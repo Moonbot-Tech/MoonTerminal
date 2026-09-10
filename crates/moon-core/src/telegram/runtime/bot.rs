@@ -43,10 +43,17 @@ pub(super) fn run(
     });
     let _ = tx.try_send(Work::Status(TelegramStatus::Starting));
     let mut username = None;
+    let mut history = super::history::History::default();
+    let mut history_path = None;
     while alive.upgrade().is_some() {
         if username.is_none() {
             match api.get_me() {
-                Ok(me) => username = me.username,
+                Ok(me) => {
+                    let path = crate::config::paths::telegram_chat_history(me.id);
+                    history = super::history::History::load(&path);
+                    history_path = Some(path);
+                    username = me.username;
+                }
                 Err(error) => {
                     let invalid_credential = matches!(
                         error,
@@ -92,10 +99,16 @@ pub(super) fn run(
             if alive.upgrade().is_none() {
                 return;
             }
+            if let Some(callback) = &update.callback_query {
+                if let Err(error) = api.answer_callback(&callback.id) {
+                    publish_status(&tx, &error);
+                }
+            }
             let Some(mut inbound) = parse_update(&update, username.as_deref()) else {
                 api.acknowledge_update(update.update_id);
                 continue;
             };
+            let mut reply_button = false;
             if inbound.command == ParsedCommand::Unknown {
                 if let Some(text) = update
                     .message
@@ -104,6 +117,7 @@ pub(super) fn run(
                 {
                     if let Ok(labels) = labels.lock() {
                         inbound.command = parse_reply_button(text, &labels);
+                        reply_button = inbound.command != ParsedCommand::Unknown;
                     }
                 }
             }
@@ -112,28 +126,32 @@ pub(super) fn run(
             let private_chat = update
                 .message
                 .as_ref()
+                .or_else(|| {
+                    update
+                        .callback_query
+                        .as_ref()
+                        .and_then(|callback| callback.message.as_ref())
+                })
                 .map(|message| &message.chat)
                 .is_some_and(|chat| chat.id == chat_id && chat.kind == "private");
             let (reply, rx) = mpsc::sync_channel(1);
+            let is_start = matches!(inbound.command, ParsedCommand::Start);
+            let is_report = matches!(
+                inbound.command,
+                ParsedCommand::Report(_) | ParsedCommand::Start
+            );
             let work = {
                 let Ok(mut ledger) = auth.lock() else {
                     return;
                 };
                 match inbound.command {
-                    ParsedCommand::Pair { .. }
-                    | ParsedCommand::MiniApp
-                    | ParsedCommand::Start
-                    | ParsedCommand::Help
-                        if !private_chat =>
-                    {
-                        Work::Command {
-                            chat_id,
-                            command: ParsedCommand::Pair {
-                                code: String::new(),
-                            },
-                            reply,
-                        }
-                    }
+                    _ if !private_chat => Work::Command {
+                        chat_id,
+                        command: ParsedCommand::Pair {
+                            code: String::new(),
+                        },
+                        reply,
+                    },
                     ParsedCommand::Pair { ref code }
                         if ledger.pair(chat_id, code, Instant::now()).is_ok() =>
                     {
@@ -158,17 +176,112 @@ pub(super) fn run(
                 break;
             }
             api.acknowledge_update(update.update_id);
-            let Some(result) = super::response(rx, &alive) else {
+            let Some(result) = super::response(rx, &alive, is_report) else {
+                if is_report {
+                    report_failure(&mut api, &tx, &labels, chat_id);
+                }
                 continue;
             };
-            let (text, keyboard) = match result {
-                Response::Text { text, keyboard } => (text, keyboard),
-                Response::PairSaved { text, keyboard, .. } => (text, keyboard),
-            };
-            // Both persistent navigation and Mini App launchers belong to private chats.
-            let keyboard = keyboard.as_ref().filter(|_| private_chat);
-            send_text(&mut api, &tx, chat_id, &text, keyboard);
+            // A report may outlive a pairing revocation while its database read completes.
+            if matches!(result, Response::Rich { .. })
+                && !auth
+                    .lock()
+                    .is_ok_and(|ledger| ledger.is_authorized(chat_id))
+            {
+                continue;
+            }
+            match result {
+                Response::Rich {
+                    html,
+                    keyboard,
+                    navigation,
+                } => {
+                    // Keyboard owners are permanent and never enter answer cleanup tracking.
+                    if is_start || !history.navigation.contains_key(&chat_id) {
+                        match api.send_message(chat_id, &navigation.0, Some(&navigation.1)) {
+                            Ok(sent) => {
+                                history.navigation.insert(chat_id, sent.message_id);
+                                if let Some(path) = &history_path {
+                                    if let Err(error) = history.save(path) {
+                                        log::warn!(
+                                            "telegram navigation persistence failed: {error}"
+                                        );
+                                    }
+                                }
+                            }
+                            Err(error) => publish_error(&tx, error),
+                        }
+                    }
+                    let message = update
+                        .callback_query
+                        .as_ref()
+                        .and_then(|callback| callback.message.as_ref())
+                        .map(|message| message.message_id);
+                    match api.rich_message(chat_id, message, &html, &keyboard) {
+                        Ok(delivered) if message.is_none() => {
+                            let previous = history.answers.insert(
+                                chat_id,
+                                super::history::Answer {
+                                    id: delivered.message_id,
+                                    sent_at: delivered.date,
+                                },
+                            );
+                            let saved = history_path.as_ref().is_some_and(|path| {
+                                match history.save(path) {
+                                    Ok(()) => true,
+                                    Err(error) => {
+                                        log::warn!("telegram answer persistence failed: {error}");
+                                        false
+                                    }
+                                }
+                            });
+                            if saved && reply_button {
+                                if let Some(previous) = previous.filter(|answer| {
+                                    answer.deletable(crate::util::time::now_unix_ms_i64() / 1000)
+                                }) {
+                                    if let Err(error) = api.delete_message(chat_id, previous.id) {
+                                        if !crate::telegram::api::is_unavailable_delete(
+                                            "deleteMessage",
+                                            &error,
+                                        ) {
+                                            log::warn!(
+                                                "telegram previous answer cleanup failed: {error}"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            if !crate::telegram::api::is_unchanged_edit("editMessageText", &error) {
+                                publish_error(&tx, error);
+                                report_failure(&mut api, &tx, &labels, chat_id);
+                            }
+                        }
+                    }
+                }
+                Response::Text { text, keyboard } | Response::PairSaved { text, keyboard, .. } => {
+                    let keyboard = keyboard.as_ref().filter(|_| private_chat);
+                    send_text(&mut api, &tx, chat_id, &text, keyboard);
+                }
+            }
         }
+    }
+}
+/// Best-effort localized feedback when a report times out or Telegram rejects its markup.
+fn report_failure(
+    api: &mut BotApi,
+    tx: &SyncSender<Work>,
+    labels: &Mutex<std::collections::BTreeMap<String, String>>,
+    chat: i64,
+) {
+    let text = labels
+        .lock()
+        .ok()
+        .and_then(|labels| labels.get("report_delivery_failed").cloned());
+    if let Some(text) = text {
+        send_text(api, tx, chat, &text, None);
     }
 }
 /// Deliver localized pages and expose redacted transport failures.

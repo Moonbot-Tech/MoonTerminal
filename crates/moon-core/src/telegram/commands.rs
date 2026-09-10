@@ -1,13 +1,16 @@
 //! Command parsing for the Bot API surface.
 //!
-//! The parser recognizes `/start`, `/help`, `/pair <code>`, and `/miniapp`. Command suffixes
-//! (`/miniapp@botname`) are accepted only for the configured bot username from `getMe`.
+//! Pairing, navigation, bounded report periods, and report callbacks share typed commands.
+//! Command suffixes are accepted only for the configured bot username from `getMe`.
 
 use super::api::{Message, Update};
+use super::report::{Period, ReportRequest};
 
 /// Parsed inbound command, localization-free.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParsedCommand {
+    /// Read a page of closed real trades from the terminal's local report replica.
+    Report(ReportRequest),
     /// Show the paired chat's welcome message and available next action.
     Start,
     /// Explain navigation without requiring the user to remember `/miniapp`.
@@ -32,13 +35,28 @@ pub struct Inbound {
 /// Parse a Bot API update into at most one inbound command.
 ///
 /// Args:
-///     update: Decoded `message`.
+///     update: Decoded message or private sender-matched report callback.
 ///     bot_username: Username from `getMe`, without a leading `@`. When `None`, any `@suffix` is
 ///         rejected so a command aimed at another bot cannot run here.
 ///
 /// Returns:
-///     `None` when the update has no text.
+///     `None` when no text exists or callback identity cannot be established.
 pub fn parse_update(update: &Update, bot_username: Option<&str>) -> Option<Inbound> {
+    if let Some(callback) = &update.callback_query {
+        let message = callback.message.as_ref()?;
+        if message.chat.kind != "private" || message.chat.id != callback.from.id {
+            return None;
+        }
+        return Some(Inbound {
+            chat_id: message.chat.id,
+            command: callback
+                .data
+                .as_deref()
+                .and_then(ReportRequest::parse_callback)
+                .map(ParsedCommand::Report)
+                .unwrap_or(ParsedCommand::Unknown),
+        });
+    }
     update
         .message
         .as_ref()
@@ -90,6 +108,42 @@ pub fn parse_text(text: &str, bot_username: Option<&str>) -> ParsedCommand {
     }
     let name = name.to_ascii_lowercase();
     match name.as_str() {
+        "today" | "day" | "report" if args.is_empty() => {
+            ParsedCommand::Report(ReportRequest::new(Period::Today, false))
+        }
+        "hour" => require_no_args(
+            args,
+            ParsedCommand::Report(ReportRequest::new(Period::Hour, false)),
+        ),
+        "yesterday" => require_no_args(
+            args,
+            ParsedCommand::Report(ReportRequest::new(Period::Yesterday, false)),
+        ),
+        "month" => require_no_args(
+            args,
+            ParsedCommand::Report(ReportRequest::new(Period::Month, false)),
+        ),
+        "lastmonth" => require_no_args(
+            args,
+            ParsedCommand::Report(ReportRequest::new(Period::LastMonth, false)),
+        ),
+        "daily" if args.is_empty() => {
+            ParsedCommand::Report(ReportRequest::new(Period::Month, true))
+        }
+        "report" | "daily" => {
+            let dates: Vec<_> = args.split_whitespace().collect();
+            if dates.len() != 2 {
+                return ParsedCommand::InvalidArgument;
+            }
+            match ReportRequest::dates(dates[0], dates[1]) {
+                Some(mut request) => {
+                    request.daily = name == "daily";
+                    request.by_exchange = !request.daily;
+                    ParsedCommand::Report(request)
+                }
+                None => ParsedCommand::InvalidArgument,
+            }
+        }
         "start" => require_no_args(args, ParsedCommand::Start),
         "help" => require_no_args(args, ParsedCommand::Help),
         "miniapp" => require_no_args(args, ParsedCommand::MiniApp),
@@ -114,10 +168,35 @@ pub fn parse_reply_button(
         for (name, command) in [
             ("miniapp", ParsedCommand::MiniApp),
             ("help", ParsedCommand::Help),
+            ("home", ParsedCommand::Start),
+            (
+                "today",
+                ParsedCommand::Report(ReportRequest::new(Period::Today, false)),
+            ),
+            (
+                "yesterday",
+                ParsedCommand::Report(ReportRequest::new(Period::Yesterday, false)),
+            ),
+            (
+                "month",
+                ParsedCommand::Report(ReportRequest::new(Period::Month, false)),
+            ),
+            (
+                "lastmonth",
+                ParsedCommand::Report(ReportRequest::new(Period::LastMonth, false)),
+            ),
+            (
+                "daily",
+                ParsedCommand::Report(ReportRequest::new(Period::Month, true)),
+            ),
         ] {
-            if labels
-                .get(&format!("button_{name}_{locale}"))
-                .is_some_and(|label| label == text)
+            if [
+                format!("button_{name}_{locale}"),
+                format!("button_{name}_emoji_{locale}"),
+                format!("button_{name}_legacy_emoji_{locale}"),
+            ]
+            .iter()
+            .any(|key| labels.get(key).is_some_and(|label| label == text))
             {
                 return command;
             }

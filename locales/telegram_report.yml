@@ -1,0 +1,226 @@
+_version: 2
+
+telegram.help_hour:
+  ru: "Этот час"
+  en: "This hour"
+  es: "Esta hora"
+
+telegram.help_daily:
+  ru: "По дням за этот месяц"
+  en: "Daily results this month"
+  es: "Resultados diarios de este mes"
+
+telegram.help_intro:
+  ru: "Выберите период в нижнем меню. Повторное нажатие обновляет отчёт. Нажмите биржу, чтобы открыть её ядра."
+  en: "Choose a period in the bottom menu. Tap again for a fresh report. Select an exchange to open its cores."
+  es: "Elige un período en el menú inferior. Pulsa de nuevo para actualizar. Selecciona un exchange para ver sus núcleos."
+
+telegram.help_commands:
+  ru: "Команды и свой период"
+  en: "Commands and custom dates"
+  es: "Comandos y fechas propias"
+
+telegram.help_limits:
+  ru: "Даты включительно, максимум 366 дней. Часовой пояс: %{zone}. Терминал должен быть запущен."
+  en: "Dates are inclusive, up to 366 days. Time zone: %{zone}. Keep the terminal running."
+  es: "Fechas inclusive, máximo 366 días. Zona horaria: %{zone}. Mantén el terminal abierto."
+
+telegram.help_custom:
+  ru: "Свой период / по дням"
+  en: "Custom period / by day"
+  es: "Período propio / por día"
+
+telegram.help_mini:
+  ru: "Для отчётов в чате Mini App не нужен. Команда /miniapp открывает приложение, если оно включено в настройках терминала."
+  en: "Chat reports do not require Mini App. Use /miniapp to open it when enabled in terminal settings."
+  es: "Los informes del chat no necesitan Mini App. /miniapp lo abre si está habilitado en los ajustes del terminal."
+
+telegram.report_total:
+  ru: "Итого"
+  en: "Total"
+  es: "Total"
+
+telegram.report_calculation_extra:
+  ru: "Итого охватывает всю выбранную группу и период, включая другие страницы. Средний ордер считается по сделкам с подходящими данными; исключения указаны в деталях отчёта."
+  en: "Total covers the entire selected group and period, including other pages. Average order uses trades with suitable data; exclusions are listed in report details."
+  es: "El total incluye todo el grupo y período, también otras páginas. La orden media usa operaciones con datos adecuados; las exclusiones figuran en los detalles."
+
+telegram.button_home:
+  ru: "Сводка"
+  en: "Overview"
+  es: "Resumen"
+
+telegram.report_navigation_hint:
+  ru: "Период выбирайте в нижнем меню. Повторное нажатие запросит свежий отчёт. Под отчётом — переходы к ядрам и дням."
+  en: "Choose the period in the bottom menu. Tap again for a fresh report. Buttons beneath the report open cores or days."
+  es: "Elige el período en el menú inferior. Pulsa de nuevo para obtener un informe actualizado. Los botones del informe abren núcleos o días."
+
+telegram.report_all_cores:
+  ru: "Все ядра"
+  en: "All cores"
+  es: "Todos los núcleos"
+
+telegram.report_by_days:
+  ru: "По дням"
+  en: "By day"
+  es: "Por día"
+
+telegram.report_days_scope:
+  ru: "Дни группы"
+  en: "Group by day"
+  es: "Días del grupo"
+
+telegram.report_cores_scope:
+  ru: "Ядра группы"
+  en: "Group cores"
+  es: "Núcleos del grupo"
+
+telegram.report_back:
+  ru: "Все биржи"
+  en: "All exchanges"
+  es: "Todos los exchanges"
+
+telegram.report_calculation:
+  ru: "Как считается"
+  en: "Calculation details"
+  es: "Cómo se calcula"
+
+telegram.report_exchanges:
+  ru: "Биржи"
+  en: "Exchanges"
+  es: "Exchanges"
+
+telegram.report_exchange:
+  ru: "Биржа"
+  en: "Exchange"
+  es: "Exchange"
+
+telegram.report_scope_unavailable:
+  ru: "Биржа недоступна"
+  en: "Exchange unavailable"
+  es: "Exchange no disponible"
+
+telegram.report_average_coverage:
+  ru: "учтено %{counted}; исключено %{excluded}"
+  en: "%{counted} counted; %{excluded} excluded"
+  es: "%{counted} incluidas; %{excluded} excluidas"
+
+telegram.report_delivery_failed:
+  ru: "Не удалось показать отчёт. Повторите запрос; если ошибка повторяется, проверьте подключение терминала и обновите Telegram."
+  en: "Could not display the report. Please retry; if this persists, check the terminal connection and update Telegram."
+  es: "No se pudo mostrar el informe. Reinténtalo; si persiste, comprueba la conexión del terminal y actualiza Telegram."
+
+telegram.button_today:
+  ru: "Сегодня"
+  en: "Today"
+  es: "Hoy"
+
+telegram.button_yesterday:
+  ru: "Вчера"
+  en: "Yesterday"
+  es: "Ayer"
+
+telegram.button_month:
+  ru: "Этот месяц"
+  en: "This month"
+  es: "Este mes"
+
+telegram.button_lastmonth:
+  ru: "Прошлый месяц"
+  en: "Last month"
+  es: "Mes pasado"
+
+telegram.button_daily:
+  ru: "По дням"
+  en: "Daily"
+  es: "Por día"
+
+telegram.report_days:
+  ru: "Дни"
+  en: "Days"
+  es: "Días"
+
+telegram.report_cores:
+  ru: "Ядра"
+  en: "Cores"
+  es: "Núcleos"
+
+telegram.report_profit:
+  ru: "Результат"
+  en: "Profit / loss"
+  es: "Resultado"
+
+telegram.report_trades:
+  ru: "Сделки"
+  en: "Trades"
+  es: "Operaciones"
+
+telegram.report_date:
+  ru: "Дата"
+  en: "Date"
+  es: "Fecha"
+
+telegram.report_bot:
+  ru: "Бот"
+  en: "Bot"
+  es: "Bot"
+
+telegram.report_details:
+  ru: "Валюта и средний ордер"
+  en: "Currencies and average order"
+  es: "Divisas y orden media"
+
+telegram.report_average:
+  ru: "Средний ордер"
+  en: "Average order"
+  es: "Orden media"
+
+telegram.report_page:
+  ru: "Страница"
+  en: "Page"
+  es: "Página"
+
+telegram.report_prev:
+  ru: "Назад"
+  en: "Previous"
+  es: "Anterior"
+
+telegram.report_next:
+  ru: "Далее"
+  en: "Next"
+  es: "Siguiente"
+
+telegram.report_unvalued:
+  ru: "Нет оценки"
+  en: "Unavailable"
+  es: "Sin valoración"
+
+telegram.report_empty:
+  ru: "За этот период закрытых реальных сделок нет."
+  en: "No closed real trades in this period."
+  es: "No hay operaciones reales cerradas en este período."
+
+telegram.report_scope:
+  ru: "Выбранная группа в истории терминала · реальные закрытые сделки · курс на момент сделки. Данные локальной истории; выключенные боты не обновляются."
+  en: "Selected group in terminal history · closed real trades · rates at trade time. Local history; offline bots do not update."
+  es: "Grupo seleccionado del historial · operaciones reales cerradas · tipos al operar. Historial local; los bots desconectados no se actualizan."
+
+telegram.report_missing_rates:
+  ru: "Если не все сделки оценены, итог в USDT недоступен. Детали сохраняют суммы по известным валютам; неизвестные валюты в них не включены."
+  en: "If any trades lack valuation, the complete USDT total is unavailable. Details retain known currency subtotals; unknown currencies are excluded."
+  es: "Si faltan valoraciones, el total completo en USDT no está disponible. Los detalles conservan los subtotales por divisa conocida; las desconocidas se excluyen."
+
+telegram.report_busy:
+  ru: "Предыдущий отчёт ещё рассчитывается. Повторите запрос немного позже."
+  en: "The previous report is still being calculated. Please try again shortly."
+  es: "El informe anterior aún se está calculando. Inténtalo de nuevo en breve."
+
+telegram.report_failed:
+  ru: "Не удалось прочитать историю сделок. Повторите запрос; ошибка чтения не означает нулевой результат."
+  en: "Could not read trade history. Please retry; a read error does not mean zero profit."
+  es: "No se pudo leer el historial. Reinténtalo; un error de lectura no significa resultado cero."
+
+telegram.report_help:
+  ru: "Выберите период кнопками. В отчёте доступны вид по ботам/дням — для свежих данных повторно нажмите период в нижнем меню.\n\n/hour — этот час\n/today — сегодня\n/daily — по дням за этот месяц\n/report 2026-09-01 2026-09-10 — свой период\n/daily 2026-09-01 2026-09-10 — свой период по дням\nДаты включительно, максимум 366 дней; часовой пояс — из часов терминала. Терминал должен быть запущен."
+  en: "Choose a period below. Reports have bot/day views. Tap a period again for fresh data.\n\n/hour — this hour\n/today — today\n/daily — daily results this month\n/report 2026-09-01 2026-09-10 — custom period\n/daily 2026-09-01 2026-09-10 — custom daily results\nDates are inclusive, up to 366 days; time zone follows the terminal clock. Keep the terminal running."
+  es: "Elige un período. Cada informe permite cambiar bot/día. Pulsa de nuevo un período para actualizar.\n\n/hour — esta hora\n/today — hoy\n/daily — resultados diarios del mes\n/report 2026-09-01 2026-09-10 — período personalizado\n/daily 2026-09-01 2026-09-10 — resultados diarios personalizados\nFechas inclusive, máximo 366 días; zona del reloj del terminal. El terminal debe estar abierto."

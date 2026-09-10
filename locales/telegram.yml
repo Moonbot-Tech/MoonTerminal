@@ -3,9 +3,9 @@
 _version: 2
 
 telegram.intro:
-  ru: "Подключите своего бота, разрешите доступ своему чату и открывайте Mini App из Telegram."
-  en: "Connect your bot, authorize your chat, and open Mini App from Telegram."
-  es: "Conecta tu bot, autoriza tu chat y abre Mini App desde Telegram."
+  ru: "Подключите своего бота и привяжите чат для отчётов в Telegram. Mini App включается отдельно."
+  en: "Connect your bot and pair your chat for Telegram reports. Mini App is enabled separately."
+  es: "Conecta tu bot y vincula tu chat para recibir informes en Telegram. Mini App se activa por separado."
 telegram.section_access:
   ru: "Доступ к терминалу"
   en: "Terminal access"
@@ -43,9 +43,9 @@ telegram.mini_failed:
   en: "Could not make Mini App available. Check your internet connection; retrying automatically."
   es: "No se pudo habilitar Mini App. Comprueba tu conexión a internet; se reintentará automáticamente."
 telegram.bot_welcome:
-  ru: "MoonTerminal\n\nЭтот чат подключён к вашему терминалу. Кнопка «Открыть» рядом с полем ввода запускает Mini App.\n\nДля получения ссылки отправьте /miniapp. Терминал должен оставаться запущенным."
-  en: "MoonTerminal\n\nThis chat is connected to your terminal. The Open button beside the message field launches Mini App.\n\nSend /miniapp to get a launch link. Keep the terminal running."
-  es: "MoonTerminal\n\nEste chat está conectado a tu terminal. El botón Abrir junto al campo de mensaje inicia Mini App.\n\nEnvía /miniapp para obtener un enlace de acceso. Mantén el terminal abierto."
+  ru: "MoonTerminal\n\nЧат подключён. Отчёты доступны прямо здесь; включать Mini App для них не нужно.\n\n/miniapp — отдельный запуск Mini App."
+  en: "MoonTerminal\n\nChat connected. Reports are available here without enabling Mini App.\n\n/miniapp — launch Mini App separately."
+  es: "MoonTerminal\n\nChat conectado. Los informes están disponibles aquí sin activar Mini App.\n\n/miniapp — abrir Mini App por separado."
 telegram.button_help:
   ru: "Помощь"
   en: "Help"
@@ -96,9 +96,9 @@ telegram.mini_app:
   en: "Enable Mini App"
   es: "Activar Mini App"
 telegram.mini_app_hint:
-  ru: "После сохранения откройте своего бота и отправьте /start. Бот покажет кнопку входа. Терминал должен оставаться запущенным."
-  en: "After saving, open your bot and send /start to get the launch button. Keep the terminal running."
-  es: "Después de guardar, abre tu bot y envía /start para obtener el botón de acceso. Mantén el terminal abierto."
+  ru: "После сохранения отправьте боту /miniapp для кнопки входа. /start открывает меню отчётов. Терминал должен оставаться запущенным."
+  en: "After saving, send /miniapp for the launch button. /start opens report navigation. Keep the terminal running."
+  es: "Después de guardar, envía /miniapp para obtener el botón de acceso. /start abre los informes. Mantén el terminal abierto."
 
 telegram.paired_none:
   ru: "Нет привязанных чатов"
@@ -127,9 +127,9 @@ telegram.state.unavailable:
   es: "No se puede conectar con Telegram. Comprueba el token y tu conexión a internet."
 
 telegram.pair_success:
-  ru: "Чат подключён к MoonTerminal.\n\nТеперь можно открыть Mini App или помощь кнопками внизу."
-  en: "Chat connected to MoonTerminal.\n\nUse the buttons below to open Mini App or get help."
-  es: "Chat conectado a MoonTerminal.\n\nUsa los botones de abajo para abrir Mini App u obtener ayuda."
+  ru: "Чат подключён к MoonTerminal.\n\nВыберите период в нижнем меню для отчёта. Mini App открывается командой /miniapp."
+  en: "Chat connected to MoonTerminal.\n\nChoose a period in the bottom menu for a report. Use /miniapp to launch Mini App."
+  es: "Chat conectado a MoonTerminal.\n\nElige un período en el menú inferior para ver el informe. Usa /miniapp para abrir Mini App."
 
 telegram.refusal:
   ru: "Доступ запрещён."
