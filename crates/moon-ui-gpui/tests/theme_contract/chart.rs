@@ -583,6 +583,75 @@ fn every_backend_extends_a_ray_along_its_direction() {
     }
 }
 
+/// Evaluate the shader's sum of lengths so a reach regression fails on geometry, not emission.
+/// Unknown expressions fail closed: a shader rewrite must update this small numeric adapter.
+fn shader_ray_reach(src: &str, a: [f32; 2], d: [f32; 2], bounds: [f32; 4]) -> f32 {
+    let expression = src
+        .split_once(" reach = ")
+        .expect("ray reach assignment")
+        .1
+        .split_once(';')
+        .expect("ray reach terminator")
+        .0
+        .replace("cv_bounds", "cv.bounds");
+    expression
+        .split('+')
+        .map(|term| match term.trim() {
+            "length(a - cv.bounds.xy)" => (a[0] - bounds[0]).hypot(a[1] - bounds[1]),
+            "length(cv.bounds.zw)" => bounds[2].hypot(bounds[3]),
+            "length(d)" => d[0].hypot(d[1]),
+            scalar => scalar.parse::<f32>().expect("supported ray reach term"),
+        })
+        .sum()
+}
+
+/// Two days left of a one-hour viewport used to end the ray at x=-13678, wholly offscreen.
+/// Also cover legacy Ray directions and an offset pane: reach must pass every visible point
+/// while the segment still starts at its origin, never at a point behind it.
+#[test]
+fn every_backend_ray_reaches_the_viewport_from_a_distant_origin() {
+    for path in [
+        "chartdx/shaders/order_lines.hlsl",
+        "chartdx/shaders/chart_native.metal",
+        "chartdx/shaders/native_seg.wgsl",
+    ] {
+        let src = code_only(&read_src(path));
+        assert!(src.contains("a + normalize(d + "));
+        assert!(src.contains("* reach"));
+        for offset in [[0.0_f32, 0.0], [120.0, 80.0]] {
+            let bounds = [offset[0], offset[1], 600.0, 400.0];
+            // origin, direction, last visible point along that direction (plot-local pixels).
+            for (origin, d, exit) in [
+                ([-28_800.0, 200.0], [14_400.0, 0.0], [600.0, 200.0]),
+                ([30_000.0, 200.0], [-1.0, 0.0], [0.0, 200.0]),
+                ([300.0, -28_800.0], [0.0, 1.0], [300.0, 400.0]),
+                ([300.0, 30_000.0], [0.0, -1.0], [300.0, 0.0]),
+                ([-30_000.0, -30_000.0], [1.0, 1.0], [400.0, 400.0]),
+                ([250.0, 200.0], [14_400.0, 0.0], [600.0, 200.0]),
+            ] {
+                let a = [origin[0] + offset[0], origin[1] + offset[1]];
+                let reach = shader_ray_reach(&src, a, d, bounds);
+                let needed = (exit[0] - origin[0]).hypot(exit[1] - origin[1]);
+                assert!(
+                    reach > needed,
+                    "{path}: origin {origin:?}, direction {d:?}: reach {reach} stops before plot exit {needed}"
+                );
+                // The shader extends only b; its unsnapped direction and original a stay intact.
+                let direction_len = (d[0] + 1e-6).hypot(d[1]);
+                let b = [
+                    a[0] + (d[0] + 1e-6) / direction_len * reach,
+                    a[1] + d[1] / direction_len * reach,
+                ];
+                if d[1] == 0.0 && d[0] > 0.0 {
+                    assert!(b[0] > offset[0] + 600.0, "{path}: ray misses right edge");
+                    assert_eq!(b[1], a[1]);
+                    assert_eq!(a[0].min(b[0]), a[0], "{path}: ray extends left of origin");
+                }
+            }
+        }
+    }
+}
+
 /// Prepare must hand the price auto-fit the two bands SEPARATELY, through `fit_band`.
 ///
 /// This is the one link in the chain no unit test can reach: `moon-ui-gpui` is a binary crate, so

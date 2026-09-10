@@ -62,3 +62,29 @@ fn delayed_coin_navigation_revalidates_live_workspace_authority() {
     );
     assert!(navigation.contains("let group = group.clone();"));
 }
+
+/// Cards and chart marks share tag_color: custom RGB must survive both theme changes and persisted
+/// settings reloads, while legacy symbolic keys continue to follow the selected theme.
+#[test]
+fn saved_custom_tag_color_is_fixed_while_symbolic_color_follows_theme() {
+    let settings: moon_core::config::NewsTagSettings = serde_json::from_str(
+        r##"{"colors":{"custom":"#12aBcD","legacy":"red","unknown":"future-key"}}"##,
+    )
+    .expect("valid persisted tag colors");
+    for config in [
+        moon_ui::MoonThemeConfig::moon_terminal(),
+        moon_ui::MoonThemeConfig::moon_light(),
+    ] {
+        let palette = moon_ui::MoonTheme::from_config(config).palette;
+        assert_eq!(
+            super::tag_color("CUSTOM", &settings, palette),
+            Some(0x12abcd)
+        );
+        assert_eq!(
+            super::tag_color("legacy", &settings, palette),
+            Some(palette.red)
+        );
+        assert_eq!(super::tag_color("unknown", &settings, palette), None);
+        assert_eq!(super::tag_color("neutral", &settings, palette), None);
+    }
+}

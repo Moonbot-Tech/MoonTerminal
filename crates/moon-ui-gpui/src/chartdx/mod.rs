@@ -25,6 +25,7 @@ pub mod combo;
 pub mod cursor;
 mod data_state;
 mod engine;
+mod figure_snap;
 mod figures_sync;
 mod news_sync;
 pub(crate) mod trade_history_sync;
@@ -591,6 +592,8 @@ struct PaneRender {
     mark_line_upload: Vec<PriceLinePoint>,
     /// Reusable candle-layer upload buffer.
     candle_upload: Vec<CandleGpu>,
+    /// Candle candidates retained with the uploaded series for drawing-tool snapping.
+    figure_snap: figure_snap::FigureSnapData,
     /// Last candle-series revision delivered to the GPU; `u64::MAX` means never delivered.
     last_candle_rev: u64,
     /// Applied candle-view config, stored already reduced to `CandleViewCfg::history_inputs` — the
@@ -820,6 +823,7 @@ impl PaneRender {
             last_line_upload: Vec::new(),
             mark_line_upload: Vec::new(),
             candle_upload: Vec::new(),
+            figure_snap: figure_snap::FigureSnapData::default(),
             last_candle_rev: u64::MAX,
             applied_candle_cfg: moon_core::market::CandleViewCfg::default().history_inputs(),
             last_zone_bucket: i64::MIN,

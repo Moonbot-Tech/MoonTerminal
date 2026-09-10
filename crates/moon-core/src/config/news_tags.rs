@@ -3,7 +3,7 @@
 //!
 //! Both the colours and the filter are GLOBAL (a tag reads and filters the same in every group/
 //! window) and saved immediately on change, mirroring `detects_view.toml`. Colours are stored as a
-//! small palette KEY (e.g. `"red"`), not a raw RGB, so the rendered colour follows the active theme;
+//! symbolic palette key (e.g. `"red"`) for a theme-adaptive color, or `#RRGGBB` for fixed RGB;
 //! absent/empty keys render neutral. The hidden set stores case-folded tag keys (a tagged card is
 //! hidden only when ALL its tags are hidden); `hide_untagged` hides news carrying no tags at all.
 
@@ -17,7 +17,7 @@ use crate::config::{paths, write_file_atomic};
 /// neutral, so the file stays forward-compatible.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NewsTagSettings {
-    /// Tag key (case-folded) → palette colour key (`red`/`amber`/`green`/`blue`).
+    /// Case-folded tag key mapped to a symbolic theme key or fixed `#RRGGBB` color.
     #[serde(default)]
     colors: HashMap<String, String>,
     /// Case-folded tag keys the user hid.
@@ -62,6 +62,16 @@ impl NewsTagSettings {
 
     // ---- colours ------------------------------------------------------------------------------
 
+    /// Decode a fixed color without confusing unknown symbolic keys with RGB.
+    /// Six hex digits after `#` are required; alpha and shorthand are not persisted formats.
+    pub fn custom_rgb(value: &str) -> Option<u32> {
+        let digits = value.strip_prefix('#')?;
+        if digits.len() != 6 || !digits.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        u32::from_str_radix(digits, 16).ok()
+    }
+
     /// The colour key assigned to `key`, or `None` when neutral.
     pub fn color(&self, key: &str) -> Option<&str> {
         self.colors
@@ -70,10 +80,11 @@ impl NewsTagSettings {
             .filter(|s| !s.is_empty())
     }
 
-    /// Assign (`Some`) or clear (`None`) a tag's colour. Returns whether the map actually changed, so
+    /// Assign a symbolic key or `#RRGGBB` (`Some`), or clear (`None`). Unknown keys are retained
+    /// for forward compatibility. Returns whether the map actually changed, so
     /// the caller can skip an unnecessary save + repaint. Bumps [`Self::rev`] on a real change.
-    pub fn set_color(&mut self, key: &str, palette_key: Option<&str>) -> bool {
-        let changed = match palette_key {
+    pub fn set_color(&mut self, key: &str, color_key: Option<&str>) -> bool {
+        let changed = match color_key {
             Some(k) if !k.is_empty() => {
                 if self.colors.get(key).map(String::as_str) == Some(k) {
                     false
@@ -145,3 +156,6 @@ impl NewsTagSettings {
         changed
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -52,25 +52,6 @@ fn tool_item(
 }
 
 impl ChartTabs {
-    /// The arbitrary-colour cell handed to the settings panel's swatch row.
-    ///
-    /// Lives here and not in `figstyle` because the wheel needs an `Entity` to hold its open state,
-    /// and that belongs to the view that hosts the popup. The subscription in `ChartTabs::new`
-    /// writes the chosen RGB into `fig_style`, keeping the opacity the stepper owns.
-    fn custom_color_cell(&self) -> AnyElement {
-        div()
-            .id("fig-custom-color")
-            .tooltip(|_window, cx| {
-                cx.new(|_| moon_ui::MoonTooltipView::new(t!("chart.fig.custom_color").to_string()))
-                    .into()
-            })
-            .child(
-                moon_ui::MoonColorPicker::new(&self.fig_color_picker)
-                    .colors(design::picker_palette()),
-            )
-            .into_any_element()
-    }
-
     /// Render the figure-tool selector and explicitly unscoped tool-default settings surface.
     pub(super) fn render_fig_tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (draw_mode, tool, sells_zone) = {
@@ -221,7 +202,7 @@ impl ChartTabs {
             &self.backend,
             tool,
             crate::figstyle::WorkspaceAuthority::Unscoped,
-            Some(self.custom_color_cell()),
+            None,
             cx,
         )
     }

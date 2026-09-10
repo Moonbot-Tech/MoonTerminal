@@ -279,6 +279,13 @@ impl SettingsView {
                     cx,
                 ),
                 self.hotkey_row(
+                    t!("hotkeys.draw_horizontal_ray").to_string(),
+                    t!("hotkeys.draw_horizontal_ray_hint").to_string(),
+                    HotkeySlot::DrawHorizontalRay,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
                     t!("hotkeys.draw_segment").to_string(),
                     t!("hotkeys.draw_segment_hint").to_string(),
                     HotkeySlot::DrawSegment,

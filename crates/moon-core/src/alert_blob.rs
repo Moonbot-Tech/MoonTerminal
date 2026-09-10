@@ -154,6 +154,7 @@ pub fn encode(
         FigureKind::FibRetracement(_)
         | FigureKind::Rect(_)
         | FigureKind::Ray(_)
+        | FigureKind::HorizontalRay(_)
         | FigureKind::Position(_) => return None,
     };
     let mut out = Vec::with_capacity(96);
@@ -210,6 +211,7 @@ pub fn encode(
         FigureKind::FibRetracement(_)
         | FigureKind::Rect(_)
         | FigureKind::Ray(_)
+        | FigureKind::HorizontalRay(_)
         | FigureKind::Position(_) => return None,
     }
     Some(out)

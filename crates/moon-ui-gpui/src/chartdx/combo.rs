@@ -614,6 +614,18 @@ impl ComboLayer {
         }
     }
 
+    /// Read the chronological ring that pending GPU uploads will publish.
+    pub(super) fn tick_samples(&self) -> impl Iterator<Item = &ChartCross> {
+        moon_chart::tick_volume::pending_ring(
+            &self.resident_crosses,
+            self.resident_head,
+            self.resident_count,
+            self.cross_capacity as usize,
+            self.pending_reset.as_deref(),
+            &self.pending_append,
+        )
+    }
+
     fn recalc_volume_scale(&mut self) {
         let (buy, sell) = cross_volume_max(self.resident_crosses.iter().take(self.resident_count));
         self.volume_buy_max = buy;

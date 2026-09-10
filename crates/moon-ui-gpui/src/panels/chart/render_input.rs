@@ -250,6 +250,7 @@ pub(super) fn mouse_down_left(
                     .fig_draft
                     .as_ref()
                     .is_some_and(|draft| !draft.needs_modifier()),
+            e.modifiers.secondary(),
             cx,
         )
     {
@@ -383,7 +384,10 @@ pub(super) fn mouse_up_left(
     settle_paced_drag(this, cx);
     // A draw-drag-release gesture (Command/Ctrl down, drag, release) completes a segment/channel
     // without a second click. A stationary click is not a drag gesture and waits for click two.
-    if let Some((pos, _)) = this.chart_local(e.position) {
+    if let Some((pos, within)) = this.chart_local(e.position) {
+        if this.fig_drag.is_some() {
+            this.update_fig_pointer(pos, within, true, e.modifiers.secondary(), cx);
+        }
         if this.try_fig_release(pos, e.modifiers.secondary(), cx) {
             cx.notify();
             cx.stop_propagation();
@@ -676,7 +680,7 @@ pub(super) fn mouse_move(
             crate::diag::bump(&crate::diag::CHART_CURSOR_UPDATE);
         }
         // Update figure-draft preview under the cursor and figure hover highlighting.
-        this.update_fig_pointer(pos, within, false, cx);
+        this.update_fig_pointer(pos, within, false, e.modifiers.secondary(), cx);
         // News marks: one Y comparison unless the pointer is in the marks' row along the bottom
         // edge. Repaints only while the Ctrl card is on screen.
         this.note_news_modifiers(e.modifiers, cx);
@@ -723,7 +727,7 @@ pub(super) fn mouse_move(
         e.pressed_button == Some(MouseButton::Right),
     );
     if this.fig_drag.is_some() {
-        this.update_fig_pointer(pos, within, true, cx);
+        this.update_fig_pointer(pos, within, true, e.modifiers.secondary(), cx);
         cx.stop_propagation();
         return;
     }
@@ -740,7 +744,7 @@ pub(super) fn mouse_move(
     if this.fig_draft.as_ref().is_some_and(|d| d.down.is_some())
         && e.pressed_button == Some(MouseButton::Left)
     {
-        this.update_fig_pointer(pos, within, true, cx);
+        this.update_fig_pointer(pos, within, true, e.modifiers.secondary(), cx);
     }
     if this.order_drag.is_some() {
         this.update_order_drag(pos, cx);

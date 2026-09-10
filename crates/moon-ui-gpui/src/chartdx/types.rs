@@ -94,6 +94,7 @@ pub struct ChartCross {
     pub time_rel: f32,
     pub price: f32,
     pub side: u32,
+    /// Base quantity, preserving the native tick band's existing height semantics.
     pub qty: f32,
 }
 

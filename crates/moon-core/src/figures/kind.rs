@@ -8,8 +8,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::tools::{
-    Channel, FibRetracement, FigureTool, HLine, MbFib, Position, Ray, Rect, Segment, ToolShape,
-    Triangle,
+    Channel, FibRetracement, FigureTool, HLine, HorizontalRay, MbFib, Position, Ray, Rect, Segment,
+    ToolShape, Triangle,
 };
 
 /// Figure type. The JSON representation matches Moonbot's `TChartObject` names that were used
@@ -20,6 +20,8 @@ pub enum FigureKind {
     HLine(HLine),
     Segment(Segment),
     Ray(Ray),
+    /// Terminal-only horizontal ray with one persisted origin.
+    HorizontalRay(HorizontalRay),
     Position(Position),
     Triangle(Triangle),
     Channel(Channel),
@@ -41,6 +43,7 @@ impl FigureKind {
             FigureKind::HLine(t) => t,
             FigureKind::Segment(t) => t,
             FigureKind::Ray(t) => t,
+            FigureKind::HorizontalRay(t) => t,
             FigureKind::Position(t) => t,
             FigureKind::Triangle(t) => t,
             FigureKind::Channel(t) => t,
@@ -56,6 +59,7 @@ impl FigureKind {
             FigureKind::HLine(t) => t,
             FigureKind::Segment(t) => t,
             FigureKind::Ray(t) => t,
+            FigureKind::HorizontalRay(t) => t,
             FigureKind::Position(t) => t,
             FigureKind::Triangle(t) => t,
             FigureKind::Channel(t) => t,

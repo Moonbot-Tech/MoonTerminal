@@ -311,6 +311,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         fig_tool_settings: std::collections::HashMap::new(),
         fig_selected: None,
         last_chart_alerts_activity: 0,
+        trade_playback: Default::default(),
         last_detect_seq: std::collections::HashMap::new(),
         last_detect_rev: std::collections::HashMap::new(),
         last_orders_alert_rev: std::collections::HashMap::new(),
@@ -567,10 +568,11 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     // Play core detect/alert sounds for new detects that specify a sound.
                     let detect_played = b.play_detect_sounds();
                     // Moonbot's price-approach alerts, on the same drain and behind their own
-                    // per-core revision gate. They are told whether the detect scan above already
-                    // used this drain's one sound: both go through the same player, which replaces
-                    // what it is playing rather than mixing.
+                    // per-core revision gate. Preserve their detect-first admission policy; the
+                    // shared scheduler then serializes accepted clips with the trade lane.
                     b.play_price_alert_sounds(detect_played);
+                    b.collect_trade_sounds();
+                    b.pump_sounds();
                     if drain.order_lines_data {
                         let chart_consumers = b.live_chart_consumers();
                         for chart in chart_consumers {
@@ -712,6 +714,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     // Before the warning engine: a schedule boundary crossed on this very tick must
                     // already be in force for the alerts this tick opens.
                     b.tick_quiet(cx);
+                    // Audio must finish its queue even when no more market events arrive.
+                    b.pump_sounds();
                     let now_ms = moon_chart::paint::now_unix_ms() as i64;
                     b.tick_core_warnings(now_ms);
                     // The update queue spawns no timer of its own: this coordination loop already

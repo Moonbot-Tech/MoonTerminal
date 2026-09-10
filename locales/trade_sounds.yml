@@ -1,0 +1,33 @@
+_version: 2
+trade_sounds.tab:
+  ru: "Звуки сделок"
+  en: "Trade sounds"
+  es: "Sonidos"
+trade_sounds.help:
+  ru: "Выберите звуки открытия и закрытия для каждой биржи. Изменения сохраняются автоматически."
+  en: "Choose entry and exit sounds for each exchange. Changes are saved automatically."
+  es: "Elige los sonidos de apertura y cierre de cada mercado. Los cambios se guardan automáticamente."
+trade_sounds.exchange:
+  ru: "Биржа"
+  en: "Exchange"
+  es: "Mercado"
+trade_sounds.quiet_note:
+  ru: "Тихий режим включён — звуки отключены."
+  en: "Quiet mode is on — sounds are muted."
+  es: "El modo silencioso está activado: los sonidos están desactivados."
+trade_sounds.open:
+  ru: "Открытие позиции"
+  en: "Position opened"
+  es: "Posición abierta"
+trade_sounds.close:
+  ru: "Закрытие позиции"
+  en: "Position closed"
+  es: "Posición cerrada"
+trade_sounds.off:
+  ru: "Без звука"
+  en: "Silent"
+  es: "Sin sonido"
+trade_sounds.preview:
+  ru: "Прослушать"
+  en: "Preview"
+  es: "Escuchar"

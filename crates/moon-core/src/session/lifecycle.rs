@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 use crate::config::{AppConfig, ServerConfig};
 use crate::db::ReportTx;
 use crate::feed::{
-    self, ConnStatus, CoreTimeOffsetStatus, EngineActionResult, FeedHandle, FeedMsg, FeedWakeTx,
+    self, ConnStatus, CoreTimeOffsetStatus, EngineActionResult, ExchangeId, FeedHandle, FeedMsg,
+    FeedWakeTx,
 };
 use crate::market::{MarketDataMode, MarketDataSource, MarketStore};
 use crate::session::core_time_offset::OffsetSource;
@@ -18,6 +19,8 @@ use super::{
 
 #[cfg(test)]
 mod order_tests;
+#[cfg(test)]
+mod trade_sound_tests;
 
 /// Position of `id` in the configured order; ids missing from `order` rank last.
 pub(super) fn rank_of(order: &[CoreId], id: CoreId) -> usize {
@@ -62,6 +65,8 @@ impl SessionManager {
         // The optional local kline cache preserves candle history across restarts.
         market_source.init_kline_cache(crate::config::paths::klines_db_path());
         let mut mgr = Self {
+            trade_sounds: Vec::new(),
+            trade_sound_epochs: HashMap::new(),
             sessions: Vec::new(),
             config_order: config.servers.iter().map(|s| s.id).collect(),
             feed_wake,
@@ -162,6 +167,8 @@ impl SessionManager {
     /// and base before coordination recomputes the provider role and last command. Removal leaves
     /// this state absent.
     fn clear_core_coordination(&mut self, id: CoreId) {
+        self.trade_sound_epochs.remove(&id);
+        self.trade_sounds.retain(|(core, _, _)| *core != id);
         self.core_venue.remove(&id);
         self.core_base.remove(&id);
         self.core_provider.remove(&id);
@@ -333,7 +340,32 @@ impl SessionManager {
             while let Ok(msg) = sess.handle.rx.try_recv() {
                 stats.any = true;
                 match msg {
+                    FeedMsg::Status(status) => {
+                        self.trade_sound_epochs
+                            .insert(sess.id, std::sync::Arc::new(()));
+                        // A queued edge from before a connection boundary must not sound after it.
+                        self.trade_sounds.retain(|(core, _, _)| *core != sess.id);
+                        if let Some(core) = self.store.core_mut(sess.id) {
+                            core.apply(FeedMsg::Status(status));
+                            stats.ui_state = true;
+                        }
+                    }
+                    FeedMsg::TradeSounds(sounds) => {
+                        let room = 256usize.saturating_sub(self.trade_sounds.len());
+                        if let Some(venue) = self.core_venue.get(&sess.id) {
+                            self.trade_sounds.extend(
+                                sounds
+                                    .into_iter()
+                                    .take(room)
+                                    .map(|s| (sess.id, venue.id, s)),
+                            );
+                        }
+                        stats.ui_state = true;
+                    }
                     FeedMsg::Identity { id, dex, reported } => {
+                        self.trade_sound_epochs
+                            .insert(sess.id, std::sync::Arc::new(()));
+                        self.trade_sounds.retain(|(core, _, _)| *core != sess.id);
                         // One insert replaces the whole entry, so a reconnect onto a different
                         // venue cannot leave the previous caption or DEX name behind.
                         self.core_venue
@@ -401,6 +433,18 @@ impl SessionManager {
             }
         }
         stats
+    }
+
+    /// Current connection token for delayed trade playback; removal makes it unavailable.
+    pub fn trade_sound_epoch(&self, core: CoreId) -> Option<&std::sync::Arc<()>> {
+        self.trade_sound_epochs.get(&core)
+    }
+
+    /// Transfer captured edges to the UI playback lane, which owns delayed authorization.
+    pub fn take_trade_sounds(
+        &mut self,
+    ) -> Vec<(CoreId, ExchangeId, crate::feed::trade_sound::TradeSound)> {
+        std::mem::take(&mut self.trade_sounds)
     }
 
     /// Debug-only stress fixture for the dev panel fill button.

@@ -371,6 +371,9 @@ pub struct HotkeysConfig {
     /// inherit, not because Alt is unavailable — it reaches the handler on both platforms.
     #[serde(default = "default_draw_hline")]
     pub draw_hline: String,
+    /// Optional shortcut for the one-click horizontal ray; absent means unassigned.
+    #[serde(default)]
+    pub draw_horizontal_ray: String,
     #[serde(default = "default_draw_segment")]
     pub draw_segment: String,
     #[serde(default = "default_draw_triangle")]
@@ -483,6 +486,7 @@ impl Default for HotkeysConfig {
             switch_figure: default_switch_figure(),
             chart_shot: default_chart_shot(),
             draw_hline: default_draw_hline(),
+            draw_horizontal_ray: String::new(),
             draw_segment: default_draw_segment(),
             draw_triangle: default_draw_triangle(),
             draw_channel: default_draw_channel(),
@@ -744,6 +748,7 @@ impl HotkeysConfig {
             &self.switch_figure,
             &self.chart_shot,
             &self.draw_hline,
+            &self.draw_horizontal_ray,
             &self.draw_segment,
             &self.draw_triangle,
             &self.draw_channel,

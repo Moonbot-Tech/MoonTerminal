@@ -12,6 +12,7 @@ use gpui::*;
 use moon_core::config::{HotkeysConfig, MouseGestureBinding, MoveKind};
 use rust_i18n::t;
 
+/// Editable shortcut identities shared by hotkey rows and their config mapping.
 #[derive(Clone, Copy)]
 enum HotkeySlot {
     OrderSize(usize),
@@ -37,6 +38,8 @@ enum HotkeySlot {
     SwitchFigure,
     ChartShot,
     DrawHline,
+    /// Optional one-click horizontal ray shortcut.
+    DrawHorizontalRay,
     DrawSegment,
     DrawTriangle,
     DrawChannel,
@@ -160,6 +163,7 @@ macro_rules! hotkey_field {
             HotkeySlot::SwitchFigure => $($brw)+ $hotkeys.switch_figure,
             HotkeySlot::ChartShot => $($brw)+ $hotkeys.chart_shot,
             HotkeySlot::DrawHline => $($brw)+ $hotkeys.draw_hline,
+            HotkeySlot::DrawHorizontalRay => $($brw)+ $hotkeys.draw_horizontal_ray,
             HotkeySlot::DrawSegment => $($brw)+ $hotkeys.draw_segment,
             HotkeySlot::DrawTriangle => $($brw)+ $hotkeys.draw_triangle,
             HotkeySlot::DrawChannel => $($brw)+ $hotkeys.draw_channel,
@@ -330,6 +334,7 @@ fn mouse_slot_id(slot: MouseSlot) -> &'static str {
     }
 }
 
+/// Stable element identity for each editable shortcut.
 fn slot_id(slot: HotkeySlot) -> String {
     match slot {
         HotkeySlot::OrderSize(i) => format!("order-size-{i}"),
@@ -355,6 +360,7 @@ fn slot_id(slot: HotkeySlot) -> String {
         HotkeySlot::SwitchFigure => "switch-figure".into(),
         HotkeySlot::ChartShot => "chart-shot".into(),
         HotkeySlot::DrawHline => "draw-hline".into(),
+        HotkeySlot::DrawHorizontalRay => "draw-horizontal-ray".into(),
         HotkeySlot::DrawSegment => "draw-segment".into(),
         HotkeySlot::DrawTriangle => "draw-triangle".into(),
         HotkeySlot::DrawChannel => "draw-channel".into(),
@@ -367,6 +373,7 @@ fn slot_id(slot: HotkeySlot) -> String {
 /// Compact identity label for one hotkey slot — the same title `group_rows` gives this slot's own
 /// editor row, e.g. `"F3"` or the localized action name. Lets the pull preview name each row this
 /// way too, so two visually identical `F1 -> F2 will apply` rows can be told apart.
+/// Localized shortcut name used in settings and import previews.
 fn slot_label(slot: HotkeySlot) -> String {
     match slot {
         HotkeySlot::OrderSize(i) => format!("F{}", i + 1),
@@ -392,6 +399,7 @@ fn slot_label(slot: HotkeySlot) -> String {
         HotkeySlot::SwitchFigure => t!("hotkeys.switch_figure").to_string(),
         HotkeySlot::ChartShot => t!("hotkeys.chart_shot").to_string(),
         HotkeySlot::DrawHline => t!("hotkeys.draw_hline").to_string(),
+        HotkeySlot::DrawHorizontalRay => t!("hotkeys.draw_horizontal_ray").to_string(),
         HotkeySlot::DrawSegment => t!("hotkeys.draw_segment").to_string(),
         HotkeySlot::DrawTriangle => t!("hotkeys.draw_triangle").to_string(),
         HotkeySlot::DrawChannel => t!("hotkeys.draw_channel").to_string(),

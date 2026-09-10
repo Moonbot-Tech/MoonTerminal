@@ -41,6 +41,7 @@ pub mod tab_badges;
 pub mod telegram_access;
 pub mod theme;
 pub mod theme_legacy;
+pub mod trade_sounds;
 
 mod backup;
 mod migrate;

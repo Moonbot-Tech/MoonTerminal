@@ -32,10 +32,8 @@ use crate::panels::{micro_button, popup_group, popup_group_inset_px, toggle_vari
 /// selecting nothing, which reads as "unset". Every field now starts at `1.5`.
 const SIZE_STEPS: [f32; 7] = [0.75, 1.0, 1.25, 1.45, 1.5, 1.7, 2.0];
 
-/// Fixed colours a caption may take, beyond the theme and the by-sign modes.
-const FIXED_COLORS: [u32; 8] = [
-    0xffffff, 0xffd166, 0xef476f, 0x06d6a0, 0x4cc9f0, 0xb388ff, 0xff9f1c, 0x8d99ae,
-];
+/// Initial fixed color when a caption first leaves its theme or sign mode.
+const DEFAULT_FIXED_COLOR: u32 = 0xffffff;
 
 /// Colour thresholds offered, in percent. `0` colours everything, which is the default and the
 /// way back.
@@ -663,7 +661,7 @@ fn caption_settings(
                         // back and forth does not silently reset the user's choice.
                         _ => match style.color {
                             Some(LabelColor::Fixed(rgb)) => LabelColor::Fixed(rgb),
-                            _ => LabelColor::Fixed(FIXED_COLORS[0]),
+                            _ => LabelColor::Fixed(DEFAULT_FIXED_COLOR),
                         },
                     });
                 });
@@ -671,29 +669,17 @@ fn caption_settings(
         )
     });
     if let LabelColor::Fixed(picked) = resolved.color {
-        let mut swatches = h_flex().gap(design::ui_px(cx, 3.0));
-        for value in FIXED_COLORS {
-            let state = state.clone();
-            // A bare `div` here is the colour itself, not a re-implemented button: the library's
-            // own colour control is `MoonColorPicker`, which needs a state entity per caption.
-            swatches = swatches.child(
-                div()
-                    .id(SharedString::from(format!("le-sw-{value:06x}")))
-                    .w(design::ui_px(cx, 18.0))
-                    .h(design::ui_px(cx, 14.0))
-                    .rounded(design::ui_px(cx, 3.0))
-                    .bg(rgb(value))
-                    .border_1()
-                    .border_color(moon(if value == picked { p.text } else { p.border }))
-                    .cursor_pointer()
-                    .on_click(move |_, _w, cx: &mut App| {
-                        write_row(&state, cx, |s| {
-                            s.row.parts[selected].style.color = Some(LabelColor::Fixed(value));
-                        });
-                    }),
-            );
-        }
-        col = col.child(swatches);
+        let state = state.clone();
+        col = col.child(crate::controls::color_picker::ColorPicker::new(
+            format!("le-color-{}-{selected}", state.entity_id()),
+            design::hsla_to_rgb8(rgb(picked).into()),
+            move |color, cx| {
+                write_row(&state, cx, |s| {
+                    s.row.parts[selected].style.color =
+                        Some(LabelColor::Fixed(design::rgb_to_u32(color)));
+                });
+            },
+        ));
     }
 
     // Whether the colour applies to the figure alone. Offered only when the caption HAS a prefix

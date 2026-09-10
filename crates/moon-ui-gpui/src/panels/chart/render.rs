@@ -388,6 +388,7 @@ impl Render for ChartPanel {
                 |this: &mut ChartPanel, e: &ModifiersChangedEvent, _w, cx| {
                     this.note_news_modifiers(e.modifiers, cx);
                     this.note_warn_modifiers(e.modifiers, cx);
+                    this.note_fig_modifiers(e.modifiers.secondary(), cx);
                 },
             ))
             // The own-pass engine synchronously obtains slot geometry from `GpuFrameInfo.bounds`
