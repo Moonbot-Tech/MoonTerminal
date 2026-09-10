@@ -50,10 +50,15 @@ fn scale_label(scale: Option<f32>) -> String {
 /// Returns the next price-scale step for the Scale +/- shortcuts.
 ///
 /// `SCALES` is the single ordering source: Auto → 50% → 20% → 10% → 5% → 2%, with increasing
-/// indices zooming IN. `zoom_in=true` (Scale +) moves toward a smaller percentage; `false`
-/// (Scale -) moves outward toward Auto. The ends clamp without wrapping. Exact preset values
-/// match directly; a custom dragged value starts from its nearest numeric step.
-pub(crate) fn step_scale(current: Option<f32>, zoom_in: bool) -> Option<f32> {
+/// indices zooming IN. The ends clamp without wrapping. Exact preset values match directly; a
+/// custom dragged value starts from its nearest numeric step.
+///
+/// `scale_up` is the PERCENTAGE going up — a wider visible band, which is zooming OUT — because that
+/// is what Moonbot's own "Scale +" does: its Ctrl+Q walks the scale 1% → 2% → 3% → 5%, checked
+/// against Moonbot on 2026-09-10. The parameter used to be `zoom_in` and the two hotkeys passed it
+/// the other way round, so both shortcuts did the opposite of their label. Nothing caught it: the
+/// only reader is the pair of hotkey handlers, and no test pinned the direction until now.
+pub(crate) fn step_scale(current: Option<f32>, scale_up: bool) -> Option<f32> {
     let idx = SCALES
         .iter()
         .position(|(_, v)| *v == current)
@@ -67,10 +72,11 @@ pub(crate) fn step_scale(current: Option<f32>, zoom_in: bool) -> Option<f32> {
                 .map(|(i, _)| i)
                 .unwrap_or(0),
         });
-    let next = if zoom_in {
-        (idx + 1).min(SCALES.len() - 1)
-    } else {
+    let next = if scale_up {
+        // Toward Auto, which heads the list: a bigger percentage sits at a LOWER index.
         idx.saturating_sub(1)
+    } else {
+        (idx + 1).min(SCALES.len() - 1)
     };
     SCALES[next].1
 }
@@ -229,3 +235,6 @@ pub(crate) fn scale_dropdown_for_add_stack(
     )
     .into_any_element()
 }
+
+#[cfg(test)]
+mod tests;

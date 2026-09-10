@@ -7,7 +7,7 @@ use moonproto::state::StratsState;
 use moonproto::{MoonClient, StrategyKind, StrategySchema, StrategySnapshot};
 
 use super::account_reconciliation::BALANCE_TRACE_LEVEL;
-use super::client_settings::{ClientSettingsSequence, ManualOrder};
+use super::client_settings::{ClientSettingsSequence, ManualOrder, ManualOrderKind};
 use super::market_role::MarketRoleState;
 use super::shared_config::SharedConfigSequence;
 use crate::config::ServerConfig;
@@ -1332,7 +1332,30 @@ pub(super) fn drain_commands(
                     size,
                     strategy_id,
                     exit,
-                    planned_sell,
+                    kind: ManualOrderKind::Immediate { planned_sell },
+                    sync_exit,
+                });
+            }
+            Ok(CoreCmd::PlacePendingOrder {
+                market,
+                short,
+                trigger_price,
+                size,
+                strategy_id,
+                exit,
+                sync_exit,
+            }) => {
+                // Behind the SAME barrier as an immediate order: a bare pending is priced from the
+                // core's own exit generation when it fires, so releasing it ahead of that generation
+                // would create it under the TP/SL the trader just replaced.
+                client_settings_sequence.enqueue_order(ManualOrder {
+                    market,
+                    short,
+                    price: trigger_price,
+                    size,
+                    strategy_id,
+                    exit,
+                    kind: ManualOrderKind::Pending,
                     sync_exit,
                 });
             }

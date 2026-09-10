@@ -1,6 +1,6 @@
 use super::{
-    ClientSettingsSequence, GroupExitSettings, MAX_EXIT_ATTEMPTS, ManualOrder, SequenceAction,
-    TakeProfitMode, client_settings_from_proto,
+    ClientSettingsSequence, GroupExitSettings, MAX_EXIT_ATTEMPTS, ManualOrder, ManualOrderKind,
+    SequenceAction, TakeProfitMode, client_settings_from_proto,
 };
 use crate::feed::ClientSettingsEdit;
 
@@ -44,7 +44,7 @@ fn waiting_order(price: f64, take_profit: f64) -> ManualOrder {
         size: 800.0,
         strategy_id: None,
         exit: exit_settings(take_profit, false),
-        planned_sell: 0.0,
+        kind: ManualOrderKind::Immediate { planned_sell: 0.0 },
         sync_exit: true,
     }
 }
@@ -188,7 +188,7 @@ fn orders_release_after_their_own_confirmed_generation() {
         size: 0.25,
         strategy_id: None,
         exit: first,
-        planned_sell: 0.0,
+        kind: ManualOrderKind::Immediate { planned_sell: 0.0 },
         sync_exit: true,
     });
     sequence.enqueue_order(ManualOrder {
@@ -198,7 +198,7 @@ fn orders_release_after_their_own_confirmed_generation() {
         size: 0.001,
         strategy_id: None,
         exit: second,
-        planned_sell: 0.0,
+        kind: ManualOrderKind::Immediate { planned_sell: 0.0 },
         sync_exit: true,
     });
 
@@ -232,7 +232,7 @@ fn an_order_is_released_after_its_generation_is_refused_three_times() {
         size: 0.001,
         strategy_id: None,
         exit: exit_settings(30.0, false),
-        planned_sell: 0.0,
+        kind: ManualOrderKind::Immediate { planned_sell: 0.0 },
         sync_exit: true,
     });
 
@@ -269,14 +269,21 @@ fn an_order_that_ignores_the_exit_generation_is_sent_immediately() {
         strategy_id: Some(77),
         // Deliberately a generation the core does NOT hold: it must not matter.
         exit: exit_settings(30.0, false),
-        planned_sell: 101_000.0,
+        kind: ManualOrderKind::Immediate {
+            planned_sell: 101_000.0,
+        },
         sync_exit: false,
     });
 
     match sequence.next_action(&core_settings, TEST_CORE) {
         SequenceAction::Place(order) => {
             assert_eq!(order.market, "BTCUSDT");
-            assert_eq!(order.planned_sell, 101_000.0);
+            assert_eq!(
+                order.kind,
+                ManualOrderKind::Immediate {
+                    planned_sell: 101_000.0
+                }
+            );
         }
         _ => panic!("an order that does not sync its exits must go out on the first plan"),
     }
@@ -487,7 +494,7 @@ fn a_queued_ban_does_not_strand_an_order_whose_exits_were_refused() {
         size: 10.0,
         strategy_id: None,
         exit: exit_settings(12.0, true),
-        planned_sell: 0.0,
+        kind: ManualOrderKind::Immediate { planned_sell: 0.0 },
         sync_exit: true,
     });
     // The trader bans a different coin while the order is still waiting.

@@ -99,6 +99,21 @@ fn gpui_keystroke_format() {
         to_gpui_keystroke(decode(MOD_CTRL | MOD_SHIFT | 0x21)).unwrap(),
         "ctrl-shift-pageup"
     );
+    // The platform key sits BEFORE shift and is named for the OS, both mirroring
+    // `gpui::Keystroke::unparse` — which is what the terminal writes when a key is recorded, and
+    // what two literal collision checks in this crate compare against. Written the other way round
+    // until 2026-09-10, so one press had two spellings and those checks called it two keys.
+    let platform = if cfg!(target_os = "macos") {
+        "cmd"
+    } else if cfg!(target_os = "windows") {
+        "win"
+    } else {
+        "super"
+    };
+    assert_eq!(
+        to_gpui_keystroke(decode(MOD_CMD | MOD_SHIFT | 0x44)).unwrap(),
+        format!("{platform}-shift-d")
+    );
 }
 
 #[test]

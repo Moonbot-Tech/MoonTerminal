@@ -13,11 +13,25 @@
 //! such question had to be answered by reading the routers again.
 //!
 //! This module is that attachment and nothing else — a pure lookup with one arm per slot, so the
-//! compiler refuses a new slot that does not state both facts. It computes no conflicts yet; the
-//! yellow/red captions planned on top of it need exactly the overlap [`Scope::intersects`] answers,
-//! and when they are written [`Scope`] should move down beside the routers it describes
-//! (`crate::hotkeys`) so the rule can refine `HotkeysConfig::bound_keys` rather than disagree with
-//! it.
+//! compiler refuses a new slot that does not state both facts.
+//!
+//! It computes no conflicts, and it turned out not to be what the conflict captions needed:
+//! [`super::clash`] answers them from the dispatchers' own ORDER — `RESOLVE_ORDER` for the keys, the
+//! per-button layer lists for the mouse — because the first version, which reasoned about where each
+//! binding acts, was backwards on thirty slots out of thirty-eight. So [`Scope`] is a row's label
+//! and not a rule, and [`Scope::intersects`] has no caller outside this module's own tests.
+//!
+//! It was also meant to MOVE down beside the routers it describes, so the fact would be owned where
+//! the behavior is. That is blocked on something bigger, and worth naming rather than re-discovering:
+//! the tables below are keyed by [`HotkeySlot`] and [`MouseSlot`], which are defined in this
+//! settings page (`super`). A table cannot sit below its own key type, so the slot enums have to
+//! come out of the page first — which is the plan's P0, the one slot registry. Until then the label
+//! stays here.
+//!
+//! What DID move down is the comparison the collision rule turns on: `crate::hotkeys::binding_id` is
+//! now the single definition of "these two configured strings are the same press", beside the
+//! dispatcher that decides it, and both [`super::clash`] and [`super::pull`] read it instead of
+//! spelling their own.
 
 use rust_i18n::t;
 

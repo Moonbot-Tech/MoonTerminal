@@ -280,9 +280,10 @@ impl Shell {
             // Step the active tab's Y scale and address the revision to this group. Its ChartTabs
             // applies the change to the active panel and consumes only revisions for its group.
             HotkeyAction::ScalePlus | HotkeyAction::ScaleMinus => {
-                let zoom_in = matches!(action, HotkeyAction::ScalePlus);
+                // "+" is the scale NUMBER growing, not the zoom: Moonbot's Scale + widens the band.
+                let scale_up = matches!(action, HotkeyAction::ScalePlus);
                 self.backend.update(cx, |b, _| {
-                    let next = crate::controls::step_scale(b.price_scale, zoom_in);
+                    let next = crate::controls::step_scale(b.price_scale, scale_up);
                     b.price_scale = next;
                     b.price_scale_group = Some(group.clone());
                     b.price_scale_rev = b.price_scale_rev.wrapping_add(1);

@@ -185,6 +185,10 @@ fn mouse_down_handlers_offer_a_press_to_their_layers_in_a_fixed_order() {
                 "try_open_figure_menu",
                 "try_move_orders_click",
                 "try_open_order_menu",
+                // Last, under both menus — and left out of this list until 10.09.2026, which is how
+                // the settings page came to caption a working right-button placement gesture "the
+                // right button places no orders".
+                "try_place_order_click",
             ],
         ),
         (

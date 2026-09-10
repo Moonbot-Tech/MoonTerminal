@@ -121,6 +121,18 @@ pub fn to_gpui_keystroke(short: DecodedShortcut) -> Option<String> {
     let DecodedShortcut::Key { mods, key } = short else {
         return None;
     };
+    // Modifier order and the platform key's NAME mirror `gpui::Keystroke::unparse`, which is what
+    // the terminal writes when a key is recorded in Settings. `Keystroke::parse` reads either
+    // spelling, so this is not about being understood — it is about the two strings the app writes
+    // for one press being the SAME string, because two collision checks in this crate compare them
+    // literally and it has no parser to do better (`HotkeysConfig::clear_if_duplicate`,
+    // `plan::push_hotkey`). Before this they read `ctrl-alt-shift-cmd-k` against
+    // `ctrl-alt-win-shift-k` and called one press two keys.
+    //
+    // One-off cost, worth naming: a key stored by an EARLIER build's import as `cmd-…` no longer
+    // matches literally, so the next import preview offers it once as a change. Applying it rewrites
+    // the spelling and the row settles. One row, for a modifier almost nothing is bound to, against
+    // every future write agreeing.
     let mut s = String::new();
     if mods.ctrl {
         s.push_str("ctrl-");
@@ -128,11 +140,18 @@ pub fn to_gpui_keystroke(short: DecodedShortcut) -> Option<String> {
     if mods.alt {
         s.push_str("alt-");
     }
+    if mods.cmd {
+        // The same per-OS word `unparse` emits, for the same modifier.
+        s.push_str(if cfg!(target_os = "macos") {
+            "cmd-"
+        } else if cfg!(target_os = "windows") {
+            "win-"
+        } else {
+            "super-"
+        });
+    }
     if mods.shift {
         s.push_str("shift-");
-    }
-    if mods.cmd {
-        s.push_str("cmd-");
     }
     use ShortcutKey::*;
     match key {
@@ -172,11 +191,20 @@ pub fn display(short: DecodedShortcut) -> String {
             if mods.alt {
                 s.push_str("Alt+");
             }
+            // Platform key before Shift, and named for the OS, exactly as `to_gpui_keystroke`
+            // writes it: this label sits beside that string in the import preview, and the two
+            // describing one press differently is how a reader starts doubting which is which.
+            if mods.cmd {
+                s.push_str(if cfg!(target_os = "macos") {
+                    "Cmd+"
+                } else if cfg!(target_os = "windows") {
+                    "Win+"
+                } else {
+                    "Super+"
+                });
+            }
             if mods.shift {
                 s.push_str("Shift+");
-            }
-            if mods.cmd {
-                s.push_str("Cmd+");
             }
             use ShortcutKey::*;
             match key {

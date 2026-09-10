@@ -24,9 +24,9 @@ use super::pull::{PullRow, PullVerdict, apply_core_hotkeys, preview_core_hotkeys
 use super::pull_gestures::{self, GesturePullRow, apply_core_gestures, preview_core_gestures};
 use super::{
     HotkeyGroup, HotkeySlot, MouseSlot, MoveKindSlot, all_mouse_slots, mouse_slot_id,
-    mouse_slot_value, mouse_slot_wip, move_kind_slot_id, move_kind_slot_value, parse_hotkey,
-    set_mouse_slot_value, set_mouse_slot_verbatim, set_move_kind_slot_value, set_slot_value,
-    short_move_twin, slot_id, slot_label, slot_value,
+    mouse_slot_value, move_kind_slot_id, move_kind_slot_value, set_mouse_slot_value,
+    set_mouse_slot_verbatim, set_move_kind_slot_value, set_slot_value, short_move_twin, slot_id,
+    slot_label, slot_value,
 };
 use crate::design;
 use crate::settings::SettingsView;
@@ -725,7 +725,7 @@ impl SettingsView {
         let title_is_identity =
             matches!(slot, HotkeySlot::OrderSize(_) | HotkeySlot::SellPreset(_));
         let raw = slot_value(hotkeys, slot);
-        let parsed = parse_hotkey(raw);
+        let parsed = crate::hotkeys::parse_binding(raw);
         let invalid = !raw.trim().is_empty() && parsed.is_none();
 
         let id = format!("hotkey-{}", slot_id(slot));
@@ -797,22 +797,16 @@ impl SettingsView {
         let current = mouse_slot_value(hotkeys, slot);
         let id = format!("mouse-{}", mouse_slot_id(slot));
         let backend = self.backend.clone();
-        let wip = mouse_slot_wip(slot);
-        // Every note this row prints, in one place under the description: the "not wired yet"
-        // status used to sit in a column of its own on the far right, which put it a screen away
-        // from the sentence it belongs beside.
-        let mut notes: Vec<Clash> = Vec::new();
-        if wip {
-            notes.push(Clash {
-                severity: Severity::Shares,
-                text: t!("hotkeys.todo").to_string(),
-            });
-        }
+        // Every note this row prints goes under the description, rather than in a column of its
+        // own on the far right — which put it a screen away from the sentence it belongs beside.
+        //
         // A greyed short row follows its long twin, so a clash reported on it would name a binding
         // the row does not own.
-        if !disabled && let Some(clash) = clashes.mouse(hotkeys, slot) {
-            notes.push(clash);
-        }
+        let notes = if disabled {
+            Vec::new()
+        } else {
+            clashes.mouse(hotkeys, slot)
+        };
         let items = MouseGestureBinding::ALL.into_iter().map(move |gesture| {
             let backend = backend.clone();
             MoonMenuItem::with_key(gesture.config_value(), gesture.menu_label())
@@ -945,7 +939,8 @@ impl SettingsView {
     ///     desc: Muted description that may wrap within its capped column.
     ///     marks: The slot's two facts, or `None` for a row that owns no slot.
     ///     mono_title: Whether the title is an identity like `F3` rather than a phrase.
-    ///     notes: Lines printed under the description — a clash, a "not wired yet" — in order.
+    ///     notes: Lines printed under the description, in order. A gesture row can carry two:
+    ///         which row it takes its binding from, and which layer it shares it with.
     ///     cx: Settings context used for palette and scaled layout.
     ///
     /// Returns:
@@ -1275,7 +1270,7 @@ impl SettingsView {
             )
             .child(
                 MoonHotkeyInput::new(format!("{id}-current"))
-                    .value(parse_hotkey(&row.current))
+                    .value(crate::hotkeys::parse_binding(&row.current))
                     .placeholder(t!("hotkeys.unassigned").to_string())
                     .disabled(true)
                     .compact()

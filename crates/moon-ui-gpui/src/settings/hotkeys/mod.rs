@@ -1,7 +1,7 @@
 //! Hotkeys tab: a Moonbot-compatible hotkey set organized by workflow.
 //!
 //! This module owns the slot enums (`HotkeySlot`/`MouseSlot`), the slot-to-`HotkeysConfig`
-//! field mapping (getters, setters, and IDs), and `parse_hotkey`; [`tab`] contains the
+//! field mapping (getters, setters, and IDs); [`tab`] contains the
 //! `SettingsView` implementation that builds the tab and its editor rows. [`meta`] attaches the
 //! two marks every row carries; [`pull`] and [`pull_gestures`] hold the pure preview/apply logic
 //! behind the "pull layout from core" button — the keys and the mouse gestures respectively.
@@ -151,29 +151,6 @@ fn all_mouse_slots() -> [MouseSlot; 13] {
         MouseSlot::ShortSellMove2,
         MouseSlot::FigDelete,
     ]
-}
-
-/// Returns whether runtime does not yet consume this mouse gesture.
-///
-/// Placement reads BuySet/ShortSet in `ChartPanel::try_place_order_click`, the eight Move gestures
-/// are read by `ChartPanel::try_move_orders_click`, and FigDelete — the one slot here that is not a
-/// trading gesture — by `ChartPanel::try_fig_delete_click`. Only the two pending slots remain
-/// unconsumed, and the reason is ours rather than the protocol's: moonproto DOES carry the command.
-/// `client.trade().new_pending_order(PendingOrderParams::new(market, side, trigger_price, size))`
-/// exists on the pinned revision, and the pending it creates is published in the ordinary order
-/// snapshot, so it can then be moved or cancelled like any other order. Nothing here sends it yet —
-/// that is a feature to write, not a wire gap to wait on.
-fn mouse_slot_wip(slot: MouseSlot) -> bool {
-    matches!(slot, MouseSlot::PendingLong | MouseSlot::PendingShort)
-}
-
-fn parse_hotkey(raw: &str) -> Option<Keystroke> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        None
-    } else {
-        Keystroke::parse(raw).ok()
-    }
 }
 
 /// Centralizes the slot-to-`HotkeysConfig` field map formerly duplicated by the getter and setter.

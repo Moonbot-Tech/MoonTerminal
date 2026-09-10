@@ -111,6 +111,44 @@ struct OrderHit {
     on_start_cross: bool,
 }
 
+/// What one of the four placement gestures asks for: which side, and whether it waits for a trigger.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct PlacementIntent {
+    /// Position side: `false` Long, `true` Short.
+    pub(super) short: bool,
+    /// Whether the clicked price is a pending TRIGGER rather than an entry price.
+    pub(super) pending: bool,
+}
+
+/// Resolve a press against the four configured placement gestures, or `None` for a press that is
+/// not order placement at all.
+///
+/// The four are tried in `settings::hotkeys::all_mouse_slots()`'s order — immediate long, immediate
+/// short, pending long, pending short — the order the settings page lists them in, and the first
+/// match is what fires. `settings::hotkeys::clash::same_layer_rank` mirrors this order to caption
+/// which of two rows holding one gesture wins, so reordering here without reordering there tells
+/// the row that DOES fire that it will not.
+pub(super) fn placement_intent(
+    hotkeys: &moon_core::config::HotkeysConfig,
+    button: TradeMouseButton,
+    modifiers: Modifiers,
+    click_count: usize,
+) -> Option<PlacementIntent> {
+    let matches = |binding| ChartPanel::gesture_matches(binding, button, modifiers, click_count);
+    let (short, pending) = if matches(hotkeys.buy_set_click) {
+        (false, false)
+    } else if matches(hotkeys.short_set_click) {
+        (true, false)
+    } else if matches(hotkeys.pending_long_click) {
+        (false, true)
+    } else if matches(hotkeys.pending_short_click) {
+        (true, true)
+    } else {
+        return None;
+    };
+    Some(PlacementIntent { short, pending })
+}
+
 impl ChartPanel {
     pub(super) fn gesture_matches(
         binding: MouseGestureBinding,
@@ -163,7 +201,8 @@ impl ChartPanel {
         }
     }
 
-    /// Place an order when the press matches a configured buy-set or short-set gesture.
+    /// Place an order when the press matches one of the four configured placement gestures: buy-set,
+    /// short-set, or either pending slot. [`placement_intent`] says which, and in what order.
     ///
     /// `click_count` must be the count from this panel's own [`super::ClickSeries`], never the
     /// window's native one: the native count pairs presses by time and distance across the whole
@@ -187,28 +226,14 @@ impl ChartPanel {
         if self.historical {
             return false;
         }
-        // Resolve Long/Short from the configured buy-set and short-set gestures; unrelated gestures
-        // are not order placement.
-        let short = {
+        let Some(intent) = ({
             let b = self.backend.read(cx);
             let cfg = b.preview.as_ref().unwrap_or(&b.config);
-            if Self::gesture_matches(cfg.hotkeys.buy_set_click, button, modifiers, click_count) {
-                Some(false)
-            } else if Self::gesture_matches(
-                cfg.hotkeys.short_set_click,
-                button,
-                modifiers,
-                click_count,
-            ) {
-                Some(true)
-            } else {
-                None
-            }
-        };
-        let Some(short) = short else {
+            placement_intent(&cfg.hotkeys, button, modifiers, click_count)
+        }) else {
             return false;
         };
-        self.place_order_at_pos(pos, short, cx)
+        self.place_order_at_pos(pos, intent, cx)
     }
 
     /// Send Moonbot's Move Open / Move TP for a press that matches one of the four move gestures.
@@ -338,7 +363,16 @@ impl ChartPanel {
             return false;
         }
         match self.input.cursor {
-            Some(pos) => self.place_order_at_pos(pos, short, cx),
+            // The new-long/new-short KEYS place an immediate order; a pending has no key of its
+            // own, only the two gesture slots.
+            Some(pos) => self.place_order_at_pos(
+                pos,
+                PlacementIntent {
+                    short,
+                    pending: false,
+                },
+                cx,
+            ),
             None => {
                 log::debug!(
                     "manual order refused: this chart holds no cursor position, so the hotkey has \
@@ -349,11 +383,29 @@ impl ChartPanel {
         }
     }
 
-    /// Place a manual order at slot-pixel position `pos`, using `short` to select its position side.
+    /// Place a manual order at slot-pixel position `pos`, as `intent` asks for it.
     ///
-    /// `false` selects Long and `true` selects Short. This shared mouse/hotkey path resolves pane,
-    /// price, and `(core, market)`, then converts the core group's visible USD-equivalent size.
-    fn place_order_at_pos(&mut self, pos: (f32, f32), short: bool, cx: &mut Context<Self>) -> bool {
+    /// `intent.short` selects the position side. This shared mouse/hotkey path resolves pane, price,
+    /// and `(core, market)`, then converts the core group's visible USD-equivalent size.
+    ///
+    /// `intent.pending` sends the price as a TRIGGER CONDITION instead of an entry: the core holds
+    /// the order until the market reaches it and prices the order itself then, applying its own
+    /// pending spread. Every absolute PRICE the terminal would derive from an entry is therefore
+    /// withheld on that path — see the branch below — and the core supplies the exits from the
+    /// generation this order waits behind, or from the strategy named with it. The SIZE is the one
+    /// figure that cannot be withheld, since the order needs one: on a Contracts market it is
+    /// divided by the trigger and so carries the spread's error, which `manual_order_size_base`
+    /// states at the division and the slot's hint states to the trader.
+    ///
+    /// The two flags travel as one [`PlacementIntent`] rather than as adjacent `bool` arguments:
+    /// transposing them compiles silently and opens the wrong side with the wrong command.
+    fn place_order_at_pos(
+        &mut self,
+        pos: (f32, f32),
+        intent: PlacementIntent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let PlacementIntent { short, pending } = intent;
         // In separate-zone mode place only from the order-book zone; otherwise accept any pane area.
         let separate = self.separate_zones(cx);
         let pane = if separate {
@@ -438,10 +490,38 @@ impl ChartPanel {
                 );
                 return false;
             };
-            b.queue_visible_stop(core, &market, price, short, terms.exit);
-            match b
-                .session
-                .place_order(
+            let sent = if pending {
+                // NOTHING derived from an entry price rides with a pending, because it has no entry
+                // yet: the core prices it at the trigger moved by its own pending spread
+                // (`pending_orders_spread` ships at 0.5%, more than a whole take profit on many
+                // manual orders). That rules out `planned_sell`, an absolute price on the wire, and
+                // it rules out queueing the visible stop, which is written onto the published order
+                // as an absolute level computed from the entry. The core applies the exits it holds
+                // when the order really opens: the generation this one waits behind, or its
+                // strategy.
+                //
+                // KNOWN GAP, and the slot's hint states it rather than leaving the trader to find
+                // it: `queue_visible_stop` is what carries an EDITED panel SL onto a manual-strategy
+                // order, so with a manual strategy selected a pending takes that strategy's stop and
+                // the edit does not reach it. Queueing it here would not fix that — the queue holds
+                // one stop per market for 15 seconds and matches the next order to appear, while a
+                // pending may wait hours and then open at a price this side never saw. The real fix
+                // is a per-order stop intent that survives until its own uid leaves the pending
+                // state and is computed from the entry the core actually used; that is a feature,
+                // and `docs-internal/HOTKEYS_UNIFIED_PLAN.md` carries it.
+                b.session.place_pending_order(
+                    core,
+                    market.clone(),
+                    short,
+                    price,
+                    terms.size_base,
+                    terms.strategy_id,
+                    terms.exit,
+                    terms.sync_exit,
+                )
+            } else {
+                b.queue_visible_stop(core, &market, price, short, terms.exit);
+                b.session.place_order(
                     core,
                     market.clone(),
                     short,
@@ -452,15 +532,17 @@ impl ChartPanel {
                     terms.planned_sell.unwrap_or(0.0),
                     terms.sync_exit,
                 )
-            {
+            };
+            match sent {
                 Ok(()) => {
                     // The pointer position is in the SUCCESS line too, so a log holding both
                     // outcomes shows where the accepting zone actually starts — a refusal alone
                     // gives one side of the boundary and leaves the other to guesswork.
                     log::info!(
-                        "manual chart order: core={} market={market} side={} price={price:.8} size={} usd={usd} at ({:.1}, {:.1})",
+                        "manual chart order: core={} market={market} side={} {}={price:.8} size={} usd={usd} at ({:.1}, {:.1})",
                         moon_core::feed::core_label(core),
                         if short { "short" } else { "long" },
+                        if pending { "trigger" } else { "price" },
                         terms.size_base,
                         pos.0,
                         pos.1
@@ -470,8 +552,13 @@ impl ChartPanel {
                 Err(err) => {
                     // The stop was queued before the order was sent, and it attaches to whatever
                     // order appears next in this market. With no order on its way, leaving it armed
-                    // would put THIS click's stop on somebody else's next order.
-                    b.cancel_pending_stop(core, &market);
+                    // would put THIS click's stop on somebody else's next order. Only the immediate
+                    // path queued one: the queue holds a single stop per market, so cancelling on a
+                    // failed PENDING would discard the stop an immediate order placed moments ago
+                    // and is still waiting for.
+                    if !pending {
+                        b.cancel_pending_stop(core, &market);
+                    }
                     log::warn!(
                         "manual chart order failed: core={} market={market} price={price:.8}: {err:#}",
                         moon_core::feed::core_label(core)

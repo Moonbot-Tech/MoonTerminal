@@ -122,9 +122,10 @@ pub enum HotkeyAction {
     ///
     /// The caller increments a global revision observed by every `ChartTabs` instance.
     CloseAllCharts,
-    /// Zoom the active chart's Y scale inward through the calling window.
+    /// Step the active chart's Y scale UP a preset through the calling window — a wider price
+    /// band, which is zooming OUT. Moonbot's own reading of "+": see `controls::step_scale`.
     ScalePlus,
-    /// Zoom the active chart's Y scale outward through the calling window.
+    /// Step the active chart's Y scale DOWN a preset — a tighter band, zooming IN.
     ScaleMinus,
     /// Copy an image of the active chart to the system clipboard - Moonbot's "make shot".
     ///
@@ -135,6 +136,59 @@ pub enum HotkeyAction {
     ChartShot,
 }
 
+/// What the dispatcher actually compares a keystroke by: its modifiers and its key, nothing else.
+///
+/// The two halves of a configured binding's identity, and the ONE definition of it. Every collision
+/// question in the app — the settings page's clash captions, the core pull's "already bound
+/// elsewhere" gate — is "do these two configured strings name the same press", and answering it by
+/// comparing the STRINGS is wrong in ways nobody spots by reading: `Keystroke::parse` is
+/// case-insensitive, accepts the modifiers in any order, and takes `cmd`, `super` and `win` as one
+/// modifier. `hotkeys.toml` is a plain file the user may hand-edit or paste into, so `Ctrl-F10` and
+/// `shift-ctrl-Z` are spellings that really arrive; and a file written by an older build carries
+/// `ctrl-alt-shift-cmd-k` where this one now writes `ctrl-alt-win-shift-k` for the same press. Same
+/// press, several strings, and a literal compare calls them free of each other.
+///
+/// The two producers themselves were the worst of it and no longer disagree:
+/// `moonbot_import::shortcut::to_gpui_keystroke` was aligned with `Keystroke::unparse` on
+/// 2026-09-10. What remains is every file written before that, and every file written by hand.
+pub type BindingId = (Modifiers, String);
+
+/// A configured binding string as a keystroke, or `None` for one that binds nothing.
+///
+/// The one statement of "unbound" in the app: empty, whitespace, or a spelling the parser rejects.
+/// All three mean the same thing to every caller — a slot holding one fires on no press, takes a key
+/// from nobody and loses one to nobody — and it used to be written out separately in [`pressed`], in
+/// [`binding_id`] and in the settings page.
+pub fn parse_binding(raw: &str) -> Option<Keystroke> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Keystroke::parse(raw).ok()
+}
+
+/// The identity of a CONFIGURED binding string, or `None` for one that can never fire.
+///
+/// This is the string-vs-string sibling of [`pressed`], and deliberately does NOT carry its
+/// physical-letter fallback: that one exists because a LAYOUT decides what the platform calls the
+/// key the user physically struck, and both sides here are spellings their author chose, on no
+/// layout in particular.
+pub fn binding_id(raw: &str) -> Option<BindingId> {
+    let k = parse_binding(raw)?;
+    Some((k.modifiers, k.key))
+}
+
+/// Whether two configured binding strings name the same press.
+///
+/// Two strings that cannot fire are not "the same binding": an unbound slot does not collide with
+/// another unbound slot, and reporting that would put a clash caption on every empty row.
+pub fn same_binding(a: &str, b: &str) -> bool {
+    match (binding_id(a), binding_id(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Return whether an event matches a configured GPUI keystroke string.
 ///
 /// Empty or invalid strings do not match. Comparison uses only `modifiers` and `key`: Windows
@@ -142,13 +196,11 @@ pub enum HotkeyAction {
 /// prevented Ctrl-plus-letter bindings from matching.
 ///
 /// A letter is compared against the PHYSICAL key as well as the name the platform gave it, so a
-/// binding does not die when the keyboard layout changes — see [`layout::us_letter`].
+/// binding does not die when the keyboard layout changes — see [`layout::us_letter`]. That half is
+/// why this cannot be [`binding_id`] on both sides: an event's `key` is what the layout produced,
+/// not what the author typed into the settings page.
 fn pressed(raw: &str, event: &Keystroke) -> bool {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return false;
-    }
-    let Ok(k) = Keystroke::parse(raw) else {
+    let Some(k) = parse_binding(raw) else {
         return false;
     };
     k.modifiers == event.modifiers

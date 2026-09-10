@@ -1,6 +1,7 @@
 // Do not use `super::*`: the parent re-exports GPUI's `test` attribute macro through its imports,
 // which would shadow the built-in `#[test]`.
 use super::layout::us_letter;
+use super::{binding_id, same_binding};
 
 /// Pins what the layout translation must NOT touch.
 ///
@@ -177,4 +178,38 @@ fn only_the_presses_a_field_consumes_belong_to_it() {
             "{raw} is a binding, and the character is the one the user did not ask for"
         );
     }
+}
+
+/// One press, two spellings, and the tree really produces both: `Keystroke::unparse` writes a
+/// recorded key as `ctrl-alt-win-shift-k` on Windows while `moonbot_import::shortcut` writes
+/// `ctrl-alt-shift-cmd-k` for the same press. Every collision question in the app turns on these
+/// being one binding.
+///
+/// Plausible breakage: comparing the strings again — in the clash captions, in the core pull, or in a
+/// third place added later — which reads a taken key as free and double-binds the file.
+#[test]
+fn one_press_spelled_two_ways_is_one_binding() {
+    // Modifier order.
+    assert!(same_binding("shift-ctrl-z", "ctrl-shift-z"));
+    // Case, in both the modifier and a named key.
+    assert!(same_binding("Ctrl-F10", "ctrl-f10"));
+    // `cmd`, `super` and `win` are one modifier to `Keystroke::parse`, and the two producers in this
+    // tree disagree on which word they write.
+    assert!(same_binding("ctrl-alt-win-shift-k", "ctrl-alt-shift-cmd-k"));
+    assert!(same_binding("super-k", "cmd-k"));
+    // An uppercase single character IS shift plus the lowercase one, by the parser's own rule.
+    assert!(same_binding("ctrl-Z", "ctrl-shift-z"));
+}
+
+/// The other direction, or the comparison would report every row as colliding with every other.
+#[test]
+fn different_presses_and_unusable_strings_are_not_one_binding() {
+    assert!(!same_binding("ctrl-z", "ctrl-shift-z"));
+    assert!(!same_binding("alt-1", "alt-2"));
+    // Two slots that can never fire do not collide with each other: an empty row must carry no
+    // clash caption, and neither must a row holding something the parser rejects.
+    assert!(!same_binding("", ""));
+    assert!(!same_binding("   ", "ctrl-z"));
+    assert!(binding_id("ctrl-a-b").is_none(), "the key must come last");
+    assert!(binding_id("").is_none());
 }

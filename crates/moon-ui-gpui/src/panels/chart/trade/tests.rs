@@ -7,19 +7,9 @@ use moon_core::session::order_lines::LineKind;
 use super::hover_probe_due;
 use super::{ChartPanel, TradeMouseButton};
 
-fn ctrl() -> Modifiers {
-    Modifiers {
-        control: true,
-        ..Default::default()
-    }
-}
-
-fn shift() -> Modifiers {
-    Modifiers {
-        shift: true,
-        ..Default::default()
-    }
-}
+// `Modifiers::control`/`shift`/`alt` are gpui's own single-modifier constructors; the local
+// copies this file used to keep were character-identical to them.
+use Modifiers as M;
 
 /// Pins which configured gesture pair may grab each order line.
 ///
@@ -84,13 +74,13 @@ fn gesture_matching_reads_button_modifiers_and_click_count() {
     assert!(m(
         MouseGestureBinding::LeftShift,
         TradeMouseButton::Left,
-        shift(),
+        M::shift(),
         1
     ));
     assert!(!m(
         MouseGestureBinding::LeftShift,
         TradeMouseButton::Left,
-        ctrl(),
+        M::control(),
         1
     ));
     // A double-click binding requires the second press; a single one is not it.
@@ -116,14 +106,14 @@ fn gesture_matching_reads_button_modifiers_and_click_count() {
     assert!(m(
         MouseGestureBinding::LeftCtrl,
         TradeMouseButton::Left,
-        ctrl(),
+        M::control(),
         1
     ));
     assert!(
         !m(
             MouseGestureBinding::LeftCtrl,
             TradeMouseButton::Right,
-            ctrl(),
+            M::control(),
             1
         ),
         "Ctrl+right must stay a gesture of its own on every platform"
@@ -189,35 +179,35 @@ fn every_gesture_binding_answers_exactly_the_presses_it_names() {
     let expect = [
         // Plain buttons answer only an unmodified press.
         (G::Middle, B::Middle, none, 1, true),
-        (G::Middle, B::Middle, ctrl(), 1, false),
-        (G::Middle, B::Middle, shift(), 1, false),
+        (G::Middle, B::Middle, M::control(), 1, false),
+        (G::Middle, B::Middle, M::shift(), 1, false),
         (G::Middle, B::Middle, alt, 1, false),
         (G::Middle, B::Left, none, 1, false),
         (G::Middle, B::Right, none, 1, false),
         // ... and at any click count: a double middle click is still two middle presses.
         (G::Middle, B::Middle, none, 2, true),
         // Modified buttons answer their own modifier, whatever else is held.
-        (G::MiddleCtrl, B::Middle, ctrl(), 1, true),
+        (G::MiddleCtrl, B::Middle, M::control(), 1, true),
         (G::MiddleCtrl, B::Middle, none, 1, false),
-        (G::MiddleShift, B::Middle, shift(), 1, true),
+        (G::MiddleShift, B::Middle, M::shift(), 1, true),
         (G::MiddleAlt, B::Middle, alt, 1, true),
-        (G::LeftCtrl, B::Left, ctrl(), 1, true),
-        (G::LeftShift, B::Left, shift(), 1, true),
+        (G::LeftCtrl, B::Left, M::control(), 1, true),
+        (G::LeftShift, B::Left, M::shift(), 1, true),
         (G::LeftAlt, B::Left, alt, 1, true),
-        (G::RightCtrl, B::Right, ctrl(), 1, true),
-        (G::RightShift, B::Right, shift(), 1, true),
+        (G::RightCtrl, B::Right, M::control(), 1, true),
+        (G::RightShift, B::Right, M::shift(), 1, true),
         (G::RightAlt, B::Right, alt, 1, true),
         // Doubles need the second press AND a clear modifier set.
         (G::LeftDouble, B::Left, none, 2, true),
         (G::LeftDouble, B::Left, none, 1, false),
-        (G::LeftDouble, B::Left, ctrl(), 2, false),
+        (G::LeftDouble, B::Left, M::control(), 2, false),
         (G::RightDouble, B::Right, none, 2, true),
         (G::RightDouble, B::Right, none, 1, false),
         // Modified doubles need both halves.
-        (G::LeftCtrlDouble, B::Left, ctrl(), 2, true),
-        (G::LeftCtrlDouble, B::Left, ctrl(), 1, false),
+        (G::LeftCtrlDouble, B::Left, M::control(), 2, true),
+        (G::LeftCtrlDouble, B::Left, M::control(), 1, false),
         (G::LeftCtrlDouble, B::Left, none, 2, false),
-        (G::LeftShiftDouble, B::Left, shift(), 2, true),
+        (G::LeftShiftDouble, B::Left, M::shift(), 2, true),
         (G::LeftAltDouble, B::Left, alt, 2, true),
         // `None` is the off switch: it answers nothing at all.
         (G::None, B::Left, none, 1, false),
@@ -257,16 +247,21 @@ fn only_the_modified_doubles_overlap_their_single_click_twins() {
     let known = [
         (
             B::Left,
-            ctrl(),
+            M::control(),
             2usize,
             vec![G::LeftCtrl, G::LeftCtrlDouble],
         ),
-        (B::Left, shift(), 2, vec![G::LeftShift, G::LeftShiftDouble]),
+        (
+            B::Left,
+            M::shift(),
+            2,
+            vec![G::LeftShift, G::LeftShiftDouble],
+        ),
         (B::Left, alt, 2, vec![G::LeftAlt, G::LeftAltDouble]),
     ];
 
     for button in [B::Left, B::Middle, B::Right] {
-        for modifiers in [Modifiers::default(), ctrl(), shift(), alt] {
+        for modifiers in [Modifiers::default(), M::control(), M::shift(), alt] {
             for clicks in [1usize, 2] {
                 let hit: Vec<G> = G::ALL
                     .into_iter()
@@ -290,4 +285,89 @@ fn only_the_modified_doubles_overlap_their_single_click_twins() {
             }
         }
     }
+}
+
+/// Pins which of the four placement gestures a press satisfies, and that a pending is a SEPARATE
+/// intent from an immediate order rather than a variant of one.
+///
+/// Plausible breakage: giving the pending rows the immediate branch — or the reverse — sends the
+/// clicked price as an ENTRY where the wire expects a trigger condition, so an order opens at once
+/// at a price the trader meant the market to have to reach first.
+#[test]
+fn placement_gestures_split_side_and_pending() {
+    let hk = HotkeysConfig {
+        buy_set_click: MouseGestureBinding::LeftDouble,
+        short_set_click: MouseGestureBinding::MiddleShift,
+        pending_long_click: MouseGestureBinding::LeftAlt,
+        pending_short_click: MouseGestureBinding::MiddleAlt,
+        ..Default::default()
+    };
+    let intent =
+        |button, modifiers, clicks| super::placement_intent(&hk, button, modifiers, clicks);
+
+    assert_eq!(
+        intent(TradeMouseButton::Left, Modifiers::default(), 2),
+        Some(super::PlacementIntent {
+            short: false,
+            pending: false
+        }),
+    );
+    assert_eq!(
+        intent(TradeMouseButton::Middle, M::shift(), 1),
+        Some(super::PlacementIntent {
+            short: true,
+            pending: false
+        }),
+    );
+    assert_eq!(
+        intent(TradeMouseButton::Left, M::alt(), 1),
+        Some(super::PlacementIntent {
+            short: false,
+            pending: true
+        }),
+    );
+    assert_eq!(
+        intent(TradeMouseButton::Middle, M::alt(), 1),
+        Some(super::PlacementIntent {
+            short: true,
+            pending: true
+        }),
+    );
+    // A press no placement row holds is not placement, whatever else it may be.
+    assert_eq!(intent(TradeMouseButton::Left, M::control(), 1), None);
+    assert_eq!(
+        intent(TradeMouseButton::Right, Modifiers::default(), 1),
+        None
+    );
+}
+
+/// A press held by two placement rows goes to the EARLIER row, and that order is the one the
+/// settings page's clash caption reports.
+///
+/// Plausible breakage: trying the pending rows first would make every duplicate fire the pending
+/// while the page keeps naming the immediate row as the winner.
+#[test]
+fn a_shared_placement_gesture_goes_to_the_immediate_row() {
+    let hk = HotkeysConfig {
+        buy_set_click: MouseGestureBinding::LeftAlt,
+        pending_long_click: MouseGestureBinding::LeftAlt,
+        short_set_click: MouseGestureBinding::MiddleAlt,
+        pending_short_click: MouseGestureBinding::MiddleAlt,
+        ..Default::default()
+    };
+
+    assert_eq!(
+        super::placement_intent(&hk, TradeMouseButton::Left, M::alt(), 1),
+        Some(super::PlacementIntent {
+            short: false,
+            pending: false
+        }),
+    );
+    assert_eq!(
+        super::placement_intent(&hk, TradeMouseButton::Middle, M::alt(), 1),
+        Some(super::PlacementIntent {
+            short: true,
+            pending: false
+        }),
+    );
 }

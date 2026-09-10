@@ -12,6 +12,10 @@ use moon_core::config::HotkeysConfig;
 use moon_core::config::moonbot_import::shortcut::{self, DecodedShortcut};
 use moon_core::feed::{CoreHotkeyAction, CoreHotkeyLayout};
 
+use std::collections::HashSet;
+
+use crate::hotkeys::{BindingId, binding_id, same_binding};
+
 use super::{HotkeySlot, set_slot_value, slot_value};
 
 const ORDER_SIZE_SLOTS: usize = moon_core::config::ORDER_SIZE_KEYS;
@@ -94,20 +98,50 @@ fn slot_for_action(action: CoreHotkeyAction) -> Option<HotkeySlot> {
     })
 }
 
-fn build_row(hotkeys: &HotkeysConfig, slot: HotkeySlot, core_raw: u16) -> PullRow {
+/// Every press the terminal's file already binds, for the conflict gate.
+///
+/// Built ONCE per preview: a per-row scan re-parsed all ~48 stored keys for each of ~40 rows, which
+/// is nineteen hundred parses and twice as many allocations to answer a question with one answer.
+fn presses_in_use(hotkeys: &HotkeysConfig) -> HashSet<BindingId> {
+    hotkeys
+        .bound_keys()
+        .iter()
+        .filter_map(|held| binding_id(held))
+        .collect()
+}
+
+fn build_row(
+    hotkeys: &HotkeysConfig,
+    slot: HotkeySlot,
+    core_raw: u16,
+    in_use: &HashSet<BindingId>,
+) -> PullRow {
     let current = slot_value(hotkeys, slot).to_string();
     let core_decoded = shortcut::decode(core_raw);
     let new_key = shortcut::to_gpui_keystroke(core_decoded);
+    // Compared as PRESSES, never as strings, and the two sides of every comparison below come
+    // from different producers: `current` is `Keystroke::unparse`'s spelling of a recorded key (or
+    // whatever a hand-edited or pasted `hotkeys.toml` holds), while `new_key` is
+    // `shortcut::to_gpui_keystroke`'s. Those two agree since 2026-09-10, but a file written by an
+    // older build still carries `ctrl-alt-shift-cmd-k` where this one writes `ctrl-alt-win-shift-k`
+    // for the same press, `hotkeys.toml` is hand-editable and pasteable, and `Keystroke::parse` is
+    // case-insensitive besides. A literal compare therefore reported "free"
+    // for a key another slot already holds and applied it, silently double-binding the terminal:
+    // the dispatcher then answers the FIRST branch and the loser dies with nothing said. The
+    // settings page's clash captions have compared presses since they were written, so this is also
+    // where the pull stopped disagreeing with the page about the same file.
     let verdict = match &new_key {
         None if core_raw == 0 => PullVerdict::Empty,
         None => PullVerdict::Unsupported,
-        Some(k) if *k == current => PullVerdict::Unchanged,
+        // The same press already: nothing to write, and nothing worth showing as a change even when
+        // the two spell it differently.
+        Some(k) if same_binding(k, &current) => PullVerdict::Unchanged,
         Some(k) => {
-            // `current` (this slot's own key) is excluded by construction since `k != current`
-            // here, so ANY occurrence in `bound_keys()` means another slot already holds it —
-            // matching `HotkeysConfig::bound_keys()`'s own "a key held by two slots appears
-            // twice" doc.
-            let held_elsewhere = hotkeys.bound_keys().iter().any(|held| held == k);
+            // This slot's own key cannot be the match: `same_binding` above already ruled it out.
+            // So any binding in the file naming this press belongs to ANOTHER slot — the same
+            // reading as `HotkeysConfig::bound_keys()`'s own "a key held by two slots appears
+            // twice" doc, with the comparison the dispatcher uses.
+            let held_elsewhere = binding_id(k).is_some_and(|id| in_use.contains(&id));
             if held_elsewhere {
                 PullVerdict::Conflict
             } else {
@@ -146,11 +180,13 @@ pub(super) fn preview_core_hotkeys(
     let mut rows: Vec<PullRow> = Vec::with_capacity(
         ORDER_SIZE_SLOTS + SELL_PRESET_SLOTS + MANUAL_STRATEGY_SLOTS + layout.named.len(),
     );
+    let in_use = presses_in_use(hotkeys);
     for i in 0..ORDER_SIZE_SLOTS {
         rows.push(build_row(
             hotkeys,
             HotkeySlot::OrderSize(i),
             layout.order_size[i],
+            &in_use,
         ));
     }
     for i in 0..SELL_PRESET_SLOTS {
@@ -158,32 +194,40 @@ pub(super) fn preview_core_hotkeys(
             hotkeys,
             HotkeySlot::SellPreset(i),
             layout.sell_preset[i],
+            &in_use,
         ));
     }
     for (i, &raw) in manual_strategy_keys.iter().enumerate() {
-        rows.push(build_row(hotkeys, HotkeySlot::ManualStrategy(i), raw));
+        rows.push(build_row(
+            hotkeys,
+            HotkeySlot::ManualStrategy(i),
+            raw,
+            &in_use,
+        ));
     }
     for &(action, raw) in layout.named.iter() {
         if let Some(slot) = slot_for_action(action) {
-            rows.push(build_row(hotkeys, slot, raw));
+            rows.push(build_row(hotkeys, slot, raw, &in_use));
         }
     }
 
     // A core layout can itself hold the same key twice (two slots both `f1`, say). Checking each
     // row only against the terminal's PRE-EXISTING bindings would let both through as `WillApply`
     // and silently double-bind the terminal on apply — a same-batch collision is a conflict too.
-    // Owned `String` keys, not `&str` borrowed from `rows`: the lookup below needs `rows.iter_mut()`
-    // at the same time, and a map borrowing from `rows` would conflict with that mutable pass.
-    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    //
+    // Keyed by PRESS, like every other comparison in this module. Both sides here do come from
+    // `to_gpui_keystroke`, so strings would agree today — but "today" is a property of one producer,
+    // and a second one feeding this batch later would break the only half nothing points at.
+    let mut counts: std::collections::HashMap<BindingId, usize> = std::collections::HashMap::new();
     for row in rows.iter().filter(|r| r.verdict == PullVerdict::WillApply) {
-        if let Some(k) = row.new_key.as_ref() {
-            *counts.entry(k.clone()).or_insert(0) += 1;
+        if let Some(id) = row.new_key.as_deref().and_then(binding_id) {
+            *counts.entry(id).or_insert(0) += 1;
         }
     }
     for row in rows.iter_mut() {
         if row.verdict == PullVerdict::WillApply
-            && let Some(k) = row.new_key.as_ref()
-            && counts.get(k).copied().unwrap_or(0) > 1
+            && let Some(id) = row.new_key.as_deref().and_then(binding_id)
+            && counts.get(&id).copied().unwrap_or(0) > 1
         {
             row.verdict = PullVerdict::Conflict;
         }
@@ -210,3 +254,6 @@ pub(super) fn apply_core_hotkeys(hotkeys: &mut HotkeysConfig, rows: &[PullRow]) 
     }
     changed
 }
+
+#[cfg(test)]
+mod tests;

@@ -13,10 +13,14 @@
 //!   keystroke fires and every later holder is dead — whatever either of them acts on. That is why
 //!   the keyboard half needs no scope reasoning at all.
 //! - **Mouse.** Each button's handler in `panels::chart::render_input` offers a press to its layers
-//!   in a fixed order, and the order DIFFERS between buttons: the right button has no order
-//!   placement layer at all, so a placement gesture bound to a right button reaches nothing.
-//!   [`button_layers`] is that order, and it includes the layers this page has no row for — figure
-//!   drawing, the figure menu, the order menu, the X-scale sync.
+//!   in a fixed order, and the order DIFFERS between buttons: the right button offers placement
+//!   LAST, under both context menus, where the left and middle buttons offer it above the move
+//!   layer. [`button_layers`] is that order, and it includes the layers this page has no row for —
+//!   figure drawing, the figure menu, the order menu, the X-scale sync. This half was guessed too,
+//!   and the guess said the right button placed nothing at all — a red "will not fire" on a gesture
+//!   that opens a live position.
+//! - **Within one layer** the order is a third thing again, and [`same_layer_rank`] is it: placement
+//!   asks in `all_mouse_slots` order, the move rows in `resolve_move_gesture`'s pair order.
 //!
 //! A layer that answers only in a mode or over an object — drawing while a tool is armed, a context
 //! menu over its object — does not kill what sits below it: the press falls through everywhere the
@@ -29,10 +33,12 @@ use std::collections::HashMap;
 use moon_core::config::{HotkeysConfig, MouseGestureBinding, MoveKind};
 use rust_i18n::t;
 
+use crate::hotkeys::{BindingId, binding_id};
+
 use super::pull_gestures::{GestureTarget, local_gesture, target_label};
 use super::{
-    HotkeySlot, MouseSlot, MoveKindSlot, all_mouse_slots, move_kind_slot_value, parse_hotkey,
-    slot_label, slot_value,
+    HotkeySlot, MouseSlot, MoveKindSlot, all_mouse_slots, move_kind_slot_value, slot_label,
+    slot_value,
 };
 
 /// How badly the other holder gets in this row's way.
@@ -146,7 +152,7 @@ enum Layer {
     Draw,
     /// Deletes the figure under the pointer — only over a figure.
     FigDelete,
-    /// Places an order. Absent from the right button entirely.
+    /// Places an order. Offered by every button, but LAST on the right, under both menus.
     Place,
     /// Moves a side's orders onto the clicked price.
     Move,
@@ -163,6 +169,11 @@ impl Layer {
     ///
     /// A conditional layer does not kill what sits below it: the press falls through wherever its
     /// condition does not hold, so both live.
+    ///
+    /// The degenerate form of a question that wants a SET: "everywhere" and "somewhere" are the two
+    /// ends of "on which surfaces", and a boolean cannot say that the somewhere of the layer above is
+    /// the same somewhere as the row below — which is the one case a conditional layer does kill, and
+    /// why [`dead_fig_delete_gesture`] exists as a list beside it. `meta::Scope` is the set.
     fn unconditional(self) -> bool {
         matches!(self, Self::Place | Self::Move | Self::XScale)
     }
@@ -182,8 +193,11 @@ impl Layer {
 /// The layers one button's handler offers a press to, in its order.
 ///
 /// Transcribed from `panels::chart::render_input`, whose order is itself pinned by
-/// `panels::chart::tests`. The right button is the one that surprises: it carries no placement
-/// layer, so an order-placing gesture bound to a right button fires nowhere.
+/// `panels::chart::tests`. The right button is the one that surprises: placement sits LAST there,
+/// under both context menus, so a right-button placement gesture works — but only where no menu
+/// claims the press first. The earlier reading, that the right button places nothing at all, put a
+/// red "will not fire" on a gesture that opens a live position: `mouse_down_right` really does
+/// reach `try_place_order_click`.
 fn button_layers(gesture: MouseGestureBinding) -> &'static [Layer] {
     use MouseGestureBinding as G;
     match gesture {
@@ -203,6 +217,7 @@ fn button_layers(gesture: MouseGestureBinding) -> &'static [Layer] {
             Layer::FigMenu,
             Layer::Move,
             Layer::OrderMenu,
+            Layer::Place,
         ],
     }
 }
@@ -221,9 +236,15 @@ fn slot_layer(slot: MouseSlot) -> Layer {
 
 /// Whether a rowless chart layer actually answers THIS gesture.
 ///
-/// Drawing is claimed only for the Ctrl-left gestures — `try_fig_click` gates on the platform's
-/// secondary modifier — while the X-scale sync is Shift+Middle alone. Both context menus answer any
-/// press of their button over their object.
+/// Drawing is claimed for both Ctrl-left gestures, and the DOUBLE one needs saying: a Ctrl double
+/// click is two presses, and only the second carries `click_count == 2`. Press one reaches
+/// `try_fig_click` like any single Ctrl press and grabs the figure under the pointer; press two
+/// skips the drawing layer (`mouse_down_left` gates it on `e.click_count <= 1 || starting_band`) and
+/// reaches the rows below. So a row bound to the double gesture SHARES the sequence with drawing
+/// rather than losing it — which is what the caption says, and why this arm covers both.
+///
+/// The X-scale sync is Shift+Middle alone. Both context menus answer any press of their button over
+/// their object.
 fn ownerless_layer(gesture: MouseGestureBinding, layer: Layer) -> bool {
     use MouseGestureBinding as G;
     match layer {
@@ -233,19 +254,6 @@ fn ownerless_layer(gesture: MouseGestureBinding, layer: Layer) -> bool {
         Layer::FigDelete | Layer::Place | Layer::Move => false,
     }
 }
-
-/// A keystroke reduced to what the dispatcher compares: modifiers and key, nothing else.
-///
-/// `hotkeys::pressed` compares those two rather than the whole `Keystroke`, so two slots that spell
-/// one combination differently are one binding to it and must be one binding here. An unparseable
-/// string yields `None` on both sides, which is the right reading: such a slot can never fire, so it
-/// can never collide either.
-fn normalise(raw: &str) -> Option<KeyId> {
-    let k = parse_hotkey(raw)?;
-    Some((k.modifiers, k.key))
-}
-
-type KeyId = (gpui::Modifiers, String);
 
 /// One holder of a keystroke: a row of this page, or a built-in that owns it.
 #[derive(Clone, Copy)]
@@ -266,7 +274,7 @@ impl Holder {
 /// Who holds what, built once per group render.
 pub(super) struct Clashes {
     /// Keystroke -> its holders in [`RESOLVE_ORDER`]; the first of them is the one that fires.
-    keys: HashMap<KeyId, Vec<Holder>>,
+    keys: HashMap<BindingId, Vec<Holder>>,
     /// Gesture -> the rows holding it. A move row whose kind is `None` is left out: the dispatcher
     /// steps past such a row rather than letting it silence the next one.
     gestures: HashMap<MouseGestureBinding, Vec<MouseSlot>>,
@@ -274,17 +282,17 @@ pub(super) struct Clashes {
 
 impl Clashes {
     pub(super) fn build(hotkeys: &HotkeysConfig) -> Self {
-        let mut keys: HashMap<KeyId, Vec<Holder>> = HashMap::new();
+        let mut keys: HashMap<BindingId, Vec<Holder>> = HashMap::new();
         for step in RESOLVE_ORDER {
             match step {
                 Step::Slot(slot) => {
-                    if let Some(id) = normalise(slot_value(hotkeys, *slot)) {
+                    if let Some(id) = binding_id(slot_value(hotkeys, *slot)) {
                         keys.entry(id).or_default().push(Holder::Slot(*slot));
                     }
                 }
                 Step::Builtin(strokes, name) => {
                     for raw in *strokes {
-                        if let Some(id) = normalise(raw) {
+                        if let Some(id) = binding_id(raw) {
                             keys.entry(id).or_default().push(Holder::Builtin(name));
                         }
                     }
@@ -293,11 +301,7 @@ impl Clashes {
         }
         let mut gestures: HashMap<MouseGestureBinding, Vec<MouseSlot>> = HashMap::new();
         for slot in all_mouse_slots() {
-            // What the terminal FIRES for this row, not what the field holds: with the mirror
-            // switch on, a short row's stored value is not read at all, and indexing it would put a
-            // rival nothing dispatches into every other row's caption.
-            let gesture = local_gesture(hotkeys, slot);
-            if gesture != MouseGestureBinding::None && !inert_move_row(hotkeys, slot) {
+            if let Some(gesture) = firing_gesture(hotkeys, slot) {
                 gestures.entry(gesture).or_default().push(slot);
             }
         }
@@ -310,7 +314,7 @@ impl Clashes {
     /// rows below it are told they are dead. Handing both the same sentence — which is what the
     /// first version did — is how a working binding gets reported as broken.
     pub(super) fn key(&self, hotkeys: &HotkeysConfig, slot: HotkeySlot) -> Option<Clash> {
-        let id = normalise(slot_value(hotkeys, slot))?;
+        let id = binding_id(slot_value(hotkeys, slot))?;
         let holders = self.keys.get(&id)?;
         if holders.len() < 2 {
             return None;
@@ -339,55 +343,86 @@ impl Clashes {
         })
     }
 
-    /// The caption for one gesture row.
-    pub(super) fn mouse(&self, hotkeys: &HotkeysConfig, slot: MouseSlot) -> Option<Clash> {
-        let gesture = local_gesture(hotkeys, slot);
-        if gesture == MouseGestureBinding::None {
-            return None;
-        }
+    /// The captions for one gesture row, in the order they should be printed.
+    ///
+    /// A list rather than one line: a row can both TAKE its binding from a row below it and SHARE
+    /// it with a layer that only answers over an object, and those are two different sentences
+    /// about two different rivals. `row_head` prints one line per entry.
+    pub(super) fn mouse(&self, hotkeys: &HotkeysConfig, slot: MouseSlot) -> Vec<Clash> {
+        // Nothing this row dispatches, nothing to caption. The index above uses the same reading, so
+        // the two cannot disagree about which rows are even in the running — and they used to: a
+        // caption was once handed to a row whose Move kind is `None`, telling it that it was taking
+        // the binding from the row that is in fact the only one firing.
+        let Some(gesture) = firing_gesture(hotkeys, slot) else {
+            return Vec::new();
+        };
         let layers = button_layers(gesture);
         let mine = slot_layer(slot);
-        // A placement gesture on the right button reaches no placement layer at all.
-        if !layers.contains(&mine) {
-            return Some(Clash {
-                severity: Severity::Shadowed,
-                text: t!("hotkeys.clash.no_layer").to_string(),
-            });
-        }
         let rows = self
             .gestures
             .get(&gesture)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let mut kills: Vec<String> = Vec::new();
+        // Two values of the figure-delete dropdown never fire and no layer ORDER says so, so the
+        // walk below cannot find them; seeded here and emitted by the same tail as every other kill.
+        let mut kills: Vec<String> = match mine {
+            Layer::FigDelete => dead_fig_delete_gesture(gesture)
+                .and_then(Layer::layer_name)
+                .map(|name| vec![t!(name).to_string()])
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let mut wins: Vec<String> = Vec::new();
         let mut beside: Vec<String> = Vec::new();
         for layer in layers {
-            let holders = layer_holders(*layer, rows, slot, gesture);
-            if holders.is_empty() {
+            let position = layer_position(layers, *layer, mine);
+            if position == Position::Same {
+                // The same layer, asked once: whichever row its own dispatcher reaches first
+                // answers, and the others never do. Direction is the whole point here, exactly as
+                // `Self::key` states beside it — handing both rows "will not fire" reports the one
+                // that DOES fire as broken.
+                let rank = same_layer_rank(slot);
+                for other in layer_rows(*layer, rows, slot) {
+                    let label = target_label(GestureTarget::Gesture(other));
+                    if same_layer_rank(other) < rank {
+                        kills.push(label);
+                    } else {
+                        wins.push(label);
+                    }
+                }
                 continue;
             }
-            match layer_position(layers, *layer, mine) {
+            let holders = layer_holders(*layer, rows, slot, gesture);
+            if position == Position::Above && layer.unconditional() {
                 // Above and unconditional: it takes every press and this row is dead.
-                Position::Above if layer.unconditional() => kills.extend(holders),
+                kills.extend(holders);
+            } else {
                 // Above but conditional, or below: both live.
-                Position::Above | Position::Below => beside.extend(holders),
-                // The same layer, and the handler asks it once: the first row in it answers.
-                Position::Same => kills.extend(holders),
+                beside.extend(holders);
             }
         }
+        // A row that never answers has nothing else worth saying: the other captions describe where
+        // it still works, and it does not.
         if !kills.is_empty() {
-            return Some(Clash {
+            return vec![Clash {
                 severity: Severity::Shadowed,
                 text: t!("hotkeys.clash.gesture", rows = kills.join(", ")).to_string(),
+            }];
+        }
+        let mut notes = Vec::new();
+        if !wins.is_empty() {
+            notes.push(Clash {
+                severity: Severity::Shares,
+                text: t!("hotkeys.clash.wins", rows = wins.join(", ")).to_string(),
             });
         }
-        if beside.is_empty() {
-            return None;
+        if !beside.is_empty() {
+            notes.push(Clash {
+                severity: Severity::Shares,
+                text: t!("hotkeys.clash.shares", rows = beside.join(", ")).to_string(),
+            });
         }
-        Some(Clash {
-            severity: Severity::Shares,
-            text: t!("hotkeys.clash.shares", rows = beside.join(", ")).to_string(),
-        })
+        notes
     }
 }
 
@@ -408,12 +443,103 @@ fn layer_position(layers: &[Layer], layer: Layer, mine: Layer) -> Position {
     }
 }
 
-/// Everything that answers this gesture at one layer, other than the row asking.
+/// A gesture the figure-delete row can hold and never fire on, and the layer that takes it.
+///
+/// Neither is a matter of layer ORDER — the figure-delete layer even sits ABOVE the menu on the right
+/// button — so [`button_layers`] cannot express them and the caption used to read "both work" about a
+/// gesture that is simply dead. Both are already written down in
+/// `panels::chart::figures::erase`'s own module header:
+///
+/// - `Ctrl+Left` is taken by the drawing layer, which grabs an existing figure with the SAME hit
+///   predicate and threshold this row would delete by. Sharing the object is what makes it a kill
+///   rather than a coexistence: there is nowhere left for the press to fall through to. The DOUBLE
+///   variant is NOT dead and must not be listed here — `mouse_down_left` gates the figure layer on
+///   `e.click_count <= 1 || starting_band`, so press two of a Ctrl double click arrives at this row
+///   (press one still goes to drawing, which is a shared sequence, not a kill).
+/// - a right DOUBLE click never arrives — press one opens the figure menu and its overlay eats press
+///   two — even though the figure-delete layer sits ABOVE the menu on that button.
+///
+/// Windows and Linux. On macOS the secondary modifier is Command, so `Ctrl+Left` does arrive there;
+/// that is the same platform simplification [`ownerless_layer`] already makes for the drawing layer,
+/// and the row it mislabels is one, on one platform, against a caption that is backwards on every.
+///
+/// A LIST, where the general rule is a set relation: both arms are "the layer above shares this
+/// row's own object", which is what `meta::Scope`'s documented containment — `FIGURE` as a narrower
+/// form of `CURSOR` — exists to express and has no caller yet. Two hand-written arms are the right
+/// size for fixing one live wrong caption; a third belongs in that model instead. The plan carries it.
+fn dead_fig_delete_gesture(gesture: MouseGestureBinding) -> Option<Layer> {
+    use MouseGestureBinding as G;
+    match gesture {
+        G::LeftCtrl => Some(Layer::Draw),
+        G::RightDouble => Some(Layer::FigMenu),
+        _ => None,
+    }
+}
+
+/// The gesture this row actually dispatches on, or `None` for a row that dispatches nothing.
+///
+/// Two ways to hold no press, and both must read the same to the index and to the caption: an unset
+/// dropdown, and a move row whose kind is `None`, which `resolve_move_gesture` steps past on purpose.
+/// It also answers what the terminal FIRES rather than what the field holds — with the mirror switch
+/// on, a short row's stored value is not read at all, and indexing it would put a rival nothing
+/// dispatches into every other row's caption.
+fn firing_gesture(hotkeys: &HotkeysConfig, slot: MouseSlot) -> Option<MouseGestureBinding> {
+    let gesture = local_gesture(hotkeys, slot);
+    if gesture == MouseGestureBinding::None || inert_move_row(hotkeys, slot) {
+        return None;
+    }
+    Some(gesture)
+}
+
+/// Where a row stands in its OWN layer's dispatch order, lowest answering first.
+///
+/// Neither layer is asked in this page's list order, and that is why this exists:
+/// - placement — `panels::chart::trade::placement_intent` tries the four rows in
+///   [`all_mouse_slots`] order and returns the FIRST match;
+/// - move — `HotkeysConfig::resolve_move_gesture` walks four PAIRS, buy, sell, buy2, sell2, testing
+///   each pair's long and short halves together, so `ShortBuyMove` answers before `SellMove2`
+///   although this page lists it four rows later.
+///
+/// Ranks are only ever compared within one layer, so the two families may reuse the same numbers.
+/// The halves of one move pair share a rank and are never compared: `same_move_row` exempts them.
+fn same_layer_rank(slot: MouseSlot) -> u8 {
+    match slot {
+        MouseSlot::BuySet => 0,
+        MouseSlot::ShortSet => 1,
+        MouseSlot::PendingLong => 2,
+        MouseSlot::PendingShort => 3,
+        // The move pairs are numbered ONCE, by `move_pair`, which `same_move_row` also reads: a
+        // second copy of that table here would let the rank that picks a winner disagree with the
+        // exemption that decides whether the two rows are rivals at all. `FigDelete` is alone on
+        // its layer, so its number is never compared with anything.
+        other => move_pair(other).unwrap_or(0),
+    }
+}
+
+/// The ROWS that answer this gesture at one layer, other than the row asking.
 ///
 /// The two halves of ONE move row are not counted against each other:
 /// `HotkeysConfig::resolve_move_gesture` tests each side separately and answers `MoveSide::Both`
 /// when the press hits both, rather than picking a winner. The shipped defaults arrive there
 /// without the mirror switch even being on, which is how this exemption was found.
+///
+/// Rows rather than labels because one caller ranks them and the other only names them, and the
+/// exemption above must hold for both — it used to be written out twice.
+fn layer_rows<'a>(
+    layer: Layer,
+    rows: &'a [MouseSlot],
+    asking: MouseSlot,
+) -> impl Iterator<Item = MouseSlot> + 'a {
+    rows.iter()
+        .copied()
+        .filter(move |other| *other != asking && slot_layer(*other) == layer)
+        .filter(move |other| !same_move_row(asking, *other))
+}
+
+/// Everything that answers this gesture at one layer, named for a caption.
+///
+/// A layer with no row of its own — drawing, either context menu, the X-scale sync — is named by
+/// the layer itself, and only when it really claims this gesture.
 fn layer_holders(
     layer: Layer,
     rows: &[MouseSlot],
@@ -427,10 +553,8 @@ fn layer_holders(
             Vec::new()
         };
     }
-    rows.iter()
-        .filter(|other| **other != asking && slot_layer(**other) == layer)
-        .filter(|other| !same_move_row(asking, **other))
-        .map(|other| target_label(GestureTarget::Gesture(*other)))
+    layer_rows(layer, rows, asking)
+        .map(|other| target_label(GestureTarget::Gesture(other)))
         .collect()
 }
 

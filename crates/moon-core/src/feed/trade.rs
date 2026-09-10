@@ -6,13 +6,14 @@
 //! the local model; this layer only invokes the handle.
 //!
 //! moonproto is the API source of truth: `MoonTrade::new_order` (TNewOrderCommand, CmdId=3),
+//! `MoonTrade::new_pending_order`,
 //! `MoonOrders::move_order` (TOrderReplaceCommand, CmdId=6),
 //! `MoonOrders::cancel` (TOrderCancelCommand, CmdId=10).
 
 use moonproto::{
     BulkMoveKind, ClosePositionParams, MoonClient, MoveAllBuysParams, MoveAllSellsParams,
-    NewOrderParams, OrderSide, OrderWorkerStatus, PositionFilter, SellOrderParams,
-    SplitOrderParams, VStopParams,
+    NewOrderParams, OrderSide, OrderWorkerStatus, PendingOrderParams, PositionFilter,
+    SellOrderParams, SplitOrderParams, VStopParams,
 };
 
 use crate::feed::{OrderLinePriceKind, OrderStopKind};
@@ -31,6 +32,20 @@ pub(super) fn report<T, E: std::fmt::Display>(
             "core {} {ctx} failed: {error}",
             crate::feed::core_label(server_id)
         ),
+    }
+}
+
+/// The one place `short` becomes a wire side.
+///
+/// Both order builders in this file used to spell the ternary out, and `join_sells` a third time;
+/// the field decides which side a live position opens on, so a flip fixed in one copy and missed in
+/// another is money. `sells_to_zone`'s lookalike is deliberately NOT a caller — its ternary yields a
+/// `PositionFilter`, which is a different type asking a different question.
+fn order_side(short: bool) -> OrderSide {
+    if short {
+        OrderSide::Short
+    } else {
+        OrderSide::Long
     }
 }
 
@@ -86,11 +101,7 @@ fn new_order_params(
     use_market_stop: bool,
     planned_sell: f64,
 ) -> NewOrderParams {
-    let side = if short {
-        OrderSide::Short
-    } else {
-        OrderSide::Long
-    };
+    let side = order_side(short);
     let mut params =
         NewOrderParams::new(market, side, price, size).with_market_stop(use_market_stop);
     if let Some(id) = strategy_id {
@@ -100,6 +111,64 @@ fn new_order_params(
     // its own settings or the order's strategy, which is exactly what an absent target must do.
     if planned_sell.is_finite() && planned_sell > 0.0 {
         params = params.with_planned_sell_price(planned_sell);
+    }
+    params
+}
+
+/// Places a pending order: one the core holds until the price reaches `trigger_price`.
+///
+/// `trigger_price` is the CONDITION, not the entry — the core applies its own pending spread when
+/// the trigger fires, so nothing derived from it rides along and there is no `planned_sell` here.
+/// `strategy_id=None` creates a bare pending, which the core does NOT fill in with its configured
+/// manual strategy; `size` and the strategy rules are otherwise `place_order`'s exactly.
+pub(super) fn place_pending_order(
+    client: &MoonClient,
+    server_id: u64,
+    market: String,
+    short: bool,
+    trigger_price: f64,
+    size: f64,
+    strategy_id: Option<u64>,
+    use_market_stop: bool,
+) {
+    let params = pending_order_params(
+        market.clone(),
+        short,
+        trigger_price,
+        size,
+        strategy_id,
+        use_market_stop,
+    );
+    // Through `report`, unlike `place_order` beside it: that one logs what actually RODE, because
+    // its builder drops a non-positive sell target. This builder drops nothing.
+    report(
+        server_id,
+        format!(
+            "place pending order {market} short={short} trigger={trigger_price}/{size} \
+             strat={strategy_id:?}"
+        ),
+        client.trade().new_pending_order(params),
+    );
+}
+
+/// Build complete MoonProto pending-order parameters.
+///
+/// No `planned_sell_price`: see [`place_pending_order`]. `use_market_stop` is passed on because the
+/// core reads it for a UDP strategy candidate; a Manual strategy uses its own retained setting and a
+/// bare pending ignores the flag entirely.
+fn pending_order_params(
+    market: String,
+    short: bool,
+    trigger_price: f64,
+    size: f64,
+    strategy_id: Option<u64>,
+    use_market_stop: bool,
+) -> PendingOrderParams {
+    let side = order_side(short);
+    let mut params = PendingOrderParams::new(market, side, trigger_price, size)
+        .with_market_stop(use_market_stop);
+    if let Some(id) = strategy_id {
+        params = params.with_strategy_id(id);
     }
     params
 }
@@ -270,11 +339,7 @@ pub(super) fn cancel_market_buys(client: &MoonClient, server_id: u64, market: &s
 /// Joins all sell orders for a market (the sell-line context-menu action). `short` is the
 /// POSITION side (mirroring `is_short`) and determines `OrderSide`. Maps to `trade().join_orders`.
 pub(super) fn join_sells(client: &MoonClient, server_id: u64, market: String, short: bool) {
-    let side = if short {
-        OrderSide::Short
-    } else {
-        OrderSide::Long
-    };
+    let side = order_side(short);
     report(
         server_id,
         format!("join sells {market} short={short}"),

@@ -737,6 +737,12 @@ impl HotkeysConfig {
     /// Includes the preset and manual-strategy arrays: those are exactly where a user's own
     /// `alt-1` is most likely to sit. A key held by two slots appears twice, which is what makes a
     /// duplicate visible to the caller.
+    ///
+    /// Raw strings, exactly as stored — this crate cannot parse them and deliberately does not try.
+    /// A caller that must decide whether two of these are the SAME PRESS compares them through
+    /// `crate::hotkeys::binding_id` on the UI side, as the core pull's conflict gate does; a caller
+    /// that compares them literally, as [`clear_if_duplicate`] does, misses a differently-spelled
+    /// duplicate and says so where it is written.
     pub fn bound_keys(&self) -> Vec<String> {
         let named = [
             &self.cancel_buy,
@@ -817,6 +823,22 @@ impl HotkeysConfig {
 /// `taken` is a [`HotkeysConfig::bound_keys`] snapshot, in which the field's OWN key already counts
 /// once; anything above one occurrence is a real collision. An empty field binds nothing and is
 /// left alone.
+///
+/// STILL NOT REDUNDANT, now that the settings page captions duplicates by name. The two answer
+/// different questions and only one of them is about the user: the page reports a duplicate the USER
+/// created and leaves it alone, because their binding is their business; this clears a default WE
+/// ship into a slot that did not exist in their file yet, which they never chose and would only
+/// discover by noticing an old key had stopped working. A caption cannot serve the second case — it
+/// is only read by someone who opens the page, and by then the key is already stolen.
+///
+/// LIMIT, and it is a real one: this compares the STRINGS, while the dispatcher compares the press
+/// (`crate::hotkeys::binding_id` in the UI crate is the definition). `Keystroke::parse` is
+/// case-insensitive, takes the modifiers in any order, and reads `cmd`/`super`/`win` as one
+/// modifier, so a file whose key is spelled `Ctrl-F10` or `ctrl-alt-win-shift-k` hides a real
+/// collision from this check and the shipped default takes the key after all. Not fixed here on
+/// purpose: this crate has no keystroke parser, and writing a second one to compare with would
+/// invite exactly the drift it is meant to catch. The honest fix is to hand the comparison in from
+/// the crate that owns the parser; `docs-internal/HOTKEYS_UNIFIED_PLAN.md` carries it as debt.
 ///
 /// Args:
 ///     taken: Snapshot of all already-bound, non-empty keystrokes.

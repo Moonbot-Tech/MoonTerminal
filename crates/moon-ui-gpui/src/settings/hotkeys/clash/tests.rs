@@ -176,6 +176,7 @@ fn the_button_decides_which_gesture_row_loses() {
     assert_eq!(
         clashes
             .mouse(&hotkeys, MouseSlot::BuySet)
+            .first()
             .expect("placement is asked first, so it takes the press")
             .severity,
         Severity::Shares
@@ -183,19 +184,100 @@ fn the_button_decides_which_gesture_row_loses() {
     assert_eq!(
         clashes
             .mouse(&hotkeys, MouseSlot::BuyMove)
+            .first()
             .expect("the move row is asked second and never reached")
             .severity,
         Severity::Shadowed
     );
 
-    // The right button carries no placement layer whatsoever.
+    // The right button DOES place orders — last, under both context menus. Read the other way
+    // round until 10.09.2026, which put a red "will not fire" on a gesture that opens a position.
     let mut right = quiet();
     set_mouse_slot_verbatim(&mut right, MouseSlot::BuySet, MouseGestureBinding::RightAlt);
-    let clash = Clashes::build(&right)
-        .mouse(&right, MouseSlot::BuySet)
-        .expect("a placement gesture on the right button fires nowhere");
-    assert_eq!(clash.severity, Severity::Shadowed);
-    assert!(clash.text.contains("right button"), "{}", clash.text);
+    let notes = Clashes::build(&right).mouse(&right, MouseSlot::BuySet);
+    let clash = notes
+        .first()
+        .expect("the menus above it share the press, which is worth saying");
+    assert_eq!(
+        clash.severity,
+        Severity::Shares,
+        "a right-button placement gesture fires wherever no menu claims the press: {}",
+        clash.text
+    );
+}
+
+/// The row a same-layer duplicate actually reaches FIRST is told it is taking the binding; the one
+/// behind it is told it will not fire. Both are live trading rows, and telling the winner it is
+/// broken is the failure `Clashes::key` already names beside its own directional verdict.
+#[test]
+fn a_shared_placement_gesture_names_a_winner_and_a_loser() {
+    let mut hotkeys = quiet();
+    set_mouse_slot_verbatim(
+        &mut hotkeys,
+        MouseSlot::BuySet,
+        MouseGestureBinding::LeftAlt,
+    );
+    set_mouse_slot_verbatim(
+        &mut hotkeys,
+        MouseSlot::PendingLong,
+        MouseGestureBinding::LeftAlt,
+    );
+    let clashes = Clashes::build(&hotkeys);
+
+    assert_eq!(
+        clashes
+            .mouse(&hotkeys, MouseSlot::BuySet)
+            .first()
+            .expect("the row placement_intent tries first takes the gesture")
+            .severity,
+        Severity::Shares
+    );
+    assert_eq!(
+        clashes
+            .mouse(&hotkeys, MouseSlot::PendingLong)
+            .first()
+            .expect("the row behind it never answers")
+            .severity,
+        Severity::Shadowed
+    );
+}
+
+/// The move rows are asked in PAIRS — buy, sell, buy2, sell2 — not in this page's row order, so a
+/// short row answers before a long row listed above it.
+///
+/// Plausible breakage: ranking move rows by their position in `all_mouse_slots()` would name
+/// `SellMove2` the winner over `ShortBuyMove`, which is the reverse of what the dispatcher does.
+#[test]
+fn move_rows_rank_by_the_dispatchers_pairs_not_by_row_order() {
+    let mut hotkeys = quiet();
+    set_mouse_slot_verbatim(
+        &mut hotkeys,
+        MouseSlot::SellMove2,
+        MouseGestureBinding::MiddleAlt,
+    );
+    set_mouse_slot_verbatim(
+        &mut hotkeys,
+        MouseSlot::ShortBuyMove,
+        MouseGestureBinding::MiddleAlt,
+    );
+    let clashes = Clashes::build(&hotkeys);
+
+    assert_eq!(
+        clashes
+            .mouse(&hotkeys, MouseSlot::ShortBuyMove)
+            .first()
+            .expect("the buy pair is asked first")
+            .severity,
+        Severity::Shares
+    );
+    assert_eq!(
+        clashes
+            .mouse(&hotkeys, MouseSlot::SellMove2)
+            .first()
+            .expect("the sell2 pair is asked last")
+            .severity,
+        Severity::Shadowed
+    );
 }
 
 /// A move row whose kind is `None` sends nothing and does not silence the row below it.
@@ -218,7 +300,7 @@ fn an_inert_move_row_shadows_nothing() {
     );
     let clashes = Clashes::build(&hotkeys);
     assert!(
-        clashes.mouse(&hotkeys, MouseSlot::SellMove).is_none(),
+        clashes.mouse(&hotkeys, MouseSlot::SellMove).is_empty(),
         "a row set to send nothing was reported as taking the press"
     );
 }
@@ -243,6 +325,7 @@ fn a_conditional_chart_layer_shares() {
     assert_eq!(
         clashes
             .mouse(&hotkeys, MouseSlot::BuySet)
+            .first()
             .expect("drawing shares this gesture")
             .severity,
         Severity::Shares
@@ -250,6 +333,7 @@ fn a_conditional_chart_layer_shares() {
     assert_eq!(
         clashes
             .mouse(&hotkeys, MouseSlot::ShortSet)
+            .first()
             .expect("the sync sits below this row")
             .severity,
         Severity::Shares
@@ -271,7 +355,7 @@ fn the_two_halves_of_one_move_row_are_not_a_clash() {
         MouseGestureBinding::MiddleCtrl,
     );
     let clashes = Clashes::build(&hotkeys);
-    assert!(clashes.mouse(&hotkeys, MouseSlot::BuyMove).is_none());
+    assert!(clashes.mouse(&hotkeys, MouseSlot::BuyMove).is_empty());
 }
 
 /// The shipped defaults must leave no row dead.
@@ -296,7 +380,8 @@ fn the_shipped_defaults_leave_nothing_dead() {
         .filter(|slot| {
             clashes
                 .mouse(&hotkeys, *slot)
-                .is_some_and(|c| c.severity == Severity::Shadowed)
+                .iter()
+                .any(|c| c.severity == Severity::Shadowed)
         })
         .map(mouse_slot_id)
         .collect();
@@ -304,4 +389,93 @@ fn the_shipped_defaults_leave_nothing_dead() {
         dead_mice.is_empty(),
         "a shipped gesture never fires: {dead_mice:?}"
     );
+}
+
+/// A move row whose kind is `None` sends nothing, so it neither takes a binding nor loses one.
+///
+/// Plausible breakage: reporting it as the winner captions the row that ACTUALLY fires as dead —
+/// `resolve_move_gesture` steps past the inert row on purpose, so the rival is the only one working.
+#[test]
+fn an_inert_move_row_carries_no_caption_of_its_own() {
+    let mut hotkeys = quiet();
+    set_mouse_slot_verbatim(
+        &mut hotkeys,
+        MouseSlot::BuyMove,
+        MouseGestureBinding::MiddleAlt,
+    );
+    set_move_kind_slot_value(&mut hotkeys, MoveKindSlot::BuyMove, MoveKind::None);
+    // A live rival on the same gesture, one that the dispatcher reaches later.
+    set_mouse_slot_verbatim(
+        &mut hotkeys,
+        MouseSlot::SellMove,
+        MouseGestureBinding::MiddleAlt,
+    );
+    set_move_kind_slot_value(
+        &mut hotkeys,
+        MoveKindSlot::SellMove,
+        MoveKind::ParallelShift,
+    );
+    let clashes = Clashes::build(&hotkeys);
+
+    assert!(
+        clashes.mouse(&hotkeys, MouseSlot::BuyMove).is_empty(),
+        "an inert row takes nothing from the row that fires"
+    );
+    assert!(
+        clashes.mouse(&hotkeys, MouseSlot::SellMove).is_empty(),
+        "and the row that fires is not shadowed by one that sends nothing"
+    );
+}
+
+/// The two figure-delete gestures that cannot reach a figure, per `figures::erase`'s own header:
+/// the drawing layer grabs it on Ctrl+Left with the same hit predicate, and a right double click
+/// never arrives because press one opens the figure menu.
+///
+/// Plausible breakage: neither is a matter of layer ORDER — the figure-delete layer even sits above
+/// the menu on the right button — so the layer walk reports "both work" about a dead gesture.
+#[test]
+fn the_dead_figure_delete_gestures_are_reported_dead() {
+    for gesture in [
+        MouseGestureBinding::LeftCtrl,
+        MouseGestureBinding::RightDouble,
+    ] {
+        let mut hotkeys = quiet();
+        set_mouse_slot_verbatim(&mut hotkeys, MouseSlot::FigDelete, gesture);
+        let notes = Clashes::build(&hotkeys).mouse(&hotkeys, MouseSlot::FigDelete);
+        let clash = notes
+            .first()
+            .unwrap_or_else(|| panic!("{gesture:?} reaches no figure and must say so"));
+        assert_eq!(clash.severity, Severity::Shadowed, "{gesture:?}");
+    }
+    // The shipped default reaches a figure with nothing above it, so it carries nothing at all.
+    let mut hotkeys = quiet();
+    set_mouse_slot_verbatim(
+        &mut hotkeys,
+        MouseSlot::FigDelete,
+        MouseGestureBinding::Middle,
+    );
+    assert!(
+        Clashes::build(&hotkeys)
+            .mouse(&hotkeys, MouseSlot::FigDelete)
+            .is_empty(),
+        "the shipped middle-click default is not dead"
+    );
+
+    // `LeftCtrlDouble` is the sharp one, and it is neither of the two easy answers: it looks like
+    // the dead `LeftCtrl` and is not, and it is not free either. A Ctrl double click is two presses
+    // — press one goes to drawing exactly as a single Ctrl press does, press two skips the drawing
+    // layer (`mouse_down_left` gates it on `click_count <= 1`) and reaches this row. So both act,
+    // and the row says so. Calling it dead put a red "will not fire" on a gesture that fires;
+    // calling it free hid a rival that really does take half the sequence.
+    let mut hotkeys = quiet();
+    set_mouse_slot_verbatim(
+        &mut hotkeys,
+        MouseSlot::FigDelete,
+        MouseGestureBinding::LeftCtrlDouble,
+    );
+    let notes = Clashes::build(&hotkeys).mouse(&hotkeys, MouseSlot::FigDelete);
+    let clash = notes
+        .first()
+        .expect("drawing takes press one, which is worth saying");
+    assert_eq!(clash.severity, Severity::Shares);
 }

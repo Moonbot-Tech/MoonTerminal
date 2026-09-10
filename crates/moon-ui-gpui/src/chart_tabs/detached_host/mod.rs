@@ -556,8 +556,9 @@ impl DetachedChartHost {
                 true
             }
             HotkeyAction::ScalePlus | HotkeyAction::ScaleMinus => {
-                let zoom_in = matches!(action, HotkeyAction::ScalePlus);
-                let next = crate::controls::step_scale(self.panel.read(cx).scale(), zoom_in);
+                // "+" is the scale NUMBER growing, not the zoom: Moonbot's Scale + widens the band.
+                let scale_up = matches!(action, HotkeyAction::ScalePlus);
+                let next = crate::controls::step_scale(self.panel.read(cx).scale(), scale_up);
                 self.panel.update(cx, |st, scx| st.set_scale(next, scx));
                 cx.notify();
                 true
