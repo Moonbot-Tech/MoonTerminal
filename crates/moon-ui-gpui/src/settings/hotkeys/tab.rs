@@ -136,7 +136,9 @@ impl SettingsView {
             .child(muted_line(t!("hotkeys.group.builtin_hint").to_string(), &p))
             .children([
                 self.builtin_row(t!("hotkeys.builtin.wheel_zoom").to_string(), cx),
+                self.builtin_row(t!("hotkeys.builtin.wheel_zoom_coarse").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.wheel_pan").to_string(), cx),
+                self.builtin_row(t!("hotkeys.builtin.x_sync").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.cancel_hover").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.esc_close").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.close_all").to_string(), cx),

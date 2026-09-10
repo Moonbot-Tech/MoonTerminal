@@ -903,7 +903,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
       <li><strong>Live / Пауза</strong> — Live: график бежит за рынком. Пауза: заморожен, можно листать (ЛКМ-перетаскивание, колесо).</li>
       <li><strong>Запуск отдельных окон</strong> — Монитор прибыли · Скринер · Стратегии · Аналитика · Настройки. Каждое — отдельное окно ОС; Аналитика открывается сама один раз при старте.</li>
       <li><strong>Вкладки графиков</strong> — Открытые графики группы. Escape закрывает активный Main-график, Shift+Escape — все Main-графики во всех группах.</li>
-      <li><strong>Область графика</strong> — Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо — зум по времени, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на ордерной линии отменяет этот ордер.</li>
+      <li><strong>Область графика</strong> — Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо или Ctrl+колесо — зум по времени, Ctrl+Shift — крупным шагом, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на ордерной линии отменяет этот ордер.</li>
       <li><strong>Стакан</strong> — Глубина рынка справа от графика. По нему же работают мышиные жесты: двойной клик — поставить лонг, Shift+клик — двинуть открытый лонг, Ctrl+клик — двинуть линии выхода.</li>
       <li><strong>Лента детектов</strong> — Карточки сработавших детектов по паре «ядро — монета». Вид настраивается шестерёнкой: размер, поля, мини-график, цветная полоса сервера.</li>
       <li><strong>Вкладки дока</strong> — Клик — выбрать · двойной клик или перетаскивание — открепить в окно. Правый клик по вкладке включает счётчики непрочитанного.</li>
@@ -927,7 +927,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
       <li><strong>Полная сводка</strong> — Все доступные ядра группы Main</li>
       <li><strong>Дерево ядер по биржам</strong> — Заголовки бирж идут по живым метаданным рынка, неизвестная биржа — первой; ядра внутри — в каноническом порядке. Отключённые и недоступные строки остаются видимыми и клик по ним ничего не меняет. Клик по ядру этой группы меняет только её Auto-область; клик по ядру другой группы открывает уже существующее окно той группы, панели между окнами не переезжают.</li>
       <li><strong>Закреплённые графики и рабочие вкладки</strong> — ChartTabs всегда первая, визуально отделена и её нельзя переставить вперёд. Дальше — Report, Assets, CoreStatus, Log и Detects. News и Alerts (Фигуры) в режиме AUTO нет: это панели только для MANUAL. Открепить вкладку или график нельзя.</li>
-      <li><strong>Область графика</strong> — Тот же GPU-график, что в MANUAL. Колесо — зум по времени, Shift или Alt + колесо — прокрутка. В Обзоре выбор сводки не подменяет Main-график чужим ядром. Escape по последнему Main в режиме AUTO возвращает на Report.</li>
+      <li><strong>Область графика</strong> — Тот же GPU-график, что в MANUAL. Колесо или Ctrl+колесо — зум по времени, Shift или Alt + колесо — прокрутка. В Обзоре выбор сводки не подменяет Main-график чужим ядром. Escape по последнему Main в режиме AUTO возвращает на Report.</li>
       <li><strong>Стакан</strong> — Глубина рынка справа от графика. По нему же работают мышиные жесты: двойной клик — поставить лонг, Shift+клик — двинуть открытый лонг, Ctrl+клик — двинуть линии выхода.</li>
       <li><strong>Нижняя поверхность ордеров</strong> — Отдельная нижняя панель, не кандидат на стартовую вкладку режима AUTO. На первом запуске она выше обычного на четыре строки таблицы. Открепить её из режима AUTO нельзя.</li>
       <li><strong>Статус-бар</strong> — Соединение: зелёный — все ядра готовы, красный — хотя бы одно отвалилось, жёлтый — ещё подключаются. Дальше лицензия, глубина стакана, FPS и расход CPU / GPU / RAM. Выбранное на рейке ядро эти цифры не сужает.</li>
@@ -1440,11 +1440,11 @@ const MODES = {
         "n": 14,
         "ru": [
           "Область графика",
-          "Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо — зум по времени, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на ордерной линии отменяет этот ордер."
+          "Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо или Ctrl+колесо — зум по времени, Ctrl+Shift — крупным шагом, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на ордерной линии отменяет этот ордер."
         ],
         "en": [
           "Chart area",
-          "Candles, order lines and closed trades drawn by a dedicated GPU pass. Wheel zooms by time, Shift or Alt + wheel pans left/right. Tab or Delete over an order line cancels that order."
+          "Candles, order lines and closed trades drawn by a dedicated GPU pass. Wheel or Ctrl+wheel zooms by time — Ctrl+Shift for a coarser step — and Shift or Alt + wheel pans left/right. Tab or Delete over an order line cancels that order."
         ],
         "src": "locales/hotkeys.yml — встроенные"
       },
@@ -1729,11 +1729,11 @@ const MODES = {
         "n": 16,
         "ru": [
           "Область графика",
-          "Тот же GPU-график, что в MANUAL. Колесо — зум по времени, Shift или Alt + колесо — прокрутка. В Обзоре выбор сводки не подменяет Main-график чужим ядром. Escape по последнему Main в режиме AUTO возвращает на Report."
+          "Тот же GPU-график, что в MANUAL. Колесо или Ctrl+колесо — зум по времени, Shift или Alt + колесо — прокрутка. В Обзоре выбор сводки не подменяет Main-график чужим ядром. Escape по последнему Main в режиме AUTO возвращает на Report."
         ],
         "en": [
           "Chart area",
-          "The same GPU chart as MANUAL. Wheel zooms by time, Shift or Alt + wheel pans. Overview does not retarget the Main chart to some other core. Escape on the last Main chart in AUTO reveals Report."
+          "The same GPU chart as MANUAL. Wheel or Ctrl+wheel zooms by time, Shift or Alt + wheel pans. Overview does not retarget the Main chart to some other core. Escape on the last Main chart in AUTO reveals Report."
         ],
         "src": "shell/workspace.rs — should_return_to_report_after_main_close"
       },
@@ -2141,10 +2141,17 @@ const HOTKEYS = [
     },
     "rows": [
       [
-        "Wheel",
+        "Wheel / Ctrl+Wheel",
         {
           "ru": "Зум по времени",
           "en": "Zoom by time"
+        }
+      ],
+      [
+        "Ctrl+Shift+Wheel",
+        {
+          "ru": "То же, но крупным шагом",
+          "en": "The same, in a coarser step"
         }
       ],
       [
@@ -2152,6 +2159,13 @@ const HOTKEYS = [
         {
           "ru": "Прокрутка графика влево-вправо",
           "en": "Pan the chart left and right"
+        }
+      ],
+      [
+        "Shift+Middle click",
+        {
+          "ru": "Синхронизировать масштаб по времени со всеми графиками окна",
+          "en": "Sync the time scale across every chart in the window"
         }
       ],
       [
@@ -2345,7 +2359,7 @@ function render(){
     }
   ],
   [
-    "29",
+    "31",
     {
       "ru": "горячих клавиш",
       "en": "hotkeys"

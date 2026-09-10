@@ -17,6 +17,22 @@ pub enum Btn {
     Right,
 }
 
+/// What a wheel event does to the hovered pane's X window.
+///
+/// A type rather than the `pan: bool` this used to take, because the answer stopped being a yes/no
+/// the moment Moonbot's coarse step arrived — and a third state spelled as a second bool is how a
+/// caller ends up passing `pan=true, coarse=true`, which means nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WheelAction {
+    /// Move the window along time.
+    Pan,
+    /// Scale it by the ordinary step: one doubling per wheel threshold.
+    Zoom,
+    /// Scale it by the coarse step — Moonbot's "stretches even more" on Ctrl+Shift, which is two
+    /// doublings where [`Self::Zoom`] gives one.
+    ZoomCoarse,
+}
+
 const WHEEL_THRESHOLD: f32 = 100.0;
 /// Pixel distance that doubles or halves X scale for precise macOS trackpad input.
 ///
@@ -70,6 +86,9 @@ pub struct ChartInput {
     drag_accum: (f32, f32),
     wheel_accum: f32,
     wheel_pane: Option<usize>,
+    /// Which gesture the accumulated lines were gathered under, so a change of modifiers mid-scroll
+    /// starts a fresh count instead of spending them at the new step size.
+    wheel_action: Option<WheelAction>,
     rmb_down: bool,
     /// Whether right-button movement crossed the price-zoom drag threshold.
     rmb_moved: bool,
@@ -148,30 +167,49 @@ impl ChartInput {
 
     /// Apply wheel X zoom or X pan to the hovered pane.
     ///
-    /// `dy` is a line delta for discrete input or a pixel delta when `precise` is true. `pan`
-    /// selects Shift/Alt wheel panning instead of zooming, and `gate_ok` requires the pointer to be
-    /// inside the chart zone. Returns whether a view changed and needs presentation.
+    /// `dy` is a line delta for discrete input or a pixel delta when `precise` is true. `action`
+    /// says which gesture the modifiers named, and `gate_ok` requires the pointer to be inside the
+    /// chart zone. Returns whether a view changed and needs presentation.
     pub fn wheel(
         &mut self,
         dy: f32,
         precise: bool,
-        pan: bool,
+        action: WheelAction,
         gate_ok: bool,
         container: &mut Container,
         fallback_w: f32,
         ppp: f32,
     ) -> bool {
-        if !gate_ok || dy == 0.0 {
+        // Non-finite deltas are refused HERE, at the one place they enter, because everything
+        // downstream carries NaN silently: the threshold test below is false for NaN so it does not
+        // return early, `signum()` of a NaN accumulator is NaN, `View::zoom_x_at` multiplies the
+        // raw `px_per_ms` by it, and `f32::clamp` returns a NaN unchanged — after which that pane's
+        // scale is NaN forever, since the self-heal on resize compares against it and never matches
+        // again. The old discrete branch happened to survive this by testing `> 0.0` and falling to
+        // a 0.5 factor; computing the factor from the accumulator removed that accident, which is
+        // what made the guard worth writing rather than assuming the platform is well behaved.
+        if !gate_ok || !dy.is_finite() || dy == 0.0 {
             return false;
         }
-        if self.wheel_pane != self.hovered_pane {
+        // The accumulator belongs to one pane AND one gesture. Carrying it across a change of
+        // either spends lines gathered while panning on the zoom step that follows, which fires
+        // early and at whichever multiplier the modifiers happen to hold at that instant.
+        if self.wheel_pane != self.hovered_pane || self.wheel_action != Some(action) {
             self.wheel_accum = 0.0;
             self.wheel_pane = self.hovered_pane;
+            self.wheel_action = Some(action);
         }
         let (plot_w, cursor_x) = self.plot_metrics_for(self.hovered_pane, fallback_w, ppp);
         let now = now_unix_ms();
         if let Some(view) = self.hovered_view_mut(container) {
-            if pan {
+            // How many doublings one step is worth. The coarse gesture is Moonbot's Ctrl+Shift, and
+            // it is a bigger STEP rather than a different operation.
+            let doublings = if action == WheelAction::ZoomCoarse {
+                2.0
+            } else {
+                1.0
+            };
+            if action == WheelAction::Pan {
                 // Precise panning follows gesture pixels; a discrete line event uses a fixed
                 // 60-device-pixel step in its sign direction.
                 let dx = if precise { -dy } else { -dy.signum() * 60.0 };
@@ -180,16 +218,16 @@ impl ChartInput {
                 // Precise macOS trackpad input zooms proportionally to gesture magnitude without
                 // threshold accumulation, avoiding repeated jumps from inertial pixel deltas.
                 self.wheel_accum = 0.0;
-                let factor = 2f32.powf(dy / WHEEL_PX_PER_2X);
+                let factor = 2f32.powf(doublings * dy / WHEEL_PX_PER_2X);
                 view.zoom_x_at(factor, plot_w, cursor_x, now);
             } else {
-                // Accumulate discrete wheel lines and apply a 2x or 0.5x step at the threshold.
+                // Accumulate discrete wheel lines and apply the step at the threshold.
                 self.wheel_accum += dy * 40.0;
                 if self.wheel_accum.abs() < WHEEL_THRESHOLD {
                     return false;
                 }
                 // Terminal UX: wheel up zooms in, wheel down zooms out.
-                let factor = if self.wheel_accum > 0.0 { 2.0 } else { 0.5 };
+                let factor = 2f32.powf(doublings * self.wheel_accum.signum());
                 self.wheel_accum = 0.0;
                 view.zoom_x_at(factor, plot_w, cursor_x, now);
             }

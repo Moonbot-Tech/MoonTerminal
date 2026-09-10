@@ -393,12 +393,18 @@ impl Clashes {
                 continue;
             }
             let holders = layer_holders(*layer, rows, slot, gesture);
-            if position == Position::Above && layer.unconditional() {
+            match position {
                 // Above and unconditional: it takes every press and this row is dead.
-                kills.extend(holders);
-            } else {
-                // Above but conditional, or below: both live.
-                beside.extend(holders);
+                Position::Above if layer.unconditional() => kills.extend(holders),
+                // BELOW, and this row's own layer answers every press: the mirror of the case
+                // above, and it has to be told from this side too. `buy_set_click` on Shift+Left
+                // sits above the move layer, which holds the same gesture by default — the move row
+                // read "will not fire" while this one read "both work", so one collision described
+                // itself two contradictory ways. The test is MY layer, not theirs: a row whose own
+                // layer only answers over an object lets the press fall through when it misses.
+                Position::Below if mine.unconditional() => wins.extend(holders),
+                // Above but conditional, or below a row that is itself conditional: both live.
+                _ => beside.extend(holders),
             }
         }
         // A row that never answers has nothing else worth saying: the other captions describe where

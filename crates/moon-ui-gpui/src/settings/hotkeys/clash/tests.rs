@@ -479,3 +479,56 @@ fn the_dead_figure_delete_gestures_are_reported_dead() {
         .expect("drawing takes press one, which is worth saying");
     assert_eq!(clash.severity, Severity::Shares);
 }
+
+/// One collision, one story from both sides. A row whose layer answers every press takes the
+/// binding from every row in a layer BELOW it, and both captions have to agree on who that is.
+///
+/// Plausible breakage: testing the OTHER layer's `unconditional` on the below branch, or leaving
+/// that branch to fall into "both work" — which is what it did until 2026-09-10. Asserted on the
+/// TEXT, not the severity: "takes this binding" and "both work" are both amber, so a severity check
+/// alone stays green through exactly the regression this test is named after.
+#[test]
+fn a_lower_layer_is_told_it_loses_and_the_upper_one_that_it_takes() {
+    let mut hotkeys = quiet();
+    set_mouse_slot_verbatim(
+        &mut hotkeys,
+        MouseSlot::BuySet,
+        MouseGestureBinding::LeftShift,
+    );
+    set_mouse_slot_verbatim(
+        &mut hotkeys,
+        MouseSlot::BuyMove,
+        MouseGestureBinding::LeftShift,
+    );
+    set_move_kind_slot_value(&mut hotkeys, MoveKindSlot::BuyMove, MoveKind::ParallelShift);
+    let clashes = Clashes::build(&hotkeys);
+
+    let winner = clashes.mouse(&hotkeys, MouseSlot::BuySet);
+    let winner = winner
+        .first()
+        .expect("placement is offered the press first, and says so");
+    assert_eq!(
+        winner.severity,
+        Severity::Shares,
+        "the winner works, so it is amber and not red"
+    );
+    assert_eq!(
+        winner.text,
+        rust_i18n::t!(
+            "hotkeys.clash.wins",
+            rows = super::super::pull_gestures::target_label(
+                super::super::pull_gestures::GestureTarget::Gesture(MouseSlot::BuyMove)
+            )
+        )
+        .to_string(),
+        "and it says it TAKES the binding, not that both work"
+    );
+    assert_eq!(
+        clashes
+            .mouse(&hotkeys, MouseSlot::BuyMove)
+            .first()
+            .expect("the move row never sees the press")
+            .severity,
+        Severity::Shadowed
+    );
+}

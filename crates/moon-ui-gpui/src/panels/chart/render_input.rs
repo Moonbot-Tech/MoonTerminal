@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use gpui::*;
 
 use crate::chartdx::input;
+use crate::chartdx::input::WheelAction;
 
 /// Smallest gap between two drag-driven `cx.notify()` calls.
 ///
@@ -143,6 +144,25 @@ fn release_order_drag(
 }
 
 /// Routes a wheel event to chart zoom/pan or the surrounding stack scroll.
+/// Which wheel gesture a modifier set names — this decides only WHAT the wheel does, never where.
+///
+/// Moonbot's own built-in list, from its Hotkeys page: `Ctrl+Wheel` stretches the chart along time,
+/// `Ctrl+Shift+Wheel` stretches it more, and `Alt or Shift+Wheel` moves it left and right. A bare
+/// wheel is not on that list and zooms here — ours to keep, and a superset rather than a conflict.
+///
+/// The order of the tests is the whole of it: `Ctrl+Shift` has to be read before the plain `Shift`
+/// pan, or the coarse gesture pans instead of zooming, which is what it did until 2026-09-10.
+pub(super) fn wheel_action(modifiers: Modifiers) -> WheelAction {
+    if modifiers.control && modifiers.shift {
+        return WheelAction::ZoomCoarse;
+    }
+    if modifiers.shift || modifiers.alt {
+        return WheelAction::Pan;
+    }
+    WheelAction::Zoom
+}
+
+/// Routes a wheel event to chart zoom/pan or leaves it for the surrounding stack to scroll.
 pub(super) fn scroll_wheel(
     this: &mut ChartPanel,
     e: &ScrollWheelEvent,
@@ -192,9 +212,15 @@ pub(super) fn scroll_wheel(
     let changed = {
         let input = &mut this.input;
         this.chart.with_container_mut(|container| {
-            // Built-in gesture: Shift OR Alt + wheel pans time left/right; no modifier zooms time.
-            let pan = e.modifiers.shift || e.modifiers.alt;
-            input.wheel(dy, precise, pan, within, container, fb, sf)
+            input.wheel(
+                dy,
+                precise,
+                wheel_action(e.modifiers),
+                within,
+                container,
+                fb,
+                sf,
+            )
         })
     };
     if changed {
@@ -932,3 +958,6 @@ pub(super) fn hover(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

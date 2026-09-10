@@ -852,6 +852,14 @@ impl ChartView {
     /// Returns:
     ///     Nothing; the X scale and anchor are updated in place.
     pub fn zoom_x_at(&mut self, factor: f32, area_w: f32, cursor_x: f32, now_ms: f64) {
+        // A local invariant rather than a promise extracted from every caller: the clamp below
+        // returns a NaN unchanged, `next` is computed from the RAW `px_per_ms` rather than the
+        // floored `old_px`, and `x_default_scale`'s comparison never matches a NaN again — so one
+        // bad factor pins this pane's scale to NaN for the rest of the session with no way back.
+        // Zero and negative are refused on the same line: both invert or collapse the window.
+        if !(factor.is_finite() && factor > 0.0) {
+            return;
+        }
         self.clear_frame_request();
         let was_follow = self.follow;
         let right_before = self.right_time_ms;
