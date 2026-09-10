@@ -1,6 +1,6 @@
 //! Bounded application bridge and joined Telegram transport ownership.
 use super::{
-    TelegramStatus, api::InlineKeyboardMarkup, auth::Authorization, commands::ParsedCommand,
+    TelegramStatus, api::ReplyMarkup, auth::Authorization, commands::ParsedCommand,
     web::MiniAppApiRequest,
 };
 use crate::config::TelegramConfig;
@@ -31,11 +31,12 @@ pub enum Work {
 pub enum Response {
     Text {
         text: String,
-        keyboard: Option<InlineKeyboardMarkup>,
+        keyboard: Option<ReplyMarkup>,
     },
     PairSaved {
         saved: bool,
         text: String,
+        keyboard: Option<ReplyMarkup>,
     },
 }
 /// In-memory pairing ledger shared by the bot and the Mini App session check.
@@ -74,9 +75,10 @@ impl TelegramService {
         let auth = authorization.clone();
         let bot_tx = tx.clone();
         let token = config.token.clone();
+        let bot_labels = labels.clone();
         let join = thread::Builder::new()
             .name("telegram-bot".into())
-            .spawn(move || bot::run(token, weak, auth, bot_tx))
+            .spawn(move || bot::run(token, weak, auth, bot_labels, bot_tx))
             .ok()?;
         let weak = Arc::downgrade(&alive);
         let cfg = mini_config.clone();

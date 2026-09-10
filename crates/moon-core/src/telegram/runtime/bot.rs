@@ -3,12 +3,12 @@ use super::{Response, SharedAuthorization, Work};
 use crate::config::Secret;
 use crate::telegram::{
     TelegramStatus,
-    api::{BotApi, InlineKeyboardMarkup},
-    commands::{ParsedCommand, parse_update},
+    api::{BotApi, ReplyMarkup},
+    commands::{ParsedCommand, parse_reply_button, parse_update},
     reply::segment_pages,
 };
 use std::sync::{
-    Weak,
+    Arc, Mutex, Weak,
     mpsc::{self, SyncSender},
 };
 use std::time::{Duration, Instant};
@@ -17,7 +17,13 @@ use std::time::{Duration, Instant};
 /// retry every 250 ms. Shutdown and config replacement drop `alive` and interrupt this wait.
 const INVALID_CREDENTIAL_RETRY: Duration = Duration::from_secs(30);
 /// Poll with private-chat pairing and Mini App guards; persistence publication owns admission.
-pub(super) fn run(token: Secret, alive: Weak<()>, auth: SharedAuthorization, tx: SyncSender<Work>) {
+pub(super) fn run(
+    token: Secret,
+    alive: Weak<()>,
+    auth: SharedAuthorization,
+    labels: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
+    tx: SyncSender<Work>,
+) {
     let mut api = BotApi::new(token);
     api.set_liveness(alive.clone());
     let status_tx = tx.clone();
@@ -57,12 +63,6 @@ pub(super) fn run(token: Secret, alive: Weak<()>, auth: SharedAuthorization, tx:
                 }
             }
         }
-        let count = auth.lock().map(|a| a.chat_count()).unwrap_or(0);
-        let _ = tx.try_send(Work::Status(if count == 0 {
-            TelegramStatus::Unpaired
-        } else {
-            TelegramStatus::Paired { chat_count: count }
-        }));
         let updates = match api.get_updates() {
             Ok(updates) => updates,
             Err(error) => {
@@ -70,14 +70,32 @@ pub(super) fn run(token: Secret, alive: Weak<()>, auth: SharedAuthorization, tx:
                 continue;
             }
         };
+        // A retry attempt does not prove recovery; retain the last failure until polling succeeds.
+        let count = auth.lock().map(|a| a.chat_count()).unwrap_or(0);
+        let _ = tx.try_send(Work::Status(if count == 0 {
+            TelegramStatus::Unpaired
+        } else {
+            TelegramStatus::Paired { chat_count: count }
+        }));
         for update in updates {
             if alive.upgrade().is_none() {
                 return;
             }
-            let Some(inbound) = parse_update(&update, username.as_deref()) else {
+            let Some(mut inbound) = parse_update(&update, username.as_deref()) else {
                 api.acknowledge_update(update.update_id);
                 continue;
             };
+            if inbound.command == ParsedCommand::Unknown {
+                if let Some(text) = update
+                    .message
+                    .as_ref()
+                    .and_then(|message| message.text.as_deref())
+                {
+                    if let Ok(labels) = labels.lock() {
+                        inbound.command = parse_reply_button(text, &labels);
+                    }
+                }
+            }
             let chat_id = inbound.chat_id;
             // Match the same source as parse_update; absent chat metadata fails closed.
             let private_chat = update
@@ -91,7 +109,12 @@ pub(super) fn run(token: Secret, alive: Weak<()>, auth: SharedAuthorization, tx:
                     return;
                 };
                 match inbound.command {
-                    ParsedCommand::Pair { .. } | ParsedCommand::MiniApp if !private_chat => {
+                    ParsedCommand::Pair { .. }
+                    | ParsedCommand::MiniApp
+                    | ParsedCommand::Start
+                    | ParsedCommand::Help
+                        if !private_chat =>
+                    {
                         Work::Command {
                             chat_id,
                             command: ParsedCommand::Pair {
@@ -129,16 +152,10 @@ pub(super) fn run(token: Secret, alive: Weak<()>, auth: SharedAuthorization, tx:
             };
             let (text, keyboard) = match result {
                 Response::Text { text, keyboard } => (text, keyboard),
-                Response::PairSaved { text, .. } => (text, None),
+                Response::PairSaved { text, keyboard, .. } => (text, keyboard),
             };
-            let keyboard = keyboard.as_ref().filter(|markup| {
-                private_chat
-                    || markup
-                        .inline_keyboard
-                        .iter()
-                        .flatten()
-                        .all(|button| button.web_app.is_none())
-            });
+            // Both persistent navigation and Mini App launchers belong to private chats.
+            let keyboard = keyboard.as_ref().filter(|_| private_chat);
             send_text(&mut api, &tx, chat_id, &text, keyboard);
         }
     }
@@ -149,7 +166,7 @@ fn send_text(
     tx: &SyncSender<Work>,
     chat: i64,
     text: &str,
-    keyboard: Option<&InlineKeyboardMarkup>,
+    keyboard: Option<&ReplyMarkup>,
 ) {
     for page in segment_pages(text) {
         if let Err(error) = api.send_message(chat, &page, keyboard) {

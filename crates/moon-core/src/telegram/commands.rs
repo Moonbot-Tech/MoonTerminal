@@ -1,6 +1,6 @@
 //! Command parsing for the Bot API surface.
 //!
-//! The parser recognizes `/pair <code>` and `/miniapp` only. Command suffixes
+//! The parser recognizes `/start`, `/help`, `/pair <code>`, and `/miniapp`. Command suffixes
 //! (`/miniapp@botname`) are accepted only for the configured bot username from `getMe`.
 
 use super::api::{Message, Update};
@@ -8,6 +8,10 @@ use super::api::{Message, Update};
 /// Parsed inbound command, localization-free.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParsedCommand {
+    /// Show the paired chat's welcome message and available next action.
+    Start,
+    /// Explain navigation without requiring the user to remember `/miniapp`.
+    Help,
     MiniApp,
     Pair {
         code: String,
@@ -86,11 +90,44 @@ pub fn parse_text(text: &str, bot_username: Option<&str>) -> ParsedCommand {
     }
     let name = name.to_ascii_lowercase();
     match name.as_str() {
+        "start" => require_no_args(args, ParsedCommand::Start),
+        "help" => require_no_args(args, ParsedCommand::Help),
         "miniapp" => require_no_args(args, ParsedCommand::MiniApp),
         "pair" => parse_pair(args),
         _ => ParsedCommand::Unknown,
     }
 }
+
+/// Resolve exact application-localized reply labels in every supported language.
+///
+/// This is parsing only: the runtime still checks private-chat identity and authorization.
+/// Slash commands never become button clicks, even if a supplied label resembles a command.
+pub fn parse_reply_button(
+    text: &str,
+    labels: &std::collections::BTreeMap<String, String>,
+) -> ParsedCommand {
+    let text = text.trim();
+    if text.is_empty() || text.starts_with('/') {
+        return ParsedCommand::Unknown;
+    }
+    for locale in ["ru", "en", "es"] {
+        for (name, command) in [
+            ("miniapp", ParsedCommand::MiniApp),
+            ("help", ParsedCommand::Help),
+        ] {
+            if labels
+                .get(&format!("button_{name}_{locale}"))
+                .is_some_and(|label| label == text)
+            {
+                return command;
+            }
+        }
+    }
+    ParsedCommand::Unknown
+}
+
+#[cfg(test)]
+mod tests;
 
 /// Split a command remainder into its first token and trimmed trailing arguments.
 fn split_head_args(rest: &str) -> (&str, &str) {

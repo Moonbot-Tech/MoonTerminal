@@ -69,13 +69,13 @@ pub(crate) enum Tab {
 impl Tab {
     const ALL: [Tab; 8] = [
         Tab::Connections,
+        Tab::Telegram,
         Tab::General,
         Tab::Hotkeys,
         Tab::Interface,
         Tab::Lines,
         Tab::Badges,
         Tab::Storage,
-        Tab::Telegram,
     ];
     /// Returns the stable, deliberately untranslated tab ID used by `MoonButton::new` and keys.
     fn id(self) -> &'static str {
