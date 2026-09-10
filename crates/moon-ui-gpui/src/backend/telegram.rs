@@ -18,6 +18,9 @@ use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+mod tests;
+
 /// Process-only service state; no credential is rendered by Debug.
 pub(crate) struct TelegramState {
     pub(crate) service: Option<TelegramService>,
@@ -29,11 +32,22 @@ pub(crate) struct TelegramState {
     configuration_pending: bool,
     /// Retirement runs off GPUI; the next saved service starts only after the old one joins.
     retiring: Option<JoinHandle<()>>,
+    /// Same-token service restarts must still clear menus for previously revoked chats.
+    retired_menu_chats: Vec<i64>,
 }
 impl TelegramState {
     /// Construct optional transport only from saved configuration.
     pub(crate) fn new(config: &TelegramConfig) -> Self {
-        let service = TelegramService::start_localized(config, telegram_labels());
+        Self::new_with_menu_cleanup(config, Vec::new())
+    }
+
+    /// Start transport with cleanup-only identities retained from the same bot credential.
+    fn new_with_menu_cleanup(config: &TelegramConfig, retired_menu_chats: Vec<i64>) -> Self {
+        let service = TelegramService::start_localized_with_menu_cleanup(
+            config,
+            telegram_labels(),
+            &retired_menu_chats,
+        );
         let status = if config.token.is_empty() {
             TelegramStatus::Disabled
         } else if service.is_some() {
@@ -49,6 +63,28 @@ impl TelegramState {
             revision: 0,
             configuration_pending: false,
             retiring: None,
+            retired_menu_chats,
+        }
+    }
+
+    /// Replace joined transport without forgetting pending cleanup for the same bot.
+    fn start_saved(&mut self, config: &TelegramConfig) {
+        let retired = std::mem::take(&mut self.retired_menu_chats);
+        *self = Self::new_with_menu_cleanup(config, retired);
+    }
+
+    /// Retain only removed identities, and never transfer them to a different bot token.
+    fn remember_menu_cleanup(&mut self, before: &TelegramConfig, saved: &TelegramConfig) {
+        if before.token.expose() != saved.token.expose() {
+            self.retired_menu_chats.clear();
+        } else {
+            for &chat in &before.authorized_chat_ids {
+                if !saved.authorized_chat_ids.contains(&chat)
+                    && !self.retired_menu_chats.contains(&chat)
+                {
+                    self.retired_menu_chats.push(chat);
+                }
+            }
         }
     }
     /// Stop and join transport before their owners disappear.
@@ -90,12 +126,13 @@ impl Backend {
     /// Reconcile a successfully persisted token or identity change; retain saved failures.
     pub(crate) fn reconcile_telegram(&mut self, before: &TelegramConfig) {
         let saved = &self.config.telegram;
+        self.telegram.remember_menu_cleanup(before, saved);
         if before.token.expose() != saved.token.expose()
             || before.authorized_chat_ids != saved.authorized_chat_ids
         {
             self.telegram.restart();
             if self.telegram.retiring.is_none() {
-                self.telegram = TelegramState::new(saved);
+                self.telegram.start_saved(saved);
             }
         } else {
             if let Some(service) = self.telegram.service.as_ref() {
@@ -123,13 +160,15 @@ impl Backend {
             self.telegram.status = TelegramStatus::Unavailable;
             return;
         }
+        self.telegram
+            .remember_menu_cleanup(&self.config.telegram, &candidate.telegram);
         self.config = candidate;
         if let Some(preview) = self.preview.as_mut() {
             preview.telegram.authorized_chat_ids.clear();
         }
         self.telegram.restart();
         if self.telegram.retiring.is_none() {
-            self.telegram = TelegramState::new(&self.config.telegram);
+            self.telegram.start_saved(&self.config.telegram);
         }
     }
     /// Drain bounded transport work on the 100 ms owner loop.
@@ -143,7 +182,7 @@ impl Backend {
             if let Some(join) = self.telegram.retiring.take() {
                 let _ = join.join();
             }
-            self.telegram = TelegramState::new(&self.config.telegram);
+            self.telegram.start_saved(&self.config.telegram);
             cx.notify();
         }
         if self.telegram.service.is_none() {
@@ -222,7 +261,7 @@ impl Backend {
                                 {
                                     Some(InlineKeyboardMarkup::from_rows(vec![vec![
                                         InlineKeyboardButton::web_app(
-                                            t!("telegram.mini_open").to_string(),
+                                            t!("telegram.open").to_string(),
                                             url.clone(),
                                         ),
                                     ]]))
@@ -326,19 +365,13 @@ fn status_text(status: &TelegramStatus) -> String {
     .to_string()
 }
 
-/// Persistent text buttons request a fresh launcher instead of retaining a stale tunnel URL.
+/// Keep help in the reply keyboard; the native menu owns the Mini App launcher.
 fn navigation_keyboard() -> ReplyMarkup {
     ReplyMarkup::Reply(ReplyKeyboardMarkup {
-        keyboard: vec![vec![
-            KeyboardButton {
-                text: t!("telegram.mini_open").to_string(),
-                style: Some("primary".to_string()),
-            },
-            KeyboardButton {
-                text: t!("telegram.button_help").to_string(),
-                style: None,
-            },
-        ]],
+        keyboard: vec![vec![KeyboardButton {
+            text: t!("telegram.button_help").to_string(),
+            style: None,
+        }]],
         resize_keyboard: true,
         is_persistent: true,
     })
@@ -347,6 +380,7 @@ fn navigation_keyboard() -> ReplyMarkup {
 /// Compose Mini App shell labels and all reply-button aliases in the UI locale domain.
 fn telegram_labels() -> std::collections::BTreeMap<String, String> {
     let mut labels: std::collections::BTreeMap<String, String> = [
+        ("menu_miniapp".to_string(), t!("telegram.open").to_string()),
         (
             "mini_shell_checking".to_string(),
             t!("telegram.mini_shell_checking").to_string(),

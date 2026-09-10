@@ -254,6 +254,7 @@ pub fn failed_telegram_status() -> TelegramStatus {
 pub(super) fn run_service(
     config: Arc<Mutex<crate::config::TelegramConfig>>,
     labels: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
+    menu: super::menu::SharedMenu,
     alive: Weak<()>,
     tx: SyncSender<super::Work>,
 ) {
@@ -272,6 +273,13 @@ pub(super) fn run_service(
             break;
         };
         if previous.as_ref() != Some(&desired) || previous_labels != current_labels {
+            super::menu::MenuIntent::publish(
+                &menu,
+                &desired.1,
+                false,
+                &MiniAppStatus::Stopped,
+                &current_labels,
+            );
             owner.stop();
             retry_at = None;
             retry_failures = 0;
@@ -297,6 +305,13 @@ pub(super) fn run_service(
             previous_labels = current_labels;
         }
         owner.poll_url();
+        super::menu::MenuIntent::publish(
+            &menu,
+            &desired.1,
+            desired.0,
+            &owner.status(),
+            &previous_labels,
+        );
         if desired.0
             && !saved.token.is_empty()
             && matches!(owner.status(), MiniAppStatus::Failed { .. })

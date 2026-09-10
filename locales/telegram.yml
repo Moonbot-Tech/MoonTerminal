@@ -35,25 +35,25 @@ telegram.mini_ready:
   en: "Ready. Open Mini App using the button in your bot."
   es: "Lista. Abre Mini App con el botón de tu bot."
 telegram.mini_starting:
-  ru: "Подготавливаем Mini App. Дождитесь готовности, затем нажмите «Открыть Mini App» в боте."
-  en: "Preparing Mini App. Once ready, press Open Mini App in the bot."
-  es: "Preparando Mini App. Cuando esté lista, pulsa Abrir Mini App en el bot."
+  ru: "Подготавливаем Mini App. Дождитесь готовности, затем нажмите «Открыть» в боте."
+  en: "Preparing Mini App. Once ready, press Open in the bot."
+  es: "Preparando Mini App. Cuando esté lista, pulsa Abrir en el bot."
 telegram.mini_failed:
   ru: "Не удалось открыть доступ к Mini App. Проверьте интернет; повторная попытка выполняется автоматически."
   en: "Could not make Mini App available. Check your internet connection; retrying automatically."
   es: "No se pudo habilitar Mini App. Comprueba tu conexión a internet; se reintentará automáticamente."
 telegram.bot_welcome:
-  ru: "MoonTerminal\n\nЭтот чат подключён к вашему терминалу. Выберите действие на клавиатуре внизу.\n\nКнопка «Открыть Mini App» запрашивает актуальную ссылку для входа. Терминал должен оставаться запущенным."
-  en: "MoonTerminal\n\nThis chat is connected to your terminal. Choose an action on the keyboard below.\n\nOpen Mini App requests a fresh launch link. Keep the terminal running."
-  es: "MoonTerminal\n\nEste chat está conectado a tu terminal. Elige una acción en el teclado de abajo.\n\nAbrir Mini App solicita un enlace de acceso actualizado. Mantén el terminal abierto."
+  ru: "MoonTerminal\n\nЭтот чат подключён к вашему терминалу. Кнопка «Открыть» рядом с полем ввода запускает Mini App.\n\nДля получения ссылки отправьте /miniapp. Терминал должен оставаться запущенным."
+  en: "MoonTerminal\n\nThis chat is connected to your terminal. The Open button beside the message field launches Mini App.\n\nSend /miniapp to get a launch link. Keep the terminal running."
+  es: "MoonTerminal\n\nEste chat está conectado a tu terminal. El botón Abrir junto al campo de mensaje inicia Mini App.\n\nEnvía /miniapp para obtener un enlace de acceso. Mantén el terminal abierto."
 telegram.button_help:
   ru: "Помощь"
   en: "Help"
   es: "Ayuda"
 telegram.bot_ready:
-  ru: "Mini App готово к открытию. Нажмите кнопку ниже."
-  en: "Mini App is ready. Tap the button below."
-  es: "Mini App está lista. Pulsa el botón de abajo."
+  ru: "Mini App готово к открытию. Нажмите «Открыть»."
+  en: "Mini App is ready. Tap Open."
+  es: "Mini App está lista. Pulsa Abrir."
 telegram.bot_mini_disabled:
   ru: "Mini App выключено. В MoonTerminal откройте «Настройки → Telegram», включите Mini App и сохраните изменения. Затем отправьте /miniapp."
   en: "Mini App is off. In MoonTerminal, open Settings → Telegram, enable Mini App and save. Then send /miniapp."
@@ -140,6 +140,11 @@ telegram.mini_open:
   ru: "Открыть Mini App"
   en: "Open Mini App"
   es: "Abrir Mini App"
+
+telegram.open:
+  ru: "Открыть"
+  en: "Open"
+  es: "Abrir"
 
 telegram.invalid:
   ru: "Команда не распознана.\n\n/start — главное меню\n/miniapp — открыть Mini App\n/help — помощь"
