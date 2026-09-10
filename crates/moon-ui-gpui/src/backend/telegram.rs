@@ -18,11 +18,14 @@ use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+mod reports;
 #[cfg(test)]
 mod tests;
 
 /// Process-only service state; no credential is rendered by Debug.
 pub(crate) struct TelegramState {
+    /// At most one database report is computed at a time, including timed-out requests.
+    report_pending: bool,
     pub(crate) service: Option<TelegramService>,
     pub(crate) status: TelegramStatus,
     pub(crate) mini_status: MiniAppStatus,
@@ -56,6 +59,7 @@ impl TelegramState {
             TelegramStatus::Unavailable
         };
         Self {
+            report_pending: false,
             service,
             status,
             mini_status: MiniAppStatus::Stopped,
@@ -70,7 +74,9 @@ impl TelegramState {
     /// Replace joined transport without forgetting pending cleanup for the same bot.
     fn start_saved(&mut self, config: &TelegramConfig) {
         let retired = std::mem::take(&mut self.retired_menu_chats);
+        let report_pending = self.report_pending;
         *self = Self::new_with_menu_cleanup(config, retired);
+        self.report_pending = report_pending;
     }
 
     /// Retain only removed identities, and never transfer them to a different bot token.
@@ -254,7 +260,25 @@ impl Backend {
                         continue;
                     }
                     match command {
-                        ParsedCommand::Start | ParsedCommand::Help | ParsedCommand::MiniApp => {
+                        ParsedCommand::Start => self.telegram_report(
+                            chat_id,
+                            moon_core::telegram::report::ReportRequest::new(
+                                moon_core::telegram::report::Period::Today,
+                                false,
+                            ),
+                            reply,
+                            cx,
+                        ),
+                        ParsedCommand::Report(request) => {
+                            self.telegram_report(chat_id, request, reply, cx)
+                        }
+                        ParsedCommand::Help => {
+                            let zone = crate::chrome::clock::resolved_header_clock_zone(
+                                self.header_clock_zone(),
+                            );
+                            let _ = reply.try_send(reports::help(&zone.to_string()));
+                        }
+                        ParsedCommand::MiniApp => {
                             let keyboard = match &self.telegram.mini_status {
                                 MiniAppStatus::Tunneling { url, .. }
                                     if self.config.telegram.mini_app_enabled =>
@@ -268,36 +292,25 @@ impl Backend {
                                 }
                                 _ => None,
                             };
-                            let text =
-                                if matches!(command, ParsedCommand::Start | ParsedCommand::Help) {
-                                    let next = if keyboard.is_some() {
-                                        t!("telegram.bot_ready")
-                                    } else if !self.config.telegram.mini_app_enabled {
-                                        t!("telegram.bot_mini_disabled")
-                                    } else {
-                                        t!("telegram.bot_mini_wait")
-                                    };
-                                    format!("{}\n\n{}", t!("telegram.bot_welcome"), next)
-                                } else if keyboard.is_some() {
-                                    t!("telegram.bot_ready").to_string()
-                                } else if !self.config.telegram.mini_app_enabled {
-                                    t!("telegram.bot_mini_disabled").to_string()
-                                } else {
-                                    t!("telegram.bot_mini_wait").to_string()
-                                };
-                            let keyboard =
-                                if matches!(command, ParsedCommand::Start | ParsedCommand::Help) {
-                                    Some(navigation_keyboard())
-                                } else {
-                                    keyboard
-                                        .map(ReplyMarkup::Inline)
-                                        .or_else(|| Some(navigation_keyboard()))
-                                };
+                            let text = if keyboard.is_some() {
+                                t!("telegram.bot_ready").to_string()
+                            } else if !self.config.telegram.mini_app_enabled {
+                                t!("telegram.bot_mini_disabled").to_string()
+                            } else {
+                                t!("telegram.bot_mini_wait").to_string()
+                            };
+                            let keyboard = keyboard
+                                .map(ReplyMarkup::Inline)
+                                .or_else(|| Some(navigation_keyboard()));
                             let _ = reply.try_send(Response::Text { text, keyboard });
                         }
                         _ => {
                             let _ = reply.try_send(Response::Text {
-                                text: t!("telegram.invalid").to_string(),
+                                text: format!(
+                                    "{}\n\n{}",
+                                    t!("telegram.invalid"),
+                                    t!("telegram.report_help")
+                                ),
                                 keyboard: Some(navigation_keyboard()),
                             });
                         }
@@ -365,16 +378,35 @@ fn status_text(status: &TelegramStatus) -> String {
     .to_string()
 }
 
-/// Keep help in the reply keyboard; the native menu owns the Mini App launcher.
+/// Global navigation owns periods and help; report actions remain inline.
 fn navigation_keyboard() -> ReplyMarkup {
+    let locale = rust_i18n::locale();
+    let buttons: Vec<_> = navigation_buttons()
+        .iter()
+        .map(|(name, icon)| {
+            let key = format!("telegram.button_{name}");
+            KeyboardButton {
+                text: format!("{icon} {}", t!(&key, locale = locale.as_ref())),
+                style: None,
+            }
+        })
+        .collect();
     ReplyMarkup::Reply(ReplyKeyboardMarkup {
-        keyboard: vec![vec![KeyboardButton {
-            text: t!("telegram.button_help").to_string(),
-            style: None,
-        }]],
+        keyboard: buttons.chunks(2).map(|row| row.to_vec()).collect(),
         resize_keyboard: true,
         is_persistent: true,
     })
+}
+
+/// Stable glyphs are kept outside localization dictionaries and shared by rendering and aliases.
+fn navigation_buttons() -> [(&'static str, &'static str); 5] {
+    [
+        ("today", "\u{1f4c5}"),
+        ("yesterday", "\u{23ee}"),
+        ("month", "\u{1f5d3}"),
+        ("lastmonth", "\u{1f4c6}"),
+        ("help", "\u{2139}\u{fe0f}"),
+    ]
 }
 
 /// Compose Mini App shell labels and all reply-button aliases in the UI locale domain.
@@ -402,8 +434,33 @@ fn telegram_labels() -> std::collections::BTreeMap<String, String> {
     ]
     .into_iter()
     .collect();
+    labels.insert(
+        "report_delivery_failed".into(),
+        t!("telegram.report_delivery_failed").to_string(),
+    );
     // Keep old keyboard labels usable after the desktop locale changes.
     for locale in ["ru", "en", "es"] {
+        for (name, icon) in [("home", "\u{1f4ca}"), ("help", "\u{2753}")] {
+            let key = format!("telegram.button_{name}");
+            labels.insert(
+                format!("button_{name}_legacy_emoji_{locale}"),
+                format!("{icon} {}", t!(&key, locale = locale)),
+            );
+        }
+        for (name, icon) in navigation_buttons() {
+            let key = format!("telegram.button_{name}");
+            labels.insert(
+                format!("button_{name}_emoji_{locale}"),
+                format!("{icon} {}", t!(&key, locale = locale)),
+            );
+        }
+        for name in ["today", "yesterday", "month", "lastmonth", "daily", "home"] {
+            let key = format!("telegram.button_{name}");
+            labels.insert(
+                format!("button_{name}_{locale}"),
+                t!(&key, locale = locale).to_string(),
+            );
+        }
         labels.insert(
             format!("button_miniapp_{locale}"),
             t!("telegram.mini_open", locale = locale).to_string(),

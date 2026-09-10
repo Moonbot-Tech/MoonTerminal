@@ -137,6 +137,8 @@ pub struct Message {
     #[serde(default)]
     pub message_id: i64,
     #[serde(default)]
+    pub date: i64,
+    #[serde(default)]
     pub chat: Chat,
     #[serde(default)]
     pub from: Option<User>,
@@ -144,12 +146,23 @@ pub struct Message {
     pub text: Option<String>,
 }
 
-/// One long-poll update. Only `message` is requested.
+/// A button press carries both its sender and the originating message for authorization.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CallbackQuery {
+    pub id: String,
+    pub from: User,
+    pub message: Option<Message>,
+    pub data: Option<String>,
+}
+
+/// One long-poll update, including report navigation callbacks.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Update {
     pub update_id: i64,
     #[serde(default)]
     pub message: Option<Message>,
+    #[serde(default)]
+    pub callback_query: Option<CallbackQuery>,
 }
 
 /// Telegram Mini App button target. The URL is the current tunnel, set per message.
@@ -179,6 +192,8 @@ pub struct InlineKeyboardButton {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web_app: Option<WebAppInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_data: Option<String>,
 }
 
 /// Reply markup accepted by `sendMessage`.
@@ -367,7 +382,7 @@ impl BotApi {
         let req = GetUpdatesReq {
             offset: self.offset,
             timeout: LONG_POLL_SECONDS,
-            allowed_updates: &["message"],
+            allowed_updates: &["message", "callback_query"],
         };
         self.post("getUpdates", &req, true)
     }
@@ -406,6 +421,36 @@ impl BotApi {
         self.post("sendMessage", &req, false)
     }
 
+    /// Send editable reports with their inline keyboard in the initial request.
+    pub fn rich_message(
+        &mut self,
+        chat: i64,
+        message: Option<i64>,
+        html: &str,
+        keyboard: &ReplyMarkup,
+    ) -> Result<Message, ApiError> {
+        let (method, body) = rich_request(chat, message, html, keyboard);
+        self.post(method, &body, false)
+    }
+
+    /// Delete only a known outgoing answer after its replacement was successfully delivered.
+    pub fn delete_message(&mut self, chat: i64, message: i64) -> Result<bool, ApiError> {
+        self.post(
+            "deleteMessage",
+            &serde_json::json!({"chat_id": chat, "message_id": message}),
+            false,
+        )
+    }
+
+    /// Dismiss Telegram's callback spinner before waiting for report computation.
+    pub fn answer_callback(&mut self, id: &str) -> Result<bool, ApiError> {
+        self.post(
+            "answerCallbackQuery",
+            &serde_json::json!({"callback_query_id": id}),
+            false,
+        )
+    }
+
     /// Honor retry deadlines while allowing service shutdown to interrupt waits between calls.
     fn post<T, B>(&mut self, method: &str, body: &B, long_poll: bool) -> Result<T, ApiError>
     where
@@ -430,7 +475,11 @@ impl BotApi {
             }
             let result = self.post_once(method, body, long_poll);
             if let (Err(failure), Some(observer)) = (&result, &self.error_observer) {
-                observer(&failure.error);
+                if !is_unchanged_edit(method, &failure.error)
+                    && !is_unavailable_delete(method, &failure.error)
+                {
+                    observer(&failure.error);
+                }
             }
             match result {
                 Ok(value) => {
@@ -616,12 +665,53 @@ fn redact_secret(text: &str, token: &str) -> String {
     }
 }
 
+/// Keep removal of a reply keyboard out of every message that will later be edited.
+fn rich_request(
+    chat: i64,
+    message: Option<i64>,
+    html: &str,
+    keyboard: &ReplyMarkup,
+) -> (&'static str, serde_json::Value) {
+    let mut body = serde_json::json!({"chat_id":chat,"rich_message":{"html":html,"skip_entity_detection":true},"reply_markup":keyboard});
+    let method = if let Some(id) = message {
+        body["message_id"] = id.into();
+        "editMessageText"
+    } else {
+        "sendRichMessage"
+    };
+    (method, body)
+}
+
+/// Telegram reports an idempotent edit as an error; it must not change service health.
+pub fn is_unchanged_edit(method: &str, error: &ApiError) -> bool {
+    matches!(method, "editMessageText" | "editMessageReplyMarkup")
+        && matches!(error, ApiError::Telegram { description, retry_after_secs: None }
+        if description.contains("message is not modified"))
+}
+
+/// An expired or already removed cleanup target is not a bot connectivity failure.
+pub fn is_unavailable_delete(method: &str, error: &ApiError) -> bool {
+    method == "deleteMessage"
+        && matches!(error, ApiError::Telegram { description, retry_after_secs: None }
+            if description == "Bad Request: message to delete not found"
+                || description == "Bad Request: message can't be deleted")
+}
+
 impl InlineKeyboardButton {
+    /// A bounded, application-owned report navigation action.
+    pub fn callback(text: impl Into<String>, data: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            web_app: None,
+            callback_data: Some(data.into()),
+        }
+    }
     /// Mini App button. The URL is the current public tunnel, not a BotFather menu URL.
     pub fn web_app(text: impl Into<String>, url: impl Into<String>) -> Self {
         Self {
             text: text.into(),
             web_app: Some(WebAppInfo { url: url.into() }),
+            callback_data: None,
         }
     }
 }

@@ -6,6 +6,44 @@ use super::{
 };
 use serde_json::json;
 
+/// Telegram forbids editing messages carrying ReplyKeyboardRemove: reports must start inline.
+#[test]
+fn rich_reports_are_sent_with_editable_inline_navigation() {
+    let keyboard = ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(vec![vec![
+        InlineKeyboardButton::callback("Refresh", "r:e:t:0"),
+    ]]));
+    let (method, body) = super::rich_request(7, None, "<p>Report</p>", &keyboard);
+    assert_eq!(method, "sendRichMessage");
+    assert_eq!(
+        body["reply_markup"],
+        json!({"inline_keyboard":[[{"text":"Refresh","callback_data":"r:e:t:0"}]]})
+    );
+    assert!(body.get("message_id").is_none());
+    assert!(body["reply_markup"].get("remove_keyboard").is_none());
+    let (method, edited) = super::rich_request(7, Some(50), "<p>Updated</p>", &keyboard);
+    assert_eq!(method, "editMessageText");
+    assert_eq!(edited["message_id"], 50);
+    assert_eq!(edited["chat_id"], 7);
+    assert_eq!(edited["reply_markup"], body["reply_markup"]);
+}
+
+/// Only an unchanged edit is a harmless no-op; rate limits and other methods remain failures.
+#[test]
+fn unchanged_edits_do_not_report_transport_failure() {
+    let error = super::ApiError::Telegram {
+        description: "Bad Request: message is not modified".into(),
+        retry_after_secs: None,
+    };
+    assert!(super::is_unchanged_edit("editMessageText", &error));
+    assert!(super::is_unchanged_edit("editMessageReplyMarkup", &error));
+    assert!(!super::is_unchanged_edit("sendRichMessage", &error));
+    let limited = super::ApiError::Telegram {
+        description: "message is not modified".into(),
+        retry_after_secs: Some(30),
+    };
+    assert!(!super::is_unchanged_edit("editMessageText", &limited));
+}
+
 /// Menu writes must include a private chat scope and Telegram's tagged web_app wire shape.
 #[test]
 fn native_menu_request_is_chat_scoped_and_clears_without_a_stale_url() {
@@ -90,4 +128,33 @@ fn inline_launcher_keeps_web_app_wire_shape() {
             }]]}
         })
     );
+}
+
+/// Cleanup no-ops are quiet, but authentication and rate limits remain observable failures.
+#[test]
+fn unavailable_deletion_is_scoped_and_does_not_hide_rate_limits() {
+    let missing = super::ApiError::Telegram {
+        description: "Bad Request: message to delete not found".into(),
+        retry_after_secs: None,
+    };
+    assert!(super::is_unavailable_delete("deleteMessage", &missing));
+    assert!(!super::is_unavailable_delete("sendMessage", &missing));
+    let expired = super::ApiError::Telegram {
+        description: "Bad Request: message can't be deleted".into(),
+        retry_after_secs: None,
+    };
+    assert!(super::is_unavailable_delete("deleteMessage", &expired));
+    let limited = super::ApiError::Telegram {
+        description: "Bad Request: message can't be deleted".into(),
+        retry_after_secs: Some(60),
+    };
+    assert!(!super::is_unavailable_delete("deleteMessage", &limited));
+    let unauthorized = super::ApiError::Telegram {
+        description: "Unauthorized".into(),
+        retry_after_secs: None,
+    };
+    assert!(!super::is_unavailable_delete(
+        "deleteMessage",
+        &unauthorized
+    ));
 }

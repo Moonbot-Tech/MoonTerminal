@@ -11,6 +11,7 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 mod bot;
+mod history;
 mod menu;
 pub mod mini_app;
 /// Authenticated work drained by the application's coordination loop.
@@ -30,6 +31,13 @@ pub enum Work {
 }
 /// Localized result; transport inserts protocol fields but never invents prose.
 pub enum Response {
+    /// One complete report or Help message; never split inside markup.
+    Rich {
+        html: String,
+        keyboard: ReplyMarkup,
+        /// Persistent navigation is installed on its own welcome message, never on an editable report.
+        navigation: (String, ReplyMarkup),
+    },
     Text {
         text: String,
         keyboard: Option<ReplyMarkup>,
@@ -172,8 +180,8 @@ impl Drop for TelegramService {
     }
 }
 /// Wait for application response while observing shutdown.
-fn response(rx: Receiver<Response>, alive: &Weak<()>) -> Option<Response> {
-    let deadline = Instant::now() + std::time::Duration::from_secs(10);
+fn response(rx: Receiver<Response>, alive: &Weak<()>, report: bool) -> Option<Response> {
+    let deadline = Instant::now() + std::time::Duration::from_secs(if report { 120 } else { 10 });
     while alive.upgrade().is_some() && Instant::now() < deadline {
         match rx.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(result) => return Some(result),

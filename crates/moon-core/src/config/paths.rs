@@ -1003,3 +1003,8 @@ pub fn migrate_flat_to_cfg() {
 
 #[cfg(test)]
 mod tests;
+
+/// Bot identity scopes persisted outgoing message IDs without storing credentials.
+pub fn telegram_chat_history(bot_id: i64) -> PathBuf {
+    telegram_dir().join(format!("chat-history-{bot_id}.json"))
+}

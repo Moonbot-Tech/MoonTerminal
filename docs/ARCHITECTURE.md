@@ -678,11 +678,35 @@ HTTP — синхронный `ureq`, `getUpdates` держит сокет до 
   inline launcher remains available and uses the current `MiniAppStatus::Tunneling` URL.
   Pairing reset retains cleanup-only chat IDs across same-token service restarts for the lifetime
   of the desktop process; token changes discard them. Those IDs never grant app authorization.
-- **Bot navigation.** Pairing, `/start`, and `/help` publish a persistent reply keyboard with
-  Help only, replacing the previous two-button keyboard on the next reply. The native menu and
-  `/miniapp` inline launcher use the short localized Open label. Old Mini App reply-button labels
-  in ru/en/es still request a fresh inline launcher, so previously delivered keyboards remain
-  usable until refreshed. Private-chat and pairing checks apply to every route.
+- **Bot navigation.** Pairing and `/help` install the persistent reply keyboard; `/start` sends a localized welcome carrying that keyboard, followed by an inline report.
+  Reply buttons own global period selection and Help. Inline report buttons own exchange
+  drill-down, core/day views, back and paging; periods are not duplicated. A repeated reply-keyboard
+  period request fetches fresh data. The complete-scope Total row follows the main table rows;
+  calculation explanations are in Help, not an additional report disclosure. Emoji-decorated
+  aliases and older plain labels are matched exactly in ru/en/es. Identity checks precede both
+  welcome and report delivery. Reports always carry inline markup from the first send: Telegram
+  disallows editing messages with a reply keyboard. The temporary removal/deletion flow is gone.
+  The native menu and `/miniapp` retain the independent Mini App launcher.
+- **Chat cleanup continuity.** Per-bot chat-history metadata records the permanent reply-menu
+  message separately from disposable rich answers and their original Telegram send timestamps.
+  The bot ID comes from `getMe`; metadata never authorizes a chat or stores credentials.
+  Atomic publication precedes deletion. Restart restores tracking without another menu notice;
+  answers near or beyond 48 hours are skipped, and absent/undeletable cleanup targets do not
+  change transport health. Callback edits keep the original send time.
+- **Chat reports without Mini App.** `/report`, `/today`, `/hour`, `/yesterday`, `/month`,
+  `/lastmonth`, and `/daily` read closed real trades from all cores in local history. Custom
+  `/report YYYY-MM-DD YYYY-MM-DD` and `/daily` ranges include both dates and allow at most 366
+  days. `backend/telegram/reports.rs` uses a background executor, a pinned SQLite snapshot,
+  `ReportAxis::load`, `query_totals`, and historical valuation; read failures never become zero.
+  Core groups use `CoreOrder`, six active groups per page, with the complete-scope total on every page.
+  Exchange groups use canonical venue identity and support scoped drill-down; empty scoped membership
+  uses the no-match sentinel. Groups without trades are removed before paging; zero-profit trades stay.
+  Native subtotals remain available when USDT conversion is incomplete. Rich HTML reports use
+  `sendRichMessage`; private sender-matched callbacks edit the originating message and recheck
+  saved authorization. Paging/view changes retain UTC bounds; a new reply-keyboard request resolves its preset again.
+  The display zone follows the terminal clock. One pending report survives service replacement,
+  preventing overlapping reads; a report response has a bounded 120-second wait with failure
+  feedback. Unchanged edits are normal no-ops. See [chat report usage](TELEGRAM_REPORTS.md).
 - **Страница Mini App сейчас нарочно пустая: единственный её запрос — проверка сессии
   (`POST /api/session`). Это решение по объёму, а не недописанный экран.**
 - **Выключение присоединяет всё, что подняли.** Смена токена или списка чатов —

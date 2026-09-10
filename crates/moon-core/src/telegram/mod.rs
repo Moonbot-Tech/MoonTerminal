@@ -13,6 +13,7 @@ pub mod cloudflared;
 pub mod commands;
 pub mod init_data;
 pub mod reply;
+pub mod report;
 pub mod runtime;
 pub mod tunnel;
 pub mod web;

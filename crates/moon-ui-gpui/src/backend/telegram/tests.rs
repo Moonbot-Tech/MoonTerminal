@@ -3,6 +3,36 @@
 use super::TelegramState;
 use moon_core::config::{Secret, TelegramConfig};
 
+/// Every visible emoji button must resolve through exact localized aliases without guessing text.
+#[test]
+fn persistent_navigation_buttons_have_recognized_commands() {
+    let labels = super::telegram_labels();
+    let moon_core::telegram::api::ReplyMarkup::Reply(markup) = super::navigation_keyboard() else {
+        panic!("expected persistent keyboard")
+    };
+    assert!(markup.is_persistent);
+    for row in markup.keyboard {
+        for button in row {
+            assert_ne!(
+                moon_core::telegram::commands::parse_reply_button(&button.text, &labels),
+                moon_core::telegram::commands::ParsedCommand::Unknown,
+                "{}",
+                button.text
+            );
+        }
+    }
+}
+
+/// A detached read must retain exclusive admission even when its bot service is replaced.
+#[test]
+fn pending_report_survives_service_replacement() {
+    let config = TelegramConfig::default();
+    let mut state = TelegramState::new(&config);
+    state.report_pending = true;
+    state.start_saved(&config);
+    assert!(state.report_pending);
+}
+
 /// The same restart helper used after pairing reset must retain retired menu recipients.
 #[test]
 fn revoked_menu_identities_survive_service_replacement() {
