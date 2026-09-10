@@ -2,9 +2,8 @@
 //! with `DETECT_KIND_ALERT`, so it obtains the source strategy sound through
 //! `DetectRow.sound_name`, just like an ordinary detect. This is a `Backend` method because it needs
 //! the core store. Feed draining invokes the scan; revision and sequence cursors avoid redundant
-//! work and startup backlog. Each pass selects at most one eligible new detect per core, without an
-//! audio queue. `media::sound::play` is asynchronous on Windows, where a later sound interrupts the one
-//! already playing.
+//! work and startup backlog. Each pass selects at most one eligible new detect per core. The shared
+//! media scheduler queues selected clips and serializes them with price alerts and trade notices.
 
 use crate::Backend;
 
@@ -13,8 +12,8 @@ impl Backend {
     /// prevents duplicates and startup bursts: the first visit seeds the cursor without playback.
     ///
     /// Returns:
-    ///     Whether a sound was played. The price-approach alerts run next in the same drain and
-    ///     share the one player, so they use this to avoid clipping what was just started.
+    ///     Whether a sound was selected. Price-approach alerts keep their existing per-drain
+    ///     admission policy; the media scheduler owns actual playback timing.
     pub(crate) fn play_detect_sounds(&mut self) -> bool {
         let mut played = false;
         for (core, data) in self.session.store().cores() {

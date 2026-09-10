@@ -301,6 +301,7 @@ mod captions;
 mod labels;
 mod prepare;
 mod runs;
+mod tick_volume;
 
 #[cfg(test)]
 mod tests;

@@ -180,7 +180,15 @@ impl Backend {
         {
             self.layout_dirty = true;
         }
+        let was_sleeping = self.quiet_sleeping;
         self.quiet_sleeping = self.layout.quiet.sleeping_at(now_min);
+        // Clear only on entry to sleep: later producer-approved bypasses retain their turns.
+        if self.quiet_sleeping && !was_sleeping {
+            crate::media::sound::discard_pending();
+        }
+        if self.quiet_sleeping {
+            self.trade_playback = Default::default();
+        }
     }
 
     /// Whether one arriving detect may still play its sound.

@@ -601,6 +601,8 @@ struct Backend {
     /// Last observed aggregate revision of server-side chart alerts, gating remote-figure
     /// reconciliation in the feed-drain path.
     last_chart_alerts_activity: u64,
+    /// Trade edges waiting for their serialized playback turn.
+    trade_playback: backend::trade_sound::TradePlayback,
     /// Last processed detect sequence per core, used for detect and alert sound traversal.
     /// It may be seeded or advanced after observing a detect without playing a sound.
     last_detect_seq: std::collections::HashMap<CoreId, u64>,

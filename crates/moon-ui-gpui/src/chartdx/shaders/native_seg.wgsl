@@ -62,7 +62,8 @@ fn seg_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32
     var a = vec2<f32>(a_raw.x, round(a_raw.y));
     let b_snapped = vec2<f32>(b_raw.x, round(b_raw.y));
     let d = b_raw - a_raw;
-    let reach = length(cv.bounds.zw) + length(d) + 1.0;
+    // Origin-to-plot distance plus the diagonal bounds every visible point, even after a long pan.
+    let reach = length(a - cv.bounds.xy) + length(cv.bounds.zw) + length(d) + 1.0;
     var b = select(b_snapped, a + normalize(d + vec2<f32>(1e-6, 0.0)) * reach, ray);
     // m.w = SEG_CLAMP_PLOT pins the segment to the plot once its price leaves the visible band, so
     // an exit line a few percent away stays visible and grabbable at any zoom instead of being

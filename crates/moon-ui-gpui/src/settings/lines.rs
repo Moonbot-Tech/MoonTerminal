@@ -11,6 +11,7 @@ use moon_ui::{
 
 use super::{SettingsView, separator, slider_row};
 use crate::Backend;
+use crate::design;
 use moon_core::{config::OrdersStyle, util::fmt};
 use rust_i18n::t;
 
@@ -334,7 +335,7 @@ impl SettingsView {
                 h_flex()
                     .gap(px(10.0))
                     .items_center()
-                    .child(MoonColorPicker::new(&ed.color))
+                    .child(MoonColorPicker::new(&ed.color).colors(design::picker_palette()))
                     .child(slider_row(
                         &t!("lines.thickness"),
                         &ed.thickness,
@@ -358,7 +359,10 @@ impl SettingsView {
                     h_flex()
                         .gap(px(10.0))
                         .items_center()
-                        .child(MoonColorPicker::new(&ed.pending_color))
+                        .child(
+                            MoonColorPicker::new(&ed.pending_color)
+                                .colors(design::picker_palette()),
+                        )
                         .child(slider_row(
                             &t!("lines.pending_alpha"),
                             &ed.pending_alpha,
@@ -769,7 +773,10 @@ impl SettingsView {
                         h_flex()
                             .gap(px(10.0))
                             .items_center()
-                            .child(MoonColorPicker::new(&l.path_color))
+                            .child(
+                                MoonColorPicker::new(&l.path_color)
+                                    .colors(design::picker_palette()),
+                            )
                             .child(slider_row(
                                 &t!("lines.thickness"),
                                 &l.path_thickness,

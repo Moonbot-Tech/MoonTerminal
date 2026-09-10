@@ -18,8 +18,8 @@
 //! funnels and knows only the explicit [`WorkspaceAuthority`] supplied by its host.
 //!
 //! Two asymmetries between the targets are deliberate and are NOT "the same rows drifting apart":
-//! a host may inject an arbitrary-colour wheel (`custom_color`), which needs an `Entity` only the
-//! host can own, and only the tab strip has one today; and a figure the core owns is offered no
+//! a host may retain its own arbitrary-color picker (`custom_color`); other hosts use the shared
+//! MoonUI state adapter. A figure the core owns is offered no
 //! fill, because the alert blob has no field for one and the next reconcile would revert it.
 //!
 //! The CONTAINER is the host's, not this module's: over a chart the panel is placed at the clicked
@@ -144,18 +144,6 @@ fn snapshot(backend: &Backend, target: &Target) -> Option<Snapshot> {
     }
 }
 
-/// The swatch palette every settings surface offers, whichever target it is aimed at.
-const SWATCHES: [[u8; 4]; 8] = [
-    [64, 196, 255, 255],  // blue (default)
-    [80, 220, 120, 255],  // green
-    [240, 90, 90, 255],   // red
-    [250, 200, 60, 255],  // yellow
-    [245, 150, 40, 255],  // orange
-    [200, 110, 240, 255], // purple
-    [240, 240, 240, 255], // white
-    [150, 160, 175, 255], // gray
-];
-
 /// Step opacity by 5%, snapping to whole percentage points.
 ///
 /// The previous +/-24-of-255 arithmetic jumped from 100 to 91 to 81 and made values such as 15%
@@ -243,9 +231,8 @@ fn edit_switch(
 ///
 /// `None` when there is nothing to show — the figure was deleted from another window, or dropped
 /// when its core disconnected while the panel was open.
-/// `custom_color` is the host's arbitrary-colour picker, placed at the end of the swatch row. It
-/// needs an `Entity` of its own to hold the open/closed wheel, which belongs to the view that hosts
-/// the panel rather than to the panel; a host without one passes `None` and offers the swatches.
+/// `custom_color` is an optional host-owned picker. Other hosts use the shared MoonUI adapter
+/// seeded from this target's stored RGB.
 /// `authority` is cloned into every write callback so an Alerts-hosted surface can refuse a stale
 /// core while chart and tool-default hosts remain explicitly unscoped.
 pub(crate) fn rows<V: 'static>(
@@ -262,22 +249,17 @@ pub(crate) fn rows<V: 'static>(
     let mut rows = v_flex().gap(design::ui_px(cx, 6.0));
     rows = rows
         .child(label(&t!("chart.fig.color")))
-        .child(
-            h_flex()
-                .items_center()
-                .gap(design::ui_px(cx, 3.0))
-                .flex_wrap()
-                .child(swatch_row(
-                    backend,
-                    target,
-                    &authority,
-                    "figset-color",
-                    snap.style.color,
-                    true,
-                    cx,
-                ))
-                .children(custom_color),
-        )
+        .child(custom_color.unwrap_or_else(|| {
+            color_picker(
+                backend,
+                target,
+                &authority,
+                "figset-color",
+                snap.style.color,
+                true,
+            )
+            .into_any_element()
+        }))
         .child(stepper_row(
             backend,
             target,
@@ -478,76 +460,55 @@ pub(crate) fn render_tool_defaults<V: 'static>(
     )
 }
 
-/// A row of colour swatches writing either the line colour or the fill colour. Every swatch clones
-/// `authority` and refuses a stale scoped figure before changing its style.
-fn swatch_row<V: 'static>(
+/// Pick arbitrary line or fill RGB through the existing authority-checked style writer.
+/// Opacity remains independent; choosing a fill color enables a previously disabled fill.
+fn color_picker(
     backend: &Entity<Backend>,
     target: &Target,
     authority: &WorkspaceAuthority,
     id_prefix: &'static str,
     current: [u8; 4],
     line: bool,
-    cx: &mut Context<V>,
 ) -> impl IntoElement {
-    let p = MoonPalette::active(cx);
-    let mut row = h_flex().items_center().gap(px(3.0)).flex_wrap();
-    for (i, sw) in SWATCHES.iter().enumerate() {
-        let sw = *sw;
-        let backend = backend.clone();
-        let target = target.clone();
-        let authority = authority.clone();
-        let selected = current[..3] == sw[..3] && (line || current[3] > 0);
-        row = row.child(
-            div()
-                .id((id_prefix, i))
-                .w(px(16.0))
-                .h(px(16.0))
-                .rounded(design::ui_px(cx, 3.0))
-                .bg(gpui::rgb(
-                    ((sw[0] as u32) << 16) | ((sw[1] as u32) << 8) | sw[2] as u32,
-                ))
-                .border_2()
-                .border_color(if selected {
-                    rgb(p.accent)
-                } else {
-                    rgb(p.border)
-                })
-                .cursor_pointer()
-                .on_click(move |_, _w, app| {
-                    backend.update(app, |b, bcx| {
-                        let changed = edit_style(b, &target, &authority, |s| {
-                            // Opacity is a separate control; picking a colour must not reset it.
-                            if line {
-                                let next = [sw[0], sw[1], sw[2], s.color[3]];
-                                let changed = s.color != next;
-                                s.color = next;
-                                changed
-                            } else {
-                                // Picking a colour turns the fill on: at its current strength, or
-                                // at the default when it was off, since the ∅ cell zeroes the
-                                // alpha. A fill that stayed invisible after a deliberate click
-                                // would read as broken.
-                                let a = match s.fill[3] {
-                                    0 => DEFAULT_FILL_ALPHA,
-                                    a => a,
-                                };
-                                let next = [sw[0], sw[1], sw[2], a];
-                                let changed = s.fill != next;
-                                s.fill = next;
-                                changed
-                            }
-                        });
-                        if changed {
-                            bcx.notify();
-                        }
-                    });
-                }),
-        );
-    }
-    row
+    let id = match target {
+        Target::Figure(figure) => format!(
+            "{id_prefix}-{}-{:?}-{}-{}",
+            backend.entity_id(),
+            figure.core,
+            figure.market,
+            figure.id,
+        ),
+        Target::ToolDefaults(tool) => format!("{id_prefix}-{}-{tool:?}", backend.entity_id()),
+    };
+    let backend = backend.clone();
+    let target = target.clone();
+    let authority = authority.clone();
+    crate::controls::color_picker::ColorPicker::new(
+        id,
+        [current[0], current[1], current[2]],
+        move |color, app| {
+            backend.update(app, |b, bcx| {
+                let changed = edit_style(b, &target, &authority, |s| {
+                    let slot = if line { &mut s.color } else { &mut s.fill };
+                    let alpha = if !line && slot[3] == 0 {
+                        DEFAULT_FILL_ALPHA
+                    } else {
+                        slot[3]
+                    };
+                    let next = [color[0], color[1], color[2], alpha];
+                    let changed = *slot != next;
+                    *slot = next;
+                    changed
+                });
+                if changed {
+                    bcx.notify();
+                }
+            });
+        },
+    )
 }
 
-/// The fill row: the "no fill" cell plus either the swatches or, for a tool that colours itself
+/// The fill row: a no-fill switch plus either the RGB picker or, for a tool that colours itself
 /// from a typed scale, a single cell that switches the fill back on in the scale's own hues. All
 /// callbacks carry `authority` through the shared style-write funnel.
 fn fill_row<V: 'static>(
@@ -563,30 +524,16 @@ fn fill_row<V: 'static>(
     let target_off = target.clone();
     let authority_off = authority.clone();
     let mut row = h_flex().items_center().gap(px(3.0)).flex_wrap().child(
-        div()
-            .id("figset-fill-off")
-            .w(px(16.0))
-            .h(px(16.0))
-            .rounded(design::ui_px(cx, 3.0))
-            .border_2()
-            .border_color(if has_fill {
-                rgb(p.border)
-            } else {
-                rgb(p.accent)
-            })
-            .text_color(rgb(p.text_muted))
-            .text_center()
-            .child("∅")
-            .cursor_pointer()
-            .tooltip(|_window, cx| {
-                cx.new(|_| MoonTooltipView::new(t!("chart.fig.no_fill").to_string()))
-                    .into()
-            })
-            .on_click(move |_, _w, app| {
+        MoonCheckbox::new("figset-fill-off")
+            .label(t!("chart.fig.no_fill").to_string())
+            .checked(!has_fill)
+            .size(MoonCheckboxSize::Compact)
+            .on_change(move |off, _, app| {
                 backend_off.update(app, |b, bcx| {
                     if edit_style(b, &target_off, &authority_off, |s| {
-                        let changed = s.fill[3] != 0;
-                        s.fill[3] = 0;
+                        let alpha = if *off { 0 } else { DEFAULT_FILL_ALPHA };
+                        let changed = s.fill[3] != alpha;
+                        s.fill[3] = alpha;
                         changed
                     }) {
                         bcx.notify();
@@ -632,14 +579,13 @@ fn fill_row<V: 'static>(
         );
         return row.into_any_element();
     }
-    row.child(swatch_row(
+    row.child(color_picker(
         backend,
         target,
         authority,
         "figset-fill",
         snap.style.fill,
         false,
-        cx,
     ))
     .into_any_element()
 }

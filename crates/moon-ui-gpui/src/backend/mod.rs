@@ -14,6 +14,7 @@ pub(crate) mod server_chart;
 pub(crate) mod telegram;
 #[cfg(test)]
 mod tests;
+pub(crate) mod trade_sound;
 
 pub(crate) use alert_sound::AlertLeg;
 pub(crate) use favorites::FavLocal;

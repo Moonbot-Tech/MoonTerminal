@@ -178,3 +178,29 @@ fn only_the_presses_a_field_consumes_belong_to_it() {
         );
     }
 }
+
+/// The optional key must resolve to the dedicated tool, and clearing it must disarm that binding.
+#[test]
+fn horizontal_ray_shortcut_resolves_only_when_configured() {
+    use crate::hotkeys::{HotkeyAction, resolve_binding};
+    use gpui::Keystroke;
+    use moon_core::config::HotkeysConfig;
+    use moon_core::figures::FigureTool;
+
+    let mut config = HotkeysConfig::default();
+    let event = Keystroke::parse("ctrl-alt-r").unwrap();
+    assert!(!matches!(
+        resolve_binding(&event, &config),
+        Some(HotkeyAction::FigTool(_))
+    ));
+    config.draw_horizontal_ray = "ctrl-alt-r".into();
+    assert!(matches!(
+        resolve_binding(&event, &config),
+        Some(HotkeyAction::FigTool(FigureTool::HorizontalRay))
+    ));
+    config.draw_horizontal_ray.clear();
+    assert!(!matches!(
+        resolve_binding(&event, &config),
+        Some(HotkeyAction::FigTool(_))
+    ));
+}

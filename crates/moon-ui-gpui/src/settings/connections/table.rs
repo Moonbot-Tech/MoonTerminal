@@ -1019,7 +1019,9 @@ pub(super) fn server_row(
             .small()
             .into_any_element(),
         feed_popover(view, weak, i, row_key, ids, cx).into_any_element(),
-        MoonColorPicker::new(&row.color).into_any_element(),
+        MoonColorPicker::new(&row.color)
+            .colors(design::picker_palette())
+            .into_any_element(),
         {
             let weak_del = weak.clone();
             MoonButton::new(ids.del.clone())

@@ -15,6 +15,7 @@
 mod channel;
 mod fib_retracement;
 mod hline;
+mod horizontal_ray;
 mod mb_fib;
 mod position;
 mod ray;
@@ -25,6 +26,7 @@ mod triangle;
 pub use channel::Channel;
 pub use fib_retracement::FibRetracement;
 pub use hline::HLine;
+pub use horizontal_ray::HorizontalRay;
 pub use mb_fib::{MB_FIB_LEVELS, MB_FIB_RATIOS, MbFib};
 pub use position::Position;
 pub use ray::Ray;
@@ -247,6 +249,8 @@ pub enum FigureTool {
     Position,
     /// Half-infinite line: an origin and a direction; see [`Ray`].
     Ray,
+    /// One origin and a fixed price, extending right; see [`HorizontalRay`].
+    HorizontalRay,
 }
 
 /// Every tool, in menu order. The toolbar, the hotkey CYCLE, the alerts list and the tests all
@@ -272,6 +276,7 @@ pub const REGISTRY: &[ToolDef] = &[
     channel::DEF,
     rect::DEF,
     ray::DEF,
+    horizontal_ray::DEF,
     position::DEF,
 ];
 

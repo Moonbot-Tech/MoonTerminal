@@ -1233,6 +1233,18 @@ impl MetalLayers {
             .write(device, "moon_chart_book_view_uniform", &[*orderbook_view]);
     }
 
+    /// Borrow the retained Metal tick ring without a per-cursor copy.
+    pub(super) fn tick_samples(&self) -> impl Iterator<Item = &ChartCross> {
+        moon_chart::tick_volume::pending_ring(
+            &self.crosses,
+            self.cross_head,
+            self.cross_count,
+            self.combo_capacity,
+            None,
+            &[],
+        )
+    }
+
     fn recalc_volume_scale(&mut self) {
         let (buy, sell) = cross_volume_max(self.crosses.iter().take(self.cross_count));
         self.volume_buy_max = buy;

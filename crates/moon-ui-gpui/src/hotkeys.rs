@@ -424,6 +424,9 @@ fn resolve_binding(event: &Keystroke, hk: &HotkeysConfig) -> Option<HotkeyAction
     if p(&hk.draw_hline) {
         return Some(A::FigTool(FigureTool::HLine));
     }
+    if p(&hk.draw_horizontal_ray) {
+        return Some(A::FigTool(FigureTool::HorizontalRay));
+    }
     if p(&hk.draw_segment) {
         return Some(A::FigTool(FigureTool::Segment));
     }

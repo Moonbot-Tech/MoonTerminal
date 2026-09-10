@@ -571,6 +571,7 @@ pub(super) fn run(
     // Coalesced repair requests for account changes that need a fresh balance or wallet snapshot,
     // plus the recurring API-key expiration poll.
     let mut account_reconciliation = AccountReconciliation::new(Instant::now());
+    let mut trade_sounds = crate::feed::trade_sound::TradeSoundState::default();
     // Window for logging Balance events after our refresh, used to diagnose phantom Assets entries.
     let mut balance_refresh_log_until: Option<Instant> = None;
     // Transfer-assets cursor: publish only when the revision changes (request/response).
@@ -797,6 +798,14 @@ pub(super) fn run(
         // re-open either — the cell would freeze at its last in-progress figure forever.
         let was_ready = is_ready;
         for ev in lifecycle_events.drain(..) {
+            if matches!(
+                &ev,
+                LifecycleEvent::Connecting
+                    | LifecycleEvent::Connected { .. }
+                    | LifecycleEvent::Disconnected
+            ) {
+                trade_sounds.reset();
+            }
             // The core is named because these lines are the only record of a connection's shape,
             // and every core in the process writes them into ONE file: without the label, telling
             // which of twenty-two cores never reached `Ready` means correlating by timestamp
@@ -1050,6 +1059,17 @@ pub(super) fn run(
         // presentation-only order events are ignored, and authoritative full/Spot updates cancel
         // pending work.
         let account_now = Instant::now();
+        if server.feed.orders {
+            let sound_snapshot = client.snapshot();
+            let sounds = trade_sounds.observe(
+                &events,
+                is_ready,
+                sound_snapshot.as_ref().map(|snapshot| snapshot.orders()),
+            );
+            if !sounds.is_empty() && tx.send(FeedMsg::TradeSounds(sounds)).is_err() {
+                break;
+            }
+        }
         account_reconciliation.observe_events(&events, account_now);
         if account_reconciliation.balance_due(account_now) {
             match client.balances().refresh() {

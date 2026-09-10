@@ -27,32 +27,23 @@ impl Render for SettingsView {
         let chrome_width = f32::from(window.viewport_size().width);
 
         // ── Tab strip ───────────────────────────────────────────────────────
-        // Eight font-scaled 110-pixel tabs plus scaled gaps and padding overflow a 620-pixel
-        // (and the default 860-pixel) window. Wrap onto two rows below that single-row width;
-        // keep one row when every tab still fits. Button width and wrap threshold share one
-        // scaled measurement.
+        // Derive row capacity from the same resolved geometry as the buttons, so larger fonts
+        // and additional tabs cannot overflow the minimum Settings width.
         const TAB_BUTTON_W: f32 = 110.0;
         const TAB_GAP: f32 = 6.0;
         const TAB_PAD_X: f32 = 8.0;
         let tab_w = design::font_w(cx, TAB_BUTTON_W);
-        let tab_n = Tab::ALL.len() as f32;
-        let single_row_w = tab_n * tab_w
-            + (tab_n - 1.0) * design::ui_value(cx, TAB_GAP)
-            + 2.0 * design::ui_value(cx, TAB_PAD_X);
-        let wrap = chrome_width < single_row_w;
+        let gap = design::ui_value(cx, TAB_GAP);
+        let available = chrome_width - 2.0 * design::ui_value(cx, TAB_PAD_X);
+        let capacity = ((available + gap) / (tab_w + gap)).floor().max(1.0) as usize;
         let row_h = design::fit_h_px(cx, 34.0, 13.0, 10.5);
         let mut tabs = v_flex()
             .w_full()
             .bg(rgba_from(p.shell_high, 1.0))
             .border_b_1()
             .border_color(rgba_from(p.border, 1.0));
-        if wrap {
-            let mid = Tab::ALL.len().div_ceil(2);
-            tabs = tabs
-                .child(self.tab_strip_row(&Tab::ALL[..mid], row_h, tab_w, cx))
-                .child(self.tab_strip_row(&Tab::ALL[mid..], row_h, tab_w, cx));
-        } else {
-            tabs = tabs.child(self.tab_strip_row(&Tab::ALL, row_h, tab_w, cx));
+        for row in Tab::ALL.chunks(capacity) {
+            tabs = tabs.child(self.tab_strip_row(row, row_h, tab_w, cx));
         }
 
         // ── Active tab body ─────────────────────────────────────────────────
@@ -65,6 +56,7 @@ impl Render for SettingsView {
             Tab::Connections => self.connections_tab(cx).into_any_element(),
             Tab::Storage => self.storage_tab(cx).into_any_element(),
             Tab::Telegram => self.telegram_tab(cx).into_any_element(),
+            Tab::TradeSounds => self.trade_sounds_tab(chrome_width, cx).into_any_element(),
         };
         // Make tall tabs scroll through a stateful div with a visible vertical scrollbar.
         // `Scrollable` inherits only `size`, not `flex_1`, and renders at `size_full`; on its own it

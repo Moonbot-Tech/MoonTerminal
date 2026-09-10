@@ -12,6 +12,8 @@
 //! box are NOT applied — they are transient view state of one open panel, not a statement about
 //! what deserves attention.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex};
 
@@ -27,8 +29,14 @@ pub(super) const BUCKETS: usize = TAG_PALETTE.len() + 1;
 /// The bucket for items with no coloured tag; the colour buckets are indexed by [`TAG_PALETTE`].
 const NEUTRAL: usize = TAG_PALETTE.len();
 
-/// Unread counts per bucket, indexed by [`TAG_PALETTE`] with [`NEUTRAL`] last.
-pub(super) type Counts = [usize; BUCKETS];
+/// Symbolic theme buckets retain their order; custom buckets use sorted RGB identities.
+#[derive(Default)]
+pub(super) struct Counts {
+    /// Existing symbolic buckets, with neutral last.
+    pub(super) palette: [usize; BUCKETS],
+    /// One counter per distinct fixed RGB, never folded into the neutral bucket.
+    pub(super) custom: BTreeMap<u32, usize>,
+}
 
 /// Resolve a persisted palette colour key to its bucket index.
 fn palette_index(key: &str) -> Option<usize> {
@@ -79,33 +87,37 @@ pub(super) fn scan(
         // A hidden topic contributes nothing even when a sibling tag keeps the item visible —
         // switching a topic off means "do not count this", not "count it under another name".
         let mut hit = [false; BUCKETS];
+        let mut custom_hit = BTreeSet::new();
         for key in item.tags.iter().map(|t| t.to_lowercase()) {
             if settings.is_hidden(&key) {
                 continue;
             }
-            if let Some(ix) = settings
-                .color(&key)
-                .and_then(palette_index)
-                .filter(|ix| !hit[*ix])
-            {
+            let Some(color) = settings.color(&key) else {
+                continue;
+            };
+            if let Some(ix) = palette_index(color).filter(|ix| !hit[*ix]) {
                 hit[ix] = true;
-                out.counts[ix] += 1;
+                out.counts.palette[ix] += 1;
+            } else if let Some(rgb) = NewsTagSettings::custom_rgb(color)
+                && custom_hit.insert(rgb)
+            {
+                *out.counts.custom.entry(rgb).or_default() += 1;
             }
         }
-        if !hit.iter().any(|h| *h) {
-            out.counts[NEUTRAL] += 1;
+        if !hit.iter().any(|h| *h) && custom_hit.is_empty() {
+            out.counts.palette[NEUTRAL] += 1;
         }
     }
     out
 }
 
-/// The badge row for a hidden tab: one small pill per non-empty bucket in palette order, coloured
+/// The badge row for a hidden tab: symbolic colors, sorted custom RGB colors, then neutral, painted
 /// like the tag it counts. Returns `None` when everything is read.
 ///
 /// `merged` is the per-panel "do not split by colour" switch: `Some(total)` collapses the row into
 /// one neutral pill.
 pub(super) fn badges(
-    counts: Counts,
+    counts: &Counts,
     merged: Option<usize>,
     p: MoonPalette,
     cx: &App,
@@ -119,11 +131,20 @@ pub(super) fn badges(
         .iter()
         .enumerate()
         .map(|(ix, key)| (ix, key_color(key, p)))
-        .chain(std::iter::once((NEUTRAL, None)))
-        .filter(|(ix, _)| counts[*ix] > 0)
+        .filter(|(ix, _)| counts.palette[*ix] > 0)
     {
         any = true;
-        row = row.child(pill(counts[ix], color.unwrap_or(p.text_muted)));
+        row = row.child(pill(counts.palette[ix], color.unwrap_or(p.text_muted)));
+    }
+    for (&color, &count) in &counts.custom {
+        if count > 0 {
+            any = true;
+            row = row.child(pill(count, color));
+        }
+    }
+    if counts.palette[NEUTRAL] > 0 {
+        any = true;
+        row = row.child(pill(counts.palette[NEUTRAL], p.text_muted));
     }
     any.then(|| row.into_any_element())
 }

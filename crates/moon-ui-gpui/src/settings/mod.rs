@@ -24,6 +24,7 @@ mod security;
 mod share;
 mod storage;
 mod telegram;
+mod trade_sounds;
 
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -54,6 +55,7 @@ use lines::Lines;
 
 const SETTINGS_HEADER_H: f32 = 30.0;
 
+/// Settings categories, including immediate preferences outside the config draft.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
     Connections,
@@ -64,10 +66,11 @@ pub(crate) enum Tab {
     Badges,
     Storage,
     Telegram,
+    TradeSounds,
 }
 
 impl Tab {
-    const ALL: [Tab; 8] = [
+    const ALL: [Tab; 9] = [
         Tab::Connections,
         Tab::Telegram,
         Tab::General,
@@ -76,6 +79,7 @@ impl Tab {
         Tab::Lines,
         Tab::Badges,
         Tab::Storage,
+        Tab::TradeSounds,
     ];
     /// Returns the stable, deliberately untranslated tab ID used by `MoonButton::new` and keys.
     fn id(self) -> &'static str {
@@ -88,6 +92,7 @@ impl Tab {
             Tab::Badges => "Бейджи",
             Tab::Storage => "Хранилище",
             Tab::Telegram => "Telegram",
+            Tab::TradeSounds => "trade-sounds",
         }
     }
     /// Returns the localized tab label from the `tab.*` namespace.
@@ -101,6 +106,7 @@ impl Tab {
             Tab::Badges => t!("tab.badges"),
             Tab::Storage => t!("tab.storage"),
             Tab::Telegram => t!("telegram.tab"),
+            Tab::TradeSounds => t!("trade_sounds.tab"),
         }
         .to_string()
     }
@@ -617,6 +623,7 @@ fn settings_sig(b: &Backend) -> u64 {
     let cfg = b.preview.as_ref().unwrap_or(&b.config);
     let mut h = DefaultHasher::new();
 
+    b.quiet_sleeping.hash(&mut h);
     cfg.language.code().hash(&mut h);
     cfg.market_mode.code().hash(&mut h);
     cfg.core_sort.hash(&mut h);

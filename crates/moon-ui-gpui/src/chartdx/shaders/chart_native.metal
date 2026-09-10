@@ -667,7 +667,8 @@ vertex SOut seg_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     float2 b = float2(b_raw.x, round(b_raw.y));
     if (ray) {
         float2 d = b_raw - a_raw;
-        float reach = length(cv.bounds.zw) + length(d) + 1.0;
+        // Origin-to-plot distance plus the diagonal bounds every visible point, even after a long pan.
+        float reach = length(a - cv.bounds.xy) + length(cv.bounds.zw) + length(d) + 1.0;
         b = a + normalize(d + float2(1e-6, 0.0)) * reach;
     }
     // m.w = SEG_CLAMP_PLOT pins the segment to the plot once its price leaves the visible band, so

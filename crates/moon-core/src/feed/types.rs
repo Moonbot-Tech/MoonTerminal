@@ -1217,8 +1217,11 @@ pub struct CoreTimeOffsetStatus {
     pub source: crate::session::core_time_offset::OffsetSource,
 }
 
+/// Account updates and transient notifications delivered from one core's feed.
 #[derive(Debug, Clone)]
 pub enum FeedMsg {
+    /// Already deduplicated actual trade edges; independent of order-table publication.
+    TradeSounds(Vec<super::trade_sound::TradeSound>),
     Status(ConnStatus),
     /// A core's clock offset was measured and its durable write has already been HANDED to the
     /// report writer.

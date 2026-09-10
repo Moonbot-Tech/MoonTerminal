@@ -1196,6 +1196,9 @@ pub struct WindowLayout {
     /// the header toggle. Terminal-wide rather than per group — one operator, one pair of ears.
     #[serde(default)]
     pub quiet: crate::config::quiet::QuietCfg,
+    /// Immediate Settings preferences for actual trade edges, keyed by platform and DEX.
+    #[serde(default, deserialize_with = "de_lenient_map")]
+    pub trade_sounds: HashMap<String, crate::config::trade_sounds::TradeSounds>,
 }
 
 /// Per-axis enable switches for the core-warning engine, set from the Core Status gear popup.

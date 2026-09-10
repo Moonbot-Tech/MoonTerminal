@@ -1,0 +1,13 @@
+_version: 2
+alerts.fig.horizontal_ray:
+  ru: "Горизонтальный луч"
+  en: "Horizontal Ray"
+  es: "Rayo horizontal"
+hotkeys.draw_horizontal_ray:
+  ru: "Горизонтальный луч"
+  en: "Horizontal Ray"
+  es: "Rayo horizontal"
+hotkeys.draw_horizontal_ray_hint:
+  ru: "Один клик задаёт начало и цену луча, направленного вправо. Повторное нажатие выключает инструмент."
+  en: "One click sets the origin and price of a rightward ray. Press again to disarm the tool."
+  es: "Un clic fija el origen y el precio de un rayo hacia la derecha. Pulsa de nuevo para desactivar la herramienta."

@@ -63,19 +63,18 @@ const FLASH_BATCH_MAX: usize = 3;
 /// (counter switches, read watermark) is stored under.
 const PANEL_NAME: &str = "News";
 
-/// The fixed palette a user can assign to a tag. Keys persist in `news_tags.json` and resolve to
-/// theme colours via [`key_color`]; storing keys (not RGB) keeps the colour theme-adaptive. Limited
-/// to the distinct hues `MoonPalette` carries.
+/// Theme-adaptive choices retained alongside the fixed RGB picker. Their symbolic keys persist
+/// unchanged in `news_tags.json`; custom colors instead store `#RRGGBB`.
 pub(super) const TAG_PALETTE: [&str; 4] = ["red", "amber", "green", "blue"];
 
-/// Resolve a palette colour key to the active theme colour, or `None` for an unknown/neutral key.
+/// Resolve a symbolic theme key or fixed `#RRGGBB`; unknown and neutral keys paint nothing.
 fn key_color(key: &str, p: MoonPalette) -> Option<u32> {
     match key {
         "red" => Some(p.red),
         "amber" => Some(p.amber),
         "green" => Some(p.green),
         "blue" => Some(p.blue),
-        _ => None,
+        _ => NewsTagSettings::custom_rgb(key),
     }
 }
 
@@ -823,7 +822,7 @@ impl NewsView {
             .into_any_element()
     }
 
-    /// One tag row: visibility checkbox · `#label` · palette swatches (+ "none"). `key` is the
+    /// One tag row: visibility, symbolic/neutral colors, and a fixed RGB picker. `key` is the
     /// case-folded identity used for hide state and the colour map; `label` is the display form;
     /// `hidden`/`current` are read from the persisted settings by the caller.
     fn tag_row(
@@ -892,24 +891,66 @@ impl NewsView {
                 })),
         );
 
-        h_flex()
-            .w_full()
-            .items_center()
-            .gap(design::ui_px(cx, 8.0))
-            .py(design::ui_px(cx, 2.0))
-            .child(checkbox)
-            .child(
-                // AMBIGUOUS: a user-defined tag identifier, not a sentence — treated as a value
-                // like a badge or strategy name and left mono.
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .font_family(design::mono())
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text))
-                    .child(format!("#{label}")),
+        // Entering fixed mode writes the resolved RGB even when it equals a theme swatch.
+        // Otherwise a same-value HEX commit would emit no Change and stay theme-adaptive.
+        let fixed = current.as_deref().and_then(NewsTagSettings::custom_rgb);
+        let seed = current
+            .as_deref()
+            .and_then(|value| key_color(value, p))
+            .unwrap_or(p.text_muted);
+        let fixed_key = key.clone();
+        let fixed_toggle = MoonCheckbox::new(SharedString::from(format!("nt-fixed-{key}")))
+            .label(t!("chart_labels.color_fixed").to_string())
+            .checked(fixed.is_some())
+            .size(MoonCheckboxSize::Compact)
+            .on_change(cx.listener(move |this, checked: &bool, _, cx| {
+                let color = checked.then(|| format!("#{seed:06X}"));
+                this.set_tag_color(&fixed_key, color.as_deref(), cx);
+            }));
+        let picker = fixed.map(|value| {
+            let weak = cx.entity().downgrade();
+            let color_key = key.clone();
+            crate::controls::color_picker::ColorPicker::new(
+                format!("nt-rgb-{key}"),
+                design::hsla_to_rgb8(rgb(value).into()),
+                move |color, app| {
+                    let color = format!("#{:06X}", design::rgb_to_u32(color));
+                    let _ = weak.update(app, |this, cx| {
+                        this.set_tag_color(&color_key, Some(&color), cx);
+                    });
+                },
             )
-            .child(swatches)
+        });
+        v_flex()
+            .w_full()
+            .gap(design::ui_px(cx, 4.0))
+            .py(design::ui_px(cx, 2.0))
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap(design::ui_px(cx, 8.0))
+                    .child(checkbox)
+                    .child(
+                        // User-defined tag identifiers are values rather than prose.
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .font_family(design::mono())
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text))
+                            .child(format!("#{label}")),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .flex_wrap()
+                    .gap(design::ui_px(cx, 8.0))
+                    .child(swatches)
+                    .child(fixed_toggle),
+            )
+            .children(picker)
             .into_any_element()
     }
 
@@ -1139,7 +1180,7 @@ impl Panel for NewsView {
             return None;
         }
         unread::badges(
-            self.unread,
+            &self.unread,
             merged.then_some(self.unread_total),
             MoonPalette::active(cx),
             cx,

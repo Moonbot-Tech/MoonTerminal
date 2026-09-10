@@ -13,12 +13,6 @@ use crate::chart_tabs::seg_row;
 use crate::design::{self, moon};
 use crate::panels::{micro_button, popup_group, toggle_variant};
 
-/// Colours a venue can take, matching the caption editor's own set so the two windows offer one
-/// palette rather than two.
-const VENUE_COLORS: [u32; 8] = [
-    0xffffff, 0xffd166, 0xef476f, 0x06d6a0, 0x4cc9f0, 0xb388ff, 0xff9f1c, 0x8d99ae,
-];
-
 /// Width of one micro glyph button.
 const MICRO_W: f32 = 20.0;
 /// Width of the venue name column.
@@ -227,37 +221,37 @@ fn venue_line(
         .child(venue.label_with(dex_names))
         .into_any_element();
 
-    let mut swatches = h_flex().gap(design::ui_px(cx, 3.0));
-    // The first swatch is "no colour of its own": a venue that follows the chart's caption colour,
-    // which is what every venue starts as.
-    for value in std::iter::once(None).chain(VENUE_COLORS.map(Some)) {
-        let state = state.clone();
-        let picked = venue.color == value;
-        swatches = swatches.child(
-            div()
-                .id(SharedString::from(format!(
-                    "arb-sw-{ix}-{}",
-                    value.unwrap_or(0)
-                )))
-                .w(design::ui_px(cx, 14.0))
-                .h(design::ui_px(cx, 14.0))
-                .rounded(design::ui_px(cx, 3.0))
-                .bg(match value {
-                    Some(rgb) => gpui::rgb(rgb).into(),
-                    None => moon(p.surface),
-                })
-                .border_1()
-                .border_color(moon(if picked { p.text } else { p.border }))
-                .cursor_pointer()
-                .on_click(move |_, _w, cx: &mut App| {
-                    ArbEditState::write(&state, cx, |cfg| {
-                        if let Some(v) = cfg.venues.get_mut(ix) {
-                            v.color = value;
-                        }
-                    });
-                }),
-        );
-    }
+    let venue_code = venue.code;
+    let theme_state = state.clone();
+    let default_color = p.text;
+    let inherited = venue.color.is_none();
+    let theme_color = micro_button(
+        format!("arb-theme-{venue_code}"),
+        "∅",
+        t!("chart_labels.color_theme").to_string(),
+        toggle_variant(inherited),
+        inherited,
+        micro_w,
+        move |_, cx| {
+            ArbEditState::write(&theme_state, cx, |cfg| {
+                if let Some(v) = cfg.venues.iter_mut().find(|v| v.code == venue_code) {
+                    v.color = if inherited { Some(default_color) } else { None };
+                }
+            });
+        },
+    );
+    let color_state = state.clone();
+    let color = crate::controls::color_picker::ColorPicker::new(
+        format!("arb-color-{}-{venue_code}", state.entity_id()),
+        design::hsla_to_rgb8(rgb(venue.color.unwrap_or(p.text)).into()),
+        move |color, cx| {
+            ArbEditState::write(&color_state, cx, |cfg| {
+                if let Some(v) = cfg.venues.iter_mut().find(|v| v.code == venue_code) {
+                    v.color = Some(design::rgb_to_u32(color));
+                }
+            });
+        },
+    );
 
     h_flex()
         .w_full()
@@ -267,6 +261,8 @@ fn venue_line(
         .child(down)
         .child(eye)
         .child(name)
-        .child(swatches)
+        .flex_wrap()
+        .child(theme_color)
+        .child(color)
         .into_any_element()
 }
