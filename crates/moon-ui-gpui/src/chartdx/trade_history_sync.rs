@@ -15,7 +15,6 @@ use moon_chart::layers::{MarkerInstance, SegInstance};
 use moon_chart::trade_marks::{self, TapePrint, TradeCluster, TradeMark};
 use moon_chart::view::ChartView;
 use moon_core::db::ChartTradeRecord;
-use moon_core::market::trade_replay::TradeReplaySource;
 use moon_core::session::CoreId;
 
 use super::ChartDataState;
@@ -82,7 +81,7 @@ pub(crate) fn replay_tape(
     let Some(series) = series else {
         return Vec::new();
     };
-    if series.source != TradeReplaySource::Ticks {
+    if !series.source.is_ticks() {
         return Vec::new();
     }
     series

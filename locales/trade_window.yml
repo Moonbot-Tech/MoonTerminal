@@ -43,6 +43,31 @@ trade_window.source.ticks:
   en: "exchange ticks"
   es: "ticks del exchange"
 
+trade_window.source.core_ticks:
+  ru: "тики с ядра"
+  en: "core ticks"
+  es: "ticks del núcleo"
+
+trade_window.source.loading_more:
+  ru: "загрузка продолжается"
+  en: "loading more"
+  es: "cargando más"
+
+trade_window.source.context_unavailable:
+  ru: "свечной контекст недоступен"
+  en: "candle context unavailable"
+  es: "contexto de velas no disponible"
+
+trade_window.source.awaiting_core:
+  ru: "свечи %{min} мин, проверяем архив ядра"
+  en: "%{min}-minute candles, checking core archive"
+  es: "velas de %{min} min, comprobando el archivo del núcleo"
+
+trade_window.source.core_ticks_bucketed:
+  ru: "тики с ядра, шаг %{secs} с"
+  en: "core ticks, %{secs} s step"
+  es: "ticks del núcleo, paso de %{secs} s"
+
 trade_window.source.ticks_bucketed:
   ru: "тики с биржи, шаг %{secs} с"
   en: "exchange ticks, %{secs} s step"

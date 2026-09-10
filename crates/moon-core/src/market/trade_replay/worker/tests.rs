@@ -4,11 +4,312 @@ use super::*;
 use crate::feed::Side;
 use crate::market::trade_replay::rest::{FetchError, TradePage};
 
+/// Native data remains usable when context is rate-limited or the venue has no candle endpoint.
+#[test]
+fn native_ticks_survive_unavailable_candle_context() {
+    for fallback in [
+        TradeReplayOutcome::Failed(TradeReplayFailure::RateLimited { retry_in_s: 17 }),
+        TradeReplayOutcome::Empty(TradeReplayEmpty::NoEndpoint {
+            brand: crate::venue::Brand::Bybit,
+        }),
+    ] {
+        let served = core_first(
+            || Some(core_series(true)),
+            || Served {
+                outcome: fallback,
+                tick_stage: None,
+            },
+        );
+        let TradeReplayOutcome::Ready(series) = served.outcome else {
+            panic!("usable native ticks hidden by a context failure")
+        };
+        assert_eq!(series.ticks.len(), 2);
+        assert_eq!(series.source, TradeReplaySource::CoreTicks);
+        assert_eq!(series.tick_status, TickStatus::ContextUnavailable);
+        assert!(series.candles.is_empty());
+    }
+}
+
+/// A late native result cannot erase a wider exchange interval already displayed to the user.
+#[test]
+fn late_core_upgrade_rejects_narrower_published_coverage() {
+    let now = Instant::now();
+    let probe = CoreUpgradeProbe::new(now);
+    let shown = Some((0, 180_000));
+    assert!(
+        !probe.stop(false, now + Duration::from_millis(500), shown, || Some(
+            core_series(true)
+        ))
+    );
+    assert!(
+        probe.ready.borrow().is_none(),
+        "narrow core span must not stop REST or replace displayed points"
+    );
+    assert!(
+        probe.stop(false, now + Duration::from_secs(1), shown, || Some(
+            core_series(false)
+        ))
+    );
+    assert_eq!(
+        probe
+            .ready
+            .into_inner()
+            .expect("covering replacement")
+            .covered,
+        shown
+    );
+}
+
+/// Terminal public tick answers still observe a later native archive independently.
+#[test]
+fn delayed_native_archive_upgrades_no_route_and_retention_answers() {
+    for status in [
+        TickStatus::NoRoute,
+        TickStatus::Failed,
+        TickStatus::NoTrades,
+        TickStatus::OutOfRetention {
+            retention_ms: 1_000,
+        },
+    ] {
+        let now = Instant::now();
+        let mut bars = core_series(true);
+        bars.source = TradeReplaySource::Klines1m;
+        bars.tick_status = status;
+        bars.ticks.clear();
+        bars.candles.push(ChartCandle {
+            t_open_ms: 0.0,
+            open: 10.0,
+            high: 12.0,
+            low: 9.0,
+            close: 11.0,
+            volume: 5.0,
+            quote_volume: 55.0,
+        });
+        let mut served = Served {
+            outcome: TradeReplayOutcome::Ready(bars),
+            tick_stage: None,
+        };
+        let mut wait = prepare_native_wait(&mut served, now)
+            .expect("native follow-up must not require a REST tick job");
+        assert!(
+            matches!(served.outcome, TradeReplayOutcome::Ready(ref s) if s.tick_status == TickStatus::AwaitingCore)
+        );
+        assert!(wait.advance(None, now + Duration::from_secs(2)).is_none());
+        let TradeReplayOutcome::Ready(series) = wait
+            .advance(Some(core_series(true)), now + Duration::from_secs(3))
+            .expect("late archive")
+        else {
+            panic!("native data lost")
+        };
+        assert_eq!(series.source, TradeReplaySource::CoreTicks);
+        assert_eq!(series.tick_status, TickStatus::Served);
+        assert_eq!(series.candles.len(), 1);
+        let TradeReplayOutcome::Ready(expired) = wait
+            .advance(None, now + Duration::from_secs(31))
+            .expect("bounded follow-up")
+        else {
+            panic!("fallback lost")
+        };
+        assert_eq!(
+            expired.tick_status, status,
+            "timeout must restore the terminal reason, not leave a pending caption"
+        );
+    }
+}
+
+/// A retry must preserve wider cached points through native replacement and subsequent reopening.
+#[test]
+fn cached_retry_keeps_wider_tick_coverage() {
+    let mut wide = core_series(false);
+    wide.source = TradeReplaySource::Ticks;
+    wide.window.to_ms = 600_000;
+    wide.covered = Some((0, 360_000));
+    wide.partial = true;
+    let route = trade_route(wide.venue).expect("tick route");
+    let key = OutcomeKey {
+        venue: wide.venue,
+        host: route.host(),
+        market: "BTCUSDT".to_owned(),
+        from_ms: wide.window.from_ms,
+        to_ms: wide.window.to_ms,
+    };
+    let cache = Mutex::new(VecDeque::new());
+    remember_store(
+        &cache,
+        key.clone(),
+        Remembered::Ready {
+            series: wide.clone(),
+            ticks_settled: false,
+        },
+    );
+    let Some(Remembered::Ready { mut series, .. }) = remember_lookup(&cache, &key, 42) else {
+        panic!("retry cache missing")
+    };
+    let stage =
+        stage_and_stamp(series.venue, series.window, &key, &mut series).expect("retry stage");
+    assert_eq!(series.tick_status, TickStatus::Streaming);
+    let narrow = core_series(true);
+    assert!(!preserves_coverage(
+        narrow.covered,
+        stage.baseline.as_ref().and_then(|s| s.covered)
+    ));
+    let retained = retain_baseline(narrow, stage.baseline.as_ref());
+    remember_store(
+        &cache,
+        key.clone(),
+        Remembered::Ready {
+            series: retained,
+            ticks_settled: true,
+        },
+    );
+    let Some(Remembered::Ready {
+        series: reopened, ..
+    }) = remember_lookup(&cache, &key, 43)
+    else {
+        panic!("settled cache missing")
+    };
+    assert_eq!(reopened.covered, wide.covered);
+    assert_eq!(reopened.source, TradeReplaySource::Ticks);
+}
+
+/// Frozen native answer for testing the production source-selection path without I/O.
+fn core_series(partial: bool) -> TradeReplaySeries {
+    TradeReplaySeries {
+        source: TradeReplaySource::CoreTicks,
+        venue: crate::venue::venue(3).expect("Binance spot"),
+        window: ReplayWindow {
+            from_ms: 0,
+            to_ms: 180_000,
+            open_ms: 60_000,
+            close_ms: 120_000,
+            over_budget: false,
+        },
+        tf_ms: BAR_MS,
+        candles: Vec::new(),
+        ticks: vec![tick(60_000, 10.0), tick(120_000, 11.0)],
+        identity: 42,
+        tick_status: TickStatus::Served,
+        bucket_ms: 0,
+        partial,
+        covered: Some(if partial {
+            (60_000, 120_000)
+        } else {
+            (0, 180_000)
+        }),
+    }
+}
+
+/// Available core points still need the wide candle stage, but must avoid a redundant core scan.
+#[test]
+fn core_replay_preserves_wide_candle_stage() {
+    let reads = Cell::new(0);
+    let candles_requested = Cell::new(false);
+    let served = core_first(
+        || {
+            reads.set(reads.get() + 1);
+            Some(core_series(true))
+        },
+        || {
+            candles_requested.set(true);
+            let mut bars = core_series(true);
+            bars.source = TradeReplaySource::Klines1m;
+            Served {
+                outcome: TradeReplayOutcome::Ready(bars),
+                tick_stage: None,
+            }
+        },
+    );
+    assert!(candles_requested.get());
+    assert_eq!(
+        reads.get(),
+        1,
+        "a ready narrow core span needs no immediate rescan"
+    );
+    assert!(served.tick_stage.is_none());
+    let TradeReplayOutcome::Ready(series) = served.outcome else {
+        panic!("core answer lost")
+    };
+    assert_eq!(series.source, TradeReplaySource::CoreTicks);
+    assert!(series.partial);
+}
+
+/// A newly arrived core archive upgrades candles and cancels their pending exchange tick stage.
+#[test]
+fn core_replay_rechecks_after_candles_and_keeps_context() {
+    let reads = Cell::new(0);
+    let mut bars = core_series(true);
+    bars.source = TradeReplaySource::Klines1m;
+    bars.ticks.clear();
+    bars.covered = None;
+    bars.tick_status = TickStatus::Pending;
+    bars.candles.push(ChartCandle {
+        t_open_ms: 0.0,
+        open: 10.0,
+        high: 12.0,
+        low: 9.0,
+        close: 11.0,
+        volume: 5.0,
+        quote_volume: 55.0,
+    });
+    let route = trade_route(bars.venue).expect("spot trade route");
+    let stage = TickStage {
+        baseline: None,
+        route,
+        key: OutcomeKey {
+            venue: bars.venue,
+            host: route.host(),
+            market: "BTCUSDT".into(),
+            from_ms: bars.window.from_ms,
+            to_ms: bars.window.to_ms,
+        },
+        candles: bars.candles.clone(),
+    };
+    let served = core_first(
+        || {
+            reads.set(reads.get() + 1);
+            (reads.get() == 2).then(|| core_series(true))
+        },
+        || Served {
+            outcome: TradeReplayOutcome::Ready(bars),
+            tick_stage: Some(stage),
+        },
+    );
+    let TradeReplayOutcome::Ready(series) = served.outcome else {
+        panic!("core upgrade lost")
+    };
+    assert_eq!(series.source, TradeReplaySource::CoreTicks);
+    assert_eq!(series.covered, Some((60_000, 120_000)));
+    assert_eq!(
+        series.candles.len(),
+        1,
+        "context candles outside the core span must survive"
+    );
+    assert_eq!(series.tick_status, TickStatus::Served);
+    assert!(served.tick_stage.is_none());
+}
+
+/// Unavailable core history must preserve the REST answer instead of reporting empty success.
+#[test]
+fn core_replay_missing_history_preserves_rest_failure() {
+    let served = core_first(
+        || None,
+        || Served {
+            outcome: TradeReplayOutcome::Failed(TradeReplayFailure::RateLimited { retry_in_s: 17 }),
+            tick_stage: None,
+        },
+    );
+    assert!(matches!(
+        served.outcome,
+        TradeReplayOutcome::Failed(TradeReplayFailure::RateLimited { retry_in_s: 17 })
+    ));
+}
+
 /// Records the pagination seam without touching a real host gate.
 #[derive(Default)]
 struct FakeObserver {
     claims: usize,
     paces: usize,
+    snapshots: Vec<(usize, (i64, i64))>,
 }
 
 impl TickObserver for FakeObserver {
@@ -20,6 +321,71 @@ impl TickObserver for FakeObserver {
     fn pace(&mut self, _host: &str) {
         self.paces += 1;
     }
+
+    /// Capture progress boundaries so tests can distinguish streaming from a final-only answer.
+    fn progress(&mut self, ticks: &[Tick], covered: (i64, i64)) {
+        self.snapshots.push((ticks.len(), covered));
+    }
+}
+
+/// A core archive that arrives later must stop a REST walk without busy polling or sleeping.
+#[test]
+fn late_core_upgrade_is_detected_between_pages() {
+    let now = Instant::now();
+    let probe = CoreUpgradeProbe::new(now);
+    assert!(!probe.stop(false, now, None, || panic!("early rescan")));
+    assert!(
+        probe.stop(false, now + Duration::from_millis(500), None, || Some(
+            core_series(true)
+        ))
+    );
+    assert!(probe.ready.into_inner().is_some());
+}
+
+/// Finished tiles must publish increasing snapshots before the whole plan has completed.
+#[test]
+fn paginator_publishes_contiguous_groups() {
+    let plan = TickPlan {
+        slices: vec![(100, 199), (200, 299)],
+        focus_len: 1,
+    };
+    let mut observer = FakeObserver::default();
+    let verdict = paginate_ticks(
+        TradeRoute::BinanceUsdMAggTrades,
+        &plan,
+        100,
+        10,
+        || false,
+        || false,
+        &mut observer,
+        |from, _, _| page(vec![tick(from + 5, 10.0)]),
+    );
+    assert!(matches!(verdict, TickVerdict::Ready(_)));
+    assert_eq!(observer.snapshots, vec![(1, (100, 199)), (2, (100, 299))]);
+}
+
+/// A backwards page to the right cannot fill its unfetched gap next to the visible prefix.
+#[test]
+fn partial_page_progress_respects_pagination_direction() {
+    let rows = [tick(250, 10.0), tick(299, 11.0)];
+    assert_eq!(
+        page_progress_span(
+            Some((100, 199)),
+            (200, 299),
+            &rows,
+            Some(rest::TradeCursor::LessThanId(42))
+        ),
+        Some((100, 199))
+    );
+    assert_eq!(
+        page_progress_span(
+            Some((100, 199)),
+            (200, 299),
+            &rows,
+            Some(rest::TradeCursor::FromId(42))
+        ),
+        Some((100, 299))
+    );
 }
 
 /// Builds one real-looking trade row for a deterministic fake page.

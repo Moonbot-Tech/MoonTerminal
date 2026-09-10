@@ -398,6 +398,11 @@ vertex VolumeBarOut volume_bars_vertex(uint vid [[vertex_id]], uint iid [[instan
     }
 
     Candle cd1 = candles[iid + 1];
+    // A replay removes candles under its tick span. Never fill a hill across that gap.
+    float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs.tf_rel;
+    if (cd1.t_open > cd.t_open + tf_rel * 1.001) {
+        return { float4(2.0, 2.0, 0.0, 1.0), 0u };
+    }
     float2 c1 = vol_center_px(cv, cs, cd1);
     float h1 = vol_height_px(cv, vs, cd1);
     float x = mix(c0.x, c1.x, corner.x);

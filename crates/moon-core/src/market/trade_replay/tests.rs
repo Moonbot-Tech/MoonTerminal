@@ -1,5 +1,55 @@
 use super::*;
 
+/// Wide candle context must never expand either native or REST tick requests past five minutes.
+#[test]
+fn detailed_tick_window_excludes_wide_candle_context() {
+    let window = replay_window(100_000, 100_060).expect("one-minute trade");
+    let narrow = window.tick_window();
+    assert_eq!((narrow.from_ms, narrow.to_ms), (99_700_000, 100_360_000));
+    let plan = tick_plan(window, Some(60 * MINUTE_MS), None);
+    assert_eq!(plan.slices.first().map(|s| s.0), Some(99_700_000));
+    assert_eq!(plan.slices.last().map(|s| s.1), Some(100_360_000));
+    assert!(
+        plan.slices
+            .iter()
+            .all(|s| s.0 >= narrow.from_ms && s.1 <= narrow.to_ms)
+    );
+    assert_eq!(
+        plan.focus_len,
+        plan.slices.len(),
+        "no distant context tiles may be requested"
+    );
+}
+
+/// Progressive coverage changes must upload candles again even though the request ID is stable.
+#[test]
+fn growing_tick_coverage_invalidates_candle_upload() {
+    let mut series = bars_only_series();
+    series.source = TradeReplaySource::Ticks;
+    series.covered = Some((0, MINUTE_MS - 1));
+    let mut out = ChartHistoryBuffers::default();
+    let first = series.read_into(
+        0.0,
+        0.0,
+        (3 * MINUTE_MS) as f32,
+        Some(&candle_params(0)),
+        &mut out,
+    );
+    series.covered = Some((0, 2 * MINUTE_MS - 1));
+    let next = series.read_into(
+        0.0,
+        0.0,
+        (3 * MINUTE_MS) as f32,
+        Some(&candle_params(first.candles_revision)),
+        &mut out,
+    );
+    assert!(
+        next.candles_changed,
+        "new tick chunks must remove newly covered candles"
+    );
+    assert_ne!(next.candles_revision, first.candles_revision);
+}
+
 const MINUTE_MS: i64 = 60_000;
 
 fn candle(t_open_ms: i64, low: f32, high: f32, close: f32) -> ChartCandle {

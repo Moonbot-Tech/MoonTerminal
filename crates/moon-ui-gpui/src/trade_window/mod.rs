@@ -279,21 +279,18 @@ pub(super) fn fold_outcome(
     outcome: &TradeReplayOutcome,
 ) -> Fold {
     let accept = match state {
-        // The rule is stated for what it means rather than for what the worker happens to send
-        // (the existing comment's own standard): a chart already showing something never
-        // regresses, but a caption that is still PROVISIONAL may be resolved. So a `Ready` state
-        // whose tick status has not answered yet accepts a second `Ready` outcome once that
-        // outcome's own status has moved past `Pending` and actually carries rows — the only
-        // thing that turns "пробуем тики…" into a stated reason. A state whose status is already
-        // terminal (a settled `Ticks` series, or a `Klines1m` reason already printed) accepts
-        // nothing.
+        // Pending candles may become streaming ticks; further groups replace those ticks until
+        // a final answer settles the caption. Never regress a visible tape to candles or an error.
         TradeWindowState::Ready { tick_status, .. } => {
-            *tick_status == TickStatus::Pending
-                && matches!(
-                    outcome,
-                    TradeReplayOutcome::Ready(series)
-                        if series.tick_status != TickStatus::Pending && !series.is_empty()
-                )
+            matches!(
+                tick_status,
+                TickStatus::Pending | TickStatus::Streaming | TickStatus::AwaitingCore
+            ) && matches!(
+                outcome,
+                TradeReplayOutcome::Ready(series)
+                    if series.tick_status != TickStatus::Pending && !series.is_empty()
+                        && (*tick_status != TickStatus::Streaming || series.source.is_ticks())
+            )
         }
         // Loading, Empty or Failed has nothing on screen to protect.
         TradeWindowState::Loading | TradeWindowState::Empty(_) | TradeWindowState::Failed(_) => {
@@ -306,7 +303,7 @@ pub(super) fn fold_outcome(
         // reopen case delivers a settled `Ticks` series as the FIRST outcome, and a position-keyed
         // rule would leave a reopened window stuck in the candle stage's forced mode.
         restore_candle_mode: accept
-            && matches!(outcome, TradeReplayOutcome::Ready(series) if series.source == TradeReplaySource::Ticks),
+            && matches!(outcome, TradeReplayOutcome::Ready(series) if series.source.is_ticks()),
         // The upgrade re-uses the picture already framed rather than re-framing it, so a user who
         // panned while the ticks loaded is not yanked back to the trade.
         frame: accept && !published_this_sequence,
@@ -582,7 +579,7 @@ impl TradeWindowView {
         });
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
-            // One `TradeReplayRequest` now answers with ONE or TWO outcomes before the worker
+            // One `TradeReplayRequest` streams candle and tick snapshots before the worker
             // drops `reply` — the candle stage, then an optional tick upgrade — so this task
             // receives in a loop rather than once, and the drop (a `RecvError`) is its exit
             // signal, exactly like the view going away is (`this.update` failing below). The
