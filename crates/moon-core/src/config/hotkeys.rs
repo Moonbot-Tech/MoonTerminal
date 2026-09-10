@@ -952,8 +952,8 @@ impl HotkeysConfig {
         ] {
             if *slot != MouseGestureBinding::None {
                 log::warn!(
-                    "hotkeys.toml: {label} теперь ставит настоящий отложенный ордер; жест {slot:?} \
-                     снят, назначьте его заново, если это нужно"
+                    "hotkeys.toml: {label} now places a real pending order; its gesture \
+                     {slot:?} was cleared, set it again if that is what you want"
                 );
                 *slot = MouseGestureBinding::None;
             }
@@ -1050,7 +1050,7 @@ fn clear_if_duplicate(taken: &[String], field: &mut String, label: &str) {
         return;
     }
     log::warn!(
-        "hotkeys.toml: {} уже занят, {} оставлен без клавиши",
+        "hotkeys.toml: {} is already taken, {} was left without a key",
         field,
         label
     );

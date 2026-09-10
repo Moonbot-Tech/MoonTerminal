@@ -182,9 +182,12 @@ fn move_kind_slot_id(slot: MoveKindSlot) -> &'static str {
     }
 }
 
-/// The gesture-field map, once, for the getter and both setters — the same shape
-/// [`hotkey_field`] gives the keyboard slots. `$($brw)+` accepts `&` or `&mut`, and the compiler
-/// still checks the match exhaustively.
+/// The gesture-field map, once, for the getter and both setters. `$($brw)+` accepts `&` or `&mut`,
+/// and the compiler still checks the match exhaustively.
+///
+/// The keyboard half of this is gone: its slots reach their fields through
+/// `moon_core::config::HotkeysConfig::key`, beside the data. The gestures have no such registry yet
+/// — that is the same debt as their missing `bound_keys`, and it is in the plan.
 macro_rules! mouse_field {
     ($hotkeys:ident, $slot:expr, $($brw:tt)+) => {
         match $slot {
