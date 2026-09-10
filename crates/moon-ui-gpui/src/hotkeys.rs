@@ -25,7 +25,7 @@ use gpui::{
     App, Context, Entity, FocusHandle, Focusable, KeyDownEvent, Keystroke, KeystrokeEvent,
     Modifiers, ModifiersChangedEvent, Window,
 };
-use moon_core::config::{HotkeysConfig, SHIFT_PERCENT, SPLIT_ORDER_PARTS};
+use moon_core::config::{HotkeysConfig, KeySlot, SHIFT_PERCENT, SPLIT_ORDER_PARTS};
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::figures::FigureTool;
 use moon_core::session::CoreId;
@@ -470,145 +470,200 @@ impl HotkeyAction {
 /// fixed-sell presets; active-market and active-core trading actions; configured `switch_charts`;
 /// then manual strategies. Returns `None` when no binding matches.
 fn resolve_binding(event: &Keystroke, hk: &HotkeysConfig) -> Option<HotkeyAction> {
+    DISPATCH.iter().find_map(|step| match step {
+        Step::Slot(slot) => pressed(hk.key(*slot), event).then(|| action_of(*slot, hk)),
+        Step::Builtin(builtin) => builtin
+            .strokes
+            .iter()
+            .any(|raw| pressed(raw, event))
+            .then_some(builtin.action),
+    })
+}
+
+/// One step of [`DISPATCH`]: a configurable slot, or a binding the user cannot edit.
+#[derive(Clone, Copy)]
+pub enum Step {
+    Slot(KeySlot),
+    Builtin(Builtin),
+}
+
+/// A built-in binding: the keystrokes it answers, the action, and the locale key naming it on the
+/// settings page.
+#[derive(Clone, Copy)]
+pub struct Builtin {
+    pub strokes: &'static [&'static str],
+    pub action: HotkeyAction,
+    pub name: &'static str,
+}
+
+const fn builtin(
+    strokes: &'static [&'static str],
+    action: HotkeyAction,
+    name: &'static str,
+) -> Step {
+    Step::Builtin(Builtin {
+        strokes,
+        action,
+        name,
+    })
+}
+
+/// The order a keystroke is tested against the bindings — the ONE list that says which of two
+/// holders of a key fires.
+///
+/// [`resolve_binding`] returns on the first match, so every later holder of the same keystroke is
+/// dead; the settings page's clash captions read this same list to say so, which is why it is data
+/// and not a chain of `if`s. The order is deliberate and worth keeping in view:
+///
+/// - the drawing layer is tested FIRST, which is the whole reason those eight can take a built-in
+///   key away and the thirty below them cannot;
+/// - the built-ins sit next: below the figure slots, above everything else. Shift+Escape before
+///   plain Escape is only a reading aid — [`pressed`] matches modifiers exactly, so neither can
+///   answer the other's press. Exactly, and that is one deliberate narrowing against the `if`
+///   chain this replaced: that chain never looked at the Fn modifier, so Fn+Shift+Escape closed
+///   every chart; now it is nobody's press, the same rule every configurable slot has always had.
+///   Only the macOS backend sets the bit (`moon-gpui-windows` hardcodes it false), so this is a
+///   Mac-only change to one built-in, made on purpose rather than carried as an exception;
+/// - the window-local Y scale and the chart shot sit ABOVE the preset arrays: those are
+///   user-editable, and a Moonbot import can move one onto any key at all;
+/// - the trading actions and the manual-strategy presets close the list.
+pub const DISPATCH: &[Step] = &[
+    Step::Slot(KeySlot::DrawHline),
+    Step::Slot(KeySlot::DrawSegment),
+    Step::Slot(KeySlot::DrawTriangle),
+    Step::Slot(KeySlot::DrawChannel),
+    Step::Slot(KeySlot::SwitchFigure),
+    Step::Slot(KeySlot::FigDelete),
+    Step::Slot(KeySlot::FigAlert),
+    Step::Slot(KeySlot::FigUndo),
+    builtin(
+        &["shift-escape"],
+        HotkeyAction::CloseAllCharts,
+        "hotkeys.clash.builtin.close_all",
+    ),
+    builtin(
+        &["escape"],
+        HotkeyAction::CloseActiveChart,
+        "hotkeys.clash.builtin.esc_close",
+    ),
+    builtin(
+        &["ctrl-shift-f10"],
+        HotkeyAction::ResetWindows,
+        "hotkeys.clash.builtin.reset_windows",
+    ),
+    builtin(
+        &["tab", "delete"],
+        HotkeyAction::CancelHoveredOrder,
+        "hotkeys.clash.builtin.cancel_hover",
+    ),
+    Step::Slot(KeySlot::ScalePlus),
+    Step::Slot(KeySlot::ScaleMinus),
+    Step::Slot(KeySlot::ChartShot),
+    Step::Slot(KeySlot::OrderSize(0)),
+    Step::Slot(KeySlot::OrderSize(1)),
+    Step::Slot(KeySlot::OrderSize(2)),
+    Step::Slot(KeySlot::OrderSize(3)),
+    Step::Slot(KeySlot::OrderSize(4)),
+    Step::Slot(KeySlot::OrderSize(5)),
+    Step::Slot(KeySlot::SellPreset(0)),
+    Step::Slot(KeySlot::SellPreset(1)),
+    Step::Slot(KeySlot::SellPreset(2)),
+    Step::Slot(KeySlot::SellPreset(3)),
+    Step::Slot(KeySlot::SellPreset(4)),
+    Step::Slot(KeySlot::SellPreset(5)),
+    Step::Slot(KeySlot::CancelBuy),
+    Step::Slot(KeySlot::CancelAllBuys),
+    Step::Slot(KeySlot::PanicSell),
+    Step::Slot(KeySlot::PanicSellOne),
+    Step::Slot(KeySlot::JoinSells),
+    Step::Slot(KeySlot::SplitOrder),
+    Step::Slot(KeySlot::SplitOrderX),
+    Step::Slot(KeySlot::SellsToRect),
+    Step::Slot(KeySlot::NewLong),
+    Step::Slot(KeySlot::NewShort),
+    Step::Slot(KeySlot::ShiftBuyUp),
+    Step::Slot(KeySlot::ShiftBuyDown),
+    Step::Slot(KeySlot::ShiftSellUp),
+    Step::Slot(KeySlot::ShiftSellDown),
+    Step::Slot(KeySlot::SwitchCharts),
+    Step::Slot(KeySlot::ManualStrategy(0)),
+    Step::Slot(KeySlot::ManualStrategy(1)),
+    Step::Slot(KeySlot::ManualStrategy(2)),
+    Step::Slot(KeySlot::ManualStrategy(3)),
+    Step::Slot(KeySlot::ManualStrategy(4)),
+    Step::Slot(KeySlot::ManualStrategy(5)),
+    Step::Slot(KeySlot::ManualStrategy(6)),
+    Step::Slot(KeySlot::ManualStrategy(7)),
+    Step::Slot(KeySlot::ManualStrategy(8)),
+    Step::Slot(KeySlot::ManualStrategy(9)),
+];
+
+/// Every configurable slot in [`DISPATCH`], in its order — for the tests that hold the list to
+/// the config's own slot list.
+#[cfg(test)]
+pub(crate) fn slots_in_dispatch_order() -> impl Iterator<Item = KeySlot> {
+    DISPATCH.iter().filter_map(|step| match step {
+        Step::Slot(slot) => Some(*slot),
+        Step::Builtin(_) => None,
+    })
+}
+
+/// The action one slot performs.
+///
+/// Total over the slots, so a gesture bound to a slot (`hotkeys.toml` `[action_clicks]`) and a key
+/// bound to it resolve to the same action through the same table. Split Order splits into a fixed
+/// three, as Moonbot does; Split Order X into the configured count, which is why the config comes
+/// along. Both split slots resolve to the SAME action, which `pre_dispatch` offers to the hovered
+/// order before any market-level split.
+pub fn action_of(slot: KeySlot, hk: &HotkeysConfig) -> HotkeyAction {
     use HotkeyAction as A;
-    let p = |raw: &str| pressed(raw, event);
-
-    // Drawing-layer bindings take precedence over built-ins and trading bindings.
-    if p(&hk.draw_hline) {
-        return Some(A::FigTool(FigureTool::HLine));
-    }
-    if p(&hk.draw_segment) {
-        return Some(A::FigTool(FigureTool::Segment));
-    }
-    if p(&hk.draw_triangle) {
-        return Some(A::FigTool(FigureTool::Triangle));
-    }
-    if p(&hk.draw_channel) {
-        return Some(A::FigTool(FigureTool::Channel));
-    }
-    if p(&hk.switch_figure) {
-        return Some(A::SwitchFigure);
-    }
-    if p(&hk.fig_delete) {
-        return Some(A::FigDelete);
-    }
-    if p(&hk.fig_alert) {
-        return Some(A::FigAlert);
-    }
-    if p(&hk.fig_undo) {
-        return Some(A::FigUndo);
-    }
-    // Shift-only Escape closes all Main stacks; the next branch matches modifier-free Escape.
-    if event.key == "escape"
-        && event.modifiers.shift
-        && !event.modifiers.control
-        && !event.modifiers.alt
-        && !event.modifiers.platform
-    {
-        return Some(A::CloseAllCharts);
-    }
-    if event.key == "escape" && event.modifiers == Modifiers::default() {
-        return Some(A::CloseActiveChart);
-    }
-    // Remaining built-in, non-configurable bindings.
-    if p("ctrl-shift-f10") {
-        return Some(A::ResetWindows);
-    }
-    if (event.key == "tab" || event.key == "delete") && event.modifiers == Modifiers::default() {
-        return Some(A::CancelHoveredOrder);
-    }
-
-    // Window-local Y-scale bindings.
-    if p(&hk.scale_plus) {
-        return Some(A::ScalePlus);
-    }
-    if p(&hk.scale_minus) {
-        return Some(A::ScaleMinus);
-    }
-    // Reading the chart's own pixels belongs to the same window-local cluster as its scale, and
-    // deliberately sits ABOVE the preset arrays: those are user-editable and a Moonbot import can
-    // move one onto any key at all.
-    if p(&hk.chart_shot) {
-        return Some(A::ChartShot);
-    }
-
-    // Order-size and fixed-sell presets.
-    if let Some(i) = hk.order_size.iter().position(|r| p(r)) {
-        return Some(A::OrderSize(i));
-    }
-    if let Some(i) = hk.sell_preset.iter().position(|r| p(r)) {
-        return Some(A::SellPreset(i));
-    }
-
-    // Order actions for the active chart's market.
-    if p(&hk.cancel_buy) {
-        return Some(A::CancelBuy);
-    }
-    if p(&hk.cancel_all_buys) {
-        return Some(A::CancelAllBuys);
-    }
-    if p(&hk.panic_sell) {
-        return Some(A::PanicSell);
-    }
-    if p(&hk.panic_sell_one) {
-        return Some(A::PanicSellOne);
-    }
-    if p(&hk.join_sells) {
-        return Some(A::JoinSells);
-    }
-    // Split Order splits into a fixed three, as Moonbot does; Split Order X into the configured
-    // count. Repeats of a held key are dropped for both by `pre_dispatch`.
-    if p(&hk.split_order) {
-        return Some(A::SplitOrder {
+    match slot {
+        KeySlot::OrderSize(i) => A::OrderSize(i),
+        KeySlot::SellPreset(i) => A::SellPreset(i),
+        KeySlot::ManualStrategy(i) => A::ManualStrategy(i),
+        KeySlot::CancelBuy => A::CancelBuy,
+        KeySlot::PanicSell => A::PanicSell,
+        KeySlot::PanicSellOne => A::PanicSellOne,
+        KeySlot::CancelAllBuys => A::CancelAllBuys,
+        KeySlot::JoinSells => A::JoinSells,
+        KeySlot::SwitchCharts => A::SwitchCharts,
+        KeySlot::NewLong => A::NewLong,
+        KeySlot::NewShort => A::NewShort,
+        KeySlot::SplitOrder => A::SplitOrder {
             parts: SPLIT_ORDER_PARTS,
-        });
-    }
-    if p(&hk.split_order_x) {
-        return Some(A::SplitOrder {
+        },
+        KeySlot::SplitOrderX => A::SplitOrder {
             parts: hk.split_n_parts(),
-        });
-    }
-    if p(&hk.sells_to_rect) {
-        return Some(A::SellsToRect);
-    }
-    if p(&hk.new_long) {
-        return Some(A::NewLong);
-    }
-    if p(&hk.new_short) {
-        return Some(A::NewShort);
-    }
-    if p(&hk.shift_buy_up) {
-        return Some(A::ShiftOrder {
+        },
+        KeySlot::SellsToRect => A::SellsToRect,
+        KeySlot::ShiftBuyUp => A::ShiftOrder {
             sell: false,
             up: true,
-        });
-    }
-    if p(&hk.shift_buy_down) {
-        return Some(A::ShiftOrder {
+        },
+        KeySlot::ShiftBuyDown => A::ShiftOrder {
             sell: false,
             up: false,
-        });
-    }
-    if p(&hk.shift_sell_up) {
-        return Some(A::ShiftOrder {
+        },
+        KeySlot::ShiftSellUp => A::ShiftOrder {
             sell: true,
             up: true,
-        });
-    }
-    if p(&hk.shift_sell_down) {
-        return Some(A::ShiftOrder {
+        },
+        KeySlot::ShiftSellDown => A::ShiftOrder {
             sell: true,
             up: false,
-        });
+        },
+        KeySlot::ScalePlus => A::ScalePlus,
+        KeySlot::ScaleMinus => A::ScaleMinus,
+        KeySlot::SwitchFigure => A::SwitchFigure,
+        KeySlot::ChartShot => A::ChartShot,
+        KeySlot::DrawHline => A::FigTool(FigureTool::HLine),
+        KeySlot::DrawSegment => A::FigTool(FigureTool::Segment),
+        KeySlot::DrawTriangle => A::FigTool(FigureTool::Triangle),
+        KeySlot::DrawChannel => A::FigTool(FigureTool::Channel),
+        KeySlot::FigDelete => A::FigDelete,
+        KeySlot::FigAlert => A::FigAlert,
+        KeySlot::FigUndo => A::FigUndo,
     }
-    if p(&hk.switch_charts) {
-        return Some(A::SwitchCharts);
-    }
-
-    if let Some(i) = hk.manual_strategy.iter().position(|r| p(r)) {
-        return Some(A::ManualStrategy(i));
-    }
-    None
 }
 
 /// Rewrite a recorded keystroke onto the physical key, so the settings file is layout-independent.

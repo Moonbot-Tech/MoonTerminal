@@ -1,15 +1,16 @@
 //! Who else answers this binding, which of them fires, and which therefore never does.
 //!
-//! The module is a transcription of two orders that live elsewhere, and it is worth saying why it
-//! is a transcription rather than a rule of its own. The first version guessed: it assumed the
-//! built-in keys sat below every configurable slot. That is true of eight of them and false of the
-//! other thirty, so the page told traders that Panic Sell on Escape would take Escape away, when
-//! Panic Sell on Escape in fact never fires at all. A caption that is confidently backwards is
-//! worse than no caption, so both orders below are read off the dispatchers and pinned by tests
-//! that read those dispatchers' own source.
+//! The module reads two orders that live elsewhere, and it is worth saying why it reads them
+//! rather than keeping a rule of its own. The first version guessed: it assumed the built-in keys
+//! sat below every configurable slot. That is true of eight of them and false of the other thirty,
+//! so the page told traders that Panic Sell on Escape would take Escape away, when Panic Sell on
+//! Escape in fact never fires at all. A caption that is confidently backwards is worse than no
+//! caption. The keyboard order is now the dispatcher's own list; the mouse order is still a
+//! transcription, pinned by a test that reads the handlers' source.
 //!
-//! - **Keyboard.** [`RESOLVE_ORDER`] is `hotkeys::resolve_binding`'s chain of `if`s, built-in
-//!   branches included, in its order. It returns on the first match, so the first holder of a
+//! - **Keyboard.** `hotkeys::DISPATCH` is the list `resolve_binding` walks, built-ins included, and
+//!   this module reads it directly — it used to be transcribed here and pinned by a test that read
+//!   the dispatcher's source. The dispatcher returns on the first match, so the first holder of a
 //!   keystroke fires and every later holder is dead — whatever either of them acts on. That is why
 //!   the keyboard half needs no scope reasoning at all.
 //! - **Mouse.** Each button's handler in `panels::chart::render_input` offers a press to its layers
@@ -36,7 +37,7 @@ use moon_core::config::{
 };
 use rust_i18n::t;
 
-use crate::hotkeys::{BindingId, binding_id};
+use crate::hotkeys::{BindingId, Builtin, DISPATCH, HotkeyAction, Step, binding_id};
 
 use super::pull_gestures::{GestureTarget, target_label};
 use super::registry;
@@ -56,90 +57,6 @@ pub(super) struct Clash {
     pub severity: Severity,
     /// Already localized — the row only has to print it.
     pub text: String,
-}
-
-/// One step of `hotkeys::resolve_binding`, in the order that function tests them.
-///
-/// Transcribed, not invented. `resolve_binding` returns on its first match, so this order alone
-/// decides which holder of a keystroke is alive; `clash::tests` reads that function's source and
-/// fails if the two ever disagree.
-enum Step {
-    Slot(KeySlot),
-    /// A binding the user cannot edit: the keystrokes it answers, and the locale key naming it.
-    Builtin(&'static [&'static str], &'static str),
-}
-
-const RESOLVE_ORDER: &[Step] = &[
-    // The drawing layer is tested FIRST, which is the whole reason these eight can take a built-in
-    // key away and the thirty below them cannot.
-    Step::Slot(KeySlot::DrawHline),
-    Step::Slot(KeySlot::DrawSegment),
-    Step::Slot(KeySlot::DrawTriangle),
-    Step::Slot(KeySlot::DrawChannel),
-    Step::Slot(KeySlot::SwitchFigure),
-    Step::Slot(KeySlot::FigDelete),
-    Step::Slot(KeySlot::FigAlert),
-    Step::Slot(KeySlot::FigUndo),
-    // The built-ins sit HERE: below the figure slots, above everything else.
-    Step::Builtin(&["shift-escape"], "hotkeys.clash.builtin.close_all"),
-    Step::Builtin(&["escape"], "hotkeys.clash.builtin.esc_close"),
-    Step::Builtin(&["ctrl-shift-f10"], "hotkeys.clash.builtin.reset_windows"),
-    Step::Builtin(&["tab", "delete"], "hotkeys.clash.builtin.cancel_hover"),
-    Step::Slot(KeySlot::ScalePlus),
-    Step::Slot(KeySlot::ScaleMinus),
-    Step::Slot(KeySlot::ChartShot),
-    Step::Slot(KeySlot::OrderSize(0)),
-    Step::Slot(KeySlot::OrderSize(1)),
-    Step::Slot(KeySlot::OrderSize(2)),
-    Step::Slot(KeySlot::OrderSize(3)),
-    Step::Slot(KeySlot::OrderSize(4)),
-    Step::Slot(KeySlot::OrderSize(5)),
-    Step::Slot(KeySlot::SellPreset(0)),
-    Step::Slot(KeySlot::SellPreset(1)),
-    Step::Slot(KeySlot::SellPreset(2)),
-    Step::Slot(KeySlot::SellPreset(3)),
-    Step::Slot(KeySlot::SellPreset(4)),
-    Step::Slot(KeySlot::SellPreset(5)),
-    Step::Slot(KeySlot::CancelBuy),
-    Step::Slot(KeySlot::CancelAllBuys),
-    Step::Slot(KeySlot::PanicSell),
-    Step::Slot(KeySlot::PanicSellOne),
-    Step::Slot(KeySlot::JoinSells),
-    Step::Slot(KeySlot::SplitOrder),
-    Step::Slot(KeySlot::SplitOrderX),
-    Step::Slot(KeySlot::SellsToRect),
-    Step::Slot(KeySlot::NewLong),
-    Step::Slot(KeySlot::NewShort),
-    Step::Slot(KeySlot::ShiftBuyUp),
-    Step::Slot(KeySlot::ShiftBuyDown),
-    Step::Slot(KeySlot::ShiftSellUp),
-    Step::Slot(KeySlot::ShiftSellDown),
-    Step::Slot(KeySlot::SwitchCharts),
-    Step::Slot(KeySlot::ManualStrategy(0)),
-    Step::Slot(KeySlot::ManualStrategy(1)),
-    Step::Slot(KeySlot::ManualStrategy(2)),
-    Step::Slot(KeySlot::ManualStrategy(3)),
-    Step::Slot(KeySlot::ManualStrategy(4)),
-    Step::Slot(KeySlot::ManualStrategy(5)),
-    Step::Slot(KeySlot::ManualStrategy(6)),
-    Step::Slot(KeySlot::ManualStrategy(7)),
-    Step::Slot(KeySlot::ManualStrategy(8)),
-    Step::Slot(KeySlot::ManualStrategy(9)),
-];
-
-/// Every slot, in the order the dispatcher tests it.
-///
-/// A slot that is in `KeySlot` but not in this order gets no clash detection; `clash::tests` holds
-/// the two to the same set.
-#[cfg(test)]
-pub(super) fn slots_in_resolve_order() -> Vec<KeySlot> {
-    RESOLVE_ORDER
-        .iter()
-        .filter_map(|step| match step {
-            Step::Slot(slot) => Some(*slot),
-            Step::Builtin(..) => None,
-        })
-        .collect()
 }
 
 /// A layer of one mouse button's handler: a row of this page, or something the chart does that has
@@ -256,21 +173,22 @@ fn ownerless_layer(gesture: MouseGestureBinding, layer: Layer) -> bool {
 #[derive(Clone, Copy)]
 enum Holder {
     Slot(KeySlot),
-    Builtin(&'static str),
+    Builtin(Builtin),
 }
 
 impl Holder {
     fn label(self) -> String {
         match self {
             Self::Slot(slot) => registry::key_title(slot),
-            Self::Builtin(name) => t!(name).to_string(),
+            Self::Builtin(builtin) => t!(builtin.name).to_string(),
         }
     }
 }
 
 /// Who holds what, built once per group render.
 pub(super) struct Clashes {
-    /// Keystroke -> its holders in [`RESOLVE_ORDER`]; the first of them is the one that fires.
+    /// Keystroke -> its holders in `hotkeys::DISPATCH` order; the first of them is the one that
+    /// fires.
     keys: HashMap<BindingId, Vec<Holder>>,
     /// Gesture -> the rows holding it. A move row whose kind is `None` is left out: the dispatcher
     /// steps past such a row rather than letting it silence the next one.
@@ -280,17 +198,17 @@ pub(super) struct Clashes {
 impl Clashes {
     pub(super) fn build(hotkeys: &HotkeysConfig) -> Self {
         let mut keys: HashMap<BindingId, Vec<Holder>> = HashMap::new();
-        for step in RESOLVE_ORDER {
+        for step in DISPATCH {
             match step {
                 Step::Slot(slot) => {
                     if let Some(id) = binding_id(hotkeys.key(*slot)) {
                         keys.entry(id).or_default().push(Holder::Slot(*slot));
                     }
                 }
-                Step::Builtin(strokes, name) => {
-                    for raw in *strokes {
+                Step::Builtin(builtin) => {
+                    for raw in builtin.strokes {
                         if let Some(id) = binding_id(raw) {
-                            keys.entry(id).or_default().push(Holder::Builtin(name));
+                            keys.entry(id).or_default().push(Holder::Builtin(*builtin));
                         }
                     }
                 }
@@ -605,11 +523,16 @@ fn layer_holders(
 /// exemption is for THAT pair only: the same slot on Escape or Ctrl+Shift+F10 has no such
 /// fall-through and really does end them.
 fn documented_fallback(slot: KeySlot, other: Holder) -> bool {
+    // Matched on the ACTION, not on the built-in's locale key: the key is a label, and renaming it
+    // must not turn the one documented fall-through into a reported shadow.
     matches!(
         (slot, other),
         (
             KeySlot::FigDelete,
-            Holder::Builtin("hotkeys.clash.builtin.cancel_hover")
+            Holder::Builtin(Builtin {
+                action: HotkeyAction::CancelHoveredOrder,
+                ..
+            })
         )
     )
 }

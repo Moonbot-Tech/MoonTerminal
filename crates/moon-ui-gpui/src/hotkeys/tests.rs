@@ -1,6 +1,9 @@
 // Do not use `super::*`: the parent re-exports GPUI's `test` attribute macro through its imports,
 // which would shadow the built-in `#[test]`.
 use super::layout::us_letter;
+use gpui::Keystroke;
+use moon_core::config::HotkeysConfig;
+
 use super::{binding_id, same_binding};
 
 /// Pins what the layout translation must NOT touch.
@@ -212,4 +215,54 @@ fn different_presses_and_unusable_strings_are_not_one_binding() {
     assert!(!same_binding("   ", "ctrl-z"));
     assert!(binding_id("ctrl-a-b").is_none(), "the key must come last");
     assert!(binding_id("").is_none());
+}
+
+/// The built-ins resolve through the same exact-modifier match as every slot, so the list can
+/// carry them as keystroke strings rather than as hand-written branches.
+///
+/// Plausible breakage: a built-in spelled so that a modified press satisfies it — Ctrl+Escape
+/// closing the chart, or Shift+Tab cancelling an order — which the old `if` chain excluded by
+/// testing the modifiers one by one.
+#[test]
+fn the_builtins_match_their_press_exactly() {
+    use super::{HotkeyAction as A, resolve_binding};
+    let hk = HotkeysConfig::default();
+    let at = |raw: &str| resolve_binding(&Keystroke::parse(raw).unwrap(), &hk);
+    assert_eq!(at("shift-escape"), Some(A::CloseAllCharts));
+    assert_eq!(at("escape"), Some(A::CloseActiveChart));
+    assert_eq!(at("ctrl-escape"), None, "a modified Escape is nobody's");
+    assert_eq!(at("ctrl-shift-f10"), Some(A::ResetWindows));
+    assert_eq!(at("tab"), Some(A::CancelHoveredOrder));
+    assert_eq!(
+        at("delete"),
+        Some(A::FigDelete),
+        "the figure slot ships on Delete, above the cancel"
+    );
+    assert_eq!(at("shift-tab"), None);
+}
+
+/// A slot's key and its action are one table: every slot in the dispatch order resolves, when its
+/// own key is pressed, to `action_of` that slot — which is what lets a mouse gesture bound to the
+/// slot execute the same action by the same name.
+#[test]
+fn every_slot_resolves_to_its_own_action() {
+    use super::{action_of, resolve_binding, slots_in_dispatch_order};
+    let mut hk = HotkeysConfig::default();
+    // A distinct, otherwise-unbound key per slot, so the first match is the slot itself.
+    for (n, slot) in slots_in_dispatch_order().enumerate() {
+        hk.set_key(slot, format!("ctrl-alt-shift-f{}", n % 12 + 1));
+    }
+    // With twelve function keys and forty-eight slots the keys repeat; give each slot its own turn
+    // by clearing the others first.
+    for slot in slots_in_dispatch_order() {
+        let mut one = hk.clone();
+        for other in slots_in_dispatch_order() {
+            if other != slot {
+                one.set_key(other, String::new());
+            }
+        }
+        let raw = one.key(slot).to_string();
+        let got = resolve_binding(&Keystroke::parse(&raw).unwrap(), &one);
+        assert_eq!(got, Some(action_of(slot, &one)), "{slot:?} on {raw}");
+    }
 }

@@ -5,7 +5,8 @@ use moon_core::config::{
 };
 
 use super::super::registry;
-use super::{Clashes, Severity, slots_in_resolve_order};
+use super::{Clashes, Severity};
+use crate::hotkeys::slots_in_dispatch_order;
 
 /// A configuration with nothing bound, so each test states its own collision and no other.
 fn quiet() -> HotkeysConfig {
@@ -20,11 +21,11 @@ fn quiet() -> HotkeysConfig {
     hotkeys
 }
 
-/// Every slot the config holds is somewhere in the transcribed order — a slot missing from it
-/// would get no clash detection and no caption, silently.
+/// Every slot the config holds is somewhere in the dispatch order — a slot missing from it would
+/// get no key at all, and no caption to say so.
 #[test]
-fn every_slot_is_in_the_resolve_order_once() {
-    let ordered = slots_in_resolve_order();
+fn every_slot_is_in_the_dispatch_order_once() {
+    let ordered: Vec<KeySlot> = slots_in_dispatch_order().collect();
     let distinct: HashSet<KeySlot> = ordered.iter().copied().collect();
     assert_eq!(
         distinct.len(),
@@ -33,53 +34,6 @@ fn every_slot_is_in_the_resolve_order_once() {
     );
     let all: HashSet<KeySlot> = KeySlot::all().into_iter().collect();
     assert_eq!(distinct, all);
-}
-
-/// The transcribed order must still match the dispatcher's own source.
-///
-/// [`super::RESOLVE_ORDER`] is the only thing that says which holder of a key survives, and it is a
-/// COPY of `hotkeys::resolve_binding`. A copy drifts, and when this one drifted the page told
-/// traders a working binding was dead. So it is checked by reading the original: every slot field
-/// in the order that function tests it, with the built-in block in its real place among them.
-///
-/// Plausible breakage: moving one branch in `resolve_binding` — an edit that looks like tidying —
-/// which silently inverts every caption on the keys either side of the move.
-#[test]
-fn the_transcribed_order_still_matches_the_dispatcher() {
-    let source = include_str!("../../../hotkeys.rs");
-    let body = source
-        .split("fn resolve_binding(")
-        .nth(1)
-        .expect("resolve_binding")
-        .split("\npub fn ")
-        .next()
-        .expect("its body");
-
-    let mut at = 0usize;
-    let mut previous = String::new();
-    for step in super::RESOLVE_ORDER {
-        let needle = match step {
-            // A preset family is tested once, as an array, for all of its indices — and the stem
-            // IS the field name, which `moon_core`'s own tests pin to the file.
-            super::Step::Slot(slot) => format!("hk.{}", slot.stem()),
-            // A built-in is not always spelled as a keystroke in the source: the two Escape
-            // branches are told apart by their MODIFIERS, so each is matched on what actually
-            // distinguishes it there.
-            super::Step::Builtin(strokes, _) => match strokes[0] {
-                "shift-escape" => "event.modifiers.shift".to_string(),
-                "escape" => "Modifiers::default()".to_string(),
-                other => format!("\"{other}\""),
-            },
-        };
-        if needle == previous {
-            continue;
-        }
-        let found = body[at..].find(&needle).unwrap_or_else(|| {
-            panic!("{needle} no longer follows the step before it — the order drifted")
-        });
-        at += found + needle.len();
-        previous = needle;
-    }
 }
 
 /// Two keyboard slots on one key: the one the dispatcher reaches first fires, the other does not,

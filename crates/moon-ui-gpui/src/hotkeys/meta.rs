@@ -19,8 +19,8 @@
 //! cannot sit below its own key type — which is why it spent its first months inside the page.
 //!
 //! It computes no conflicts, and it turned out not to be what the conflict captions needed:
-//! `settings::hotkeys::clash` answers them from the dispatchers' own ORDER — `RESOLVE_ORDER` for the
-//! keys, the per-button layer lists for the mouse — because the first version, which reasoned about
+//! `settings::hotkeys::clash` answers them from the dispatchers' own ORDER — `hotkeys::DISPATCH` for
+//! the keys, the per-button layer lists for the mouse — because the first version, which reasoned about
 //! where each binding acts, was backwards on thirty slots out of thirty-eight. So [`Scope`] is a
 //! row's label and not a rule, and [`Scope::intersects`] has no caller outside its own tests.
 
