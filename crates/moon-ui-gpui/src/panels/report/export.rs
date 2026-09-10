@@ -269,30 +269,10 @@ pub(super) fn field_text(
     display_zone: Tz,
 ) -> String {
     if date_col(col) {
-        // A replicated column is stored on the CORE's own clock, so it reaches true UTC through
-        // the axis before any zone is applied -- exactly what `columns::cell` does for the grid.
-        // `last_update_at` is written by this terminal, is genuine UTC already, and therefore
-        // takes the selected zone with no correction. Export must agree with the grid exactly, or
-        // the same trade reads as two different times depending on where you looked at it.
-        let replicated = col != "last_update_at";
-        let zone = if replicated {
-            axis.zone()
-        } else {
-            display_zone
-        };
-        let project = |secs: i64| {
-            let secs = if replicated {
-                axis.to_utc(secs, core_uid)
-            } else {
-                secs
-            };
-            moon_core::util::display_time::format_minute(secs, zone)
-        };
-        return match v {
-            Value::Integer(i) => project(*i),
-            Value::Real(r) => project(*r as i64),
-            _ => String::new(),
-        };
+        // Share the grid's missing-close sentinel and clock projection with CSV, XLSX, and TSV.
+        return columns::date_cell_instant(col, v, axis, core_uid, display_zone)
+            .map(|(secs, zone)| moon_core::util::display_time::format_minute(secs, zone))
+            .unwrap_or_default();
     }
     match v {
         Value::Null => String::new(),

@@ -13,6 +13,66 @@ use moon_ui::MoonPalette;
 use rusqlite::types::Value;
 use std::collections::{HashMap, HashSet};
 
+/// Missing closes stay blank before offset conversion, while real closes keep their local time.
+#[test]
+fn open_position_close_is_blank_in_grid_and_exports_before_clock_projection() {
+    for offset_secs in [-10_800, 10_800] {
+        let axis = ReportAxis::from_measured(
+            HashMap::from([(
+                7,
+                vec![moon_core::db::report_axis::OffsetSegment {
+                    from_utc: 0,
+                    offset_secs,
+                }],
+            )]),
+            Tz::Europe__Warsaw,
+        );
+        for value in [
+            Value::Null,
+            Value::Integer(0),
+            Value::Real(0.0),
+            Value::Integer(-1),
+        ] {
+            assert_eq!(
+                cell(
+                    "closedate",
+                    &value,
+                    None,
+                    MoonPalette::default(),
+                    &axis,
+                    7,
+                    Tz::UTC
+                )
+                .0,
+                ""
+            );
+            assert_eq!(
+                crate::panels::report::export::field_text("closedate", &value, &axis, 7, Tz::UTC),
+                ""
+            );
+        }
+        // 2026-09-10 12:00 UTC is 14:00 in Warsaw, regardless of the source core's clock.
+        let closed = Value::Integer(1_789_041_600 + i64::from(offset_secs));
+        assert_eq!(
+            cell(
+                "closedate",
+                &closed,
+                None,
+                MoonPalette::default(),
+                &axis,
+                7,
+                Tz::UTC
+            )
+            .0,
+            "2026-09-10 14:00"
+        );
+        assert_eq!(
+            crate::panels::report::export::field_text("closedate", &closed, &axis, 7, Tz::UTC),
+            "2026-09-10 14:00"
+        );
+    }
+}
+
 // REPAIRED at the PROVE task, by removal: `cell_tooltip` -- the free-text-column-gated tooltip
 // this test probed (`valuation_source_tooltip_keeps_complete_provenance`) -- no longer exists.
 // The fix barrier deliberately superseded it: `report_data_cell`'s own docstring now states

@@ -41,6 +41,7 @@ fn paste_here_item(
                 // Reported, like every other paste door. Discarding the count here was how the one
                 // gesture that most looks like it did something - right-click, "Paste here" - ended
                 // up being the only one that said nothing.
+                this.retire_replaced_cut(cx);
                 let moving = this.cut.is_some();
                 let landed = this.paste_into(core, target, cx);
                 let note = match (landed, moving) {
@@ -98,6 +99,7 @@ fn move_to_folder_item(
 }
 
 impl StrategiesView {
+    /// Open the menu with paste availability resolved from the current text and destination schema.
     pub(super) fn open_menu(
         &mut self,
         menu: ContextMenu,
@@ -107,16 +109,7 @@ impl StrategiesView {
         self.op = None;
         self.op_input = None;
         let pos = menu.pos;
-        // Asked ONCE, here, and handed down: `paste_into` accepts the system clipboard as text too
-        // (`ops::clip_from_text`), so "can I paste?" is not answerable from the internal clipboard
-        // alone. Reading the OS clipboard per menu ITEM would ask the platform the same question
-        // four times for one right-click.
-        let paste_ready = self.clipboard.is_some()
-            || cx
-                .read_from_clipboard()
-                .and_then(|item| item.text())
-                .and_then(|text| ops::clip_from_text(&text))
-                .is_some();
+        let paste_ready = self.clipboard_for_core(menu.core, cx).is_some();
         let items = self.context_menu_items(&menu, paste_ready, cx);
         // Fitted, not fixed: the longest entry did not fit the fixed 190 px level, and a row that
         // overruns its level no longer lays out like the rows that fit it.
