@@ -15,12 +15,25 @@ use super::SettingsView;
 use crate::{Backend, design};
 use moon_core::config::Secret;
 
+mod access;
+
 /// Password-field width in unscaled pixels, matching the Security tab.
 const TOKEN_FIELD_W: f32 = 240.0;
 
 /// Per-window editor state for the Telegram tab.
 pub(super) struct TelegramEd {
     token: Entity<MoonInputState>,
+    /// One expanded chat keeps long client lists compact.
+    active_chat: Option<i64>,
+    /// Ownership transfer requires a second explicit click within the selected chat.
+    pending_owner: Option<i64>,
+    name: Entity<MoonInputState>,
+    search: Entity<MoonInputState>,
+    /// History candidates are independent of the draft grants so deselection is reversible.
+    history_cores: Vec<(u64, String)>,
+    history_loaded: bool,
+    history_loading: bool,
+    history_failed: bool,
 }
 
 /// Build masked token input bound to the Settings draft.
@@ -62,7 +75,45 @@ pub(super) fn build(
         }
     })
     .detach();
-    TelegramEd { token }
+    let name = cx.new(|cx| MoonInputState::new(window, cx));
+    cx.subscribe(&name, |this, emitter, ev: &MoonInputEvent, cx| {
+        if matches!(ev, MoonInputEvent::Change) {
+            let Some(chat) = this.telegram.active_chat else {
+                return;
+            };
+            let value = emitter.read(cx).value().to_string();
+            this.backend.update(cx, |b, bcx| {
+                if let Some(draft) = b.preview.as_mut()
+                    && draft.telegram.authorized_chat_ids.contains(&chat)
+                {
+                    let profile = draft.telegram.chat_profile_mut(chat);
+                    if profile.name != value {
+                        profile.name = value;
+                        bcx.notify();
+                    }
+                }
+            });
+        }
+    })
+    .detach();
+    let search = cx.new(|cx| MoonInputState::new(window, cx));
+    cx.subscribe(&search, |_, _, ev: &MoonInputEvent, cx| {
+        if matches!(ev, MoonInputEvent::Change) {
+            cx.notify();
+        }
+    })
+    .detach();
+    TelegramEd {
+        token,
+        active_chat: None,
+        pending_owner: None,
+        name,
+        search,
+        history_cores: Vec::new(),
+        history_loaded: false,
+        history_loading: false,
+        history_failed: false,
+    }
 }
 
 impl SettingsView {
@@ -264,6 +315,7 @@ impl SettingsView {
                         )
                     }),
             )
+            .child(self.telegram_chat_access(cx))
             .child(
                 MoonGroupBox::new("telegram-mini-section")
                     .title(t!("telegram.section_mini_app").to_string())

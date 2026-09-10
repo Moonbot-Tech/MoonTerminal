@@ -35,7 +35,22 @@ selected time zone, including daylight-saving changes. Paging and changing the v
 resolved UTC bounds; A new reply-keyboard request resolves the period again. Changing the terminal's time
 zone changes the report's display and daily grouping on the next request.
 
-Reports cover all bots retained in local history, including bots no longer configured. They
+Settings -> Telegram -> Chats and core access assigns one owner and any number of read-only
+viewers. The first paired chat is the owner, including when upgrading an older flat pairing list;
+other chats start with no assigned cores. The owner can read all bots retained in local history,
+including bots no longer configured. Viewers can read only explicitly assigned cores. Their totals,
+exchange groups, daily views and old callback buttons all use those same saved permissions.
+
+Expand a chat to give it a local name, search cores by number or name, and select its available
+cores. Archived cores are loaded from local history and can also be assigned. Selecting all current
+cores captures that list: cores added later are not automatically shared. Press Save to apply names,
+roles, assignments or an individual unpairing. Ownership transfer requires confirmation and leaves
+the previous owner as a viewer with no assigned cores. Reset pairing revokes every chat and role.
+Changing saved permissions cancels pending deliveries through the previous service generation;
+already delivered Telegram messages are not recalled. Existing Telegram functionality remains
+reporting: assigning the owner role does not add trading or core-control commands.
+
+Reports
 include closed real trades and exclude emulator and deleted trades. Offline bots' local history
 may be incomplete. The final Total row covers the whole period, including groups on other pages.
 

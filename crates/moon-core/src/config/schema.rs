@@ -245,6 +245,12 @@ pub struct TelegramConfig {
     /// Chat ids allowed to issue commands after a successful `/pair`.
     #[serde(default)]
     pub authorized_chat_ids: Vec<i64>,
+    /// Sole owner. Legacy configurations resolve to their first paired chat.
+    #[serde(default)]
+    pub owner_chat_id: Option<i64>,
+    /// Named chat profiles; viewers receive only explicitly assigned stable core uids.
+    #[serde(default)]
+    pub chat_access: Vec<super::telegram_access::TelegramChatAccess>,
     /// Whether the Mini App / tunnel path is requested. The process itself starts in a later phase.
     #[serde(default)]
     pub mini_app_enabled: bool,

@@ -133,9 +133,9 @@ impl Backend {
     pub(crate) fn reconcile_telegram(&mut self, before: &TelegramConfig) {
         let saved = &self.config.telegram;
         self.telegram.remember_menu_cleanup(before, saved);
-        if before.token.expose() != saved.token.expose()
-            || before.authorized_chat_ids != saved.authorized_chat_ids
-        {
+        if before.token.expose() != saved.token.expose() || !before.same_chat_permissions(saved) {
+            // Cancel the old API's liveness before retiring it: a queued report or a pending
+            // navigation send must not continue with grants that have just been revoked.
             self.telegram.restart();
             if self.telegram.retiring.is_none() {
                 self.telegram.start_saved(saved);
@@ -162,6 +162,8 @@ impl Backend {
     pub(crate) fn reset_telegram_pairing(&mut self) {
         let mut candidate = self.config.clone();
         candidate.telegram.authorized_chat_ids.clear();
+        candidate.telegram.owner_chat_id = None;
+        candidate.telegram.chat_access.clear();
         if candidate.save_telegram().is_err() {
             self.telegram.status = TelegramStatus::Unavailable;
             return;
@@ -171,6 +173,8 @@ impl Backend {
         self.config = candidate;
         if let Some(preview) = self.preview.as_mut() {
             preview.telegram.authorized_chat_ids.clear();
+            preview.telegram.owner_chat_id = None;
+            preview.telegram.chat_access.clear();
         }
         self.telegram.restart();
         if self.telegram.retiring.is_none() {
@@ -217,15 +221,17 @@ impl Backend {
                 Work::MiniStatus(status) => self.telegram.mini_status = status,
                 Work::Pair { chat_id, reply } => {
                     let mut candidate = self.config.clone();
-                    if !candidate.telegram.authorized_chat_ids.contains(&chat_id) {
+                    let newly_paired = !candidate.telegram.authorized_chat_ids.contains(&chat_id);
+                    if newly_paired {
                         candidate.telegram.authorized_chat_ids.push(chat_id);
                     }
                     let saved = candidate.save_telegram().is_ok();
                     if saved {
                         self.config = candidate;
-                        if let Some(preview) = self.preview.as_mut() {
-                            preview.telegram.authorized_chat_ids =
-                                self.config.telegram.authorized_chat_ids.clone();
+                        if newly_paired && let Some(preview) = self.preview.as_mut() {
+                            if !preview.telegram.authorized_chat_ids.contains(&chat_id) {
+                                preview.telegram.authorized_chat_ids.push(chat_id);
+                            }
                         }
                         if let Some(service) = self.telegram.service.as_ref() {
                             self.telegram.configuration_pending |=
