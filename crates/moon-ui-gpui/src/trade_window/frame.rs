@@ -2,7 +2,7 @@
 //!
 //! Separate from `trade_replay::replay_window`, which decides what is FETCHED. Those two answer
 //! different questions and must not be confused. The fetch buys context generously and
-//! ASYMMETRICALLY - sixty minutes before the entry against twenty after the exit - because what
+//! ASYMMETRICALLY - six hours before the entry against two after the exit - because what
 //! the market did beforehand is worth more than what it did after. The VIEW cannot inherit that
 //! shape: an asymmetric window puts a short trade three quarters of the way to the right, so two
 //! trades of different lengths produce two differently composed pictures, which is precisely the

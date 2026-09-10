@@ -5,6 +5,7 @@ mod history;
 mod label_tests;
 mod read;
 mod refresh;
+mod replay;
 #[cfg(test)]
 mod tests;
 mod volume;

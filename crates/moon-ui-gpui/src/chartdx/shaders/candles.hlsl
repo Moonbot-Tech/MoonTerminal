@@ -226,6 +226,11 @@ VolumeBarOut volume_bars_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID
         // count - 1 instances. Built directly rather than as p0 + corner * sz, because its two
         // edges differ in height and a rectangle cannot express that.
         Candle cd1 = candles[iid + 1];
+        // A replay removes candles under its tick span. Never fill a hill across that gap.
+        float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs_tf_rel;
+        if (cd1.t_open > cd.t_open + tf_rel * 1.001) {
+            return vol_cull();
+        }
         float2 c1 = vol_center_px(cd1);
         float h1 = vol_height_px(cd1);
         float x = lerp(c0.x, c1.x, corner.x);

@@ -2,6 +2,35 @@
 
 use super::support::*;
 
+/// A missing candle interval must not become a filled volume trapezoid on any backend.
+#[test]
+fn volume_hills_never_bridge_missing_candle_intervals() {
+    for path in [
+        "chartdx/shaders/candles.hlsl",
+        "chartdx/shaders/chart_native.metal",
+        "chartdx/shaders/native_candles.wgsl",
+    ] {
+        let source = code_only(&read_src(path));
+        let body = braced_body(&source, "volume_bars_vertex(");
+        let guard = body
+            .find("cd1.t_open > cd.t_open + tf_rel * 1.001")
+            .expect("missing volume gap guard");
+        let interpolation = body
+            .find("float x =")
+            .or_else(|| body.find("let x ="))
+            .expect("hill interpolation");
+        assert!(
+            guard < interpolation,
+            "{path}: gap rejection must precede hill interpolation"
+        );
+        let guard_body = braced_body(&body[guard..], "cd1.t_open");
+        assert!(
+            guard_body.contains("return"),
+            "{path}: a detected gap must suppress the trapezoid"
+        );
+    }
+}
+
 /// `trade_history_hover.rs:profit_text` — dropping the `record.quote` half of the guard would
 /// print a profit amount with no resolved ticker, which is exactly the unlabeled figure this
 /// design refuses to show. `moon-ui-gpui` has no `[lib]`, so this invariant can only be read as

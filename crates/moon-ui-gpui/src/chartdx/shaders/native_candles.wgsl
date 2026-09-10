@@ -241,6 +241,11 @@ fn volume_bars_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) 
     }
 
     let cd1 = candles[iid + 1u];
+    // A replay removes candles under its tick span. Never fill a hill across that gap.
+    let tf_rel = select(cs.tf_rel, cd.tf_rel, cd.tf_rel > 0.0);
+    if cd1.t_open > cd.t_open + tf_rel * 1.001 {
+        return vol_cull();
+    }
     let c1 = vol_center_px(cd1);
     let h1 = vol_height_px(cd1);
     let x = mix(c0.x, c1.x, corner.x);

@@ -33,6 +33,8 @@ pub enum ReplayAddressError {
 /// satisfy a value nobody logs.
 #[derive(Clone)]
 pub struct ReplayAddress {
+    /// Shared source retained for background archive reads against this captured exchange identity.
+    pub(crate) history: MarketDataSource,
     /// The venue the core is connected to, as the exchange directory names it.
     pub venue: crate::venue::Venue,
     /// Kline-cache address shared by every core on this exchange.
@@ -313,6 +315,7 @@ impl MarketDataSource {
         // connected.
         let venue = crate::venue::venue(exchange.code).ok_or(ReplayAddressError::UnknownVenue)?;
         Ok(ReplayAddress {
+            history: self.clone(),
             venue,
             // The exact spelling the live path and the recorder already file rows under; a
             // divergence here would silently split the cache in two.

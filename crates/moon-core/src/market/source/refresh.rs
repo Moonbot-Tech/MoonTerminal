@@ -308,6 +308,7 @@ impl MarketDataSource {
         inner.core_venue = venues.clone();
     }
 
+    /// Replace live provider ownership while retaining replay archive gates for connected cores.
     pub fn set_provider_map(&self, core_provider: &HashMap<CoreId, CoreId>) {
         let mut inner = self.inner.write().expect("market source poisoned");
         inner.core_provider = core_provider.clone();
@@ -322,7 +323,10 @@ impl MarketDataSource {
         inner
             .provider_orderbook_kind
             .retain(|provider, _| active_providers.contains(provider));
-        inner.archive.retain_providers(&active_providers);
+        // Replays also read archives from connected cores that are not the elected live source.
+        // Keep the once-per-client gate until disconnect, not merely until a provider election.
+        let connected_cores = inner.clients.keys().copied().collect();
+        inner.archive.retain_providers(&connected_cores);
         inner.native_backfill.retain_providers(&active_providers);
     }
 
