@@ -805,6 +805,66 @@ pub fn pre_dispatch(
     }
 }
 
+/// Perform a slot's action for a press on a chart, exactly as a key press would.
+///
+/// The click half of a keyboard slot (`hotkeys.toml` `[action_clicks]`) resolves to the same
+/// [`HotkeyAction`] as the key, and it must take the same road: [`pre_dispatch`] first — the
+/// cursor-addressed policies, split on the hovered order, figure undo on the hovered chart — then
+/// the WINDOW's own dispatch, which is where the scale, the chart switch, the shot and the
+/// placement of a manual order are routed. Reached through the window's root view rather than by
+/// a second copy of that routing. Every window's root is `moon_ui::Root`, which carries the real
+/// view — a group window's [`Shell`], a detached chart window's [`DetachedChartHost`] — as an
+/// `AnyView`; that inner view is what is downcast, and each keeps its own `dispatch_hotkey`.
+///
+/// Called DEFERRED from the chart's mouse handler (`Window::defer`), never inline: the handler
+/// runs with the panel leased, and both `pre_dispatch` and the shell's routing reach for the
+/// hovered chart — which is that very panel — through `Entity::update`. Inline, the second lease
+/// would panic; deferred, the press is consumed at once and the action runs when the lease is
+/// released, still within the same event's turn.
+///
+/// Returns:
+///     Whether a window routed the action. `false` for a window whose root wraps neither host —
+///     the diagnostics debug window is the one that draws a chart, and it routes no key press
+///     either, so a click there answers exactly as a key does: nothing, with a warning.
+///
+/// `clicked` is the pane the press landed on. A group window's routing finds it on its own — the
+/// hovered chart is the clicked one — but a detached window's key routing acts on the WINDOW's
+/// market, which for a multi-coin window is the anchor or nothing; a click names its pane instead.
+pub fn dispatch_from_chart(
+    action: HotkeyAction,
+    clicked: Option<(CoreId, String)>,
+    backend: &Entity<Backend>,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    if pre_dispatch(action, false, backend, cx) {
+        return true;
+    }
+    // Not `Root::read`: that one panics on a window whose root is something else, and a warning
+    // is the right answer to a window nobody expected a chart in.
+    let inner = window
+        .root::<moon_ui::Root>()
+        .flatten()
+        .map(|root| root.read(cx).view().clone());
+    let routed = inner.and_then(|inner| match inner.downcast::<crate::shell::Shell>() {
+        Ok(shell) => {
+            Some(shell.update(cx, |shell, scx| shell.dispatch_hotkey(action, window, scx)))
+        }
+        Err(other) => other
+            .downcast::<crate::chart_tabs::DetachedChartHost>()
+            .ok()
+            .map(|host| {
+                host.update(cx, |host, hcx| {
+                    host.dispatch_hotkey_at(action, clicked, window, hcx)
+                })
+            }),
+    });
+    routed.unwrap_or_else(|| {
+        log::warn!("a chart click resolved to {action:?}, but its window has no hotkey routing");
+        false
+    })
+}
+
 /// Let Escape leave the Sells-to-zone mode before anything else acts on it.
 ///
 /// Matched on the RAW key rather than on a resolved action: the mode's own posture is Ctrl held

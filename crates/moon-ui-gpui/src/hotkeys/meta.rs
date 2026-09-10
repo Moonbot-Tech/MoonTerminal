@@ -155,6 +155,16 @@ pub enum Origin {
 }
 
 impl Origin {
+    /// The origin of a row that carries two slots: shared as soon as either half is — a row
+    /// whose key a paste overwrites is a row a paste overwrites, whatever its click half does.
+    pub fn join(self, other: Self) -> Self {
+        if self == Self::Shared || other == Self::Shared {
+            Self::Shared
+        } else {
+            Self::Local
+        }
+    }
+
     /// Short mark shown on the row.
     pub fn label(self) -> String {
         match self {
@@ -251,9 +261,14 @@ pub fn key_slot_meta(slot: KeySlot) -> SlotMeta {
 /// `settings::hotkeys::pull_gestures` reads them into this terminal's one layout, so a pull
 /// overwrites these rows exactly as it overwrites a key. Their surface is the trading surface: the
 /// book strip under "separate control zones" and the whole pane without it.
+///
+/// A key half acts wherever its key acts — it performs the same action through the same dispatch —
+/// and nothing writes it: Moonbot has no gesture for these, so a paste and a pull leave the table
+/// alone even where they overwrite the key beside it.
 pub fn gesture_slot_meta(slot: GestureSlot) -> SlotMeta {
     use GestureSlot as S;
     match slot {
+        S::ForKey(key) => meta(Origin::Local, key_slot_meta(key).scope),
         S::BuySet
         | S::ShortSet
         | S::PendingLong

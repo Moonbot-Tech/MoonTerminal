@@ -14,7 +14,7 @@ fn quiet() -> HotkeysConfig {
     for slot in KeySlot::all() {
         hotkeys.set_key(slot, String::new());
     }
-    for slot in GestureSlot::ALL {
+    for slot in GestureSlot::all() {
         hotkeys.set_gesture(slot, MouseGestureBinding::None);
     }
     hotkeys.same_hotkeys_for_move = false;
@@ -53,7 +53,7 @@ fn the_winner_and_the_loser_are_told_different_things() {
     let winner = clashes.key(&hotkeys, KeySlot::DrawHline).expect("winner");
     assert_eq!(winner.severity, Severity::Shares);
     assert!(
-        winner.text.contains("Takes this binding"),
+        winner.text.contains("takes this binding"),
         "{}",
         winner.text
     );
@@ -189,7 +189,7 @@ fn a_shared_placement_gesture_names_a_winner_and_a_loser() {
 /// The move rows are asked in PAIRS — buy, sell, buy2, sell2 — not in this page's row order, so a
 /// short row answers before a long row listed above it.
 ///
-/// Plausible breakage: ranking move rows by their position in `GestureSlot::ALL` would name
+/// Plausible breakage: ranking move rows by their position in `GestureSlot::all()` would name
 /// `SellMove2` the winner over `ShortBuyMove`, which is the reverse of what the dispatcher does.
 #[test]
 fn move_rows_rank_by_the_dispatchers_pairs_not_by_row_order() {
@@ -287,7 +287,7 @@ fn the_shipped_defaults_leave_nothing_dead() {
         .collect();
     assert!(dead.is_empty(), "a shipped key never fires: {dead:?}");
 
-    let dead_mice: Vec<String> = GestureSlot::ALL
+    let dead_mice: Vec<String> = GestureSlot::all()
         .into_iter()
         .filter(|slot| {
             clashes
@@ -399,7 +399,7 @@ fn a_lower_layer_is_told_it_loses_and_the_upper_one_that_it_takes() {
     assert_eq!(
         winner.text,
         rust_i18n::t!(
-            "hotkeys.clash.wins",
+            "hotkeys.clash.wins_gesture",
             rows = super::super::pull_gestures::target_label(
                 super::super::pull_gestures::GestureTarget::Gesture(GestureSlot::BuyMove)
             )
@@ -440,10 +440,50 @@ fn a_lower_layer_needing_the_same_object_is_taken_from() {
     assert_eq!(
         clash.text,
         rust_i18n::t!(
-            "hotkeys.clash.wins",
+            "hotkeys.clash.wins_gesture",
             rows = rust_i18n::t!("hotkeys.clash.layer.fig_menu")
         )
         .to_string(),
         "it TAKES the press from the menu; it does not share it"
     );
+}
+
+/// A key's click half sits on the action layer, offered before placement on every button: bound
+/// to the same press as a placement row it TAKES the press, and the placement row is told it
+/// will not fire — the same two sentences every other pair of layers gets.
+///
+/// Plausible breakage: the action layer missing from `button_layers`, which leaves a key half
+/// with no position at all and captions nothing about a press two rows answer.
+#[test]
+fn a_key_half_takes_the_press_from_the_placement_row_below_it() {
+    let _locale = crate::test_locale::force("en");
+    let mut hotkeys = quiet();
+    let half = GestureSlot::ForKey(KeySlot::CancelBuy);
+    hotkeys.set_gesture(half, MouseGestureBinding::LeftAlt);
+    hotkeys.set_gesture(GestureSlot::BuySet, MouseGestureBinding::LeftAlt);
+    let clashes = Clashes::build(&hotkeys);
+
+    let action = clashes.mouse(&hotkeys, half);
+    assert_eq!(action.len(), 1, "{action:?}");
+    assert_eq!(action[0].severity, Severity::Shares);
+    assert!(
+        action[0].text.contains("takes this binding"),
+        "{}",
+        action[0].text
+    );
+    assert!(action[0].text.contains("Place Long"), "{}", action[0].text);
+
+    let placement = clashes.mouse(&hotkeys, GestureSlot::BuySet);
+    assert_eq!(placement.len(), 1, "{placement:?}");
+    assert_eq!(placement[0].severity, Severity::Shadowed);
+    assert!(
+        placement[0].text.contains("Cancel Buy"),
+        "{}",
+        placement[0].text
+    );
+
+    // Unset, the half is nobody's rival: the placement row is alone again.
+    hotkeys.set_gesture(half, MouseGestureBinding::None);
+    let clashes = Clashes::build(&hotkeys);
+    assert!(clashes.mouse(&hotkeys, GestureSlot::BuySet).is_empty());
 }

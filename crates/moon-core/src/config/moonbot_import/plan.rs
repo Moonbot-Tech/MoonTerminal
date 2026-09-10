@@ -194,21 +194,16 @@ fn action_target(action: ShortcutAction) -> Option<KeySlot> {
 /// name and dots for depth, shared with `theme.bg.dark` and `group.order_size_sel`. The page dresses
 /// the same stem with hyphens, and both come off one name.
 pub(super) fn hotkey_id(slot: KeySlot) -> String {
-    match slot.index() {
-        Some(i) => format!("hotkey.{}.{i}", slot.stem()),
-        None => format!("hotkey.{}", slot.stem()),
-    }
+    format!("hotkey.{}", slot.name())
 }
 
 /// The slot one plan id names, or `None` for an id this build does not know.
 ///
-/// A search over [`KeySlot::all`] through [`hotkey_id`] itself, so the two cannot disagree: an
-/// index past its family is refused because no slot spells it, rather than by a range check that
+/// The area prefix comes off and [`KeySlot::for_name`] does the rest, so the two cannot disagree:
+/// an index past its family is refused because no slot spells it, rather than by a range check that
 /// would have to know the family sizes a second time.
 pub(super) fn slot_for_id(id: &str) -> Option<KeySlot> {
-    KeySlot::all()
-        .into_iter()
-        .find(|slot| hotkey_id(*slot) == id)
+    KeySlot::for_name(id.strip_prefix("hotkey.")?)
 }
 
 /// Returns the Moonbot slot name used in preview/unsupported lists.

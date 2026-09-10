@@ -349,6 +349,19 @@ pub(super) fn mouse_down_left(
         cx.stop_propagation();
         return;
     }
+    // The click halves of the keyboard slots, before the trading gestures on every button: a bound
+    // action is the user's deliberate choice, and a collision with a placement or move gesture is
+    // captioned on the settings page rather than settled here by one silently winning. Off in the
+    // Sells-to-zone mode for the same reason the trading gestures below are.
+    if within
+        && !sells_zone_mode
+        && clicks.is_some_and(|count| {
+            this.try_action_click(TradeMouseButton::Left, e.modifiers, count, window, cx)
+        })
+    {
+        cx.stop_propagation();
+        return;
+    }
     // Second, the TRADING gestures are off while the Sells-to-zone mode is armed: the mode is a
     // drawing posture — the badge and the tool picker both say so — and a press meant for a band
     // must not place or cancel an order instead. That covers the order book too, whose click also
@@ -544,6 +557,17 @@ pub(super) fn mouse_down_right(
         cx.stop_propagation();
         return;
     }
+    // The click halves of the keyboard slots, before both menus: nothing is bound to the right
+    // button by default, so the plain right click still opens them.
+    if within
+        && clicks.is_some_and(|count| {
+            this.try_action_click(TradeMouseButton::Right, e.modifiers, count, window, cx)
+        })
+    {
+        this.suppress_rmb_up = true;
+        cx.stop_propagation();
+        return;
+    }
     // Right-clicking a drawn figure in drawing mode opens its Alert/Delete menu. This has highest
     // priority; suppress_rmb_up consumes the paired release so fullscreen remains intact.
     if within && this.try_open_figure_menu(pos, e.position, window, cx) {
@@ -670,6 +694,15 @@ pub(super) fn mouse_down_middle(
     // gesture bound elsewhere costs the trading path nothing.
     //
     if within && fig_delete_press(this, TradeMouseButton::Middle, e, clicks, pos, cx) {
+        cx.stop_propagation();
+        return;
+    }
+    // The click halves of the keyboard slots, before the trading gestures.
+    if within
+        && clicks.is_some_and(|count| {
+            this.try_action_click(TradeMouseButton::Middle, e.modifiers, count, window, cx)
+        })
+    {
         cx.stop_propagation();
         return;
     }

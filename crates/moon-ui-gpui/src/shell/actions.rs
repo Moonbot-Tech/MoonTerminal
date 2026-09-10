@@ -268,7 +268,7 @@ impl Shell {
     ///
     /// Returns:
     ///     Whether the action was handled here, which is what decides propagation.
-    fn dispatch_hotkey(
+    pub(crate) fn dispatch_hotkey(
         &mut self,
         action: crate::hotkeys::HotkeyAction,
         window: &mut Window,

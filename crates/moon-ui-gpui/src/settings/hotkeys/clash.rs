@@ -21,7 +21,7 @@
 //!   and the guess said the right button placed nothing at all — a red "will not fire" on a gesture
 //!   that opens a live position.
 //! - **Within one layer** the order is a third thing again, and [`same_layer_rank`] is it: placement
-//!   asks in `GestureSlot::ALL` order, the move rows in `MoveKindSlot::ALL` order — both read off
+//!   asks in `GestureSlot::OWN` order, the key halves in `GestureSlot::all` order, the move rows in `MoveKindSlot::ALL` order — both read off
 //!   the lists the dispatchers walk, not copied.
 //!
 //! A layer that answers only in a mode or over an object — drawing while a tool is armed, a context
@@ -32,9 +32,7 @@
 
 use std::collections::HashMap;
 
-use moon_core::config::{
-    GestureSlot, HotkeysConfig, KeySlot, MouseGestureBinding, MoveKind, MoveKindSlot,
-};
+use moon_core::config::{GestureSlot, HotkeysConfig, KeySlot, MouseGestureBinding, MoveKindSlot};
 use rust_i18n::t;
 
 use crate::hotkeys::{BindingId, Builtin, DISPATCH, HotkeyAction, Step, binding_id};
@@ -52,7 +50,7 @@ pub(super) enum Severity {
 }
 
 /// One row's caption.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct Clash {
     pub severity: Severity,
     /// Already localized — the row only has to print it.
@@ -67,6 +65,10 @@ enum Layer {
     Draw,
     /// Deletes the figure under the pointer — only over a figure.
     FigDelete,
+    /// Performs a keyboard slot's action from its click half. Offered right after the figure
+    /// layer on every button, before placement: a bound action is the user's own choice, and the
+    /// two collide on the page's captions rather than by one silently winning.
+    Action,
     /// Places an order. Offered by every button, but LAST on the right, under both menus.
     Place,
     /// Moves a side's orders onto the clicked price.
@@ -90,7 +92,7 @@ impl Layer {
     /// the same somewhere as the row below — which is the one case a conditional layer does kill, and
     /// why [`dead_fig_delete_gesture`] exists as a list beside it. `meta::Scope` is the set.
     fn unconditional(self) -> bool {
-        matches!(self, Self::Place | Self::Move | Self::XScale)
+        matches!(self, Self::Action | Self::Place | Self::Move | Self::XScale)
     }
 
     /// The locale key naming a layer that owns no row on this page, or `None` for one that does.
@@ -100,7 +102,7 @@ impl Layer {
             Self::FigMenu => "hotkeys.clash.layer.fig_menu",
             Self::OrderMenu => "hotkeys.clash.layer.order_menu",
             Self::XScale => "hotkeys.clash.layer.x_scale",
-            Self::FigDelete | Self::Place | Self::Move => return None,
+            Self::FigDelete | Self::Action | Self::Place | Self::Move => return None,
         })
     }
 }
@@ -123,12 +125,23 @@ fn button_layers(gesture: MouseGestureBinding) -> &'static [Layer] {
         | G::LeftAlt
         | G::LeftCtrlDouble
         | G::LeftShiftDouble
-        | G::LeftAltDouble => &[Layer::Draw, Layer::FigDelete, Layer::Place, Layer::Move],
-        G::Middle | G::MiddleCtrl | G::MiddleShift | G::MiddleAlt => {
-            &[Layer::FigDelete, Layer::Place, Layer::Move, Layer::XScale]
-        }
+        | G::LeftAltDouble => &[
+            Layer::Draw,
+            Layer::FigDelete,
+            Layer::Action,
+            Layer::Place,
+            Layer::Move,
+        ],
+        G::Middle | G::MiddleCtrl | G::MiddleShift | G::MiddleAlt => &[
+            Layer::FigDelete,
+            Layer::Action,
+            Layer::Place,
+            Layer::Move,
+            Layer::XScale,
+        ],
         G::RightDouble | G::RightCtrl | G::RightShift | G::RightAlt => &[
             Layer::FigDelete,
+            Layer::Action,
             Layer::FigMenu,
             Layer::Move,
             Layer::OrderMenu,
@@ -139,12 +152,11 @@ fn button_layers(gesture: MouseGestureBinding) -> &'static [Layer] {
 
 /// Which layer a row belongs to.
 fn slot_layer(slot: GestureSlot) -> Layer {
-    if slot == GestureSlot::FigDelete {
-        Layer::FigDelete
-    } else if slot.placement().is_some() {
-        Layer::Place
-    } else {
-        Layer::Move
+    match slot {
+        GestureSlot::FigDelete => Layer::FigDelete,
+        GestureSlot::ForKey(_) => Layer::Action,
+        own if own.placement().is_some() => Layer::Place,
+        _ => Layer::Move,
     }
 }
 
@@ -165,7 +177,7 @@ fn ownerless_layer(gesture: MouseGestureBinding, layer: Layer) -> bool {
         Layer::Draw => matches!(gesture, G::LeftCtrl | G::LeftCtrlDouble),
         Layer::XScale => gesture == G::MiddleShift,
         Layer::FigMenu | Layer::OrderMenu => true,
-        Layer::FigDelete | Layer::Place | Layer::Move => false,
+        Layer::FigDelete | Layer::Action | Layer::Place | Layer::Move => false,
     }
 }
 
@@ -193,6 +205,10 @@ pub(super) struct Clashes {
     /// Gesture -> the rows holding it. A move row whose kind is `None` is left out: the dispatcher
     /// steps past such a row rather than letting it silence the next one.
     gestures: HashMap<MouseGestureBinding, Vec<GestureSlot>>,
+    /// Every gesture slot in dispatch order, built once: `same_layer_rank` reads positions off it
+    /// for every rival of every row, and building the list per rival made one render of the page
+    /// quadratic in its own length.
+    order: Vec<GestureSlot>,
 }
 
 impl Clashes {
@@ -215,12 +231,17 @@ impl Clashes {
             }
         }
         let mut gestures: HashMap<MouseGestureBinding, Vec<GestureSlot>> = HashMap::new();
-        for slot in GestureSlot::ALL {
-            if let Some(gesture) = firing_gesture(hotkeys, slot) {
-                gestures.entry(gesture).or_default().push(slot);
+        let order = GestureSlot::all();
+        for slot in &order {
+            if let Some(gesture) = hotkeys.firing_gesture(*slot) {
+                gestures.entry(gesture).or_default().push(*slot);
             }
         }
-        Self { keys, gestures }
+        Self {
+            keys,
+            gestures,
+            order,
+        }
     }
 
     /// The caption for one keyboard row.
@@ -249,7 +270,7 @@ impl Clashes {
             }
             return Some(Clash {
                 severity: Severity::Shares,
-                text: t!("hotkeys.clash.wins", rows = losers.join(", ")).to_string(),
+                text: t!("hotkeys.clash.wins_key", rows = losers.join(", ")).to_string(),
             });
         }
         Some(Clash {
@@ -268,7 +289,7 @@ impl Clashes {
         // the two cannot disagree about which rows are even in the running — and they used to: a
         // caption was once handed to a row whose Move kind is `None`, telling it that it was taking
         // the binding from the row that is in fact the only one firing.
-        let Some(gesture) = firing_gesture(hotkeys, slot) else {
+        let Some(gesture) = hotkeys.firing_gesture(slot) else {
             return Vec::new();
         };
         let layers = button_layers(gesture);
@@ -296,10 +317,10 @@ impl Clashes {
                 // answers, and the others never do. Direction is the whole point here, exactly as
                 // `Self::key` states beside it — handing both rows "will not fire" reports the one
                 // that DOES fire as broken.
-                let rank = same_layer_rank(slot);
+                let rank = same_layer_rank(&self.order, slot);
                 for other in layer_rows(*layer, rows, slot) {
                     let label = target_label(GestureTarget::Gesture(other));
-                    if same_layer_rank(other) < rank {
+                    if same_layer_rank(&self.order, other) < rank {
                         kills.push(label);
                     } else {
                         wins.push(label);
@@ -343,13 +364,13 @@ impl Clashes {
         if !wins.is_empty() {
             notes.push(Clash {
                 severity: Severity::Shares,
-                text: t!("hotkeys.clash.wins", rows = wins.join(", ")).to_string(),
+                text: t!("hotkeys.clash.wins_gesture", rows = wins.join(", ")).to_string(),
             });
         }
         if !beside.is_empty() {
             notes.push(Clash {
                 severity: Severity::Shares,
-                text: t!("hotkeys.clash.shares", rows = beside.join(", ")).to_string(),
+                text: t!("hotkeys.clash.shares_gesture", rows = beside.join(", ")).to_string(),
             });
         }
         notes
@@ -383,7 +404,7 @@ fn layer_object(layer: Layer) -> Option<Object> {
     match layer {
         Layer::Draw | Layer::FigDelete | Layer::FigMenu => Some(Object::Figure),
         Layer::OrderMenu => Some(Object::OrderLine),
-        Layer::Place | Layer::Move | Layer::XScale => None,
+        Layer::Action | Layer::Place | Layer::Move | Layer::XScale => None,
     }
 }
 
@@ -437,26 +458,13 @@ fn dead_fig_delete_gesture(gesture: MouseGestureBinding) -> Option<Layer> {
     }
 }
 
-/// The gesture this row actually dispatches on, or `None` for a row that dispatches nothing.
-///
-/// Two ways to hold no press, and both must read the same to the index and to the caption: an unset
-/// dropdown, and a move row whose kind is `None`, which `resolve_move_gesture` steps past on purpose.
-/// It also answers what the terminal FIRES rather than what the field holds — with the mirror switch
-/// on, a short row's stored value is not read at all, and indexing it would put a rival nothing
-/// dispatches into every other row's caption.
-fn firing_gesture(hotkeys: &HotkeysConfig, slot: GestureSlot) -> Option<MouseGestureBinding> {
-    let gesture = hotkeys.gesture_in_effect(slot);
-    if gesture == MouseGestureBinding::None || inert_move_row(hotkeys, slot) {
-        return None;
-    }
-    Some(gesture)
-}
-
 /// Where a row stands in its OWN layer's dispatch order, lowest answering first.
 ///
 /// Neither layer is asked in this page's list order, and that is why this exists:
 /// - placement — `panels::chart::trade::placement_intent` tries the placement rows in
-///   `GestureSlot::ALL` order and returns the FIRST match;
+///   `GestureSlot::OWN` order and returns the FIRST match;
+/// - action — the chart's action layer tries the key halves in `GestureSlot::all` order, which
+///   is `KeySlot::all` order, and the first match fires;
 /// - move — `HotkeysConfig::resolve_move_gesture` walks `MoveKindSlot::ALL`, testing each row's long
 ///   and short halves together, so `ShortBuyMove` answers before `SellMove2` although this page
 ///   lists it four rows later.
@@ -466,12 +474,12 @@ fn firing_gesture(hotkeys: &HotkeysConfig, slot: GestureSlot) -> Option<MouseGes
 /// the same numbers. The halves of one move row share a rank and are never compared:
 /// `same_move_row` exempts them. `FigDelete` is alone on its layer, so its number is never compared
 /// with anything.
-fn same_layer_rank(slot: GestureSlot) -> u8 {
+fn same_layer_rank(order: &[GestureSlot], slot: GestureSlot) -> usize {
     let position = match slot.move_half() {
         Some(half) => MoveKindSlot::ALL.iter().position(|row| *row == half.row),
-        None => GestureSlot::ALL.iter().position(|other| *other == slot),
+        None => order.iter().position(|other| *other == slot),
     };
-    position.unwrap_or(0) as u8
+    position.unwrap_or(0)
 }
 
 /// The ROWS that answer this gesture at one layer, other than the row asking.
@@ -543,16 +551,6 @@ fn same_move_row(a: GestureSlot, b: GestureSlot) -> bool {
         (Some(x), Some(y)) => x.row == y.row,
         _ => false,
     }
-}
-
-/// A move row whose kind is `None` sends nothing and does not stop the next row.
-///
-/// `resolve_move_gesture` steps past such a row on purpose — "another slot may hold the same
-/// binding WITH a kind, and giving up here would let a disabled row silence a working one" — so
-/// counting it as a holder would report a shadow that never happens.
-fn inert_move_row(hotkeys: &HotkeysConfig, slot: GestureSlot) -> bool {
-    slot.move_half()
-        .is_some_and(|half| hotkeys.move_kind(half.row) == MoveKind::None)
 }
 
 #[cfg(test)]

@@ -266,3 +266,53 @@ fn every_slot_resolves_to_its_own_action() {
         assert_eq!(got, Some(action_of(slot, &one)), "{slot:?} on {raw}");
     }
 }
+
+/// The chart's action layer reaches a window's routing through the view `moon_ui::Root` wraps,
+/// and both window constructors do wrap theirs — pinned by reading the sources, because nothing
+/// else says so: a root that is not `Root`, or a `Root` around a third view type, makes every
+/// bound click consume the press and route nothing, with only a warning to show for it.
+///
+/// Plausible breakage: a window opened with the `Shell` as its root directly, or
+/// `dispatch_from_chart` going back to `window.root::<Shell>()`, which a `Root`-wrapped window
+/// never satisfies (that is how the first version shipped dead).
+#[test]
+fn the_chart_routes_its_clicks_through_the_view_inside_root() {
+    let hotkeys = include_str!("../hotkeys.rs");
+    let body = hotkeys
+        .split("pub fn dispatch_from_chart(")
+        .nth(1)
+        .expect("dispatch_from_chart")
+        .split("\npub fn ")
+        .next()
+        .expect("its body");
+    assert!(body.contains("root::<moon_ui::Root>()"), "{body}");
+    assert!(body.contains("downcast::<crate::shell::Shell>()"));
+    assert!(body.contains("downcast::<crate::chart_tabs::DetachedChartHost>()"));
+    assert!(
+        !body.contains("root::<crate::shell::Shell>()"),
+        "the Shell is never the window root itself"
+    );
+
+    for (path, source, view) in [
+        (
+            "window/group_window.rs",
+            include_str!("../window/group_window.rs"),
+            "Shell::new(",
+        ),
+        (
+            "chart_tabs/windows.rs",
+            include_str!("../chart_tabs/windows.rs"),
+            "DetachedChartHost::new(",
+        ),
+    ] {
+        let open = source
+            .split(view)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{path} no longer builds {view}"));
+        let wrapped = open.split("\n    }").next().unwrap_or(open);
+        assert!(
+            wrapped.contains("Root::new("),
+            "{path}: the window root must be moon_ui::Root around the view"
+        );
+    }
+}

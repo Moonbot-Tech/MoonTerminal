@@ -44,13 +44,24 @@ fn every_slot_is_on_the_page_exactly_once() {
         let n = keys.iter().filter(|k| **k == slot).count();
         assert_eq!(n, 1, "{slot:?} is on the page {n} times");
     }
-    for slot in GestureSlot::ALL {
+    for slot in GestureSlot::all() {
         let n = gestures.iter().filter(|g| **g == slot).count();
         assert_eq!(n, 1, "{slot:?} is on the page {n} times");
     }
     // And the page carries nothing the config does not — a row whose slot the file cannot hold.
     assert_eq!(keys.len(), KeySlot::all().len());
-    assert_eq!(gestures.len(), GestureSlot::ALL.len());
+    assert_eq!(gestures.len(), GestureSlot::all().len());
+    // A key half sits on its own key's row, never on another.
+    for spec in slots() {
+        if let Some(GestureSlot::ForKey(of)) = spec.mouse() {
+            assert_eq!(
+                spec.key(),
+                Some(of),
+                "{}: a key half on a stranger's row",
+                spec.title()
+            );
+        }
+    }
 }
 
 /// Every kind selector sits on the row of the gesture it belongs to, and the short rows carry
@@ -90,7 +101,7 @@ fn editor_ids_are_unique() {
         );
     }
     let mut seen = HashSet::new();
-    for slot in GestureSlot::ALL {
+    for slot in GestureSlot::all() {
         assert!(
             seen.insert(gesture_id(slot)),
             "{} names two gesture editors",
@@ -150,28 +161,40 @@ fn the_figure_delete_row_carries_both_editors_and_one_set_of_marks() {
     assert_eq!(marks.scope.label(), "cursor / selection");
 }
 
-/// A row with two editors carries ONE origin mark, so its halves must not disagree about it.
+/// A row with two editors carries ONE origin mark, and it says whether ANY half travels: the key
+/// of an ordinary trading row does, its click half never does, and the row reads `MB`.
 ///
-/// This is the check that forces a decision when the first key-that-travels meets a
-/// gesture-that-does-not on one row: the mark cannot answer for both, and the row will need a mark
-/// per half rather than a silent choice.
+/// Plausible breakage: the join taking the gesture's answer, which would mark every trading key
+/// `MT` the moment it gained a click half and tell the user a paste leaves it alone.
 #[test]
-fn the_halves_of_a_two_editor_row_agree_on_origin() {
-    for spec in slots() {
-        if let (Some(key), Some(mouse)) = (spec.key(), spec.mouse()) {
-            assert_eq!(
-                meta::key_slot_meta(key).origin,
-                meta::gesture_slot_meta(mouse).origin,
-                "{}: one mark cannot say what a paste does to two halves that differ",
-                spec.title()
-            );
-        }
-    }
+fn a_two_editor_row_is_shared_when_either_half_is() {
+    let _locale = crate::test_locale::force("en");
+    let cancel = slots()
+        .find(|spec| spec.key() == Some(KeySlot::CancelBuy))
+        .expect("cancel_buy is on the page");
+    assert_eq!(
+        cancel.mouse(),
+        Some(GestureSlot::ForKey(KeySlot::CancelBuy))
+    );
+    assert_eq!(
+        meta::key_slot_meta(KeySlot::CancelBuy).origin,
+        Origin::Shared
+    );
+    assert_eq!(
+        meta::gesture_slot_meta(GestureSlot::ForKey(KeySlot::CancelBuy)).origin,
+        Origin::Local
+    );
+    assert_eq!(cancel.meta().origin, Origin::Shared);
+
+    let draw = slots()
+        .find(|spec| spec.key() == Some(KeySlot::DrawHline))
+        .expect("draw_hline is on the page");
+    assert_eq!(draw.meta().origin, Origin::Local, "both halves ours");
 }
 
 /// The placement rows appear on the page in the order a press is tried against them.
 ///
-/// `placement_intent` walks `GestureSlot::ALL` and the first match fires; `clash::same_layer_rank`
+/// `placement_intent` walks `GestureSlot::OWN` and the first match fires; `clash::same_layer_rank`
 /// reads the same list to say which of two rows holding one gesture wins. A page that listed them
 /// in another order would show the loser above the winner.
 #[test]
@@ -180,7 +203,7 @@ fn the_placement_rows_are_listed_in_dispatch_order() {
         .filter_map(|spec| spec.mouse())
         .filter(|slot| slot.placement().is_some())
         .collect();
-    let dispatched: Vec<GestureSlot> = GestureSlot::ALL
+    let dispatched: Vec<GestureSlot> = GestureSlot::all()
         .into_iter()
         .filter(|slot| slot.placement().is_some())
         .collect();

@@ -114,7 +114,7 @@ struct OrderHit {
 /// Resolve a press against the four configured placement gestures, or `None` for a press that is
 /// not order placement at all.
 ///
-/// The four are tried in `GestureSlot::ALL`'s order — immediate long, immediate short, pending
+/// The four are tried in `GestureSlot::OWN`'s order — immediate long, immediate short, pending
 /// long, pending short — which is the order the settings page lists them in, and the first match is
 /// what fires. `settings::hotkeys::clash::same_layer_rank` reads the same list to caption which of
 /// two rows holding one gesture wins, so the two cannot disagree about it.
@@ -125,7 +125,7 @@ pub(super) fn placement_intent(
     click_count: usize,
 ) -> Option<Placement> {
     let matches = |binding| ChartPanel::gesture_matches(binding, button, modifiers, click_count);
-    GestureSlot::ALL.into_iter().find_map(|slot| {
+    GestureSlot::OWN.into_iter().find_map(|slot| {
         let placement = slot.placement()?;
         matches(hotkeys.gesture(slot)).then_some(placement)
     })
@@ -216,6 +216,59 @@ impl ChartPanel {
             return false;
         };
         self.place_order_at_pos(pos, intent, cx)
+    }
+
+    /// Offer a press to the click halves of the keyboard slots — the chart's ACTION layer.
+    ///
+    /// One layer for every bindable action rather than a branch per action: the press resolves to
+    /// a slot through the table, the slot to its action through `hotkeys::action_of`, and the
+    /// action runs through `hotkeys::dispatch_from_chart`, which is the road a key press takes.
+    /// The chart under the pointer is this one, so "the hovered chart" every cursor-addressed
+    /// action reads is exactly what the user clicked; the pane the press landed on travels along
+    /// for the routing that does not read the hover (a detached window's).
+    ///
+    /// Deferred, not inline: see `dispatch_from_chart` for why the handler's own lease forbids it.
+    /// The press is consumed either way — a bound press is spoken for whether or not the action
+    /// then finds something to act on, which is also how a key press behaves.
+    ///
+    /// Args:
+    ///     button: Physical button of the press.
+    ///     modifiers: Modifier state of the press.
+    ///     click_count: This panel's own click count, never the window's.
+    ///     window: The window the chart is drawn in, whose root routes the action.
+    ///     cx: Panel context, used to read the bindings.
+    ///
+    /// Returns:
+    ///     Whether a click half claimed the press.
+    pub(super) fn try_action_click(
+        &mut self,
+        button: TradeMouseButton,
+        modifiers: Modifiers,
+        click_count: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // A historical viewer acts on nothing live; see `try_place_order_click`.
+        if self.historical {
+            return false;
+        }
+        let action = {
+            let b = self.backend.read(cx);
+            let hk = &b.preview.as_ref().unwrap_or(&b.config).hotkeys;
+            let slot = hk.action_for_gesture(|binding| {
+                Self::gesture_matches(binding, button, modifiers, click_count)
+            });
+            match slot {
+                Some(slot) => crate::hotkeys::action_of(slot, hk),
+                None => return false,
+            }
+        };
+        let backend = self.backend.clone();
+        let clicked = self.target_at_cursor();
+        window.defer(cx, move |window, cx| {
+            crate::hotkeys::dispatch_from_chart(action, clicked, &backend, window, cx);
+        });
+        true
     }
 
     /// Send Moonbot's Move Open / Move TP for a press that matches one of the four move gestures.

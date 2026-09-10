@@ -78,7 +78,8 @@ fn core_gesture(g: &GestureSettings, slot: GestureSlot) -> Option<u8> {
         GestureSlot::PendingShort => g.pending_short_set_click,
         // Deleting a figure by pointing is the Terminal's own: `GestureSettings` carries the twelve
         // order gestures and no figure gesture at all, so a pull has nothing to say about this row.
-        GestureSlot::FigDelete => return None,
+        // Nor about a key's click half: Moonbot has no such gesture.
+        GestureSlot::FigDelete | GestureSlot::ForKey(_) => return None,
         // Every move half was answered above; the arm is here so a new variant has to say which
         // side of the wire it is on. Should `move_half` ever stop covering one of these, the row
         // drops out of the pull — and `registry::tests` fails, because its mark still says the
@@ -192,7 +193,7 @@ pub(super) fn preview_core_gestures(
     g: &GestureSettings,
 ) -> Vec<GesturePullRow> {
     let mut rows = Vec::with_capacity(17);
-    for slot in GestureSlot::ALL {
+    for slot in GestureSlot::OWN {
         let Some(raw) = core_gesture(g, slot) else {
             continue;
         };

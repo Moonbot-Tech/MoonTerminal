@@ -45,14 +45,18 @@ hotkeys.clash.gesture:
   ru: "Не сработает: жест забирает %{rows}."
   en: "Will not fire: %{rows} takes this gesture."
   es: "No se activará: %{rows} se queda con este gesto."
-hotkeys.clash.shares:
-  ru: "Тот же бинд у: %{rows}. Работают оба — каждый на своём."
-  en: "Same binding as %{rows}. Both work, each on its own ground."
-  es: "Mismo atajo que %{rows}. Ambos funcionan, cada uno en lo suyo."
-hotkeys.clash.wins:
-  ru: "Забирает бинд у: %{rows} — там он не сработает."
-  en: "Takes this binding from %{rows}, which will not fire."
-  es: "Le quita el atajo a %{rows}, que no se activará."
+hotkeys.clash.shares_gesture:
+  ru: "Тот же жест у: %{rows}. Работают оба — каждый на своём."
+  en: "Same gesture as %{rows}. Both work, each on its own ground."
+  es: "Mismo gesto que %{rows}. Ambos funcionan, cada uno en lo suyo."
+hotkeys.clash.wins_key:
+  ru: "Клавиша забирает бинд у: %{rows} — там она не сработает."
+  en: "The key takes this binding from %{rows}, where it will not fire."
+  es: "La tecla le quita el atajo a %{rows}, donde no se activará."
+hotkeys.clash.wins_gesture:
+  ru: "Жест забирает бинд у: %{rows} — там он не сработает."
+  en: "The gesture takes this binding from %{rows}, where it will not fire."
+  es: "El gesto le quita el atajo a %{rows}, donde no se activará."
 hotkeys.clash.builtin.esc_close:
   ru: "встроенное закрытие чарта (Esc)"
   en: "the built-in close chart (Esc)"
@@ -86,9 +90,9 @@ hotkeys.clash.layer.x_scale:
   en: "the X-scale sync"
   es: "la sincronización de escala X"
 hotkeys.marks_legend:
-  ru: "Метки строки: где действует · откуда БИНД. MB — назначение перезапишет вставка конфига Moonbot или тяга раскладки с ядра. MT — бинд только наш, не перезаписывается ничем; сама функция при этом может быть и в Moonbot (рисование есть, горячих клавиш для него там нет)."
-  en: "Row marks: where it acts, and where the BINDING comes from. MB — a Moonbot paste or a core pull overwrites it. MT — the binding is ours and nothing overwrites it; the feature itself may exist in Moonbot too (drawing does, it just has no hotkeys there)."
-  es: "Marcas de fila: dónde actúa y de dónde viene el ATAJO. MB: pegar la configuración de Moonbot o traer la disposición del core lo reescribe. MT: el atajo es nuestro y nada lo sobrescribe; la función puede existir también en Moonbot (el dibujo existe, pero allí no tiene atajos)."
+  ru: "У каждой клавиши справа — жест мыши: клик по графику делает то же самое. Метки строки: где действует · откуда БИНД. MB — клавишу перезапишет вставка конфига Moonbot или тяга раскладки с ядра (жесты стакана — тоже тяга). MT — ничем не перезаписывается. Жест в строке с клавишей — всегда наш, Moonbot таких не хранит."
+  en: "Every key has a mouse gesture beside it: a click on the chart does the same thing. Row marks: where it acts, and where the BINDING comes from. MB — a Moonbot paste or a core pull overwrites the key (the book gestures come from the pull too). MT — nothing overwrites it. The click beside a key is always ours; Moonbot keeps no such gesture."
+  es: "Cada tecla tiene un gesto de ratón al lado: un clic en el gráfico hace lo mismo. Marcas de fila: dónde actúa y de dónde viene el ATAJO. MB: pegar la configuración de Moonbot o traer la disposición del core reescribe la tecla (los gestos del libro también vienen de allí). MT: nada lo sobrescribe. El clic junto a una tecla es siempre nuestro; Moonbot no guarda esos gestos."
 hotkeys.unassigned:
   ru: "Не задано"
   en: "Unassigned"

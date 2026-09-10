@@ -547,11 +547,14 @@ fn a_slots_stem_is_its_key_in_the_file() {
 
 /// Every gesture the file stores is reachable through a [`GestureSlot`], and no two slots share one.
 ///
-/// The same shape as the keystroke check above, for the same reason: `GestureSlot::ALL` cannot be
-/// verified by walking `GestureSlot::ALL`. Every slot is written a DISTINCT gesture, the file is
-/// read back, and every gesture-shaped value in it has to be one of those — a field no slot reaches
-/// still holds its default, which is either `none` or a duplicate of a marker. The four kind fields
-/// are moved off `none` first so they cannot be mistaken for an unreached gesture.
+/// The same shape as the keystroke check above, for the same reason: `GestureSlot::all()` cannot
+/// be verified by walking `GestureSlot::all()`. Every slot is written a gesture — the thirteen with
+/// a field a DISTINCT one, the key halves a rotating one, since there are more of them than there
+/// are gestures — the file is read back, and the gesture-shaped values in it, top level and the
+/// `[action_clicks]` table together, have to be exactly what was written, as a multiset. A field no
+/// slot reaches still holds its default, which is either `none` or a duplicate of a marker; a slot
+/// that reaches no field writes nothing and is missing from the count. The four kind fields are
+/// moved off `none` first so they cannot be mistaken for an unreached gesture.
 ///
 /// What a missed field costs: the settings page never draws it, the core pull never writes it, and
 /// the clash index never sees the gesture it holds — so a press two rows answer is captioned as
@@ -562,43 +565,138 @@ fn no_stored_gesture_is_missing_from_the_registry() {
     for row in MoveKindSlot::ALL {
         cfg.set_move_kind(row, MoveKind::TopVolume);
     }
-    // Distinct, and none of them `None`: `ALL[0]` is the unset gesture. Every slot is cleared
-    // first, so a marker that happens to be a slot's shipped default is still a change.
+    let slots = GestureSlot::all();
+    // None of them `None`: `ALL[0]` is the unset gesture. Every slot is cleared first, so a marker
+    // that happens to be a slot's shipped default is still a change.
+    let live = &MouseGestureBinding::ALL[1..];
     let markers: Vec<MouseGestureBinding> =
-        MouseGestureBinding::ALL[1..=GestureSlot::ALL.len()].to_vec();
-    for slot in GestureSlot::ALL {
-        cfg.set_gesture(slot, MouseGestureBinding::None);
+        (0..slots.len()).map(|i| live[i % live.len()]).collect();
+    for slot in &slots {
+        cfg.set_gesture(*slot, MouseGestureBinding::None);
     }
-    for (slot, marker) in GestureSlot::ALL.into_iter().zip(&markers) {
-        assert!(cfg.set_gesture(slot, *marker), "{slot:?} stores nothing");
+    for (slot, marker) in slots.iter().zip(&markers) {
+        assert!(cfg.set_gesture(*slot, *marker), "{slot:?} stores nothing");
     }
     let text = toml::to_string(&cfg).expect("serialize hotkeys");
     let table: toml::Table = text.parse().expect("re-read hotkeys");
 
-    let mut stored: Vec<(String, MouseGestureBinding)> = table
-        .iter()
-        .filter_map(|(name, value)| {
-            let gesture = MouseGestureBinding::from_config_value(value.as_str()?)?;
-            Some((name.clone(), gesture))
-        })
-        .collect();
-    stored.sort_by_key(|(_, gesture)| gesture.config_value());
-    let mut expected = markers.clone();
-    expected.sort_by_key(|gesture| gesture.config_value());
-    let found: Vec<MouseGestureBinding> = stored.iter().map(|(_, g)| *g).collect();
+    let mut stored: Vec<(String, MouseGestureBinding)> = Vec::new();
+    for (name, value) in &table {
+        match value {
+            toml::Value::String(raw) => {
+                if let Some(gesture) = MouseGestureBinding::from_config_value(raw) {
+                    stored.push((name.clone(), gesture));
+                }
+            }
+            // The one nested table the file has: the key halves, keyed by slot name.
+            toml::Value::Table(inner) if name == "action_clicks" => {
+                for (key, value) in inner {
+                    let gesture = value
+                        .as_str()
+                        .and_then(MouseGestureBinding::from_config_value)
+                        .unwrap_or_else(|| panic!("action_clicks.{key} is not a gesture"));
+                    stored.push((format!("action_clicks.{key}"), gesture));
+                }
+            }
+            toml::Value::Table(_) => {
+                panic!("this walk reads one nested table; extend it for {name}")
+            }
+            _ => {}
+        }
+    }
+    let mut found: Vec<&str> = stored.iter().map(|(_, g)| g.config_value()).collect();
+    found.sort_unstable();
+    let mut expected: Vec<&str> = markers.iter().map(|g| g.config_value()).collect();
+    expected.sort_unstable();
     assert_eq!(
         found, expected,
-        "the file's gesture fields are not exactly the slots' markers: {stored:?}"
+        "the file's gesture values are not exactly the slots' markers: {stored:?}"
     );
 
     // Read back through the accessor too, all writes before any read, so an alias cannot pass.
-    for (slot, marker) in GestureSlot::ALL.into_iter().zip(&markers) {
+    for (slot, marker) in slots.iter().zip(&markers) {
         assert_eq!(
-            cfg.gesture(slot),
+            cfg.gesture(*slot),
             *marker,
             "{slot:?} shares a field with another slot"
         );
     }
+}
+
+/// A key half is stored under the slot's full name and is ABSENT when unset — so a file that never
+/// used one carries no table, and an older build reading a file that did keeps everything else.
+///
+/// Plausible breakage: storing `none` instead of removing, which fills the file with forty-six
+/// lines nobody set; or a name spelling that `for_name` does not read back, which loses the gesture
+/// on the next launch.
+#[test]
+fn a_key_half_is_stored_by_name_and_absent_when_unset() {
+    let mut cfg = HotkeysConfig::default();
+    assert!(
+        !toml::to_string(&cfg).unwrap().contains("action_clicks"),
+        "an unused table is not written"
+    );
+    let slot = GestureSlot::ForKey(KeySlot::OrderSize(2));
+    assert!(cfg.set_gesture(slot, MouseGestureBinding::MiddleAlt));
+    assert!(
+        !cfg.set_gesture(slot, MouseGestureBinding::MiddleAlt),
+        "no change reports none"
+    );
+    let text = toml::to_string(&cfg).unwrap();
+    assert!(text.contains("[action_clicks]"), "{text}");
+    assert!(text.contains("\"order_size.2\" = \"middle-alt\""), "{text}");
+
+    let back: HotkeysConfig = toml::from_str(&text).unwrap();
+    assert_eq!(back.gesture(slot), MouseGestureBinding::MiddleAlt);
+    assert_eq!(
+        KeySlot::for_name("order_size.2"),
+        Some(KeySlot::OrderSize(2))
+    );
+    assert_eq!(KeySlot::for_name("order_size.9"), None);
+    assert_eq!(KeySlot::for_name("cancel_buy"), Some(KeySlot::CancelBuy));
+
+    assert!(cfg.set_gesture(slot, MouseGestureBinding::None));
+    assert!(!cfg.set_gesture(slot, MouseGestureBinding::None));
+    assert!(cfg.action_clicks.is_empty(), "unset is removed, not stored");
+
+    // A name this build does not know survives a load-and-save untouched and names no slot.
+    let foreign: HotkeysConfig =
+        toml::from_str("[action_clicks]\nfrom_the_future = \"middle\"\n").unwrap();
+    assert_eq!(foreign.action_clicks.len(), 1);
+    assert!(
+        toml::to_string(&foreign)
+            .unwrap()
+            .contains("from_the_future")
+    );
+    assert!(
+        GestureSlot::all()
+            .iter()
+            .all(|slot| !matches!(slot, GestureSlot::ForKey(k) if k.name() == "from_the_future"))
+    );
+}
+
+/// The two slots with no mouse half are exactly the two the design names, and every other key
+/// slot appears in `all()` once, after the thirteen with a field of their own.
+#[test]
+fn every_key_slot_but_two_has_a_mouse_half_once() {
+    let all = GestureSlot::all();
+    assert_eq!(&all[..GestureSlot::OWN.len()], &GestureSlot::OWN[..]);
+    let halves: Vec<KeySlot> = all
+        .iter()
+        .filter_map(|slot| match slot {
+            GestureSlot::ForKey(key) => Some(*key),
+            _ => None,
+        })
+        .collect();
+    let without: Vec<KeySlot> = KeySlot::all()
+        .into_iter()
+        .filter(|key| !halves.contains(key))
+        .collect();
+    assert_eq!(without, [KeySlot::SellsToRect, KeySlot::FigDelete]);
+    let mut seen = halves.clone();
+    seen.sort_by_key(|k| k.name());
+    seen.dedup();
+    assert_eq!(seen.len(), halves.len(), "a key half is listed twice");
 }
 
 /// Each move row owns one kind field, and the row's two halves are two different gesture slots.
@@ -770,6 +868,15 @@ fn the_arriving_figure_gesture_yields_to_a_trading_gesture_on_the_same_button() 
     assert!(free.fill_unbound_slots());
     assert_eq!(free.fig_delete_click, MouseGestureBinding::Middle);
 
+    // A move row whose kind is None dispatches nothing, so Middle on it is free — the same reading
+    // the settings page gives that row.
+    let mut inert = HotkeysConfig::default();
+    inert.schema = 3;
+    inert.buy_move_click = MouseGestureBinding::Middle;
+    inert.buy_move_kind = MoveKind::None;
+    assert!(inert.fill_unbound_slots());
+    assert_eq!(inert.fig_delete_click, MouseGestureBinding::Middle);
+
     // A short field left on Middle behind the mirror switch is not a gesture anyone can press.
     let mut mirrored = HotkeysConfig::default();
     mirrored.schema = 3;
@@ -819,4 +926,59 @@ fn the_pending_gestures_are_cleared_once_when_they_go_live() {
     old.pending_long_click = MouseGestureBinding::MiddleShift;
     assert!(!old.fill_unbound_slots(), "the generation has already run");
     assert_eq!(old.pending_long_click, MouseGestureBinding::MiddleShift);
+}
+
+/// A press claims the click half bound to it, and two halves bound to one press resolve in the
+/// page's order — never in the table's alphabetical one.
+///
+/// Plausible breakage: iterating the `BTreeMap` and taking the first hit, which would let
+/// `cancel_all_buys` (alphabetically first) beat `cancel_buy` although the page lists and
+/// captions it the other way round.
+#[test]
+fn a_press_claims_the_click_half_in_page_order() {
+    let mut cfg = HotkeysConfig::default();
+    let is = |wanted: MouseGestureBinding| move |g: MouseGestureBinding| g == wanted;
+    assert_eq!(
+        cfg.action_for_gesture(is(MouseGestureBinding::MiddleAlt)),
+        None
+    );
+
+    cfg.set_gesture(
+        GestureSlot::ForKey(KeySlot::CancelAllBuys),
+        MouseGestureBinding::MiddleAlt,
+    );
+    cfg.set_gesture(
+        GestureSlot::ForKey(KeySlot::CancelBuy),
+        MouseGestureBinding::MiddleAlt,
+    );
+    cfg.set_gesture(
+        GestureSlot::ForKey(KeySlot::PanicSell),
+        MouseGestureBinding::RightAlt,
+    );
+    let all = KeySlot::all();
+    let position = |slot| all.iter().position(|s| *s == slot).unwrap();
+    assert!(position(KeySlot::CancelBuy) < position(KeySlot::CancelAllBuys));
+    assert_eq!(
+        cfg.action_for_gesture(is(MouseGestureBinding::MiddleAlt)),
+        Some(KeySlot::CancelBuy),
+        "the page's order, not the table's"
+    );
+    assert_eq!(
+        cfg.action_for_gesture(is(MouseGestureBinding::RightAlt)),
+        Some(KeySlot::PanicSell)
+    );
+    assert_eq!(
+        cfg.action_for_gesture(is(MouseGestureBinding::LeftAlt)),
+        None
+    );
+    // A name this build does not know is never a hit, whatever it is bound to — nor is a slot
+    // that has no mouse half, however it got into the table.
+    cfg.action_clicks
+        .insert("from_the_future".into(), MouseGestureBinding::LeftAlt);
+    cfg.action_clicks
+        .insert("fig_delete".into(), MouseGestureBinding::LeftAlt);
+    assert_eq!(
+        cfg.action_for_gesture(is(MouseGestureBinding::LeftAlt)),
+        None
+    );
 }

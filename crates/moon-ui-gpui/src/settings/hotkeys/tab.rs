@@ -59,6 +59,11 @@ fn sized_cell(child: impl IntoElement, width: f32, cx: &App) -> gpui::Div {
     div().flex_none().w(design::ui_px(cx, width)).child(child)
 }
 
+/// A cell reserved and left empty, so the column after it starts at the same x on every row.
+fn empty_cell(width: f32, cx: &App) -> gpui::Div {
+    div().flex_none().w(design::ui_px(cx, width))
+}
+
 /// One line of muted body text, the style this tab's descriptions, hints and marks all share.
 fn muted_line(text: String, p: &MoonPalette) -> impl IntoElement {
     MoonText::new(text)
@@ -318,11 +323,10 @@ impl SettingsView {
     /// Builds one editor row: title, marks, description, and the editors the row carries — a
     /// hotkey field, a gesture dropdown with its kind selector, or both.
     ///
-    /// One builder for every row, because a row is now defined by WHICH editors it has and not by
-    /// which kind: the figure-delete row carries both, and every action that gets a mouse half will
-    /// look like it. The trailing controls sit in a block of fixed-width cells, reserved on every
-    /// row that has a gesture editor, empty ones included — that is what keeps the columns aligned
-    /// when one row carries a kind dropdown and the next does not.
+    /// One builder for every row, because a row is defined by WHICH editors it has and not by which
+    /// kind: almost every keyboard row carries a click half too. The trailing controls sit in a
+    /// block of fixed-width cells, reserved on every row, empty ones included — that is what keeps
+    /// the columns aligned when one row carries a kind dropdown and the next does not.
     ///
     /// Args:
     ///     spec: The row, from the registry.
@@ -363,8 +367,12 @@ impl SettingsView {
             notes,
             cx,
         );
-        row.when_some(spec.key(), |row, key| {
-            row.child(control_cell(self.hotkey_input(key, hotkeys, cx), cx))
+        // The key cell is reserved on every row, empty on the four placement rows and the eight
+        // move rows: the gesture column has to start at one x down the whole page now that almost
+        // every row has one.
+        row.child(match spec.key() {
+            Some(key) => control_cell(self.hotkey_input(key, hotkeys, cx), cx),
+            None => empty_cell(ROW_CONTROL_WIDTH, cx),
         })
         .when_some(spec.mouse(), |row, mouse| {
             row.child(
@@ -382,9 +390,7 @@ impl SettingsView {
                             ROW_CONTROL_WIDTH + ROW_KIND_EXTRA,
                             cx,
                         ),
-                        None => div()
-                            .flex_none()
-                            .w(design::ui_px(cx, ROW_CONTROL_WIDTH + ROW_KIND_EXTRA)),
+                        None => empty_cell(ROW_CONTROL_WIDTH + ROW_KIND_EXTRA, cx),
                     }),
             )
         })

@@ -11,9 +11,10 @@
 //! `hotkeys.` prefix for the locale; a test checks that every dressing resolves to real text. Which
 //! side of the page a row is on is the one fact stated here and nowhere else.
 //!
-//! A row can carry a key, a gesture, or BOTH — the figure-delete row is the first with two editors,
-//! and the shape every other action will take when it gets a mouse half. Its two facts are then
-//! the join of its halves' facts.
+//! A row can carry a key, a gesture, or BOTH. Every keyboard slot that can carry a mouse half
+//! (`KeySlot::has_mouse_half`) is a two-editor row whose gesture is `GestureSlot::ForKey`; the
+//! figure-delete row pairs its key with the gesture field it had before the table existed. A row's
+//! two facts are then the join of its halves' facts.
 
 use std::sync::LazyLock;
 
@@ -169,10 +170,10 @@ impl SlotSpec {
     /// The row's two facts — where it acts and whether Moonbot writes it — joined across its
     /// editors.
     ///
-    /// The origin is the key's when there are two: a test holds the halves to the same answer, so
-    /// the day a row gets a key that travels and a gesture that does not, the mark has to be
-    /// redesigned rather than quietly answer for one half. The scope is `Scope::join`, which reads
-    /// the containment the surfaces document.
+    /// The origin says whether ANY half travels: for almost every two-editor row that is the key
+    /// (a Moonbot paste or a core pull writes it) while the gesture is ours, and the legend says so
+    /// in as many words. The scope is `Scope::join`, which reads the containment the surfaces
+    /// document.
     pub fn meta(&self) -> SlotMeta {
         match self.editors {
             Editors::Key(key) => meta::key_slot_meta(key),
@@ -181,7 +182,7 @@ impl SlotSpec {
                 let k = meta::key_slot_meta(key);
                 let m = meta::gesture_slot_meta(mouse);
                 SlotMeta {
-                    origin: k.origin,
+                    origin: k.origin.join(m.origin),
                     scope: k.scope.join(m.scope),
                 }
             }
@@ -226,10 +227,15 @@ pub(super) fn rows() -> &'static [Row] {
 
 fn build_rows() -> Vec<Row> {
     use HotkeyGroup as G;
-    let key = |group, key| {
+    // A keyboard slot brings its mouse half along wherever it can carry one, so the page has no
+    // list of "which actions also take a click" to keep — the config's own rule decides.
+    let key = |group, key: KeySlot| {
         Row::Slot(SlotSpec {
             group,
-            editors: Editors::Key(key),
+            editors: match key.mouse_half() {
+                Some(half) => Editors::Both(key, half),
+                None => Editors::Key(key),
+            },
         })
     };
     let mouse = |group, mouse| {
@@ -269,9 +275,8 @@ fn build_rows() -> Vec<Row> {
         key(G::Draw, KeySlot::DrawSegment),
         key(G::Draw, KeySlot::DrawTriangle),
         key(G::Draw, KeySlot::DrawChannel),
-        // One action, two editors: the key deletes the selected figure, the gesture the one under
-        // the pointer. They were two rows while the gesture was the only mouse slot outside the
-        // trading page; §3.4 of the plan is one row per action, and this is its first.
+        // The key deletes the selected figure, the gesture the one under the pointer: the one
+        // two-editor row whose gesture has a field of its own, from before the table existed.
         both(G::Draw, KeySlot::FigDelete, GestureSlot::FigDelete),
         key(G::Draw, KeySlot::FigAlert),
         key(G::Draw, KeySlot::FigUndo),
@@ -308,18 +313,17 @@ pub(super) fn slots() -> impl Iterator<Item = SlotSpec> {
     })
 }
 
-/// The page id of a keyboard slot: its stem with hyphens, and the index for a preset.
+/// The page id of a keyboard slot: its full name with hyphens — `cancel-buy`, `order-size-2`.
 pub(super) fn key_id(slot: KeySlot) -> String {
-    let stem = slot.stem().replace('_', "-");
-    match slot.index() {
-        Some(i) => format!("{stem}-{i}"),
-        None => stem,
-    }
+    slot.name().replace(['_', '.'], "-")
 }
 
-/// The page id of a gesture slot: its stem with hyphens.
+/// The page id of a gesture slot: its stem with hyphens; a key half carries its key's id.
 pub(super) fn gesture_id(slot: GestureSlot) -> String {
-    slot.stem().replace('_', "-")
+    match slot {
+        GestureSlot::ForKey(key) => key_id(key),
+        own => own.stem().replace('_', "-"),
+    }
 }
 
 /// The title of the row that edits one keyboard slot — `F3`, `S2`, or the localized action.
@@ -345,6 +349,11 @@ pub(super) fn key_title(slot: KeySlot) -> String {
 /// figure-delete gesture names the row the reader will find it on. The lookup is a scan of the
 /// registry, which is why a row that KNOWS it has no key goes to [`mouse_only_title`] directly.
 pub(super) fn gesture_title(slot: GestureSlot) -> String {
+    // A key half names its key in the variant; only a gesture with a field of its own has to be
+    // looked up to learn whether it shares a row.
+    if let GestureSlot::ForKey(key) = slot {
+        return key_title(key);
+    }
     let shared_row_key = slots().find_map(|spec| match (spec.key(), spec.mouse()) {
         (Some(key), Some(mouse)) if mouse == slot => Some(key),
         _ => None,

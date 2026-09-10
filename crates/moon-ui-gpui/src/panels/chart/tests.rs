@@ -172,6 +172,7 @@ fn mouse_down_handlers_offer_a_press_to_their_layers_in_a_fixed_order() {
                 "try_open_arb_venue",
                 "try_fig_click",
                 "fig_delete_press",
+                "try_action_click",
                 "try_place_order_click",
                 "try_move_orders_click",
             ],
@@ -182,6 +183,7 @@ fn mouse_down_handlers_offer_a_press_to_their_layers_in_a_fixed_order() {
                 "try_open_arb_venue",
                 "try_open_volume_menu",
                 "fig_delete_press",
+                "try_action_click",
                 "try_open_figure_menu",
                 "try_move_orders_click",
                 "try_open_order_menu",
@@ -195,6 +197,7 @@ fn mouse_down_handlers_offer_a_press_to_their_layers_in_a_fixed_order() {
             "mouse_down_middle",
             vec![
                 "fig_delete_press",
+                "try_action_click",
                 "try_place_order_click",
                 "try_move_orders_click",
                 "sync_x_scale_window",
