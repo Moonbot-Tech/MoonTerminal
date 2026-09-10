@@ -172,6 +172,30 @@ pub struct InlineKeyboardMarkup {
     pub inline_keyboard: Vec<Vec<InlineKeyboardButton>>,
 }
 
+/// Persistent text navigation; buttons send their labels as ordinary chat messages.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ReplyKeyboardMarkup {
+    pub keyboard: Vec<Vec<KeyboardButton>>,
+    pub resize_keyboard: bool,
+    pub is_persistent: bool,
+}
+
+/// A text-only reply button with optional Telegram-native visual emphasis.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct KeyboardButton {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+}
+
+/// Telegram accepts one keyboard kind per message, without an enum discriminator.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ReplyMarkup {
+    Inline(InlineKeyboardMarkup),
+    Reply(ReplyKeyboardMarkup),
+}
+
 /// Optional retry metadata carried by a failed Telegram response envelope.
 #[derive(Deserialize)]
 struct ResponseParameters {
@@ -204,7 +228,7 @@ struct SendMessageReq<'a> {
     chat_id: i64,
     text: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    reply_markup: Option<&'a InlineKeyboardMarkup>,
+    reply_markup: Option<&'a ReplyMarkup>,
 }
 
 impl RetryState {
@@ -323,12 +347,12 @@ impl BotApi {
         }
     }
 
-    /// Send a text message, optionally with an inline keyboard or Mini App button.
+    /// Send a text message with an optional inline launcher or persistent reply keyboard.
     ///
     /// Args:
     ///     chat_id: Destination chat.
     ///     text: Already-composed page; the caller owns localization and 4096-unit splitting.
-    ///     reply_markup: Optional inline keyboard.
+    ///     reply_markup: Optional Telegram keyboard, serialized without a wrapper.
     ///
     /// Returns:
     ///     The echoed message on success.
@@ -336,7 +360,7 @@ impl BotApi {
         &mut self,
         chat_id: i64,
         text: &str,
-        reply_markup: Option<&InlineKeyboardMarkup>,
+        reply_markup: Option<&ReplyMarkup>,
     ) -> Result<Message, ApiError> {
         let req = SendMessageReq {
             chat_id,
@@ -574,3 +598,6 @@ impl InlineKeyboardMarkup {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

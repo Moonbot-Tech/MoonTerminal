@@ -6,8 +6,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex,
-    rgba_from, v_flex,
+    MoonButton, MoonCheckboxSize, MoonGroupBox, MoonInput, MoonInputEvent, MoonInputState,
+    MoonPalette, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -83,7 +83,8 @@ impl SettingsView {
         let cfg = self.backend.read(cx);
         let draft = cfg.preview.as_ref().unwrap_or(&cfg.config);
         let telegram = &draft.telegram;
-        let status_text = if telegram.token.expose() != cfg.config.telegram.token.expose() {
+        let token_changed = telegram.token.expose() != cfg.config.telegram.token.expose();
+        let status_text = if token_changed {
             t!("telegram.state.unsaved").to_string()
         } else {
             cfg.telegram_service_status_text()
@@ -94,7 +95,27 @@ impl SettingsView {
             .as_ref()
             .map(|(code, _)| t!("telegram.pair_code", code = code.clone()).to_string())
             .unwrap_or_default();
-        let mini_url = if telegram.mini_app_enabled {
+        let mini_changed =
+            token_changed || telegram.mini_app_enabled != cfg.config.telegram.mini_app_enabled;
+        let mini_status = if mini_changed {
+            t!("telegram.state.unsaved").to_string()
+        } else if !telegram.mini_app_enabled {
+            t!("telegram.mini_disabled").to_string()
+        } else if telegram.token.is_empty() {
+            t!("telegram.state.disabled").to_string()
+        } else {
+            use moon_core::telegram::runtime::mini_app::MiniAppStatus;
+            match &cfg.telegram.mini_status {
+                MiniAppStatus::Tunneling { .. } => t!("telegram.mini_ready"),
+                MiniAppStatus::Starting | MiniAppStatus::Listening { .. } => {
+                    t!("telegram.mini_starting")
+                }
+                MiniAppStatus::Failed { .. } => t!("telegram.mini_failed"),
+                MiniAppStatus::Stopped => t!("telegram.stopped"),
+            }
+            .to_string()
+        };
+        let mini_url = if telegram.mini_app_enabled && !mini_changed {
             match &cfg.telegram.mini_status {
                 moon_core::telegram::runtime::mini_app::MiniAppStatus::Tunneling {
                     url, ..
@@ -117,11 +138,19 @@ impl SettingsView {
 
         v_flex()
             .w_full()
-            .gap(design::ui_px(cx, 10.0))
-            .child(super::section(&t!("telegram.section_bot"), p, cx))
+            .max_w(design::font_w_px(cx, 680.0))
+            .gap(design::ui_px(cx, 16.0))
             .child(
-                v_flex()
-                    .gap(design::ui_px(cx, 4.0))
+                div()
+                    .text_color(muted)
+                    .child(t!("telegram.intro").to_string()),
+            )
+            .child(
+                MoonGroupBox::new("telegram-bot-section")
+                    .title(t!("telegram.section_bot").to_string())
+                    .padding(14.0)
+                    .gap(10.0)
+                    .child(div().text_color(rgba_from(p.text, 1.0)).child(status_text))
                     .child(
                         h_flex()
                             .flex_wrap()
@@ -155,65 +184,125 @@ impl SettingsView {
                         )
                     }),
             )
-            .child(div().text_color(rgba_from(p.text, 1.0)).child(status_text))
-            .child(div().text_color(muted).child(paired))
-            .when(!pairing.is_empty(), |tab| {
-                tab.child(div().text_color(muted).child(pairing))
-            })
             .child(
-                h_flex()
-                    .gap(design::ui_px(cx, 8.0))
+                MoonGroupBox::new("telegram-access-section")
+                    .title(t!("telegram.section_access").to_string())
+                    .padding(14.0)
+                    .gap(10.0)
+                    .child(div().text_color(muted).child(paired))
                     .child(
-                        MoonButton::new("telegram-pair")
-                            .label(t!("telegram.pair_new").to_string())
-                            .disabled(cfg.telegram.service.is_none())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.backend.update(cx, |b, bcx| {
-                                    b.issue_telegram_pairing();
-                                    bcx.notify();
-                                });
-                            }))
-                            .render(),
+                        div()
+                            .text_color(muted)
+                            .child(t!("telegram.access_hint").to_string()),
                     )
                     .child(
-                        MoonButton::new("telegram-reset")
-                            .disabled(cfg.config.telegram.authorized_chat_ids.is_empty())
-                            .label(t!("telegram.pair_reset").to_string())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.backend.update(cx, |b, bcx| {
-                                    b.reset_telegram_pairing();
-                                    bcx.notify();
-                                });
-                            }))
-                            .render(),
-                    ),
+                        h_flex()
+                            .flex_wrap()
+                            .gap(design::ui_px(cx, 8.0))
+                            .child(
+                                MoonButton::new("telegram-pair")
+                                    .primary()
+                                    .padding_x(12.0)
+                                    .label(t!("telegram.pair_new").to_string())
+                                    .disabled(cfg.telegram.service.is_none() || token_changed)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.backend.update(cx, |b, bcx| {
+                                            b.issue_telegram_pairing();
+                                            bcx.notify();
+                                        });
+                                    }))
+                                    .render(),
+                            )
+                            .child(
+                                MoonButton::new("telegram-reset")
+                                    .ghost()
+                                    .padding_x(12.0)
+                                    .disabled(cfg.config.telegram.authorized_chat_ids.is_empty())
+                                    .label(t!("telegram.pair_reset").to_string())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.backend.update(cx, |b, bcx| {
+                                            b.reset_telegram_pairing();
+                                            bcx.notify();
+                                        });
+                                    }))
+                                    .render(),
+                            ),
+                    )
+                    .when(!pairing.is_empty() && !token_changed, |section| {
+                        section.child(
+                            v_flex()
+                                .gap(design::ui_px(cx, 8.0))
+                                .child(div().font_family(design::mono()).child(pairing))
+                                .child(
+                                    MoonButton::new("telegram-copy-pair")
+                                        .label(t!("telegram.pair_copy").to_string())
+                                        .padding_x(12.0)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            let command = this
+                                                .backend
+                                                .read(cx)
+                                                .telegram
+                                                .pairing
+                                                .as_ref()
+                                                .filter(|(_, expiry)| {
+                                                    std::time::Instant::now() < *expiry
+                                                })
+                                                .map(|(code, _)| format!("/pair {code}"));
+                                            if let Some(command) = command {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    command,
+                                                ));
+                                                this.status = Some((
+                                                    super::StatusMsg::Key("settings.copied"),
+                                                    false,
+                                                ));
+                                                cx.notify();
+                                            }
+                                        }))
+                                        .render(),
+                                ),
+                        )
+                    }),
             )
-            .child(super::separator(p, cx))
-            .child(super::section(&t!("telegram.section_mini_app"), p, cx))
             .child(
-                self.draft_checkbox(cx, "tg-mini-app", mini_app, |p, v| {
-                    if p.telegram.mini_app_enabled != v {
-                        p.telegram.mini_app_enabled = v;
-                        true
-                    } else {
-                        false
-                    }
-                })
-                .label(t!("telegram.mini_app").to_string())
-                .size(MoonCheckboxSize::Normal),
+                MoonGroupBox::new("telegram-mini-section")
+                    .title(t!("telegram.section_mini_app").to_string())
+                    .padding(14.0)
+                    .gap(10.0)
+                    .child(
+                        self.draft_checkbox(cx, "tg-mini-app", mini_app, |p, v| {
+                            if p.telegram.mini_app_enabled != v {
+                                p.telegram.mini_app_enabled = v;
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                        .label(t!("telegram.mini_app").to_string())
+                        .size(MoonCheckboxSize::Normal),
+                    )
+                    .child(
+                        div()
+                            .text_color(muted)
+                            .child(t!("telegram.mini_app_hint").to_string()),
+                    )
+                    .child(div().text_color(rgba_from(p.text, 1.0)).child(mini_status))
+                    .when_some(mini_url, |tab, url| {
+                        tab.child(
+                            MoonButton::new("telegram-copy-url")
+                                .label(t!("telegram.mini_copy_url").to_string())
+                                .ghost()
+                                .padding_x(12.0)
+                                .tooltip(url.clone())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
+                                    this.status =
+                                        Some((super::StatusMsg::Key("settings.copied"), false));
+                                    cx.notify();
+                                }))
+                                .render(),
+                        )
+                    }),
             )
-            .child(
-                div()
-                    .text_color(muted)
-                    .child(t!("telegram.mini_app_hint").to_string()),
-            )
-            .when_some(mini_url, |tab, url| {
-                tab.child(
-                    div()
-                        .font_family(design::mono())
-                        .text_color(muted)
-                        .child(url),
-                )
-            })
     }
 }

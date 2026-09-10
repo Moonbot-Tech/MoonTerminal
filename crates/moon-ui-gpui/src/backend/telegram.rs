@@ -4,7 +4,10 @@ use gpui::Context;
 use moon_core::config::TelegramConfig;
 use moon_core::telegram::{
     TelegramService, TelegramStatus,
-    api::{InlineKeyboardButton, InlineKeyboardMarkup},
+    api::{
+        InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup,
+        ReplyMarkup,
+    },
     commands::ParsedCommand,
     runtime::mini_app::MiniAppStatus,
     runtime::{Response, Work},
@@ -191,7 +194,12 @@ impl Backend {
                         t!("telegram.refusal")
                     }
                     .to_string();
-                    let _ = reply.try_send(Response::PairSaved { saved, text });
+                    let keyboard = saved.then(navigation_keyboard);
+                    let _ = reply.try_send(Response::PairSaved {
+                        saved,
+                        text,
+                        keyboard,
+                    });
                 }
                 Work::Command {
                     chat_id,
@@ -207,9 +215,11 @@ impl Backend {
                         continue;
                     }
                     match command {
-                        ParsedCommand::MiniApp => {
+                        ParsedCommand::Start | ParsedCommand::Help | ParsedCommand::MiniApp => {
                             let keyboard = match &self.telegram.mini_status {
-                                MiniAppStatus::Tunneling { url, .. } => {
+                                MiniAppStatus::Tunneling { url, .. }
+                                    if self.config.telegram.mini_app_enabled =>
+                                {
                                     Some(InlineKeyboardMarkup::from_rows(vec![vec![
                                         InlineKeyboardButton::web_app(
                                             t!("telegram.mini_open").to_string(),
@@ -219,15 +229,39 @@ impl Backend {
                                 }
                                 _ => None,
                             };
-                            let text = if keyboard.is_some() {
-                                t!("telegram.mini_open")
-                            } else {
-                                t!("telegram.state.unavailable")
-                            }
-                            .to_string();
+                            let text =
+                                if matches!(command, ParsedCommand::Start | ParsedCommand::Help) {
+                                    let next = if keyboard.is_some() {
+                                        t!("telegram.bot_ready")
+                                    } else if !self.config.telegram.mini_app_enabled {
+                                        t!("telegram.bot_mini_disabled")
+                                    } else {
+                                        t!("telegram.bot_mini_wait")
+                                    };
+                                    format!("{}\n\n{}", t!("telegram.bot_welcome"), next)
+                                } else if keyboard.is_some() {
+                                    t!("telegram.bot_ready").to_string()
+                                } else if !self.config.telegram.mini_app_enabled {
+                                    t!("telegram.bot_mini_disabled").to_string()
+                                } else {
+                                    t!("telegram.bot_mini_wait").to_string()
+                                };
+                            let keyboard =
+                                if matches!(command, ParsedCommand::Start | ParsedCommand::Help) {
+                                    Some(navigation_keyboard())
+                                } else {
+                                    keyboard
+                                        .map(ReplyMarkup::Inline)
+                                        .or_else(|| Some(navigation_keyboard()))
+                                };
                             let _ = reply.try_send(Response::Text { text, keyboard });
                         }
-                        _ => answer(&reply, t!("telegram.invalid").to_string()),
+                        _ => {
+                            let _ = reply.try_send(Response::Text {
+                                text: t!("telegram.invalid").to_string(),
+                                keyboard: Some(navigation_keyboard()),
+                            });
+                        }
                     }
                 }
                 Work::MiniApp(request) => self.telegram_mini_request(request),
@@ -282,8 +316,7 @@ fn status_text(status: &TelegramStatus) -> String {
         TelegramStatus::Stopping => t!("telegram.stopping"),
         TelegramStatus::Disabled => t!("telegram.state.disabled"),
         TelegramStatus::Starting => t!("telegram.state.starting"),
-        TelegramStatus::Unpaired => t!("telegram.paired_none"),
-        TelegramStatus::Paired { chat_count } => t!("telegram.paired_count", count = chat_count),
+        TelegramStatus::Unpaired | TelegramStatus::Paired { .. } => t!("telegram.state.connected"),
         TelegramStatus::RateLimited { retry_after_secs } => {
             t!("telegram.rate_limited", seconds = retry_after_secs)
         }
@@ -293,9 +326,27 @@ fn status_text(status: &TelegramStatus) -> String {
     .to_string()
 }
 
-/// Compose Mini App shell labels in the UI locale domain.
+/// Persistent text buttons request a fresh launcher instead of retaining a stale tunnel URL.
+fn navigation_keyboard() -> ReplyMarkup {
+    ReplyMarkup::Reply(ReplyKeyboardMarkup {
+        keyboard: vec![vec![
+            KeyboardButton {
+                text: t!("telegram.mini_open").to_string(),
+                style: Some("primary".to_string()),
+            },
+            KeyboardButton {
+                text: t!("telegram.button_help").to_string(),
+                style: None,
+            },
+        ]],
+        resize_keyboard: true,
+        is_persistent: true,
+    })
+}
+
+/// Compose Mini App shell labels and all reply-button aliases in the UI locale domain.
 fn telegram_labels() -> std::collections::BTreeMap<String, String> {
-    [
+    let mut labels: std::collections::BTreeMap<String, String> = [
         (
             "mini_shell_checking".to_string(),
             t!("telegram.mini_shell_checking").to_string(),
@@ -316,5 +367,17 @@ fn telegram_labels() -> std::collections::BTreeMap<String, String> {
         ("locale".to_string(), rust_i18n::locale().to_string()),
     ]
     .into_iter()
-    .collect()
+    .collect();
+    // Keep old keyboard labels usable after the desktop locale changes.
+    for locale in ["ru", "en", "es"] {
+        labels.insert(
+            format!("button_miniapp_{locale}"),
+            t!("telegram.mini_open", locale = locale).to_string(),
+        );
+        labels.insert(
+            format!("button_help_{locale}"),
+            t!("telegram.button_help", locale = locale).to_string(),
+        );
+    }
+    labels
 }
