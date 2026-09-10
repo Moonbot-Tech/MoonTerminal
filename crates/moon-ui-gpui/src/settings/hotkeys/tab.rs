@@ -737,6 +737,7 @@ impl SettingsView {
             desc.into(),
             Some(key_slot_meta(slot)),
             title_is_identity,
+            false,
             clash.clone().into_iter().collect(),
             cx,
         )
@@ -823,8 +824,6 @@ impl SettingsView {
                 })
         });
 
-        // A greyed short row follows its long twin, so a clash reported on it would name a binding
-        // the row does not own.
         // One line, with the trailing controls in a block of their own.
         //
         // The block is what makes the columns line up. Before it, a gesture row's first dropdown
@@ -837,6 +836,7 @@ impl SettingsView {
             desc.into(),
             Some(mouse_slot_meta(slot)),
             false,
+            disabled,
             notes,
             cx,
         )
@@ -940,6 +940,9 @@ impl SettingsView {
     ///     desc: Muted description that may wrap within its capped column.
     ///     marks: The slot's two facts, or `None` for a row that owns no slot.
     ///     mono_title: Whether the title is an identity like `F3` rather than a phrase.
+    ///     muted: Whether the title is greyed because the row is inert — the four short move rows
+    ///         while the mirror switch owns them. Lost in a signature change on 2026-09-09, which
+    ///         left those rows shouting a full-contrast title beside a dropdown that does nothing.
     ///     notes: Lines printed under the description, in order. A gesture row can carry two:
     ///         which row it takes its binding from, and which layer it shares it with.
     ///     cx: Settings context used for palette and scaled layout.
@@ -952,6 +955,7 @@ impl SettingsView {
         desc: String,
         marks: Option<SlotMeta>,
         mono_title: bool,
+        muted: bool,
         notes: Vec<Clash>,
         cx: &Context<Self>,
     ) -> gpui::Div {
@@ -973,7 +977,7 @@ impl SettingsView {
                             .wrap()
                             .font_size(11.0)
                             .line_height(14.0)
-                            .color(p.text)
+                            .color(if muted { p.text_muted } else { p.text })
                             .render(),
                     ),
             )
@@ -1035,6 +1039,7 @@ impl SettingsView {
             t!("hotkeys.split_parts").to_string(),
             t!("hotkeys.split_parts_hint").to_string(),
             Some(meta::SPLIT_PARTS),
+            false,
             false,
             Vec::new(),
             cx,

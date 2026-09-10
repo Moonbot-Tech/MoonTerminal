@@ -396,13 +396,22 @@ impl Clashes {
             match position {
                 // Above and unconditional: it takes every press and this row is dead.
                 Position::Above if layer.unconditional() => kills.extend(holders),
-                // BELOW, and this row's own layer answers every press: the mirror of the case
-                // above, and it has to be told from this side too. `buy_set_click` on Shift+Left
+                // BELOW, and this row takes every press that layer would have seen. Two ways to
+                // do that, and the second is easy to miss: my layer answers unconditionally, OR we
+                // both need the same object and I am asked first — over that object the press never
+                // reaches them, and away from it neither of us answers.
+                //
+                // The first case has to be told from this side too: `buy_set_click` on Shift+Left
                 // sits above the move layer, which holds the same gesture by default — the move row
                 // read "will not fire" while this one read "both work", so one collision described
-                // itself two contradictory ways. The test is MY layer, not theirs: a row whose own
-                // layer only answers over an object lets the press fall through when it misses.
-                Position::Below if mine.unconditional() => wins.extend(holders),
+                // itself two contradictory ways.
+                Position::Below
+                    if mine.unconditional()
+                        || (layer_object(mine).is_some()
+                            && layer_object(mine) == layer_object(*layer)) =>
+                {
+                    wins.extend(holders)
+                }
                 // Above but conditional, or below a row that is itself conditional: both live.
                 _ => beside.extend(holders),
             }
@@ -429,6 +438,37 @@ impl Clashes {
             });
         }
         notes
+    }
+}
+
+/// What has to be under the pointer for a layer to answer at all.
+///
+/// The missing half of [`Layer::unconditional`]: that one asks whether a layer answers EVERY press,
+/// which is enough to know when an upper layer kills a lower one, and not enough for the reverse.
+/// Two conditional layers that need the SAME object do not coexist — whichever is offered the press
+/// first takes every press the other would ever have seen. A figure-delete gesture on the right
+/// button reads exactly that way: the delete layer is offered the press before the figure menu, and
+/// over a figure it consumes it, so "both work" was false for the one gesture the row is bound to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Object {
+    /// A drawn figure within the hit threshold.
+    Figure,
+    /// An order line under the pointer.
+    OrderLine,
+}
+
+/// The object a layer needs, or `None` for one that answers wherever it is offered the press.
+///
+/// `Draw`'s entry is the NARROW half of its condition and is why this is not the whole story:
+/// `try_fig_click` also answers on empty plot while a tool is armed, because that is where a new
+/// figure starts. It costs nothing today — no settings row belongs to the drawing layer, so this is
+/// never asked about `Draw` as the ROW's own layer, only as a rival above one — but a row that ever
+/// does will need the armed-tool mode here as well, which is the `Scope` model the plan carries.
+fn layer_object(layer: Layer) -> Option<Object> {
+    match layer {
+        Layer::Draw | Layer::FigDelete | Layer::FigMenu => Some(Object::Figure),
+        Layer::OrderMenu => Some(Object::OrderLine),
+        Layer::Place | Layer::Move | Layer::XScale => None,
     }
 }
 

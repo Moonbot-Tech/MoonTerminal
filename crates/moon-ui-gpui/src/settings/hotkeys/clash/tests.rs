@@ -532,3 +532,38 @@ fn a_lower_layer_is_told_it_loses_and_the_upper_one_that_it_takes() {
         Severity::Shadowed
     );
 }
+
+/// Two conditional layers that need the SAME object do not coexist, whatever their order says.
+///
+/// The figure-delete layer is offered a right press before the figure menu, and over a figure it
+/// consumes it — so a delete gesture on a right button takes that press from the menu rather than
+/// sharing it. Away from a figure neither answers, which is why "both work, each on its own ground"
+/// reads plausible and is wrong: there is no ground of its own for the menu to keep.
+///
+/// Plausible breakage: testing only `unconditional()` on the below branch, which is true of neither
+/// layer here, so both fell through to the sharing caption.
+#[test]
+fn a_lower_layer_needing_the_same_object_is_taken_from() {
+    let _locale = crate::test_locale::force("en");
+    let mut hotkeys = quiet();
+    set_mouse_slot_verbatim(
+        &mut hotkeys,
+        MouseSlot::FigDelete,
+        MouseGestureBinding::RightAlt,
+    );
+
+    let notes = Clashes::build(&hotkeys).mouse(&hotkeys, MouseSlot::FigDelete);
+    let clash = notes
+        .first()
+        .expect("the figure menu sits below and never sees the press");
+    assert_eq!(clash.severity, Severity::Shares);
+    assert_eq!(
+        clash.text,
+        rust_i18n::t!(
+            "hotkeys.clash.wins",
+            rows = rust_i18n::t!("hotkeys.clash.layer.fig_menu")
+        )
+        .to_string(),
+        "it TAKES the press from the menu; it does not share it"
+    );
+}

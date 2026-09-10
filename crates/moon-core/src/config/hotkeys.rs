@@ -19,8 +19,9 @@ pub const MANUAL_STRATEGY_KEYS: usize = 10;
 /// [`HotkeysConfig::fill_unbound_slots`].
 ///
 /// 1: backfilled the slots that shipped unbound. 2: cleared `chart_shot` where the user had
-/// already given Ctrl+F10 to something else.
-const SCHEMA: u8 = 3;
+/// already given Ctrl+F10 to something else. 3: the same for `fig_undo` on Ctrl+Z. 4: cleared the
+/// two pending-order GESTURES, which stopped being inert and started placing live orders.
+const SCHEMA: u8 = 4;
 
 /// Parts produced by the plain Split Order action, matching Moonbot, where that action always
 /// splits a sell order into three. The configurable count belongs to `Split N` instead.
@@ -832,6 +833,10 @@ impl HotkeysConfig {
     ///
     /// Generation 2 → 3: the same check for `fig_undo`, which arrives on Ctrl+Z the same way.
     ///
+    /// Generation 3 → 4: the first arm about a GESTURE rather than a key, and about meaning rather
+    /// than collision — the two pending-order gestures went from saved-but-inert to placing a live
+    /// order, so a value chosen while the row said it did nothing is cleared.
+    ///
     /// Returns whether anything changed, so the caller can persist the stamp.
     pub(super) fn fill_unbound_slots(&mut self) -> bool {
         if self.schema >= SCHEMA {
@@ -848,6 +853,9 @@ impl HotkeysConfig {
         }
         if self.schema < 3 {
             self.clear_generation_3_collisions();
+        }
+        if self.schema < 4 {
+            self.clear_generation_4_pending_gestures();
         }
         self.schema = SCHEMA;
         true
@@ -921,6 +929,35 @@ impl HotkeysConfig {
         // Recomputed rather than reused: the generations above may have just changed slots.
         let taken = self.bound_keys();
         clear_if_duplicate(&taken, &mut self.fig_undo, "Delete last figure");
+    }
+
+    /// Generation 3 -> 4: the two pending-order gestures start FIRING.
+    ///
+    /// They shipped editable and saved, with the row itself saying the terminal did not send them
+    /// yet — so anyone who set one was told, on that screen, that it did nothing. It now places a
+    /// live pending order on the selected core. A value chosen under that promise is not a choice to
+    /// trade, and the two are cleared once rather than waking up as a trading gesture; both ship
+    /// unset, so this touches nobody who did not deliberately set one.
+    ///
+    /// The mirror of what generations 1 through 3 do for keys, and the first time a GESTURE needs
+    /// it. There is still no `bound_keys` for gestures, so a gesture that collides with another
+    /// cannot be found the way a key can — that debt is in the plan.
+    ///
+    /// Returns:
+    ///     Nothing; clears only the two pending gesture slots.
+    fn clear_generation_4_pending_gestures(&mut self) {
+        for (slot, label) in [
+            (&mut self.pending_long_click, "Pending Long"),
+            (&mut self.pending_short_click, "Pending Short"),
+        ] {
+            if *slot != MouseGestureBinding::None {
+                log::warn!(
+                    "hotkeys.toml: {label} теперь ставит настоящий отложенный ордер; жест {slot:?} \
+                     снят, назначьте его заново, если это нужно"
+                );
+                *slot = MouseGestureBinding::None;
+            }
+        }
     }
 
     /// Every keystroke this file already binds, for collision checks.

@@ -561,3 +561,38 @@ fn a_no_op_write_and_an_impossible_index_are_both_quiet() {
         assert!(!cfg.set_key(out_of_range, "alt-1".into()));
     }
 }
+
+/// The two pending gestures are cleared ONCE, when they stop being inert.
+///
+/// They shipped saved but unsent, with the settings row saying so; a value set under that promise
+/// is not a decision to place live pending orders, which is what the same value does now. Everything
+/// else in the file is left exactly as it was.
+///
+/// Plausible breakage: clearing on every load takes the gesture back from someone who set it
+/// deliberately AFTER the change, which is the same mistake the keyboard generations are gated
+/// against.
+#[test]
+fn the_pending_gestures_are_cleared_once_when_they_go_live() {
+    let mut old = HotkeysConfig {
+        schema: 3,
+        pending_long_click: MouseGestureBinding::Middle,
+        pending_short_click: MouseGestureBinding::LeftAlt,
+        // A neighbour that must survive untouched: this one always did something.
+        buy_set_click: MouseGestureBinding::LeftDouble,
+        ..HotkeysConfig::default()
+    };
+
+    assert!(old.fill_unbound_slots());
+    assert_eq!(old.pending_long_click, MouseGestureBinding::None);
+    assert_eq!(old.pending_short_click, MouseGestureBinding::None);
+    assert_eq!(
+        old.buy_set_click,
+        MouseGestureBinding::LeftDouble,
+        "only the two that changed meaning are touched"
+    );
+
+    // Set again on a file that has already been through it, and it stays.
+    old.pending_long_click = MouseGestureBinding::MiddleShift;
+    assert!(!old.fill_unbound_slots(), "the generation has already run");
+    assert_eq!(old.pending_long_click, MouseGestureBinding::MiddleShift);
+}
