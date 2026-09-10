@@ -32,18 +32,23 @@ pub(super) struct PullRow {
     pub verdict: PullVerdict,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Shared with [`super::pull_gestures`], whose rows carry a gesture rather than a key: read
+/// "value" for "key" below. Two variants behave differently there and that module says why — a
+/// zero ordinal is a real value rather than `Empty` (Moonbot lets a trader pick "none"), and
+/// `Conflict` is never produced, because one gesture on two rows is ordinary once the mirror
+/// switch is on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum PullVerdict {
-    /// The core reports no key for this slot (`core_raw == 0`).
+    /// The core reports no value for this slot (`core_raw == 0`).
     Empty,
-    /// The core's key does not decode to anything `gpui::Keystroke::parse` accepts.
+    /// The core's value does not decode to anything this build understands.
     Unsupported,
-    /// The core's key already matches the terminal's own binding for this slot.
+    /// The core's value already matches the terminal's own.
     Unchanged,
-    /// The core's key differs and is free — applying will write it.
+    /// The core's value differs and is free — applying will write it.
     WillApply,
     /// The core's key differs and is already bound elsewhere (another terminal slot, or another
-    /// slot in this SAME incoming batch) — shown, but excluded from apply.
+    /// slot in this SAME incoming batch) — shown, but excluded from apply. Keys only.
     Conflict,
 }
 

@@ -2,17 +2,21 @@
 //!
 //! This module owns the slot enums (`HotkeySlot`/`MouseSlot`), the slot-to-`HotkeysConfig`
 //! field mapping (getters, setters, and IDs), and `parse_hotkey`; [`tab`] contains the
-//! `SettingsView` implementation that builds the tab and its editor rows. [`pull`] holds the
-//! pure preview/apply logic behind the "pull layout from core" button.
+//! `SettingsView` implementation that builds the tab and its editor rows. [`meta`] attaches the
+//! two marks every row carries; [`pull`] and [`pull_gestures`] hold the pure preview/apply logic
+//! behind the "pull layout from core" button — the keys and the mouse gestures respectively.
 
+mod clash;
+mod meta;
 mod pull;
+mod pull_gestures;
 mod tab;
 
 use gpui::*;
 use moon_core::config::{HotkeysConfig, MouseGestureBinding, MoveKind};
 use rust_i18n::t;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum HotkeySlot {
     OrderSize(usize),
     SellPreset(usize),
@@ -43,6 +47,17 @@ enum HotkeySlot {
     FigDelete,
     FigAlert,
     FigUndo,
+}
+
+/// Every slot the tab can edit, in the order `hotkeys::resolve_binding` tests them.
+///
+/// Delegates to [`clash::slots_in_resolve_order`] rather than listing the slots again: that order
+/// has to exist anyway to say which of two holders of one key actually fires, and a second list
+/// beside the enum would be one more place to forget a new variant. Forgetting it in the one list
+/// that remains costs the slot its clash detection, which is loud enough to be noticed.
+#[cfg(test)]
+fn all_slots() -> Vec<HotkeySlot> {
+    clash::slots_in_resolve_order()
 }
 
 /// Hotkey groups shown as sub-tabs below the built-in block, matching Moonbot's hotkey pages.
@@ -97,7 +112,7 @@ impl HotkeyGroup {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum MouseSlot {
     BuySet,
     ShortSet,
@@ -116,13 +131,38 @@ enum MouseSlot {
     FigDelete,
 }
 
+/// Every gesture slot, once: the gesture pull walks it and the marks check walks it.
+///
+/// The compiler cannot enforce this list — a new variant left out simply goes unpulled and
+/// unchecked rather than failing to build. Add it here when you add it above.
+fn all_mouse_slots() -> [MouseSlot; 13] {
+    [
+        MouseSlot::BuySet,
+        MouseSlot::ShortSet,
+        MouseSlot::PendingLong,
+        MouseSlot::PendingShort,
+        MouseSlot::BuyMove,
+        MouseSlot::SellMove,
+        MouseSlot::BuyMove2,
+        MouseSlot::SellMove2,
+        MouseSlot::ShortBuyMove,
+        MouseSlot::ShortSellMove,
+        MouseSlot::ShortBuyMove2,
+        MouseSlot::ShortSellMove2,
+        MouseSlot::FigDelete,
+    ]
+}
+
 /// Returns whether runtime does not yet consume this mouse gesture.
 ///
 /// Placement reads BuySet/ShortSet in `ChartPanel::try_place_order_click`, the eight Move gestures
 /// are read by `ChartPanel::try_move_orders_click`, and FigDelete — the one slot here that is not a
 /// trading gesture — by `ChartPanel::try_fig_delete_click`. Only the two pending slots remain
-/// unconsumed, and not for want of wiring: moonproto's `NewOrderParams` carries no pending
-/// condition, so there is no command to send (see `moonbot_import` and the order-line notes).
+/// unconsumed, and the reason is ours rather than the protocol's: moonproto DOES carry the command.
+/// `client.trade().new_pending_order(PendingOrderParams::new(market, side, trigger_price, size))`
+/// exists on the pinned revision, and the pending it creates is published in the ordinary order
+/// snapshot, so it can then be moved or cancelled like any other order. Nothing here sends it yet —
+/// that is a feature to write, not a wire gap to wait on.
 fn mouse_slot_wip(slot: MouseSlot) -> bool {
     matches!(slot, MouseSlot::PendingLong | MouseSlot::PendingShort)
 }
@@ -236,76 +276,78 @@ fn move_kind_slot_id(slot: MoveKindSlot) -> &'static str {
     }
 }
 
-fn mouse_slot_value(hotkeys: &HotkeysConfig, slot: MouseSlot) -> MouseGestureBinding {
-    match slot {
-        MouseSlot::BuySet => hotkeys.buy_set_click,
-        MouseSlot::ShortSet => hotkeys.short_set_click,
-        MouseSlot::PendingLong => hotkeys.pending_long_click,
-        MouseSlot::PendingShort => hotkeys.pending_short_click,
-        MouseSlot::BuyMove => hotkeys.buy_move_click,
-        MouseSlot::SellMove => hotkeys.sell_move_click,
-        MouseSlot::BuyMove2 => hotkeys.buy_move_click2,
-        MouseSlot::SellMove2 => hotkeys.sell_move_click2,
-        MouseSlot::ShortBuyMove => hotkeys.short_buy_move_click,
-        MouseSlot::ShortSellMove => hotkeys.short_sell_move_click,
-        MouseSlot::ShortBuyMove2 => hotkeys.short_buy_move_click2,
-        MouseSlot::ShortSellMove2 => hotkeys.short_sell_move_click2,
-        MouseSlot::FigDelete => hotkeys.fig_delete_click,
-    }
+/// The gesture-field map, once, for the getter and both setters — the same shape
+/// [`hotkey_field`] gives the keyboard slots. `$($brw)+` accepts `&` or `&mut`, and the compiler
+/// still checks the match exhaustively.
+macro_rules! mouse_field {
+    ($hotkeys:ident, $slot:expr, $($brw:tt)+) => {
+        match $slot {
+            MouseSlot::BuySet => $($brw)+ $hotkeys.buy_set_click,
+            MouseSlot::ShortSet => $($brw)+ $hotkeys.short_set_click,
+            MouseSlot::PendingLong => $($brw)+ $hotkeys.pending_long_click,
+            MouseSlot::PendingShort => $($brw)+ $hotkeys.pending_short_click,
+            MouseSlot::BuyMove => $($brw)+ $hotkeys.buy_move_click,
+            MouseSlot::SellMove => $($brw)+ $hotkeys.sell_move_click,
+            MouseSlot::BuyMove2 => $($brw)+ $hotkeys.buy_move_click2,
+            MouseSlot::SellMove2 => $($brw)+ $hotkeys.sell_move_click2,
+            MouseSlot::ShortBuyMove => $($brw)+ $hotkeys.short_buy_move_click,
+            MouseSlot::ShortSellMove => $($brw)+ $hotkeys.short_sell_move_click,
+            MouseSlot::ShortBuyMove2 => $($brw)+ $hotkeys.short_buy_move_click2,
+            MouseSlot::ShortSellMove2 => $($brw)+ $hotkeys.short_sell_move_click2,
+            MouseSlot::FigDelete => $($brw)+ $hotkeys.fig_delete_click,
+        }
+    };
 }
 
+fn mouse_slot_value(hotkeys: &HotkeysConfig, slot: MouseSlot) -> MouseGestureBinding {
+    *mouse_field!(hotkeys, slot, &)
+}
+
+/// Writes one gesture field and NOTHING else — no mirroring, whatever the "same for move" flag
+/// says.
+///
+/// The pull needs this and the editor must not have it. A pull carries a whole layout, long rows
+/// and short rows together, and the mirroring setter would let a long row overwrite a short value
+/// the preview had already decided to leave alone: with the flag on locally and off at the core,
+/// writing the long side mirrors onto the short one, and the short row that would have repaired it
+/// is skipped as `Unchanged`. Verbatim is also simply what a layout transfer means.
+fn set_mouse_slot_verbatim(
+    hotkeys: &mut HotkeysConfig,
+    slot: MouseSlot,
+    value: MouseGestureBinding,
+) -> bool {
+    set_mouse_field(mouse_field!(hotkeys, slot, &mut), value)
+}
+
+/// The short row a long move row mirrors onto while "same for move" is set.
+///
+/// Only the four long move rows have one; every other slot stands alone, which is why the settings
+/// tab shows a kind column on those four and greys the short ones out.
+fn short_move_twin(slot: MouseSlot) -> Option<MouseSlot> {
+    Some(match slot {
+        MouseSlot::BuyMove => MouseSlot::ShortBuyMove,
+        MouseSlot::SellMove => MouseSlot::ShortSellMove,
+        MouseSlot::BuyMove2 => MouseSlot::ShortBuyMove2,
+        MouseSlot::SellMove2 => MouseSlot::ShortSellMove2,
+        _ => return None,
+    })
+}
+
+/// Writes one gesture the way the EDITOR must: carrying the mirror "same for move" demands.
+///
+/// The mirror is Moonbot's own behaviour and the reason the short rows are greyed out while the
+/// flag is on. [`set_mouse_slot_verbatim`] is the other half — see there for why a layout transfer
+/// must not use this one.
 fn set_mouse_slot_value(
     hotkeys: &mut HotkeysConfig,
     slot: MouseSlot,
     value: MouseGestureBinding,
 ) -> bool {
-    let mut changed = false;
-    match slot {
-        MouseSlot::BuySet => changed |= set_mouse_field(&mut hotkeys.buy_set_click, value),
-        MouseSlot::ShortSet => changed |= set_mouse_field(&mut hotkeys.short_set_click, value),
-        MouseSlot::PendingLong => {
-            changed |= set_mouse_field(&mut hotkeys.pending_long_click, value)
-        }
-        MouseSlot::PendingShort => {
-            changed |= set_mouse_field(&mut hotkeys.pending_short_click, value)
-        }
-        MouseSlot::BuyMove => {
-            changed |= set_mouse_field(&mut hotkeys.buy_move_click, value);
-            if hotkeys.same_hotkeys_for_move {
-                changed |= set_mouse_field(&mut hotkeys.short_buy_move_click, value);
-            }
-        }
-        MouseSlot::SellMove => {
-            changed |= set_mouse_field(&mut hotkeys.sell_move_click, value);
-            if hotkeys.same_hotkeys_for_move {
-                changed |= set_mouse_field(&mut hotkeys.short_sell_move_click, value);
-            }
-        }
-        MouseSlot::BuyMove2 => {
-            changed |= set_mouse_field(&mut hotkeys.buy_move_click2, value);
-            if hotkeys.same_hotkeys_for_move {
-                changed |= set_mouse_field(&mut hotkeys.short_buy_move_click2, value);
-            }
-        }
-        MouseSlot::SellMove2 => {
-            changed |= set_mouse_field(&mut hotkeys.sell_move_click2, value);
-            if hotkeys.same_hotkeys_for_move {
-                changed |= set_mouse_field(&mut hotkeys.short_sell_move_click2, value);
-            }
-        }
-        MouseSlot::ShortBuyMove => {
-            changed |= set_mouse_field(&mut hotkeys.short_buy_move_click, value)
-        }
-        MouseSlot::ShortSellMove => {
-            changed |= set_mouse_field(&mut hotkeys.short_sell_move_click, value)
-        }
-        MouseSlot::ShortBuyMove2 => {
-            changed |= set_mouse_field(&mut hotkeys.short_buy_move_click2, value)
-        }
-        MouseSlot::ShortSellMove2 => {
-            changed |= set_mouse_field(&mut hotkeys.short_sell_move_click2, value)
-        }
-        MouseSlot::FigDelete => changed |= set_mouse_field(&mut hotkeys.fig_delete_click, value),
+    let mut changed = set_mouse_slot_verbatim(hotkeys, slot, value);
+    if hotkeys.same_hotkeys_for_move
+        && let Some(twin) = short_move_twin(slot)
+    {
+        changed |= set_mouse_slot_verbatim(hotkeys, twin, value);
     }
     changed
 }

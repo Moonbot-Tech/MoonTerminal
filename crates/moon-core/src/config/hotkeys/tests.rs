@@ -351,10 +351,11 @@ fn the_shipped_move_kind_is_moonbots_parallel_shift() {
 /// The POSITION of a variant in these two lists is a wire value.
 ///
 /// `feed::GestureSettings` carries Moonbot's mouse gestures and move kinds as the raw bytes the
-/// safe-share config holds, and the expert window's Hotkeys page turns a byte into a menu entry by
-/// indexing `ALL`. Nothing else pins the two together, so reordering either list — a harmless-
-/// looking edit, since both are "just a display order" — would silently rewrite every core's stored
-/// gestures on the next OK.
+/// safe-share config holds, and TWO surfaces turn a byte into a value by indexing `ALL`: the expert
+/// window's Hotkeys page, and `settings::hotkeys::pull_gestures`, which decodes the same bytes into
+/// this terminal's own layout. Nothing else pins the lists to the wire, so reordering either — a
+/// harmless-looking edit, since both are "just a display order" — would silently rewrite every
+/// core's stored gestures on the next OK and mis-import every pulled gesture.
 ///
 /// The anchors are moonproto's own annotated defaults (`shared_config/sections.rs`:
 /// `buy_set_click: 1, // Dbl_Click`, `sell_move_click: 2, // CTRL_Click`) and its

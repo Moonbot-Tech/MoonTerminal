@@ -11,6 +11,11 @@
 //! `config::HotkeysConfig`, which the Settings window edits and which this page never touches: a
 //! change here moves what Moonbot does on a click, not what MoonTerminal does.
 //!
+//! Since 10.09.2026 the traffic is not one-way in the other sense either: the Settings window's
+//! "pull layout from core" reads these same twelve gestures into the terminal's own layout
+//! (`settings::hotkeys::pull_gestures`). That is a READ of the values this page shows; this page
+//! remains the only writer of them, and the pull never sends anything back.
+//!
 //! The other five are read-only rather than dead. The terminal DOES project the core's keyboard
 //! bindings (`ManualSettings::core_hotkeys`, `strat_buttons`, `order_sizes`), so what they show are
 //! the core's real ones, decoded through the same `moonbot_import::shortcut` the Settings window

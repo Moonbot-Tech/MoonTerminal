@@ -14,15 +14,19 @@ use moon_core::session::CoreId;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
     MoonHotkeyInput, MoonKbd, MoonKbdSize, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTabItem,
-    MoonTabStrip, MoonText, h_flex, rgba_from, v_flex,
+    MoonTabStrip, MoonTag, MoonText, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
+use super::clash::{Clash, Clashes, Severity};
+use super::meta::{self, Origin, SlotMeta, key_slot_meta, mouse_slot_meta};
 use super::pull::{PullRow, PullVerdict, apply_core_hotkeys, preview_core_hotkeys};
+use super::pull_gestures::{self, GesturePullRow, apply_core_gestures, preview_core_gestures};
 use super::{
-    HotkeyGroup, HotkeySlot, MouseSlot, MoveKindSlot, mouse_slot_id, mouse_slot_value,
-    mouse_slot_wip, move_kind_slot_id, move_kind_slot_value, parse_hotkey, set_mouse_slot_value,
-    set_move_kind_slot_value, set_slot_value, slot_id, slot_label, slot_value,
+    HotkeyGroup, HotkeySlot, MouseSlot, MoveKindSlot, all_mouse_slots, mouse_slot_id,
+    mouse_slot_value, mouse_slot_wip, move_kind_slot_id, move_kind_slot_value, parse_hotkey,
+    set_mouse_slot_value, set_mouse_slot_verbatim, set_move_kind_slot_value, set_slot_value,
+    short_move_twin, slot_id, slot_label, slot_value,
 };
 use crate::design;
 use crate::settings::SettingsView;
@@ -32,6 +36,63 @@ const ROW_TITLE_WIDTH: f32 = 160.0;
 
 /// Maximum readable width of a hotkey row description before its editor column begins.
 const ROW_DESCRIPTION_MAX_WIDTH: f32 = 640.0;
+
+/// Logical width reserved for the marks that say where a binding acts and where its binding came
+/// from.
+///
+/// A column of its own rather than an inline pair, and reserved on the rows that carry no marks
+/// too: the marks are read DOWN the page ("which of these is mine to keep"), which only works while
+/// they start at the same x on every row.
+const ROW_MARKS_WIDTH: f32 = 150.0;
+
+/// Width of the surface half inside that column.
+///
+/// Fixed so the provenance tag beside it starts at the same x on every row — the tag is what the
+/// page is read down, and a tag that moves with the length of the words before it is not a column.
+const ROW_SCOPE_WIDTH: f32 = 104.0;
+
+/// Wraps one trailing control so it keeps its own width instead of stretching into the row.
+fn control_cell(child: impl IntoElement, cx: &App) -> gpui::Div {
+    sized_cell(child, ROW_CONTROL_WIDTH, cx)
+}
+
+/// The same, at a stated width.
+fn sized_cell(child: impl IntoElement, width: f32, cx: &App) -> gpui::Div {
+    div().flex_none().w(design::ui_px(cx, width)).child(child)
+}
+
+/// One line of muted body text, the style this tab's descriptions, hints and marks all share.
+fn muted_line(text: String, p: &MoonPalette) -> impl IntoElement {
+    MoonText::new(text)
+        .uppercase(false)
+        .mono(false)
+        .wrap()
+        .line_height(12.0)
+        .color(p.text_muted)
+        .render()
+}
+
+/// The rendered width every row editor shares — the hotkey field and both dropdowns.
+///
+/// It has to be applied through `trigger_width` (rendered pixels) rather than
+/// `trigger_width_scaled`, because the two components scale differently: `MoonHotkeyInput::width`
+/// goes through the UI scale, while a scaled trigger width goes through the FONT scale. Left to
+/// their own defaults they agree only at one setting of the font slider and drift apart at every
+/// other, which is exactly how a field and the dropdown beside it ended up different widths.
+const ROW_EDITOR_WIDTH: f32 = 176.0;
+
+/// Extra width the "move kind" cell gets over the gesture cell beside it.
+///
+/// Its labels are phrases rather than a keystroke — "Параллельно к курсору" against "Alt+Middle" —
+/// so the same width truncated them under the caret.
+const ROW_KIND_EXTRA: f32 = 56.0;
+
+/// Width of every trailing control cell.
+///
+/// Each control sits in a `flex_none` box of this width rather than straight in the row. Without
+/// the box a trigger grows into whatever space is left, which is how one dropdown ended up twice
+/// the width of the row above it with the description running underneath it.
+const ROW_CONTROL_WIDTH: f32 = 184.0;
 
 impl SettingsView {
     /// Builds the Settings Hotkeys tab, including its lifted-contrast group strip.
@@ -72,15 +133,7 @@ impl SettingsView {
                     .color(p.text)
                     .render(),
             )
-            .child(
-                MoonText::new(t!("hotkeys.group.builtin_hint").to_string())
-                    .uppercase(false)
-                    .mono(false)
-                    .wrap()
-                    .line_height(12.0)
-                    .color(p.text_muted)
-                    .render(),
-            )
+            .child(muted_line(t!("hotkeys.group.builtin_hint").to_string(), &p))
             .children([
                 self.builtin_row(t!("hotkeys.builtin.wheel_zoom").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.wheel_pan").to_string(), cx),
@@ -118,15 +171,10 @@ impl SettingsView {
         let body = v_flex()
             .w_full()
             .gap(design::ui_px(cx, 3.0))
-            .child(
-                MoonText::new(self.hotkeys_group.hint())
-                    .uppercase(false)
-                    .mono(false)
-                    .wrap()
-                    .line_height(12.0)
-                    .color(p.text_muted)
-                    .render(),
-            )
+            .child(muted_line(self.hotkeys_group.hint(), &p))
+            // Said once for the whole page instead of in every row's own description: the marks
+            // repeat on every line, so their meaning does not have to.
+            .child(muted_line(t!("hotkeys.marks_legend").to_string(), &p))
             .children(self.group_rows(self.hotkeys_group, &hotkeys, cx));
 
         v_flex()
@@ -147,17 +195,35 @@ impl SettingsView {
         cx: &Context<Self>,
     ) -> Vec<AnyElement> {
         let hotkeys = hotkeys.clone();
+        // Built once for the whole group rather than per row: it is an index over every slot, and
+        // asking it forty-six times to rebuild itself forty-six times would be the same answer at
+        // forty-six times the price.
+        let clashes = Clashes::build(&hotkeys);
         match group {
             HotkeyGroup::Presets => (0..ORDER_SIZE_KEYS)
                 .map(|i| {
                     let title = format!("F{}", i + 1);
                     let desc = t!("hotkeys.order_size", n = i + 1).to_string();
-                    self.hotkey_row(title, desc, HotkeySlot::OrderSize(i), &hotkeys, cx)
+                    self.hotkey_row(
+                        title,
+                        desc,
+                        HotkeySlot::OrderSize(i),
+                        &hotkeys,
+                        &clashes,
+                        cx,
+                    )
                 })
                 .chain((0..SELL_PRESET_KEYS).map(|i| {
                     let title = format!("S{}", i + 1);
                     let desc = t!("hotkeys.sell_preset", n = i + 1).to_string();
-                    self.hotkey_row(title, desc, HotkeySlot::SellPreset(i), &hotkeys, cx)
+                    self.hotkey_row(
+                        title,
+                        desc,
+                        HotkeySlot::SellPreset(i),
+                        &hotkeys,
+                        &clashes,
+                        cx,
+                    )
                 }))
                 .collect(),
             HotkeyGroup::Trading => vec![
@@ -166,6 +232,7 @@ impl SettingsView {
                     t!("hotkeys.cancel_buy_hint").to_string(),
                     HotkeySlot::CancelBuy,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -173,6 +240,7 @@ impl SettingsView {
                     t!("hotkeys.panic_sell_hint").to_string(),
                     HotkeySlot::PanicSell,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -180,6 +248,7 @@ impl SettingsView {
                     t!("hotkeys.panic_sell_one_hint").to_string(),
                     HotkeySlot::PanicSellOne,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -187,6 +256,7 @@ impl SettingsView {
                     t!("hotkeys.cancel_all_buys_hint").to_string(),
                     HotkeySlot::CancelAllBuys,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -194,6 +264,7 @@ impl SettingsView {
                     t!("hotkeys.join_sells_hint").to_string(),
                     HotkeySlot::JoinSells,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -201,6 +272,7 @@ impl SettingsView {
                     t!("hotkeys.new_long_hint").to_string(),
                     HotkeySlot::NewLong,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -208,6 +280,7 @@ impl SettingsView {
                     t!("hotkeys.new_short_hint").to_string(),
                     HotkeySlot::NewShort,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -215,6 +288,7 @@ impl SettingsView {
                     t!("hotkeys.split_order_hint", n = SPLIT_ORDER_PARTS).to_string(),
                     HotkeySlot::SplitOrder,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -222,6 +296,7 @@ impl SettingsView {
                     t!("hotkeys.split_order_x_hint").to_string(),
                     HotkeySlot::SplitOrderX,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.split_parts_row(&hotkeys, cx),
@@ -230,6 +305,7 @@ impl SettingsView {
                     t!("hotkeys.sells_to_rect_hint").to_string(),
                     HotkeySlot::SellsToRect,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
             ],
@@ -239,13 +315,7 @@ impl SettingsView {
                     t!("hotkeys.switch_charts_hint").to_string(),
                     HotkeySlot::SwitchCharts,
                     &hotkeys,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.switch_figure").to_string(),
-                    t!("hotkeys.switch_figure_hint").to_string(),
-                    HotkeySlot::SwitchFigure,
-                    &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -253,6 +323,7 @@ impl SettingsView {
                     t!("hotkeys.scale_plus_hint").to_string(),
                     HotkeySlot::ScalePlus,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -260,6 +331,7 @@ impl SettingsView {
                     t!("hotkeys.scale_minus_hint").to_string(),
                     HotkeySlot::ScaleMinus,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -267,15 +339,25 @@ impl SettingsView {
                     t!("hotkeys.chart_shot_hint").to_string(),
                     HotkeySlot::ChartShot,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
             ],
             HotkeyGroup::Draw => vec![
                 self.hotkey_row(
+                    t!("hotkeys.switch_figure").to_string(),
+                    t!("hotkeys.switch_figure_hint").to_string(),
+                    HotkeySlot::SwitchFigure,
+                    &hotkeys,
+                    &clashes,
+                    cx,
+                ),
+                self.hotkey_row(
                     t!("hotkeys.draw_hline").to_string(),
                     t!("hotkeys.draw_hline_hint").to_string(),
                     HotkeySlot::DrawHline,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -283,6 +365,7 @@ impl SettingsView {
                     t!("hotkeys.draw_segment_hint").to_string(),
                     HotkeySlot::DrawSegment,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -290,6 +373,7 @@ impl SettingsView {
                     t!("hotkeys.draw_triangle_hint").to_string(),
                     HotkeySlot::DrawTriangle,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -297,6 +381,7 @@ impl SettingsView {
                     t!("hotkeys.draw_channel_hint").to_string(),
                     HotkeySlot::DrawChannel,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -304,6 +389,7 @@ impl SettingsView {
                     t!("hotkeys.fig_delete_hint").to_string(),
                     HotkeySlot::FigDelete,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -311,6 +397,7 @@ impl SettingsView {
                     t!("hotkeys.fig_alert_hint").to_string(),
                     HotkeySlot::FigAlert,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -318,15 +405,16 @@ impl SettingsView {
                     t!("hotkeys.fig_undo_hint").to_string(),
                     HotkeySlot::FigUndo,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
-                self.local_only_divider(cx),
                 self.mouse_row(
                     t!("hotkeys.mouse.fig_delete").to_string(),
                     t!("hotkeys.mouse.fig_delete_hint").to_string(),
                     MouseSlot::FigDelete,
                     None,
                     &hotkeys,
+                    &clashes,
                     false,
                     cx,
                 ),
@@ -337,6 +425,7 @@ impl SettingsView {
                     t!("hotkeys.shift_buy_up_hint").to_string(),
                     HotkeySlot::ShiftBuyUp,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -344,6 +433,7 @@ impl SettingsView {
                     t!("hotkeys.shift_buy_down_hint").to_string(),
                     HotkeySlot::ShiftBuyDown,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -351,6 +441,7 @@ impl SettingsView {
                     t!("hotkeys.shift_sell_up_hint").to_string(),
                     HotkeySlot::ShiftSellUp,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
                 self.hotkey_row(
@@ -358,6 +449,7 @@ impl SettingsView {
                     t!("hotkeys.shift_sell_down_hint").to_string(),
                     HotkeySlot::ShiftSellDown,
                     &hotkeys,
+                    &clashes,
                     cx,
                 ),
             ],
@@ -368,6 +460,7 @@ impl SettingsView {
                     MouseSlot::BuySet,
                     None,
                     &hotkeys,
+                    &clashes,
                     false,
                     cx,
                 ),
@@ -377,6 +470,7 @@ impl SettingsView {
                     MouseSlot::ShortSet,
                     None,
                     &hotkeys,
+                    &clashes,
                     false,
                     cx,
                 ),
@@ -386,6 +480,7 @@ impl SettingsView {
                     MouseSlot::PendingLong,
                     None,
                     &hotkeys,
+                    &clashes,
                     false,
                     cx,
                 ),
@@ -395,6 +490,7 @@ impl SettingsView {
                     MouseSlot::PendingShort,
                     None,
                     &hotkeys,
+                    &clashes,
                     false,
                     cx,
                 ),
@@ -404,6 +500,7 @@ impl SettingsView {
                     MouseSlot::BuyMove,
                     Some(MoveKindSlot::BuyMove),
                     &hotkeys,
+                    &clashes,
                     false,
                     cx,
                 ),
@@ -413,6 +510,7 @@ impl SettingsView {
                     MouseSlot::SellMove,
                     Some(MoveKindSlot::SellMove),
                     &hotkeys,
+                    &clashes,
                     false,
                     cx,
                 ),
@@ -422,6 +520,7 @@ impl SettingsView {
                     MouseSlot::BuyMove2,
                     Some(MoveKindSlot::BuyMove2),
                     &hotkeys,
+                    &clashes,
                     false,
                     cx,
                 ),
@@ -431,6 +530,7 @@ impl SettingsView {
                     MouseSlot::SellMove2,
                     Some(MoveKindSlot::SellMove2),
                     &hotkeys,
+                    &clashes,
                     false,
                     cx,
                 ),
@@ -441,6 +541,7 @@ impl SettingsView {
                     MouseSlot::ShortBuyMove,
                     None,
                     &hotkeys,
+                    &clashes,
                     hotkeys.same_hotkeys_for_move,
                     cx,
                 ),
@@ -450,6 +551,7 @@ impl SettingsView {
                     MouseSlot::ShortSellMove,
                     None,
                     &hotkeys,
+                    &clashes,
                     hotkeys.same_hotkeys_for_move,
                     cx,
                 ),
@@ -459,6 +561,7 @@ impl SettingsView {
                     MouseSlot::ShortBuyMove2,
                     None,
                     &hotkeys,
+                    &clashes,
                     hotkeys.same_hotkeys_for_move,
                     cx,
                 ),
@@ -468,6 +571,7 @@ impl SettingsView {
                     MouseSlot::ShortSellMove2,
                     None,
                     &hotkeys,
+                    &clashes,
                     hotkeys.same_hotkeys_for_move,
                     cx,
                 ),
@@ -479,6 +583,7 @@ impl SettingsView {
                         t!("hotkeys.manual_strategy_hint", n = i + 1).to_string(),
                         HotkeySlot::ManualStrategy(i),
                         &hotkeys,
+                        &clashes,
                         cx,
                     )
                 })
@@ -508,29 +613,88 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// A rule marking where a page stops describing Moonbot and starts describing this terminal.
+    /// The caption a row shows when something else answers its binding.
     ///
-    /// Everything BELOW it is ours alone: the core neither sends it nor takes it, so pasting a
-    /// Moonbot configuration leaves these rows exactly as they were. Said once, as a line, instead
-    /// of in every row's own hint.
-    fn local_only_divider(&self, cx: &Context<Self>) -> AnyElement {
-        let p = MoonPalette::active(cx);
-        v_flex()
-            .w_full()
-            .pt(design::ui_px(cx, 6.0))
-            .gap(design::ui_px(cx, 3.0))
-            .border_t_1()
-            .border_color(rgba_from(p.border, 0.6))
-            .child(
-                MoonText::new(t!("hotkeys.local_only").to_string())
-                    .uppercase(false)
-                    .mono(false)
-                    .wrap()
-                    .line_height(12.0)
-                    .color(p.text_muted)
-                    .render(),
-            )
+    /// Under the description rather than beside the editor: it is a sentence, it names other rows,
+    /// and it has to be able to wrap. Red when one of the two never fires, amber when both do and
+    /// the user simply ought to know.
+    fn clash_line(&self, clash: &Clash, p: &MoonPalette) -> AnyElement {
+        let color = match clash.severity {
+            Severity::Shadowed => p.red_text,
+            Severity::Shares => p.amber,
+        };
+        MoonText::new(clash.text.clone())
+            .uppercase(false)
+            .mono(false)
+            .wrap()
+            .line_height(12.0)
+            .color(color)
+            .render()
             .into_any_element()
+    }
+
+    /// The marks column: WHERE this binding acts, and what Moonbot has of it.
+    ///
+    /// Two facts, because a user asks two different questions of this page — "why did my key do
+    /// nothing over there" and "what will pasting a Moonbot configuration overwrite" — and neither
+    /// was answerable from the row before. `None` renders the column empty, keeping a row that owns
+    /// no slot (the part count, the mirroring checkbox) aligned with the rows that do.
+    ///
+    /// Args:
+    ///     marks: The slot's two facts, or `None` for a row that is not a slot.
+    ///     p: Active palette, already read by every caller.
+    ///     cx: Settings context used for scaled geometry and the zone setting.
+    ///
+    /// Returns:
+    ///     The fixed-width marks column.
+    fn slot_marks(
+        &self,
+        marks: Option<SlotMeta>,
+        p: &MoonPalette,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
+        let column = div().flex_none().w(design::ui_px(cx, ROW_MARKS_WIDTH));
+        let Some(marks) = marks else {
+            return column;
+        };
+        // The surface a row's two-way set resolves to right now, rather than the disjunction: the
+        // reader wants the answer for the terminal in front of them.
+        let separate_zones = {
+            let b = self.backend.read(cx);
+            b.preview
+                .as_ref()
+                .unwrap_or(&b.config)
+                .separate_control_zones
+        };
+        column.child(
+            h_flex()
+                .gap(design::ui_px(cx, 6.0))
+                .items_center()
+                // The surface as plain muted text in a fixed sub-column, not a second pill and not
+                // a wrapping pair. Two pills of the same tone would say nothing about which of them
+                // is the one that changes; and letting the two share one wrapping box made the
+                // whole point of the column collapse — a long surface pushed the tag onto its own
+                // line, so no two rows started their tag at the same x.
+                .child(
+                    div()
+                        .flex_none()
+                        .w(design::ui_px(cx, ROW_SCOPE_WIDTH))
+                        .child(muted_line(marks.scope.resolved(separate_zones).label(), p)),
+                )
+                .child(
+                    match marks.origin {
+                        // Two tones, because the two answers matter equally at a glance: blue for
+                        // a binding a paste or a pull will overwrite, green for one nothing can.
+                        Origin::Shared => MoonTag::info(),
+                        Origin::Local => MoonTag::positive(),
+                    }
+                    .mono(false)
+                    // `.child` rather than `.label`: the latter uppercases, and the legend that
+                    // explains these marks quotes them as written.
+                    .child(marks.origin.label())
+                    .render(),
+                ),
+        )
     }
 
     /// Build one keyboard shortcut row with the editor in the tab's shared control column.
@@ -550,9 +714,9 @@ impl SettingsView {
         desc: impl Into<String>,
         slot: HotkeySlot,
         hotkeys: &HotkeysConfig,
+        clashes: &Clashes,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let p = MoonPalette::active(cx);
         // Most rows title themselves with a localized phrase, but the preset slots title
         // themselves with their own IDENTITY -- `F3`, `S2` -- which is a value, and `core_pull_row`
         // pins that same string mono. Read it off the slot the row already carries rather than
@@ -563,75 +727,43 @@ impl SettingsView {
         let raw = slot_value(hotkeys, slot);
         let parsed = parse_hotkey(raw);
         let invalid = !raw.trim().is_empty() && parsed.is_none();
-        // A key held by two slots resolves by branch order in the dispatcher, so one of the two
-        // silently never fires. Show it here rather than letting the user hunt for it.
-        let conflict = !raw.trim().is_empty()
-            && hotkeys
-                .bound_keys()
-                .iter()
-                .filter(|held| held.as_str() == raw.trim())
-                .count()
-                > 1;
-        let id = format!("hotkey-{}", slot_id(slot));
 
-        h_flex()
-            .w_full()
-            .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
-            .gap(design::ui_px(cx, 10.0))
-            .items_center()
-            .child(
-                div()
-                    .flex_none()
-                    .w(design::ui_px(cx, ROW_TITLE_WIDTH))
-                    .child(
-                        MoonText::new(title.into())
-                            .uppercase(false)
-                            .mono(title_is_identity)
-                            .wrap()
-                            .font_size(11.0)
-                            .line_height(14.0)
-                            .color(p.text)
-                            .render(),
-                    ),
-            )
-            .child(
-                // Match title sizing, use muted text, and wrap within the window.
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .max_w(design::ui_px(cx, ROW_DESCRIPTION_MAX_WIDTH))
-                    .child(
-                        MoonText::new(desc.into())
-                            .uppercase(false)
-                            .mono(false)
-                            .wrap()
-                            .font_size(11.0)
-                            .line_height(14.0)
-                            .color(p.text_muted)
-                            .render(),
-                    ),
-            )
-            .child(
-                MoonHotkeyInput::new(id)
-                    .value(parsed)
-                    .placeholder(t!("hotkeys.unassigned").to_string())
-                    .recording_placeholder(t!("hotkeys.recording").to_string())
-                    .invalid(invalid)
-                    .conflict(conflict)
-                    .compact()
-                    .width(176.0)
-                    .on_change(
-                        cx.processor(move |this, value: Option<Keystroke>, _window, cx| {
-                            // Store the PHYSICAL key: a letter recorded under a Cyrillic layout
-                            // would otherwise be saved as that layout's character.
-                            let value = value
-                                .map(|k| crate::hotkeys::recorded_keystroke(k).unparse())
-                                .unwrap_or_default();
-                            this.set_hotkey(slot, value, cx);
-                        }),
-                    ),
-            )
-            .into_any_element()
+        let id = format!("hotkey-{}", slot_id(slot));
+        let clash = clashes.key(hotkeys, slot);
+
+        self.row_head(
+            title.into(),
+            desc.into(),
+            Some(key_slot_meta(slot)),
+            title_is_identity,
+            clash.clone().into_iter().collect(),
+            cx,
+        )
+        .child(control_cell(
+            MoonHotkeyInput::new(id)
+                .value(parsed)
+                .placeholder(t!("hotkeys.unassigned").to_string())
+                .recording_placeholder(t!("hotkeys.recording").to_string())
+                .invalid(invalid)
+                // No `.conflict()`: the component paints that frame AMBER and stamps an
+                // unlocalized "conflict" badge inside the field, and amber is this page's
+                // "both work" tone. The caption below the description carries the whole
+                // answer, in the right colour and in words.
+                .compact()
+                .width(ROW_EDITOR_WIDTH)
+                .on_change(
+                    cx.processor(move |this, value: Option<Keystroke>, _window, cx| {
+                        // Store the PHYSICAL key: a letter recorded under a Cyrillic layout
+                        // would otherwise be saved as that layout's character.
+                        let value = value
+                            .map(|k| crate::hotkeys::recorded_keystroke(k).unparse())
+                            .unwrap_or_default();
+                        this.set_hotkey(slot, value, cx);
+                    }),
+                ),
+            cx,
+        ))
+        .into_any_element()
     }
 
     /// Build one mouse-gesture row with a binding and, for move rows, a "Move kind" selector.
@@ -658,14 +790,29 @@ impl SettingsView {
         slot: MouseSlot,
         kind_slot: Option<MoveKindSlot>,
         hotkeys: &HotkeysConfig,
+        clashes: &Clashes,
         disabled: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let p = MoonPalette::active(cx);
         let current = mouse_slot_value(hotkeys, slot);
         let id = format!("mouse-{}", mouse_slot_id(slot));
         let backend = self.backend.clone();
         let wip = mouse_slot_wip(slot);
+        // Every note this row prints, in one place under the description: the "not wired yet"
+        // status used to sit in a column of its own on the far right, which put it a screen away
+        // from the sentence it belongs beside.
+        let mut notes: Vec<Clash> = Vec::new();
+        if wip {
+            notes.push(Clash {
+                severity: Severity::Shares,
+                text: t!("hotkeys.todo").to_string(),
+            });
+        }
+        // A greyed short row follows its long twin, so a clash reported on it would name a binding
+        // the row does not own.
+        if !disabled && let Some(clash) = clashes.mouse(hotkeys, slot) {
+            notes.push(clash);
+        }
         let items = MouseGestureBinding::ALL.into_iter().map(move |gesture| {
             let backend = backend.clone();
             MoonMenuItem::with_key(gesture.config_value(), gesture.menu_label())
@@ -681,26 +828,52 @@ impl SettingsView {
                 })
         });
 
-        let mut row = self
-            .row_head(title.into(), desc.into(), disabled, cx)
-            .child(
-                Self::row_dropdown(id, current.label())
-                    .trigger_variant(if current == MouseGestureBinding::None {
-                        MoonButtonVariant::Neutral
-                    } else {
-                        MoonButtonVariant::Blue
-                    })
-                    .menu_width_scaled(228.0)
-                    .disabled(disabled)
-                    .items(items),
-            );
-        if wip {
-            row = row.child(self.wip_tag(&p, cx));
-        }
-        if let Some(kind_slot) = kind_slot {
-            row = row.child(self.move_kind_dropdown(kind_slot, hotkeys, disabled));
-        }
-        row.into_any_element()
+        // A greyed short row follows its long twin, so a clash reported on it would name a binding
+        // the row does not own.
+        // One line, with the trailing controls in a block of their own.
+        //
+        // The block is what makes the columns line up. Before it, a gesture row's first dropdown
+        // started wherever the row above happened to leave it: rows carry a different NUMBER of
+        // trailing controls — a kind dropdown here, a status note there — and a wider tail pushed
+        // everything left of it. Every cell inside the block is reserved on every row, empty ones
+        // included, so the block is one width and the columns hold.
+        self.row_head(
+            title.into(),
+            desc.into(),
+            Some(mouse_slot_meta(slot)),
+            false,
+            notes,
+            cx,
+        )
+        .child(
+            h_flex()
+                .flex_none()
+                .gap(design::ui_px(cx, 10.0))
+                .items_center()
+                .child(control_cell(
+                    Self::row_dropdown(id, current.label(), cx)
+                        .trigger_variant(if current == MouseGestureBinding::None {
+                            MoonButtonVariant::Neutral
+                        } else {
+                            MoonButtonVariant::Blue
+                        })
+                        .menu_width_scaled(228.0)
+                        .disabled(disabled)
+                        .items(items),
+                    cx,
+                ))
+                .child(match kind_slot {
+                    Some(kind_slot) => sized_cell(
+                        self.move_kind_dropdown(kind_slot, hotkeys, disabled, cx),
+                        ROW_CONTROL_WIDTH + ROW_KIND_EXTRA,
+                        cx,
+                    ),
+                    None => div()
+                        .flex_none()
+                        .w(design::ui_px(cx, ROW_CONTROL_WIDTH + ROW_KIND_EXTRA)),
+                }),
+        )
+        .into_any_element()
     }
 
     /// The "Move kind" selector of one move row — Moonbot's column of the same name.
@@ -713,6 +886,7 @@ impl SettingsView {
         slot: MoveKindSlot,
         hotkeys: &HotkeysConfig,
         disabled: bool,
+        cx: &App,
     ) -> impl IntoElement {
         let current = move_kind_slot_value(hotkeys, slot);
         let backend = self.backend.clone();
@@ -735,6 +909,7 @@ impl SettingsView {
         Self::row_dropdown(
             format!("move-kind-{}", move_kind_slot_id(slot)),
             t!(&current_key).to_string(),
+            cx,
         )
         // The trigger shows the chosen kind, so the menu carries the name of the setting — the
         // "Move kind" column heading Moonbot puts above the same list.
@@ -768,7 +943,9 @@ impl SettingsView {
     /// Args:
     ///     title: Label displayed in the shared fixed-width title column.
     ///     desc: Muted description that may wrap within its capped column.
-    ///     disabled: Whether the title uses muted styling.
+    ///     marks: The slot's two facts, or `None` for a row that owns no slot.
+    ///     mono_title: Whether the title is an identity like `F3` rather than a phrase.
+    ///     notes: Lines printed under the description — a clash, a "not wired yet" — in order.
     ///     cx: Settings context used for palette and scaled layout.
     ///
     /// Returns:
@@ -777,7 +954,9 @@ impl SettingsView {
         &self,
         title: String,
         desc: String,
-        disabled: bool,
+        marks: Option<SlotMeta>,
+        mono_title: bool,
+        notes: Vec<Clash>,
         cx: &Context<Self>,
     ) -> gpui::Div {
         let p = MoonPalette::active(cx);
@@ -794,19 +973,21 @@ impl SettingsView {
                     .child(
                         MoonText::new(title)
                             .uppercase(false)
-                            .mono(false)
+                            .mono(mono_title)
                             .wrap()
                             .font_size(11.0)
                             .line_height(14.0)
-                            .color(if disabled { p.text_muted } else { p.text })
+                            .color(p.text)
                             .render(),
                     ),
             )
+            .child(self.slot_marks(marks, &p, cx))
             .child(
                 // Match title sizing, use muted text, and wrap within the window.
-                div()
+                v_flex()
                     .flex_1()
                     .min_w_0()
+                    .gap(design::ui_px(cx, 2.0))
                     .max_w(design::ui_px(cx, ROW_DESCRIPTION_MAX_WIDTH))
                     .child(
                         MoonText::new(desc)
@@ -817,17 +998,18 @@ impl SettingsView {
                             .line_height(14.0)
                             .color(p.text_muted)
                             .render(),
-                    ),
+                    )
+                    .children(notes.iter().map(|note| self.clash_line(note, &p))),
             )
     }
 
     /// Builds a row's trailing dropdown with the trigger geometry shared by this tab.
-    fn row_dropdown(id: String, label: impl Into<SharedString>) -> MoonDropdown {
+    fn row_dropdown(id: String, label: impl Into<SharedString>, cx: &App) -> MoonDropdown {
         MoonDropdown::new(SharedString::from(id))
             .label(label)
             .trigger_caret(true)
             .trigger_size(MoonButtonSize::Micro)
-            .trigger_width_scaled(176.0)
+            .trigger_width(design::ui_value(cx, ROW_EDITOR_WIDTH))
             .menu_size(MoonMenuSize::Compact)
     }
 
@@ -856,15 +1038,18 @@ impl SettingsView {
         self.row_head(
             t!("hotkeys.split_parts").to_string(),
             t!("hotkeys.split_parts_hint").to_string(),
+            Some(meta::SPLIT_PARTS),
             false,
+            Vec::new(),
             cx,
         )
-        .child(
-            Self::row_dropdown("hotkey-split-parts".into(), current.to_string())
+        .child(control_cell(
+            Self::row_dropdown("hotkey-split-parts".into(), current.to_string(), cx)
                 .trigger_variant(MoonButtonVariant::Blue)
                 .menu_width_scaled(120.0)
                 .items(items),
-        )
+            cx,
+        ))
         .into_any_element()
     }
 
@@ -885,6 +1070,7 @@ impl SettingsView {
             .gap(design::ui_px(cx, 10.0))
             .items_center()
             .child(div().flex_none().w(design::ui_px(cx, ROW_TITLE_WIDTH)))
+            .child(self.slot_marks(Some(meta::SAME_FOR_MOVE), &MoonPalette::active(cx), cx))
             .child(
                 div()
                     .flex_1()
@@ -902,10 +1088,15 @@ impl SettingsView {
                                 let changed = p.hotkeys.same_hotkeys_for_move != *value;
                                 p.hotkeys.same_hotkeys_for_move = *value;
                                 if *value {
-                                    p.hotkeys.short_buy_move_click = p.hotkeys.buy_move_click;
-                                    p.hotkeys.short_sell_move_click = p.hotkeys.sell_move_click;
-                                    p.hotkeys.short_buy_move_click2 = p.hotkeys.buy_move_click2;
-                                    p.hotkeys.short_sell_move_click2 = p.hotkeys.sell_move_click2;
+                                    // Mirrors only on the way ON, which is what Moonbot's own
+                                    // dialog does. The pull re-aims in both directions, because
+                                    // there a short row can go live with a value nothing wrote.
+                                    for slot in all_mouse_slots() {
+                                        if let Some(twin) = short_move_twin(slot) {
+                                            let long = mouse_slot_value(&p.hotkeys, slot);
+                                            set_mouse_slot_verbatim(&mut p.hotkeys, twin, long);
+                                        }
+                                    }
                                 }
                                 if changed {
                                     bcx.notify();
@@ -914,19 +1105,6 @@ impl SettingsView {
                         });
                     }),
             )
-            .into_any_element()
-    }
-
-    /// Builds the amber "not connected" badge for mouse gestures without a runtime consumer.
-    ///
-    /// The selection is saved to configuration, but no action executes it yet.
-    fn wip_tag(&self, p: &MoonPalette, _cx: &Context<Self>) -> AnyElement {
-        MoonText::new(t!("hotkeys.todo").to_string())
-            .uppercase(false)
-            .mono(false)
-            .line_height(12.0)
-            .color(p.amber)
-            .render()
             .into_any_element()
     }
 
@@ -985,8 +1163,13 @@ impl SettingsView {
     }
 
     /// Applies every `WillApply` row of the CURRENT preview (rebuilt fresh here, not reused from
-    /// render — the two are the same computation over the same draft, so they cannot disagree)
-    /// and writes `hotkeys.toml` immediately.
+    /// render) and writes `hotkeys.toml` immediately.
+    ///
+    /// Rebuilding cannot disagree with what was drawn over the DRAFT — same computation, same
+    /// values. It can over the CORE's block: that is re-read from the store here, so a
+    /// configuration arriving between the frame the user read and the click they made is what gets
+    /// applied. The window is an eye-to-click one and the alternative — applying rows captured at
+    /// render time — would write a layout the core has already replaced, which is worse.
     ///
     /// This bypasses the tab's usual preview/Save cycle on purpose: `HotkeysConfig::save()` is a
     /// separate file with its own saver, no `config_dirty` involved. Writing both
@@ -995,7 +1178,7 @@ impl SettingsView {
     /// looked like when the window opened.
     fn confirm_core_pull(&mut self, core: CoreId, cx: &mut Context<Self>) {
         let outcome = self.backend.update(cx, |b, bcx| {
-            let (layout, manual_strategy_keys) = b
+            let (layout, manual_strategy_keys, gestures) = b
                 .session
                 .store()
                 .core(core)
@@ -1004,6 +1187,7 @@ impl SettingsView {
                     (
                         c.manual.core_hotkeys.clone(),
                         c.manual.strat_buttons.hot_keys,
+                        c.gestures,
                     )
                 })?;
             let base = b
@@ -1012,8 +1196,10 @@ impl SettingsView {
                 .map(|p| p.hotkeys.clone())
                 .unwrap_or_else(|| b.config.hotkeys.clone());
             let rows = preview_core_hotkeys(&base, &layout, &manual_strategy_keys);
+            let gesture_rows = preview_core_gestures(&base, &gestures);
             let mut hotkeys = base;
-            let changed = apply_core_hotkeys(&mut hotkeys, &rows);
+            let mut changed = apply_core_hotkeys(&mut hotkeys, &rows);
+            changed |= apply_core_gestures(&mut hotkeys, &gesture_rows);
             if changed {
                 b.config.hotkeys = hotkeys.clone();
                 if let Some(p) = b.preview.as_mut() {
@@ -1123,6 +1309,86 @@ impl SettingsView {
             .into_any_element()
     }
 
+    /// One gesture row of the pull preview.
+    ///
+    /// Text on both sides rather than the key row's `MoonHotkeyInput` and `MoonKbd`: a gesture is a
+    /// phrase ("Ctrl+Left (CTRL_Click)"), not a keystroke, and those two controls draw keystrokes.
+    fn core_pull_gesture_row(&self, row: &GesturePullRow, cx: &Context<Self>) -> AnyElement {
+        let p = MoonPalette::active(cx);
+        let (verdict_text, verdict_color): (String, u32) = match row.verdict {
+            // Not produced for gestures — a zero ordinal is a value there — but the verdict enum
+            // is shared with the keyboard half, so the arm has to exist. It borrows that half's
+            // wording rather than carrying three translations nothing can render.
+            PullVerdict::Empty => (t!("hotkeys.pull.verdict.empty").to_string(), p.text_muted),
+            PullVerdict::Unsupported => (
+                t!("hotkeys.pull.verdict.gesture_unsupported").to_string(),
+                p.amber,
+            ),
+            PullVerdict::Unchanged => (
+                t!("hotkeys.pull.verdict.unchanged").to_string(),
+                p.text_muted,
+            ),
+            PullVerdict::WillApply => (
+                t!("hotkeys.pull.verdict.will_apply").to_string(),
+                p.green_text,
+            ),
+            // Never produced for gestures — see `pull_gestures::preview_core_gestures`.
+            PullVerdict::Conflict => (t!("hotkeys.pull.verdict.conflict").to_string(), p.red_text),
+        };
+        let dim = matches!(
+            row.verdict,
+            PullVerdict::Empty | PullVerdict::Unsupported | PullVerdict::Unchanged
+        );
+
+        h_flex()
+            .w_full()
+            .min_h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
+            .gap(design::ui_px(cx, 10.0))
+            .items_center()
+            .child(
+                div()
+                    .flex_none()
+                    .w(design::ui_px(cx, 200.0))
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgba_from(p.text, 1.0))
+                    .child(pull_gestures::target_label(row.target)),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .w(design::ui_px(cx, 170.0))
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgba_from(p.text_muted, 1.0))
+                    .child(row.current.clone()),
+            )
+            .child(
+                MoonText::new("->")
+                    .uppercase(false)
+                    .mono(true)
+                    .font_size(11.0)
+                    .line_height(14.0)
+                    .color(p.text_muted)
+                    .render(),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .w(design::ui_px(cx, 170.0))
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgba_from(if dim { p.text_muted } else { p.text }, 1.0))
+                    .child(row.incoming.clone()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgba_from(verdict_color, 1.0))
+                    .child(verdict_text),
+            )
+            .into_any_element()
+    }
+
     /// The "pull layout from core" button and, once a layout has arrived, its preview diff.
     /// Placed after the ManualStrategy rows and gated on nothing else: it is always visible on
     /// this sub-tab, which is what lets a resolved core's Live/Stale/Awaiting state stay legible
@@ -1157,6 +1423,7 @@ impl SettingsView {
             (
                 c.manual.core_hotkeys.clone(),
                 c.manual.strat_buttons.hot_keys,
+                c.gestures,
             )
         });
 
@@ -1208,15 +1475,33 @@ impl SettingsView {
             return out;
         }
 
-        let Some((layout, manual_strategy_keys)) = manual else {
+        let Some((layout, manual_strategy_keys, gestures)) = manual else {
             out.push(self.pull_hint(t!("hotkeys.pull.empty").to_string(), &p, cx));
             return out;
         };
 
         let rows = preview_core_hotkeys(hotkeys, &layout, &manual_strategy_keys);
-        let any_will_apply = rows.iter().any(|r| r.verdict == PullVerdict::WillApply);
+        let gesture_rows = preview_core_gestures(hotkeys, &gestures);
+        let any_will_apply = rows
+            .iter()
+            .map(|r| r.verdict)
+            .chain(gesture_rows.iter().map(|r| r.verdict))
+            .any(|v| v == PullVerdict::WillApply);
         for row in &rows {
             out.push(self.core_pull_row(row, cx));
+        }
+        out.push(
+            MoonText::new(t!("hotkeys.pull.gestures").to_string())
+                .uppercase(false)
+                .mono(false)
+                .font_size(11.0)
+                .line_height(14.0)
+                .color(p.text)
+                .render()
+                .into_any_element(),
+        );
+        for row in &gesture_rows {
+            out.push(self.core_pull_gesture_row(row, cx));
         }
         out.push(
             h_flex()
