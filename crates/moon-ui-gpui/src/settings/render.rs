@@ -27,40 +27,32 @@ impl Render for SettingsView {
         let chrome_width = f32::from(window.viewport_size().width);
 
         // ── Tab strip ───────────────────────────────────────────────────────
-        let mut tabs = h_flex()
+        // Eight font-scaled 110-pixel tabs plus scaled gaps and padding overflow a 620-pixel
+        // (and the default 860-pixel) window. Wrap onto two rows below that single-row width;
+        // keep one row when every tab still fits. Button width and wrap threshold share one
+        // scaled measurement.
+        const TAB_BUTTON_W: f32 = 110.0;
+        const TAB_GAP: f32 = 6.0;
+        const TAB_PAD_X: f32 = 8.0;
+        let tab_w = design::font_w(cx, TAB_BUTTON_W);
+        let tab_n = Tab::ALL.len() as f32;
+        let single_row_w = tab_n * tab_w
+            + (tab_n - 1.0) * design::ui_value(cx, TAB_GAP)
+            + 2.0 * design::ui_value(cx, TAB_PAD_X);
+        let wrap = chrome_width < single_row_w;
+        let row_h = design::fit_h_px(cx, 34.0, 13.0, 10.5);
+        let mut tabs = v_flex()
             .w_full()
-            .h(design::fit_h_px(cx, 34.0, 13.0, 10.5))
-            .gap(design::ui_px(cx, 6.0))
-            .px(design::ui_px(cx, 8.0))
             .bg(rgba_from(p.shell_high, 1.0))
             .border_b_1()
             .border_color(rgba_from(p.border, 1.0));
-        for t in Tab::ALL {
-            let on = self.active == t;
-            tabs = tabs.child(
-                MoonButton::new(t.id())
-                    .variant(if on {
-                        MoonButtonVariant::Blue
-                    } else {
-                        MoonButtonVariant::Ghost
-                    })
-                    .size(MoonButtonSize::Custom {
-                        height: 24.0,
-                        radius: design::R_BUTTON_BASE,
-                        font_size: 10.5,
-                        line_height: 13.0,
-                        gap: 5.0,
-                    })
-                    // Keep all seven tabs within the default 860-pixel window width.
-                    .width(110.0)
-                    .selected(on)
-                    .label(t.title())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.active = t;
-                        cx.notify();
-                    }))
-                    .render(),
-            );
+        if wrap {
+            let mid = Tab::ALL.len().div_ceil(2);
+            tabs = tabs
+                .child(self.tab_strip_row(&Tab::ALL[..mid], row_h, tab_w, cx))
+                .child(self.tab_strip_row(&Tab::ALL[mid..], row_h, tab_w, cx));
+        } else {
+            tabs = tabs.child(self.tab_strip_row(&Tab::ALL, row_h, tab_w, cx));
         }
 
         // ── Active tab body ─────────────────────────────────────────────────
@@ -72,6 +64,7 @@ impl Render for SettingsView {
             Tab::Badges => self.badges_tab(cx).into_any_element(),
             Tab::Connections => self.connections_tab(cx).into_any_element(),
             Tab::Storage => self.storage_tab(cx).into_any_element(),
+            Tab::Telegram => self.telegram_tab(cx).into_any_element(),
         };
         // Make tall tabs scroll through a stateful div with a visible vertical scrollbar.
         // `Scrollable` inherits only `size`, not `flex_1`, and renders at `size_full`; on its own it
@@ -275,6 +268,61 @@ impl Render for SettingsView {
                     .show_controls(design::show_custom_window_controls())
                     .hit_overlay(),
             )
+    }
+}
+
+impl SettingsView {
+    /// Build one tab-strip row of font-scaled tab buttons.
+    ///
+    /// Args:
+    ///     tabs: Slice of tabs to render in this row, in `Tab::ALL` order.
+    ///     row_h: Fitted row height matching the previous single-row strip.
+    ///     tab_w: Font-scaled tab button width, shared with the wrap threshold.
+    ///     cx: Settings context used for click handlers.
+    ///
+    /// Returns:
+    ///     One full-width tab row.
+    fn tab_strip_row(
+        &self,
+        tabs: &[Tab],
+        row_h: Pixels,
+        tab_w: f32,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let mut row = h_flex()
+            .w_full()
+            .h(row_h)
+            .gap(design::ui_px(cx, 6.0))
+            .px(design::ui_px(cx, 8.0))
+            .bg(rgba_from(p.shell_high, 1.0));
+        for t in tabs.iter().copied() {
+            let on = self.active == t;
+            row = row.child(
+                MoonButton::new(t.id())
+                    .variant(if on {
+                        MoonButtonVariant::Blue
+                    } else {
+                        MoonButtonVariant::Ghost
+                    })
+                    .size(MoonButtonSize::Custom {
+                        height: 24.0,
+                        radius: design::R_BUTTON_BASE,
+                        font_size: 10.5,
+                        line_height: 13.0,
+                        gap: 5.0,
+                    })
+                    .width(tab_w)
+                    .selected(on)
+                    .label(t.title())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.active = t;
+                        cx.notify();
+                    }))
+                    .render(),
+            );
+        }
+        row
     }
 }
 

@@ -1,0 +1,219 @@
+//! Telegram Settings tab: token, pairing status, Mini App.
+//!
+//! Edits stay on `Backend.preview` and persist through the existing Save transaction. Live
+//! service status and pairing come from the live service, independently of unsaved edits.
+
+use gpui::prelude::FluentBuilder;
+use gpui::*;
+use moon_ui::{
+    MoonButton, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex,
+    rgba_from, v_flex,
+};
+use rust_i18n::t;
+
+use super::SettingsView;
+use crate::{Backend, design};
+use moon_core::config::Secret;
+
+/// Password-field width in unscaled pixels, matching the Security tab.
+const TOKEN_FIELD_W: f32 = 240.0;
+
+/// Per-window editor state for the Telegram tab.
+pub(super) struct TelegramEd {
+    token: Entity<MoonInputState>,
+}
+
+/// Build masked token input bound to the Settings draft.
+///
+/// Args:
+///     backend: Settings backend that owns the draft configuration.
+///     window: Settings window used to create the input state.
+///     cx: Settings context used to install the change subscription.
+///
+/// Returns:
+///     Editor state whose token field writes `AppConfig::telegram.token` on each change.
+pub(super) fn build(
+    backend: &Entity<Backend>,
+    window: &mut Window,
+    cx: &mut Context<SettingsView>,
+) -> TelegramEd {
+    let initial = {
+        let b = backend.read(cx);
+        let d = b.preview.as_ref().unwrap_or(&b.config);
+        d.telegram.token.expose().to_string()
+    };
+    let token = cx.new(|cx| {
+        MoonInputState::new(window, cx)
+            .masked(true)
+            .default_value(initial)
+    });
+    token.update(cx, |st, c| st.set_masked(true, window, c));
+    cx.subscribe(&token, |this, emitter, ev: &MoonInputEvent, cx| {
+        if matches!(ev, MoonInputEvent::Change) {
+            let val = emitter.read(cx).value().to_string();
+            this.backend.update(cx, |b, bcx| {
+                if let Some(p) = b.preview.as_mut() {
+                    if p.telegram.token.expose() != val {
+                        p.telegram.token = Secret::new(val);
+                        bcx.notify();
+                    }
+                }
+            });
+        }
+    })
+    .detach();
+    TelegramEd { token }
+}
+
+impl SettingsView {
+    /// Render the Telegram Settings tab.
+    ///
+    /// Controls stack vertically so a 620-pixel Settings width does not need a horizontal
+    /// scrollbar. Unsaved edits remain explicit while live transport health is shown
+    /// independently from the draft.
+    ///
+    /// Args:
+    ///     cx: Settings context used for palette, draft, and callbacks.
+    ///
+    /// Returns:
+    ///     The assembled Telegram tab.
+    pub(super) fn telegram_tab(&self, cx: &Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let muted = rgba_from(p.text_muted, 1.0);
+        let cfg = self.backend.read(cx);
+        let draft = cfg.preview.as_ref().unwrap_or(&cfg.config);
+        let telegram = &draft.telegram;
+        let status_text = if telegram.token.expose() != cfg.config.telegram.token.expose() {
+            t!("telegram.state.unsaved").to_string()
+        } else {
+            cfg.telegram_service_status_text()
+        };
+        let pairing = cfg
+            .telegram
+            .pairing
+            .as_ref()
+            .map(|(code, _)| t!("telegram.pair_code", code = code.clone()).to_string())
+            .unwrap_or_default();
+        let mini_url = if telegram.mini_app_enabled {
+            match &cfg.telegram.mini_status {
+                moon_core::telegram::runtime::mini_app::MiniAppStatus::Tunneling {
+                    url, ..
+                } => Some(url.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let paired = if telegram.authorized_chat_ids.is_empty() {
+            t!("telegram.paired_none").to_string()
+        } else {
+            t!(
+                "telegram.paired_count",
+                count = telegram.authorized_chat_ids.len()
+            )
+            .to_string()
+        };
+        let mini_app = telegram.mini_app_enabled;
+
+        v_flex()
+            .w_full()
+            .gap(design::ui_px(cx, 10.0))
+            .child(super::section(&t!("telegram.section_bot"), p, cx))
+            .child(
+                v_flex()
+                    .gap(design::ui_px(cx, 4.0))
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .gap(design::ui_px(cx, 10.0))
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_color(rgba_from(p.text_soft, 1.0))
+                                    .child(t!("telegram.token").to_string()),
+                            )
+                            .child(
+                                div().w(design::font_w_px(cx, TOKEN_FIELD_W)).child(
+                                    MoonInput::new("telegram-token")
+                                        .state(&self.telegram.token)
+                                        .small()
+                                        .mono(true)
+                                        .mask_toggle(),
+                                ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_color(muted)
+                            .child(t!("telegram.token_hint").to_string()),
+                    )
+                    .when(cfg.config.telegram.token.expose().is_empty(), |token| {
+                        token.child(
+                            div()
+                                .text_color(muted)
+                                .child(t!("telegram.onboarding").to_string()),
+                        )
+                    }),
+            )
+            .child(div().text_color(rgba_from(p.text, 1.0)).child(status_text))
+            .child(div().text_color(muted).child(paired))
+            .when(!pairing.is_empty(), |tab| {
+                tab.child(div().text_color(muted).child(pairing))
+            })
+            .child(
+                h_flex()
+                    .gap(design::ui_px(cx, 8.0))
+                    .child(
+                        MoonButton::new("telegram-pair")
+                            .label(t!("telegram.pair_new").to_string())
+                            .disabled(cfg.telegram.service.is_none())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.backend.update(cx, |b, bcx| {
+                                    b.issue_telegram_pairing();
+                                    bcx.notify();
+                                });
+                            }))
+                            .render(),
+                    )
+                    .child(
+                        MoonButton::new("telegram-reset")
+                            .disabled(cfg.config.telegram.authorized_chat_ids.is_empty())
+                            .label(t!("telegram.pair_reset").to_string())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.backend.update(cx, |b, bcx| {
+                                    b.reset_telegram_pairing();
+                                    bcx.notify();
+                                });
+                            }))
+                            .render(),
+                    ),
+            )
+            .child(super::separator(p, cx))
+            .child(super::section(&t!("telegram.section_mini_app"), p, cx))
+            .child(
+                self.draft_checkbox(cx, "tg-mini-app", mini_app, |p, v| {
+                    if p.telegram.mini_app_enabled != v {
+                        p.telegram.mini_app_enabled = v;
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .label(t!("telegram.mini_app").to_string())
+                .size(MoonCheckboxSize::Normal),
+            )
+            .child(
+                div()
+                    .text_color(muted)
+                    .child(t!("telegram.mini_app_hint").to_string()),
+            )
+            .when_some(mini_url, |tab, url| {
+                tab.child(
+                    div()
+                        .font_family(design::mono())
+                        .text_color(muted)
+                        .child(url),
+                )
+            })
+    }
+}

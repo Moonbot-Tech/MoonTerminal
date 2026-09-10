@@ -309,6 +309,37 @@ impl RateHeaders {
     }
 }
 
+impl GitHubReleaseClient {
+    /// Fetch one GitHub release-list page with ETag, rate-limit, and body-size bounds.
+    ///
+    /// Args:
+    ///     user_agent: Product-specific User-Agent; the updater keeps `MoonTerminal-updater`.
+    ///     page: One-based page number.
+    ///     per_page: Page size advertised to GitHub.
+    ///     etag: Optional exact validator for this URL.
+    ///     now_unix: Current Unix seconds for scheduling headers.
+    ///     max_bytes: Hard response-body ceiling.
+    ///
+    /// Returns:
+    ///     `(status, etag, body_bytes)`. Status 304 has an empty body.
+    ///
+    /// Errors:
+    ///     Typed transport, rate-limit, or protocol failure without response bodies.
+    pub(crate) fn fetch_release_list_page(
+        &self,
+        user_agent: &str,
+        page: usize,
+        per_page: usize,
+        etag: Option<&HeaderValue>,
+        now_unix: u64,
+        max_bytes: u64,
+    ) -> Result<(u16, Option<HeaderValue>, Vec<u8>), DiscoveryError> {
+        let fetched =
+            github_release_list_page(self, user_agent, page, per_page, etag, now_unix, max_bytes)?;
+        Ok((fetched.status, fetched.etag, fetched.body))
+    }
+}
+
 /// Fetch one exact conditional release-list page and classify its scheduling metadata.
 ///
 /// Args:
@@ -329,13 +360,63 @@ fn release_page(
     etag: Option<&HeaderValue>,
     now_unix: u64,
 ) -> Result<PageFetch, DiscoveryError> {
+    let fetched = github_release_list_page(
+        client,
+        "MoonTerminal-updater",
+        page,
+        RELEASES_PER_PAGE,
+        etag,
+        now_unix,
+        MAX_RELEASE_RESPONSE_BYTES,
+    )?;
+    let rate = fetched.rate;
+    if fetched.status == 304 {
+        return Ok(PageFetch {
+            update: PageUpdate::NotModified,
+            rate,
+        });
+    }
+    let releases = serde_json::from_slice(&fetched.body).map_err(|error| {
+        DiscoveryError::new(
+            DiscoveryRetry::Protocol,
+            None,
+            anyhow!(error).context("decode bounded GitHub releases response"),
+        )
+    })?;
+    Ok(PageFetch {
+        update: PageUpdate::Fresh(CachedReleasePage {
+            etag: fetched.etag,
+            releases,
+        }),
+        rate,
+    })
+}
+
+/// One bounded GitHub release-list HTTP result with sanitized scheduling metadata.
+struct GithubListFetch {
+    status: u16,
+    etag: Option<HeaderValue>,
+    body: Vec<u8>,
+    rate: RateHeaders,
+}
+
+/// Perform the shared GitHub release-list GET used by self-update and verified asset acquisition.
+fn github_release_list_page(
+    client: &GitHubReleaseClient,
+    user_agent: &str,
+    page: usize,
+    per_page: usize,
+    etag: Option<&HeaderValue>,
+    now_unix: u64,
+    max_bytes: u64,
+) -> Result<GithubListFetch, DiscoveryError> {
     let mut request = client
         .agent
         .get(&client.releases_url)
         .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "MoonTerminal-updater")
+        .header("User-Agent", user_agent)
         .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
-        .query("per_page", RELEASES_PER_PAGE.to_string())
+        .query("per_page", per_page.to_string())
         .query("page", page.to_string());
     if let Some(etag) = etag {
         request = request.header("If-None-Match", etag.clone());
@@ -350,8 +431,10 @@ fn release_page(
     let status = response.status().as_u16();
     let rate = RateHeaders::from_headers(response.headers(), now_unix);
     if status == 304 {
-        return Ok(PageFetch {
-            update: PageUpdate::NotModified,
+        return Ok(GithubListFetch {
+            status,
+            etag: bounded_etag(response.headers()),
+            body: Vec::new(),
             rate,
         });
     }
@@ -377,11 +460,11 @@ fn release_page(
         ));
     }
     let etag = bounded_etag(response.headers());
-    let releases = response
+    let body = response
         .body_mut()
         .with_config()
-        .limit(MAX_RELEASE_RESPONSE_BYTES)
-        .read_json()
+        .limit(max_bytes)
+        .read_to_vec()
         .map_err(|error| {
             DiscoveryError::new(
                 DiscoveryRetry::Protocol,
@@ -389,8 +472,10 @@ fn release_page(
                 anyhow!(error).context("decode bounded GitHub releases response"),
             )
         })?;
-    Ok(PageFetch {
-        update: PageUpdate::Fresh(CachedReleasePage { etag, releases }),
+    Ok(GithubListFetch {
+        status,
+        etag,
+        body,
         rate,
     })
 }

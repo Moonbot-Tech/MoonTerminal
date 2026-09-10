@@ -230,7 +230,6 @@ impl SettingsView {
     /// changes reconcile sessions, while chart-topology changes rebuild group windows.
     fn apply_settings(&mut self, before: &AppConfig, cx: &mut Context<Self>) {
         let after = self.backend.read(cx).config.clone();
-
         // Presentation settings are read during rendering, so update locale/order and redraw
         // without recreating windows or sessions.
         let lang_changed = before.language != after.language;
@@ -238,6 +237,10 @@ impl SettingsView {
         if lang_changed {
             rust_i18n::set_locale(after.language.code());
         }
+        self.backend.update(cx, |b, bcx| {
+            b.reconcile_telegram(&before.telegram);
+            bcx.notify();
+        });
         if lang_changed || sort_changed {
             // Notify Backend before redrawing so signature-gated panels recompute their order.
             self.backend.update(cx, |b, bcx| {

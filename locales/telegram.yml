@@ -1,0 +1,136 @@
+# Telegram Settings tab and later bot/Mini App strings.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
+_version: 2
+
+telegram.tab:
+  ru: "Telegram"
+  en: "Telegram"
+  es: "Telegram"
+
+telegram.section_bot:
+  ru: "Бот"
+  en: "Bot"
+  es: "Bot"
+telegram.section_mini_app:
+  ru: "Mini App"
+  en: "Mini App"
+  es: "Mini App"
+
+telegram.token:
+  ru: "Токен бота"
+  en: "Bot token"
+  es: "Token del bot"
+telegram.token_hint:
+  ru: "Хранится только в зашифрованном конфиге. Пустой токен полностью выключает Telegram."
+  en: "Stored only in the encrypted config. An empty token turns Telegram off completely."
+  es: "Se guarda solo en la configuración cifrada. Un token vacío desactiva Telegram por completo."
+
+telegram.onboarding:
+  ru: "Как подключить: 1) напишите @BotFather команду /newbot и скопируйте выданный токен; 2) вставьте его сюда и нажмите «Сохранить»; 3) нажмите «Новый код привязки» и отправьте код своему боту — терминал запомнит этот чат."
+  en: "How to connect: 1) send /newbot to @BotFather and copy the token it gives you; 2) paste it here and press Save; 3) press New pairing code and send the code to your bot - the terminal will remember that chat."
+  es: "Cómo conectar: 1) envía /newbot a @BotFather y copia el token que te da; 2) pégalo aquí y pulsa Guardar; 3) pulsa Nuevo código de vinculación y envía el código a tu bot; el terminal recordará ese chat."
+
+telegram.mini_app:
+  ru: "Включить Mini App"
+  en: "Enable Mini App"
+  es: "Activar Mini App"
+telegram.mini_app_hint:
+  ru: "Туннель и локальный сервер запускаются в фоне после сохранения. Без токена ничего не стартует."
+  en: "The tunnel and local server start in the background after saving. Nothing starts without a token."
+  es: "El túnel y el servidor local se inician en segundo plano al guardar. Sin token no arranca nada."
+
+telegram.paired_none:
+  ru: "Нет привязанных чатов"
+  en: "No paired chats"
+  es: "Sin chats vinculados"
+telegram.paired_count:
+  ru: "Привязанных чатов: %{count}"
+  en: "Paired chats: %{count}"
+  es: "Chats vinculados: %{count}"
+
+telegram.state.disabled:
+  ru: "Выключено: задайте токен бота, чтобы включить Telegram."
+  en: "Disabled: set a bot token to turn Telegram on."
+  es: "Desactivado: indica un token de bot para activar Telegram."
+telegram.state.unsaved:
+  ru: "Не сохранено: токен задан, но ещё не записан."
+  en: "Unsaved: a bot token is set, but it has not been saved."
+  es: "Sin guardar: hay un token de bot, pero aún no se ha guardado."
+telegram.state.starting:
+  ru: "Запускается…"
+  en: "Starting…"
+  es: "Iniciando…"
+telegram.state.unavailable:
+  ru: "Недоступно: токен сохранён, служба ещё не запущена в этом сеансе."
+  en: "Unavailable: the token is saved, but the service is not running in this session."
+  es: "No disponible: el token está guardado, pero el servicio no está en marcha en esta sesión."
+
+telegram.pair_success:
+  ru: "Чат привязан."
+  en: "Chat paired."
+  es: "Chat vinculado."
+
+telegram.refusal:
+  ru: "Доступ запрещён."
+  en: "Access denied."
+  es: "Acceso denegado."
+
+telegram.mini_open:
+  ru: "Открыть Mini App"
+  en: "Open Mini App"
+  es: "Abrir Mini App"
+
+telegram.invalid:
+  ru: "Неизвестная команда. Отправьте /miniapp, чтобы открыть Mini App."
+  en: "Unknown command. Send /miniapp to open the Mini App."
+  es: "Comando desconocido. Envía /miniapp para abrir Mini App."
+
+telegram.rate_limited:
+  ru: "Ограничение Telegram: повтор через %{seconds} с."
+  en: "Telegram rate limit: retry after %{seconds}s."
+  es: "Límite de Telegram: reintento tras %{seconds}s."
+
+telegram.stopped:
+  ru: "Остановлено"
+  en: "Stopped"
+  es: "Detenido"
+
+telegram.pair_code:
+  ru: "/pair %{code}: одноразовый код на 10 минут."
+  en: "/pair %{code}: one-use code, valid for 10 minutes."
+  es: "/pair %{code}: código de un uso, válido durante 10 minutos."
+
+telegram.pair_new:
+  ru: "Новый код привязки"
+  en: "New pairing code"
+  es: "Nuevo código de vinculación"
+
+telegram.pair_reset:
+  ru: "Отозвать все чаты"
+  en: "Revoke all chats"
+  es: "Revocar todos los chats"
+
+telegram.stopping:
+  ru: "Останавливается…"
+  en: "Stopping…"
+  es: "Deteniendo…"
+
+telegram.mini_shell_checking:
+  ru: "Проверка соединения…"
+  en: "Checking the connection…"
+  es: "Comprobando la conexión…"
+
+telegram.mini_shell_connected:
+  ru: "Терминал подключён; здесь пока ничего нет."
+  en: "Terminal connected, nothing here yet."
+  es: "Terminal conectado; aquí no hay nada todavía."
+
+telegram.mini_shell_denied:
+  ru: "Этот чат не допущен. Привяжите его заново или включите Mini App в Настройках."
+  en: "This chat is not admitted. Re-pair it, or turn Mini App on in Settings."
+  es: "Este chat no está admitido. Vuelve a vincularlo o activa Mini App en Ajustes."
+
+telegram.mini_shell_unreachable:
+  ru: "Терминал недоступен. Туннель или сам терминал выключен."
+  en: "The terminal could not be reached. The tunnel or the terminal is down."
+  es: "No se pudo alcanzar el terminal. El túnel o el terminal está apagado."

@@ -1,4 +1,4 @@
-//! Low-level config-file I/O: encrypted servers.enc and plaintext settings.toml.
+//! Low-level config-file I/O: encrypted servers.enc (cores and Telegram secrets) and plaintext settings.toml.
 //! This module contains NO domain logic; merging and uids belong in `reconcile`.
 //!
 //! A corrupt settings.toml must not be lost silently: move it to `.bak` and continue with
@@ -26,7 +26,7 @@ pub fn read_servers() -> anyhow::Result<ServersFile> {
     Ok(sf)
 }
 
-/// Encrypts and writes servers.enc.
+/// Encrypts and writes servers.enc, including Telegram credentials when present.
 ///
 /// Refuses to write over a file this process never opened; see [`refuse_blind_overwrite`].
 pub fn write_servers(sf: &ServersFile) -> anyhow::Result<()> {

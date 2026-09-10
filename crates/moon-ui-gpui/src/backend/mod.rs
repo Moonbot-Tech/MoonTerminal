@@ -11,6 +11,7 @@ mod manual_trading;
 mod open_request;
 mod quiet;
 pub(crate) mod server_chart;
+pub(crate) mod telegram;
 #[cfg(test)]
 mod tests;
 

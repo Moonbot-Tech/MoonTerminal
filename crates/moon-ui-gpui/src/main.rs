@@ -87,6 +87,8 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 
 /// Shared backend stored in one `Entity`, drained by coordination loops, and notifying UI observers.
 struct Backend {
+    /// Optional Telegram service, joined before application owners disappear.
+    telegram: backend::telegram::TelegramState,
     /// Process-wide self-update state shared by every group window.
     updater: Entity<update::UpdateController>,
     session: SessionManager,

@@ -30,50 +30,129 @@ pub(super) fn download_verified(
     let staged_path = crate::config::paths::update_staged_executable_path(nonce)
         .context("resolve canonical update staging path")?;
     validate_download_url(release.download_url(), release.release_tag())?;
-    if release.asset_size() == 0 || release.asset_size() > MAX_EXECUTABLE_BYTES {
+    stage_verified_asset(
+        client,
+        release.download_url(),
+        &staged_path,
+        release.asset_size(),
+        &release.asset_sha256(),
+        "MoonTerminal-updater",
+        MAX_EXECUTABLE_BYTES,
+    )
+}
+
+impl GitHubReleaseClient {
+    /// Bounded HTTPS client for an exact GitHub release-list URL.
+    ///
+    /// Args:
+    ///     releases_url: Exact `https://api.github.com/repos/.../releases` endpoint.
+    ///
+    /// Returns:
+    ///     A client that rejects plain HTTP and uses the same timeouts as self-update.
+    pub(crate) fn for_github_releases(releases_url: &str) -> Self {
+        Self::build(releases_url, true)
+    }
+
+    /// Download one GitHub release asset into `dest` after streamed and post-sync SHA-256 checks.
+    ///
+    /// Args:
+    ///     download_url: Caller-validated HTTPS GitHub release-download URL.
+    ///     dest: Final promotion path. Unique `.part` files are created beside it.
+    ///     expected_size: Immutable size from release metadata.
+    ///     expected_digest: Immutable SHA-256 from official checksum or GitHub digest.
+    ///     user_agent: Product-specific User-Agent; the updater keeps `MoonTerminal-updater`.
+    ///     max_bytes: Hard ceiling, never larger than the caller's policy.
+    ///
+    /// Returns:
+    ///     `dest` after both digest passes and atomic rename.
+    pub(crate) fn stage_verified_asset(
+        &self,
+        download_url: &str,
+        dest: &Path,
+        expected_size: u64,
+        expected_digest: &[u8; 32],
+        user_agent: &str,
+        max_bytes: u64,
+    ) -> anyhow::Result<PathBuf> {
+        stage_verified_asset(
+            self,
+            download_url,
+            dest,
+            expected_size,
+            expected_digest,
+            user_agent,
+            max_bytes,
+        )
+    }
+}
+
+/// Stage one verified GitHub asset beside `dest` using unique `.part` files.
+fn stage_verified_asset(
+    client: &GitHubReleaseClient,
+    download_url: &str,
+    dest: &Path,
+    expected_size: u64,
+    expected_digest: &[u8; 32],
+    user_agent: &str,
+    max_bytes: u64,
+) -> anyhow::Result<PathBuf> {
+    if expected_size == 0 || expected_size > max_bytes {
         bail!("release asset size is outside the allowed range");
     }
-    let parent = staged_path
+    let parent = dest
         .parent()
         .ok_or_else(|| anyhow!("staged executable has no parent directory"))?;
     ensure_plain_directory(parent)?;
-    let (part_path, part_file) = create_unique_part(&staged_path)?;
+    let (part_path, part_file) = create_unique_part(dest)?;
     let mut part = PartFile::new(part_path, part_file);
-    download_into(client, release, part.file_mut())?;
+    download_into(
+        client,
+        download_url,
+        expected_size,
+        expected_digest,
+        max_bytes,
+        user_agent,
+        part.file_mut(),
+    )?;
     let part_path = part.path().to_path_buf();
     promote_verified_part(
         &part_path,
         part.file_mut(),
-        &staged_path,
-        release.asset_size(),
-        &release.asset_sha256(),
+        dest,
+        expected_size,
+        expected_digest,
     )?;
     part.disarm();
-    Ok(staged_path)
+    Ok(dest.to_path_buf())
 }
 
 /// Stream one response into the already-exclusive part file and verify its first hash.
 fn download_into(
     client: &GitHubReleaseClient,
-    release: &AvailableRelease,
+    download_url: &str,
+    expected_size: u64,
+    expected_digest: &[u8; 32],
+    max_bytes: u64,
+    user_agent: &str,
     part_file: &mut File,
 ) -> anyhow::Result<()> {
     let mut response = client
         .agent
-        .get(release.download_url())
+        .get(download_url)
         .header("Accept", "application/octet-stream")
-        .header("User-Agent", "MoonTerminal-updater")
+        .header("User-Agent", user_agent)
         .call()
         .context("download update asset")?;
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
         bail!("GitHub update asset returned HTTP {status}");
     }
-    copy_verified(
+    copy_verified_bounded(
         response.body_mut().as_reader(),
         part_file,
-        release.asset_size(),
-        &release.asset_sha256(),
+        expected_size,
+        expected_digest,
+        max_bytes,
     )
 }
 
@@ -146,11 +225,29 @@ impl Drop for PartFile {
 }
 
 /// Stream bytes into a destination while enforcing exact size and SHA-256.
+#[cfg(test)]
 fn copy_verified(
+    reader: impl Read,
+    writer: impl Write,
+    expected_size: u64,
+    expected_digest: &[u8; 32],
+) -> anyhow::Result<()> {
+    copy_verified_bounded(
+        reader,
+        writer,
+        expected_size,
+        expected_digest,
+        MAX_EXECUTABLE_BYTES,
+    )
+}
+
+/// Stream bytes while enforcing exact size, SHA-256, and a caller ceiling.
+fn copy_verified_bounded(
     mut reader: impl Read,
     mut writer: impl Write,
     expected_size: u64,
     expected_digest: &[u8; 32],
+    max_bytes: u64,
 ) -> anyhow::Result<()> {
     let mut hasher = Sha256::new();
     let mut total = 0u64;
@@ -163,7 +260,7 @@ fn copy_verified(
         total = total
             .checked_add(read as u64)
             .ok_or_else(|| anyhow!("download size overflow"))?;
-        if total > expected_size || total > MAX_EXECUTABLE_BYTES {
+        if total > expected_size || total > max_bytes {
             bail!("download exceeds the immutable release size");
         }
         hasher.update(&buffer[..read]);

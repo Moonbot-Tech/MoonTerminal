@@ -148,6 +148,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let updater = cx.new(|_| crate::update::UpdateController::new());
 
     let backend = cx.new(|_| Backend {
+        telegram: crate::backend::telegram::TelegramState::new(&cfg.telegram),
         updater: updater.clone(),
         session: SessionManager::start(
             &cfg,
@@ -463,6 +464,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         moon_core::detect_diag::line("[quit] on_app_quit → сохраняю charts.json");
         let final_persistence = app_quit_backend.update(cx, |b, _| {
             b.quitting = true;
+            b.telegram.request_stop();
             // One of the two DEBOUNCED flush sites; the other is the coordinator tick below.
             // Not reached by FireTest at all, which exits through `std::process::exit` — kept
             // gated so the rule holds however the run ends.
@@ -519,6 +521,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
             .shutdown(final_persistence);
         app_quit_backend.update(cx, |b, _| {
             apply_persistence_ack(b, final_acknowledgement);
+            // Joined LAST: every persisted authority is already written, so a transport that is
+            // still inside a blocking long poll can no longer delay the save behind it.
+            b.telegram.stop();
         });
         async move {}
     })
@@ -661,6 +666,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                             valuation.wake();
                         }
                     }
+                    b.tick_telegram(cx);
                     b.maybe_diag_open_first_market(cx);
                     b.refresh_header_ticker_default(false);
                     b.sync_open_markets_if_due();
