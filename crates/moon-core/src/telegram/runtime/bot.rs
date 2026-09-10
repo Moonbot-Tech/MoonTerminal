@@ -22,6 +22,8 @@ pub(super) fn run(
     alive: Weak<()>,
     auth: SharedAuthorization,
     labels: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
+    menu: super::menu::SharedMenu,
+    mut menu_sync: super::menu::MenuSync,
     tx: SyncSender<Work>,
 ) {
     let mut api = BotApi::new(token);
@@ -61,6 +63,15 @@ pub(super) fn run(
                     }
                     continue;
                 }
+            }
+        }
+        let menu_intent = menu.lock().map(|intent| intent.clone());
+        if let Ok(intent) = menu_intent {
+            if let Err(error) = menu_sync.sync(&intent, Instant::now(), |chat, button| {
+                api.set_chat_menu_button(chat, button)
+            }) {
+                log::warn!("telegram menu update failed: {error}");
+                publish_status(&tx, &error);
             }
         }
         let updates = match api.get_updates() {

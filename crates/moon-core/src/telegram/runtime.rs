@@ -11,6 +11,7 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 mod bot;
+mod menu;
 pub mod mini_app;
 /// Authenticated work drained by the application's coordination loop.
 pub enum Work {
@@ -61,6 +62,15 @@ impl TelegramService {
         config: &TelegramConfig,
         labels: std::collections::BTreeMap<String, String>,
     ) -> Option<Self> {
+        Self::start_localized_with_menu_cleanup(config, labels, &[])
+    }
+
+    /// Restart the same bot with retired chat IDs solely for clearing their native menus.
+    pub fn start_localized_with_menu_cleanup(
+        config: &TelegramConfig,
+        labels: std::collections::BTreeMap<String, String>,
+        retired_chats: &[i64],
+    ) -> Option<Self> {
         if config.token.is_empty() {
             return None;
         }
@@ -71,14 +81,19 @@ impl TelegramService {
         let (tx, events) = mpsc::sync_channel(64);
         let mini_config = Arc::new(Mutex::new(config.clone()));
         let labels = Arc::new(Mutex::new(labels));
+        let menu = Arc::new(Mutex::new(menu::MenuIntent::stopped(
+            &config.authorized_chat_ids,
+        )));
         let weak = Arc::downgrade(&alive);
         let auth = authorization.clone();
         let bot_tx = tx.clone();
         let token = config.token.clone();
         let bot_labels = labels.clone();
+        let bot_menu = menu.clone();
+        let menu_sync = menu::MenuSync::with_cleanup(retired_chats);
         let join = thread::Builder::new()
             .name("telegram-bot".into())
-            .spawn(move || bot::run(token, weak, auth, bot_labels, bot_tx))
+            .spawn(move || bot::run(token, weak, auth, bot_labels, bot_menu, menu_sync, bot_tx))
             .ok()?;
         let weak = Arc::downgrade(&alive);
         let cfg = mini_config.clone();
@@ -86,7 +101,7 @@ impl TelegramService {
         let failure_tx = tx.clone();
         let mini_join = thread::Builder::new()
             .name("telegram-miniapp-owner".into())
-            .spawn(move || mini_app::run_service(cfg, mini_labels, weak, tx));
+            .spawn(move || mini_app::run_service(cfg, mini_labels, menu, weak, tx));
         let mut joins = vec![join];
         if let Ok(join) = mini_join {
             joins.push(join);

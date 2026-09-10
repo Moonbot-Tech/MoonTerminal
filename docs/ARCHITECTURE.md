@@ -669,14 +669,20 @@ HTTP — синхронный `ureq`, `getUpdates` держит сокет до 
   порт. Единственный аутентифицированный запрос — `POST /api/session`: HMAC `initData`, затем
   `authorize_paired_identity`, затем живая перепроверка `mini_app_enabled` и членства чата в
   `Backend::telegram_mini_request`. Подлинность запуска Telegram — не авторизация терминала.
-- **Кнопка Mini App не может быть пунктом меню BotFather.** URL quick-туннеля меняется при
-  каждом старте `cloudflared`. Кнопка — только `InlineKeyboardButton::web_app` с текущим URL
-  из `MiniAppStatus::Tunneling`, команда `/miniapp`.
-- **Навигация бота.** После сохранённой привязки, `/start` и `/help` бот показывает постоянную
-  Reply-клавиатуру: «Открыть Mini App» и «Помощь». Это текстовые кнопки: первая запрашивает
-  свежую inline-кнопку с текущим URL, вторая показывает помощь. Старые подписи ru/en/es
-  распознаются и после смены языка. Все пути проходят прежние проверки private-чата и парности;
-  непарному чату меню не выдаётся.
+- **Native Mini App menu follows the tunnel.** The Mini App owner publishes the latest URL and
+  localized label; the bot worker reconciles per-chat `setChatMenuButton` between long polls.
+  Only paired private chats receive a web-app menu. Disabled, unavailable, or revoked targets
+  revert to commands; failed writes remain pending with a cooldown. Updates can wait for the
+  current long poll (normally up to 25 seconds). Shutdown makes no uncancellable cleanup calls:
+  Telegram may retain the last menu until the next service start reconciles it. The `/miniapp`
+  inline launcher remains available and uses the current `MiniAppStatus::Tunneling` URL.
+  Pairing reset retains cleanup-only chat IDs across same-token service restarts for the lifetime
+  of the desktop process; token changes discard them. Those IDs never grant app authorization.
+- **Bot navigation.** Pairing, `/start`, and `/help` publish a persistent reply keyboard with
+  Help only, replacing the previous two-button keyboard on the next reply. The native menu and
+  `/miniapp` inline launcher use the short localized Open label. Old Mini App reply-button labels
+  in ru/en/es still request a fresh inline launcher, so previously delivered keyboards remain
+  usable until refreshed. Private-chat and pairing checks apply to every route.
 - **Страница Mini App сейчас нарочно пустая: единственный её запрос — проверка сессии
   (`POST /api/session`). Это решение по объёму, а не недописанный экран.**
 - **Выключение присоединяет всё, что подняли.** Смена токена или списка чатов —

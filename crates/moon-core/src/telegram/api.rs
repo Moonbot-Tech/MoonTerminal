@@ -158,6 +158,21 @@ pub struct WebAppInfo {
     pub url: String,
 }
 
+/// A private chat's native menu either launches the current app or shows bot commands.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MenuButton {
+    Commands,
+    WebApp { text: String, web_app: WebAppInfo },
+}
+
+/// Always scope menu changes to one paired private chat, never the bot-wide default.
+#[derive(Serialize)]
+struct SetChatMenuButtonReq<'a> {
+    chat_id: i64,
+    menu_button: &'a MenuButton,
+}
+
 /// One inline-keyboard Mini App button.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct InlineKeyboardButton {
@@ -316,6 +331,27 @@ impl BotApi {
     ///     The bot user, or a classified error with no URL or token.
     pub fn get_me(&mut self) -> Result<User, ApiError> {
         self.post("getMe", &EmptyBody {}, false)
+    }
+
+    /// Replace a private chat's menu using the same redacted, cancellable transport as replies.
+    pub fn set_chat_menu_button(
+        &mut self,
+        chat_id: i64,
+        menu_button: &MenuButton,
+    ) -> Result<(), ApiError> {
+        let accepted: bool = self.post(
+            "setChatMenuButton",
+            &SetChatMenuButtonReq {
+                chat_id,
+                menu_button,
+            },
+            false,
+        )?;
+        if accepted {
+            Ok(())
+        } else {
+            Err(ApiError::Protocol)
+        }
     }
 
     /// Long-poll `getUpdates` without acknowledging the batch.
