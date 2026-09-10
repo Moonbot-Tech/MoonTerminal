@@ -702,6 +702,7 @@ fn report_data_cell(row: usize, col: &str, val: &Value, ctx: &RowCellCtx<'_>) ->
 /// terminal wrote itself (see `strat_db::stats`), already true UTC, so it takes the user's selected
 /// `display_zone` directly instead. Applying `display_zone` on top of the axis for the first three
 /// would silently double-convert them.
+/// An absent close time is a position-state sentinel, so reject it before correcting the clock.
 ///
 /// Args:
 ///     col: Runtime report column name.
@@ -712,7 +713,7 @@ fn report_data_cell(row: usize, col: &str, val: &Value, ctx: &RowCellCtx<'_>) ->
 ///
 /// Returns:
 ///     `(UTC seconds, zone to render in)`, or `None` for a non-date column or an unreadable value.
-fn date_cell_instant(
+pub(super) fn date_cell_instant(
     col: &str,
     v: &Value,
     axis: &ReportAxis,
@@ -720,9 +721,9 @@ fn date_cell_instant(
     display_zone: Tz,
 ) -> Option<(i64, Tz)> {
     match col {
-        "buydate" | "closedate" | "sellsetdate" => {
-            as_i64(v).map(|secs| (axis.to_utc(secs, core_uid), axis.zone()))
-        }
+        "buydate" | "closedate" | "sellsetdate" => as_i64(v)
+            .filter(|secs| col != "closedate" || *secs > 0)
+            .map(|secs| (axis.to_utc(secs, core_uid), axis.zone())),
         "last_update_at" => as_i64(v).map(|secs| (secs, display_zone)),
         _ => None,
     }
