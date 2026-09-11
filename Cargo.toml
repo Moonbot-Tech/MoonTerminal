@@ -7,13 +7,6 @@
 # docs/ARCHITECTURE.md (the "Rendering" section).
 [workspace]
 members = ["crates/moon-core", "crates/moon-chart", "crates/moon-ui-gpui"]
-# A developer-only tool with its own lockfile. Adding it as a member made cargo re-resolve the
-# shared lock beyond the tool's own crates (socket2 0.5→0.6, windows-sys 0.60→0.61 moved in the
-# same `cargo build`), and a triage tool must not move what the product ships. Build it in place:
-# `cargo run --manifest-path tools/symbolize/Cargo.toml -- …`. Outside the workspace it is also
-# outside `cargo test --workspace` and cargo-deny — its 35 dependencies are checked only when it
-# is built; that is the trade the exclusion makes.
-exclude = ["tools/symbolize"]
 resolver = "2"
 
 [profile.release]

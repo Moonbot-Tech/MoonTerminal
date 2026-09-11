@@ -7,9 +7,9 @@
 //! try to replace it. What it adds is the piece that record lacks: a line in OUR `panic.log`,
 //! next to the Rust panics, saying that the process died natively, in which build, after how long,
 //! on which thread, at what address, and the faulting thread's stack as `moonterminal+0xOFFSET`
-//! (the form a dSYM resolves with `atos`; none is built or kept today — the offsets stand on
-//! their own until one is made from the same tag). Without it a native crash on a Mac leaves
-//! `panic.log` untouched, and "the terminal just closed" is all the log can say.
+//! (offsets into the image; no symbols are built for them, by decision). Without it a native
+//! crash on a Mac leaves `panic.log` untouched, and "the terminal just closed" is all the log
+//! can say.
 //!
 //! Everything here runs inside a signal handler, so nothing allocates and nothing of ours locks:
 //! the report is formatted into a static buffer and written with `write(2)`. It goes out in two

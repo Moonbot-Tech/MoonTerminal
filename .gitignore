@@ -1,6 +1,4 @@
 /target
-# The crash-triage tool is outside the workspace and builds into its own target dir.
-/tools/symbolize/target
 /tmp/
 /.cargo/
 # Local configs containing keys — NEVER commit them.

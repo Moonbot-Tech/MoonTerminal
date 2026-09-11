@@ -13,7 +13,7 @@
 //! through `dbghelp` and can fault themselves. A report cut short still carries its top.
 //!
 //! What a stripped release build gets from it: the faulting instruction as `moonterminal+0xRVA`
-//! (a PDB from the same build resolves that to a line), the registers, the raw stack in the same
+//! (an offset into the image, no symbols by decision), the registers, the raw stack in the same
 //! form, the thread, the process's memory and GUI-object counts, the foreign DLLs loaded into it,
 //! the last [`super::msg_ring::REPORT_LINES`] window messages plus the older notable ones the ring
 //! still holds, and the dump.
@@ -257,8 +257,9 @@ unsafe extern "system" fn native_exception_filter(
     ));
 
     // The filter runs on the thread that faulted, and `force_capture` walks its current stack while
-    // the handler is executing. It does not unwind from the saved `ContextRecord`; available PDBs
-    // symbolize the captured frames in the same way as the panic hook.
+    // the handler is executing. It does not unwind from the saved `ContextRecord`; in a dev build
+    // the captured frames symbolize the same way as the panic hook's, in release they print as
+    // `<unknown>`.
     let bt = std::backtrace::Backtrace::force_capture();
     panic_log(&format!("--- backtrace ---\n{bt}\n--- end ---"));
 

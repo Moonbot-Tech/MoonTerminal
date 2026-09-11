@@ -3,8 +3,8 @@
 //! The text report names the faulting instruction and the raw stack; the dump carries the stack
 //! of every thread with its registers — and deliberately no data: neither the heap nor the values
 //! on the stacks, only the pointers that let a debugger walk them, so a forwarded dump cannot
-//! carry a key. WinDbg reads it without symbols, and with the PDB kept from the same release build
-//! it reads as source lines.
+//! carry a key. WinDbg reads it without symbols: every thread's stack as image offsets, which is
+//! what the text report has for the faulting thread alone.
 //! The Windows Error Reporting way of getting one — `LocalDumps` in the registry — needs an
 //! administrator on the user's machine; this needs nothing.
 //!

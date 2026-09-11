@@ -1,9 +1,0 @@
-[package]
-name = "symbolize"
-version = "0.0.0"
-edition = "2024"
-publish = false
-description = "Turns `moonterminal+0xRVA` lines from panic.log into file:line, against a PDB rebuilt from the same tag"
-
-[dependencies]
-pdb-addr2line = "0.11"

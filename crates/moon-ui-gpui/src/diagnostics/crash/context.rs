@@ -7,9 +7,10 @@
 //! being handled. `dbghelp` is not — it takes a process-wide lock and has faulted inside this very
 //! handler before — so the symbolised backtrace stays LAST in the report and nothing here depends
 //! on it. A stripped release build prints `<unknown>` for every frame of that backtrace anyway;
-//! the `module+rva` form printed here is what a PDB turns into a line — not one kept anywhere,
-//! one rebuilt from the same tag with the release's own settings (`tools/symbolize`, and the
-//! "Crash triage" section of `docs-internal/AGENTS.md`).
+//! the `module+rva` form printed here is an offset into our own image — the same offset in the
+//! same build is the same code, which is what lets two reports be compared, and what a
+//! disassembler of the shipped exe reads. No symbols are built or kept for it: the decision was
+//! that the report must stand without them.
 //!
 //! `panic.log` masks network addresses before writing; hexadecimal values pass through untouched.
 
@@ -56,8 +57,9 @@ pub(super) fn header() -> String {
     out
 }
 
-/// The faulting instruction as `module+rva`, the form a PDB resolves, next to the load base that
-/// turns any other raw address in the same report into an offset.
+/// The faulting instruction as `module+rva` — an offset into the image, stable across runs of
+/// the same build — next to the load base that turns any other raw address in the same report
+/// into an offset.
 pub(super) fn location(rip: usize) -> String {
     match module_of(rip) {
         Some((name, base)) => format!("at {name}+0x{:X} (base 0x{base:016X})", rip - base),
