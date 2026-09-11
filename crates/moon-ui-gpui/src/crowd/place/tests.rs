@@ -97,7 +97,13 @@ fn grid_threshold_budgets_every_gap_and_inset() {
     };
     assert_eq!(needs.narrow_below(), px(960.0));
     assert_eq!(needs.form(px(959.0)), Form::OneColumn);
-    assert_eq!(needs.form(px(960.0)), Form::Grid { start: px(300.0), end: px(300.0) });
+    assert_eq!(
+        needs.form(px(960.0)),
+        Form::Grid {
+            start: px(300.0),
+            end: px(300.0)
+        }
+    );
 }
 
 /// A short viewport must scroll a tall middle stack instead of shrinking that band to zero.
@@ -166,7 +172,13 @@ fn two_boards_on_a_laptop_panel_are_a_grid_not_a_column() {
     };
     assert_eq!(needs.narrow_below(), px(720.0));
     assert!(px(1100.0) >= needs.narrow_below());
-    assert_eq!(needs.form(px(1100.0)), Form::Grid { start: px(330.0), end: px(330.0) });
+    assert_eq!(
+        needs.form(px(1100.0)),
+        Form::Grid {
+            start: px(330.0),
+            end: px(330.0)
+        }
+    );
 }
 
 /// The shipped arrangement keeps the brand in the true middle while the panel affords it: both side
@@ -182,12 +194,30 @@ fn the_grid_is_symmetric_while_it_can_be_and_asymmetric_before_it_collapses() {
     // 454 + 376 + 330 + 60
     assert_eq!(needs.narrow_below(), px(1220.0));
     // 2 * 454 + 376 + 60 = 1344 fits: symmetric.
-    assert_eq!(needs.form(px(1400.0)), Form::Grid { start: px(454.0), end: px(454.0) });
+    assert_eq!(
+        needs.form(px(1400.0)),
+        Form::Grid {
+            start: px(454.0),
+            end: px(454.0)
+        }
+    );
     // Between 1220 and 1344 the brand gives up its exact center rather than the whole grid.
-    assert_eq!(needs.form(px(1300.0)), Form::Grid { start: px(454.0), end: px(330.0) });
+    assert_eq!(
+        needs.form(px(1300.0)),
+        Form::Grid {
+            start: px(454.0),
+            end: px(330.0)
+        }
+    );
     assert_eq!(needs.form(px(1219.0)), Form::OneColumn);
     // The unmeasured first frame is the grid, exactly as before.
-    assert_eq!(needs.form(px(0.0)), Form::Grid { start: px(454.0), end: px(454.0) });
+    assert_eq!(
+        needs.form(px(0.0)),
+        Form::Grid {
+            start: px(454.0),
+            end: px(454.0)
+        }
+    );
 }
 
 /// A column nobody put anything in costs nothing but its gap.
@@ -200,5 +230,11 @@ fn an_empty_column_needs_no_width() {
         fixed: px(60.0),
     };
     assert_eq!(needs.narrow_below(), px(436.0));
-    assert_eq!(needs.form(px(500.0)), Form::Grid { start: px(0.0), end: px(0.0) });
+    assert_eq!(
+        needs.form(px(500.0)),
+        Form::Grid {
+            start: px(0.0),
+            end: px(0.0)
+        }
+    );
 }
