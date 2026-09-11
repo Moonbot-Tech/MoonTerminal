@@ -67,7 +67,7 @@ impl StrategiesView {
         state
     }
 
-    /// Build a MoonUI swatch/palette picker for a Color field.
+    /// Build a MoonUI picker with shared custom history for a Color field.
     /// A selection stages a new hexadecimal value while preserving its Moonbot `AARRGGBB` alpha
     /// prefix. States are cached by row id and recreated when the external RGB value changes.
     pub(super) fn field_color_state(
@@ -85,8 +85,7 @@ impl StrategiesView {
                 return state.clone();
             }
         }
-        let init: Hsla = design::rgb_bytes_to_hsla(rgb_val);
-        let state = cx.new(|cx| MoonColorPickerState::new(window, cx).default_value(init));
+        let state = crate::controls::color_picker::shared_color_state(rgb_val, window, cx);
         let prefix = hex_alpha_prefix(hex);
         cx.subscribe(&state, move |this, _st, ev: &MoonColorPickerEvent, cx| {
             let MoonColorPickerEvent::Change(h) = ev else {

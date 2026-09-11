@@ -10,8 +10,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonCheckboxSize,
-    MoonColorPicker, MoonColorPickerEvent, MoonColorPickerState, MoonInput, MoonInputEvent,
-    MoonInputState, MoonPalette, MoonTooltipView, StyledExt, h_flex, rgba_from, v_flex,
+    MoonColorPicker, MoonColorPickerState, MoonInput, MoonInputEvent, MoonInputState, MoonPalette,
+    MoonTooltipView, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -67,28 +67,8 @@ fn badge_input(
     st
 }
 
-/// Convert the draft's persisted custom-colour history to the widget's `Hsla` seed list.
-///
-/// Every picker receives this same conversion, so a custom colour stays reusable across badge rows
-/// after Settings rebuilds the editor state instead of surviving only in the picker that added it.
-///
-/// Args:
-///     cfg: Live configuration or the Settings draft that owns the persisted reuse history.
-///
-/// Returns:
-///     Custom colours in their persisted most-recent-first order, converted for MoonUI.
-fn custom_colors_seed(cfg: &moon_core::config::AppConfig) -> Vec<Hsla> {
-    cfg.badges
-        .custom_colors
-        .iter()
-        .map(|c| design::rgb_bytes_to_hsla(*c))
-        .collect()
-}
-
-/// Build a color picker bound through `BadgeEntry` accessors to draft `badges.entries[idx]`.
-///
-/// Shared by all three per-row pickers (main colour, outline-long, outline-short), so every one
-/// of them seeds from — and can add to — the same tab-wide custom-colour reuse list.
+/// Bind a badge color to its draft field through the shared app-global history factory.
+/// Theme selection is resolved from the current draft on each read and write.
 fn entry_color(
     backend: &Entity<Backend>,
     window: &mut Window,
@@ -102,19 +82,17 @@ fn entry_color(
     // saved when this editor was built. The entry itself cannot answer that, so the mode is
     // resolved here, where the draft is in scope, and handed down: in the getter from the same
     // snapshot the entry is read out of, in the setter from the draft being written.
-    let (init, custom_seed) = {
+    let init = {
         let b = backend.read(cx);
         let cfg = b.preview.as_ref().unwrap_or(&b.config);
         let is_light = cfg.ui_theme_mode.is_light();
-        let init = cfg
-            .badges
+        cfg.badges
             .entries
             .get(idx)
             .map(|e| get(e, is_light))
-            .unwrap_or([0x97, 0x92, 0x8A]);
-        (init, custom_colors_seed(cfg))
+            .unwrap_or([0x97, 0x92, 0x8A])
     };
-    let st = super::draft_color(window, cx, init, move |p, cc| {
+    super::draft_color(window, cx, init, move |p, cc| {
         let is_light = p.ui_theme_mode.is_light();
         if let Some(e) = p.badges.entries.get_mut(idx) {
             if get(e, is_light) != cc {
@@ -123,54 +101,7 @@ fn entry_color(
             }
         }
         false
-    });
-    st.update(cx, |s, c| s.set_custom_colors(custom_seed, c));
-
-    // A colour committed through ANY of the tab's pickers is persisted once and fanned out to
-    // every OTHER already-built row so it is immediately reusable — never through `build()` again,
-    // which would tear down every row's `MoonInputState` (including whichever hex field the user
-    // is mid-edit in) and has no `Window` available here to rebuild with anyway.
-    cx.subscribe(&st, move |this, _emitter, ev: &MoonColorPickerEvent, cx| {
-        let MoonColorPickerEvent::CustomAdded(h) = ev else {
-            return;
-        };
-        let c = super::hsla_u8(*h);
-        let changed = this.backend.update(cx, |b, bcx| {
-            let Some(p) = b.preview.as_mut() else {
-                return false;
-            };
-            if !p.badges.remember_custom_color(c) {
-                return false;
-            }
-            bcx.notify();
-            true
-        });
-        if !changed {
-            return;
-        }
-        let list = {
-            let b = this.backend.read(cx);
-            custom_colors_seed(b.preview.as_ref().unwrap_or(&b.config))
-        };
-        let siblings: Vec<Entity<MoonColorPickerState>> = this
-            .badges
-            .rows
-            .iter()
-            .flat_map(|row| {
-                [
-                    row.color.clone(),
-                    row.outline_long.clone(),
-                    row.outline_short.clone(),
-                ]
-            })
-            .collect();
-        for sibling in siblings {
-            sibling.update(cx, |s, c| s.set_custom_colors(list.clone(), c));
-        }
     })
-    .detach();
-
-    st
 }
 
 /// Build badge editor state from the current draft.

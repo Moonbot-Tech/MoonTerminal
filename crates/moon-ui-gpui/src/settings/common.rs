@@ -163,7 +163,7 @@ pub(super) fn color_row(
         )
 }
 
-/// Bind a color picker to the live Settings draft.
+/// Bind a color picker to the live Settings draft and independent app-global custom history.
 ///
 /// Initialize it from `init`. On `Change`, call `apply` against `Backend.preview`; the closure both
 /// detects and performs a change and may capture context such as a server index. Notify the backend
@@ -174,9 +174,7 @@ pub(super) fn draft_color(
     init: [u8; 3],
     apply: impl Fn(&mut AppConfig, [u8; 3]) -> bool + 'static,
 ) -> Entity<MoonColorPickerState> {
-    let st = cx.new(|cx| {
-        MoonColorPickerState::new(window, cx).default_value(design::rgb_bytes_to_hsla(init))
-    });
+    let st = crate::controls::color_picker::shared_color_state(init, window, cx);
     cx.subscribe(&st, move |this, _emitter, ev: &MoonColorPickerEvent, cx| {
         let MoonColorPickerEvent::Change(h) = ev else {
             return;
