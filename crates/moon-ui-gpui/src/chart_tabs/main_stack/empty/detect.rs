@@ -27,16 +27,21 @@ use moon_core::crowd::CrowdRule;
 use moon_core::crowd::detect::{DEFAULT_PROFIT, DEFAULT_TRADES, SEATS};
 use moon_ui::{
     MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex,
+    rgba_from,
 };
 use rust_i18n::t;
 
 use crate::chart_tabs::MainChartStack;
 use crate::design;
+use crate::panels::{COMPACT_CHECKBOX_DISABLED_ALPHA, COMPACT_CHECKBOX_FONT, POPUP_GROUP_GAP};
 
 /// Width of one field, in design units. Sized for six digits and a decimal point.
 const FIELD_WIDTH: f32 = 84.0;
 /// Gap between a caption and its field, in design units.
 const FIELD_GAP: f32 = 8.0;
+/// Gap between two rows, in design units: the pitch the frame around these packs its rows at, and
+/// the one the placement rows above the frame use, so the list does not change pitch at the border.
+const ROW_GAP: f32 = POPUP_GROUP_GAP;
 
 /// Largest profit line accepted, in dollars, either side of zero.
 ///
@@ -269,11 +274,15 @@ impl MainChartStack {
     ///     window: The window the controls belong to.
     ///     cx: Stack context used to create, subscribe and seed.
     pub(super) fn seed_empty_detect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let places = EmptyPlaces::restore(&self.backend.read(cx).layout);
+        let layout = &self.backend.read(cx).layout;
+        let screen = super::EmptyScreen::restore(layout);
+        let places = EmptyPlaces::restore(layout);
         if let Some(selects) = &self.empty_places {
-            selects.show(places, cx);
+            selects.show(&screen, places, cx);
         } else {
-            self.empty_places = Some(super::arrange::PlaceSelects::seed(places, window, cx));
+            self.empty_places = Some(super::arrange::PlaceSelects::seed(
+                &screen, places, window, cx,
+            ));
         }
         let inputs = match &self.empty_detect {
             Some(inputs) => inputs.clone(),
@@ -398,8 +407,10 @@ fn edited(input: &Entity<MoonInputState>, seed: &str, cx: &App) -> Option<String
 
 /// The rule's own controls: its two lines, how long a card stays, and what happens at the last seat.
 ///
-/// Dead while the rule is off — the fields grey out rather than disappearing, so the popup does not
-/// change height under the cursor and the reader can see what they would be configuring.
+/// Drawn under the rule's switch inside one frame the popup puts around both — the rule is the one
+/// thing in the popup that is not a block, and the border is what says so. Dead while the rule is
+/// off — the fields grey out rather than disappearing, so the popup does not change height under
+/// the cursor and the reader can see what they would be configuring.
 ///
 /// Args:
 ///     enabled: Whether the rule is being watched at all.
@@ -420,7 +431,7 @@ pub(super) fn block(
 ) -> AnyElement {
     moon_ui::v_flex()
         .w_full()
-        .gap(design::ui_px(cx, FIELD_GAP))
+        .gap(design::ui_px(cx, ROW_GAP))
         .child(field_row(
             id("detect-profit"),
             t!("crowd.settings.detect_profit").to_string(),
@@ -490,14 +501,16 @@ fn field_row(
         .items_center()
         .gap(design::ui_px(cx, FIELD_GAP))
         .child(
+            // The face the compact checkbox beside these gives its label, on and off: its size,
+            // soft text, and the same fade when dead.
             div()
                 .flex_1()
-                .text_size(design::t_body(cx))
-                .text_color(rgb(if enabled {
-                    palette.text
+                .text_size(design::text_px(cx, COMPACT_CHECKBOX_FONT))
+                .text_color(if enabled {
+                    rgba_from(palette.text_soft, 1.0)
                 } else {
-                    palette.text_muted
-                }))
+                    rgba_from(palette.text_muted, COMPACT_CHECKBOX_DISABLED_ALPHA)
+                })
                 .child(label),
         )
         .child(

@@ -6,8 +6,13 @@ use super::*;
 #[test]
 fn one_column_does_not_imply_compact_boards() {
     let thresholds = [px(410.0), px(410.0), px(490.0)];
-    let grid = grid_width(px(454.0), px(18.0), px(12.0));
-    assert!(px(1150.0) < grid);
+    let needs = ColumnNeeds {
+        start: px(454.0),
+        center: px(376.0),
+        end: px(454.0),
+        fixed: px(60.0),
+    };
+    assert_eq!(needs.form(px(1150.0)), Form::OneColumn);
     assert_eq!(board_modes(px(1150.0), thresholds), 0);
     assert_eq!(board_modes(px(320.0), thresholds), 0b111);
     // The trader board alone needs records here; selecting one format for every board is wrong.
@@ -37,7 +42,7 @@ fn trader_and_brand_have_independent_vertical_flows() {
         vec![vec![EmptyBlock::Minute], vec![], vec![EmptyBlock::Coins]]
     );
 
-    let mut column = column_flow(Vec::new(), px(12.0), px(40.0), px(18.0));
+    let mut column = column_flow(Vec::new(), None, px(12.0), px(40.0), px(18.0));
     let style = column.style();
     assert_eq!(style.flex_direction, Some(gpui::FlexDirection::Column));
     assert_eq!(style.min_size.height, Some(gpui::relative(1.0).into()));
@@ -45,6 +50,22 @@ fn trader_and_brand_have_independent_vertical_flows() {
         style.size.height, None,
         "intrinsic content must be allowed to exceed the viewport"
     );
+}
+
+/// A side column is exactly as wide as the grid says, and the middle one takes what is left: equal
+/// thirds would hand a 330-pixel board a third of the panel and make the collapse three boards wide.
+#[test]
+fn side_columns_take_their_width_and_the_middle_takes_the_rest() {
+    let mut side = column_flow(Vec::new(), Some(px(330.0)), px(12.0), px(40.0), px(18.0));
+    let style = side.style();
+    assert_eq!(style.size.width, Some(px(330.0).into()));
+    assert_eq!(style.flex_grow, Some(0.0));
+    assert_eq!(style.flex_shrink, Some(0.0));
+
+    let mut middle = column_flow(Vec::new(), None, px(12.0), px(40.0), px(18.0));
+    let style = middle.style();
+    assert_eq!(style.size.width, None);
+    assert_eq!(style.flex_grow, Some(1.0));
 }
 
 /// Top and bottom retain their content height while only the middle consumes spare column space.
@@ -64,11 +85,19 @@ fn column_anchors_do_not_share_or_shrink_their_heights() {
     }
 }
 
-/// Three fitting boards still need two gaps; omitting them clips the last columns at the switch.
+/// Three fitting columns still need two gaps and two insets; omitting them clips the last column
+/// at the switch.
 #[test]
 fn grid_threshold_budgets_every_gap_and_inset() {
-    assert_eq!(grid_width(px(300.0), px(18.0), px(12.0)), px(960.0));
-    assert_eq!(grid_width(px(450.0), px(27.0), px(18.0)), px(1440.0));
+    let needs = ColumnNeeds {
+        start: px(300.0),
+        center: px(300.0),
+        end: px(300.0),
+        fixed: px(60.0),
+    };
+    assert_eq!(needs.narrow_below(), px(960.0));
+    assert_eq!(needs.form(px(959.0)), Form::OneColumn);
+    assert_eq!(needs.form(px(960.0)), Form::Grid { start: px(300.0), end: px(300.0) });
 }
 
 /// A short viewport must scroll a tall middle stack instead of shrinking that band to zero.
@@ -122,4 +151,54 @@ fn a_block_that_is_switched_off_is_never_placed() {
             "{block:?} was placed although it was not handed in"
         );
     }
+}
+
+/// The user's report: the minute board top-left and the coin board bottom-right, the trader board
+/// switched OFF, on a panel of 1100 logical pixels — and everything drawn down the middle. The
+/// threshold was three times the widest board there is, not the width of what is on the screen.
+#[test]
+fn two_boards_on_a_laptop_panel_are_a_grid_not_a_column() {
+    let needs = ColumnNeeds {
+        start: px(330.0),
+        center: px(0.0),
+        end: px(330.0),
+        fixed: px(60.0),
+    };
+    assert_eq!(needs.narrow_below(), px(720.0));
+    assert!(px(1100.0) >= needs.narrow_below());
+    assert_eq!(needs.form(px(1100.0)), Form::Grid { start: px(330.0), end: px(330.0) });
+}
+
+/// The shipped arrangement keeps the brand in the true middle while the panel affords it: both side
+/// columns take the wider side's width, so the center column is centered on the screen.
+#[test]
+fn the_grid_is_symmetric_while_it_can_be_and_asymmetric_before_it_collapses() {
+    let needs = ColumnNeeds {
+        start: px(454.0),
+        center: px(376.0),
+        end: px(330.0),
+        fixed: px(60.0),
+    };
+    // 454 + 376 + 330 + 60
+    assert_eq!(needs.narrow_below(), px(1220.0));
+    // 2 * 454 + 376 + 60 = 1344 fits: symmetric.
+    assert_eq!(needs.form(px(1400.0)), Form::Grid { start: px(454.0), end: px(454.0) });
+    // Between 1220 and 1344 the brand gives up its exact center rather than the whole grid.
+    assert_eq!(needs.form(px(1300.0)), Form::Grid { start: px(454.0), end: px(330.0) });
+    assert_eq!(needs.form(px(1219.0)), Form::OneColumn);
+    // The unmeasured first frame is the grid, exactly as before.
+    assert_eq!(needs.form(px(0.0)), Form::Grid { start: px(454.0), end: px(454.0) });
+}
+
+/// A column nobody put anything in costs nothing but its gap.
+#[test]
+fn an_empty_column_needs_no_width() {
+    let needs = ColumnNeeds {
+        start: px(0.0),
+        center: px(376.0),
+        end: px(0.0),
+        fixed: px(60.0),
+    };
+    assert_eq!(needs.narrow_below(), px(436.0));
+    assert_eq!(needs.form(px(500.0)), Form::Grid { start: px(0.0), end: px(0.0) });
 }

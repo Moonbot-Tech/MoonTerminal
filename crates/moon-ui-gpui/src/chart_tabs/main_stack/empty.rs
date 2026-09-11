@@ -4,16 +4,18 @@
 //! screen has grown a state of its own — up to five layers, a live view over the crowd's
 //! statistics among them — and none of that belongs in the middle of the stack's layout code.
 //!
-//! **One screen, five switches, any combination.** The logo, the hint under it and the three crowd
+//! **One screen, five blocks, any combination.** The logo, the hint under it and the three crowd
 //! tables are independent layers of the same screen: the brand sits in the middle, the tables are
 //! anchored to the edges, and the statistics are drawn LAST so a figure is never behind the mark.
-//! Nothing here is exclusive — the point of separate switches is that somebody who wants only the
-//! trader board gets only the trader board.
+//! Nothing here is exclusive — the point of separate blocks is that somebody who wants only the
+//! trader board gets only the trader board. Each block is asked ONE question in the popup — where
+//! it goes, "nowhere" being an answer — and keeps two keys: the switch, and the anchor it goes back
+//! to when it is shown again (`arrange`).
 //!
 //! One of the five reaches past this screen. The brand is drawn on three empty surfaces — here, an
 //! AddToChart stack with no charts, and a chart slot waiting for data — and one switch governs all
 //! three, because it says "show the logo" and not "show it here". The two outside this file read
-//! [`empty_logo`]; this one draws from the checkbox's own state, and a test pins that the two
+//! [`empty_logo`]; this one draws from the switch's own state, and a test pins that the two
 //! readings of that key cannot drift. Changing it refreshes every window, since neither of the
 //! other two observes this stack.
 //!
@@ -38,7 +40,7 @@ use gpui::{
     AnyElement, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, Window, div, px, rgb,
 };
-use moon_core::config::layout::{EmptyBlock, EmptyPlaces, EmptySlot, WindowLayout};
+use moon_core::config::layout::{EmptyBlock, EmptyPlaces, WindowLayout};
 use moon_ui::{MoonCheckbox, MoonCheckboxSize, MoonPalette, MoonPopover, MoonPopoverPlacement};
 use rust_i18n::t;
 
@@ -57,7 +59,8 @@ const GEAR_INSET: f32 = 10.0;
 /// Preferred popup width before the group inset. The complete outer box is capped to the
 /// viewport so enlarged UI chrome cannot hide the placement controls.
 const CONTENT_WIDTH: f32 = 360.0;
-/// Gap between the popup's title row and the switches under it, in design units.
+/// Gap between the popup's sections — the title row, the placement rows, the rule's frame — in
+/// design units. Wider than the pitch inside a section, so the sections read as sections.
 const POPUP_GAP: f32 = 8.0;
 /// Widest the hint under the logo is allowed to run before it wraps, in design units.
 const HINT_WIDTH: f32 = 420.0;
@@ -107,6 +110,21 @@ impl EmptyScreen {
         self.detect
     }
 
+    /// Every block that is switched on, in [`EmptyBlock::ALL`] order — what the frame has to make
+    /// room for. The rule is not in it: it draws nothing here.
+    pub(super) fn blocks_on(self) -> Vec<EmptyBlock> {
+        EmptyBlock::ALL
+            .into_iter()
+            .filter(|block| match block {
+                EmptyBlock::Logo => self.logo,
+                EmptyBlock::Hint => self.hint,
+                EmptyBlock::Minute => self.minute,
+                EmptyBlock::Traders => self.traders,
+                EmptyBlock::Coins => self.coins,
+            })
+            .collect()
+    }
+
     /// Which tables are on, for the view that draws them.
     fn parts(self) -> CrowdParts {
         CrowdParts {
@@ -121,11 +139,17 @@ impl EmptyScreen {
 ///
 /// Every row is DATA. Adding a switch is one entry here, and the four mechanical parts — restore
 /// it, show it, set it, save it — cannot drift apart because none of them is written twice.
+///
+/// A switch that governs a BLOCK is not shown as a checkbox: its block's dropdown carries "hidden"
+/// as an entry (`arrange::Placement`), and that entry is this switch. The one switch with no block
+/// — the rule — is the checkbox the popup still draws.
 struct Switch {
     /// Element-identity suffix, unique within the popup.
     id: &'static str,
-    /// Locale key of the visible label.
+    /// Locale key of the visible label: the block's name for a block, the rule's for the rule.
     label: &'static str,
+    /// The block this switch draws, or `None` for the rule, which draws nothing.
+    block: Option<EmptyBlock>,
     /// What it is worth on a profile that has never opened this popup.
     default: bool,
     /// Read the current value out of the arrangement.
@@ -134,11 +158,25 @@ struct Switch {
     set: fn(&mut EmptyScreen, bool),
     /// Read this switch's saved value, or `None` when it was never chosen.
     saved: fn(&WindowLayout) -> Option<bool>,
-    /// Save an edited value under this switch's own `layout.toml` key.
+    /// Save an edited value under this switch's own `layout.toml` key, or `None` to forget it.
     ///
     /// Only the EDITED key is ever written. Stamping the others would turn "never chosen" into an
-    /// explicit value for switches nobody touched.
-    store: fn(&mut WindowLayout, bool),
+    /// explicit value for switches nobody touched. Forgetting is how a reset works: a key that is
+    /// cleared takes the default again, including a default that changes later.
+    store: fn(&mut WindowLayout, Option<bool>),
+}
+
+/// The switch behind one block.
+///
+/// Args:
+///     block: The block asked about.
+fn switch_of(block: EmptyBlock) -> &'static Switch {
+    SWITCHES
+        .iter()
+        .find(|switch| switch.block == Some(block))
+        // Every block has a row in `SWITCHES`, and a test pins it; reaching this would mean the
+        // table lost one, which the test catches before any popup is drawn.
+        .unwrap_or(&SWITCHES[0])
 }
 
 /// Every switch, in the order the popup shows them: what the screen already was, then what can be
@@ -146,57 +184,63 @@ struct Switch {
 const SWITCHES: [Switch; 6] = [
     Switch {
         id: "logo",
-        label: "crowd.settings.logo",
+        label: "crowd.block.logo",
+        block: Some(EmptyBlock::Logo),
         default: LOGO_DEFAULT,
         read: |screen| screen.logo,
         set: |screen, value| screen.logo = value,
         saved: |layout| layout.main_empty_logo,
-        store: |layout, value| layout.main_empty_logo = Some(value),
+        store: |layout, value| layout.main_empty_logo = value,
     },
     Switch {
         id: "hint",
-        label: "crowd.settings.hint",
+        label: "crowd.block.hint",
+        block: Some(EmptyBlock::Hint),
         default: true,
         read: |screen| screen.hint,
         set: |screen, value| screen.hint = value,
         saved: |layout| layout.main_empty_hint,
-        store: |layout, value| layout.main_empty_hint = Some(value),
+        store: |layout, value| layout.main_empty_hint = value,
     },
     Switch {
         id: "minute",
-        label: "crowd.settings.minute",
+        label: "crowd.block.minute",
+        block: Some(EmptyBlock::Minute),
         default: false,
         read: |screen| screen.minute,
         set: |screen, value| screen.minute = value,
         saved: |layout| layout.main_empty_minute,
-        store: |layout, value| layout.main_empty_minute = Some(value),
+        store: |layout, value| layout.main_empty_minute = value,
     },
     Switch {
         id: "traders",
-        label: "crowd.settings.traders",
+        label: "crowd.block.traders",
+        block: Some(EmptyBlock::Traders),
         default: false,
         read: |screen| screen.traders,
         set: |screen, value| screen.traders = value,
         saved: |layout| layout.main_empty_traders,
-        store: |layout, value| layout.main_empty_traders = Some(value),
+        store: |layout, value| layout.main_empty_traders = value,
     },
     Switch {
         id: "coins",
-        label: "crowd.settings.coins",
+        label: "crowd.block.coins",
+        block: Some(EmptyBlock::Coins),
         default: false,
         read: |screen| screen.coins,
         set: |screen, value| screen.coins = value,
         saved: |layout| layout.main_empty_coins,
-        store: |layout, value| layout.main_empty_coins = Some(value),
+        store: |layout, value| layout.main_empty_coins = value,
     },
     Switch {
         id: "detect",
         label: "crowd.settings.detect",
+        block: None,
         default: DETECT_DEFAULT,
         read: |screen| screen.detect,
         set: |screen, value| screen.detect = value,
         saved: |layout| layout.main_empty_detect,
-        store: |layout, value| layout.main_empty_detect = Some(value),
+        store: |layout, value| layout.main_empty_detect = value,
     },
 ];
 
@@ -223,7 +267,7 @@ const LOGO_DEFAULT: bool = true;
 /// outside this file ask here: an AddToChart or Custom stack holding no charts, and a chart slot
 /// waiting for its data.
 ///
-/// The empty screen in this file draws its own mark from [`EmptyScreen`], which is the CHECKBOX's
+/// The empty screen in this file draws its own mark from [`EmptyScreen`], which is the SWITCH's
 /// state rather than a second opinion about the key: both come from `main_empty_logo` with
 /// [`LOGO_DEFAULT`] behind it, and a test pins that they agree, exactly as one does for the rule's
 /// three keys.
@@ -236,6 +280,21 @@ const LOGO_DEFAULT: bool = true;
 ///     layout: Persisted window layout.
 pub(crate) fn empty_logo(layout: &WindowLayout) -> bool {
     layout.main_empty_logo.unwrap_or(LOGO_DEFAULT)
+}
+
+/// Clear every block's anchor and switch, and nothing else.
+///
+/// Cleared rather than written with today's defaults, for the reason [`EmptyPlaces::reset`] gives:
+/// a profile that has been reset is a profile that has never chosen. The rule's keys are left
+/// alone — it is not a block.
+///
+/// Args:
+///     layout: Persisted window layout, edited in place.
+fn forget_arrangement(layout: &mut WindowLayout) {
+    EmptyPlaces::reset(layout);
+    for switch in SWITCHES.iter().filter(|switch| switch.block.is_some()) {
+        (switch.store)(layout, None);
+    }
 }
 
 impl MainChartStack {
@@ -330,7 +389,7 @@ impl MainChartStack {
         }
         let store = switch.store;
         self.backend.update(cx, |backend, _| {
-            store(&mut backend.layout, on);
+            store(&mut backend.layout, Some(on));
             backend.layout_dirty = true;
         });
         self.publish_crowd_rule(cx);
@@ -339,7 +398,7 @@ impl MainChartStack {
         cx.notify();
         // Every window, and every switch. There is ONE `layout` behind all of them, and more than
         // one group window can be drawing from it: a second window's empty Main shows the same five
-        // checkboxes and the same layers, and the logo reaches further still — an empty AddToChart
+        // dropdowns and the same layers, and the logo reaches further still — an empty AddToChart
         // stack, an empty chart slot. None of those observes this one, and `cx.notify()` reaches
         // only the stack that was clicked. This marks every window dirty, which is what it costs;
         // a switch is a click, so the price is one frame for a setting that means the same thing
@@ -347,22 +406,53 @@ impl MainChartStack {
         cx.refresh_windows();
     }
 
-    /// Move one block of the empty screen to one of the nine anchors.
+    /// Answer one block's dropdown: draw it at an anchor, or stop drawing it.
     ///
-    /// The block's own key and nothing else, for the reason [`Switch::store`] gives: a write that
-    /// stamped the other four would turn "never chosen" into an explicit anchor for blocks nobody
-    /// touched, and a later change of default could then never reach them.
+    /// The two keys behind the one control, written in ONE update and followed by one repaint: an
+    /// answer is a click, and un-hiding a block at a new anchor is not two clicks. An anchor is
+    /// written only when one was chosen, so hiding a block leaves its anchor exactly where it was —
+    /// that is what "show it again" goes back to. Only the answered block's keys are touched, for
+    /// the reason [`Switch::store`] gives. Answering what the block already is costs no frame.
+    ///
+    /// The rule is not republished: it reads its own keys (`crowd_rule`), and none of them is
+    /// written here. The tables' connections follow the switches on the repaint this asks for
+    /// (`sync_crowd_stats`), which is the one place that decides whether the view exists.
     ///
     /// Args:
-    ///     block: Which block was placed.
-    ///     slot: Where it now goes.
+    ///     block: Which block was answered for.
+    ///     placement: The answer.
     ///     cx: Stack context used to persist and repaint.
-    pub(super) fn set_place(&mut self, block: EmptyBlock, slot: EmptySlot, cx: &mut Context<Self>) {
-        if EmptyPlaces::restore(&self.backend.read(cx).layout).slot(block) == slot {
+    pub(super) fn set_placement(
+        &mut self,
+        block: EmptyBlock,
+        placement: arrange::Placement,
+        cx: &mut Context<Self>,
+    ) {
+        let layout = &self.backend.read(cx).layout;
+        let screen = EmptyScreen::restore(layout);
+        let places = EmptyPlaces::restore(layout);
+        if arrange::Placement::of(block, &screen, places) == placement {
             return;
         }
+        // Only what the answer CHANGES is written: a shown block moved to a new anchor keeps its
+        // switch key as it was (a never-chosen `None` included), and a hidden block shown again at
+        // the anchor it already resolves to keeps that anchor unwritten.
+        let switch = switch_of(block);
+        let shown = (switch.read)(&screen);
+        let moved = match placement {
+            arrange::Placement::Hidden => None,
+            arrange::Placement::At(slot) => (places.slot(block) != slot).then_some(slot),
+        };
+        let store = switch.store;
         self.backend.update(cx, |backend, _| {
-            block.store(&mut backend.layout, Some(slot));
+            match placement {
+                arrange::Placement::Hidden if shown => store(&mut backend.layout, Some(false)),
+                arrange::Placement::At(_) if !shown => store(&mut backend.layout, Some(true)),
+                _ => {}
+            }
+            if let Some(slot) = moved {
+                block.store(&mut backend.layout, Some(slot));
+            }
             backend.layout_dirty = true;
         });
         cx.notify();
@@ -371,7 +461,12 @@ impl MainChartStack {
         cx.refresh_windows();
     }
 
-    /// Forget every anchor, so the screen comes back to the arrangement it shipped with.
+    /// Forget every block's anchor AND switch, so the screen comes back to the one it shipped with.
+    ///
+    /// Both, because the popup asks one question per block and a reset answers it the way a fresh
+    /// profile would: the brand and its line in the middle, no table. The rule is not a block and
+    /// keeps its setting — it is not part of the arrangement, and switching a watch off is not
+    /// something a layout button may do.
     ///
     /// The dropdowns are put back by hand afterwards: they hold their own selection, and a reset
     /// that moved the blocks without moving the controls would leave five dropdowns naming places
@@ -381,11 +476,18 @@ impl MainChartStack {
     ///     cx: Stack context used to persist and repaint.
     pub(super) fn reset_places(&mut self, cx: &mut Context<Self>) {
         self.backend.update(cx, |backend, _| {
-            EmptyPlaces::reset(&mut backend.layout);
+            forget_arrangement(&mut backend.layout);
             backend.layout_dirty = true;
         });
+        // No rule to republish: its keys are not among the forgotten ones. A table that just went
+        // off drops its connection on the repaint below, in `sync_crowd_stats`.
         if let Some(selects) = self.empty_places.clone() {
-            selects.show(EmptyPlaces::default(), cx);
+            let layout = &self.backend.read(cx).layout;
+            selects.show(
+                &EmptyScreen::restore(layout),
+                EmptyPlaces::restore(layout),
+                cx,
+            );
         }
         cx.notify();
         cx.refresh_windows();
@@ -422,7 +524,12 @@ impl MainChartStack {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if let Some(selects) = &self.empty_places {
-            selects.show(EmptyPlaces::restore(&self.backend.read(cx).layout), cx);
+            let layout = &self.backend.read(cx).layout;
+            selects.show(
+                &EmptyScreen::restore(layout),
+                EmptyPlaces::restore(layout),
+                cx,
+            );
         }
         let view = cx.entity();
         let inset = design::ui_px(cx, GEAR_INSET);
@@ -511,10 +618,10 @@ fn popup_outer_width(
     preferred.min((viewport - inset * 2.0).max(px(0.0)))
 }
 
-/// The popup body: a title with its ✕, and one switch per layer.
+/// The popup body: a title with its ✕, one dropdown per block, and the rule under them.
 ///
 /// Args:
-///     screen: What the checkboxes show.
+///     screen: What the rule's checkbox shows.
 ///     cards: How the rule's cards are set to behave.
 ///     inputs: The rule's fields, once the popup has been opened at least once.
 ///     places: The blocks' position dropdowns, built with the same window as those fields.
@@ -557,28 +664,54 @@ fn settings_content(
                     }
                 })),
         )
-        .children(SWITCHES.iter().map(|switch| {
-            let view = view.clone();
-            MoonCheckbox::new(id(switch.id))
-                .label(t!(switch.label).to_string())
-                .checked((switch.read)(&screen))
-                .size(MoonCheckboxSize::Compact)
-                .on_change(move |checked: &bool, _window, app| {
-                    let checked = *checked;
-                    view.update(app, |this, cx| this.set_switch(switch, checked, cx));
-                })
-                .into_any_element()
-        }))
-        // Where each block goes, under the switches that decide whether it is drawn at all. The
-        // two are deliberately separate questions: a block that is switched off keeps its place,
-        // and switching it back on puts it where it was left.
+        // Where each block goes, "nowhere" included: one question per block. What is kept is still
+        // two keys, so a block that is hidden keeps its place and comes back to it.
         .children(places.map(|places| arrange::block(places, view.clone(), id, palette, cx)))
-        // The rule's own controls, under the switch that decides whether they mean anything.
-        .children(
-            inputs
-                .map(|inputs| detect::block(screen.detect(), cards, inputs, view, id, palette, cx)),
-        )
+        // The one switch that is not a block: the rule, which draws nothing and has no place. It
+        // heads a frame of its own, with its rows under it — the border is what marks it as the
+        // thing that is not a block.
+        .children(inputs.map(|inputs| {
+            let mut frame = crate::panels::popup_frame(id("detect-group"));
+            for switch in SWITCHES.iter().filter(|switch| switch.block.is_none()) {
+                let view = view.clone();
+                frame = frame.child(
+                    MoonCheckbox::new(id(switch.id))
+                        .label(t!(switch.label).to_string())
+                        .checked((switch.read)(&screen))
+                        .size(MoonCheckboxSize::Compact)
+                        .on_change(move |checked: &bool, _window, app| {
+                            let checked = *checked;
+                            view.update(app, |this, cx| this.set_switch(switch, checked, cx));
+                        }),
+                );
+            }
+            frame.child(detect::block(
+                screen.detect(),
+                cards,
+                inputs,
+                view,
+                id,
+                palette,
+                cx,
+            ))
+        }))
         .into_any_element()
+}
+
+/// One frame's answer to the three questions the empty screen is drawn from.
+///
+/// Resolved ONCE in the render and handed down, rather than asked again inside: the size probe
+/// repaints on the form this width produces, and a screen that re-derived the form from a second
+/// reading could disagree with the probe that decided whether to repaint it.
+pub(super) struct EmptyFrame {
+    /// What is switched on.
+    pub(super) screen: EmptyScreen,
+    /// Where each block goes.
+    pub(super) places: EmptyPlaces,
+    /// The grid with its side widths, or the one-column form, for this width.
+    pub(super) form: place::Form,
+    /// Measured Main width, used for board presentation (full board or records).
+    pub(super) width: gpui::Pixels,
 }
 
 /// The empty screen: whichever blocks are switched on, where this profile has put them, and the
@@ -590,9 +723,8 @@ fn settings_content(
 ///
 /// Args:
 ///     stack: The stack, for the corner control and the saved anchors.
-///     screen: What is switched on.
+///     frame: What is on, where it goes and which form it takes, resolved once by the caller.
 ///     stats: The statistics view, when any of its tables is.
-///     width: Measured Main width, used separately for grid collapse and board presentation.
 ///     window: Host viewport used to bound the settings popup.
 ///     palette: Active MoonUI palette.
 ///     cx: Stack context.
@@ -601,16 +733,19 @@ fn settings_content(
 ///     The whole screen, ready for the size probe the caller wraps it in.
 pub(super) fn empty_screen(
     stack: &mut MainChartStack,
-    screen: EmptyScreen,
+    frame: EmptyFrame,
     stats: Option<Entity<CrowdStatsView>>,
-    width: gpui::Pixels,
     window: &Window,
     palette: MoonPalette,
     cx: &mut Context<MainChartStack>,
 ) -> AnyElement {
-    let narrow = super::is_narrow(width, place::narrow_below(cx));
+    let EmptyFrame {
+        screen,
+        places,
+        form,
+        width,
+    } = frame;
     let settings = stack.empty_settings(window, palette, cx);
-    let places = EmptyPlaces::restore(&stack.backend.read(cx).layout);
     // Scoped by group like every other identity in this stack: two group windows are two empty
     // screens, and a shared id would give the narrow form's scroll one position for both.
     let frame_id = SharedString::from(format!("main-empty-frame-{}", stack.group));
@@ -647,7 +782,7 @@ pub(super) fn empty_screen(
         .relative()
         .size_full()
         .bg(rgb(palette.chart_bg))
-        .child(place::frame(frame_id, blocks, places, narrow, cx))
+        .child(place::frame(frame_id, blocks, places, form, cx))
         .child(settings)
         .into_any_element()
 }

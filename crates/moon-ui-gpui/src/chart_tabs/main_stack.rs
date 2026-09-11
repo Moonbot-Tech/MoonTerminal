@@ -23,6 +23,7 @@ use crate::Backend;
 use crate::panels::ChartPanel;
 use crate::persistence::chart_persist::{PriceAxisPos, StackLayoutMode, StackOrientation};
 use moon_core::config::ChartTheme;
+use moon_core::config::layout::EmptyPlaces;
 use moon_core::session::CoreId;
 
 /// Main tab where each market owns a separate `ChartPanel`/`gpu_canvas`.
@@ -1599,22 +1600,6 @@ mod empty;
 
 pub(crate) use empty::{crowd_cards, crowd_rule_for_run, empty_logo};
 
-/// Whether the empty screen has to fall back to its one-column form at this width.
-///
-/// Split out because the render and its size probe must answer it the same way: the probe compares
-/// the answer it would give against the one on screen and repaints only when they differ, so two
-/// copies of this comparison would either repaint on every resize frame or on none of them.
-///
-/// A width of zero is the frame BEFORE the first measurement, and is deliberately not narrow: the
-/// grid is what almost every panel gets, and opening on the column form for one frame would flash.
-///
-/// Args:
-///     width: The panel's measured width.
-///     narrow_below: The width the three-column arrangement stops fitting at.
-fn is_narrow(width: Pixels, narrow_below: Pixels) -> bool {
-    width > px(0.0) && width < narrow_below
-}
-
 #[cfg(test)]
 mod tests;
 
@@ -1631,17 +1616,26 @@ impl Render for MainChartStack {
         let crowd = self.sync_crowd_stats(cx);
         if self.charts.is_empty() {
             let screen = self.empty_arrangement(cx);
-            // Grid collapse and board compaction are separate thresholds. Repaint when either
-            // changes, including a full-board/record transition within the one-column layout.
-            let narrow_below = crate::crowd::place::narrow_below(cx);
+            let places = EmptyPlaces::restore(&self.backend.read(cx).layout);
+            // The grid's form and board compaction are separate thresholds. Repaint when either
+            // changes, including a full-board/record transition within the one-column layout. The
+            // form is resolved from what is ON and WHERE, so the render and its probe read one
+            // answer: two copies of that comparison would repaint on every resize frame or on none.
+            let needs = crate::crowd::place::ColumnNeeds::of(&screen.blocks_on(), places, cx);
             let board_thresholds = crate::crowd::place::board_thresholds(cx);
             let width_mode = move |width| {
-                usize::from(is_narrow(width, narrow_below))
-                    | (crate::crowd::place::board_modes(width, board_thresholds) << 1)
+                needs.form(width).mode()
+                    | (crate::crowd::place::board_modes(width, board_thresholds) << 2)
             };
             let width = self.measured.get().width;
             let mode_now = width_mode(width);
-            let empty = empty::empty_screen(self, screen, crowd, width, window, palette, cx);
+            let frame = empty::EmptyFrame {
+                screen,
+                places,
+                form: needs.form(width),
+                width,
+            };
+            let empty = empty::empty_screen(self, frame, crowd, window, palette, cx);
             // Measured here too, for the reason the fullscreen branch keeps its probe: a resize
             // taken while the stack is empty must not leave a size the first divided frame uses.
             return super::stack::with_size_probe(

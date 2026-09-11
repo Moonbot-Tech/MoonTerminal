@@ -86,35 +86,15 @@ crowd.settings.title:
   ru: "Пустой экран"
   en: "Empty screen"
   es: "Pantalla vacía"
-# Five independent layers, in the order the popup lists them. Each names what it shows rather than
-# what it hides, and the three tables also decide what is READ: an unshown table opens no connection
-# to the statistics service. The LOGO is the one that is not only about this screen — it governs the
-# same brand on an empty AddToChart stack and on a chart slot waiting for data, which is why its
-# label says "the logo" and not "the logo here".
-crowd.settings.logo:
-  ru: "Показывать логотип"
-  en: "Show the logo"
-  es: "Mostrar el logotipo"
-crowd.settings.hint:
-  ru: "Показывать помощь"
-  en: "Show the hint"
-  es: "Mostrar la ayuda"
-crowd.settings.minute:
-  ru: "Показывать минутные сделки"
-  en: "Show the trading minute"
-  es: "Mostrar el minuto de operaciones"
-crowd.settings.traders:
-  ru: "Показывать топ 24ч по ID"
-  en: "Show the 24h trader top"
-  es: "Mostrar el top 24h de traders"
-crowd.settings.coins:
-  ru: "Показывать топ 24ч по монетам"
-  en: "Show the 24h coin top"
-  es: "Mostrar el top 24h de monedas"
+# The five blocks have no captions of their own here: each is one row of the placement section
+# below, captioned by its `crowd.block.*` name, with "hidden" as an entry of its dropdown. The three
+# tables also decide what is READ: a hidden table opens no connection to the statistics service.
+# The LOGO is the one that is not only about this screen — hiding it hides the same brand on an
+# empty AddToChart stack and on a chart slot waiting for data.
 
 # --- Where each block of the empty screen is drawn ---
-# The switches above say WHETHER a block is drawn; these say WHERE. Deliberately two questions: a
-# block that is switched off keeps the place it was given, and switching it back on puts it there.
+# One dropdown per block: the nine anchors, and "hidden" as the tenth entry. What is KEPT is still
+# two keys — a hidden block keeps the place it was given, and showing it again puts it back there.
 # The mark and the line under it are placed SEPARATELY because they are switched separately.
 crowd.settings.places:
   ru: "Расположение блоков"
@@ -152,8 +132,12 @@ crowd.block.coins:
   en: "24h coin top"
   es: "Top 24h de monedas"
 
-# The nine anchors, named by row and side. Two blocks may name the same one — they are then drawn
+# "Hidden" first, then the nine anchors, named by row and side. Two blocks may name the same one — they are then drawn
 # one under the other, which is how the logo and its hint share the middle by default.
+crowd.slot.hidden:
+  ru: "Не отображать"
+  en: "Hidden"
+  es: "No mostrar"
 crowd.slot.top_start:
   ru: "Сверху слева"
   en: "Top left"

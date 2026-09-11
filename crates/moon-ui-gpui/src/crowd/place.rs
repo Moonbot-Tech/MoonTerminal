@@ -11,21 +11,28 @@
 //! the shipped screen works, with the mark and its hint sharing the middle cell.
 //!
 //! **Narrow is a different layout, not a squeezed one.** Three columns of a table measured in
-//! digits cannot be made narrow: below the width its widest board needs, the frame stops being a
-//! grid and becomes one scrollable column read in anchor order. Nothing is clipped sideways and no
-//! saved anchor becomes wrong — the same arrangement is simply read top to bottom.
+//! digits cannot be made narrow: below the width the blocks ON THE SCREEN need side by side, the
+//! frame stops being a grid and becomes one scrollable column read in anchor order. Nothing is
+//! clipped sideways and no saved anchor becomes wrong — the same arrangement is simply read top to
+//! bottom.
+//!
+//! **The threshold is what is switched on, where it was put.** It used to be three times the widest
+//! board there is — 1400-odd logical pixels, which a 1920-wide screen at 150 % never reaches — so
+//! every anchor a person chose was overridden by the one-column form, and "everything is always in
+//! the middle" was the whole of the feature. Now each column is as wide as the widest block anchored
+//! in it, and a column nobody uses costs nothing. The side columns are made EQUAL while the panel
+//! affords it, so the brand in the middle stays in the true middle; when it does not, the brand
+//! moves off-center by a few pixels before the whole grid is given up.
 
 use gpui::{
     AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement, Pixels, SharedString,
     StatefulInteractiveElement, Styled, div, px,
 };
 use moon_core::config::layout::{EmptyBlock, EmptyPlaces, EmptySlot};
+use rust_i18n::t;
 
 use super::table::Look;
-
-/// How many columns the grid form has. Named because the narrow threshold is derived from it: the
-/// grid is worth having exactly while the widest board fits in one of them.
-const COLUMNS: f32 = 3.0;
+use crate::design;
 
 /// Gap between two blocks stacked in one cell, and between two cells, in design units.
 ///
@@ -34,24 +41,135 @@ const COLUMNS: f32 = 3.0;
 /// as a group and the pair does not.
 const BLOCK_GAP: f32 = 12.0;
 
-/// The width below which the grid is abandoned for one column.
+/// What the switched-on blocks ask of the grid's three columns, in pixels.
 ///
-/// Derived from the boards themselves rather than chosen: a column of figures is as wide as the
-/// digits in it, so the honest question is whether the widest board still fits in a third of the
-/// panel. A design-unit constant here would be somebody's font setting and nobody else's — the
-/// boards grow with the Font slider and this threshold grows with them.
-///
-/// Args:
-///     cx: Application context supplying the theme's scaled metrics.
-pub(crate) fn narrow_below(cx: &App) -> Pixels {
-    let look = Look::of(cx);
-    let widest = f32::from(look.w_day_traders()).max(f32::from(look.w_minute()));
-    grid_width(px(widest), look.edge_x, crate::design::ui_px(cx, BLOCK_GAP))
+/// Resolved once per frame from the same three inputs the drawing uses — which blocks are on, where
+/// each is anchored, and the theme's measurements — so the threshold and the columns it guards
+/// cannot disagree about what is on the screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ColumnNeeds {
+    /// The widest block anchored in the start column, or zero when nothing is.
+    pub(crate) start: Pixels,
+    /// The same for the middle column.
+    pub(crate) center: Pixels,
+    /// The same for the end column.
+    pub(crate) end: Pixels,
+    /// Both outer insets and both gaps between columns: what the grid costs before any block.
+    pub(crate) fixed: Pixels,
 }
 
-/// Budget all columns, both outer insets and the gaps between columns.
-fn grid_width(board: Pixels, inset: Pixels, gap: Pixels) -> Pixels {
-    board * COLUMNS + inset * 2.0 + gap * (COLUMNS - 1.0)
+/// Which of the frame's two forms a width gets, and the side columns' widths when it is the grid.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Form {
+    /// Every block in one scrollable column, read in anchor order.
+    OneColumn,
+    /// Three columns; the middle one takes whatever the two sides leave.
+    Grid { start: Pixels, end: Pixels },
+}
+
+impl Form {
+    /// The number the size probe repaints on: one column, the symmetric grid, or the asymmetric
+    /// one. Two widths that give the same number draw the same frame, so a resize between them
+    /// costs no repaint — and two that differ must repaint, since the side columns moved.
+    pub(crate) fn mode(self) -> usize {
+        match self {
+            Self::OneColumn => 0,
+            Self::Grid { start, end } if start == end => 1,
+            Self::Grid { .. } => 2,
+        }
+    }
+}
+
+impl ColumnNeeds {
+    /// Measure the blocks that are on, column by column.
+    ///
+    /// Args:
+    ///     on: The blocks that are switched on, in any order.
+    ///     places: Where each block is anchored.
+    ///     cx: Application context supplying the theme's scaled metrics.
+    pub(crate) fn of(on: &[EmptyBlock], places: EmptyPlaces, cx: &App) -> Self {
+        let look = Look::of(cx);
+        let gap = design::ui_px(cx, BLOCK_GAP);
+        let mut needs = Self {
+            start: px(0.0),
+            center: px(0.0),
+            end: px(0.0),
+            fixed: look.edge_x * 2.0 + gap * 2.0,
+        };
+        for block in on {
+            let width = block_width(*block, &look, cx);
+            let column = match places.slot(*block).column() {
+                0 => &mut needs.start,
+                1 => &mut needs.center,
+                _ => &mut needs.end,
+            };
+            *column = (*column).max(width);
+        }
+        needs
+    }
+
+    /// The width below which the grid is abandoned for one column: every column's own need, side
+    /// by side, plus the insets and gaps.
+    pub(crate) fn narrow_below(self) -> Pixels {
+        self.start + self.center + self.end + self.fixed
+    }
+
+    /// The form a panel of this width gets.
+    ///
+    /// A width of zero is the frame BEFORE the first measurement, and is deliberately the grid: the
+    /// grid is what almost every panel gets, and opening on the column form for one frame would
+    /// flash. The grid is symmetric while the panel affords both sides at the wider side's width —
+    /// that is what keeps the middle column in the middle — and asymmetric between that and the
+    /// collapse, because a brand a few pixels off-center is a smaller loss than the whole grid.
+    ///
+    /// Args:
+    ///     width: The panel's measured width, or zero before the first measurement.
+    pub(crate) fn form(self, width: Pixels) -> Form {
+        if width > px(0.0) && width < self.narrow_below() {
+            return Form::OneColumn;
+        }
+        let side = self.start.max(self.end);
+        if width == px(0.0) || side * 2.0 + self.center + self.fixed <= width {
+            Form::Grid {
+                start: side,
+                end: side,
+            }
+        } else {
+            Form::Grid {
+                start: self.start,
+                end: self.end,
+            }
+        }
+    }
+}
+
+/// The width one block asks of its column.
+///
+/// The boards are measured by their columns, the same way [`board_thresholds`] measures them. The
+/// brand is its glow frame. The line under the brand is its own block — switched and anchored on
+/// its own, with or without the mark — and it WRAPS, so what it asks is the narrowest column it can
+/// still fold into: its longest word. Charging it the full width it may spread to would collapse
+/// the whole grid for a sentence that would have folded onto one more line.
+fn block_width(block: EmptyBlock, look: &Look, cx: &App) -> Pixels {
+    match block {
+        EmptyBlock::Logo => design::logo_glow_frame_w(cx, design::EMPTY_STACK_LOGO_W),
+        EmptyBlock::Hint => hint_min_width(cx),
+        EmptyBlock::Minute => look.w_minute(),
+        EmptyBlock::Traders => look.w_day_traders(),
+        EmptyBlock::Coins => look.w_day_coins() + look.rank_indent(),
+    }
+}
+
+/// The widest word of the hint at the size it is drawn: the width below which it cannot wrap
+/// any further. Measured through the face and size the screen draws it in — `t_body` in the mono
+/// family, which the hint sets nowhere and inherits from the shell root — through the glyph cache,
+/// so it is not a constant somebody tuned for one locale.
+fn hint_min_width(cx: &App) -> Pixels {
+    let hint = t!("chart.empty.hint");
+    px(hint
+        .split_whitespace()
+        .map(|word| design::mono_body_text_width(cx, word, 400.0))
+        .fold(0.0, f32::max))
 }
 
 /// Outer Main widths needed by each full board, independently of the three-column threshold.
@@ -83,7 +201,7 @@ pub(crate) fn board_modes(width: Pixels, thresholds: [Pixels; 3]) -> usize {
 ///     blocks: The blocks that are switched ON, in any order — the anchors decide what is drawn
 ///         where, and [`EmptyBlock::ALL`] decides what stacks above what.
 ///     places: Where each block goes.
-///     narrow: Whether the panel is below [`narrow_below`].
+///     form: The grid with its side widths, or the one-column form, from [`ColumnNeeds::form`].
 ///     cx: Application context supplying the theme's scaled metrics.
 ///
 /// Returns:
@@ -92,7 +210,7 @@ pub(crate) fn frame(
     id: SharedString,
     blocks: Vec<(EmptyBlock, AnyElement)>,
     places: EmptyPlaces,
-    narrow: bool,
+    form: Form,
     cx: &App,
 ) -> AnyElement {
     let look = Look::of(cx);
@@ -104,7 +222,7 @@ pub(crate) fn frame(
         .map(|(block, element)| (block, Some(element)))
         .collect();
 
-    if narrow {
+    let Form::Grid { start, end } = form else {
         // One column, in anchor reading order: the arrangement still says what comes first, it is
         // simply read down the page. Each board independently chooses whether its columns fit.
         let ordered: Vec<AnyElement> = EmptySlot::ALL
@@ -135,7 +253,7 @@ pub(crate) fn frame(
                     .child(block)
             }))
             .into_any_element();
-    }
+    };
 
     let mut columns: Vec<Div> = Vec::new();
     for column in 0..3u8 {
@@ -147,7 +265,18 @@ pub(crate) fn frame(
                 .collect();
             cells.push(cell(row as u8, column, stacked, gap));
         }
-        columns.push(column_flow(cells, gap, look.edge_top, look.edge_bottom));
+        let width = match column {
+            0 => Some(start),
+            1 => None,
+            _ => Some(end),
+        };
+        columns.push(column_flow(
+            cells,
+            width,
+            gap,
+            look.edge_top,
+            look.edge_bottom,
+        ));
     }
 
     div()
@@ -185,12 +314,30 @@ fn take(pending: &mut [(EmptyBlock, Option<AnyElement>)], block: EmptyBlock) -> 
 /// Give each column its own viewport-height flow, growing beyond it only for its own content.
 /// The parent has a definite viewport height and start alignment, so a tall left column cannot
 /// stretch the center column or move its middle anchor. Overflow reaches the frame's scrollport.
-fn column_flow(cells: Vec<Div>, gap: Pixels, top: Pixels, bottom: Pixels) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_w_0()
+///
+/// A side column is as wide as [`Form::Grid`] says and no wider — three equal thirds would hand a
+/// board a third of the panel whatever the board measures, which is what made the old threshold
+/// three boards wide. The middle column has no width of its own and takes what the sides leave.
+///
+/// Args:
+///     cells: The column's three anchors, top to bottom.
+///     width: The side column's width, or `None` for the middle one.
+///     gap: Space between two cells.
+///     top: Inset above the first cell.
+///     bottom: Inset under the last.
+fn column_flow(
+    cells: Vec<Div>,
+    width: Option<Pixels>,
+    gap: Pixels,
+    top: Pixels,
+    bottom: Pixels,
+) -> Div {
+    let column = div().flex().flex_col().min_w_0();
+    let column = match width {
+        Some(width) => column.flex_none().w(width),
+        None => column.flex_1(),
+    };
+    column
         .min_h(gpui::relative(1.0))
         .gap(gap)
         .pt(top)
