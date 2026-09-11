@@ -17,7 +17,11 @@ fn a_dropdowns_index_and_its_entry_are_the_same_thing() {
     assert_eq!(all.len(), 1 + EmptySlot::ALL.len());
     assert_eq!(all[0], Placement::Hidden, "hidden must be the first entry");
     for (index, placement) in all.into_iter().enumerate() {
-        assert_eq!(placement.index(), index, "{placement:?} selects the wrong row");
+        assert_eq!(
+            placement.index(),
+            index,
+            "{placement:?} selects the wrong row"
+        );
     }
 }
 

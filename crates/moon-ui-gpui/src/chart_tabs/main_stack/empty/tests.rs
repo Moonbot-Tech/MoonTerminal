@@ -383,8 +383,14 @@ fn a_reset_forgets_every_block_and_spares_the_rule() {
     for block in EmptyBlock::ALL {
         assert_eq!(block.saved(&layout), None, "{block:?} kept an anchor");
     }
-    assert_eq!(layout.main_empty_logo, None, "the brand's choice was not forgotten");
-    assert_eq!(layout.main_empty_minute, None, "the minute's choice was not forgotten");
+    assert_eq!(
+        layout.main_empty_logo, None,
+        "the brand's choice was not forgotten"
+    );
+    assert_eq!(
+        layout.main_empty_minute, None,
+        "the minute's choice was not forgotten"
+    );
     let mut shipped = WindowLayout::default();
     shipped.main_empty_detect = Some(true);
     assert_eq!(
@@ -392,7 +398,11 @@ fn a_reset_forgets_every_block_and_spares_the_rule() {
         EmptyScreen::restore(&shipped),
         "a reset screen must be the shipped one, with the rule as it was"
     );
-    assert_eq!(layout.main_empty_detect, Some(true), "the reset stopped the watch");
+    assert_eq!(
+        layout.main_empty_detect,
+        Some(true),
+        "the reset stopped the watch"
+    );
 }
 
 /// Placing a block must not READ anything. The three tables each carry a connection to a public
