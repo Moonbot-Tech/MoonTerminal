@@ -171,9 +171,9 @@ impl SlotSpec {
     /// editors.
     ///
     /// The origin says whether ANY half travels: for almost every two-editor row that is the key
-    /// (a Moonbot paste or a core pull writes it) while the gesture is ours, and the legend says so
-    /// in as many words. The scope is `Scope::join`, which reads the containment the surfaces
-    /// document.
+    /// (a Moonbot paste or a core pull writes it) while the gesture is ours, and the MB column's
+    /// tooltip says so in as many words. The scope is `Scope::join`, which reads the containment
+    /// the surfaces document.
     pub fn meta(&self) -> SlotMeta {
         match self.editors {
             Editors::Key(key) => meta::key_slot_meta(key),

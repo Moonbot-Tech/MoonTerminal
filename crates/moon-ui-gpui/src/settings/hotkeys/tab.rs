@@ -231,9 +231,6 @@ impl SettingsView {
             .w_full()
             .gap(design::ui_px(cx, 3.0))
             .child(muted_line(self.hotkeys_group.hint(), &p))
-            // Said once for the whole page instead of in every row's own description: the marks
-            // repeat on every line, so their meaning does not have to.
-            .child(muted_line(t!("hotkeys.marks_legend").to_string(), &p))
             .child(self.columns_header(cx))
             .children(self.group_rows(self.hotkeys_group, &hotkeys, cx));
 
@@ -330,7 +327,8 @@ impl SettingsView {
             .min_w(design::ui_px(cx, FIXED_COLUMNS_WIDTH + ROW_TITLE_MIN_WIDTH))
             .gap(design::ui_px(cx, COLUMN_GAP))
             .items_end()
-            .child(fixed("hotkeys.col.help", ROW_HINT_WIDTH))
+            // The help column needs no caption: the glyphs under it are their own.
+            .child(empty_cell(ROW_HINT_WIDTH, cx))
             .child(
                 h_flex()
                     .flex_1()
@@ -346,7 +344,16 @@ impl SettingsView {
                 "hotkeys.col.param",
                 ROW_CONTROL_WIDTH + ROW_KIND_EXTRA,
             ))
-            .child(fixed("hotkeys.col.mb", ROW_MB_WIDTH))
+            // The one caption that needs explaining carries its explanation the way the rows carry
+            // theirs — behind a hover.
+            .child(self.hint_cell(
+                "hint-col-mb".to_string(),
+                t!("hotkeys.col.mb").to_string(),
+                t!("hotkeys.col.mb_hint").to_string(),
+                ROW_MB_WIDTH,
+                &p,
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -651,11 +658,26 @@ impl SettingsView {
         p: &MoonPalette,
         cx: &Context<Self>,
     ) -> Stateful<Div> {
+        self.hint_cell(id, "?".to_string(), hint, ROW_HINT_WIDTH, p, cx)
+    }
+
+    /// A cell whose text brightens under the pointer and opens `hint` as a tooltip — the `?` of
+    /// a row, or a header caption that has something to explain. Nothing to click.
+    fn hint_cell(
+        &self,
+        id: String,
+        text: String,
+        hint: String,
+        width: f32,
+        p: &MoonPalette,
+        cx: &Context<Self>,
+    ) -> Stateful<Div> {
         let hover = p.text;
-        div()
+        h_flex()
             .id(SharedString::from(id))
             .flex_none()
-            .w(design::ui_px(cx, ROW_HINT_WIDTH))
+            .w(design::ui_px(cx, width))
+            .justify_center()
             .cursor_default()
             .text_size(design::t_body(cx))
             .text_color(design::moon(p.text_muted))
@@ -664,7 +686,7 @@ impl SettingsView {
                 cx.new(|_| MoonTooltipView::new(hint.clone()).max_width(HINT_TOOLTIP_MAX_WIDTH))
                     .into()
             })
-            .child("?")
+            .child(text)
     }
 
     /// Builds a row's trailing dropdown with the trigger geometry shared by this tab.
@@ -795,14 +817,20 @@ impl SettingsView {
     /// core, the same resolution the header's manual-strategy cluster already uses.
     ///
     /// The Hotkeys tab has no owning window group of its own (unlike the toolbar or header, which
-    /// render inside one group's window) — Settings is one shared window. `Backend::
-    /// singleton_workspace` is the existing resolver for exactly this situation: it is the same
-    /// "last focused live Auto group" the Strategies and Analytics windows already use to answer
-    /// group-shaped questions from an unscoped window (`strategies/window.rs`,
-    /// `analytics/tuner/mod.rs`).
+    /// render inside one group's window) — Settings is one shared window. With ONE group window
+    /// open there is nothing to resolve: that group's active core is the answer, in either
+    /// workspace mode. With several, `Backend::singleton_workspace` is the resolver the Strategies
+    /// and Analytics windows use for the same question — and it answers only for a group in the
+    /// Auto-trading mode, because `workspace_focus` is set in no other. That gate is why this
+    /// section reported "no active core" to a terminal with one Classic group and a core on
+    /// every chart.
     fn core_pull_target(&self, cx: &Context<Self>) -> Option<CoreId> {
         let b = self.backend.read(cx);
-        let group = b.singleton_workspace()?.group;
+        let mut groups = b.group_windows.keys();
+        let group = match (groups.next(), groups.next()) {
+            (Some(only), None) => only.clone(),
+            _ => b.singleton_workspace()?.group,
+        };
         b.active_trade_core(&group)
     }
 

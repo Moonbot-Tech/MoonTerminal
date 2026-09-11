@@ -29,10 +29,6 @@ hotkeys.scope.figure:
   ru: "фигура"
   en: "figure"
   es: "figura"
-hotkeys.col.help:
-  ru: "?"
-  en: "?"
-  es: "?"
 hotkeys.col.title:
   ru: "Название"
   en: "Action"
@@ -61,6 +57,10 @@ hotkeys.col.mb:
   ru: "MB"
   en: "MB"
   es: "MB"
+hotkeys.col.mb_hint:
+  ru: "«+» — значение переносится из Moonbot: клавишу перезапишет вставка конфига или тяга раскладки с ядра, жесты стакана — тяга."
+  en: "«+» — the value travels from Moonbot: a config paste or a core pull overwrites the key, the book gestures come from the pull."
+  es: "«+»: el valor viene de Moonbot: pegar la configuración o traer la disposición del core reescribe la tecla; los gestos del libro vienen de allí."
 hotkeys.clash.key:
   ru: "Не сработает: клавишу забирает %{rows}."
   en: "Will not fire: %{rows} takes this key."
@@ -113,10 +113,6 @@ hotkeys.clash.layer.x_scale:
   ru: "синхрон X-масштаба"
   en: "the X-scale sync"
   es: "la sincronización de escala X"
-hotkeys.marks_legend:
-  ru: "Описание — под «?». «+» в колонке MB: клавишу перезапишет вставка конфига Moonbot или тяга с ядра."
-  en: "The description is behind the «?». A «+» under MB: a Moonbot config paste or a core pull overwrites the key."
-  es: "La descripción está tras «?». Un «+» en MB: pegar la configuración de Moonbot o traer del core reescribe la tecla."
 hotkeys.unassigned:
   ru: "Не задано"
   en: "Unassigned"
