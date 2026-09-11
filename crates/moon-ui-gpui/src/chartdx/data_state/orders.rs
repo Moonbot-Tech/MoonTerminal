@@ -245,6 +245,8 @@ impl ChartDataState {
                 let figures_sig = self.figures_sig();
                 if force
                     || pr.last_order_lines_rev != core_st.order_lines_rev
+                    || pr.last_order_strategies_rev != core_st.strategies_rev
+                    || pr.last_order_schema_rev != core_st.schema_rev
                     || pr.last_order_highlight_uid != highlight_uid
                     || pr.last_order_drag_preview != drag_preview_sig
                     || pr.last_figures_sig != figures_sig
@@ -258,6 +260,8 @@ impl ChartDataState {
                     let mut zones = Vec::new();
                     moon_chart::build_order_geometry(
                         order_lines,
+                        &core_st.strategies,
+                        core_st.schema.as_ref(),
                         &pane.market,
                         &self.orders,
                         &self.chart_graphics,
@@ -340,6 +344,8 @@ impl ChartDataState {
                         self.view_dirty = true;
                     }
                     pr.last_order_lines_rev = core_st.order_lines_rev;
+                    pr.last_order_strategies_rev = core_st.strategies_rev;
+                    pr.last_order_schema_rev = core_st.schema_rev;
                     pr.last_order_lines_sync_ms = now;
                     pr.pending_order_gpu_rev = Some(core_st.order_lines_rev);
                     pr.last_order_highlight_uid = highlight_uid;

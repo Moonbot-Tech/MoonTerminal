@@ -103,6 +103,8 @@ fn draw_order_segments(
     let mut markers = Vec::new();
     build_order_geometry(
         store,
+        &[],
+        None,
         "BTCUSDT",
         style,
         graphics,
@@ -135,6 +137,8 @@ fn draw_order_markers(
     let mut markers = Vec::new();
     build_order_geometry(
         store,
+        &[],
+        None,
         "BTCUSDT",
         style,
         graphics,
@@ -240,6 +244,8 @@ fn an_order_dated_only_by_its_exit_survives_a_window_before_its_creation() {
     // A window that ends before the fallback creation but holds the exit line's start.
     build_order_geometry(
         &store,
+        &[],
+        None,
         "BTCUSDT",
         &OrdersStyle::default(),
         &ChartGraphicsCfg::default(),
@@ -281,6 +287,8 @@ fn moonshot_zone_keeps_moonbot_fixed_opacity() {
     let mut markers = Vec::new();
     build_order_geometry(
         &store,
+        &[],
+        None,
         "BTCUSDT",
         &OrdersStyle::default(),
         &ChartGraphicsCfg::default(),
@@ -319,6 +327,8 @@ fn server_trace_is_separate_from_active_order_line() {
     let mut markers = Vec::new();
     build_order_geometry(
         &store,
+        &[],
+        None,
         "BTCUSDT",
         &OrdersStyle::default(),
         &ChartGraphicsCfg::default(),
@@ -541,6 +551,8 @@ fn dragging_order_keeps_server_trace_visible() {
     let mut markers = Vec::new();
     build_order_geometry(
         &store,
+        &[],
+        None,
         "BTCUSDT",
         &OrdersStyle::default(),
         &ChartGraphicsCfg::default(),
@@ -623,6 +635,8 @@ fn geometry_for_scaled(
     let mut markers = Vec::new();
     build_order_geometry(
         &store,
+        &[],
+        None,
         "BTCUSDT",
         &OrdersStyle::default(),
         graphics,
@@ -787,6 +801,8 @@ fn entry_fill_before_a_fallback_creation_is_clamped_to_the_line_start() {
     let mut markers = Vec::new();
     build_order_geometry(
         &store,
+        &[],
+        None,
         "BTCUSDT",
         &OrdersStyle::default(),
         &ChartGraphicsCfg::default(),
@@ -955,6 +971,8 @@ fn filled_repriced_entry_path_stops_at_fill_without_post_fill_risers() {
     let mut markers = Vec::new();
     build_order_geometry(
         &store,
+        &[],
+        None,
         "BTCUSDT",
         &OrdersStyle::default(),
         &ChartGraphicsCfg::default(),
@@ -1132,6 +1150,8 @@ fn moonshot_zone_toggle_hides_only_the_corridor() {
         let mut markers = Vec::new();
         build_order_geometry(
             &store,
+            &[],
+            None,
             "BTCUSDT",
             &OrdersStyle::default(),
             &ChartGraphicsCfg::default(),
@@ -1330,5 +1350,342 @@ fn only_a_live_exit_line_is_pinned_to_the_plot() {
         clamp_at(61_404.0),
         Some(SEG_CLAMP_NONE),
         "a closed order's exit must not be pinned"
+    );
+}
+
+/// Confirmed wire-format fields for a strategy whose RGB channels cannot match theme defaults.
+fn custom_strategy() -> moon_core::feed::StrategyRow {
+    moon_core::feed::StrategyRow {
+        id: 7,
+        name: "custom".into(),
+        kind: "test".into(),
+        kind_ordinal: 0,
+        folder_path: String::new(),
+        checked: true,
+        is_short: false,
+        fields: vec![
+            ("UseCustomColors".into(), "Yes".into()),
+            ("BuyOrderColor".into(), "80123456".into()),
+            ("SellOrderColor".into(), "FFABCDEF".into()),
+            ("OrderLineKind".into(), "2".into()),
+        ],
+    }
+}
+
+/// Draws a supplied snapshot against retained orders without changing their revision.
+fn draw_strategy_segments(
+    store: &OrderLineStore,
+    rows: &[moon_core::feed::StrategyRow],
+    schema: Option<&moon_core::feed::StrategySchemaModel>,
+    style: &OrdersStyle,
+) -> (Vec<SegInstance>, Vec<LineInstance>) {
+    let mut segs = Vec::new();
+    let mut hlines = Vec::new();
+    let graphics = ChartGraphicsCfg {
+        hide_closed_sell_line: false,
+        ..Default::default()
+    };
+    build_order_geometry(
+        store,
+        rows,
+        schema,
+        "BTCUSDT",
+        style,
+        &graphics,
+        1.0,
+        None,
+        None,
+        0.0,
+        3_000.0,
+        0.0,
+        10_000.0,
+        10_000.0,
+        true,
+        &mut Vec::new(),
+        &mut hlines,
+        &mut segs,
+        &mut Vec::new(),
+    );
+    (segs, hlines)
+}
+
+/// Strategy colors override both sides and pending colors; opacity, widths and stop colors survive.
+#[test]
+fn strategy_colors_and_all_five_patterns_reach_order_geometry() {
+    let themes = moon_core::config::OrdersStyleSet::default();
+    for style in [&themes.dark, &themes.light] {
+        for short in [false, true] {
+            for fill in [0.0, 100.0] {
+                for closed in [false, true] {
+                    let mut row = test_order_with_buy_trace();
+                    row.strat_id = 7;
+                    row.strat_name = "stale name".into();
+                    row.is_short = short;
+                    row.fill_pct = fill;
+                    row.filled = fill > 0.0;
+                    row.pending = fill == 0.0;
+                    row.sell_price = 62_000.0;
+                    row.sell_create_time_ms = 1_000.0;
+                    row.entry_fill_time_ms = 1_500.0;
+                    row.stop_loss = Some(59_000.0);
+                    row.trailing = Some(59_100.0);
+                    row.take_profit = Some(63_000.0);
+                    row.vstop = Some(58_000.0);
+                    row.pending_cond = Some(60_500.0);
+                    row.liq = Some(50_000.0);
+                    let mut store = OrderLineStore::default();
+                    store.update(&[row.clone()], 0);
+                    if closed {
+                        row.job_is_done = true;
+                        store.update(&[row], 0);
+                    }
+                    for pattern in 0..5 {
+                        let mut strategy = custom_strategy();
+                        strategy.fields[3].1 = pattern.to_string();
+                        let (segs, hlines) =
+                            draw_strategy_segments(&store, &[strategy], None, style);
+                        assert!(!segs.is_empty());
+                        assert!(segs.iter().all(|s| s.pattern == pattern as f32));
+                        let entry_style = if short { &style.buy_short } else { &style.buy };
+                        let alpha = if closed {
+                            style.closed_alpha
+                        } else if fill == 0.0 {
+                            entry_style.pending_alpha
+                        } else {
+                            style.active_alpha
+                        };
+                        let buy = segs
+                            .iter()
+                            .find(|s| {
+                                s.p0 == 60_000.0
+                                    && s.thickness == entry_style.thickness
+                                    && s.color[0] == 0x12 as f32 / 255.0
+                            })
+                            .expect("custom entry");
+                        assert_eq!(
+                            &buy.color[..3],
+                            &[
+                                0x12 as f32 / 255.0,
+                                0x34 as f32 / 255.0,
+                                0x56 as f32 / 255.0
+                            ]
+                        );
+                        assert!((buy.color[3] - alpha * 128.0 / 255.0).abs() <= f32::EPSILON);
+                        if fill == 0.0 {
+                            assert!(hlines.is_empty());
+                            if !closed {
+                                let condition = segs
+                                    .iter()
+                                    .find(|s| s.p0 == 60_500.0)
+                                    .expect("pending condition");
+                                assert_eq!(condition.color, rgba(style.pending_cond.color, alpha));
+                                assert_eq!(condition.thickness, style.pending_cond.thickness);
+                            }
+                            assert!(
+                                !segs.iter().any(|s| s.p0 == 62_000.0
+                                    || s.p0 == 59_000.0
+                                    || s.p0 == 50_000.0),
+                                "unfilled orders have no exit or protective lines"
+                            );
+                            continue;
+                        }
+                        let sell = segs.iter().find(|s| s.p0 == 62_000.0).expect("custom exit");
+                        assert_eq!(
+                            sell.color,
+                            [
+                                0xAB as f32 / 255.0,
+                                0xCD as f32 / 255.0,
+                                0xEF as f32 / 255.0,
+                                alpha
+                            ]
+                        );
+                        assert_eq!(
+                            sell.thickness,
+                            if short {
+                                style.sell_short.thickness
+                            } else {
+                                style.sell.thickness
+                            }
+                        );
+                        if !closed {
+                            let liq = hlines
+                                .iter()
+                                .find(|line| line.price == 50_000.0)
+                                .expect("liquidation line");
+                            assert_eq!(liq.style, pattern as f32);
+                            assert_eq!(liq.color, rgba(style.liq.color, alpha));
+                            assert_eq!(liq.thickness, style.liq.thickness);
+                            for (price, line) in [
+                                (59_000.0, &style.stop),
+                                (59_100.0, &style.trailing),
+                                (63_000.0, &style.take_profit),
+                                (58_000.0, &style.vstop),
+                            ] {
+                                let seg = segs
+                                    .iter()
+                                    .find(|s| s.p0 == price)
+                                    .expect("protective line");
+                                assert_eq!(seg.color, rgba(line.color, alpha));
+                                assert_eq!(seg.thickness, line.thickness);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Late snapshots recolor unchanged orders; disabled, missing and malformed overrides preserve defaults.
+#[test]
+fn strategy_snapshot_arrival_and_fallbacks_preserve_order_authority() {
+    let mut row = test_order_with_buy_trace();
+    row.strat_id = 7;
+    row.strat_name = "custom".into();
+    let mut store = OrderLineStore::default();
+    store.update(&[row.clone()], 0);
+    let style = OrdersStyle::default();
+    let original = draw_strategy_segments(&store, &[], None, &style).0;
+    let custom = draw_strategy_segments(&store, &[custom_strategy()], None, &style).0;
+    assert_ne!(
+        bytemuck::cast_slice::<SegInstance, u8>(&original),
+        bytemuck::cast_slice::<SegInstance, u8>(&custom)
+    );
+    for variant in 0..4 {
+        let mut strategy = custom_strategy();
+        match variant {
+            0 => strategy.fields[0].1 = "No".into(),
+            1 => strategy.id = 8,
+            2 => strategy.fields.clear(),
+            _ => {
+                for (_, value) in &mut strategy.fields[1..] {
+                    *value = "invalid".into();
+                }
+            }
+        }
+        let fallback = draw_strategy_segments(&store, &[strategy], None, &style).0;
+        assert_eq!(
+            bytemuck::cast_slice::<SegInstance, u8>(&original),
+            bytemuck::cast_slice::<SegInstance, u8>(&fallback)
+        );
+    }
+    row.strat_id = 0;
+    assert!(
+        store.update(&[row.clone()], 0),
+        "identity alone must invalidate geometry"
+    );
+    let named = draw_strategy_segments(&store, &[custom_strategy()], None, &style).0;
+    assert_eq!(
+        bytemuck::cast_slice::<SegInstance, u8>(&named),
+        bytemuck::cast_slice::<SegInstance, u8>(&custom)
+    );
+    let mut duplicate = custom_strategy();
+    duplicate.id = 8;
+    let ambiguous = draw_strategy_segments(&store, &[custom_strategy(), duplicate], None, &style).0;
+    assert_eq!(
+        bytemuck::cast_slice::<SegInstance, u8>(&ambiguous),
+        bytemuck::cast_slice::<SegInstance, u8>(&original)
+    );
+    row.strat_name.clear();
+    store.update(&[row], 0);
+    let manual = draw_strategy_segments(&store, &[custom_strategy()], None, &style).0;
+    assert_eq!(
+        bytemuck::cast_slice::<SegInstance, u8>(&manual),
+        bytemuck::cast_slice::<SegInstance, u8>(&original)
+    );
+}
+
+/// Omitted fields inherit the matching kind's schema, even when the schema arrives after orders.
+#[test]
+fn sparse_strategy_defaults_and_late_schema_override_global_styles() {
+    use moon_core::feed::{
+        SchemaField, SchemaFieldUi, SchemaKind, SchemaSection, StrategySchemaModel,
+    };
+    let mut row = test_order_with_buy_trace();
+    row.strat_id = 7;
+    row.filled = true;
+    row.fill_pct = 100.0;
+    row.stop_loss = Some(59_000.0);
+    row.sell_price = 62_000.0;
+    row.sell_create_time_ms = 1_000.0;
+    row.entry_fill_time_ms = 1_500.0;
+    let mut store = OrderLineStore::default();
+    store.update(&[row], 0);
+    let mut style = OrdersStyle::default();
+    style.stop.dashed = true;
+    let mut strategy = custom_strategy();
+    strategy.kind_ordinal = 9;
+    strategy.fields.clear();
+    let schema = StrategySchemaModel {
+        kinds: vec![SchemaKind {
+            ordinal: 9,
+            name: "test".into(),
+            sections: vec![SchemaSection {
+                title: "style".into(),
+                fields: [
+                    ("UseCustomColors", "Yes"),
+                    ("BuyOrderColor", "112233"),
+                    ("SellOrderColor", "445566"),
+                    ("OrderLineKind", "0"),
+                ]
+                .into_iter()
+                .map(|(name, value)| SchemaField {
+                    name: name.into(),
+                    type_name: "String".into(),
+                    ui: SchemaFieldUi::Edit,
+                    picklist: Vec::new(),
+                    default: Some(value.into()),
+                })
+                .collect(),
+            }],
+        }],
+    };
+    let before = draw_strategy_segments(&store, &[strategy.clone()], None, &style).0;
+    assert_eq!(
+        before
+            .iter()
+            .find(|s| s.p0 == 59_000.0)
+            .expect("stop before schema")
+            .pattern,
+        4.0
+    );
+    let after = draw_strategy_segments(&store, &[strategy.clone()], Some(&schema), &style).0;
+    assert!(after.iter().all(|s| s.pattern == 0.0));
+    assert!(after.iter().any(|s| s.p0 == 60_000.0 && s.color == [17.0/255.0, 34.0/255.0, 51.0/255.0, 1.0]));
+    assert!(
+        after.iter().any(
+            |s| s.p0 == 62_000.0 && s.color == [68.0 / 255.0, 85.0 / 255.0, 102.0 / 255.0, 1.0]
+        )
+    );
+    // The wire schema omits the default value itself for a zero-default numeric field.
+    let mut implicit_zero = schema.clone();
+    implicit_zero.kinds[0].sections[0]
+        .fields
+        .iter_mut()
+        .find(|f| f.name == "OrderLineKind")
+        .expect("pen schema")
+        .default = None;
+    let zero = draw_strategy_segments(&store, &[strategy.clone()], Some(&implicit_zero), &style).0;
+    assert_eq!(
+        bytemuck::cast_slice::<SegInstance, u8>(&after),
+        bytemuck::cast_slice::<SegInstance, u8>(&zero)
+    );
+    strategy.fields.push(("OrderLineKind".into(), "3".into()));
+    let explicit = draw_strategy_segments(&store, &[strategy.clone()], Some(&schema), &style).0;
+    assert!(explicit.iter().all(|s| s.pattern == 3.0));
+    strategy
+        .fields
+        .push(("UseCustomColors".into(), "No".into()));
+    let disabled = draw_strategy_segments(&store, &[strategy.clone()], Some(&schema), &style).0;
+    assert_eq!(
+        bytemuck::cast_slice::<SegInstance, u8>(&before),
+        bytemuck::cast_slice::<SegInstance, u8>(&disabled)
+    );
+    strategy.fields.clear();
+    strategy.kind_ordinal = 10;
+    let other_kind = draw_strategy_segments(&store, &[strategy], Some(&schema), &style).0;
+    assert_eq!(
+        bytemuck::cast_slice::<SegInstance, u8>(&before),
+        bytemuck::cast_slice::<SegInstance, u8>(&other_kind)
     );
 }

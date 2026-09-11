@@ -226,6 +226,10 @@ pub struct RetainedOrder {
     #[allow(dead_code)]
     pub uid: u64,
     pub market: String,
+    /// Core-local strategy identity retained after the live order disappears.
+    pub strat_id: u64,
+    /// Strategy name for legacy rows without a numeric identity.
+    pub strat_name: String,
     pub is_short: bool,
     /// Whether the order is EMULATED rather than live, mirrored from the wire row.
     ///
@@ -321,6 +325,7 @@ impl RetainedOrder {
         }
     }
 
+    /// Retains wire identity and line state for live and closed chart orders.
     fn new(r: &OrderRow, now_ms: f64, seq: u64, correction_gen: u64) -> Self {
         // The start cannot be in the future because the core clock may lead the local clock;
         // otherwise the line segment degenerates or moves beyond the right edge. An order the core
@@ -335,6 +340,8 @@ impl RetainedOrder {
         Self {
             uid: r.uid,
             market: r.market.clone(),
+            strat_id: r.strat_id,
+            strat_name: r.strat_name.clone(),
             is_short: r.is_short,
             emulator: r.emulator,
             size: r.size as f32,
@@ -490,6 +497,11 @@ impl OrderLineStore {
                 order.closed_store_ms = None;
                 order.closed_rev = None;
                 became_open = true;
+                changed = true;
+            }
+            if order.strat_id != r.strat_id || order.strat_name != r.strat_name {
+                order.strat_id = r.strat_id;
+                order.strat_name.clone_from(&r.strat_name);
                 changed = true;
             }
             order.is_short = r.is_short;
