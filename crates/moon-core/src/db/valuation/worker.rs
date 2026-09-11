@@ -230,6 +230,8 @@ struct PrefetchError {
 /// Successful exact-rate prefetch state consumed by the following per-row preparation pass.
 #[derive(Debug, PartialEq)]
 struct PrefetchOutcome {
+    /// Provider fault retained after independent rows have been processed.
+    provider_fault: Option<FaultCause>,
     /// Whether prefetch changed durable rate coverage.
     changed: bool,
     /// Quote/minute keys whose canonical Binance/Bybit exact routes were all absent.
@@ -1012,6 +1014,7 @@ fn reconcile_step(
             dirty,
         )?;
         let mut changed = prefetched.changed;
+        let mut provider_fault = prefetched.provider_fault;
         for input in &inputs {
             let minute = valuation_minute(axis, input);
             match prepare_trade(
@@ -1031,6 +1034,11 @@ fn reconcile_step(
                 } => {
                     changed |= input_changed;
                     deferred.insert(trade_key(input), input.clone());
+                }
+                PrepareResult::Retry(error) if error.kind == FailureKind::Provider => {
+                    changed |= defer_provider_trade(store, axis, input)?;
+                    deferred.insert(trade_key(input), input.clone());
+                    provider_fault.get_or_insert(error);
                 }
                 PrepareResult::Retry(error) => {
                     if changed {
@@ -1052,6 +1060,9 @@ fn reconcile_step(
             state.after = inputs
                 .last()
                 .map(|input| (input.closedate, input.core_uid, input.row_id));
+        }
+        if let Some(error) = provider_fault {
+            return Err(error);
         }
         return Ok(StageTurn::Ran { more: true });
     }
@@ -1180,6 +1191,7 @@ fn consume_outbox(
         dirty,
     )?;
     let mut changed = prefetched.changed;
+    let mut provider_fault = prefetched.provider_fault;
     let mut acknowledged = None;
     for (event, input) in events.iter().zip(loaded) {
         match process_event(
@@ -1187,7 +1199,7 @@ fn consume_outbox(
             source,
             axis,
             *event,
-            input,
+            input.clone(),
             deferred,
             &prefetched.canonical_exact_missing,
         ) {
@@ -1201,6 +1213,15 @@ fn consume_outbox(
                 changed: event_changed,
             } => {
                 changed |= event_changed;
+                acknowledged = Some(event.seq);
+            }
+            PrepareResult::Retry(error)
+                if error.kind == FailureKind::Provider && input.is_some() =>
+            {
+                let input = input.as_ref().expect("provider row failure has input");
+                changed |= defer_provider_trade(store, axis, input)?;
+                deferred.insert(trade_key(input), input.clone());
+                provider_fault.get_or_insert(error);
                 acknowledged = Some(event.seq);
             }
             PrepareResult::Retry(error) => {
@@ -1219,6 +1240,9 @@ fn consume_outbox(
     }
     if changed {
         publish(generation, dirty);
+    }
+    if let Some(error) = provider_fault {
+        return Err(error);
     }
     Ok(StageTurn::Ran {
         more: batch_was_full,
@@ -1345,7 +1369,17 @@ fn prepare_trade(
                         now_ms,
                     ) {
                         Ok(None) => {
-                            return PrepareResult::Deferred { changed: false };
+                            return match delete_trade(
+                                store,
+                                input.source,
+                                input.core_uid,
+                                input.row_id,
+                            ) {
+                                PrepareResult::Complete { changed } => {
+                                    PrepareResult::Deferred { changed }
+                                }
+                                result => result,
+                            };
                         }
                         Ok(Some(search_start)) => search_start,
                         Err(error) => return PrepareResult::Retry(super::store_fault(error)),
@@ -1387,7 +1421,7 @@ fn prepare_trade(
                                 result => result,
                             };
                         }
-                        Err(FetchFailure::Transient(error)) => {
+                        Err(FetchFailure::Transient(error) | FetchFailure::Unavailable(error)) => {
                             return PrepareResult::Retry(FaultCause::new(
                                 FailureKind::Provider,
                                 error,
@@ -1405,6 +1439,30 @@ fn prepare_trade(
             changed: changed > 0,
         },
         Err(error) => PrepareResult::Retry(super::store_fault(error)),
+    }
+}
+
+/// Persist outage pacing without claiming any minute was searched, then retire stale row values.
+fn defer_provider_trade(
+    store: &Connection,
+    axis: &ReportAxis,
+    input: &TradeInput,
+) -> Result<bool, FaultCause> {
+    let minute = valuation_minute(axis, input);
+    super::store_rate_search(
+        store,
+        input.quote_ordinal,
+        minute,
+        minute.saturating_sub(60),
+        now_unix_ms_i64(),
+    )
+    .map_err(super::store_fault)?;
+    match delete_trade(store, input.source, input.core_uid, input.row_id) {
+        PrepareResult::Complete { changed } => Ok(changed),
+        PrepareResult::Retry(error) => Err(error),
+        PrepareResult::Deferred { .. } => {
+            unreachable!("deleting a cached value does not await a rate")
+        }
     }
 }
 
@@ -1498,6 +1556,7 @@ fn prefetch_rates(
         }
     }
     let mut canonical_exact_missing = BTreeSet::new();
+    let mut provider_fault = None;
     for ((quote_ordinal, ticker), minutes) in groups {
         let minutes = minutes.into_iter().collect::<Vec<_>>();
         let mut start = 0;
@@ -1541,15 +1600,29 @@ fn prefetch_rates(
                 }
             }
             if let Some(error) = batch.transient {
-                return Err(PrefetchError {
-                    fault: FaultCause::new(FailureKind::Provider, error),
-                    changed,
-                });
+                for minute in &minutes[start..end] {
+                    if batch.ready.iter().any(|rate| rate.minute_utc == *minute) {
+                        continue;
+                    }
+                    super::store_rate_search(
+                        store,
+                        quote_ordinal,
+                        *minute,
+                        minute.saturating_sub(60),
+                        fetched_at,
+                    )
+                    .map_err(|error| PrefetchError {
+                        fault: super::store_fault(error),
+                        changed,
+                    })?;
+                }
+                provider_fault.get_or_insert_with(|| FaultCause::new(FailureKind::Provider, error));
             }
             start = end;
         }
     }
     Ok(PrefetchOutcome {
+        provider_fault,
         changed,
         canonical_exact_missing,
     })
@@ -1809,6 +1882,10 @@ struct CurrentRateState {
     minute: Option<i64>,
     /// Ordinals still to resolve in this pass, popped from the back.
     pending: Vec<i64>,
+    /// Publish healthy currencies incrementally after any provider failure in this pass.
+    had_outage: bool,
+    /// Next reverse queue offset, advanced on failure without discarding the currency.
+    next_offset: usize,
     /// Latest known rate per quote ordinal.
     rates: BTreeMap<i64, super::CurrentRate>,
     /// Ordinals whose direct and inverse routes were all last classified as permanently absent.
@@ -1827,6 +1904,22 @@ struct CurrentRateState {
 }
 
 impl CurrentRateState {
+    /// Requeue healthy currencies ahead of unresolved retries so their rates stay fresh.
+    fn rearm(&mut self, minute: i64) {
+        self.minute = Some(minute);
+        let mut added = self
+            .ordinals
+            .iter()
+            .copied()
+            .filter(|ordinal| !self.pending.contains(ordinal))
+            .collect::<Vec<_>>();
+        if !added.is_empty() {
+            self.next_offset = self.pending.len();
+        }
+        added.append(&mut self.pending);
+        self.pending = added;
+    }
+
     /// Abandon the pass in flight because current-rate mode is disabled.
     ///
     /// The gathered rates are kept: switching the mode back on should reuse whatever is still
@@ -1834,6 +1927,8 @@ impl CurrentRateState {
     fn stand_down(&mut self) {
         self.minute = None;
         self.pending.clear();
+        self.had_outage = false;
+        self.next_offset = 0;
     }
 
     /// Whether this snapshot would render differently from the last published one.
@@ -2051,7 +2146,11 @@ fn refresh_current_rates(
     state: &mut CurrentRateState,
 ) -> Result<StageTurn, FaultCause> {
     let minute = current_minute_utc();
-    if refresh_is_due(minute, state.minute, state.pending.is_empty()) {
+    if refresh_is_due(
+        minute,
+        state.minute,
+        state.pending.is_empty() || state.had_outage,
+    ) {
         if minutes_elapsed(minute, state.scanned, CURRENT_SCAN_MINUTES) {
             let conn = match crate::db::open_reader() {
                 Ok(conn) => conn,
@@ -2061,8 +2160,7 @@ fn refresh_current_rates(
             state.ordinals = report_quote_ordinals(&conn).map_err(report_fault)?;
             state.scanned = Some(minute);
         }
-        state.minute = Some(minute);
-        state.pending = state.ordinals.clone();
+        state.rearm(minute);
     }
     resolve_next_rate(source, generation, dirty, state, minute)
 }
@@ -2091,9 +2189,11 @@ fn resolve_next_rate(
     state: &mut CurrentRateState,
     minute: i64,
 ) -> Result<StageTurn, FaultCause> {
-    let Some(&ordinal) = state.pending.last() else {
+    if state.pending.is_empty() {
         return Ok(StageTurn::Drained);
-    };
+    }
+    let index = state.pending.len() - 1 - state.next_offset % state.pending.len();
+    let ordinal = state.pending[index];
     let ticker = crate::db::QuoteCurrency::from_report_ordinal(ordinal)
         .map(|currency| currency.ticker())
         .unwrap_or("UNKNOWN");
@@ -2117,14 +2217,24 @@ fn resolve_next_rate(
             state.rates.remove(&ordinal);
             state.missing.insert(ordinal);
         }
-        // Leave the currency queued: the stage's own backoff decides when to try it again, and the
-        // published snapshot keeps serving whatever is still fresh meanwhile.
-        Err(FetchFailure::Transient(message)) => {
+        // Retain the failed currency but advance the cursor so independent currencies can run
+        // after the stage backoff. Published partial progress keeps their rates available.
+        Err(FetchFailure::Unavailable(message) | FetchFailure::Transient(message)) => {
+            state.next_offset = (state.next_offset + 1) % state.pending.len();
+            state.had_outage = true;
+            if !state.rates.is_empty() {
+                state.publish_snapshot(generation, dirty, now_unix_ms_i64());
+            }
             return Err(FaultCause::new(FailureKind::Provider, message));
         }
     }
-    state.pending.pop();
+    state.pending.remove(index);
+    state.next_offset = 0;
+    if state.had_outage {
+        state.publish_snapshot(generation, dirty, now_unix_ms_i64());
+    }
     if state.pending.is_empty() {
+        state.had_outage = false;
         state.publish_snapshot(generation, dirty, now_unix_ms_i64());
         Ok(StageTurn::Drained)
     } else {
@@ -2287,6 +2397,7 @@ fn process_deferred(
         dirty,
     )?;
     let mut changed = prefetched.changed;
+    let mut provider_fault = prefetched.provider_fault;
     for key in &keys {
         let Some(input) = deferred.get(key).cloned() else {
             continue;
@@ -2310,6 +2421,10 @@ fn process_deferred(
             PrepareResult::Deferred {
                 changed: input_changed,
             } => changed |= input_changed,
+            PrepareResult::Retry(error) if error.kind == FailureKind::Provider => {
+                changed |= defer_provider_trade(store, axis, &input)?;
+                provider_fault.get_or_insert(error);
+            }
             PrepareResult::Retry(error) => {
                 if changed {
                     publish(generation, dirty);
@@ -2320,6 +2435,9 @@ fn process_deferred(
     }
     if changed {
         publish(generation, dirty);
+    }
+    if let Some(error) = provider_fault {
+        return Err(error);
     }
     Ok(StageTurn::Ran {
         more: current_minute_closed_any(store, axis, deferred),

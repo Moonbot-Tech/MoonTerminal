@@ -144,12 +144,11 @@ pub(super) fn split_body(
         ))
     });
     v_flex()
-        .flex_1()
+        .flex_none()
         .w_full()
         .items_center()
-        .justify_center()
-        .gap(design::ui_px(cx, 12.0))
-        .px(design::ui_px(cx, 20.0))
+        .gap(design::ui_px(cx, 4.0))
+        .p(design::ui_px(cx, 6.0))
         .text_align(TextAlign::Center)
         .child(
             div()
@@ -162,7 +161,7 @@ pub(super) fn split_body(
                 .max_w(design::ui_px(cx, 560.0))
                 .font_family(design::ui_font())
                 .text_color(moon(palette.text_muted))
-                .child(t!("profit_monitor.split_detail").to_string()),
+                .child(t!("profit_monitor.split_pending").to_string()),
         )
         .child(chips)
         .when(show_trades, |body| {
@@ -325,7 +324,7 @@ pub(super) fn profit_column(request: ColumnRequest<'_>, cx: &App) -> (ProfitColu
         rows.absorb(ProfitLen::measure(
             row.profit,
             row.last_profit.filter(|_| want_suffix),
-            unit,
+            row.unit.or(unit),
         ));
     }
     let ticker = unit_ticker(unit);
@@ -340,7 +339,17 @@ pub(super) fn profit_column(request: ColumnRequest<'_>, cx: &App) -> (ProfitColu
             Some(_) => heading_width(&profit_heading(unit, false), scale, cx),
             None => heading,
         },
-        ticker: ticker.map_or(0, |ticker| ticker.chars().count()),
+        ticker: entries
+            .iter()
+            .filter_map(|entry| match entry {
+                MonitorEntry::Row { row, .. } | MonitorEntry::Subtotal { row, .. } => {
+                    unit_ticker(row.unit.or(unit))
+                }
+                MonitorEntry::Header(_) => None,
+            })
+            .map(|ticker| ticker.chars().count())
+            .max()
+            .unwrap_or(0),
         available: available_width(layout, slots, width, scale),
     };
     let column = plan_profit_column(
@@ -390,6 +399,7 @@ pub(super) fn table(
     entries: Vec<MonitorEntry>,
     total: MonitorRow,
     unit: Option<ProfitUnit>,
+    split_totals: Option<&moon_core::db::QuoteBreakdown>,
     column: ProfitColumn,
     layout: MonitorLayout,
     sort: Option<MonitorSort>,
@@ -405,6 +415,7 @@ pub(super) fn table(
     cx: &App,
 ) -> AnyElement {
     let show_trades = layout.trades;
+    let split = split_totals.is_some();
     let show_win = layout.win_rate;
     let show_average = layout.average_order;
     let sectioned = entries
@@ -598,7 +609,12 @@ pub(super) fn table(
             };
             let subtotal = matches!(entry, MonitorEntry::Subtotal { .. });
             let subtotal_tooltip = subtotal.then(|| name.clone());
-            let (profit, profit_sign) = format_profit(row.profit, row.last_profit, unit, form);
+            let row_unit = row.unit.or(unit);
+            let (profit, profit_sign) = if split && row_unit.is_none() {
+                ("—".to_string(), moon_core::util::fmt::DeltaSign::Zero)
+            } else {
+                format_profit(row.profit, row.last_profit, row_unit, form)
+            };
             table_row(
                 name,
                 profit,
@@ -607,7 +623,8 @@ pub(super) fn table(
                 // Empty, not `0.0%` and not `0.00 USDT`, when the ratio has no denominator: the
                 // one definition lives on the row itself.
                 row.win_rate().map(format_win_rate),
-                row.average_order().map(|value| format_amount(value, unit)),
+                row.average_order()
+                    .map(|value| format_amount(value, row_unit)),
                 show_trades,
                 show_win,
                 show_average,
@@ -719,6 +736,11 @@ pub(super) fn table(
             scope_marker.tooltip(std::slice::from_ref(&scope_line)),
         ))
     });
+
+    let footer = match split_totals {
+        Some(totals) => split_body(totals, layout.trades, scope_marker, palette, cx),
+        None => footer.into_any_element(),
+    };
 
     v_flex()
         .flex_1()

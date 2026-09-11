@@ -251,3 +251,50 @@ fn a_null_profit_on_the_newest_trade_shows_no_last_trade() {
         "an unknown profit is not a zero one"
     );
 }
+
+/// Mixed currencies on one core must remain separate, including count-only unknown rows.
+#[test]
+fn split_snapshot_keeps_native_core_rows() {
+    let connection = fixture();
+    connection
+        .execute_batch(
+            "UPDATE orders_rep SET basecurrency=8 WHERE closedate=120;
+        UPDATE orders_rep SET basecurrency=NULL WHERE closedate=130;",
+        )
+        .expect("mixed core");
+    let snapshot = super::snapshot_on(&connection, &query(0, 200)).expect("snapshot");
+    assert!(matches!(snapshot.scope, ProfitScope::Split(_)));
+    assert_eq!(snapshot.currencies.len(), 3);
+    assert_eq!(
+        snapshot.currencies[0].currency.expect("unit").ticker(),
+        "USDT"
+    );
+    assert_eq!(
+        snapshot.currencies[0]
+            .data
+            .cores
+            .iter()
+            .map(|r| r.profit)
+            .collect::<Vec<_>>(),
+        vec![12.0, -5.0]
+    );
+    let usdc = &snapshot.currencies[1];
+    assert_eq!(usdc.currency.expect("unit").ticker(), "USDC");
+    assert_eq!(usdc.data.cores[0].core_uid, 1);
+    assert_eq!(usdc.data.cores[0].profit, 3.0);
+    assert_eq!(usdc.data.cores[0].last_profit, Some(3.0));
+    let unknown = &snapshot.currencies[2];
+    assert_eq!(unknown.currency, None);
+    assert_eq!(unknown.data.cores[0].trades, 1);
+    assert_eq!(unknown.data.cores[0].last_profit, None);
+    assert_eq!(unknown.data.cores[0].positive_orders, 0);
+    let mut narrowed = query(0, 115);
+    narrowed.cores = vec![2];
+    let snapshot = super::snapshot_on(&connection, &narrowed).expect("filtered");
+    assert!(snapshot.currencies.is_empty());
+    let ProfitScope::Comparable { data, .. } = snapshot.scope else {
+        panic!("single quote");
+    };
+    assert_eq!(data.cores.len(), 1);
+    assert_eq!(data.cores[0].profit, -5.0);
+}

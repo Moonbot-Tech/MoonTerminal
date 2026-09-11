@@ -3,6 +3,67 @@
 use super::{CandleVolume, fit_tick_readout, tick_amount, tick_lines, tick_readout_origin};
 use moon_chart::tick_volume::TickVolumeRange;
 
+/// Native band hit testing must reject the candle plot, axes and hidden bands at every scale.
+#[test]
+fn volume_readout_requires_hovering_a_visible_band() {
+    use crate::chartdx::types::VolumeStyleGpu;
+    let candle = VolumeStyleGpu {
+        up: [0.0, 1.0, 0.0, 0.5],
+        down: [1.0, 0.0, 0.0, 0.5],
+        m: [1.0, 0.10, 1.0, 0.0],
+        ..VolumeStyleGpu::default()
+    };
+    for scale in [1.0, 1.5, 2.0] {
+        let bounds = [100.0 * scale, 50.0 * scale, 600.0 * scale, 800.0 * scale];
+        let base = 850.0 * scale - 1.0;
+        let pick = |x, y, alpha, style| super::hovered_volume_bands(bounds, [x, y], alpha, style);
+        assert_eq!(
+            pick(300.0 * scale, 300.0 * scale, 0.5, candle),
+            [false, false]
+        );
+        assert_eq!(pick(300.0 * scale, base - 20.0, 0.5, candle), [true, true]);
+        assert_eq!(
+            pick(300.0 * scale, base - 73.0, 0.5, candle),
+            [false, true],
+            "native tick cap is 72 device pixels, not logical pixels"
+        );
+        assert_eq!(
+            pick(300.0 * scale, base - 81.0 * scale, 0.5, candle),
+            [false, false]
+        );
+        assert_eq!(pick(99.0 * scale, base, 0.5, candle), [false, false]);
+        assert_eq!(pick(701.0 * scale, base, 0.5, candle), [false, false]);
+        assert_eq!(pick(300.0 * scale, base + 2.0, 0.5, candle), [false, false]);
+        assert_eq!(pick(300.0 * scale, base - 20.0, 0.0, candle), [false, true]);
+        assert_eq!(
+            pick(300.0 * scale, base - 20.0, 0.5, VolumeStyleGpu::default()),
+            [true, false]
+        );
+        let hidden = VolumeStyleGpu {
+            up: [0.0; 4],
+            down: [0.0; 4],
+            ..candle
+        };
+        assert_eq!(
+            pick(300.0 * scale, base - 20.0, 0.0, hidden),
+            [false, false]
+        );
+    }
+    let small = [0.0, 0.0, 200.0, 100.0];
+    assert_eq!(
+        super::hovered_volume_bands(small, [50.0, 81.0], 1.0, candle),
+        [true, false]
+    );
+    assert_eq!(
+        super::hovered_volume_bands(small, [50.0, 80.0], 1.0, candle),
+        [false, false]
+    );
+    assert_eq!(
+        super::hovered_volume_bands(small, [50.0, f32::NAN], 1.0, candle),
+        [false, false]
+    );
+}
+
 /// Measured from bundled GeistMono-Regular.ttf with fontTools: head.unitsPerEm = 1000,
 /// hmtx advance = 600 for digits, punctuation, Latin and Cyrillic characters used here.
 /// At the requested 13px default, the independent 0.6em advance is 7.8px and the

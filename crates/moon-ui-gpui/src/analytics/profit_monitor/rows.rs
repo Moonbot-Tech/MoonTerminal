@@ -117,6 +117,8 @@ impl LiveContext {
 /// One displayed row after the selected grouping axis has merged per-core data.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct MonitorRow {
+    /// Explicit native unit in a split-currency section; otherwise the table supplies its unit.
+    pub(super) unit: Option<moon_core::db::ProfitUnit>,
     /// Visible group label.
     pub(super) name: String,
     /// Projected profit.
@@ -341,7 +343,7 @@ pub(super) fn fold_total(rows: &[MonitorRow]) -> MonitorRow {
 ///
 /// Returns:
 ///     One all-zero row per active configured core with no row yet, in canonical order.
-fn idle_rows(
+pub(super) fn idle_rows(
     traded: &HashSet<CoreId>,
     live: &LiveContext,
     labels: &RowLabels<'_>,
@@ -479,4 +481,25 @@ pub(super) fn grouped_rows(
         rows.sort_by(|a, b| b.profit.total_cmp(&a.profit));
     }
     rows
+}
+
+/// Merge only arrival metadata across native currencies; monetary values never cross units.
+pub(super) fn currency_arrivals(
+    partitions: &[moon_core::db::analytics::ProfitMonitorCurrency],
+) -> Vec<ProfitMonitorCore> {
+    let mut cores = std::collections::BTreeMap::<u64, ProfitMonitorCore>::new();
+    for source in partitions
+        .iter()
+        .flat_map(|partition| &partition.data.cores)
+    {
+        let target = cores
+            .entry(source.core_uid)
+            .or_insert_with(|| ProfitMonitorCore {
+                core_uid: source.core_uid,
+                ..ProfitMonitorCore::default()
+            });
+        target.trades += source.trades;
+        target.last_close = target.last_close.max(source.last_close);
+    }
+    cores.into_values().collect()
 }

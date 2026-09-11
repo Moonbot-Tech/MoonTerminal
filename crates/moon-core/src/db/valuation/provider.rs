@@ -19,7 +19,9 @@ const HYPERLIQUID_META_TTL: Duration = Duration::from_secs(5 * 60);
 pub(crate) enum FetchFailure {
     /// The symbol is invalid or the requested range currently contains no retained candle.
     Missing,
-    /// Transport, rate-limit, service, or malformed-response failure that may recover.
+    /// Transport or service outage; another provider may supply the same requested minute.
+    Unavailable(String),
+    /// Malformed data or other request failure that must not advance to another route.
     Transient(String),
 }
 
@@ -150,10 +152,7 @@ impl HttpSpotRateSource {
             .call()
             .map_err(classify_http_error)?;
         let status = response.status().as_u16();
-        let value: Value = response
-            .into_body()
-            .read_json()
-            .map_err(|error| FetchFailure::Transient(format!("binance JSON: {error}")))?;
+        let value = read_response(response, "binance")?;
         classify_binance_status(status, &value)?;
         parse_binance(&value, start_minute_utc, end_minute_utc)
     }
@@ -189,10 +188,7 @@ impl HttpSpotRateSource {
             .call()
             .map_err(classify_http_error)?;
         let status = response.status().as_u16();
-        let value: Value = response
-            .into_body()
-            .read_json()
-            .map_err(|error| FetchFailure::Transient(format!("bybit JSON: {error}")))?;
+        let value = read_response(response, "bybit")?;
         if !(200..300).contains(&status) {
             return Err(FetchFailure::Transient(format!("bybit HTTP {status}")));
         }
@@ -214,15 +210,13 @@ impl HttpSpotRateSource {
             .send_json(payload)
             .map_err(classify_http_error)?;
         let status = response.status().as_u16();
+        let value = read_response(response, "hyperliquid")?;
         if !(200..300).contains(&status) {
             return Err(FetchFailure::Transient(format!(
                 "hyperliquid HTTP {status}"
             )));
         }
-        response
-            .into_body()
-            .read_json()
-            .map_err(|error| FetchFailure::Transient(format!("hyperliquid JSON: {error}")))
+        Ok(value)
     }
 
     /// Discover one Hyperliquid spot market without relying on unstable provider indexes.
@@ -436,7 +430,12 @@ pub(crate) fn resolve_latest_rate(
     if quote_ticker == "USDT" {
         return Ok(identity_rate(quote_ordinal, end_minute_utc));
     }
+    let mut unavailable = None;
+    let mut unavailable_providers = BTreeSet::new();
     for (provider, symbol, orientation) in canonical_routes(quote_ticker) {
+        if unavailable_providers.contains(provider) {
+            continue;
+        }
         match source.candles(provider, &symbol, start_minute_utc, end_minute_utc) {
             Ok(candles) => {
                 let Some(candle) = candles.into_iter().max_by_key(|candle| candle.open_ms) else {
@@ -465,6 +464,10 @@ pub(crate) fn resolve_latest_rate(
                 });
             }
             Err(FetchFailure::Missing) => continue,
+            Err(FetchFailure::Unavailable(error)) => {
+                unavailable_providers.insert(provider);
+                unavailable.get_or_insert_with(|| route_transient(provider, &symbol, error));
+            }
             Err(FetchFailure::Transient(error)) => {
                 return Err(FetchFailure::Transient(route_transient(
                     provider, &symbol, error,
@@ -472,7 +475,9 @@ pub(crate) fn resolve_latest_rate(
             }
         }
     }
-    Err(FetchFailure::Missing)
+    Err(unavailable
+        .map(FetchFailure::Unavailable)
+        .unwrap_or(FetchFailure::Missing))
 }
 
 /// Batch result that preserves successful canonical routes before a later transient failure.
@@ -525,7 +530,12 @@ pub(crate) fn resolve_rate_batch(
     };
     let end_minute = unresolved.last().copied().unwrap_or(start_minute);
     let mut ready = Vec::new();
+    let mut unavailable = None;
+    let mut unavailable_providers = BTreeSet::new();
     for (provider, symbol, orientation) in canonical_routes(quote_ticker) {
+        if unavailable_providers.contains(provider) {
+            continue;
+        }
         if unresolved.is_empty() {
             break;
         }
@@ -571,6 +581,10 @@ pub(crate) fn resolve_rate_batch(
                 }
             }
             Err(FetchFailure::Missing) => continue,
+            Err(FetchFailure::Unavailable(error)) => {
+                unavailable_providers.insert(provider);
+                unavailable.get_or_insert_with(|| route_transient(provider, &symbol, error));
+            }
             Err(FetchFailure::Transient(error)) => {
                 return RateBatch {
                     ready,
@@ -580,10 +594,15 @@ pub(crate) fn resolve_rate_batch(
             }
         }
     }
+    let transient = (!unresolved.is_empty()).then_some(unavailable).flatten();
     RateBatch {
         ready,
-        missing: unresolved.into_iter().collect(),
-        transient: None,
+        missing: if transient.is_some() {
+            Vec::new()
+        } else {
+            unresolved.into_iter().collect()
+        },
+        transient,
     }
 }
 
@@ -667,7 +686,32 @@ pub(super) fn validated_market_rate(
 /// Returns:
 ///     Missing only for client responses that prove the route is invalid; transient otherwise.
 fn classify_http_error(error: ureq::Error) -> FetchFailure {
-    FetchFailure::Transient(error.to_string())
+    match error {
+        ureq::Error::Timeout(_)
+        | ureq::Error::Io(_)
+        | ureq::Error::HostNotFound
+        | ureq::Error::ConnectionFailed => FetchFailure::Unavailable(error.to_string()),
+        _ => FetchFailure::Transient(error.to_string()),
+    }
+}
+
+/// Preserve transport failures during body reads; malformed JSON remains a data error.
+fn read_response(
+    response: ureq::http::Response<ureq::Body>,
+    provider: &str,
+) -> Result<Value, FetchFailure> {
+    let status = response.status().as_u16();
+    if matches!(status, 408 | 429 | 500..=599) {
+        return Err(FetchFailure::Unavailable(format!(
+            "{provider} HTTP {status}"
+        )));
+    }
+    let bytes = response
+        .into_body()
+        .read_to_vec()
+        .map_err(classify_http_error)?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| FetchFailure::Transient(format!("{provider} JSON: {error}")))
 }
 
 /// Classify a Binance HTTP response using its structured exchange error code.

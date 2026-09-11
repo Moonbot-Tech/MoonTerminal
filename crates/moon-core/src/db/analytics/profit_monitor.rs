@@ -7,7 +7,7 @@ use rusqlite::Connection;
 
 use super::{Query, ScopeDecision, min_closedate, scope_decision_on, scoped, unified_from_mode};
 use crate::db::read_fail::read_fail_on;
-use crate::db::{ProfitScope, ReadFail, ReadResult};
+use crate::db::{ProfitScope, QuoteCurrency, ReadFail, ReadResult};
 
 /// One core's additive metrics over the selected monitor period.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -73,6 +73,68 @@ pub struct ProfitMonitorSummary {
     pub cores: Vec<ProfitMonitorCore>,
 }
 
+/// One native currency partition; unknown denominations carry counts but no money.
+#[derive(Clone, Debug)]
+pub struct ProfitMonitorCurrency {
+    /// Trusted denomination, absent for unknown report currency values.
+    pub currency: Option<QuoteCurrency>,
+    /// Per-core metrics from this partition only.
+    pub data: ProfitMonitorSummary,
+}
+
+/// Scalar coverage and native fallback rows read from the same committed snapshot.
+pub struct ProfitMonitorSnapshot {
+    /// Existing comparability contract, including exact split totals.
+    pub scope: ProfitScope<ProfitMonitorSummary>,
+    /// Populated only when the whole scope cannot publish comparable money.
+    pub currencies: Vec<ProfitMonitorCurrency>,
+}
+
+/// Read monitor rows without withholding native partitions during conversion outages.
+pub fn profit_monitor_snapshot(q: &Query) -> ReadResult<ProfitMonitorSnapshot> {
+    let conn = super::super::open_reader()?;
+    let _rates = super::super::valuation::pin_current_rates();
+    let snapshot = super::super::read_snapshot(&conn)?;
+    snapshot_on(&snapshot, q)
+}
+
+/// Keep every currency partition under the same period, filters, and SQLite snapshot.
+fn snapshot_on(conn: &Connection, q: &Query) -> ReadResult<ProfitMonitorSnapshot> {
+    let mut q = q.clone();
+    if q.from < 0 {
+        q.from = min_closedate(conn, &q.resolved_axis(conn)?)?;
+    }
+    let scope = profit_monitor_on(conn, &q)?;
+    let mut currencies = Vec::new();
+    if let ProfitScope::Split(totals) = &scope {
+        let source = unified_from_mode(conn, &q, super::query::ProjectionMode::Native)?
+            .ok_or(ReadFail::NotReady)?;
+        for currency in totals
+            .totals
+            .iter()
+            .map(|total| Some(total.currency))
+            .chain((totals.unknown_orders > 0).then_some(None))
+        {
+            let predicate = match currency {
+                Some(currency) => format!("typeof(basecurrency)='integer' AND basecurrency={}", currency.ordinal()),
+                None => "basecurrency IS NULL OR typeof(basecurrency)<>'integer' OR basecurrency NOT BETWEEN 0 AND 20".to_string(),
+            };
+            let partition = format!("(SELECT * FROM {source} WHERE {predicate}) o");
+            let mut data = aggregate_on(conn, &q, &partition)?;
+            if currency.is_none() {
+                for core in &mut data.cores {
+                    core.profit = 0.0;
+                    core.last_profit = None;
+                    core.positive_spent = 0.0;
+                    core.positive_orders = 0;
+                }
+            }
+            currencies.push(ProfitMonitorCurrency { currency, data });
+        }
+    }
+    Ok(ProfitMonitorSnapshot { scope, currencies })
+}
+
 /// Read the compact Profit Monitor payload from one committed report snapshot.
 ///
 /// Args:
@@ -99,8 +161,6 @@ pub(super) fn profit_monitor_on(
     conn: &Connection,
     q: &Query,
 ) -> ReadResult<ProfitScope<ProfitMonitorSummary>> {
-    const CTX: &str = "analytics: profit monitor";
-
     let mut q = q.clone();
     if q.from < 0 {
         q.from = min_closedate(conn, &q.resolved_axis(conn)?)?;
@@ -115,6 +175,12 @@ pub(super) fn profit_monitor_on(
     let Some(source) = unified_from_mode(conn, &q, projection)? else {
         return Err(ReadFail::NotReady);
     };
+    Ok(scoped(decision, aggregate_on(conn, &q, &source)?))
+}
+
+/// Aggregate a prefiltered source whose money shares one explicitly established unit.
+fn aggregate_on(conn: &Connection, q: &Query, source: &str) -> ReadResult<ProfitMonitorSummary> {
+    const CTX: &str = "analytics: profit monitor";
     // Keep exactly one MIN/MAX aggregate: SQLite then guarantees that the bare `core_name` comes
     // from the row supplying this latest nonblank close date. SUM and COUNT do not weaken that
     // rule, while a second MIN/MAX would silently make the chosen name arbitrary.
@@ -159,14 +225,14 @@ pub(super) fn profit_monitor_on(
     for row in rows {
         cores.push(row.map_err(|error| read_fail_on(conn, CTX, error))?);
     }
-    let latest = latest_trade_on(conn, &source, &q)?;
+    let latest = latest_trade_on(conn, source, q)?;
     for core in &mut cores {
         if let Some((profit, close)) = latest.get(&core.core_uid) {
             core.last_profit = *profit;
             core.last_close = *close;
         }
     }
-    Ok(scoped(decision, ProfitMonitorSummary { cores }))
+    Ok(ProfitMonitorSummary { cores })
 }
 
 /// Read the newest closed trade of every core over the same projected source.

@@ -1502,3 +1502,125 @@ fn a_data_only_core_keeps_its_money_inside_a_scoped_read() {
         "a present scope that resolves empty must fail closed instead of broadening to every core"
     );
 }
+
+/// Switching grouping must change native rows without ever merging different currencies.
+#[test]
+fn currency_sections_keep_grouping_and_unique_row_identities() {
+    use super::sections::{self, MonitorEntry};
+    use moon_core::db::analytics::ProfitMonitorCurrency;
+    use moon_core::db::{ProfitUnit, QuoteCurrency};
+    let partitions = vec![
+        ProfitMonitorCurrency {
+            currency: Some(QuoteCurrency::usdt()),
+            data: summary(),
+        },
+        ProfitMonitorCurrency {
+            currency: QuoteCurrency::from_report_ordinal(8),
+            data: summary(),
+        },
+    ];
+    let live = LiveContext {
+        core_order: vec![1, 2],
+        venues: [(1, venue(0, "", "Binance")), (2, venue(0, "", "Binance"))].into(),
+        ..LiveContext::default()
+    };
+    for (mode, expected) in [(GroupMode::Core, 4), (GroupMode::Exchange, 2)] {
+        let entries = sections::currencies(
+            &partitions,
+            &live,
+            mode,
+            None,
+            RowLabels { core: "Core" },
+            "Unknown",
+            sections::CurrencyOptions::default(),
+        );
+        let rows = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                MonitorEntry::Row {
+                    row, occurrence, ..
+                } => Some((row, *occurrence)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), expected);
+        assert!(
+            rows.iter()
+                .any(|(row, _)| row.unit == Some(ProfitUnit::Quote(QuoteCurrency::usdt())))
+        );
+        assert!(rows.iter().any(|(row, _)| row.unit
+            == Some(ProfitUnit::Quote(
+                QuoteCurrency::from_report_ordinal(8).expect("USDC")
+            ))));
+        let mut identities = std::collections::HashSet::new();
+        for (index, (row, occurrence)) in rows.iter().enumerate() {
+            assert!(identities.insert(format!(
+                "{:?}",
+                super::line::row_id(*occurrence, index, row)
+            )));
+        }
+        let totals = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                MonitorEntry::Subtotal { row, .. } => Some(row.profit),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(totals, vec![10.0, 10.0]);
+    }
+}
+
+/// A quiet core is represented once, without inventing its currency or counting a trade.
+#[test]
+fn split_currencies_honor_idle_core_preference_once() {
+    use super::sections::{self, CurrencyOptions, MonitorEntry};
+    use moon_core::db::QuoteCurrency;
+    use moon_core::db::analytics::ProfitMonitorCurrency;
+    let partitions = vec![
+        ProfitMonitorCurrency {
+            currency: Some(QuoteCurrency::usdt()),
+            data: summary(),
+        },
+        ProfitMonitorCurrency {
+            currency: QuoteCurrency::from_report_ordinal(8),
+            data: summary(),
+        },
+    ];
+    let live = LiveContext {
+        core_order: vec![1, 2, 3],
+        active: [1, 2, 3].into(),
+        ..LiveContext::default()
+    };
+    for include_idle in [false, true] {
+        let entries = sections::currencies(
+            &partitions,
+            &live,
+            GroupMode::Core,
+            None,
+            RowLabels { core: "Core" },
+            "Unknown",
+            CurrencyOptions {
+                include_idle,
+                idle_label: "No trades",
+                ..CurrencyOptions::default()
+            },
+        );
+        let quiet = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                MonitorEntry::Row { row, .. } if row.primary_core == 3 => Some(row),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(quiet.len(), usize::from(include_idle));
+        if let Some(row) = quiet.first() {
+            assert_eq!(row.unit, None);
+            assert_eq!(row.trades, 0);
+            assert_eq!(row.last_profit, None);
+            assert_eq!(row.filter_cores.as_ref(), &[3]);
+        }
+    }
+    let arrivals = super::rows::currency_arrivals(&partitions);
+    assert_eq!(arrivals.iter().map(|row| row.trades).sum::<i64>(), 8);
+    assert!(arrivals.iter().all(|row| row.profit == 0.0));
+}

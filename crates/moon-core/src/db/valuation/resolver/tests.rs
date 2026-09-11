@@ -276,3 +276,43 @@ fn usdt_identity_never_touches_the_provider() {
     assert_eq!(rate.rate_usdt, 1.0);
     assert_eq!(source.call_count(), 0);
 }
+
+/// Historical fallback must preserve exact-close and successor-open semantics during an outage.
+#[test]
+fn historical_paths_survive_a_primary_outage_without_inventing_absence() {
+    struct OutageSource(FixtureSource);
+    impl SpotRateSource for OutageSource {
+        /// Keep Binance unavailable while other providers answer from deterministic fixtures.
+        fn candles(
+            &self,
+            provider: &'static str,
+            symbol: &str,
+            start: i64,
+            end: i64,
+        ) -> Result<Vec<SpotCandle>, FetchFailure> {
+            if provider == "binance_spot" {
+                return Err(FetchFailure::Unavailable("offline".into()));
+            }
+            self.0.candles(provider, symbol, start, end)
+        }
+    }
+    let minute = 1_700_000_040;
+    let quote = QuoteCurrency::from_report_ordinal(8).expect("USDC");
+    let source = OutageSource(FixtureSource::new(&[(
+        "bybit_spot",
+        "USDCUSDT",
+        minute,
+        1.002,
+        1.001,
+    )]));
+    let rate = resolve_historical_rate(&source, quote, minute, minute, minute + 600, false)
+        .expect("fallback");
+    assert_eq!(rate.provider, "bybit_spot");
+    assert_eq!(rate.rate_usdt, 1.001);
+    assert_eq!(rate.price_basis, RatePriceBasis::ExactClose);
+    let absent = OutageSource(FixtureSource::new(&[]));
+    assert!(matches!(
+        resolve_historical_rate(&absent, quote, minute, minute, minute + 600, false),
+        Err(FetchFailure::Unavailable(_))
+    ));
+}

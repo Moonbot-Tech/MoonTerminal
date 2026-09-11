@@ -32,6 +32,124 @@ use super::MonitorSort;
 use super::rows::{LiveContext, MonitorRow, fold_total};
 use super::sort_rows;
 
+/// Preferences and captions needed only by the native fallback layout.
+#[derive(Default)]
+pub(super) struct CurrencyOptions<'a> {
+    /// Existing saved-group captions, present when group sections are enabled.
+    pub(super) group_labels: Option<&'a SectionLabels<'a>>,
+    /// Whether active cores without trades remain visible once outside currency partitions.
+    pub(super) include_idle: bool,
+    /// Caption for the unitless idle section.
+    pub(super) idle_label: &'a str,
+}
+
+/// Keep native denominations in separate sections while reusing core/exchange grouping.
+pub(super) fn currencies(
+    partitions: &[moon_core::db::analytics::ProfitMonitorCurrency],
+    live: &LiveContext,
+    mode: super::rows::GroupMode,
+    sort: Option<MonitorSort>,
+    labels: super::rows::RowLabels<'_>,
+    unknown: &str,
+    options: CurrencyOptions<'_>,
+) -> Vec<MonitorEntry> {
+    let mut entries = Vec::new();
+    let mut occurrences = HashMap::<u64, usize>::new();
+    for partition in partitions {
+        let section = entries.len();
+        let mut rows = super::rows::grouped_rows(
+            &partition.data,
+            live,
+            mode,
+            false,
+            super::rows::RowLabels { core: labels.core },
+        );
+        sort_rows(&mut rows, sort);
+        let cores = rows
+            .iter()
+            .flat_map(|row| row.filter_cores.iter().copied())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let name = partition
+            .currency
+            .map_or(unknown, |currency| currency.ticker())
+            .to_string();
+        entries.push(MonitorEntry::Header(SectionHead {
+            name: name.clone(),
+            cores: cores.into(),
+            section,
+        }));
+        let unit = partition.currency.map(moon_core::db::ProfitUnit::Quote);
+        let mut total = fold_total(&rows);
+        total.unit = unit;
+        let inner = match options
+            .group_labels
+            .filter(|_| mode == super::rows::GroupMode::Core)
+        {
+            Some(labels) => sectioned(
+                rows,
+                live,
+                sort,
+                SectionLabels {
+                    ungrouped: labels.ungrouped,
+                    subtotal: labels.subtotal,
+                },
+            ),
+            None => flat(rows, sort),
+        };
+        let offset = entries.len();
+        for mut entry in inner {
+            match &mut entry {
+                MonitorEntry::Row {
+                    row, occurrence, ..
+                } => {
+                    row.unit = unit;
+                    let seen = occurrences.entry(row.primary_core).or_default();
+                    *occurrence = *seen;
+                    *seen += 1;
+                }
+                MonitorEntry::Header(head) => head.section += offset,
+                MonitorEntry::Subtotal { row, section, .. } => {
+                    row.unit = unit;
+                    *section += offset;
+                }
+            }
+            entries.push(entry);
+        }
+        entries.push(MonitorEntry::Subtotal {
+            label: name,
+            row: total,
+            section,
+        });
+    }
+    if options.include_idle && mode == super::rows::GroupMode::Core {
+        let traded = partitions
+            .iter()
+            .flat_map(|partition| partition.data.cores.iter().map(|core| core.core_uid))
+            .collect();
+        let mut idle = super::rows::idle_rows(&traded, live, &labels);
+        if !idle.is_empty() {
+            sort_rows(&mut idle, sort);
+            let cores = idle.iter().map(|row| row.primary_core).collect::<Vec<_>>();
+            entries.push(MonitorEntry::Header(SectionHead {
+                name: options.idle_label.to_string(),
+                cores: cores.into(),
+                section: entries.len(),
+            }));
+            for (index, mut row) in idle.into_iter().enumerate() {
+                row.filter_cores = Rc::from([row.primary_core].as_slice());
+                entries.push(MonitorEntry::Row {
+                    row,
+                    stripe: index % 2 != 0,
+                    occurrence: 0,
+                });
+            }
+        }
+    }
+    entries
+}
+
 #[cfg(test)]
 mod tests;
 

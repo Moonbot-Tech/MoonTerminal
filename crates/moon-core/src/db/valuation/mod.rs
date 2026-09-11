@@ -1722,7 +1722,8 @@ fn decode_orientation(value: i64, column: usize) -> rusqlite::Result<RateOrienta
 ///
 /// Returns:
 ///     No minute while retry pacing is active; otherwise the requested minute for a new search or
-///     the minute immediately after the last proven-empty horizon.
+///     the minute immediately after the last proven-empty horizon. An outage-only retry keeps
+///     the original minute because no candle absence was established.
 pub(crate) fn rate_search_start(
     conn: &Connection,
     quote_ordinal: i64,
@@ -1740,11 +1741,7 @@ pub(crate) fn rate_search_start(
     Ok(match state {
         None => Some(minute_utc),
         Some((_, retry_at)) if retry_at > now_ms => None,
-        Some((searched_through, _)) => Some(
-            searched_through
-                .saturating_add(60)
-                .max(minute_utc.saturating_add(60)),
-        ),
+        Some((searched_through, _)) => Some(searched_through.saturating_add(60).max(minute_utc)),
     })
 }
 

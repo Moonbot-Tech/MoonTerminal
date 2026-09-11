@@ -186,9 +186,10 @@ fn profit_monitor_table_keeps_large_core_sets_scrollable_and_single_line() {
             && table.contains("let show_trades = layout.trades;")
             && table.matches("show_trades,").count() == 2
             && split.contains(".when(show_trades")
-            && monitor_body.contains("ProfitLoadState::Split(totals) => split_body(")
-            && monitor_body
-                .contains("MonitorLayout::for_width(width, design::ui_value(cx, 1.0)).trades",),
+            && monitor_body.contains("ProfitLoadState::Split(totals) => {")
+            && monitor_body.contains("sections::currencies(")
+            && monitor_body.contains("Some(totals),")
+            && table.contains("split_body(totals, layout.trades, scope_marker, palette, cx)"),
         "the Trades heading, body rows, total footer, and split-currency count must share one responsive decision"
     );
 }

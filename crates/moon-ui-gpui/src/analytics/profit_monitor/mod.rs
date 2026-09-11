@@ -28,7 +28,7 @@ use chrono_tz::Tz;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::db::analytics::{
-    PreviousPeriodBasis, ProfitMonitorCore, ProfitMonitorSummary, Query,
+    PreviousPeriodBasis, ProfitMonitorCore, ProfitMonitorCurrency, ProfitMonitorSummary, Query,
 };
 use moon_core::db::valuation::ValuationMode;
 use moon_core::db::{FailKind, ProfitMetric, ProfitUnit, ReadFail, SideFilter};
@@ -57,7 +57,7 @@ use model::{
 use rows::{GroupMode, LiveContext, MonitorRow, RowLabels, fold_total, grouped_rows};
 use sections::{MonitorEntry, SectionLabels};
 use settings::MonitorPrefs;
-use table::{centered_alert, centered_message, split_body};
+use table::{centered_alert, centered_message};
 
 const HEADER_HEIGHT: f32 = 32.0;
 const CONTEXT_REFRESH_MS: u128 = 5_000;
@@ -275,6 +275,8 @@ pub(crate) struct ProfitMonitorView {
     valuation: ValuationMode,
     live: LiveContext,
     data: ProfitLoadState<ProfitMonitorSummary>,
+    /// Native partitions published atomically with a split-currency snapshot.
+    currencies: Vec<ProfitMonitorCurrency>,
     /// Cores the last SUCCESSFUL read actually named, kept apart from [`Self::data`].
     ///
     /// [`super::model::scoped_query_core_ids`] needs the previous read's core list to keep a
@@ -482,6 +484,7 @@ impl ProfitMonitorView {
             valuation,
             live,
             data: ProfitLoadState::default(),
+            currencies: Vec::new(),
             seen_data_cores: Vec::new(),
             refresh_error: None,
             // Left at zero: the first backend notification fills it, and `sync_run_state` already
@@ -745,7 +748,9 @@ impl ProfitMonitorView {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { moon_core::db::analytics::profit_monitor(&query) })
+                .background_spawn(async move {
+                    moon_core::db::analytics::profit_monitor_snapshot(&query)
+                })
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -753,7 +758,10 @@ impl ProfitMonitorView {
                     if this.seq == request {
                         let error = result.as_ref().err().cloned();
                         if !after_report || error.is_none() {
-                            this.data.apply(result);
+                            this.data.apply(result.map(|snapshot| {
+                                this.currencies = snapshot.currencies;
+                                snapshot.scope
+                            }));
                             // Widen the carry-forward universe with what this read named, and only
                             // from a successful one: a failed or split read names no cores, and
                             // adopting its emptiness would discard the list a later scoped query
@@ -765,6 +773,15 @@ impl ProfitMonitorView {
                                 for core in &data.cores {
                                     if !this.seen_data_cores.contains(&core.core_uid) {
                                         this.seen_data_cores.push(core.core_uid);
+                                    }
+                                }
+                            }
+                            if matches!(this.data, ProfitLoadState::Split(_)) {
+                                for partition in &this.currencies {
+                                    for core in &partition.data.cores {
+                                        if !this.seen_data_cores.contains(&core.core_uid) {
+                                            this.seen_data_cores.push(core.core_uid);
+                                        }
                                     }
                                 }
                             }
@@ -868,12 +885,17 @@ impl ProfitMonitorView {
     /// Args:
     ///     cx: View context used to arm the repaint chain.
     fn observe_arrivals(&mut self, cx: &mut Context<Self>) {
-        let ProfitLoadState::Ready { data, .. } = &self.data else {
-            // Split currencies, a failed read, or a report that is not ready yet all leave the
-            // memory describing a snapshot nobody can see any more. Re-baselining here is what
-            // stops an outage from ending in a table-wide flash.
-            self.rebaseline_arrivals();
-            return;
+        let split_cores;
+        let cores = match &self.data {
+            ProfitLoadState::Ready { data, .. } => &data.cores,
+            ProfitLoadState::Split(_) => {
+                split_cores = rows::currency_arrivals(&self.currencies);
+                &split_cores
+            }
+            _ => {
+                self.rebaseline_arrivals();
+                return;
+            }
         };
         // An EMPTY previous snapshot is not a baseline to diff against. A table going from nothing
         // to forty rows is report replication catching up, not forty cores trading in one instant,
@@ -881,7 +903,7 @@ impl ProfitMonitorView {
         // table is empty, the row APPEARING is already the signal — the highlight exists to point
         // at a change inside a table that is already populated.
         let baseline = self.seen_trades.as_ref().filter(|seen| !seen.is_empty());
-        let (seen, arrived) = arrivals(baseline, &data.cores);
+        let (seen, arrived) = arrivals(baseline, cores);
         self.seen_trades = Some(seen);
         if !self.prefs.flash || arrived.is_empty() {
             return;
@@ -1134,13 +1156,57 @@ impl ProfitMonitorView {
                 error.to_string(),
                 cx,
             ),
-            ProfitLoadState::Split(totals) => split_body(
-                totals,
-                MonitorLayout::for_width(width, design::ui_value(cx, 1.0)).trades,
-                scope_marker,
-                palette,
-                cx,
-            ),
+            ProfitLoadState::Split(totals) => {
+                let core_label = t!("profit_monitor.core_fallback").to_string();
+                let unknown = t!("profit_monitor.currency_unknown").to_string();
+                let ungrouped = t!("profit_monitor.group.ungrouped").to_string();
+                let subtotal =
+                    |name: &str| t!("profit_monitor.group.subtotal", name = name).to_string();
+                let group_labels = SectionLabels {
+                    ungrouped: &ungrouped,
+                    subtotal: &subtotal,
+                };
+                let idle_label = t!("profit_monitor.idle_section").to_string();
+                let entries = sections::currencies(
+                    &self.currencies,
+                    &self.live,
+                    self.group,
+                    self.sort,
+                    RowLabels { core: &core_label },
+                    &unknown,
+                    sections::CurrencyOptions {
+                        group_labels: self.prefs.group_sections.then_some(&group_labels),
+                        include_idle: self.prefs.idle_cores,
+                        idle_label: &idle_label,
+                    },
+                );
+                let scale = design::ui_value(cx, 1.0);
+                let layout = MonitorLayout::for_width(width, scale);
+                let total = MonitorRow {
+                    trades: totals.orders,
+                    ..MonitorRow::default()
+                };
+                let column = self.profit_column(&entries, &total, None, layout, width, scale, cx);
+                table::table(
+                    entries,
+                    total,
+                    None,
+                    Some(totals),
+                    column,
+                    layout,
+                    self.sort,
+                    self.prefs,
+                    &self.flash,
+                    self.backend.read(cx).core_filter(),
+                    &self.scroll,
+                    scope_marker,
+                    &self.live.action_core_ids,
+                    palette,
+                    view,
+                    self.backend.clone(),
+                    cx,
+                )
+            }
             ProfitLoadState::Ready { unit, data } => {
                 let core_label = t!("profit_monitor.core_fallback").to_string();
                 let rows = grouped_rows(
@@ -1181,6 +1247,7 @@ impl ProfitMonitorView {
                     entries,
                     total,
                     *unit,
+                    None,
                     column,
                     layout,
                     self.sort,
