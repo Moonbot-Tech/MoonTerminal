@@ -99,6 +99,10 @@ pub(crate) struct MainChartStack {
     /// The crowd rule's two threshold fields, built the first time that popup is opened. See
     /// [`empty::DetectInputs`]: a text field needs a `Window`, and this stack is built without one.
     empty_detect: Option<empty::DetectInputs>,
+    /// The five dropdowns that place the blocks of the empty screen, built with the same window as
+    /// the rule's fields beside them and kept for the same reason: a `MoonSelectState` cannot be
+    /// rebuilt per frame without throwing away an open menu.
+    empty_places: Option<empty::arrange::PlaceSelects>,
     /// Whether the one-shot inactivity auto-close timer is armed.
     /// It ticks at about 1 Hz while configured and charts exist, then rearms itself.
     idle_timer_armed: bool,
@@ -238,6 +242,7 @@ impl MainChartStack {
             crowd: None,
             empty_settings_open: false,
             empty_detect: None,
+            empty_places: None,
             idle_timer_armed: false,
             layout_columns: None,
             layout_columns_exact: None,
@@ -1594,6 +1599,22 @@ mod empty;
 
 pub(crate) use empty::{crowd_cards, crowd_rule_for_run, empty_logo};
 
+/// Whether the empty screen has to fall back to its one-column form at this width.
+///
+/// Split out because the render and its size probe must answer it the same way: the probe compares
+/// the answer it would give against the one on screen and repaints only when they differ, so two
+/// copies of this comparison would either repaint on every resize frame or on none of them.
+///
+/// A width of zero is the frame BEFORE the first measurement, and is deliberately not narrow: the
+/// grid is what almost every panel gets, and opening on the column form for one frame would flash.
+///
+/// Args:
+///     width: The panel's measured width.
+///     narrow_below: The width the three-column arrangement stops fitting at.
+fn is_narrow(width: Pixels, narrow_below: Pixels) -> bool {
+    width > px(0.0) && width < narrow_below
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -1610,17 +1631,25 @@ impl Render for MainChartStack {
         let crowd = self.sync_crowd_stats(cx);
         if self.charts.is_empty() {
             let screen = self.empty_arrangement(cx);
-            let empty = empty::empty_screen(self, screen, crowd, palette, cx);
+            // Grid collapse and board compaction are separate thresholds. Repaint when either
+            // changes, including a full-board/record transition within the one-column layout.
+            let narrow_below = crate::crowd::place::narrow_below(cx);
+            let board_thresholds = crate::crowd::place::board_thresholds(cx);
+            let width_mode = move |width| {
+                usize::from(is_narrow(width, narrow_below))
+                    | (crate::crowd::place::board_modes(width, board_thresholds) << 1)
+            };
+            let width = self.measured.get().width;
+            let mode_now = width_mode(width);
+            let empty = empty::empty_screen(self, screen, crowd, width, window, palette, cx);
             // Measured here too, for the reason the fullscreen branch keeps its probe: a resize
             // taken while the stack is empty must not leave a size the first divided frame uses.
-            // An empty stack divides nothing, so the probe only RECORDS here: the number it would
-            // derive is 1 either way, and the charts that arrive later notify on their own.
             return super::stack::with_size_probe(
                 empty,
                 self.measured.clone(),
                 cx.entity(),
-                1,
-                |_| 1,
+                mode_now,
+                move |size| width_mode(size.width),
             );
         }
 

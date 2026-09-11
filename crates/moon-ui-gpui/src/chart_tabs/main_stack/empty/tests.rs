@@ -1,7 +1,42 @@
 use super::detect::{crowd_cards, crowd_rule, field_text};
 use super::{EmptyScreen, SWITCHES, empty_logo};
-use moon_core::config::layout::WindowLayout;
+use moon_core::config::layout::{EmptyBlock, EmptyPlaces, EmptySlot, WindowLayout};
 use moon_core::crowd::detect::{DEFAULT_PROFIT, DEFAULT_TRADES};
+
+/// Even a viewport smaller than the usual popup must not inherit a hard minimum height.
+#[test]
+fn settings_scroll_budget_never_exceeds_the_window() {
+    assert_eq!(
+        super::popup_body_height(gpui::px(300.0), gpui::px(64.0)),
+        gpui::px(236.0)
+    );
+    assert_eq!(
+        super::popup_body_height(gpui::px(40.0), gpui::px(64.0)),
+        gpui::px(0.0)
+    );
+}
+
+/// Regress the wiring that previously left a second group's retained selects stale and treated
+/// a nested menu click as an outside click. These controls cannot be instantiated without GPUI.
+#[test]
+fn placement_popup_keeps_nested_menus_and_shared_values_live() {
+    let source = include_str!("../empty.rs");
+    let settings = source
+        .split("pub(super) fn empty_settings(")
+        .nth(1)
+        .expect("settings renderer");
+    assert!(settings.contains(".overlay_closable(false)"));
+    assert!(
+        settings.contains("selects.show(EmptyPlaces::restore(&self.backend.read(cx).layout), cx)")
+    );
+    let seed = include_str!("detect.rs");
+    let seed = seed
+        .split("pub(super) fn seed_empty_detect(")
+        .nth(1)
+        .expect("popup seeding");
+    assert!(seed.contains("if let Some(selects) = &self.empty_places"));
+    assert!(seed.contains("selects.show(places, cx)"));
+}
 
 #[test]
 fn a_profile_that_has_never_chosen_gets_the_screen_the_terminal_always_had() {
@@ -243,4 +278,66 @@ fn the_logo_switch_reaches_every_empty_surface_and_the_cover_stays() {
             "{name} builds its own cover, so the switch and the plate can drift apart there"
         );
     }
+}
+
+/// Switching a block OFF must not forget where it goes. The two settings answer different
+/// questions, and somebody who hid the minute and switched it back on must find it where they left
+/// it rather than back in the corner it shipped in.
+#[test]
+fn hiding_a_block_does_not_forget_where_it_goes() {
+    let mut layout = WindowLayout::default();
+    EmptyBlock::Minute.store(&mut layout, Some(EmptySlot::BottomStart));
+    layout.main_empty_minute = Some(true);
+
+    assert!(EmptyScreen::restore(&layout).minute);
+    assert_eq!(
+        EmptyPlaces::restore(&layout).slot(EmptyBlock::Minute),
+        EmptySlot::BottomStart
+    );
+
+    layout.main_empty_minute = Some(false);
+    assert!(!EmptyScreen::restore(&layout).minute);
+    assert_eq!(
+        EmptyPlaces::restore(&layout).slot(EmptyBlock::Minute),
+        EmptySlot::BottomStart,
+        "switching a block off moved it"
+    );
+}
+
+/// Placing a block must not READ anything. The three tables each carry a connection to a public
+/// service, and arranging a screen is not consent to open one — a profile that has only ever chosen
+/// where things go must still be offline.
+#[test]
+fn arranging_the_screen_does_not_switch_the_service_on() {
+    let mut layout = WindowLayout::default();
+    for block in EmptyBlock::ALL {
+        block.store(&mut layout, Some(EmptySlot::TopCenter));
+    }
+
+    let screen = EmptyScreen::restore(&layout);
+    assert!(
+        !screen.parts().any(),
+        "a placement opened a connection nobody asked for"
+    );
+    assert!(!screen.detect(), "a placement started watching the market");
+    assert!(screen.logo, "a placement changed what is drawn");
+    assert!(screen.hint, "a placement changed what is drawn");
+}
+
+/// A valid 1.5x UI scale must keep controls inside the 520px minimum group window.
+#[test]
+fn settings_outer_width_fits_a_narrow_scaled_group_window() {
+    use gpui::px;
+    assert_eq!(
+        super::popup_outer_width(px(561.0), px(520.0), px(15.0)),
+        px(490.0)
+    );
+    assert_eq!(
+        super::popup_outer_width(px(374.0), px(1200.0), px(10.0)),
+        px(374.0)
+    );
+    assert_eq!(
+        super::popup_outer_width(px(561.0), px(520.0), px(23.0)),
+        px(474.0)
+    );
 }

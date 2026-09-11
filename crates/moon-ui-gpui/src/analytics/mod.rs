@@ -531,6 +531,8 @@ pub struct AnalyticsView {
     /// Hovered bar of the "by strategy type" chart (single-day periods only) — popup of the
     /// cores behind that type.
     pub(super) hover_kind: Option<usize>,
+    /// Delayed dismissal shared by chart buckets and their scrollable popup.
+    summary_popup_hover: summary::PopupHover,
     /// Whether the Summary's per-core card shows every ranked core instead of the compact
     /// leaders/outsiders overview. A display lens, persisted as `layout.analytics_cores_show_all`
     /// so the choice survives a restart.
@@ -1021,6 +1023,7 @@ impl AnalyticsView {
             hover_daily_bucket: None,
             hover_cum_bucket: None,
             hover_kind: None,
+            summary_popup_hover: summary::PopupHover::default(),
             show_all_core_ranks: saved_cores_show_all,
             sel_strategy: None,
             sel_extra: Vec::new(),
@@ -1707,6 +1710,8 @@ impl AnalyticsView {
         // only the range can tell whether retained bucket hovers still name the same data.
         let active_range = self.active_period().range(self.bound_zone());
         let range_moved = active_range != self.data_range;
+        self.summary_popup_hover
+            .reset_for_reload(!after_report || range_moved);
         if !after_report || range_moved {
             // Bucket indices are time-ordered and survive a same-scope catch-up, but a moved
             // range shifts their meaning without changing the preset enum.

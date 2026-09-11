@@ -22,7 +22,7 @@ use gpui::{
     AnyElement, App, AppContext, Context, Entity, IntoElement, ParentElement, SharedString, Styled,
     Window, div, rgb,
 };
-use moon_core::config::layout::WindowLayout;
+use moon_core::config::layout::{EmptyPlaces, WindowLayout};
 use moon_core::crowd::CrowdRule;
 use moon_core::crowd::detect::{DEFAULT_PROFIT, DEFAULT_TRADES, SEATS};
 use moon_ui::{
@@ -258,12 +258,23 @@ impl MainChartStack {
         cx.notify();
     }
 
-    /// Build the rule's fields on first use, and fill them with the settings as they stand.
+    /// Build the popup's window-bound controls on first use, and fill them with the settings as
+    /// they stand.
+    ///
+    /// The rule's fields and the blocks' position dropdowns are built together because they need
+    /// the same thing and only the popup has it: a `MoonInputState` and a `MoonSelectState` cannot
+    /// exist without a `Window`, and this stack is constructed without one.
     ///
     /// Args:
-    ///     window: The window the fields belong to; a `MoonInputState` cannot exist without one.
+    ///     window: The window the controls belong to.
     ///     cx: Stack context used to create, subscribe and seed.
     pub(super) fn seed_empty_detect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let places = EmptyPlaces::restore(&self.backend.read(cx).layout);
+        if let Some(selects) = &self.empty_places {
+            selects.show(places, cx);
+        } else {
+            self.empty_places = Some(super::arrange::PlaceSelects::seed(places, window, cx));
+        }
         let inputs = match &self.empty_detect {
             Some(inputs) => inputs.clone(),
             None => {

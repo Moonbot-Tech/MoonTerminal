@@ -34,17 +34,16 @@
 //! delivers. The reading itself belongs to `crowd::service`, one per terminal, which closes
 //! whatever no screen and no rule is asking for.
 
-use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    SharedString, Styled, div, rgb,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, px, rgb,
 };
-use moon_core::config::layout::WindowLayout;
+use moon_core::config::layout::{EmptyBlock, EmptyPlaces, EmptySlot, WindowLayout};
 use moon_ui::{MoonCheckbox, MoonCheckboxSize, MoonPalette, MoonPopover, MoonPopoverPlacement};
 use rust_i18n::t;
 
 use super::MainChartStack;
-use crate::crowd::{CrowdParts, CrowdStatsView};
+use crate::crowd::{CrowdParts, CrowdStatsView, place};
 use crate::design;
 use crate::panels::{popup_close_button, popup_gear_trigger, popup_title};
 
@@ -55,13 +54,11 @@ use crate::panels::{popup_close_button, popup_gear_trigger, popup_title};
 /// below it — see `crowd::table`'s own top inset — so the two share the corner without overlapping.
 const GEAR_INSET: f32 = 10.0;
 
-/// Popup CONTENT width in design units, before the group frame's own inset. Sized for the longest
-/// localized label rather than for the control.
-const CONTENT_WIDTH: f32 = 300.0;
+/// Preferred popup width before the group inset. The complete outer box is capped to the
+/// viewport so enlarged UI chrome cannot hide the placement controls.
+const CONTENT_WIDTH: f32 = 360.0;
 /// Gap between the popup's title row and the switches under it, in design units.
 const POPUP_GAP: f32 = 8.0;
-/// Gap between the logo and the line under it, in design units.
-const LOGO_GAP: f32 = 10.0;
 /// Widest the hint under the logo is allowed to run before it wraps, in design units.
 const HINT_WIDTH: f32 = 420.0;
 /// What the empty screen shows.
@@ -203,11 +200,13 @@ const SWITCHES: [Switch; 6] = [
     },
 ];
 
+pub(super) mod arrange;
 pub(super) mod detect;
 
 #[cfg(test)]
 mod tests;
 
+use arrange::PlaceSelects;
 use detect::DETECT_DEFAULT;
 pub(crate) use detect::{CrowdCards, DetectInputs, crowd_cards, crowd_rule_for_run};
 
@@ -303,10 +302,14 @@ impl MainChartStack {
             None if drawn => {
                 let backend = self.backend.clone();
                 let group = self.group.clone();
-                self.crowd = Some((
-                    parts,
-                    cx.new(|cx| CrowdStatsView::new(parts, backend, group, cx)),
-                ));
+                let view = cx.new(|cx| CrowdStatsView::new(parts, backend, group, cx));
+                // The view is COMPOSED by the empty screen rather than drawn as a child of it: its
+                // boards have to stack with the brand in a shared cell, which they could not do
+                // from a layer of their own. Nothing therefore re-renders when the view notifies,
+                // so this stack listens and repaints itself — which is what carries the view's
+                // twelve-a-second frame chain, and its wake from the service, on to the screen.
+                cx.observe(&view, |_, _view, cx| cx.notify()).detach();
+                self.crowd = Some((parts, view));
             }
             _ => {}
         }
@@ -344,6 +347,50 @@ impl MainChartStack {
         cx.refresh_windows();
     }
 
+    /// Move one block of the empty screen to one of the nine anchors.
+    ///
+    /// The block's own key and nothing else, for the reason [`Switch::store`] gives: a write that
+    /// stamped the other four would turn "never chosen" into an explicit anchor for blocks nobody
+    /// touched, and a later change of default could then never reach them.
+    ///
+    /// Args:
+    ///     block: Which block was placed.
+    ///     slot: Where it now goes.
+    ///     cx: Stack context used to persist and repaint.
+    pub(super) fn set_place(&mut self, block: EmptyBlock, slot: EmptySlot, cx: &mut Context<Self>) {
+        if EmptyPlaces::restore(&self.backend.read(cx).layout).slot(block) == slot {
+            return;
+        }
+        self.backend.update(cx, |backend, _| {
+            block.store(&mut backend.layout, Some(slot));
+            backend.layout_dirty = true;
+        });
+        cx.notify();
+        // Every window, for the reason `set_switch` refreshes them all: one `layout` stands behind
+        // every group window's empty screen, and none of them observes this stack.
+        cx.refresh_windows();
+    }
+
+    /// Forget every anchor, so the screen comes back to the arrangement it shipped with.
+    ///
+    /// The dropdowns are put back by hand afterwards: they hold their own selection, and a reset
+    /// that moved the blocks without moving the controls would leave five dropdowns naming places
+    /// nothing is drawn in.
+    ///
+    /// Args:
+    ///     cx: Stack context used to persist and repaint.
+    pub(super) fn reset_places(&mut self, cx: &mut Context<Self>) {
+        self.backend.update(cx, |backend, _| {
+            EmptyPlaces::reset(&mut backend.layout);
+            backend.layout_dirty = true;
+        });
+        if let Some(selects) = self.empty_places.clone() {
+            selects.show(EmptyPlaces::default(), cx);
+        }
+        cx.notify();
+        cx.refresh_windows();
+    }
+
     /// Close the popup, guarding the double report a popover makes when its own trigger is clicked.
     ///
     /// The ✕ is a way of FINISHING an edit, so it commits like every other way out. A controlled
@@ -362,6 +409,7 @@ impl MainChartStack {
     /// The ⚙ in the corner of the empty screen, with its popup.
     ///
     /// Args:
+    ///     window: Host viewport used to bound the scrolling popup.
     ///     palette: Active MoonUI palette.
     ///     cx: Stack context used to read the switches and wire the toggles.
     ///
@@ -369,9 +417,13 @@ impl MainChartStack {
     ///     The corner control, absolutely placed.
     pub(super) fn empty_settings(
         &self,
+        window: &Window,
         palette: MoonPalette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if let Some(selects) = &self.empty_places {
+            selects.show(EmptyPlaces::restore(&self.backend.read(cx).layout), cx);
+        }
         let view = cx.entity();
         let inset = design::ui_px(cx, GEAR_INSET);
         let open = self.empty_settings_open;
@@ -382,11 +434,15 @@ impl MainChartStack {
         let mut popover = MoonPopover::new(id("settings-popover"))
             // Down and to the left, out of the corner it is anchored in.
             .placement(MoonPopoverPlacement::BottomEnd)
-            .content_width(
-                f32::from(design::ui_px(cx, CONTENT_WIDTH))
-                    + crate::panels::popup_group_inset_px(cx),
-            )
+            // Limit the OUTER box; MoonPopover owns its padding and border inside this width.
+            .width(f32::from(popup_outer_width(
+                design::ui_px(cx, CONTENT_WIDTH) + px(crate::panels::popup_group_inset_px(cx)),
+                window.viewport_size().width,
+                inset + window.client_inset().unwrap_or(px(0.0)),
+            )))
             .close_on_content_click(false)
+            // Nested select menus may extend beyond this popover; the close button remains live.
+            .overlay_closable(false)
             .open(open)
             .on_open_change({
                 let view = view.clone();
@@ -411,15 +467,25 @@ impl MainChartStack {
                 open,
             ));
         if open {
-            popover = popover.content(settings_content(
-                self.empty_arrangement(cx),
-                crowd_cards(&self.backend.read(cx).layout),
-                self.empty_detect.as_ref(),
-                view,
-                &id,
-                palette,
-                cx,
-            ));
+            popover = popover.content(
+                div()
+                    .id(id("settings-scroll"))
+                    .max_h(popup_body_height(
+                        window.viewport_size().height,
+                        design::ui_px(cx, 64.0),
+                    ))
+                    .overflow_y_scroll()
+                    .child(settings_content(
+                        self.empty_arrangement(cx),
+                        crowd_cards(&self.backend.read(cx).layout),
+                        self.empty_detect.as_ref(),
+                        self.empty_places.as_ref(),
+                        view,
+                        &id,
+                        palette,
+                        cx,
+                    )),
+            );
         }
         div()
             .absolute()
@@ -430,12 +496,28 @@ impl MainChartStack {
     }
 }
 
+/// Reserve space for the trigger, outer popup chrome and viewport margins without a minimum
+/// that could make the popup taller than the window.
+fn popup_body_height(viewport: gpui::Pixels, chrome: gpui::Pixels) -> gpui::Pixels {
+    (viewport - chrome).max(px(0.0))
+}
+
+/// Fit the complete popup, including internally owned chrome, between both window insets.
+fn popup_outer_width(
+    preferred: gpui::Pixels,
+    viewport: gpui::Pixels,
+    inset: gpui::Pixels,
+) -> gpui::Pixels {
+    preferred.min((viewport - inset * 2.0).max(px(0.0)))
+}
+
 /// The popup body: a title with its ✕, and one switch per layer.
 ///
 /// Args:
 ///     screen: What the checkboxes show.
 ///     cards: How the rule's cards are set to behave.
 ///     inputs: The rule's fields, once the popup has been opened at least once.
+///     places: The blocks' position dropdowns, built with the same window as those fields.
 ///     view: Stack entity receiving the edits.
 ///     id: Group-scoped element identities.
 ///     palette: Active MoonUI palette.
@@ -444,6 +526,7 @@ fn settings_content(
     screen: EmptyScreen,
     cards: CrowdCards,
     inputs: Option<&DetectInputs>,
+    places: Option<&PlaceSelects>,
     view: Entity<MainChartStack>,
     id: &dyn Fn(&str) -> SharedString,
     palette: MoonPalette,
@@ -486,6 +569,10 @@ fn settings_content(
                 })
                 .into_any_element()
         }))
+        // Where each block goes, under the switches that decide whether it is drawn at all. The
+        // two are deliberately separate questions: a block that is switched off keeps its place,
+        // and switching it back on puts it where it was left.
+        .children(places.map(|places| arrange::block(places, view.clone(), id, palette, cx)))
         // The rule's own controls, under the switch that decides whether they mean anything.
         .children(
             inputs
@@ -494,12 +581,19 @@ fn settings_content(
         .into_any_element()
 }
 
-/// The empty screen: whichever layers are switched on, and the ⚙ that chooses them.
+/// The empty screen: whichever blocks are switched on, where this profile has put them, and the
+/// ⚙ that decides both.
+///
+/// The blocks are handed to `crowd::place` as a flat list rather than laid out here: two of them
+/// may be anchored to the same cell, where they stack, and a screen that placed the brand itself
+/// and left the tables to place themselves could never stack one with the other.
 ///
 /// Args:
-///     stack: The stack, for the corner control.
+///     stack: The stack, for the corner control and the saved anchors.
 ///     screen: What is switched on.
 ///     stats: The statistics view, when any of its tables is.
+///     width: Measured Main width, used separately for grid collapse and board presentation.
+///     window: Host viewport used to bound the settings popup.
 ///     palette: Active MoonUI palette.
 ///     cx: Stack context.
 ///
@@ -509,49 +603,51 @@ pub(super) fn empty_screen(
     stack: &mut MainChartStack,
     screen: EmptyScreen,
     stats: Option<Entity<CrowdStatsView>>,
+    width: gpui::Pixels,
+    window: &Window,
     palette: MoonPalette,
     cx: &mut Context<MainChartStack>,
 ) -> AnyElement {
-    let settings = stack.empty_settings(palette, cx);
+    let narrow = super::is_narrow(width, place::narrow_below(cx));
+    let settings = stack.empty_settings(window, palette, cx);
+    let places = EmptyPlaces::restore(&stack.backend.read(cx).layout);
+    // Scoped by group like every other identity in this stack: two group windows are two empty
+    // screens, and a shared id would give the narrow form's scroll one position for both.
+    let frame_id = SharedString::from(format!("main-empty-frame-{}", stack.group));
+    let mut blocks: Vec<(EmptyBlock, AnyElement)> = Vec::new();
+    if screen.logo {
+        blocks.push((
+            EmptyBlock::Logo,
+            design::logo_glow_sized(cx, design::EMPTY_STACK_LOGO_W).into_any_element(),
+        ));
+    }
+    // A block of its own rather than part of the mark, because it is its own switch and its own
+    // anchor: somebody may want the line without the logo, or the line somewhere other than the
+    // middle. One muted line, naming the ONE gesture that actually opens a chart from here — there
+    // is no double-click on a core row that does it, since the rail only RETARGETS a chart that
+    // already exists (`sync_auto_workspace_chart` returns early on an empty Main).
+    if screen.hint {
+        blocks.push((
+            EmptyBlock::Hint,
+            div()
+                .max_w(design::font_w_px(cx, HINT_WIDTH))
+                .text_center()
+                .text_size(design::t_body(cx))
+                .text_color(rgb(palette.text_muted))
+                .child(t!("chart.empty.hint").to_string())
+                .into_any_element(),
+        ));
+    }
+    // The statistics are added LAST so that, in a cell they share with the brand, a figure is drawn
+    // under the mark rather than behind it.
+    if let Some(view) = stats {
+        blocks.extend(crate::crowd::boards(&view, width, cx));
+    }
     div()
         .relative()
         .size_full()
         .bg(rgb(palette.chart_bg))
-        // The brand and its line, centred in a layer of their own rather than in the screen's flow:
-        // the tables are anchored to the edges, and laying them out as siblings of a centred column
-        // would give them the height of that column instead of the height of the panel.
-        .when(screen.logo || screen.hint, |body| {
-            body.child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap(design::ui_px(cx, LOGO_GAP))
-                    .when(screen.logo, |middle| {
-                        middle.child(design::logo_glow_sized(cx, design::EMPTY_STACK_LOGO_W))
-                    })
-                    // A logo alone says the stack is empty but not what to do about it. One muted
-                    // line, naming the ONE gesture that actually opens a chart from here: there is
-                    // no double-click on a core row that does it — the rail only RETARGETS a chart
-                    // that already exists (`sync_auto_workspace_chart` returns early on an empty
-                    // Main).
-                    .when(screen.hint, |middle| {
-                        middle.child(
-                            div()
-                                .max_w(design::font_w_px(cx, HINT_WIDTH))
-                                .text_center()
-                                .text_size(design::t_body(cx))
-                                .text_color(rgb(palette.text_muted))
-                                .child(t!("chart.empty.hint").to_string()),
-                        )
-                    }),
-            )
-        })
-        // Last, so a figure is never drawn behind the mark it shares the screen with.
-        .children(stats.map(|view| div().absolute().inset_0().child(view)))
+        .child(place::frame(frame_id, blocks, places, narrow, cx))
         .child(settings)
         .into_any_element()
 }

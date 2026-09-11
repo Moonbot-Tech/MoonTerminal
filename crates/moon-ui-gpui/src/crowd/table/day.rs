@@ -21,7 +21,8 @@ use super::{
     signed, signed_compact, state_of, text,
 };
 
-/// The day's coins, in the bottom-right corner: what paid the crowd, beside what cost it.
+/// The day's coins: what paid the crowd, beside what cost it. Where it is drawn is the reader's
+/// choice — see `crowd::place`.
 ///
 /// TWO COLUMNS ACROSS rather than one list down. The board is two ends of a day — the five best
 /// and the five worst — and stacking them made a table half the screen tall for ten short rows.
@@ -66,17 +67,17 @@ pub fn day_coins(
         );
     }
     div()
-        .absolute()
-        .right(look.edge_x)
-        .bottom(look.edge_bottom)
         .flex()
         .flex_col()
         .gap(look.gap_stack)
-        .child(text(
-            t!("crowd.day.coins").to_string(),
-            look.caption,
-            look.dim(A_CAPTION),
-        ))
+        .child(
+            text(
+                t!("crowd.day.coins").to_string(),
+                look.caption,
+                look.dim(A_CAPTION),
+            )
+            .mb(look.gap_stack),
+        )
         .children(rows.is_empty().then(|| {
             text(
                 t!("crowd.day.silent").to_string(),
@@ -147,7 +148,8 @@ fn day_coin_half(
     half
 }
 
-/// The day's traders, down the left: place, who, what they made, how many trades it took.
+/// The day's traders: place, who, what they made, how many trades it took. Where it is drawn is
+/// the reader's choice — see `crowd::place`.
 ///
 /// A trader who has not consented to being named still counts — the service says so, and their
 /// figures are in the totals — so the row is shown with a dash where the handle would be rather
@@ -177,9 +179,6 @@ pub fn day_traders(
         trader_row(row, 0, look)
     }));
     div()
-        .absolute()
-        .left(look.edge_x)
-        .top(look.edge_top)
         .flex()
         .flex_col()
         .gap(look.gap_stack)
@@ -218,8 +217,6 @@ pub fn day_traders(
             div()
                 .flex()
                 .gap(look.gap_traders)
-                // Nothing over the marks: they are not a column, they are what the rank did.
-                .child(div().w(look.w_shift))
                 .child(look.heading_right(t!("crowd.col.rank").to_string(), look.w_place))
                 .child(look.heading(t!("crowd.col.id").to_string(), look.w_id))
                 .child(look.heading(t!("crowd.col.who").to_string(), look.w_who))
@@ -229,13 +226,15 @@ pub fn day_traders(
                     look.w_money(),
                 ))
                 .child(look.heading_right(t!("crowd.col.trades").to_string(), look.w_trades))
+                // Keep rank movement after the figures, without an empty leading column.
+                .child(div().w(look.w_shift))
         }))
         .child(rows_box(TRADERS_SHOWN, look.w_day_traders(), look).children(list))
 }
 
-/// One trader's day: which way the rank moved, place, account, who, money, trades.
+/// One trader's day: place, account, who, money, trades, then rank movement.
 ///
-/// The ACCOUNT sits right after the move, before the handle, because it is the only name half
+/// The ACCOUNT sits right after the place, before the handle, because it is the only name half
 /// this board has: an anonymous row is `@` and there are many of them, while the number is the
 /// service's own and does not change when somebody renames themselves.
 ///
@@ -250,7 +249,6 @@ fn trader_row(row: &Trader, shift: i32, look: &Look) -> Div {
     div()
         .flex()
         .gap(look.gap_traders)
-        .child(shifted(shift, look).w(look.w_shift))
         .child(
             text(format!("{}", row.place), look.body, look.dim(A_HEADING))
                 .w(look.w_place)
@@ -273,6 +271,7 @@ fn trader_row(row: &Trader, shift: i32, look: &Look) -> Div {
                 .w(look.w_trades)
                 .text_right(),
         )
+        .child(shifted(shift, look).w(look.w_shift))
 }
 
 /// Which way a row went on the board, and by how much.

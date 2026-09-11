@@ -22,9 +22,12 @@ use super::{
     SOURCE_URL, coin_cell, dollars, figure, leaving_rows, motion, placed, rows_box, state_of, text,
 };
 
-/// The minute table in the top-right corner: what the crowd won and lost on each coin.
+/// The minute table: what the crowd won and lost on each coin.
 ///
-/// Absolutely positioned, so the caller only has to give it something `relative` to sit in.
+/// It places itself NOWHERE. Where this board is drawn is a saved choice now
+/// (`moon_core::config::layout::EmptyPlaces`), and the frame in `crowd::place` is the one thing
+/// that knows about anchors — a board that still nailed itself to a corner could not be moved out
+/// of it.
 ///
 /// Args:
 ///     rows: The coins to show, already in the order they should be read.
@@ -39,9 +42,6 @@ pub fn minute(
     look: &Look,
 ) -> Div {
     div()
-        .absolute()
-        .right(look.edge_x)
-        .top(look.edge_top)
         .flex()
         .flex_col()
         .gap(look.gap_stack)
@@ -58,7 +58,7 @@ pub fn minute(
 ///
 /// A stand-in says so in words, because there the figures are invented and no colour can carry
 /// that.
-fn caption(wire: Wire, look: &Look) -> Div {
+pub(super) fn caption(wire: Wire, look: &Look) -> Div {
     let mut row = div().flex().gap(look.gap_traders).child(text(
         t!("crowd.minute.title").to_string(),
         look.caption,

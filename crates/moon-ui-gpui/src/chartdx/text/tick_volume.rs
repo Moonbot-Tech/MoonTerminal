@@ -1,9 +1,42 @@
-//! Actual per-trade quote values near the cursor, drawn with retained native chart text.
+//! Actual traded quote values under the cursor, drawn with retained native chart text.
+//!
+//! Two different facts share the block, and they are never blended:
+//!
+//! * the individual prints near the cursor's time column, per side, as a count and a min/max RANGE
+//!   — overlapping trades stay independent prints and are never summed;
+//! * the hovered candle's own bucket turnover, one aggregate figure, labelled with the period it
+//!   covers. The chart has no per-side candle data, so this figure is never split into BUY/SELL and
+//!   never presented as a trade.
 
 use moon_chart::tick_volume::TickVolumeRange;
 use rust_i18n::t;
 
 use super::*;
+
+/// The hovered candle's own turnover, as the readout states it.
+///
+/// One aggregate for the whole bucket. It carries its bucket width because the history tail mixes
+/// coarser buckets into the series: an unlabelled amount would leave a one-minute total and a
+/// one-day total indistinguishable. The amount may be a source figure or an estimate — see
+/// [`moon_chart::VolumeSample::quote_volume`] — and the sample does not carry which, so neither
+/// does this.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CandleVolume {
+    quote: f32,
+    tf_ms: f64,
+}
+
+impl CandleVolume {
+    /// Accept a bucket only when its turnover is a real, positive amount.
+    ///
+    /// A bucket with nothing in it — or a source that reports no turnover — contributes no line
+    /// rather than a bare zero, and a non-finite figure contributes none rather than an `inf` where
+    /// the reader expects money. `collect_samples` floors the value at zero, which folds a NaN into
+    /// zero but leaves an infinity intact, so this is the guard that stops one.
+    fn new(quote: f32, tf_ms: f64) -> Option<Self> {
+        (quote.is_finite() && quote > 0.0).then_some(Self { quote, tf_ms })
+    }
+}
 
 /// Complete text and measured line boxes; amounts are never truncated to fit a pane.
 struct TickReadout {
@@ -25,19 +58,82 @@ fn tick_amount(value: f32, compact: bool) -> String {
     decimal
 }
 
+/// The candle's own lines, appended after the tick rows and never mixed into them.
+///
+/// The heading above the tick rows says "nearby ticks", so this figure carries its own label rather
+/// than inheriting one that would misdescribe it.
+///
+/// Stacked, it has its own heading and the amount goes on the next line, which is what lets a
+/// candle-only readout narrow at all: without it the single inline line is the same width in all
+/// three attempts and a narrow pane simply loses the block. The unit rides that heading only when
+/// there is no tick heading above already carrying it.
+fn candle_lines(
+    candle: CandleVolume,
+    unit: &str,
+    locale: &str,
+    stacked: bool,
+    unit_above: bool,
+    compact: bool,
+) -> Vec<String> {
+    let value = tick_amount(candle.quote, compact);
+    let tf = moon_chart::volume_bars::bucket_label(candle.tf_ms);
+    if !stacked {
+        return vec![match tf {
+            Some(tf) => t!(
+                "tick_volume.candle_values",
+                locale = locale,
+                tf = tf,
+                value = value,
+                unit = unit
+            )
+            .to_string(),
+            None => t!(
+                "tick_volume.candle_values_untimed",
+                locale = locale,
+                value = value,
+                unit = unit
+            )
+            .to_string(),
+        }];
+    }
+    let head = match (unit_above, tf) {
+        (true, Some(tf)) => t!("tick_volume.candle_head", locale = locale, tf = tf).to_string(),
+        (true, None) => t!("tick_volume.candle_head_untimed", locale = locale).to_string(),
+        (false, Some(tf)) => t!(
+            "tick_volume.candle_head_unit",
+            locale = locale,
+            tf = tf,
+            unit = unit
+        )
+        .to_string(),
+        (false, None) => t!(
+            "tick_volume.candle_head_unit_untimed",
+            locale = locale,
+            unit = unit
+        )
+        .to_string(),
+    };
+    vec![head, value]
+}
+
 /// Keep the wide wording intact, then trade width for height without dropping a side or unit.
 fn tick_lines(
     ranges: [Option<TickVolumeRange>; 2],
+    candle: Option<CandleVolume>,
     unit: &str,
     locale: &str,
     stacked: bool,
     compact: bool,
 ) -> Vec<String> {
-    let mut lines = vec![if stacked {
-        t!("tick_volume.nearby_unit", locale = locale, unit = unit).to_string()
-    } else {
-        t!("tick_volume.nearby", locale = locale).to_string()
-    }];
+    let has_ticks = ranges.iter().any(Option::is_some);
+    let mut lines = Vec::new();
+    if has_ticks {
+        lines.push(if stacked {
+            t!("tick_volume.nearby_unit", locale = locale, unit = unit).to_string()
+        } else {
+            t!("tick_volume.nearby", locale = locale).to_string()
+        });
+    }
     for (side, range) in ["BUY", "SELL"].into_iter().zip(ranges) {
         let Some(range) = range else { continue };
         let lo = tick_amount(range.min, compact);
@@ -77,26 +173,33 @@ fn tick_lines(
             );
         }
     }
+    if let Some(candle) = candle {
+        lines.extend(candle_lines(
+            candle, unit, locale, stacked, has_ticks, compact,
+        ));
+    }
     lines
 }
 
 /// Select a complete layout using shaped logical-pixel measurements at the user's font size.
-/// A 200x180 logical-pixel plot fits both side ranges at the default 11.5px Geist Mono font,
-/// including f32 extremes and six-digit counts in all three locales. Larger fonts or longer
-/// quote symbols require more room; genuinely undersized plots still cannot show clipped money.
+/// A 200x180 logical-pixel plot fits both side ranges at the default 13px Geist Mono readout size,
+/// including f32 extremes and six-digit counts in all three locales. Larger fonts, a candle line or
+/// longer quote symbols require more room; genuinely undersized plots still cannot show clipped
+/// money — the block is dropped whole rather than truncated.
 fn fit_tick_readout(
     ranges: [Option<TickVolumeRange>; 2],
+    candle: Option<CandleVolume>,
     unit: &str,
     locale: &str,
     size: [f32; 2],
     mut measure: impl FnMut(&str) -> [f32; 2],
 ) -> Option<TickReadout> {
-    if ranges.iter().all(Option::is_none) || unit.is_empty() {
+    if (ranges.iter().all(Option::is_none) && candle.is_none()) || unit.is_empty() {
         return None;
     }
     let pad = READOUT_PAD_X + READOUT_INSET;
     for (stacked, compact) in [(false, false), (true, false), (true, true)] {
-        let lines: Vec<_> = tick_lines(ranges, unit, locale, stacked, compact)
+        let lines: Vec<_> = tick_lines(ranges, candle, unit, locale, stacked, compact)
             .into_iter()
             .map(|line| {
                 let metrics = measure(&line);
@@ -142,8 +245,15 @@ fn tick_readout_origin(
 }
 
 impl RenderState {
-    /// Describe every ordinary print within three logical pixels while hovering the tick band.
-    /// A side with overlapping prints gets a count and range, never an arbitrary selected trade.
+    /// Describe what traded under the cursor, anywhere in the plot.
+    ///
+    /// Every ordinary print within three logical pixels of the cursor's time column is reported per
+    /// side as a count and a range, never an arbitrary selected trade; the tick rows follow the
+    /// native band being drawn, since that ring is what they describe. Beside them, the candle the
+    /// pointer is over contributes its own bucket turnover — the figure the bottom volume bars are
+    /// drawn from — which is why the readout is useful over the candle plot and not only over the
+    /// band along its floor.
+    ///
     /// Read the upcoming native ring because text preparation runs before GPU upload preparation.
     pub(super) fn draw_tick_volume_readout(
         &mut self,
@@ -166,22 +276,41 @@ impl RenderState {
             view.time_to_px,
             [x_dev, y_dev],
             sf,
-            view.volume_alpha,
         ) else {
             return Ok(());
         };
         let [_, _, width, height] = view.bounds;
         // A small column tolerates the cached bitmap's subpixel pan phase. Its explicit nearby
         // wording avoids pretending it is an exact time or selecting one of overlapping prints.
-        let ranges = pr.layers.nearby_tick_volumes(from, to);
+        let ranges = if moon_chart::tick_volume::tick_ranges_visible(view.volume_alpha) {
+            pr.layers.nearby_tick_volumes(from, to)
+        } else {
+            [None, None]
+        };
+        // The candle's own turnover, from the samples the bottom band is scaled from, so the
+        // readout and the bar under the pointer cannot disagree. Those samples are RETAINED across
+        // a plain pan, exactly as the band's own statistics are, so the figure survives the gesture
+        // that never refills the history buffer. `t_open_ms` is absolute while the view's times are
+        // relative to the chart epoch, hence the epoch added back here.
+        let candle = moon_chart::tick_volume::cursor_time(
+            view.bounds,
+            view.view_time0,
+            view.time_to_px,
+            [x_dev, y_dev],
+        )
+        .and_then(|at| {
+            moon_chart::volume_bars::sample_at(&pr.volume_samples, pr.epoch_ms + at as f64)
+        })
+        .and_then(|sample| CandleVolume::new(sample.quote_volume, sample.tf_ms));
         let unit = pr.quote.clone();
         let Some(readout) = fit_tick_readout(
             ranges,
+            candle,
             &unit,
             &rust_i18n::locale(),
             [width / sf, height / sf],
             |line| {
-                let m = self.measure_label_text(ctx, line);
+                let m = self.measure_readout_text(ctx, line);
                 [m.width.as_f32(), m.line_height.as_f32()]
             },
         ) else {
@@ -192,7 +321,7 @@ impl RenderState {
         let ink = color(self.readout_label);
         for (line, metrics) in &readout.lines {
             let h = metrics[1];
-            self.draw_label_text(ctx, line, x, y, 0.0, 0.0, ink)?;
+            self.draw_readout_text(ctx, line, x, y, 0.0, 0.0, ink)?;
             placed.push(PlacedLabel {
                 x,
                 y,
