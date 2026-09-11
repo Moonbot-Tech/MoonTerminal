@@ -1,9 +1,9 @@
 //! Builds the Hotkeys tab in a Moonbot-style layout: an always-visible block of hard-coded
 //! built-in hotkeys, a group sub-tab switcher (`SettingsView.hotkeys_group`), and the active
 //! group's rows — read off [`super::registry`], which is the one place that says what the page
-//! shows and in what order. The rows form one TABLE with a header: help · title · surface · key ·
-//! mouse · parameter · MB, every cell a fixed width, so a row that lacks an editor leaves its cell
-//! empty rather than pulling the next one over. The row editors (`slot_row`, `split_parts_row`,
+//! shows and in what order. The rows form one TABLE with a header: help · title · surface ·
+//! problems · key · mouse · parameter · MB; the title grows, every other cell is fixed, so a row
+//! that lacks an editor leaves its cell empty rather than pulling the next one over. The row editors (`slot_row`, `split_parts_row`,
 //! `same_move_row`) update the draft. The "pull layout from core" section that closes the
 //! manual-strategy page is a block of its own — a preview of what a pull would change, with its
 //! own columns — not rows of this table.
@@ -39,8 +39,9 @@ use crate::settings::SettingsView;
 /// the page long, and the one thing nobody re-reads once they know the action.
 const ROW_HINT_WIDTH: f32 = 14.0;
 
-/// Logical width reserved for every hotkey row title.
-const ROW_TITLE_WIDTH: f32 = 130.0;
+/// The least the title column gets. It is the one column that GROWS: every other cell is fixed
+/// and pushed to the right edge, and whatever the window has left over goes to the titles.
+const ROW_TITLE_MIN_WIDTH: f32 = 130.0;
 
 /// Readable width of the description tooltip, in rendered pixels.
 const HINT_TOOLTIP_MAX_WIDTH: f32 = 380.0;
@@ -48,31 +49,34 @@ const HINT_TOOLTIP_MAX_WIDTH: f32 = 380.0;
 /// Width of the surface column — where the binding acts.
 const ROW_SCOPE_WIDTH: f32 = 84.0;
 
+/// Width of the problems column: the conflict captions, which have to be seen without asking.
+const ROW_PROBLEMS_WIDTH: f32 = 170.0;
+
 /// Width of the last column: a `+` on the rows a Moonbot paste or a core pull writes.
 const ROW_MB_WIDTH: f32 = 28.0;
 
 /// Gap between the table's columns.
 const COLUMN_GAP: f32 = 10.0;
 
-/// The seven columns and six gaps: 14 + 130 + 84 + 184 + 140 + 184 + 28 + 60 = 824, which is the
-/// body the DEFAULT 860-pixel Settings window leaves (`settings/render.rs`, and the same budget
-/// `connections/columns.rs` works to). The rows do not wrap — a table that wraps is not a table
-/// — so the widths have to add up to the window, and a column widened here is a column taken
-/// from another. The key column is the one that cannot give: `MoonHotkeyInput` keeps a minimum
-/// width of 176 of its own, so a narrower cell would only let the field run under its neighbour.
+/// The fixed columns and the seven gaps beside the growing title: 14 + 84 + 170 + 184 + 140 + 184
+/// + 28 + 70 = 874 — past the 824 the DEFAULT 860-pixel Settings window leaves, by design: the
+/// user works this page in a wider window, and the titles were the column that could not be read
+/// at the default. The rows do not wrap — a table that wraps is not a table — so below that width
+/// the right edge is cut rather than reflowed. The key column is the one that cannot give:
+/// `MoonHotkeyInput` keeps a minimum width of 176 of its own.
 ///
 /// Logical pixels: the window is opened at an unscaled 860, so at a UI scale other than 1.0 the
 /// table is wider or narrower than the body by that factor — the same tension every fixed-width
 /// table in this window carries, and the user's slider to resolve.
-const TABLE_WIDTH: f32 = ROW_HINT_WIDTH
-    + ROW_TITLE_WIDTH
+const FIXED_COLUMNS_WIDTH: f32 = ROW_HINT_WIDTH
     + ROW_SCOPE_WIDTH
+    + ROW_PROBLEMS_WIDTH
     + ROW_KEY_WIDTH
     + ROW_CONTROL_WIDTH
     + ROW_CONTROL_WIDTH
     + ROW_KIND_EXTRA
     + ROW_MB_WIDTH
-    + 6.0 * COLUMN_GAP;
+    + 7.0 * COLUMN_GAP;
 
 /// The contents of one table row, cell by cell. `None` leaves a cell empty at its width.
 struct TableRow {
@@ -88,7 +92,7 @@ struct TableRow {
     /// Whether the title is greyed because the row is inert — the four short move rows while
     /// the mirror switch owns them.
     muted: bool,
-    /// The conflict captions, printed on a line under the row.
+    /// The conflict captions, printed in the problems cell.
     notes: Vec<Clash>,
     key: Option<AnyElement>,
     mouse: Option<AnyElement>,
@@ -111,7 +115,10 @@ fn muted_line(text: String, p: &MoonPalette) -> impl IntoElement {
         .uppercase(false)
         .mono(false)
         .wrap()
-        .line_height(12.0)
+        // The one size the whole tab uses: titles, surfaces, captions and the header alike. A
+        // caption one step smaller was tried and read as a different font.
+        .font_size(11.0)
+        .line_height(14.0)
         .color(p.text_muted)
         .render()
 }
@@ -299,40 +306,57 @@ impl SettingsView {
             .uppercase(false)
             .mono(false)
             .wrap()
-            .line_height(12.0)
+            .font_size(11.0)
+            .line_height(14.0)
             .color(color)
             .render()
             .into_any_element()
     }
 
-    /// The table's header: one caption per column, at the columns' own widths.
+    /// The table's header: one caption per column, centred over the column, at the columns' own
+    /// widths — the title's caption over the growing cell.
     fn columns_header(&self, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
-        let caption =
-            |key: &str, width: f32| sized_cell(muted_line(t!(key).to_string(), &p), width, cx);
+        let caption = |key: &str| muted_line(t!(key).to_string(), &p);
+        let fixed = |key: &str, width: f32| {
+            h_flex()
+                .flex_none()
+                .w(design::ui_px(cx, width))
+                .justify_center()
+                .child(caption(key))
+        };
         h_flex()
-            .w(design::ui_px(cx, TABLE_WIDTH))
+            .w_full()
+            .min_w(design::ui_px(cx, FIXED_COLUMNS_WIDTH + ROW_TITLE_MIN_WIDTH))
             .gap(design::ui_px(cx, COLUMN_GAP))
             .items_end()
-            .child(caption("hotkeys.col.help", ROW_HINT_WIDTH))
-            .child(caption("hotkeys.col.title", ROW_TITLE_WIDTH))
-            .child(caption("hotkeys.col.scope", ROW_SCOPE_WIDTH))
-            .child(caption("hotkeys.col.key", ROW_KEY_WIDTH))
-            .child(caption("hotkeys.col.mouse", ROW_CONTROL_WIDTH))
-            .child(caption(
+            .child(fixed("hotkeys.col.help", ROW_HINT_WIDTH))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w(design::ui_px(cx, ROW_TITLE_MIN_WIDTH))
+                    .justify_center()
+                    .child(caption("hotkeys.col.title")),
+            )
+            .child(fixed("hotkeys.col.scope", ROW_SCOPE_WIDTH))
+            .child(fixed("hotkeys.col.problems", ROW_PROBLEMS_WIDTH))
+            .child(fixed("hotkeys.col.key", ROW_KEY_WIDTH))
+            .child(fixed("hotkeys.col.mouse", ROW_CONTROL_WIDTH))
+            .child(fixed(
                 "hotkeys.col.param",
                 ROW_CONTROL_WIDTH + ROW_KIND_EXTRA,
             ))
-            .child(caption("hotkeys.col.mb", ROW_MB_WIDTH))
+            .child(fixed("hotkeys.col.mb", ROW_MB_WIDTH))
             .into_any_element()
     }
 
-    /// One row of the table: the seven cells at the header's widths, then the row's notes — the
-    /// conflict captions — on a line of their own under the title.
+    /// One row of the table: the eight cells at the header's widths — the conflict captions in the
+    /// problems cell, where they are seen without asking.
     ///
     /// Every row goes through here, editors or not, which is what makes it a table: a row without a
     /// key leaves the key cell empty instead of sliding its mouse editor into it, as the old
-    /// trailing-controls layout did for `Sells to rectangle`.
+    /// trailing-controls layout did for `Sells to rectangle`. The title cell grows and every other
+    /// cell is fixed, so the editors sit against the right edge whatever the window's width.
     ///
     /// Args:
     ///     row: The cells' contents. See [`TableRow`].
@@ -355,8 +379,9 @@ impl SettingsView {
             Some(content) => sized_cell(content, width, cx),
             None => empty_cell(width, cx),
         };
-        let cells = h_flex()
-            .w(design::ui_px(cx, TABLE_WIDTH))
+        h_flex()
+            .w_full()
+            .min_w(design::ui_px(cx, FIXED_COLUMNS_WIDTH + ROW_TITLE_MIN_WIDTH))
             .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
             .gap(design::ui_px(cx, COLUMN_GAP))
             .items_center()
@@ -366,51 +391,51 @@ impl SettingsView {
                     .into_any_element(),
                 None => empty_cell(ROW_HINT_WIDTH, cx).into_any_element(),
             })
-            .child(sized_cell(
-                MoonText::new(row.title)
-                    .uppercase(false)
-                    .mono(row.mono_title)
-                    .wrap()
-                    .font_size(11.0)
-                    .line_height(14.0)
-                    .color(if row.muted { p.text_muted } else { p.text })
-                    .render(),
-                ROW_TITLE_WIDTH,
-                cx,
-            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(design::ui_px(cx, ROW_TITLE_MIN_WIDTH))
+                    .child(
+                        MoonText::new(row.title)
+                            .uppercase(false)
+                            .mono(row.mono_title)
+                            .wrap()
+                            .font_size(11.0)
+                            .line_height(14.0)
+                            .color(if row.muted { p.text_muted } else { p.text })
+                            .render(),
+                    ),
+            )
             .child(cell(
                 row.meta.map(|m| {
                     muted_line(m.scope.resolved(separate_zones).label(), &p).into_any_element()
                 }),
                 ROW_SCOPE_WIDTH,
             ))
+            .child(cell(
+                (!row.notes.is_empty()).then(|| {
+                    v_flex()
+                        .gap(design::ui_px(cx, 2.0))
+                        .children(row.notes.iter().map(|note| self.clash_line(note, &p)))
+                        .into_any_element()
+                }),
+                ROW_PROBLEMS_WIDTH,
+            ))
             .child(cell(row.key, ROW_KEY_WIDTH))
             .child(cell(row.mouse, ROW_CONTROL_WIDTH))
             .child(cell(row.param, ROW_CONTROL_WIDTH + ROW_KIND_EXTRA))
             // A `+` rather than a tag: the column's header already says MB, and a mark that is
             // either there or not reads down the page faster than two coloured pills.
-            .child(cell(
-                row.meta
-                    .filter(|m| m.origin == Origin::Shared)
-                    .map(|_| muted_line("+".to_string(), &p).into_any_element()),
-                ROW_MB_WIDTH,
-            ));
-        if row.notes.is_empty() {
-            return cells.into_any_element();
-        }
-        v_flex()
-            .w(design::ui_px(cx, TABLE_WIDTH))
-            .gap(design::ui_px(cx, 2.0))
-            .child(cells)
             .child(
-                // The notes start under the title, not under the glyph, and stop before the MB
-                // column, so they read as part of the row they are about.
-                v_flex()
-                    .w_full()
-                    .pl(design::ui_px(cx, ROW_HINT_WIDTH + COLUMN_GAP))
-                    .pr(design::ui_px(cx, ROW_MB_WIDTH + COLUMN_GAP))
-                    .gap(design::ui_px(cx, 2.0))
-                    .children(row.notes.iter().map(|note| self.clash_line(note, &p))),
+                h_flex()
+                    .flex_none()
+                    .w(design::ui_px(cx, ROW_MB_WIDTH))
+                    .justify_center()
+                    .children(
+                        row.meta
+                            .filter(|m| m.origin == Origin::Shared)
+                            .map(|_| muted_line("+".to_string(), &p)),
+                    ),
             )
             .into_any_element()
     }
@@ -632,7 +657,7 @@ impl SettingsView {
             .flex_none()
             .w(design::ui_px(cx, ROW_HINT_WIDTH))
             .cursor_default()
-            .text_size(design::t_caption(cx))
+            .text_size(design::t_body(cx))
             .text_color(design::moon(p.text_muted))
             .hover(move |s| s.text_color(design::moon(hover)))
             .tooltip(move |_w, cx| {

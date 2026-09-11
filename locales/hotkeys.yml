@@ -41,6 +41,10 @@ hotkeys.col.scope:
   ru: "Область"
   en: "Where"
   es: "Dónde"
+hotkeys.col.problems:
+  ru: "Проблемы"
+  en: "Problems"
+  es: "Problemas"
 hotkeys.col.key:
   ru: "Клавиатура"
   en: "Keyboard"
@@ -110,9 +114,9 @@ hotkeys.clash.layer.x_scale:
   en: "the X-scale sync"
   es: "la sincronización de escala X"
 hotkeys.marks_legend:
-  ru: "Клавиша и жест мыши — два способа вызвать одно действие; описание — под «?». Область — где бинд действует. «+» в колонке MB: значение переносится из Moonbot — клавишу перезапишет вставка конфига или тяга раскладки с ядра, жесты стакана — тяга. Жест рядом с клавишей всегда наш, Moonbot таких не хранит."
-  en: "A key and a mouse gesture are two ways to fire one action; the description is behind the «?». Where — the surface the binding acts on. A «+» in the MB column: the value travels from Moonbot — a config paste or a core pull overwrites the key, the book gestures come from the pull. The gesture beside a key is always ours; Moonbot keeps no such gesture."
-  es: "Una tecla y un gesto de ratón son dos formas de lanzar una acción; la descripción está tras «?». Dónde: la superficie sobre la que actúa el atajo. Un «+» en la columna MB: el valor viene de Moonbot — pegar la configuración o traer la disposición del core reescribe la tecla; los gestos del libro vienen de allí. El gesto junto a una tecla es siempre nuestro; Moonbot no guarda esos gestos."
+  ru: "Описание — под «?». «+» в колонке MB: клавишу перезапишет вставка конфига Moonbot или тяга с ядра."
+  en: "The description is behind the «?». A «+» under MB: a Moonbot config paste or a core pull overwrites the key."
+  es: "La descripción está tras «?». Un «+» en MB: pegar la configuración de Moonbot o traer del core reescribe la tecla."
 hotkeys.unassigned:
   ru: "Не задано"
   en: "Unassigned"
@@ -163,9 +167,9 @@ hotkeys.group.presets:
   en: "Order presets"
   es: "Preajustes de orden"
 hotkeys.group.presets_hint:
-  ru: "Те же F1-F6 и S1-S6, что в Moonbot: размер ручного ордера и фикс. Sell."
-  en: "The same F1-F6 and S1-S6 as Moonbot: manual order size and fixed sell."
-  es: "Los mismos F1-F6 y S1-S6 que Moonbot: tamaño de orden manual y venta fija."
+  ru: "F1–F6 — размер ручного ордера, S1–S6 — фикс. Sell, как в Moonbot."
+  en: "F1–F6 — manual order size, S1–S6 — fixed sell, as in Moonbot."
+  es: "F1–F6: tamaño de la orden manual; S1–S6: venta fija, como en Moonbot."
 hotkeys.order_size:
   ru: "Выбрать размер ручного ордера %{n}"
   en: "Select manual order size %{n}"
@@ -180,9 +184,9 @@ hotkeys.group.trading:
   en: "Trading commands"
   es: "Comandos de trading"
 hotkeys.group.trading_hint:
-  ru: "Команды, которые в Moonbot назначаются через HotkeysConfig и работают с активным рынком."
-  en: "Moonbot HotkeysConfig commands that operate on the active market."
-  es: "Comandos de HotkeysConfig de Moonbot que operan sobre el mercado activo."
+  ru: "Торговые команды Moonbot для рынка под курсором или активного чарта."
+  en: "Moonbot's trading commands, for the market under the pointer or the active chart."
+  es: "Comandos de trading de Moonbot para el mercado bajo el cursor o el gráfico activo."
 hotkeys.cancel_buy:
   ru: "Cancel Buy"
   en: "Cancel Buy"
@@ -346,9 +350,9 @@ hotkeys.group.order_move:
   en: "Order shift"
   es: "Desplazamiento de órdenes"
 hotkeys.group.order_move_hint:
-  ru: "Сдвиг живых ордеров рынка активного чарта на 1%, как в Moonbot: одна команда на сторону, ордера отбирает и считает ядро."
-  en: "Shift the active chart market's live orders by 1%, as Moonbot does: one command per side, with the core selecting the orders and doing the arithmetic."
-  es: "Desplaza un 1% las órdenes vivas del mercado del gráfico activo, como en Moonbot: un comando por lado; el núcleo elige las órdenes y hace el cálculo."
+  ru: "Сдвиг живых ордеров на 1% — одна команда на сторону, как в Moonbot."
+  en: "Shift live orders by 1% — one command per side, as in Moonbot."
+  es: "Desplaza las órdenes vivas un 1%: un comando por lado, como en Moonbot."
 hotkeys.shift_buy_up:
   ru: "Shift Buy Up"
   en: "Shift Buy Up"
@@ -387,9 +391,9 @@ hotkeys.group.mouse:
   en: "Order book mouse"
   es: "Ratón en libro"
 hotkeys.group.mouse_hint:
-  ru: "Живой Moonbot-путь: ордера ставятся кликами в зоне стакана. Move-жест — это КЛИК по цене, а не протяжка; какие ордера переносить, задаёт «Вид переноса» рядом."
-  en: "The live Moonbot path: orders are placed by clicking inside the book area. A move gesture is a CLICK on a price, not a drag; the «Move kind» beside it says which orders go there."
-  es: "La ruta viva de Moonbot: las órdenes se crean con clics en el libro. Un gesto Move es un CLIC sobre un precio, no un arrastre; el «Tipo de traslado» contiguo dice qué órdenes se mueven."
+  ru: "Клики по стакану, как в Moonbot. Move — это клик по цене, а не протяжка; что переносить — «Параметр»."
+  en: "Clicks in the book, as in Moonbot. Move is a click on a price, not a drag; what moves is the «Parameter»."
+  es: "Clics en el libro, como en Moonbot. Move es un clic sobre un precio, no un arrastre; qué se mueve: «Parámetro»."
 hotkeys.mouse.buy_set:
   ru: "Поставить Long"
   en: "Place Long"
@@ -532,9 +536,9 @@ hotkeys.group.manual_strategy:
   en: "Manual strategies"
   es: "Estrategias manuales"
 hotkeys.group.manual_strategy_hint:
-  ru: "10 хоткеев ManualStratsConfig.hotKeys из Moonbot: хоткей N выбирает N-ю manual-стратегию активного ядра (порядок — как в пикере MS шапки) и включает режим. По умолчанию пустые."
-  en: "10 Moonbot ManualStratsConfig.hotKeys: hotkey N selects the Nth manual strategy of the active core (same order as the header MS picker) and enables the mode. Empty by default."
-  es: "10 ManualStratsConfig.hotKeys de Moonbot: la tecla N selecciona la N-ésima estrategia manual del núcleo activo (mismo orden que el selector MS) y activa el modo. Vacíos por defecto."
+  ru: "Хоткей N выбирает N-ю ручную стратегию активного ядра (порядок — как в пикере MS) и включает режим."
+  en: "Hotkey N selects the Nth manual strategy of the active core (the MS picker's order) and enables the mode."
+  es: "La tecla N elige la N-ésima estrategia manual del núcleo activo (orden del selector MS) y activa el modo."
 hotkeys.manual_strategy:
   ru: "Ручная стратегия %{n}"
   en: "Manual strategy %{n}"
@@ -550,9 +554,9 @@ hotkeys.group.draw:
   en: "Drawing"
   es: "Dibujo"
 hotkeys.group.draw_hint:
-  ru: "Фигуры на чарте (как в Moonbot). Хоткей выбирает инструмент, повтор того же — снимает его. Ctrl+ЛКМ рисует и захватывает фигуру, простой ЛКМ торгует, как обычно. В полоске вкладок: список инструментов («Курсор» — не рисовать) и ⚙ — стиль выбранного инструмента. ПКМ по нарисованной фигуре — те же настройки для неё."
-  en: "Chart figures (as in Moonbot). A hotkey arms its tool; the same key again disarms it. Ctrl+LMB draws and grabs a figure, plain LMB keeps trading as usual. In the tab strip: the tool list (\"Cursor\" draws nothing) and ⚙ for the armed tool's style. Right-clicking a drawn figure opens the same settings for it."
-  es: "Figuras en el gráfico (como en Moonbot). La tecla activa su herramienta; la misma tecla la desactiva. Ctrl+clic izq. dibuja y agarra una figura; el clic izq. normal sigue operando. En la barra de pestañas: la lista de herramientas («Cursor» no dibuja) y ⚙ para el estilo de la herramienta activa. Clic derecho sobre una figura abre esos mismos ajustes para ella."
+  ru: "Хоткей выбирает инструмент, повтор — снимает. Ctrl+ЛКМ рисует и захватывает фигуру, простой ЛКМ торгует."
+  en: "A hotkey arms its tool, the same key disarms it. Ctrl+LMB draws and grabs a figure, plain LMB trades."
+  es: "La tecla activa su herramienta; repetirla la desactiva. Ctrl+clic izq. dibuja y agarra; el clic normal opera."
 hotkeys.draw_hline:
   ru: "Горизонтальная линия"
   en: "Horizontal line"
