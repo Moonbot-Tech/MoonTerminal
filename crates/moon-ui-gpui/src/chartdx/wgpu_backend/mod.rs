@@ -10,10 +10,10 @@ use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, HLineGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu, VolumeStyleGpu, ZoneGpu,
-    append_cross_ring, cross_append_ranges, cross_volume_max, evicted_cross_ranges, hl_of, mk_of,
-    ordered_cross_ring, ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, seg_of,
-    update_cross_volume_max, zone_of,
+    GridParams, HLineGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu, TickStyleGpu,
+    VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_append_ranges, cross_volume_max,
+    evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring, ranges_have_entries,
+    ranges_touch_volume_max, reset_cross_ring, seg_of, update_cross_volume_max, zone_of,
 };
 
 const BACKGROUND_SHADER: &str = include_str!("shaders/native_background.wgsl");
@@ -107,6 +107,7 @@ impl BufferSlot {
     }
 }
 
+/// Pipelines and layouts, with a dedicated tick-style binding contract.
 struct Pipelines {
     bg_layout: wgpu::BindGroupLayout,
     grid_layout: wgpu::BindGroupLayout,
@@ -114,9 +115,11 @@ struct Pipelines {
     readout_layout: wgpu::BindGroupLayout,
     view_storage_layout: wgpu::BindGroupLayout,
     /// The two price pipelines only. NOT `view_storage_layout`: that one is shared with
-    /// crosses, volume, zone, hline, seg and marker, and a third binding on it would
-    /// invalidate all six of their bind groups.
+    /// zone, hline, seg and marker, and a third binding on it would
+    /// invalidate their bind groups.
     price_layout: wgpu::BindGroupLayout,
+    /// Crosses and trade volume use a separate three-entry layout.
+    cross_layout: wgpu::BindGroupLayout,
     book_layout: wgpu::BindGroupLayout,
     candle_layout: wgpu::BindGroupLayout,
     background: wgpu::RenderPipeline,
@@ -346,6 +349,7 @@ struct PreparedBindGroups {
     marker: wgpu::BindGroup,
 }
 
+/// Retained chart data, style uniforms, and cached GPU layers.
 pub struct WgpuLayers {
     device_generation: u64,
     format: Option<wgpu::TextureFormat>,
@@ -385,7 +389,10 @@ pub struct WgpuLayers {
     last_line_buffer: BufferSlot,
     mark_line_buffer: BufferSlot,
     price_style_uniform: BufferSlot,
+    tick_style_uniform: BufferSlot,
     price_style: PriceStyleGpu,
+    /// Trade-tick style retained across resource recreation and compared before rebaking.
+    tick_style: TickStyleGpu,
     level_buffer: BufferSlot,
     zone_buffer: BufferSlot,
     hline_buffer: BufferSlot,

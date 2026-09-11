@@ -3,6 +3,7 @@
 use super::*;
 
 impl WgpuLayers {
+    /// Uploads shared geometry and styles, refreshing bindings when buffers are recreated.
     pub(super) fn upload_common(
         &mut self,
         device: &wgpu::Device,
@@ -74,7 +75,10 @@ impl WgpuLayers {
             wgpu::BufferUsages::UNIFORM,
             &[*book_style],
         );
-        if self.combo_buffers_dirty || self.cross_buffer.buffer.is_none() {
+        if self.combo_buffers_dirty
+            || self.cross_buffer.buffer.is_none()
+            || self.tick_style_uniform.buffer.is_none()
+        {
             if self.cross_buffer.buffer.is_some() && !self.combo_dirty_ranges.is_empty() {
                 let mut recreated = false;
                 for &(start, count) in &self.combo_dirty_ranges {
@@ -109,6 +113,13 @@ impl WgpuLayers {
                     &self.crosses,
                 );
             }
+            binds_dirty |= self.tick_style_uniform.write(
+                device,
+                queue,
+                "moon_chart_tick_style",
+                wgpu::BufferUsages::UNIFORM,
+                &[self.tick_style],
+            );
             self.combo_buffers_dirty = false;
         }
         if self.price_line_buffers_dirty
@@ -326,6 +337,33 @@ impl WgpuLayers {
         })
     }
 
+    /// Binds the combo view, crosses, and tick style using the three-entry cross layout.
+    /// A bind group using the shared two-entry layout would be rejected at creation.
+    fn bind_cross<'a>(
+        &'a self,
+        device: &wgpu::Device,
+        layout: &'a wgpu::BindGroupLayout,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("moon_chart_cross_bind"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.combo_view_uniform.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.cross_buffer.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.tick_style_uniform.binding(),
+                },
+            ],
+        })
+    }
+
     fn bind_view_storage<'a>(
         &'a self,
         device: &wgpu::Device,
@@ -364,6 +402,7 @@ impl WgpuLayers {
         })
     }
 
+    /// Rebuilds bind groups using each pass-specific uniform layout.
     pub(super) fn prepare_bind_groups(&mut self, device: &wgpu::Device) {
         let pipelines = self.pipelines.as_ref().unwrap();
         let bg = self.background_texture.as_ref().unwrap();
@@ -388,12 +427,7 @@ impl WgpuLayers {
         let grid_bind = self.bind_uniform(device, &pipelines.grid_layout, &self.grid_uniform);
         let cursor_bind = self.bind_uniform(device, &pipelines.cursor_layout, &self.cursor_uniform);
         let readout_bind = self.bind_readout(device, &pipelines.readout_layout);
-        let cross_bind = self.bind_view_storage(
-            device,
-            &pipelines.view_storage_layout,
-            &self.combo_view_uniform,
-            &self.cross_buffer,
-        );
+        let cross_bind = self.bind_cross(device, &pipelines.cross_layout);
         let last_bind = self.bind_price(device, &pipelines.price_layout, &self.last_line_buffer);
         let mark_bind = self.bind_price(device, &pipelines.price_layout, &self.mark_line_buffer);
         let book_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {

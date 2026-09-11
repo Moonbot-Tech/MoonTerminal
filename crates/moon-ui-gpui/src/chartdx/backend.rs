@@ -7,7 +7,7 @@ use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, PriceStyleGpu, ReadoutRect, VolumeStyleGpu,
+    GridParams, PriceStyleGpu, ReadoutRect, TickStyleGpu, VolumeStyleGpu,
 };
 
 #[cfg(target_os = "macos")]
@@ -221,6 +221,20 @@ impl PlatformLayers {
         self.wgpu.set_price_style(style);
         #[cfg(target_os = "macos")]
         self.metal.set_price_style(style);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            let _ = style;
+        }
+    }
+
+    /// Idempotently sets the trade-tick colours and invalidates baked history.
+    pub fn set_tick_style(&mut self, style: TickStyleGpu) {
+        #[cfg(windows)]
+        self.combo.set_tick_style(style);
+        #[cfg(target_os = "linux")]
+        self.wgpu.set_tick_style(style);
+        #[cfg(target_os = "macos")]
+        self.metal.set_tick_style(style);
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = style;

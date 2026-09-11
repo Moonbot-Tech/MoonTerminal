@@ -19,8 +19,8 @@ use super::gpu::{
     device_changed, full_viewport, ring_write_no_overwrite, set_scissor_rect, update_dynamic,
 };
 use super::types::{
-    PriceStyleGpu, append_cross_ring, cross_volume_max, evicted_cross_ranges, ranges_have_entries,
-    ranges_touch_volume_max, reset_cross_ring, update_cross_volume_max,
+    PriceStyleGpu, TickStyleGpu, append_cross_ring, cross_volume_max, evicted_cross_ranges,
+    ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, update_cross_volume_max,
 };
 
 const MIN_COMBO_CAPACITY: u32 = 1;
@@ -54,6 +54,7 @@ struct CrossPipe {
     mark_line_srv: ID3D11ShaderResourceView,
     view_cb: ID3D11Buffer,
     price_style_cb: ID3D11Buffer,
+    tick_style_cb: ID3D11Buffer,
 }
 
 /// Combo backing bitmap `(W * 1.2) x H`, containing baked history and a UV-scroll anchor.
@@ -90,6 +91,7 @@ struct VolumeScaleKey {
     time_to_px_bits: u32,
 }
 
+/// Retains tick history and appearance for cached combo rendering.
 pub struct ComboLayer {
     pipe: Option<CrossPipe>,
     tex: Option<ComboTex>,
@@ -120,9 +122,12 @@ pub struct ComboLayer {
     /// Not part of the combo bake: price lines are drawn straight to the backbuffer, so a
     /// change here needs no texture invalidation the way `volume_alpha` does.
     price_style: PriceStyleGpu,
+    /// Trade-tick style retained across resource recreation and compared before rebaking.
+    tick_style: TickStyleGpu,
 }
 
 impl ComboLayer {
+    /// Creates empty GPU resources with retained default appearance.
     pub fn new() -> Self {
         Self {
             pipe: None,
@@ -147,6 +152,7 @@ impl ComboLayer {
             volume_data_generation: 0,
             volume_window_cache: None,
             price_style: PriceStyleGpu::default(),
+            tick_style: TickStyleGpu::default(),
         }
     }
 
@@ -193,6 +199,16 @@ impl ComboLayer {
     pub fn append(&mut self, data: &[ChartCross]) {
         if !data.is_empty() {
             self.pending_append.extend_from_slice(data);
+        }
+    }
+
+    /// Updates tick colours and invalidates history baked with the previous style.
+    pub fn set_tick_style(&mut self, style: TickStyleGpu) {
+        if self.tick_style != style {
+            self.tick_style = style;
+            if let Some(tex) = self.tex.as_mut() {
+                tex.valid = false;
+            }
         }
     }
 
@@ -335,6 +351,7 @@ impl ComboLayer {
             _pad2: 0.0,
         };
         update_dynamic(context, &pipe.view_cb, &[bake_view]);
+        update_dynamic(context, &pipe.tick_style_cb, &[self.tick_style]);
         let tex_vp = D3D11_VIEWPORT {
             TopLeftX: 0.0,
             TopLeftY: 0.0,
@@ -348,8 +365,22 @@ impl ComboLayer {
             context.RSSetViewports(Some(&[tex_vp]));
             set_scissor_rect(context, 0.0, 0.0, tex_w as f32, tex_h as f32);
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            context.VSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
-            context.PSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
+            context.VSSetConstantBuffers(
+                0,
+                Some(&[
+                    Some(pipe.view_cb.clone()),
+                    None,
+                    Some(pipe.tick_style_cb.clone()),
+                ]),
+            );
+            context.PSSetConstantBuffers(
+                0,
+                Some(&[
+                    Some(pipe.view_cb.clone()),
+                    None,
+                    Some(pipe.tick_style_cb.clone()),
+                ]),
+            );
             context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
             if need_full {
                 crate::diag::bump(&crate::diag::CHART_COMBO_BAKE);
@@ -713,6 +744,7 @@ impl ComboLayer {
         }
     }
 
+    /// Creates tick, volume, and price pipelines with their style buffers.
     fn create_pipe(&self, device: &ID3D11Device) -> CrossPipe {
         let cross_vs = super::gpu::make_vs(device, CROSSES_HLSL, "crosses_vertex");
         let cross_ps = super::gpu::make_ps(device, CROSSES_HLSL, "crosses_fragment");
@@ -743,6 +775,7 @@ impl ComboLayer {
         let mark_line_srv = create_srv(device, &mark_line_buf);
         let view_cb = create_dynamic_cb(device, std::mem::size_of::<ChartViewGpu>() as u32);
         let price_style_cb = create_dynamic_cb(device, std::mem::size_of::<PriceStyleGpu>() as u32);
+        let tick_style_cb = create_dynamic_cb(device, std::mem::size_of::<TickStyleGpu>() as u32);
         CrossPipe {
             cross_vs,
             cross_ps,
@@ -761,6 +794,7 @@ impl ComboLayer {
             mark_line_srv,
             view_cb,
             price_style_cb,
+            tick_style_cb,
         }
     }
 

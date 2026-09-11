@@ -34,6 +34,13 @@ cbuffer PriceStyle : register(b1) {
     float4 ps_m;    // x = line half-width in physical px
 };
 
+// b1 belongs to PriceStyle; ticks use the free b2 slot in both stages.
+cbuffer TickStyle : register(b2) {
+    float4 ts_buy;
+    float4 ts_sell;
+    float4 ts_liq;
+};
+
 StructuredBuffer<Cross> crosses : register(t1);
 
 Cross combo_cross(uint iid) {
@@ -97,12 +104,8 @@ float4 crosses_fragment(CrossOut i) : SV_Target {
     if (((mask >> (uint)col) & 1u) == 0u) {
         discard;
     }
-    // Canonical application palette: --long (GREEN) / --short (ORANGE), matching order-book
-    // bid/ask so buy trades and book bids use the same green. Direct sRGB (UNORM target; see grid.hlsl).
-    float3 buy  = float3(0.18431, 0.65882, 0.36078); // #2FA85C palette GREEN
-    float3 sell = float3(1.0,     0.55686, 0.35294); // #FF8E5A palette ORANGE
-    float3 liq  = float3(1.0,     1.0,     0.0);     // #FFFF00 liquidation (bright yellow)
-    float3 rgb = (i.side == 0u) ? buy : ((i.side == 1u) ? sell : liq);
+    // Theme colours preserve the historical palette defaults. Direct sRGB (UNORM target).
+    float3 rgb = (i.side == 0u) ? ts_buy.rgb : ((i.side == 1u) ? ts_sell.rgb : ts_liq.rgb);
     return float4(rgb, 1.0);
 }
 
@@ -139,9 +142,7 @@ VolumeOut volume_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
 }
 
 float4 volume_fragment(VolumeOut i) : SV_Target {
-    float3 buy  = float3(0.18431, 0.65882, 0.36078);
-    float3 sell = float3(1.0,     0.55686, 0.35294);
-    float3 rgb = (i.side == 0u) ? buy : sell;
+    float3 rgb = (i.side == 0u) ? ts_buy.rgb : ts_sell.rgb;
     return float4(rgb, saturate(cv_volume_alpha));
 }
 

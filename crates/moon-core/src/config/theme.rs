@@ -12,6 +12,7 @@ use crate::palette;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+/// Persisted sRGB chart appearance, including trade-tick colours.
 pub struct ChartTheme {
     // --- Chart: background and grid ---
     /// Chart background (sRGB).
@@ -43,6 +44,15 @@ pub struct ChartTheme {
     pub candle_neutral: [u8; 3],
     /// Candle-body fill opacity, 0..1 (outlines/wicks are drawn more opaquely).
     pub candle_fill_alpha: f32,
+
+    // --- Trade ticks ---
+    // Per-backend shader literals are now uniforms shared by all three backends.
+    /// Buy trade-tick colour, sRGB.
+    pub tick_buy: [u8; 3],
+    /// Sell trade-tick colour, sRGB.
+    pub tick_sell: [u8; 3],
+    /// Liquidation trade-tick colour, sRGB.
+    pub tick_liq: [u8; 3],
 
     // --- Price lines ---
     // Colour and width used to live as literals in the shaders (one copy per backend). They are
@@ -114,6 +124,7 @@ pub struct ChartTheme {
 }
 
 impl Default for ChartTheme {
+    /// Preserves dark colour defaults for new themes and missing persisted fields.
     fn default() -> Self {
         Self {
             bg: [30, 30, 30],
@@ -131,6 +142,10 @@ impl Default for ChartTheme {
             candle_down: palette::CANDLE_DOWN,
             candle_neutral: [128, 128, 128],
             candle_fill_alpha: 0.85,
+            // Preserved colour defaults from the former shader literals.
+            tick_buy: [47, 168, 92],
+            tick_sell: [255, 142, 90],
+            tick_liq: [255, 255, 0],
             // The five numbers below reproduce the literals the shaders used to carry, so a fresh
             // install renders byte-identically to the version before they became configurable:
             // last was vec4(0.82, 0.60, 0.36, 0.82), mark was vec4(0.42, 0.72, 1.00, 0.78), and
@@ -204,6 +219,10 @@ impl ChartTheme {
         // `theme.toml` or the `[light]` table restores these.
         self.price_line = [166, 110, 46];
         self.mark_line = [26, 115, 190];
+        // Only sell and liquidation need darker colours on white; buy is already readable.
+        self.tick_buy = [47, 168, 92];
+        self.tick_sell = [230, 110, 50];
+        self.tick_liq = [181, 137, 0];
         self.book_bg = [255, 255, 255];
         self.book_bg_ask = [255, 244, 242];
         self.book_bg_bid = [243, 250, 242];

@@ -5,6 +5,7 @@ use moon_core::market::{LiqSpanReadout, VolumeAt, VolumeSpan, VolumeSpanReadout}
 
 use super::orders::refresh_orderbook_label_notionals;
 use super::*;
+use crate::chartdx::types::TickStyleGpu;
 
 /// Refit after a pixel of motion or any width/zoom change, without rescanning subpixel live motion.
 fn price_fit_window_changed(cached: Option<(f32, f32, f32)>, current: (f32, f32, f32)) -> bool {
@@ -197,6 +198,11 @@ impl ChartDataState {
                 0.0,
                 0.0,
             ],
+        };
+        let next_tick_style = TickStyleGpu {
+            buy: rgb4(self.theme.tick_buy),
+            sell: rgb4(self.theme.tick_sell),
+            liq: rgb4(self.theme.tick_liq),
         };
         // Likewise per-tab-only: the band's style id is clamped once, not per pane. The band's
         // remaining fields stay in the loop because they fold in per-pane `volume_stats`. The
@@ -1012,6 +1018,12 @@ impl ChartDataState {
             if pr.price_style != next_price_style {
                 pr.price_style = next_price_style;
                 pr.layers.set_price_style(next_price_style);
+                pr.gpu_prepare_dirty = true;
+                pixels_changed = true;
+            }
+            if pr.tick_style != next_tick_style {
+                pr.tick_style = next_tick_style;
+                pr.layers.set_tick_style(next_tick_style);
                 pr.gpu_prepare_dirty = true;
                 pixels_changed = true;
             }

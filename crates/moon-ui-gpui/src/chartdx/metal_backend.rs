@@ -18,9 +18,10 @@ use std::ffi::c_void;
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, HLineGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu, VolumeStyleGpu, ZoneGpu,
-    append_cross_ring, cross_volume_max, evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring,
-    ranges_touch_volume_max, reset_cross_ring, seg_of, update_cross_volume_max, zone_of,
+    GridParams, HLineGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu, TickStyleGpu,
+    VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_volume_max, evicted_cross_ranges, hl_of,
+    mk_of, ordered_cross_ring, ranges_touch_volume_max, reset_cross_ring, seg_of,
+    update_cross_volume_max, zone_of,
 };
 
 const SHADER: &str = include_str!("shaders/chart_native.metal");
@@ -284,6 +285,7 @@ impl BaseCache {
     }
 }
 
+/// Retained chart data and appearance with snapshot uniforms for combo bakes.
 pub struct MetalLayers {
     device_generation: u64,
     pixel_format: Option<MTLPixelFormat>,
@@ -321,6 +323,8 @@ pub struct MetalLayers {
     mark_line_buffer: BufferSlot,
     price_style_uniform: BufferSlot,
     price_style: PriceStyleGpu,
+    /// Trade-tick style retained across resource recreation and compared before rebaking.
+    tick_style: TickStyleGpu,
     volume_style_uniform: BufferSlot,
     volume_style: VolumeStyleGpu,
     level_buffer: BufferSlot,
@@ -338,6 +342,7 @@ pub struct MetalLayers {
 }
 
 impl MetalLayers {
+    /// Creates empty GPU resources with retained default appearance.
     pub fn new() -> Self {
         Self {
             device_generation: 0,
@@ -375,6 +380,7 @@ impl MetalLayers {
             mark_line_buffer: BufferSlot::default(),
             price_style_uniform: BufferSlot::default(),
             price_style: PriceStyleGpu::default(),
+            tick_style: TickStyleGpu::default(),
             volume_style_uniform: BufferSlot::default(),
             volume_style: VolumeStyleGpu::default(),
             level_buffer: BufferSlot::default(),
@@ -520,6 +526,17 @@ impl MetalLayers {
             // The band is drawn in the BASE pass, so a style change with no cache
             // invalidation would not appear until something else forced a rebake.
             self.base_cache.valid = false;
+        }
+    }
+
+    /// Updates tick colours and invalidates history baked with the previous style.
+    pub fn set_tick_style(&mut self, style: TickStyleGpu) {
+        if self.tick_style != style {
+            self.tick_style = style;
+            self.combo_buffers_dirty = true;
+            if let Some(tex) = self.combo_texture.as_mut() {
+                tex.valid = false;
+            }
         }
     }
 
@@ -882,6 +899,7 @@ impl MetalLayers {
         true
     }
 
+    /// Draws combo history with snapshot view and tick-style buffers retained until completion.
     fn draw_combo_layers(
         &self,
         device: &DeviceRef,
@@ -894,6 +912,10 @@ impl MetalLayers {
         let view_buffer = snapshot_buffer(device, "moon_chart_combo_view_uniform", &[view]);
         set_uniform(encoder, 0, view_buffer.as_ref());
         keepalive.push(view_buffer);
+        let tick_buffer =
+            snapshot_buffer(device, "moon_chart_combo_tick_style", &[self.tick_style]);
+        set_uniform(encoder, 2, tick_buffer.as_ref());
+        keepalive.push(tick_buffer);
         let cross_buffer = (!crosses.is_empty())
             .then(|| snapshot_buffer(device, "moon_chart_combo_crosses", crosses));
         if !crosses.is_empty() {

@@ -455,6 +455,9 @@ fragment float4 candles_fragment(CandleOut in [[stage_in]],
     return in.color;
 }
 
+// set_uniform binds index 2 to both stages; do not reuse it in these pipelines.
+struct TickStyle { float4 buy; float4 sell; float4 liq; };
+
 struct CrossOut { float4 position [[position]]; float2 uv; uint side [[flat]]; };
 
 vertex CrossOut crosses_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
@@ -473,14 +476,12 @@ vertex CrossOut crosses_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     return { to_clip(px, cv.resolution), corner, c.side };
 }
 
-fragment float4 crosses_fragment(CrossOut in [[stage_in]]) {
+fragment float4 crosses_fragment(CrossOut in [[stage_in]], constant TickStyle& ts [[buffer(2)]]) {
     int col = clamp((int)floor((in.uv.x * 0.5 + 0.5) * 7.0), 0, 6);
     int row = clamp((int)floor((in.uv.y * 0.5 + 0.5) * 7.0), 0, 6);
     uint mask = (row == 0 || row == 6) ? 0x77u : ((row == 1 || row == 5) ? 0x7Fu : 0x3Eu);
     if (((mask >> (uint)col) & 1u) == 0u) discard_fragment();
-    float3 buy = float3(0.18431, 0.65882, 0.36078);
-    float3 sell = float3(1.0, 0.55686, 0.35294);
-    return float4(in.side == 0 ? buy : sell, 1.0);
+    return float4(in.side == 0 ? ts.buy.rgb : (in.side == 1 ? ts.sell.rgb : ts.liq.rgb), 1.0);
 }
 
 struct VolumeOut { float4 position [[position]]; uint side [[flat]]; };
@@ -504,10 +505,9 @@ vertex VolumeOut volume_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     return { to_clip(px, cv.resolution), c.side };
 }
 
-fragment float4 volume_fragment(VolumeOut in [[stage_in]], constant ChartView& cv [[buffer(0)]]) {
-    float3 buy = float3(0.18431, 0.65882, 0.36078);
-    float3 sell = float3(1.0, 0.55686, 0.35294);
-    return float4(in.side == 0 ? buy : sell, saturate(cv.volume_alpha));
+fragment float4 volume_fragment(VolumeOut in [[stage_in]], constant ChartView& cv [[buffer(0)]],
+                                constant TickStyle& ts [[buffer(2)]]) {
+    return float4(in.side == 0 ? ts.buy.rgb : ts.sell.rgb, saturate(cv.volume_alpha));
 }
 
 struct PriceOut { float4 position [[position]]; };

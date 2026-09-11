@@ -87,8 +87,8 @@ use backend::PlatformLayers;
 use pane::{Container, ContainerKind};
 use types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, PriceStyleGpu, ReadoutRect, VolumeStyleGpu, cover_uv, fill_candle_upload,
-    fill_cross_upload, fill_liq_upload, fill_price_upload, rgb4, rgba3,
+    GridParams, PriceStyleGpu, ReadoutRect, TickStyleGpu, VolumeStyleGpu, cover_uv,
+    fill_candle_upload, fill_cross_upload, fill_liq_upload, fill_price_upload, rgb4, rgba3,
 };
 
 const CHART_PHOTO_BACKGROUND_ENABLED: bool = false;
@@ -607,6 +607,8 @@ struct PaneRender {
     candle_style: CandleStyleGpu,
     /// Last price-line style sent to the layer, compared before `set_price_style`.
     price_style: PriceStyleGpu,
+    /// Trade-tick style retained across resource recreation and compared before rebaking.
+    tick_style: TickStyleGpu,
     /// Last bottom-volume style sent to the layer, compared before `set_volume_style`.
     volume_style: VolumeStyleGpu,
     /// Retained per-candle volume samples for the visible-range max/average.
@@ -841,6 +843,7 @@ impl PaneRender {
             last_zone_bucket: i64::MIN,
             candle_style: CandleStyleGpu::default(),
             price_style: PriceStyleGpu::default(),
+            tick_style: TickStyleGpu::default(),
             volume_style: VolumeStyleGpu::default(),
             volume_samples: Vec::new(),
             volume_stats: None,

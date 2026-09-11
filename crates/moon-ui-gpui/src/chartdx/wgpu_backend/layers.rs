@@ -3,6 +3,7 @@
 use super::*;
 
 impl WgpuLayers {
+    /// Creates empty GPU resources with retained default appearance.
     pub fn new() -> Self {
         Self {
             device_generation: 0,
@@ -41,7 +42,9 @@ impl WgpuLayers {
             last_line_buffer: BufferSlot::default(),
             mark_line_buffer: BufferSlot::default(),
             price_style_uniform: BufferSlot::default(),
+            tick_style_uniform: BufferSlot::default(),
             price_style: PriceStyleGpu::default(),
+            tick_style: TickStyleGpu::default(),
             level_buffer: BufferSlot::default(),
             zone_buffer: BufferSlot::default(),
             hline_buffer: BufferSlot::default(),
@@ -193,6 +196,17 @@ impl WgpuLayers {
         }
     }
 
+    /// Updates tick colours and invalidates history baked with the previous style.
+    pub fn set_tick_style(&mut self, style: TickStyleGpu) {
+        if self.tick_style != style {
+            self.tick_style = style;
+            self.combo_buffers_dirty = true;
+            if let Some(tex) = self.combo_texture.as_mut() {
+                tex.valid = false;
+            }
+        }
+    }
+
     /// Idempotently sets the price-line colours and half-width.
     pub fn set_price_style(&mut self, style: PriceStyleGpu) {
         if self.price_style != style {
@@ -232,6 +246,7 @@ impl WgpuLayers {
         self.base_cache.needs_rebuild(gpu)
     }
 
+    /// Drops device resources while retaining the configured appearance for reupload.
     pub(super) fn reset_gpu_objects(&mut self) {
         self.pipelines = None;
         self.background_texture = None;
@@ -257,6 +272,7 @@ impl WgpuLayers {
         self.candle_style_uniform = BufferSlot::default();
         self.volume_style_uniform = BufferSlot::default();
         self.price_style_uniform = BufferSlot::default();
+        self.tick_style_uniform = BufferSlot::default();
         self.combo_buffers_dirty = true;
         self.price_line_buffers_dirty = true;
         self.book_buffer_dirty = true;
