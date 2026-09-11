@@ -543,6 +543,11 @@ pub fn badges_path() -> PathBuf {
     cfg_dir().join("badges.json")
 }
 
+/// App-local custom HEX history shared by all terminal color pickers.
+pub fn custom_colors_path() -> PathBuf {
+    cfg_dir().join("custom_colors.json")
+}
+
 /// Local per-tag colours for the News panel, in a small portable JSON file.
 pub fn news_tags_path() -> PathBuf {
     cfg_dir().join("news_tags.json")

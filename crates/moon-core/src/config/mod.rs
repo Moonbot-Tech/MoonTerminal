@@ -24,6 +24,7 @@ pub mod chart_labels;
 pub mod core_groups;
 pub mod core_updates;
 pub mod crypto;
+pub mod custom_colors;
 pub mod detect_view;
 pub mod groups;
 pub mod hotkeys;
