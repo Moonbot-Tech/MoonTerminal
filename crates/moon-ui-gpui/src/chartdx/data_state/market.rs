@@ -6,6 +6,13 @@ use moon_core::market::{LiqSpanReadout, VolumeAt, VolumeSpan, VolumeSpanReadout}
 use super::orders::refresh_orderbook_label_notionals;
 use super::*;
 
+/// Refit after a pixel of motion or any width/zoom change, without rescanning subpixel live motion.
+fn price_fit_window_changed(cached: Option<(f32, f32, f32)>, current: (f32, f32, f32)) -> bool {
+    cached.is_none_or(|(from, span, ppm)| {
+        span != current.1 || ppm != current.2 || (from - current.0).abs() * current.2 >= 1.0
+    })
+}
+
 /// Emergency candle kill switch. The presence of `MOON_CANDLES_OFF`, regardless of its value,
 /// restores pure tick mode with crosses across the full window and an empty candle layer. Intended
 /// for GPU/CPU A/B measurements.
@@ -145,6 +152,7 @@ impl ChartDataState {
         changed
     }
 
+    /// Pull market rows and refresh price, book and pending live trade-time estimates.
     pub(crate) fn sync_from_market_source(
         &mut self,
         source: &MarketDataSource,
@@ -292,7 +300,12 @@ impl ChartDataState {
             let history_from =
                 view_time0 - history_prefetch.max(chart_history_floor_ms(self.candle_view));
             let history_to = view_time0 + window_ms + history_prefetch;
-            let scan_price = device_lost || cam_px != pr.scan_cam_px;
+            let price_window = (view_time0, view_time0 + window_ms);
+            let price_scan_key = (view_time0, window_ms, pane.view.px_per_ms);
+            // Subpixel follow motion cannot justify another full retained-history scan.
+            // Width and zoom remain independent invalidators, even with a fixed right anchor.
+            let price_window_changed =
+                price_fit_window_changed(pr.price_scan_window, price_scan_key);
             let source_revs = source.market_revisions(pane.core, &pane.market);
             // The corner caption's ticker, resolved HERE rather than while drawing: the draw runs
             // per frame and this takes the source lock and a snapshot.
@@ -342,11 +355,21 @@ impl ChartDataState {
             }
             let source_generation = source_revs.map(|revs| revs.generation).unwrap_or(0);
             let source_generation_changed = source_generation != pr.source_generation;
+            let live_trade_source = source_revs.map(|revs| (revs.provider, revs.generation));
+            let mut trade_snap_changed =
+                self.draws_live_market() && pr.live_trade_source != live_trade_source;
+            if trade_snap_changed {
+                pr.live_trade_snap.reset_matches();
+                pr.live_trade_source = live_trade_source;
+            }
             // The core's chart archive was merged, prepending history OLDER than every cursor this
             // pane holds. A wake is not enough: an incremental drain starts at the cursor and can
             // never reach behind it, so this forces a full window re-read exactly once per archive.
             let source_archive = source_revs.map(|revs| revs.archive).unwrap_or(0);
             let source_archive_changed = source_archive != pr.source_archive;
+            if source_archive_changed && self.draws_live_market() {
+                pr.live_trade_snap.request_seed();
+            }
             let mut history_source_sig = 0xcbf29ce4_84222325u64;
             if let Some(revs) = source_revs {
                 history_source_sig = mix_sig(history_source_sig, revs.provider);
@@ -406,7 +429,7 @@ impl ChartDataState {
             // the visible edge has to stay in the buffer, so the budget stops one margin short. A
             // pane too narrow for any slack (an order-book-only pane floors `chart_w` at 1 px) gets
             // a zero budget and the old per-pixel behaviour, which is the correct degradation.
-            let panned_off_edge = !pane.view.follow && scan_price;
+            let panned_off_edge = !pane.view.follow && price_window_changed;
             let pan_budget_px = (history_prefetch - marker_margin).max(0.0) as f64
                 * pane.view.px_per_ms.max(1e-9) as f64;
             let pan_reset_due = panned_off_edge
@@ -515,12 +538,17 @@ impl ChartDataState {
                 pixels_changed = true;
             }
             let candle_params_opt = (!candles_off).then_some(&candle_params);
+            let scan_price = force_history_reset
+                || price_window_changed
+                || (!pane.view.follow && history_source_changed);
+            let price_scan = scan_price.then_some(price_window);
             // Automatic Y refits on every camera pixel, so a panning pane reads even when the pan
             // budget has not run out: the price scan keeps its own windowed buffer and follows
             // `scan_price` alone, independently of `force_reset`. Reading without resetting is what
             // makes the budget affordable — those pixels still get a fitted Y and an incremental
             // drain, they just do not re-upload the world.
-            let read_history = history_source_changed || force_history_reset || panned_off_edge;
+            let read_history =
+                history_source_changed || force_history_reset || price_window_changed;
             let mut history = if read_history {
                 let read_timer = crate::diag::timer();
                 // An engine holding a frozen replay answers from it and never touches the live
@@ -528,10 +556,11 @@ impl ChartDataState {
                 // that closed. The live arm below is byte-identical to what it always was, which
                 // is the point — the main chart's path is not conditional on this feature.
                 let history = match self.trade_replay.as_ref() {
-                    Some(series) => Some(series.read_into(
+                    Some(series) => Some(series.read_with_price_window(
                         pane.view.epoch_ms,
                         history_from,
                         history_to,
+                        price_scan,
                         candle_params_opt,
                         &mut pr.history_buffers,
                     )),
@@ -542,7 +571,7 @@ impl ChartDataState {
                         history_from,
                         history_to,
                         force_history_reset,
-                        scan_price,
+                        price_scan,
                         candle_params_opt,
                         &mut pr.history_cursor,
                         &mut pr.history_buffers,
@@ -581,10 +610,11 @@ impl ChartDataState {
             if capacity_changed && history.as_ref().is_some_and(|h| !h.combo_reset) {
                 let read_timer = crate::diag::timer();
                 history = match self.trade_replay.as_ref() {
-                    Some(series) => Some(series.read_into(
+                    Some(series) => Some(series.read_with_price_window(
                         pane.view.epoch_ms,
                         history_from,
                         history_to,
+                        price_scan,
                         candle_params_opt,
                         &mut pr.history_buffers,
                     )),
@@ -595,7 +625,7 @@ impl ChartDataState {
                         history_from,
                         history_to,
                         true,
-                        scan_price,
+                        price_scan,
                         candle_params_opt,
                         &mut pr.history_cursor,
                         &mut pr.history_buffers,
@@ -612,7 +642,7 @@ impl ChartDataState {
             let last_price = if let Some(history) = history {
                 if scan_price {
                     pr.cached_tick_price = history.tick_price_range;
-                    pr.scan_cam_px = cam_px;
+                    pr.price_scan_window = Some(price_scan_key);
                 }
                 let last_price = history.last_price;
                 if capacity_changed || history.combo_reset {
@@ -814,7 +844,7 @@ impl ChartDataState {
                 }
                 if scan_price {
                     pr.cached_tick_price = None;
-                    pr.scan_cam_px = cam_px;
+                    pr.price_scan_window = Some(price_scan_key);
                 }
                 let latest = source.latest_price(pane.core, &pane.market).ok();
                 pr.cached_last_price = latest;
@@ -1171,6 +1201,13 @@ impl ChartDataState {
             }
             pr.last_device_gen = device_gen;
             pr.active = true;
+            if self.draws_live_market() && history_source_changed {
+                trade_snap_changed |= self.sync_live_trade_ticks(pane.core, pr);
+            }
+            if trade_snap_changed || (pr.live_trade_snap.needs_seed() && history_source_changed) {
+                self.refresh_live_trade_geometry(*idx, pane.core, &pane.view, pr);
+                pixels_changed = true;
+            }
         }
         // Caption inputs that come from the market snapshot. The readout is only READ when a
         // caption actually asks for it: `market_ticker` takes the source lock and a versioned

@@ -12,6 +12,24 @@ use super::{
 };
 use crate::market::candles::ChartCandle;
 
+/// Private consumer cursor for exact live marker prints, independent of candle/tick visibility.
+#[derive(Default)]
+pub struct TradeTickCursor {
+    next: Option<moonproto::state::SeqRingCursor>,
+}
+
+/// Filter borrowed append-order prints without losing late resends behind newer timestamps.
+fn visit_tick_rows<'a>(
+    rows: impl Iterator<Item = &'a moonproto::state::TradeHistoryRow>,
+    from_ms: i64,
+    to_ms: i64,
+    mut visit: impl FnMut(i64, f32),
+) {
+    for row in rows.filter(|row| row.unix_millis() >= from_ms && row.unix_millis() < to_ms) {
+        visit(row.unix_millis(), row.price);
+    }
+}
+
 /// Why a core's exchange could not be addressed for a trade replay.
 ///
 /// Two DIFFERENT facts, and the window says a different thing for each: one asks the user to
@@ -184,6 +202,44 @@ impl MarketDataSource {
             meta: counters.meta,
             archive: counters.archive,
         })
+    }
+
+    /// Visit new ordinary prints in `window` at original precision, seeding retained rows once.
+    /// The callback runs under the ring read guard and must not call back into the market source.
+    /// A default cursor requests a full seed; subsequent reads visit only newly appended rows.
+    /// This performs no archive request, chart-history cursor mutation, or tape allocation.
+    pub fn visit_trade_ticks(
+        &self,
+        core: CoreId,
+        market: &str,
+        window: (i64, i64),
+        cursor: &mut TradeTickCursor,
+        mut visit: impl FnMut(i64, f32),
+    ) -> Option<()> {
+        let (from_ms, to_ms) = window;
+        if to_ms <= from_ms {
+            return Some(());
+        }
+        let client = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let provider = inner.core_provider.get(&core)?;
+            inner.clients.get(provider)?.get()?
+        };
+        let snapshot = client.snapshot_versioned()?;
+        let readers = snapshot.market_history_readers(market)?;
+        let reader = readers.futures_trades.or(readers.spot_trades)?;
+        let start = cursor.next.unwrap_or_else(|| {
+            reader.cursor_at_or_after_time(moonproto::MoonTime::from_unix_millis(from_ms))
+        });
+        // Capture the next cursor BEFORE reading: a concurrent append may be observed twice,
+        // but cannot fall into a gap between the read and cursor publication.
+        let next = reader.cursor_from_now();
+        reader.with_from_cursor(start, reader.capacity(), |view| {
+            let (first, second) = view.as_slices();
+            visit_tick_rows(first.iter().chain(second), from_ms, to_ms, &mut visit);
+        });
+        cursor.next = Some(next);
+        Some(())
     }
 
     pub fn latest_price(&self, core: CoreId, market: &str) -> Result<f32, LatestPriceError> {
@@ -1272,3 +1328,6 @@ impl MarketDataSource {
             .map(|view| (&view.book, view.book_rev)))
     }
 }
+
+#[cfg(test)]
+mod tests;

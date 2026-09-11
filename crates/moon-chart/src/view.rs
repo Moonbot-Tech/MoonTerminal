@@ -37,10 +37,8 @@
 /// fit gives the view a scale, so testing the scale would switch the fallback off after one frame
 /// and latch the pane onto whatever that first frame produced.
 ///
-/// One honest limit: `window_data` is what the CALLER believes is in the window, and prepare scans
-/// ticks over the window plus a 20% prefetch margin. Parked at the very ceiling, the newest trades
-/// just left of the plot therefore still count — the scale stays anchored to the recent price band
-/// instead of freezing completely, which is the harmless direction to be wrong in.
+/// The caller fits only visible ticks and intersecting candles; history prefetch does not
+/// contribute off-screen extrema to this range.
 ///
 /// This lives here, beside the fit it feeds, so it can be tested: its caller is in a binary crate.
 ///

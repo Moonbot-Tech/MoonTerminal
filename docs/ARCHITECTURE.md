@@ -40,6 +40,16 @@ lines, figures, news, and warnings. Loading, ready, empty, not-ready, and failed
 visible without blocking live market data, and the first successful load focuses the selected or
 newest closed-trade interval once.
 
+Live/Pause preserves the chosen time zoom. History upload bounds include prefetch, but Y fitting
+uses a separate visible interval for live data, fixtures and frozen replay. Candles intersecting
+the visible boundary contribute at their displayed timeframe, including on cached repeat reads.
+
+Live trade markers retain report prices and may estimate subsecond display time from an ordinary
+public print at the same feed-precision price within the report's second. This is not an execution
+timestamp: missing matches preserve report coordinates. A separate exact-timestamp source cursor
+works even when candles hide ticks; market-only updates replace the retained trade geometry without
+waking the panel. Provider/generation changes reset matches, and archive revisions request a reseed.
+
 Текущий live-path ушёл от старого постоянного polling и top-down переноса chart data:
 
 - MoonProto события приходят через event sink с waker.

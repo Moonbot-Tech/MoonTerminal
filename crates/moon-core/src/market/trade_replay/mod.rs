@@ -732,6 +732,27 @@ impl TradeReplaySeries {
         candle_params: Option<&CandleReadParams>,
         out: &mut ChartHistoryBuffers,
     ) -> ChartHistoryRead {
+        self.read_with_price_window(
+            epoch_ms,
+            from_rel_ms,
+            to_rel_ms,
+            Some((from_rel_ms, to_rel_ms)),
+            candle_params,
+            out,
+        )
+    }
+
+    /// Read retained replay rows while fitting Y only to the visible interval, not prefetch.
+    /// The original `read_into` API fits the whole requested interval for non-prefetch callers.
+    pub fn read_with_price_window(
+        &self,
+        epoch_ms: f64,
+        from_rel_ms: f32,
+        to_rel_ms: f32,
+        price_window: Option<(f32, f32)>,
+        candle_params: Option<&CandleReadParams>,
+        out: &mut ChartHistoryBuffers,
+    ) -> ChartHistoryRead {
         // The live path clears these before every read, and the caller relies on that: this read
         // re-emits the whole window rather than draining a live edge, so extending without
         // clearing would duplicate every point on the second frame and leave rows from a previous
@@ -756,6 +777,12 @@ impl TradeReplaySeries {
         let to_ms = ((epoch_ms + f64::from(to_rel_ms.max(from_rel_ms))).round() as i64)
             .max(from_ms.saturating_add(1));
         let tf_ms = candle_params.map_or(self.tf_ms, |p| p.tf_ms).max(1);
+        let price_window = price_window.map(|(from, to)| {
+            (
+                (epoch_ms + f64::from(from)).round() as i64,
+                (epoch_ms + f64::from(to)).round() as i64,
+            )
+        });
         // Salted by source: a tick series and its sibling candle series otherwise share
         // `(identity, tf_ms, from_bucket, to_bucket)` bit-for-bit (§4 of the tick-replay plan),
         // so the tick upgrade's revision would equal the one the pane already shipped and
@@ -794,7 +821,8 @@ impl TradeReplaySeries {
         read.combo_left_rel_ms = out.ticks.first().map(|t| (t.time_ms - epoch_ms) as f32);
         read.combo_capacity = out.ticks.len().max(1);
         read.combo_reset = true;
-        read.tick_price_range = price_range_of_ticks(&out.ticks);
+        read.tick_price_range =
+            price_window.and_then(|window| price_range_of_ticks(&out.ticks, window));
         read.last_price = out.ticks.last().map(|t| t.price);
 
         // Bars, only when the caller both wants them and does not already hold this exact series.
@@ -847,7 +875,8 @@ impl TradeReplaySeries {
         // whose bars were suppressed above, or the scale collapses the moment the series is
         // recognised as already shipped.
         if read.tick_price_range.is_none() {
-            read.tick_price_range = price_range_of_candles(&self.candles, from_ms, to_ms);
+            read.tick_price_range = price_window
+                .and_then(|(from, to)| price_range_of_candles(&self.candles, tf_ms, from, to));
         }
         if read.last_price.is_none() {
             read.last_price = self
@@ -885,14 +914,20 @@ fn bar_inside(t_open_ms: f64, tf_ms: i64, covered: (i64, i64)) -> bool {
 /// Lowest and highest finite positive price across a run of trade points.
 ///
 /// Args:
-///     ticks: Points already clipped to the window.
+///     ticks: Retained points, possibly extending beyond the visible window for prefetch.
+///     window: Inclusive visible interval in Unix milliseconds.
 ///
 /// Returns:
 ///     `(low, high)`, or `None` when no point carries a usable price.
-fn price_range_of_ticks(ticks: &[Tick]) -> Option<(f32, f32)> {
+fn price_range_of_ticks(ticks: &[Tick], window: (i64, i64)) -> Option<(f32, f32)> {
     ticks
         .iter()
-        .filter(|t| t.price.is_finite() && t.price > 0.0)
+        .filter(|t| {
+            t.price.is_finite()
+                && t.price > 0.0
+                && t.time_ms >= window.0 as f64
+                && t.time_ms <= window.1 as f64
+        })
         .fold(None, |acc: Option<(f32, f32)>, t| {
             Some(match acc {
                 None => (t.price, t.price),
@@ -901,23 +936,33 @@ fn price_range_of_ticks(ticks: &[Tick]) -> Option<(f32, f32)> {
         })
 }
 
-/// Lowest low and highest high across the bars inside a window.
+/// Lowest low and highest high across displayed candle buckets intersecting a window.
 ///
 /// Args:
 ///     candles: The whole series; bars outside the window are ignored here rather than by the
 ///         caller, so a repeat read whose bars were suppressed still gets a range.
+///     tf_ms: Displayed aggregation width; all source rows in an intersecting bucket contribute.
 ///     from_ms: Left edge of the ask.
 ///     to_ms: Right edge of the ask.
 ///
 /// Returns:
 ///     `(low, high)`, or `None` when no bar inside the window carries usable prices.
-fn price_range_of_candles(candles: &[ChartCandle], from_ms: i64, to_ms: i64) -> Option<(f32, f32)> {
+fn price_range_of_candles(
+    candles: &[ChartCandle],
+    tf_ms: i64,
+    from_ms: i64,
+    to_ms: i64,
+) -> Option<(f32, f32)> {
     candles
         .iter()
         .filter(|c| {
             c.t_open_ms.is_finite()
-                && (c.t_open_ms as i64) >= from_ms
-                && (c.t_open_ms as i64) <= to_ms
+                && crate::market::candles::candle_intersects_window(
+                    (c.t_open_ms as i64).div_euclid(tf_ms.max(1)) as f64 * tf_ms.max(1) as f64,
+                    tf_ms as f64,
+                    from_ms as f64,
+                    to_ms as f64,
+                )
                 && c.low.is_finite()
                 && c.high.is_finite()
                 && c.high > 0.0

@@ -10,7 +10,7 @@ mod replay;
 mod tests;
 mod volume;
 
-pub use read::{ReplayAddress, ReplayAddressError};
+pub use read::{ReplayAddress, ReplayAddressError, TradeTickCursor};
 pub use volume::{LiqSpanReadout, VolumeAt, VolumeSpan, VolumeSpanReadout};
 
 use std::collections::HashMap;
@@ -849,6 +849,8 @@ pub struct ChartHistoryCursor {
     last_price: Option<f32>,
     trade_rows: Vec<TradeHistoryRow>,
     scan_trade_rows: Vec<TradeHistoryRow>,
+    /// Fixture candles last uploaded by this pane, retained for viewport-only fitting without SQL.
+    fixture_candles: Vec<ChartCandle>,
     liq_rows: Vec<TradeHistoryRow>,
     last_price_rows: Vec<LastPricePoint>,
     mark_price_rows: Vec<MarkPricePoint>,
