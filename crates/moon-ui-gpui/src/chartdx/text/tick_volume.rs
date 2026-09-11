@@ -13,6 +13,30 @@ use rust_i18n::t;
 
 use super::*;
 
+/// Select only visible volume bands beneath the pointer, in the shaders' device-pixel coordinates.
+/// Tick height matches `volume_vertex`; candle height follows the uploaded per-pane style.
+fn hovered_volume_bands(
+    bounds: [f32; 4],
+    cursor: [f32; 2],
+    tick_alpha: f32,
+    candle_style: crate::chartdx::types::VolumeStyleGpu,
+) -> [bool; 2] {
+    if moon_chart::tick_volume::cursor_time(bounds, 0.0, 1.0, cursor).is_none() {
+        return [false, false];
+    }
+    let base = bounds[1] + bounds[3] - 1.0;
+    let inside = |height: f32| {
+        height.is_finite() && height > 0.0 && (base - height..=base).contains(&cursor[1])
+    };
+    let ticks = moon_chart::tick_volume::tick_ranges_visible(tick_alpha)
+        && inside((bounds[3] * 0.18).min(72.0));
+    let candle = candle_style.m[0] >= 0.5
+        && (moon_chart::tick_volume::tick_ranges_visible(candle_style.up[3])
+            || moon_chart::tick_volume::tick_ranges_visible(candle_style.down[3]))
+        && inside(bounds[3] * candle_style.m[1]);
+    [ticks, candle]
+}
+
 /// The hovered candle's own turnover, as the readout states it.
 ///
 /// One aggregate for the whole bucket. It carries its bucket width because the history tail mixes
@@ -245,14 +269,13 @@ fn tick_readout_origin(
 }
 
 impl RenderState {
-    /// Describe what traded under the cursor, anywhere in the plot.
+    /// Describe trades only while the pointer is over their visible bottom-volume band.
     ///
     /// Every ordinary print within three logical pixels of the cursor's time column is reported per
     /// side as a count and a range, never an arbitrary selected trade; the tick rows follow the
     /// native band being drawn, since that ring is what they describe. Beside them, the candle the
-    /// pointer is over contributes its own bucket turnover — the figure the bottom volume bars are
-    /// drawn from — which is why the readout is useful over the candle plot and not only over the
-    /// band along its floor.
+    /// pointer is over contributes its own bucket turnover only inside its configured volume band.
+    /// Moving back onto the candle plot hides both readouts without changing the crosshair labels.
     ///
     /// Read the upcoming native ring because text preparation runs before GPU upload preparation.
     pub(super) fn draw_tick_volume_readout(
@@ -270,6 +293,15 @@ impl RenderState {
         }
         let x_dev = self.slot_origin[0] + cursor.local[0];
         let y_dev = self.slot_origin[1] + cursor.local[1];
+        let [hover_ticks, hover_candle] = hovered_volume_bands(
+            view.bounds,
+            [x_dev, y_dev],
+            view.volume_alpha,
+            pr.volume_style,
+        );
+        if !hover_ticks && !hover_candle {
+            return Ok(());
+        }
         let Some((from, to)) = moon_chart::tick_volume::cursor_column(
             view.bounds,
             view.view_time0,
@@ -282,7 +314,7 @@ impl RenderState {
         let [_, _, width, height] = view.bounds;
         // A small column tolerates the cached bitmap's subpixel pan phase. Its explicit nearby
         // wording avoids pretending it is an exact time or selecting one of overlapping prints.
-        let ranges = if moon_chart::tick_volume::tick_ranges_visible(view.volume_alpha) {
+        let ranges = if hover_ticks {
             pr.layers.nearby_tick_volumes(from, to)
         } else {
             [None, None]
@@ -298,6 +330,7 @@ impl RenderState {
             view.time_to_px,
             [x_dev, y_dev],
         )
+        .filter(|_| hover_candle)
         .and_then(|at| {
             moon_chart::volume_bars::sample_at(&pr.volume_samples, pr.epoch_ms + at as f64)
         })
