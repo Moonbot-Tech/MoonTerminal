@@ -1,9 +1,19 @@
 //! Unit tests for the pure selection and normalization rules behind the per-core ranking.
 
 use super::{
-    core_rank_rows, core_rank_stats, distinct_core_colors, overview_ranges, thinned_labels,
+    PopupHover, PopupKey, core_rank_rows, core_rank_stats, distinct_core_colors, overview_ranges,
+    popup_limits, popup_outer_width, thinned_labels,
 };
 use moon_core::db::analytics::CoreSeries;
+
+/// Long identities retain their entire measured row and do not lose width to the vertical track.
+#[test]
+fn popup_long_rows_keep_content_and_scrollbar_width_separate() {
+    let outer = popup_outer_width(460.0, 22.0, 190.0, 8.0);
+    assert_eq!(outer - 22.0 - 8.0, 460.0);
+    assert_eq!(popup_limits(outer, 1200.0, 800.0, 8.0).0, outer);
+    assert_eq!(popup_limits(outer, 400.0, 800.0, 8.0).0, 384.0);
+}
 
 /// Build the minimum core series needed by ranking helpers.
 ///
@@ -151,4 +161,164 @@ fn core_colors_are_unique_and_stable_by_uid() {
             "uid {uid} must keep its color across order changes"
         );
     }
+}
+
+/// `charts.rs:thinned_labels` must seed the LAST bucket before the greedy pass. Deleting that seed
+/// puts the final bucket back at the mercy of the magnitude order, where a flat closing day ranks
+/// dead last and the chart ends on an unlabelled bar — the reader cannot tell a zero result from
+/// missing data.
+#[test]
+fn thinned_labels_always_label_the_final_bucket() {
+    let closing_zero = thinned_labels(&[90.0, -100.0, 80.0, 70.0, 0.0], 100.0, 30.0);
+    let single = thinned_labels(&[0.0], 100.0, 30.0);
+
+    assert_eq!(
+        closing_zero,
+        vec![1, 4],
+        "the flat closing day keeps its number"
+    );
+    assert_eq!(single, vec![0], "a one-bucket period still labels itself");
+    assert!(thinned_labels(&[], 100.0, 30.0).is_empty());
+}
+
+/// `charts.rs:thinned_labels` must make every other candidate clear the final label, not the other
+/// way round. Seeding the last bucket AFTER the greedy loop instead of before it lets the period's
+/// biggest day claim the neighbouring column first and the guaranteed final label then overlaps it.
+#[test]
+fn thinned_labels_let_the_final_bucket_displace_a_bigger_neighbour() {
+    let labels = thinned_labels(&[0.0, 0.0, 1000.0, 0.0], 100.0, 40.0);
+
+    assert!(
+        !labels.contains(&2),
+        "the biggest day yields when it cannot clear the final label"
+    );
+    assert_eq!(labels, vec![0, 3]);
+}
+
+/// `charts.rs:thinned_labels` must separate neighbours against the final label's RIGHT-ALIGNED
+/// centre (`plot_w - label_w / 2`), the position `daily_bars` actually draws it at. Reverting that
+/// arm to the shared column centre reports bucket 6 as clear by 60px when only 45px of the plot
+/// separate the two labels, and they collide on screen.
+#[test]
+fn thinned_labels_measure_the_final_label_where_it_is_drawn() {
+    let mut vals = vec![0.0; 10];
+    vals[6] = 1000.0;
+
+    let labels = thinned_labels(&vals, 200.0, 50.0);
+
+    assert!(
+        !labels.contains(&6),
+        "a bucket inside the final label's own width may not be labelled"
+    );
+    assert_eq!(labels, vec![0, 3, 9]);
+}
+
+/// Oversize content must stay inside the usable window even after font/UI or DPI changes.
+/// Removing the viewport cap or subtracting only one inset lets wrapped rows leave the window.
+#[test]
+fn popup_limits_reserve_both_window_edges() {
+    assert_eq!(popup_limits(1200.0, 860.0, 520.0, 12.0), (836.0, 496.0));
+    assert_eq!(popup_limits(600.0, 430.0, 260.0, 18.0), (394.0, 224.0));
+    assert_eq!(popup_limits(600.0, 20.0, 20.0, 18.0), (0.0, 0.0));
+}
+
+/// A centre bucket must not squeeze a readable popup into the remaining fraction of its plot.
+/// Reintroducing the nominal plot cap loses width even when the window has enough room.
+#[test]
+fn popup_limits_keep_measured_width_when_window_has_room() {
+    assert_eq!(popup_limits(500.0, 860.0, 520.0, 8.0), (500.0, 504.0));
+    assert_eq!(popup_limits(240.0, 1240.0, 800.0, 8.0), (240.0, 784.0));
+}
+
+/// Entering the popup must invalidate the source-column timer, in either callback order.
+/// Without that fence the card vanishes while the user tries to scroll its lower server names.
+#[test]
+fn popup_hover_survives_travel_from_column_to_card() {
+    let key = PopupKey::Daily(2);
+    let mut hover = PopupHover::default();
+    hover.enter(key, false);
+    let leaving_column = hover.leave(key, false).expect("column starts grace period");
+    hover.enter(key, true);
+    assert!(!hover.expire(key, leaving_column));
+    assert_eq!(
+        hover.leave(key, false),
+        None,
+        "late column leave cannot dismiss hovered card"
+    );
+
+    let leaving_card = hover.leave(key, true).expect("card starts grace period");
+    assert!(
+        hover.expire(key, leaving_card),
+        "leaving both surfaces dismisses the card"
+    );
+    assert!(
+        !hover.expire(key, leaving_card),
+        "one timer cannot dismiss twice"
+    );
+}
+
+/// Switching chart or returning across the gap must reject pending dismissal from the old owner.
+#[test]
+fn popup_hover_rejects_stale_leave_after_switch_or_return() {
+    let first = PopupKey::Cumulative(2);
+    let next = PopupKey::Kind(2);
+    let mut hover = PopupHover::default();
+    hover.enter(first, false);
+    let stale = hover.leave(first, false).expect("leave timer");
+    hover.enter(next, false);
+    assert!(!hover.expire(first, stale));
+    assert_eq!(hover.leave(first, true), None);
+
+    let stale = hover.leave(next, false).expect("new leave timer");
+    hover.enter(next, false);
+    assert!(
+        !hover.expire(next, stale),
+        "return to same column cancels dismissal"
+    );
+    let current = hover.leave(next, false).expect("current leave timer");
+    assert!(hover.expire(next, current));
+}
+
+/// Crossing another bucket en route to the visible popup must not replace that popup after entry.
+/// Removing the reveal-generation check makes a queued neighbour dwell steal scroll ownership.
+#[test]
+fn popup_entry_cancels_neighbour_dwell() {
+    let visible = PopupKey::Daily(10);
+    let crossed = PopupKey::Daily(11);
+    let mut hover = PopupHover::default();
+    hover.enter(visible, false);
+    hover.enter(crossed, false);
+    let dwell = hover.revision;
+    hover.enter(visible, true);
+    assert!(!hover.is_current(crossed, dwell));
+    assert_eq!(hover.leave(crossed, false), None);
+    let leave = hover
+        .leave(visible, true)
+        .expect("leaving popup dismisses it");
+    assert!(hover.expire(visible, leave));
+}
+
+/// A queued reveal cannot resurrect a bucket whose identity was invalidated by reload.
+#[test]
+fn popup_reload_invalidates_stale_reveal() {
+    let mut hover = PopupHover::default();
+    let daily = PopupKey::Daily(2);
+    hover.enter(daily, false);
+    let daily_dwell = hover.revision;
+    hover.reset_for_reload(false);
+    assert!(
+        hover.is_current(daily, daily_dwell),
+        "same-range daily indices remain valid"
+    );
+    hover.reset_for_reload(true);
+    assert!(!hover.is_current(daily, daily_dwell));
+
+    let kind = PopupKey::Kind(2);
+    hover.enter(kind, false);
+    let kind_dwell = hover.revision;
+    hover.reset_for_reload(false);
+    assert!(
+        !hover.is_current(kind, kind_dwell),
+        "profit-sorted kinds can reorder on any reload"
+    );
 }

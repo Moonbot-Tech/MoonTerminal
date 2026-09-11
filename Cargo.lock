@@ -3801,7 +3801,7 @@ dependencies = [
 [[package]]
 name = "moon-collections"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "indexmap",
  "moon-gpui-util",
@@ -3850,7 +3850,7 @@ dependencies = [
 [[package]]
 name = "moon-derive-refineable"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3860,7 +3860,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3944,7 +3944,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-linux"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3995,7 +3995,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-macos"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -4042,7 +4042,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-macros"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -4053,7 +4053,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-platform"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "console_error_panic_hook",
  "moon-gpui",
@@ -4066,7 +4066,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-shared-string"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "schemars",
  "serde",
@@ -4076,7 +4076,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-util"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "anyhow",
  "log",
@@ -4086,7 +4086,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-web"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -4110,7 +4110,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-wgpu"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4139,7 +4139,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-windows"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -4167,7 +4167,7 @@ dependencies = [
 [[package]]
 name = "moon-http-client"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4187,7 +4187,7 @@ dependencies = [
 [[package]]
 name = "moon-media"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -4202,7 +4202,7 @@ dependencies = [
 [[package]]
 name = "moon-perf"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "moon-collections",
  "serde",
@@ -4212,7 +4212,7 @@ dependencies = [
 [[package]]
 name = "moon-refineable"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "moon-derive-refineable",
 ]
@@ -4220,7 +4220,7 @@ dependencies = [
 [[package]]
 name = "moon-scheduler"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "async-task",
  "backtrace",
@@ -4235,7 +4235,7 @@ dependencies = [
 [[package]]
 name = "moon-sum-tree"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "heapless",
  "log",
@@ -4246,7 +4246,7 @@ dependencies = [
 [[package]]
 name = "moon-ui"
 version = "0.1.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "moon-ui-components",
  "moon-ui-components-assets",
@@ -4255,7 +4255,7 @@ dependencies = [
 [[package]]
 name = "moon-ui-components"
 version = "0.1.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -4305,7 +4305,7 @@ dependencies = [
 [[package]]
 name = "moon-ui-components-assets"
 version = "0.1.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "anyhow",
  "log",
@@ -4319,7 +4319,7 @@ dependencies = [
 [[package]]
 name = "moon-ui-components-macros"
 version = "0.1.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4370,7 +4370,7 @@ dependencies = [
 [[package]]
 name = "moon-util-macros"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#18d8bf6d29832dd952ef14d5a26a143cd6460ef8"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#8d0266785cb7e455ead07e455fdaa9ba8d547bda"
 dependencies = [
  "moon-perf",
  "quote",

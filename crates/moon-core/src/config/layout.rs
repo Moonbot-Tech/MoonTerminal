@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use super::paths;
 
+mod empty;
 mod serde_compat;
+
+pub use empty::{EmptyBlock, EmptyPlaces, EmptySlot};
 
 use serde_compat::{
     de_arrow_scale, de_auto_workspace_rail_width, de_candle_volume_alpha, de_candle_volume_height,
@@ -758,6 +761,29 @@ pub struct WindowLayout {
     pub main_empty_traders: Option<bool>,
     #[serde(default, deserialize_with = "de_lenient")]
     pub main_empty_coins: Option<bool>,
+    /// Where each of the five blocks of the empty screen is drawn, as one of nine anchors.
+    ///
+    /// Separate from the switches above because they answer different questions: the switch says
+    /// WHETHER a block is drawn, this says WHERE. A person who has switched the minute off still
+    /// has a place chosen for it, and switching it back on puts it where they left it.
+    ///
+    /// `None` means "never chosen" and takes the block's own default, which between the five
+    /// reproduces the screen the terminal shipped with. Two blocks may name the SAME anchor — they
+    /// stack there, which is exactly how the brand and its hint share the middle — so there is no
+    /// combination here that has to be repaired.
+    ///
+    /// Read leniently for the reason every widget preference here is: a hand edit, or an anchor
+    /// written by a newer build, must cost that one block its place and never the window layout.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_place_logo: Option<EmptySlot>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_place_hint: Option<EmptySlot>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_place_minute: Option<EmptySlot>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_place_traders: Option<EmptySlot>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_place_coins: Option<EmptySlot>,
     /// Whether the crowd's rule is watched, and the two lines it is watched against.
     ///
     /// The rule is not a table: it costs a connection for as long as the terminal is open, because

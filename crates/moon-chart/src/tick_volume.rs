@@ -19,38 +19,59 @@ pub struct TickVolumeRange {
     pub max: f32,
 }
 
-/// Resolve the nearby time column only inside the visible native tick-volume band.
-/// Bounds and cursor use device pixels; the 72px ceiling and 1px inset mirror all three shaders.
+/// Chart time under the cursor, relative to the chart epoch, for a cursor inside the plot.
+///
+/// The whole plot qualifies, not only the native tick-volume band along its floor: the readout
+/// answers "what traded here" for the candle the pointer is over as well as for the prints in the
+/// band, and a reader hovering a candle body is asking exactly that question. Bounds and cursor use
+/// device pixels.
+pub fn cursor_time(bounds: [f32; 4], time0: f32, time_to_px: f32, cursor: [f32; 2]) -> Option<f32> {
+    let [left, top, width, height] = bounds;
+    if bounds.iter().chain(cursor.iter()).any(|v| !v.is_finite())
+        || !time0.is_finite()
+        || !time_to_px.is_finite()
+        || time_to_px <= 0.0
+        || width <= 0.0
+        || height <= 0.0
+    {
+        return None;
+    }
+    if !(left..=left + width).contains(&cursor[0]) || !(top..=top + height).contains(&cursor[1]) {
+        return None;
+    }
+    let at = time0 + (cursor[0] - left) / time_to_px;
+    at.is_finite().then_some(at)
+}
+
+/// Resolve the nearby time column for a cursor anywhere inside the visible plot.
+///
+/// Shares [`cursor_time`]'s validation so the column and the candle lookup can never disagree about
+/// whether the pointer is on the chart at all. The +/-3px pick tolerance is in logical pixels and is
+/// scaled once, here.
 pub fn cursor_column(
     bounds: [f32; 4],
     time0: f32,
     time_to_px: f32,
     cursor: [f32; 2],
     scale: f32,
-    alpha: f32,
 ) -> Option<(f32, f32)> {
-    let [left, top, width, height] = bounds;
-    if bounds.iter().chain(cursor.iter()).any(|v| !v.is_finite())
-        || !time0.is_finite()
-        || !time_to_px.is_finite()
-        || time_to_px <= 0.0
-        || !scale.is_finite()
-        || scale <= 0.0
-        || !alpha.is_finite()
-        || alpha <= 0.0
-        || width <= 0.0
-        || height <= 0.0
-    {
+    if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
-    let base = top + height - 1.0;
-    let band = (height * 0.18).min(72.0);
-    if !(left..=left + width).contains(&cursor[0]) || !(base - band..=base).contains(&cursor[1]) {
-        return None;
-    }
+    cursor_time(bounds, time0, time_to_px, cursor)?;
+    let [left, _, width, _] = bounds;
     let from = time0 + (cursor[0] - left - 3.0 * scale).max(0.0) / time_to_px;
     let to = time0 + (cursor[0] - left + 3.0 * scale).min(width) / time_to_px;
     (from.is_finite() && to.is_finite()).then_some((from, to))
+}
+
+/// Whether the per-trade band the tick rows describe is drawn at all.
+///
+/// The rows report individual prints out of the native tick ring, so they stay tied to that ring
+/// being visualized; the candle figure beside them is a property of the candle itself and is not
+/// gated by this.
+pub fn tick_ranges_visible(alpha: f32) -> bool {
+    alpha.is_finite() && alpha > 0.0
 }
 
 /// Collect both sides in a bounded time column; skip liquidations and unusable values.

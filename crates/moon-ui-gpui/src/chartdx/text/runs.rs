@@ -55,6 +55,30 @@ impl RenderState {
         measure_text_run(&mut self.text_runs, self.text_run_cursor, ctx, text)
     }
 
+    /// Draws one bottom-volume scale label, larger and SEMIBOLD; see `VOLUME_SCALE_FONT_SIZE`.
+    pub(super) fn draw_volume_scale_text(
+        &mut self,
+        ctx: &mut GpuCanvasTextContext<'_>,
+        text: &str,
+        x: f32,
+        y: f32,
+        ax: f32,
+        ay: f32,
+        color: Hsla,
+    ) -> anyhow::Result<GpuCanvasTextMetrics> {
+        draw_volume_scale_text_run(
+            &mut self.text_runs,
+            &mut self.text_run_cursor,
+            ctx,
+            text,
+            x,
+            y,
+            ax,
+            ay,
+            color,
+        )
+    }
+
     /// Returns the order-line and cursor label size: `FONT_SIZE` plus the theme setting.
     ///
     /// Clamps the settings-slider adjustment to safe bounds so it cannot break layout.
@@ -94,6 +118,46 @@ impl RenderState {
         text: &str,
     ) -> GpuCanvasTextMetrics {
         measure_label_text_run(
+            &mut self.text_runs,
+            self.text_run_cursor,
+            ctx,
+            self.label_font_delta,
+            text,
+        )
+    }
+
+    /// Draws one line of the cursor's volume readout, a fixed step above the label size.
+    pub(super) fn draw_readout_text(
+        &mut self,
+        ctx: &mut GpuCanvasTextContext<'_>,
+        text: &str,
+        x: f32,
+        y: f32,
+        ax: f32,
+        ay: f32,
+        color: Hsla,
+    ) -> anyhow::Result<GpuCanvasTextMetrics> {
+        draw_readout_text_run(
+            &mut self.text_runs,
+            &mut self.text_run_cursor,
+            ctx,
+            self.label_font_delta,
+            text,
+            x,
+            y,
+            ax,
+            ay,
+            color,
+        )
+    }
+
+    /// Measures one line of the cursor's volume readout at the size it is drawn at.
+    pub(super) fn measure_readout_text(
+        &mut self,
+        ctx: &GpuCanvasTextContext<'_>,
+        text: &str,
+    ) -> GpuCanvasTextMetrics {
+        measure_readout_text_run(
             &mut self.text_runs,
             self.text_run_cursor,
             ctx,

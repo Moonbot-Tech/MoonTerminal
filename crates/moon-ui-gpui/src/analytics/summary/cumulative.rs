@@ -14,8 +14,8 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::charts::{
-    CHART_H, PLOT_W_NOMINAL, PopupMode, bucket_label, bucket_popup, core_color, muted_caption,
-    widest_label_w,
+    CHART_H, PLOT_W_NOMINAL, PopupKey, PopupMode, bucket_label, bucket_popup, chart_hover,
+    core_color, muted_caption, widest_label_w,
 };
 use crate::design;
 use crate::design::{moon, moon_alpha};
@@ -650,15 +650,7 @@ fn hover_row(
             .left(relative(left))
             .w(relative(right - left))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    if this.hover_cum_bucket != Some(bi) {
-                        this.hover_cum_bucket = Some(bi);
-                        cx.notify();
-                    }
-                } else if this.hover_cum_bucket == Some(bi) {
-                    this.hover_cum_bucket = None;
-                    cx.notify();
-                }
+                chart_hover(this, PopupKey::Cumulative(bi), *hovered, false, cx);
             }));
         if hover == Some(bi) {
             col = col.bg(moon_alpha(p.text_muted, 0.07));

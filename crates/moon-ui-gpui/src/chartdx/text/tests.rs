@@ -85,3 +85,66 @@ fn prepare_wires_width_derived_time_label_target() {
         "prepared time steps must not restore the fixed six-label target"
     );
 }
+
+/// The cursor's volume readout is drawn larger than an order-line label at every slider setting.
+///
+/// Breakage this pins: routing the readout back through the plain label size — the shape it had
+/// before — makes the two equal again, and the extra clamp keeps the bump from pushing the largest
+/// setting past the bound the label size is held to.
+#[test]
+fn the_volume_readout_sits_above_the_label_size_and_stays_clamped() {
+    use crate::chartdx::text::{READOUT_FONT_BUMP, label_font_px, readout_font_px};
+
+    for delta in [-6.0, -2.0, 0.0, 3.0, 12.0] {
+        assert_eq!(
+            readout_font_px(delta),
+            label_font_px(delta) + READOUT_FONT_BUMP,
+            "the readout follows the slider, one fixed step above the label"
+        );
+    }
+    // Both ends stay inside the bound `label_font_px` exists to hold.
+    assert_eq!(readout_font_px(1_000.0), 40.0);
+    assert_eq!(readout_font_px(-1_000.0), 6.0 + READOUT_FONT_BUMP);
+}
+
+/// The bottom-volume scale labels are larger and heavier than ordinary axis text.
+///
+/// Breakage this pins: restoring the axis size or the regular face for the two reference-line
+/// labels, which are read against the bars rather than against an empty gutter.
+#[test]
+fn volume_scale_labels_are_larger_and_bolder_than_the_axis() {
+    let source = include_str!("mod.rs");
+
+    assert!(source.contains("const VOLUME_SCALE_FONT_SIZE: f32 = FONT_SIZE + 1.5;"));
+    assert!(source.contains("const VOLUME_SCALE_WEIGHT: FontWeight = FontWeight::SEMIBOLD;"));
+
+    let prepare: String = include_str!("prepare.rs")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(
+        prepare.contains("self.draw_volume_scale_text(ctx,&label,plot_left+4.0,y,0.0,0.5,ink,)?")
+            || prepare
+                .contains("self.draw_volume_scale_text(ctx,&label,plot_left+4.0,y,0.0,0.5,ink)?"),
+        "the band's scale labels must take the volume-scale face, not the axis one"
+    );
+}
+
+/// A reference line too close to the band floor keeps its label off the plot's bottom edge.
+///
+/// Breakage this pins: the former fixed 6px threshold, which was already under half the axis line
+/// height and would let the larger scale face hang past the plot once it grew.
+#[test]
+fn a_scale_label_is_skipped_rather_than_hung_past_the_band_floor() {
+    use crate::chartdx::text::volume_scale_label_fits;
+
+    // The max line sits at the band's own top, so it fits as soon as the band is tall enough.
+    assert!(volume_scale_label_fits(72.0, 1.0));
+    // The average line rides low on a shallow band: no room, so no label.
+    assert!(!volume_scale_label_fits(40.0, 0.1));
+    assert!(!volume_scale_label_fits(0.0, 1.0));
+    // The boundary is the label's own half line height, not a constant.
+    let half = (11.5 + 1.5 + 4.0) * 0.5;
+    assert!(volume_scale_label_fits(half, 1.0));
+    assert!(!volume_scale_label_fits(half - 0.01, 1.0));
+}

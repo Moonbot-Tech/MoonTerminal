@@ -39,9 +39,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use gpui::{
-    Context, Entity, IntoElement, ParentElement, Pixels, Point, Render, Styled, Window, div,
-};
+use gpui::{AnyElement, App, Context, Entity, IntoElement, Pixels, Point, Styled, Window};
+use moon_core::config::layout::EmptyBlock;
 use moon_core::crowd::board::{CoinDay, DaySummary, Trader};
 use moon_core::crowd::{Standing, Wants, Wire};
 
@@ -53,6 +52,7 @@ use service::{CrowdLease, CrowdService};
 use table::Look;
 use table::motion::Motion;
 
+pub(crate) mod place;
 pub(crate) mod service;
 mod table;
 
@@ -539,60 +539,116 @@ fn rank_marks(was: &[Trader], next: &[Trader]) -> HashMap<u64, i32> {
         .collect()
 }
 
-impl Render for CrowdStatsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        diag::bump(&diag::CROWD_RENDER);
-        let _render_us = diag::scope(&diag::CROWD_RENDER_US);
-        // One moment for the whole frame: three tables read at three instants would be three
-        // snapshots of the same movement, which is a picture of nothing.
-        let now = Instant::now();
-        let look = Look::of(cx);
-        let view = cx.entity();
-        // One listener per coin, built here because this is the only place that knows how to open
-        // a chart; the tables stay free of any context.
-        let on_coin = move |coin: &str| -> table::CoinAction {
+/// The tables this view is showing, each one ready to be anchored by `place::frame`.
+///
+/// A free function over the ENTITY rather than a `Render` impl, because the empty screen has to
+/// interleave these three with the brand and its hint: two blocks anchored to the same cell stack,
+/// and blocks that came from two separate layers could only ever be drawn over each other. So the
+/// view keeps the reading, the movement and the lease, and the screen keeps the layout.
+///
+/// The view is therefore notified rather than rendered: whoever builds it observes it and repaints
+/// itself, which is what carries the twelve-a-second frame chain through to the screen.
+///
+/// Args:
+///     view: The statistics view, read for its rows and cloned into each coin's listener.
+///     width: Actual Main width; each board chooses records only if its full columns cannot fit.
+///     cx: Application context, for the theme's metrics and the read.
+///
+/// Returns:
+///     One entry per table that is switched ON, in no particular order — the anchors decide where
+///     each one goes.
+pub(crate) fn boards(
+    view: &Entity<CrowdStatsView>,
+    width: gpui::Pixels,
+    cx: &App,
+) -> Vec<(EmptyBlock, AnyElement)> {
+    diag::bump(&diag::CROWD_RENDER);
+    let _render_us = diag::scope(&diag::CROWD_RENDER_US);
+    // One moment for the whole frame: three tables read at three instants would be three
+    // snapshots of the same movement, which is a picture of nothing.
+    let now = Instant::now();
+    let look = Look::of(cx);
+    let compact = place::board_modes(width, place::board_thresholds(cx));
+    let this = view.read(cx);
+    // One listener per coin, built here because this is the only place that knows how to open
+    // a chart; the tables stay free of any context.
+    let on_coin = {
+        let view = view.clone();
+        move |coin: &str| -> table::CoinAction {
             let coin = coin.to_string();
             let view = view.clone();
             Box::new(
-                move |event: &gpui::MouseDownEvent, window: &mut Window, app| {
+                move |event: &gpui::MouseDownEvent, window: &mut Window, app: &mut App| {
                     let at = event.position;
                     view.update(app, |this, cx| this.open_coin(&coin, at, window, cx));
                 },
             )
-        };
-        div()
-            .size_full()
-            .relative()
-            // Figures in columns, compared down the page: the same family every other data surface
-            // in the terminal uses, and the reason the money lines up at all.
-            .font_family(design::mono())
-            .children(self.parts.minute.then(|| {
+        }
+    };
+    // Figures in columns, compared down the page: the same family every other data surface in the
+    // terminal uses, and the reason the money lines up at all. Set per BOARD rather than on one
+    // wrapper, because there is no longer a wrapper — each board is handed to the frame alone.
+    let mut boards: Vec<(EmptyBlock, AnyElement)> = Vec::new();
+    if this.parts.minute {
+        boards.push((
+            EmptyBlock::Minute,
+            (if compact & 1 != 0 {
+                table::narrow::minute(
+                    &this.shown.rows,
+                    this.shown.wire.unwrap_or(Wire::Opening),
+                    Some(&on_coin),
+                    &look,
+                )
+            } else {
                 table::minute(
-                    &self.shown.rows,
-                    self.shown.wire.unwrap_or(Wire::Opening),
-                    Some((&self.minute_moves, now)),
+                    &this.shown.rows,
+                    this.shown.wire.unwrap_or(Wire::Opening),
+                    Some((&this.minute_moves, now)),
                     Some(&on_coin),
                     &look,
                 )
-            }))
-            .children(self.parts.coins.then(|| {
-                table::day_coins(
-                    &self.shown.coins,
-                    Some((&self.coin_moves, now)),
-                    Some(&on_coin),
-                    &look,
-                )
-            }))
-            .children(self.parts.traders.then(|| {
-                table::day_traders(
-                    &self.shown.traders,
-                    Some((&self.trader_moves, now)),
-                    &self.trader_marks,
-                    self.shown.summary,
-                    &look,
-                )
-            }))
+            })
+            .font_family(design::mono())
+            .into_any_element(),
+        ));
     }
+    if this.parts.coins {
+        boards.push((
+            EmptyBlock::Coins,
+            (if compact & 2 != 0 {
+                table::narrow::coins(&this.shown.coins, Some(&on_coin), &look)
+            } else {
+                table::day_coins(
+                    &this.shown.coins,
+                    Some((&this.coin_moves, now)),
+                    Some(&on_coin),
+                    &look,
+                )
+                .pl(look.rank_indent())
+            })
+            .font_family(design::mono())
+            .into_any_element(),
+        ));
+    }
+    if this.parts.traders {
+        boards.push((
+            EmptyBlock::Traders,
+            (if compact & 4 != 0 {
+                table::narrow::traders(&this.shown.traders, this.shown.summary, &look)
+            } else {
+                table::day_traders(
+                    &this.shown.traders,
+                    Some((&this.trader_moves, now)),
+                    &this.trader_marks,
+                    this.shown.summary,
+                    &look,
+                )
+            })
+            .font_family(design::mono())
+            .into_any_element(),
+        ));
+    }
+    boards
 }
 
 #[cfg(test)]

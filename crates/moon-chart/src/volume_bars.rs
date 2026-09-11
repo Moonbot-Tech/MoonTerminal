@@ -129,6 +129,73 @@ pub fn visible_volume_stats(
     })
 }
 
+/// The retained bucket a chart time falls in, for the cursor readout.
+///
+/// Buckets are half-open `[t_open_ms, t_open_ms + tf_ms)`. The history tail mixes coarser buckets
+/// into the series, so membership is judged against each candle's OWN width, exactly as
+/// [`visible_volume_stats`] judges visibility. Where a coarse filler and a fine bucket both cover
+/// the instant, the NARROWEST wins: it is the more precise statement about that moment, and a
+/// readout that named the coarse total while the chart drew the fine bar would contradict the bar
+/// under the pointer.
+///
+/// The turnover it carries may be a source figure or an estimate — see [`VolumeSample`] — and this
+/// function does not distinguish them, because the sample does not carry the distinction.
+///
+/// Args:
+///     samples: Retained per-candle samples, in any order.
+///     t_ms: Absolute Unix milliseconds under the cursor.
+///
+/// Returns:
+///     The covering bucket, or `None` when the time falls in a gap or is not finite.
+pub fn sample_at(samples: &[VolumeSample], t_ms: f64) -> Option<VolumeSample> {
+    if !t_ms.is_finite() {
+        return None;
+    }
+    let mut best: Option<VolumeSample> = None;
+    for s in samples {
+        if !s.t_open_ms.is_finite()
+            || !s.tf_ms.is_finite()
+            || s.tf_ms <= 0.0
+            || t_ms < s.t_open_ms
+            || t_ms >= s.t_open_ms + s.tf_ms
+        {
+            continue;
+        }
+        if best.is_none_or(|b| s.tf_ms < b.tf_ms) {
+            best = Some(*s);
+        }
+    }
+    best
+}
+
+/// A bucket duration as the chart's own timeframe controls spell it: `30s`, `1m`, `4h`, `1d`.
+///
+/// The readout has to name the period its figure covers: the history tail mixes coarser buckets
+/// into the series, so the same pane can show a one-minute total beside a one-day one, and an
+/// unlabelled amount would leave the two indistinguishable. The token is deliberately untranslated,
+/// like every other market/technical token (`locales/README.md`).
+///
+/// Args:
+///     tf_ms: Bucket width in milliseconds.
+///
+/// Returns:
+///     The token, or `None` for a width below one millisecond or not finite — a period that cannot
+///     be named honestly gets no name rather than a rounded one.
+pub fn bucket_label(tf_ms: f64) -> Option<String> {
+    if !tf_ms.is_finite() || tf_ms < 1.0 {
+        return None;
+    }
+    let secs = (tf_ms / 1000.0).round() as i64;
+    Some(match secs {
+        s if s > 0 && s % 86_400 == 0 => format!("{}d", s / 86_400),
+        s if s > 0 && s % 3_600 == 0 => format!("{}h", s / 3_600),
+        s if s > 0 && s % 60 == 0 => format!("{}m", s / 60),
+        s if s > 0 => format!("{s}s"),
+        // Sub-second buckets round to zero seconds; name them in milliseconds rather than as `0s`.
+        _ => format!("{}ms", tf_ms.round() as i64),
+    })
+}
+
 /// Clamp a configured bottom-volume style id to a style that exists.
 ///
 /// Lives here rather than beside the other `ChartGraphicsCfg` clamps because this module owns the
