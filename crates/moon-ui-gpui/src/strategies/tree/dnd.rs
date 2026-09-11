@@ -12,6 +12,32 @@ use moon_core::feed::NewStrategySpec;
 mod tests;
 
 impl StrategiesView {
+    /// A copy made outside the tree cancels its pending cut before targets or result wording resolve.
+    pub(super) fn retire_replaced_cut(&mut self, cx: &mut Context<Self>) {
+        if self.cut.is_some() {
+            let text = cx.read_from_clipboard().and_then(|item| item.text());
+            if !ops::clipboard_matches_internal(self.clipboard.as_deref(), text.as_deref()) {
+                self.cut = None;
+                cx.notify();
+            }
+        }
+    }
+
+    /// Read the current clipboard against the destination core's authoritative strategy kinds.
+    pub(super) fn clipboard_for_core(&self, core: CoreId, cx: &App) -> Option<Vec<ops::ClipItem>> {
+        let text = cx.read_from_clipboard().and_then(|item| item.text());
+        let kinds = self
+            .backend
+            .read(cx)
+            .session
+            .store()
+            .core(core)
+            .and_then(|data| data.schema.as_ref())
+            .map(|schema| schema.kinds.as_slice())
+            .unwrap_or_default();
+        ops::resolve_clipboard(self.clipboard.as_deref(), text.as_deref(), kinds)
+    }
+
     // ── Clipboard: copy and paste ────────────────────────────────────────────
 
     /// Copy the selected strategies and retain each row's core-qualified placement anchor.
@@ -195,18 +221,13 @@ impl StrategiesView {
         if !action_cores_visible(self.workspace_cores.as_deref(), [core]) {
             return 0;
         }
+        self.retire_replaced_cut(cx);
         // A pending CUT is a move, not a create, and it takes precedence over the clipboard the
         // cut itself wrote.
         if self.cut.is_some() {
             return self.paste_cut(core, &target, cx);
         }
-        // Prefer the internal clipboard; when empty, parse the system clipboard's `clip_to_text`
-        // format so strategies or folders shared as text can be pasted.
-        let clip = self.clipboard.clone().or_else(|| {
-            cx.read_from_clipboard()
-                .and_then(|item| item.text())
-                .and_then(|t| ops::clip_from_text(&t))
-        });
+        let clip = self.clipboard_for_core(core, cx);
         let Some(clip) = clip else {
             return 0;
         };

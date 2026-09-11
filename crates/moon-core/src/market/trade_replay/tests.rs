@@ -1,5 +1,55 @@
 use super::*;
 
+/// Wide candle context must never expand either native or REST tick requests past five minutes.
+#[test]
+fn detailed_tick_window_excludes_wide_candle_context() {
+    let window = replay_window(100_000, 100_060).expect("one-minute trade");
+    let narrow = window.tick_window();
+    assert_eq!((narrow.from_ms, narrow.to_ms), (99_700_000, 100_360_000));
+    let plan = tick_plan(window, Some(60 * MINUTE_MS), None);
+    assert_eq!(plan.slices.first().map(|s| s.0), Some(99_700_000));
+    assert_eq!(plan.slices.last().map(|s| s.1), Some(100_360_000));
+    assert!(
+        plan.slices
+            .iter()
+            .all(|s| s.0 >= narrow.from_ms && s.1 <= narrow.to_ms)
+    );
+    assert_eq!(
+        plan.focus_len,
+        plan.slices.len(),
+        "no distant context tiles may be requested"
+    );
+}
+
+/// Progressive coverage changes must upload candles again even though the request ID is stable.
+#[test]
+fn growing_tick_coverage_invalidates_candle_upload() {
+    let mut series = bars_only_series();
+    series.source = TradeReplaySource::Ticks;
+    series.covered = Some((0, MINUTE_MS - 1));
+    let mut out = ChartHistoryBuffers::default();
+    let first = series.read_into(
+        0.0,
+        0.0,
+        (3 * MINUTE_MS) as f32,
+        Some(&candle_params(0)),
+        &mut out,
+    );
+    series.covered = Some((0, 2 * MINUTE_MS - 1));
+    let next = series.read_into(
+        0.0,
+        0.0,
+        (3 * MINUTE_MS) as f32,
+        Some(&candle_params(first.candles_revision)),
+        &mut out,
+    );
+    assert!(
+        next.candles_changed,
+        "new tick chunks must remove newly covered candles"
+    );
+    assert_ne!(next.candles_revision, first.candles_revision);
+}
+
 const MINUTE_MS: i64 = 60_000;
 
 fn candle(t_open_ms: i64, low: f32, high: f32, close: f32) -> ChartCandle {
@@ -259,11 +309,11 @@ fn cache_coverage_rejects_prefixes_and_oversized_holes() {
 /// floors, reject reversed or non-positive stamps, and retain a pre-epoch trade at the Unix epoch.
 #[test]
 fn replay_window_accepts_same_second_stamps_and_rejects_invalid_inputs() {
-    let same_second = replay_window(10_000, 10_000).expect("same-second trade");
+    let same_second = replay_window(100_000, 100_000).expect("same-second trade");
     assert_eq!(
         (same_second.from_ms, same_second.to_ms),
-        (6_400_000, 11_200_000),
-        "a same-second trade needs the 60-minute lead and 20-minute trail floors"
+        (78_400_000, 107_200_000),
+        "a same-second trade needs the six-hour lead and two-hour trail floors"
     );
     assert!(
         !same_second.over_budget,
@@ -295,70 +345,27 @@ fn replay_window_accepts_same_second_stamps_and_rejects_invalid_inputs() {
 /// each floor; replacing `pad_ms.max(LEAD_FLOOR_MS)` with addition doubles long replay requests.
 #[test]
 fn replay_window_uses_maximum_floors_and_proportional_context() {
-    let ten_hour_open_s = 200_000;
-    let ten_hour_close_s = ten_hour_open_s + 10 * 60 * 60;
-    let ten_hour = replay_window(ten_hour_open_s, ten_hour_close_s).expect("valid ten-hour trade");
-    let ten_hour_open_ms = ten_hour_open_s * 1_000;
-    let ten_hour_close_ms = ten_hour_close_s * 1_000;
-
-    assert_eq!(
-        ten_hour_open_ms - ten_hour.from_ms,
-        5 * 60 * MINUTE_MS,
-        "replay_window changing pad_ms.max(LEAD_FLOOR_MS) to addition would inflate a ten-hour trade beyond its five-hour lead"
-    );
-    assert_eq!(
-        ten_hour.to_ms - ten_hour_close_ms,
-        5 * 60 * MINUTE_MS,
-        "replay_window changing pad_ms.max(TRAIL_FLOOR_MS) to addition would inflate a ten-hour trade beyond its five-hour trail"
-    );
-
-    let short_open_s = 10_000;
-    let short_close_s = short_open_s + 60;
-    let short = replay_window(short_open_s, short_close_s).expect("valid short trade");
-    let short_open_ms = short_open_s * 1_000;
-    let short_close_ms = short_close_s * 1_000;
-
-    assert_eq!(
-        short_open_ms - short.from_ms,
-        60 * MINUTE_MS,
-        "replay_window removing LEAD_FLOOR_MS would leave a one-minute trade without 60 minutes of lead"
-    );
-    assert_eq!(
-        short.to_ms - short_close_ms,
-        20 * MINUTE_MS,
-        "replay_window removing TRAIL_FLOOR_MS would leave a one-minute trade without 20 minutes of trail"
-    );
-    assert_eq!(
-        short.span_ms(),
-        80 * MINUTE_MS + 60 * 1_000,
-        "replay_window summing floors with padding would make a one-minute trade wider than its stated floors"
-    );
-
-    let two_hour = replay_window(100_000, 100_000 + 2 * 60 * 60).expect("valid two-hour trade");
-    let four_hour = replay_window(100_000, 100_000 + 4 * 60 * 60).expect("valid four-hour trade");
-    let two_hour_open_ms = 100_000 * 1_000;
-    let four_hour_open_ms = 100_000 * 1_000;
-
-    assert_eq!(
-        two_hour_open_ms - two_hour.from_ms,
-        60 * MINUTE_MS,
-        "replay_window adding LEAD_FLOOR_MS would inflate proportional context for a two-hour trade"
-    );
-    assert_eq!(
-        four_hour_open_ms - four_hour.from_ms,
-        2 * 60 * MINUTE_MS,
-        "replay_window adding LEAD_FLOOR_MS would inflate proportional context for a four-hour trade"
-    );
-    assert_eq!(
-        four_hour_open_ms - four_hour.from_ms,
-        2 * (two_hour_open_ms - two_hour.from_ms),
-        "replay_window bypassing proportional padding would stop longer trades from receiving double the lead"
-    );
-    assert_eq!(
-        four_hour.to_ms - (100_000 + 4 * 60 * 60) * 1_000,
-        2 * 60 * MINUTE_MS,
-        "replay_window replacing proportional padding with TRAIL_FLOOR_MS would cap a four-hour trade at 20 minutes of trail"
-    );
+    let open_s = 200_000;
+    let open_ms = open_s * 1_000;
+    for (held_hours, lead_hours, trail_hours) in [(0, 6, 2), (4, 6, 2), (16, 8, 8), (32, 16, 16)] {
+        let close_s = open_s + held_hours * 60 * 60;
+        let window = replay_window(open_s, close_s).expect("valid trade");
+        assert_eq!(
+            open_ms - window.from_ms,
+            lead_hours * 60 * MINUTE_MS,
+            "the lead must retain six hours or half the holding time, whichever is greater"
+        );
+        assert_eq!(
+            window.to_ms - close_s * 1_000,
+            trail_hours * 60 * MINUTE_MS,
+            "the trail must retain two hours or half the holding time, whichever is greater"
+        );
+        assert_eq!(
+            window.span_ms(),
+            (held_hours + lead_hours + trail_hours) * 60 * MINUTE_MS,
+            "context floors must not be added on top of proportional padding"
+        );
+    }
 }
 
 /// `market/trade_replay/mod.rs:replay_window` must trim only context; restoring its centred
@@ -380,11 +387,11 @@ fn replay_window_keeps_trade_and_floors_when_trimming_the_budget() {
         "replay_window restoring a centred MAX_SPAN_MS clip would hide the exit outside its chart"
     );
     assert!(
-        open_ms - long.from_ms >= 60 * MINUTE_MS,
+        open_ms - long.from_ms >= 6 * 60 * MINUTE_MS,
         "replay_window trimming past LEAD_FLOOR_MS would remove required context before the entry"
     );
     assert!(
-        long.to_ms - close_ms >= 20 * MINUTE_MS,
+        long.to_ms - close_ms >= 2 * 60 * MINUTE_MS,
         "replay_window trimming past TRAIL_FLOOR_MS would remove required context after the exit"
     );
     assert!(
@@ -392,7 +399,7 @@ fn replay_window_keeps_trade_and_floors_when_trimming_the_budget() {
         "replay_window retaining floors beyond MAX_SPAN_MS must label the wider request over_budget"
     );
 
-    let threshold_ms = 7 * 24 * 60 * MINUTE_MS - 80 * MINUTE_MS;
+    let threshold_ms = 7 * 24 * 60 * MINUTE_MS - 8 * 60 * MINUTE_MS;
     let just_under_s = threshold_ms / 1_000 - 60;
     let just_over_s = threshold_ms / 1_000 + 60;
     let just_under =
@@ -510,7 +517,7 @@ fn tick_plan_prioritizes_focus_and_keeps_every_prefix_contiguous_after_clipping(
     );
     assert!(
         plan.slices[0].0 <= window.open_ms && window.open_ms <= plan.slices[0].1,
-        "the 80-minute scalp's entry belongs to the very first fetched slice"
+        "the eight-hour scalp window's entry belongs to the very first fetched slice"
     );
     let focus_slices = &plan.slices[..plan.focus_len];
     assert_eq!(

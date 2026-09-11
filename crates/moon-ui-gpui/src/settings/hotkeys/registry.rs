@@ -284,6 +284,7 @@ fn build_rows() -> Vec<Row> {
         key(G::Chart, KeySlot::ChartShot),
         key(G::Draw, KeySlot::SwitchFigure),
         key(G::Draw, KeySlot::DrawHline),
+        key(G::Draw, KeySlot::DrawHorizontalRay),
         key(G::Draw, KeySlot::DrawSegment),
         key(G::Draw, KeySlot::DrawTriangle),
         key(G::Draw, KeySlot::DrawChannel),

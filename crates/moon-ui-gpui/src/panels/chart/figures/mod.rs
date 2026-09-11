@@ -31,6 +31,9 @@ pub(super) use self::draft::FigDraft;
 /// Figure-line hit-test threshold in pixels before scaling by pixels-per-point, matching order lines.
 const HIT_PX: f32 = 6.0;
 
+/// Magnet radius in logical pixels, converted once to chart device pixels.
+const SNAP_PX: f32 = 8.0;
+
 /// Glyph shown beside the crosshair while the Sells-to-zone drawing mode is armed.
 ///
 /// A mark, not a word: it sits ON the chart next to the pointer, where a label would cover price.
@@ -47,10 +50,11 @@ pub(super) struct FigDrag {
     pub grab: Grab,
     /// Cursor position, in data coordinates, of the previous drag step.
     ///
-    /// Dragging applies the DELTA between steps rather than moving the figure to an absolute
-    /// target: the figure then follows the cursor without jumping to it, and a price-only tool
-    /// drops the time component by itself instead of needing a per-tool anchor table here.
+    /// Body dragging applies the delta between steps. Handles use their original grab offset
+    /// when unsnapped so a magnet correction cannot permanently displace later free movement.
     pub last: FigNode,
+    /// Original handle minus press position; absent for body dragging.
+    pub grab_offset: Option<FigNode>,
     /// Whether any step actually moved the figure.
     ///
     /// A tool may refuse a step — Moonbot's own Fibonacci refuses a purely sideways drag, since its
@@ -73,6 +77,38 @@ impl ChartPanel {
             .with_container(|c| c.pane(pane).map(|p| (p.core, p.market.clone())))
     }
 
+    /// Resolve a drawing endpoint from the plotted market data while the modifier is held.
+    /// Trading bands keep their existing pointer prices and never use the drawing magnet.
+    fn fig_pointer_node(&self, pane: usize, pos: (f32, f32), map: &PaneMap, snap: bool) -> FigNode {
+        if snap
+            && let Some(node) = self.chart.nearest_figure_snap(
+                pane,
+                pos,
+                map.plot,
+                map,
+                SNAP_PX * self.last_ppp.max(1.0),
+            )
+        {
+            return node;
+        }
+        map.node_at(pos)
+    }
+
+    /// Re-evaluate an active figure at the stationary cursor when its magnet modifier changes.
+    pub(super) fn note_fig_modifiers(&mut self, snap: bool, cx: &mut Context<Self>) {
+        let Some(pos) = self.input.cursor else { return };
+        if self.fig_draft.is_none() && self.fig_drag.is_none() {
+            return;
+        }
+        self.fig_draft_probe = None;
+        let pressed = self.fig_drag.is_some()
+            || self
+                .fig_draft
+                .as_ref()
+                .is_some_and(|draft| draft.down.is_some());
+        self.update_fig_pointer(pos, true, pressed, snap, cx);
+    }
+
     /// Handle a left-button press for the figure layer.
     ///
     /// Interaction requires a true `draw_mod` gate. The caller sets this gate when the secondary
@@ -81,10 +117,12 @@ impl ChartPanel {
     /// grabbed first — which needs no armed tool, since a figure is grabbable whenever it is drawn;
     /// otherwise the click places the next node, which does. Returns whether the figure layer
     /// consumed it.
+    /// `snap` is the actual secondary modifier state, separate from the ongoing-draft gate.
     pub(super) fn try_fig_click(
         &mut self,
         pos: (f32, f32),
         draw_mod: bool,
+        snap: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         // Match Moonbot: starting a draft or grabbing a figure requires the secondary modifier.
@@ -123,7 +161,7 @@ impl ChartPanel {
         if !draw_mode {
             return false;
         }
-        let node = map.node_at(pos);
+        let node = self.fig_pointer_node(pane, pos, &map, snap && !armed);
         self.fig_draw_click(pane, tool, node, &[], armed, cx);
         // Retain the press for the drag-release gesture in `try_fig_release`. On the draft itself,
         // so a figure finished by this very click leaves no press behind at all.
@@ -286,7 +324,7 @@ impl ChartPanel {
         let Some(map) = self.pane_map(pane) else {
             return false;
         };
-        let node = map.node_at(pos);
+        let node = self.fig_pointer_node(pane, pos, &map, draw_mod && !armed);
         // Read BEFORE the release node is placed: what a tool derives from a gesture is defined
         // against a draft holding the press alone, and placing first would make that test fail.
         // The release node and the derived ones then go in together, so a tool drawn by dragging
@@ -423,6 +461,13 @@ impl ChartPanel {
                 .get(core, &market, sel_id)
                 .and_then(|fig| pick_handle(&fig.kind, pos, map, threshold));
             if let Some(i) = grab {
+                let pointer = map.node_at(pos);
+                let grab_offset = store
+                    .get(core, &market, sel_id)
+                    .and_then(|fig| fig.kind.shape().handle(i))
+                    .map(|node| {
+                        FigNode::new(node.time_ms - pointer.time_ms, node.price - pointer.price)
+                    });
                 drop(store);
                 self.fig_drag = Some(FigDrag {
                     core,
@@ -431,6 +476,7 @@ impl ChartPanel {
                     pane,
                     grab: Grab::Handle(i),
                     last: map.node_at(pos),
+                    grab_offset,
                     moved: false,
                 });
                 // Publish the drag, as the body branch below does: the renderer suppresses a
@@ -466,6 +512,7 @@ impl ChartPanel {
             pane,
             grab: Grab::Body,
             last: map.node_at(pos),
+            grab_offset: None,
             moved: false,
         });
         self.sync_fig_visual(cx);
@@ -477,6 +524,7 @@ impl ChartPanel {
     /// `pressed_left` reports whether the left button remains held. The return value reports an
     /// active drag or a later preview/hover change; cancelling a draft after drawing mode is disabled
     /// synchronizes visuals but can still return `false`, especially when outside the chart.
+    /// `snap` attracts drawing endpoints and handles to visible market points only while held.
     ///
     /// It is NOT a "repaint the GPUI tree" request, and every caller discards it: everything this
     /// updates reaches the screen through the chart's own pass. A caller that ever does need the
@@ -486,8 +534,18 @@ impl ChartPanel {
         pos: (f32, f32),
         within: bool,
         pressed_left: bool,
+        snap: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        // A draft's old prices cannot be reprojected onto the market that replaced its pane.
+        if self.fig_draft.as_ref().is_some_and(|draft| {
+            self.fig_pane_key(draft.pane)
+                .is_none_or(|(core, market)| core != draft.core || market != draft.market)
+        }) {
+            self.fig_draft = None;
+            self.fig_draft_probe = None;
+            self.sync_fig_visual(cx);
+        }
         // Cancel the draft when the tool was disarmed while the cursor sat still. `sync_fig_visual`
         // already does this the moment it happens; this is the second guard, for a draft started
         // before that path could run.
@@ -536,6 +594,15 @@ impl ChartPanel {
                 self.sync_fig_visual(cx);
             }
             if let Some(drag) = &self.fig_drag {
+                // A switched/replaced pane must never provide another market's snap target.
+                if self
+                    .fig_pane_key(drag.pane)
+                    .is_none_or(|(core, market)| core != drag.core || market != drag.market)
+                {
+                    self.fig_drag = None;
+                    self.sync_fig_visual(cx);
+                    return false;
+                }
                 // The map of the pane the drag STARTED on, never the one under the cursor. The
                 // cursor may cross into a neighbouring pane of the stack, which shows another
                 // market on its own time and price scale; a delta measured across two different
@@ -544,6 +611,21 @@ impl ChartPanel {
                     return false;
                 };
                 let cur = map.node_at(pos);
+                let target = if snap && matches!(drag.grab, Grab::Handle(_)) {
+                    self.chart.nearest_figure_snap(
+                        drag.pane,
+                        pos,
+                        map.plot,
+                        &map,
+                        SNAP_PX * self.last_ppp.max(1.0),
+                    )
+                } else {
+                    None
+                }
+                .or_else(|| {
+                    drag.grab_offset
+                        .map(|offset| cur.shifted(offset.time_ms, offset.price))
+                });
                 let (dt_ms, dp) = (cur.time_ms - drag.last.time_ms, cur.price - drag.last.price);
                 let (core, market, id, grab, dpane) = (
                     drag.core,
@@ -560,7 +642,20 @@ impl ChartPanel {
                         .read(cx)
                         .figures
                         .borrow_mut()
-                        .edit(core, &market, id, |fig| drag_figure(fig, grab, dt_ms, dp));
+                        .edit(core, &market, id, |fig| {
+                            // Correct from the actual handle, not the grab cursor: the latter can
+                            // be several pixels away and would leave a permanent snap offset.
+                            let delta = match (grab, target) {
+                                (Grab::Handle(i), Some(target)) => {
+                                    fig.kind.shape().handle(i).map(|at| {
+                                        (target.time_ms - at.time_ms, target.price - at.price)
+                                    })
+                                }
+                                _ => None,
+                            };
+                            let (dt, dp) = delta.unwrap_or((dt_ms, dp));
+                            drag_figure(fig, grab, dt, dp)
+                        });
                 if let Some(d) = self.fig_drag.as_mut() {
                     d.moved |= edited;
                 }
@@ -590,17 +685,18 @@ impl ChartPanel {
         }
         // Move the draft's preview endpoint with the cursor while it remains on the draft pane.
         let draft_pane = self.fig_draft_pane(pos).filter(|_| {
-            // Same Delphi threshold the hover hit-test uses (INPUT_HOTPATH_NORMS §1): raw
-            // MouseMove arrives far more often than the cursor moves, and each accepted move
-            // rebuilds this pane's whole figure geometry.
-            let due = super::trade::hover_probe_due(self.fig_draft_probe, pos);
+            // Free movement keeps the existing threshold. A live magnet resolves every position:
+            // skipping across its radius boundary would preview a different point than a click.
+            let due = snap || super::trade::hover_probe_due(self.fig_draft_probe, pos);
             if due {
                 self.fig_draft_probe = Some(pos);
             }
             due
         });
-        if let Some(map) = draft_pane.and_then(|dp| self.pane_map(dp)) {
-            let node = map.node_at(pos);
+        if let Some((pane, map)) = draft_pane.and_then(|dp| self.pane_map(dp).map(|map| (dp, map)))
+        {
+            let armed = self.backend.read(cx).sells_zone_armed();
+            let node = self.fig_pointer_node(pane, pos, &map, snap && !armed);
             // From the same accepted position as the cursor node above, so the previewed figure is
             // the one `make` would build from the nodes being shown rather than a blend of two
             // pointer positions a fraction of a pixel apart.

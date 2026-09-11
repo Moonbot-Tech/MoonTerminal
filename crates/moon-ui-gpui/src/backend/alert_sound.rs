@@ -56,7 +56,10 @@ impl Backend {
     ///
     /// Args:
     ///     detect_played: Whether the detect scan already used this drain's one sound.
-    pub(crate) fn play_price_alert_sounds(&mut self, detect_played: bool) {
+    ///
+    /// Returns:
+    ///     Whether this drain's shared player budget has been spent, including detects.
+    pub(crate) fn play_price_alert_sounds(&mut self, detect_played: bool) -> bool {
         // Cloned once for the whole pass rather than per core: the handle is an `Arc` clone, while
         // each `latest_price` below takes the source's read lock.
         let source = self.session.market_source();
@@ -201,6 +204,7 @@ impl Backend {
                 played = true;
             }
         }
+        played
     }
 }
 

@@ -39,6 +39,7 @@
 mod coin_menu;
 pub(crate) mod coin_open;
 pub(crate) mod coin_search;
+pub(crate) mod color_picker;
 mod core_broadcast;
 mod core_combo;
 mod core_group_dialogs;

@@ -313,6 +313,8 @@ pub enum KeySlot {
     SwitchFigure,
     ChartShot,
     DrawHline,
+    /// Optional one-click horizontal ray shortcut.
+    DrawHorizontalRay,
     DrawSegment,
     DrawTriangle,
     DrawChannel,
@@ -328,7 +330,7 @@ impl KeySlot {
     /// unenumerated. What checks it is a test that serializes the config with every slot written a
     /// marker and looks for a stored keystroke that kept its own value: the STRUCT is the reference,
     /// never this list, because a test that walks this list to verify this list proves nothing.
-    pub const NAMED: [Self; 26] = [
+    pub const NAMED: [Self; 27] = [
         Self::CancelBuy,
         Self::PanicSell,
         Self::PanicSellOne,
@@ -349,6 +351,7 @@ impl KeySlot {
         Self::SwitchFigure,
         Self::ChartShot,
         Self::DrawHline,
+        Self::DrawHorizontalRay,
         Self::DrawSegment,
         Self::DrawTriangle,
         Self::DrawChannel,
@@ -403,6 +406,7 @@ impl KeySlot {
             Self::SwitchFigure => "switch_figure",
             Self::ChartShot => "chart_shot",
             Self::DrawHline => "draw_hline",
+            Self::DrawHorizontalRay => "draw_horizontal_ray",
             Self::DrawSegment => "draw_segment",
             Self::DrawTriangle => "draw_triangle",
             Self::DrawChannel => "draw_channel",
@@ -706,6 +710,7 @@ impl HotkeysConfig {
             KeySlot::SwitchFigure => &self.switch_figure,
             KeySlot::ChartShot => &self.chart_shot,
             KeySlot::DrawHline => &self.draw_hline,
+            KeySlot::DrawHorizontalRay => &self.draw_horizontal_ray,
             KeySlot::DrawSegment => &self.draw_segment,
             KeySlot::DrawTriangle => &self.draw_triangle,
             KeySlot::DrawChannel => &self.draw_channel,
@@ -753,6 +758,7 @@ impl HotkeysConfig {
             KeySlot::SwitchFigure => &mut self.switch_figure,
             KeySlot::ChartShot => &mut self.chart_shot,
             KeySlot::DrawHline => &mut self.draw_hline,
+            KeySlot::DrawHorizontalRay => &mut self.draw_horizontal_ray,
             KeySlot::DrawSegment => &mut self.draw_segment,
             KeySlot::DrawTriangle => &mut self.draw_triangle,
             KeySlot::DrawChannel => &mut self.draw_channel,
@@ -1015,6 +1021,9 @@ pub struct HotkeysConfig {
     /// inherit, not because Alt is unavailable — it reaches the handler on both platforms.
     #[serde(default = "default_draw_hline")]
     pub draw_hline: String,
+    /// Optional shortcut for the one-click horizontal ray; absent means unassigned.
+    #[serde(default)]
+    pub draw_horizontal_ray: String,
     #[serde(default = "default_draw_segment")]
     pub draw_segment: String,
     #[serde(default = "default_draw_triangle")]
@@ -1152,6 +1161,7 @@ impl Default for HotkeysConfig {
             switch_figure: default_switch_figure(),
             chart_shot: default_chart_shot(),
             draw_hline: default_draw_hline(),
+            draw_horizontal_ray: String::new(),
             draw_segment: default_draw_segment(),
             draw_triangle: default_draw_triangle(),
             draw_channel: default_draw_channel(),

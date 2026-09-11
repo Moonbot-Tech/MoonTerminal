@@ -111,3 +111,49 @@ fn graphite_is_dark_while_light_remains_the_only_light_mode() {
     assert!(!UiThemeMode::Graphite.is_light());
     assert!(!UiThemeMode::Dark.is_light());
 }
+
+/// `config::store::read_servers` must continue accepting a pre-cut Telegram table whose removed
+/// `default_report_days` and `pushes` keys are unknown to `TelegramConfig`; otherwise saving the
+/// decoded configuration would strand the user's encrypted core credentials behind a parse error.
+#[test]
+fn legacy_telegram_keys_decode_and_are_dropped_without_losing_surviving_values() {
+    let legacy = r#"
+        [[servers]]
+        uid = 41
+        name = "alpha"
+        key = "core-secret"
+
+        [telegram]
+        token = "bot-secret"
+        authorized_chat_ids = [1001, -1002]
+        mini_app_enabled = true
+        default_report_days = 7
+
+        [telegram.pushes]
+        reports = true
+    "#;
+
+    let decoded: ServersFile = toml::from_str(legacy)
+        .expect("a servers.enc payload from the previous Telegram build must decode");
+
+    assert_eq!(decoded.servers.len(), 1);
+    assert_eq!(decoded.servers[0].uid, 41);
+    assert_eq!(decoded.servers[0].name, "alpha");
+    assert_eq!(decoded.servers[0].key.expose(), "core-secret");
+    assert_eq!(decoded.telegram.token.expose(), "bot-secret");
+    assert_eq!(decoded.telegram.authorized_chat_ids, vec![1001, -1002]);
+    assert!(decoded.telegram.mini_app_enabled);
+
+    let rewritten = toml::to_string(&decoded)
+        .expect("the accepted legacy payload must remain serializable after the migration");
+    assert!(
+        !rewritten.contains("default_report_days") && !rewritten.contains("[telegram.pushes]"),
+        "the next save intentionally removes only the retired Telegram keys: {rewritten}"
+    );
+    assert!(rewritten.contains("uid = 41"));
+    assert!(rewritten.contains("name = \"alpha\""));
+    assert!(rewritten.contains("key = \"core-secret\""));
+    assert!(rewritten.contains("token = \"bot-secret\""));
+    assert!(rewritten.contains("authorized_chat_ids = [1001, -1002]"));
+    assert!(rewritten.contains("mini_app_enabled = true"));
+}

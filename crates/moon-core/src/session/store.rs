@@ -1301,8 +1301,10 @@ impl CoreData {
             // The build number above IS, which is why it sits in an arm of its own: it belongs to
             // one core's retained state, while a venue and a base currency belong to the session
             // manager's cross-core coordination.
-            FeedMsg::Identity { .. } | FeedMsg::CoreBase { .. } | FeedMsg::MarketDataChanged(_) => {
-            }
+            FeedMsg::Identity { .. }
+            | FeedMsg::CoreBase { .. }
+            | FeedMsg::MarketDataChanged(_)
+            | FeedMsg::TradeSounds(_) => {}
         }
     }
 

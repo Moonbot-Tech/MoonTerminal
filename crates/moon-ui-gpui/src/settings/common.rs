@@ -155,7 +155,7 @@ pub(super) fn color_row(
         .min_h(design::fit_h_px(cx, 28.0, 14.0, 7.0))
         .gap(design::ui_px(cx, 10.0))
         .items_center()
-        .child(MoonColorPicker::new(st))
+        .child(MoonColorPicker::new(st).colors(design::picker_palette()))
         .child(
             div()
                 .text_color(rgba_from(p.text_soft, 1.0))

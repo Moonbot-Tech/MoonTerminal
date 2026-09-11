@@ -30,6 +30,7 @@
 //! the candle stage that ran first, so the window always has SOMETHING to show while the reasoned
 //! caption explains what is missing and why.
 
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -152,6 +153,8 @@ struct OutcomeKey {
 /// [`TradeReplaySeries::partial`], cover only part of the window.
 #[derive(Clone, Debug)]
 pub(crate) struct TickStage {
+    /// Previously published cache answer; every retry must retain at least this tick span.
+    baseline: Option<TradeReplaySeries>,
     /// Which venue endpoint to ask.
     route: TradeRoute,
     /// The ring key this stage's answer replaces on success.
@@ -168,6 +171,48 @@ pub(crate) struct TickStage {
 pub(crate) enum Job {
     Candles(TradeReplayRequest),
     Ticks(TradeReplayRequest, TickStage),
+    Native(TradeReplayRequest, NativeWait),
+}
+
+/// One bounded native follow-up independent of public tick-route eligibility.
+pub(crate) struct NativeWait {
+    fallback: TradeReplayOutcome,
+    next: Instant,
+    expires: Instant,
+}
+
+impl NativeWait {
+    /// Keep the original terminal outcome so a timeout does not leave a loading caption behind.
+    fn new(fallback: TradeReplayOutcome, now: Instant) -> Self {
+        Self {
+            fallback,
+            next: now + Duration::from_millis(500),
+            expires: now + Duration::from_secs(30),
+        }
+    }
+
+    /// Finish on usable native data or expiry; otherwise retain the original fallback and retry.
+    fn advance(
+        &mut self,
+        native: Option<TradeReplaySeries>,
+        now: Instant,
+    ) -> Option<TradeReplayOutcome> {
+        let required = match &self.fallback {
+            TradeReplayOutcome::Ready(series) if series.source.is_ticks() => series.covered,
+            _ => None,
+        };
+        if let Some(series) = native.filter(|series| preserves_coverage(series.covered, required)) {
+            return Some(TradeReplayOutcome::Ready(attach_context(
+                series,
+                &self.fallback,
+            )));
+        }
+        if now >= self.expires {
+            return Some(self.fallback.clone());
+        }
+        self.next = now + Duration::from_millis(500);
+        None
+    }
 }
 
 /// Pop the next unit of work: any pending [`Job::Candles`] strictly ahead of every
@@ -181,7 +226,10 @@ pub(crate) enum Job {
 fn next_job(queue: &mut VecDeque<Job>) -> Option<Job> {
     match queue.iter().position(|job| matches!(job, Job::Candles(_))) {
         Some(index) => queue.remove(index),
-        None => queue.pop_front(),
+        None => match queue.iter().position(|job| matches!(job, Job::Native(..))) {
+            Some(index) => queue.remove(index),
+            None => queue.pop_front(),
+        },
     }
 }
 
@@ -246,7 +294,12 @@ pub(crate) enum TickVerdict {
 pub(crate) trait TickObserver {
     fn claim(&mut self, host: &str) -> Result<(), u32>;
     fn pace(&mut self, host: &str);
+    /// Publish a contiguous completed prefix without claiming unfetched time between tiles.
+    fn progress(&mut self, _ticks: &[Tick], _covered: (i64, i64)) {}
 }
+
+/// Callback that publishes a contiguous tick snapshot to one replay window.
+type TickProgress<'a> = dyn FnMut(&[Tick], (i64, i64)) + 'a;
 
 /// Bridges the pure [`TickObserver`] seam to the real [`ReplayGate`] for production use.
 ///
@@ -258,6 +311,7 @@ pub(crate) trait TickObserver {
 struct GateObserver<'a> {
     gate: &'a ReplayGate,
     host: &'static str,
+    progress: &'a mut TickProgress<'a>,
 }
 
 impl TickObserver for GateObserver<'_> {
@@ -267,6 +321,11 @@ impl TickObserver for GateObserver<'_> {
 
     fn pace(&mut self, _host: &str) {
         self.gate.pace(self.host);
+    }
+
+    /// Forward progress to this request's own reply channel.
+    fn progress(&mut self, ticks: &[Tick], covered: (i64, i64)) {
+        (self.progress)(ticks, covered);
     }
 }
 
@@ -322,9 +381,9 @@ pub fn request(request: TradeReplayRequest) {
 
 /// Worker loop: an internal priority queue, forever.
 ///
-/// One request produces up to two jobs, run at different priorities rather than back to back —
+/// Candle, tick, and bounded native follow-up jobs run at different priorities —
 /// see [`next_job`] for why an inline tick stage would break the first outcome's own promise.
-/// Every iteration blocks on [`Receiver::recv`] only when the queue is empty; otherwise every
+/// Idle waits end at the next native probe deadline; otherwise every
 /// already-queued request is drained non-blockingly first, so a burst of report-row clicks is
 /// batched into the queue before priority is applied rather than served one at a time.
 ///
@@ -335,13 +394,29 @@ fn run(rx: &Receiver<TradeReplayRequest>) {
     let gate = ReplayGate::new();
     let cache: Mutex<VecDeque<(OutcomeKey, Remembered)>> = Mutex::new(VecDeque::new());
     let mut queue: VecDeque<Job> = VecDeque::new();
+    let mut native_waits: Vec<(TradeReplayRequest, NativeWait)> = Vec::new();
     loop {
+        let now = Instant::now();
+        let mut index = 0;
+        while index < native_waits.len() {
+            if native_waits[index].1.next <= now {
+                let (request, wait) = native_waits.remove(index);
+                queue.push_back(Job::Native(request, wait));
+            } else {
+                index += 1;
+            }
+        }
         if queue.is_empty() {
-            match rx.recv() {
+            let received = match native_waits.iter().map(|(_, wait)| wait.next).min() {
+                Some(next) => rx.recv_timeout(next.saturating_duration_since(Instant::now())),
+                None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+            };
+            match received {
                 Ok(request) => queue.push_back(Job::Candles(request)),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 // Every sender lives inside `WORKER`, which is never dropped, so this is
                 // unreachable in practice; exiting is the honest answer if it ever happens.
-                Err(_) => return,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }
         while let Ok(request) = rx.try_recv() {
@@ -358,7 +433,8 @@ fn run(rx: &Receiver<TradeReplayRequest>) {
                 if request.cancel.load(Ordering::Relaxed) {
                     continue;
                 }
-                let served = serve(&agent, &gate, &cache, &request);
+                let mut served = serve_with_core(&agent, &gate, &cache, &request);
+                let native_wait = prepare_native_wait(&mut served, Instant::now());
                 // The receiver is gone whenever the window closed mid-fetch. Normal, not an
                 // error — and exactly the signal that a queued tick stage would now answer no
                 // one, so it is never queued on a failed send.
@@ -366,7 +442,24 @@ fn run(rx: &Receiver<TradeReplayRequest>) {
                 if sent {
                     if let Some(stage) = served.tick_stage {
                         queue.push_back(Job::Ticks(request, stage));
+                    } else if let Some(wait) = native_wait {
+                        native_waits.push((request, wait));
                     }
+                }
+            }
+            Job::Native(request, mut wait) => {
+                if request.cancel.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let outcome = wait.advance(read_core(&request), Instant::now());
+                if request.cancel.load(Ordering::Relaxed) {
+                    continue;
+                }
+                match outcome {
+                    Some(outcome) => {
+                        let _ = request.reply.send(outcome);
+                    }
+                    None => native_waits.push((request, wait)),
                 }
             }
             Job::Ticks(request, stage) => {
@@ -375,6 +468,7 @@ fn run(rx: &Receiver<TradeReplayRequest>) {
                 }
                 match serve_ticks(&agent, &gate, &request, &stage) {
                     Ok((series, venue_refused)) => {
+                        let series = retain_baseline(series, stage.baseline.as_ref());
                         // A PARTIAL harvest is still a COMPLETE run of the stage: the walk is
                         // done deciding what it can serve, so a reopen must not re-ask for ticks
                         // it already answered, whether or not `series.partial` is set — UNLESS
@@ -392,11 +486,26 @@ fn run(rx: &Receiver<TradeReplayRequest>) {
                             },
                         );
                         // Normal, not an error, for the same reason as the candle send above.
-                        let _ = request.reply.send(TradeReplayOutcome::Ready(series));
+                        let mut served = Served {
+                            outcome: TradeReplayOutcome::Ready(series),
+                            tick_stage: None,
+                        };
+                        let wait = prepare_native_wait(&mut served, Instant::now());
+                        if request.reply.send(served.outcome).is_ok() {
+                            if let Some(wait) = wait {
+                                native_waits.push((request, wait));
+                            }
+                        }
                     }
                     Err(Some(status)) => {
-                        let mut series = compose(&request, request.address.venue, stage.candles);
-                        series.tick_status = status;
+                        let mut series = stage.baseline.clone().unwrap_or_else(|| {
+                            compose(&request, request.address.venue, stage.candles)
+                        });
+                        series.tick_status = if series.source.is_ticks() {
+                            TickStatus::Served
+                        } else {
+                            status
+                        };
                         // `NoTrades` is authoritative — the venue answered and held nothing — and
                         // is remembered settled exactly like a `Ready` harvest. `Failed` is not:
                         // the fetch itself did not produce an answer, so a reopen must retry it.
@@ -410,7 +519,16 @@ fn run(rx: &Receiver<TradeReplayRequest>) {
                                 },
                             );
                         }
-                        let _ = request.reply.send(TradeReplayOutcome::Ready(series));
+                        let mut served = Served {
+                            outcome: TradeReplayOutcome::Ready(series),
+                            tick_stage: None,
+                        };
+                        let wait = prepare_native_wait(&mut served, Instant::now());
+                        if request.reply.send(served.outcome).is_ok() {
+                            if let Some(wait) = wait {
+                                native_waits.push((request, wait));
+                            }
+                        }
                     }
                     // The window closed; there is no one left to send a second outcome to.
                     Err(None) => {}
@@ -426,6 +544,161 @@ struct Served {
     /// `Some` only when the CANDLE outcome above was `Ready`, so `run` may queue it onto the
     /// BACK of the deque; see [`tick_stage_for`] for the four conditions that gate it.
     tick_stage: Option<TickStage>,
+}
+
+/// Arm native observation whenever no public tick job can complete this candle/failed answer.
+fn prepare_native_wait(served: &mut Served, now: Instant) -> Option<NativeWait> {
+    if served.tick_stage.is_some()
+        || matches!(&served.outcome, TradeReplayOutcome::Ready(series)
+            if series.source == TradeReplaySource::CoreTicks || (series.source.is_ticks()
+                && preserves_coverage(series.covered, Some(series.window.focus()))))
+    {
+        return None;
+    }
+    let wait = NativeWait::new(served.outcome.clone(), now);
+    if let TradeReplayOutcome::Ready(series) = &mut served.outcome {
+        series.tick_status = if series.source.is_ticks() {
+            TickStatus::Streaming
+        } else {
+            TickStatus::AwaitingCore
+        };
+    }
+    Some(wait)
+}
+
+/// Preserve native ticks even when candle context fails, and carry an honest caption state.
+fn attach_context(
+    mut native: TradeReplaySeries,
+    context: &TradeReplayOutcome,
+) -> TradeReplaySeries {
+    match context {
+        TradeReplayOutcome::Ready(series) if !series.candles.is_empty() => {
+            native.candles = series.candles.clone();
+        }
+        _ => native.tick_status = TickStatus::ContextUnavailable,
+    }
+    native
+}
+
+/// Prefer the core archive before paying for public history, rechecking after candles arrive.
+fn serve_with_core(
+    agent: &ureq::Agent,
+    gate: &ReplayGate,
+    cache: &Mutex<VecDeque<(OutcomeKey, Remembered)>>,
+    request: &TradeReplayRequest,
+) -> Served {
+    core_first(|| read_core(request), || serve(agent, gate, cache, request))
+}
+
+/// Keep wide candle context and replace only the narrow tick stage with core data.
+///
+/// The callback seam verifies request avoidance without making a live exchange request. A
+/// second read observes an archive that completed while the candle fallback was running.
+fn core_first(
+    mut read_core: impl FnMut() -> Option<TradeReplaySeries>,
+    fetch_candles: impl FnOnce() -> Served,
+) -> Served {
+    let initial = read_core();
+    let mut served = fetch_candles();
+    // A previously cached exchange tick answer already avoids a tick request and may cover
+    // more context than the core. Never replace it with a narrower local answer.
+    if matches!(&served.outcome, TradeReplayOutcome::Ready(series) if series.source.is_ticks()) {
+        return served;
+    }
+    let Some(series) = initial.or_else(&mut read_core) else {
+        return served;
+    };
+    let series = attach_context(series, &served.outcome);
+    served.outcome = TradeReplayOutcome::Ready(series);
+    served.tick_stage = None;
+    served
+}
+
+/// Freeze core-owned points into the same bounded representation the REST tick stage produces.
+fn read_core(request: &TradeReplayRequest) -> Option<TradeReplaySeries> {
+    if request.cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let native = request.address.history.replay_core_ticks(
+        &request.address,
+        &request.market,
+        request.window.tick_window(),
+    )?;
+    let (ticks, bucket_ms) = fit_ticks(native.ticks, TICK_BUDGET);
+    if ticks.is_empty() {
+        return None;
+    }
+    let mut series = compose_ticks(
+        request,
+        request.address.venue,
+        ticks,
+        bucket_ms,
+        native.covered != (request.window.from_ms, request.window.to_ms),
+        native.covered,
+        Vec::new(),
+    );
+    series.source = TradeReplaySource::CoreTicks;
+    Some(series)
+}
+
+/// Cooperatively replace a REST walk when a requested core archive arrives between pages.
+struct CoreUpgradeProbe {
+    next: Cell<Instant>,
+    ready: RefCell<Option<TradeReplaySeries>>,
+}
+
+impl CoreUpgradeProbe {
+    /// Space expensive retained-ring scans while an exchange page is in flight.
+    fn new(now: Instant) -> Self {
+        Self {
+            next: Cell::new(now + Duration::from_millis(500)),
+            ready: RefCell::new(None),
+        }
+    }
+
+    /// Stop the walk on cancellation or replacement; never sleep or delay a network page.
+    fn stop(
+        &self,
+        cancelled: bool,
+        now: Instant,
+        published: Option<(i64, i64)>,
+        read: impl FnOnce() -> Option<TradeReplaySeries>,
+    ) -> bool {
+        if cancelled || self.ready.borrow().is_some() {
+            return true;
+        }
+        if now < self.next.get() {
+            return false;
+        }
+        self.next.set(now + Duration::from_millis(500));
+        *self.ready.borrow_mut() =
+            read().filter(|series| preserves_coverage(series.covered, published));
+        self.ready.borrow().is_some()
+    }
+}
+
+/// Replacement may improve resolution/source but cannot remove any published tick interval.
+fn preserves_coverage(candidate: Option<(i64, i64)>, published: Option<(i64, i64)>) -> bool {
+    match (candidate, published) {
+        (Some((left, right)), Some((shown_left, shown_right))) => {
+            left <= shown_left && right >= shown_right
+        }
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
+/// A retry can update the cache only if it retains all previously available tick coverage.
+fn retain_baseline(
+    candidate: TradeReplaySeries,
+    baseline: Option<&TradeReplaySeries>,
+) -> TradeReplaySeries {
+    match baseline {
+        Some(previous) if !preserves_coverage(candidate.covered, previous.covered) => {
+            previous.clone()
+        }
+        _ => candidate,
+    }
 }
 
 /// Answer one request: memory cache, then SQLite cache, then the network.
@@ -697,7 +970,13 @@ fn stage_and_stamp(
     series: &mut TradeReplaySeries,
 ) -> Option<TickStage> {
     match tick_stage_for(venue, window, key, &series.candles) {
-        Ok(stage) => Some(stage),
+        Ok(mut stage) => {
+            if series.source.is_ticks() {
+                stage.baseline = Some(series.clone());
+                series.tick_status = TickStatus::Streaming;
+            }
+            Some(stage)
+        }
         Err(status) => {
             series.tick_status = status;
             None
@@ -741,6 +1020,7 @@ fn tick_stage_for(
         return Err(TickStatus::OutOfRetention { retention_ms });
     }
     Ok(TickStage {
+        baseline: None,
         route,
         key: key.clone(),
         candles: candles.to_vec(),
@@ -796,6 +1076,14 @@ fn serve_ticks(
     request: &TradeReplayRequest,
     stage: &TickStage,
 ) -> Result<(TradeReplaySeries, bool), Option<TickStatus>> {
+    // The archive may have arrived while other candle jobs had priority in the worker queue.
+    let baseline_coverage = stage.baseline.as_ref().and_then(|series| series.covered);
+    if let Some(mut series) =
+        read_core(request).filter(|series| preserves_coverage(series.covered, baseline_coverage))
+    {
+        series.candles = stage.candles.clone();
+        return Ok((series, false));
+    }
     let route = stage.route;
     let deadline = Instant::now() + JOB_DEADLINE;
     // Re-derived rather than trusted from `tick_stage_for`'s own permissive pass: that check ran
@@ -815,22 +1103,81 @@ fn serve_ticks(
             retention_ms: route.retention_ms().unwrap_or(0),
         }));
     }
+    let mut last_progress = None;
+    let published_coverage = Cell::new(baseline_coverage);
+    let mut publish_progress = |ticks: &[Tick], covered: (i64, i64)| {
+        let now = Instant::now();
+        if !preserves_coverage(Some(covered), published_coverage.get())
+            || request.cancel.load(Ordering::Relaxed)
+            || last_progress
+                .is_some_and(|last| now.duration_since(last) < Duration::from_millis(500))
+        {
+            return;
+        }
+        let mut points: Vec<_> = ticks
+            .iter()
+            .copied()
+            .filter(|tick| tick.time_ms as i64 >= covered.0 && tick.time_ms as i64 <= covered.1)
+            .collect();
+        if points.is_empty() {
+            return;
+        }
+        points.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+        let (points, bucket_ms) = fit_ticks(points, TICK_BUDGET);
+        let mut series = compose_ticks(
+            request,
+            request.address.venue,
+            points,
+            bucket_ms,
+            true,
+            covered,
+            stage.candles.clone(),
+        );
+        series.tick_status = TickStatus::Streaming;
+        if request
+            .reply
+            .send(TradeReplayOutcome::Ready(series))
+            .is_ok()
+        {
+            last_progress = Some(now);
+            published_coverage.set(Some(covered));
+        }
+    };
     let mut observer = GateObserver {
         gate,
         host: route.host(),
+        progress: &mut publish_progress,
     };
+    let upgrade = CoreUpgradeProbe::new(Instant::now());
     let verdict = paginate_ticks(
         route,
         &plan,
         TICK_BUDGET,
         TICK_PAGE_BUDGET,
-        || request.cancel.load(Ordering::Relaxed),
+        || {
+            upgrade.stop(
+                request.cancel.load(Ordering::Relaxed),
+                Instant::now(),
+                published_coverage.get(),
+                || read_core(request),
+            )
+        },
         || Instant::now() >= deadline,
         &mut observer,
         |from_ms, to_ms, cursor| {
             rest::fetch_trades(agent, route, &request.market, from_ms, to_ms, cursor)
         },
     );
+    if let Some(mut series) = upgrade.ready.into_inner() {
+        // The paginator stopped on our replacement, not a host refusal. Its paid-for rows are
+        // superseded by the core span, and this attempt must not leave the exchange in backoff.
+        gate.clear(route.host());
+        if request.cancel.load(Ordering::Relaxed) {
+            return Err(None);
+        }
+        series.candles = stage.candles.clone();
+        return Ok((series, false));
+    }
     let harvest = match verdict {
         TickVerdict::Ready(harvest) => harvest,
         TickVerdict::Abandoned(reason) => {
@@ -1060,6 +1407,18 @@ where
                     && (t.time_ms as i64) <= slice_to
             });
             ticks.extend(rows);
+            // The focus can require many pages. Show its already-walked span before the tile
+            // completes, but do not publish non-focus tiles that a budget may later discard.
+            if is_focus && page.next.is_some() {
+                if let Some(span) = page_progress_span(
+                    covered,
+                    (slice_from, slice_to),
+                    &ticks[start_len..],
+                    page.next,
+                ) {
+                    observer.progress(&ticks, span);
+                }
+            }
             match page.next {
                 Some(next_cursor) => cursor = Some(next_cursor),
                 None => break,
@@ -1076,6 +1435,9 @@ where
             None => (slice_from, slice_to),
             Some((c_from, c_to)) => (c_from.min(slice_from), c_to.max(slice_to)),
         });
+        if let Some(span) = covered {
+            observer.progress(&ticks, span);
+        }
     }
 
     if ticks.is_empty() {
@@ -1133,6 +1495,34 @@ where
         complete,
         venue_refused,
     })
+}
+
+/// Join a partial focus page only when its pagination direction touches the completed span.
+fn page_progress_span(
+    covered: Option<(i64, i64)>,
+    slice: (i64, i64),
+    rows: &[Tick],
+    cursor: Option<rest::TradeCursor>,
+) -> Option<(i64, i64)> {
+    let first = rows.first()?;
+    let (lo, hi) = rows.iter().fold(
+        (first.time_ms as i64, first.time_ms as i64),
+        |(lo, hi), t| (lo.min(t.time_ms as i64), hi.max(t.time_ms as i64)),
+    );
+    match covered {
+        None => Some((lo, hi)),
+        Some((from, to))
+            if slice.0 > to && matches!(cursor, Some(rest::TradeCursor::FromId(_))) =>
+        {
+            Some((from, to.max(hi)))
+        }
+        Some((from, to))
+            if slice.1 < from && matches!(cursor, Some(rest::TradeCursor::LessThanId(_))) =>
+        {
+            Some((from.min(lo), to))
+        }
+        span => span,
+    }
 }
 
 /// Build the frozen TICK series one tick stage answers with.
@@ -1200,7 +1590,7 @@ fn compose_ticks(
 pub(crate) fn rows_for_cache(source: TradeReplaySource, rows: &[ChartCandle]) -> &[ChartCandle] {
     match source {
         TradeReplaySource::Klines1m => rows,
-        TradeReplaySource::Ticks => &[],
+        TradeReplaySource::Ticks | TradeReplaySource::CoreTicks => &[],
     }
 }
 

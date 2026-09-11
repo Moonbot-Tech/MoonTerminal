@@ -14,6 +14,7 @@ mod strategies;
 pub mod strategy_order;
 pub mod synth;
 mod trade;
+pub mod trade_sound;
 pub mod types;
 
 pub use conn_verdict::{Diagnosis, FailureClass, diagnose};
@@ -953,4 +954,19 @@ pub fn spawn(
         client,
         _join: join,
     }
+}
+
+/// Inert channel-backed feed for session-drain regressions; never constructs a live client.
+#[cfg(test)]
+pub(crate) fn trade_sound_test_feed() -> (FeedTx, FeedHandle) {
+    let (data, rx) = std::sync::mpsc::channel();
+    let (commands, _commands_rx) = std::sync::mpsc::channel();
+    let (wake, _wake_rx) = std::sync::mpsc::channel();
+    let handle = FeedHandle {
+        rx,
+        cmd_tx: CoreCmdTx::new(commands, wake, LatestMarketRole::default()),
+        client: SharedMoonClient::default(),
+        _join: std::thread::spawn(|| {}),
+    };
+    (FeedTx::new(data, None), handle)
 }

@@ -87,6 +87,8 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 
 /// Shared backend stored in one `Entity`, drained by coordination loops, and notifying UI observers.
 struct Backend {
+    /// Optional Telegram service, joined before application owners disappear.
+    telegram: backend::telegram::TelegramState,
     /// Process-wide self-update state shared by every group window.
     updater: Entity<update::UpdateController>,
     session: SessionManager,
@@ -599,6 +601,8 @@ struct Backend {
     /// Last observed aggregate revision of server-side chart alerts, gating remote-figure
     /// reconciliation in the feed-drain path.
     last_chart_alerts_activity: u64,
+    /// Trade edges waiting for their serialized playback turn.
+    trade_playback: backend::trade_sound::TradePlayback,
     /// Last processed detect sequence per core, used for detect and alert sound traversal.
     /// It may be seeded or advanced after observing a detect without playing a sound.
     last_detect_seq: std::collections::HashMap<CoreId, u64>,

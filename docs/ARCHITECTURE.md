@@ -645,6 +645,84 @@ core не может появиться между проверкой покол
   схемы отменяется. Иначе временная ошибка чтения (права, шара, невыгруженный облачный
   плейсхолдер) превращалась бы в безвозвратную замену живого конфига дефолтами.
 
+## Telegram: свой поток, парность чата и одноразовый туннель
+
+`moon-core/src/telegram/` — UI-независимый агент: свой бот и Mini App. Async-рантайма нет,
+HTTP — синхронный `ureq`, `getUpdates` держит сокет до 25 с, поэтому транспорт живёт в своих
+потоках, по форме как `crowd/`. **Пустой токен — жёсткий выключатель: `TelegramService::start`
+возвращает `None` до канала, потока, пути, слушателя и helper-процесса.**
+
+- **Два потока.** `telegram-bot` блокирующе поллит `getUpdates`. `telegram-miniapp-owner`
+  отдельно держит loopback-сервер и туннель, иначе один задержавшийся poll заблокировал бы HTTP.
+  GPUI `Backend` общается только типизированными каналами `Work` / `Response` и дренирует их в
+  100 мс цикле (`Backend::tick_telegram`).
+- **Токен живёт в `Secret` внутри `servers.enc`, не в `settings.toml`.** `TelegramConfig`
+  сериализуется только в шифрованный агрегат; `Secret` в `Debug` — `Secret(***)`, `ApiError` не
+  несёт ни токена, ни Bot API URL. Settings маскирует поле и хеширует только пустоту токена.
+- **Граница доверия — парность чата.** Имя бота из `getMe` публично. Команды принимает только
+  chat id из `authorized_chat_ids` после `/pair`. Код парности — шесть символов, 10 минут, один
+  раз, только в памяти. Непарный собеседник получает плоский `telegram.refusal` («Доступ
+  запрещён») — без намёка, что за ботом стоит терминал. `/pair` и `/miniapp` — только из
+  private-чата.
+- **Mini App с петли наружу через quick-туннель.** `MiniAppServer` биндится на `127.0.0.1:0`;
+  `cloudflared` (verified-download через путь self-updater, SHA-256) поднимает туннель на этот
+  порт. Единственный аутентифицированный запрос — `POST /api/session`: HMAC `initData`, затем
+  `authorize_paired_identity`, затем живая перепроверка `mini_app_enabled` и членства чата в
+  `Backend::telegram_mini_request`. Подлинность запуска Telegram — не авторизация терминала.
+- **Native Mini App menu follows the tunnel.** The Mini App owner publishes the latest URL and
+  localized label; the bot worker reconciles per-chat `setChatMenuButton` between long polls.
+  Only paired private chats receive a web-app menu. Disabled, unavailable, or revoked targets
+  revert to commands; failed writes remain pending with a cooldown. Updates can wait for the
+  current long poll (normally up to 25 seconds). Shutdown makes no uncancellable cleanup calls:
+  Telegram may retain the last menu until the next service start reconciles it. The `/miniapp`
+  inline launcher remains available and uses the current `MiniAppStatus::Tunneling` URL.
+  Pairing reset retains cleanup-only chat IDs across same-token service restarts for the lifetime
+  of the desktop process; token changes discard them. Those IDs never grant app authorization.
+- **Bot navigation.** Pairing and `/help` install the persistent reply keyboard; `/start` sends a localized welcome carrying that keyboard, followed by an inline report.
+  Reply buttons own global period selection and Help. Inline report buttons own exchange
+  drill-down, core/day views, back and paging; periods are not duplicated. A repeated reply-keyboard
+  period request fetches fresh data. The complete-scope Total row follows the main table rows;
+  calculation explanations are in Help, not an additional report disclosure. Emoji-decorated
+  aliases and older plain labels are matched exactly in ru/en/es. Identity checks precede both
+  welcome and report delivery. Reports always carry inline markup from the first send: Telegram
+  disallows editing messages with a reply keyboard. The temporary removal/deletion flow is gone.
+  The native menu and `/miniapp` retain the independent Mini App launcher.
+- **Chat cleanup continuity.** Per-bot chat-history metadata records the permanent reply-menu
+  message separately from disposable rich answers and their original Telegram send timestamps.
+  The bot ID comes from `getMe`; metadata never authorizes a chat or stores credentials.
+  Atomic publication precedes deletion. Restart restores tracking without another menu notice;
+  answers near or beyond 48 hours are skipped, and absent/undeletable cleanup targets do not
+  change transport health. Callback edits keep the original send time.
+- **Chat reports without Mini App.** `/report`, `/today`, `/hour`, `/yesterday`, `/month`,
+  `/lastmonth`, and `/daily` read closed real trades from permitted cores in local history. Custom
+  `/report YYYY-MM-DD YYYY-MM-DD` and `/daily` ranges include both dates and allow at most 366
+  days. `backend/telegram/reports.rs` uses a background executor, a pinned SQLite snapshot,
+  `ReportAxis::load`, `query_totals`, and historical valuation; read failures never become zero.
+  Core groups use `CoreOrder`, six active groups per page, with the complete-scope total on every page.
+  Exchange groups use canonical venue identity and support scoped drill-down; empty scoped membership
+  uses the no-match sentinel. Groups without trades are removed before paging; zero-profit trades stay.
+  Native subtotals remain available when USDT conversion is incomplete. Rich HTML reports use
+  `sendRichMessage`; private sender-matched callbacks edit the originating message and recheck
+  saved authorization. Paging/view changes retain UTC bounds; a new reply-keyboard request resolves its preset again.
+  The display zone follows the terminal clock. One pending report survives service replacement,
+  preventing overlapping reads; a report response has a bounded 120-second wait with failure
+  feedback. Unchanged edits are normal no-ops. See [chat report usage](TELEGRAM_REPORTS.md).
+- **Per-chat access.** Encrypted `TelegramConfig` stores one owner and named viewer profiles with
+  explicit stable core uids. Legacy files resolve their first paired chat as owner; every other
+  chat defaults to no data access. The owner sees all history; viewers' core rows, exchange and
+  daily groups, and totals all intersect the same saved uid set before SQL aggregation. Empty
+  intersections use the no-match sentinel, never the query API's empty-list/all-cores shortcut.
+  Report completion rechecks the permission snapshot. Saved role or grant changes synchronously
+  revoke old service liveness before retiring the worker, cancelling queued deliveries and retries.
+  Settings edits remain a draft until Save; archived candidates load asynchronously from history
+  independently of checkbox selection. Read-only viewers gain no core-control authority.
+- **Страница Mini App сейчас нарочно пустая: единственный её запрос — проверка сессии
+  (`POST /api/session`). Это решение по объёму, а не недописанный экран.**
+- **Выключение присоединяет всё, что подняли.** Смена токена или списка чатов —
+  `TelegramState::restart`. Снятие галки Mini App не трогает бота (`MiniAppOwner::stop`: сначала
+  туннель, потом слушатель). Выход — `TelegramState::stop`. `Drop` у `TelegramService` и
+  `MiniAppOwner` делает то же.
+
 ## UI Components
 
 Приложение зависит от `Moonbot-Tech/MoonUI` и использует компоненты через `moon_ui::*` /

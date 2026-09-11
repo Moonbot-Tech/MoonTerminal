@@ -605,6 +605,10 @@ impl RenderState {
             let mut skip_price_label_y = None;
 
             if let Some(cursor) = cursor {
+                self.draw_tick_volume_readout(ctx, idx, cursor, sf, &mut placed)?;
+            }
+
+            if let Some(cursor) = cursor {
                 let cx_log = (self.slot_origin[0] + cursor.local[0]) / sf;
                 let cy_log = (self.slot_origin[1] + cursor.local[1]) / sf;
 

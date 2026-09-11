@@ -237,7 +237,9 @@ pub fn key_slot_meta(slot: KeySlot) -> SlotMeta {
         // Addressed here by the pointer alone (`hotkeys::pre_dispatch`).
         S::FigUndo => meta(Local, Scope::CURSOR),
         // The drawing layer is the Terminal's: no core slot, no imported field.
-        S::DrawHline | S::DrawSegment | S::DrawTriangle | S::DrawChannel => meta(Local, Scope::APP),
+        S::DrawHline | S::DrawHorizontalRay | S::DrawSegment | S::DrawTriangle | S::DrawChannel => {
+            meta(Local, Scope::APP)
+        }
         // Deletes the selected figure — and with NOTHING selected the same press falls through to
         // cancelling the order under the pointer (`shell/actions.rs`), which is the second surface
         // and the destructive one.

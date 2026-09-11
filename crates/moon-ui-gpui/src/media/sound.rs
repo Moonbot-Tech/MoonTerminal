@@ -4,7 +4,8 @@
 //! Each platform plays them with what it already links, so this file adds no audio dependency:
 //! Windows uses WinMM `PlaySoundW` with `SND_MEMORY | SND_ASYNC`, macOS uses AppKit `NSSound`
 //! over an `NSData` view of the same bytes. Both are asynchronous, and on both a new sound
-//! replaces the one already playing rather than mixing with it. Linux remains silent — nothing
+//! replaces the one already playing rather than mixing with it. The scheduler below serializes
+//! every caller, including previews, before reaching those platform functions. Linux remains silent — nothing
 //! there is linked that can play audio, and adding one is a dependency decision of its own.
 //!
 //! A detection or alert strategy selects a sound by file stem; lookup trims whitespace and is
@@ -109,15 +110,145 @@ fn bytes_of(name: &str) -> Option<&'static [u8]> {
     SOUNDS.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
 }
 
-/// Play a named sound asynchronously, doing nothing when the stem is unknown.
-/// Each backend plays one sound at a time, so a new call interrupts the previous one as in Moonbot.
-pub fn play(name: &str) {
-    let Some(wav) = bytes_of(name) else {
-        return;
-    };
-    play_bytes(wav);
+/// One validated embedded clip; duration is derived from PCM frames, not a fixed timeout.
+#[derive(Clone, Copy)]
+struct Clip {
+    wav: &'static [u8],
+    duration: std::time::Duration,
 }
 
+impl Clip {
+    /// Reject unknown or malformed assets before they can occupy the playback queue.
+    fn named(name: &str) -> Option<Self> {
+        let wav = bytes_of(name)?;
+        Some(Self {
+            wav,
+            duration: wav_duration(wav)?,
+        })
+    }
+}
+
+/// Read RIFF chunks, including odd-length padding, and measure PCM frames at the sample rate.
+fn wav_duration(wav: &[u8]) -> Option<std::time::Duration> {
+    if wav.get(..4)? != b"RIFF" || wav.get(8..12)? != b"WAVE" {
+        return None;
+    }
+    let end = 8usize.checked_add(u32::from_le_bytes(wav.get(4..8)?.try_into().ok()?) as usize)?;
+    if end > wav.len() {
+        return None;
+    }
+    let mut offset = 12usize;
+    let mut format = None;
+    let mut data_len = 0u64;
+    while offset.checked_add(8)? <= end {
+        let tag = wav.get(offset..offset + 4)?;
+        let len = u32::from_le_bytes(wav.get(offset + 4..offset + 8)?.try_into().ok()?) as usize;
+        offset += 8;
+        let chunk_end = offset.checked_add(len)?;
+        if chunk_end > end {
+            return None;
+        }
+        let chunk = wav.get(offset..chunk_end)?;
+        if tag == b"fmt " {
+            let encoding = u16::from_le_bytes(chunk.get(..2)?.try_into().ok()?);
+            let rate = u32::from_le_bytes(chunk.get(4..8)?.try_into().ok()?);
+            let alignment = u16::from_le_bytes(chunk.get(12..14)?.try_into().ok()?);
+            if encoding != 1 || rate == 0 || alignment == 0 {
+                return None;
+            }
+            format = Some((rate, alignment));
+        } else if tag == b"data" {
+            data_len = data_len.checked_add(len as u64)?;
+        }
+        offset = chunk_end.checked_add(len & 1)?;
+    }
+    let (rate, alignment) = format?;
+    if data_len == 0 || !data_len.is_multiple_of(u64::from(alignment)) {
+        return None;
+    }
+    let frames = data_len / u64::from(alignment);
+    let nanos = frames.checked_mul(1_000_000_000)?.div_ceil(u64::from(rate));
+    Some(std::time::Duration::from_nanos(nanos))
+}
+
+/// The normal lane retains existing producer selection rules; trades have a separate bounded
+/// backend lane so a burst of detects cannot occupy every trade slot. Alternate when both wait.
+#[derive(Default)]
+struct Playback {
+    normal: std::collections::VecDeque<Clip>,
+    busy_until: Option<std::time::Instant>,
+    trade_turn: bool,
+}
+
+impl Playback {
+    /// Preserve accepted FIFO entries on overflow; never evict a clip already waiting to play.
+    fn enqueue(&mut self, clip: Clip) {
+        if self.normal.len() < 64 {
+            self.normal.push_back(clip);
+        } else {
+            log::warn!("notification sound queue full; newest ordinary sound omitted");
+        }
+    }
+
+    /// Called by the application timer even without feed traffic. The small output-device
+    /// allowance prevents timer granularity from starting the next clip before its last frame.
+    fn next(&mut self, now: std::time::Instant, trade: Option<Clip>) -> Option<(Clip, bool)> {
+        if self.busy_until.is_some_and(|until| now < until) {
+            return None;
+        }
+        let is_trade = trade.is_some() && (self.trade_turn || self.normal.is_empty());
+        let clip = if is_trade {
+            trade?
+        } else {
+            self.normal.pop_front()?
+        };
+        self.trade_turn = !is_trade;
+        self.busy_until = Some(now + clip.duration + std::time::Duration::from_millis(50));
+        Some((clip, is_trade))
+    }
+}
+
+thread_local! {
+    /// All playback callers run on the GPUI thread; no lock or sleeping thread is required.
+    static PLAYBACK: std::cell::RefCell<Playback> = std::cell::RefCell::new(Playback::default());
+}
+
+/// Queue a named sound without interrupting the current clip. The application's coordination
+/// timer pumps this lane, including Settings previews when no market events arrive.
+pub fn play(name: &str) {
+    if let Some(clip) = Clip::named(name) {
+        PLAYBACK.with(|player| player.borrow_mut().enqueue(clip));
+    }
+}
+
+/// Spend pre-sleep ordinary backlog once at the quiet transition. Later producer-authorized
+/// quiet exceptions may enqueue normally, and the current asynchronous clip is left to finish.
+pub(crate) fn discard_pending() {
+    PLAYBACK.with(|player| player.borrow_mut().normal.clear());
+}
+
+/// Whether the embedded stem is playable and can safely enter the delayed trade lane.
+pub(crate) fn is_playable(name: &str) -> bool {
+    Clip::named(name).is_some()
+}
+
+/// Offer the validated trade-lane head and advance one fair, noninterrupting playback turn.
+/// Returns true only when the trade was selected, so contention never consumes its edge.
+pub(crate) fn pump(trade: Option<&str>) -> bool {
+    let next = PLAYBACK.with(|player| {
+        player
+            .borrow_mut()
+            .next(std::time::Instant::now(), trade.and_then(Clip::named))
+    });
+    if let Some((clip, is_trade)) = next {
+        play_bytes(clip.wav);
+        is_trade
+    } else {
+        false
+    }
+}
+
+/// Start one clip after the shared scheduler has released the previous clip's duration.
 #[cfg(windows)]
 fn play_bytes(wav: &'static [u8]) {
     use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};

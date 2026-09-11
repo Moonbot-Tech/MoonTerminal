@@ -16,6 +16,7 @@ pub mod axes;
 pub mod container;
 // `data` / market-source models live in moon-core. Re-export them under the previous path.
 pub use moon_core::data;
+pub mod drawing_snap;
 pub mod figures;
 pub use figures::build_figure_geometry;
 pub mod layers;
@@ -29,6 +30,7 @@ pub use trade_marks::{
     TAPE_SNAP_WINDOW_MS, TapePrint, build_trade_geometry, normalize_chart_graphics,
     snap_mark_to_tape,
 };
+pub mod tick_volume;
 pub mod view;
 pub mod volume_bars;
 pub use volume_bars::{VolumeSample, VolumeStats, collect_samples, visible_volume_stats};

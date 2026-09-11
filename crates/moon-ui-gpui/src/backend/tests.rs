@@ -11,6 +11,26 @@ use super::{
 };
 use crate::backend::core_warn::{WarnAxis, WarnEnabled, WarnEpisode, WarnSnapshot};
 
+/// `backend::telegram::Backend::telegram_mini_request` must reject both a disabled Mini App and
+/// a chat absent from the current paired set, while `telegram::web::App::handle_session` maps
+/// that rejection to 403; otherwise a stale bound server can keep returning a successful session
+/// after a user disables Mini App access or revokes the chat.
+#[test]
+fn mini_app_session_guard_rechecks_both_live_authorization_conditions() {
+    let adapter = include_str!("telegram.rs");
+    let guard = "if !self.config.telegram.mini_app_enabled\n                    || !self.config.telegram.authorized_chat_ids.contains(&chat_id)\n                {\n                    let _ = reply.try_send(Err(MiniAppApiError::Rejected));\n                    return;\n                }";
+    assert!(
+        adapter.contains(guard),
+        "the adapter must reject a disabled Mini App OR a now-revoked chat before replying OK"
+    );
+
+    let http = include_str!("../../../moon-core/src/telegram/web.rs");
+    assert!(
+        http.contains("Ok(Err(_)) => status_response(StatusCode::FORBIDDEN, \"rejected\")"),
+        "an adapter rejection must become a 403 response rather than the old timeout class"
+    );
+}
+
 /// Build one warning episode for scope/ordering regressions.
 ///
 /// Args:

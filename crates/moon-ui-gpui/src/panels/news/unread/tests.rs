@@ -31,7 +31,9 @@ fn colored(pairs: &[(&str, &str)]) -> NewsTagSettings {
 #[test]
 fn an_item_counts_into_every_colour_it_carries() {
     let settings = colored(&[("hack", "red"), ("listing", "green")]);
-    let counts = scan(&[item(10, &["hack", "listing"])], 0, NOW, &settings).counts;
+    let counts = scan(&[item(10, &["hack", "listing"])], 0, NOW, &settings)
+        .counts
+        .palette;
     let red = counts[0];
     let green = counts[2];
     assert_eq!((red, green), (1, 1));
@@ -43,7 +45,9 @@ fn an_item_counts_into_every_colour_it_carries() {
 #[test]
 fn two_tags_of_one_colour_count_once() {
     let settings = colored(&[("hack", "red"), ("exploit", "red")]);
-    let counts = scan(&[item(10, &["hack", "exploit"])], 0, NOW, &settings).counts;
+    let counts = scan(&[item(10, &["hack", "exploit"])], 0, NOW, &settings)
+        .counts
+        .palette;
     assert_eq!(counts[0], 1);
 }
 
@@ -54,7 +58,7 @@ fn items_at_or_below_the_watermark_are_read() {
     let settings = NewsTagSettings::default();
     let items = [item(100, &[]), item(200, &[]), item(300, &[])];
     let s = scan(&items, 200, NOW, &settings);
-    assert_eq!(s.counts[BUCKETS - 1], 1);
+    assert_eq!(s.counts.palette[BUCKETS - 1], 1);
     assert_eq!(s.total, 1);
 }
 
@@ -64,7 +68,9 @@ fn items_at_or_below_the_watermark_are_read() {
 fn a_hidden_topic_does_not_count() {
     let mut settings = colored(&[("hack", "red")]);
     settings.set_hidden("hack", true);
-    let counts = scan(&[item(10, &["hack"])], 0, NOW, &settings).counts;
+    let counts = scan(&[item(10, &["hack"])], 0, NOW, &settings)
+        .counts
+        .palette;
     assert_eq!(counts.iter().sum::<usize>(), 0);
 }
 
@@ -74,7 +80,9 @@ fn a_hidden_topic_does_not_count() {
 fn a_hidden_tag_contributes_nothing_to_a_still_visible_item() {
     let mut settings = colored(&[("hack", "red"), ("listing", "green")]);
     settings.set_hidden("hack", true);
-    let counts = scan(&[item(10, &["hack", "listing"])], 0, NOW, &settings).counts;
+    let counts = scan(&[item(10, &["hack", "listing"])], 0, NOW, &settings)
+        .counts
+        .palette;
     assert_eq!((counts[0], counts[2]), (0, 1));
 }
 
@@ -83,7 +91,9 @@ fn a_hidden_tag_contributes_nothing_to_a_still_visible_item() {
 #[test]
 fn untagged_and_neutral_items_land_in_the_neutral_bucket() {
     let settings = colored(&[("hack", "red")]);
-    let counts = scan(&[item(10, &[]), item(11, &["weather"])], 0, NOW, &settings).counts;
+    let counts = scan(&[item(10, &[]), item(11, &["weather"])], 0, NOW, &settings)
+        .counts
+        .palette;
     assert_eq!(counts[BUCKETS - 1], 2);
     assert_eq!(counts[0], 0);
 }
@@ -95,7 +105,7 @@ fn the_merged_total_counts_items_not_bucket_hits() {
     let settings = colored(&[("hack", "red"), ("listing", "green")]);
     let items = [item(10, &["hack", "listing"])];
     let s = scan(&items, 0, NOW, &settings);
-    assert_eq!(s.counts.iter().sum::<usize>(), 2);
+    assert_eq!(s.counts.palette.iter().sum::<usize>(), 2);
     assert_eq!(s.total, 1);
 }
 
@@ -120,4 +130,50 @@ fn an_item_without_a_publication_stamp_falls_back_to_its_service_time() {
         ..NewsItem::default()
     };
     assert_eq!(scan(&[stampless], 0, NOW, &settings).total, 1);
+}
+
+/// A fixed color must produce its own colored badge, not silently become neutral; HEX case is
+/// representation only, so two tags with the same RGB count once per item.
+#[test]
+fn custom_rgb_counts_are_non_neutral_and_deduplicate_by_rgb() {
+    let settings = colored(&[("one", "#12aBcD"), ("two", "#12ABCD"), ("black", "#000000")]);
+    let result = scan(
+        &[item(10, &["one", "two", "black"]), item(11, &["two"])],
+        0,
+        NOW,
+        &settings,
+    );
+    assert_eq!(result.counts.custom.get(&0x12abcd), Some(&2));
+    assert_eq!(result.counts.custom.get(&0), Some(&1));
+    assert_eq!(result.counts.palette.iter().sum::<usize>(), 0);
+    assert_eq!(result.total, 2);
+}
+
+/// Custom and symbolic colors both contribute, but hidden topics, old items and invalid keys do
+/// not manufacture colored counts. A malformed stored color retains the legacy neutral fallback.
+#[test]
+fn custom_colors_respect_visibility_watermark_and_symbolic_buckets() {
+    let mut settings = colored(&[
+        ("custom", "#123456"),
+        ("hidden", "#ABCDEF"),
+        ("red", "red"),
+        ("bad", "#12345Z"),
+    ]);
+    settings.set_hidden("hidden", true);
+    let result = scan(
+        &[
+            item(5, &["custom"]),
+            item(10, &["custom", "hidden", "red"]),
+            item(11, &["hidden"]),
+            item(12, &["bad"]),
+        ],
+        5,
+        NOW,
+        &settings,
+    );
+    assert_eq!(result.counts.custom.len(), 1);
+    assert_eq!(result.counts.custom.get(&0x123456), Some(&1));
+    assert_eq!(result.counts.palette[0], 1);
+    assert_eq!(result.counts.palette[BUCKETS - 1], 1);
+    assert_eq!(result.total, 2);
 }

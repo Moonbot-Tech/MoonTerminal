@@ -982,3 +982,25 @@ fn a_press_claims_the_click_half_in_page_order() {
         None
     );
 }
+
+/// Upgrading an old config must not claim a key; a chosen binding must reach registration and disk.
+#[test]
+fn horizontal_ray_binding_is_optional_and_survives_config_roundtrip() {
+    let old: HotkeysConfig = toml::from_str("draw_hline = 'ctrl-h'").unwrap();
+    assert!(old.draw_horizontal_ray.is_empty());
+    assert_eq!(old.draw_hline, "ctrl-h");
+    let mut chosen = old;
+    chosen.draw_horizontal_ray = "ctrl-alt-r".into();
+    chosen.switch_figure_skip = vec!["horizontal_ray".into()];
+    chosen.fill_unbound_slots();
+    let restored: HotkeysConfig = toml::from_str(&toml::to_string(&chosen).unwrap()).unwrap();
+    assert!(restored.bound_keys().iter().any(|key| key == "ctrl-alt-r"));
+    assert_eq!(restored.draw_horizontal_ray, "ctrl-alt-r");
+    assert_eq!(restored.switch_figure_skip, vec!["horizontal_ray"]);
+    chosen.draw_horizontal_ray.clear();
+    chosen.fill_unbound_slots();
+    assert!(
+        chosen.draw_horizontal_ray.is_empty(),
+        "explicitly cleared remains unassigned"
+    );
+}

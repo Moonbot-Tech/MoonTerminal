@@ -1,0 +1,28 @@
+# Per-trade volume readouts; separate from candle-volume captions.
+_version: 2
+
+tick_volume.nearby:
+  ru: "Тики рядом с курсором"
+  en: "Nearby ticks"
+  es: "Ticks cercanos"
+tick_volume.side_values:
+  ru: "%{side} (%{count}): %{value} %{unit}"
+  en: "%{side} (%{count}): %{value} %{unit}"
+  es: "%{side} (%{count}): %{value} %{unit}"
+
+tick_volume.nearby_unit:
+  ru: "Тики рядом (%{unit})"
+  en: "Nearby ticks (%{unit})"
+  es: "Ticks cercanos (%{unit})"
+tick_volume.side_count:
+  ru: "%{side} (%{count})"
+  en: "%{side} (%{count})"
+  es: "%{side} (%{count})"
+tick_volume.minimum:
+  ru: "Мин: %{value}"
+  en: "Min: %{value}"
+  es: "Mín: %{value}"
+tick_volume.maximum:
+  ru: "Макс: %{value}"
+  en: "Max: %{value}"
+  es: "Máx: %{value}"

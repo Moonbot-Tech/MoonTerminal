@@ -1,0 +1,202 @@
+# Telegram Settings tab and later bot/Mini App strings.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
+_version: 2
+
+telegram.intro:
+  ru: "Подключите своего бота и привяжите чат для отчётов в Telegram. Mini App включается отдельно."
+  en: "Connect your bot and pair your chat for Telegram reports. Mini App is enabled separately."
+  es: "Conecta tu bot y vincula tu chat para recibir informes en Telegram. Mini App se activa por separado."
+telegram.section_access:
+  ru: "Доступ к терминалу"
+  en: "Terminal access"
+  es: "Acceso al terminal"
+telegram.access_hint:
+  ru: "Только привязанные чаты получают доступ. Для нового чата создайте код и отправьте команду своему боту."
+  en: "Only paired chats have access. For a new chat, generate a code and send the command to your bot."
+  es: "Solo los chats vinculados tienen acceso. Para un chat nuevo, genera un código y envía el comando a tu bot."
+telegram.state.connected:
+  ru: "Бот подключён"
+  en: "Bot connected"
+  es: "Bot conectado"
+telegram.pair_copy:
+  ru: "Скопировать команду"
+  en: "Copy command"
+  es: "Copiar comando"
+telegram.mini_copy_url:
+  ru: "Скопировать адрес Mini App"
+  en: "Copy Mini App address"
+  es: "Copiar dirección de Mini App"
+telegram.mini_disabled:
+  ru: "Mini App выключено"
+  en: "Mini App is off"
+  es: "Mini App está desactivada"
+telegram.mini_ready:
+  ru: "Готово. Откройте Mini App кнопкой в своём боте."
+  en: "Ready. Open Mini App using the button in your bot."
+  es: "Lista. Abre Mini App con el botón de tu bot."
+telegram.mini_starting:
+  ru: "Подготавливаем Mini App. Дождитесь готовности, затем нажмите «Открыть» в боте."
+  en: "Preparing Mini App. Once ready, press Open in the bot."
+  es: "Preparando Mini App. Cuando esté lista, pulsa Abrir en el bot."
+telegram.mini_failed:
+  ru: "Не удалось открыть доступ к Mini App. Проверьте интернет; повторная попытка выполняется автоматически."
+  en: "Could not make Mini App available. Check your internet connection; retrying automatically."
+  es: "No se pudo habilitar Mini App. Comprueba tu conexión a internet; se reintentará automáticamente."
+telegram.bot_welcome:
+  ru: "MoonTerminal\n\nЧат подключён. Отчёты доступны прямо здесь; включать Mini App для них не нужно.\n\n/miniapp — отдельный запуск Mini App."
+  en: "MoonTerminal\n\nChat connected. Reports are available here without enabling Mini App.\n\n/miniapp — launch Mini App separately."
+  es: "MoonTerminal\n\nChat conectado. Los informes están disponibles aquí sin activar Mini App.\n\n/miniapp — abrir Mini App por separado."
+telegram.button_help:
+  ru: "Помощь"
+  en: "Help"
+  es: "Ayuda"
+telegram.bot_ready:
+  ru: "Mini App готово к открытию. Нажмите «Открыть»."
+  en: "Mini App is ready. Tap Open."
+  es: "Mini App está lista. Pulsa Abrir."
+telegram.bot_mini_disabled:
+  ru: "Mini App выключено. В MoonTerminal откройте «Настройки → Telegram», включите Mini App и сохраните изменения. Затем отправьте /miniapp."
+  en: "Mini App is off. In MoonTerminal, open Settings → Telegram, enable Mini App and save. Then send /miniapp."
+  es: "Mini App está desactivada. En MoonTerminal, abre Ajustes → Telegram, activa Mini App y guarda. Después envía /miniapp."
+telegram.bot_mini_wait:
+  ru: "Mini App пока недоступно. Проверьте его состояние в «Настройки → Telegram» и повторите /miniapp, когда оно будет готово."
+  en: "Mini App is not available yet. Check its status in Settings → Telegram and send /miniapp again when ready."
+  es: "Mini App aún no está disponible. Comprueba su estado en Ajustes → Telegram y vuelve a enviar /miniapp cuando esté lista."
+
+telegram.tab:
+  ru: "Telegram"
+  en: "Telegram"
+  es: "Telegram"
+
+telegram.section_bot:
+  ru: "Бот"
+  en: "Bot"
+  es: "Bot"
+telegram.section_mini_app:
+  ru: "Mini App"
+  en: "Mini App"
+  es: "Mini App"
+
+telegram.token:
+  ru: "Токен бота"
+  en: "Bot token"
+  es: "Token del bot"
+telegram.token_hint:
+  ru: "Хранится только в зашифрованном конфиге. Пустой токен полностью выключает Telegram."
+  en: "Stored only in the encrypted config. An empty token turns Telegram off completely."
+  es: "Se guarda solo en la configuración cifrada. Un token vacío desactiva Telegram por completo."
+
+telegram.onboarding:
+  ru: "Создайте бота: отправьте /newbot в @BotFather. Вставьте полученный токен сюда и нажмите «Сохранить». Затем подключите свой чат в блоке «Доступ к терминалу»."
+  en: "Create a bot: send /newbot to @BotFather. Paste the token here and press Save. Then pair your chat in Terminal access."
+  es: "Crea un bot: envía /newbot a @BotFather. Pega el token aquí y pulsa Guardar. Después vincula tu chat en Acceso al terminal."
+
+telegram.mini_app:
+  ru: "Включить Mini App"
+  en: "Enable Mini App"
+  es: "Activar Mini App"
+telegram.mini_app_hint:
+  ru: "После сохранения отправьте боту /miniapp для кнопки входа. /start открывает меню отчётов. Терминал должен оставаться запущенным."
+  en: "After saving, send /miniapp for the launch button. /start opens report navigation. Keep the terminal running."
+  es: "Después de guardar, envía /miniapp para obtener el botón de acceso. /start abre los informes. Mantén el terminal abierto."
+
+telegram.paired_none:
+  ru: "Нет привязанных чатов"
+  en: "No paired chats"
+  es: "Sin chats vinculados"
+telegram.paired_count:
+  ru: "Привязанных чатов: %{count}"
+  en: "Paired chats: %{count}"
+  es: "Chats vinculados: %{count}"
+
+telegram.state.disabled:
+  ru: "Выключено: задайте токен бота, чтобы включить Telegram."
+  en: "Disabled: set a bot token to turn Telegram on."
+  es: "Desactivado: indica un token de bot para activar Telegram."
+telegram.state.unsaved:
+  ru: "Есть изменения. Нажмите «Сохранить», чтобы применить их."
+  en: "Changes pending. Press Save to apply them."
+  es: "Hay cambios pendientes. Pulsa Guardar para aplicarlos."
+telegram.state.starting:
+  ru: "Запускается…"
+  en: "Starting…"
+  es: "Iniciando…"
+telegram.state.unavailable:
+  ru: "Нет соединения с Telegram. Проверьте токен и подключение к интернету."
+  en: "Cannot connect to Telegram. Check the token and your internet connection."
+  es: "No se puede conectar con Telegram. Comprueba el token y tu conexión a internet."
+
+telegram.pair_success:
+  ru: "Чат подключён к MoonTerminal.\n\nВыберите период в нижнем меню для отчёта. Mini App открывается командой /miniapp."
+  en: "Chat connected to MoonTerminal.\n\nChoose a period in the bottom menu for a report. Use /miniapp to launch Mini App."
+  es: "Chat conectado a MoonTerminal.\n\nElige un período en el menú inferior para ver el informe. Usa /miniapp para abrir Mini App."
+
+telegram.refusal:
+  ru: "Доступ запрещён."
+  en: "Access denied."
+  es: "Acceso denegado."
+
+telegram.mini_open:
+  ru: "Открыть Mini App"
+  en: "Open Mini App"
+  es: "Abrir Mini App"
+
+telegram.open:
+  ru: "Открыть"
+  en: "Open"
+  es: "Abrir"
+
+telegram.invalid:
+  ru: "Команда не распознана.\n\n/start — главное меню\n/miniapp — открыть Mini App\n/help — помощь"
+  en: "Command not recognized.\n\n/start — main menu\n/miniapp — open Mini App\n/help — help"
+  es: "Comando no reconocido.\n\n/start — menú principal\n/miniapp — abrir Mini App\n/help — ayuda"
+
+telegram.rate_limited:
+  ru: "Ограничение Telegram: повтор через %{seconds} с."
+  en: "Telegram rate limit: retry after %{seconds}s."
+  es: "Límite de Telegram: reintento tras %{seconds}s."
+
+telegram.stopped:
+  ru: "Остановлено"
+  en: "Stopped"
+  es: "Detenido"
+
+telegram.pair_code:
+  ru: "/pair %{code}\nОтправьте эту команду боту в личном чате. Код действует 10 минут и только один раз."
+  en: "/pair %{code}\nSend this command to your bot in a private chat. The code works once and expires after 10 minutes."
+  es: "/pair %{code}\nEnvía este comando a tu bot en un chat privado. El código es de un solo uso y caduca a los 10 minutos."
+
+telegram.pair_new:
+  ru: "Получить код привязки"
+  en: "Get pairing code"
+  es: "Obtener código de vinculación"
+
+telegram.pair_reset:
+  ru: "Отозвать все чаты"
+  en: "Revoke all chats"
+  es: "Revocar todos los chats"
+
+telegram.stopping:
+  ru: "Останавливается…"
+  en: "Stopping…"
+  es: "Deteniendo…"
+
+telegram.mini_shell_checking:
+  ru: "Проверка соединения…"
+  en: "Checking the connection…"
+  es: "Comprobando la conexión…"
+
+telegram.mini_shell_connected:
+  ru: "Терминал подключён; здесь пока ничего нет."
+  en: "Terminal connected, nothing here yet."
+  es: "Terminal conectado; aquí no hay nada todavía."
+
+telegram.mini_shell_denied:
+  ru: "Этот чат не допущен. Привяжите его заново или включите Mini App в Настройках."
+  en: "This chat is not admitted. Re-pair it, or turn Mini App on in Settings."
+  es: "Este chat no está admitido. Vuelve a vincularlo o activa Mini App en Ajustes."
+
+telegram.mini_shell_unreachable:
+  ru: "Терминал недоступен. Туннель или сам терминал выключен."
+  en: "The terminal could not be reached. The tunnel or the terminal is down."
+  es: "No se pudo alcanzar el terminal. El túnel o el terminal está apagado."

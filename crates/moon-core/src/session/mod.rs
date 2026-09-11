@@ -120,7 +120,12 @@ pub struct LicenseSummary {
     pub moon_credits_auction: i64,
 }
 
+/// Owns core feeds, account/market routing, and pending notifications for the UI drain.
 pub struct SessionManager {
+    /// Replaced at every connection/identity boundary; queued playback must retain this token.
+    trade_sound_epochs: HashMap<CoreId, std::sync::Arc<()>>,
+    /// Trade edges awaiting one UI drain; bounded independently from retained order history.
+    trade_sounds: Vec<(CoreId, ExchangeId, crate::feed::trade_sound::TradeSound)>,
     sessions: Vec<CoreSession>,
     /// Config ranks for active and inactive cores, keeping reactivated sessions in place.
     /// Refreshed by every path that can insert a session.

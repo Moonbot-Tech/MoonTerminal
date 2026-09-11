@@ -529,6 +529,7 @@ const fn builtin(
 /// - the trading actions and the manual-strategy presets close the list.
 pub const DISPATCH: &[Step] = &[
     Step::Slot(KeySlot::DrawHline),
+    Step::Slot(KeySlot::DrawHorizontalRay),
     Step::Slot(KeySlot::DrawSegment),
     Step::Slot(KeySlot::DrawTriangle),
     Step::Slot(KeySlot::DrawChannel),
@@ -657,6 +658,7 @@ pub fn action_of(slot: KeySlot, hk: &HotkeysConfig) -> HotkeyAction {
         KeySlot::SwitchFigure => A::SwitchFigure,
         KeySlot::ChartShot => A::ChartShot,
         KeySlot::DrawHline => A::FigTool(FigureTool::HLine),
+        KeySlot::DrawHorizontalRay => A::FigTool(FigureTool::HorizontalRay),
         KeySlot::DrawSegment => A::FigTool(FigureTool::Segment),
         KeySlot::DrawTriangle => A::FigTool(FigureTool::Triangle),
         KeySlot::DrawChannel => A::FigTool(FigureTool::Channel),

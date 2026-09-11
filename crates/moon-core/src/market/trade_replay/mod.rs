@@ -1,13 +1,13 @@
-//! Frozen market history for ONE closed trade, fetched from the exchange's public REST.
+//! Frozen market history for ONE closed trade, read from core archives with public REST fallback.
 //!
 //! # Why this exists
 //!
 //! Clicking a closed trade in the Report used to reposition the main chart's viewport onto the
 //! trade's interval and fetch nothing, so the entry and exit arrows regularly landed over empty
-//! space. Neither of the two live sources can fix that: MoonProto keeps trades in a bounded
-//! in-process ring rather than a history store, and a core answers `request_coin_card` with about
-//! five hundred recent bars and accepts no time range. The exchange's own public REST is the only
-//! thing that can answer "what was this market doing between 14:02 and 14:20 last Tuesday".
+//! space. Core archives can answer while the trade remains in their bounded retained rings;
+//! older positions still need the exchange's public REST. The replay worker first checks matching
+//! core history, requests an archive through the shared demand gate, and uses REST where the
+//! retained span cannot bracket the position. Candle context remains outside a partial tick span.
 //!
 //! # What a replay is, and what it is NOT
 //!
@@ -41,27 +41,15 @@ use crate::venue::{Brand, Venue};
 /// Milliseconds in one minute, the only timeframe a replay is fetched at.
 const MINUTE_MS: i64 = 60_000;
 
-/// Smallest distance from the ENTRY to the window's left edge, in milliseconds.
+/// Minimum history before entry, so the setup can be read in its broader market context.
 ///
-/// A FLOOR, not padding added on top: a trade whose proportional context already reaches further
-/// back keeps its own, larger lead. The point of looking at a trade's picture is to see what the
-/// market was doing BEFORE the entry, and half of a forty-second scalp is twenty seconds — which
-/// is no context at all. Sixty minutes is the user's stated minimum, raised from thirty on
-/// 2026-08-23 after looking at real trades in the shipped build.
-///
-/// This also SUBSUMES the ten-minute minimum span this module used to widen to: the two floors
-/// together guarantee at least eighty minutes plus the position's own duration, so that widening
-/// step could never fire again and was removed rather than left as unreachable code.
-const LEAD_FLOOR_MS: i64 = 60 * MINUTE_MS;
+/// This is a floor against proportional padding, not additional padding for long positions.
+const LEAD_FLOOR_MS: i64 = 6 * 60 * MINUTE_MS;
 
-/// Smallest distance from the EXIT to the window's right edge, in milliseconds.
+/// Minimum history after exit, so the continuation or reversal remains available when zooming out.
 ///
-/// A FLOOR on the same terms as [`LEAD_FLOOR_MS`], and deliberately much smaller: what happened
-/// after an exit is worth a glance, not a study, and every extra minute here is a bar fetched
-/// through a public, rate-limited endpoint. Twenty minutes is the user's stated minimum, raised
-/// from five on 2026-08-23 — still a third of the lead, so the asymmetry the paragraph argues
-/// for survives the widening.
-const TRAIL_FLOOR_MS: i64 = 20 * MINUTE_MS;
+/// The future portion is naturally unavailable for a recently closed trade.
+const TRAIL_FLOOR_MS: i64 = 2 * 60 * MINUTE_MS;
 
 /// Budget on the CONTEXT a replay pays for, in milliseconds — not a ceiling on the window.
 ///
@@ -83,18 +71,10 @@ const MAX_SPAN_MS: i64 = 7 * 24 * 60 * MINUTE_MS;
 /// exit — so a window clipped exactly to the position would answer the wrong question.
 const CONTEXT_FRACTION: f64 = 0.5;
 
-/// Margin added around the trade's own span when computing [`ReplayWindow::focus`].
-///
-/// Wide enough that the entry and exit sit comfortably inside the focus tiles [`tick_plan`]
-/// fetches first, rather than landing on the very edge of one; not wider, because every extra
-/// millisecond here is lead/trail context pulled ahead of a slice that is actually IN the trade.
+/// Detailed history includes five minutes before entry and after exit; wider context stays bars.
 const FOCUS_MARGIN_MS: i64 = 5 * MINUTE_MS;
 
-/// Width of one tick-fetch tile in [`tick_plan`], before a route's own cap narrows it further.
-///
-/// An 80-minute scalp window under Binance USD-M's one-hour query cap would otherwise tile into
-/// two requests that both straddle the focus, making trade-priority ordering inert — chopping
-/// finer than the route cap is what gives [`tick_plan`] something to actually prioritise.
+/// Bound each tick tile so completed groups can be shown during a long position's replay.
 const TICK_SLICE_MS: i64 = 10 * MINUTE_MS;
 
 /// Bucket widths [`fit_ticks`] tries in order, coarsest last.
@@ -115,6 +95,12 @@ pub enum TickStatus {
     /// A tick stage is queued and has not answered yet. The first outcome of every window that
     /// earns one carries this.
     Pending,
+    /// A partial tick snapshot is visible while the worker continues fetching further pages.
+    Streaming,
+    /// Candle context is visible while a bounded native-archive follow-up remains active.
+    AwaitingCore,
+    /// Usable native ticks are visible, but broad candle context could not be loaded.
+    ContextUnavailable,
     /// This build knows no public trades route for the venue (Bybit, Hyperliquid). Retrying
     /// cannot help.
     NoRoute,
@@ -127,7 +113,7 @@ pub enum TickStatus {
     NoTrades,
     /// The tick fetch itself did not produce an answer.
     Failed,
-    /// Ticks were served. Only a [`TradeReplaySource::Ticks`] series carries this.
+    /// The tick stage finished; carried by exchange or core tick series.
     Served,
 }
 
@@ -140,8 +126,17 @@ pub enum TickStatus {
 pub enum TradeReplaySource {
     /// Individual public trades, drawn as chart points.
     Ticks,
+    /// Trade points copied from a matching core's retained archive.
+    CoreTicks,
     /// One-minute bars — the fallback wherever ticks cannot be had.
     Klines1m,
+}
+
+impl TradeReplaySource {
+    /// Whether this source supplies tape points for rendering and snapping trade markers.
+    pub const fn is_ticks(self) -> bool {
+        matches!(self, Self::Ticks | Self::CoreTicks)
+    }
 }
 
 /// Why a replay carries nothing to draw, stated as a fact rather than as a sentence.
@@ -246,11 +241,9 @@ impl ReplayWindow {
         }
     }
 
-    /// The sub-window closest to the trade itself, for ordering a tick fetch around it.
+    /// The only interval requested as ticks: the position plus five minutes on each side.
     ///
-    /// [`tick_plan`] fetches this region FIRST and orders every other tile by distance to it, so
-    /// a fetch cut short by budget or deadline still lands the trade's own span rather than an
-    /// hour of lead context nobody asked to see before it.
+    /// Both native archive reads and public REST use this interval. Wider history remains candles.
     ///
     /// Returns:
     ///     `(left, right)` inclusive, clamped into `[Self::from_ms, Self::to_ms]` on both ends —
@@ -266,6 +259,15 @@ impl ReplayWindow {
             .min(self.to_ms)
             .max(self.from_ms);
         (left, right)
+    }
+    /// Detailed points cover only the position plus five minutes on each side; context stays bars.
+    pub(crate) fn tick_window(self) -> Self {
+        let (from_ms, to_ms) = self.focus();
+        Self {
+            from_ms,
+            to_ms,
+            ..self
+        }
     }
 }
 
@@ -412,57 +414,19 @@ pub fn time_slices(window: ReplayWindow, max_span_ms: Option<i64>) -> Vec<(i64, 
     out
 }
 
-/// One ordered decomposition of a [`ReplayWindow`] into tick-fetch tiles.
-///
-/// [`Self::slices`] is ordered so that ANY PREFIX is a CONTIGUOUS span with no gap between the
-/// sorted first-k slices, for every k — [`worker::paginate_ticks`] leans on exactly this to
-/// report a fetch truncated by budget or a deadline as ONE covered interval rather than a comb of
-/// holes. A later "tidy" that resorts these tiles purely by `from_ms` would keep them contiguous
-/// too, but back in CLOCK order — which throws away the whole reason this type exists, so preserve
-/// the ORDER here, not merely the contiguity.
+/// Contiguous tick-fetch tiles. Every completed prefix can be published as one covered span.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TickPlan {
-    /// Every tile to fetch, in fetch-priority order: the trade's own focus first, then outward.
+    /// Narrow focus tiles in chronological order; distant candle context is excluded.
     pub slices: Vec<(i64, i64)>,
     /// How many leading entries of [`Self::slices`] cover [`ReplayWindow::focus`].
     pub focus_len: usize,
 }
 
-/// Tile a window into tick-fetch requests ordered around the TRADE instead of around the clock.
+/// Tile only the position and its five-minute margins, leaving wider context as candles.
 ///
-/// The window is chopped into three independent regions — before the focus, the focus itself,
-/// after the focus — each tiled by [`time_slices`] at `min(TICK_SLICE_MS, max_query_ms)`. The
-/// focus tiles are placed first, ascending; every remaining tile then follows by distance to the
-/// focus, nearest first, tied-break by `from_ms` (so the tile just before the focus outranks the
-/// tile just after it, since it sits at a smaller time). This is what lets a walk that runs out of
-/// budget or time abandon the FARTHEST tiles rather than the nearest ones — the defect this module
-/// exists to fix in the first place.
-///
-/// A route's documented retention makes the LEFT edge of every region a moving floor: rows older
-/// than `now_ms - retention_ms` cannot be fetched regardless of what the window asks for. Judging
-/// retention against the padded window (as the naive check does) refuses a trade whose own span
-/// is well inside retention the moment its OPTIONAL lead context crosses the boundary — the ticks
-/// the user actually wants are available and get skipped anyway. So this clips instead of
-/// refusing outright: every region drops the part of itself older than `earliest_ms`, and if the
-/// FOCUS itself — the trade, not its context — falls entirely before it, the whole plan is empty
-/// rather than a lead-less scrap of trail. The caller reads an empty plan as "nothing worth
-/// fetching" and reports `OutOfRetention`.
-///
-/// Args:
-///     window: The window to cover.
-///     max_query_ms: The route's own cap on one request's span, or `None`/non-positive when it
-///         documents none, in which case [`TICK_SLICE_MS`] alone tiles the window.
-///     earliest_ms: The oldest millisecond the route's retention can still answer for, or `None`
-///         when the route documents no retention limit.
-///
-/// Returns:
-///     A [`TickPlan`] whose prefix-contiguity invariant (see [`TickPlan`]) holds for every k, even
-///     after retention clipping — clipping only ever shrinks the LEAD region from the near edge
-///     inward, and whenever it shrinks the focus's own start too, the entire lead region (being
-///     strictly older) is guaranteed to fall before `earliest_ms` as well and is dropped whole, so
-///     no clipped region can end up separated from its neighbour by a gap. A region that ends up
-///     empty or inverted contributes no tiles — [`time_slices`] already returns none for an
-///     inverted span, so no extra per-region check is needed here.
+/// Retention clips this narrow range before paging. Completed prefixes remain contiguous so
+/// progressive snapshots never claim a gap between independently fetched sections.
 pub(crate) fn tick_plan(
     window: ReplayWindow,
     max_query_ms: Option<i64>,
@@ -497,39 +461,11 @@ pub(crate) fn tick_plan(
         },
         Some(span),
     );
-    let lead_slices = time_slices(
-        ReplayWindow {
-            from_ms: clip_from(window.from_ms),
-            to_ms: focus_from - 1,
-            ..window
-        },
-        Some(span),
-    );
-    let trail_slices = time_slices(
-        ReplayWindow {
-            from_ms: clip_from(focus_to + 1),
-            to_ms: window.to_ms,
-            ..window
-        },
-        Some(span),
-    );
-
     let focus_len = focus_slices.len();
-    let mut rest: Vec<(i64, i64)> = lead_slices.into_iter().chain(trail_slices).collect();
-    // Ascending distance first; `from_ms` breaks the tie between the one lead tile and the one
-    // trail tile that can sit exactly as close on either side of the focus.
-    rest.sort_by_key(|&(from, to)| {
-        let distance = if to < focus_from {
-            focus_from - to
-        } else {
-            from - focus_to
-        };
-        (distance, from)
-    });
-
-    let mut slices = focus_slices;
-    slices.extend(rest);
-    TickPlan { slices, focus_len }
+    TickPlan {
+        slices: focus_slices,
+        focus_len,
+    }
 }
 
 /// Thin a tick run down to a render/remember budget, coarsening only as far as needed.
@@ -694,6 +630,7 @@ pub fn tick_identity_salt(source: TradeReplaySource) -> u64 {
     match source {
         TradeReplaySource::Klines1m => 0,
         TradeReplaySource::Ticks => 0x9E37_79B9_7F4A_7C15,
+        TradeReplaySource::CoreTicks => 0xD1B5_4A32_D192_ED03,
     }
 }
 
@@ -823,7 +760,13 @@ impl TradeReplaySeries {
         // `(identity, tf_ms, from_bucket, to_bucket)` bit-for-bit (§4 of the tick-replay plan),
         // so the tick upgrade's revision would equal the one the pane already shipped and
         // `candles_changed` below would stay false forever. See `tick_identity_salt`.
-        let salted_identity = self.identity ^ tick_identity_salt(self.source);
+        let mut salted_identity = self.identity ^ tick_identity_salt(self.source);
+        if let Some((from, to)) = self.covered {
+            // Successive progressive snapshots share the window identity but change which
+            // candles must remain visible. Their coverage must invalidate the candle upload.
+            salted_identity ^= (from as u64).rotate_left(17) ^ (to as u64).rotate_left(37);
+            salted_identity ^= self.ticks.len() as u64;
+        }
         let revision = replay_revision(
             salted_identity,
             tf_ms,

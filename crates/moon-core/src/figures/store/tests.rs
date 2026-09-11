@@ -532,3 +532,41 @@ fn a_shared_figure_is_not_local_to_the_core_it_is_shared_with() {
     assert!(!store.is_local(2, "BTCUSDT", id));
     assert!(store.is_local(1, "BTCUSDT", id));
 }
+
+/// Adding the new variant must preserve old figures and persist the ray's only anchor and style.
+#[test]
+fn horizontal_ray_and_legacy_figures_survive_store_roundtrip() {
+    use crate::figures::tools::HorizontalRay;
+    let mut store = FigureStore::from_json(V1_FILE);
+    let mut drawn = fig(FigureKind::HorizontalRay(HorizontalRay {
+        origin: FigNode::new(1_700_000_123_456.0, 42.125),
+    }));
+    drawn.color = [21, 43, 65, 87];
+    drawn.thickness = 3.5;
+    drawn.line_kind = crate::figures::LineKind::DashDot;
+    let id = store.add(1, "BTCUSDT", drawn.clone());
+    let json = serde_json::to_string(&store.to_persist()).expect("serialize figures");
+    let back = FigureStore::from_json(&json);
+    assert_eq!(back.figures(1, "BTCUSDT").len(), 5);
+    assert_eq!(
+        back.get(1, "BTCUSDT", 3).unwrap().kind,
+        FigureKind::HLine(HLine { price: 100.5 })
+    );
+    let restored = back.get(1, "BTCUSDT", id).expect("ray survives reload");
+    assert_eq!(restored.kind, drawn.kind);
+    assert_eq!(restored.color, [21, 43, 65, 87]);
+    assert_eq!(restored.thickness, 3.5);
+    assert_eq!(restored.line_kind, crate::figures::LineKind::DashDot);
+    let legacy_ray: FigureKind = serde_json::from_str(
+        r#"{"Ray":{"a":{"time_ms":1.0,"price":2.0},"b":{"time_ms":3.0,"price":4.0}}}"#,
+    )
+    .expect("arbitrary ray keeps its original representation");
+    assert_eq!(legacy_ray.tool(), crate::figures::FigureTool::Ray);
+    let persisted = serde_json::to_value(&restored.kind).unwrap();
+    assert_eq!(
+        persisted,
+        serde_json::json!({"HorizontalRay": {"origin": {
+            "time_ms": 1_700_000_123_456.0, "price": 42.125
+        }}})
+    );
+}

@@ -1,6 +1,7 @@
 //! Primary server configuration split across two files below [`paths::data_dir`]:
-//! - `servers.enc` in the data root (encrypted): uid/name/key as portable secrets; host and port
-//!   are encoded in the Moonbot key itself, and so is the transport mode the key seeds;
+//! - `servers.enc` in the data root (encrypted): uid/name/key as portable secrets plus the
+//!   Telegram token, pairing, and preferences; host and port are encoded in the Moonbot key
+//!   itself, and so is the transport mode the key seeds;
 //! - `cfg/settings.toml` (plaintext): schema version, groups, and per-server metadata such as
 //!   active/show_window/feed flags, group, market, and color, joined to servers by uid.
 //!
@@ -37,8 +38,10 @@ pub mod secrets;
 pub mod servers;
 pub mod storage;
 pub mod tab_badges;
+pub mod telegram_access;
 pub mod theme;
 pub mod theme_legacy;
+pub mod trade_sounds;
 
 mod backup;
 mod migrate;
@@ -92,7 +95,7 @@ pub use layout::{
 pub use news_tags::NewsTagSettings;
 pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
 pub use quiet::{QuietCfg, QuietWarnBypass};
-pub use schema::{UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN, UiThemeMode};
+pub use schema::{TelegramConfig, UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN, UiThemeMode};
 pub use secrets::Secret;
 pub use servers::{
     ChartBucket, CoreSortMode, FeedFlags, MANUAL_STRAT_SLOTS, ManualStratState, ServerConfig,
@@ -328,6 +331,11 @@ pub struct AppConfig {
     /// `charts.json` stored positional CoreIds. At startup, the UI rebinds them once to stable
     /// uids (see `chart_persist::remap_core_ids`). Defaults to false.
     pub chart_core_remap_needed: bool,
+    /// Telegram credentials, pairing, and preferences from `servers.enc`.
+    ///
+    /// An empty token is the hard off switch. This field is absent from plaintext
+    /// `settings.toml`; [`Secret`]'s `Debug` already redacts the token.
+    pub telegram: TelegramConfig,
 }
 
 impl AppConfig {
@@ -366,6 +374,7 @@ impl AppConfig {
             badges: Default::default(),
             settings_unreadable: Default::default(),
             chart_core_remap_needed: Default::default(),
+            telegram: Default::default(),
         }
     }
 
@@ -466,6 +475,7 @@ impl AppConfig {
                 badges,
                 settings_unreadable,
                 chart_core_remap_needed: merged.chart_core_remap_needed,
+                telegram: merged.telegram,
             };
             log::info!(
                 "конфиг: {} серверов, {} групп",
@@ -792,6 +802,7 @@ impl AppConfig {
             // that were never read with defaults.
             settings_unreadable,
             chart_core_remap_needed: false,
+            telegram: TelegramConfig::default(),
         };
         ensure_server_group_configs(&config.servers, &mut config.groups);
         config
@@ -806,10 +817,49 @@ impl AppConfig {
         self.save_impl()
     }
 
+    /// Replace only the encrypted aggregate, preserving the validated saved server secrets.
+    ///
+    /// Pairing must not report failure after its authorization has already reached disk in a
+    /// multi-file save. Refuse unreadable, interrupted, or unassigned config; the sole commit
+    /// point here is the atomic encrypted replacement, with no fallible operation after it.
+    pub fn save_telegram(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.settings_unreadable, "configuration is unreadable");
+        self.validate()?;
+        backup::with_config_pair(|| {
+            anyhow::ensure!(
+                !backup::pair_write_pending(),
+                "configuration repair is pending"
+            );
+            store::ensure_servers_writable()?;
+            let mut uids = HashSet::new();
+            anyhow::ensure!(
+                self.servers
+                    .iter()
+                    .all(|server| server.uid != 0 && uids.insert(server.uid)),
+                "server identities require a full settings save"
+            );
+            // Use the already opened config, retaining pending encryption key-slot changes.
+            // Reopening servers.enc here would replace the live vault with its older slots.
+            let encrypted = schema::ServersFile {
+                servers: self
+                    .servers
+                    .iter()
+                    .map(|server| schema::ServerEntry {
+                        uid: server.uid,
+                        name: server.name.clone(),
+                        key: server.key.clone(),
+                    })
+                    .collect(),
+                telegram: self.telegram.clone(),
+            };
+            store::write_servers(&encrypted)
+        })
+    }
+
     /// Shared save implementation for every config persistence path.
     ///
-    /// This is the ONLY config write point, so the write block belongs here. It covers Settings,
-    /// the timer drain, the exit write, and migration rather than only one remembered path.
+    /// This is the general config write point; the Telegram-only path enforces the same read
+    /// guard. It covers Settings, the timer drain, the exit write, and migration.
     fn save_impl(&mut self) -> anyhow::Result<()> {
         if self.settings_unreadable {
             anyhow::bail!(
@@ -847,11 +897,19 @@ impl AppConfig {
             self.core_sort,
             self.report_valuation_mode,
             self.next_uid.get(),
+            self.telegram.clone(),
         );
         // Refuse an unwritable servers.enc BEFORE the pair write starts. Failing inside the block
         // below would leave the "replacement in progress" marker behind with settings.toml never
         // written, turning a refusal into a permanently half-replaced pair.
         store::ensure_servers_writable()?;
+        // Theme, line styles, and hotkeys each use their own portable file, independently of
+        // settings.toml. Persist them BEFORE the encrypted pair write so an auxiliary failure
+        // cannot follow a newly written Telegram credential in servers.enc. This ordering is
+        // the credential truthfulness boundary, not a multi-file transaction.
+        self.theme.save()?;
+        self.orders.save()?;
+        self.hotkeys.save()?;
         // Hold one pair lock across both atomic replacements so a background snapshot cannot mix
         // servers from one config generation with settings metadata from another.
         backup::with_config_pair(|| -> anyhow::Result<()> {
@@ -861,12 +919,8 @@ impl AppConfig {
             backup::finish_pair_write()?;
             Ok(())
         })?;
-        // Theme, line styles, detect badges, and hotkeys each use their own portable file,
-        // independently of settings.toml.
-        self.theme.save()?;
-        self.orders.save()?;
+        // Detect badges stay best-effort after the pair write; they do not fail Save.
         self.badges.save();
-        self.hotkeys.save()?;
         Ok(())
     }
 
@@ -990,6 +1044,9 @@ impl AppConfig {
             ValuationMode::default(),
             // The uid counter advances on save and does not describe structure by itself.
             0,
+            // Telegram credentials are not a session/window reconnect trigger, and the token
+            // must not enter this plaintext signature.
+            TelegramConfig::default(),
         );
         let a = toml::to_string(&sf).unwrap_or_default();
         let b = toml::to_string(&meta).unwrap_or_default();

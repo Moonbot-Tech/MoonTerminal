@@ -66,3 +66,119 @@ fn an_ordinal_outside_the_list_names_nothing() {
     assert_eq!(mb_sound_name(i32::MIN), None, "the -1 must not overflow");
     assert_eq!(mb_sound_name(MB_SOUNDS.len() as i32 + 1), None);
 }
+
+/// Independent sample counts pin full clip durations, including a selectable five-second clip.
+#[test]
+fn pcm_duration_uses_frames_and_sample_rate() {
+    use super::{bytes_of, wav_duration};
+    use std::time::Duration;
+    assert_eq!(
+        wav_duration(bytes_of("ding1").unwrap()),
+        Some(Duration::from_millis(1076))
+    );
+    assert_eq!(
+        wav_duration(bytes_of("ding2").unwrap()),
+        Some(Duration::from_nanos(5_017_333_334))
+    );
+    assert_eq!(
+        wav_duration(bytes_of("babytoy").unwrap()),
+        Some(Duration::from_nanos(293_877_552))
+    );
+    for (_, wav) in SOUNDS {
+        assert!(
+            wav_duration(wav).is_some(),
+            "every shipped asset must pass the scheduler's format guard"
+        );
+        assert!(
+            wav_duration(&wav[..wav.len() - 1]).is_none(),
+            "truncated RIFF must not reserve a player slot"
+        );
+    }
+}
+
+/// Ordinary notices get the first turn, but cannot cut or indefinitely starve waiting trades.
+#[test]
+fn contention_alternates_complete_clips_and_progresses_without_new_events() {
+    use super::{Clip, Playback};
+    use std::time::{Duration, Instant};
+    let mut player = Playback::default();
+    let detect = Clip::named("babytoy").unwrap();
+    let alert = Clip::named("pfiff").unwrap();
+    let open = Clip::named("ding1").unwrap();
+    let close = Clip::named("ding2").unwrap();
+    player.enqueue(detect);
+    player.enqueue(alert);
+    let start = Instant::now();
+    let (first, is_trade) = player.next(start, Some(open)).unwrap();
+    assert!(!is_trade);
+    assert!(std::ptr::eq(first.wav, detect.wav));
+    assert!(player.next(start + detect.duration, Some(open)).is_none());
+    let open_at = start + detect.duration + Duration::from_millis(50);
+    assert!(player.next(open_at, Some(open)).unwrap().1);
+    // Repeated producer traffic while the trade plays must queue, never interrupt it.
+    player.enqueue(detect);
+    assert!(
+        player
+            .next(open_at + Duration::from_millis(500), Some(close))
+            .is_none()
+    );
+    let alert_at = open_at + open.duration + Duration::from_millis(50);
+    let (next, is_trade) = player.next(alert_at, Some(close)).unwrap();
+    assert!(!is_trade);
+    assert!(std::ptr::eq(next.wav, alert.wav));
+    let close_at = alert_at + alert.duration + Duration::from_millis(50);
+    assert!(player.next(close_at, Some(close)).unwrap().1);
+    assert!(
+        player
+            .next(close_at + Duration::from_secs(5), None)
+            .is_none()
+    );
+    assert!(
+        !player
+            .next(close_at + close.duration + Duration::from_millis(50), None)
+            .unwrap()
+            .1
+    );
+}
+
+/// Saturating the ordinary lane cannot replace its accepted FIFO head or a pending trade turn.
+#[test]
+fn ordinary_queue_is_bounded_without_evicting_accepted_clips() {
+    use super::{Clip, Playback};
+    use std::time::{Duration, Instant};
+    let mut player = Playback::default();
+    let first = Clip::named("babytoy").unwrap();
+    player.enqueue(first);
+    for _ in 0..1000 {
+        player.enqueue(Clip::named("ding2").unwrap());
+    }
+    assert_eq!(player.normal.len(), 64);
+    let now = Instant::now();
+    assert!(std::ptr::eq(
+        player.next(now, None).unwrap().0.wav,
+        first.wav
+    ));
+    assert!(
+        player
+            .next(
+                now + first.duration + Duration::from_millis(50),
+                Clip::named("ding1")
+            )
+            .unwrap()
+            .1
+    );
+}
+
+/// Entering quiet spends the old backlog without rejecting later producer-approved exceptions.
+#[test]
+fn quiet_transition_discards_backlog_but_accepts_later_bypass() {
+    use super::{PLAYBACK, discard_pending, play};
+    play("ding1");
+    play("ding2");
+    discard_pending();
+    PLAYBACK.with(|player| assert!(player.borrow().normal.is_empty()));
+    // Simulates a detect already approved by the existing quiet-bypass policy.
+    play("pfiff");
+    PLAYBACK.with(|player| assert_eq!(player.borrow().normal.len(), 1));
+    discard_pending();
+}

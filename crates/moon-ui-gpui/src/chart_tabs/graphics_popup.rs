@@ -14,8 +14,8 @@
 //! KIND of tab (`chart_tabs::apply_all`). The ⧉ button opens the row that names which kinds a press
 //! addresses and stores these settings as their default.
 //!
-//! All controls are stateless: they are re-derived from the stored config on every render, which is
-//! what lets the popup live in a chart host that repaints constantly.
+//! Controls read stored config on every render. The RGB picker keeps window-local MoonUI state
+//! through the shared color adapter, refreshing it when the active tab changes.
 
 use gpui::*;
 use moon_core::config::ChartGraphicsCfg;
@@ -71,30 +71,11 @@ const VOLUME_STYLES: [u8; 3] = [
     moon_core::market::candles::VOLUME_STYLE_OFF,
 ];
 
-/// Offered colours for the volume scale's reference lines, sRGB.
-///
-/// A grey ramp rather than a wheel: the lines annotate a volume band, and what matters is how far
-/// they sit from the background. `110` and `170` are the two values the dark and light themes used
-/// to set, so every migrated user finds their own colour on the ramp.
-///
-/// A stored colour that is NOT on this ramp still draws, and the row shows it as an extra trailing
-/// cell — see [`swatch_row`]. This replaced a free colour wheel in Settings; `MoonColorPickerState`
-/// could not be reused because it exposes no public setter, so its swatch could not be re-pointed
-/// when the popup switches to another tab.
-const VOLUME_SCALE_COLORS: [[u8; 3]; 6] = [
-    [70, 70, 70],
-    [110, 110, 110],
-    [150, 150, 150],
-    [170, 170, 170],
-    [200, 200, 200],
-    [235, 235, 235],
-];
-
 /// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
 ///
 /// Sized on the widest row, of which there are now several: six segments at 42 units each, which
 /// the three 84-unit style segments tie exactly. The checkbox labels wrap rather than widen, the
-/// colour cells are sized to fit seven in that same width, and the localized ES strings are the
+/// RGB picker fits within that same width, and the localized ES strings are the
 /// longest of the three.
 pub(super) fn content_width(cx: &App) -> Pixels {
     px(6.0 * 42.0 + popup_group_inset_px(cx))
@@ -125,69 +106,6 @@ fn nearest(steps: &[f32], value: f32) -> usize {
         }
     }
     best
-}
-
-/// Build one popup setting as a caption with a row of clickable colour cells below it.
-///
-/// Hand-built rather than taken from MoonUI, and the gap is real rather than an oversight:
-/// `MoonColorPicker` is STATEFUL — it needs an `Entity<MoonColorPickerState>` held by the view, and
-/// that state exposes no public setter, so it cannot be re-pointed when this popup switches to
-/// another chart tab. `MoonSegmentedControl::replace_item` cannot carry the cells either: its own
-/// documentation says a replaced cell keeps its width and underline but loses click handling, and a
-/// colour the user cannot click is not a control. What the stack lacks is a STATELESS controlled
-/// swatch strip, so this builds one from primitives and design tokens rather than duplicating an
-/// existing widget.
-///
-/// Args:
-///     id: Element identity prefix for the cells.
-///     caption: Localized label drawn above them.
-///     swatches: One `(sRGB, selected)` pair per cell, in display order.
-///     p: Active palette, for the caption and the cell borders.
-///     cx: App context, for the caption text size and cell sizing.
-///     on_pick: Receives the picked cell index.
-///
-/// Returns:
-///     The caption and its colour cells as one column.
-fn swatch_row(
-    id: String,
-    caption: String,
-    swatches: Vec<([u8; 3], bool)>,
-    p: MoonPalette,
-    cx: &App,
-    on_pick: impl Fn(usize, &mut App) + Clone + 'static,
-) -> impl IntoElement {
-    // Sized so SEVEN cells still fit the popup's content width: the row grows by one when the
-    // stored colour is off-ramp (see `VOLUME_SCALE_COLORS`), and that case must not overflow.
-    let cell = design::ui_px(cx, 32.0);
-    let mut cells = h_flex().w_full().gap(design::ui_px(cx, 4.0));
-    for (index, (color, selected)) in swatches.into_iter().enumerate() {
-        let on_pick = on_pick.clone();
-        cells = cells.child(
-            div()
-                .id(SharedString::from(format!("{id}-{index}")))
-                .w(cell)
-                .h(design::ui_px(cx, 18.0))
-                .rounded(design::ui_px(cx, 3.0))
-                .bg(rgb(design::rgb_to_u32(color)))
-                .border_1()
-                // The selected cell is ringed in the accent the segmented rows above use, so the
-                // two kinds of row read as the same control at a glance.
-                .border_color(rgb(if selected { p.blue } else { p.border }))
-                .cursor_pointer()
-                .hover(|s| s.border_color(rgb(p.border_hover)))
-                .on_click(move |_, _w, app| on_pick(index, app)),
-        );
-    }
-    v_flex()
-        .w_full()
-        .gap(design::ui_px(cx, 2.0))
-        .child(
-            div()
-                .text_size(design::t_caption(cx))
-                .text_color(rgb(p.text))
-                .child(caption),
-        )
-        .child(cells)
 }
 
 /// Label a 0..1 fraction as whole percent.
@@ -231,6 +149,7 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
     id: &str,
     entity: Entity<T>,
     cfg: ChartGraphicsCfg,
+    target: (u32, moon_core::config::ChartBucket),
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -452,33 +371,24 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
     };
     let volume_scale_row = {
         let entity = entity.clone();
-        let stored = cfg.candle_volume_scale;
-        let on_ramp = VOLUME_SCALE_COLORS.contains(&stored);
-        let mut swatches: Vec<([u8; 3], bool)> = VOLUME_SCALE_COLORS
-            .iter()
-            .map(|c| (*c, on_ramp && *c == stored))
-            .collect();
-        // A colour set before this row existed — the old Settings page had a full wheel — is kept
-        // as a trailing cell rather than silently dropped. Without it the row would show nothing
-        // selected while the chart draws that very colour.
-        if !on_ramp {
-            swatches.push((stored, true));
-        }
-        swatch_row(
-            format!("{id}-volume-scale"),
-            t!("chart.graphics.candle_volume_scale").to_string(),
-            swatches,
-            p,
-            cx,
-            move |ix, app| {
-                // The trailing cell is the value already stored, so picking it is a no-op and
-                // falls out of this bound check by itself.
-                if let Some(v) = VOLUME_SCALE_COLORS.get(ix) {
-                    let v = *v;
-                    write_cfg(&entity, app, |c| c.candle_volume_scale = v);
-                }
-            },
-        )
+        v_flex()
+            .w_full()
+            .gap(design::ui_px(cx, 2.0))
+            .child(
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text))
+                    .child(t!("chart.graphics.candle_volume_scale").to_string()),
+            )
+            .child(crate::controls::color_picker::ColorPicker::new(
+                format!("{id}-volume-scale-{target:?}"),
+                cfg.candle_volume_scale,
+                move |color, app| {
+                    if entity.read(app).spec_key() == target {
+                        write_cfg(&entity, app, |c| c.candle_volume_scale = color);
+                    }
+                },
+            ))
     };
 
     // The ⧉ "apply to all" icon mirrors the candle popup beside it: distribute THIS target's
@@ -652,11 +562,13 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
         p,
         cx,
     );
-    popover = popover.content(
-        v_flex()
-            .gap_2()
-            .children(row)
-            .child(render_graphics_popup(id_prefix, entity, cfg, p, cx)),
-    );
+    popover = popover.content(v_flex().gap_2().children(row).child(render_graphics_popup(
+        id_prefix,
+        entity,
+        cfg,
+        this.spec_key(),
+        p,
+        cx,
+    )));
     popover
 }

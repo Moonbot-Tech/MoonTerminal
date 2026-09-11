@@ -47,8 +47,7 @@ use crate::persistence::chart_persist::StackLayoutMode;
 
 use gpui::*;
 use moon_ui::{
-    MoonBackgroundPolicy, MoonColorPickerEvent, MoonColorPickerState, MoonInputEvent,
-    MoonInputState, Panel, PanelEvent, PanelState,
+    MoonBackgroundPolicy, MoonInputEvent, MoonInputState, Panel, PanelEvent, PanelState,
 };
 use rust_i18n::t;
 
@@ -365,8 +364,6 @@ pub struct ChartTabs {
     /// Reset on OPEN rather than on every way the popup can close, for the reason
     /// `open_coin_popup` states about the expanded rows: opening is the one funnel.
     coin_tab: crate::controls::coin_search::CoinTab,
-    /// Arbitrary drawing-color picker offered at the end of the settings panel's swatch row.
-    fig_color_picker: Entity<MoonColorPickerState>,
 }
 
 impl ChartTabs {
@@ -683,32 +680,6 @@ impl ChartTabs {
             },
         )
         .detach();
-        // The custom drawing-color picker writes RGB into the SELECTED TOOL's style while
-        // preserving alpha, which is controlled by the opacity stepper. It seeds from whichever
-        // tool is selected at startup; later selections repaint the wheel from the panel's swatches
-        // rather than through this state.
-        let fig_color_picker = {
-            let b = backend.read(cx);
-            let init = b.fig_style(b.fig_tool).color;
-            let hsla: Hsla = crate::design::rgb_bytes_to_hsla([init[0], init[1], init[2]]);
-            cx.new(|cx| MoonColorPickerState::new(window, cx).default_value(hsla))
-        };
-        cx.subscribe(
-            &fig_color_picker,
-            |this, _st, ev: &MoonColorPickerEvent, cx| {
-                let MoonColorPickerEvent::Change(h) = ev else {
-                    return;
-                };
-                let c = crate::design::hsla_to_rgb8(*h);
-                this.backend.update(cx, |b, bcx| {
-                    let tool = b.fig_tool;
-                    let style = b.fig_style_mut(tool);
-                    style.color = [c[0], c[1], c[2], style.color[3]];
-                    bcx.notify();
-                });
-            },
-        )
-        .detach();
         let layout_fit_input = cx.new(|cx| MoonInputState::new(window, cx));
         let layout_scroll_input = cx.new(|cx| MoonInputState::new(window, cx));
         let layout_max_charts_input = cx.new(|cx| MoonInputState::new(window, cx));
@@ -780,7 +751,6 @@ impl ChartTabs {
             coin_input,
             coin_query: String::new(),
             coin_tab: crate::controls::coin_search::CoinTab::default(),
-            fig_color_picker,
         };
         // Read from the window being built rather than looked up later: `group_windows` is filled
         // only after `open_window` returns, so the deferred restore below has no addressable group

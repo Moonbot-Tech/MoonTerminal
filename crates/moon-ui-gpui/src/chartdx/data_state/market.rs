@@ -508,6 +508,7 @@ impl ChartDataState {
                 shipped_revision: pr.last_candle_rev,
             };
             if candles_off && pr.last_candle_rev != u64::MAX {
+                pr.figure_snap.clear_candles();
                 pr.layers.set_candles(Vec::new());
                 pr.last_candle_rev = u64::MAX;
                 pr.gpu_prepare_dirty = true;
@@ -733,6 +734,7 @@ impl ChartDataState {
                     // layer drops the vector, which no timer spans. Left alone deliberately:
                     // retaining it means handing the buffer back OUT of the layer, an API change
                     // across three backends for a slice of a figure already at 0.14% of wall time.
+                    pr.figure_snap.set_candles(&pr.candle_upload);
                     pr.layers.set_candles(std::mem::take(&mut pr.candle_upload));
                     crate::diag::record_us(&crate::diag::CHART_CANDLE_UPLOAD_US, upload_timer);
                     pr.last_candle_rev = history.candles_revision;
@@ -796,6 +798,7 @@ impl ChartDataState {
                 if pr.resident_left_rel.is_finite() {
                     pr.layers.reset_combo(Vec::new());
                     pr.layers.set_price_lines(&[], &[]);
+                    pr.figure_snap.clear_candles();
                     pr.layers.set_candles(Vec::new());
                     pr.last_candle_rev = u64::MAX;
                     pr.history_cursor.reset();

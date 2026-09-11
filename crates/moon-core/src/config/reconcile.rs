@@ -10,8 +10,8 @@ use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
 use super::schema::{
     COREID_UID_VERSION, SCHEMA_VERSION, ServerEntry, ServerMeta, ServersFile, SettingsFile,
-    UiThemeMode, clamp_chart_memory_percent, clamp_chart_stack_height, repair_ui_font_delta,
-    repair_ui_scale,
+    TelegramConfig, UiThemeMode, clamp_chart_memory_percent, clamp_chart_stack_height,
+    repair_ui_font_delta, repair_ui_scale,
 };
 use super::servers::{self, CoreSortMode};
 use super::uid_counter::UidCounter;
@@ -72,6 +72,9 @@ pub struct Merged {
     /// `charts.json` format lives in the UI crate. After write-back raises the version, this flag
     /// no longer activates.
     pub chart_core_remap_needed: bool,
+    /// Telegram credentials and preferences from the encrypted aggregate.
+    /// The token is not compared or copied here.
+    pub telegram: TelegramConfig,
 }
 
 /// Merge server secrets and settings into runtime server records.
@@ -104,6 +107,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     let core_sort = meta.core_sort;
     let report_valuation_mode = meta.report_valuation_mode;
     let hotkeys = meta.hotkeys;
+    let telegram = sf.telegram;
     let mut groups = meta.groups.clone();
     for group in &mut groups {
         if group.trade.repair() {
@@ -221,6 +225,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
         hotkeys,
         dirty,
         chart_core_remap_needed,
+        telegram,
     }
 }
 
@@ -251,6 +256,7 @@ pub fn split(
     core_sort: CoreSortMode,
     report_valuation_mode: ValuationMode,
     next_uid: u64,
+    telegram: TelegramConfig,
 ) -> (ServersFile, SettingsFile) {
     let sf = ServersFile {
         servers: servers
@@ -261,6 +267,7 @@ pub fn split(
                 key: s.key.clone(),
             })
             .collect(),
+        telegram,
     };
     let meta = SettingsFile {
         version: SCHEMA_VERSION,

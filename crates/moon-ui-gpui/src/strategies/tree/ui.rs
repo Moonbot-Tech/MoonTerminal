@@ -778,6 +778,7 @@ impl StrategiesView {
     /// Returns:
     ///     Nothing; cross-core cuts defer their final outcome until the destination echo arrives.
     pub(super) fn paste_to_targets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.retire_replaced_cut(cx);
         let moving = self.cut.is_some();
         let targets = self.paste_targets(cx);
         let mut strategies = 0usize;
@@ -1116,7 +1117,8 @@ impl StrategiesView {
         };
         // Enablement takes the caller's already-resolved list; the click handler below still
         // resolves its own target, because the workspace can move between frame and click.
-        let can_paste = self.clipboard.is_some() && has_visible_cores;
+        // External text can arrive without a local copy or a render notification. Validate on click.
+        let can_paste = has_visible_cores;
         let copy_label = t!("strat.action_copy").to_string();
         let paste_label = t!("strat.action_paste").to_string();
         let delete_label = t!("strat.action_delete").to_string();

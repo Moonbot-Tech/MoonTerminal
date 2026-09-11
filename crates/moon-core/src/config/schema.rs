@@ -232,10 +232,37 @@ pub struct ServerEntry {
     pub key: Secret,
 }
 
+/// Telegram bot credentials, pairing, and preferences stored only in `servers.enc`.
+///
+/// The token is a [`Secret`] and must never be copied into plaintext `settings.toml`, a
+/// `Debug` string, or an allocated signature buffer. Pairing identities are chat ids, not
+/// tokens; they still travel with the encrypted aggregate so one generation stays atomic.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TelegramConfig {
+    /// Bot API token. Empty is the hard off switch.
+    #[serde(default)]
+    pub token: Secret,
+    /// Chat ids allowed to issue commands after a successful `/pair`.
+    #[serde(default)]
+    pub authorized_chat_ids: Vec<i64>,
+    /// Sole owner. Legacy configurations resolve to their first paired chat.
+    #[serde(default)]
+    pub owner_chat_id: Option<i64>,
+    /// Named chat profiles; viewers receive only explicitly assigned stable core uids.
+    #[serde(default)]
+    pub chat_access: Vec<super::telegram_access::TelegramChatAccess>,
+    /// Whether the Mini App / tunnel path is requested. The process itself starts in a later phase.
+    #[serde(default)]
+    pub mini_app_enabled: bool,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct ServersFile {
     #[serde(default)]
     pub servers: Vec<ServerEntry>,
+    /// Telegram credentials and preferences. Absent in older files; serde supplies defaults.
+    #[serde(default)]
+    pub telegram: TelegramConfig,
 }
 
 /// Per-server metadata in plaintext settings.toml, without secrets.

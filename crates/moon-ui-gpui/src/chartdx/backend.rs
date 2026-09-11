@@ -56,6 +56,46 @@ pub struct PlatformLayers {
 }
 
 impl PlatformLayers {
+    /// Borrow the chronological tick ring for this frame, including pending native uploads.
+    /// Consumers can inspect prices or notionals without allocating a second history mirror.
+    pub(super) fn tick_samples(&self) -> impl Iterator<Item = &ChartCross> {
+        #[cfg(windows)]
+        {
+            self.combo.tick_samples()
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.wgpu.tick_samples()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.metal.tick_samples()
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            std::iter::empty()
+        }
+    }
+
+    /// Return individual quote amounts without changing the native band's base-quantity scale.
+    pub(super) fn nearby_tick_volumes(
+        &self,
+        from: f32,
+        to: f32,
+    ) -> [Option<moon_chart::tick_volume::TickVolumeRange>; 2] {
+        moon_chart::tick_volume::nearby_ticks(
+            self.tick_samples().map(|c| {
+                (
+                    c.time_rel,
+                    c.side,
+                    moon_chart::tick_volume::quote_notional(c.price, c.qty),
+                )
+            }),
+            from,
+            to,
+        )
+    }
+
     pub fn new() -> Self {
         Self {
             #[cfg(windows)]

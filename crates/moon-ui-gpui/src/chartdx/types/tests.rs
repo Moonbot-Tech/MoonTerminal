@@ -1,5 +1,51 @@
 use super::*;
 
+/// Quote readouts must not alter base-quantity uploads or merge independent equal-time prints.
+#[test]
+fn trade_upload_preserves_base_quantity_for_quote_readouts() {
+    let ticks = [
+        moon_core::feed::Tick {
+            time_ms: 1_010.0,
+            price: 25.0,
+            qty: 4.0,
+            side: moon_core::feed::Side::Buy,
+        },
+        moon_core::feed::Tick {
+            time_ms: 1_010.0,
+            price: 50.0,
+            qty: 4.0,
+            side: moon_core::feed::Side::Sell,
+        },
+        moon_core::feed::Tick {
+            time_ms: 1_011.0,
+            price: f32::MAX,
+            qty: 2.0,
+            side: moon_core::feed::Side::Buy,
+        },
+    ];
+    let mut uploaded = Vec::new();
+    super::fill_cross_upload(&ticks, 1_000.0, &mut uploaded);
+    assert_eq!(uploaded.len(), 3);
+    assert_eq!(
+        (uploaded[0].time_rel, uploaded[0].side, uploaded[0].qty),
+        (10.0, 0, 4.0)
+    );
+    assert_eq!(
+        (uploaded[1].time_rel, uploaded[1].side, uploaded[1].qty),
+        (10.0, 1, 4.0)
+    );
+    assert_eq!(uploaded[2].qty, 2.0);
+    let amounts: Vec<_> = uploaded
+        .iter()
+        .map(|c| moon_chart::tick_volume::quote_notional(c.price, c.qty))
+        .collect();
+    assert_eq!(
+        amounts,
+        [100.0, 200.0, 0.0],
+        "unrepresentable quote amount must omit only its readout"
+    );
+}
+
 #[test]
 fn evicted_cross_ranges_reports_overwritten_ring_slots() {
     assert_eq!(cross_append_ranges(3, 4, 5), [(3, 2), (0, 2)]);

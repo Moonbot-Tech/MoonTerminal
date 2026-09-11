@@ -184,13 +184,22 @@ impl TradeWindowView {
             // — and a timeframe of 1 to 60 has nothing to group. Do not "fix" this into `fmt`.
             let caption = match &self.state {
                 TradeWindowState::Ready {
-                    source: TradeReplaySource::Ticks,
+                    source: source @ (TradeReplaySource::Ticks | TradeReplaySource::CoreTicks),
                     tf_min,
                     bucket_ms,
                     partial,
+                    tick_status,
                     ..
                 } => {
-                    let base = if *bucket_ms == 0 {
+                    let base = if *source == TradeReplaySource::CoreTicks && *bucket_ms == 0 {
+                        t!("trade_window.source.core_ticks").to_string()
+                    } else if *source == TradeReplaySource::CoreTicks {
+                        t!(
+                            "trade_window.source.core_ticks_bucketed",
+                            secs = bucket_ms / 1_000
+                        )
+                        .to_string()
+                    } else if *bucket_ms == 0 {
                         t!("trade_window.source.ticks").to_string()
                     } else {
                         t!(
@@ -199,7 +208,14 @@ impl TradeWindowView {
                         )
                         .to_string()
                     };
-                    if *partial {
+                    let base = if *tick_status == TickStatus::Streaming {
+                        format!("{base}, {}", t!("trade_window.source.loading_more"))
+                    } else {
+                        base
+                    };
+                    if *tick_status == TickStatus::ContextUnavailable {
+                        format!("{base}, {}", t!("trade_window.source.context_unavailable"))
+                    } else if *partial {
                         // The join happens IN CODE, so no locale value carries a separator glyph.
                         // Every sibling Russian caption in `trade_window.yml` joins its two halves
                         // with an em dash, never the ASCII hyphen the other locales use — so the
@@ -222,7 +238,10 @@ impl TradeWindowView {
                     brand,
                     ..
                 } => match tick_status {
-                    TickStatus::Pending => {
+                    TickStatus::AwaitingCore => {
+                        t!("trade_window.source.awaiting_core", min = tf_min).to_string()
+                    }
+                    TickStatus::Pending | TickStatus::Streaming => {
                         t!("trade_window.source.candles_ticks_pending", min = tf_min).to_string()
                     }
                     TickStatus::NoRoute => t!(
@@ -247,7 +266,7 @@ impl TradeWindowView {
                     // own doc comment), never a `Klines1m` one. Answered rather than panicked, the
                     // way the `Loading | Empty | Failed` arm below answers its own unreachable
                     // case.
-                    TickStatus::Served => String::new(),
+                    TickStatus::Served | TickStatus::ContextUnavailable => String::new(),
                 },
                 // Unreachable: the caller checked `overlays_chart` first. Answered rather than
                 // panicked, for the same reason `overlay_message` answers its own unreachable arm.

@@ -13,6 +13,35 @@ use std::collections::HashSet;
 use moon_core::feed::{SchemaKind, StrategyRow};
 use moon_core::session::CoreId;
 
+mod moonbot_text;
+
+/// Retain local copy/cut identity only while its serialized text remains on the system clipboard.
+/// A temporarily unavailable clipboard keeps the local operation usable.
+pub fn clipboard_matches_internal(internal: Option<&[ClipItem]>, text: Option<&str>) -> bool {
+    internal.is_some_and(|items| {
+        !items.is_empty()
+            && text.is_none_or(|text| text.replace("\r\n", "\n") == clip_to_text(items))
+    })
+}
+
+/// Resolve current clipboard text, retaining placement anchors only for an unchanged local copy.
+/// MoonBot exports need the destination schema to resolve their textual SignalType.
+pub fn resolve_clipboard(
+    internal: Option<&[ClipItem]>,
+    text: Option<&str>,
+    kinds: &[SchemaKind],
+) -> Option<Vec<ClipItem>> {
+    let Some(text) = text else {
+        return internal
+            .filter(|items| !items.is_empty())
+            .map(<[_]>::to_vec);
+    };
+    if clipboard_matches_internal(internal, Some(text)) {
+        return internal.map(<[_]>::to_vec);
+    }
+    clip_from_text(text).or_else(|| moonbot_text::parse(text, kinds))
+}
+
 /// Field name through which moonproto stores `StrategySnapshot::strategy_name`.
 pub const STRATEGY_NAME_FIELD: &str = "StrategyName";
 

@@ -23,6 +23,8 @@ mod render;
 mod security;
 mod share;
 mod storage;
+mod telegram;
+mod trade_sounds;
 
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -53,6 +55,7 @@ use lines::Lines;
 
 const SETTINGS_HEADER_H: f32 = 30.0;
 
+/// Settings categories, including immediate preferences outside the config draft.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
     Connections,
@@ -62,17 +65,21 @@ pub(crate) enum Tab {
     Lines,
     Badges,
     Storage,
+    Telegram,
+    TradeSounds,
 }
 
 impl Tab {
-    const ALL: [Tab; 7] = [
+    const ALL: [Tab; 9] = [
         Tab::Connections,
+        Tab::Telegram,
         Tab::General,
         Tab::Hotkeys,
         Tab::Interface,
         Tab::Lines,
         Tab::Badges,
         Tab::Storage,
+        Tab::TradeSounds,
     ];
     /// Returns the stable, deliberately untranslated tab ID used by `MoonButton::new` and keys.
     fn id(self) -> &'static str {
@@ -84,6 +91,8 @@ impl Tab {
             Tab::Lines => "Линии",
             Tab::Badges => "Бейджи",
             Tab::Storage => "Хранилище",
+            Tab::Telegram => "Telegram",
+            Tab::TradeSounds => "trade-sounds",
         }
     }
     /// Returns the localized tab label from the `tab.*` namespace.
@@ -96,6 +105,8 @@ impl Tab {
             Tab::Lines => t!("tab.lines"),
             Tab::Badges => t!("tab.badges"),
             Tab::Storage => t!("tab.storage"),
+            Tab::Telegram => t!("telegram.tab"),
+            Tab::TradeSounds => t!("trade_sounds.tab"),
         }
         .to_string()
     }
@@ -263,6 +274,8 @@ pub struct SettingsView {
     import: Option<import_preview::ImportState>,
     /// Launch and `servers.enc` password editors on the General tab; see [`security`].
     security: security::SecurityEd,
+    /// Telegram tab editor; see [`telegram`].
+    telegram: telegram::TelegramEd,
 }
 
 impl SettingsView {
@@ -318,6 +331,7 @@ impl SettingsView {
         let badges = badges::build(&backend, window, cx);
         let conn = connections::build_conn(&backend, window, cx);
         let security_ed = security::build(&backend, window, cx);
+        let telegram_ed = telegram::build(&backend, window, cx);
 
         // Build the General tab's personal `settings.toml` UI-font control: a labeled slider and
         // bidirectionally synchronized numeric input. Edits reinstall the MoonUI theme live so
@@ -593,6 +607,7 @@ impl SettingsView {
             idle_last_secs: std::cell::Cell::new(0),
             import: None,
             security: security_ed,
+            telegram: telegram_ed,
         }
     }
 }
@@ -608,6 +623,7 @@ fn settings_sig(b: &Backend) -> u64 {
     let cfg = b.preview.as_ref().unwrap_or(&b.config);
     let mut h = DefaultHasher::new();
 
+    b.quiet_sleeping.hash(&mut h);
     cfg.language.code().hash(&mut h);
     cfg.market_mode.code().hash(&mut h);
     cfg.core_sort.hash(&mut h);
@@ -649,6 +665,15 @@ fn settings_sig(b: &Backend) -> u64 {
         s.color.hash(&mut h);
         s.synthetic.hash(&mut h);
     }
+
+    // Token plaintext is never hashed; emptiness plus the non-secret preference fields
+    // are enough to repaint the Telegram tab.
+    b.telegram.revision.hash(&mut h);
+    cfg.telegram.token.is_empty().hash(&mut h);
+    cfg.telegram.authorized_chat_ids.hash(&mut h);
+    cfg.telegram.owner_chat_id.hash(&mut h);
+    cfg.telegram.chat_access.hash(&mut h);
+    cfg.telegram.mini_app_enabled.hash(&mut h);
 
     cfg.groups.len().hash(&mut h);
     for g in &cfg.groups {
@@ -803,6 +828,9 @@ fn draft_sig(cfg: &AppConfig) -> u64 {
     hash_json(&mut h, &cfg.theme);
     hash_json(&mut h, &cfg.orders);
     hash_json(&mut h, &cfg.badges);
+    // Streams the Telegram aggregate, including the token, into the hasher without allocating
+    // a plaintext buffer. See [`hash_json`].
+    hash_json(&mut h, &cfg.telegram);
 
     // `MarketDataMode` and `ValuationMode` are not `Serialize`, so they take the same
     // stable-code path `settings_sig` uses; the rest are plain scalars.
