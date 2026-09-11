@@ -52,6 +52,77 @@ fn growing_tick_coverage_invalidates_candle_upload() {
 
 const MINUTE_MS: i64 = 60_000;
 
+/// Wide prefetch still uploads all rows, but off-screen extrema must not affect the visible Y fit.
+#[test]
+fn replay_price_window_is_independent_of_prefetch_for_ticks_and_cached_candles() {
+    let mut series = bars_only_series();
+    let mut out = ChartHistoryBuffers::default();
+    let params = candle_params(0);
+    let first = series.read_with_price_window(
+        0.0,
+        0.0,
+        180_000.0,
+        Some((60_000.0, 119_999.0)),
+        Some(&params),
+        &mut out,
+    );
+    assert_eq!(out.candles.len(), 3);
+    assert_eq!(first.tick_price_range, Some((92.0, 110.0)));
+    let repeat = series.read_with_price_window(
+        0.0,
+        0.0,
+        180_000.0,
+        Some((60_000.0, 119_999.0)),
+        Some(&candle_params(first.candles_revision)),
+        &mut out,
+    );
+    assert!(out.candles.is_empty());
+    assert_eq!(repeat.tick_price_range, Some((92.0, 110.0)));
+    let partial = series.read_with_price_window(
+        0.0,
+        0.0,
+        180_000.0,
+        Some((90_000.0, 119_999.0)),
+        Some(&candle_params(first.candles_revision)),
+        &mut out,
+    );
+    assert_eq!(partial.tick_price_range, Some((92.0, 110.0)));
+    let mut coarse_params = candle_params(0);
+    coarse_params.tf_ms = 180_000;
+    let coarse = series.read_with_price_window(
+        0.0,
+        0.0,
+        180_000.0,
+        Some((90_000.0, 119_999.0)),
+        Some(&coarse_params),
+        &mut out,
+    );
+    assert_eq!(coarse.tick_price_range, Some((90.0, 110.0)));
+    series.ticks = [
+        (10_000.0, 1.0),
+        (70_000.0, 100.0),
+        (80_000.0, 102.0),
+        (150_000.0, 1000.0),
+    ]
+    .map(|(time_ms, price)| Tick {
+        time_ms,
+        price,
+        qty: 1.0,
+        side: crate::feed::Side::Buy,
+    })
+    .to_vec();
+    let ticks = series.read_with_price_window(
+        0.0,
+        0.0,
+        180_000.0,
+        Some((60_000.0, 119_999.0)),
+        None,
+        &mut out,
+    );
+    assert_eq!(out.ticks.len(), 4);
+    assert_eq!(ticks.tick_price_range, Some((100.0, 102.0)));
+}
+
 fn candle(t_open_ms: i64, low: f32, high: f32, close: f32) -> ChartCandle {
     ChartCandle {
         t_open_ms: t_open_ms as f64,

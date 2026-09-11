@@ -280,7 +280,69 @@ fn deep_history_kind(tf_min: u32) -> DeepHistoryKind {
     }
 }
 
+/// Fit the visible portion of retained fine and coarse candles, preserving any visible tick band.
+/// History prefetch may contain extreme prices far off screen and must never reach this window.
+fn visible_candle_fit(
+    cursor: &ChartHistoryCursor,
+    series_tf_ms: i64,
+    window: (f64, f64),
+    ticks: Option<(f32, f32)>,
+) -> Option<(f32, f32)> {
+    let mut range = ticks;
+    let mut include = |lo: f32, hi: f32| {
+        range = Some(match range {
+            Some((a, b)) => (a.min(lo), b.max(hi)),
+            None => (lo, hi),
+        });
+    };
+    if let Some((lo, hi)) = cursor.candle_series.price_range(window.0, window.1) {
+        include(lo, hi);
+    }
+    for (candle, tf) in &cursor.coarse_fill {
+        if f64::from(*tf) > series_tf_ms as f64
+            && crate::market::candles::candle_intersects_window(
+                candle.t_open_ms,
+                f64::from(*tf),
+                window.0,
+                window.1,
+            )
+        {
+            include(candle.low, candle.high);
+        }
+    }
+    range
+}
+
+/// Fit the actual uploaded fixture bars, including partial boundary candles on cached reads.
+fn fixture_visible_fit(
+    candles: &[ChartCandle],
+    tf_ms: i64,
+    window: (f64, f64),
+) -> Option<(f32, f32)> {
+    candles
+        .iter()
+        .filter(|c| {
+            c.low.is_finite()
+                && c.high.is_finite()
+                && c.high > 0.0
+                && crate::market::candles::candle_intersects_window(
+                    c.t_open_ms,
+                    tf_ms as f64,
+                    window.0,
+                    window.1,
+                )
+        })
+        .fold(None, |range: Option<(f32, f32)>, c| {
+            Some(match range {
+                Some((lo, hi)) => (lo.min(c.low), hi.max(c.high)),
+                None => (c.low, c.high),
+            })
+        })
+}
+
 impl MarketDataSource {
+    /// Read prefetched chart history while fitting prices only inside the independently supplied
+    /// visible price window. `None` keeps the caller's cached fit without scanning retained rows.
     #[allow(clippy::too_many_arguments)]
     pub fn read_chart_history_into(
         &self,
@@ -290,7 +352,7 @@ impl MarketDataSource {
         from_rel_ms: f32,
         to_rel_ms: f32,
         force_reset: bool,
-        scan_price: bool,
+        price_window: Option<(f32, f32)>,
         candle_params: Option<&CandleReadParams>,
         cursor: &mut ChartHistoryCursor,
         out: &mut ChartHistoryBuffers,
@@ -309,7 +371,7 @@ impl MarketDataSource {
                     let inner = self.inner.read().expect("market source poisoned");
                     inner.kline_cache.clone()
                 };
-                return Some(read_fixture_history(
+                let mut read = read_fixture_history(
                     fixture,
                     cache.as_ref(),
                     core,
@@ -318,7 +380,19 @@ impl MarketDataSource {
                     to_rel_ms,
                     candle_params,
                     out,
-                ));
+                );
+                if read.candles_changed {
+                    cursor.fixture_candles.clone_from(&out.candles);
+                }
+                read.tick_price_range = match (price_window, candle_params) {
+                    (Some((from, to)), Some(params)) => fixture_visible_fit(
+                        &cursor.fixture_candles,
+                        params.tf_ms,
+                        (epoch_ms + f64::from(from), epoch_ms + f64::from(to)),
+                    ),
+                    _ => None,
+                };
+                return Some(read);
             }
         }
         // The client's epoch is read HERE, under the guard that already resolves the client, and
@@ -408,10 +482,10 @@ impl MarketDataSource {
                     cursor.last_price = Some(row.price);
                 }
             }
-            if scan_price {
+            if let Some((price_from, price_to)) = price_window {
                 reader.copy_time_range(
-                    trades_from_time,
-                    to_time,
+                    moon_time_from_rel_ms(epoch_ms, price_from.max(trades_from_rel)),
+                    moon_time_from_rel_ms(epoch_ms, price_to),
                     display_cap,
                     &mut cursor.scan_trade_rows,
                 );
@@ -1119,44 +1193,16 @@ impl MarketDataSource {
                     );
                 }
             }
-            if scan_price {
-                // Include visible candle highs and lows in automatic Y scaling. Trade crosses now
-                // cover only their display zone, so older visible history would otherwise not affect
-                // the scale.
-                if let Some((lo, hi)) = cursor
-                    .candle_series
-                    .price_range(epoch_ms + from_rel_ms as f64, epoch_ms + to_rel_ms as f64)
-                {
-                    read.tick_price_range = Some(match read.tick_price_range {
-                        Some((a, b)) => (a.min(lo), b.max(hi)),
-                        None => (lo, hi),
-                    });
-                }
-                // The coarse fillers are visible too, so include their highs and lows. Read from
-                // the SAME composed vector the upload drew, and admit each entry through the one
-                // visibility predicate the volume band and this scale already share — the scale
-                // must never disagree with the drawn candles about which coarse rows exist.
-                let from_abs = epoch_ms + from_rel_ms as f64;
-                let to_abs = epoch_ms + to_rel_ms as f64;
-                let series_tf = cp.tf_ms as f64;
-                for (c, tf) in cursor.coarse_fill.iter() {
-                    // Series candles are already covered by `price_range` above, and only a layer
-                    // strictly coarser than the series is ever composed in.
-                    if (*tf as f64) <= series_tf {
-                        continue;
-                    }
-                    if crate::market::candles::candle_intersects_window(
-                        c.t_open_ms,
-                        *tf as f64,
-                        from_abs,
-                        to_abs,
-                    ) {
-                        read.tick_price_range = Some(match read.tick_price_range {
-                            Some((a, b)) => (a.min(c.low), b.max(c.high)),
-                            None => (c.low, c.high),
-                        });
-                    }
-                }
+            if let Some((price_from, price_to)) = price_window {
+                read.tick_price_range = visible_candle_fit(
+                    cursor,
+                    cp.tf_ms,
+                    (
+                        epoch_ms + f64::from(price_from),
+                        epoch_ms + f64::from(price_to),
+                    ),
+                    read.tick_price_range,
+                );
             }
         }
 

@@ -686,6 +686,14 @@ struct PaneRender {
     /// one bucket the view keeps moving while the buffers do not, so re-clustering from the live
     /// scale would answer about a picture that is not on screen. Hit-testing reads this.
     trade_geometry: trade_history_sync::TradeGeometry,
+    /// Same-market display-time estimates retained across live tick-ring eviction.
+    live_trade_snap: moon_chart::trade_marks::live_snap::LiveTradeSnap,
+    /// Provider generations are local to a provider, so both fields identify the tape authority.
+    live_trade_source: Option<(CoreId, u64)>,
+    /// Exact-source cursor independent of the displayed candle/tick range.
+    live_trade_cursor: moon_core::market::TradeTickCursor,
+    /// CPU userdata union retained for market-only trade updates without a session/UI refresh.
+    trade_userdata: trade_history_sync::TradeUserdata,
     /// Warning-badge signature encoded into userdata; `u64::MAX` means dirty.
     last_warn_sig: u64,
     /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
@@ -721,9 +729,9 @@ struct PaneRender {
     right_margin_frac: f32,
     follow: bool,
     last_edge_px: i64,
-    /// Cache of the expensive auto-Y scan over visible tick minima and maxima plus the camera pixel
-    /// position for which it is valid. Rescan only on pixel crossings; see the prepare switch.
-    scan_cam_px: i64,
+    /// Last fitted (visible left, duration, pixels/ms); resize and zoom invalidate independently
+    /// of the history floor, while live motion is throttled to whole pixels.
+    price_scan_window: Option<(f32, f32, f32)>,
     cached_tick_price: Option<(f32, f32)>,
     cached_last_price: Option<f32>,
     /// Whether this pane has ever had price data of its OWN in the window — trades, candles or an
@@ -859,6 +867,10 @@ impl PaneRender {
             last_news_sig: u64::MAX,
             last_trade_history_sig: u64::MAX,
             trade_geometry: trade_history_sync::TradeGeometry::default(),
+            live_trade_snap: moon_chart::trade_marks::live_snap::LiveTradeSnap::default(),
+            live_trade_source: None,
+            live_trade_cursor: Default::default(),
+            trade_userdata: trade_history_sync::TradeUserdata::default(),
             last_warn_sig: u64::MAX,
             order_labels: Vec::new(),
             figure_labels: Vec::new(),
@@ -872,7 +884,7 @@ impl PaneRender {
             right_margin_frac: 0.10,
             follow: false,
             last_edge_px: i64::MIN,
-            scan_cam_px: i64::MIN,
+            price_scan_window: None,
             cached_tick_price: None,
             cached_last_price: None,
             saw_window_data: false,

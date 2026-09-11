@@ -11,13 +11,43 @@
 
 use std::rc::Rc;
 
-use moon_chart::layers::{MarkerInstance, SegInstance};
+use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance};
 use moon_chart::trade_marks::{self, TapePrint, TradeCluster, TradeMark};
 use moon_chart::view::ChartView;
 use moon_core::db::ChartTradeRecord;
 use moon_core::session::CoreId;
 
 use super::ChartDataState;
+
+/// Retained userdata union lets a market-only match replace just trade geometry in the same frame.
+/// Vectors move here after order synchronization; other overlays keep their original paint order.
+#[derive(Default)]
+pub(super) struct TradeUserdata {
+    zones: Vec<ZoneInstance>,
+    hlines: Vec<LineInstance>,
+    segs: Vec<SegInstance>,
+    markers: Vec<MarkerInstance>,
+}
+
+impl TradeUserdata {
+    /// Retain and publish a complete session-authored union for later market-only trade updates.
+    pub(super) fn set(
+        &mut self,
+        layers: &mut super::backend::PlatformLayers,
+        zones: Vec<ZoneInstance>,
+        hlines: Vec<LineInstance>,
+        segs: Vec<SegInstance>,
+        markers: Vec<MarkerInstance>,
+    ) {
+        layers.set_userdata(&zones, &hlines, &segs, &markers);
+        *self = Self {
+            zones,
+            hlines,
+            segs,
+            markers,
+        };
+    }
+}
 
 /// Whether a closed trade of this kind is drawn, per the graphics popup's two checkboxes.
 ///
@@ -136,6 +166,9 @@ fn replay_tape_fingerprint(
 /// one field so a future edit cannot refresh one and leave the other describing a previous build.
 #[derive(Default)]
 pub(crate) struct TradeGeometry {
+    /// Trade-only ranges inside the retained userdata union; surrounding overlays are untouched.
+    marker_range: std::ops::Range<usize>,
+    seg_range: std::ops::Range<usize>,
     /// The clusters the uploaded arrows were built from, one per drawn marker.
     pub clusters: Vec<TradeCluster>,
     /// For each entry of this pane's FILTERED mark list, its index in the panel's record list.
@@ -149,6 +182,78 @@ pub(crate) struct TradeGeometry {
 }
 
 impl ChartDataState {
+    /// Consume exact source prints on their own cursor, even when candles hide ordinary tick rows.
+    /// Only changed estimates trigger geometry work; unrelated history advances just the cursor.
+    pub(super) fn sync_live_trade_ticks(
+        &self,
+        core: CoreId,
+        rendered: &mut super::PaneRender,
+    ) -> bool {
+        let Some(window) = rendered.live_trade_snap.window() else {
+            return false;
+        };
+        let Some(source) = self.market_source.as_ref() else {
+            return false;
+        };
+        if rendered.live_trade_snap.needs_seed() {
+            rendered.live_trade_cursor = Default::default();
+        }
+        let mut changed = false;
+        let seeded = source.visit_trade_ticks(
+            core,
+            &rendered.market,
+            window,
+            &mut rendered.live_trade_cursor,
+            |t_ms, price| {
+                changed |= rendered.live_trade_snap.observe([TapePrint {
+                    t_ms,
+                    price: f64::from(price),
+                }]);
+            },
+        );
+        if seeded.is_some() {
+            rendered.live_trade_snap.seed_complete();
+        }
+        changed
+    }
+    /// Recompose trade arrows immediately after a market-only match, without waking the panel.
+    pub(super) fn refresh_live_trade_geometry(
+        &self,
+        index: usize,
+        core: CoreId,
+        view: &ChartView,
+        rendered: &mut super::PaneRender,
+    ) {
+        let marker_start = rendered.trade_geometry.marker_range.start;
+        let seg_start = rendered.trade_geometry.seg_range.start;
+        let mut markers = Vec::new();
+        let mut segs = Vec::new();
+        let mut next = self.append_trade_history_geometry(
+            index,
+            core,
+            view,
+            rendered,
+            &mut markers,
+            &mut segs,
+        );
+        next.marker_range = marker_start..marker_start + markers.len();
+        next.seg_range = seg_start..seg_start + segs.len();
+        rendered
+            .trade_userdata
+            .markers
+            .splice(rendered.trade_geometry.marker_range.clone(), markers);
+        rendered
+            .trade_userdata
+            .segs
+            .splice(rendered.trade_geometry.seg_range.clone(), segs);
+        let union = &rendered.trade_userdata;
+        rendered
+            .layers
+            .set_userdata(&union.zones, &union.hlines, &union.segs, &union.markers);
+        rendered.trade_geometry = next;
+        rendered.last_trade_history_sig = self.trade_history_sig(view);
+        rendered.gpu_prepare_dirty = true;
+    }
     /// Mark every pane's trade-history geometry dirty and request a present.
     ///
     /// The shared body of every setter here that invalidates the userdata pass rather than a
@@ -262,6 +367,7 @@ impl ChartDataState {
     ///     pane: Index of the pane being composed, which decides whether it owns the hovered arrow.
     ///     core: Exact pane core; records from other cores are ignored.
     ///     view: The pane's own view, supplying the epoch and the scale clustering works in.
+    ///     rendered: This pane's resident ordinary ticks and retained live-time estimates.
     ///     markers: Existing order/figure/news marker union to extend.
     ///     segs: Existing order/figure segment union to extend with the connectors.
     ///
@@ -275,6 +381,7 @@ impl ChartDataState {
         pane: usize,
         core: CoreId,
         view: &ChartView,
+        rendered: &mut super::PaneRender,
         markers: &mut Vec<MarkerInstance>,
         segs: &mut Vec<SegInstance>,
     ) -> TradeGeometry {
@@ -285,7 +392,7 @@ impl ChartDataState {
         let mut sources = Vec::new();
         // The replica stores seconds; every other instance in this layer is relative milliseconds.
         let tape = self.replay_tape.as_slice();
-        let marks = self
+        let mut marks = self
             .trade_history
             .iter()
             .enumerate()
@@ -301,6 +408,13 @@ impl ChartDataState {
                 }
             })
             .collect::<Vec<_>>();
+        if self.draws_live_market() {
+            rendered.live_trade_snap.set_marks(&marks);
+            self.sync_live_trade_ticks(core, rendered);
+            marks = rendered.live_trade_snap.marks();
+        }
+        let marker_start = markers.len();
+        let seg_start = segs.len();
         let clusters = moon_chart::build_trade_geometry(
             &marks,
             &trade_marks::TradeGeometryCtx {
@@ -319,7 +433,12 @@ impl ChartDataState {
             markers,
             segs,
         );
-        TradeGeometry { clusters, sources }
+        TradeGeometry {
+            clusters,
+            sources,
+            marker_range: marker_start..markers.len(),
+            seg_range: seg_start..segs.len(),
+        }
     }
 }
 

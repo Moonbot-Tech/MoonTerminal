@@ -5,6 +5,57 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
+/// Extreme fine and coarse prefetch candles cannot move the paused chart away from its visible prices.
+#[test]
+fn visible_fit_excludes_prefetched_extremes_and_includes_intersecting_coarse_bars() {
+    let candle = |time, low, high| ChartCandle {
+        t_open_ms: time,
+        open: low,
+        close: high,
+        low,
+        high,
+        volume: 1.0,
+        quote_volume: 1.0,
+    };
+    let mut cursor = ChartHistoryCursor::default();
+    cursor.candle_series.rebuild(
+        60_000,
+        &[
+            candle(0.0, 0.01, 0.9),
+            candle(600_000.0, 0.142, 0.146),
+            candle(660_000.0, 0.143, 0.147),
+            candle(1_200_000.0, 0.02, 0.8),
+        ],
+        60_000,
+        &[],
+    );
+    cursor.coarse_fill = vec![
+        (candle(0.0, 0.001, 9.0), 300_000.0),
+        (candle(900_000.0, 0.14, 0.149), 300_000.0),
+    ];
+    assert_eq!(
+        visible_candle_fit(&cursor, 60_000, (600_000.0, 720_000.0), None),
+        Some((0.142, 0.147))
+    );
+    assert_eq!(
+        visible_candle_fit(&cursor, 60_000, (950_000.0, 960_000.0), None),
+        Some((0.14, 0.149))
+    );
+    assert_eq!(
+        visible_candle_fit(
+            &cursor,
+            60_000,
+            (600_000.0, 720_000.0),
+            Some((0.141, 0.148))
+        ),
+        Some((0.141, 0.148))
+    );
+    assert_eq!(
+        visible_candle_fit(&cursor, 60_000, (2_000_000.0, 2_100_000.0), None),
+        None
+    );
+}
+
 /// `history.rs:wire_row_candle` re-inlining a base-volume estimate in either adapter, or passing
 /// `false` at a call site, makes quote-denominated futures rows render as volume times price.
 #[test]
@@ -129,4 +180,31 @@ fn native_backfill_gate_claims_once_and_scopes_lifecycle_resets() {
     gate.clear();
     assert_eq!(gate.claim(provider_a_key, now), Some(30));
     assert_eq!(gate.claim(provider_b_key, now), Some(30));
+}
+
+/// A partial hourly candle fits its uploaded wick, without including distant prefetched candles.
+#[test]
+fn fixture_fit_uses_complete_uploaded_boundary_candles() {
+    let candle = |time, low, high| ChartCandle {
+        t_open_ms: time,
+        open: low,
+        close: low,
+        low,
+        high,
+        volume: 1.0,
+        quote_volume: 1.0,
+    };
+    let rows = [
+        candle(0.0, 1.0, 1000.0),
+        candle(3_600_000.0, 90.0, 150.0),
+        candle(7_200_000.0, 2.0, 2000.0),
+    ];
+    assert_eq!(
+        fixture_visible_fit(&rows, 3_600_000, (3_900_000.0, 4_200_000.0)),
+        Some((90.0, 150.0))
+    );
+    assert_eq!(
+        fixture_visible_fit(&rows, 3_600_000, (10_800_000.0, 11_000_000.0)),
+        None
+    );
 }

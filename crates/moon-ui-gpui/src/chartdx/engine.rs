@@ -1241,10 +1241,8 @@ impl ChartEngine {
     ///
     /// A HISTORICAL engine refuses the global flag outright. `ChartPanel::render` applies
     /// `backend.follow` to every panel it draws, and that flag defaults to on, so without this
-    /// guard the frame a trade window just requested was undone one frame later: the mismatch made
-    /// this method fire, and its body calls `resume_live` plus `reset_default_window_on_next_prepare`
-    /// on the pane, re-anchoring it to `now` with the built-in six-hour window. A trade older than
-    /// that window then fell off the left edge, leaving labelled axes over an empty plot.
+    /// guard a trade window's requested interval would be undone by re-anchoring it to `now`.
+    /// Resuming a live engine preserves its chosen time scale: Live changes the anchor, not zoom.
     pub fn set_follow(&mut self, follow: bool, now_ms: f64) -> bool {
         if self.data.borrow().historical || self.follow == follow {
             return false;
@@ -1257,7 +1255,6 @@ impl ChartEngine {
                 // live panes untouched so their window and zoom are not reset.
                 if !p.view.follow {
                     p.view.resume_live(now_ms);
-                    p.view.reset_default_window_on_next_prepare();
                 }
             } else {
                 // An explicit Live-button disable does not automatically rejoin on a timer.
@@ -1487,7 +1484,7 @@ impl ChartEngine {
             pr.resident_left_rel = f32::NAN;
             pr.pan_reset_cam_px = i64::MIN;
             pr.cached_tick_price = None;
-            pr.scan_cam_px = i64::MIN;
+            pr.price_scan_window = None;
             pr.gpu_prepare_dirty = true;
         }
         st.needs_present = true;
@@ -1542,3 +1539,6 @@ impl ChartEngine {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests;

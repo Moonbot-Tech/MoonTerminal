@@ -143,3 +143,29 @@ fn a_pointer_leaving_clears_only_its_own_entries() {
 
     assert_eq!(held, vec![(live, 1)]);
 }
+
+/// Width and zoom invalidate the fit even with no pan; subpixel follow motion stays cheap.
+#[test]
+fn price_fit_cache_tracks_viewport_and_accumulates_subpixel_motion() {
+    let cached = Some((1000.0, 60000.0, 0.01));
+    assert!(!super::price_fit_window_changed(
+        cached,
+        (1050.0, 60000.0, 0.01)
+    ));
+    assert!(super::price_fit_window_changed(
+        cached,
+        (1100.0, 60000.0, 0.01)
+    ));
+    assert!(super::price_fit_window_changed(
+        cached,
+        (1000.0, 30000.0, 0.01)
+    ));
+    assert!(super::price_fit_window_changed(
+        cached,
+        (1000.0, 60000.0, 0.02)
+    ));
+    assert!(super::price_fit_window_changed(
+        None,
+        (1000.0, 60000.0, 0.01)
+    ));
+}

@@ -34,6 +34,8 @@
 
 use moon_core::config::ChartGraphicsCfg;
 
+pub mod live_snap;
+
 use crate::layers::{
     MARKER_SHAPE_ARROW_DOWN, MARKER_SHAPE_ARROW_UP, MarkerInstance, SEG_CLAMP_NONE,
     SEG_EXTEND_NONE, SEG_PATTERN_DASH, SegInstance, rgb_with_alpha as rgba,
