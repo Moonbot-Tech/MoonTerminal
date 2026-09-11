@@ -93,6 +93,17 @@ jobs:
         with:
           save-if: false
       - name: Build release binary
+        # Line tables in, nothing kept: the profile's `strip = true` would produce no PDB at all,
+        # and — measured on two clean builds — a build WITH line tables lays its code out
+        # differently from one without, so a PDB made later would not describe the shipped exe.
+        # With these two overrides the exe ships as before (same size, minus nothing) and a
+        # rebuild of the same tag with the same overrides reproduces its `.text` byte for byte;
+        # `tools/symbolize` then turns a `moonterminal+0xRVA` line from a user's `panic.log` into
+        # file:line against that rebuilt PDB. The PDB written here is discarded with the runner.
+        # Cost measured locally: +53 s on a 739 s build.
+        env:
+          CARGO_PROFILE_RELEASE_STRIP: "false"
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
         run: cargo build -p moon-ui-gpui --bin moonterminal --release --locked --target x86_64-pc-windows-msvc
       - name: Stage artifact
         shell: bash

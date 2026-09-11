@@ -107,4 +107,10 @@ crc32fast = "1"
 moonproto = { git = "https://github.com/Moonbot-Tech/MoonProtoBeta" }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Performance"] }
+# Performance: the GPU-engine PDH query (metrics.rs). Threading + Foundation:
+# GetProcessHandleCount / GetGuiResources for the resource watch (metrics/resource_watch.rs).
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Performance",
+    "Win32_System_Threading",
+] }

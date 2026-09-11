@@ -41,6 +41,10 @@ const ENV_ALLOW: &[(&str, &str)] = &[
         "MOON_ARCHIVE_PROBE",
         "one-off unit probe for archive reach, deliberately separate from the market channel",
     ),
+    (
+        "MOON_CRASH_PROBE",
+        "raises a real access violation to exercise the crash report; a switch that kills the          process must never be a key in a file a user edits",
+    ),
 ];
 
 /// Relative log-file names that may still be opened by relative path, and why.
