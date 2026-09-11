@@ -492,6 +492,7 @@ impl SessionManager {
     /// entry. `strategy_id=None` creates a BARE pending: the core does not substitute its own manual
     /// strategy the way it may for [`Self::place_order`]. Non-finite or non-positive `trigger_price`
     /// or `size` values are ignored.
+    #[allow(clippy::too_many_arguments)]
     pub fn place_pending_order(
         &self,
         core: CoreId,

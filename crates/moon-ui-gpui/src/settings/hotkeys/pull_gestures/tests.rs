@@ -74,10 +74,12 @@ fn a_mirrored_short_row_takes_the_long_gesture_not_the_stale_short_field() {
 /// Plausible breakage: `apply_core_gestures` calling the editor's `set_gesture_mirrored`.
 #[test]
 fn applying_a_long_gesture_leaves_the_short_row_the_core_did_not_change() {
-    let mut hotkeys = HotkeysConfig::default();
-    hotkeys.same_hotkeys_for_move = true;
-    hotkeys.buy_move_click = MouseGestureBinding::LeftDouble;
-    hotkeys.short_buy_move_click = MouseGestureBinding::RightShift;
+    let mut hotkeys = HotkeysConfig {
+        same_hotkeys_for_move: true,
+        buy_move_click: MouseGestureBinding::LeftDouble,
+        short_buy_move_click: MouseGestureBinding::RightShift,
+        ..Default::default()
+    };
 
     let mut core = empty_core();
     core.same_hotkeys_for_move = false;
@@ -102,8 +104,10 @@ fn applying_a_long_gesture_leaves_the_short_row_the_core_did_not_change() {
 /// window — or a `unwrap_or_default()` that silently disarms the row.
 #[test]
 fn an_unknown_ordinal_is_refused_rather_than_guessed() {
-    let mut hotkeys = HotkeysConfig::default();
-    hotkeys.buy_set_click = MouseGestureBinding::LeftDouble;
+    let mut hotkeys = HotkeysConfig {
+        buy_set_click: MouseGestureBinding::LeftDouble,
+        ..Default::default()
+    };
     // The flag travels too, and it is not what this test is about.
     hotkeys.same_hotkeys_for_move = false;
     let mut core = empty_core();
@@ -137,11 +141,13 @@ fn an_unknown_ordinal_is_refused_rather_than_guessed() {
 /// make a stock core silently leave the secondary move rows on whatever the terminal had.
 #[test]
 fn a_core_value_of_none_arrives_as_none() {
-    let mut hotkeys = HotkeysConfig::default();
-    hotkeys.buy_set_click = MouseGestureBinding::LeftDouble;
-    hotkeys.buy_move_kind = MoveKind::ParallelShift;
-    hotkeys.buy_move_kind2 = MoveKind::ParallelShift;
-    hotkeys.same_hotkeys_for_move = false;
+    let mut hotkeys = HotkeysConfig {
+        buy_set_click: MouseGestureBinding::LeftDouble,
+        buy_move_kind: MoveKind::ParallelShift,
+        buy_move_kind2: MoveKind::ParallelShift,
+        same_hotkeys_for_move: false,
+        ..Default::default()
+    };
 
     let rows = preview_core_gestures(&hotkeys, &empty_core());
     assert_eq!(
@@ -166,10 +172,12 @@ fn a_core_value_of_none_arrives_as_none() {
 /// Plausible breakage: repairing the short rows only when the flag turns ON.
 #[test]
 fn turning_the_mirror_off_re_aims_the_short_rows_it_makes_live() {
-    let mut hotkeys = HotkeysConfig::default();
-    hotkeys.same_hotkeys_for_move = true;
-    hotkeys.buy_move_click = MouseGestureBinding::LeftDouble;
-    hotkeys.short_buy_move_click = MouseGestureBinding::RightAlt;
+    let mut hotkeys = HotkeysConfig {
+        same_hotkeys_for_move: true,
+        buy_move_click: MouseGestureBinding::LeftDouble,
+        short_buy_move_click: MouseGestureBinding::RightAlt,
+        ..Default::default()
+    };
 
     let mut core = empty_core();
     core.same_hotkeys_for_move = false;
@@ -195,9 +203,11 @@ fn turning_the_mirror_off_re_aims_the_short_rows_it_makes_live() {
 /// that makes the short field unreachable.
 #[test]
 fn turning_the_mirror_on_re_aims_the_short_rows_it_hides() {
-    let mut hotkeys = HotkeysConfig::default();
-    hotkeys.same_hotkeys_for_move = false;
-    hotkeys.short_buy_move_click = MouseGestureBinding::RightAlt;
+    let mut hotkeys = HotkeysConfig {
+        same_hotkeys_for_move: false,
+        short_buy_move_click: MouseGestureBinding::RightAlt,
+        ..Default::default()
+    };
 
     let mut core = empty_core();
     core.same_hotkeys_for_move = true;

@@ -121,6 +121,7 @@ fn new_order_params(
 /// the trigger fires, so nothing derived from it rides along and there is no `planned_sell` here.
 /// `strategy_id=None` creates a bare pending, which the core does NOT fill in with its configured
 /// manual strategy; `size` and the strategy rules are otherwise `place_order`'s exactly.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn place_pending_order(
     client: &MoonClient,
     server_id: u64,

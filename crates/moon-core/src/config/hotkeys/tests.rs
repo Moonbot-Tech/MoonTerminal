@@ -847,9 +847,11 @@ fn the_arriving_figure_gesture_yields_to_a_trading_gesture_on_the_same_button() 
     // A file from before the gesture existed, and one an intermediate build stamped 4 with the
     // gesture already in it: both are judged once.
     for from in [3, 4] {
-        let mut taken = HotkeysConfig::default();
-        taken.schema = from;
-        taken.buy_move_click = MouseGestureBinding::Middle;
+        let mut taken = HotkeysConfig {
+            schema: from,
+            buy_move_click: MouseGestureBinding::Middle,
+            ..Default::default()
+        };
         assert!(taken.fill_unbound_slots());
         assert_eq!(
             taken.fig_delete_click,
@@ -863,32 +865,40 @@ fn the_arriving_figure_gesture_yields_to_a_trading_gesture_on_the_same_button() 
         );
     }
 
-    let mut free = HotkeysConfig::default();
-    free.schema = 3;
+    let mut free = HotkeysConfig {
+        schema: 3,
+        ..Default::default()
+    };
     assert!(free.fill_unbound_slots());
     assert_eq!(free.fig_delete_click, MouseGestureBinding::Middle);
 
     // A move row whose kind is None dispatches nothing, so Middle on it is free — the same reading
     // the settings page gives that row.
-    let mut inert = HotkeysConfig::default();
-    inert.schema = 3;
-    inert.buy_move_click = MouseGestureBinding::Middle;
-    inert.buy_move_kind = MoveKind::None;
+    let mut inert = HotkeysConfig {
+        schema: 3,
+        buy_move_click: MouseGestureBinding::Middle,
+        buy_move_kind: MoveKind::None,
+        ..Default::default()
+    };
     assert!(inert.fill_unbound_slots());
     assert_eq!(inert.fig_delete_click, MouseGestureBinding::Middle);
 
     // A short field left on Middle behind the mirror switch is not a gesture anyone can press.
-    let mut mirrored = HotkeysConfig::default();
-    mirrored.schema = 3;
-    mirrored.same_hotkeys_for_move = true;
-    mirrored.short_sell_move_click = MouseGestureBinding::Middle;
+    let mut mirrored = HotkeysConfig {
+        schema: 3,
+        same_hotkeys_for_move: true,
+        short_sell_move_click: MouseGestureBinding::Middle,
+        ..Default::default()
+    };
     assert!(mirrored.fill_unbound_slots());
     assert_eq!(mirrored.fig_delete_click, MouseGestureBinding::Middle);
 
     // A file already at this generation is not re-judged: a later deliberate choice stands.
-    let mut chosen = HotkeysConfig::default();
-    chosen.schema = SCHEMA;
-    chosen.buy_move_click = MouseGestureBinding::Middle;
+    let mut chosen = HotkeysConfig {
+        schema: SCHEMA,
+        buy_move_click: MouseGestureBinding::Middle,
+        ..Default::default()
+    };
     assert!(!chosen.fill_unbound_slots());
     assert_eq!(chosen.fig_delete_click, MouseGestureBinding::Middle);
 }

@@ -65,8 +65,10 @@ fn a_differently_spelled_rival_is_a_conflict() {
 /// press they already had and rewrote their own spelling on apply.
 #[test]
 fn the_same_press_spelled_differently_is_unchanged() {
-    let mut hotkeys = HotkeysConfig::default();
-    hotkeys.cancel_buy = "shift-ctrl-Z".to_string();
+    let hotkeys = HotkeysConfig {
+        cancel_buy: "shift-ctrl-Z".to_string(),
+        ..Default::default()
+    };
 
     let row = cancel_buy_row(&hotkeys, CTRL_SHIFT_Z);
 
@@ -76,8 +78,10 @@ fn the_same_press_spelled_differently_is_unchanged() {
 /// And a press nothing holds still applies — the guard above must narrow the verdict, not blanket it.
 #[test]
 fn a_free_press_still_applies() {
-    let mut hotkeys = HotkeysConfig::default();
-    hotkeys.cancel_buy = "alt-b".to_string();
+    let hotkeys = HotkeysConfig {
+        cancel_buy: "alt-b".to_string(),
+        ..Default::default()
+    };
     // Stated rather than assumed, and compared as PRESSES: a shipped default spelled `Shift-Ctrl-Z`
     // would walk straight past a string comparison and fail the assertion below with a misleading
     // message about the verdict.

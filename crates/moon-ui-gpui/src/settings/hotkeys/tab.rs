@@ -57,10 +57,10 @@ const ROW_MB_WIDTH: f32 = 28.0;
 /// Gap between the table's columns.
 const COLUMN_GAP: f32 = 10.0;
 
-/// The fixed columns and the seven gaps beside the growing title: 14 + 84 + 170 + 184 + 140 + 184
-/// + 28 + 70 = 874 — past the 824 the DEFAULT 860-pixel Settings window leaves, by design: the
-/// user works this page in a wider window, and the titles were the column that could not be read
-/// at the default. The rows do not wrap — a table that wraps is not a table — so below that width
+/// The fixed columns and the seven gaps beside the growing title — 14, 84, 170, 184, 140, 184, 28
+/// and 70 of gaps, 874 in all — past the 824 the DEFAULT 860-pixel Settings window leaves, by
+/// design: the user works this page in a wider window, and the titles were the column that could
+/// not be read at the default. The rows do not wrap — a table that wraps is not a table — so below that width
 /// the right edge is cut rather than reflowed. The key column is the one that cannot give:
 /// `MoonHotkeyInput` keeps a minimum width of 176 of its own.
 ///
