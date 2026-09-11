@@ -18,7 +18,7 @@ use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
     MoonGroupBox, MoonInput, MoonLink, MoonMenuItem, MoonMenuSize, MoonPalette, MoonRadio,
-    MoonRadioSize, MoonSlider, MoonStepper, MoonStepperSize, MoonText, h_flex, v_flex,
+    MoonRadioSize, MoonSlider, MoonStepper, MoonStepperSize, MoonText, MoonTone, h_flex, v_flex,
 };
 
 use rust_i18n::t;
@@ -29,7 +29,7 @@ use crate::design;
 use crate::panels::popup_group;
 use crate::shell::editors::EditorStore;
 
-use super::CoreExpertView;
+use super::{CoreExpertView, mixed};
 
 /// A titled frame, as Moonbot draws its groups.
 ///
@@ -52,18 +52,50 @@ pub(super) fn flag(
     set: fn(&mut CoreConfig, bool),
 ) -> impl IntoElement {
     let view = view.clone();
-    MoonCheckbox::new(SharedString::from(id))
-        .label(label)
-        .checked(checked)
-        .disabled(!enabled)
-        .size(MoonCheckboxSize::Compact)
-        .on_change(move |ch: &bool, _w, app| {
-            let on = *ch;
-            view.update(app, |this, cx| {
-                this.edit_draft(|draft| set(draft, on), cx);
-            });
-        })
+    // Mixed across the selection: drawn EMPTY inside the mixed frame until the trader picks one,
+    // and the first click then stages `true` for every selected core. Not `indeterminate`:
+    // MoonUI's `MoonCheckbox` draws that state as fully checked and reports every click on it as
+    // `false` (docs-internal/FORK_BUGS.md), which would make a mixed safety flag impossible to
+    // switch on. And not the tone alone: the component colours only a CHECKED box by it, so an
+    // empty box would look like any other — the frame is what marks it.
+    let mixed = enabled && mixed::is_mixed(id, |cfg| set(cfg, false));
+    mixed_frame(
+        mixed,
+        MoonCheckbox::new(SharedString::from(id))
+            .label(label)
+            .checked(checked && !mixed)
+            .tone(design::mixed_tone(mixed))
+            .disabled(!enabled)
+            .size(MoonCheckboxSize::Compact)
+            .on_change(move |ch: &bool, _w, app| {
+                let on = *ch;
+                view.update(app, |this, cx| {
+                    this.edit_control(id, |draft| set(draft, on), cx);
+                });
+            }),
+    )
 }
+
+/// The mark every control without a look of its own for "the selection disagrees here" wears: a
+/// thin frame in the warning colour with a faint fill of it, around the control and its caption.
+///
+/// Drawn by the widget rather than the page so a row cannot forget it, and only while the scope
+/// is installed — outside a render of the expert window there is no colour to draw it in.
+pub(super) fn mixed_frame(mixed: bool, control: impl IntoElement) -> impl IntoElement {
+    let color = mixed.then(mixed::accent).flatten();
+    div()
+        .when_some(color, |this, color| {
+            this.rounded(px(3.0))
+                .border_1()
+                .border_color(rgb(color))
+                .bg(design::moon_alpha(color, MIXED_FILL_ALPHA))
+        })
+        .child(control)
+}
+
+/// Opacity of the fill behind a mixed control: a tint the eye picks up across a page, well under
+/// what would read as a selection.
+const MIXED_FILL_ALPHA: f32 = 0.10;
 
 /// One checkbox row a page draws but the snapshot cannot fill: a caption, and no write.
 ///
@@ -105,7 +137,7 @@ pub(super) fn caption(text: String, enabled: bool, p: MoonPalette, cx: &App) -> 
 }
 
 /// A smaller, quieter caption — Moonbot's explanatory lines under a group's title.
-pub(super) fn hint(text: String, p: MoonPalette, cx: &App) -> impl IntoElement {
+pub(super) fn hint(text: impl Into<SharedString>, p: MoonPalette, cx: &App) -> impl IntoElement {
     text_at(text, p.text_soft, design::t_caption(cx), false, cx)
 }
 
@@ -113,7 +145,13 @@ pub(super) fn hint(text: String, p: MoonPalette, cx: &App) -> impl IntoElement {
 ///
 /// `flex_none` so a row of label-box-label keeps Moonbot's spacing instead of the labels absorbing
 /// the row; paragraphs that DO want the width go through [`text_block`].
-fn text_at(text: String, color: u32, size: Pixels, bold: bool, cx: &App) -> impl IntoElement {
+fn text_at(
+    text: impl Into<SharedString>,
+    color: u32,
+    size: Pixels,
+    bold: bool,
+    cx: &App,
+) -> impl IntoElement {
     div().flex_none().child(
         MoonText::new(text)
             .color(color)
@@ -127,7 +165,12 @@ fn text_at(text: String, color: u32, size: Pixels, bold: bool, cx: &App) -> impl
 
 /// A paragraph: the running text Moonbot prints under a group or beside a warning, which wraps and
 /// takes the width it is given.
-pub(super) fn text_block(text: String, color: u32, bold: bool, cx: &App) -> impl IntoElement {
+pub(super) fn text_block(
+    text: impl Into<SharedString>,
+    color: u32,
+    bold: bool,
+    cx: &App,
+) -> impl IntoElement {
     div().w_full().min_w_0().child(
         MoonText::new(text)
             .color(color)
@@ -150,13 +193,19 @@ pub(super) fn slider(
     enabled: bool,
 ) -> Option<impl IntoElement> {
     let state = store.slider(id)?;
+    // The view probed this slider's setter from the page specs; a mixed one is framed, since the
+    // component has no tone of its own and its thumb can only ever show ONE value.
+    let mixed = enabled && mixed::cached(id);
     Some(
-        div().w_full().child(
-            MoonSlider::new(&state)
-                .id(id)
-                .height(18.0)
-                .disabled(!enabled),
-        ),
+        div().w_full().child(mixed_frame(
+            mixed,
+            div().w_full().child(
+                MoonSlider::new(&state)
+                    .id(id)
+                    .height(18.0)
+                    .disabled(!enabled),
+            ),
+        )),
     )
 }
 
@@ -178,12 +227,20 @@ pub(super) fn field_masked(
     masked: bool,
 ) -> Option<impl IntoElement> {
     let state = store.input(id)?;
+    // Emptied by the view when mixed (see `build_editors`); here it only says why it is empty.
+    let mixed = enabled && mixed::cached(id);
     Some(
         div().w_full().child(
             MoonInput::new(id)
                 .state(&state)
                 .small()
                 .disabled(!enabled)
+                .when(mixed, |input| {
+                    input
+                        .tone(MoonTone::Warning)
+                        .selected(true)
+                        .placeholder(t!("common.mixed_values").to_string())
+                })
                 .when(masked, |input| input.mask_toggle()),
         ),
     )
@@ -254,7 +311,12 @@ pub(super) fn labeled(
 /// One line of running text on a page — Moonbot's coloured status lines and the short sentences it
 /// sets beside a control. Sized to its text like [`caption`], so a row can hold it next to a box;
 /// the paragraphs that need the width and wrap are [`text_block`].
-pub(super) fn text_line(text: String, color: u32, bold: bool, cx: &App) -> impl IntoElement {
+pub(super) fn text_line(
+    text: impl Into<SharedString>,
+    color: u32,
+    bold: bool,
+    cx: &App,
+) -> impl IntoElement {
     text_at(text, color, design::t_body(cx), bold, cx)
 }
 
@@ -305,13 +367,18 @@ pub(super) fn choice_live(
     // Shared because `radio_items` clones the handler once per item; the closure itself is built
     // once per selector either way.
     let set = std::rc::Rc::new(set);
-    let label = options
-        .iter()
-        .find(|(value, _, _)| *value == current)
-        .map_or_else(
-            || SharedString::from(format!("#{current}")),
-            |(_, _, name)| name.clone(),
-        );
+    let mixed = enabled && mixed::is_mixed(id, |cfg| set(cfg, 1));
+    let label = if mixed {
+        SharedString::from(design::MIXED_MARK)
+    } else {
+        options
+            .iter()
+            .find(|(value, _, _)| *value == current)
+            .map_or_else(
+                || SharedString::from(format!("#{current}")),
+                |(_, _, name)| name.clone(),
+            )
+    };
     let view = view.clone();
     let items = if enabled {
         crate::panels::common::radio_items(
@@ -319,11 +386,11 @@ pub(super) fn choice_live(
             current,
             crate::panels::common::RadioMark::Check,
             move |app, value| {
-                if value == current {
+                if value == current && !mixed {
                     return;
                 }
                 view.update(app, |this, cx| {
-                    this.edit_draft(|draft| set(draft, value), cx);
+                    this.edit_control(id, |draft| set(draft, value), cx);
                 });
             },
         )
@@ -333,7 +400,7 @@ pub(super) fn choice_live(
     MoonDropdown::new(id)
         .label(label)
         .trigger_caret(true)
-        .trigger_variant(MoonButtonVariant::Soft)
+        .trigger_variant(design::mixed_trigger_variant(mixed))
         .trigger_size(MoonButtonSize::Action)
         .menu_size(MoonMenuSize::Compact)
         .items(items)
@@ -358,18 +425,28 @@ pub(super) fn radio_live(
     set: fn(&mut CoreConfig),
 ) -> impl IntoElement {
     let view = view.clone();
-    MoonRadio::new(id)
-        .label(label)
-        .checked(selected)
-        .size(MoonRadioSize::Compact)
-        .on_change(move |_, _w, app| {
-            if selected {
-                return;
-            }
-            view.update(app, |this, cx| {
-                this.edit_draft(set, cx);
-            });
-        })
+    // The group's fields differ across the selection: no option is THE one, and each says so —
+    // framed, since the tone alone colours only a picked option.
+    let mixed = mixed::is_mixed(id, set);
+    mixed_frame(
+        mixed,
+        MoonRadio::new(id)
+            .label(label)
+            .checked(selected && !mixed)
+            .tone(design::mixed_tone(mixed))
+            .size(MoonRadioSize::Compact)
+            .on_change(move |_, _w, app| {
+                // Re-picking the option already picked stages nothing — unless the group is
+                // mixed, where picking the drawn core's own option is the decision "this one,
+                // everywhere".
+                if selected && !mixed {
+                    return;
+                }
+                view.update(app, |this, cx| {
+                    this.edit_control(id, set, cx);
+                });
+            }),
+    )
 }
 
 /// Moonbot's `< n >` spinner, for the counts it does not give a slider, staging into the page.
@@ -389,22 +466,24 @@ pub(super) fn stepper_live(
     set: fn(&mut CoreConfig, i32),
 ) -> impl IntoElement {
     let view = view.clone();
+    let mixed = mixed::is_mixed(id, |cfg| set(cfg, 1));
     MoonStepper::new(id)
         .value(value as f32)
         .step(1.0)
         .precision(0)
         .size(MoonStepperSize::Compact)
+        .tone(design::mixed_tone(mixed))
         .on_change(move |v, _w, app| {
             // `as i32` saturates rather than wrapping.
             let next = (v.round() as i32).max(floor);
             // Without a range the component never dims its "−", so pressing it at the floor arrives
             // here as a change to the value already held. Staging that would mark the page edited
             // and stop the window following the core, for a press that moved nothing.
-            if next == value {
+            if next == value && !mixed {
                 return;
             }
             view.update(app, |this, cx| {
-                this.edit_draft(|draft| set(draft, next), cx);
+                this.edit_control(id, |draft| set(draft, next), cx);
             });
         })
 }
@@ -443,16 +522,22 @@ pub(super) fn list_box(
 /// Still not `MoonList`, for the reason [`list_box`] gives: this is a handful of lines, not a
 /// virtualized list with a delegate. The pick lives in the WINDOW — a page is rebuilt every render
 /// — so the row hands the index straight to it.
+///
+/// `edits` names what the box and the buttons beside it change — by doing it, the way every
+/// setter here is probed — so the frame can say when the selected cores disagree on that list.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn list_box_select(
     id: &'static str,
     lines: Vec<String>,
     selected: Option<usize>,
     empty_note: String,
     view: &Entity<CoreExpertView>,
+    edits: fn(&mut CoreConfig),
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement {
     let empty = lines.is_empty();
+    let mixed = mixed::is_mixed(id, edits);
     v_flex()
         .id(id)
         .w_full()
@@ -462,7 +547,7 @@ pub(super) fn list_box_select(
         .p(design::ui_px(cx, 6.0))
         .rounded(design::r_button(cx))
         .border_1()
-        .border_color(rgb(p.border))
+        .border_color(rgb(if mixed { p.amber } else { p.border }))
         .overflow_y_scroll()
         .when(empty, |this| this.child(hint(empty_note, p, cx)))
         .children(lines.into_iter().enumerate().map(|(row, line)| {
@@ -522,11 +607,16 @@ pub(super) fn num(
     cx: &App,
 ) -> Option<impl IntoElement> {
     let state = store.input(id)?;
+    let mixed = enabled && mixed::cached(id);
     Some(
-        div()
-            .flex_none()
-            .w(design::ui_px(cx, width))
-            .child(MoonInput::new(id).state(&state).small().disabled(!enabled)),
+        div().flex_none().w(design::ui_px(cx, width)).child(
+            MoonInput::new(id)
+                .state(&state)
+                .small()
+                .disabled(!enabled)
+                // Too narrow for the placeholder: the tone and the emptiness say it.
+                .when(mixed, |input| input.tone(MoonTone::Warning).selected(true)),
+        ),
     )
 }
 
@@ -550,8 +640,13 @@ pub(super) fn sound_cell(
     cx: &App,
 ) -> impl IntoElement {
     let name = crate::media::sound::mb_sound_name(current);
+    let mixed = mixed::is_mixed(id, |cfg| set(cfg, 1));
     // A core holding an ordinal this build has no name for shows that NUMBER rather than a guess.
-    let label = name.map_or_else(|| format!("#{current}"), str::to_string);
+    let label = if mixed {
+        design::MIXED_MARK.to_string()
+    } else {
+        name.map_or_else(|| format!("#{current}"), str::to_string)
+    };
     let view = view.clone();
     let options = crate::media::sound::MB_SOUNDS
         .iter()
@@ -570,11 +665,11 @@ pub(super) fn sound_cell(
         current,
         crate::panels::common::RadioMark::Check,
         move |app, ordinal| {
-            if ordinal == current {
+            if ordinal == current && !mixed {
                 return;
             }
             view.update(app, |this, cx| {
-                this.edit_draft(|draft| set(draft, ordinal), cx);
+                this.edit_control(id, |draft| set(draft, ordinal), cx);
             });
         },
     );
@@ -585,7 +680,7 @@ pub(super) fn sound_cell(
             MoonDropdown::new(id)
                 .label(label)
                 .trigger_caret(true)
-                .trigger_variant(MoonButtonVariant::Soft)
+                .trigger_variant(design::mixed_trigger_variant(mixed))
                 .trigger_size(MoonButtonSize::Action)
                 .trigger_width_scaled(94.0)
                 .menu_width_scaled(128.0)

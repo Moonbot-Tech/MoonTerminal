@@ -1939,6 +1939,21 @@ impl Backend {
         }
     }
 
+    /// The group's active trading core as a SURFACE may address it: `None` in Auto Overview.
+    ///
+    /// [`Self::active_trade_core`] falls through to the group's FIRST core in Overview, where the
+    /// header draws no per-core cluster at all — an address the user never chose and no popup,
+    /// settings page or bulk command may write to. Every surface that resolves a core for a write
+    /// asks this rather than the bare method, so the gate is one line rather than a copy at some
+    /// of the call sites.
+    pub(crate) fn scoped_trade_core(&self, group: &str) -> Option<CoreId> {
+        if self.is_auto_overview_scope(group) {
+            None
+        } else {
+            self.active_trade_core(group)
+        }
+    }
+
     /// Return the group's cores in canonical order for the header selector.
     pub(crate) fn group_cores(&self, group: &str) -> OrderedCores {
         CoreOrder::new(&self.config).from_sessions(self.session.sessions(), |s| s.group == group)

@@ -228,7 +228,12 @@ impl editors::CoreDraftHost for Shell {
         &mut self.core_settings_editors
     }
 
-    fn stage_draft(&mut self, apply: impl FnOnce(&mut CoreConfig), cx: &mut Context<Self>) {
+    fn stage_draft(
+        &mut self,
+        _id: &'static str,
+        apply: impl Fn(&mut CoreConfig),
+        cx: &mut Context<Self>,
+    ) {
         self.edit_core_draft(apply, cx);
     }
 
@@ -239,11 +244,9 @@ impl editors::CoreDraftHost for Shell {
 
 /// Send one staged page to the core it was seeded from, as Moonbot's OK does.
 ///
-/// Shared by the compact gear popup and by [`crate::core_expert`]'s window: both stage a whole
-/// projection of ONE core, and both must refuse to write it into a core that moved underneath
-/// them, so the clamp, the [`resolve_core_settings_write`] guard, the section mask and the
-/// client-side half of the blacklist-delta filter live here once instead of being re-derived per
-/// caller.
+/// The compact gear popup's send: it stages a whole projection of the group's ACTIVE core and must
+/// refuse to write it into a core that moved underneath it, so the [`resolve_core_settings_write`]
+/// guard sits here, in front of [`send_core_config_to`], which carries everything else.
 ///
 /// Args:
 ///     backend: Application state holding the session the page travels through.
@@ -259,9 +262,41 @@ pub(crate) fn send_core_config(
     backend: &Entity<Backend>,
     group: &str,
     seeded: Option<CoreId>,
-    mut draft: CoreConfig,
+    draft: CoreConfig,
     sections: FieldMask,
     cx: &App,
+) -> bool {
+    let b = backend.read(cx);
+    let active = b.active_trade_core(group);
+    let Some(core) = resolve_core_settings_write(seeded, active) else {
+        // Silence here would be indistinguishable from a successful save: the surface closes either
+        // way, and the user pressed OK expecting the values on screen to be applied.
+        log::warn!("core settings OK ignored: the active core moved since the page was seeded");
+        return false;
+    };
+    send_core_config_to(b, core, draft, sections)
+}
+
+/// Send one projection to one named core.
+///
+/// Shared by [`send_core_config`] and by [`crate::core_expert`]'s window, whose cores are picked in
+/// a list rather than resolved from the group — so the active-core guard is the caller's business
+/// and everything the two sends must agree on lives here once: the leverage clamp, the section
+/// mask, and the client-side halves of the two delta filters.
+///
+/// Args:
+///     b: Application state holding the session the page travels through.
+///     core: Core the page is written to.
+///     draft: The page, taken by value because the leverage clamp below rewrites it.
+///     sections: Which areas of `draft` this write may touch; see [`FieldMask`].
+///
+/// Returns:
+///     Whether the page reached the session for that core.
+pub(crate) fn send_core_config_to(
+    b: &Backend,
+    core: CoreId,
+    mut draft: CoreConfig,
+    sections: FieldMask,
 ) -> bool {
     // One clamp for the whole page, here rather than per keystroke: the exchange refuses a
     // non-positive multiplier and no supported venue offers more than 125x, but clamping while the
@@ -276,18 +311,10 @@ pub(crate) fn send_core_config(
     if draft.leverage.auto_fix_lev || draft.leverage.fix_lev != 0 {
         draft.leverage.fix_lev = draft.leverage.fix_lev.clamp(1, MAX_FIX_LEVERAGE);
     }
-    let b = backend.read(cx);
-    let active = b.active_trade_core(group);
-    let Some(core) = resolve_core_settings_write(seeded, active) else {
-        // Silence here would be indistinguishable from a successful save: the surface closes either
-        // way, and the user pressed OK expecting the values on screen to be applied.
-        log::warn!("core settings OK ignored: the active core moved since the page was seeded");
-        return false;
-    };
     // The mask comes from the CALLER, because what a surface may write is what it DRAWS, and a
     // draft seeded when that surface opened is stale everywhere the user could not see it. The
     // compact popup draws all five rendered sections and names all five; the expert window names
-    // only the sections of the PAGES its user actually edited, so its OK cannot write its own
+    // only the areas of the FIELDS its user actually changed, so its OK cannot write its own
     // frozen copy of a page nobody opened back over a change made elsewhere while it stood open.
     // Neither can name the manual block at all: no mask reachable from here carries it, checkbox on
     // or off.

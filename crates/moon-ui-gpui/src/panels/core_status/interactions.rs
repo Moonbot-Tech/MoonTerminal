@@ -520,12 +520,9 @@ impl CoreStatusView {
 
     /// Apply one core-row click to the panel's controlled selection.
     ///
-    /// A PLAIN click routes through `select_only`, not through `click`: in this panel a plain
-    /// click means "this core", and it has to keep meaning that when the same row is clicked
-    /// twice. Report's shared algorithm deliberately clears a sole selection on the second plain
-    /// click, which is right for a report row and wrong here -- it would leave an ordinary
-    /// double-click with nothing selected, in a panel whose next gesture enqueues a build. Ctrl
-    /// and Shift go to `click` unchanged, so toggling and ranges are the one shared algorithm.
+    /// Through `RowSelection::press`: a plain click means "this core" and keeps meaning it on a
+    /// second click, Ctrl and Shift toggle and range — the reading this panel and the expert
+    /// settings window share, and the one written up on that method.
     ///
     /// Args:
     ///     clicked: The clicked core, or `None` for a line that is not a core row.
@@ -539,12 +536,8 @@ impl CoreStatusView {
         modifiers: Modifiers,
         cx: &mut Context<Self>,
     ) {
-        if modifiers.shift || modifiers.secondary() {
-            self.core_selection
-                .click(clicked, order, modifiers.shift, modifiers.secondary());
-        } else {
-            self.core_selection.select_only(clicked);
-        }
+        self.core_selection
+            .press(clicked, order, modifiers.shift, modifiers.secondary());
         cx.notify();
     }
 

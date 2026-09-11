@@ -132,3 +132,15 @@ common.core_pick.group_delete:
   ru: "Удалить"
   en: "Delete"
   es: "Eliminar"
+
+# A control edited for several things at once (strategies, cores) whose values disagree.
+common.mixed_values:
+  ru: "разные значения"
+  en: "mixed values"
+  es: "valores distintos"
+
+# The button that writes a staged change and keeps its surface open.
+common.apply:
+  ru: "Применить"
+  en: "Apply"
+  es: "Aplicar"

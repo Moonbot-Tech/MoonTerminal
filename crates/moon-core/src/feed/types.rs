@@ -9,13 +9,14 @@ mod core_status;
 pub use core_folders::CoreFolders;
 pub use core_problem::{CoreProblem, CoreProblemCategory, CoreProblems};
 pub use core_settings::{
-    AutoBuySettings, AutoStartSettings, BtcBlinkSettings, CORE_HOTKEY_ACTION_COUNT, CoreConfig,
-    CoreConfigArea, CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult,
-    CoreConfigEditRow, CoreConfigRejection, CoreConfigState, CoreHotkeyAction, CoreHotkeyLayout,
-    CoreStratButtons, GeneralSettings, GestureSettings, InterfaceSettings, LeverageSettings,
-    ManualSettings, MoveRow, OrderRulesSettings, ProfitState, SignalsSettings, SpecialSettings,
-    TelegramSettings, day_fraction_to_minutes, fav_markets_has, fav_markets_list, fav_markets_set,
-    minutes_to_day_fraction,
+    AutoBuySettings, AutoStartSettings, BtcBlinkSettings, CORE_FIELDS, CORE_HOTKEY_ACTION_COUNT,
+    CoreChangeSet, CoreConfig, CoreConfigArea, CoreConfigEditEvent, CoreConfigEditPhase,
+    CoreConfigEditResult, CoreConfigEditRow, CoreConfigRejection, CoreConfigState, CoreField,
+    CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, FieldValue, GeneralSettings,
+    GestureSettings, InterfaceSettings, LeverageSettings, ManualSettings, MoveRow,
+    OrderRulesSettings, ProbeBases, ProfitState, SignalsSettings, SpecialSettings,
+    TelegramSettings, day_fraction_to_minutes, differing_fields, fav_markets_has, fav_markets_list,
+    fav_markets_set, index_of, minutes_to_day_fraction,
 };
 pub use core_status::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreEndpoint, CoreIdentityFacts, CoreInitStep,

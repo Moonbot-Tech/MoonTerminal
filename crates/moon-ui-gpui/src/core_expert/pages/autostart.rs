@@ -2,8 +2,8 @@
 //! fully LIVE.
 //!
 //! Every switch, box and slider here edits `moon_core::feed::AutoStartSettings` or
-//! `BtcBlinkSettings`, both of which the terminal projects and `ExpertTab::add_sections`
-//! carries back, so OK sends what the page shows. The compact popup draws the same fields in its
+//! `BtcBlinkSettings`, both of which the terminal projects and `moon_core::feed::CORE_FIELDS`
+//! lists, so OK sends what the page shows. The compact popup draws the same fields in its
 //! own compact order; this page follows Moonbot's layout instead, row for row.
 //!
 //! The two "Сейчас:" counters are the core's REPORT totals (`moon_core::feed::ProfitState`), not
@@ -21,10 +21,7 @@ use moon_core::session::CoreId;
 use crate::Backend;
 use crate::design;
 use crate::shell::editors::EditorStore;
-use crate::shell::{
-    ERRORS_LEVEL_BOUNDS, PING_LEVEL_BOUNDS, fmt_hhmm, parse_hhmm, parse_num,
-    resolve_core_settings_write,
-};
+use crate::shell::{ERRORS_LEVEL_BOUNDS, PING_LEVEL_BOUNDS, fmt_hhmm, parse_hhmm, parse_num};
 
 use super::super::CoreExpertView;
 use super::super::widgets::{caption, flag, hint, num, rows, slider, sound_cell};
@@ -250,8 +247,8 @@ fn profit_line(
     profit: ProfitCounter,
     kind: ResetProfitKind,
     seeded: Option<CoreId>,
+    view: &Entity<CoreExpertView>,
     backend: &Entity<Backend>,
-    group: &str,
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement {
@@ -265,7 +262,7 @@ fn profit_line(
         None => t!("core_settings.as_now_unknown").to_string(),
     };
     let backend = backend.clone();
-    let group = group.to_string();
+    let view = view.clone();
     h_flex()
         .w_full()
         .items_center()
@@ -277,18 +274,18 @@ fn profit_line(
                 .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Soft)
                 .on_click(move |_, _w, app| {
-                    let b = backend.read(app);
-                    // The same hazard OK answers with its banner: the core can move between the
-                    // render that drew this button and the click that pressed it. Silence would be
+                    // The counters drawn beside this button are the seeded core's, and the window
+                    // binds a core only once its page arrived — so a button drawn with no seed is
+                    // a button drawn over no counters. And the anchor can move between the render
+                    // that drew the button and this click (a core leaving the list), so the window
+                    // is asked again rather than trusted from the render. Silence would be
                     // indistinguishable from a counter that reset and had nothing to show for it.
-                    let Some(core) =
-                        resolve_core_settings_write(seeded, b.active_trade_core(&group))
+                    let Some(core) = seeded.filter(|core| view.read(app).seeded() == Some(*core))
                     else {
-                        log::warn!(
-                            "reset profit ignored: the active core moved since the page was seeded"
-                        );
+                        log::warn!("reset profit ignored: the page no longer describes that core");
                         return;
                     };
+                    let b = backend.read(app);
                     if let Err(e) = b.session.reset_profit(core, kind) {
                         log::warn!("reset profit failed: {e:#}");
                     }
@@ -304,7 +301,6 @@ pub(super) fn body(
     store: &EditorStore,
     draft: &CoreConfig,
     backend: &Entity<Backend>,
-    group_name: &str,
     seeded: Option<CoreId>,
     profit: (ProfitCounter, ProfitCounter),
     p: MoonPalette,
@@ -429,8 +425,8 @@ pub(super) fn body(
             window_profit,
             ResetProfitKind::Session,
             seeded,
+            view,
             backend,
-            group_name,
             p,
             cx,
         ))
@@ -473,8 +469,8 @@ pub(super) fn body(
             hourly_profit,
             ResetProfitKind::All,
             seeded,
+            view,
             backend,
-            group_name,
             p,
             cx,
         ))

@@ -79,7 +79,16 @@ pub(crate) trait CoreDraftHost: Sized + 'static {
 
     /// Apply one staged change to the surface's draft. A change arriving without a draft is dropped
     /// rather than creating one.
-    fn stage_draft(&mut self, apply: impl FnOnce(&mut CoreConfig), cx: &mut Context<Self>);
+    ///
+    /// `id` names the control the change came from. The compact popup has no use for it; the
+    /// expert window reads off it whether the control was drawn mixed across several cores, in
+    /// which case the change is a decision to stage even when it moved nothing on the page.
+    fn stage_draft(
+        &mut self,
+        id: &'static str,
+        apply: impl Fn(&mut CoreConfig),
+        cx: &mut Context<Self>,
+    );
 
     /// The window this surface draws in, used to write a field from a slider drag:
     /// `MoonInputState::set_value` needs a `&mut Window`, which an event handler does not have.
@@ -164,7 +173,7 @@ pub(crate) fn input_state<V: CoreDraftHost>(
         move |this: &mut V, state, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
                 let text = state.read(cx).value().to_string();
-                this.stage_draft(|draft| stage(draft, &text), cx);
+                this.stage_draft(id, |draft| stage(draft, &text), cx);
             }
         },
     )
@@ -248,7 +257,7 @@ pub(crate) fn slider_state<V: CoreDraftHost>(
                 move |this: &mut V, _state, ev: &MoonSliderEvent, cx| {
                     if let MoonSliderEvent::Change(v) = ev {
                         let v = v.end();
-                        this.stage_draft(|draft| stage(draft, v), cx);
+                        this.stage_draft(id, |draft| stage(draft, v), cx);
                         // A row that also shows the value in an editor writes it there directly:
                         // the editor only re-reads the draft on a re-seed (so typing survives), and
                         // without this the number would contradict the thumb being dragged. Every

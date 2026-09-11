@@ -1777,7 +1777,7 @@ impl StrategiesView {
                     .selected(dirty || differ)
                     .disabled(!active);
                 if differ {
-                    input = input.placeholder(t!("strat.mixed_values").to_string());
+                    input = input.placeholder(t!("common.mixed_values").to_string());
                 }
                 h_flex()
                     .w_full()
@@ -1814,7 +1814,7 @@ impl StrategiesView {
                     );
                 }
                 let trigger_label = if differ {
-                    "≠".to_string()
+                    design::MIXED_MARK.to_string()
                 } else {
                     if value.is_empty() {
                         "—".to_string()
@@ -1935,7 +1935,7 @@ impl StrategiesView {
                             .selected(dirty || differ)
                             .disabled(!active);
                     if differ {
-                        input = input.placeholder(t!("strat.mixed_values").to_string());
+                        input = input.placeholder(t!("common.mixed_values").to_string());
                     }
                     input.into_any_element()
                 }
@@ -2078,7 +2078,7 @@ impl StrategiesView {
                         .flex_none()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(moon(p.blue))
-                        .child("≠"),
+                        .child(design::MIXED_MARK),
                 )
                 .child(control)
                 .into_any_element()

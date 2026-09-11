@@ -1,9 +1,10 @@
-//! Rendering of the expert core-settings window: title bar, the expert-mode switch, Moonbot's tab
-//! strip, the page body and the OK/Cancel footer.
+//! Rendering of the expert core-settings window: title bar, the expert-mode switch, the core list
+//! down the left, Moonbot's tab strip, the page body and the footer with its send plan and OK.
 //!
 //! The frame the pages hang in, and the two contracts it holds them to: nothing editable is drawn
-//! unless the window is in [`PageState::Ready`], and OK is the only path to the wire. The pages
-//! themselves live in [`super::pages`].
+//! unless the window is in [`PageState::Ready`], and the footer's two send buttons — Apply and OK
+//! — are the only path to the wire. The pages themselves live in [`super::pages`], the left
+//! column in [`super::sidebar`].
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -15,7 +16,7 @@ use rust_i18n::t;
 
 use crate::design::{self, moon, moon_alpha};
 
-use super::{CoreExpertView, ExpertTab, PageState, TabSource, pages};
+use super::{CoreExpertView, ExpertTab, PageState, TabSource, mixed, pages, widgets};
 
 /// Title-bar height, matching the Screener window this one is built after.
 const HEADER_H: f32 = 32.0;
@@ -30,14 +31,28 @@ impl Render for CoreExpertView {
         // And put it back on the window itself, as every other window root here does: a window
         // holding no focus at all answers no hotkey.
         crate::hotkeys::restore_root_focus(&self.focus, window, cx);
+        let p = MoonPalette::active(cx);
+        // What still needs the trader's attention — one list for the marks and for the badges,
+        // so the two agree — set before the editors are built, since the boxes are emptied there.
+        // Collected before the scope takes it: the iterator borrows the window the scope is a
+        // field of.
+        let attention: Vec<usize> = self.attention().collect();
+        self.mixed.set_context(attention.into_iter(), p.amber);
         // Before anything reads them: a row draws the control its page declared, and the pages are
         // built below in this same frame.
         self.build_editors(window, cx);
-        let p = MoonPalette::active(cx);
         // Built before the tree: it needs `window` and `&mut cx`, which the builder chain below
         // cannot lend it while it is also reading `cx` for its own scaled metrics.
         let tab_strip = self.tab_strip(window, cx);
+        // The page's widgets are free functions that cannot read this view back mid-render, so
+        // the scope they ask is lent to the thread for exactly the body's construction.
+        mixed::install(std::mem::take(&mut self.mixed));
         let body = self.body(p, window, cx).into_any_element();
+        self.mixed = mixed::take();
+        // How many selected cores OK reaches, and how many it skips for want of a page.
+        let (pages, skipped) = self.roster.selected_pages(&self.selection);
+        let sidebar = self.sidebar(p, cx).into_any_element();
+        let footer = self.footer(pages, skipped, p, cx).into_any_element();
         let chrome_width = crate::window::windowing::responsive_width(window);
         v_flex()
             .size_full()
@@ -54,9 +69,23 @@ impl Render for CoreExpertView {
             .track_focus(&self.focus)
             .child(title_bar(p, cx))
             .child(self.switch_row(p, cx))
-            .child(tab_strip)
-            .child(body)
-            .child(self.footer(p, cx))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .items_stretch()
+                    .child(sidebar)
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .child(tab_strip)
+                            .child(body),
+                    ),
+            )
+            .child(footer)
             .child(
                 MoonWindowFrame::tool("core-expert-frame-hit", chrome_width)
                     .header_height(HEADER_H)
@@ -99,8 +128,8 @@ fn title_bar(p: MoonPalette, cx: &App) -> impl IntoElement {
 }
 
 impl CoreExpertView {
-    /// Row above the strip: the expert-mode switch that owns which face the gear opens, and the
-    /// name of the core this window is bound to.
+    /// Row above the list and the strip: the expert-mode switch that owns which face the gear
+    /// opens, and the name of the core whose page is drawn.
     ///
     /// The switch sits here rather than only in the popup because unticking it is the ONLY way back
     /// to the compact face once this window is the one the gear opens.
@@ -109,9 +138,11 @@ impl CoreExpertView {
         // Read, never assumed: the preference is application-wide and can be cleared from the other
         // face, so a hardcoded tick would show this window disagreeing with the gear that opened it.
         let expert = self.backend.read(cx).core_settings_expert();
-        // Resolved when the binding changed, not here: this runs on every repaint, including one
-        // per hover over the tab strip.
-        let core_name = self.core_name.clone();
+        // The roster already holds the name; a lookup per repaint is a scan of a few dozen rows
+        // and a shared-string clone.
+        let core_name = self
+            .seeded()
+            .and_then(|core| self.roster.name(core).cloned());
         h_flex()
             .w_full()
             .flex_none()
@@ -157,9 +188,25 @@ impl CoreExpertView {
     fn tab_strip(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let view = cx.entity();
         let selected = self.tab;
+        // Badged with how many parameters on that page still need attention: where to look
+        // before anything is typed.
+        let attention = self.mixed.differing();
         let items: Vec<MoonTabItem> = ExpertTab::ALL
             .iter()
-            .map(|tab| MoonTabItem::new(tab.title()).selected(*tab == selected))
+            .map(|tab| {
+                let n = attention
+                    .iter()
+                    .filter(|&&field| {
+                        ExpertTab::for_area(moon_core::feed::CORE_FIELDS[field].area) == Some(*tab)
+                    })
+                    .count();
+                let item = MoonTabItem::new(tab.title()).selected(*tab == selected);
+                if n > 0 {
+                    item.badge(n.to_string())
+                } else {
+                    item
+                }
+            })
             .collect();
         let strip_h = design::tab_strip_h(cx);
         let p = MoonPalette::active(cx);
@@ -247,7 +294,7 @@ impl CoreExpertView {
         // Read here, from the window's own `&self`: a page is built inside this render, where
         // reading the view back would panic.
         let profit = self
-            .seeded
+            .seeded()
             .and_then(|core| self.backend.read(cx).session.store().core(core))
             .and_then(|d| d.profit_state.as_ref())
             .map_or((None, None), |s| {
@@ -256,10 +303,19 @@ impl CoreExpertView {
                     Some((s.hourly_profit, s.hourly_trades)),
                 )
             });
+        let rejected = self.seeded().and_then(|core| {
+            let b = self.backend.read(cx);
+            let row = b.session.store().core(core)?.core_config_edit.as_ref()?;
+            // A named refusal first; a core that never answered at all — the queue gave up with
+            // nothing to compare — is the other way a write is lost, and says so in its own words.
+            crate::controls::core_config_rejection_caption(row.mismatches.as_ref()).or_else(|| {
+                (row.phase == moon_core::feed::CoreConfigEditPhase::GaveUp)
+                    .then(|| SharedString::from(t!("core_expert.write_gave_up").to_string()))
+            })
+        });
         let ctx = pages::PageCtx {
             backend: &self.backend,
-            group: &self.group,
-            seeded: self.seeded,
+            seeded: self.seeded(),
             profit,
             hotkeys_sub: self.hotkeys_sub,
             special_section: self.special_section,
@@ -278,8 +334,6 @@ impl CoreExpertView {
         // would be describing what is on screen beside it.
         let note = (page.is_none() || source_note_over_page).then(|| match self.state {
             PageState::NoCore => t!("core_expert.no_core"),
-            PageState::Overview => t!("core_expert.overview"),
-            PageState::CoreMoved => t!("core_expert.core_moved"),
             PageState::Waiting => t!("core_expert.waiting"),
             PageState::Replaced => t!("core_expert.replaced"),
             PageState::Stale => t!("core_expert.stale"),
@@ -308,47 +362,96 @@ impl CoreExpertView {
             .gap(design::ui_px(cx, 8.0))
             .px(design::ui_px(cx, design::HEADER_PAD_X))
             .py(design::ui_px(cx, 10.0))
-            .children(self.write_refused.then(|| {
+            .children(self.write_refused.map(|(sent, total)| {
                 MoonAlert::error(
                     "core-expert-refused",
-                    t!("core_expert.write_refused").to_string(),
+                    t!(
+                        "core_expert.write_refused",
+                        sent = sent.to_string(),
+                        total = total.to_string()
+                    )
+                    .to_string(),
                 )
             }))
+            // The anchor's last write, as the CORE answered it: a refused or clamped area is news
+            // the send itself cannot give, and after Apply the page stays open over the values
+            // the core may not hold. The same caption the toolbar draws for the same notice.
+            .children(
+                rejected
+                    .map(|caption| MoonAlert::warning("core-expert-rejected", caption.to_string())),
+            )
             .children(note.map(|note| {
                 if warn {
                     MoonAlert::warning("core-expert-page-note", note.to_string()).into_any_element()
                 } else {
-                    crate::core_expert::widgets::text_block(
-                        note.to_string(),
-                        p.text_muted,
-                        false,
-                        cx,
-                    )
-                    .into_any_element()
+                    widgets::text_block(note.to_string(), p.text_muted, false, cx)
+                        .into_any_element()
                 }
             }))
             .children(hotkeys_strip)
             .children(page)
     }
 
-    /// OK and Cancel, with Moonbot's meaning: OK sends the whole page, Cancel discards it.
+    /// The send plan, Apply, OK and Cancel: Apply sends and stays, OK sends and closes, Cancel
+    /// discards.
     ///
-    /// OK is dark unless a page is actually sendable, so pressing it can never read as a save of
-    /// values that reached nothing.
-    fn footer(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
+    /// The plan says, before the click, what OK would do — how many parameters, to how many cores,
+    /// and how many selected cores it would skip for want of a page. OK is dark unless the anchor's
+    /// page is actually sendable, so pressing it can never read as a save of values that reached
+    /// nothing.
+    ///
+    /// Args:
+    ///     cores: Selected cores with a live page — what OK writes to.
+    ///     skipped: Selected cores without one — what OK skips.
+    fn footer(
+        &self,
+        cores: usize,
+        skipped: usize,
+        p: MoonPalette,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let view = cx.entity();
         let cancel_view = view.clone();
+        let apply_view = view.clone();
         let can_send = self.state.can_send();
+        let params = self.changes.len();
+        let has_changes = params > 0;
+        let plan_text = if has_changes {
+            t!(
+                "core_expert.plan",
+                params = params.to_string(),
+                cores = cores.to_string()
+            )
+            .to_string()
+        } else {
+            t!("core_expert.plan_nothing").to_string()
+        };
+        let skipped = (skipped > 0)
+            .then(|| t!("core_expert.plan_skipped", n = skipped.to_string()).to_string());
         h_flex()
             .w_full()
             .flex_none()
             .items_center()
-            .justify_end()
+            .justify_between()
             .gap(design::ui_px(cx, 8.0))
             .px(design::ui_px(cx, design::HEADER_PAD_X))
             .py(design::ui_px(cx, 8.0))
             .border_t(px(1.0))
             .border_color(moon_alpha(p.border, 1.0))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .items_center()
+                    .gap(design::ui_px(cx, 8.0))
+                    .child(widgets::text_line(
+                        plan_text,
+                        if has_changes { p.text } else { p.text_muted },
+                        has_changes,
+                        cx,
+                    ))
+                    .children(skipped.map(|text| widgets::text_line(text, p.amber, false, cx))),
+            )
             .child(
                 MoonButton::new("core-expert-cancel")
                     .label(t!("core_settings.cancel").to_string())
@@ -357,6 +460,20 @@ impl CoreExpertView {
                     .padding_x(14.0)
                     .on_click(move |_, window, app| {
                         cancel_view.update(app, |this, _cx| this.cancel(window));
+                    })
+                    .render(),
+            )
+            .child(
+                MoonButton::new("core-expert-apply")
+                    .label(t!("common.apply").to_string())
+                    .size(MoonButtonSize::Action)
+                    .variant(MoonButtonVariant::Soft)
+                    // Dark while there is nothing to apply: unlike OK, it has no "close" to offer
+                    // instead.
+                    .disabled(!can_send || !has_changes)
+                    .padding_x(14.0)
+                    .on_click(move |_, _window, app| {
+                        apply_view.update(app, |this, cx| this.apply(cx));
                     })
                     .render(),
             )

@@ -36,33 +36,62 @@ core_expert.tab_hotkeys:
   en: "Hotkeys"
   es: "Hotkeys"
 core_expert.no_core:
-  ru: "Нет активного ядра: выберите ядро в шапке окна группы."
-  en: "No active core: pick one in the group window's header."
-  es: "No hay núcleo activo: elija uno en la cabecera de la ventana del grupo."
-core_expert.overview:
-  ru: "Группа показывает обзор всех ядер. Настройки принадлежат одному ядру — выберите его в шапке группы."
-  en: "The group is showing every core at once. These settings belong to a single core — pick one in the group header."
-  es: "El grupo muestra todos los núcleos a la vez. Estos ajustes pertenecen a un solo núcleo: elija uno en la cabecera del grupo."
-core_expert.core_moved:
-  ru: "Активное ядро группы сменилось. Страница описывает прежнее ядро, поэтому отправить её нельзя — нажмите шестерёнку заново."
-  en: "The group's active core changed. This page describes the previous core, so it cannot be sent — press the gear again."
-  es: "El núcleo activo del grupo cambió. Esta página describe el núcleo anterior, así que no puede enviarse: pulse el engranaje de nuevo."
+  ru: "Выберите ядро в списке слева. Ctrl+клик добавляет ядро к выбору, Shift+клик выбирает диапазон — OK запишет изменённые параметры во все выбранные ядра."
+  en: "Pick a core in the list on the left. Ctrl+click adds a core to the selection, Shift+click selects a range — OK writes the changed parameters to every selected core."
+  es: "Elija un núcleo en la lista de la izquierda. Ctrl+clic añade un núcleo a la selección, Mayús+clic selecciona un rango: OK escribe los parámetros cambiados en todos los núcleos seleccionados."
 core_expert.waiting:
   ru: "Ждём настройки ядра — ядро присылает их фоном сразу после подключения."
   en: "Waiting for the core's settings — the core sends them in the background after connecting."
   es: "Esperando los ajustes del núcleo: el núcleo los envía en segundo plano tras conectarse."
 core_expert.replaced:
-  ru: "На этом подключении отвечает уже другой процесс Moonbot. Прежняя страница отброшена, чтобы не записать её в новый процесс, — нажмите шестерёнку заново."
-  en: "A different Moonbot process now answers on this connection. The previous page was dropped rather than written into the new process — press the gear again."
-  es: "En esta conexión responde ahora otro proceso de Moonbot. La página anterior se descartó en vez de escribirse en el nuevo proceso: pulse el engranaje de nuevo."
+  ru: "На этом подключении отвечает уже другой процесс Moonbot. Прежняя страница отброшена, чтобы не записать её в новый процесс; изменения сохранены и лягут на новую страницу, когда она придёт."
+  en: "A different Moonbot process now answers on this connection. The previous page was dropped rather than written into the new process; the staged changes are kept and will be laid over the new page when it arrives."
+  es: "En esta conexión responde ahora otro proceso de Moonbot. La página anterior se descartó en vez de escribirse en el nuevo proceso; los cambios preparados se conservan y se aplicarán sobre la nueva página cuando llegue."
 core_expert.stale:
   ru: "Связь с ядром не готова: страница показана по сохранённому снимку и отправлена не будет, пока ядро не ответит заново."
   en: "The link to the core is not ready: this page is a retained snapshot and will not be sent until the core answers again."
   es: "El enlace con el núcleo no está listo: esta página es una instantánea retenida y no se enviará hasta que el núcleo responda de nuevo."
 core_expert.write_refused:
-  ru: "Настройки не отправлены: ядро сменилось или отказало в приёме страницы. Окно оставлено открытым, чтобы отказ не выглядел как сохранение."
-  en: "Nothing was sent: the core moved, or refused the page. The window stays open so a refusal cannot look like a save."
-  es: "No se envió nada: el núcleo cambió o rechazó la página. La ventana permanece abierta para que un rechazo no parezca un guardado."
+  ru: "Отправлено в %{sent} из %{total} ядер: остальные без страницы или отказали в приёме. Окно оставлено открытым, изменения сохранены — сузьте выбор или повторите."
+  en: "Sent to %{sent} of %{total} cores: the rest have no page or refused it. The window stays open with the changes staged — narrow the selection or retry."
+  es: "Enviado a %{sent} de %{total} núcleos: el resto no tiene página o la rechazó. La ventana permanece abierta con los cambios preparados: reduzca la selección o reintente."
+
+# --- Core list down the left; a parameter the selected cores disagree on is marked in place. ---
+core_expert.cores_title:
+  ru: "Ядра"
+  en: "Cores"
+  es: "Núcleos"
+core_expert.cores_selected:
+  ru: "выбрано: %{n}"
+  en: "selected: %{n}"
+  es: "seleccionados: %{n}"
+core_expert.cores_none:
+  ru: "Ядер нет: терминал не подключён ни к одному."
+  en: "No cores: the terminal is connected to none."
+  es: "No hay núcleos: el terminal no está conectado a ninguno."
+core_expert.core_no_page:
+  ru: "нет страницы"
+  en: "no page"
+  es: "sin página"
+# --- Banner: a write the session queue gave up on. ---
+core_expert.write_gave_up:
+  ru: "Ядро не подтвердило последнюю запись: ни одна из повторных отправок не получила ответа. Значения на странице могут не совпадать с тем, что держит ядро."
+  en: "The core never confirmed the last write: none of the retries was answered. The values on this page may not be what the core holds."
+  es: "El núcleo no confirmó la última escritura: ninguno de los reintentos obtuvo respuesta. Los valores de esta página pueden no ser los que tiene el núcleo."
+# --- Footer: what Apply and OK will do, said before the click. ---
+core_expert.plan_nothing:
+  ru: "Изменений нет"
+  en: "No changes"
+  es: "Sin cambios"
+core_expert.plan:
+  ru: "Изменится параметров: %{params} · ядер: %{cores}"
+  en: "Parameters to change: %{params} · cores: %{cores}"
+  es: "Parámetros a cambiar: %{params} · núcleos: %{cores}"
+core_expert.plan_skipped:
+  ru: "без страницы: %{n} — будут пропущены"
+  en: "without a page: %{n} — will be skipped"
+  es: "sin página: %{n} — se omitirán"
+# --- Page body: a page not projected, or not drawn yet. ---
 core_expert.page_todo:
   ru: "Страница ещё не перенесена. Каркас окна готов: вкладки, экспертный режим и отправка по OK."
   en: "This page is not ported yet. The frame is in place: tabs, expert mode and the send on OK."

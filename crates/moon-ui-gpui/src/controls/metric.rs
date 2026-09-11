@@ -37,11 +37,7 @@ use moon_core::util::fmt;
 /// Returns:
 ///     The active trade core, or `None` in Auto Overview.
 fn scoped_lev_core(b: &Backend, group: &str) -> Option<CoreId> {
-    if b.is_auto_overview_scope(group) {
-        None
-    } else {
-        b.active_trade_core(group)
-    }
+    b.scoped_trade_core(group)
 }
 
 /// Toolbar trading metric with its own slider-and-input popup.

@@ -311,10 +311,6 @@ strat.pick_kind:
   ru: "выберите вид"
   en: "select a type"
   es: "selecciona un tipo"
-strat.mixed_values:
-  ru: "разные значения"
-  en: "mixed values"
-  es: "valores distintos"
 strat.root:
   ru: "корень"
   en: "root"

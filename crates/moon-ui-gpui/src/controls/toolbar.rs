@@ -561,14 +561,18 @@ fn area_caption(area: CoreConfigArea) -> String {
     t!(key).to_string()
 }
 
-/// Whole-block tooltip naming a [`CoreConfigRejection::Areas`] the display core's one retained edit
-/// carries, or `None` while nothing is rejected.
+/// Caption naming a [`CoreConfigRejection::Areas`] a core's one retained edit carries, or `None`
+/// while nothing is rejected.
 ///
-/// This is the ONLY reader of `CoreData::core_config_edit`. The gear popup still writes AutoStart,
-/// BtcBlink, General and Leverage through the shared-config sequence, and a core that refuses one
-/// of them resolves the edit as `NotApplied` — without this the popup would close exactly as it
-/// does on success and the refusal would never reach the screen.
-fn manual_area_rejection_tip(mismatches: Option<&CoreConfigRejection>) -> Option<SharedString> {
+/// Two readers of `CoreData::core_config_edit`: the toolbar's per-cell tip here, and the expert
+/// core-settings window's banner. The gear popup writes AutoStart, BtcBlink, General and Leverage
+/// through the shared-config sequence, and a core that refuses one of them resolves the edit as
+/// `NotApplied` — without this the popup would close exactly as it does on success and the refusal
+/// would never reach the screen; the expert window's Apply keeps the page open over values the
+/// core may have refused, which is why it draws the same caption.
+pub(crate) fn core_config_rejection_caption(
+    mismatches: Option<&CoreConfigRejection>,
+) -> Option<SharedString> {
     let Some(CoreConfigRejection::Areas(areas)) = mismatches else {
         return None;
     };
@@ -882,7 +886,7 @@ pub fn toolbar(
     let manual_block_tip = (!write_matches_display)
         .then(|| SharedString::from(t!("toolbar.core_manual_mismatch").to_string()))
         .or_else(|| {
-            manual_area_rejection_tip(
+            core_config_rejection_caption(
                 core_config_edit
                     .as_ref()
                     .and_then(|row| row.mismatches.as_ref()),

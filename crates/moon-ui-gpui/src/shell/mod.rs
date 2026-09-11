@@ -18,17 +18,17 @@
 
 mod actions;
 mod core_settings;
-// What the expert window shares with the gear popup: the send both faces go through, the guard
-// that addresses it, the slider bounds their shared rows are drawn with, and the control store.
-// Named items rather than the popup's whole module tree — `editors` comes across as a module
-// because a second host implements its trait and calls its free functions, which is the one part
-// of the popup's internals that is deliberately shared.
+// What the expert window shares with the gear popup: the per-core send both faces go through, the
+// slider bounds their shared rows are drawn with, and the control store. Named items rather than
+// the popup's whole module tree — `editors` comes across as a module because a second host
+// implements its trait and calls its free functions, which is the one part of the popup's
+// internals that is deliberately shared. `send_core_config` and the guard in front of it stay the
+// popup's own: the expert window addresses cores picked in a list, not the group's active one.
 pub(crate) use core_settings::draft::{
     ERRORS_LEVEL_BOUNDS, PING_LEVEL_BOUNDS, TAKE_PROFIT_BOUNDS, TRAILING_BOUNDS, VSTOP_BOUNDS,
-    fmt_hhmm, parse_hhmm, parse_num, send_core_config,
+    fmt_hhmm, parse_hhmm, parse_num, send_core_config_to,
 };
 pub(crate) use core_settings::editors;
-pub(crate) use core_settings::resolve_core_settings_write;
 pub(crate) mod core_settings_popup;
 mod docks;
 mod header;

@@ -1772,7 +1772,9 @@ fn the_movers_suggestion_offers_each_market_once() {
     );
 }
 
-/// Protects every core-settings write handler from bypassing its seeded-target guard.
+/// Protects every core-settings write handler from bypassing its seeded-target guard — and the
+/// expert window, whose cores are picked by name, from bypassing the shared send that guard hands
+/// the page to.
 ///
 /// `shell/core_settings.rs::resolve_core_settings_write` is a pure decision the unit tests in
 /// `shell/core_settings/tests.rs` exercise directly, but a call SITE reverted to a bare
@@ -1784,7 +1786,7 @@ fn the_movers_suggestion_offers_each_market_once() {
 /// `resolve_core_settings_write` in prose, so a raw substring search would stay green with the
 /// call itself deleted.
 #[test]
-fn core_settings_writes_all_go_through_the_seeded_target_guard() {
+fn core_settings_writes_go_through_the_guard_or_the_shared_send() {
     // The popup is split across a frame and its tabs; a handler moved into one of the tab modules
     // must not escape this check, which is exactly what happened when the tabs were introduced.
     for module in [
@@ -1821,16 +1823,21 @@ fn core_settings_writes_all_go_through_the_seeded_target_guard() {
     }
 
     // The OK press is the one write that carries the whole staged draft, so it is the one that must
-    // never fall back to whatever core is active when the button is clicked. Two surfaces stage
-    // such a draft now — the compact popup and the expert window — and BOTH reach the wire through
-    // one function, which is where the guard lives: a second copy of the send is how the two would
-    // come to disagree about which core an OK addresses.
+    // never fall back to whatever core is active when the button is clicked. The popup's send
+    // resolves its address through the guard and then hands the page to `send_core_config_to`,
+    // the one function BOTH surfaces end in: the clamp, the mask and the client-side filter halves
+    // live there once, so a second copy of the send is how the two would come to disagree.
     let draft = code_only(&read_src("shell/core_settings/draft.rs"));
     let send = braced_body(&draft, "pub(crate) fn send_core_config(");
     assert!(
         send.contains("resolve_core_settings_write("),
         "send_core_config must resolve its write address through resolve_core_settings_write, \
          not a bare b.active_trade_core(group)"
+    );
+    assert!(
+        send.contains("send_core_config_to("),
+        "send_core_config must hand the resolved core to send_core_config_to rather than carry a \
+         second copy of the clamp and the mask"
     );
     let commit = braced_body(&draft, "pub(crate) fn commit_core_draft(");
     assert!(
@@ -1839,11 +1846,12 @@ fn core_settings_writes_all_go_through_the_seeded_target_guard() {
          guard, the leverage clamp and the section mask"
     );
 
-    // The expert window is the second surface, and it must not grow its own send: `edit_core_config`
-    // there would bypass the guard, the clamp and the mask in one step.
-    // The module's root, its directory AND its pages: `read_module` reads neither `core_expert.rs`
-    // itself nor any subdirectory, and the pages under `core_expert/pages/` are where every control
-    // that stages a value lives.
+    // The expert window is the second surface. Its cores are picked by name in its own list, so
+    // the active-core guard does not apply to it — but it must not grow its own send either:
+    // `edit_core_config` there would bypass the clamp, the mask and the client-side halves in one
+    // step. The module's root, its directory AND its pages: `read_module` reads neither
+    // `core_expert.rs` itself nor any subdirectory, and the pages under `core_expert/pages/` are
+    // where every control that stages a value lives.
     let expert_module = code_only(&format!(
         "{}\n{}\n{}",
         read_src("core_expert.rs"),
@@ -1852,15 +1860,31 @@ fn core_settings_writes_all_go_through_the_seeded_target_guard() {
     ));
     assert!(
         !expert_module.contains("edit_core_config("),
-        "the expert core-settings window must reach the core through send_core_config, never call \
-         session.edit_core_config directly"
+        "the expert core-settings window must reach the core through send_core_config_to, never \
+         call session.edit_core_config directly"
     );
-    let expert = code_only(&read_src("core_expert.rs"));
-    let commit_expert = braced_body(&expert, "fn commit(");
+    // OK and Apply share ONE send; it is that function that must reach the wire through the
+    // shared helper, and both buttons must go through it rather than grow a send of their own.
+    let expert_commit_src = code_only(&read_src("core_expert/commit.rs"));
+    let send_expert = braced_body(&expert_commit_src, "fn send(");
     assert!(
-        commit_expert.contains("send_core_config("),
-        "CoreExpertView::commit must send the staged page through send_core_config"
+        send_expert.contains("send_core_config_to("),
+        "CoreExpertView::send must send every target's page through send_core_config_to"
     );
+    // And what it sends is each target's OWN latest snapshot with the staged fields laid over it,
+    // never the anchor's page: a bulk OK that copied one core's whole page onto another would
+    // overwrite every parameter the two held differently.
+    assert!(
+        send_expert.contains(".overlay(") && send_expert.contains("live_core_config()"),
+        "CoreExpertView::send must overlay the staged changes on each target's live snapshot"
+    );
+    for button in ["fn commit(", "fn apply("] {
+        let body = braced_body(&expert_commit_src, button);
+        assert!(
+            body.contains("self.send(") && !body.contains("send_core_config_to("),
+            "{button} must send through CoreExpertView::send, not a copy of it"
+        );
+    }
 }
 
 /// The expert window's pages must own their control ids, and must not draw a control they never

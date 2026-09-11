@@ -9,7 +9,8 @@
 //! What is live is `moon_core::feed::InterfaceSettings` — spread across the wire's `trading`,
 //! `visual`, `signals` and `ui` sections — plus the two price-approach alerts of
 //! `moon_core::feed::SignalsSettings`, which Moonbot draws on this page and the compact popup draws
-//! on its own. This tab names both areas; see `super::super::ExpertTab::add_sections`.
+//! on its own. A change to either area is masked from the field it moved, so the tab needs no
+//! declaration of its own; see `moon_core::feed::CORE_FIELDS`.
 //!
 //! What is left disabled is disabled for a reason that can be named per row, and no longer for the
 //! want of one. Four checkbox rows have no field in the snapshot at all — the two windows Moonbot

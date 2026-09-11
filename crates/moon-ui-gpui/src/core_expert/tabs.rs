@@ -12,7 +12,7 @@
 use gpui::ElementId;
 use rust_i18n::t;
 
-use moon_core::feed::FieldMask;
+use moon_core::feed::CoreConfigArea;
 
 /// How far one page's values actually reach this window — the answer to "why can I not edit this".
 ///
@@ -21,8 +21,8 @@ use moon_core::feed::FieldMask;
 /// 1. The WIRE is the safe-share configuration (`moonproto::shared_config`): a deliberately safe
 ///    subset of Moonbot's settings, carrying no secrets and no machine-local state.
 /// 2. The PROJECTION is `moon_core::feed::CoreConfig`, the part of that subset this terminal reads
-///    into typed fields and — through the mask a surface builds with [`ExpertTab::add_sections`] —
-///    is allowed to write back.
+///    into typed fields and — through the field table `moon_core::feed::CORE_FIELDS`, whose areas
+///    become the mask an OK carries — is allowed to write back.
 ///
 /// Only the first now separates one page from another. There used to be a third rating for a page
 /// on the wire but not yet projected, and every such page has since been ported; a page added in
@@ -113,36 +113,6 @@ impl ExpertTab {
         .to_string()
     }
 
-    /// Add the sections THIS page draws to a mask.
-    ///
-    /// The unit an OK is built from: a surface may write only what it drew, and this window draws a
-    /// different set per tab. Folding it over the tabs the user actually edited is what keeps an OK
-    /// pressed on General from writing the Interface block this window seeded when it opened —
-    /// which would silently revert whatever the Moonbot user changed there meanwhile.
-    ///
-    /// A page with nothing projected behind it adds nothing, so a window where only dead rows were
-    /// touched sends no write at all.
-    pub(crate) fn add_sections(self, mask: FieldMask) -> FieldMask {
-        match self {
-            // Two areas for one Moonbot page: the compact popup draws only the first, so the
-            // seven rows below it are their own — see `moon_core::feed::OrderRulesSettings`.
-            Self::General => mask.with_general().with_order_rules(),
-            // Moonbot's AutoStart page draws `visual.blink_config` beside `trading.auto_start`, so
-            // the page owns both sections.
-            Self::AutoStart => mask.with_auto_start().with_btc_blink(),
-            // Moonbot puts its three alert sounds on the Interface page, so that page owns the
-            // `signals` section the compact popup draws them from.
-            Self::Interface => mask.with_interface().with_signals(),
-            Self::AutoBuy => mask.with_auto_buy(),
-            Self::Telegram => mask.with_telegram(),
-            Self::Special => mask.with_special(),
-            // Only the mouse-gesture block of the Hotkeys page: the rest of it mirrors the
-            // manual block, which no mask may reach.
-            Self::Hotkeys => mask.with_gestures(),
-            Self::Login => mask,
-        }
-    }
-
     /// How far this page's values reach — see [`TabSource`].
     ///
     /// `Projected` is what `moon_core::feed::CoreConfig` carries AND this window draws: the General
@@ -170,6 +140,27 @@ impl ExpertTab {
             | Self::Hotkeys
             | Self::Special => TabSource::Projected,
         }
+    }
+
+    /// The page that draws an area's fields, or `None` for an area no page draws.
+    ///
+    /// The reverse of the pages' own knowledge — each page stages into the areas it draws — kept
+    /// here so the strip can count, per tab, the parameters the selected cores disagree on.
+    /// Moonbot's layout, not the projection's: the alert sounds of `signals` sit on the Interface
+    /// page, `btc_blink` on AutoStart, and the General page spans `general` and `order_rules`.
+    pub(crate) fn for_area(area: CoreConfigArea) -> Option<Self> {
+        Some(match area {
+            CoreConfigArea::General | CoreConfigArea::OrderRules => Self::General,
+            CoreConfigArea::AutoStart | CoreConfigArea::BtcBlink => Self::AutoStart,
+            CoreConfigArea::Interface | CoreConfigArea::Signals => Self::Interface,
+            CoreConfigArea::AutoBuy => Self::AutoBuy,
+            CoreConfigArea::Telegram => Self::Telegram,
+            CoreConfigArea::Special => Self::Special,
+            CoreConfigArea::Gestures => Self::Hotkeys,
+            CoreConfigArea::Leverage | CoreConfigArea::Manual | CoreConfigArea::FavMarkets => {
+                return None;
+            }
+        })
     }
 
     /// The page at one position in the strip, used by the tab strip's index-based click.

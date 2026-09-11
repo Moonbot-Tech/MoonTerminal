@@ -3,9 +3,9 @@
 //! Each page reproduces its Moonbot original ROW FOR ROW, including the rows this terminal cannot
 //! fill: those are drawn and disabled rather than hidden, so the window can be read side by side
 //! with Moonbot's own dialog. What decides a row's fate is the projection
-//! (`moon_core::feed::CoreConfig`) and whether this page's tab names that section in
-//! [`super::ExpertTab::add_sections`] — a control outside either is dead until both are widened,
-//! and drawing it as live would promise a value OK cannot carry.
+//! (`moon_core::feed::CoreConfig`) and whether the field it stages into is in the table
+//! `moon_core::feed::CORE_FIELDS` — a control outside either is dead until both are widened, and
+//! drawing it as live would promise a value OK cannot carry.
 //!
 //! Controls that need a retained state (sliders, text fields) are declared as SPECS here and built
 //! once per render by the window, exactly as the compact popup builds its own — see
@@ -46,7 +46,6 @@ pub(super) type ProfitCounter = Option<(f64, i32)>;
 /// where reading it back would panic.
 pub(super) struct PageCtx<'a> {
     pub(super) backend: &'a Entity<Backend>,
-    pub(super) group: &'a str,
     pub(super) seeded: Option<CoreId>,
     /// The core's trade-window and hourly report totals, each `None` until the core publishes them.
     pub(super) profit: (ProfitCounter, ProfitCounter),
@@ -151,7 +150,6 @@ pub(super) fn page(
             store,
             draft,
             ctx.backend,
-            ctx.group,
             ctx.seeded,
             ctx.profit,
             p,

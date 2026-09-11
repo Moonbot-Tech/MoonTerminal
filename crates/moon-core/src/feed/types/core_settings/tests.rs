@@ -1,5 +1,11 @@
 use super::*;
 
+/// The projection of the wire defaults — the one way a test in this tree builds a `CoreConfig`,
+/// since the type deliberately has no `Default` and its constructor is crate-private.
+pub(super) fn wire_default() -> CoreConfig {
+    crate::feed::live::core_config_from_proto(&moonproto::shared_config::SharedConfig::default())
+}
+
 /// Regression target: the Moonbot default window end (`0.9999`, printed as 23:59) must not round up
 /// past the last minute of the day, which a bare `as u16` cast after `round` would do.
 #[test]
