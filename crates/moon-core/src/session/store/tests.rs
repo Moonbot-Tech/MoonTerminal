@@ -1169,3 +1169,42 @@ fn chart_text_replaces_one_market_and_ignores_an_identical_repeat() {
         "identical rows must not wake the chart"
     );
 }
+
+/// The drain counter is the barrier a surface waits on for what it sent (see the field's doc):
+/// it moves on the drain alone, and touches neither the data revisions nor the edit row.
+#[test]
+fn a_drained_queue_advances_its_own_revision_and_nothing_else() {
+    let mut cd = CoreData::new();
+    let before = (
+        cd.core_config_drained_rev,
+        cd.core_config_rev,
+        cd.core_config_recv_rev,
+    );
+
+    cd.apply(FeedMsg::CoreConfigEdit(CoreConfigEditEvent::Drained));
+
+    assert_eq!(cd.core_config_drained_rev, before.0.wrapping_add(1));
+    assert_eq!(
+        (cd.core_config_rev, cd.core_config_recv_rev),
+        (before.1, before.2)
+    );
+    assert!(cd.core_config_edit.is_none(), "a drain is not a verdict");
+}
+
+/// A give-up is followed by the drain that its leaving the queue causes, and the drain must not
+/// clear the verdict: the surface that reads the drain also draws the banner off this row.
+#[test]
+fn a_drain_after_a_give_up_keeps_the_verdict() {
+    let mut cd = CoreData::new();
+    cd.apply(submitted(attempt(false)));
+    cd.apply(FeedMsg::CoreConfigEdit(CoreConfigEditEvent::Resolved(
+        CoreConfigEditResult::GaveUp,
+    )));
+
+    cd.apply(FeedMsg::CoreConfigEdit(CoreConfigEditEvent::Drained));
+
+    assert_eq!(
+        cd.core_config_edit.as_ref().map(|row| row.phase),
+        Some(CoreConfigEditPhase::GaveUp)
+    );
+}

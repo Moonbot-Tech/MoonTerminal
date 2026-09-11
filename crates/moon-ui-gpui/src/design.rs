@@ -6,7 +6,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::util::fmt::DeltaSign;
-use moon_ui::{MoonMetrics, MoonPalette, MoonTableStyle, MoonTheme, MoonTone, rgba_from};
+use moon_ui::{
+    MoonButtonVariant, MoonMetrics, MoonPalette, MoonTableStyle, MoonTheme, MoonTone, rgba_from,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
@@ -140,6 +142,29 @@ pub const CHROME_RULE_H: f32 = 20.0;
 /// figure, so the operator cannot tell "nothing set" from "reading zero" at a glance.
 pub fn readout_color(p: MoonPalette, present: bool) -> u32 {
     if present { p.text } else { p.text_muted }
+}
+
+/// The mark a selector shows where a selection of several disagrees on its value — the strategies
+/// window's own, and the expert core-settings window's, so one glyph means one thing.
+pub const MIXED_MARK: &str = "≠";
+
+/// Tone of a control whose value differs across the selection it edits, or the plain one.
+pub fn mixed_tone(mixed: bool) -> MoonTone {
+    if mixed {
+        MoonTone::Warning
+    } else {
+        MoonTone::Default
+    }
+}
+
+/// Trigger variant of a dropdown whose value differs across the selection it edits. Separate from
+/// [`mixed_tone`] because `MoonDropdown` has a variant and no tone.
+pub fn mixed_trigger_variant(mixed: bool) -> MoonButtonVariant {
+    if mixed {
+        MoonButtonVariant::Amber
+    } else {
+        MoonButtonVariant::Soft
+    }
 }
 
 /// Tone for a chrome toggle whose ON state should read as a caution rather than an ordinary

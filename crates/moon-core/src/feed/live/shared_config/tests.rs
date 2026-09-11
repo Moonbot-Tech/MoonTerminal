@@ -115,9 +115,10 @@ fn a_no_op_edit_is_dropped_even_when_an_untouched_area_drifted() {
     assert!(
         matches!(
             events.as_slice(),
-            [CoreConfigEditEvent::Resolved(
-                CoreConfigEditResult::Confirmed
-            )]
+            [
+                CoreConfigEditEvent::Resolved(CoreConfigEditResult::Confirmed),
+                CoreConfigEditEvent::Drained
+            ]
         ),
         "dropping it without resolving leaves the toolbar cell pending forever, got {events:?}"
     );
@@ -291,9 +292,10 @@ fn a_concurrent_change_outside_the_mask_still_confirms_the_edit() {
     assert!(
         matches!(
             events.as_slice(),
-            [CoreConfigEditEvent::Resolved(
-                CoreConfigEditResult::Confirmed
-            )]
+            [
+                CoreConfigEditEvent::Resolved(CoreConfigEditResult::Confirmed),
+                CoreConfigEditEvent::Drained
+            ]
         ),
         "expected one Confirmed, got {events:?}"
     );
@@ -326,9 +328,10 @@ fn an_echo_after_the_timeout_still_confirms_the_edit() {
     assert!(
         matches!(
             events.as_slice(),
-            [CoreConfigEditEvent::Resolved(
-                CoreConfigEditResult::Confirmed
-            )]
+            [
+                CoreConfigEditEvent::Resolved(CoreConfigEditResult::Confirmed),
+                CoreConfigEditEvent::Drained
+            ]
         ),
         "a late echo must resolve as confirmed, got {events:?}"
     );
@@ -1214,9 +1217,10 @@ fn a_marked_market_is_a_delta_resolved_against_the_snapshot_that_is_sent() {
     assert!(
         matches!(
             events.as_slice(),
-            [CoreConfigEditEvent::Resolved(
-                CoreConfigEditResult::Confirmed
-            )]
+            [
+                CoreConfigEditEvent::Resolved(CoreConfigEditResult::Confirmed),
+                CoreConfigEditEvent::Drained
+            ]
         ),
         "a reordered, re-spaced echo of the same set is the write landing, got {events:?}"
     );
@@ -1239,10 +1243,93 @@ fn a_mark_the_core_already_holds_needs_no_packet() {
     assert!(
         matches!(
             events.as_slice(),
-            [CoreConfigEditEvent::Resolved(
-                CoreConfigEditResult::Confirmed
-            )]
+            [
+                CoreConfigEditEvent::Resolved(CoreConfigEditResult::Confirmed),
+                CoreConfigEditEvent::Drained
+            ]
         ),
         "got {events:?}"
     );
+}
+
+/// Regression target (2026-09-11): the expert settings window held a field out of its "these
+/// cores differ" list until the core echoed the write — and an edit the core already holds is
+/// dropped from the queue with no packet, so no echo ever came and the field stayed hidden for a
+/// timeout. The queue running empty is the one signal that covers that drop too.
+#[test]
+fn a_satisfied_drop_that_empties_the_queue_reports_it_drained() {
+    let base = SharedConfig::default();
+    let mut sequence = SharedConfigSequence::new();
+    sequence.enqueue(edit_from(&base, |_| {}), FieldMask::RENDERED_SECTIONS);
+
+    let mut events = Vec::new();
+    let _ = sequence.next_action(&base, TEST_CORE, &mut events);
+    assert!(
+        matches!(events.last(), Some(CoreConfigEditEvent::Drained)),
+        "nothing was sent, yet the queue is empty and the page reflects the edit, got {events:?}"
+    );
+}
+
+/// The drain is reported only once the LAST entry has left: a satisfied head with a real send
+/// behind it leaves the queue busy, and a surface that dropped its account of the second edit on
+/// the first one's drop would lay a stale page over the next send.
+#[test]
+fn a_queue_with_work_still_queued_is_not_drained() {
+    let base = SharedConfig::default();
+    let mut sequence = SharedConfigSequence::new();
+    let mask = FieldMask::RENDERED_SECTIONS;
+    sequence.enqueue(edit_from(&base, |_| {}), mask);
+    sequence.enqueue(edit_from(&base, |s| s.errors_level = 9), mask);
+
+    let mut events = Vec::new();
+    assert!(matches!(
+        sequence.next_action(&base, TEST_CORE, &mut events),
+        SequenceAction::Send { .. }
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, CoreConfigEditEvent::Drained)),
+        "the second edit is still in flight, got {events:?}"
+    );
+}
+
+/// A give-up empties the queue as much as a confirmation does, and reports it the same way: the
+/// surface waiting on the drain must then show the difference the write failed to remove.
+#[test]
+fn a_give_up_that_empties_the_queue_reports_it_drained_after_the_verdict() {
+    let base = SharedConfig::default();
+    let mut sequence = SharedConfigSequence::new();
+    let mask = FieldMask::RENDERED_SECTIONS;
+    sequence.enqueue(edit_from(&base, |s| s.errors_level = 9), mask);
+    for _ in 0..MAX_ATTEMPTS {
+        let sent = next_config(&mut sequence, &base);
+        sequence.observe_send_success(&sent, ask(1, mask));
+        sequence.observe_update();
+    }
+    sequence.observe_echo_timeout();
+
+    let mut events = Vec::new();
+    let _ = sequence.next_action(&base, TEST_CORE, &mut events);
+    assert!(
+        matches!(
+            events.as_slice(),
+            [
+                CoreConfigEditEvent::Resolved(CoreConfigEditResult::GaveUp),
+                CoreConfigEditEvent::Drained
+            ]
+        ),
+        "the verdict first, then the drain, got {events:?}"
+    );
+}
+
+/// An idle queue drained by nothing reports nothing: the drain is a transition, not a state, and
+/// a surface counting it must not see one per feed-loop wake.
+#[test]
+fn an_empty_queue_does_not_report_a_drain() {
+    let base = SharedConfig::default();
+    let mut sequence = SharedConfigSequence::new();
+    let mut events = Vec::new();
+    let _ = sequence.next_action(&base, TEST_CORE, &mut events);
+    assert!(events.is_empty(), "got {events:?}");
 }

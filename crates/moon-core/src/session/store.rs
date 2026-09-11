@@ -354,8 +354,18 @@ pub struct CoreData {
     pub core_config_recv_rev: u64,
     /// Advances on EVERY `FeedMsg::CoreConfigEdit`, unconditionally — including a `Pending ->
     /// GaveUp` transition, which repaints a per-cell notice without moving any data revision of
-    /// its own.
+    /// its own, and a `Drained`, which moves [`Self::core_config_drained_rev`] beside this and no
+    /// data revision.
     pub core_config_edit_rev: u64,
+    /// Advances each time the core's write queue runs empty
+    /// ([`crate::feed::CoreConfigEditEvent::Drained`]).
+    ///
+    /// The barrier for a surface that lays what it sent over its next write until the core has
+    /// caught up: a write is behind it once this has moved past the value read when the write was
+    /// enqueued. Not `core_config_recv_rev`: an edit the core already holds leaves the queue with
+    /// no packet and no echo, and a surface waiting for a snapshot then holds its copy for a
+    /// timeout the queue never had.
+    pub core_config_drained_rev: u64,
     pub profit_state_rev: u64,
     pub runtime_state_rev: u64,
     /// Advances when `strategies_running` changes, including its first arrival.
@@ -507,6 +517,7 @@ impl CoreData {
             fav_markets_rev: 0,
             core_config_recv_rev: 0,
             core_config_edit_rev: 0,
+            core_config_drained_rev: 0,
             profit_state_rev: 0,
             runtime_state_rev: 0,
             strategies_running_rev: 0,
@@ -1028,9 +1039,10 @@ impl CoreData {
                         //    new edit, not a retry of a dead one. This stops the dead verdict from
                         //    being INHERITED; it does not preserve it. There is one row per core
                         //    and this arm overwrites it, so a give-up is blanked by whatever is
-                        //    submitted next — and `phase` reaches no surface at all, `mismatches`
-                        //    being the only field anything renders. Giving a give-up a life of its
-                        //    own needs a second slot, or a row per edit; neither is here.
+                        //    submitted next — `mismatches` is what the toolbar renders, and the
+                        //    expert settings window draws a banner off `phase == GaveUp` while
+                        //    the row lasts. Giving a give-up a life of its own needs a second
+                        //    slot, or a row per edit; neither is here.
                         // 2. The new mask must be CONTAINED in the old. A send's mask is the union
                         //    of everything queued and narrows as entries leave, so a batch whose
                         //    head was confirmed re-sends the rest under a smaller mask — still the
@@ -1070,6 +1082,9 @@ impl CoreData {
                         if let Some(row) = self.core_config_edit.as_mut() {
                             row.phase = CoreConfigEditPhase::GaveUp;
                         }
+                    }
+                    CoreConfigEditEvent::Drained => {
+                        self.core_config_drained_rev = self.core_config_drained_rev.wrapping_add(1);
                     }
                 }
                 // Unconditional: a `Pending -> GaveUp` transition repaints a per-cell notice
@@ -1336,6 +1351,18 @@ impl CoreData {
             CoreConfigState::Stale
         } else {
             CoreConfigState::Live
+        }
+    }
+
+    /// The projected page while — and only while — [`Self::core_config_state`] rates it `Live`:
+    /// the one reading a surface may seed from, compare, or send.
+    ///
+    /// `Live` implies the page is present, so this is the classification and its consumer in one
+    /// place rather than a `Live` check followed by a second `is_none` test at every call site.
+    pub fn live_core_config(&self) -> Option<&CoreConfig> {
+        match self.core_config_state() {
+            CoreConfigState::Live => self.core_config.as_ref(),
+            CoreConfigState::Awaiting | CoreConfigState::Stale => None,
         }
     }
 

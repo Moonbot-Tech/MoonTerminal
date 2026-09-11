@@ -2,7 +2,7 @@
 // the built-in attribute and makes `#[test]` expand recursively (CONTRIBUTING.md).
 use super::{ExpertTab, TabSource};
 
-use moon_core::feed::FieldMask;
+use moon_core::feed::{CORE_FIELDS, CoreConfigArea};
 
 /// The strip must carry Moonbot's pages in Moonbot's order: a trader reaches for a tab by
 /// POSITION, and a reordered or shortened strip silently sends them to the wrong page.
@@ -63,9 +63,9 @@ fn only_the_wireless_page_is_absent() {
 }
 
 /// `Projected` claims a page can be seeded AND sent today, which is true only of what
-/// `moon_core::feed::CoreConfig` carries and the window's own mask writes. Widening this set
-/// without widening the projection is how a page would come to draw controls that silently cannot
-/// be sent — so this list moves only together with `CoreConfig` and `ExpertTab::add_sections`.
+/// `moon_core::feed::CoreConfig` carries and `moon_core::feed::CORE_FIELDS` lists. Widening this
+/// set without widening the projection is how a page would come to draw controls that silently
+/// cannot be sent — so this list moves only together with `CoreConfig` and that table.
 ///
 /// The order is the strip's, not alphabetical: `ExpertTab::ALL` is what Moonbot's tabs read left to
 /// right, and reading the assertion against the dialog is the point of it.
@@ -90,30 +90,28 @@ fn projected_pages_are_only_the_ones_the_terminal_reads_and_writes() {
     );
 }
 
-/// Every page the strip calls `Projected` must actually name a section, and every page it does not
-/// must name none.
-///
-/// `add_sections` is the single point that decides whether an OK reaches the wire at all: a tab
-/// that silently added nothing would drop every edit made on it while `source()` still promised the
-/// page was ready, and no other test would notice.
-#[test]
-fn a_page_names_sections_exactly_when_it_claims_to_be_projected() {
-    for tab in ExpertTab::ALL {
-        let named = tab.add_sections(FieldMask::EMPTY) != FieldMask::EMPTY;
-        assert_eq!(
-            named,
-            tab.source() == TabSource::Projected,
-            "{} claims {:?} but {} a section",
-            tab.id(),
-            tab.source(),
-            if named { "names" } else { "names no" }
-        );
-    }
-}
-
 /// The window opens on a page it can actually fill, not on Moonbot's own first tab — which is the
 /// one page that has no wire values at all.
 #[test]
 fn default_page_is_editable_today() {
     assert_eq!(ExpertTab::default().source(), TabSource::Projected);
+}
+
+/// Every table field lands on exactly one Projected page — the strip counts differences per
+/// tab, and a field with no page would differ invisibly — while the areas no page draws land on
+/// none.
+#[test]
+fn every_table_field_has_a_page_and_it_is_projected() {
+    for field in CORE_FIELDS {
+        let tab =
+            ExpertTab::for_area(field.area).unwrap_or_else(|| panic!("{} has no page", field.key));
+        assert_eq!(tab.source(), TabSource::Projected, "{}", field.key);
+    }
+    for area in [
+        CoreConfigArea::Leverage,
+        CoreConfigArea::Manual,
+        CoreConfigArea::FavMarkets,
+    ] {
+        assert_eq!(ExpertTab::for_area(area), None);
+    }
 }

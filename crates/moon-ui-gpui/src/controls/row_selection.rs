@@ -116,6 +116,51 @@ impl<K: Copy + Eq + Hash> RowSelection<K> {
         }
     }
 
+    /// Apply one row click the way a panel that must never end up with NOTHING selected reads it:
+    /// a plain click selects that row alone, Shift and the secondary modifier go to [`Self::click`]
+    /// unchanged.
+    ///
+    /// [`Self::click`] deliberately clears a sole selection on a second plain click, which is
+    /// right for a report row and wrong for a panel whose next gesture acts on "the selected
+    /// core" — Core Status enqueues a build on it, the expert settings window draws its page. Both
+    /// route plain clicks through [`Self::select_only`] for that reason, and this is that routing
+    /// written once.
+    ///
+    /// Args:
+    ///     clicked: Stable identity of the clicked row, or `None` for a line that is not a row.
+    ///     order: Current rendered row identities in visual order.
+    ///     shift: Whether Shift was held.
+    ///     secondary: Whether Ctrl on Windows/Linux or Command on macOS was held.
+    pub(crate) fn press(
+        &mut self,
+        clicked: Option<K>,
+        order: &[Option<K>],
+        shift: bool,
+        secondary: bool,
+    ) {
+        if shift || secondary {
+            self.click(clicked, order, shift, secondary);
+        } else {
+            self.select_only(clicked);
+        }
+    }
+
+    /// The selected rows in the order a list draws them.
+    ///
+    /// The set has no order of its own, and a caller that acts on "the selection" — a bulk
+    /// command, a bulk write — must act in the order the user sees, or its log reads shuffled.
+    ///
+    /// Args:
+    ///     order: Current rendered row identities in visual order, `None` for a non-row line.
+    pub(crate) fn in_order(&self, order: &[Option<K>]) -> Vec<K> {
+        order
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|key| self.selected.contains(key))
+            .collect()
+    }
+
     /// Select exactly one row, whatever was selected before.
     ///
     /// Unlike a plain [`Self::click`], this never clears: it exists for the second half of a

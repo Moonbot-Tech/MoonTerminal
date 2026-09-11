@@ -19,9 +19,9 @@
 //! The other five are read-only rather than dead. The terminal DOES project the core's keyboard
 //! bindings (`ManualSettings::core_hotkeys`, `strat_buttons`, `order_sizes`), so what they show are
 //! the core's real ones, decoded through the same `moonbot_import::shortcut` the Settings window
-//! pulls them with. What it may not do is write them back: `ExpertTab::add_sections` excludes the
-//! whole manual block, deliberately, so an OK from this window can never touch a manual-trading
-//! field. To CHANGE those, the Settings window's Hotkeys tab pulls them into the terminal's own set.
+//! pulls them with. What it may not do is write them back: `moon_core::feed::CORE_FIELDS` — the
+//! table every OK of this window is counted and masked from — excludes the whole manual block,
+//! deliberately, so an OK from this window can never touch a manual-trading field. To CHANGE those, the Settings window's Hotkeys tab pulls them into the terminal's own set.
 //!
 //! Two places still print an em dash where a value would be. The six "Fixed Sell Prices"
 //! percentages ride the compact `ClientSettings` channel (`s_price`), which this page does not

@@ -607,7 +607,17 @@ impl GestureSettings {
     /// when it goes on — the same thing Moonbot's own checkbox does.
     pub fn set_same_hotkeys(&mut self, on: bool) {
         self.same_hotkeys_for_move = on;
-        if on {
+        self.normalize();
+    }
+
+    /// Restore the block's one cross-field rule: with the mirror on, every short gesture equals
+    /// its long twin. A no-op while the mirror is off.
+    ///
+    /// The rule is kept by [`Self::set_move_gesture`] and [`Self::set_same_hotkeys`] as long as
+    /// the block is only ever changed through them; a field-by-field copy from another core
+    /// (`CoreChangeSet::overlay`) is not, and calls this afterwards.
+    pub fn normalize(&mut self) {
+        if self.same_hotkeys_for_move {
             self.short_buy_move_click = self.buy_move_click;
             self.short_sell_move_click = self.sell_move_click;
             self.short_buy_move_click_2 = self.buy_move_click_2;
@@ -1678,6 +1688,14 @@ pub enum CoreConfigEditEvent {
     Submitted(Box<CoreConfigEditRow>),
     /// The most recently submitted edit reached one echo's verdict.
     Resolved(CoreConfigEditResult),
+    /// The core's write queue just ran empty: every edit queued for it has left — confirmed by
+    /// an echo, dropped because the core already held it (no packet, so no echo), or given up on.
+    ///
+    /// The one signal that means "the retained snapshot reflects everything sent, or the give-up
+    /// says otherwise". A surface that remembers what it sent until the core caught up waits for
+    /// THIS, not for a snapshot: an edit the core already satisfies is dropped without a send,
+    /// and a surface counting echoes would wait for one that never comes.
+    Drained,
 }
 
 /// Report profit counters from moonproto `TProfitStateCommand`, shown as the "now" lines beside the
@@ -1726,9 +1744,13 @@ pub fn minutes_to_day_fraction(minutes: u16) -> f64 {
     f64::from(minutes.min(1439)) / MINUTES_PER_DAY
 }
 
+mod change_set;
 mod fav_markets;
+mod fields;
 
+pub use change_set::CoreChangeSet;
 pub use fav_markets::{fav_markets_has, fav_markets_list, fav_markets_set};
+pub use fields::{CORE_FIELDS, CoreField, FieldValue, ProbeBases, differing_fields, index_of};
 
 #[cfg(test)]
 mod tests;

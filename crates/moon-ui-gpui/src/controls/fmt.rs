@@ -1,6 +1,19 @@
-//! Toolbar value formatting for metric, size, and sell fields, plus mouse-wheel stepping.
+//! Toolbar value formatting for metric, size, and sell fields, plus mouse-wheel stepping, and the
+//! one text cut every panel that prints user or core text shares.
 
 use gpui::ScrollDelta;
+
+/// Cut `text` to `max_chars` characters, marking that something was cut.
+///
+/// The marker is the point: a silently shortened message reads as the whole message, which is the
+/// same class of lie as a silent core reading as a healthy one. Counted in characters, never bytes,
+/// so a Cyrillic blacklist cannot be cut mid-character.
+pub fn ellipsize(text: &str, max_chars: usize) -> String {
+    match text.chars().count() > max_chars {
+        true => text.chars().take(max_chars).collect::<String>() + "…",
+        false => text.to_string(),
+    }
+}
 
 /// Formats a value with two decimal places and a period separator, for example `50` as `50.00`.
 pub fn fmt_field2(v: f32) -> String {

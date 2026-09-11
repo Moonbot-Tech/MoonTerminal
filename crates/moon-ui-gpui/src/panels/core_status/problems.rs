@@ -20,6 +20,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use moon_core::feed::{CoreProblem, CoreProblemCategory};
+
+use crate::controls::ellipsize;
 use moon_core::session::CoreId;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonDataCell, MoonDataRow, MoonDataTable,
@@ -651,17 +653,6 @@ fn details_text(problem: &CoreProblem) -> Option<String> {
     // `None` rather than an empty string: a core that sent neither must not open a blank tooltip
     // popup on a cell that is hoverable regardless.
     (!parts.is_empty()).then(|| ellipsize(&parts.join("\n\n"), DETAILS_MAX_CHARS))
-}
-
-/// Cut `text` to `max_chars`, marking that something was cut.
-///
-/// The marker is the point: a silently shortened detector message reads as the whole message, which
-/// is the same class of lie as a silent core reading as a healthy one.
-fn ellipsize(text: &str, max_chars: usize) -> String {
-    match text.chars().count() > max_chars {
-        true => text.chars().take(max_chars).collect::<String>() + "…",
-        false => text.to_string(),
-    }
 }
 
 /// Localized category label.

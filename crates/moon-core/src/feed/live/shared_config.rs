@@ -106,8 +106,9 @@ impl FieldMask {
     /// The five sections the COMPACT gear popup renders, and nothing else.
     ///
     /// Not "everything the terminal renders" any more: the expert window builds its own mask out of
-    /// the pages its user actually edited (`ExpertTab::add_sections` in `moon-ui-gpui`), and one of
-    /// them reaches a sixth section this popup does not draw. Each surface names what it drew.
+    /// the FIELDS its user actually changed (each entry of `feed::CORE_FIELDS` carries its
+    /// section's mask), and those reach sections this popup does not draw. Each surface names what
+    /// it drew.
     ///
     /// The manual block is deliberately absent from BOTH: an OK may never change a manual-trading
     /// field, checkbox on or off — see `send_core_config`, the one applier they share.
@@ -239,7 +240,8 @@ impl FieldMask {
         self
     }
 
-    fn union(self, other: Self) -> Self {
+    /// Every area either mask names.
+    pub(crate) fn union(self, other: Self) -> Self {
         Self {
             auto_buy: self.auto_buy || other.auto_buy,
             auto_start: self.auto_start || other.auto_start,
@@ -745,6 +747,9 @@ impl SharedConfigSequence {
     }
 
     /// Select the next action and discard edits the core already reflects.
+    ///
+    /// Pushes [`CoreConfigEditEvent::Drained`] when the queue runs empty in this call — after the
+    /// verdicts and drops that emptied it, so a reader sees why before it sees that.
     fn next_action(
         &mut self,
         config: &SharedConfig,
@@ -754,6 +759,7 @@ impl SharedConfigSequence {
         if self.waiting_for_echo {
             return SequenceAction::Idle;
         }
+        let had_work = !self.queue.is_empty();
         if let Some(PendingConfirmation { expected, ask }) = self.pending_confirmation.take() {
             let actual = core_config_from_proto(config);
             // Scoped to the mask, not the whole projection. Anything this write did not name is
@@ -797,6 +803,9 @@ impl SharedConfigSequence {
         }
         loop {
             let Some(head) = self.queue.front() else {
+                if had_work {
+                    events.push(CoreConfigEditEvent::Drained);
+                }
                 return SequenceAction::Idle;
             };
             if edit_satisfied(config, &head.op) {

@@ -698,9 +698,9 @@ pub(super) fn run(
         if command_drain == CommandDrain::Disconnected {
             return Ok(());
         }
-        if !send_core_config_events(core_config_events) {
-            break;
-        }
+        // The edit events the drain produced are NOT sent here: they go out below, after this
+        // iteration's configuration snapshot, together with the ones the drive there produces —
+        // see the send at the end of the settings block.
         // Publish an immediate best-effort order snapshot after a flagged command, bypassing the
         // event gate and 250 ms throttle. Some retained-order edits may already be visible locally,
         // but queued work such as new-order creation may not be; this snapshot can precede the
@@ -1552,11 +1552,7 @@ pub(super) fn run(
                 shared_config_sequence.observe_update();
             }
             if client_settings_sequence.is_idle() {
-                let mut core_config_events = Vec::new();
                 shared_config_sequence.drive(&client, server.id, &mut core_config_events);
-                if !send_core_config_events(core_config_events) {
-                    break;
-                }
             } else {
                 shared_config_sequence.note_gated(server.id);
             }
@@ -1575,6 +1571,14 @@ pub(super) fn run(
             {
                 break;
             }
+        }
+        // After the snapshot, never before it — and once per iteration, whichever drive produced
+        // them: a `Drained` among these tells a surface that the retained page reflects everything
+        // it sent, and that page must already be in the store when the surface reads it. The drive
+        // in the command drain compares against the client's snapshot as it stands NOW, which is
+        // the one published just above when a settings event arrived in this same iteration.
+        if !send_core_config_events(core_config_events) {
+            break;
         }
         let profit_state = settings_event_snapshot(
             &events,

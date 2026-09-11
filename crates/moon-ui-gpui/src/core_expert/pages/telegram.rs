@@ -90,6 +90,12 @@ pub(super) fn body(
             selected,
             t!("core_expert.tlg_channels_empty").to_string(),
             view,
+            // What the box and the buttons beside it edit — the list AND the primary channel
+            // "add" writes — as a probe, so it moves them rather than naming them.
+            |d| {
+                d.telegram.pump_channels.clear();
+                d.telegram.pump_channel.clear();
+            },
             p,
             cx,
         ))

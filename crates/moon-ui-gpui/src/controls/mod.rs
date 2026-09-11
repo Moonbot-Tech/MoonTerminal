@@ -69,7 +69,7 @@ pub(crate) use core_combo::{
 pub(crate) use core_groups::group_is_applied;
 pub(crate) use core_host::{CoreComboHost, core_combo_extras};
 pub(crate) use core_quick::toggle_core_selection;
-pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
+pub use fmt::{ellipsize, fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub(crate) use label_fields::{field_picker, row_display_name, row_title};
 pub use manual_strat::manual_strategy_controls;
 pub(crate) use manual_strat::select_manual_strategy;
@@ -80,6 +80,7 @@ pub(crate) use scale::{
     remembered_scale, scale_dropdown_for_add_stack, scale_dropdown_for_tabs,
     scale_dropdown_for_trade_window, step_scale,
 };
+pub(crate) use toolbar::core_config_rejection_caption;
 pub use toolbar::toolbar;
 pub(crate) use venue_label::{venue_id_label, venue_label, venue_section_label};
 
