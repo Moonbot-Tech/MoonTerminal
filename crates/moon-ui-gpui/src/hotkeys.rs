@@ -515,8 +515,8 @@ const fn builtin(
 /// dead; the settings page's clash captions read this same list to say so, which is why it is data
 /// and not a chain of `if`s. The order is deliberate and worth keeping in view:
 ///
-/// - the drawing layer is tested FIRST, which is the whole reason those eight can take a built-in
-///   key away and the thirty below them cannot;
+/// - the drawing layer is tested FIRST, which is the whole reason the figure slots can take a
+///   built-in key away and everything below them cannot;
 /// - the built-ins sit next: below the figure slots, above everything else. Shift+Escape before
 ///   plain Escape is only a reading aid — [`pressed`] matches modifiers exactly, so neither can
 ///   answer the other's press. Exactly, and that is one deliberate narrowing against the `if`
