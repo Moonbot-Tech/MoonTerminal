@@ -29,14 +29,34 @@ hotkeys.scope.figure:
   ru: "фигура"
   en: "figure"
   es: "figura"
-hotkeys.origin.shared:
+hotkeys.col.help:
+  ru: "?"
+  en: "?"
+  es: "?"
+hotkeys.col.title:
+  ru: "Название"
+  en: "Action"
+  es: "Acción"
+hotkeys.col.scope:
+  ru: "Область"
+  en: "Where"
+  es: "Dónde"
+hotkeys.col.key:
+  ru: "Клавиатура"
+  en: "Keyboard"
+  es: "Teclado"
+hotkeys.col.mouse:
+  ru: "Мышь"
+  en: "Mouse"
+  es: "Ratón"
+hotkeys.col.param:
+  ru: "Параметр"
+  en: "Parameter"
+  es: "Parámetro"
+hotkeys.col.mb:
   ru: "MB"
   en: "MB"
   es: "MB"
-hotkeys.origin.local:
-  ru: "MT"
-  en: "MT"
-  es: "MT"
 hotkeys.clash.key:
   ru: "Не сработает: клавишу забирает %{rows}."
   en: "Will not fire: %{rows} takes this key."
@@ -90,9 +110,9 @@ hotkeys.clash.layer.x_scale:
   en: "the X-scale sync"
   es: "la sincronización de escala X"
 hotkeys.marks_legend:
-  ru: "У каждой клавиши справа — жест мыши: клик по графику делает то же самое. Метки строки: где действует · откуда БИНД. MB — клавишу перезапишет вставка конфига Moonbot или тяга раскладки с ядра (жесты стакана — тоже тяга). MT — ничем не перезаписывается. Жест в строке с клавишей — всегда наш, Moonbot таких не хранит."
-  en: "Every key has a mouse gesture beside it: a click on the chart does the same thing. Row marks: where it acts, and where the BINDING comes from. MB — a Moonbot paste or a core pull overwrites the key (the book gestures come from the pull too). MT — nothing overwrites it. The click beside a key is always ours; Moonbot keeps no such gesture."
-  es: "Cada tecla tiene un gesto de ratón al lado: un clic en el gráfico hace lo mismo. Marcas de fila: dónde actúa y de dónde viene el ATAJO. MB: pegar la configuración de Moonbot o traer la disposición del core reescribe la tecla (los gestos del libro también vienen de allí). MT: nada lo sobrescribe. El clic junto a una tecla es siempre nuestro; Moonbot no guarda esos gestos."
+  ru: "Клавиша и жест мыши — два способа вызвать одно действие; описание — под «?». Область — где бинд действует. «+» в колонке MB: значение переносится из Moonbot — клавишу перезапишет вставка конфига или тяга раскладки с ядра, жесты стакана — тяга. Жест рядом с клавишей всегда наш, Moonbot таких не хранит."
+  en: "A key and a mouse gesture are two ways to fire one action; the description is behind the «?». Where — the surface the binding acts on. A «+» in the MB column: the value travels from Moonbot — a config paste or a core pull overwrites the key, the book gestures come from the pull. The gesture beside a key is always ours; Moonbot keeps no such gesture."
+  es: "Una tecla y un gesto de ratón son dos formas de lanzar una acción; la descripción está tras «?». Dónde: la superficie sobre la que actúa el atajo. Un «+» en la columna MB: el valor viene de Moonbot — pegar la configuración o traer la disposición del core reescribe la tecla; los gestos del libro vienen de allí. El gesto junto a una tecla es siempre nuestro; Moonbot no guarda esos gestos."
 hotkeys.unassigned:
   ru: "Не задано"
   en: "Unassigned"

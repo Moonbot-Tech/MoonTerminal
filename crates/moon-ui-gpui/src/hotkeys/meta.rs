@@ -164,15 +164,6 @@ impl Origin {
             Self::Local
         }
     }
-
-    /// Short mark shown on the row.
-    pub fn label(self) -> String {
-        match self {
-            Self::Shared => t!("hotkeys.origin.shared"),
-            Self::Local => t!("hotkeys.origin.local"),
-        }
-        .to_string()
-    }
 }
 
 /// One slot's two facts, as the settings row shows them.

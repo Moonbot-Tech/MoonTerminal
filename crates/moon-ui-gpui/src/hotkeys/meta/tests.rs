@@ -82,8 +82,6 @@ fn a_two_surface_label_names_both_surfaces_in_words() {
         gesture_slot_meta(GestureSlot::BuySet).scope.label(),
         "book / plot"
     );
-    assert_eq!(Origin::Shared.label(), "MB");
-    assert_eq!(Origin::Local.label(), "MT");
 }
 
 /// Joining two slots' surfaces reads the containment the constants document, so a two-editor row

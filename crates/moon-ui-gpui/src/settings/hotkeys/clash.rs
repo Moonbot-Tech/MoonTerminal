@@ -283,7 +283,7 @@ impl Clashes {
     ///
     /// A list rather than one line: a row can both TAKE its binding from a row below it and SHARE
     /// it with a layer that only answers over an object, and those are two different sentences
-    /// about two different rivals. `row_head` prints one line per entry.
+    /// about two different rivals. `table_row` prints one line per entry.
     pub(super) fn mouse(&self, hotkeys: &HotkeysConfig, slot: GestureSlot) -> Vec<Clash> {
         // Nothing this row dispatches, nothing to caption. The index above uses the same reading, so
         // the two cannot disagree about which rows are even in the running — and they used to: a
