@@ -37,10 +37,14 @@ pub(in crate::settings) enum HotkeyGroup {
     OrderMove,
     Mouse,
     ManualStrategy,
+    /// Not a hotkey page: the "pull layout from core" preview, which compares every slot the core
+    /// carries against the local one. A tab of its own so the manual-strategy page ends where its
+    /// rows end.
+    CorePull,
 }
 
 impl HotkeyGroup {
-    pub(in crate::settings) const ALL: [Self; 7] = [
+    pub(in crate::settings) const ALL: [Self; 8] = [
         Self::Presets,
         Self::Trading,
         Self::Chart,
@@ -48,6 +52,7 @@ impl HotkeyGroup {
         Self::OrderMove,
         Self::Mouse,
         Self::ManualStrategy,
+        Self::CorePull,
     ];
 
     pub(in crate::settings) fn title(self) -> String {
@@ -59,8 +64,14 @@ impl HotkeyGroup {
             Self::OrderMove => t!("hotkeys.group.order_move"),
             Self::Mouse => t!("hotkeys.group.mouse"),
             Self::ManualStrategy => t!("hotkeys.group.manual_strategy"),
+            Self::CorePull => t!("hotkeys.pull.title"),
         }
         .to_string()
+    }
+
+    /// Whether the page is the hotkey table — with its header — rather than the pull preview.
+    pub(in crate::settings) fn is_table(self) -> bool {
+        self != Self::CorePull
     }
 
     /// Returns the hint shown above the active sub-tab's rows.
@@ -73,6 +84,7 @@ impl HotkeyGroup {
             Self::OrderMove => t!("hotkeys.group.order_move_hint"),
             Self::Mouse => t!("hotkeys.group.mouse_hint"),
             Self::ManualStrategy => t!("hotkeys.group.manual_strategy_hint"),
+            Self::CorePull => t!("hotkeys.pull.hint"),
         }
         .to_string()
     }
@@ -199,7 +211,7 @@ pub(super) enum Row {
     SplitParts,
     /// The mirror switch, between the long move rows and the short ones it owns.
     SameForMove,
-    /// The "pull layout from core" section, closing the manual-strategy page.
+    /// The "pull layout from core" preview — the whole of its own page.
     CorePull,
 }
 
@@ -210,7 +222,7 @@ impl Row {
             Self::Slot(spec) => spec.group,
             Self::SplitParts => HotkeyGroup::Trading,
             Self::SameForMove => HotkeyGroup::Mouse,
-            Self::CorePull => HotkeyGroup::ManualStrategy,
+            Self::CorePull => HotkeyGroup::CorePull,
         }
     }
 }

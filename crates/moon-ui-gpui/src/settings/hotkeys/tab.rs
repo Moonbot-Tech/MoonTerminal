@@ -4,9 +4,8 @@
 //! shows and in what order. The rows form one TABLE with a header: help · title · surface ·
 //! problems · key · mouse · parameter · MB; the title grows, every other cell is fixed, so a row
 //! that lacks an editor leaves its cell empty rather than pulling the next one over. The row editors (`slot_row`, `split_parts_row`,
-//! `same_move_row`) update the draft. The "pull layout from core" section that closes the
-//! manual-strategy page is a block of its own — a preview of what a pull would change, with its
-//! own columns — not rows of this table.
+//! `same_move_row`) update the draft. The "pull layout from core" preview is a page of its own —
+//! what a pull would change, with its own columns — not rows of this table.
 
 use gpui::*;
 use moon_core::config::moonbot_import::shortcut;
@@ -231,7 +230,11 @@ impl SettingsView {
             .w_full()
             .gap(design::ui_px(cx, 3.0))
             .child(muted_line(self.hotkeys_group.hint(), &p))
-            .child(self.columns_header(cx))
+            .children(
+                self.hotkeys_group
+                    .is_table()
+                    .then(|| self.columns_header(cx)),
+            )
             .children(self.group_rows(self.hotkeys_group, &hotkeys, cx));
 
         v_flex()
@@ -1085,26 +1088,12 @@ impl SettingsView {
     }
 
     /// The "pull layout from core" button and, once a layout has arrived, its preview diff.
-    /// Placed after the ManualStrategy rows and gated on nothing else: it is always visible on
-    /// this sub-tab, which is what lets a resolved core's Live/Stale/Awaiting state stay legible
+    /// The whole of its own sub-tab and gated on nothing else: it is always visible there, which
+    /// is what lets a resolved core's Live/Stale/Awaiting state stay legible
     /// without the user having to click anything first.
     fn core_pull_section(&self, hotkeys: &HotkeysConfig, cx: &Context<Self>) -> Vec<AnyElement> {
         let p = MoonPalette::active(cx);
-        let mut out: Vec<AnyElement> = vec![
-            div()
-                .w_full()
-                .h(design::ui_px(cx, 1.0))
-                .bg(rgba_from(p.border, 1.0))
-                .into_any_element(),
-            MoonText::new(t!("hotkeys.pull.title").to_string())
-                .uppercase(false)
-                .mono(false)
-                .font_size(11.0)
-                .line_height(14.0)
-                .color(p.text)
-                .render()
-                .into_any_element(),
-        ];
+        let mut out: Vec<AnyElement> = Vec::new();
 
         let Some(core) = self.core_pull_target(cx) else {
             out.push(self.pull_hint(t!("hotkeys.pull.no_core").to_string(), &p, cx));

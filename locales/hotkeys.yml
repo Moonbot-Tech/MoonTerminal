@@ -630,6 +630,10 @@ hotkeys.pull.button:
   ru: "Подтянуть раскладку с ядра"
   en: "Pull layout from core"
   es: "Extraer diseño del núcleo"
+hotkeys.pull.hint:
+  ru: "Раскладка хоткеев активного ядра против локальной: что совпадает, что изменится после тяги."
+  en: "The active core's hotkey layout against the local one: what matches, what a pull would change."
+  es: "La disposición de atajos del núcleo activo frente a la local: qué coincide y qué cambiaría al traerla."
 hotkeys.pull.no_core:
   ru: "Нет активного ядра — выберите ядро на графике, чтобы подтянуть его раскладку."
   en: "No active core — pick a core on the chart to pull its layout."
