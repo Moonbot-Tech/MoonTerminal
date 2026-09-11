@@ -21,6 +21,8 @@ use moon_core::session::order_lines::{LineKind, OrderLineStore, RetainedOrder};
 
 use crate::layers::rgb_with_alpha as rgba;
 
+mod strategy_style;
+
 // The entry line's fill mark speaks the closed-trade-history vocabulary on purpose: the user
 // should read a fill on an order line exactly as they read one in trade history, so it reuses
 // that layer's glyphs and its resting half-extents rather than inventing a shape of its own.
@@ -38,6 +40,7 @@ use crate::trade_marks::{ARROW_HALF_H, ARROW_HALF_W, clamp_arrow_scale};
 /// line dashes to say "placed, not yet filled" (`pending_dashed`), and this segment exists only once
 /// the entry HAS filled. Carrying the dash across the fill arrow would keep flying the pending flag
 /// over a position that is actually held, which is the opposite of what the segment is for.
+/// An explicit strategy pen still applies: that pattern identifies the strategy, not a pending leg.
 const POSITION_HOLD_RGB: [u8; 3] = moon_core::palette::ORANGE;
 
 /// Which horizontal edge of the plot a line was pinned to.
@@ -154,7 +157,8 @@ fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, LineKind); 7] {
 /// of their movement (unless `graphics.hide_order_move_history` hides it, along with the
 /// fallback-step knots that mark it), start crosses plus end crosses or filled-entry arrows,
 /// and a continuous liquidation line. The server's `SetStopPrice` segment remains visible. Culls
-/// orders outside the visible time window.
+/// orders outside the visible time window. Confirmed strategies must belong to the same core
+/// as `store`; their enabled colors and pen patterns override the global style per order.
 ///
 /// The ENTRY line is the one exception to "an active line runs to the right edge": once the wire
 /// dates the entry's fill it ends there instead, marked with the closed-trade-history arrow rather
@@ -165,6 +169,8 @@ fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, LineKind); 7] {
 #[allow(clippy::too_many_arguments)]
 pub fn build_order_geometry(
     store: &OrderLineStore,
+    strategies: &[moon_core::feed::StrategyRow],
+    schema: Option<&moon_core::feed::StrategySchemaModel>,
     market: &str,
     style: &OrdersStyle,
     graphics: &ChartGraphicsCfg,
@@ -194,6 +200,7 @@ pub fn build_order_geometry(
     markers.clear();
     let to_rel = |t_ms: f64| (t_ms - epoch_ms) as f32;
     let kinds = traced_kinds(style);
+    let strategies = strategy_style::StrategyStyles::new(strategies, schema);
 
     // Visible set: open orders plus the newest max_closed_orders closed orders, in store-ring
     // order (without sorting; the store itself caps closed orders). Then cull by time window.
@@ -218,6 +225,8 @@ pub fn build_order_geometry(
     visible[..open].sort_unstable_by_key(|ord| (highlight_uid == Some(ord.uid), ord.seq));
 
     for ord in visible {
+        let custom = strategies.get(ord);
+        let first_seg = segs.len();
         let closed = ord.closed_ms.is_some();
         let highlighted = highlight_uid == Some(ord.uid) && !closed;
         let drag_preview = drag_preview.filter(|(uid, _, price)| {
@@ -286,7 +295,11 @@ pub fn build_order_geometry(
                 hlines.push(LineInstance {
                     price: p,
                     color: rgba(s.color, line_alpha),
-                    style: if s.dashed { 1.0 } else { 0.0 },
+                    style: custom.and_then(|s| s.pattern).unwrap_or(if s.dashed {
+                        1.0
+                    } else {
+                        0.0
+                    }),
                     thickness: s.thickness * highlight_thickness_mul,
                 });
             }
@@ -352,7 +365,11 @@ pub fn build_order_geometry(
             } else {
                 st.color
             };
-            let col = rgba(line_color, line_alpha);
+            let color = |alpha| {
+                let fallback = rgba(line_color, alpha);
+                custom.map_or(fallback, |s| s.color(kind, fallback))
+            };
+            let col = color(line_alpha);
             let dash = if dashed {
                 SEG_PATTERN_DASH_DOT_DOT
             } else {
@@ -389,7 +406,7 @@ pub fn build_order_geometry(
                 // exactly like TOrderLine.DrawInternal, not as an ordinary polyline. The separate
                 // SetStopPrice segment below shares their arrival but is not part of this trace.
                 // IMPORTANT: this trace does not replace the live price of the primary order line.
-                let trace_color = rgba(line_color, trace_alpha);
+                let trace_color = color(trace_alpha);
                 let trace_thickness = if highlighted { 2.0 } else { 1.0 };
                 let trace_dash = if show_light_lines {
                     SEG_PATTERN_SOLID
@@ -751,6 +768,13 @@ pub fn build_order_geometry(
                     MARKER_SHAPE_CROSS,
                     col,
                 ));
+            }
+        }
+        // The strategy's pen applies to every segment of this order, including stop/trailing
+        // traces and the holding continuation. Marker shapes and global widths stay independent.
+        if let Some(pattern) = custom.and_then(|s| s.pattern) {
+            for seg in &mut segs[first_seg..] {
+                seg.pattern = pattern;
             }
         }
     }

@@ -653,6 +653,10 @@ struct PaneRender {
     last_label_book_rev: u64,
     /// Last order revision uploaded into the userdata buffer.
     last_order_lines_rev: u64,
+    /// Strategy snapshots can change order appearance without an order update.
+    last_order_strategies_rev: u64,
+    /// Sparse strategy snapshots inherit defaults from a separately arriving schema.
+    last_order_schema_rev: u64,
     /// Last order-zone signature. Zones live in the base cache, drawn over the grid and under the
     /// candles, while lines and traces render as an overlay. Zone changes must invalidate base;
     /// line hover and drag must not.
@@ -854,6 +858,8 @@ impl PaneRender {
             last_book_lo: f32::NAN,
             last_book_hi: f32::NAN,
             last_order_lines_rev: u64::MAX,
+            last_order_strategies_rev: u64::MAX,
+            last_order_schema_rev: u64::MAX,
             last_order_zone_sig: 0,
             last_order_lines_sync_ms: 0.0,
             pending_order_gpu_rev: None,

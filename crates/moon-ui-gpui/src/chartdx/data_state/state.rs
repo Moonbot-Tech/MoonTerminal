@@ -86,6 +86,7 @@ impl ChartDataState {
             .wrapping_add(self.order_signature(session))
     }
 
+    /// Wakes order synchronization for each pane's order and confirmed strategy streams.
     pub(crate) fn order_signature(&self, session: &SessionManager) -> u64 {
         let mut sig = 0u64;
         // A detect caption is refreshed on this SAME sync — it is read where the session is in hand
@@ -108,9 +109,16 @@ impl ChartDataState {
                 .chart_labels
                 .any_drawn(|f| f == moon_core::config::ChartLabelField::StrategyFilters);
         let container = self.container.borrow();
-        if let Some((core, _market)) = container.target_ref(0) {
+        for ix in 0..container.pane_count() {
+            let Some((core, _market)) = container.target_ref(ix) else {
+                continue;
+            };
             if let Some(core_st) = session.store().core(core) {
-                sig = sig.wrapping_add(core_st.order_lines_rev);
+                sig = sig.wrapping_mul(31).wrapping_add(core_st.order_lines_rev);
+                if self.draws_live_market() {
+                    sig = sig.wrapping_mul(31).wrapping_add(core_st.strategies_rev);
+                    sig = sig.wrapping_mul(31).wrapping_add(core_st.schema_rev);
+                }
             }
         }
         if wants_filters {

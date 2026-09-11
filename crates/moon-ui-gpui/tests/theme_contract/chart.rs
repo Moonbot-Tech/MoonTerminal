@@ -1270,3 +1270,21 @@ fn coin_search_never_post_filters_a_wide_result_set() {
         );
     }
 }
+
+/// A strategy-only update must pass both frame and pane gates and use that pane's core snapshot.
+#[test]
+fn strategy_colors_wake_both_order_geometry_cache_gates() {
+    let state = code_only(&read_src("chartdx/data_state/state.rs"));
+    let signature = braced_body(&state, "fn order_signature(");
+    let panes = braced_body(signature, "for ix in 0..container.pane_count()");
+    assert!(panes.contains("container.target_ref(ix)"));
+    assert!(panes.contains("core_st.strategies_rev"));
+    assert!(panes.contains("core_st.schema_rev"));
+    let orders = code_only(&read_src("chartdx/data_state/orders.rs"));
+    assert!(orders.contains("pr.last_order_strategies_rev != core_st.strategies_rev"));
+    assert!(orders.contains("pr.last_order_strategies_rev = core_st.strategies_rev"));
+    assert!(orders.contains("pr.last_order_schema_rev != core_st.schema_rev"));
+    assert!(orders.contains("pr.last_order_schema_rev = core_st.schema_rev"));
+    assert!(orders.contains("core_st.schema.as_ref()"));
+    assert!(orders.contains("order_lines,\n                        &core_st.strategies,"));
+}

@@ -66,6 +66,16 @@ Push-события остаются для UI-виджетов и редких 
 snapshot плюс captured event rows, чтобы короткий terminal status (`Cancel`, `Fail`, `Done`) не
 терялся, даже если latest snapshot уже убрал uid из live-list.
 
+Order geometry resolves `UseCustomColors`, `BuyOrderColor`, `SellOrderColor` and `OrderLineKind`
+from the order's own core's confirmed strategy snapshot and kind-specific schema defaults. Retained orders keep strategy ID/name;
+a nonzero ID is authoritative, while an ID-less named row may match a unique name. Missing,
+disabled or invalid fields fall back to the current theme's order style. Strategy ARGB alpha
+multiplies lifecycle opacity; entry/exit colors apply on both long and short orders, and the pen
+pattern applies to all order segments, including protective lines and liquidation. Widths,
+markers, zone colors and semantic label colors retain their existing settings. Both the chart
+wake signature and the pane geometry cache track strategy and schema revisions, so late data and edits
+apply without waiting for an order price change.
+
 ## Ручная торговля: группа задаёт видимые параметры
 
 У ручного ордера два источника настроек с намеренно разной областью владения:
