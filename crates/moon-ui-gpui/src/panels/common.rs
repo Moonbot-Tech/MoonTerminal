@@ -285,6 +285,18 @@ pub(crate) const COMPACT_CHECKBOX_GAP: f32 = 6.0;
 /// Compact `MoonCheckbox` label size before font scaling.
 pub(crate) const COMPACT_CHECKBOX_FONT: f32 = 9.5;
 
+/// Opacity a compact `MoonCheckbox` fades its label to while disabled.
+///
+/// A caption that sits beside such a checkbox and greys out with it has to fade by the same
+/// amount, or the two read as two states of "off" in one group.
+pub(crate) const COMPACT_CHECKBOX_DISABLED_ALPHA: f32 = 0.45;
+
+/// Design-unit gap between the rows of a settings popup's group ([`popup_group`], [`popup_frame`]).
+///
+/// Also the pitch of rows a popup lists OUTSIDE a frame, so a list does not change pitch at a
+/// border. Stated once for the reason [`POPUP_GROUP_INSET`] is.
+pub(crate) const POPUP_GROUP_GAP: f32 = 4.0;
+
 /// `MoonGroupBox` caption size before font scaling, as [`popup_group`] renders it.
 pub(crate) const POPUP_GROUP_CAPTION_FONT: f32 = 10.5;
 
@@ -399,11 +411,26 @@ pub(crate) fn popup_group(
     id: impl Into<SharedString>,
     title: impl Into<SharedString>,
 ) -> MoonGroupBox {
+    popup_frame(id).title(title)
+}
+
+/// Builds the same frame as [`popup_group`] with no caption of its own.
+///
+/// For a group whose first row IS its caption — a checkbox that switches the whole group on, with
+/// the rows it governs under it. A caption above such a switch would name the group twice, and a
+/// switch inside a captioned group reads as one more setting rather than as the gate. Same border,
+/// padding, gap and fill as the captioned one, so the two cannot drift apart in one popup.
+///
+/// Args:
+///     id: Stable element identity, unique within the hosting popup.
+///
+/// Returns:
+///     A group box ready to receive children.
+pub(crate) fn popup_frame(id: impl Into<SharedString>) -> MoonGroupBox {
     MoonGroupBox::new(id)
-        .title(title)
         .background_policy(MoonBackgroundPolicy::NoFill)
         .padding(POPUP_GROUP_PAD)
-        .gap(4.0)
+        .gap(POPUP_GROUP_GAP)
 }
 
 /// Builds the title cell of a settings popup's head row.

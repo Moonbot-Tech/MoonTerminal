@@ -26,16 +26,23 @@ fn placement_popup_keeps_nested_menus_and_shared_values_live() {
         .nth(1)
         .expect("settings renderer");
     assert!(settings.contains(".overlay_closable(false)"));
-    assert!(
-        settings.contains("selects.show(EmptyPlaces::restore(&self.backend.read(cx).layout), cx)")
-    );
+    // The whole call, so the values shown are read from the shared layout on THIS render and not
+    // from anything cached: `layout` is bound from `self.backend` right above the call.
+    assert!(settings.contains("let layout = &self.backend.read(cx).layout;"));
+    assert!(settings.contains(concat!(
+        "selects.show(\n",
+        "                &EmptyScreen::restore(layout),\n",
+        "                EmptyPlaces::restore(layout),\n",
+        "                cx,\n",
+        "            );"
+    )));
     let seed = include_str!("detect.rs");
     let seed = seed
         .split("pub(super) fn seed_empty_detect(")
         .nth(1)
         .expect("popup seeding");
     assert!(seed.contains("if let Some(selects) = &self.empty_places"));
-    assert!(seed.contains("selects.show(places, cx)"));
+    assert!(seed.contains("selects.show(&screen, places, cx)"));
 }
 
 #[test]
@@ -162,7 +169,7 @@ fn a_choice_that_was_made_outlives_the_default() {
     // things: a default that changes later must not overrule somebody who switched it off.
     let mut layout = WindowLayout::default();
     for switch in &SWITCHES {
-        (switch.store)(&mut layout, !switch.default);
+        (switch.store)(&mut layout, Some(!switch.default));
     }
     let screen = EmptyScreen::restore(&layout);
     for switch in &SWITCHES {
@@ -301,6 +308,100 @@ fn hiding_a_block_does_not_forget_where_it_goes() {
         EmptyPlaces::restore(&layout).slot(EmptyBlock::Minute),
         EmptySlot::BottomStart,
         "switching a block off moved it"
+    );
+}
+
+/// A dropdown's choice reaches the one write path, and that path writes both keys in ONE update.
+/// The controls cannot be driven without GPUI, so the wiring is pinned as text: a dropdown that
+/// confirmed into `set_switch` alone would hide but never move, and one that wrote the two keys
+/// through two updates would repaint every window twice per click.
+#[test]
+fn a_dropdowns_answer_is_one_write_of_both_keys() {
+    let seed = include_str!("arrange.rs")
+        .split("pub(super) fn seed(")
+        .nth(1)
+        .expect("the dropdowns are seeded in arrange.rs");
+    assert!(seed.contains("MoonSelectEvent::Confirm(Some(placement))"));
+    assert!(seed.contains("this.set_placement(block, *placement, cx)"));
+
+    let write = include_str!("../empty.rs")
+        .split("pub(super) fn set_placement(")
+        .nth(1)
+        .and_then(|tail| tail.find("cx.refresh_windows();").map(|at| &tail[..at]))
+        .expect("set_placement ends by refreshing every window");
+    assert_eq!(
+        write.matches("self.backend.update(").count(),
+        1,
+        "both keys must go through one update"
+    );
+    assert!(write.contains("block.store(&mut backend.layout, Some(slot))"));
+    assert!(write.contains("store(&mut backend.layout, Some(true))"));
+    assert!(write.contains("store(&mut backend.layout, Some(false))"));
+    assert!(
+        !write.contains("publish_crowd_rule"),
+        "placing a block does not touch the rule's keys, so it must not republish the rule"
+    );
+}
+
+/// Every block has its switch, and the rule has none: the dropdowns look their switch up by block,
+/// and a block without one would fall back to the first row and flip the brand instead.
+#[test]
+fn every_block_has_exactly_one_switch_and_the_rule_has_none() {
+    for block in EmptyBlock::ALL {
+        let matches = SWITCHES
+            .iter()
+            .filter(|switch| switch.block == Some(block))
+            .count();
+        assert_eq!(matches, 1, "{block:?} has {matches} switches");
+        assert_eq!(super::switch_of(block).block, Some(block));
+    }
+    assert_eq!(
+        SWITCHES
+            .iter()
+            .filter(|switch| switch.block.is_none())
+            .count(),
+        1,
+        "exactly one switch is not a block: the rule"
+    );
+}
+
+/// A reset answers every block's question the way a fresh profile would — anchor AND switch
+/// forgotten — and leaves the rule alone: a layout button may not stop a watch.
+#[test]
+fn a_reset_forgets_every_block_and_spares_the_rule() {
+    let mut layout = WindowLayout::default();
+    for block in EmptyBlock::ALL {
+        block.store(&mut layout, Some(EmptySlot::TopCenter));
+    }
+    layout.main_empty_logo = Some(false);
+    layout.main_empty_minute = Some(true);
+    layout.main_empty_detect = Some(true);
+
+    super::forget_arrangement(&mut layout);
+
+    assert_eq!(EmptyPlaces::restore(&layout), EmptyPlaces::default());
+    for block in EmptyBlock::ALL {
+        assert_eq!(block.saved(&layout), None, "{block:?} kept an anchor");
+    }
+    assert_eq!(
+        layout.main_empty_logo, None,
+        "the brand's choice was not forgotten"
+    );
+    assert_eq!(
+        layout.main_empty_minute, None,
+        "the minute's choice was not forgotten"
+    );
+    let mut shipped = WindowLayout::default();
+    shipped.main_empty_detect = Some(true);
+    assert_eq!(
+        EmptyScreen::restore(&layout),
+        EmptyScreen::restore(&shipped),
+        "a reset screen must be the shipped one, with the rule as it was"
+    );
+    assert_eq!(
+        layout.main_empty_detect,
+        Some(true),
+        "the reset stopped the watch"
     );
 }
 

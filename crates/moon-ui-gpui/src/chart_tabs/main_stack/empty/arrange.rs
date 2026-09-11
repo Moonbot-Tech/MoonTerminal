@@ -1,10 +1,17 @@
-//! Where each block of the empty screen goes: one dropdown per block, and one way back.
+//! Where each block of the empty screen goes, or that it does not: one dropdown per block, and one
+//! way back.
 //!
 //! **A choice, not a gesture.** The blocks are placed from a list of nine named anchors rather than
 //! dragged around the screen. Dragging would need a mode of its own — the tables are clickable, and
 //! a drag that started on a coin would have to decide whether it meant "open this chart" — and it
 //! would be unreachable for anybody who does not use a pointer. A named list is reachable, says out
 //! loud where a block will land before it lands there, and needs nothing switched off to be safe.
+//!
+//! **"Hidden" is the tenth entry, not a second control.** A block that is drawn is drawn somewhere,
+//! so "where" and "whether" are one question with ten answers, and the popup asks it once. What the
+//! answer is KEPT as is still two keys — the switch and the anchor — because hiding a block must not
+//! forget where it was: the person who hides the minute and brings it back finds it where they left
+//! it, and the brand's switch is read by two more empty surfaces that know nothing of anchors.
 //!
 //! **Five dropdowns, not four.** The mark and the line under it are placed separately, because they
 //! are switched separately: somebody who wants the line without the mark is asking a question one
@@ -25,24 +32,72 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use super::{EmptyScreen, switch_of};
 use crate::chart_tabs::MainChartStack;
 use crate::design;
+use crate::panels::{COMPACT_CHECKBOX_FONT, POPUP_GROUP_GAP};
 
-/// Gap between a caption and its control, and between two rows, in design units. The rule's own
-/// fields under these use the same one — they are one list of settings, not two.
-const ROW_GAP: f32 = 8.0;
-/// Width of one position dropdown, in design units, sized for the longest localized anchor name.
+/// Gap between a caption and its control, and between two rows, in design units: the pitch a popup
+/// group packs its rows at, so these rows and the framed ones under them read as one list.
+const ROW_GAP: f32 = POPUP_GROUP_GAP;
+/// Width of one position dropdown, in design units, sized for the longest localized entry.
 const SELECT_WIDTH: f32 = 132.0;
 
-/// The locale key naming one block.
-fn block_label(block: EmptyBlock) -> &'static str {
-    match block {
-        EmptyBlock::Logo => "crowd.block.logo",
-        EmptyBlock::Hint => "crowd.block.hint",
-        EmptyBlock::Minute => "crowd.block.minute",
-        EmptyBlock::Traders => "crowd.block.traders",
-        EmptyBlock::Coins => "crowd.block.coins",
+/// One answer to "where does this block go": one of the nine anchors, or nowhere.
+///
+/// The dropdown's value. It is NOT what is stored — the layout keeps a switch and an anchor per
+/// block, and this is the two of them read together — so that hiding a block leaves its anchor
+/// where it was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Placement {
+    /// The block is not drawn.
+    Hidden,
+    /// The block is drawn at this anchor.
+    At(EmptySlot),
+}
+
+impl Placement {
+    /// Every entry, in the order the list shows them: "hidden" first, then the anchors in reading
+    /// order. The index into this is what a dropdown selects by.
+    pub(super) fn all() -> impl Iterator<Item = Self> {
+        std::iter::once(Self::Hidden).chain(EmptySlot::ALL.into_iter().map(Self::At))
     }
+
+    /// Which entry of [`Placement::all`] this is.
+    pub(super) fn index(self) -> usize {
+        match self {
+            Self::Hidden => 0,
+            Self::At(slot) => 1 + slot_index(slot),
+        }
+    }
+
+    /// What one block's two keys say together.
+    ///
+    /// Args:
+    ///     block: The block asked about.
+    ///     screen: What is switched on.
+    ///     places: Where each block is anchored.
+    pub(super) fn of(block: EmptyBlock, screen: &EmptyScreen, places: EmptyPlaces) -> Self {
+        if (switch_of(block).read)(screen) {
+            Self::At(places.slot(block))
+        } else {
+            Self::Hidden
+        }
+    }
+
+    /// The locale key naming this entry.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Hidden => "crowd.slot.hidden",
+            Self::At(slot) => slot_label(slot),
+        }
+    }
+}
+
+/// The locale key naming one block: the same one its switch carries, so a row and the switch behind
+/// it cannot call the block two things.
+fn block_label(block: EmptyBlock) -> &'static str {
+    switch_of(block).label
 }
 
 /// The locale key naming one anchor.
@@ -60,7 +115,7 @@ fn slot_label(slot: EmptySlot) -> &'static str {
     }
 }
 
-/// Which entry of [`EmptySlot::ALL`] one anchor is, which is the index a dropdown selects by.
+/// Which entry of [`EmptySlot::ALL`] one anchor is.
 fn slot_index(slot: EmptySlot) -> usize {
     EmptySlot::ALL
         .into_iter()
@@ -74,36 +129,37 @@ fn slot_index(slot: EmptySlot) -> usize {
 /// write: the entities inside are handles, so a clone is the same five dropdowns.
 #[derive(Clone)]
 pub(crate) struct PlaceSelects {
-    selects: Vec<(EmptyBlock, Entity<MoonSelectState<EmptySlot>>)>,
+    selects: Vec<(EmptyBlock, Entity<MoonSelectState<Placement>>)>,
 }
 
 impl PlaceSelects {
-    /// Build the five dropdowns and wire each one to its block's key.
+    /// Build the five dropdowns and wire each one to its block's two keys.
     ///
     /// Args:
-    ///     places: Where the blocks stand right now, which is what each dropdown opens on.
+    ///     screen: What is switched on right now.
+    ///     places: Where the blocks stand right now; with `screen`, what each dropdown opens on.
     ///     window: The window the dropdowns belong to; a `MoonSelectState` cannot exist without one.
     ///     cx: Stack context used to create and subscribe.
     pub(super) fn seed(
+        screen: &EmptyScreen,
         places: EmptyPlaces,
         window: &mut Window,
         cx: &mut Context<MainChartStack>,
     ) -> Self {
         let mut selects = Vec::with_capacity(EmptyBlock::COUNT);
         for block in EmptyBlock::ALL {
-            let items: Vec<MoonSelectItem<EmptySlot>> = EmptySlot::ALL
-                .into_iter()
-                .map(|slot| MoonSelectItem::new(slot, t!(slot_label(slot)).to_string()))
+            let items: Vec<MoonSelectItem<Placement>> = Placement::all()
+                .map(|placement| MoonSelectItem::new(placement, t!(placement.label()).to_string()))
                 .collect();
-            let chosen = IndexPath::new(slot_index(places.slot(block)));
+            let chosen = IndexPath::new(Placement::of(block, screen, places).index());
             let state = cx.new(|cx| MoonSelectState::new(items, Some(chosen), window, cx));
             cx.subscribe(
                 &state,
-                move |this, _state, event: &MoonSelectEvent<EmptySlot>, cx| {
+                move |this, _state, event: &MoonSelectEvent<Placement>, cx| {
                     // `Confirm(None)` is the control being CLEARED, which these never are: every
-                    // block is somewhere, and "nowhere" is what its visibility switch means.
-                    if let MoonSelectEvent::Confirm(Some(slot)) = event {
-                        this.set_place(block, *slot, cx);
+                    // block has an answer, and "not drawn" is an entry of the list, not an absence.
+                    if let MoonSelectEvent::Confirm(Some(placement)) = event {
+                        this.set_placement(block, *placement, cx);
                     }
                 },
             )
@@ -115,17 +171,21 @@ impl PlaceSelects {
 
     /// Put the dropdowns back on an arrangement that was changed from somewhere other than them.
     ///
-    /// Another group window can edit the shared layout while this popup is open. Setting the value does NOT report a confirmation back — that
-    /// is emitted by the menu's own choice — so this cannot loop back into another write.
+    /// Another group window can edit the shared layout while this popup is open, and the brand's
+    /// switch can be flipped by a reset. Setting the value does NOT report a confirmation back —
+    /// that is emitted by the menu's own choice — so this cannot loop back into another write.
     ///
     /// Args:
-    ///     places: The arrangement the controls must now show.
+    ///     screen: What is switched on now.
+    ///     places: Where each block is anchored now.
     ///     cx: Any application context.
-    pub(super) fn show(&self, places: EmptyPlaces, cx: &mut App) {
+    pub(super) fn show(&self, screen: &EmptyScreen, places: EmptyPlaces, cx: &mut App) {
         for (block, state) in &self.selects {
-            let slot = places.slot(*block);
+            let placement = Placement::of(*block, screen, places);
             state.update(cx, |state, cx| {
-                if state.selected_value() != Some(&slot) && state.set_selected_value(&slot) {
+                if state.selected_value() != Some(&placement)
+                    && state.set_selected_value(&placement)
+                {
                     cx.notify();
                 }
             });
@@ -194,7 +254,7 @@ pub(super) fn block(
 ///     cx: Application context supplying scaled geometry.
 fn row(
     block: EmptyBlock,
-    state: &Entity<MoonSelectState<EmptySlot>>,
+    state: &Entity<MoonSelectState<Placement>>,
     palette: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -203,11 +263,13 @@ fn row(
         .items_center()
         .gap(design::ui_px(cx, ROW_GAP))
         .child(
+            // The face a compact checkbox gives its label — its size, soft text — so this row and
+            // the rule's switch under it read as one list rather than as a heading over a note.
             div()
                 .flex_1()
                 .min_w_0()
-                .text_size(design::t_body(cx))
-                .text_color(rgb(palette.text))
+                .text_size(design::text_px(cx, COMPACT_CHECKBOX_FONT))
+                .text_color(rgb(palette.text_soft))
                 .child(t!(block_label(block)).to_string()),
         )
         .child(

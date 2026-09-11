@@ -1558,10 +1558,21 @@ pub fn empty_cover(cx: &App, background: u32, logo: Option<f32>) -> Div {
 /// the LOCKUP width keeps every caller's number comparable to the artwork rather than to a frame
 /// whose size the aura decides.
 pub fn logo_glow_sized(cx: &App, width: f32) -> impl IntoElement {
-    let frame_w = width * LOGO_GLOW_SCALE;
+    let frame_w = logo_glow_frame_w(cx, width);
     img(GLOW_IMAGES[usize::from(MoonPalette::active(cx).is_light())].clone())
-        .w(px(frame_w))
-        .h(px(frame_w))
+        .w(frame_w)
+        .h(frame_w)
+}
+
+/// Width of the square glow canvas [`logo_glow_sized`] draws a lockup of `width` on: what the mark
+/// actually occupies, which is what a layout reserving room for it has to ask.
+///
+/// Args:
+///     cx: Application context, for parity with the drawing side; the frame does not follow the
+///         Font slider.
+///     width: Lockup width, as handed to [`logo_glow_sized`].
+pub fn logo_glow_frame_w(_cx: &App, width: f32) -> Pixels {
+    px(width * LOGO_GLOW_SCALE)
 }
 
 /// Vertical 1px group separator.
