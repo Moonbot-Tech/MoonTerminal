@@ -16,7 +16,7 @@ use moon_core::session::CoreId;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
     MoonHotkeyInput, MoonKbd, MoonKbdSize, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTabItem,
-    MoonTabStrip, MoonTag, MoonText, h_flex, rgba_from, v_flex,
+    MoonTabStrip, MoonTag, MoonText, MoonTooltipView, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -29,11 +29,22 @@ use crate::design;
 use crate::hotkeys::meta::{self, Origin, SlotMeta};
 use crate::settings::SettingsView;
 
+/// Logical width of the `?` cell that opens a row's description on hover.
+///
+/// A cell of its own, first in the row, so the titles start at one x and the glyph is where the
+/// eye goes for "what does this do" — a description printed on every row was the column that made
+/// the page long, and the one thing nobody re-reads once they know the action.
+const ROW_HINT_WIDTH: f32 = 14.0;
+
 /// Logical width reserved for every hotkey row title.
 const ROW_TITLE_WIDTH: f32 = 160.0;
 
-/// Maximum readable width of a hotkey row description before its editor column begins.
+/// Maximum readable width of a hotkey row's notes — the conflict captions — before its editor
+/// column begins.
 const ROW_DESCRIPTION_MAX_WIDTH: f32 = 640.0;
+
+/// Readable width of the description tooltip, in rendered pixels.
+const HINT_TOOLTIP_MAX_WIDTH: f32 = 380.0;
 
 /// Logical width reserved for the marks that say where a binding acts and where its binding came
 /// from.
@@ -238,9 +249,9 @@ impl SettingsView {
 
     /// The caption a row shows when something else answers its binding.
     ///
-    /// Under the description rather than beside the editor: it is a sentence, it names other rows,
-    /// and it has to be able to wrap. Red when one of the two never fires, amber when both do and
-    /// the user simply ought to know.
+    /// In the row's middle column rather than beside the editor: it is a sentence, it names other
+    /// rows, and it has to be able to wrap. Red when one of the two never fires, amber when both do
+    /// and the user simply ought to know.
     fn clash_line(&self, clash: &Clash, p: &MoonPalette) -> AnyElement {
         let color = match clash.severity {
             Severity::Shadowed => p.red_text,
@@ -346,8 +357,8 @@ impl SettingsView {
         // A greyed short row follows its long twin, so a clash reported on it would name a binding
         // the row does not own.
         let disabled = spec.follows_mirror() && hotkeys.same_hotkeys_for_move;
-        // Every note this row prints goes under the description, rather than in a column of its
-        // own on the far right — which put it a screen away from the sentence it belongs beside.
+        // Every note this row prints goes in the middle column, beside the title, rather than in a
+        // column of its own on the far right — which put it a screen away from the row it is about.
         let mut notes: Vec<Clash> = Vec::new();
         if let Some(key) = spec.key() {
             notes.extend(clashes.key(hotkeys, key));
@@ -358,7 +369,13 @@ impl SettingsView {
             notes.extend(clashes.mouse(hotkeys, mouse));
         }
 
+        let id = match (spec.key(), spec.mouse()) {
+            (Some(key), _) => registry::key_id(key),
+            (None, Some(mouse)) => registry::gesture_id(mouse),
+            (None, None) => unreachable!("a row edits at least one slot"),
+        };
         let row = self.row_head(
+            id,
             spec.title(),
             spec.hint(),
             Some(spec.meta()),
@@ -528,15 +545,52 @@ impl SettingsView {
         .items(items)
     }
 
-    /// Builds the shared leading half of an editor row: title, then the wrapping description.
-    ///
-    /// Every row on this tab is that pair plus one or two controls. The row wraps trailing controls
-    /// at narrow widths instead of clipping them, and the text sizes are deliberately equal — a
-    /// description one step smaller was tried and read as a different font.
+    /// The `?` cell of a row: a glyph that brightens under the pointer and opens the description as
+    /// a tooltip. Nothing to click — it only answers hover.
     ///
     /// Args:
+    ///     id: Stable element id, which the tooltip state is keyed on.
+    ///     hint: The description, already localized.
+    ///     p: Active palette.
+    ///     cx: Settings context used for scaled geometry.
+    ///
+    /// Returns:
+    ///     The fixed-width hint cell.
+    fn hint_glyph(
+        &self,
+        id: String,
+        hint: String,
+        p: &MoonPalette,
+        cx: &Context<Self>,
+    ) -> Stateful<Div> {
+        let hover = p.text;
+        div()
+            .id(SharedString::from(id))
+            .flex_none()
+            .w(design::ui_px(cx, ROW_HINT_WIDTH))
+            .cursor_default()
+            .text_size(design::t_caption(cx))
+            .text_color(design::moon(p.text_muted))
+            .hover(move |s| s.text_color(design::moon(hover)))
+            .tooltip(move |_w, cx| {
+                cx.new(|_| MoonTooltipView::new(hint.clone()).max_width(HINT_TOOLTIP_MAX_WIDTH))
+                    .into()
+            })
+            .child("?")
+    }
+
+    /// Builds the shared leading half of an editor row: the `?` with the description behind it,
+    /// the title, the marks, then the notes.
+    ///
+    /// Every row on this tab is that prefix plus one or two controls. The row wraps trailing
+    /// controls at narrow widths instead of clipping them. The description used to be printed on
+    /// every row and made the page twice as long; it now sits behind the glyph, and the middle
+    /// column carries only what has to be seen without asking — the conflict captions.
+    ///
+    /// Args:
+    ///     id: Stable element id for the row's hover state.
     ///     title: Label displayed in the shared fixed-width title column.
-    ///     desc: Muted description that may wrap within its capped column.
+    ///     desc: Description shown as the `?` tooltip.
     ///     marks: The slot's two facts, or `None` for a row that owns no slot.
     ///     mono_title: Whether the title is an identity like `F3` rather than a phrase.
     ///     muted: Whether the title is greyed because the row is inert — the four short move rows
@@ -548,8 +602,10 @@ impl SettingsView {
     ///
     /// Returns:
     ///     The row prefix to which callers append one or two controls.
+    #[allow(clippy::too_many_arguments)]
     fn row_head(
         &self,
+        id: String,
         title: String,
         desc: String,
         marks: Option<SlotMeta>,
@@ -565,6 +621,7 @@ impl SettingsView {
             .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
             .gap(design::ui_px(cx, 10.0))
             .items_center()
+            .child(self.hint_glyph(format!("hint-{id}"), desc, &p, cx))
             .child(
                 div()
                     .flex_none()
@@ -582,22 +639,14 @@ impl SettingsView {
             )
             .child(self.slot_marks(marks, &p, cx))
             .child(
-                // Match title sizing, use muted text, and wrap within the window.
+                // The notes column: the captions that must be seen without asking, wrapping within
+                // the window. Empty on most rows, and kept as the flexible spacer that pushes the
+                // controls to the right regardless.
                 v_flex()
                     .flex_1()
                     .min_w_0()
                     .gap(design::ui_px(cx, 2.0))
                     .max_w(design::ui_px(cx, ROW_DESCRIPTION_MAX_WIDTH))
-                    .child(
-                        MoonText::new(desc)
-                            .uppercase(false)
-                            .mono(false)
-                            .wrap()
-                            .font_size(11.0)
-                            .line_height(14.0)
-                            .color(p.text_muted)
-                            .render(),
-                    )
                     .children(notes.iter().map(|note| self.clash_line(note, &p))),
             )
     }
@@ -635,6 +684,7 @@ impl SettingsView {
         });
 
         self.row_head(
+            "split-parts".to_string(),
             t!("hotkeys.split_parts").to_string(),
             t!("hotkeys.split_parts_hint").to_string(),
             Some(meta::SPLIT_PARTS),
@@ -669,6 +719,7 @@ impl SettingsView {
             .min_h(design::fit_h_px(cx, 30.0, 12.0, 6.0))
             .gap(design::ui_px(cx, 10.0))
             .items_center()
+            .child(empty_cell(ROW_HINT_WIDTH, cx))
             .child(div().flex_none().w(design::ui_px(cx, ROW_TITLE_WIDTH)))
             .child(self.slot_marks(Some(meta::SAME_FOR_MOVE), &MoonPalette::active(cx), cx))
             .child(
