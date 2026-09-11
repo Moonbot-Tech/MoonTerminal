@@ -1814,3 +1814,142 @@ fn a_non_minute_aligned_offset_converts_before_it_floors() {
         "a measured offset must actually move the rate-key minute away from the raw closedate"
     );
 }
+
+/// A failed USDC lookup must not suppress a ready USDT row in the same deferred batch.
+#[test]
+fn unavailable_currency_does_not_block_ready_rows_and_retries_exact_minute() {
+    let store = super::super::open_store(std::path::Path::new(":memory:")).expect("store");
+    let minute = current_minute_utc() - 120;
+    let usdc = minute_input(minute + 5, 1);
+    let mut usdt = minute_input(minute + 6, 2);
+    usdt.quote_ordinal = 1;
+    usdt.profit_quote = 17.0;
+    let mut pending = BTreeMap::from([
+        (trade_key(&usdc), usdc.clone()),
+        (trade_key(&usdt), usdt.clone()),
+    ]);
+    let generation = AtomicU64::new(0);
+    let dirty = AtomicBool::new(false);
+    let source = CountingSource::unreachable();
+    let result = process_deferred(&store, &source, &axis(), &generation, &dirty, &mut pending);
+    assert!(matches!(
+        result,
+        Err(FaultCause {
+            kind: FailureKind::Provider,
+            ..
+        })
+    ));
+    assert!(pending.contains_key(&trade_key(&usdc)));
+    assert!(!pending.contains_key(&trade_key(&usdt)));
+    assert_eq!(
+        store
+            .query_row(
+                "SELECT profit_quote FROM trade_values WHERE core_uid=2",
+                [],
+                |row| row.get::<_, f64>(0)
+            )
+            .expect("ready sibling"),
+        17.0
+    );
+    assert!(!current_minute_closed_any(&store, &axis(), &pending));
+    let start = super::super::rate_search_start(&store, 8, minute, now_unix_ms_i64() + 301_000)
+        .expect("durable retry");
+    assert_eq!(
+        start,
+        Some(minute),
+        "outage did not prove the exact minute absent"
+    );
+    store
+        .execute("UPDATE rate_searches SET next_retry_at_ms=0", [])
+        .expect("retry due");
+    let recovered = CountingSource::new(&[("USDCUSDT", 1.001)]).at_minute(minute);
+    process_deferred(
+        &store,
+        &recovered,
+        &axis(),
+        &generation,
+        &dirty,
+        &mut pending,
+    )
+    .expect("recovered");
+    assert!(pending.is_empty());
+    assert_eq!(
+        super::super::cached_rate(&store, 8, minute)
+            .expect("cache")
+            .expect("rate")
+            .price_basis,
+        RatePriceBasis::ExactClose
+    );
+}
+
+/// Persistent failed currencies must neither starve a sibling nor suppress its periodic refresh.
+#[test]
+fn current_failures_leave_healthy_currencies_eligible_for_every_refresh() {
+    struct SelectiveFailure {
+        outage: bool,
+    }
+    impl SpotRateSource for SelectiveFailure {
+        /// Fail ETH routes while BTC always supplies a fresh candle.
+        fn candles(
+            &self,
+            _: &'static str,
+            symbol: &str,
+            start: i64,
+            end: i64,
+        ) -> Result<Vec<super::super::provider::SpotCandle>, FetchFailure> {
+            if symbol.contains("ETH") {
+                return Err(if self.outage {
+                    FetchFailure::Unavailable("offline".into())
+                } else {
+                    FetchFailure::Transient("bad JSON".into())
+                });
+            }
+            assert!(symbol.contains("BTC"));
+            assert!(start <= end);
+            Ok(vec![super::super::provider::SpotCandle {
+                open_ms: end * 1000,
+                close_ms: end * 1000 + 59_999,
+                open: 60_000.0,
+                close: 60_001.0,
+            }])
+        }
+    }
+    let _published = publish_guard();
+    for outage in [false, true] {
+        let source = SelectiveFailure { outage };
+        let generation = AtomicU64::new(0);
+        let dirty = AtomicBool::new(false);
+        let mut state = scoped_pass(&[0, 2]);
+        assert!(resolve_next_rate(&source, &generation, &dirty, &mut state, RATE_MINUTE).is_err());
+        assert_eq!(
+            state.pending,
+            vec![0, 2],
+            "failure retains the original queue membership"
+        );
+        resolve_next_rate(&source, &generation, &dirty, &mut state, RATE_MINUTE)
+            .expect("healthy sibling");
+        assert!(state.rates.contains_key(&0));
+        assert!(
+            state
+                .published
+                .as_ref()
+                .expect("partial publication")
+                .0
+                .contains_key(&0)
+        );
+        assert_eq!(state.pending, vec![2]);
+        for pass in 1..=4 {
+            let minute = RATE_MINUTE + pass * CURRENT_REFRESH_MINUTES * 60;
+            assert!(refresh_is_due(
+                minute,
+                state.minute,
+                state.pending.is_empty() || state.had_outage
+            ));
+            state.rearm(minute);
+            resolve_next_rate(&source, &generation, &dirty, &mut state, minute)
+                .expect("healthy refresh ahead of failed currency");
+            assert_eq!(state.pending, vec![2]);
+            assert!(resolve_next_rate(&source, &generation, &dirty, &mut state, minute).is_err());
+        }
+    }
+}

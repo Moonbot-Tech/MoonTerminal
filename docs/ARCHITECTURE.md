@@ -541,6 +541,18 @@ spot-вселенной Hyperliquid берутся из `spotMeta`, а не за
 складывает цены разных моментов. В `rates` отдельно сохраняются минута сделки, фактическая минута,
 price basis и обе ноги; полный источник и задержка доступны в подсказке колонки Report.
 
+Transport timeouts and temporary service failures permit another provider to supply the requested
+closed candle; malformed responses remain data errors. Successful fallback valuations retain their
+actual provider and market. If no fallback resolves the request, it remains retryable rather than
+being classified as a missing candle. Outage retry records do not advance the proven-empty horizon:
+the original minute must be retried. Historical batches defer failed currency keys durably while
+applying independent ready rows; outbox acknowledgements follow processing or durable deferral.
+
+The Profit Monitor reads native currency partitions in the same snapshot as its coverage decision.
+When the full scope cannot be converted, its core/exchange tables remain visible in separate currency
+sections. Each section has its own monetary subtotal; the footer never adds unlike currencies.
+Unknown denominations retain their core identities and counts but publish no monetary amount.
+
 Отсутствие свечи до текущего закрытого горизонта не является окончательным «курс недоступен».
 `rate_searches` хранит достигнутый горизонт и wall-clock время следующей попытки; строка остаётся
 pending, переживает перезапуск и повторяется без горячего цикла. Смена `ALGORITHM_VERSION` выводит

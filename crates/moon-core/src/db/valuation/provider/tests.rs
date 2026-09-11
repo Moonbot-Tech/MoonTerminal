@@ -583,3 +583,81 @@ fn transient_bybit_fault_names_the_route_code_and_message() {
         "a transient direct Bybit route must stop before inverse fallback"
     );
 }
+
+/// An outage may use Bybit while retaining the exact minute and actual provenance.
+#[test]
+fn outage_uses_fallback_without_changing_the_requested_minute() {
+    let minute = 1_700_000_040;
+    let candle = SpotCandle {
+        open_ms: minute * 1000,
+        close_ms: minute * 1000 + 59_999,
+        open: 1.002,
+        close: 1.001,
+    };
+    for current in [false, true] {
+        let source = FakeSource::new(vec![
+            Err(FetchFailure::Unavailable("timeout".into())),
+            Ok(vec![candle]),
+        ]);
+        let rate = if current {
+            resolve_latest_rate(&source, 8, "USDC", minute, minute).expect("current fallback")
+        } else {
+            let batch = resolve_rate_batch(&source, 8, "USDC", &[minute]);
+            assert_eq!(batch.transient, None);
+            assert!(batch.missing.is_empty());
+            batch.ready.into_iter().next().expect("historical fallback")
+        };
+        assert_eq!(rate.provider, "bybit_spot");
+        assert_eq!(rate.symbol, "USDCUSDT");
+        assert_eq!(rate.minute_utc, minute);
+        assert_eq!(rate.rate_usdt, 1.001);
+        assert_eq!(source.calls.lock().expect("calls").len(), 2);
+    }
+}
+
+/// Empty fallback routes must not turn a primary outage into a proven absence.
+#[test]
+fn outage_with_no_fallback_retains_retryable_failure() {
+    let source = FakeSource::new(vec![
+        Err(FetchFailure::Unavailable("timeout".into())),
+        Err(FetchFailure::Missing),
+        Err(FetchFailure::Missing),
+    ]);
+    let batch = resolve_rate_batch(&source, 8, "USDC", &[1_700_000_040]);
+    assert!(batch.ready.is_empty());
+    assert!(batch.missing.is_empty());
+    assert!(batch.transient.expect("retryable").contains("timeout"));
+    assert!(matches!(
+        classify_http_error(ureq::Error::Timeout(ureq::Timeout::Global)),
+        FetchFailure::Unavailable(_)
+    ));
+}
+
+/// A timeout in the response body is an outage, not malformed JSON or a missing symbol.
+#[test]
+fn body_timeout_keeps_transport_classification() {
+    struct TimedOut;
+    impl std::io::Read for TimedOut {
+        /// Simulate a socket timeout after response headers have arrived.
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "fixture timeout",
+            ))
+        }
+    }
+    let response = ureq::http::Response::builder()
+        .body(ureq::Body::builder().reader(TimedOut))
+        .expect("response");
+    assert!(matches!(
+        read_response(response, "binance"),
+        Err(FetchFailure::Unavailable(_))
+    ));
+    let response = ureq::http::Response::builder()
+        .body(ureq::Body::builder().data("broken"))
+        .expect("response");
+    assert!(matches!(
+        read_response(response, "binance"),
+        Err(FetchFailure::Transient(_))
+    ));
+}

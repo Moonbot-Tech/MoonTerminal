@@ -35,7 +35,10 @@ pub use calendar::{
     CalendarPeriod, CellTotals, DayCell, HourStat, calendar_cells, calendar_hours, hourly_profiles,
 };
 pub use groups::{GroupStat, KindCore, KindStat, TopTrade, coin_groups, strategies_for_coins};
-pub use profit_monitor::{ProfitMonitorCore, ProfitMonitorSummary, profit_monitor};
+pub use profit_monitor::{
+    ProfitMonitorCore, ProfitMonitorCurrency, ProfitMonitorSnapshot, ProfitMonitorSummary,
+    profit_monitor, profit_monitor_snapshot,
+};
 pub use query::{ANALYTICS_HORIZON_SECS, ANALYTICS_MAX_SPAN_SECS, PreviousPeriodBasis, Query};
 
 use groups::groups;

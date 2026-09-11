@@ -1652,3 +1652,16 @@ analytics.purge.core_lost:
   ru: "Ядро пропало со связи — дальше ничего не отправлено."
   en: "The core went offline — nothing further was sent."
   es: "El núcleo se desconectó — no se envió nada más."
+
+profit_monitor.currency_unknown:
+  ru: "Валюта неизвестна"
+  en: "Unknown currency"
+  es: "Moneda desconocida"
+profit_monitor.idle_section:
+  ru: "Без сделок за период"
+  en: "No trades in this period"
+  es: "Sin operaciones en este período"
+profit_monitor.split_pending:
+  ru: "Пересчёт не завершён. Итоги показаны отдельно по валютам."
+  en: "Conversion incomplete. Totals are shown separately by currency."
+  es: "Conversión incompleta. Totales separados por moneda."

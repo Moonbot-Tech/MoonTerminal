@@ -107,6 +107,7 @@ fn resolve_paths(
     let quote_ticker = quote.ticker();
     let mut best: Option<(PathKey, ResolvedRate)> = None;
     let mut lookups = BTreeMap::new();
+    let mut unavailable = None;
     for route in leg_routes(quote_ticker, "USDT") {
         if basis == RatePriceBasis::ExactClose
             && canonical_exact_prefetched
@@ -114,14 +115,22 @@ fn resolve_paths(
         {
             continue;
         }
-        if let Some(observation) = observe(
+        let observation = match observe(
             source,
             &route,
             start_minute_utc,
             end_minute_utc,
             basis,
             &mut lookups,
-        )? {
+        ) {
+            Ok(observation) => observation,
+            Err(FetchFailure::Unavailable(error)) => {
+                unavailable.get_or_insert(error);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if let Some(observation) = observation {
             let minute = observation.candle.open_ms.div_euclid(60_000) * 60;
             let key = PathKey::one(minute, &observation.route);
             consider(
@@ -144,7 +153,7 @@ fn resolve_paths(
         let second_routes = leg_routes(intermediate.ticker(), "USDT");
         for first in leg_routes(quote_ticker, intermediate.ticker()) {
             for second in &second_routes {
-                if let Some((first_observation, second_observation)) = common_observations(
+                let observations = match common_observations(
                     source,
                     &first,
                     second,
@@ -152,7 +161,15 @@ fn resolve_paths(
                     end_minute_utc,
                     basis,
                     &mut lookups,
-                )? {
+                ) {
+                    Ok(observations) => observations,
+                    Err(FetchFailure::Unavailable(error)) => {
+                        unavailable.get_or_insert(error);
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                if let Some((first_observation, second_observation)) = observations {
                     let minute = first_observation.candle.open_ms.div_euclid(60_000) * 60;
                     let key = PathKey::two(
                         minute,
@@ -182,6 +199,11 @@ fn resolve_paths(
             break;
         }
     }
+    if best.is_none() {
+        if let Some(error) = unavailable {
+            return Err(FetchFailure::Unavailable(error));
+        }
+    }
     Ok(best.map(|(_, rate)| rate))
 }
 
@@ -203,7 +225,7 @@ fn observe(
     start_minute_utc: i64,
     end_minute_utc: i64,
     basis: RatePriceBasis,
-    lookups: &mut BTreeMap<LookupKey, Option<LegObservation>>,
+    lookups: &mut BTreeMap<LookupKey, Result<Option<LegObservation>, FetchFailure>>,
 ) -> Result<Option<LegObservation>, FetchFailure> {
     let key = LookupKey {
         provider: route.provider,
@@ -213,7 +235,17 @@ fn observe(
         successor: basis == RatePriceBasis::SuccessorOpen,
     };
     if let Some(cached) = lookups.get(&key) {
-        return Ok(cached.clone());
+        return cached.clone();
+    }
+    if let Some(error) = lookups.iter().find_map(|(key, result)| {
+        (key.provider == route.provider)
+            .then_some(result)
+            .and_then(|result| match result {
+                Err(FetchFailure::Unavailable(error)) => Some(error.clone()),
+                _ => None,
+            })
+    }) {
+        return Err(FetchFailure::Unavailable(error));
     }
     let candle = match basis {
         RatePriceBasis::ExactClose => source
@@ -239,10 +271,13 @@ fn observe(
     let candle = match candle {
         Ok(candle) => candle,
         Err(FetchFailure::Missing) => {
-            lookups.insert(key, None);
+            lookups.insert(key, Ok(None));
             return Ok(None);
         }
-        Err(error) => return Err(error),
+        Err(error) => {
+            lookups.insert(key, Err(error.clone()));
+            return Err(error);
+        }
     };
     let raw = match basis {
         RatePriceBasis::ExactClose => candle.close,
@@ -254,7 +289,7 @@ fn observe(
         candle,
         rate,
     });
-    lookups.insert(key, result.clone());
+    lookups.insert(key, Ok(result.clone()));
     Ok(result)
 }
 
@@ -278,7 +313,7 @@ fn common_observations(
     start_minute_utc: i64,
     end_minute_utc: i64,
     basis: RatePriceBasis,
-    lookups: &mut BTreeMap<LookupKey, Option<LegObservation>>,
+    lookups: &mut BTreeMap<LookupKey, Result<Option<LegObservation>, FetchFailure>>,
 ) -> Result<Option<(LegObservation, LegObservation)>, FetchFailure> {
     if basis == RatePriceBasis::ExactClose {
         let Some(first) = observe(
