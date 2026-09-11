@@ -135,6 +135,32 @@ pub struct PriceStyleGpu {
     pub m: [f32; 4],
 }
 
+/// Trade-tick constants: `TickStyle` at b2 in crosses.hlsl, `@group(0) @binding(2)`
+/// in native_crosses.wgsl, and `[[buffer(2)]]` in chart_native.metal.
+/// Three vec4 members keep offsets 0/16/32 and size 48 identical across shader languages.
+/// Explicit alignment preserves the 16-byte uniform contract; alpha remains owned by each pass.
+#[repr(C, align(16))]
+#[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TickStyleGpu {
+    /// Buy sRGB colour; the fourth channel is unused.
+    pub buy: [f32; 4],
+    /// Sell sRGB colour; the fourth channel is unused.
+    pub sell: [f32; 4],
+    /// Liquidation sRGB colour; the fourth channel is unused.
+    pub liq: [f32; 4],
+}
+
+impl Default for TickStyleGpu {
+    /// Preserves dark colour defaults before the first theme upload.
+    fn default() -> Self {
+        Self {
+            buy: rgb4([47, 168, 92]),
+            sell: rgb4([255, 142, 90]),
+            liq: rgb4([255, 255, 0]),
+        }
+    }
+}
+
 /// Candle-layer style constants matching cbuffer `CandleStyle` at b1 in candles.hlsl.
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]

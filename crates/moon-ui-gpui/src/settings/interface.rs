@@ -1,6 +1,6 @@
 //! Interface tab for chart-theme editing, ported from egui's `settings/interface.rs`.
 //!
-//! It exposes chart, crosshair, order-book, panel, and candle colors plus numeric controls. Edits
+//! It exposes chart, crosshair, trade, order-book, panel, and candle colors plus numeric controls. Edits
 //! update the draft for live preview; Save writes `theme.toml`. [`Iface`] owns editor controls.
 //!
 //! The trade-mark sizes and the bottom-volume band are NOT here. They describe a chart tab rather
@@ -33,6 +33,9 @@ pub(super) struct Iface {
     mark_line: Entity<MoonColorPickerState>,
     mark_line_alpha: Entity<MoonSliderState>,
     price_line_px: Entity<MoonSliderState>,
+    tick_buy: Entity<MoonColorPickerState>,
+    tick_sell: Entity<MoonColorPickerState>,
+    tick_liq: Entity<MoonColorPickerState>,
     book_bg: Entity<MoonColorPickerState>,
     book_bg_ask: Entity<MoonColorPickerState>,
     book_bg_bid: Entity<MoonColorPickerState>,
@@ -214,6 +217,9 @@ pub(super) fn build(
             6.0,
             0.1,
         ),
+        tick_buy: color_field(backend, window, cx, |t| t.tick_buy, |t, v| t.tick_buy = v),
+        tick_sell: color_field(backend, window, cx, |t| t.tick_sell, |t, v| t.tick_sell = v),
+        tick_liq: color_field(backend, window, cx, |t| t.tick_liq, |t, v| t.tick_liq = v),
         book_bg: color_field(backend, window, cx, |t| t.book_bg, |t, v| t.book_bg = v),
         book_bg_ask: color_field(
             backend,
@@ -247,8 +253,9 @@ pub(super) fn build(
 impl SettingsView {
     /// Render the Interface tab for the portable `theme.toml` chart theme variant.
     ///
-    /// Sections cover chart-label font, chart background/grid, crosshair, candles, order book, and
-    /// panels. Personal interface mode and UI font settings belong to General in `settings.toml`.
+    /// Sections cover chart-label font, chart background/grid, crosshair, candles, price lines,
+    /// trades, order book, and panels. Personal interface mode and UI font settings belong to
+    /// General in `settings.toml`.
     ///
     /// Args:
     ///     cx: Settings context that supplies the active palette and display scale.
@@ -365,8 +372,12 @@ impl SettingsView {
                 cx,
             ))
             .child(separator(p, cx))
-            // The trade-mark and bottom-volume groups that used to sit here are now per chart TAB,
-            // in the chart's palette popup (`chart_tabs::graphics_popup`).
+            // Trade colors are shared by all chart tabs using this theme.
+            .child(section(&t!("iface.sec_trades"), p, cx))
+            .child(color_row(&t!("iface.tick_buy"), &i.tick_buy, p, cx))
+            .child(color_row(&t!("iface.tick_sell"), &i.tick_sell, p, cx))
+            .child(color_row(&t!("iface.tick_liq"), &i.tick_liq, p, cx))
+            .child(separator(p, cx))
             // Order book.
             .child(section(&t!("iface.sec_book"), p, cx))
             .child(color_row(&t!("iface.book_bg"), &i.book_bg, p, cx))

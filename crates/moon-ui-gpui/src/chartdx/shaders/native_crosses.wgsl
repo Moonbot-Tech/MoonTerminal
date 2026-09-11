@@ -36,6 +36,13 @@ fn to_clip(px: vec2<f32>, resolution: vec2<f32>) -> vec4<f32> {
 @group(0) @binding(0) var<uniform> cv: ChartView;
 @group(0) @binding(1) var<storage, read> crosses: array<Cross>;
 
+struct TickStyle {
+    buy: vec4<f32>,
+    sell: vec4<f32>,
+    liq: vec4<f32>,
+};
+@group(0) @binding(2) var<uniform> ts: TickStyle;
+
 struct CrossOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -81,9 +88,15 @@ fn crosses_fragment(in: CrossOut) -> @location(0) vec4<f32> {
     if ((mask >> u32(col)) & 1u) == 0u {
         discard;
     }
-    let buy = vec3<f32>(0.18431, 0.65882, 0.36078);
-    let sell = vec3<f32>(1.0, 0.55686, 0.35294);
-    return vec4<f32>(select(buy, sell, in.side != 0u), 1.0);
+    var rgb: vec3<f32>;
+    if in.side == 0u {
+        rgb = ts.buy.rgb;
+    } else if in.side == 1u {
+        rgb = ts.sell.rgb;
+    } else {
+        rgb = ts.liq.rgb;
+    }
+    return vec4<f32>(rgb, 1.0);
 }
 
 struct VolumeOut {
@@ -119,7 +132,5 @@ fn volume_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: 
 
 @fragment
 fn volume_fragment(in: VolumeOut) -> @location(0) vec4<f32> {
-    let buy = vec3<f32>(0.18431, 0.65882, 0.36078);
-    let sell = vec3<f32>(1.0, 0.55686, 0.35294);
-    return vec4<f32>(select(buy, sell, in.side != 0u), clamp(cv.volume_alpha, 0.0, 1.0));
+    return vec4<f32>(select(ts.buy.rgb, ts.sell.rgb, in.side != 0u), clamp(cv.volume_alpha, 0.0, 1.0));
 }

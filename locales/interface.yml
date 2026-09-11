@@ -118,6 +118,22 @@ iface.price_line_px:
   ru: "Толщина линий цены, пкс"
   en: "Price line thickness, px"
   es: "Grosor de las líneas de precio, px"
+iface.sec_trades:
+  ru: "Сделки"
+  en: "Trades"
+  es: "Operaciones"
+iface.tick_buy:
+  ru: "Цвет покупок"
+  en: "Buy trade color"
+  es: "Color de compras"
+iface.tick_sell:
+  ru: "Цвет продаж"
+  en: "Sell trade color"
+  es: "Color de ventas"
+iface.tick_liq:
+  ru: "Цвет ликвидаций"
+  en: "Liquidation color"
+  es: "Color de liquidaciones"
 iface.sec_book:
   ru: "Стакан"
   en: "Order book"

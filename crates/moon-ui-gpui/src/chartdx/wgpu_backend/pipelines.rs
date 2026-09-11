@@ -2,6 +2,7 @@
 
 use super::*;
 
+/// Creates pipelines with separate style layouts for ticks and price lines.
 pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureFormat) -> Pipelines {
     let background_shader = shader(device, "moon_chart_background_wgsl", BACKGROUND_SHADER);
     let grid_shader = shader(device, "moon_chart_grid_wgsl", GRID_SHADER);
@@ -56,13 +57,22 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         ],
     });
     // Price lines take their own layout so the shared `view_storage_layout` keeps exactly two
-    // entries for its six other consumers.
+    // entries for the remaining geometry consumers.
     let price_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("moon_chart_price_layout"),
         entries: &[
             uniform_entry(0, std::mem::size_of::<ChartViewGpu>()),
             storage_entry(1),
             uniform_entry(2, std::mem::size_of::<PriceStyleGpu>()),
+        ],
+    });
+    // Keep the shared two-entry layout intact for the remaining geometry passes.
+    let cross_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("moon_chart_cross_layout"),
+        entries: &[
+            uniform_entry(0, std::mem::size_of::<ChartViewGpu>()),
+            storage_entry(1),
+            uniform_entry(2, std::mem::size_of::<TickStyleGpu>()),
         ],
     });
     let book_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -127,7 +137,7 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         device,
         format,
         &crosses_shader,
-        &view_storage_layout,
+        &cross_layout,
         "crosses_vertex",
         "crosses_fragment",
     );
@@ -135,7 +145,7 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         device,
         format,
         &crosses_shader,
-        &view_storage_layout,
+        &cross_layout,
         "volume_vertex",
         "volume_fragment",
     );
@@ -248,6 +258,7 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         readout_layout,
         view_storage_layout,
         price_layout,
+        cross_layout,
         book_layout,
         candle_layout,
         background,
