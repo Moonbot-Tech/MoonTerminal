@@ -1,31 +1,77 @@
 //! Regression cases for quote units, overlapping ticks, and pending native uploads.
 
-use super::{TickVolumeRange, cursor_column, nearby_ticks, pending_ring, quote_notional};
+use super::{
+    TickVolumeRange, cursor_column, cursor_time, nearby_ticks, pending_ring, quote_notional,
+    tick_ranges_visible,
+};
 
-/// Hidden layers and off-band cursors have no values; DPI scales the pick column once.
+/// The whole plot answers, not only the band along its floor; DPI scales the pick column once.
+///
+/// Breakage this pins: restoring the former band-only Y gate — `base - band ..= base` around the
+/// plot's floor — makes every candle-plot cursor here read `None` again.
 #[test]
-fn cursor_column_respects_native_band_and_opacity() {
-    let bounds = [100.0, 50.0, 600.0, 800.0]; // band floor 849, ceiling 777 device pixels
-    assert_eq!(
-        cursor_column(bounds, 1_000.0, 2.0, [300.0, 800.0], 2.0, 0.5),
-        Some((1097.0, 1103.0))
-    );
-    for cursor in [
-        [300.0, 776.0],
-        [300.0, 850.0],
-        [99.0, 800.0],
-        [701.0, 800.0],
-    ] {
-        assert_eq!(cursor_column(bounds, 1_000.0, 2.0, cursor, 2.0, 0.5), None);
+fn cursor_column_covers_the_whole_plot() {
+    let bounds = [100.0, 50.0, 600.0, 800.0]; // plot 100..700 x 50..850 device pixels
+    // The former band ceiling sat at 777: a cursor over the candles well above it now answers.
+    for y in [50.0, 300.0, 776.0, 800.0, 850.0] {
+        assert_eq!(
+            cursor_column(bounds, 1_000.0, 2.0, [300.0, y], 2.0),
+            Some((1097.0, 1103.0)),
+            "cursor at y={y} is inside the plot"
+        );
+    }
+    // Outside the plot rectangle on any edge, there is nothing to describe.
+    for cursor in [[300.0, 49.0], [300.0, 851.0], [99.0, 800.0], [701.0, 800.0]] {
+        assert_eq!(cursor_column(bounds, 1_000.0, 2.0, cursor, 2.0), None);
     }
     assert_eq!(
-        cursor_column(bounds, 1_000.0, 2.0, [300.0, 800.0], 2.0, 0.0),
+        cursor_column(bounds, 1_000.0, 0.0, [300.0, 800.0], 2.0),
         None
     );
     assert_eq!(
-        cursor_column(bounds, 1_000.0, 0.0, [300.0, 800.0], 2.0, 0.5),
+        cursor_column(bounds, 1_000.0, 2.0, [300.0, 800.0], 0.0),
         None
     );
+    assert_eq!(
+        cursor_column(bounds, f32::NAN, 2.0, [300.0, 800.0], 2.0),
+        None
+    );
+}
+
+/// The candle lookup's time shares the column's validation and sits at the cursor, not at an edge.
+#[test]
+fn cursor_time_is_the_exact_cursor_and_shares_the_column_guards() {
+    let bounds = [100.0, 50.0, 600.0, 800.0];
+    assert_eq!(
+        cursor_time(bounds, 1_000.0, 2.0, [300.0, 300.0]),
+        Some(1100.0)
+    );
+    // The left edge clamps the column's own start, but never the time under the pointer.
+    assert_eq!(
+        cursor_time(bounds, 1_000.0, 2.0, [100.0, 300.0]),
+        Some(1000.0)
+    );
+    assert_eq!(
+        cursor_column(bounds, 1_000.0, 2.0, [100.0, 300.0], 2.0),
+        Some((1000.0, 1003.0))
+    );
+    for cursor in [[99.0, 300.0], [300.0, 851.0]] {
+        assert_eq!(cursor_time(bounds, 1_000.0, 2.0, cursor), None);
+    }
+    assert_eq!(
+        cursor_time([100.0, 50.0, 0.0, 800.0], 1_000.0, 2.0, [100.0, 300.0]),
+        None
+    );
+}
+
+/// Tick rows follow the native band's opacity; the candle figure beside them does not.
+#[test]
+fn tick_rows_follow_the_native_band_opacity() {
+    assert!(tick_ranges_visible(0.5));
+    assert!(tick_ranges_visible(1.0));
+    for alpha in [0.0, -1.0, f32::NAN] {
+        assert!(!tick_ranges_visible(alpha));
+    }
 }
 
 /// A price move changes notional even when base quantity stays fixed.

@@ -85,11 +85,6 @@ fn data_render_roots_keep_the_mono_family() {
             "impl Render for StrategiesView",
             "strategy rows and names",
         ),
-        (
-            "crowd.rs",
-            "impl Render for CrowdStatsView",
-            "the crowd's money columns",
-        ),
     ] {
         let source = read_src(path);
         let root = render_root(&source, render_impl);
@@ -130,6 +125,24 @@ fn data_render_roots_keep_the_mono_family() {
         assert!(
             body.contains(".font_family(design::mono())"),
             "{path}:{function} must keep mono for {surface}; a proportional pane breaks comparison scanning"
+        );
+    }
+}
+
+/// Each independently placed crowd board must carry its own mono family in both layouts.
+/// Reverting one branch to UI text must fail even when its sibling boards still use mono.
+#[test]
+fn independently_placed_crowd_boards_keep_the_mono_family() {
+    let source = read_src("crowd.rs");
+    let boards = braced_body(&source, "pub(crate) fn boards(");
+    for branch in [
+        "if this.parts.minute",
+        "if this.parts.coins",
+        "if this.parts.traders",
+    ] {
+        assert!(
+            code_only(braced_body(boards, branch)).contains(".font_family(design::mono())"),
+            "crowd.rs:{branch} must set mono on its independent data root"
         );
     }
 }

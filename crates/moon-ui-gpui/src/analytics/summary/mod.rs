@@ -9,6 +9,7 @@ use rust_i18n::t;
 
 use super::AnalyticsView;
 mod charts;
+pub(super) use charts::PopupHover;
 mod cumulative;
 use crate::design;
 use crate::design::{moon, moon_alpha};

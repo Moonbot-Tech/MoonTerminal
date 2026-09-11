@@ -3,10 +3,13 @@
 //! chart itself lives in `cumulative`.
 
 use std::ops::Range;
+use std::time::Duration;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonPalette, MoonProgress, MoonScrollbarVisibility, MoonVirtualList, h_flex, v_flex,
+    MoonPalette, MoonProgress, MoonScrollAxis, MoonScrollbarVisibility, MoonVirtualList, h_flex,
+    moon_scrollbar_overlay_with_palette, v_flex,
 };
 use rust_i18n::t;
 
@@ -73,13 +76,151 @@ pub(super) fn widest_label_w<'a>(
 /// drift apart from a layout that cannot.
 pub(super) const PLOT_W_NOMINAL: f32 = 392.0;
 
+/// Chart identity and bucket together prevent a late dismissal from closing another popup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PopupKey {
+    /// One daily profit bucket.
+    Daily(usize),
+    /// Running totals through one bucket.
+    Cumulative(usize),
+    /// One strategy type.
+    Kind(usize),
+}
+
+/// Pointer ownership and generation fence for delayed popup dismissal.
+#[derive(Default)]
+pub(in crate::analytics) struct PopupHover {
+    /// Bucket currently owning the popup.
+    target: Option<PopupKey>,
+    /// Whether the pointer reached the popup instead of merely leaving its source column.
+    over_popup: bool,
+    /// Invalidates outstanding leave timers when the pointer returns or changes buckets.
+    revision: u64,
+}
+
+impl PopupHover {
+    /// Cancel queued actions when reloading changes what their bucket index identifies.
+    pub(in crate::analytics) fn reset_for_reload(&mut self, reset_daily: bool) {
+        if reset_daily || matches!(self.target, Some(PopupKey::Kind(_))) {
+            self.target = None;
+            self.over_popup = false;
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    /// Transfer ownership on entry and cancel any previous leave timer.
+    fn enter(&mut self, key: PopupKey, over_popup: bool) {
+        self.target = Some(key);
+        self.over_popup = over_popup;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Begin a grace period unless this is an obsolete source or the popup still owns hover.
+    fn leave(&mut self, key: PopupKey, from_popup: bool) -> Option<u64> {
+        if self.target != Some(key) || (!from_popup && self.over_popup) {
+            return None;
+        }
+        self.over_popup = false;
+        self.revision = self.revision.wrapping_add(1);
+        Some(self.revision)
+    }
+
+    /// Expire only the exact leave event; re-entry and bucket switches invalidate it.
+    fn expire(&mut self, key: PopupKey, revision: u64) -> bool {
+        if !self.is_current(key, revision) || self.over_popup {
+            return false;
+        }
+        self.target = None;
+        true
+    }
+
+    /// Accept a delayed action only while the same pointer event still owns the popup.
+    fn is_current(&self, key: PopupKey, revision: u64) -> bool {
+        self.target == Some(key) && self.revision == revision
+    }
+}
+
+/// Keep the existing chart highlights synchronized with the popup's single pointer owner.
+fn select_popup(this: &mut AnalyticsView, key: Option<PopupKey>) {
+    this.hover_daily_bucket = match key {
+        Some(PopupKey::Daily(i)) => Some(i),
+        _ => None,
+    };
+    this.hover_cum_bucket = match key {
+        Some(PopupKey::Cumulative(i)) => Some(i),
+        _ => None,
+    };
+    this.hover_kind = match key {
+        Some(PopupKey::Kind(i)) => Some(i),
+        _ => None,
+    };
+}
+
+/// Allow travel across the anchor gap without closing; a generation fence rejects stale timers.
+pub(super) fn chart_hover(
+    this: &mut AnalyticsView,
+    key: PopupKey,
+    hovered: bool,
+    from_popup: bool,
+    cx: &mut Context<AnalyticsView>,
+) {
+    let pending = if hovered {
+        // Crossing dense neighbouring columns on the way to the popup must not make the card
+        // chase the pointer. A brief dwell switches buckets; entering the card cancels that dwell.
+        let switching = !from_popup
+            && this
+                .summary_popup_hover
+                .target
+                .is_some_and(|old| old != key)
+            && (this.hover_daily_bucket.is_some()
+                || this.hover_cum_bucket.is_some()
+                || this.hover_kind.is_some());
+        this.summary_popup_hover.enter(key, from_popup);
+        if switching {
+            Some((this.summary_popup_hover.revision, true))
+        } else {
+            select_popup(this, Some(key));
+            cx.notify();
+            None
+        }
+    } else {
+        this.summary_popup_hover
+            .leave(key, from_popup)
+            .map(|revision| (revision, false))
+    };
+    if let Some((revision, reveal)) = pending {
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            executor
+                .timer(Duration::from_millis(if reveal { 150 } else { 300 }))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if reveal && this.summary_popup_hover.is_current(key, revision) {
+                    select_popup(this, Some(key));
+                    cx.notify();
+                } else if !reveal && this.summary_popup_hover.expire(key, revision) {
+                    select_popup(this, None);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+}
+
 /// Which buckets keep a value label once the bars are denser than the labels are wide.
 ///
-/// Greedy by descending |value|: the biggest day is always labelled, and every later candidate
-/// is kept only if its column sits at least one label-width from every column already kept.
-/// That is what replaced the old all-or-nothing `days.len() <= 45` cutoff, which drew a slab of
-/// colliding digits just under the limit and NOTHING at all just over it — so on «Все» the
-/// chart said nothing about its own extremes.
+/// The LAST bucket is seeded before anything else, so the period's own end always carries its
+/// number — including a zero one, which ordering by magnitude ranks dead last and which the
+/// reader most wants to see, because "where did this period finish" is the question the right
+/// edge of the chart answers. Every other candidate then has to clear that label rather than the
+/// other way round, so the guarantee costs a neighbour rather than an overlap.
+///
+/// The rest is greedy by descending |value|: the biggest day is labelled next, and every later
+/// candidate is kept only if its column sits at least one label-width from every column already
+/// kept. That is what replaced the old all-or-nothing `days.len() <= 45` cutoff, which drew a
+/// slab of colliding digits just under the limit and NOTHING at all just over it — so on «Все»
+/// the chart said nothing about its own extremes.
 ///
 /// Selecting by magnitude rather than by every N-th bucket is deliberate: the days worth naming
 /// on a profit chart are the big ones, and an every-N-th rule names whichever days the stride
@@ -91,20 +232,34 @@ pub(super) const PLOT_W_NOMINAL: f32 = 392.0;
 ///     label_w: Width of one label, in pixels.
 ///
 /// Returns:
-///     Indices into `vals` to label, ascending.
+///     Indices into `vals` to label, ascending. Always contains the last index.
 fn thinned_labels(vals: &[f64], plot_w: f32, label_w: f32) -> Vec<usize> {
     let n = vals.len();
     if n == 0 {
         return Vec::new();
     }
+    let last = n - 1;
     // Bars are equal flex cells, so bucket `i` is centred at (i+0.5)/n of the width — the same
-    // mapping the hover popup uses.
-    let x = |i: usize| (i as f32 + 0.5) / n as f32 * plot_w;
+    // mapping the hover popup uses. The last one is the exception: its label is right-aligned to
+    // the plot's edge instead of centred on its column (`daily_bars`), because a centred label
+    // there would hang half its width outside the card. Its centre therefore sits half a label
+    // in from that edge, and the separation test has to use THAT, or the neighbour it clears on
+    // paper still collides on screen.
+    let x = |i: usize| {
+        if i == last {
+            plot_w - label_w / 2.0
+        } else {
+            (i as f32 + 0.5) / n as f32 * plot_w
+        }
+    };
     let mut order: Vec<usize> = (0..n).collect();
     // Index as the tie-break, so two equal days never swap between frames.
     order.sort_by(|&a, &b| vals[b].abs().total_cmp(&vals[a].abs()).then(a.cmp(&b)));
-    let mut kept: Vec<usize> = Vec::new();
+    let mut kept: Vec<usize> = vec![last];
     for i in order {
+        if i == last {
+            continue;
+        }
         if kept.iter().all(|&j| (x(i) - x(j)).abs() >= label_w) {
             kept.push(i);
         }
@@ -376,10 +531,6 @@ pub(super) fn daily_bars(
         thinned_labels(&profits, PLOT_W_NOMINAL, label_w)
             .into_iter()
             .collect();
-    // A bar is labelled only if it also TRADED, so the reserved band must ask the same
-    // question: an all-quiet period has candidates but draws nothing, and reserving room for
-    // labels that never appear just shortens every bar.
-    let labels_on = labelled.iter().any(|&bi| days[bi].trades > 0);
     // Space reserved for the labels: always on top (above the tallest green
     // bar), on the bottom only when there is a negative value (the label goes
     // BELOW a red bar). Bars scale into the remaining height, so the numbers
@@ -390,12 +541,11 @@ pub(super) fn daily_bars(
     // purpose: `t_caption` follows the Font slider, the clearance goes through `ui_px` like
     // every other piece of chrome (`cumulative.rs` sizes its own band the same way).
     let label_band = f32::from(design::t_caption(cx)) * 1.4 + f32::from(design::ui_px(cx, 2.0));
-    let pad_top = if labels_on { label_band } else { 0.0 };
-    let pad_bottom = if labels_on && vmin < 0.0 {
-        label_band
-    } else {
-        0.0
-    };
+    // The band is unconditional now: `thinned_labels` always keeps the last bucket and that one
+    // is drawn even on a quiet day, so there is no longer a period that reserves room for
+    // labels it never draws.
+    let pad_top = label_band;
+    let pad_bottom = if vmin < 0.0 { label_band } else { 0.0 };
     let area_h = (CHART_H - pad_top - pad_bottom).max(10.0);
     let zero_from_bottom = pad_bottom + area_h * (1.0 - up_frac);
     let n = days.len();
@@ -420,15 +570,7 @@ pub(super) fn daily_bars(
             .relative()
             .h_full()
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    if this.hover_daily_bucket != Some(bi) {
-                        this.hover_daily_bucket = Some(bi);
-                        cx.notify();
-                    }
-                } else if this.hover_daily_bucket == Some(bi) {
-                    this.hover_daily_bucket = None;
-                    cx.notify();
-                }
+                chart_hover(this, PopupKey::Daily(bi), *hovered, false, cx);
             }))
             .child(
                 div()
@@ -443,7 +585,12 @@ pub(super) fn daily_bars(
         if hover == Some(bi) {
             col = col.bg(moon_alpha(p.text_muted, 0.07));
         }
-        if labelled.contains(&bi) && d.trades > 0 {
+        // A quiet bucket normally draws no number — an empty day has nothing to report. The LAST
+        // bucket is the exception and is drawn whatever it holds, zero included: the right edge
+        // of the chart is where a reader looks for where the period ended, and a missing number
+        // there reads as missing DATA rather than as a flat day.
+        let is_last = bi + 1 == n;
+        if labelled.contains(&bi) && (d.trades > 0 || is_last) {
             // Label: above a green bar / below a red one (the space is
             // reserved by pad_top/pad_bottom, so no bar covers the number).
             let label_bottom = if d.profit >= 0.0 {
@@ -456,22 +603,28 @@ pub(super) fn daily_bars(
             // side, so it matches the width the thinning pass kept the columns
             // apart by; neighbours can no longer touch.
             let over = px(label_w / 2.0);
+            // Except at the right edge, where that same overhang would push half the number past
+            // the plot and into the card's padding. The last label spends its whole overhang on
+            // the LEFT and ends flush with its own column, which is the plot's edge;
+            // `thinned_labels` separates its neighbours against that shifted centre.
+            let band = if is_last {
+                div().left(px(-label_w)).right_0()
+            } else {
+                div().left(-over).right(-over)
+            };
+            let text = div().w_full().flex().child(texts[bi].clone());
+            let text = if is_last {
+                text.justify_end()
+            } else {
+                text.justify_center()
+            };
             col = col.child(
-                div()
-                    .absolute()
-                    .left(-over)
-                    .right(-over)
+                band.absolute()
                     .bottom(px(label_bottom))
                     .text_size(design::t_caption(cx))
                     .whitespace_nowrap()
                     .text_color(moon(super::sign_color(p, d.profit)))
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .justify_center()
-                            .child(texts[bi].clone()),
-                    ),
+                    .child(text),
             );
         }
         row = row.child(col);
@@ -508,7 +661,7 @@ pub(super) fn daily_bars(
         .into_any_element()
 }
 
-/// Rows a bucket popup lists before it would run off the screen.
+/// Largest contributors retained in the popup; viewport scrolling separately bounds its height.
 const POPUP_ROWS: usize = 16;
 
 /// A core's colour: the server's own, or the cycled fallback when it has no config entry.
@@ -534,12 +687,14 @@ pub(super) struct PopupRow {
 /// `frac` is where the hovered column sits across the chart's width — the CALLER's
 /// business, since the bars are equal flex cells (`bi/n`) while the curve puts its points
 /// at `bi/(n-1)`, and a shared guess would anchor the card away from what it describes.
+/// `key` binds scroll state and delayed hover events to this exact chart and bucket.
 pub(super) fn popup_card(
     title: String,
     total: f64,
     trades: i64,
     mut rows: Vec<PopupRow>,
     frac: f32,
+    key: PopupKey,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
@@ -553,19 +708,102 @@ pub(super) fn popup_card(
     // Then DISPLAY by value: earners on top, losers at the bottom.
     rows.sort_by(|a, b| b.value.total_cmp(&a.value));
     let hidden = found.saturating_sub(rows.len());
+    let more = (hidden > 0).then(|| t!("analytics.popup_more", n = hidden).to_string());
+    // Measured BEFORE the rows are consumed, so the card is sized by the very strings it is
+    // about to draw rather than by a width guessed once and left behind.
+    let content_w = popup_content_w(
+        &title,
+        &profit_trades(total, trades),
+        &rows,
+        more.as_deref(),
+        cx,
+    );
     let mut card = popup_shell(p, cx).child(popup_head(title, total, trades, p, cx));
     for r in rows {
         card = card.child(popup_core_row(r.label, r.dot, r.value, r.trades, p, cx));
     }
     // The cap is never silent: without this the rows visibly fail to add up to the header.
-    if hidden > 0 {
-        card = card.child(
-            div()
-                .text_color(moon(p.text_muted))
-                .child(t!("analytics.popup_more", n = hidden).to_string()),
-        );
+    if let Some(more) = more {
+        card = card.child(div().text_color(moon(p.text_muted)).child(more));
     }
-    anchor_popup(card, frac, cx)
+    PopupOverlay {
+        card,
+        width: popup_w(content_w, cx),
+        frac,
+        key,
+        view: cx.entity().downgrade(),
+        palette: p,
+    }
+    .into_any_element()
+}
+
+/// Widest line the popup is about to draw, in pixels, chrome between the columns included.
+///
+/// EVERY row is measured, unlike the bar labels of [`widest_label_w`], which take the longest
+/// string as the widest one: that shortcut holds only while a glyph advance is constant, and a
+/// core NAME is arbitrary user text that can mix scripts within one popup. Picking the wrong row
+/// there would truncate the very name this measurement exists to reveal, and a hovered popup is
+/// at most `POPUP_ROWS` server rows, so measuring all of them costs nothing worth saving.
+///
+/// Args:
+///     title: Header text on the left — the bucket's date or the strategy type.
+///     total: Already-formatted header total, the `Σ` value.
+///     rows: The core lines this card will list, after the row cap.
+///     more: The "…N more" tail, when the cap hid something.
+///     cx: Analytics view context.
+///
+/// Returns:
+///     Width the card's content needs, excluding its own padding and border.
+fn popup_content_w(
+    title: &str,
+    total: &str,
+    rows: &[PopupRow],
+    more: Option<&str>,
+    cx: &Context<AnalyticsView>,
+) -> f32 {
+    let w = |s: &str| design::mono_caption_text_width(cx, s, LABEL_WEIGHT);
+    // `popup_head`: title, a 10px gap, `Σ`, a 4px gap, the total.
+    let head = w(title)
+        + f32::from(design::ui_px(cx, 10.0))
+        + w("Σ")
+        + f32::from(design::ui_px(cx, 4.0))
+        + w(total);
+    // `popup_core_row`: the 6px dot and two 5px gaps around the name.
+    let row_chrome = f32::from(design::ui_px(cx, 6.0)) + f32::from(design::ui_px(cx, 5.0)) * 2.0;
+    rows.iter()
+        .map(|r| row_chrome + w(&r.label) + w(&profit_trades(r.value, r.trades)))
+        .chain(more.map(w))
+        .fold(head, f32::max)
+}
+
+/// Width of the popup card: measured from its own content, so a long server name reads in full.
+///
+/// The old fixed 190 turned every name past roughly twenty characters into an ellipsis, and this
+/// card is the ONE surface that says WHICH core earned the day — a truncated name there answers
+/// nothing. Keep the minimum width for short names, but let full names determine the maximum.
+/// Only the real window bounds constrain the viewport; unusually long rows scroll horizontally.
+/// [`PopupOverlay`] fits this width against the actual viewport, independently of bucket position.
+///
+/// Args:
+///     content_w: Widest line the card will draw, from [`popup_content_w`].
+///     cx: Analytics view context.
+///
+/// Returns:
+///     Outer width for the popup holder.
+fn popup_w(content_w: f32, cx: &Context<AnalyticsView>) -> Pixels {
+    // `popup_shell`'s own 8px of padding each side, its one-pixel border each side, and a couple
+    // of pixels of slack: `mono_caption_text_width` sums glyph advances without kerning, so an
+    // exact fit can still clip the last character it was measured to hold.
+    let chrome =
+        f32::from(design::ui_px(cx, 8.0)) * 2.0 + 2.0 + f32::from(design::ui_px(cx, 2.0)) * 2.0;
+    let min = f32::from(design::font_w_px(cx, 190.0));
+    let track = f32::from(design::ui_px(cx, moon_ui::MOON_SCROLLBAR_TRACK));
+    px(popup_outer_width(content_w, chrome, min, track))
+}
+
+/// Reserve scrollbar space outside the measured card, without an arbitrary chart-width cap.
+fn popup_outer_width(content: f32, chrome: f32, minimum: f32, track: f32) -> f32 {
+    (content + chrome).max(minimum) + track
 }
 
 /// Which numbers a bucket popup reports — the ONE thing the two time charts' popups differ in.
@@ -647,10 +885,11 @@ fn popup_core_row(
                 .bg(dot),
         )
         .child(
+            // Keep identities on one line; the window-bounded viewport scrolls oversized rows.
             div()
                 .flex_1()
                 .min_w_0()
-                .truncate()
+                .whitespace_nowrap()
                 .text_color(moon(p.text_soft))
                 .child(name),
         )
@@ -662,20 +901,105 @@ fn popup_core_row(
         )
 }
 
-/// Anchor a popup to bucket `frac` of the chart's width, inside its relative container: in
-/// the right third it opens to the LEFT of the column, otherwise to the right. `deferred`
-/// paints it ON TOP of everything — without it the card hid under the cards drawn later.
-fn anchor_popup(card: Div, frac: f32, cx: &Context<AnalyticsView>) -> AnyElement {
-    let mut holder = div()
-        .absolute()
-        .top(px(6.0))
-        .w(design::font_w_px(cx, 190.0));
-    if frac <= 0.62 {
-        holder = holder.left(relative(frac)).ml(px(12.0));
-    } else {
-        holder = holder.right(relative(1.0 - frac)).mr(px(12.0));
+/// Fit the scroll viewport inside window chrome, without squeezing it into a bucket's remainder.
+fn popup_limits(width: f32, viewport_w: f32, viewport_h: f32, inset: f32) -> (f32, f32) {
+    (
+        width.min((viewport_w - 2.0 * inset).max(0.0)),
+        (viewport_h - 2.0 * inset).max(0.0),
+    )
+}
+
+/// Window-aware adapter for the shared chart popup; MoonUI supplies anchoring and scrollbars.
+#[derive(IntoElement)]
+struct PopupOverlay {
+    /// Already formatted rows and header, retaining the active profit unit.
+    card: Div,
+    /// Measured outer width before viewport fitting.
+    width: Pixels,
+    /// Bucket anchor along the chart's actual laid-out width.
+    frac: f32,
+    /// Distinguishes scroll state and hover timers across charts and buckets.
+    key: PopupKey,
+    /// Weak owner avoids an element-to-view reference cycle.
+    view: WeakEntity<AnalyticsView>,
+    /// Palette for the Moon scrollbar track and thumb.
+    palette: MoonPalette,
+}
+
+impl RenderOnce for PopupOverlay {
+    /// Bound the entire card, preserve intrinsic row heights, and let MoonUI fit its window anchor.
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let margin = design::ui_px(cx, 8.0);
+        let inset = margin + window.client_inset().unwrap_or(px(0.0));
+        let viewport = window.viewport_size();
+        let (width, max_height) = popup_limits(
+            f32::from(self.width),
+            f32::from(viewport.width),
+            f32::from(viewport.height),
+            f32::from(inset),
+        );
+        let id = SharedString::from(format!("an-popup-{:?}", self.key));
+        let state = window.use_keyed_state(id.clone(), cx, |window, _| {
+            // The scrollbar reads bounds from the previous layout, so prime it once on opening.
+            window.request_animation_frame();
+            ScrollHandle::new()
+        });
+        let scroll = state.read(cx).clone();
+        let track = design::ui_px(cx, moon_ui::MOON_SCROLLBAR_TRACK);
+        let horizontal = self.width > px(width);
+        let key = self.key;
+        let view = self.view;
+        let popup = div()
+            .id(id.clone())
+            .relative()
+            .occlude()
+            .w(px(width))
+            .on_hover(move |hovered, _, cx| {
+                let _ = view.update(cx, |this, cx| {
+                    chart_hover(this, key, *hovered, true, cx);
+                });
+            })
+            .child(
+                div()
+                    .id(SharedString::from(format!("{id}:scroll")))
+                    .w_full()
+                    .max_h(px(max_height))
+                    .overflow_y_scroll()
+                    .overflow_x_scroll()
+                    .track_scroll(&scroll)
+                    // Space for the pinned scrollbar is outside the measured card content.
+                    .pr(track)
+                    .when(horizontal, |this| this.pb(track))
+                    .child(self.card.w(self.width - track).flex_none()),
+            )
+            .children(moon_scrollbar_overlay_with_palette(
+                format!("{id}:bar"),
+                &scroll,
+                MoonScrollAxis::Both,
+                MoonScrollbarVisibility::Always,
+                self.palette,
+                window,
+                cx,
+            ));
+        let opens_left = self.frac > 0.62;
+        deferred(
+            div()
+                .absolute()
+                .left(relative(self.frac))
+                .top(px(6.0))
+                .child(
+                    anchored()
+                        .anchor(if opens_left {
+                            Anchor::TopRight
+                        } else {
+                            Anchor::TopLeft
+                        })
+                        .offset(point(px(if opens_left { -12.0 } else { 12.0 }), px(0.0)))
+                        .snap_to_window_with_margin(margin)
+                        .child(popup),
+                ),
+        )
     }
-    deferred(holder.child(card)).into_any_element()
 }
 
 /// Popup of bucket `bi`: the date, `Σ` of the whole bucket, and every core that traded by
@@ -755,7 +1079,11 @@ pub(super) fn bucket_popup(
         .get(bi)
         .map(|d| bucket_label(d.start, bucket, zone))
         .unwrap_or_default();
-    popup_card(title, total, trades, rows, frac, p, cx)
+    let key = match mode {
+        PopupMode::Day => PopupKey::Daily(bi),
+        PopupMode::Running => PopupKey::Cumulative(bi),
+    };
+    popup_card(title, total, trades, rows, frac, key, p, cx)
 }
 
 /// Profit per STRATEGY TYPE: one bar per type, green up / orange down, the type's name and
@@ -820,15 +1148,7 @@ pub(super) fn kind_bars(
             .relative()
             .h_full()
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    if this.hover_kind != Some(ki) {
-                        this.hover_kind = Some(ki);
-                        cx.notify();
-                    }
-                } else if this.hover_kind == Some(ki) {
-                    this.hover_kind = None;
-                    cx.notify();
-                }
+                chart_hover(this, PopupKey::Kind(ki), *hovered, false, cx);
             }))
             .child(
                 div()
@@ -898,7 +1218,16 @@ pub(super) fn kind_bars(
                 .collect();
             // Bars are equal flex cells: bar `ki` is the (ki+0.5)/n-th of the width.
             let frac = (ki as f32 + 0.5) / n as f32;
-            popup_card(kind_label(&k.kind), k.profit, k.trades, rows, frac, p, cx)
+            popup_card(
+                kind_label(&k.kind),
+                k.profit,
+                k.trades,
+                rows,
+                frac,
+                PopupKey::Kind(ki),
+                p,
+                cx,
+            )
         });
     div()
         .relative()

@@ -1,4 +1,5 @@
-# Per-trade volume readouts; separate from candle-volume captions.
+# Cursor volume readout: per-trade prints near the cursor, plus the hovered candle's own bucket
+# turnover. The two are labelled separately on purpose — a bucket total is not a trade.
 _version: 2
 
 tick_volume.nearby:
@@ -26,3 +27,34 @@ tick_volume.maximum:
   ru: "Макс: %{value}"
   en: "Max: %{value}"
   es: "Máx: %{value}"
+
+# The hovered candle's whole-bucket turnover. `%{tf}` is the bucket width as the chart's own
+# timeframe controls spell it (`1m`, `4h`, `1d`) and stays untranslated, like every other market
+# token. The `_untimed` pair covers a bucket whose width cannot be named.
+tick_volume.candle_values:
+  ru: "Свеча %{tf}: %{value} %{unit}"
+  en: "Candle %{tf}: %{value} %{unit}"
+  es: "Vela %{tf}: %{value} %{unit}"
+tick_volume.candle_values_untimed:
+  ru: "Свеча: %{value} %{unit}"
+  en: "Candle: %{value} %{unit}"
+  es: "Vela: %{value} %{unit}"
+tick_volume.candle_head:
+  ru: "Свеча %{tf}"
+  en: "Candle %{tf}"
+  es: "Vela %{tf}"
+tick_volume.candle_head_untimed:
+  ru: "Свеча"
+  en: "Candle"
+  es: "Vela"
+
+# Stacked with no tick heading above to carry the unit: the candle's own heading carries it, so a
+# narrow pane can still show the amount on its own line instead of losing the block.
+tick_volume.candle_head_unit:
+  ru: "Свеча %{tf} (%{unit})"
+  en: "Candle %{tf} (%{unit})"
+  es: "Vela %{tf} (%{unit})"
+tick_volume.candle_head_unit_untimed:
+  ru: "Свеча (%{unit})"
+  en: "Candle (%{unit})"
+  es: "Vela (%{unit})"

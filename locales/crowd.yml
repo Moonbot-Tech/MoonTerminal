@@ -112,6 +112,85 @@ crowd.settings.coins:
   en: "Show the 24h coin top"
   es: "Mostrar el top 24h de monedas"
 
+# --- Where each block of the empty screen is drawn ---
+# The switches above say WHETHER a block is drawn; these say WHERE. Deliberately two questions: a
+# block that is switched off keeps the place it was given, and switching it back on puts it there.
+# The mark and the line under it are placed SEPARATELY because they are switched separately.
+crowd.settings.places:
+  ru: "Расположение блоков"
+  en: "Where the blocks go"
+  es: "Ubicación de los bloques"
+crowd.settings.places_reset:
+  ru: "Сбросить"
+  en: "Reset"
+  es: "Restablecer"
+crowd.settings.places_reset_tip:
+  ru: "Вернуть все блоки на места по умолчанию"
+  en: "Put every block back where it started"
+  es: "Devolver todos los bloques a su lugar inicial"
+
+# The blocks themselves, named as things rather than as actions: these captions sit beside a
+# position, not beside a switch.
+crowd.block.logo:
+  ru: "Логотип"
+  en: "Logo"
+  es: "Logotipo"
+crowd.block.hint:
+  ru: "Подсказка"
+  en: "Hint"
+  es: "Ayuda"
+crowd.block.minute:
+  ru: "Минутные сделки"
+  en: "Trading minute"
+  es: "Minuto de operaciones"
+crowd.block.traders:
+  ru: "Топ 24ч по ID"
+  en: "24h trader top"
+  es: "Top 24h de traders"
+crowd.block.coins:
+  ru: "Топ 24ч по монетам"
+  en: "24h coin top"
+  es: "Top 24h de monedas"
+
+# The nine anchors, named by row and side. Two blocks may name the same one — they are then drawn
+# one under the other, which is how the logo and its hint share the middle by default.
+crowd.slot.top_start:
+  ru: "Сверху слева"
+  en: "Top left"
+  es: "Arriba izquierda"
+crowd.slot.top_center:
+  ru: "Сверху по центру"
+  en: "Top centre"
+  es: "Arriba centro"
+crowd.slot.top_end:
+  ru: "Сверху справа"
+  en: "Top right"
+  es: "Arriba derecha"
+crowd.slot.middle_start:
+  ru: "По центру слева"
+  en: "Middle left"
+  es: "Centro izquierda"
+crowd.slot.middle_center:
+  ru: "По центру"
+  en: "Centre"
+  es: "Centro"
+crowd.slot.middle_end:
+  ru: "По центру справа"
+  en: "Middle right"
+  es: "Centro derecha"
+crowd.slot.bottom_start:
+  ru: "Снизу слева"
+  en: "Bottom left"
+  es: "Abajo izquierda"
+crowd.slot.bottom_center:
+  ru: "Снизу по центру"
+  en: "Bottom centre"
+  es: "Abajo centro"
+crowd.slot.bottom_end:
+  ru: "Снизу справа"
+  en: "Bottom right"
+  es: "Abajo derecha"
+
 # --- The rule, which is not a layer of this screen ---
 # It draws nothing here: it puts a card in the Detects panel when a coin's minute crosses both
 # lines. Its two thresholds are dead while it is off, which is why they are captioned as

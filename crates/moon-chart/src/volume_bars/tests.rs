@@ -160,3 +160,73 @@ fn quantized_inverse_max_is_positive_monotone_and_stable_for_small_relative_chan
     assert!(low <= high);
     assert_eq!(low, nearby);
 }
+
+/// One retained bucket, for the cursor lookup.
+fn sample(t_open_ms: f64, tf_ms: f64, quote_volume: f32) -> VolumeSample {
+    VolumeSample {
+        t_open_ms,
+        tf_ms,
+        quote_volume,
+    }
+}
+
+/// `sample_at` reads each bucket against its OWN width, half-open, and prefers the narrowest.
+///
+/// Breakage this pins: judging membership against one series-wide width would place a cursor over
+/// the coarse history tail in the wrong bucket (or in none), and a closed upper bound would make
+/// two adjacent buckets both claim the instant on their shared edge.
+#[test]
+fn cursor_lookup_uses_each_buckets_own_half_open_width() {
+    let samples = [
+        sample(1_000.0, 60_000.0, 10.0),
+        sample(61_000.0, 60_000.0, 20.0),
+        // Coarse history filler, reaching past both fine buckets as the composed tail does.
+        sample(1_000.0, 240_000.0, 999.0),
+        // A wide tail bucket after a gap.
+        sample(300_000.0, 3_600_000.0, 30.0),
+    ];
+
+    // Where a fine bucket and the coarse filler both cover the instant, the narrowest wins, so
+    // the readout names the bar the chart actually drew.
+    assert_eq!(sample_at(&samples, 1_000.0), Some(samples[0]));
+    assert_eq!(sample_at(&samples, 60_999.0), Some(samples[0]));
+    // Half-open: the shared edge belongs to the later bucket alone.
+    assert_eq!(sample_at(&samples, 61_000.0), Some(samples[1]));
+    // Past both fine buckets, only the coarse filler still covers the instant.
+    assert_eq!(sample_at(&samples, 121_000.0), Some(samples[2]));
+    assert_eq!(sample_at(&samples, 240_999.0), Some(samples[2]));
+    // The gap between the filler's end and the tail bucket answers nothing.
+    assert_eq!(sample_at(&samples, 241_000.0), None);
+    assert_eq!(sample_at(&samples, 300_000.0), Some(samples[3]));
+    assert_eq!(sample_at(&samples, 3_900_000.0), None);
+    // Before the first bucket, and on unusable inputs.
+    assert_eq!(sample_at(&samples, 999.0), None);
+    assert_eq!(sample_at(&samples, f64::NAN), None);
+    assert_eq!(sample_at(&[], 1_000.0), None);
+    assert_eq!(
+        sample_at(
+            &[sample(1_000.0, 0.0, 5.0), sample(f64::NAN, 60_000.0, 5.0)],
+            1_000.0
+        ),
+        None
+    );
+}
+
+/// `bucket_label` spells a bucket width the way the chart's own timeframe controls do.
+///
+/// Breakage this pins: dropping the period from the readout, or naming a 60-minute bucket `60m`,
+/// makes a one-minute total and a one-hour total read alike in the same pane.
+#[test]
+fn bucket_label_matches_the_charts_own_timeframe_tokens() {
+    assert_eq!(bucket_label(60_000.0).as_deref(), Some("1m"));
+    assert_eq!(bucket_label(300_000.0).as_deref(), Some("5m"));
+    assert_eq!(bucket_label(3_600_000.0).as_deref(), Some("1h"));
+    assert_eq!(bucket_label(14_400_000.0).as_deref(), Some("4h"));
+    assert_eq!(bucket_label(86_400_000.0).as_deref(), Some("1d"));
+    assert_eq!(bucket_label(30_000.0).as_deref(), Some("30s"));
+    assert_eq!(bucket_label(90_000.0).as_deref(), Some("90s"));
+    assert_eq!(bucket_label(250.0).as_deref(), Some("250ms"));
+    for bad in [0.0, 0.5, -60_000.0, f64::NAN, f64::INFINITY] {
+        assert_eq!(bucket_label(bad), None, "{bad} cannot be named");
+    }
+}

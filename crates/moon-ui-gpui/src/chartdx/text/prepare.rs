@@ -110,13 +110,23 @@ impl RenderState {
                     let band = volume_band_h;
                     let avg_frac = volume_style.m[3].clamp(0.0, 1.0).sqrt();
                     for (frac, value) in [(1.0f32, stats.max), (avg_frac, stats.avg)] {
-                        // Too close to the band floor to read: skip rather than overprint.
-                        if band * frac < 6.0 {
+                        // Too close to the band floor to read: skip rather than overprint. The
+                        // room a label needs follows its own line height, so the larger, bolder
+                        // scale face cannot start hanging past the plot's bottom edge unnoticed.
+                        if !super::volume_scale_label_fits(band, frac) {
                             continue;
                         }
                         let label = super::fmt_amount(value);
                         let y = plot_bottom - band * frac;
-                        self.draw_text(ctx, &label, plot_left + 4.0, y, 0.0, 0.5, ink)?;
+                        self.draw_volume_scale_text(
+                            ctx,
+                            &label,
+                            plot_left + 4.0,
+                            y,
+                            0.0,
+                            0.5,
+                            ink,
+                        )?;
                     }
                 }
             }

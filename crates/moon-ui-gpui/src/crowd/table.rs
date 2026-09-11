@@ -53,17 +53,19 @@ pub const DAY_COIN_SEATS: usize = 10;
 /// How many coins the MINUTE board holds.
 pub const MINUTE_SEATS: usize = 10;
 
-/// Where the tables sit, in design units: the minute in the top-right corner, the day's coins
-/// under it in the bottom-right, the day's traders down the left.
+/// How far the whole arrangement stands off the panel's edges, in design units.
+///
+/// These are the FRAME's insets now, not any one table's — the boards no longer place themselves,
+/// and `crowd::place` spends these on the three bands and their columns. One inset per edge, so two
+/// blocks anchored to the same edge line up whatever they are.
 pub(super) const EDGE_X: f32 = 18.0;
 pub(super) const EDGE_BOTTOM: f32 = 18.0;
-/// Where BOTH top tables start.
+/// Where the TOP band starts.
 ///
-/// One inset for the two of them, because their captions sit side by side across the screen and
-/// two different insets read as a misalignment rather than as two tables. It clears the screen's
-/// settings button, which owns the top-right corner
-/// (`chart_tabs/main_stack/empty.rs`): a caption drawn under a button is a caption nobody can
-/// read, and moving only the table under the button would break the line the two share.
+/// Deeper than the other two on purpose: it clears the screen's settings button, which owns the
+/// top-right corner (`chart_tabs/main_stack/empty.rs`). A caption drawn under that button is a
+/// caption nobody can read, and insetting only the cell beneath it would break the line the top
+/// row's captions share.
 pub(super) const EDGE_TOP: f32 = 40.0;
 
 /// Column widths in design units, so a header and its rows cannot disagree.
@@ -86,9 +88,9 @@ pub(super) const FRAC_CHARS: f32 = 4.0;
 /// digits — the busiest second the whole market has shown is a few trades — and a column sized for
 /// a number that cannot happen is width taken from the figures that can.
 pub(super) const COUNT_CHARS: f32 = 5.0;
-/// The trader board's own columns: which way it moved, place, account, handle, money, trades.
+/// The trader board's own columns: place, account, handle, money, trades, then movement.
 ///
-/// The move goes FIRST, in front of the place it is about, and it has no heading of its own — it
+/// The move follows the figures and has no heading of its own — it
 /// is a mark, the way the leaving arrow is a mark, and a titled column over twenty mostly empty
 /// cells would be a heading for nothing.
 pub(super) const W_SHIFT: f32 = 40.0;
@@ -174,6 +176,11 @@ pub struct Look {
 }
 
 impl Look {
+    /// Align coin text with the first digit of the trader board's two-digit ranks.
+    pub(super) fn rank_indent(&self) -> Pixels {
+        (self.w_place - self.digit * 2.0).max(px(0.0))
+    }
+
     /// Resolve the palette and every scaled measurement from the active theme.
     pub fn of(cx: &App) -> Self {
         let body = design::t_body(cx);
@@ -538,6 +545,7 @@ pub(super) fn leaving_rows<T: Clone>(
 
 pub mod day;
 pub mod minute;
+pub(super) mod narrow;
 
 #[cfg(test)]
 mod tests;
