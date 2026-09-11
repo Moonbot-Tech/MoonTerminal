@@ -25,3 +25,20 @@ fn out_of_band_fractions_clamp() {
     assert_eq!(day_fraction_to_minutes(f64::INFINITY), 0);
     assert_eq!(day_fraction_to_minutes(f64::NEG_INFINITY), 0);
 }
+
+/// [`CoreHotkeyAction::ALL`] must hold every action exactly once.
+///
+/// It is hand-written, and it is the oracle behind the terminal's "which hotkeys does a core pull
+/// overwrite" check — a list with one action duplicated and another missing keeps the same length,
+/// passes every length assertion, and silently drops a whole row from that guarantee.
+#[test]
+fn every_core_hotkey_action_appears_in_all_exactly_once() {
+    let mut seen: Vec<CoreHotkeyAction> = Vec::new();
+    for action in CoreHotkeyAction::ALL {
+        assert!(!seen.contains(&action), "{action:?} is listed twice");
+        seen.push(action);
+    }
+    assert_eq!(seen.len(), CORE_HOTKEY_ACTION_COUNT);
+    // The wire array is built from this same set, one pair per action.
+    assert_eq!(CoreHotkeyAction::ALL.len(), CORE_HOTKEY_ACTION_COUNT);
+}

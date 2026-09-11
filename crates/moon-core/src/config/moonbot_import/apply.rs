@@ -84,54 +84,23 @@ fn apply_item(cfg: &mut AppConfig, item: &SettingChange) -> bool {
     }
 }
 
+/// Writes one imported keystroke to the slot its plan id names.
+///
+/// The id is read back through `plan::slot_for_id`, the same table that wrote it, so the plan and
+/// the application cannot disagree about which field an id means. They used to be two hand-kept
+/// maps in two files — eighteen names each, with a comment in this one saying it "mirrors" the
+/// other — and each ended in a silent fallback, so a name typed differently on one side imported
+/// nothing and reported nothing.
+///
+/// `false` for an id this build does not know, which the caller counts as an unapplied item.
 fn apply_hotkey(cfg: &mut AppConfig, id: &str, ks: &str) -> bool {
-    let h = &mut cfg.hotkeys;
-    // Preset slots: hotkey.order_size.{i} / hotkey.sell_preset.{i}.
-    if let Some(rest) = id.strip_prefix("hotkey.order_size.") {
-        if let Some(slot) = parse_slot::<6>(rest) {
-            h.order_size[slot] = ks.to_string();
-            return true;
-        }
-        return false;
-    }
-    if let Some(rest) = id.strip_prefix("hotkey.sell_preset.") {
-        if let Some(slot) = parse_slot::<6>(rest) {
-            h.sell_preset[slot] = ks.to_string();
-            return true;
-        }
-        return false;
-    }
-    let Some(field) = id.strip_prefix("hotkey.") else {
+    let Some(slot) = super::plan::slot_for_id(id) else {
         return false;
     };
-    // Mirrors plan::hotkey_field with the same 18 destination fields.
-    let target = match field {
-        "cancel_buy" => &mut h.cancel_buy,
-        "panic_sell" => &mut h.panic_sell,
-        "panic_sell_one" => &mut h.panic_sell_one,
-        "cancel_all_buys" => &mut h.cancel_all_buys,
-        "join_sells" => &mut h.join_sells,
-        "switch_charts" => &mut h.switch_charts,
-        "new_long" => &mut h.new_long,
-        "new_short" => &mut h.new_short,
-        "split_order" => &mut h.split_order,
-        "split_order_x" => &mut h.split_order_x,
-        "shift_buy_up" => &mut h.shift_buy_up,
-        "shift_buy_down" => &mut h.shift_buy_down,
-        "shift_sell_up" => &mut h.shift_sell_up,
-        "shift_sell_down" => &mut h.shift_sell_down,
-        "scale_plus" => &mut h.scale_plus,
-        "scale_minus" => &mut h.scale_minus,
-        "switch_figure" => &mut h.switch_figure,
-        "chart_shot" => &mut h.chart_shot,
-        _ => return false,
-    };
-    *target = ks.to_string();
+    cfg.hotkeys.set_key(slot, ks.to_string());
+    // Writing the value it already held is not a failure to import: the caller counts items it
+    // applied, and `set_key` answers whether anything CHANGED, which is a different question.
     true
-}
-
-fn parse_slot<const N: usize>(s: &str) -> Option<usize> {
-    s.parse::<usize>().ok().filter(|i| *i < N)
 }
 
 /// Applies a color item: `{target}.{side}`, where side = light|dark.

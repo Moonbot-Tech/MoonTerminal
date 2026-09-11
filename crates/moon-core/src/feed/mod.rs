@@ -438,6 +438,34 @@ pub enum CoreCmd {
         /// Whether the order waits for the core to confirm `exit` before it is sent.
         sync_exit: bool,
     },
+    /// Place a PENDING order on the core's `market`: one that waits inside the core until the price
+    /// reaches `trigger_price`, then becomes an ordinary order.
+    ///
+    /// `trigger_price` is the watched CONDITION, not the entry price — when it fires the core prices
+    /// the order itself, applying its own configured pending spread (`SharedConfig`'s
+    /// `pending_orders_spread`, which ships at 0.5%, plus its high-delta adjustment). The entry is
+    /// therefore unknown here, which is why this command carries no `planned_sell`: an absolute sell
+    /// target derived from the trigger would be off by that spread. The exits come from the core
+    /// side instead — the `exit` generation this order waits behind, or the strategy named by
+    /// `strategy_id` — both of which compute from the real entry.
+    ///
+    /// `strategy_id=None` creates a BARE pending: unlike [`Self::PlaceOrder`], the core does not
+    /// substitute its own manual strategy into it (moonproto `docs/trade_actions.md`). A named
+    /// strategy is retained as a candidate while the pending waits and attaches only when the
+    /// trigger fires, so the waiting order may still report `strat_id = 0`.
+    ///
+    /// This becomes moonproto `new_pending_order`; see `feed::trade`.
+    PlacePendingOrder {
+        market: String,
+        short: bool,
+        trigger_price: f64,
+        size: f64,
+        strategy_id: Option<u64>,
+        /// Group-local exit settings that must be confirmed before this pending is created.
+        exit: crate::config::GroupExitSettings,
+        /// Whether the pending waits for the core to confirm `exit` before it is sent.
+        sync_exit: bool,
+    },
     /// Move or replace an existing core order by `uid` at a new price, as when dragging its line.
     /// This becomes moonproto `orders().move_order`.
     MoveOrder { uid: u64, new_price: f64 },

@@ -23,6 +23,15 @@ use super::{CoreId, CoreSession, CoreStore, SessionManager};
 /// silent clamp on this side is the honest translation of a limit we do not own.
 const TEST_PROBLEM_MAX_CHARS: usize = 200;
 
+/// Whether a manual order's own inputs can become a live command at all.
+///
+/// Shared by the immediate and the pending entry points because a tightened rule that reached only
+/// one of them would leave the other placing what the first refuses. Says nothing about SIZE units
+/// or about the price being sane for the market — those belong to the callers that know them.
+fn order_inputs_ok(market: &str, price: f64, size: f64) -> bool {
+    !market.is_empty() && price.is_finite() && price > 0.0 && size.is_finite() && size > 0.0
+}
+
 impl SessionManager {
     fn send_core_cmd(&self, core: CoreId, cmd: CoreCmd, action: &str) -> Result<()> {
         let Some(s) = self.sessions.iter().find(|s| s.id == core) else {
@@ -455,10 +464,7 @@ impl SessionManager {
         planned_sell: f64,
         sync_exit: bool,
     ) -> Result<()> {
-        if market.is_empty()
-            || !(price.is_finite() && price > 0.0)
-            || !(size.is_finite() && size > 0.0)
-        {
+        if !order_inputs_ok(&market, price, size) {
             return Ok(());
         }
         self.send_core_cmd(
@@ -474,6 +480,45 @@ impl SessionManager {
                 sync_exit,
             },
             "place order",
+        )
+    }
+
+    /// Place a pending order on the core's `market` after its group exit state is confirmed.
+    ///
+    /// `trigger_price` is the CONDITION the core watches, not the entry price: it prices the order
+    /// itself when the trigger fires, applying its own pending spread. Nothing derived from the
+    /// trigger is sent, which is why there is no `planned_sell` here — the exits come from the
+    /// confirmed `exit` generation or from `strategy_id`, both computed by the core from the real
+    /// entry. `strategy_id=None` creates a BARE pending: the core does not substitute its own manual
+    /// strategy the way it may for [`Self::place_order`]. Non-finite or non-positive `trigger_price`
+    /// or `size` values are ignored.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_pending_order(
+        &self,
+        core: CoreId,
+        market: String,
+        short: bool,
+        trigger_price: f64,
+        size: f64,
+        strategy_id: Option<u64>,
+        exit: crate::config::GroupExitSettings,
+        sync_exit: bool,
+    ) -> Result<()> {
+        if !order_inputs_ok(&market, trigger_price, size) {
+            return Ok(());
+        }
+        self.send_core_cmd(
+            core,
+            CoreCmd::PlacePendingOrder {
+                market,
+                short,
+                trigger_price,
+                size,
+                strategy_id,
+                exit,
+                sync_exit,
+            },
+            "place pending order",
         )
     }
 

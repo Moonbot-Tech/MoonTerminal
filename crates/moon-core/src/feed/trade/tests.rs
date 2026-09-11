@@ -47,6 +47,49 @@ fn new_order_params_carry_a_positive_planned_sell_only() {
     assert_eq!(without.planned_sell_price, 0.0);
 }
 
+/// Regression target: the wire's `planned_sell_price` is an ABSOLUTE price, and every value the
+/// terminal could derive for a pending comes from the TRIGGER — the core moves the real entry off it
+/// by its own pending spread (`SharedConfig::pending_orders_spread`, shipped at 0.5%). Growing this
+/// builder a sell target therefore puts a silently wrong take profit on money.
+#[test]
+fn pending_order_params_carry_no_sell_target() {
+    let params = pending_order_params("BTCUSDT".to_string(), false, 100_000.0, 0.001, None, true);
+
+    assert_eq!(params.planned_sell_price, 0.0);
+    // The price rides as the CONDITION field, never as an order price.
+    assert_eq!(params.trigger_price, 100_000.0);
+}
+
+/// Regression target: `short` is the POSITION side on this path as it is on `new_order`, and a
+/// pending whose side flipped opens the opposite position when the trigger fires.
+#[test]
+fn pending_order_params_map_the_position_side() {
+    let long = pending_order_params("BTCUSDT".to_string(), false, 100_000.0, 0.001, None, false);
+    let short = pending_order_params("BTCUSDT".to_string(), true, 100_000.0, 0.001, None, false);
+
+    assert_eq!(long.side, OrderSide::Long);
+    assert_eq!(short.side, OrderSide::Short);
+}
+
+/// Regression target: a pending with NO strategy is bare — the core does not substitute its own
+/// manual strategy into one, unlike a new order — so passing `Some(id)` through is the only way a
+/// terminal-selected manual strategy ever reaches it.
+#[test]
+fn pending_order_params_carry_an_explicit_strategy_only() {
+    let bare = pending_order_params("BTCUSDT".to_string(), false, 100_000.0, 0.001, None, false);
+    let named = pending_order_params(
+        "BTCUSDT".to_string(),
+        false,
+        100_000.0,
+        0.001,
+        Some(77),
+        false,
+    );
+
+    assert_eq!(bare.strategy_id, None);
+    assert_eq!(named.strategy_id, Some(77));
+}
+
 /// A `(market_name, uid, has_live_sell_leg)` candidate for the resolver.
 fn candidate(market: &'static str, uid: u64, sell: bool) -> (&'static str, u64, bool) {
     (market, uid, sell)

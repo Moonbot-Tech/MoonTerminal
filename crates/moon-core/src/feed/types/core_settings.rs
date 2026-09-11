@@ -1424,8 +1424,46 @@ pub enum CoreHotkeyAction {
     Broadcast,
 }
 
+impl CoreHotkeyAction {
+    /// Every action, in the order [`CoreHotkeyLayout::named`] carries them.
+    ///
+    /// The enum has no iterator of its own, and the alternative is what the tree already had: a
+    /// second transcription of these twenty-seven names wherever one is needed, kept in step by
+    /// hand. Same reason [`crate::config::MouseGestureBinding::ALL`] and
+    /// [`crate::config::MoveKind::ALL`] exist.
+    pub const ALL: [Self; 27] = [
+        Self::CancelBuy,
+        Self::PanicSell,
+        Self::JoinSells,
+        Self::SwitchCharts,
+        Self::ReloadBook,
+        Self::NewLong,
+        Self::NewShort,
+        Self::SplitOrder,
+        Self::ShiftBuyUp,
+        Self::ShiftBuyDown,
+        Self::ShiftSellUp,
+        Self::ShiftSellDown,
+        Self::MakeShot,
+        Self::MakeShotBot,
+        Self::ReloadChart,
+        Self::ScalePlus,
+        Self::ScaleMinus,
+        Self::SellPlus,
+        Self::SellMinus,
+        Self::SpyMode,
+        Self::ShowCharts,
+        Self::SplitOrderX,
+        Self::SwitchFigure,
+        Self::FitSells,
+        Self::PanicSellOne,
+        Self::CancelAllBuys,
+        Self::Broadcast,
+    ];
+}
+
 /// Number of single-key ([`CoreHotkeyAction`]) hotkey slots on [`CoreHotkeyLayout::named`].
-pub const CORE_HOTKEY_ACTION_COUNT: usize = 27;
+pub const CORE_HOTKEY_ACTION_COUNT: usize = CoreHotkeyAction::ALL.len();
 
 /// Core keyboard-shortcut layout from moonproto `HotkeysConfig`, decoupled from moonproto.
 ///

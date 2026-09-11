@@ -70,6 +70,9 @@ pub struct ChartInput {
     drag_accum: (f32, f32),
     wheel_accum: f32,
     wheel_pane: Option<usize>,
+    /// Whether the accumulated lines were gathered while PANNING, so a change of modifiers
+    /// mid-scroll starts a fresh count instead of spending them on the other gesture.
+    wheel_was_pan: Option<bool>,
     rmb_down: bool,
     /// Whether right-button movement crossed the price-zoom drag threshold.
     rmb_moved: bool,
@@ -161,12 +164,24 @@ impl ChartInput {
         fallback_w: f32,
         ppp: f32,
     ) -> bool {
-        if !gate_ok || dy == 0.0 {
+        // Non-finite deltas are refused HERE, at the one place they enter, because everything
+        // downstream carries NaN silently: the threshold test below is false for NaN so it does not
+        // return early, `signum()` of a NaN accumulator is NaN, `View::zoom_x_at` multiplies the
+        // raw `px_per_ms` by it, and `f32::clamp` returns a NaN unchanged — after which that pane's
+        // scale is NaN forever, since the self-heal on resize compares against it and never matches
+        // again. The old discrete branch happened to survive this by testing `> 0.0` and falling to
+        // a 0.5 factor; computing the factor from the accumulator removed that accident, which is
+        // what made the guard worth writing rather than assuming the platform is well behaved.
+        if !gate_ok || !dy.is_finite() || dy == 0.0 {
             return false;
         }
-        if self.wheel_pane != self.hovered_pane {
+        // The accumulator belongs to one pane AND one gesture. Carrying it across a change of
+        // either spends lines gathered while panning on the zoom step that follows, which fires
+        // early and at whichever multiplier the modifiers happen to hold at that instant.
+        if self.wheel_pane != self.hovered_pane || self.wheel_was_pan != Some(pan) {
             self.wheel_accum = 0.0;
             self.wheel_pane = self.hovered_pane;
+            self.wheel_was_pan = Some(pan);
         }
         let (plot_w, cursor_x) = self.plot_metrics_for(self.hovered_pane, fallback_w, ppp);
         let now = now_unix_ms();
@@ -183,13 +198,13 @@ impl ChartInput {
                 let factor = 2f32.powf(dy / WHEEL_PX_PER_2X);
                 view.zoom_x_at(factor, plot_w, cursor_x, now);
             } else {
-                // Accumulate discrete wheel lines and apply a 2x or 0.5x step at the threshold.
+                // Accumulate discrete wheel lines and apply the step at the threshold.
                 self.wheel_accum += dy * 40.0;
                 if self.wheel_accum.abs() < WHEEL_THRESHOLD {
                     return false;
                 }
                 // Terminal UX: wheel up zooms in, wheel down zooms out.
-                let factor = if self.wheel_accum > 0.0 { 2.0 } else { 0.5 };
+                let factor = 2f32.powf(self.wheel_accum.signum());
                 self.wheel_accum = 0.0;
                 view.zoom_x_at(factor, plot_w, cursor_x, now);
             }

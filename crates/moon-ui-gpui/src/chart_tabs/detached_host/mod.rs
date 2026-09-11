@@ -29,7 +29,7 @@ mod render;
 /// The header contains scale and "close all charts" controls. The host writes window geometry to
 /// charts.json through `observe_window_bounds` and requests repinning on `on_release` through
 /// `chart_repin_request`, which `ChartTabs` drains.
-pub(super) struct DetachedChartHost {
+pub(crate) struct DetachedChartHost {
     /// The ⧉ press this window has armed but not yet queued. See `chart_tabs::apply_row`.
     apply_press: super::apply_row::ApplyPress,
     panel: Entity<AddChartStack>,
@@ -524,6 +524,24 @@ impl DetachedChartHost {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        let target = self.window_target(cx);
+        self.dispatch_hotkey_at(action, target, window, cx)
+    }
+
+    /// The routing behind [`Self::dispatch_hotkey`], with the market the action addresses handed
+    /// in rather than taken from the window.
+    ///
+    /// A key press has no position, so it acts on the WINDOW's market — the compare anchor, or the
+    /// only coin — and on a multi-coin window without an anchor it acts on nothing. A click has one:
+    /// the chart's action layer passes the pane the press landed on, so a middle click on ETH in a
+    /// window anchored on BTC panic-sells ETH, which is what was clicked, and not the anchor.
+    pub(crate) fn dispatch_hotkey_at(
+        &mut self,
+        action: crate::hotkeys::HotkeyAction,
+        target: Option<(CoreId, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         use crate::hotkeys::HotkeyAction;
         let handled = match action {
             // Resolved against THIS window's own hover trail, exactly as in the group window: a
@@ -556,8 +574,9 @@ impl DetachedChartHost {
                 true
             }
             HotkeyAction::ScalePlus | HotkeyAction::ScaleMinus => {
-                let zoom_in = matches!(action, HotkeyAction::ScalePlus);
-                let next = crate::controls::step_scale(self.panel.read(cx).scale(), zoom_in);
+                // "+" is the scale NUMBER growing, not the zoom: Moonbot's Scale + widens the band.
+                let scale_up = matches!(action, HotkeyAction::ScalePlus);
+                let next = crate::controls::step_scale(self.panel.read(cx).scale(), scale_up);
                 self.panel.update(cx, |st, scx| st.set_scale(next, scx));
                 cx.notify();
                 true
@@ -571,7 +590,6 @@ impl DetachedChartHost {
                 )
             }
             other => {
-                let target = self.window_target(cx);
                 let active_core = target.as_ref().map(|(c, _)| *c);
                 self.backend.update(cx, |b, bcx| {
                     crate::hotkeys::apply(other, b, bcx, &self.group, target.clone(), active_core)

@@ -70,6 +70,40 @@ fn press_count(
     Some(count)
 }
 
+/// Offers a press to the figure-delete gesture, one call per button.
+///
+/// Returns whether the press belongs to that gesture and must go no further. Every press it owns is
+/// consumed, deleting or not: the second press of a double click finds the figure already gone, and
+/// letting it fall through would turn one twitchy double click into a delete plus a live order. A
+/// press the gesture does NOT own is never swallowed, however the series it lands in was claimed —
+/// Shift+middle after a middle-click delete is still the X-scale sync.
+///
+/// The delete is attempted on every owned press rather than only the first, so two figures stacked
+/// under one spot come off in two clicks instead of waiting out the double-click interval.
+fn fig_delete_press(
+    this: &mut ChartPanel,
+    button: TradeMouseButton,
+    e: &MouseDownEvent,
+    clicks: Option<usize>,
+    pos: (f32, f32),
+    cx: &mut Context<ChartPanel>,
+) -> bool {
+    // `clicks` is required for the same reason every other gesture here requires it: `None` marks a
+    // press left over from closing a chart, which may act on nothing.
+    let Some(count) = clicks else {
+        return false;
+    };
+    if !this.fig_delete_gesture(button, e.modifiers, count, cx) {
+        return false;
+    }
+    let deleted = this.try_fig_delete_click(button, e.modifiers, count, pos, cx);
+    if deleted || this.click_series.claimed() {
+        this.click_series.claim();
+        return true;
+    }
+    false
+}
+
 /// Offers a press to the order-line grab, one call per button.
 ///
 /// Both counts come from the same event here rather than from three call sites: the panel's own
@@ -108,7 +142,27 @@ fn release_order_drag(
     released
 }
 
-/// Routes a wheel event to chart zoom/pan or the surrounding stack scroll.
+/// The wheel's own movement, whichever axis the platform filed it under.
+///
+/// Windows moves a Shift+wheel onto X, because that is what Shift means to a text view: the fork's
+/// `handle_mouse_wheel_msg` puts the whole distance in `x` and leaves `y` at zero (the same value,
+/// so the sign needs no repair). Reading `y` alone therefore saw NOTHING for any Shift gesture, and
+/// `ChartInput::wheel` returns on a zero delta before it looks at anything else — so Shift+wheel
+/// panning never fired on Windows at all, though the built-in list, the tour and the settings page
+/// have all promised it. Alt+wheel worked, which is why the broken half stayed hidden: the caption
+/// names both in one breath.
+///
+/// The one thing this cannot tell apart is a REAL horizontal wheel — `WM_MOUSEHWHEEL` from a tilt
+/// wheel — pressed with Shift, which reaches us in exactly this shape. Losing that is the price;
+/// a documented pan that does nothing is the alternative.
+///
+/// Worked around here rather than in the fork, per the project's rule about editing MoonUI, and
+/// noted in `docs-internal/FORK_BUGS.md`.
+fn wheel_delta(x: f32, y: f32, modifiers: Modifiers) -> f32 {
+    if y == 0.0 && modifiers.shift { x } else { y }
+}
+
+/// Routes a wheel event to chart zoom/pan or leaves it for the surrounding stack to scroll.
 pub(super) fn scroll_wheel(
     this: &mut ChartPanel,
     e: &ScrollWheelEvent,
@@ -147,8 +201,11 @@ pub(super) fn scroll_wheel(
     // precise trackpad/Magic Mouse input on macOS, delivered as a continuous inertial stream.
     // Preserve the distinction through `precise` so input.wheel scales them differently.
     let (dy, precise) = match e.delta {
-        ScrollDelta::Lines(p) => (p.y, false),
-        ScrollDelta::Pixels(p) => (f32::from(p.y), true),
+        ScrollDelta::Lines(p) => (wheel_delta(p.x, p.y, e.modifiers), false),
+        ScrollDelta::Pixels(p) => (
+            wheel_delta(f32::from(p.x), f32::from(p.y), e.modifiers),
+            true,
+        ),
     };
     this.input.last_ptr = pos;
     this.input.cursor = if within { Some(pos) } else { None };
@@ -284,6 +341,27 @@ pub(super) fn mouse_down_left(
     }
     if within && e.click_count <= 1 {
         this.fig_clear_selection_on_miss(pos, cx);
+    }
+    // A left-bound figure-delete gesture (`hotkeys.fig_delete_click`) acts here: AFTER the drawing
+    // layer, which owns the modifier click that places and grabs figures, and before trading. A
+    // setting that names the same gesture as drawing therefore keeps drawing — the press is already
+    // spoken for by the time it arrives.
+    if within && fig_delete_press(this, TradeMouseButton::Left, e, clicks, pos, cx) {
+        cx.stop_propagation();
+        return;
+    }
+    // The click halves of the keyboard slots, before the trading gestures on every button: a bound
+    // action is the user's deliberate choice, and a collision with a placement or move gesture is
+    // captioned on the settings page rather than settled here by one silently winning. Off in the
+    // Sells-to-zone mode for the same reason the trading gestures below are.
+    if within
+        && !sells_zone_mode
+        && clicks.is_some_and(|count| {
+            this.try_action_click(TradeMouseButton::Left, e.modifiers, count, window, cx)
+        })
+    {
+        cx.stop_propagation();
+        return;
     }
     // Second, the TRADING gestures are off while the Sells-to-zone mode is armed: the mode is a
     // drawing posture — the badge and the tool picker both say so — and a press meant for a band
@@ -475,6 +553,25 @@ pub(super) fn mouse_down_right(
         cx.stop_propagation();
         return;
     }
+    // A right-bound figure-delete gesture runs BEFORE the figure menu, which would otherwise
+    // swallow every right press over a figure and leave the setting unreachable. Nothing is bound
+    // to the right button by default, so the plain right click still opens the menu.
+    if within && fig_delete_press(this, TradeMouseButton::Right, e, clicks, pos, cx) {
+        this.suppress_rmb_up = true;
+        cx.stop_propagation();
+        return;
+    }
+    // The click halves of the keyboard slots, before both menus: nothing is bound to the right
+    // button by default, so the plain right click still opens them.
+    if within
+        && clicks.is_some_and(|count| {
+            this.try_action_click(TradeMouseButton::Right, e.modifiers, count, window, cx)
+        })
+    {
+        this.suppress_rmb_up = true;
+        cx.stop_propagation();
+        return;
+    }
     // Right-clicking a drawn figure in drawing mode opens its Alert/Delete menu. This has highest
     // priority; suppress_rmb_up consumes the paired release so fullscreen remains intact.
     if within && this.try_open_figure_menu(pos, e.position, window, cx) {
@@ -566,7 +663,8 @@ pub(super) fn mouse_up_right(
     }
 }
 
-/// Routes middle-button down to trading or window-local X-scale synchronization.
+/// Routes middle-button down to the figure-delete gesture, trading, or window-local X-scale
+/// synchronization.
 pub(super) fn mouse_down_middle(
     this: &mut ChartPanel,
     e: &MouseDownEvent,
@@ -593,6 +691,25 @@ pub(super) fn mouse_down_middle(
         None
     };
     this.sync_native_cursor(cx);
+    // The figure-delete gesture (`hotkeys.fig_delete_click`, middle by default) is offered before
+    // the trading gestures for the same reason the figure menu comes before the right-click
+    // fullscreen toggle: a press landing within a figure's hit threshold is aimed at that figure,
+    // not at the price under it. It refuses at once unless the setting names THIS press, so a
+    // gesture bound elsewhere costs the trading path nothing.
+    //
+    if within && fig_delete_press(this, TradeMouseButton::Middle, e, clicks, pos, cx) {
+        cx.stop_propagation();
+        return;
+    }
+    // The click halves of the keyboard slots, before the trading gestures.
+    if within
+        && clicks.is_some_and(|count| {
+            this.try_action_click(TradeMouseButton::Middle, e.modifiers, count, window, cx)
+        })
+    {
+        cx.stop_propagation();
+        return;
+    }
     if within
         && clicks.is_some_and(|count| {
             this.try_place_order_click(TradeMouseButton::Middle, e.modifiers, count, pos, cx)
@@ -875,3 +992,6 @@ pub(super) fn hover(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

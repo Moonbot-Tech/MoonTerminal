@@ -18,6 +18,7 @@ pub(crate) mod coin_search;
 mod common;
 mod custom;
 mod detached_host;
+pub(crate) use detached_host::DetachedChartHost;
 mod fig_tools;
 mod ingest;
 mod labels_popup;

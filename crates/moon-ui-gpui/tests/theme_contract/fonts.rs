@@ -292,7 +292,7 @@ fn settings_values_and_connections_repin_the_mono_family() {
     let pull_row = code_only(braced_body(&hotkeys, "fn core_pull_row("));
     let pull_slot = chain_between(
         &pull_row,
-        "let id = format!(\"core-pull-{}\", slot_id(row.slot));",
+        "let id = format!(\"core-pull-{}\", registry::key_id(row.slot));",
         "MoonHotkeyInput::new",
         "core hotkey slot identity",
     );

@@ -296,3 +296,43 @@ fn identical_values_marked_same_and_visible() {
     let plan = build_plan(&mb, &ctx(&h, &t, &o));
     assert!(find(&plan.terminal, "ui.theme_mode").unwrap().same);
 }
+
+/// Every id the plan writes is an id the application reads back to the SAME slot.
+///
+/// This is the whole reason the two tables became one. They were eighteen hand-typed names in
+/// `plan` and eighteen more in `apply`, each ending in a silent fallback — so a name spelled
+/// differently on one side meant the preview offered a hotkey, the user ticked it, and nothing was
+/// imported and nothing said so.
+///
+/// Plausible breakage: giving either direction its own spelling again, or letting a family's index
+/// round-trip to a different one.
+#[test]
+fn every_plan_id_round_trips_to_its_own_slot() {
+    for slot in KeySlot::all() {
+        let id = hotkey_id(slot);
+        assert_eq!(
+            slot_for_id(&id),
+            Some(slot),
+            "{slot:?} writes {id} and reads back as something else"
+        );
+    }
+}
+
+/// An id this build does not know is refused rather than silently landing somewhere.
+///
+/// Plausible breakage: a family prefix that accepts any index would write past its array, and an
+/// unknown name that fell through to a default would import into the wrong field.
+#[test]
+fn an_unknown_plan_id_names_no_slot() {
+    for id in [
+        "hotkey.no_such_action",
+        "hotkey.order_size.6",
+        "hotkey.order_size.x",
+        "hotkey.manual_strategy.10",
+        "theme.bg.dark",
+        "hotkey.",
+        "",
+    ] {
+        assert_eq!(slot_for_id(id), None, "{id} must name no slot");
+    }
+}

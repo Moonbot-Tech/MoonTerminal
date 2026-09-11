@@ -141,3 +141,76 @@ fn chart_settings_signature_changes_when_the_report_axis_changes() {
         "a newly measured core offset must wake an idle chart"
     );
 }
+
+/// Pins the ORDER the three mouse-down handlers offer a press to their layers.
+///
+/// The order IS the behaviour: whoever is asked first takes the press, and every "my gesture
+/// stopped working" report on this chart traces back to a layer that moved. Nothing else records
+/// it — not a type, not a test — so a refactor that regroups these blocks changes what a click
+/// does with a green build.
+///
+/// Plausible breakage: lifting the figure-delete gesture above `try_fig_click` would let a
+/// left-bound delete eat the modifier press that draws and grabs figures.
+#[test]
+fn mouse_down_handlers_offer_a_press_to_their_layers_in_a_fixed_order() {
+    let input = include_str!("render_input.rs");
+    let handler = |name: &str| {
+        input
+            .split(&format!("pub(super) fn {name}("))
+            .nth(1)
+            .unwrap_or_else(|| panic!("missing handler: {name}"))
+            .split("\npub(super) fn ")
+            .next()
+            .expect("handler body")
+            .to_string()
+    };
+    // Each list is the layers of ONE handler, in the order that handler must ask them.
+    for (name, layers) in [
+        (
+            "mouse_down_left",
+            vec![
+                "try_open_arb_venue",
+                "try_fig_click",
+                "fig_delete_press",
+                "try_action_click",
+                "try_place_order_click",
+                "try_move_orders_click",
+            ],
+        ),
+        (
+            "mouse_down_right",
+            vec![
+                "try_open_arb_venue",
+                "try_open_volume_menu",
+                "fig_delete_press",
+                "try_action_click",
+                "try_open_figure_menu",
+                "try_move_orders_click",
+                "try_open_order_menu",
+                // Last, under both menus — and left out of this list until 10.09.2026, which is how
+                // the settings page came to caption a working right-button placement gesture "the
+                // right button places no orders".
+                "try_place_order_click",
+            ],
+        ),
+        (
+            "mouse_down_middle",
+            vec![
+                "fig_delete_press",
+                "try_action_click",
+                "try_place_order_click",
+                "try_move_orders_click",
+                "sync_x_scale_window",
+            ],
+        ),
+    ] {
+        let body = handler(name);
+        let mut at = 0usize;
+        for layer in layers {
+            let found = body[at..]
+                .find(layer)
+                .unwrap_or_else(|| panic!("{name} no longer offers the press to {layer}"));
+            at += found + layer.len();
+        }
+    }
+}

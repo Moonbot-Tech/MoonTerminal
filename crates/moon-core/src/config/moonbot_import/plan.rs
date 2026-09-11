@@ -15,7 +15,7 @@
 
 use super::schema_v7::{MoonBotConfig, SHORTCUT_ACTIONS, ShortcutAction};
 use super::shortcut::{self, DecodedShortcut};
-use crate::config::hotkeys::{HotkeysConfig, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN};
+use crate::config::hotkeys::{HotkeysConfig, KeySlot, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN};
 use crate::config::orders::OrdersStyleSet;
 use crate::config::theme::ChartThemeSet;
 
@@ -156,30 +156,54 @@ fn map_ui_theme(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportP
 /// window, which the Terminal does not have. `FitSells` stays unmapped for a different reason: moonproto's own shared config calls
 /// that slot "Fit sells to orderbook", which is not the price-band spread the Terminal's
 /// `sells_to_rect` performs, and Moonbot's "Sells to rectangle" has no slot among the 27 at all.
-fn action_target(action: ShortcutAction) -> Option<&'static str> {
+fn action_target(action: ShortcutAction) -> Option<KeySlot> {
     use ShortcutAction::*;
     Some(match action {
-        CancelBuy => "cancel_buy",
-        PanicSell => "panic_sell",
-        JoinSells => "join_sells",
-        SwitchCharts => "switch_charts",
-        NewLong => "new_long",
-        NewShort => "new_short",
-        SplitOrder => "split_order",
-        SplitOrderX => "split_order_x",
-        ShiftBuyUp => "shift_buy_up",
-        ShiftBuyDown => "shift_buy_down",
-        ShiftSellUp => "shift_sell_up",
-        ShiftSellDown => "shift_sell_down",
-        ScalePlus => "scale_plus",
-        ScaleMinus => "scale_minus",
-        SwitchFigure => "switch_figure",
-        PanicSellOne => "panic_sell_one",
-        CancelAllBuys => "cancel_all_buys",
-        MakeShot => "chart_shot",
+        CancelBuy => KeySlot::CancelBuy,
+        PanicSell => KeySlot::PanicSell,
+        JoinSells => KeySlot::JoinSells,
+        SwitchCharts => KeySlot::SwitchCharts,
+        NewLong => KeySlot::NewLong,
+        NewShort => KeySlot::NewShort,
+        SplitOrder => KeySlot::SplitOrder,
+        SplitOrderX => KeySlot::SplitOrderX,
+        ShiftBuyUp => KeySlot::ShiftBuyUp,
+        ShiftBuyDown => KeySlot::ShiftBuyDown,
+        ShiftSellUp => KeySlot::ShiftSellUp,
+        ShiftSellDown => KeySlot::ShiftSellDown,
+        ScalePlus => KeySlot::ScalePlus,
+        ScaleMinus => KeySlot::ScaleMinus,
+        SwitchFigure => KeySlot::SwitchFigure,
+        PanicSellOne => KeySlot::PanicSellOne,
+        CancelAllBuys => KeySlot::CancelAllBuys,
+        MakeShot => KeySlot::ChartShot,
         ReloadBook | MakeShotBot | ReloadChart | SellPlus | SellMinus | SpyMode | ShowCharts
         | FitSells | Broadcast => return None,
     })
+}
+
+/// The plan's id for one slot: the slot's own stem in the plan's `<area>.<name>` dressing.
+///
+/// `apply` reads the same spelling back through [`slot_for_id`], which is the whole point: the id
+/// and the destination field used to be two hand-kept maps in two files that had to agree, each
+/// with a silent fallback — a name typed differently in one of them imported nothing and said
+/// nothing. Now neither side spells anything: [`KeySlot::stem`] is the field name in the file, and
+/// this only adds the area and, for a preset family, the index.
+///
+/// The form is the plan's own, not the settings page's: `<area>.<name>` with underscores inside a
+/// name and dots for depth, shared with `theme.bg.dark` and `group.order_size_sel`. The page dresses
+/// the same stem with hyphens, and both come off one name.
+pub(super) fn hotkey_id(slot: KeySlot) -> String {
+    format!("hotkey.{}", slot.name())
+}
+
+/// The slot one plan id names, or `None` for an id this build does not know.
+///
+/// The area prefix comes off and [`KeySlot::for_name`] does the rest, so the two cannot disagree:
+/// an index past its family is refused because no slot spells it, rather than by a range check that
+/// would have to know the family sizes a second time.
+pub(super) fn slot_for_id(id: &str) -> Option<KeySlot> {
+    KeySlot::for_name(id.strip_prefix("hotkey.")?)
 }
 
 /// Returns the Moonbot slot name used in preview/unsupported lists.
@@ -213,31 +237,6 @@ fn action_name(action: ShortcutAction) -> &'static str {
         PanicSellOne => "Panic Sell One",
         CancelAllBuys => "Cancel All Buys",
         Broadcast => "Broadcast",
-    }
-}
-
-/// Returns the current named destination-field value for the preview's "before" column.
-fn hotkey_field(cfg: &HotkeysConfig, field: &str) -> String {
-    match field {
-        "cancel_buy" => cfg.cancel_buy.clone(),
-        "panic_sell" => cfg.panic_sell.clone(),
-        "panic_sell_one" => cfg.panic_sell_one.clone(),
-        "cancel_all_buys" => cfg.cancel_all_buys.clone(),
-        "join_sells" => cfg.join_sells.clone(),
-        "switch_charts" => cfg.switch_charts.clone(),
-        "new_long" => cfg.new_long.clone(),
-        "new_short" => cfg.new_short.clone(),
-        "split_order" => cfg.split_order.clone(),
-        "split_order_x" => cfg.split_order_x.clone(),
-        "shift_buy_up" => cfg.shift_buy_up.clone(),
-        "shift_buy_down" => cfg.shift_buy_down.clone(),
-        "shift_sell_up" => cfg.shift_sell_up.clone(),
-        "shift_sell_down" => cfg.shift_sell_down.clone(),
-        "scale_plus" => cfg.scale_plus.clone(),
-        "scale_minus" => cfg.scale_minus.clone(),
-        "switch_figure" => cfg.switch_figure.clone(),
-        "chart_shot" => cfg.chart_shot.clone(),
-        _ => String::new(),
     }
 }
 
@@ -281,31 +280,31 @@ fn map_hotkeys(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPl
     let h = &mb.ui.hotkeys;
     // Order-size slots (OKeys → order_size) and fixed-sell slots (SKeys → sell_preset).
     for i in 0..6 {
-        push_hotkey(
-            plan,
-            format!("hotkey.order_size.{i}"),
-            format!("Размер ордера {}", i + 1),
-            h.order_size_keys[i],
-            &cur.hotkeys.order_size[i],
-        );
-        push_hotkey(
-            plan,
-            format!("hotkey.sell_preset.{i}"),
-            format!("Fixed sell {}", i + 1),
-            h.fixed_sell_keys[i],
-            &cur.hotkeys.sell_preset[i],
-        );
+        for (slot, label, raw) in [
+            (
+                KeySlot::OrderSize(i),
+                format!("Размер ордера {}", i + 1),
+                h.order_size_keys[i],
+            ),
+            (
+                KeySlot::SellPreset(i),
+                format!("Fixed sell {}", i + 1),
+                h.fixed_sell_keys[i],
+            ),
+        ] {
+            push_hotkey(plan, hotkey_id(slot), label, raw, cur.hotkeys.key(slot));
+        }
     }
     // 27 shortcut slots: 18 importable and 9 without a Terminal action.
     for action in SHORTCUT_ACTIONS {
         let raw = h.shortcuts.get(action);
         match action_target(action) {
-            Some(field) => push_hotkey(
+            Some(slot) => push_hotkey(
                 plan,
-                format!("hotkey.{field}"),
+                hotkey_id(slot),
                 action_name(action).to_string(),
                 raw,
-                &hotkey_field(cur.hotkeys, field),
+                cur.hotkeys.key(slot),
             ),
             None => {
                 // Terminal has no such action, so do not create a dead hotkey. Show only

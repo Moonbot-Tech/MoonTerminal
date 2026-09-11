@@ -278,9 +278,18 @@ pub(crate) const PENDING_STOP_TTL: Duration = Duration::from_secs(15);
 /// A visible stop waiting for the order it belongs to.
 #[derive(Clone, Debug)]
 pub(crate) struct PendingStop {
-    /// Orders already on the market when the placement was sent; the first uid outside this set is
-    /// the order this stop belongs to.
+    /// Orders already on the market when the placement was sent; a uid outside this set is a
+    /// candidate for the order this stop belongs to.
     pub before_uids: std::collections::HashSet<u64>,
+    /// Position side of the order this stop was computed for.
+    ///
+    /// A PROPERTY of the order rather than another exclusion flag: the uid diff alone cannot name
+    /// our own order — moonproto's `client_order_id` is outbound and never echoed
+    /// (`docs/trade_actions.md`) — so every new row in the market is a candidate, and the stop is an
+    /// absolute price computed for THIS side. A hedged market worked from two windows, or a pending
+    /// that triggers inside the TTL, both produce a rival row; matching the side rules out the ones
+    /// that were never this stop's order.
+    pub short: bool,
     /// The stop to apply, as an absolute price.
     pub form: moon_core::feed::OrderStopsForm,
     /// When the placement was sent, for [`PENDING_STOP_TTL`].
@@ -1450,6 +1459,7 @@ impl Backend {
             (core, market.to_string()),
             PendingStop {
                 before_uids,
+                short,
                 form,
                 at: Instant::now(),
             },
@@ -1492,7 +1502,22 @@ impl Backend {
                 data.order_lines
                     .iter_market(market)
                     .find(|order| {
-                        order.closed_ms.is_none() && !pending.before_uids.contains(&order.uid)
+                        order.closed_ms.is_none()
+                            && !pending.before_uids.contains(&order.uid)
+                            // A stop is queued only by an IMMEDIATE order, so a row still waiting on
+                            // its trigger is never that order. The core publishes a pending in the
+                            // ordinary order stream the moment it is created, so without this a
+                            // pending gesture fired within the TTL of an immediate click would take
+                            // that order's absolute stop — computed for an entry the pending has not
+                            // reached — and leave the order it was meant for unstopped.
+                            //
+                            // `pending` clears when the trigger FIRES, so this flag alone leaves a
+                            // window; the side below narrows what is left, and it is the same
+                            // pre-existing race any other new row in the market has always been in.
+                            // The full answer is to pick by lowest `seq` among side-matching
+                            // candidates — see the plan's debt list.
+                            && !order.pending
+                            && order.is_short == pending.short
                     })
                     .map(|order| order.uid)
             });
@@ -1824,6 +1849,13 @@ impl Backend {
             .iter()
             .find(|server| server.id == core)?;
         let usd = self.effective_order_size_usd_for_order(&server.group, core)?;
+        // On a Contracts market `price` is the divisor below, so a caller that cannot name the FILL
+        // price gets a size for the price it did name. The pending-order path is the one such
+        // caller: its price is a TRIGGER, and the core moves the real entry off it by its own
+        // pending spread (`SharedConfig::pending_orders_spread`, shipped at 0.5%), so an
+        // inverse-market pending deploys a notional off by that spread. The trigger is still the
+        // closest estimate of the entry that exists on this side — the spread and its high-delta
+        // rule live in the core — so this approximates rather than guesses.
         let source = self.session.market_source();
         // REFUSES on an unknown unit rather than picking one: guessing here is what sends a whole
         // account's worth of coin as a quantity.

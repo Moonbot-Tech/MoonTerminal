@@ -1,6 +1,118 @@
 # Hotkeys tab of the Settings window.
 _version: 2
 
+hotkeys.scope.app:
+  ru: "везде"
+  en: "anywhere"
+  es: "en todas partes"
+hotkeys.scope.window:
+  ru: "окно"
+  en: "window"
+  es: "ventana"
+hotkeys.scope.cursor:
+  ru: "курсор"
+  en: "cursor"
+  es: "cursor"
+hotkeys.scope.selection:
+  ru: "выделенное"
+  en: "selection"
+  es: "selección"
+hotkeys.scope.book:
+  ru: "стакан"
+  en: "book"
+  es: "libro"
+hotkeys.scope.plot:
+  ru: "график"
+  en: "plot"
+  es: "gráfico"
+hotkeys.scope.figure:
+  ru: "фигура"
+  en: "figure"
+  es: "figura"
+hotkeys.col.title:
+  ru: "Название"
+  en: "Action"
+  es: "Acción"
+hotkeys.col.scope:
+  ru: "Область"
+  en: "Where"
+  es: "Dónde"
+hotkeys.col.problems:
+  ru: "Проблемы"
+  en: "Problems"
+  es: "Problemas"
+hotkeys.col.key:
+  ru: "Клавиатура"
+  en: "Keyboard"
+  es: "Teclado"
+hotkeys.col.mouse:
+  ru: "Мышь"
+  en: "Mouse"
+  es: "Ratón"
+hotkeys.col.param:
+  ru: "Параметр"
+  en: "Parameter"
+  es: "Parámetro"
+hotkeys.col.mb:
+  ru: "MB"
+  en: "MB"
+  es: "MB"
+hotkeys.col.mb_hint:
+  ru: "«+» — значение переносится из Moonbot: клавишу перезапишет вставка конфига или тяга раскладки с ядра, жесты стакана — тяга."
+  en: "«+» — the value travels from Moonbot: a config paste or a core pull overwrites the key, the book gestures come from the pull."
+  es: "«+»: el valor viene de Moonbot: pegar la configuración o traer la disposición del core reescribe la tecla; los gestos del libro vienen de allí."
+hotkeys.clash.key:
+  ru: "Не сработает: клавишу забирает %{rows}."
+  en: "Will not fire: %{rows} takes this key."
+  es: "No se activará: %{rows} se queda con esta tecla."
+hotkeys.clash.gesture:
+  ru: "Не сработает: жест забирает %{rows}."
+  en: "Will not fire: %{rows} takes this gesture."
+  es: "No se activará: %{rows} se queda con este gesto."
+hotkeys.clash.shares_gesture:
+  ru: "Тот же жест у: %{rows}. Работают оба — каждый на своём."
+  en: "Same gesture as %{rows}. Both work, each on its own ground."
+  es: "Mismo gesto que %{rows}. Ambos funcionan, cada uno en lo suyo."
+hotkeys.clash.wins_key:
+  ru: "Клавиша забирает бинд у: %{rows} — там она не сработает."
+  en: "The key takes this binding from %{rows}, where it will not fire."
+  es: "La tecla le quita el atajo a %{rows}, donde no se activará."
+hotkeys.clash.wins_gesture:
+  ru: "Жест забирает бинд у: %{rows} — там он не сработает."
+  en: "The gesture takes this binding from %{rows}, where it will not fire."
+  es: "El gesto le quita el atajo a %{rows}, donde no se activará."
+hotkeys.clash.builtin.esc_close:
+  ru: "встроенное закрытие чарта (Esc)"
+  en: "the built-in close chart (Esc)"
+  es: "el cierre de gráfico integrado (Esc)"
+hotkeys.clash.builtin.close_all:
+  ru: "встроенное закрытие всех чартов (Shift+Esc)"
+  en: "the built-in close all charts (Shift+Esc)"
+  es: "el cierre de todos los gráficos integrado (Shift+Esc)"
+hotkeys.clash.builtin.reset_windows:
+  ru: "встроенный сброс окон (Ctrl+Shift+F10)"
+  en: "the built-in window reset (Ctrl+Shift+F10)"
+  es: "el restablecimiento de ventanas integrado (Ctrl+Shift+F10)"
+hotkeys.clash.builtin.cancel_hover:
+  ru: "встроенная отмена ордера под курсором (Tab/Delete)"
+  en: "the built-in cancel order under cursor (Tab/Delete)"
+  es: "la cancelación integrada de la orden bajo el cursor (Tab/Delete)"
+hotkeys.clash.layer.order_menu:
+  ru: "меню ордера"
+  en: "the order menu"
+  es: "el menú de la orden"
+hotkeys.clash.layer.draw:
+  ru: "рисование фигур"
+  en: "figure drawing"
+  es: "dibujo de figuras"
+hotkeys.clash.layer.fig_menu:
+  ru: "меню фигуры"
+  en: "the figure menu"
+  es: "el menú de la figura"
+hotkeys.clash.layer.x_scale:
+  ru: "синхрон X-масштаба"
+  en: "the X-scale sync"
+  es: "la sincronización de escala X"
 hotkeys.unassigned:
   ru: "Не задано"
   en: "Unassigned"
@@ -9,11 +121,6 @@ hotkeys.recording:
   ru: "Нажмите сочетание..."
   en: "Press shortcut..."
   es: "Pulsa el atajo..."
-hotkeys.todo:
-  ru: "нет команды в протоколе"
-  en: "no protocol command"
-  es: "sin comando en el protocolo"
-
 hotkeys.group.builtin:
   ru: "Встроенные хоткеи"
   en: "Built-in hotkeys"
@@ -38,6 +145,10 @@ hotkeys.builtin.reset_windows:
   ru: "[Ctrl+Shift+F10] сброс позиций всех окон на экран"
   en: "[Ctrl+Shift+F10] reset all window positions onscreen"
   es: "[Ctrl+Shift+F10] restablecer las posiciones de todas las ventanas"
+hotkeys.builtin.x_sync:
+  ru: "[Shift+Средняя кнопка] на графике — синхронизировать масштаб по времени со всеми графиками окна"
+  en: "[Shift+Middle click] on the chart — sync the time scale across every chart in the window"
+  es: "[Shift+Clic central] en el gráfico — sincroniza la escala de tiempo en todos los gráficos de la ventana"
 hotkeys.builtin.cancel_hover:
   ru: "[Tab или Del] навести на линию ордера — отменить этот ордер (Del при выделенной фигуре удаляет фигуру)"
   en: "[Tab or Del] hover an order line — cancel that order (Del deletes the figure when one is selected)"
@@ -52,9 +163,9 @@ hotkeys.group.presets:
   en: "Order presets"
   es: "Preajustes de orden"
 hotkeys.group.presets_hint:
-  ru: "Те же F1-F6 и S1-S6, что в Moonbot: размер ручного ордера и фикс. Sell."
-  en: "The same F1-F6 and S1-S6 as Moonbot: manual order size and fixed sell."
-  es: "Los mismos F1-F6 y S1-S6 que Moonbot: tamaño de orden manual y venta fija."
+  ru: "F1–F6 — размер ручного ордера, S1–S6 — фикс. Sell, как в Moonbot."
+  en: "F1–F6 — manual order size, S1–S6 — fixed sell, as in Moonbot."
+  es: "F1–F6: tamaño de la orden manual; S1–S6: venta fija, como en Moonbot."
 hotkeys.order_size:
   ru: "Выбрать размер ручного ордера %{n}"
   en: "Select manual order size %{n}"
@@ -69,9 +180,9 @@ hotkeys.group.trading:
   en: "Trading commands"
   es: "Comandos de trading"
 hotkeys.group.trading_hint:
-  ru: "Команды, которые в Moonbot назначаются через HotkeysConfig и работают с активным рынком."
-  en: "Moonbot HotkeysConfig commands that operate on the active market."
-  es: "Comandos de HotkeysConfig de Moonbot que operan sobre el mercado activo."
+  ru: "Торговые команды Moonbot для рынка под курсором или активного чарта."
+  en: "Moonbot's trading commands, for the market under the pointer or the active chart."
+  es: "Comandos de trading de Moonbot para el mercado bajo el cursor o el gráfico activo."
 hotkeys.cancel_buy:
   ru: "Cancel Buy"
   en: "Cancel Buy"
@@ -149,17 +260,17 @@ hotkeys.sells_to_rect:
   en: "Sells to rectangle"
   es: "Sells to rectangle"
 hotkeys.sells_to_rect_hint:
-  ru: "Включает режим зоны: у курсора виден значок ✎, в панели инструментов написано «Продажа в зону», и каждая пара Ctrl+кликов (или Ctrl+протяжка) задаёт границы очередной зоны. По второму клику зона исчезает, а продажи рынка раскладывает ядро — и можно рисовать следующую. Пока режим включён, левый клик по графику не торгует. Выход: повторное нажатие, Escape, выбор инструмента в панели или закрытие графика. Уже нарисованная Зона или прямоугольник — пункт «Вписать продажи в зону» по правому клику на фигуре."
-  en: "Arms the zone mode: the cursor carries a ✎ mark, the toolbar reads \"Sells to zone\", and every pair of Ctrl+clicks (or a Ctrl+drag) sets the bounds of one more zone. The second click makes the zone disappear and the core spreads the market's sells across it, ready for the next one. While the mode is on, a left click on the chart does not trade. Leave it with the key again, Escape, by picking a tool, or by closing the chart. For a Zone or rectangle already drawn, use the figure's right-click entry."
-  es: "Activa el modo zona: el cursor muestra la marca ✎, la barra indica «Ventas a zona» y cada par de Ctrl+clic (o un Ctrl+arrastre) fija los límites de una zona más. Con el segundo clic la zona desaparece y el núcleo reparte las ventas del mercado, listo para la siguiente. Mientras el modo está activo, el clic izquierdo en el gráfico no opera. Salir: pulsar de nuevo, Escape, elegir una herramienta o cerrar el gráfico. Para una Zona o rectángulo ya dibujado, use la entrada del clic derecho sobre la figura."
+  ru: "Режим зоны: каждая пара Ctrl-кликов задаёт границы, ядро раскладывает по ним продажи рынка. Выход — повтор, Escape или другой инструмент."
+  en: "Zone mode: each pair of Ctrl-clicks names a band and the core spreads the market's sells across it. Leave by pressing it again, Escape, or picking another tool."
+  es: "Modo zona: cada par de Ctrl-clics define una banda y el core reparte las ventas del mercado. Salir: pulsarlo de nuevo, Escape u otra herramienta."
 hotkeys.split_parts:
   ru: "Частей для Split Order X"
   en: "Parts for Split Order X"
   es: "Partes para Split Order X"
 hotkeys.split_parts_hint:
-  ru: "Moonbot SplitParts. В меню ордера с этим числом появляется второй пункт Split order рядом с обычным на 3."
-  en: "Moonbot SplitParts. The order menu shows a second Split order entry with this count next to the plain 3."
-  es: "Moonbot SplitParts. El menú de la orden muestra una segunda entrada Split order con este número junto a la de 3."
+  ru: "Moonbot SplitParts: на это число частей делит второй пункт «Split order» в меню ордера."
+  en: "Moonbot SplitParts: the number of parts the second «Split order» entry in the order menu uses."
+  es: "Moonbot SplitParts: el número de partes que usa la segunda entrada «Split order» del menú de la orden."
 
 hotkeys.group.chart:
   ru: "График"
@@ -235,9 +346,9 @@ hotkeys.group.order_move:
   en: "Order shift"
   es: "Desplazamiento de órdenes"
 hotkeys.group.order_move_hint:
-  ru: "Сдвиг живых ордеров рынка активного чарта на 1%, как в Moonbot: одна команда на сторону, ордера отбирает и считает ядро."
-  en: "Shift the active chart market's live orders by 1%, as Moonbot does: one command per side, with the core selecting the orders and doing the arithmetic."
-  es: "Desplaza un 1% las órdenes vivas del mercado del gráfico activo, como en Moonbot: un comando por lado; el núcleo elige las órdenes y hace el cálculo."
+  ru: "Сдвиг живых ордеров на 1% — одна команда на сторону, как в Moonbot."
+  en: "Shift live orders by 1% — one command per side, as in Moonbot."
+  es: "Desplaza las órdenes vivas un 1%: un comando por lado, como en Moonbot."
 hotkeys.shift_buy_up:
   ru: "Shift Buy Up"
   en: "Shift Buy Up"
@@ -276,9 +387,9 @@ hotkeys.group.mouse:
   en: "Order book mouse"
   es: "Ratón en libro"
 hotkeys.group.mouse_hint:
-  ru: "Живой Moonbot-путь из ChartFrameUnit: постановка ордеров кликами в зоне стакана. Move-жест — это КЛИК по цене, а не протяжка: ядро переносит на неё ордера своей стороны так, как задано в «Виде переноса» рядом. Линию под курсором по-прежнему можно просто тащить левой кнопкой — это сверх Moonbot и работает всегда. Средняя и правая кнопки и дабл-клики доступны только через жесты."
-  en: "Live Moonbot ChartFrameUnit path: place orders by clicking inside the book area. A move gesture is a CLICK on a price, not a drag: the core moves that side's orders onto it, arranged by the Move kind beside the gesture. Dragging a line under the pointer with the plain left button still works — that is on top of Moonbot and always available. The middle and right buttons and double clicks are available through gestures only."
-  es: "Ruta viva de Moonbot ChartFrameUnit: crear órdenes con clics en el libro. Un gesto Move es un CLIC sobre un precio, no un arrastre: el core mueve las órdenes de ese lado hacia él, dispuestas según el «Tipo de traslado» contiguo. Arrastrar una línea con el botón izquierdo sigue funcionando — eso es adicional a Moonbot y está siempre disponible. Los botones central y derecho y los dobles clics solo están disponibles mediante gestos."
+  ru: "Клики по стакану, как в Moonbot. Move — это клик по цене, а не протяжка; что переносить — «Параметр»."
+  en: "Clicks in the book, as in Moonbot. Move is a click on a price, not a drag; what moves is the «Parameter»."
+  es: "Clics en el libro, como en Moonbot. Move es un clic sobre un precio, no un arrastre; qué se mueve: «Parámetro»."
 hotkeys.mouse.buy_set:
   ru: "Поставить Long"
   en: "Place Long"
@@ -300,33 +411,33 @@ hotkeys.mouse.pending_long:
   en: "Pending Long"
   es: "Pending Long"
 hotkeys.mouse.pending_long_hint:
-  ru: "PendingOrderSetClick. Moonbot-дефолт: None_Click. Отложенных ордеров нет в moonproto — слать нечего, жест сохраняется на будущее."
-  en: "PendingOrderSetClick. Moonbot default: None_Click. moonproto has no pending order, so there is nothing to send; the gesture is stored for later."
-  es: "PendingOrderSetClick. Valor por defecto: None_Click. moonproto no tiene órdenes pendientes, así que no hay nada que enviar; el gesto se guarda para más adelante."
+  ru: "PendingOrderSetClick. Цена клика — условие, а не вход. Стоп и TP накладывает ядро или ручная стратегия, не панель. Moonbot-дефолт: None_Click."
+  en: "PendingOrderSetClick. The clicked price is the trigger condition, not the entry. The stop and TP come from the core or the manual strategy, not from the panel. Moonbot default: None_Click."
+  es: "PendingOrderSetClick. El precio del clic es la condición, no la entrada. El stop y el TP los pone el núcleo o la estrategia manual, no el panel. Valor por defecto de Moonbot: None_Click."
 hotkeys.mouse.pending_short:
   ru: "Pending Short"
   en: "Pending Short"
   es: "Pending Short"
 hotkeys.mouse.pending_short_hint:
-  ru: "MultiOrders.PendingShortSetClick. Moonbot-дефолт: None_Click. Отложенных ордеров нет в moonproto — слать нечего, жест сохраняется на будущее."
-  en: "MultiOrders.PendingShortSetClick. Moonbot default: None_Click. moonproto has no pending order, so there is nothing to send; the gesture is stored for later."
-  es: "MultiOrders.PendingShortSetClick. Valor por defecto: None_Click. moonproto no tiene órdenes pendientes, así que no hay nada que enviar; el gesto se guarda para más adelante."
+  ru: "MultiOrders.PendingShortSetClick. Цена клика — условие, а не вход. Стоп и TP накладывает ядро или ручная стратегия, не панель. Moonbot-дефолт: None_Click."
+  en: "MultiOrders.PendingShortSetClick. The clicked price is the trigger condition, not the entry. The stop and TP come from the core or the manual strategy, not from the panel. Moonbot default: None_Click."
+  es: "MultiOrders.PendingShortSetClick. El precio del clic es la condición, no la entrada. El stop y el TP los pone el núcleo o la estrategia manual, no el panel. Valor por defecto de Moonbot: None_Click."
 hotkeys.mouse.buy_move:
   ru: "Move Open Long"
   en: "Move Open Long"
   es: "Mover Open Long"
 hotkeys.mouse.buy_move_hint:
-  ru: "MultiOrders.BuyMoveClick. Клик переносит ордера входа на цену под курсором. Moonbot-дефолт: Shift_Click."
-  en: "MultiOrders.BuyMoveClick. The click moves the entry orders onto the price under the pointer. Moonbot default: Shift_Click."
-  es: "MultiOrders.BuyMoveClick. El clic mueve las órdenes de entrada al precio bajo el cursor. Valor por defecto: Shift_Click."
+  ru: "MultiOrders.BuyMoveClick — переносит ордера входа. Moonbot-дефолт: Shift_Click."
+  en: "MultiOrders.BuyMoveClick — moves the entry orders. Moonbot default: Shift_Click."
+  es: "MultiOrders.BuyMoveClick — mueve las órdenes de entrada. Por defecto: Shift_Click."
 hotkeys.mouse.sell_move:
   ru: "Move TP Long"
   en: "Move TP Long"
   es: "Mover TP Long"
 hotkeys.mouse.sell_move_hint:
-  ru: "MultiOrders.SellMoveClick. Клик переносит ордера выхода — TP, стоп и трейлинг — на цену под курсором. Moonbot-дефолт: CTRL_Click."
-  en: "MultiOrders.SellMoveClick. The click moves the exit orders — TP, stop and trailing — onto the price under the pointer. Moonbot default: CTRL_Click."
-  es: "MultiOrders.SellMoveClick. El clic mueve las órdenes de salida — TP, stop y trailing — al precio bajo el cursor. Valor por defecto: CTRL_Click."
+  ru: "MultiOrders.SellMoveClick — переносит выход: ТР, стоп и трейлинг. Moonbot-дефолт: CTRL_Click."
+  en: "MultiOrders.SellMoveClick — moves the exit: TP, stop and trailing. Moonbot default: CTRL_Click."
+  es: "MultiOrders.SellMoveClick — mueve la salida: TP, stop y trailing. Por defecto: CTRL_Click."
 hotkeys.mouse.buy_move2:
   ru: "Move Open Long #2"
   en: "Move Open Long #2"
@@ -352,9 +463,9 @@ hotkeys.move_kind.none:
   en: "None"
   es: "Ninguno"
 hotkeys.move_kind.parallel-shift:
-  ru: "Параллельный сдвиг к курсору"
-  en: "Parallel Shift to cursor"
-  es: "Desplazamiento paralelo al cursor"
+  ru: "Параллельно к курсору"
+  en: "Parallel to cursor"
+  es: "Paralelo al cursor"
 hotkeys.move_kind.top-volume:
   ru: "Сначала крупный объём"
   en: "Top Vol first"
@@ -364,9 +475,9 @@ hotkeys.move_kind.low-volume:
   en: "Low Vol first"
   es: "Primero menor volumen"
 hotkeys.move_kind.top-profit:
-  ru: "Сначала самый прибыльный"
+  ru: "Сначала прибыльный"
   en: "Top Profit first"
-  es: "Primero mayor beneficio"
+  es: "Mayor beneficio"
 hotkeys.move_kind.all-to-one-price:
   ru: "Все в одну цену"
   en: "All to 1 price"
@@ -376,7 +487,7 @@ hotkeys.move_kind.last-set:
   en: "Last Set"
   es: "Último colocado"
 hotkeys.move_kind.last-moved:
-  ru: "Последний перенесённый"
+  ru: "Последний перенос"
   en: "Last Moved"
   es: "Último movido"
 hotkeys.mouse.same_move:
@@ -421,9 +532,9 @@ hotkeys.group.manual_strategy:
   en: "Manual strategies"
   es: "Estrategias manuales"
 hotkeys.group.manual_strategy_hint:
-  ru: "10 хоткеев ManualStratsConfig.hotKeys из Moonbot: хоткей N выбирает N-ю manual-стратегию активного ядра (порядок — как в пикере MS шапки) и включает режим. По умолчанию пустые."
-  en: "10 Moonbot ManualStratsConfig.hotKeys: hotkey N selects the Nth manual strategy of the active core (same order as the header MS picker) and enables the mode. Empty by default."
-  es: "10 ManualStratsConfig.hotKeys de Moonbot: la tecla N selecciona la N-ésima estrategia manual del núcleo activo (mismo orden que el selector MS) y activa el modo. Vacíos por defecto."
+  ru: "Хоткей N выбирает N-ю ручную стратегию активного ядра (порядок — как в пикере MS) и включает режим."
+  en: "Hotkey N selects the Nth manual strategy of the active core (the MS picker's order) and enables the mode."
+  es: "La tecla N elige la N-ésima estrategia manual del núcleo activo (orden del selector MS) y activa el modo."
 hotkeys.manual_strategy:
   ru: "Ручная стратегия %{n}"
   en: "Manual strategy %{n}"
@@ -439,9 +550,9 @@ hotkeys.group.draw:
   en: "Drawing"
   es: "Dibujo"
 hotkeys.group.draw_hint:
-  ru: "Фигуры на чарте (как в Moonbot). Хоткей выбирает инструмент, повтор того же — снимает его. Ctrl+ЛКМ рисует и захватывает фигуру, простой ЛКМ торгует, как обычно. В полоске вкладок: список инструментов («Курсор» — не рисовать) и ⚙ — стиль выбранного инструмента. ПКМ по нарисованной фигуре — те же настройки для неё."
-  en: "Chart figures (as in Moonbot). A hotkey arms its tool; the same key again disarms it. Ctrl+LMB draws and grabs a figure, plain LMB keeps trading as usual. In the tab strip: the tool list (\"Cursor\" draws nothing) and ⚙ for the armed tool's style. Right-clicking a drawn figure opens the same settings for it."
-  es: "Figuras en el gráfico (como en Moonbot). La tecla activa su herramienta; la misma tecla la desactiva. Ctrl+clic izq. dibuja y agarra una figura; el clic izq. normal sigue operando. En la barra de pestañas: la lista de herramientas («Cursor» no dibuja) y ⚙ para el estilo de la herramienta activa. Clic derecho sobre una figura abre esos mismos ajustes para ella."
+  ru: "Хоткей выбирает инструмент, повтор — снимает. Ctrl+ЛКМ рисует и захватывает фигуру, простой ЛКМ торгует."
+  en: "A hotkey arms its tool, the same key disarms it. Ctrl+LMB draws and grabs a figure, plain LMB trades."
+  es: "La tecla activa su herramienta; repetirla la desactiva. Ctrl+clic izq. dibuja y agarra; el clic normal opera."
 hotkeys.draw_hline:
   ru: "Горизонтальная линия"
   en: "Horizontal line"
@@ -475,13 +586,13 @@ hotkeys.draw_channel_hint:
   en: "Tool: two clicks at prices — a horizontal channel (band, like Moonbot channel)."
   es: "Herramienta: dos clics en precios — un canal horizontal (banda, como el canal de Moonbot)."
 hotkeys.fig_delete:
-  ru: "Удалить выделенную фигуру"
-  en: "Delete selected figure"
-  es: "Eliminar figura seleccionada"
+  ru: "Удалить фигуру"
+  en: "Delete figure"
+  es: "Eliminar figura"
 hotkeys.fig_delete_hint:
-  ru: "Удаляет фигуру, выделенную кликом на чарте."
-  en: "Deletes the figure selected by clicking on the chart."
-  es: "Elimina la figura seleccionada con un clic en el gráfico."
+  ru: "Клавиша удаляет фигуру, выделенную кликом; жест — фигуру под курсором, выделять не нужно. Только фигуры этого графика."
+  en: "The key deletes the figure selected by a click; the gesture deletes the figure under the pointer, no selection needed. This chart's own figures only."
+  es: "La tecla elimina la figura seleccionada con un clic; el gesto, la figura bajo el cursor, sin seleccionarla. Solo las figuras de este gráfico."
 hotkeys.fig_alert:
   ru: "Alert на выделенной фигуре"
   en: "Alert on selected figure"
@@ -499,6 +610,18 @@ hotkeys.fig_undo_hint:
   en: "Deletes the last figure drawn on the chart under the pointer. Moonbot default: Ctrl+Z. Alerts that came from the core are left alone, and inside a text field Ctrl+Z stays Undo."
   es: "Elimina la última figura dibujada en el gráfico bajo el cursor. Valor por defecto de Moonbot: Ctrl+Z. No toca las alertas que llegan del núcleo y, dentro de un campo de texto, Ctrl+Z sigue siendo Deshacer."
 
+hotkeys.pull.gestures:
+  ru: "Жесты мыши"
+  en: "Mouse gestures"
+  es: "Gestos del ratón"
+hotkeys.pull.flag_on:
+  ru: "включено"
+  en: "on"
+  es: "activado"
+hotkeys.pull.flag_off:
+  ru: "выключено"
+  en: "off"
+  es: "desactivado"
 hotkeys.pull.title:
   ru: "Раскладка ядра"
   en: "Core layout"
@@ -507,6 +630,10 @@ hotkeys.pull.button:
   ru: "Подтянуть раскладку с ядра"
   en: "Pull layout from core"
   es: "Extraer diseño del núcleo"
+hotkeys.pull.hint:
+  ru: "Раскладка хоткеев активного ядра против локальной: что совпадает, что изменится после тяги."
+  en: "The active core's hotkey layout against the local one: what matches, what a pull would change."
+  es: "La disposición de atajos del núcleo activo frente a la local: qué coincide y qué cambiaría al traerla."
 hotkeys.pull.no_core:
   ru: "Нет активного ядра — выберите ядро на графике, чтобы подтянуть его раскладку."
   en: "No active core — pick a core on the chart to pull its layout."
@@ -551,6 +678,10 @@ hotkeys.pull.verdict.unsupported:
   ru: "клавиша ядра не распознана"
   en: "core key not recognized"
   es: "tecla del núcleo no reconocida"
+hotkeys.pull.verdict.gesture_unsupported:
+  ru: "жест ядра не распознан"
+  en: "core gesture not recognized"
+  es: "gesto del núcleo no reconocido"
 hotkeys.pull.verdict.unchanged:
   ru: "совпадает"
   en: "unchanged"

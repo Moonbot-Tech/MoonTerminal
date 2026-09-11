@@ -14,6 +14,21 @@ use super::convert::{apply_client_settings_edit, client_settings_from_proto};
 use crate::config::{GroupExitSettings, TakeProfitMode};
 use crate::feed::{ClientSettingsEdit, trade};
 
+/// What the queued order becomes on the wire, and what its price MEANS.
+///
+/// A type rather than a flag because the two carry different payloads: only an immediate order can
+/// name an absolute sell target. A pending is priced by the CORE when its trigger fires — it applies
+/// its own pending spread there — so a target derived from the trigger would be off by that spread,
+/// and the variant makes that absence unspellable rather than conventional.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum ManualOrderKind {
+    /// Ordinary order placed at [`ManualOrder::price`], carrying the visible sell target with it.
+    /// `0.0` means no target, and the core then applies its own settings or the order's strategy.
+    Immediate { planned_sell: f64 },
+    /// Pending order whose [`ManualOrder::price`] is the trigger CONDITION, not an entry price.
+    Pending,
+}
+
 /// One manual order waiting behind its group-settings generation.
 #[derive(Clone, Debug)]
 pub(super) struct ManualOrder {
@@ -21,7 +36,7 @@ pub(super) struct ManualOrder {
     pub market: String,
     /// Position side.
     pub short: bool,
-    /// Entry price.
+    /// Entry price, or — for [`ManualOrderKind::Pending`] — the trigger condition to watch.
     pub price: f64,
     /// Base-currency quantity already converted from the visible USD equivalent.
     pub size: f64,
@@ -34,12 +49,11 @@ pub(super) struct ManualOrder {
     /// to the order itself. Waiting there costs a full retry budget of round trips before the
     /// order goes out, which is the delay a trader feels between the click and the order.
     pub sync_exit: bool,
-    /// Sell target stored with this order (`planned_sell_price` on the wire), or `0.0` for none.
+    /// Which wire command this becomes, and the payload only that one carries.
     ///
-    /// Moonbot's own model: the visible take profit is a property of the ORDER, not of the manual
-    /// strategy — clicking a preset changes no strategy. Zero means the core applies whatever its
-    /// own settings or the order's strategy say.
-    pub planned_sell: f64,
+    /// Moonbot's own model for the immediate case: the visible take profit is a property of the
+    /// ORDER, not of the manual strategy — clicking a preset changes no strategy.
+    pub kind: ManualOrderKind,
     /// Visible settings that must be confirmed before placement.
     pub exit: GroupExitSettings,
 }
@@ -332,17 +346,32 @@ impl ClientSettingsSequence {
                     return order_submitted;
                 }
                 SequenceAction::Place(order) => {
-                    trade::place_order(
-                        client,
-                        server_id,
-                        order.market,
-                        order.short,
-                        order.price,
-                        order.size,
-                        order.strategy_id,
-                        order.exit.use_stop_market,
-                        order.planned_sell,
-                    );
+                    match order.kind {
+                        ManualOrderKind::Immediate { planned_sell } => trade::place_order(
+                            client,
+                            server_id,
+                            order.market,
+                            order.short,
+                            order.price,
+                            order.size,
+                            order.strategy_id,
+                            order.exit.use_stop_market,
+                            planned_sell,
+                        ),
+                        // The same barrier, the same size, the same strategy rules — only the
+                        // command and the meaning of the price differ, so a pending goes out
+                        // through this branch rather than through a queue of its own.
+                        ManualOrderKind::Pending => trade::place_pending_order(
+                            client,
+                            server_id,
+                            order.market,
+                            order.short,
+                            order.price,
+                            order.size,
+                            order.strategy_id,
+                            order.exit.use_stop_market,
+                        ),
+                    }
                     order_submitted = true;
                 }
             }

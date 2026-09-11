@@ -17,6 +17,7 @@
 //! their bare function-key or Delete forms.
 
 mod layout;
+pub mod meta;
 #[cfg(test)]
 mod tests;
 
@@ -24,7 +25,7 @@ use gpui::{
     App, Context, Entity, FocusHandle, Focusable, KeyDownEvent, Keystroke, KeystrokeEvent,
     Modifiers, ModifiersChangedEvent, Window,
 };
-use moon_core::config::{HotkeysConfig, SHIFT_PERCENT, SPLIT_ORDER_PARTS};
+use moon_core::config::{HotkeysConfig, KeySlot, SHIFT_PERCENT, SPLIT_ORDER_PARTS};
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::figures::FigureTool;
 use moon_core::session::CoreId;
@@ -122,9 +123,10 @@ pub enum HotkeyAction {
     ///
     /// The caller increments a global revision observed by every `ChartTabs` instance.
     CloseAllCharts,
-    /// Zoom the active chart's Y scale inward through the calling window.
+    /// Step the active chart's Y scale UP a preset through the calling window — a wider price
+    /// band, which is zooming OUT. Moonbot's own reading of "+": see `controls::step_scale`.
     ScalePlus,
-    /// Zoom the active chart's Y scale outward through the calling window.
+    /// Step the active chart's Y scale DOWN a preset — a tighter band, zooming IN.
     ScaleMinus,
     /// Copy an image of the active chart to the system clipboard - Moonbot's "make shot".
     ///
@@ -135,6 +137,59 @@ pub enum HotkeyAction {
     ChartShot,
 }
 
+/// What the dispatcher actually compares a keystroke by: its modifiers and its key, nothing else.
+///
+/// The two halves of a configured binding's identity, and the ONE definition of it. Every collision
+/// question in the app — the settings page's clash captions, the core pull's "already bound
+/// elsewhere" gate — is "do these two configured strings name the same press", and answering it by
+/// comparing the STRINGS is wrong in ways nobody spots by reading: `Keystroke::parse` is
+/// case-insensitive, accepts the modifiers in any order, and takes `cmd`, `super` and `win` as one
+/// modifier. `hotkeys.toml` is a plain file the user may hand-edit or paste into, so `Ctrl-F10` and
+/// `shift-ctrl-Z` are spellings that really arrive; and a file written by an older build carries
+/// `ctrl-alt-shift-cmd-k` where this one now writes `ctrl-alt-win-shift-k` for the same press. Same
+/// press, several strings, and a literal compare calls them free of each other.
+///
+/// The two producers themselves were the worst of it and no longer disagree:
+/// `moonbot_import::shortcut::to_gpui_keystroke` was aligned with `Keystroke::unparse` on
+/// 2026-09-10. What remains is every file written before that, and every file written by hand.
+pub type BindingId = (Modifiers, String);
+
+/// A configured binding string as a keystroke, or `None` for one that binds nothing.
+///
+/// The one statement of "unbound" in the app: empty, whitespace, or a spelling the parser rejects.
+/// All three mean the same thing to every caller — a slot holding one fires on no press, takes a key
+/// from nobody and loses one to nobody — and it used to be written out separately in [`pressed`], in
+/// [`binding_id`] and in the settings page.
+pub fn parse_binding(raw: &str) -> Option<Keystroke> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Keystroke::parse(raw).ok()
+}
+
+/// The identity of a CONFIGURED binding string, or `None` for one that can never fire.
+///
+/// This is the string-vs-string sibling of [`pressed`], and deliberately does NOT carry its
+/// physical-letter fallback: that one exists because a LAYOUT decides what the platform calls the
+/// key the user physically struck, and both sides here are spellings their author chose, on no
+/// layout in particular.
+pub fn binding_id(raw: &str) -> Option<BindingId> {
+    let k = parse_binding(raw)?;
+    Some((k.modifiers, k.key))
+}
+
+/// Whether two configured binding strings name the same press.
+///
+/// Two strings that cannot fire are not "the same binding": an unbound slot does not collide with
+/// another unbound slot, and reporting that would put a clash caption on every empty row.
+pub fn same_binding(a: &str, b: &str) -> bool {
+    match (binding_id(a), binding_id(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Return whether an event matches a configured GPUI keystroke string.
 ///
 /// Empty or invalid strings do not match. Comparison uses only `modifiers` and `key`: Windows
@@ -142,13 +197,11 @@ pub enum HotkeyAction {
 /// prevented Ctrl-plus-letter bindings from matching.
 ///
 /// A letter is compared against the PHYSICAL key as well as the name the platform gave it, so a
-/// binding does not die when the keyboard layout changes — see [`layout::us_letter`].
+/// binding does not die when the keyboard layout changes — see [`layout::us_letter`]. That half is
+/// why this cannot be [`binding_id`] on both sides: an event's `key` is what the layout produced,
+/// not what the author typed into the settings page.
 fn pressed(raw: &str, event: &Keystroke) -> bool {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return false;
-    }
-    let Ok(k) = Keystroke::parse(raw) else {
+    let Some(k) = parse_binding(raw) else {
         return false;
     };
     k.modifiers == event.modifiers
@@ -417,148 +470,202 @@ impl HotkeyAction {
 /// fixed-sell presets; active-market and active-core trading actions; configured `switch_charts`;
 /// then manual strategies. Returns `None` when no binding matches.
 fn resolve_binding(event: &Keystroke, hk: &HotkeysConfig) -> Option<HotkeyAction> {
+    DISPATCH.iter().find_map(|step| match step {
+        Step::Slot(slot) => pressed(hk.key(*slot), event).then(|| action_of(*slot, hk)),
+        Step::Builtin(builtin) => builtin
+            .strokes
+            .iter()
+            .any(|raw| pressed(raw, event))
+            .then_some(builtin.action),
+    })
+}
+
+/// One step of [`DISPATCH`]: a configurable slot, or a binding the user cannot edit.
+#[derive(Clone, Copy)]
+pub enum Step {
+    Slot(KeySlot),
+    Builtin(Builtin),
+}
+
+/// A built-in binding: the keystrokes it answers, the action, and the locale key naming it on the
+/// settings page.
+#[derive(Clone, Copy)]
+pub struct Builtin {
+    pub strokes: &'static [&'static str],
+    pub action: HotkeyAction,
+    pub name: &'static str,
+}
+
+const fn builtin(
+    strokes: &'static [&'static str],
+    action: HotkeyAction,
+    name: &'static str,
+) -> Step {
+    Step::Builtin(Builtin {
+        strokes,
+        action,
+        name,
+    })
+}
+
+/// The order a keystroke is tested against the bindings — the ONE list that says which of two
+/// holders of a key fires.
+///
+/// [`resolve_binding`] returns on the first match, so every later holder of the same keystroke is
+/// dead; the settings page's clash captions read this same list to say so, which is why it is data
+/// and not a chain of `if`s. The order is deliberate and worth keeping in view:
+///
+/// - the drawing layer is tested FIRST, which is the whole reason the figure slots can take a
+///   built-in key away and everything below them cannot;
+/// - the built-ins sit next: below the figure slots, above everything else. Shift+Escape before
+///   plain Escape is only a reading aid — [`pressed`] matches modifiers exactly, so neither can
+///   answer the other's press. Exactly, and that is one deliberate narrowing against the `if`
+///   chain this replaced: that chain never looked at the Fn modifier, so Fn+Shift+Escape closed
+///   every chart; now it is nobody's press, the same rule every configurable slot has always had.
+///   Only the macOS backend sets the bit (`moon-gpui-windows` hardcodes it false), so this is a
+///   Mac-only change to one built-in, made on purpose rather than carried as an exception;
+/// - the window-local Y scale and the chart shot sit ABOVE the preset arrays: those are
+///   user-editable, and a Moonbot import can move one onto any key at all;
+/// - the trading actions and the manual-strategy presets close the list.
+pub const DISPATCH: &[Step] = &[
+    Step::Slot(KeySlot::DrawHline),
+    Step::Slot(KeySlot::DrawHorizontalRay),
+    Step::Slot(KeySlot::DrawSegment),
+    Step::Slot(KeySlot::DrawTriangle),
+    Step::Slot(KeySlot::DrawChannel),
+    Step::Slot(KeySlot::SwitchFigure),
+    Step::Slot(KeySlot::FigDelete),
+    Step::Slot(KeySlot::FigAlert),
+    Step::Slot(KeySlot::FigUndo),
+    builtin(
+        &["shift-escape"],
+        HotkeyAction::CloseAllCharts,
+        "hotkeys.clash.builtin.close_all",
+    ),
+    builtin(
+        &["escape"],
+        HotkeyAction::CloseActiveChart,
+        "hotkeys.clash.builtin.esc_close",
+    ),
+    builtin(
+        &["ctrl-shift-f10"],
+        HotkeyAction::ResetWindows,
+        "hotkeys.clash.builtin.reset_windows",
+    ),
+    builtin(
+        &["tab", "delete"],
+        HotkeyAction::CancelHoveredOrder,
+        "hotkeys.clash.builtin.cancel_hover",
+    ),
+    Step::Slot(KeySlot::ScalePlus),
+    Step::Slot(KeySlot::ScaleMinus),
+    Step::Slot(KeySlot::ChartShot),
+    Step::Slot(KeySlot::OrderSize(0)),
+    Step::Slot(KeySlot::OrderSize(1)),
+    Step::Slot(KeySlot::OrderSize(2)),
+    Step::Slot(KeySlot::OrderSize(3)),
+    Step::Slot(KeySlot::OrderSize(4)),
+    Step::Slot(KeySlot::OrderSize(5)),
+    Step::Slot(KeySlot::SellPreset(0)),
+    Step::Slot(KeySlot::SellPreset(1)),
+    Step::Slot(KeySlot::SellPreset(2)),
+    Step::Slot(KeySlot::SellPreset(3)),
+    Step::Slot(KeySlot::SellPreset(4)),
+    Step::Slot(KeySlot::SellPreset(5)),
+    Step::Slot(KeySlot::CancelBuy),
+    Step::Slot(KeySlot::CancelAllBuys),
+    Step::Slot(KeySlot::PanicSell),
+    Step::Slot(KeySlot::PanicSellOne),
+    Step::Slot(KeySlot::JoinSells),
+    Step::Slot(KeySlot::SplitOrder),
+    Step::Slot(KeySlot::SplitOrderX),
+    Step::Slot(KeySlot::SellsToRect),
+    Step::Slot(KeySlot::NewLong),
+    Step::Slot(KeySlot::NewShort),
+    Step::Slot(KeySlot::ShiftBuyUp),
+    Step::Slot(KeySlot::ShiftBuyDown),
+    Step::Slot(KeySlot::ShiftSellUp),
+    Step::Slot(KeySlot::ShiftSellDown),
+    Step::Slot(KeySlot::SwitchCharts),
+    Step::Slot(KeySlot::ManualStrategy(0)),
+    Step::Slot(KeySlot::ManualStrategy(1)),
+    Step::Slot(KeySlot::ManualStrategy(2)),
+    Step::Slot(KeySlot::ManualStrategy(3)),
+    Step::Slot(KeySlot::ManualStrategy(4)),
+    Step::Slot(KeySlot::ManualStrategy(5)),
+    Step::Slot(KeySlot::ManualStrategy(6)),
+    Step::Slot(KeySlot::ManualStrategy(7)),
+    Step::Slot(KeySlot::ManualStrategy(8)),
+    Step::Slot(KeySlot::ManualStrategy(9)),
+];
+
+/// Every configurable slot in [`DISPATCH`], in its order — for the tests that hold the list to
+/// the config's own slot list.
+#[cfg(test)]
+pub(crate) fn slots_in_dispatch_order() -> impl Iterator<Item = KeySlot> {
+    DISPATCH.iter().filter_map(|step| match step {
+        Step::Slot(slot) => Some(*slot),
+        Step::Builtin(_) => None,
+    })
+}
+
+/// The action one slot performs.
+///
+/// Total over the slots, so a gesture bound to a slot (`hotkeys.toml` `[action_clicks]`) and a key
+/// bound to it resolve to the same action through the same table. Split Order splits into a fixed
+/// three, as Moonbot does; Split Order X into the configured count, which is why the config comes
+/// along. Both split slots resolve to the SAME action, which `pre_dispatch` offers to the hovered
+/// order before any market-level split.
+pub fn action_of(slot: KeySlot, hk: &HotkeysConfig) -> HotkeyAction {
     use HotkeyAction as A;
-    let p = |raw: &str| pressed(raw, event);
-
-    // Drawing-layer bindings take precedence over built-ins and trading bindings.
-    if p(&hk.draw_hline) {
-        return Some(A::FigTool(FigureTool::HLine));
-    }
-    if p(&hk.draw_horizontal_ray) {
-        return Some(A::FigTool(FigureTool::HorizontalRay));
-    }
-    if p(&hk.draw_segment) {
-        return Some(A::FigTool(FigureTool::Segment));
-    }
-    if p(&hk.draw_triangle) {
-        return Some(A::FigTool(FigureTool::Triangle));
-    }
-    if p(&hk.draw_channel) {
-        return Some(A::FigTool(FigureTool::Channel));
-    }
-    if p(&hk.switch_figure) {
-        return Some(A::SwitchFigure);
-    }
-    if p(&hk.fig_delete) {
-        return Some(A::FigDelete);
-    }
-    if p(&hk.fig_alert) {
-        return Some(A::FigAlert);
-    }
-    if p(&hk.fig_undo) {
-        return Some(A::FigUndo);
-    }
-    // Shift-only Escape closes all Main stacks; the next branch matches modifier-free Escape.
-    if event.key == "escape"
-        && event.modifiers.shift
-        && !event.modifiers.control
-        && !event.modifiers.alt
-        && !event.modifiers.platform
-    {
-        return Some(A::CloseAllCharts);
-    }
-    if event.key == "escape" && event.modifiers == Modifiers::default() {
-        return Some(A::CloseActiveChart);
-    }
-    // Remaining built-in, non-configurable bindings.
-    if p("ctrl-shift-f10") {
-        return Some(A::ResetWindows);
-    }
-    if (event.key == "tab" || event.key == "delete") && event.modifiers == Modifiers::default() {
-        return Some(A::CancelHoveredOrder);
-    }
-
-    // Window-local Y-scale bindings.
-    if p(&hk.scale_plus) {
-        return Some(A::ScalePlus);
-    }
-    if p(&hk.scale_minus) {
-        return Some(A::ScaleMinus);
-    }
-    // Reading the chart's own pixels belongs to the same window-local cluster as its scale, and
-    // deliberately sits ABOVE the preset arrays: those are user-editable and a Moonbot import can
-    // move one onto any key at all.
-    if p(&hk.chart_shot) {
-        return Some(A::ChartShot);
-    }
-
-    // Order-size and fixed-sell presets.
-    if let Some(i) = hk.order_size.iter().position(|r| p(r)) {
-        return Some(A::OrderSize(i));
-    }
-    if let Some(i) = hk.sell_preset.iter().position(|r| p(r)) {
-        return Some(A::SellPreset(i));
-    }
-
-    // Order actions for the active chart's market.
-    if p(&hk.cancel_buy) {
-        return Some(A::CancelBuy);
-    }
-    if p(&hk.cancel_all_buys) {
-        return Some(A::CancelAllBuys);
-    }
-    if p(&hk.panic_sell) {
-        return Some(A::PanicSell);
-    }
-    if p(&hk.panic_sell_one) {
-        return Some(A::PanicSellOne);
-    }
-    if p(&hk.join_sells) {
-        return Some(A::JoinSells);
-    }
-    // Split Order splits into a fixed three, as Moonbot does; Split Order X into the configured
-    // count. Repeats of a held key are dropped for both by `pre_dispatch`.
-    if p(&hk.split_order) {
-        return Some(A::SplitOrder {
+    match slot {
+        KeySlot::OrderSize(i) => A::OrderSize(i),
+        KeySlot::SellPreset(i) => A::SellPreset(i),
+        KeySlot::ManualStrategy(i) => A::ManualStrategy(i),
+        KeySlot::CancelBuy => A::CancelBuy,
+        KeySlot::PanicSell => A::PanicSell,
+        KeySlot::PanicSellOne => A::PanicSellOne,
+        KeySlot::CancelAllBuys => A::CancelAllBuys,
+        KeySlot::JoinSells => A::JoinSells,
+        KeySlot::SwitchCharts => A::SwitchCharts,
+        KeySlot::NewLong => A::NewLong,
+        KeySlot::NewShort => A::NewShort,
+        KeySlot::SplitOrder => A::SplitOrder {
             parts: SPLIT_ORDER_PARTS,
-        });
-    }
-    if p(&hk.split_order_x) {
-        return Some(A::SplitOrder {
+        },
+        KeySlot::SplitOrderX => A::SplitOrder {
             parts: hk.split_n_parts(),
-        });
-    }
-    if p(&hk.sells_to_rect) {
-        return Some(A::SellsToRect);
-    }
-    if p(&hk.new_long) {
-        return Some(A::NewLong);
-    }
-    if p(&hk.new_short) {
-        return Some(A::NewShort);
-    }
-    if p(&hk.shift_buy_up) {
-        return Some(A::ShiftOrder {
+        },
+        KeySlot::SellsToRect => A::SellsToRect,
+        KeySlot::ShiftBuyUp => A::ShiftOrder {
             sell: false,
             up: true,
-        });
-    }
-    if p(&hk.shift_buy_down) {
-        return Some(A::ShiftOrder {
+        },
+        KeySlot::ShiftBuyDown => A::ShiftOrder {
             sell: false,
             up: false,
-        });
-    }
-    if p(&hk.shift_sell_up) {
-        return Some(A::ShiftOrder {
+        },
+        KeySlot::ShiftSellUp => A::ShiftOrder {
             sell: true,
             up: true,
-        });
-    }
-    if p(&hk.shift_sell_down) {
-        return Some(A::ShiftOrder {
+        },
+        KeySlot::ShiftSellDown => A::ShiftOrder {
             sell: true,
             up: false,
-        });
+        },
+        KeySlot::ScalePlus => A::ScalePlus,
+        KeySlot::ScaleMinus => A::ScaleMinus,
+        KeySlot::SwitchFigure => A::SwitchFigure,
+        KeySlot::ChartShot => A::ChartShot,
+        KeySlot::DrawHline => A::FigTool(FigureTool::HLine),
+        KeySlot::DrawHorizontalRay => A::FigTool(FigureTool::HorizontalRay),
+        KeySlot::DrawSegment => A::FigTool(FigureTool::Segment),
+        KeySlot::DrawTriangle => A::FigTool(FigureTool::Triangle),
+        KeySlot::DrawChannel => A::FigTool(FigureTool::Channel),
+        KeySlot::FigDelete => A::FigDelete,
+        KeySlot::FigAlert => A::FigAlert,
+        KeySlot::FigUndo => A::FigUndo,
     }
-    if p(&hk.switch_charts) {
-        return Some(A::SwitchCharts);
-    }
-
-    if let Some(i) = hk.manual_strategy.iter().position(|r| p(r)) {
-        return Some(A::ManualStrategy(i));
-    }
-    None
 }
 
 /// Rewrite a recorded keystroke onto the physical key, so the settings file is layout-independent.
@@ -698,6 +805,66 @@ pub fn pre_dispatch(
         },
         _ => false,
     }
+}
+
+/// Perform a slot's action for a press on a chart, exactly as a key press would.
+///
+/// The click half of a keyboard slot (`hotkeys.toml` `[action_clicks]`) resolves to the same
+/// [`HotkeyAction`] as the key, and it must take the same road: [`pre_dispatch`] first — the
+/// cursor-addressed policies, split on the hovered order, figure undo on the hovered chart — then
+/// the WINDOW's own dispatch, which is where the scale, the chart switch, the shot and the
+/// placement of a manual order are routed. Reached through the window's root view rather than by
+/// a second copy of that routing. Every window's root is `moon_ui::Root`, which carries the real
+/// view — a group window's [`Shell`], a detached chart window's [`DetachedChartHost`] — as an
+/// `AnyView`; that inner view is what is downcast, and each keeps its own `dispatch_hotkey`.
+///
+/// Called DEFERRED from the chart's mouse handler (`Window::defer`), never inline: the handler
+/// runs with the panel leased, and both `pre_dispatch` and the shell's routing reach for the
+/// hovered chart — which is that very panel — through `Entity::update`. Inline, the second lease
+/// would panic; deferred, the press is consumed at once and the action runs when the lease is
+/// released, still within the same event's turn.
+///
+/// Returns:
+///     Whether a window routed the action. `false` for a window whose root wraps neither host —
+///     the diagnostics debug window is the one that draws a chart, and it routes no key press
+///     either, so a click there answers exactly as a key does: nothing, with a warning.
+///
+/// `clicked` is the pane the press landed on. A group window's routing finds it on its own — the
+/// hovered chart is the clicked one — but a detached window's key routing acts on the WINDOW's
+/// market, which for a multi-coin window is the anchor or nothing; a click names its pane instead.
+pub fn dispatch_from_chart(
+    action: HotkeyAction,
+    clicked: Option<(CoreId, String)>,
+    backend: &Entity<Backend>,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    if pre_dispatch(action, false, backend, cx) {
+        return true;
+    }
+    // Not `Root::read`: that one panics on a window whose root is something else, and a warning
+    // is the right answer to a window nobody expected a chart in.
+    let inner = window
+        .root::<moon_ui::Root>()
+        .flatten()
+        .map(|root| root.read(cx).view().clone());
+    let routed = inner.and_then(|inner| match inner.downcast::<crate::shell::Shell>() {
+        Ok(shell) => {
+            Some(shell.update(cx, |shell, scx| shell.dispatch_hotkey(action, window, scx)))
+        }
+        Err(other) => other
+            .downcast::<crate::chart_tabs::DetachedChartHost>()
+            .ok()
+            .map(|host| {
+                host.update(cx, |host, hcx| {
+                    host.dispatch_hotkey_at(action, clicked, window, hcx)
+                })
+            }),
+    });
+    routed.unwrap_or_else(|| {
+        log::warn!("a chart click resolved to {action:?}, but its window has no hotkey routing");
+        false
+    })
 }
 
 /// Let Escape leave the Sells-to-zone mode before anything else acts on it.

@@ -124,6 +124,10 @@ groups:
     action:
       ru: Прокрутка графика влево-вправо
       en: Pan the chart left and right
+  - combo: Shift+Middle click
+    action:
+      ru: Синхронизировать масштаб по времени со всеми графиками окна
+      en: Sync the time scale across every chart in the window
   - combo: Escape
     action:
       ru: Закрыть активный Main-график (режим рисования не выключает)
