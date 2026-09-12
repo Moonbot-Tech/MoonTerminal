@@ -10,7 +10,7 @@ use gpui::*;
 use moon_ui::{MoonButton, MoonCheckboxSize, MoonPalette, StyledExt, h_flex, rgba_from, v_flex};
 use rust_i18n::t;
 
-use super::{SettingsView, StatusMsg, section, separator};
+use super::{SettingsView, StatusMsg, open_folder, section, separator};
 use crate::design;
 use moon_core::config::{paths, storage as storage_cfg};
 
@@ -85,17 +85,6 @@ fn fmt_size(bytes: u64) -> String {
     } else {
         format!("{:.0} КБ", b / KB)
     }
-}
-
-/// Opens a folder in the platform file manager.
-fn open_folder(path: &std::path::Path) {
-    #[cfg(windows)]
-    let cmd = "explorer";
-    #[cfg(target_os = "macos")]
-    let cmd = "open";
-    #[cfg(not(any(windows, target_os = "macos")))]
-    let cmd = "xdg-open";
-    let _ = std::process::Command::new(cmd).arg(path).spawn();
 }
 
 impl SettingsView {

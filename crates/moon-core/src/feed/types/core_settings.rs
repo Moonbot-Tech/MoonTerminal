@@ -1186,6 +1186,15 @@ pub struct InterfaceSettings {
     /// leaving it in the signals block would have let that popup's OK write its own frozen copy of
     /// a control it never showed.
     pub play_signal_sound: bool,
+    /// `signals.signal_sound`: WHICH sound `play_signal_sound` plays, as a 1-based ordinal into
+    /// Moonbot's sound list like the two price-approach sounds in [`SignalsSettings`].
+    ///
+    /// The wire doc files this one under "incoming signal notifications", and that reading was
+    /// what kept the picker beside the switch dead for a while. It is the switch's own sound: the
+    /// Interface page draws exactly one sound picker in that row, and nothing else in the section
+    /// is left for it to belong to. Here rather than in `SignalsSettings` for the reason the switch
+    /// is: an area is a PAGE, and the compact popup never draws this pair.
+    pub signal_sound: i32,
     /// `ui.confirm_close`: ask before closing Moonbot.
     pub confirm_close: bool,
     /// `ui.hide_demo_button`.
@@ -1305,6 +1314,7 @@ impl PartialEq for InterfaceSettings {
             book_orders_opacity,
             book_orders_width,
             play_signal_sound,
+            signal_sound,
             confirm_close,
             hide_demo_button,
             auto_show_on_signal,
@@ -1350,6 +1360,7 @@ impl PartialEq for InterfaceSettings {
             && *book_orders_opacity == other.book_orders_opacity
             && *book_orders_width == other.book_orders_width
             && *play_signal_sound == other.play_signal_sound
+            && *signal_sound == other.signal_sound
             && *confirm_close == other.confirm_close
             && *hide_demo_button == other.hide_demo_button
             && *auto_show_on_signal == other.auto_show_on_signal

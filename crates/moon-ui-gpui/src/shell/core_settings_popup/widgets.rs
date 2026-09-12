@@ -282,18 +282,16 @@ pub(super) fn sound_cell(
     cx: &App,
 ) -> impl IntoElement {
     let name = crate::media::sound::mb_sound_name(current);
-    let label = name.map_or_else(|| format!("#{current}"), str::to_string);
+    let label = name.clone().unwrap_or_else(|| format!("#{current}"));
     let view = view.clone();
-    let options = crate::media::sound::MB_SOUNDS
-        .iter()
-        .enumerate()
-        .map(|(i, n)| {
-            // The wire ordinal is 1-based; see `media::sound::MB_SOUNDS`.
-            let ordinal = i as i32 + 1;
+    // The catalog's ordinal table: Moonbot's numbering, or the user's archive's.
+    let options = crate::media::sound::ordinals()
+        .into_iter()
+        .map(|(ordinal, _stem, label)| {
             (
                 ordinal,
                 SharedString::from(format!("{id}-{ordinal}")),
-                SharedString::from(*n),
+                SharedString::from(label),
             )
         });
     let items = radio_items(options, current, RadioMark::Check, move |app, ordinal| {

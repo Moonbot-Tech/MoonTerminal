@@ -1792,8 +1792,9 @@ impl StrategiesView {
                     .into_any_element()
             }
             FieldControl::Picklist => {
-                let mut items = Vec::with_capacity(f.picklist.len());
-                for option in &f.picklist {
+                let picklist = effective_picklist(f, &value);
+                let mut items = Vec::with_capacity(picklist.len());
+                for option in &picklist {
                     let option_value = option.clone();
                     let label = if option.is_empty() {
                         "—".to_string()
@@ -1805,7 +1806,7 @@ impl StrategiesView {
                     let view = view.clone();
                     items.push(
                         MoonMenuItem::with_key(format!("field-{row_id}-{option}"), label)
-                            .selected(!differ && option_value == value)
+                            .selected(!differ && picklist_row_is(f, &option_value, &value))
                             .on_click(move |_, _, app| {
                                 view.update(app, |this, cx| {
                                     this.stage_field_value(&keys, &field, option_value.clone(), cx);

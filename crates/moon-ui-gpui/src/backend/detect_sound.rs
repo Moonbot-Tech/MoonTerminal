@@ -8,6 +8,25 @@
 use crate::Backend;
 
 impl Backend {
+    /// The sound for a drawn-figure alert whose strategy names none: the Alerts panel's choice,
+    /// persisted in the layout, or the player's default while none was ever chosen.
+    pub(crate) fn alert_sound(&self) -> String {
+        let chosen = self.layout.alert_sound.trim();
+        if chosen.is_empty() {
+            crate::media::sound::DEFAULT_SOUND.to_string()
+        } else {
+            chosen.to_string()
+        }
+    }
+
+    /// Stores the Alerts panel's choice, marking the layout for its next save.
+    pub(crate) fn set_alert_sound(&mut self, name: String) {
+        if self.layout.alert_sound != name {
+            self.layout.alert_sound = name;
+            self.layout_dirty = true;
+        }
+    }
+
     /// Plays the most recent eligible new detect sound for each core. The `last_detect_seq` cursor
     /// prevents duplicates and startup bursts: the first visit seeds the cursor without playback.
     ///
@@ -40,7 +59,7 @@ impl Backend {
             }
             // Find the newest eligible detect: use its strategy sound, or the default for an alert
             // firing without a strategy. Detects are ordered oldest to newest.
-            let default_sound = &self.default_alert_sound;
+            let default_sound = self.alert_sound();
             // Eligible events are detects with Moonbot's `SoundAlert=Yes` play-sound flag and all
             // alert firings. Play exactly the strategy-provided `sound_name`. For an ordinary detect,
             // None means SoundKind=NONE and remains silent, so find_map continues to the next event.

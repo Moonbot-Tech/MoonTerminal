@@ -64,13 +64,14 @@ impl Render for SettingsView {
         // min_h(0)` container takes the remaining height and permits shrinking, while the inner
         // scroll div fills that container.
         //
-        // The Connections tab is the one exception: it owns a virtualized core list that needs a
-        // BOUNDED, non-scrolling parent of its own -- nesting it inside this scrollbar would give it
+        // Two tabs are the exception and get a BOUNDED, non-scrolling parent of their own.
+        // Connections owns a virtualized core list: nesting it inside this scrollbar would give it
         // an effectively infinite height to lay out against, since `MoonVirtualList` fills whatever
-        // its parent hands it. So Connections gets `overflow_hidden` here instead, and the tab's own
-        // content takes `flex_1 + min_h_0` down to the list, matching every other
-        // `MoonVirtualList` call site in this app. Every other tab is unaffected.
-        let body_inner = if self.active == Tab::Connections {
+        // its parent hands it. Trade sounds pins its folder block under the exchange table and
+        // scrolls the table alone. Both tabs take `flex_1 + min_h_0` down to their list, matching
+        // every other `MoonVirtualList` call site in this app. Every other tab is unaffected.
+        let bounded = matches!(self.active, Tab::Connections | Tab::TradeSounds);
+        let body_inner = if bounded {
             div()
                 .id("settings-body")
                 .size_full()
@@ -82,8 +83,11 @@ impl Render for SettingsView {
                 .gap(design::ui_px(cx, 10.0))
                 .overflow_hidden()
                 // The Settings root flips to the UI face for prose; Connections holds a data
-                // table and chrome that must stay mono like every other data surface.
-                .font_family(design::mono())
+                // table and chrome that must stay mono like every other data surface. Trade
+                // sounds sets its own faces per element.
+                .when(self.active == Tab::Connections, |el| {
+                    el.font_family(design::mono())
+                })
                 .child(content)
                 .into_any_element()
         } else {

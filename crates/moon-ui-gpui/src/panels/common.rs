@@ -183,7 +183,9 @@ pub(crate) fn count_badge(n: usize, color: u32) -> impl IntoElement {
 ///
 /// Args:
 ///     id: Stable element identity.
-///     sound: Embedded sound stem to play, or `None` to render the button inert.
+///     sound: Sound stem to play, or `None` to render the button inert. A name the catalog does
+///         not hold renders inert too — a preview must play the chosen file or nothing, never the
+///         fallback that the live paths would substitute.
 ///     side: Side of the square — pass the row's control height, so the button can neither outgrow
 ///         the row it sits in nor leave a gap under it.
 ///     p: Active palette.
@@ -193,11 +195,12 @@ pub(crate) fn count_badge(n: usize, color: u32) -> impl IntoElement {
 ///     The preview button.
 pub(crate) fn sound_preview_button(
     id: SharedString,
-    sound: Option<&'static str>,
+    sound: Option<String>,
     side: Pixels,
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement {
+    let sound = sound.filter(|name| crate::media::sound::is_playable(name));
     let enabled = sound.is_some();
     div()
         .id(id)
@@ -215,7 +218,7 @@ pub(crate) fn sound_preview_button(
             el.cursor_pointer()
                 .hover(|s| s.border_color(rgb(p.accent)).text_color(rgb(p.accent)))
                 .on_click(move |_, _, _| {
-                    if let Some(name) = sound {
+                    if let Some(name) = &sound {
                         crate::media::sound::play(name);
                     }
                 })
@@ -257,6 +260,76 @@ where
             item.on_click(move |_, _, app| on_select(app, value))
         })
         .collect()
+}
+
+/// The rows of a sound picker over the catalog's stems, with the stored name appended when no file
+/// answers to it.
+///
+/// The catalog can change under a stored setting — the user deleted a file, or the name came from
+/// a strategy on a core whose `sounds.zip` is longer than ours. Listing only what exists would
+/// leave such a picker showing nothing selected and the next click silently overwriting a name the
+/// user never meant to give up; listing the stored name, marked, shows what is stored and what is
+/// wrong with it. `radio_items` needs a `Copy` value, so rows are addressed by index into `stems`.
+pub(crate) struct SoundChoices {
+    /// Stem per row, catalog order; the marked missing name, if any, is last.
+    pub stems: Vec<String>,
+    /// Display label per row: the file's own spelling, or the stored name with the missing mark.
+    pub labels: Vec<SharedString>,
+    /// The row holding `current`, or `None` when `current` was empty.
+    pub selected: Option<usize>,
+}
+
+impl SoundChoices {
+    /// Rows for `current`, which may be empty (nothing selected) or a name the catalog lacks.
+    pub(crate) fn for_current(current: &str) -> Self {
+        let current = current.trim();
+        let mut stems = crate::media::sound::stems();
+        let mut labels: Vec<SharedString> = stems
+            .iter()
+            .map(|stem| {
+                SharedString::from(
+                    crate::media::sound::label_of(stem).unwrap_or_else(|| stem.clone()),
+                )
+            })
+            .collect();
+        let current_low = current.to_ascii_lowercase();
+        let current_stem = current_low.strip_suffix(".wav").unwrap_or(&current_low);
+        let mut selected = stems.iter().position(|stem| stem == current_stem);
+        if selected.is_none() && !current.is_empty() {
+            stems.push(current.to_string());
+            labels.push(SharedString::from(format!(
+                "{current} ({})",
+                rust_i18n::t!("sounds.missing_mark")
+            )));
+            selected = Some(stems.len() - 1);
+        }
+        Self {
+            stems,
+            labels,
+            selected,
+        }
+    }
+
+    /// `(index, key, label)` rows for [`radio_items`], keyed under `prefix`.
+    pub(crate) fn rows(&self, prefix: &str) -> Vec<(usize, SharedString, SharedString)> {
+        self.stems
+            .iter()
+            .zip(&self.labels)
+            .enumerate()
+            .map(|(i, (stem, label))| {
+                (
+                    i,
+                    SharedString::from(format!("{prefix}-{stem}")),
+                    label.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// The label the dropdown trigger shows for the selection, or `None` when nothing is selected.
+    pub(crate) fn selected_label(&self) -> Option<SharedString> {
+        self.labels.get(self.selected?).cloned()
+    }
 }
 
 /// Design-unit padding [`popup_group`] applies inside its frame, on every side.

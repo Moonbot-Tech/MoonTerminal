@@ -1,0 +1,79 @@
+_version: 2
+# The user's own sounds: the folder block on the "Trade sounds" tab, the missing-sound toast,
+# and the mark a picker puts on a stored name no file answers to.
+sounds.missing_mark:
+  ru: "нет файла"
+  en: "no file"
+  es: "sin archivo"
+sounds.missing_title:
+  ru: "Звук не найден"
+  en: "Sound not found"
+  es: "Sonido no encontrado"
+sounds.missing_name:
+  ru: "Звук «%{name}» не найден — играет %{fallback}. Положите %{name}.wav в папку %{folder}."
+  en: "Sound \"%{name}\" was not found — %{fallback} plays instead. Put %{name}.wav into %{folder}."
+  es: "No se encontró el sonido «%{name}»: suena %{fallback}. Copie %{name}.wav a la carpeta %{folder}."
+sounds.missing_ordinal:
+  ru: "Звука №%{n} нет — играет %{fallback}. Положите в папку %{folder} файл с именем %{n}_имя.wav или выберите звук заново в настройках ядра."
+  en: "Sound #%{n} does not exist — %{fallback} plays instead. Put a file named %{n}_name.wav into %{folder}, or pick the sound again in the core's settings."
+  es: "El sonido n.º %{n} no existe: suena %{fallback}. Copie a la carpeta %{folder} un archivo llamado %{n}_nombre.wav o vuelva a elegir el sonido en la configuración del núcleo."
+sounds.folder_title:
+  ru: "Свои звуки"
+  en: "Your own sounds"
+  es: "Sonidos propios"
+sounds.folder_help:
+  ru: "Положите файлы .wav в эту папку — они появятся во всех списках звуков (стратегии, звуки сделок, тревоги, алерты). Настройки ядра хранят звук НОМЕРОМ: 1–%{last} — встроенные, свой номер задаётся именем файла: %{first}_MySound.wav → звук «MySound» №%{first}. Файл без номера в настройках ядра не выбирается; файл с именем встроенного звука (ding1.wav) подменяет его."
+  en: "Drop .wav files into this folder — they appear in every sound list (strategies, trade sounds, warnings, alerts). The core's settings store a sound by NUMBER: 1–%{last} are built in; a file claims its own number by name: %{first}_MySound.wav → sound \"MySound\" #%{first}. A file without a number cannot be picked in the core's settings; a file named like a built-in sound (ding1.wav) replaces it."
+  es: "Copie archivos .wav a esta carpeta: aparecerán en todas las listas de sonidos (estrategias, sonidos de operaciones, alarmas, alertas). La configuración del núcleo guarda el sonido por NÚMERO: 1–%{last} son integrados; un archivo reclama su número por el nombre: %{first}_MySound.wav → sonido «MySound» n.º %{first}. Un archivo sin número no se puede elegir en la configuración del núcleo; un archivo con el nombre de un sonido integrado (ding1.wav) lo sustituye."
+sounds.open_folder:
+  ru: "Открыть папку"
+  en: "Open folder"
+  es: "Abrir carpeta"
+sounds.rescan:
+  ru: "Обновить"
+  en: "Rescan"
+  es: "Actualizar"
+sounds.scan_summary:
+  ru: "Из папки: %{folder} (с номером: %{numbered}), отклонено: %{rejected}"
+  en: "From the folder: %{folder} (numbered: %{numbered}), rejected: %{rejected}"
+  es: "De la carpeta: %{folder} (con número: %{numbered}), rechazados: %{rejected}"
+sounds.numbered_title:
+  ru: "Свои номера"
+  en: "Your numbers"
+  es: "Sus números"
+sounds.scan_pending:
+  ru: "Папка ещё читается…"
+  en: "Reading the folder…"
+  es: "Leyendo la carpeta…"
+sounds.rejected_title:
+  ru: "Отклонённые файлы"
+  en: "Rejected files"
+  es: "Archivos rechazados"
+sounds.reject_not_pcm:
+  ru: "не PCM WAV"
+  en: "not a PCM WAV"
+  es: "no es WAV PCM"
+sounds.reject_too_large:
+  ru: "больше %{mb} МБ"
+  en: "larger than %{mb} MB"
+  es: "mayor de %{mb} MB"
+sounds.reject_over_total:
+  ru: "превышен общий лимит %{mb} МБ"
+  en: "over the %{mb} MB total"
+  es: "supera el límite total de %{mb} MB"
+sounds.reject_io:
+  ru: "не читается: %{detail}"
+  en: "unreadable: %{detail}"
+  es: "no se puede leer: %{detail}"
+sounds.reject_number_reserved:
+  ru: "номера до %{first} заняты встроенными звуками"
+  en: "numbers below %{first} belong to the built-in sounds"
+  es: "los números anteriores a %{first} pertenecen a los sonidos integrados"
+sounds.reject_number_taken:
+  ru: "этот номер уже у файла «%{by}»"
+  en: "this number is already held by \"%{by}\""
+  es: "este número ya lo tiene «%{by}»"
+sounds.reject_name_taken:
+  ru: "звук с таким именем уже есть — файл с номером должен называться иначе"
+  en: "a sound with this name already exists — a numbered file needs a different name"
+  es: "ya existe un sonido con este nombre: un archivo con número necesita otro nombre"

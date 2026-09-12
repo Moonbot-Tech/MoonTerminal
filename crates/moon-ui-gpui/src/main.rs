@@ -626,9 +626,9 @@ struct Backend {
         CoreId,
         std::collections::HashSet<(u64, crate::backend::AlertLeg)>,
     >,
-    /// Default sound for an alert without a strategy, selected in the Alerts panel.
-    /// Stored as a WAV filename stem; see `sound` and `detect_sound`.
-    default_alert_sound: String,
+    /// Which network findings each core has already alarmed on, and when; see
+    /// `backend::problem_sound`.
+    problem_sound: crate::backend::ProblemSoundState,
     /// Cached answer to "is quiet mode silencing sounds right now", recomputed once per
     /// coordination tick and on every user action; see `backend::quiet`. The detect-sound path runs
     /// inside the feed drain, so it must not do a time-zone conversion per wake.

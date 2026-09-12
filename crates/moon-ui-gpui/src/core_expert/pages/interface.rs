@@ -331,13 +331,18 @@ pub(super) fn body(
                 view,
                 |d, on| d.interface.play_signal_sound = on,
             ))
-            // The picker stays dead: the only unclaimed preset field in the section is
-            // `signals.signal_sound`, whose own wire doc assigns it to incoming SIGNAL
-            // notifications rather than to this connectivity alert.
-            .child(dropdown(
+            // `signals.signal_sound`: the switch's own sound. Its wire doc files it under
+            // "incoming signal notifications", which kept this picker dead for a while; it is the
+            // only sound picker Moonbot draws in this row, and nothing else in the section is
+            // left for it to belong to. Live whichever way the switch stands, like every other
+            // sound picker here.
+            .child(sound_cell(
                 "exp-int-net-sound-pick",
-                NO_VALUE.to_string(),
-                false,
+                i.signal_sound,
+                view,
+                |d, v| d.interface.signal_sound = v,
+                p,
+                cx,
             ))
             .child(flag_live(
                 "exp-int-sell-sound",

@@ -1,130 +1,181 @@
-//! Alert and detection sound playback. WAV files from `assets/sounds` are embedded in the binary
-//! on every platform, so packaging never has to ship them beside the executable.
+//! Alert and detection sound playback over the sound [`catalog`]: the eighteen WAVs embedded in
+//! the binary, plus whatever `.wav` files the user drops into the sounds folder (`sources`).
 //!
-//! Each platform plays them with what it already links, so this file adds no audio dependency:
-//! Windows uses WinMM `PlaySoundW` with `SND_MEMORY | SND_ASYNC`, macOS uses AppKit `NSSound`
-//! over an `NSData` view of the same bytes. Both are asynchronous, and on both a new sound
-//! replaces the one already playing rather than mixing with it. The scheduler below serializes
-//! every caller, including previews, before reaching those platform functions. Linux remains silent — nothing
-//! there is linked that can play audio, and adding one is a dependency decision of its own.
+//! Each platform plays with what it already links, so this adds no audio dependency: Windows uses
+//! WinMM `PlaySoundW` with `SND_MEMORY | SND_ASYNC`, macOS uses AppKit `NSSound` over an `NSData`
+//! view of the same bytes. Both are asynchronous, and on both a new sound replaces the one already
+//! playing rather than mixing with it. The scheduler below serializes every caller, including
+//! previews, before reaching those platform functions. Linux remains silent — nothing there is
+//! linked that can play audio, and adding one is a dependency decision of its own.
 //!
-//! A detection or alert strategy selects a sound by file stem; lookup trims whitespace and is
-//! ASCII case-insensitive, so names such as `BABYTOY` and `ding1` match their embedded files.
+//! A sound is chosen by file stem — a strategy's `SoundKind`, a trade-sound setting — or by
+//! Moonbot's 1-based ordinal, which the core's own settings carry. Lookup trims whitespace and is
+//! ASCII case-insensitive, so `BABYTOY` and `ding1` match their files. A name or number the
+//! catalog cannot answer plays [`DEFAULT_SOUND`] and leaves a notice (`missing`) for the shell to
+//! show: the one outcome this module refuses is silence about a setting that asked for a sound.
 
-/// Embedded sounds as lowercase stems paired with WAV bytes.
-/// `include_bytes!` paths are relative to this file in `crates/moon-ui-gpui/src/media`.
-macro_rules! sounds {
-    ($($stem:literal => $file:literal),* $(,)?) => {
-        pub const SOUNDS: &[(&str, &[u8])] = &[
-            $(($stem, include_bytes!(concat!("../../../../assets/sounds/", $file)))),*
-        ];
-    };
+use std::cell::RefCell;
+use std::sync::Arc;
+
+use gpui::{App, AppContext as _};
+
+mod catalog;
+mod embedded;
+mod missing;
+mod sources;
+
+#[cfg(test)]
+use catalog::Source;
+pub(crate) use catalog::{Catalog, Entry, RejectReason, ScanStats};
+pub use embedded::DEFAULT_SOUND;
+pub(crate) use missing::{MissingSound, take as take_missing_notices};
+
+thread_local! {
+    /// The installed sound set. Same thread as playback; the scan builds a replacement off-thread
+    /// and hands it over whole through [`install`].
+    static CATALOG: RefCell<Catalog> = RefCell::new(Catalog::embedded());
 }
 
-sounds! {
-    "alarm" => "Alarm.wav",
-    "babytoy" => "BABYTOY.wav",
-    "bark" => "BARK.WAV",
-    "comegetsome" => "ComeGetSome.wav",
-    "cork" => "cork.wav",
-    "ding1" => "ding1.wav",
-    "ding2" => "ding2.wav",
-    "error" => "ERROR.wav",
-    "fatality" => "Fatality.wav",
-    "gold" => "gold.wav",
-    "hallo" => "HALLO.wav",
-    "letsrock" => "LetsRock.wav",
-    "milord" => "milord.wav",
-    "pfiff" => "PFIFF.wav",
-    "ringin" => "Ringin.wav",
-    "ringout" => "ringout.wav",
-    "turnon" => "TurnOn.wav",
-    "yes_mast" => "YES_MAST.wav",
+/// Reads the installed catalog.
+pub(crate) fn with_catalog<R>(read: impl FnOnce(&Catalog) -> R) -> R {
+    CATALOG.with(|catalog| read(&catalog.borrow()))
 }
 
-/// Moonbot's own sound list, in the order its settings dropdown shows it, read off that dropdown
-/// on 2026-09-02.
-///
-/// This is the table the PROTOCOL does not carry. `SignalsSettings`'s three sound fields are
-/// 1-based ordinals into this list — the wire says "1-based" and nothing more — so the index here
-/// is the ordinal MINUS ONE. Without it the settings popup could only show a bare number, which is
-/// what `as_alarm_no` still does.
-///
-/// The order is NOT alphabetical and must not be re-sorted: it is Moonbot's, and the ordinal is
-/// stored in the core's own config, so a re-ordering here silently re-points every core's setting
-/// at a different sound.
-///
-/// Labels keep Moonbot's own spelling, mixed case and all, because that is what the user picks from
-/// there; lowercasing one gives the stem in [`SOUNDS`], which is what [`play`] matches on. The
-/// sibling test pins both halves — every label resolves to an embedded sound, and the two lists
-/// hold the same set.
-pub const MB_SOUNDS: &[&str] = &[
-    "Alarm",
-    "BABYTOY",
-    "BARK",
-    "cork",
-    "ERROR",
-    "HALLO",
-    "PFIFF",
-    "Ringin",
-    "ringout",
-    "TurnOn",
-    "YES_MAST",
-    "ding1",
-    "ding2",
-    "Fatality",
-    "gold",
-    "milord",
-    "LetsRock",
-    "ComeGetSome",
-];
+/// Rebuilds the catalog from the sounds folder on a background thread and installs the result;
+/// `done` runs on the UI thread afterwards, for a view that wants to redraw its stats. Called once
+/// at boot and again from the Settings "Rescan" button.
+pub(crate) fn rescan(cx: &mut App, done: impl FnOnce(&mut App) + 'static) {
+    let dir = moon_core::config::paths::sounds_dir();
+    cx.spawn(async move |cx| {
+        let catalog = cx
+            .background_spawn(async move { sources::scan(&dir) })
+            .await;
+        let _ = cx.update(|cx| {
+            install(catalog);
+            done(cx);
+        });
+    })
+    .detach();
+}
 
-/// Moonbot's label for a 1-based sound ordinal, or `None` when the core holds one this list has no
-/// entry for.
+/// Swaps the catalog in and settles the notices that waited for it. A rescan also forgets which
+/// names were reported, so a file still missing after the user "fixed" the folder is named again.
+fn install(catalog: Catalog) {
+    let stats = catalog.stats();
+    log::info!(
+        "sounds: {} in the catalog, {} from {}, {} rejected{}",
+        catalog.entries().len(),
+        stats.folder_files,
+        stats.dir.display(),
+        stats.rejected.len(),
+        stats
+            .rejected
+            .iter()
+            .map(|r| format!(" [{}: {:?}]", r.name, r.reason))
+            .collect::<String>()
+    );
+    CATALOG.with(|slot| *slot.borrow_mut() = catalog);
+    missing::reset_seen();
+    missing::settle_pending(|m| {
+        with_catalog(|c| match m {
+            MissingSound::Name(name) => c.find(name).is_none(),
+            MissingSound::Ordinal(n) => c.by_ordinal(*n).is_none(),
+        })
+    });
+}
+
+/// Stems in catalog order — Moonbot's table, then the user's extras — for the sound pickers.
+pub(crate) fn stems() -> Vec<String> {
+    with_catalog(|c| c.entries().iter().map(|e| e.stem.clone()).collect())
+}
+
+/// The display name of a stem, as its file spells it, or `None` for a stem no file answers to.
+pub(crate) fn label_of(name: &str) -> Option<String> {
+    with_catalog(|c| c.find(name).map(|e| e.label.clone()))
+}
+
+/// Moonbot's label for a 1-based sound ordinal, or `None` when the table has no such row.
 ///
 /// `None` rather than a fallback to the first sound: a core carrying an ordinal we cannot name is a
 /// core whose sound list differs from ours, and showing "Alarm" for it would write that back on the
-/// next OK and silently change the user's setting.
-pub fn mb_sound_name(ordinal: i32) -> Option<&'static str> {
-    usize::try_from(ordinal.checked_sub(1)?)
-        .ok()
-        .and_then(|i| MB_SOUNDS.get(i).copied())
+/// next OK and silently change the user's setting. (Playing it is another matter: see
+/// [`play_ordinal`].)
+pub(crate) fn mb_sound_name(ordinal: i32) -> Option<String> {
+    with_catalog(|c| c.by_ordinal(ordinal).map(|e| e.label.clone()))
 }
 
-/// Play the sound a 1-based Moonbot ordinal names, doing nothing when it names none.
-pub fn play_ordinal(ordinal: i32) {
-    if let Some(name) = mb_sound_name(ordinal) {
-        play(name);
+/// The smallest number a user's file may claim — the one after Moonbot's eighteen — for the
+/// texts that tell the user how to name a file.
+pub(crate) const FIRST_USER_ORDINAL: i32 = Catalog::FIRST_USER_ORDINAL;
+
+/// The ordinal table as `(ordinal, stem, label)`, for the core-settings sound pickers.
+pub(crate) fn ordinals() -> Vec<(i32, String, String)> {
+    with_catalog(|c| {
+        c.ordinals()
+            .map(|(n, e)| (n, e.stem.clone(), e.label.clone()))
+            .collect()
+    })
+}
+
+/// Whether a file answers to this name. Preview buttons ask before enabling themselves; the
+/// playback paths do not — they fall back instead.
+pub(crate) fn is_playable(name: &str) -> bool {
+    with_catalog(|c| c.find(name).is_some())
+}
+
+/// A name or ordinal to a clip. A request the catalog cannot answer yields the default clip and
+/// is recorded as missing — held back until the first folder scan has landed, since the embedded
+/// set alone cannot say a name is absent. `None` only for an explicit "no sound" — an empty name.
+fn resolve(lookup: MissingSound) -> Option<Clip> {
+    let (clip, missed) = with_catalog(|c| {
+        let found = match &lookup {
+            MissingSound::Name(name) if name.trim().is_empty() => return (None, false),
+            MissingSound::Name(name) => c.find(name),
+            MissingSound::Ordinal(n) => c.by_ordinal(*n),
+        };
+        match found {
+            Some(entry) => (Some(Clip::from(entry)), false),
+            // The fallback plays NOW even before the scan: a sound that fires is better than one
+            // that waits for a directory listing.
+            None => (c.default_entry().map(Clip::from), true),
+        }
+    });
+    if missed {
+        missing::note(lookup, with_catalog(|c| c.scanned()));
+    }
+    clip
+}
+
+/// Queue a named sound without interrupting the current clip. The application's coordination
+/// timer pumps this lane, including Settings previews when no market events arrive. A name no
+/// file answers to plays the default and is reported once.
+pub fn play(name: &str) {
+    if let Some(clip) = resolve(MissingSound::Name(name.to_string())) {
+        PLAYBACK.with(|player| player.borrow_mut().enqueue(clip));
     }
 }
 
-/// Return sound stems for the sound-selection dropdowns (the Alerts window and the Core Status
-/// alert popup).
-pub fn names() -> impl Iterator<Item = &'static str> {
-    SOUNDS.iter().map(|(n, _)| *n)
+/// Play the sound a 1-based Moonbot ordinal names; one past the table plays the default and is
+/// reported once.
+pub fn play_ordinal(ordinal: i32) {
+    if let Some(clip) = resolve(MissingSound::Ordinal(ordinal)) {
+        PLAYBACK.with(|player| player.borrow_mut().enqueue(clip));
+    }
 }
 
-/// Find embedded WAV bytes by a trimmed, ASCII case-insensitive stem.
-fn bytes_of(name: &str) -> Option<&'static [u8]> {
-    let name = name.trim().to_ascii_lowercase();
-    SOUNDS.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
-}
-
-/// One validated embedded clip; duration is derived from PCM frames, not a fixed timeout.
-#[derive(Clone, Copy)]
+/// One validated clip; duration is derived from PCM frames, not a fixed timeout.
+#[derive(Clone)]
 struct Clip {
-    wav: &'static [u8],
+    wav: Arc<[u8]>,
     duration: std::time::Duration,
 }
 
-impl Clip {
-    /// Reject unknown or malformed assets before they can occupy the playback queue.
-    fn named(name: &str) -> Option<Self> {
-        let wav = bytes_of(name)?;
-        Some(Self {
-            wav,
-            duration: wav_duration(wav)?,
-        })
+impl From<&Entry> for Clip {
+    fn from(entry: &Entry) -> Self {
+        Self {
+            wav: entry.wav.clone(),
+            duration: entry.duration,
+        }
     }
 }
 
@@ -210,15 +261,7 @@ impl Playback {
 
 thread_local! {
     /// All playback callers run on the GPUI thread; no lock or sleeping thread is required.
-    static PLAYBACK: std::cell::RefCell<Playback> = std::cell::RefCell::new(Playback::default());
-}
-
-/// Queue a named sound without interrupting the current clip. The application's coordination
-/// timer pumps this lane, including Settings previews when no market events arrive.
-pub fn play(name: &str) {
-    if let Some(clip) = Clip::named(name) {
-        PLAYBACK.with(|player| player.borrow_mut().enqueue(clip));
-    }
+    static PLAYBACK: RefCell<Playback> = RefCell::new(Playback::default());
 }
 
 /// Spend pre-sleep ordinary backlog once at the quiet transition. Later producer-authorized
@@ -227,19 +270,12 @@ pub(crate) fn discard_pending() {
     PLAYBACK.with(|player| player.borrow_mut().normal.clear());
 }
 
-/// Whether the embedded stem is playable and can safely enter the delayed trade lane.
-pub(crate) fn is_playable(name: &str) -> bool {
-    Clip::named(name).is_some()
-}
-
-/// Offer the validated trade-lane head and advance one fair, noninterrupting playback turn.
+/// Offer the trade-lane head and advance one fair, noninterrupting playback turn. A trade sound
+/// whose file is gone plays the default and is reported, like every other lane.
 /// Returns true only when the trade was selected, so contention never consumes its edge.
 pub(crate) fn pump(trade: Option<&str>) -> bool {
-    let next = PLAYBACK.with(|player| {
-        player
-            .borrow_mut()
-            .next(std::time::Instant::now(), trade.and_then(Clip::named))
-    });
+    let trade = trade.and_then(|name| resolve(MissingSound::Name(name.to_string())));
+    let next = PLAYBACK.with(|player| player.borrow_mut().next(std::time::Instant::now(), trade));
     if let Some((clip, is_trade)) = next {
         play_bytes(clip.wav);
         is_trade
@@ -249,12 +285,22 @@ pub(crate) fn pump(trade: Option<&str>) -> bool {
 }
 
 /// Start one clip after the shared scheduler has released the previous clip's duration.
+///
+/// With `SND_MEMORY | SND_ASYNC`, WinMM reads the buffer for as long as the sound plays, after
+/// this call has returned — so the bytes are kept alive in `CURRENT` until the next call, which
+/// stops the previous sound before the slot is overwritten. Embedded sounds were `'static` and
+/// never needed this; a user's file is not.
 #[cfg(windows)]
-fn play_bytes(wav: &'static [u8]) {
+fn play_bytes(wav: Arc<[u8]>) {
     use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
     use windows::core::PCWSTR;
-    // With SND_MEMORY, `pszSound` points directly into the WAV bytes. The embedded buffer is
-    // `'static`, so it remains valid for the entire asynchronous playback operation.
+
+    thread_local! {
+        /// The buffer WinMM is currently reading. Replaced only after the next `PlaySoundW`, which
+        /// stops the sound that was reading it.
+        static CURRENT: RefCell<Option<Arc<[u8]>>> = const { RefCell::new(None) };
+    }
+
     unsafe {
         let _ = PlaySoundW(
             PCWSTR(wav.as_ptr() as *const u16),
@@ -262,9 +308,10 @@ fn play_bytes(wav: &'static [u8]) {
             SND_ASYNC | SND_MEMORY | SND_NODEFAULT,
         );
     }
+    CURRENT.with(|current| *current.borrow_mut() = Some(wav));
 }
 
-/// Play one embedded WAV through AppKit's `NSSound`.
+/// Play one WAV through AppKit's `NSSound`.
 ///
 /// `NSSound` is used rather than a Rust audio crate because AppKit is already linked: an audio
 /// dependency would pull an output-device stack into a build that needs one `play` call.
@@ -276,9 +323,9 @@ fn play_bytes(wav: &'static [u8]) {
 ///   millisecond — hence the `CURRENT` slot below, which holds exactly one and releases it only
 ///   when the next sound replaces it. That also reproduces the Windows behaviour, where WinMM
 ///   plays one sound at a time and a later call interrupts the earlier one.
-/// - `dataWithBytesNoCopy:length:freeWhenDone:` with `NO`: the buffer is `'static` embedded data,
-///   so there is nothing to copy and nothing for Foundation to free. `YES` there would hand a
-///   pointer into our own binary image to `free()`.
+/// - `dataWithBytesNoCopy:length:freeWhenDone:` with `NO`: the buffer is ours, kept alive in the
+///   `CURRENT` slot beside the sound for as long as it plays, so there is nothing to copy and
+///   nothing for Foundation to free. `YES` there would hand our allocation to `free()`.
 /// - The autorelease pool is explicit because `NSData` comes back autoreleased. Every caller does
 ///   reach this on the GPUI main thread, which has a pool per run-loop turn, but owning one here
 ///   means playback does not depend on that staying true.
@@ -294,18 +341,17 @@ fn play_bytes(wav: &'static [u8]) {
 #[cfg(target_os = "macos")]
 #[allow(unexpected_cfgs)]
 #[cfg_attr(target_arch = "aarch64", allow(clippy::bool_comparison))]
-fn play_bytes(wav: &'static [u8]) {
+fn play_bytes(wav: Arc<[u8]>) {
     use objc::rc::autoreleasepool;
     use objc::runtime::{BOOL, Class, NO, Object};
     use objc::{msg_send, sel, sel_impl};
-    use std::cell::Cell;
     use std::ffi::c_void;
 
     thread_local! {
-        /// The retained `NSSound` currently playing, or null. Thread-local rather than a global:
-        /// it is a raw Objective-C pointer with no `Send`/`Sync` story, and every caller is on the
-        /// one UI thread anyway.
-        static CURRENT: Cell<*mut Object> = const { Cell::new(std::ptr::null_mut()) };
+        /// The retained `NSSound` currently playing, with the bytes it reads, or `None`.
+        /// Thread-local rather than a global: it is a raw Objective-C pointer with no
+        /// `Send`/`Sync` story, and every caller is on the one UI thread anyway.
+        static CURRENT: RefCell<Option<(*mut Object, Arc<[u8]>)>> = const { RefCell::new(None) };
     }
 
     // Looked up rather than written as `class!(…)`: that macro panics when a class is missing, and
@@ -317,8 +363,8 @@ fn play_bytes(wav: &'static [u8]) {
     };
 
     autoreleasepool(|| unsafe {
-        let previous = CURRENT.with(|current| current.replace(std::ptr::null_mut()));
-        if !previous.is_null() {
+        // Stop and release the previous sound BEFORE its bytes go out of scope with the tuple.
+        if let Some((previous, _bytes)) = CURRENT.with(|current| current.borrow_mut().take()) {
             let _: () = msg_send![previous, stop];
             let _: () = msg_send![previous, release];
         }
@@ -343,12 +389,12 @@ fn play_bytes(wav: &'static [u8]) {
             let _: () = msg_send![sound, release];
             return;
         }
-        CURRENT.with(|current| current.set(sound));
+        CURRENT.with(|current| *current.borrow_mut() = Some((sound, wav)));
     });
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn play_bytes(_wav: &'static [u8]) {}
+fn play_bytes(_wav: Arc<[u8]>) {}
 
 #[cfg(test)]
 mod tests;

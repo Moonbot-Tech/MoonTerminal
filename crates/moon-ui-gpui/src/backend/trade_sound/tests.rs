@@ -151,4 +151,16 @@ fn delayed_authorization_checks_epoch_venue_status_quiet_and_current_stem() {
             .as_deref(),
         Some("pfiff")
     );
+    // A name no file answers to still travels to the player: it plays the default for it and
+    // reports the name. Muting it here would hide a deleted file behind silence.
+    let gone = TradeSounds {
+        open: "deleted_file".into(),
+        ..changed
+    };
+    assert_eq!(
+        event
+            .authorized_name(Some(&current), Some(event.exchange), true, false, &gone)
+            .as_deref(),
+        Some("deleted_file")
+    );
 }
