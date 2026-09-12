@@ -32,10 +32,10 @@ cbuffer ChartView : register(b0) {
 cbuffer VolumeStyle : register(b2) {
     float4 vs_up;    // buy column rgb + band opacity
     float4 vs_down;  // sell column rgb + band opacity
-    float4 vs_scale; // reference-line rgb + alpha
+    float4 vs_scale; // scale-bracket rgb + alpha
     float4 vs_m;     // x candle-band style, y height fraction, z 1/max, w half-line ratio
-    float4 vs_m2;    // x unused, y unused here, z line px
-    float4 vs_m3;    // x sides switch (0 off / 1 overlaid / 2 stacked), y split boundary rel ms, z interval rel ms
+    float4 vs_m2;    // x unused, y unused here, z bracket line px, w bracket stem signed inset px
+    float4 vs_m3;    // x sides switch (0 off / 1 overlaid / 2 stacked), y split boundary rel ms, z interval rel ms, w bracket tick px
 };
 
 struct SideBucket {
@@ -114,8 +114,38 @@ float4 side_band_fragment(SideOut i) : SV_Target {
     return (i.sell == 1u) ? vs_down : vs_up;
 }
 
-// Two full-width reference lines: instance 0 the visible maximum at the band top, instance 1 the
-// half-way line the `max / 2` label sits on. Linear, so no square root here.
+// The scale is Moonbot's BRACKET, not a pair of full-width lines: a stem from the band floor up to
+// the visible maximum, and three ticks to its right — at the maximum, at the second reference level
+// and on the floor. Instance 0 is the stem, 1..3 the ticks top-down (VOLUME_SCALE_INSTANCES). Where
+// the stem stands is vs_m2.w, the signed inset in physical px — from the plot's left edge when
+// non-negative, from its right edge when negative — the very rule the text pass places the labels
+// from (`moon_chart::volume_bars::scale_bracket_offset`); vs_m3.w is the tick length.
+float4 scale_bracket_quad(uint vid, uint iid, float band, float second_frac) {
+    float base = cv_bounds.y + cv_bounds.w - 1.0;
+    float th = max(vs_m2.z, 1.0);
+    float tick = max(vs_m3.w, th);
+    float off = (vs_m2.w >= 0.0) ? vs_m2.w : cv_bounds.z + vs_m2.w;
+    float bx = cv_bounds.x + clamp(off, 0.0, cv_bounds.z);
+    float top = round(base - band);
+    float2 origin;
+    float2 size;
+    if (iid == 0u) {
+        origin = float2(bx, top);
+        size = float2(th, base - top + 1.0);
+    } else {
+        float frac = (iid == 1u) ? 1.0 : ((iid == 2u) ? second_frac : 0.0);
+        float y = min(round(base - band * frac), base - th + 1.0);
+        origin = float2(bx, y);
+        size = float2(tick, th);
+    }
+    float2 corner = CORNERS[vid % 6u];
+    float2 px = origin + corner * size;
+    return float4(px.x / cv_resolution.x * 2.0 - 1.0,
+                  1.0 - px.y / cv_resolution.y * 2.0, 0.0, 1.0);
+}
+
+// The sides band's scale bracket: its second tick sits at the half-way level the `max / 2` label
+// names. Linear, so no square root here.
 struct SideScaleOut {
     float4 pos : SV_Position;
 };
@@ -126,15 +156,7 @@ SideScaleOut side_scale_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID)
         o.pos = float4(2.0, 2.0, 0.0, 1.0);
         return o;
     }
-    float band = side_band_h();
-    float frac = (iid == 0u) ? 1.0 : saturate(vs_m.w);
-    float base = cv_bounds.y + cv_bounds.w - 1.0;
-    float y = round(base - band * frac);
-    float th = max(vs_m2.z, 1.0);
-    float2 corner = CORNERS[vid % 6u];
-    float2 px = float2(cv_bounds.x, y) + corner * float2(cv_bounds.z, th);
-    o.pos = float4(px.x / cv_resolution.x * 2.0 - 1.0,
-                   1.0 - px.y / cv_resolution.y * 2.0, 0.0, 1.0);
+    o.pos = scale_bracket_quad(vid, iid, side_band_h(), saturate(vs_m.w));
     return o;
 }
 

@@ -4,8 +4,9 @@
 //! fill, which is what the reference terminal does too. Its own layer rather than a second draw
 //! on the candle layer because it has its own instance buffer with its own cadence — and because
 //! it must draw with candles switched OFF, which the candle layer's `count == 0` early return
-//! forbids. It also draws the band's scale lines whenever the switch is on: with the candle half
-//! read on the same linear scale, one pair of lines serves both.
+//! forbids. It also draws the band's scale bracket whenever the switch is on: with the candle
+//! half read on the same linear scale, one bracket serves both — and with the candle band OFF the
+//! split stands alone under it, as Moonbot's `Vol` does.
 //!
 //! The base is redrawn only on data changes or camera movement, so this layer adds no work to the
 //! presentation path. The buffer is reuploaded in full whenever the bucket series is re-read.
@@ -75,7 +76,8 @@ impl SideVolumeLayer {
     }
 
     /// Whether this layer draws: the sides switch is on. Samples may be absent (a market whose
-    /// history the core has not sent yet) and the scale lines still draw for the candle half.
+    /// history the core has not sent yet) and the scale bracket still draws for whatever the
+    /// band holds — the candle half, or nothing yet.
     pub fn has_data(&self) -> bool {
         self.style.m3[0] >= 0.5
     }
@@ -114,7 +116,7 @@ impl SideVolumeLayer {
         }
     }
 
-    /// Draws the band and its two reference lines in the base pass, before the candle layer.
+    /// Draws the band and its scale bracket in the base pass, right after the candle layer.
     pub fn render(
         &mut self,
         view: &ChartViewGpu,
@@ -162,7 +164,7 @@ impl SideVolumeLayer {
             }
             context.VSSetShader(&pipe.scale_vs, None);
             context.PSSetShader(&pipe.scale_ps, None);
-            context.DrawInstanced(6, 2, 0, 0);
+            context.DrawInstanced(6, moon_chart::volume_bars::VOLUME_SCALE_INSTANCES, 0, 0);
         }
     }
 

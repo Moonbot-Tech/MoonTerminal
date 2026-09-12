@@ -1438,7 +1438,8 @@ pub struct ChartGraphicsCfg {
     /// Moonbot's `Vol` on top of the band: where the retained trade history reaches, the band
     /// shows BOUGHT and SOLD as rolling sums over `candle_volume_tf_s`; before that it keeps the
     /// candle turnover in the candle's own colours, scaled to the same interval so the two halves
-    /// share one scale. Rides on hills or bars alike; off, the band is the candle turnover only.
+    /// share one scale. Rides on hills or bars alike, and stands alone with the candle band OFF
+    /// — the split only, as Moonbot draws it; off, the band is the candle turnover only.
     #[serde(default, deserialize_with = "de_lenient_false")]
     pub candle_volume_sides: bool,
     /// With [`Self::candle_volume_sides`]: draw SOLD on top of BOUGHT so a column's height is
@@ -1456,6 +1457,12 @@ pub struct ChartGraphicsCfg {
     /// `Ind. Pos`; applies to every bottom-volume style.
     #[serde(default, deserialize_with = "de_lenient_false")]
     pub candle_volume_scale_right: bool,
+    /// Let the captions of the plot's BOTTOM band print over the volume bars instead of above
+    /// them. Off, every module in that band starts at the band's top edge, so a tall band pushes
+    /// the captions up the plot; on, they start at the plot's floor and their plates back them
+    /// against the bars. Applies to every bottom-volume style.
+    #[serde(default, deserialize_with = "de_lenient_false")]
+    pub candle_volume_labels_over: bool,
 }
 
 impl Default for ChartGraphicsCfg {
@@ -1479,6 +1486,7 @@ impl Default for ChartGraphicsCfg {
             candle_volume_stacked: false,
             candle_volume_tf_s: 0,
             candle_volume_scale_right: false,
+            candle_volume_labels_over: false,
         }
     }
 }

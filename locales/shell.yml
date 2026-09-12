@@ -1083,6 +1083,18 @@ chart.graphics.volume_scale_right:
   ru: "Справа"
   en: "Right"
   es: "Derecha"
+chart.graphics.volume_labels:
+  ru: "Подписи"
+  en: "Captions"
+  es: "Etiquetas"
+chart.graphics.volume_labels_above:
+  ru: "Над объёмом"
+  en: "Above volume"
+  es: "Sobre el volumen"
+chart.graphics.volume_labels_over:
+  ru: "Поверх"
+  en: "Over it"
+  es: "Encima"
 chart.graphics.candle_volume_height:
   ru: "Высота полосы объёмов"
   en: "Volume band height"

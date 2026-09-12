@@ -722,7 +722,12 @@ impl MetalLayers {
                     draw(encoder, &pipelines.volume_bars, 6, bars as u64);
                 }
                 if self.volume_style.m3[0] < 0.5 {
-                    draw(encoder, &pipelines.volume_scale, 6, 2);
+                    draw(
+                        encoder,
+                        &pipelines.volume_scale,
+                        6,
+                        moon_chart::volume_bars::VOLUME_SCALE_INSTANCES as u64,
+                    );
                 }
             }
             draw(encoder, &pipelines.candles, 18, self.candles.len() as u64);
@@ -737,7 +742,12 @@ impl MetalLayers {
             if !self.sides.is_empty() {
                 draw(encoder, &pipelines.side_volume, 12, self.sides.len() as u64);
             }
-            draw(encoder, &pipelines.side_scale, 6, 2);
+            draw(
+                encoder,
+                &pipelines.side_scale,
+                6,
+                moon_chart::volume_bars::VOLUME_SCALE_INSTANCES as u64,
+            );
         }
 
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);

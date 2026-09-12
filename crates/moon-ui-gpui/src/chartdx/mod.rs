@@ -651,6 +651,9 @@ struct PaneRender {
     side_range: (i64, i64),
     /// Whether the band's scale labels sit at the plot's right edge; read by the text pass.
     volume_scale_right: bool,
+    /// Whether the bottom band's captions print over the volume bars rather than above them;
+    /// read by the text pass.
+    labels_over_volume: bool,
     combo_cross_capacity: usize,
     combo_price_line_capacity: usize,
     orderbook_view: ChartViewGpu,
@@ -882,6 +885,7 @@ impl PaneRender {
             side_step_ms: 0,
             side_range: (i64::MAX, i64::MIN),
             volume_scale_right: false,
+            labels_over_volume: false,
             combo_cross_capacity: 0,
             combo_price_line_capacity: 0,
             orderbook_view: ChartViewGpu::default(),

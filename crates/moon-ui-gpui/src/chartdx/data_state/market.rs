@@ -188,10 +188,12 @@ impl ChartDataState {
             .chart_graphics
             .candle_volume_style
             .min(moon_core::market::candles::VOLUME_STYLE_MAX);
-        // The bought/sold switch rides on hills or bars; with the band off there is nothing to
-        // ride on, so the switch is off too.
-        let sides_on = self.chart_graphics.candle_volume_sides
-            && volume_style_id != moon_core::market::candles::VOLUME_STYLE_OFF;
+        // The bought/sold switch stands on its own: with the candle band OFF it is the only
+        // thing in the band, drawn as Moonbot's `Vol` is — the split alone, no candle turnover
+        // before it. It used to go dark with the band, which handed the floor back to the
+        // per-trade bars and read as "the old volumes came back".
+        let sides_on = self.chart_graphics.candle_volume_sides;
+        let candle_band_on = volume_style_id != moon_core::market::candles::VOLUME_STYLE_OFF;
         let view_style = view::ViewStyle {
             marker_scale,
             // The sides band is the per-trade bars' own data regrouped, so the two would draw the
@@ -1182,14 +1184,18 @@ impl ChartDataState {
                 // The interval computed THIS sync, not the one the last successful read was
                 // stamped with: with the switch on and no read landed yet (client or snapshot
                 // momentarily absent) the stamp is still zero, and the candle half must keep
-                // drawing from what it has rather than go dark with the split.
-                let history = moon_chart::volume_bars::visible_interval_max(
-                    &pr.volume_samples,
-                    vol_from,
-                    vol_to,
-                    side_tf_ms as f64,
-                    side_boundary_ms,
-                );
+                // drawing from what it has rather than go dark with the split. With the candle
+                // band OFF that half is culled, so it must not set the scale either.
+                let history = candle_band_on.then(|| {
+                    moon_chart::volume_bars::visible_interval_max(
+                        &pr.volume_samples,
+                        vol_from,
+                        vol_to,
+                        side_tf_ms as f64,
+                        side_boundary_ms,
+                    )
+                });
+                let history = history.flatten();
                 match (split, history) {
                     (None, None) => None,
                     (a, b) => Some(a.unwrap_or(0.0).max(b.unwrap_or(0.0))),
@@ -1204,6 +1210,7 @@ impl ChartDataState {
                 moon_chart::visible_volume_stats(&pr.volume_samples, vol_from, vol_to)
             };
             pr.volume_scale_right = self.chart_graphics.candle_volume_scale_right;
+            pr.labels_over_volume = self.chart_graphics.candle_volume_labels_over;
             let next_volume_style = match pr.volume_stats {
                 // Nothing visible, or every visible bucket empty: draw no band rather than
                 // normalise against a zero maximum.
@@ -1242,7 +1249,11 @@ impl ChartDataState {
                         0.0,
                         moon_chart::volume_bars::VOLUME_BAR_W_PX * self.last_ppp,
                         moon_chart::volume_bars::VOLUME_SCALE_LINE_PX * self.last_ppp,
-                        0.0,
+                        // Where the scale bracket stands: the text pass places the labels from
+                        // the same rule, so a stem and its label cannot drift apart.
+                        moon_chart::volume_bars::scale_bracket_signed_inset(
+                            self.chart_graphics.candle_volume_scale_right,
+                        ) * self.last_ppp,
                     ],
                     // The switch: kind, where the split history begins (relative ms; +inf while
                     // no sample is resident, so the candle half keeps drawing everywhere), and
@@ -1259,7 +1270,7 @@ impl ChartDataState {
                             f32::MAX
                         },
                         side_tf_ms as f32,
-                        0.0,
+                        moon_chart::volume_bars::VOLUME_SCALE_TICK_PX * self.last_ppp,
                     ],
                 },
             };

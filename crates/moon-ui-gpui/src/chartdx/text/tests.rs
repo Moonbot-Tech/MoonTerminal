@@ -173,12 +173,48 @@ fn volume_scale_labels_are_larger_and_bolder_than_the_axis() {
                 .contains("self.draw_volume_scale_text(ctx,&label,label_x,y,label_ax,0.5,ink)?"),
         "the band's scale labels must take the volume-scale face, not the axis one"
     );
-    // The edge the labels hug is the reader's choice, and the anchor follows the edge: a label at
-    // the right edge anchored by its left corner would run into the price gutter.
+    // The labels hang off the bracket's ticks, and the bracket stands where the shaders stand
+    // it: one rule in `moon_chart::volume_bars`, read here for the text and carried to the GPU
+    // as the uniform's signed inset. A label placed from an edge of its own would part from the
+    // stem the moment either rule moved.
     assert!(
-        prepare.contains("ifvolume_scale_right{(plot_right-4.0,1.0)}else{(plot_left+4.0,0.0)}"),
-        "the scale labels must anchor by the edge they sit at"
+        prepare.contains(
+            "letbracket_x=plot_left+moon_chart::volume_bars::scale_bracket_offset(plot_w,volume_scale_right);"
+        ),
+        "the scale labels must place from the shared bracket rule"
     );
+    assert!(
+        prepare.contains(
+            "letlabel_x=bracket_x+moon_chart::volume_bars::VOLUME_SCALE_TICK_PX+moon_chart::volume_bars::VOLUME_SCALE_LABEL_GAP_PX;"
+        ),
+        "a label prints after the tick at its level"
+    );
+}
+
+/// With the captions-over-volume switch on, the caption pass is told the band is not there while
+/// the band's own scale labels keep the real height.
+///
+/// Breakage this pins: zeroing the shared `volume_band_h` instead of the caption input, which
+/// would drop the max/avg labels onto the plot floor; or forgetting the switch on the caption
+/// input, which is the whole feature.
+#[test]
+fn captions_over_volume_hide_the_band_from_the_caption_pass_only() {
+    let prepare: String = include_str!("prepare.rs")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(
+        prepare.contains("volume_band_h:iflabels_over_volume{0.0}else{volume_band_h},"),
+        "the caption input alone must lose the band under the switch"
+    );
+    // The scale labels are placed from the real band, before the caption input is built.
+    let scale_at = prepare
+        .find("lety=plot_bottom-band*frac;")
+        .expect("the scale labels place from the band height");
+    let captions_at = prepare
+        .find("volume_band_h:iflabels_over_volume")
+        .expect("the caption input applies the switch");
+    assert!(scale_at < captions_at);
 }
 
 /// A reference line too close to the band floor keeps its label off the plot's bottom edge.

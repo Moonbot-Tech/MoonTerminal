@@ -193,7 +193,7 @@ impl CandleLayer {
                 if self.volume_style.m3[0] < 0.5 {
                     context.VSSetShader(&pipe.scale_vs, None);
                     context.PSSetShader(&pipe.scale_ps, None);
-                    context.DrawInstanced(6, 2, 0, 0);
+                    context.DrawInstanced(6, moon_chart::volume_bars::VOLUME_SCALE_INSTANCES, 0, 0);
                 }
             }
             context.VSSetShader(&pipe.vs, None);

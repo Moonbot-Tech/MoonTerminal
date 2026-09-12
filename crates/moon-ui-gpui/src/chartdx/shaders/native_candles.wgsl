@@ -177,8 +177,8 @@ struct VolumeStyle {
     down: vec4<f32>,
     scale: vec4<f32>,
     m: vec4<f32>,  // x style, y height fraction, z 1/max, w avg/max
-    m2: vec4<f32>, // x retired band cap, y bar width px, z line px
-    m3: vec4<f32>, // x sides switch (0 off / 1 overlaid / 2 stacked), y split boundary rel ms, z interval rel ms
+    m2: vec4<f32>, // x retired band cap, y bar width px, z bracket line px, w bracket stem signed inset px
+    m3: vec4<f32>, // x sides switch (0 off / 1 overlaid / 2 stacked), y split boundary rel ms, z interval rel ms, w bracket tick px
 };
 
 @group(0) @binding(3) var<uniform> vs: VolumeStyle;
@@ -271,6 +271,43 @@ fn volume_bars_fragment(in: VolumeBarOut) -> @location(0) vec4<f32> {
     return select(vs.down, vs.up, in.up == 1u);
 }
 
+// The scale is Moonbot's BRACKET, not a pair of full-width lines: a stem from the band floor up to
+// the visible maximum, and three ticks to its right — at the maximum, at the second reference level
+// and on the floor. Instance 0 is the stem, 1..3 the ticks top-down (VOLUME_SCALE_INSTANCES). Where
+// the stem stands is vs.m2.w, the signed inset in physical px — from the plot's left edge when
+// non-negative, from its right edge when negative — the very rule the text pass places the labels
+// from (`moon_chart::volume_bars::scale_bracket_offset`); vs.m3.w is the tick length.
+fn scale_bracket_quad(vid: u32, iid: u32, band: f32, second_frac: f32) -> vec4<f32> {
+    let base = cv.bounds.y + cv.bounds.w - 1.0;
+    let th = max(vs.m2.z, 1.0);
+    let tick = max(vs.m3.w, th);
+    var off = vs.m2.w;
+    if off < 0.0 {
+        off = cv.bounds.z + vs.m2.w;
+    }
+    let bx = cv.bounds.x + clamp(off, 0.0, cv.bounds.z);
+    let top = round(base - band);
+    var origin: vec2<f32>;
+    var size: vec2<f32>;
+    if iid == 0u {
+        origin = vec2<f32>(bx, top);
+        size = vec2<f32>(th, base - top + 1.0);
+    } else {
+        var frac = 0.0;
+        if iid == 1u {
+            frac = 1.0;
+        } else if iid == 2u {
+            frac = second_frac;
+        }
+        let y = min(round(base - band * frac), base - th + 1.0);
+        origin = vec2<f32>(bx, y);
+        size = vec2<f32>(tick, th);
+    }
+    let corner = CORNERS_01[vid % 6u];
+    let px = origin + corner * size;
+    return to_clip(px, cv.resolution);
+}
+
 struct VolumeScaleOut {
     @builtin(position) pos: vec4<f32>,
 };
@@ -283,17 +320,7 @@ fn volume_scale_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index)
         o.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
         return o;
     }
-    let band = vol_band_h();
-    var frac = sqrt(clamp(vs.m.w, 0.0, 1.0));
-    if iid == 0u {
-        frac = 1.0;
-    }
-    let base = cv.bounds.y + cv.bounds.w - 1.0;
-    let y = round(base - band * frac);
-    let th = max(vs.m2.z, 1.0);
-    let corner = CORNERS_01[vid % 6u];
-    let px = vec2<f32>(cv.bounds.x, y) + corner * vec2<f32>(cv.bounds.z, th);
-    o.pos = to_clip(px, cv.resolution);
+    o.pos = scale_bracket_quad(vid, iid, vol_band_h(), sqrt(clamp(vs.m.w, 0.0, 1.0)));
     return o;
 }
 
