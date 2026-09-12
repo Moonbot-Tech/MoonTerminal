@@ -42,31 +42,23 @@ fn every_stop_cell_reads_on_or_off() {
     }
 }
 
-/// Only a stop-loss is drawn as a danger: it is the one whose absence leaves a position exposed.
+/// All disabled stops share MoonBot's muted status convention; enabled stops stay positive.
 ///
-/// Mutation: tone TS or VStop as Danger, or soften SL. The row would either cry wolf on every
-/// order without a trailing stop or stop flagging a genuinely unprotected position.
+/// Mutation: restore Danger for SL OFF. A disabled stop would again read as an error while
+/// neighbouring disabled statuses remain neutral. Muting any ON would hide its active state.
 ///
 /// Returns:
-///     Nothing; tones follow the stop kind.
+///     Nothing; every stop kind follows the same state-to-tone rule.
 #[test]
-fn only_stop_loss_off_is_toned_as_danger() {
-    assert!(matches!(
-        stop_look(OrderStopKind::StopLoss, false).1,
-        MoonTone::Danger
-    ));
-    assert!(matches!(
-        stop_look(OrderStopKind::Trailing, false).1,
-        MoonTone::Muted
-    ));
-    assert!(matches!(
-        stop_look(OrderStopKind::VStop, false).1,
-        MoonTone::Muted
-    ));
-    assert!(matches!(
-        stop_look(OrderStopKind::StopLoss, true).1,
-        MoonTone::Positive
-    ));
+fn all_stop_statuses_use_muted_off_and_positive_on() {
+    for kind in [
+        OrderStopKind::StopLoss,
+        OrderStopKind::Trailing,
+        OrderStopKind::VStop,
+    ] {
+        assert_eq!(stop_look(kind, false), ("OFF", MoonTone::Muted));
+        assert_eq!(stop_look(kind, true), ("ON", MoonTone::Positive));
+    }
 }
 
 /// `table.rs:flag_toggle_cell` must authorize its captured core inside the Backend update before

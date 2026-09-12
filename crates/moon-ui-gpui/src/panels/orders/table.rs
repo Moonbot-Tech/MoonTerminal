@@ -375,8 +375,8 @@ fn pnl_pct_cell(r: &OrderRow) -> MoonDataCell {
 /// yet. There is deliberately no third "no stop of its own" state: a working order inheriting its
 /// strategy's stop is protected, and drawing it as anything but ON would misread that.
 ///
-/// `OFF` is red for a stop-loss because a position without one really is exposed, and muted for TS
-/// or VStop, which are not the last line of defence.
+/// Every `OFF` uses the same muted tone, matching MoonBot's disabled-status convention;
+/// every `ON` remains positive for SL, TS, and VStop.
 ///
 /// Args:
 ///     kind: Stop protection this cell toggles.
@@ -387,7 +387,6 @@ fn pnl_pct_cell(r: &OrderRow) -> MoonDataCell {
 fn stop_look(kind: OrderStopKind, on: bool) -> (&'static str, MoonTone) {
     match (on, kind) {
         (true, _) => ("ON", MoonTone::Positive),
-        (false, OrderStopKind::StopLoss) => ("OFF", MoonTone::Danger),
         (false, _) => ("OFF", MoonTone::Muted),
     }
 }
