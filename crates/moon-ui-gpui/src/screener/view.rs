@@ -39,8 +39,11 @@ pub struct ScreenerView {
     pub(super) backend: Entity<Backend>,
     /// Cached rows after the current source, coin, volume, and sort selections are applied.
     rows: Rc<Vec<Entry>>,
-    /// Row count after source grouping but before coin and volume filters, shown in the footer.
+    /// Distinct markets after source grouping but before the coin and volume filters, the footer's
+    /// "total". Markets, not rows: a market has one row per core sharing its exchange.
     total: usize,
+    /// Distinct markets among [`Self::rows`], the footer's "shown" — counted the same way.
+    shown: usize,
     /// Workspace scope marker over every live session, or `None` when the preset is unresolved.
     /// A resolved full scope still keeps a marker whose facts are empty. Screener is a group-less
     /// singleton with no `EffectiveCoreScope` of its own, so this is built with
@@ -89,8 +92,13 @@ impl ScreenerView {
         // Prefer the shared per-context `table_visible_columns` entry for `screener-table:win`.
         // When absent, migrate from legacy `screener_columns`. Ignore unknown keys left by renamed
         // or removed columns; an empty valid set falls back to every current column.
+        //
+        // A layout saved before the PnL column was renamed keys it `session`, a key that is now
+        // retired; the list, the sort and the widths all bring it current on read (see
+        // `table::current_key`).
         let saved_cols = crate::persistence::table_persist::visible(backend.read(cx), &widths_id)
-            .or_else(|| backend.read(cx).layout.screener_columns.clone());
+            .or_else(|| backend.read(cx).layout.screener_columns.clone())
+            .map(super::table::migrate_legacy_keys);
         let visible_cols: HashSet<String> = match saved_cols {
             Some(list) => {
                 let set: HashSet<String> = list
@@ -107,10 +115,15 @@ impl ScreenerView {
             None => COLS.iter().map(|c| c.0.to_string()).collect(),
         };
         let restored_sort = super::table::restore_sort(
-            crate::persistence::table_persist::saved_sort(backend.read(cx), &widths_id),
+            super::table::migrate_legacy_sort(crate::persistence::table_persist::saved_sort(
+                backend.read(cx),
+                &widths_id,
+            )),
             &visible_cols,
         );
-        let saved_widths = crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
+        let saved_widths = super::table::migrate_legacy_widths(
+            crate::persistence::table_persist::saved(backend.read(cx), &widths_id),
+        );
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
             s.set_sort(restored_sort.0.clone(), !restored_sort.1);
@@ -163,6 +176,7 @@ impl ScreenerView {
             backend,
             rows: Rc::new(Vec::new()),
             total: 0,
+            shown: 0,
             scope_marker: None,
             sessions_total: 0,
             coin_input,
@@ -215,8 +229,9 @@ impl ScreenerView {
             self.source = ScrSource::All;
         }
         // Deduplicate by market-data provider: each group contains the consumer cores sharing that
-        // provider. With a core filter, the group contains only that core for account-derived fields,
-        // while market rows still come from its provider and charts open on the selected core.
+        // provider, and every member gets its own row per market — the market half read once from
+        // the provider, the account half its own. With a core filter, the group contains only that
+        // core.
         let mut groups: Vec<(CoreId, Vec<CoreId>)> = Vec::new();
         let mut names: HashMap<CoreId, SharedString> = HashMap::new();
         for s in b.session.sessions() {
@@ -242,35 +257,40 @@ impl ScreenerView {
         let mut entries: Vec<Entry> = Vec::new();
         for (provider, members) in &groups {
             let mut rows = source.screener_rows(*provider, members);
-            // Overlay open-order counts by exact market, summed across the group's member cores.
-            let mut order_counts: HashMap<&str, u32> = HashMap::new();
-            let member_data: Vec<_> = members.iter().filter_map(|&m| store.core(m)).collect();
-            for cd in &member_data {
-                for o in &cd.orders {
-                    *order_counts.entry(o.market.as_str()).or_default() += 1;
-                }
-            }
+            // Overlay open-order counts by exact market, per member core: a row states ONE core,
+            // so its Orders are that core's alone.
+            let order_counts: HashMap<CoreId, HashMap<&str, u32>> = members
+                .iter()
+                .filter_map(|&m| {
+                    let cd = store.core(m)?;
+                    let mut counts: HashMap<&str, u32> = HashMap::new();
+                    for o in &cd.orders {
+                        *counts.entry(o.market.as_str()).or_default() += 1;
+                    }
+                    Some((m, counts))
+                })
+                .collect();
             for row in &mut rows {
-                row.orders = order_counts.get(row.market.as_str()).copied().unwrap_or(0);
+                row.orders = order_counts
+                    .get(&row.core)
+                    .and_then(|counts| counts.get(row.market.as_str()))
+                    .copied()
+                    .unwrap_or(0);
             }
-            // Use the selected core for the Core column and chart actions under a source filter;
-            // otherwise use the group's market-data provider.
-            let open_core = match self.source {
-                ScrSource::Core(id) => id,
-                ScrSource::All => *provider,
-            };
-            let core_name = names
-                .get(&open_core)
-                .cloned()
-                .unwrap_or_else(|| SharedString::from(format!("#{open_core}")));
-            entries.extend(rows.into_iter().map(|row| Entry {
-                row,
-                core_name: core_name.clone(),
-                open_core,
+            // The Core column names the row's own core — the one whose account fields it states —
+            // never the group's provider.
+            entries.extend(rows.into_iter().map(|row| {
+                let core_name = names
+                    .get(&row.core)
+                    .cloned()
+                    .unwrap_or_else(|| SharedString::from(format!("#{}", row.core)));
+                Entry { row, core_name }
             }));
         }
 
-        self.total = entries.len();
+        // The footer counts COINS, as its label says, and a market now has one row per core
+        // sharing its exchange — so both halves of "shown / total" count distinct markets, not rows.
+        self.total = distinct_markets(&entries);
         if !coin_filter.is_empty() {
             entries.retain(|e| {
                 e.row.market.to_uppercase().contains(&coin_filter)
@@ -281,6 +301,7 @@ impl ScreenerView {
             entries.retain(|e| e.row.vol_24h >= min_vol);
         }
         sort_entries(&mut entries, &self.sort_key, self.sort_desc);
+        self.shown = distinct_markets(&entries);
         self.rows = Rc::new(entries);
     }
 
@@ -370,14 +391,14 @@ impl ScreenerView {
         cx.notify();
     }
 
-    /// Request the row's market on Main for its selected/provider core, as in an Orders token click.
+    /// Request the row's market on Main for the row's own core, as in an Orders token click.
     ///
     /// The request does not activate or raise the owning window.
     fn open_chart(&mut self, ix: usize, cx: &mut Context<Self>) {
         let Some(e) = self.rows.get(ix) else {
             return;
         };
-        let core = e.open_core;
+        let core = e.row.core;
         let market = e.row.market.clone();
         self.backend.update(cx, |b, bcx| {
             b.open_on_main((core, market), false);
@@ -594,12 +615,7 @@ impl ScreenerView {
         // Frozen render idiom (`workspace::scope_marker`): head is the existing formatted count
         // and never clips; the marker's facts trail it, clipping at their right edge when the
         // window narrows, exactly as a dock footer's fixed height requires.
-        let count_head = format!(
-            "{} / {} {}",
-            self.rows.len(),
-            self.total,
-            t!("screener.coins")
-        );
+        let count_head = format!("{} / {} {}", self.shown, self.total, t!("screener.coins"));
         let footer = scope_marker::scope_footer(count_head, self.scope_marker.as_ref());
         let footer_tip = scope_marker::scope_footer_tooltip(&footer, self.scope_marker.as_ref());
         let has_tail = !footer.tail.is_empty();
@@ -691,6 +707,25 @@ impl Render for ScreenerView {
                     .hit_overlay(),
             )
     }
+}
+
+/// Count the distinct markets among per-core rows, for the footer's coin count.
+///
+/// Rows on one exchange repeat every market once per core, and two exchanges may list the same
+/// market name, so the key is the market together with its exchange — `row.provider`, the core
+/// its market half was read from. That is what the footer counted before rows went per-core.
+///
+/// Args:
+///     entries: The rows to count over.
+///
+/// Returns:
+///     The number of distinct `(provider, market)` pairs across the entries.
+fn distinct_markets(entries: &[Entry]) -> usize {
+    entries
+        .iter()
+        .map(|e| (e.row.provider, e.row.market.as_str()))
+        .collect::<HashSet<_>>()
+        .len()
 }
 
 fn screener_header(p: MoonPalette, cx: &App) -> impl IntoElement {

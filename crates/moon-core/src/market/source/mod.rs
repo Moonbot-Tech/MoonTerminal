@@ -466,6 +466,79 @@ pub(crate) fn max_order_notional(
     }
 }
 
+/// The core's per-market Session counter, valued in USDT, or `None` when it cannot be stated.
+///
+/// ONE rule for every surface that prints "Session": the chart caption reads it here, and the
+/// Screener column reads its two halves — [`session_base_rate`] once per core and
+/// [`session_to_usdt`] per market — so they can never disagree about a coin the way the Screener's
+/// old "Session" column, which summed `TotalProfitB/L/S` (MoonBot's `PnL`), disagreed with the
+/// caption beside it.
+///
+/// The three ways this is `None` are one answer, "not statable": the core publishes no
+/// session-profit snapshot at all (every build predating the protocol field), the value is not a
+/// number, or the core's base currency cannot be valued in USDT — which also covers the moments
+/// right after connect, before `BaseCheck` names that currency. A real zero is `Some(0.0)`.
+///
+/// Takes the market's lock once for the counter; a caller already inside `MarketHandle::with` reads
+/// `Market::session_profit` there and calls [`session_to_usdt`] itself.
+///
+/// Args:
+///     snapshot: The CONSUMER core's snapshot — the account the counter belongs to, never the
+///         market-data provider's.
+///     handle: The market within that same snapshot.
+///
+/// Returns:
+///     The counter in USDT, or `None` when the core does not state it or it cannot be valued.
+pub(crate) fn session_usdt(
+    snapshot: &moonproto::MoonClientSnapshot,
+    handle: &moonproto::state::MarketHandle,
+) -> Option<f64> {
+    session_to_usdt(handle.session_profit(), session_base_rate(snapshot))
+}
+
+/// USDT per unit of the core's base currency, for valuing its Session counters; zero when unknown.
+///
+/// Per CORE, not per market: the rate is a property of the account, and a caller walking every
+/// market of an exchange for one core resolves it once. A stablecoin base settles at 1 without
+/// touching the catalogue, which is every USDT and USDC core; a coin-denominated base such as BTC
+/// costs a handful of name lookups. The rule is `feed::assets::base_rate`, not moonproto's own
+/// `session_profit_for`: that one resolves the rate from correlation markets alone and answers
+/// `None` whenever the core sent no correlation market for its own base currency.
+///
+/// Args:
+///     snapshot: The core's snapshot, which names its base currency and lists its markets.
+///
+/// Returns:
+///     The rate, or `0.0` when the base currency is unnamed yet or cannot be valued.
+pub(crate) fn session_base_rate(snapshot: &moonproto::MoonClientSnapshot) -> f64 {
+    // Borrowed, not cloned: this runs per pane on every market revision, and the currency name is
+    // read and dropped inside the same expression.
+    let base_ccy = snapshot
+        .server_info()
+        .base_currency_name
+        .as_deref()
+        .unwrap_or_default();
+    crate::feed::assets::base_rate(snapshot.markets(), base_ccy)
+}
+
+/// Value one Session counter in USDT at a rate from [`session_base_rate`].
+///
+/// Converted here rather than at the caller, because the raw value is in the CORE's base currency:
+/// a coin-margined core states it in BTC, and printing that under a dollar sign is how `0.0004 BTC`
+/// reads as nothing at all. A base this build cannot value is therefore withheld rather than shown
+/// unconverted.
+///
+/// Args:
+///     base_value: `Market::session_profit` — `None` when the core states no counter.
+///     rate: USDT per unit of the core's base currency; zero means unknown.
+///
+/// Returns:
+///     The counter in USDT, or `None` when it is absent, not a number, or the rate is unknown.
+pub(crate) fn session_to_usdt(base_value: Option<f64>, rate: f64) -> Option<f64> {
+    let base_value = base_value.filter(|v| v.is_finite())?;
+    (rate > 0.0).then_some(base_value * rate)
+}
+
 /// Market-wide context a chart caption can state beside the coin's own numbers.
 ///
 /// Two different subjects on purpose. The BACKGROUND deltas — the exchange's own average and BTC's

@@ -2,7 +2,7 @@
 
 use crate::data::OrderBookModel;
 use crate::feed::SharedMoonClient;
-use crate::market::source::{MarketLabel, MarketLimits, max_order_notional};
+use crate::market::source::{MarketLabel, MarketLimits, max_order_notional, session_usdt};
 use crate::session::CoreId;
 
 use super::{
@@ -490,7 +490,7 @@ impl MarketDataSource {
     /// Return the market-data provider core for a consumer core.
     ///
     /// This is the exchange deduplication key: cores on the same exchange share a provider. The
-    /// screener groups cores by this value to avoid duplicate coins.
+    /// screener groups cores by this value so the market half of its rows is read once per exchange.
     pub fn provider_of(&self, core: CoreId) -> Option<CoreId> {
         self.inner
             .read()
@@ -695,32 +695,14 @@ impl MarketDataSource {
                 // caption's call, not this readout's. It is not the "traded to break even" it looks
                 // like: the core leaves this counter at zero on part of its venues.
                 out.core_pnl = pos.total_profit().is_finite().then(|| pos.total_profit());
-                // The core's Session counter, valued in USDT. Read through the handle we already
-                // hold, and gated on a caption actually asking for it: on a modern core EVERY
-                // market carries a value — the snapshot states zero for the ones it omits — so the
-                // value's own presence gates nothing, and a chart drawing only a Bid would still
-                // pay `base_rate`'s catalogue walk per pane on every revision.
-                //
-                // The conversion is `feed::assets`'s, not moonproto's `session_profit_for`: that
-                // one resolves the rate from correlation markets alone and answers `None` whenever
-                // the core sent no correlation market for its own base currency. This one settles
-                // a stablecoin base at 1 before looking anything up, which is every USDT and USDC
-                // core, and only walks the catalogue for a coin-denominated base such as BTC.
+                // The core's Session counter, valued in USDT through the shared rule, and gated on
+                // a caption actually asking for it: on a modern core EVERY market carries a value —
+                // the snapshot states zero for the ones it omits — so the value's own presence
+                // gates nothing, and a chart drawing only a Bid would still pay `base_rate`'s
+                // catalogue walk per pane on every revision.
                 out.session = want_session
-                    .then(|| handle.session_profit())
-                    .flatten()
-                    .filter(|v| v.is_finite())
-                    .and_then(|base_value| {
-                        // Borrowed, not cloned: this runs per pane on every market revision, and
-                        // the currency name is read and dropped inside the same expression.
-                        let base_ccy = snapshot
-                            .server_info()
-                            .base_currency_name
-                            .as_deref()
-                            .unwrap_or_default();
-                        let rate = crate::feed::assets::base_rate(snapshot.markets(), base_ccy);
-                        (rate > 0.0).then_some(base_value * rate)
-                    });
+                    .then(|| session_usdt(snapshot, &handle))
+                    .flatten();
                 out.coin_balance = pos.asset_balance.is_finite().then_some(pos.asset_balance);
                 // `channels.markets` prints what the core actually stated for this market, which is
                 // the one thing a screenshot cannot show: a caption printing nothing looks the same
