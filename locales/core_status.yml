@@ -699,7 +699,9 @@ core_status.tz_off.source.none:
 # --- Connection verdict: why a core is not usable, and what to do about it. -------------------
 # `core_status.fault.short.*` is the two-word cell form; `reason`/`next` are the hover and the
 # status-bar line. The wording never claims a cause the terminal did not observe: `unidentified`
-# names every possibility it cannot separate, and `unknown` names the raw stage instead of guessing.
+# names every possibility it cannot separate, `unknown` names the raw stage instead of guessing,
+# and the key class (`key_empty` / `key_unparsable`) names a field the terminal could not decode
+# before any socket existed.
 core_status.fault.short.local_port:
   ru: "локальный порт"
   en: "local port"
@@ -736,6 +738,14 @@ core_status.fault.short.unknown:
   ru: "не удалось определить"
   en: "undetermined"
   es: "no determinado"
+core_status.fault.short.key_empty:
+  ru: "ключ не вставлен"
+  en: "no key pasted"
+  es: "clave no pegada"
+core_status.fault.short.key_unparsable:
+  ru: "не ключ MoonBot"
+  en: "not a MoonBot key"
+  es: "no es clave MoonBot"
 core_status.fault.reason.local_port:
   ru: "Терминал не смог занять свой UDP-порт (попыток: %{n})"
   en: "The terminal could not bind its own UDP port (%{n} attempts)"
@@ -788,6 +798,14 @@ core_status.fault.reason.unknown:
   ru: "Причину определить не удалось"
   en: "The cause could not be determined"
   es: "No se pudo determinar la causa"
+core_status.fault.reason.key_empty:
+  ru: "Поле «Ключ» пустое — подключаться нечем"
+  en: "The Key field is empty — there is nothing to connect with"
+  es: "El campo Clave está vacío: no hay con qué conectar"
+core_status.fault.reason.key_unparsable:
+  ru: "В поле «Ключ» не ключ MoonBot — терминал не смог его прочитать"
+  en: "What is in the Key field is not a MoonBot key — the terminal could not read it"
+  es: "Lo que hay en el campo Clave no es una clave MoonBot: el terminal no pudo leerla"
 core_status.fault.next.local_port:
   ru: "Порт держит что-то на ЭТОЙ машине: VPN или локальный фаервол"
   en: "Something on THIS machine holds the port: a VPN or a local firewall"
@@ -828,6 +846,10 @@ core_status.fault.next.unknown:
   ru: "Пришли эту строку и лог в поддержку"
   en: "Send this line and the log to support"
   es: "Envia esta linea y el registro al soporte"
+core_status.fault.next.key:
+  ru: "Ключ создаётся в MoonBot, не на сайте. В MoonBot: зелёный кружок слева внизу (окно Info) → строка Moon Kernel → Settings → окно Moon Proto, вкладка Settings → Key: → Copy Key (ключа нет — New Key). Вставьте его в поле «Ключ» кнопкой «Вставить» целиком и нажмите «Сохранить» — ядро подключится само"
+  en: "The key is made in MoonBot, not on the website. In MoonBot: the green dot at the bottom left (the Info window) → the Moon Kernel row → Settings → the Moon Proto window, Settings tab → Key: → Copy Key (no key yet — New Key). Paste the whole of it into the Key field with the Paste button and press Save — the core connects by itself"
+  es: "La clave se crea en MoonBot, no en el sitio web. En MoonBot: el punto verde abajo a la izquierda (ventana Info) → fila Moon Kernel → Settings → ventana Moon Proto, pestaña Settings → Key: → Copy Key (sin clave: New Key). Pégala entera en el campo Clave con el botón Pegar y pulsa Guardar: el núcleo se conecta solo"
 core_status.fault.core.legacy_named:
   ru: "Ядро сообщает MoonBot %{server}, а версию протокола не сообщает: оно старее этого терминала"
   en: "The core reports MoonBot %{server} and no protocol version: it predates this terminal"

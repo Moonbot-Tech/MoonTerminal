@@ -1,6 +1,18 @@
 //! Unit tests for feed-level order rules shared by display and packet assembly.
 
-use super::stop_inherited_from_strategy;
+use super::{live, retry_can_help, stop_inherited_from_strategy};
+use anyhow::anyhow;
+
+/// `feed::retry_can_help` is the error-side half of the retry decision paired with
+/// `FailureClass::retry_can_help`: dropping its `KeyUnreadable` downcast makes an unfixable key
+/// failure spin its backoff forever, while widening it stops real reconnects.
+#[test]
+fn only_an_unreadable_key_stops_the_feed_retry() {
+    assert!(!retry_can_help(&anyhow::Error::new(live::KeyUnreadable {
+        empty: true
+    })));
+    assert!(retry_can_help(&anyhow!("connect timeout")));
+}
 
 /// A stop switched off after the entry filled must not be re-supplied by its strategy.
 ///

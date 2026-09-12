@@ -832,6 +832,17 @@ fn jittered(d: Duration) -> Duration {
     d.mul_f64(0.75 + frac * 0.5)
 }
 
+/// Whether another `live::run` attempt can change the outcome of this failure.
+///
+/// Args:
+///     e: The error the finished attempt returned.
+///
+/// Returns:
+///     `false` only for a failure that cannot resolve without a settings edit.
+fn retry_can_help(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<live::KeyUnreadable>().is_none()
+}
+
 /// Start the live backend for one core, keeping a connection at all times and subscribing on
 /// command. `reports` is the channel to the SQLite writer; `None` means the database is unavailable
 /// and reports are not written.
@@ -901,12 +912,20 @@ pub fn spawn(
                         if !never_worked && started.elapsed() >= STABLE_AFTER {
                             backoff = BACKOFF_MIN;
                         }
+                        let can_retry = retry_can_help(&e);
                         let wait = jittered(backoff);
-                        log::error!(
-                            "live backend «{}» упал: {e:#}; реконнект через {:?}",
-                            server.name,
-                            wait
-                        );
+                        if can_retry {
+                            log::error!(
+                                "live backend «{}» упал: {e:#}; реконнект через {:?}",
+                                server.name,
+                                wait
+                            );
+                        } else {
+                            log::error!(
+                                "live backend «{}» упал: {e:#}; попытки остановлены, возобновятся после правки и сохранения ключа",
+                                server.name
+                            );
+                        }
                         // No "reconnecting" suffix here: this crate cannot localize. The UI derives
                         // whether another attempt is active from the retained `ConnFault` and the
                         // latest lifecycle status, then words that conditional fact through
@@ -922,6 +941,12 @@ pub fn spawn(
                             .is_err()
                         {
                             break; // The UI is closed.
+                        }
+                        // No attempt can succeed until the key field is edited, and every edit path builds a NEW feed
+                        // thread (Save -> `structural_sig` -> `reconcile` -> `respawn_session`; the Reconnect button
+                        // takes the same path). Waiting here would only burn a backoff on a fact that cannot change.
+                        if !can_retry {
+                            break;
                         }
                         // Drop tokens left over from the attempt that just died BEFORE waiting on
                         // them. The dying client's event sink wakes this same channel, so its

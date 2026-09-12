@@ -11,6 +11,7 @@
 //! `strategies/tree/moon.rs::moon_tree_el` for the same shape). `add_server` and `delete_server`
 //! stay ordinary `&mut self` methods; the row buttons reach them through `weak.update`.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonColorPicker,
@@ -911,7 +912,10 @@ pub(super) fn server_row(
     let ids = &row.ids;
     let row_key = row.row_key;
     // Whether this row's key field is still blank, for the first-run ring below.
-    let key_empty = row.key.read(cx).value().is_empty();
+    // Whitespace counts as blank so this agrees with `config::key_is_readable` and with the
+    // `empty` flag the connection verdict computes (`raw.trim().is_empty()`).
+    let key_empty = row.key.read(cx).value().trim().is_empty();
+    let key_unreadable = !moon_core::config::key_is_readable(&row.key.read(cx).value());
     // Show reconnect only when the draft server is active. Session status still comes from
     // the live saved runtime and may not yet match unsaved draft activity.
     let recon: AnyElement = if active {
@@ -988,13 +992,26 @@ pub(super) fn server_row(
                     // `relative()` hosts the first-run ring below; it changes no layout, because
                     // the ring is an inset overlay.
                     .relative()
+                    // `.id` is outside `.when`: it changes `Div` into `Stateful<Div>`, so it cannot
+                    // live in a `when` that must return the same type. The tooltip stays gated.
+                    .id(("key-bad", row_key))
+                    .when(key_unreadable, |d| {
+                        d.tooltip(|_window, cx| {
+                            cx.new(|_| {
+                                MoonTooltipView::new(t!("conn.key_unreadable").to_string())
+                                    .max_width(320.0)
+                            })
+                            .into()
+                        })
+                    })
                     .child(
                         MoonInput::new(ids.key.clone())
                             .state(&row.key)
                             .small()
                             .mask_toggle()
                             // Allow the key to be cleared quickly before replacement.
-                            .cleanable(true),
+                            .cleanable(true)
+                            .when(key_unreadable, |i| i.tone(MoonTone::Danger).selected(true)),
                     )
                     // Only an EMPTY key is worth pointing at: once the newcomer has pasted
                     // something the field has done its job, and a ring around a filled input

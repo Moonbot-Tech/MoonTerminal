@@ -107,6 +107,10 @@ fn step_label_opt(step: Option<CoreInitStep>) -> String {
 ///     A short localized label.
 pub(crate) fn fault_short(class: &FailureClass) -> String {
     match class {
+        FailureClass::KeyUnparsable { empty: true } => t!("core_status.fault.short.key_empty"),
+        FailureClass::KeyUnparsable { empty: false } => {
+            t!("core_status.fault.short.key_unparsable")
+        }
         FailureClass::LocalPort { .. } => t!("core_status.fault.short.local_port"),
         FailureClass::NoResponse {
             packets_received: 0,
@@ -133,6 +137,12 @@ pub(crate) fn fault_short(class: &FailureClass) -> String {
 /// after the wrong problem.
 fn reason(class: &FailureClass) -> String {
     match class {
+        FailureClass::KeyUnparsable { empty: true } => {
+            t!("core_status.fault.reason.key_empty").to_string()
+        }
+        FailureClass::KeyUnparsable { empty: false } => {
+            t!("core_status.fault.reason.key_unparsable").to_string()
+        }
         FailureClass::LocalPort { attempts } => {
             t!("core_status.fault.reason.local_port", n = attempts).to_string()
         }
@@ -218,6 +228,7 @@ fn reason(class: &FailureClass) -> String {
 ///     `NoResponse` failures.
 fn next_step(class: &FailureClass, suggested_mode: Option<TransportVersion>) -> String {
     let base = match class {
+        FailureClass::KeyUnparsable { .. } => t!("core_status.fault.next.key"),
         FailureClass::LocalPort { .. } => t!("core_status.fault.next.local_port"),
         FailureClass::NoResponse {
             packets_received: 0,

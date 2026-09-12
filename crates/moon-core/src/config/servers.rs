@@ -324,6 +324,22 @@ pub fn transport_from_key(key: &str) -> Option<TransportVersion> {
         .map(|n| TransportVersion::from(n.transport_mode))
 }
 
+/// Whether a stored key can be decoded at all, without asking what is inside it.
+///
+/// Beside `transport_from_key` because it answers the same kind of question about a stored
+/// config value, and because `moonproto` is a `moon-core` dependency only — the UI crate
+/// cannot call the parser itself. An EMPTY key is `true` here: a blank field is "not filled in
+/// yet", not "wrong", and the two get different treatment on screen.
+///
+/// Args:
+///     key: Base64 MoonBot key export, as stored in `servers.enc`.
+///
+/// Returns:
+///     `false` only for a non-empty key the parser rejects.
+pub fn key_is_readable(key: &str) -> bool {
+    key.trim().is_empty() || moonproto::parse_key_info(key).is_some()
+}
+
 /// Seed a core's transport mode from its key, ONCE: a mode already set is never overwritten.
 ///
 /// Deliberately not "whatever the newest key says". The key field emits a change per KEYSTROKE, so
