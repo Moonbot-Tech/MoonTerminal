@@ -173,11 +173,21 @@ fn volume_scale_labels_are_larger_and_bolder_than_the_axis() {
                 .contains("self.draw_volume_scale_text(ctx,&label,label_x,y,label_ax,0.5,ink)?"),
         "the band's scale labels must take the volume-scale face, not the axis one"
     );
-    // The edge the labels hug is the reader's choice, and the anchor follows the edge: a label at
-    // the right edge anchored by its left corner would run into the price gutter.
+    // The labels hang off the bracket's ticks, and the bracket stands where the shaders stand
+    // it: one rule in `moon_chart::volume_bars`, read here for the text and carried to the GPU
+    // as the uniform's signed inset. A label placed from an edge of its own would part from the
+    // stem the moment either rule moved.
     assert!(
-        prepare.contains("ifvolume_scale_right{(plot_right-4.0,1.0)}else{(plot_left+4.0,0.0)}"),
-        "the scale labels must anchor by the edge they sit at"
+        prepare.contains(
+            "letbracket_x=plot_left+moon_chart::volume_bars::scale_bracket_offset(plot_w,volume_scale_right);"
+        ),
+        "the scale labels must place from the shared bracket rule"
+    );
+    assert!(
+        prepare.contains(
+            "letlabel_x=bracket_x+moon_chart::volume_bars::VOLUME_SCALE_TICK_PX+moon_chart::volume_bars::VOLUME_SCALE_LABEL_GAP_PX;"
+        ),
+        "a label prints after the tick at its level"
     );
 }
 

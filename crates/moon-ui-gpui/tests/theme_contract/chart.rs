@@ -1298,7 +1298,7 @@ fn strategy_colors_wake_both_order_geometry_cache_gates() {
 /// SAME linear scale — its turnover read as an interval figure (`m3.z`), in its own up/down
 /// colours — with no `sqrt` anywhere while the switch is on, because the shared labels read `max`
 /// and `max / 2`.
-/// One pair of scale lines: the sides layer's, so the candle band's yield with the switch. And the
+/// One scale bracket: the sides layer's, so the candle band's yields with the switch. And the
 /// sides layer draws AFTER the candles, covering the candle bucket that straddles the boundary.
 #[test]
 fn every_backend_splits_the_band_at_the_sides_boundary() {
@@ -1415,4 +1415,82 @@ fn every_backend_splits_the_band_at_the_sides_boundary() {
             "{path}: the sides half must draw after the candles to cover the boundary bucket"
         );
     }
+}
+
+/// The band's scale is Moonbot's BRACKET — a stem and three ticks — built by one function per
+/// shader file and drawn with `moon_chart::volume_bars::VOLUME_SCALE_INSTANCES` quads on every
+/// backend, so the instance count and the vertex geometry cannot disagree. Its x comes from the
+/// uniform's signed inset, the rule the text pass places the labels from. And the bought/sold
+/// switch stands on its own: `market.rs` no longer ties it to the candle band's style, so with
+/// the style OFF the split is the band — not the per-trade bars the old gate handed the floor to.
+#[test]
+fn the_volume_scale_is_one_bracket_and_the_sides_stand_alone() {
+    const SHADERS: &[(&str, &[&str])] = &[
+        ("chartdx/shaders/candles.hlsl", &["volume_scale_vertex("]),
+        ("chartdx/shaders/side_volume.hlsl", &["side_scale_vertex("]),
+        (
+            "chartdx/shaders/native_candles.wgsl",
+            &["volume_scale_vertex("],
+        ),
+        (
+            "chartdx/shaders/native_side_volume.wgsl",
+            &["side_scale_vertex("],
+        ),
+        (
+            "chartdx/shaders/chart_native.metal",
+            &["volume_scale_vertex(", "side_scale_vertex("],
+        ),
+    ];
+    for (path, entries) in SHADERS {
+        let source = code_only(&read_src(path));
+        let helper = braced_body(&source, "scale_bracket_quad(");
+        assert!(
+            helper.contains("iid == 0u") && helper.contains("iid == 2u"),
+            "{path}: the bracket helper must build the stem (instance 0) and the ticks by instance"
+        );
+        assert!(
+            helper.contains("clamp(off, 0.0, cv_bounds.z)")
+                || helper.contains("clamp(off, 0.0, cv.bounds.z)"),
+            "{path}: the stem's inset must be clamped into the plot, as the text pass clamps it"
+        );
+        for entry in *entries {
+            let body = braced_body(&source, entry);
+            assert!(
+                body.contains("scale_bracket_quad("),
+                "{path}: `{entry}` must draw the shared bracket rather than lines of its own"
+            );
+            assert!(
+                !body.contains("cv_bounds.z, th") && !body.contains("cv.bounds.z, th"),
+                "{path}: `{entry}` must not draw a full-width line any more"
+            );
+        }
+    }
+
+    for path in [
+        "chartdx/candles.rs",
+        "chartdx/side_volume.rs",
+        "chartdx/wgpu_backend/render.rs",
+        "chartdx/metal_backend.rs",
+    ] {
+        let source = code_only(&read_src(path));
+        assert!(
+            source.contains("moon_chart::volume_bars::VOLUME_SCALE_INSTANCES"),
+            "{path}: the scale draw must take its instance count from moon_chart"
+        );
+    }
+
+    let market = code_only(&read_src("chartdx/data_state/market.rs"));
+    assert!(
+        market.contains("let sides_on = self.chart_graphics.candle_volume_sides;"),
+        "market.rs: the sides switch must not be gated on the candle band's style"
+    );
+    assert!(
+        market.contains("moon_chart::volume_bars::scale_bracket_signed_inset("),
+        "market.rs: the bracket's inset must reach the uniform from the shared rule"
+    );
+    let prepare = code_only(&read_src("chartdx/text/prepare.rs"));
+    assert!(
+        prepare.contains("moon_chart::volume_bars::scale_bracket_offset("),
+        "prepare.rs: the labels must place from the shared bracket rule"
+    );
 }

@@ -86,7 +86,13 @@ impl WgpuLayers {
                     draw_pipeline(pass, &pipelines.volume_bars, &binds.candle, 6, bars as u32);
                 }
                 if self.volume_style.m3[0] < 0.5 {
-                    draw_pipeline(pass, &pipelines.volume_scale, &binds.candle, 6, 2);
+                    draw_pipeline(
+                        pass,
+                        &pipelines.volume_scale,
+                        &binds.candle,
+                        6,
+                        moon_chart::volume_bars::VOLUME_SCALE_INSTANCES,
+                    );
                 }
             }
             crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
@@ -111,7 +117,13 @@ impl WgpuLayers {
                     self.sides.len() as u32,
                 );
             }
-            draw_pipeline(pass, &pipelines.side_scale, &binds.side, 6, 2);
+            draw_pipeline(
+                pass,
+                &pipelines.side_scale,
+                &binds.side,
+                6,
+                moon_chart::volume_bars::VOLUME_SCALE_INSTANCES,
+            );
         }
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
         draw_pipeline(pass, &pipelines.book_bg, &binds.book, 6, 1);

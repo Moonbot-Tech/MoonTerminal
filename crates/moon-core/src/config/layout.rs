@@ -1438,7 +1438,8 @@ pub struct ChartGraphicsCfg {
     /// Moonbot's `Vol` on top of the band: where the retained trade history reaches, the band
     /// shows BOUGHT and SOLD as rolling sums over `candle_volume_tf_s`; before that it keeps the
     /// candle turnover in the candle's own colours, scaled to the same interval so the two halves
-    /// share one scale. Rides on hills or bars alike; off, the band is the candle turnover only.
+    /// share one scale. Rides on hills or bars alike, and stands alone with the candle band OFF
+    /// — the split only, as Moonbot draws it; off, the band is the candle turnover only.
     #[serde(default, deserialize_with = "de_lenient_false")]
     pub candle_volume_sides: bool,
     /// With [`Self::candle_volume_sides`]: draw SOLD on top of BOUGHT so a column's height is

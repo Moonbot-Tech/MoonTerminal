@@ -102,12 +102,15 @@ impl RenderState {
             // beside it is gone, and reading the retired `m2.x` slot here would pin every label's
             // height to zero and silently stop drawing them. The same height lifts ChartBottom
             // captions above the bars, so the two cannot disagree about where the band ends.
-            let volume_band_h = if volume_style.m[0] >= 0.5 {
+            // Either half makes a band: the candle turnover (`m[0]`) or the bought/sold split
+            // (`m3[0]`), which stands on its own with the candle band off.
+            let band_on = volume_style.m[0] >= 0.5 || volume_style.m3[0] >= 0.5;
+            let volume_band_h = if band_on {
                 (plot_h * volume_style.m[1]).max(0.0)
             } else {
                 0.0
             };
-            if volume_style.m[0] >= 0.5 {
+            if band_on {
                 if let Some(stats) = volume_stats {
                     let band = volume_band_h;
                     // With the sides switch on (`m3[0]`) the band is LINEAR and its second line
@@ -119,13 +122,16 @@ impl RenderState {
                     } else {
                         ratio.sqrt()
                     };
-                    // Moonbot's `Ind. Pos`: the labels hug whichever plot edge the reader chose,
-                    // anchored by the edge they hug so the digits never cross it.
-                    let (label_x, label_ax) = if volume_scale_right {
-                        (plot_right - 4.0, 1.0)
-                    } else {
-                        (plot_left + 4.0, 0.0)
-                    };
+                    // Moonbot's `Ind. Pos`: the scale is a bracket whose stem the shader stands
+                    // at the same offset this reads, and each label prints to the RIGHT of the
+                    // tick at its level — on either side, so the right-hand bracket's labels run
+                    // into the margin, exactly as the reference prints them.
+                    let bracket_x = plot_left
+                        + moon_chart::volume_bars::scale_bracket_offset(plot_w, volume_scale_right);
+                    let label_x = bracket_x
+                        + moon_chart::volume_bars::VOLUME_SCALE_TICK_PX
+                        + moon_chart::volume_bars::VOLUME_SCALE_LABEL_GAP_PX;
+                    let label_ax = 0.0;
                     for (frac, value) in [(1.0f32, stats.max), (avg_frac, stats.avg)] {
                         // Too close to the band floor to read: skip rather than overprint. The
                         // room a label needs follows its own line height, so the larger, bolder
@@ -133,10 +139,12 @@ impl RenderState {
                         if !super::volume_scale_label_fits(band, frac) {
                             continue;
                         }
+                        // The room a label has is what lies between its tick and the plot's
+                        // right edge — the right-hand bracket leaves it the margin only.
                         let Some(label) = super::volume_scale_label(
                             value,
                             &self.panes[idx].quote,
-                            plot_w - 8.0,
+                            plot_right - label_x,
                             |text| {
                                 super::measure_sized_text_run(
                                     &mut self.text_runs,

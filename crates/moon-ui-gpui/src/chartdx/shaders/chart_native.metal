@@ -350,8 +350,8 @@ struct VolumeStyle {
     float4 down;
     float4 scale;
     float4 m;  // x style, y height fraction, z 1/max, w avg/max
-    float4 m2; // x retired band cap, y bar width px, z line px
-    float4 m3; // x sides switch (0 off / 1 overlaid / 2 stacked), y split boundary rel ms, z interval rel ms
+    float4 m2; // x retired band cap, y bar width px, z bracket line px, w bracket stem signed inset px
+    float4 m3; // x sides switch (0 off / 1 overlaid / 2 stacked), y split boundary rel ms, z interval rel ms, w bracket tick px
 };
 
 struct VolumeBarOut {
@@ -432,6 +432,36 @@ struct VolumeScaleOut {
     float4 position [[position]];
 };
 
+// The scale is Moonbot's BRACKET, not a pair of full-width lines: a stem from the band floor up to
+// the visible maximum, and three ticks to its right — at the maximum, at the second reference level
+// and on the floor. Instance 0 is the stem, 1..3 the ticks top-down (VOLUME_SCALE_INSTANCES). Where
+// the stem stands is vs.m2.w, the signed inset in physical px — from the plot's left edge when
+// non-negative, from its right edge when negative — the very rule the text pass places the labels
+// from (`moon_chart::volume_bars::scale_bracket_offset`); vs.m3.w is the tick length.
+static inline float4 scale_bracket_quad(uint vid, uint iid, float band, float second_frac,
+                                        constant ChartView& cv, constant VolumeStyle& vs) {
+    float base = cv.bounds.y + cv.bounds.w - 1.0;
+    float th = max(vs.m2.z, 1.0);
+    float tick = max(vs.m3.w, th);
+    float off = (vs.m2.w >= 0.0) ? vs.m2.w : cv.bounds.z + vs.m2.w;
+    float bx = cv.bounds.x + clamp(off, 0.0, cv.bounds.z);
+    float top = round(base - band);
+    float2 origin;
+    float2 size;
+    if (iid == 0u) {
+        origin = float2(bx, top);
+        size = float2(th, base - top + 1.0);
+    } else {
+        float frac = (iid == 1u) ? 1.0 : ((iid == 2u) ? second_frac : 0.0);
+        float y = min(round(base - band * frac), base - th + 1.0);
+        origin = float2(bx, y);
+        size = float2(tick, th);
+    }
+    float2 corner = CORNERS_01[vid % 6u];
+    float2 px = origin + corner * size;
+    return to_clip(px, cv.resolution);
+}
+
 vertex VolumeScaleOut volume_scale_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                                           constant ChartView& cv [[buffer(0)]],
                                           constant VolumeStyle& vs [[buffer(3)]]) {
@@ -439,14 +469,7 @@ vertex VolumeScaleOut volume_scale_vertex(uint vid [[vertex_id]], uint iid [[ins
         // Off, or the sides layer draws the (linear) scale for both halves.
         return { float4(2.0, 2.0, 0.0, 1.0) };
     }
-    float band = vol_band_h(cv, vs);
-    float frac = (iid == 0u) ? 1.0 : sqrt(saturate(vs.m.w));
-    float base = cv.bounds.y + cv.bounds.w - 1.0;
-    float y = round(base - band * frac);
-    float th = max(vs.m2.z, 1.0);
-    float2 corner = CORNERS_01[vid % 6u];
-    float2 px = float2(cv.bounds.x, y) + corner * float2(cv.bounds.z, th);
-    return { to_clip(px, cv.resolution) };
+    return { scale_bracket_quad(vid, iid, vol_band_h(cv, vs), sqrt(saturate(vs.m.w)), cv, vs) };
 }
 
 fragment float4 volume_scale_fragment(constant VolumeStyle& vs [[buffer(3)]]) {
@@ -455,7 +478,7 @@ fragment float4 volume_scale_fragment(constant VolumeStyle& vs [[buffer(3)]]) {
 
 // ---- Sides volume band (mirrors side_volume.hlsl) --------------------------
 // One instance = one bucket, twelve vertices: the buy column (0-5) then the sell column (6-11)
-// over it. Kinds: vs.m3.x 1 overlaid / 2 stacked. Heights are LINEAR; the reference lines sit at
+// over it. Kinds: vs.m3.x 1 overlaid / 2 stacked. Heights are LINEAR; the bracket ticks at
 // the maximum and at vs.m.w. Binds ChartView at 0, VolumeStyle at 3 (the candle band's slot, the
 // same uniform) and the bucket storage at 2.
 struct SideBucket {
@@ -516,14 +539,7 @@ vertex VolumeScaleOut side_scale_vertex(uint vid [[vertex_id]], uint iid [[insta
     if (vs.m3.x < 0.5) {
         return { float4(2.0, 2.0, 0.0, 1.0) };
     }
-    float band = vol_band_h(cv, vs);
-    float frac = (iid == 0u) ? 1.0 : saturate(vs.m.w);
-    float base = cv.bounds.y + cv.bounds.w - 1.0;
-    float y = round(base - band * frac);
-    float th = max(vs.m2.z, 1.0);
-    float2 corner = CORNERS_01[vid % 6u];
-    float2 px = float2(cv.bounds.x, y) + corner * float2(cv.bounds.z, th);
-    return { to_clip(px, cv.resolution) };
+    return { scale_bracket_quad(vid, iid, vol_band_h(cv, vs), saturate(vs.m.w), cv, vs) };
 }
 
 fragment float4 side_scale_fragment(constant VolumeStyle& vs [[buffer(3)]]) {

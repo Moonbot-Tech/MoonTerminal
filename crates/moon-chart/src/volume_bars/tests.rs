@@ -230,3 +230,28 @@ fn bucket_label_matches_the_charts_own_timeframe_tokens() {
         assert_eq!(bucket_label(bad), None, "{bad} cannot be named");
     }
 }
+
+/// The bracket's rule is one function for the text pass and, through the signed inset, for the
+/// shaders: the left stem sits a few pixels in, the right one a fixed distance short of the edge,
+/// and neither leaves the plot when it is narrower than that distance.
+#[test]
+fn scale_bracket_offset_follows_the_reference_and_stays_inside_the_plot() {
+    assert_eq!(
+        scale_bracket_offset(1000.0, false),
+        VOLUME_SCALE_LEFT_INSET_PX
+    );
+    assert_eq!(
+        scale_bracket_offset(1000.0, true),
+        1000.0 - VOLUME_SCALE_RIGHT_INSET_PX
+    );
+    // Narrower than the right inset: the stem lands on the left edge, not past it.
+    assert_eq!(scale_bracket_offset(100.0, true), 0.0);
+    // A degenerate plot never yields a negative offset.
+    assert_eq!(scale_bracket_offset(-5.0, false), 0.0);
+    // The shader-side form applies the same clamp once the plot width is known.
+    for (w, right) in [(1000.0, false), (1000.0, true), (100.0, true)] {
+        let signed = scale_bracket_signed_inset(right);
+        let shader_form = if signed >= 0.0 { signed } else { w + signed }.clamp(0.0, w);
+        assert_eq!(shader_form, scale_bracket_offset(w, right));
+    }
+}

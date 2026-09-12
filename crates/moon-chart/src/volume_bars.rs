@@ -1,5 +1,5 @@
 //! Geometry and scaling for the BOTTOM VOLUME band: the per-candle bars or Moonbot-style filled
-//! "hills" drawn along the plot's lower edge, plus the max/average reference lines that give the
+//! "hills" drawn along the plot's lower edge, plus the max/average scale bracket that gives the
 //! band a readable scale.
 //!
 //! # Why the geometry lives here
@@ -36,8 +36,63 @@ use moon_core::market::candles::candle_intersects_window;
 /// Widest single bar in the `BARS` style, logical pixels.
 pub const VOLUME_BAR_W_PX: f32 = 3.0;
 
-/// Thickness of the max and average reference lines, logical pixels.
-pub const VOLUME_SCALE_LINE_PX: f32 = 1.0;
+/// Thickness of the scale bracket's stem and ticks, logical pixels.
+pub const VOLUME_SCALE_LINE_PX: f32 = 2.0;
+
+/// Length of the bracket's three ticks — at the maximum, at the second reference level and on
+/// the band floor — logical pixels, measured to the right of the stem.
+pub const VOLUME_SCALE_TICK_PX: f32 = 8.0;
+
+/// Gap between a tick's end and the label printed after it, logical pixels.
+pub const VOLUME_SCALE_LABEL_GAP_PX: f32 = 3.0;
+
+/// The bracket's inset from the plot's LEFT edge, logical pixels — Moonbot's `Ind. Pos` left.
+pub const VOLUME_SCALE_LEFT_INSET_PX: f32 = 4.0;
+
+/// The bracket's distance from the plot's RIGHT edge, logical pixels — Moonbot's `Ind. Pos` right.
+///
+/// NOT mirrored from the left inset: Moonbot stands the bracket well inside the plot, and the
+/// distance is a constant of the reference — 218 and 223 px off the plot's right edge on two
+/// captures at different window widths, unchanged by zoom — rather than a share of the width or
+/// a distance from the last candle. The labels still print to the right of the stem, so on the
+/// right side they read into the empty margin before the book.
+pub const VOLUME_SCALE_RIGHT_INSET_PX: f32 = 220.0;
+
+/// Quads one scale draw issues: the stem, then the ticks at the maximum, at the second reference
+/// level and on the floor. Every backend's draw call and every backend's vertex shader agree on
+/// this count through here.
+pub const VOLUME_SCALE_INSTANCES: u32 = 4;
+
+/// Horizontal offset of the scale bracket's stem from the plot's LEFT edge, logical pixels.
+///
+/// One rule for the text pass and the three shaders: the pass places the labels from it, the
+/// shaders receive it as the signed offset the uniform carries and apply the same clamp. A plot
+/// too narrow for the right-hand inset keeps the bracket inside its edges rather than off them.
+///
+/// Args:
+///     plot_w: Plot width in logical pixels.
+///     right: Whether the reader put the scale at the plot's right edge.
+///
+/// Returns:
+///     The stem's x as an offset from the plot's left edge, clamped to the plot.
+pub fn scale_bracket_offset(plot_w: f32, right: bool) -> f32 {
+    let raw = if right {
+        plot_w - VOLUME_SCALE_RIGHT_INSET_PX
+    } else {
+        VOLUME_SCALE_LEFT_INSET_PX
+    };
+    raw.clamp(0.0, plot_w.max(0.0))
+}
+
+/// The signed inset the shaders take for [`scale_bracket_offset`]: non-negative measures from the
+/// plot's left edge, negative from its right. Logical pixels; the caller scales to physical.
+pub fn scale_bracket_signed_inset(right: bool) -> f32 {
+    if right {
+        -VOLUME_SCALE_RIGHT_INSET_PX
+    } else {
+        VOLUME_SCALE_LEFT_INSET_PX
+    }
+}
 
 /// Narrowest band fraction a hand-edited chart configuration can ask for.
 pub const VOLUME_HEIGHT_MIN: f32 = 0.02;
