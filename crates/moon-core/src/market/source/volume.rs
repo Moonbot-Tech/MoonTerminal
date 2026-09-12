@@ -539,6 +539,9 @@ impl MarketDataSource {
     }
 
     /// Sum this market's buckets, bringing them up to date first.
+    // Eight arguments: the two rings, the archive revision and the clock are what `advance`
+    // takes, and bundling them into a struct for one private call site would be ceremony.
+    #[allow(clippy::too_many_arguments)]
     fn volume_tracked(
         &self,
         provider: CoreId,
