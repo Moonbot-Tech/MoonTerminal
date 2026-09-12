@@ -1367,7 +1367,7 @@ fn custom_strategy() -> moon_core::feed::StrategyRow {
             ("UseCustomColors".into(), "Yes".into()),
             ("BuyOrderColor".into(), "80123456".into()),
             ("SellOrderColor".into(), "FFABCDEF".into()),
-            ("OrderLineKind".into(), "2".into()),
+            ("OrderLineKind".into(), "Dot".into()),
         ],
     }
 }
@@ -1409,7 +1409,7 @@ fn draw_strategy_segments(
     (segs, hlines)
 }
 
-/// Strategy colors override both sides and pending colors; opacity, widths and stop colors survive.
+/// Numeric-only parsing loses named strategy patterns on all lines; colors and widths must survive.
 #[test]
 fn strategy_colors_and_all_five_patterns_reach_order_geometry() {
     let themes = moon_core::config::OrdersStyleSet::default();
@@ -1439,13 +1439,20 @@ fn strategy_colors_and_all_five_patterns_reach_order_geometry() {
                         row.job_is_done = true;
                         store.update(&[row], 0);
                     }
-                    for pattern in 0..5 {
+                    for (name, pattern) in [
+                        ("Solid", 0.0),
+                        ("Dash", 1.0),
+                        ("Dot", 2.0),
+                        ("DashDot", 3.0),
+                        ("DashDotDot", 4.0),
+                        ("dAsH", 1.0),
+                    ] {
                         let mut strategy = custom_strategy();
-                        strategy.fields[3].1 = pattern.to_string();
+                        strategy.fields[3].1 = name.into();
                         let (segs, hlines) =
                             draw_strategy_segments(&store, &[strategy], None, style);
                         assert!(!segs.is_empty());
-                        assert!(segs.iter().all(|s| s.pattern == pattern as f32));
+                        assert!(segs.iter().all(|s| s.pattern == pattern));
                         let entry_style = if short { &style.buy_short } else { &style.buy };
                         let alpha = if closed {
                             style.closed_alpha
@@ -1512,7 +1519,7 @@ fn strategy_colors_and_all_five_patterns_reach_order_geometry() {
                                 .iter()
                                 .find(|line| line.price == 50_000.0)
                                 .expect("liquidation line");
-                            assert_eq!(liq.style, pattern as f32);
+                            assert_eq!(liq.style, pattern);
                             assert_eq!(liq.color, rgba(style.liq.color, alpha));
                             assert_eq!(liq.thickness, style.liq.thickness);
                             for (price, line) in [
@@ -1595,7 +1602,7 @@ fn strategy_snapshot_arrival_and_fallbacks_preserve_order_authority() {
     );
 }
 
-/// Omitted fields inherit the matching kind's schema, even when the schema arrives after orders.
+/// Numeric parsing or a fabricated zero default loses schema names or overrides global stop patterns.
 #[test]
 fn sparse_strategy_defaults_and_late_schema_override_global_styles() {
     use moon_core::feed::{
@@ -1626,7 +1633,7 @@ fn sparse_strategy_defaults_and_late_schema_override_global_styles() {
                     ("UseCustomColors", "Yes"),
                     ("BuyOrderColor", "112233"),
                     ("SellOrderColor", "445566"),
-                    ("OrderLineKind", "0"),
+                    ("OrderLineKind", "Solid"),
                 ]
                 .into_iter()
                 .map(|(name, value)| SchemaField {
@@ -1657,20 +1664,39 @@ fn sparse_strategy_defaults_and_late_schema_override_global_styles() {
             |s| s.p0 == 62_000.0 && s.color == [68.0 / 255.0, 85.0 / 255.0, 102.0 / 255.0, 1.0]
         )
     );
-    // The wire schema omits the default value itself for a zero-default numeric field.
-    let mut implicit_zero = schema.clone();
-    implicit_zero.kinds[0].sections[0]
+    // An absent or unknown pattern must retain the global dashed stop, never invent Solid.
+    for value in [None, Some("FuturePattern")] {
+        let mut fallback_schema = schema.clone();
+        fallback_schema.kinds[0].sections[0]
+            .fields
+            .iter_mut()
+            .find(|f| f.name == "OrderLineKind")
+            .expect("pen schema")
+            .default = value.map(str::to_owned);
+        let fallback =
+            draw_strategy_segments(&store, &[strategy.clone()], Some(&fallback_schema), &style).0;
+        assert_eq!(
+            fallback
+                .iter()
+                .find(|s| s.p0 == 59_000.0)
+                .expect("global stop")
+                .pattern,
+            4.0
+        );
+    }
+    strategy
         .fields
-        .iter_mut()
-        .find(|f| f.name == "OrderLineKind")
-        .expect("pen schema")
-        .default = None;
-    let zero = draw_strategy_segments(&store, &[strategy.clone()], Some(&implicit_zero), &style).0;
+        .push(("OrderLineKind".into(), "FuturePattern".into()));
+    let unknown = draw_strategy_segments(&store, &[strategy.clone()], Some(&schema), &style).0;
     assert_eq!(
-        bytemuck::cast_slice::<SegInstance, u8>(&after),
-        bytemuck::cast_slice::<SegInstance, u8>(&zero)
+        unknown
+            .iter()
+            .find(|s| s.p0 == 59_000.0)
+            .expect("unknown global stop")
+            .pattern,
+        4.0
     );
-    strategy.fields.push(("OrderLineKind".into(), "3".into()));
+    strategy.fields.last_mut().expect("explicit pattern").1 = "DashDot".into();
     let explicit = draw_strategy_segments(&store, &[strategy.clone()], Some(&schema), &style).0;
     assert!(explicit.iter().all(|s| s.pattern == 3.0));
     strategy
