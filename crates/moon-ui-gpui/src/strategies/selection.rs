@@ -350,7 +350,11 @@ impl StrategiesView {
         }
     }
 
-    /// Expand every node when `collapsed` is true; otherwise collapse all nodes.
+    /// Expand every node when `collapsed` is true; otherwise collapse hand-managed nodes.
+    ///
+    /// The concrete Auto rail core remains in `rail_expanded_core`, so Collapse all cannot hide
+    /// the sole root of a singleton workspace. Its overlay is not persisted and all other core
+    /// and folder expansion state continues to follow the existing toggle behavior.
     pub(super) fn expand_collapse_toggle(
         &mut self,
         cores: &[(CoreId, String)],
@@ -360,9 +364,6 @@ impl StrategiesView {
         if !collapsed {
             self.expanded_cores.clear();
             self.expanded_folders.clear();
-            // Otherwise the rail-seeded core is the one row that survives "collapse everything" —
-            // it lives in the overlay, not in `expanded_cores`.
-            self.rail_expanded_core = None;
             return;
         }
         for (c, _) in cores {

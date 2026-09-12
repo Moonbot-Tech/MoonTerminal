@@ -434,23 +434,24 @@ impl StrategiesView {
                     }
                 }));
                 items.push(MoonMenuItem::separator());
-                let open =
-                    self.expanded_cores.contains(&core) || self.rail_expanded_core == Some(core);
-                let (key, label) = match open {
-                    true => ("collapse-core", t!("strat.menu_collapse_core")),
-                    false => ("expand-core", t!("strat.menu_expand_core")),
-                };
-                items.push(MoonMenuItem::with_key(key, label.to_string()).on_click({
-                    let view = view.clone();
-                    move |_, window, app| {
-                        window.close_context_menu(app);
-                        view.update(app, |this, cx| {
-                            this.toggle_core_expanded(core);
-                            this.persist_session(cx);
-                            cx.notify();
-                        });
-                    }
-                }));
+                if self.rail_expanded_core != Some(core) {
+                    let open = self.expanded_cores.contains(&core);
+                    let (key, label) = match open {
+                        true => ("collapse-core", t!("strat.menu_collapse_core")),
+                        false => ("expand-core", t!("strat.menu_expand_core")),
+                    };
+                    items.push(MoonMenuItem::with_key(key, label.to_string()).on_click({
+                        let view = view.clone();
+                        move |_, window, app| {
+                            window.close_context_menu(app);
+                            view.update(app, |this, cx| {
+                                this.toggle_core_expanded(core);
+                                this.persist_session(cx);
+                                cx.notify();
+                            });
+                        }
+                    }));
+                }
             }
             MenuTarget::DeletedFolder => {
                 let rows: Vec<(u64, String)> = self

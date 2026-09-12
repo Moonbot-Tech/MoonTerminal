@@ -50,12 +50,11 @@ pub(super) fn core_is_open(expanded: &HashSet<CoreId>, rail: Option<CoreId>, cor
     expanded.contains(&core) || rail == Some(core)
 }
 
-/// Toggle one core's expansion across both the persisted set and the rail overlay.
+/// Toggle one core's hand-managed expansion without collapsing the concrete Auto rail core.
 ///
-/// Collapsing clears the rail seed too when it names this core: otherwise a click meant to close
-/// the row would leave it reopened by the overlay on the very next frame. Expanding writes only
-/// the persisted set, matching every other hand-expansion site — the overlay is exclusively an
-/// Auto rail concern.
+/// A rail overlay names the singleton Auto workspace's one concrete core. It is an invariant,
+/// not a hand expansion: keeping it intact prevents row clicks and keyboard collapse from leaving
+/// that scope with only a collapsed root. All other cores retain their existing toggle behavior.
 ///
 /// Deliberately leaves `StrategiesView::rail_seen_core` untouched: that field tracks what the rail
 /// last resolved to, not what the user is currently showing, so a later unrelated revision that
@@ -70,11 +69,11 @@ pub(super) fn toggle_core_expansion(
     rail: &mut Option<CoreId>,
     core: CoreId,
 ) {
+    if *rail == Some(core) {
+        return;
+    }
     if core_is_open(expanded, *rail, core) {
         expanded.remove(&core);
-        if *rail == Some(core) {
-            *rail = None;
-        }
     } else {
         expanded.insert(core);
     }
