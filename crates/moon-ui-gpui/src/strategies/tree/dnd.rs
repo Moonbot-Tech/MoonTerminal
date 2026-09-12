@@ -12,6 +12,21 @@ use moon_core::feed::NewStrategySpec;
 mod tests;
 
 impl StrategiesView {
+    /// Queue one warning for a complete user action, deduplicating names across its core batches.
+    /// The existing render drain displays it in this Strategies window through MoonUI.
+    pub(super) fn note_split_folders(&mut self, names: Vec<String>, cx: &mut Context<Self>) {
+        let mut seen = std::collections::HashSet::new();
+        let names: Vec<String> = names
+            .into_iter()
+            .filter(|name| seen.insert(name.clone()))
+            .collect();
+        if !names.is_empty() {
+            self.pending_notes
+                .push(tree::ui::TreeNote::SplitFolders { names });
+            cx.notify();
+        }
+    }
+
     /// A copy made outside the tree cancels its pending cut before targets or result wording resolve.
     pub(super) fn retire_replaced_cut(&mut self, cx: &mut Context<Self>) {
         if self.cut.is_some() {
@@ -206,6 +221,7 @@ impl StrategiesView {
     /// Args:
     ///     core: Destination core resolved from the effective tree selection.
     ///     target: Canonical destination folder path, or empty for the core root.
+    ///     split_folders: Names collected across every destination of this one paste action.
     ///     cx: View context used to read the clipboard and dispatch creation.
     ///
     /// Returns:
@@ -216,6 +232,7 @@ impl StrategiesView {
         &mut self,
         core: CoreId,
         target: String,
+        split_folders: &mut Vec<String>,
         cx: &mut Context<Self>,
     ) -> usize {
         if !action_cores_visible(self.workspace_cores.as_deref(), [core]) {
@@ -225,7 +242,7 @@ impl StrategiesView {
         // A pending CUT is a move, not a create, and it takes precedence over the clipboard the
         // cut itself wrote.
         if self.cut.is_some() {
-            return self.paste_cut(core, &target, cx);
+            return self.paste_cut(core, &target, split_folders, cx);
         }
         let clip = self.clipboard_for_core(core, cx);
         let Some(clip) = clip else {
@@ -264,10 +281,13 @@ impl StrategiesView {
         // Select the first pasted name after the core echoes it back.
         let first_name = new_names.first().cloned();
         let landed = specs.len();
+        let names_to_split =
+            ops::split_folder_names(specs.iter().map(|spec| spec.folder_path.as_str()));
         if let Err(error) = self.backend.read(cx).session.create_strategies(core, specs) {
             log::warn!("paste strategies failed: {error}");
             return 0;
         }
+        split_folders.extend(names_to_split);
         self.pending_names
             .extend(new_names.into_iter().map(|n| (core, n)));
         // New and pasted strategies are disabled. Expand the target core so the result is visible.
@@ -292,8 +312,15 @@ impl StrategiesView {
     /// failure direction that loses nothing.
     ///
     /// Returns:
-    ///     How many strategies were dispatched, for the caller's notice.
-    fn paste_cut(&mut self, core: CoreId, target: &str, cx: &mut Context<Self>) -> usize {
+    ///     How many strategies were dispatched, for the caller's notice. Affected folder names
+    ///     accumulate in `split_folders` for the whole paste, including all source carries.
+    fn paste_cut(
+        &mut self,
+        core: CoreId,
+        target: &str,
+        split_folders: &mut Vec<String>,
+        cx: &mut Context<Self>,
+    ) -> usize {
         let Some(cut) = self.cut.clone() else {
             return 0;
         };
@@ -364,10 +391,13 @@ impl StrategiesView {
                 })
                 .collect();
             carried += specs.len();
+            let names_to_split =
+                ops::split_folder_names(specs.iter().map(|spec| spec.folder_path.as_str()));
             if let Err(error) = self.backend.read(cx).session.create_strategies(core, specs) {
                 log::warn!("cut copy failed: {error}");
                 continue;
             }
+            split_folders.extend(names_to_split);
             self.pending_names
                 .extend(names.iter().map(|n| (core, n.clone())));
             // The source is NOT touched here. It waits for these exact names to come back.
@@ -530,15 +560,17 @@ impl StrategiesView {
                 .map(|(core, _)| *core)
                 .collect()
         };
+        let mut split_folders = Vec::new();
         let mut strategies = 0usize;
         let mut reached = 0usize;
         for core in cores {
-            let landed = self.paste_into(core, String::new(), cx);
+            let landed = self.paste_into(core, String::new(), &mut split_folders, cx);
             if landed > 0 {
                 strategies += landed;
                 reached += 1;
             }
         }
+        self.note_split_folders(split_folders, cx);
         let note = match strategies {
             0 => tree::ui::TreeNote::NothingToPaste,
             _ => tree::ui::TreeNote::Pasted {
@@ -552,7 +584,8 @@ impl StrategiesView {
     // ── Drag & Drop ───────────────────────────────────────────────────────────
 
     /// Drops dragged strategies into a target folder; an empty `target` means the core root.
-    /// Moves within one core through `move_strategies` and copies across cores.
+    /// Moves within one core through `move_strategies` and copies across cores, warning once
+    /// about destination folder names the core will split.
     pub(super) fn drop_strategies(
         &mut self,
         target_core: CoreId,
@@ -615,6 +648,8 @@ impl StrategiesView {
                 // core, so the feed's drain discards them and the copies append.
                 specs_from(ops::paste_plan(&clip, &target, &taken))
             };
+            let names_to_split =
+                ops::split_folder_names(specs.iter().map(|spec| spec.folder_path.as_str()));
             if let Err(error) = self
                 .backend
                 .read(cx)
@@ -624,6 +659,7 @@ impl StrategiesView {
                 log::warn!("copy strategies failed: {error}");
                 return;
             }
+            self.note_split_folders(names_to_split, cx);
         }
         self.expanded_cores.insert(target_core);
         self.persist_session(cx);
@@ -631,7 +667,8 @@ impl StrategiesView {
     }
 
     /// Drops a dragged folder under a target parent; an empty `target` means the core root.
-    /// Moves the subtree within one core and copies it across cores.
+    /// Moves the subtree within one core and copies it across cores, warning once about
+    /// destination folder names the core will split.
     pub(super) fn drop_folder(
         &mut self,
         target_core: CoreId,
@@ -682,6 +719,8 @@ impl StrategiesView {
                     .unwrap_or_default();
                 specs_from(ops::paste_plan(&clip, &target, &taken))
             };
+            let names_to_split =
+                ops::split_folder_names(specs.iter().map(|spec| spec.folder_path.as_str()));
             if let Err(error) = self
                 .backend
                 .read(cx)
@@ -691,6 +730,7 @@ impl StrategiesView {
                 log::warn!("copy strategy folder failed: {error}");
                 return;
             }
+            self.note_split_folders(names_to_split, cx);
         }
         self.expanded_cores.insert(target_core);
         self.persist_session(cx);

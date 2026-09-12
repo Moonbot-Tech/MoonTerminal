@@ -3369,3 +3369,8 @@ strat.sections_all_tip:
   ru: "Всего изменённых полей в этой версии: %{n}. Часть из них может отсутствовать в схеме текущего ядра, поэтому счётчики разделов не обязаны давать в сумме это число."
   en: "Total fields changed in this version: %{n}. Some may be absent from the current core's schema, so the section counters need not add up to it."
   es: "Total de campos modificados en esta versión: %{n}. Algunos pueden faltar en el esquema del núcleo actual, por lo que los contadores de sección no tienen por qué sumar ese número."
+
+strat.note_split_folders:
+  ru: 'В именах папок есть слеш: %{names}. Ядро разделит их по слешам на вложенные папки. Стратегии отправлены без изменений.'
+  en: 'Folder names contain a slash: %{names}. The core will split them at the slashes into nested folders. Strategies were sent unchanged.'
+  es: 'Los nombres de carpetas contienen barras: %{names}. El núcleo los dividirá por las barras en carpetas anidadas. Las estrategias se enviaron sin cambios.'

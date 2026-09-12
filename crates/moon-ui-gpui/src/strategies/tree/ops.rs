@@ -95,6 +95,19 @@ pub fn join_path(parts: &[String]) -> String {
     parts.join("/")
 }
 
+/// Return distinct folder names the core will split, in first-seen order.
+/// Paths are planned destinations; only separators retained INSIDE a `path_segments` segment
+/// warn, so ordinary nested paths stay silent. No path is rewritten.
+pub fn split_folder_names<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    paths
+        .into_iter()
+        .flat_map(path_segments)
+        .filter(|name| name.contains(['/', '\\']) && seen.insert(*name))
+        .map(str::to_string)
+        .collect()
+}
+
 /// Returns whether `path` starts with `prefix` segment by segment, preserving data case.
 fn starts_with(path: &[String], prefix: &[String]) -> bool {
     path.len() >= prefix.len() && prefix.iter().zip(path).all(|(a, b)| a == b)

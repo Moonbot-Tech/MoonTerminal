@@ -1169,7 +1169,7 @@ impl StrategiesView {
     /// Create a disabled strategy from schema defaults and select it after the core echo.
     ///
     /// The shared `NewStrategy` conversion keeps dialog creation aligned with paste and drop
-    /// dispatch, including placement metadata.
+    /// dispatch, including placement metadata. Warn once about folder names the core will split.
     ///
     /// Args:
     ///     core: Core captured when the modal opened.
@@ -1211,10 +1211,12 @@ impl StrategiesView {
             // core by one dispatch path and not the other.
             NewStrategySpec::from(ops::new_strategy(&kind, &name, &target))
         };
+        let split_folders = ops::split_folder_names([spec.folder_path.as_str()]);
         self.backend
             .read(cx)
             .session
             .create_strategies(core, vec![spec])?;
+        self.note_split_folders(split_folders, cx);
         // Expand the core so the created row is visible when it echoes back.
         self.expanded_cores.insert(core);
         // Select it after the core echoes it back.

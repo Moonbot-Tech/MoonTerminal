@@ -43,7 +43,9 @@ fn paste_here_item(
                 // up being the only one that said nothing.
                 this.retire_replaced_cut(cx);
                 let moving = this.cut.is_some();
-                let landed = this.paste_into(core, target, cx);
+                let mut split_folders = Vec::new();
+                let landed = this.paste_into(core, target, &mut split_folders, cx);
+                this.note_split_folders(split_folders, cx);
                 let note = match (landed, moving) {
                     (0, _) => tree::ui::TreeNote::NothingToPaste,
                     (n, true) => tree::ui::TreeNote::Moved { strategies: n },

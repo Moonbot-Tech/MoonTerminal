@@ -210,6 +210,8 @@ pub(super) enum MenuTarget {
 /// whole family exists to remove.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TreeNote {
+    /// New strategy paths contain folder names the core will split into nested folders.
+    SplitFolders { names: Vec<String> },
     /// A delete was refused because the core still runs some of the targets.
     DeleteBlocked { enabled: usize, total: usize },
     /// A core row cannot be deleted from the tree at all.
@@ -275,6 +277,9 @@ impl TreeNote {
     /// The notification to push, with its wording resolved from the active dictionary.
     pub(crate) fn notification(&self) -> MoonNotification {
         match self {
+            Self::SplitFolders { names } => MoonNotification::warning(
+                t!("strat.note_split_folders", names = names.join("; ")).to_string(),
+            ),
             Self::DeleteBlocked { enabled, total } => MoonNotification::warning(
                 t!(
                     "strat.note_delete_blocked",
@@ -781,15 +786,17 @@ impl StrategiesView {
         self.retire_replaced_cut(cx);
         let moving = self.cut.is_some();
         let targets = self.paste_targets(cx);
+        let mut split_folders = Vec::new();
         let mut strategies = 0usize;
         let mut reached = 0usize;
         for (core, path) in targets {
-            let landed = self.paste_into(core, path, cx);
+            let landed = self.paste_into(core, path, &mut split_folders, cx);
             if landed > 0 {
                 strategies += landed;
                 reached += 1;
             }
         }
+        self.note_split_folders(split_folders, cx);
         let note = match (strategies, moving) {
             (0, _) => tree::ui::TreeNote::NothingToPaste,
             // A cross-core cut reports through its own follow-up, so it is not double-announced.
