@@ -41,8 +41,10 @@ pub const SPLIT_ORDER_PARTS: i32 = 3;
 pub const SHIFT_PERCENT: f64 = 1.0;
 /// Bounds for the configurable `Split N` count (Moonbot `Hotkeys.SplitParts`). Fewer than two
 /// parts is not a split, and the upper bound keeps a mistyped import from shredding a position.
+/// Twenty since 2026-09-12, at the user's request; the core lays the parts out itself and the
+/// wire carries the count as a plain `i32`, so nothing else bounds it.
 pub const SPLIT_PARTS_MIN: u8 = 2;
-pub const SPLIT_PARTS_MAX: u8 = 10;
+pub const SPLIT_PARTS_MAX: u8 = 20;
 
 /// Moonbot's "Move kind": WHICH orders a move gesture addresses, and how the core lays them out.
 ///

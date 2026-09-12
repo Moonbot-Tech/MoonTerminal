@@ -191,25 +191,32 @@ fn core_items_and_range_checks() {
     );
     let plan = build_plan(&mb_config(), &ctx(&h, &t, &o));
 
-    assert!(find(&plan.group_items, "group.order_sizes_usd").is_none());
+    // The whole manual-trading generation is group-local now: numbers as they are, no currency
+    // guess, nothing addressed to a core.
+    let sizes = find(&plan.group_items, "group.order_sizes").unwrap();
+    assert_eq!(
+        sizes.value,
+        PlannedValue::OrderSizes([111.0, 222.0, 333.0, 444.0, 555.0, 666.0])
+    );
+    assert_eq!(sizes.new, "111, 222, 333, 444, 555, 666");
     assert!(
-        plan.warnings
+        !plan
+            .warnings
             .iter()
             .any(|warning| warning.contains("OSize"))
     );
     let sel = find(&plan.group_items, "group.order_size_sel").unwrap();
     assert_eq!(sel.value, PlannedValue::OrderSizeSel(3));
-    assert_eq!(sel.new, "F4");
+    assert_eq!(sel.new, "B4");
     assert!(!sel.same);
-
-    // Fixed-sell belongs in core_commands (ClientSettings), not group-local imports.
-    assert!(find(&plan.core_commands, "core.fixed_sell_prices").is_some());
+    let pcts = find(&plan.group_items, "group.fixed_sell_prices").unwrap();
     assert_eq!(
-        find(&plan.core_commands, "core.fixed_sell_sel")
-            .unwrap()
-            .new,
-        "S2"
+        pcts.value,
+        PlannedValue::FixedSellPrices([1.0, 5.0, 10.0, 25.0, 50.0, 100.0])
     );
+    let slot = find(&plan.group_items, "group.fixed_sell_sel").unwrap();
+    assert_eq!(slot.value, PlannedValue::FixedSellSel(1));
+    assert_eq!(slot.new, "S2");
 
     // An out-of-range bNum produces a warning and no item.
     let mut mb = mb_config();
@@ -217,6 +224,50 @@ fn core_items_and_range_checks() {
     let plan = build_plan(&mb, &ctx(&h, &t, &o));
     assert!(find(&plan.group_items, "group.order_size_sel").is_none());
     assert!(plan.warnings.iter().any(|w| w.contains("bNum")));
+
+    // The same for sbNum.
+    let mut mb = mb_config();
+    mb.ui.hotkeys.fixed_sell_sel = 6;
+    let plan = build_plan(&mb, &ctx(&h, &t, &o));
+    assert!(find(&plan.group_items, "group.fixed_sell_sel").is_none());
+    assert!(plan.warnings.iter().any(|w| w.contains("sbNum")));
+
+    // A set with a value that cannot be a size or a percentage is withheld whole, with a warning.
+    let mut mb = mb_config();
+    mb.ui.hotkeys.order_sizes[2] = -1.0;
+    mb.ui.hotkeys.fixed_sell_prices[4] = f32::NAN;
+    let plan = build_plan(&mb, &ctx(&h, &t, &o));
+    assert!(find(&plan.group_items, "group.order_sizes").is_none());
+    assert!(find(&plan.group_items, "group.fixed_sell_prices").is_none());
+    assert!(plan.warnings.iter().any(|w| w.contains("OSize")));
+    assert!(plan.warnings.iter().any(|w| w.contains("SPrice")));
+
+    // A Hotkeys block Moonbot never filled offers nothing at all, whatever its zeros would read as.
+    let mut mb = mb_config();
+    mb.ui.hotkeys.filled = false;
+    let plan = build_plan(&mb, &ctx(&h, &t, &o));
+    assert!(plan.group_items.is_empty(), "{:?}", plan.group_items);
+    assert!(plan.warnings.iter().any(|w| w.contains("не заполнен")));
+
+    // A fractional percentage previews as typed, not as its widened bits.
+    let mut mb = mb_config();
+    mb.ui.hotkeys.fixed_sell_prices[0] = 33.3;
+    let plan = build_plan(&mb, &ctx(&h, &t, &o));
+    assert_eq!(
+        find(&plan.group_items, "group.fixed_sell_prices")
+            .unwrap()
+            .new,
+        "33.3, 5, 10, 25, 50, 100"
+    );
+
+    // A zero size is what the group's load-time repair replaces with the default, so it is not
+    // offered either; a zero percentage is a legal "sell at entry" and is.
+    let mut mb = mb_config();
+    mb.ui.hotkeys.order_sizes[5] = 0.0;
+    mb.ui.hotkeys.fixed_sell_prices[0] = 0.0;
+    let plan = build_plan(&mb, &ctx(&h, &t, &o));
+    assert!(find(&plan.group_items, "group.order_sizes").is_none());
+    assert!(find(&plan.group_items, "group.fixed_sell_prices").is_some());
 }
 
 #[test]
@@ -269,10 +320,10 @@ fn split_parts_import_skips_unset_clamps_high_and_diffs_the_raw_value() {
 
     // Above the maximum the value still arrives, capped, and the cap is stated.
     let mut high = mb_config();
-    high.ui.hotkeys.split_parts = 12;
+    high.ui.hotkeys.split_parts = 25;
     let plan = build_plan(&high, &ctx(&h, &t, &o));
-    assert_eq!(find(&plan.hotkeys, "hotkey.split_parts").unwrap().new, "10");
-    assert!(plan.warnings.iter().any(|w| w.contains("SplitParts = 12")));
+    assert_eq!(find(&plan.hotkeys, "hotkey.split_parts").unwrap().new, "20");
+    assert!(plan.warnings.iter().any(|w| w.contains("SplitParts = 25")));
 
     // A raw out-of-range local value differs from the import even when its clamped reading matches.
     let broken = HotkeysConfig {

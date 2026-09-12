@@ -193,6 +193,9 @@ pub struct SettingsView {
     open_lines: HashSet<&'static str>,
     /// Active Hotkeys sub-tab, matching Moonbot's hotkey pages.
     hotkeys_group: hotkeys::HotkeyGroup,
+    /// The Hotkeys table row the pointer is on, by its row id, or `None`; that row shows its
+    /// description. See `hotkeys::tab::table_row`.
+    hotkeys_hover_row: Option<String>,
     /// Core and `core_config_recv_rev` baseline of an in-flight "pull hotkey layout from core"
     /// request, or `None` when none is pending. The baseline is the revision seen when the pull
     /// was requested; the request is settled once the store's revision has moved past it.
@@ -593,6 +596,7 @@ impl SettingsView {
             core_sort,
             open_lines: HashSet::new(),
             hotkeys_group: hotkeys::HotkeyGroup::Presets,
+            hotkeys_hover_row: None,
             core_pull: None,
             storage: storage::build(),
             icons: IconSet::discover(),

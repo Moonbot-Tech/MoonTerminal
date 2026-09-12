@@ -101,12 +101,10 @@ fn selection_filter_and_unknown_ids() {
     );
 }
 
-/// Regression target: applying only the first selected core's group leaves another selected
-/// window group on a different F-key slot than the MoonBot import preview promised.
-#[test]
-fn selected_cores_update_their_unique_groups() {
+/// Three cores in two groups, as the group-item tests below see them: ids 1 and 2 in `desk-a`,
+/// id 3 in `desk-b`, none on its own per-core set.
+fn three_cores() -> AppConfig {
     let mut cfg = AppConfig::blank(None);
-    // Three cores, targeting ids 1 and 3.
     for id in 1..=3u64 {
         cfg.servers.push(crate::config::ServerConfig {
             id,
@@ -130,6 +128,14 @@ fn selected_cores_update_their_unique_groups() {
             workspace_membership: crate::config::WorkspaceMembership::default(),
         });
     }
+    cfg
+}
+
+/// Regression target: applying only the first selected core's group leaves another selected
+/// window group on a different F-key slot than the MoonBot import preview promised.
+#[test]
+fn selected_cores_update_their_unique_groups() {
+    let mut cfg = three_cores();
     let plan = plan_with(
         vec![],
         vec![],
@@ -142,4 +148,63 @@ fn selected_cores_update_their_unique_groups() {
     assert_eq!(out.applied, 1);
     assert_eq!(cfg.group("desk-a").trade.order_size_sel, 3);
     assert_eq!(cfg.group("desk-b").trade.order_size_sel, 3);
+}
+
+/// The manual-trading generation lands in the group's own set, verbatim for the sizes and through
+/// the group's TP-mode quantization for the percentages; the slot is re-based from Moonbot's
+/// 0-based `sbNum` to the group's 1..=6.
+#[test]
+fn sizes_and_fixed_sell_land_in_the_group_set() {
+    let mut cfg = three_cores();
+    let plan = plan_with(
+        vec![],
+        vec![],
+        vec![
+            change(
+                "group.order_sizes",
+                PlannedValue::OrderSizes([50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0]),
+            ),
+            change(
+                "group.fixed_sell_prices",
+                PlannedValue::FixedSellPrices([0.5, 1.0, 1.5, 2.0, 3.0, 5.0]),
+            ),
+            change("group.fixed_sell_sel", PlannedValue::FixedSellSel(2)),
+        ],
+    );
+    let out = apply_local(&mut cfg, &plan, &all_ids(&plan), &[1, 3]);
+    assert_eq!(out.applied, 3);
+    for group in ["desk-a", "desk-b"] {
+        let trade = cfg.group(group).trade;
+        assert_eq!(
+            trade.order_sizes_usd,
+            [50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0]
+        );
+        assert_eq!(trade.exit.fixed_sell_pcts, [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]);
+        assert_eq!(trade.exit.fixed_sell_slot, Some(3));
+    }
+}
+
+/// A selected core on its own per-core set is skipped: the import never writes a core's set, and
+/// its group is reached only through another selected core that reads the group's.
+#[test]
+fn a_core_on_its_own_settings_is_skipped() {
+    let mut cfg = three_cores();
+    cfg.servers[2].own_trade_config = true; // id 3, alone in desk-b
+    let before = cfg.group("desk-b").trade.clone();
+    let plan = plan_with(
+        vec![],
+        vec![],
+        vec![change(
+            "group.order_sizes",
+            PlannedValue::OrderSizes([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        )],
+    );
+    let out = apply_local(&mut cfg, &plan, &all_ids(&plan), &[1, 3]);
+    assert_eq!(out.applied, 1);
+    assert_eq!(
+        cfg.group("desk-a").trade.order_sizes_usd,
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+    assert_eq!(cfg.group("desk-b").trade, before);
+    assert!(cfg.servers[2].trade.is_none());
 }

@@ -63,6 +63,26 @@ fn the_winner_and_the_loser_are_told_different_things() {
     assert!(loser.text.contains("Will not fire"), "{}", loser.text);
 }
 
+/// A bare letter or digit gets its warning with no rival at all, and only then: Moonbot's keypad
+/// `+` and a shifted letter are not the class the warning is about.
+#[test]
+fn a_bare_letter_is_warned_about_without_a_rival() {
+    let _locale = crate::test_locale::force("en");
+    let mut hotkeys = quiet();
+    hotkeys.set_key(KeySlot::PanicSell, "g".into());
+    hotkeys.set_key(KeySlot::ShiftBuyUp, "+".into());
+    hotkeys.set_key(KeySlot::CancelBuy, "shift-a".into());
+    let clashes = Clashes::build(&hotkeys);
+
+    assert!(clashes.key(&hotkeys, KeySlot::PanicSell).is_none());
+    let bare = super::bare_key(&hotkeys, KeySlot::PanicSell).expect("bare");
+    assert_eq!(bare.severity, Severity::Bare);
+    assert!(bare.text.contains("bare key"), "{}", bare.text);
+    assert!(super::bare_key(&hotkeys, KeySlot::ShiftBuyUp).is_none());
+    assert!(super::bare_key(&hotkeys, KeySlot::CancelBuy).is_none());
+    assert!(super::bare_key(&hotkeys, KeySlot::NewLong).is_none());
+}
+
 /// The built-ins sit BELOW the eight figure slots and ABOVE everything else, so which side of that
 /// line a slot is on decides who dies.
 ///

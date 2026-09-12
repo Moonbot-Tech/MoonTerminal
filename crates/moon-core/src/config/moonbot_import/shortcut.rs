@@ -39,7 +39,8 @@ pub enum ShortcutKey {
     Right,
     Up,
     Down,
-    /// OEM key represented by its US-layout symbol: `;` `=` `,` `-` `.` `/` `` ` `` `[` `\` `]` `'`.
+    /// OEM key represented by its US-layout symbol: `;` `=` `,` `-` `.` `/` `` ` `` `[` `\` `]` `'`
+    /// — and the keypad's `*` `+` `-` `/`, which record as those same characters.
     Oem(char),
 }
 
@@ -99,18 +100,33 @@ fn vk_to_key(vk: u8) -> Option<ShortcutKey> {
         0x2E => Delete,
         0x30..=0x39 => Char(vk as char), // For '0'..'9', VK matches ASCII.
         0x41..=0x5A => Char(vk as char), // For 'A'..'Z', VK matches ASCII.
-        0x70..=0x87 => F(vk - 0x70 + 1), // F1..F24
-        0xBA => Oem(';'),                // VK_OEM_1
-        0xBB => Oem('='),                // VK_OEM_PLUS
-        0xBC => Oem(','),                // VK_OEM_COMMA
-        0xBD => Oem('-'),                // VK_OEM_MINUS
-        0xBE => Oem('.'),                // VK_OEM_PERIOD
-        0xBF => Oem('/'),                // VK_OEM_2
-        0xC0 => Oem('`'),                // VK_OEM_3
-        0xDB => Oem('['),                // VK_OEM_4
-        0xDC => Oem('\\'),               // VK_OEM_5
-        0xDD => Oem(']'),                // VK_OEM_6
-        0xDE => Oem('\''),               // VK_OEM_7
+        // The numeric keypad, as the SAME strings the Windows fork records for those keys: it has no
+        // named form for them and takes the character `MapVirtualKeyW(MAPVK_VK_TO_CHAR)` returns
+        // (`moon-gpui-windows/src/keyboard.rs::get_key_from_vkey`), so keypad `+` and the shifted
+        // top-row `=` are one binding — which is what the dispatcher sees too. Moonbot's own
+        // `Shift Buy Up/Down` defaults sit on VK_ADD/VK_SUBTRACT and reached the "not imported" list
+        // as unknown keys until 2026-09-12. Two keypad keys stay out: `VK_SEPARATOR` (0x6C), which
+        // no common keyboard carries, and `VK_DECIMAL` (0x6E), whose character is the LAYOUT's
+        // decimal separator — `.` on a US layout, `,` on a Russian one — so no single string here
+        // could match what the dispatcher will see; an "unknown key" in the preview is honest,
+        // a binding that never fires is not.
+        0x60..=0x69 => Char((b'0' + (vk - 0x60)) as char), // VK_NUMPAD0..9
+        0x6A => Oem('*'),                                  // VK_MULTIPLY
+        0x6B => Oem('+'),                                  // VK_ADD
+        0x6D => Oem('-'),                                  // VK_SUBTRACT
+        0x6F => Oem('/'),                                  // VK_DIVIDE
+        0x70..=0x87 => F(vk - 0x70 + 1),                   // F1..F24
+        0xBA => Oem(';'),                                  // VK_OEM_1
+        0xBB => Oem('='),                                  // VK_OEM_PLUS
+        0xBC => Oem(','),                                  // VK_OEM_COMMA
+        0xBD => Oem('-'),                                  // VK_OEM_MINUS
+        0xBE => Oem('.'),                                  // VK_OEM_PERIOD
+        0xBF => Oem('/'),                                  // VK_OEM_2
+        0xC0 => Oem('`'),                                  // VK_OEM_3
+        0xDB => Oem('['),                                  // VK_OEM_4
+        0xDC => Oem('\\'),                                 // VK_OEM_5
+        0xDD => Oem(']'),                                  // VK_OEM_6
+        0xDE => Oem('\''),                                 // VK_OEM_7
         _ => return None,
     })
 }

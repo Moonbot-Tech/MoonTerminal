@@ -137,6 +137,33 @@ fn the_hotkey_channel_prefix_still_matches_this_module() {
     );
 }
 
+/// Pins what counts as a bare letter or digit — the binding the row warns about.
+///
+/// Plausible breakage: Shift joins the modifier cut and `shift-a` starts warning, which the user
+/// ruled out; or the key test becomes "no modifier at all" and the keypad `+` Moonbot itself ships
+/// for Shift Buy Up reads as a bare key.
+#[test]
+fn a_bare_letter_or_digit_is_the_unmodified_single_alnum() {
+    use super::is_bare_alnum;
+    use gpui::Keystroke;
+
+    for raw in ["g", "4", "z", "0"] {
+        assert!(
+            is_bare_alnum(&Keystroke::parse(raw).unwrap()),
+            "{raw} fires on plain typing"
+        );
+    }
+    for raw in [
+        "shift-a", "ctrl-g", "alt-4", "cmd-k", "f5", "space", "+", "-", "escape", "tab",
+        "capslock", "delete",
+    ] {
+        assert!(
+            !is_bare_alnum(&Keystroke::parse(raw).unwrap()),
+            "{raw} is not a bare letter or digit"
+        );
+    }
+}
+
 /// Pins the line between a press the focused field consumes and one that still reaches a binding.
 ///
 /// Plausible breakage: the rule is rewritten as "anything without a modifier", which takes Escape

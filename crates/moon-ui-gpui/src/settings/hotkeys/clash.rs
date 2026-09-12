@@ -47,6 +47,9 @@ pub(super) enum Severity {
     Shares,
     /// This row never fires: something above it takes the press first.
     Shadowed,
+    /// This row fires on plain typing: a bare letter or digit, which Moonbot refuses and this
+    /// page allows with a warning. Not a rival at all — the danger is the user's own keyboard.
+    Bare,
 }
 
 /// One row's caption.
@@ -522,6 +525,20 @@ fn layer_holders(
     layer_rows(layer, rows, asking)
         .map(|other| target_label(GestureTarget::Gesture(other)))
         .collect()
+}
+
+/// The caption for a key row bound to a bare letter or digit, or `None` for any other binding.
+///
+/// Alongside [`Clashes::key`] rather than inside it: that one answers "who else holds this key",
+/// and a bare `g` with no rival is exactly the row this has to mark. Read from the configured
+/// string through the same parser the dispatcher uses, so a spelling the dispatcher would not
+/// fire on is not warned about either.
+pub(super) fn bare_key(hotkeys: &HotkeysConfig, slot: KeySlot) -> Option<Clash> {
+    let key = crate::hotkeys::parse_binding(hotkeys.key(slot))?;
+    crate::hotkeys::is_bare_alnum(&key).then(|| Clash {
+        severity: Severity::Bare,
+        text: t!("hotkeys.clash.bare_key").to_string(),
+    })
 }
 
 /// The one pairing that is not a shadow although the order says it is.
