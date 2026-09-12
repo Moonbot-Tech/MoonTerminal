@@ -173,7 +173,9 @@ impl CandleLayer {
             context.VSSetShaderResources(3, Some(&[Some(pipe.srv.clone())]));
             context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
             // The volume band and its scale go FIRST so the candle bodies sit on top of them.
-            // `m[0]` is the style: 0 is off.
+            // `m[0]` is the style: 0 is off. With the sides switch on (`m3[0]`) the shader culls
+            // the candles past the split boundary and the sides layer draws the scale, so the
+            // scale draw below is skipped here.
             if self.volume_style.m[0] >= 0.5 {
                 crate::diag::bump(&crate::diag::CHART_CANDLE_VOLUME_DRAW);
                 // Hills read `candles[iid + 1]`, so they get one instance fewer; bars would
@@ -188,9 +190,11 @@ impl CandleLayer {
                     context.PSSetShader(&pipe.volume_ps, None);
                     context.DrawInstanced(6, bars, 0, 0);
                 }
-                context.VSSetShader(&pipe.scale_vs, None);
-                context.PSSetShader(&pipe.scale_ps, None);
-                context.DrawInstanced(6, 2, 0, 0);
+                if self.volume_style.m3[0] < 0.5 {
+                    context.VSSetShader(&pipe.scale_vs, None);
+                    context.PSSetShader(&pipe.scale_ps, None);
+                    context.DrawInstanced(6, 2, 0, 0);
+                }
             }
             context.VSSetShader(&pipe.vs, None);
             context.PSSetShader(&pipe.ps, None);

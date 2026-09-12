@@ -118,6 +118,61 @@ pub struct CandleGpu {
     pub tf_rel: f32,
 }
 
+/// One sample in the sides-band GPU buffer, matching `SideBucket` in side_volume.hlsl: the
+/// rolling bought/sold sums at that moment, drawn over `tf_rel` — the sampling step.
+///
+/// Times are relative to the chart epoch like [`CandleGpu`]'s, and both amounts are QUOTE
+/// turnover — the band is monetary, see `moon_chart::side_volume`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SideVolumeGpu {
+    pub t_open_rel: f32,
+    pub tf_rel: f32,
+    pub buy: f32,
+    pub sell: f32,
+}
+
+/// Most samples the sides band uploads: 512 KB of VRAM at 16 bytes per instance.
+///
+/// The samples are one per screen pixel (never finer than a second), so a read is the visible
+/// window plus its prefetch in pixels — a few thousand; nothing ordinary reaches this. The cut is
+/// made HERE, before any backend sees the buffer, so Windows, Linux and macOS draw the same set of
+/// samples — the D3D layer's own cap is a second guard on the same number, not a different rule.
+/// On overflow only the newest tail is kept; `side_volume_dropped` counts them.
+pub const SIDE_VOLUME_CAPACITY: usize = 32_768;
+
+/// Fill the sides-band GPU buffer from a bucket series, converting time relative to the epoch.
+///
+/// The source returns buckets in time order, so the newest tail is the slice's end.
+///
+/// Args:
+///     buckets: Retained buckets, oldest first.
+///     epoch_ms: The chart's epoch, unix milliseconds.
+///     out: Reused buffer; cleared first.
+pub fn fill_side_volume_upload(
+    buckets: &[moon_core::market::SideVolumeBucket],
+    epoch_ms: f64,
+    out: &mut Vec<SideVolumeGpu>,
+) {
+    out.clear();
+    let buckets = if buckets.len() > SIDE_VOLUME_CAPACITY {
+        crate::diag::bump_by(
+            &crate::diag::CHART_SIDE_VOLUME_DROPPED,
+            (buckets.len() - SIDE_VOLUME_CAPACITY) as u64,
+        );
+        &buckets[buckets.len() - SIDE_VOLUME_CAPACITY..]
+    } else {
+        buckets
+    };
+    out.reserve(buckets.len());
+    out.extend(buckets.iter().map(|b| SideVolumeGpu {
+        t_open_rel: (b.t_open_ms as f64 - epoch_ms) as f32,
+        tf_rel: b.tf_ms as f32,
+        buy: b.buy_quote.max(0.0),
+        sell: b.sell_quote.max(0.0),
+    }));
+}
+
 /// Price-line style constants: cbuffer `PriceStyle` at b1 in crosses.hlsl,
 /// `@group(0) @binding(2)` in native_price.wgsl, and `[[buffer(2)]]` in chart_native.metal.
 ///
@@ -199,7 +254,8 @@ pub struct VolumeStyleGpu {
     /// Max/average reference-line colour, rgb + alpha.
     pub scale: [f32; 4],
     /// `x` style (0 off, 1 bars, 2 hills) - `y` band height as a fraction of the plot -
-    /// `z` 1/visible_max, quantized - `w` visible average over visible max, 0..1.
+    /// `z` 1/visible_max, quantized - `w` the second reference line's height over the maximum,
+    /// 0..1: the visible average, or one half with the sides switch on.
     pub m: [f32; 4],
     /// `x` unused, once a fixed band-height cap - `y` max bar width in physical px -
     /// `z` reference-line thickness in physical px - `w` unused.
@@ -208,6 +264,14 @@ pub struct VolumeStyleGpu {
     /// `theme_contract`, and shifting three live fields to reclaim one dead slot would rewrite
     /// every shader's member list for nothing.
     pub m2: [f32; 4],
+    /// The bought/sold switch (`ChartGraphicsCfg::candle_volume_sides`): `x` 0 off, 1 overlaid,
+    /// 2 stacked - `y` where the split history begins, relative ms (candles from there on are
+    /// culled, the sides layer draws instead) - `z` the rolling interval, relative ms (a candle's
+    /// turnover is read as `vol × z / tf` so both halves share `m.z`) - `w` unused.
+    ///
+    /// The candle half keeps its own up/down colours with the switch on: the reader asked for the
+    /// same picture as without it, only continued into the split where the history allows.
+    pub m3: [f32; 4],
 }
 
 /// Fill the candle GPU buffer from a series, converting time relative to the epoch.

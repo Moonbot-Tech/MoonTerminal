@@ -11,7 +11,9 @@ mod tests;
 mod volume;
 
 pub use read::{ReplayAddress, ReplayAddressError, TradeTickCursor};
-pub use volume::{LiqSpanReadout, VolumeAt, VolumeSpan, VolumeSpanReadout};
+pub use volume::{
+    LiqSpanReadout, SIDE_BUCKET_MS, SideVolumeBucket, VolumeAt, VolumeSpan, VolumeSpanReadout,
+};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};

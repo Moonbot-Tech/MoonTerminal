@@ -30,6 +30,7 @@ pub use trade_marks::{
     TAPE_SNAP_WINDOW_MS, TapePrint, build_trade_geometry, normalize_chart_graphics,
     snap_mark_to_tape,
 };
+pub mod side_volume;
 pub mod tick_volume;
 pub mod view;
 pub mod volume_bars;

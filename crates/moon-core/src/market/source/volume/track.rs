@@ -89,6 +89,9 @@ pub(super) struct MarketTrack {
     cursor: SeqRingCursor,
     /// Whether the buckets have been filled at all.
     seeded: bool,
+    /// `MarketRevisions::archive` the buckets were seeded under; a different one is a rebuild —
+    /// the archive prepends rows older than the cursor, which no drain can reach.
+    archive_rev: u64,
     /// Earliest moment this track can answer for, in unix milliseconds.
     ///
     /// What a caption's "is this period covered" reads: a track seeded two minutes ago cannot speak
@@ -119,6 +122,7 @@ impl MarketTrack {
             ],
             cursor: SeqRingCursor::default(),
             seeded: false,
+            archive_rev: 0,
             earliest_ms: now,
             newest_ms: now,
             rows: Vec::new(),
@@ -131,13 +135,24 @@ impl MarketTrack {
     /// Args:
     ///     trades: The market's raw trade ring, if it has one.
     ///     minis: Its five-second aggregates, if it has any.
+    ///     archive_rev: The market's `MarketRevisions::archive`; a change rebuilds the track.
     ///     now: Current unix time in milliseconds.
     pub(super) fn advance(
         &mut self,
         trades: Option<&SeqRingReader<TradeHistoryRow>>,
         minis: Option<&SeqRingReader<MiniCandle>>,
+        archive_rev: u64,
         now: i64,
     ) {
+        if self.seeded && self.archive_rev != archive_rev {
+            // The archive merged rows behind the cursor; a fresh track is the only way to hold
+            // them. Costs one bucket array (~40 KB) per merge, which happens once per chart open;
+            // the drain buffer is carried over.
+            let rows = std::mem::take(&mut self.rows);
+            *self = Self::new(now);
+            self.rows = rows;
+        }
+        self.archive_rev = archive_rev;
         self.used_ms = now;
         // The live edge follows the CLOCK, not the last print: a market that has not traded for a
         // minute is still fully covered up to now, and a caption asking for that minute must read

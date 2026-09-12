@@ -58,3 +58,27 @@ tick_volume.candle_head_unit_untimed:
   ru: "Свеча (%{unit})"
   en: "Candle (%{unit})"
   es: "Vela (%{unit})"
+
+# The hovered sides-half sample (`candle_volume_sides`): bought and sold over the band's rolling
+# interval ending at the pointer, spelled `Bv`/`Sv` like the chart captions. `%{tf}` stays
+# untranslated as above.
+tick_volume.sides_values:
+  ru: "За %{tf}: Bv %{buy} · Sv %{sell} %{unit}"
+  en: "Last %{tf}: Bv %{buy} · Sv %{sell} %{unit}"
+  es: "Últ. %{tf}: Bv %{buy} · Sv %{sell} %{unit}"
+tick_volume.sides_head:
+  ru: "Объём за %{tf}"
+  en: "Volume, last %{tf}"
+  es: "Volumen, últ. %{tf}"
+tick_volume.sides_head_unit:
+  ru: "Объём за %{tf} (%{unit})"
+  en: "Volume, last %{tf} (%{unit})"
+  es: "Volumen, últ. %{tf} (%{unit})"
+tick_volume.sides_buy:
+  ru: "Bv: %{value}"
+  en: "Bv: %{value}"
+  es: "Bv: %{value}"
+tick_volume.sides_sell:
+  ru: "Sv: %{value}"
+  en: "Sv: %{value}"
+  es: "Sv: %{value}"

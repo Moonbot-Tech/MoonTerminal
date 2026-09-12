@@ -18,10 +18,10 @@ use std::ffi::c_void;
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, HLineGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu, TickStyleGpu,
-    VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_volume_max, evicted_cross_ranges, hl_of,
-    mk_of, ordered_cross_ring, ranges_touch_volume_max, reset_cross_ring, seg_of,
-    update_cross_volume_max, zone_of,
+    GridParams, HLineGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu, SideVolumeGpu,
+    TickStyleGpu, VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_volume_max,
+    evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring, ranges_touch_volume_max,
+    reset_cross_ring, seg_of, update_cross_volume_max, zone_of,
 };
 
 const SHADER: &str = include_str!("shaders/chart_native.metal");
@@ -146,6 +146,8 @@ struct Pipelines {
     candles: RenderPipelineState,
     volume_bars: RenderPipelineState,
     volume_scale: RenderPipelineState,
+    side_volume: RenderPipelineState,
+    side_scale: RenderPipelineState,
     crosses: RenderPipelineState,
     volume: RenderPipelineState,
     price_last: RenderPipelineState,
@@ -304,6 +306,8 @@ pub struct MetalLayers {
     /// Candles as a complete series replaced on revision changes, plus layer style.
     candles: Vec<CandleGpu>,
     candle_style: CandleStyleGpu,
+    /// The sides band's buckets, replaced as a unit when its series is re-read.
+    sides: Vec<SideVolumeGpu>,
     levels: Vec<LevelInstance>,
     zones: Vec<ZoneGpu>,
     hlines: Vec<HLineGpu>,
@@ -334,11 +338,13 @@ pub struct MetalLayers {
     marker_buffer: BufferSlot,
     candle_buffer: BufferSlot,
     candle_style_uniform: BufferSlot,
+    side_buffer: BufferSlot,
     combo_buffers_dirty: bool,
     price_line_buffers_dirty: bool,
     book_buffer_dirty: bool,
     userdata_buffers_dirty: bool,
     candle_buffers_dirty: bool,
+    side_buffer_dirty: bool,
 }
 
 impl MetalLayers {
@@ -361,6 +367,7 @@ impl MetalLayers {
             price_line_capacity: MIN_COMBO_CAPACITY,
             candles: Vec::new(),
             candle_style: CandleStyleGpu::default(),
+            sides: Vec::new(),
             levels: Vec::new(),
             zones: Vec::new(),
             hlines: Vec::new(),
@@ -390,12 +397,23 @@ impl MetalLayers {
             marker_buffer: BufferSlot::default(),
             candle_buffer: BufferSlot::default(),
             candle_style_uniform: BufferSlot::default(),
+            side_buffer: BufferSlot::default(),
             combo_buffers_dirty: true,
             price_line_buffers_dirty: true,
             book_buffer_dirty: true,
             userdata_buffers_dirty: true,
             candle_buffers_dirty: true,
+            side_buffer_dirty: true,
         }
+    }
+
+    /// Replace the sides band's bucket set when its series is re-read.
+    ///
+    /// The band resides in the base cache, so this invalidates it for rebaking.
+    pub fn set_side_volume(&mut self, data: Vec<SideVolumeGpu>) {
+        self.sides = data;
+        self.side_buffer_dirty = true;
+        self.base_cache.valid = false;
     }
 
     /// Replace the complete candle set when the series revision changes.
@@ -604,11 +622,13 @@ impl MetalLayers {
         self.marker_buffer = BufferSlot::default();
         self.candle_buffer = BufferSlot::default();
         self.candle_style_uniform = BufferSlot::default();
+        self.side_buffer = BufferSlot::default();
         self.combo_buffers_dirty = true;
         self.price_line_buffers_dirty = true;
         self.book_buffer_dirty = true;
         self.userdata_buffers_dirty = true;
         self.candle_buffers_dirty = true;
+        self.side_buffer_dirty = true;
     }
 
     pub fn render(
@@ -687,7 +707,9 @@ impl MetalLayers {
             set_uniform(encoder, 1, self.candle_style_uniform.buffer());
             set_storage(encoder, 2, self.candle_buffer.buffer());
             set_uniform(encoder, 3, self.volume_style_uniform.buffer());
-            // The band and its scale draw BEFORE the bodies so the candles sit on top.
+            // The band and its scale draw BEFORE the bodies so the candles sit on top. With the
+            // sides switch on the shader culls the candles past the split boundary and the sides
+            // layer below draws the scale.
             if self.volume_style.m[0] >= 0.5 {
                 crate::diag::bump(&crate::diag::CHART_CANDLE_VOLUME_DRAW);
                 // Hills read `candles[iid + 1]`, so they take one instance fewer.
@@ -699,9 +721,23 @@ impl MetalLayers {
                 if bars > 0 {
                     draw(encoder, &pipelines.volume_bars, 6, bars as u64);
                 }
-                draw(encoder, &pipelines.volume_scale, 6, 2);
+                if self.volume_style.m3[0] < 0.5 {
+                    draw(encoder, &pipelines.volume_scale, 6, 2);
+                }
             }
             draw(encoder, &pipelines.candles, 18, self.candles.len() as u64);
+        }
+        // The bought/sold half AFTER the candle layer: it covers the candle band's bucket that
+        // straddles the split boundary, and draws the shared scale whether or not samples exist.
+        if self.volume_style.m3[0] >= 0.5 {
+            crate::diag::bump(&crate::diag::CHART_SIDE_VOLUME_DRAW);
+            set_uniform(encoder, 0, self.view_uniform.buffer());
+            set_storage(encoder, 2, self.side_buffer.buffer());
+            set_uniform(encoder, 3, self.volume_style_uniform.buffer());
+            if !self.sides.is_empty() {
+                draw(encoder, &pipelines.side_volume, 12, self.sides.len() as u64);
+            }
+            draw(encoder, &pipelines.side_scale, 6, 2);
         }
 
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
@@ -1226,6 +1262,11 @@ impl MetalLayers {
             );
             self.candle_buffers_dirty = false;
         }
+        if self.side_buffer_dirty || self.side_buffer.buffer.is_none() {
+            self.side_buffer
+                .write(device, "moon_chart_side_volume", &self.sides);
+            self.side_buffer_dirty = false;
+        }
     }
 
     fn upload_frame_uniforms(
@@ -1468,6 +1509,20 @@ fn create_pipelines(device: &DeviceRef, pixel_format: MTLPixelFormat) -> Pipelin
             pixel_format,
             "volume_scale_vertex",
             "volume_scale_fragment",
+        ),
+        side_volume: pipeline(
+            device,
+            &library,
+            pixel_format,
+            "side_band_vertex",
+            "side_band_fragment",
+        ),
+        side_scale: pipeline(
+            device,
+            &library,
+            pixel_format,
+            "side_scale_vertex",
+            "side_scale_fragment",
         ),
         crosses: pipeline(
             device,

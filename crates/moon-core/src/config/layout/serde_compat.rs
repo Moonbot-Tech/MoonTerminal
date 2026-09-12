@@ -190,6 +190,17 @@ where
     Ok(de_lenient::<D, f32>(d)?.unwrap_or_else(def_candle_volume_alpha))
 }
 
+/// Read the sides-band rolling interval leniently, defaulting an unusable value to `0` — Auto.
+///
+/// Coerces a quoted number the way [`de_lenient_u32`] does: the value is a hand-typed number of
+/// seconds and lands quoted as easily as the tuner's do.
+pub(super) fn de_candle_volume_tf_s<'de, D>(d: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient_u32(d)?.unwrap_or(0))
+}
+
 /// Read the volume-scale colour leniently, defaulting an unusable value.
 pub(super) fn de_candle_volume_scale<'de, D>(d: D) -> Result<[u8; 3], D::Error>
 where

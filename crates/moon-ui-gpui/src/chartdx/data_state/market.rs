@@ -180,9 +180,28 @@ impl ChartDataState {
         // the edge. They come from `chart_graphics` rather than the theme because they are per chart
         // TAB; `set_chart_graphics` has already normalized them.
         let marker_scale = self.chart_graphics.marker_scale;
+        // Likewise per-tab-only: the band's style id is clamped once, not per pane. The band's
+        // remaining fields stay in the loop because they fold in per-pane statistics. The `.min`
+        // stays even though `set_chart_graphics` normalizes on store: this is the drawing path's
+        // own idempotent clamp, which `normalize_chart_graphics` explicitly keeps.
+        let volume_style_id = self
+            .chart_graphics
+            .candle_volume_style
+            .min(moon_core::market::candles::VOLUME_STYLE_MAX);
+        // The bought/sold switch rides on hills or bars; with the band off there is nothing to
+        // ride on, so the switch is off too.
+        let sides_on = self.chart_graphics.candle_volume_sides
+            && volume_style_id != moon_core::market::candles::VOLUME_STYLE_OFF;
         let view_style = view::ViewStyle {
             marker_scale,
-            volume_alpha: self.chart_graphics.trade_volume_alpha,
+            // The sides band is the per-trade bars' own data regrouped, so the two would draw the
+            // same prints twice at the same edge; that style switches the bars off by decision,
+            // and leaves the reader's opacity setting untouched for the other styles.
+            volume_alpha: if sides_on {
+                0.0
+            } else {
+                self.chart_graphics.trade_volume_alpha
+            },
         };
         // Price-line colours and thickness. `price_line_px` is LOGICAL, and the shaders offset by
         // a HALF width either side of the centre line, so the device scale and the halving both
@@ -204,14 +223,6 @@ impl ChartDataState {
             sell: rgb4(self.theme.tick_sell),
             liq: rgb4(self.theme.tick_liq),
         };
-        // Likewise per-tab-only: the band's style id is clamped once, not per pane. The band's
-        // remaining fields stay in the loop because they fold in per-pane `volume_stats`. The
-        // `.min` stays even though `set_chart_graphics` normalizes on store: this is the drawing
-        // path's own idempotent clamp, which `normalize_chart_graphics` explicitly keeps.
-        let volume_style_id = self
-            .chart_graphics
-            .candle_volume_style
-            .min(moon_core::market::candles::VOLUME_STYLE_MAX);
         #[cfg(windows)]
         {
             let next_bg_color = rgb4(self.theme.bg);
@@ -645,6 +656,120 @@ impl ChartDataState {
                     );
                 }
             }
+            // The sides band's samples, on the history's own cadence: re-read when the retained
+            // history MOVED (a trade batch) or the fetched range was reset, when the interval or
+            // the sampling step moved — a zoom under `Auto` or a popup pick changes the sums
+            // without any new data — and when the visible window leaves the range last read (a
+            // pan, or the follow camera consuming the prefetch). NOT on every read: in follow
+            // mode the price-fit read runs on
+            // every camera pixel, and keying on it re-shipped the whole series and re-baked the
+            // base texture sixty times a second on a chart that sat still (measured on the bench:
+            // `side_volume_upload_len` 134 k/s, `base_bake` 59/s). A replay pane has no live source
+            // and gets no split (its candle half still draws). Off, the resident series is dropped once and the layer emptied, so
+            // the next switch-on starts from nothing rather than a stale window.
+            // The rolling interval follows the VISIBLE span (Moonbot's Auto table) and the
+            // sampling step follows the pixel, so either moving is a re-read: a coarser interval
+            // sums more, a coarser step draws fewer samples.
+            let logical_px_per_ms = pane.view.px_per_ms / self.last_ppp.max(1e-6);
+            let (side_tf_ms, side_step_ms) = if sides_on {
+                let step = moon_chart::side_volume::sample_step_ms(logical_px_per_ms);
+                // Never narrower than the step — the series widens it the same way so no print
+                // falls between two samples — and this is the interval the readout names.
+                let tf = moon_chart::side_volume::effective_tf_ms(
+                    self.chart_graphics.candle_volume_tf_s,
+                    f64::from(window_ms),
+                )
+                .max(step);
+                (tf, step)
+            } else {
+                (0, 0)
+            };
+            let side_key_moved = pr.side_tf_ms != side_tf_ms || pr.side_step_ms != side_step_ms;
+            let side_data_moved =
+                history.is_some() && (history_source_changed || force_history_reset);
+            // The band's own range: the VISIBLE window plus the same prefetch the history read
+            // carries — not `history_from`, whose candle floor reaches days back and would sample
+            // a two-day series at one step per pixel for a chart showing an hour (measured: 35 k
+            // samples a read). The range is remembered, and the visible window leaving it — a pan,
+            // or the follow camera consuming the prefetch — is a re-read of its own.
+            let side_window = (
+                (pane.view.epoch_ms + f64::from(view_time0 - history_prefetch)).floor() as i64,
+                (pane.view.epoch_ms + f64::from(view_time0 + window_ms + history_prefetch)).ceil()
+                    as i64,
+            );
+            let visible_abs = (
+                (pane.view.epoch_ms + f64::from(view_time0)).floor() as i64,
+                (pane.view.epoch_ms + f64::from(view_time0 + window_ms)).ceil() as i64,
+            );
+            let side_range_moved =
+                sides_on && (visible_abs.0 < pr.side_range.0 || visible_abs.1 > pr.side_range.1);
+            if sides_on
+                && self.trade_replay.is_none()
+                && (side_data_moved || side_key_moved || side_range_moved)
+            {
+                let window = side_window;
+                // Read into the spare buffer and ship only what DIFFERS from the resident
+                // series: the retained history moves on every trade batch, but a batch that
+                // touched no bucket in this window — or the bench's synthetic feed, whose ticks
+                // never reach the split at all — must not re-upload the series and re-bake the
+                // base texture (measured before this compare: 140 k buckets/s on the bench).
+                let mut fresh = std::mem::take(&mut pr.side_scratch);
+                let side_timer = crate::diag::timer();
+                if source
+                    .side_volume_buckets(
+                        pane.core,
+                        &pane.market,
+                        side_tf_ms,
+                        side_step_ms,
+                        window,
+                        &mut fresh,
+                    )
+                    .is_some()
+                {
+                    let moved = side_key_moved || fresh != pr.side_samples;
+                    pr.side_tf_ms = side_tf_ms;
+                    pr.side_step_ms = side_step_ms;
+                    pr.side_range = window;
+                    if moved {
+                        std::mem::swap(&mut pr.side_samples, &mut fresh);
+                        // Only the tail the upload keeps stays resident, so the band's scale and
+                        // the cursor readout describe exactly the buckets on screen.
+                        let excess = pr
+                            .side_samples
+                            .len()
+                            .saturating_sub(crate::chartdx::types::SIDE_VOLUME_CAPACITY);
+                        if excess > 0 {
+                            pr.side_samples.drain(..excess);
+                        }
+                        fill_side_volume_upload(
+                            &pr.side_samples,
+                            pane.view.epoch_ms,
+                            &mut pr.side_upload,
+                        );
+                        crate::diag::bump_by(
+                            &crate::diag::CHART_SIDE_VOLUME_UPLOAD_LEN,
+                            pr.side_upload.len() as u64,
+                        );
+                        pr.layers
+                            .set_side_volume(std::mem::take(&mut pr.side_upload));
+                        pr.gpu_prepare_dirty = true;
+                        pixels_changed = true;
+                    }
+                }
+                pr.side_scratch = fresh;
+                crate::diag::record_us(&crate::diag::CHART_SIDE_VOLUME_READ_US, side_timer);
+            } else if (!sides_on || self.trade_replay.is_some()) && pr.side_tf_ms != 0 {
+                // Off, or a replay took the pane over: either way the resident buckets describe a
+                // live window this pane no longer shows. Cleared once; the width mark at zero is
+                // also what makes the return to live re-read them.
+                pr.side_tf_ms = 0;
+                pr.side_step_ms = 0;
+                pr.side_range = (i64::MAX, i64::MIN);
+                pr.side_samples.clear();
+                pr.layers.set_side_volume(Vec::new());
+                pr.gpu_prepare_dirty = true;
+                pixels_changed = true;
+            }
             let last_price = if let Some(history) = history {
                 if scan_price {
                     pr.cached_tick_price = history.tick_price_range;
@@ -1035,8 +1160,50 @@ impl ChartDataState {
             // absolute, hence the epoch added back here.
             let vol_from = view_time0 as f64 + pane.view.epoch_ms;
             let vol_to = vol_from + window_ms as f64;
-            pr.volume_stats =
-                moon_chart::visible_volume_stats(&pr.volume_samples, vol_from, vol_to);
+            let stacked = self.chart_graphics.candle_volume_stacked;
+            // With the sides switch on the band is one LINEAR scale shared by two halves: the
+            // split's rolling sums from where the trade history begins, and before that the
+            // candle turnover read as an interval figure (`visible_interval_max`). One maximum
+            // over both, and the second reference line sits half-way — so the `avg` slot carries
+            // HALF the maximum, the figure the label prints there, and `m[3]` is the same ratio
+            // without a square root.
+            let side_boundary_ms = pr
+                .side_samples
+                .first()
+                .map(|b| b.t_open_ms as f64)
+                .unwrap_or(f64::INFINITY);
+            pr.volume_stats = if sides_on {
+                let split = moon_chart::side_volume::visible_side_max(
+                    &pr.side_samples,
+                    vol_from,
+                    vol_to,
+                    stacked,
+                );
+                // The interval computed THIS sync, not the one the last successful read was
+                // stamped with: with the switch on and no read landed yet (client or snapshot
+                // momentarily absent) the stamp is still zero, and the candle half must keep
+                // drawing from what it has rather than go dark with the split.
+                let history = moon_chart::volume_bars::visible_interval_max(
+                    &pr.volume_samples,
+                    vol_from,
+                    vol_to,
+                    side_tf_ms as f64,
+                    side_boundary_ms,
+                );
+                match (split, history) {
+                    (None, None) => None,
+                    (a, b) => Some(a.unwrap_or(0.0).max(b.unwrap_or(0.0))),
+                }
+                .filter(|max| *max > 0.0)
+                .map(|max| moon_chart::VolumeStats {
+                    max,
+                    avg: max * 0.5,
+                    count: 0,
+                })
+            } else {
+                moon_chart::visible_volume_stats(&pr.volume_samples, vol_from, vol_to)
+            };
+            pr.volume_scale_right = self.chart_graphics.candle_volume_scale_right;
             let next_volume_style = match pr.volume_stats {
                 // Nothing visible, or every visible bucket empty: draw no band rather than
                 // normalise against a zero maximum.
@@ -1075,6 +1242,23 @@ impl ChartDataState {
                         0.0,
                         moon_chart::volume_bars::VOLUME_BAR_W_PX * self.last_ppp,
                         moon_chart::volume_bars::VOLUME_SCALE_LINE_PX * self.last_ppp,
+                        0.0,
+                    ],
+                    // The switch: kind, where the split history begins (relative ms; +inf while
+                    // no sample is resident, so the candle half keeps drawing everywhere), and
+                    // the interval the candle half is read against.
+                    m3: [
+                        if sides_on {
+                            1.0 + f32::from(u8::from(stacked))
+                        } else {
+                            0.0
+                        },
+                        if side_boundary_ms.is_finite() {
+                            (side_boundary_ms - pane.view.epoch_ms) as f32
+                        } else {
+                            f32::MAX
+                        },
+                        side_tf_ms as f32,
                         0.0,
                     ],
                 },

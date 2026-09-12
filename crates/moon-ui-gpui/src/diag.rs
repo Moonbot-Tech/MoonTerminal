@@ -279,6 +279,20 @@ diag_counters!(
     // so it gets its own counter: folded into `candle_draw` a disabled band would be
     // indistinguishable from an enabled one and the reuse comparison would say nothing.
     CHART_CANDLE_VOLUME_DRAW => "candle_volume_draw",
+    // The sides band (buy/sell columns) is its own layer with its own buffer: `SIDE_VOLUME_DRAW`
+    // counts its base-pass draws and `SIDE_VOLUME_UPLOAD_LEN` the buckets re-shipped, which
+    // happens on every history read the way the candle buffer does.
+    CHART_SIDE_VOLUME_DRAW => "side_volume_draw",
+    CHART_SIDE_VOLUME_UPLOAD_LEN => "side_volume_upload_len",
+    // Buckets past the sides buffer's capacity, dropped from its left edge; see `candle_dropped`.
+    CHART_SIDE_VOLUME_DROPPED => "side_volume_dropped",
+    // Microseconds per second the sides band costs a sync, end to end: the series advance (a
+    // seed on the first read: every retained mini-candle plus the ring tail), the rolling
+    // resample, the compare against the resident samples and — when they differ — the upload
+    // fill and hand-over to the layer. One number rather than the read/upload split the candles
+    // keep, because the band's upload is a few thousand 16-byte rows and not worth its own line;
+    // `side_volume_upload_len` says how many. Sits on the frame thread like `history_read_us`.
+    CHART_SIDE_VOLUME_READ_US => "side_volume_read_us",
     CHART_HISTORY_RESET_ROWS => "history_reset_rows",
     CHART_HISTORY_RESET_MS => "history_reset_ms",
     // Microseconds per second inside `read_chart_history_into`, over EVERY call — the reset pair

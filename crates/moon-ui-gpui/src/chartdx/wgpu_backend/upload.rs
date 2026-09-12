@@ -224,6 +224,16 @@ impl WgpuLayers {
             );
             self.candle_buffers_dirty = false;
         }
+        if self.side_buffer_dirty || self.side_buffer.buffer.is_none() {
+            binds_dirty |= self.side_buffer.write(
+                device,
+                queue,
+                "moon_chart_side_volume",
+                wgpu::BufferUsages::STORAGE,
+                &self.sides,
+            );
+            self.side_buffer_dirty = false;
+        }
         if binds_dirty {
             self.prepared_binds = None;
         }
@@ -473,6 +483,26 @@ impl WgpuLayers {
                 },
             ],
         });
+        // Paired with `side_layout`: view, the SAME VolumeStyle uniform the candle bind carries,
+        // and the bucket storage.
+        let side_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("moon_chart_side_bind"),
+            layout: &pipelines.side_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.view_uniform.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.volume_style_uniform.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.side_buffer.binding(),
+                },
+            ],
+        });
         let zone_bind = self.bind_view_storage(
             device,
             &pipelines.view_storage_layout,
@@ -507,6 +537,7 @@ impl WgpuLayers {
             mark: mark_bind,
             book: book_bind,
             candle: candle_bind,
+            side: side_bind,
             zone: zone_bind,
             hline: hline_bind,
             seg: seg_bind,

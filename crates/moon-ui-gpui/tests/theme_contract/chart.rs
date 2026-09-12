@@ -148,6 +148,7 @@ fn chart_appearance_contracts_stay_identical_across_shader_backends() {
                 "float4 vs_scale;",
                 "float4 vs_m;",
                 "float4 vs_m2;",
+                "float4 vs_m3;",
             ],
             &[
                 "vs_m.x < 0.5",
@@ -167,6 +168,7 @@ fn chart_appearance_contracts_stay_identical_across_shader_backends() {
                 "scale: vec4<f32>,",
                 "m: vec4<f32>,",
                 "m2: vec4<f32>,",
+                "m3: vec4<f32>,",
             ],
             &[
                 "vs.m.x < 0.5",
@@ -186,6 +188,7 @@ fn chart_appearance_contracts_stay_identical_across_shader_backends() {
                 "float4 scale;",
                 "float4 m;",
                 "float4 m2;",
+                "float4 m3;",
             ],
             &[
                 "vs.m.x < 0.5",
@@ -1287,4 +1290,129 @@ fn strategy_colors_wake_both_order_geometry_cache_gates() {
     assert!(orders.contains("pr.last_order_schema_rev = core_st.schema_rev"));
     assert!(orders.contains("core_st.schema.as_ref()"));
     assert!(orders.contains("order_lines,\n                        &core_st.strategies,"));
+}
+
+/// The bought/sold switch (`candle_volume_sides`, `VolumeStyle.m3.x`) splits the bottom band in
+/// two halves on every backend: from the split boundary (`m3.y`) on, the sides layer draws the
+/// rolling sums and the candle band culls itself; before it, the candle band continues on the
+/// SAME linear scale — its turnover read as an interval figure (`m3.z`), in its own up/down
+/// colours — with no `sqrt` anywhere while the switch is on, because the shared labels read `max`
+/// and `max / 2`.
+/// One pair of scale lines: the sides layer's, so the candle band's yield with the switch. And the
+/// sides layer draws AFTER the candles, covering the candle bucket that straddles the boundary.
+#[test]
+fn every_backend_splits_the_band_at_the_sides_boundary() {
+    const CANDLE_BAND: &[(&str, &str, &str, &str)] = &[
+        (
+            "chartdx/shaders/candles.hlsl",
+            "cd.t_open >= vs_m3.y",
+            "vs_m3.z / max(tf_rel, 1.0)",
+            "vs_m3.x >= 0.5",
+        ),
+        (
+            "chartdx/shaders/native_candles.wgsl",
+            "cd.t_open >= vs.m3.y",
+            "vs.m3.z / max(tf_rel, 1.0)",
+            "vs.m3.x >= 0.5",
+        ),
+        (
+            "chartdx/shaders/chart_native.metal",
+            "cd.t_open >= vs.m3.y",
+            "vs.m3.z / max(tf_rel, 1.0)",
+            "vs.m3.x >= 0.5",
+        ),
+    ];
+    for (path, boundary_cull, interval_read, switch_gate) in CANDLE_BAND {
+        let source = code_only(&read_src(path));
+        let body = braced_body(&source, "volume_bars_vertex(");
+        assert!(
+            body.contains(boundary_cull),
+            "{path}: the candle band must cull itself past the split boundary (`{boundary_cull}`)"
+        );
+        let height = braced_body(&source, "vol_height_px(");
+        assert!(
+            height.contains(interval_read) && height.contains(switch_gate),
+            "{path}: with the switch on the candle turnover must be read as an interval figure"
+        );
+        let scale = braced_body(&source, "volume_scale_vertex(");
+        assert!(
+            scale.contains(switch_gate),
+            "{path}: the candle band's scale lines must yield to the sides layer's"
+        );
+        let fragment = braced_body(&source, "volume_bars_fragment(");
+        assert!(
+            !fragment.contains("neutral"),
+            "{path}: the candle half keeps its up/down colours with the switch on"
+        );
+    }
+
+    const SIDES_BAND: &[(&str, &str, &str)] = &[
+        (
+            "chartdx/shaders/side_volume.hlsl",
+            "vs_m3.x < 0.5",
+            "vs_m3.x >= 1.5",
+        ),
+        (
+            "chartdx/shaders/native_side_volume.wgsl",
+            "vs.m3.x < 0.5",
+            "vs.m3.x >= 1.5",
+        ),
+        (
+            "chartdx/shaders/chart_native.metal",
+            "vs.m3.x < 0.5",
+            "vs.m3.x >= 1.5",
+        ),
+    ];
+    for (path, own_gate, stacked_gate) in SIDES_BAND {
+        let source = code_only(&read_src(path));
+        let body = braced_body(&source, "side_band_vertex(");
+        assert!(
+            body.contains(own_gate),
+            "{path}: the sides layer must draw only with the switch on (`{own_gate}`)"
+        );
+        assert!(
+            body.contains(stacked_gate),
+            "{path}: the stacked kind must lift the sell column (`{stacked_gate}`)"
+        );
+        assert!(
+            !body.contains("sqrt"),
+            "{path}: the sides half is linear; a square root breaks its `max / 2` label"
+        );
+        let scale = braced_body(&source, "side_scale_vertex(");
+        assert!(
+            scale.contains(own_gate) && !scale.contains("sqrt"),
+            "{path}: the sides scale lines are linear and gated on the switch"
+        );
+    }
+
+    const DRAWS: &[(&str, &str, &str)] = &[
+        (
+            "chartdx/backend.rs",
+            "self.candles.render(view, context, rtv, gpu, panel_clip);",
+            "self.side_volume.render(view, context, rtv, gpu, panel_clip);",
+        ),
+        (
+            "chartdx/wgpu_backend/render.rs",
+            "&pipelines.candles",
+            "&pipelines.side_volume",
+        ),
+        (
+            "chartdx/metal_backend.rs",
+            "&pipelines.candles",
+            "&pipelines.side_volume",
+        ),
+    ];
+    for (path, candle_draw, side_draw) in DRAWS {
+        let source = code_only(&read_src(path));
+        let candle_at = source
+            .find(candle_draw)
+            .unwrap_or_else(|| panic!("{path}: missing candle draw"));
+        let side_at = source
+            .find(side_draw)
+            .unwrap_or_else(|| panic!("{path}: missing sides band draw"));
+        assert!(
+            candle_at < side_at,
+            "{path}: the sides half must draw after the candles to cover the boundary bucket"
+        );
+    }
 }

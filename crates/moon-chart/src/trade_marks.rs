@@ -168,8 +168,14 @@ pub fn normalize_chart_graphics(cfg: ChartGraphicsCfg) -> ChartGraphicsCfg {
         // The bottom band's two clamps belong to `volume_bars`, which owns that band and its
         // range constants; this normalizer only gathers them.
         candle_volume_style: crate::volume_bars::clamp_volume_style(cfg.candle_volume_style),
+        // One build stored the split as a style of its own; that file reads as hills with the
+        // switch on, so nobody who picked it loses the picture.
+        candle_volume_sides: cfg.candle_volume_sides
+            || cfg.candle_volume_style == moon_core::market::candles::VOLUME_STYLE_LEGACY_SIDES,
         candle_volume_height: crate::volume_bars::clamp_band_fraction(cfg.candle_volume_height),
         candle_volume_alpha: clamp_volume_alpha(cfg.candle_volume_alpha, def.candle_volume_alpha),
+        // The sides band's interval snaps onto its own list, in the module that owns the list.
+        candle_volume_tf_s: crate::side_volume::snap_tf_s(cfg.candle_volume_tf_s),
         ..cfg
     }
 }

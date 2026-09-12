@@ -208,7 +208,59 @@ pub fn bucket_label(tf_ms: f64) -> Option<String> {
 /// Returns:
 ///     The id, saturated at the highest defined style.
 pub fn clamp_volume_style(style: u8) -> u8 {
+    if style == moon_core::market::candles::VOLUME_STYLE_LEGACY_SIDES {
+        // The retired "sides" style: hills, with `candle_volume_sides` set by the normalizer.
+        return moon_core::market::candles::VOLUME_STYLE_HILLS;
+    }
     style.min(moon_core::market::candles::VOLUME_STYLE_MAX)
+}
+
+/// The tallest candle on screen once its turnover is read as a ROLLING-INTERVAL figure, in the
+/// quote currency — the scale the `candle_volume_sides` band shares between its two halves.
+///
+/// A candle's turnover covers its own timeframe; the sides half covers `interval_ms`. Read on one
+/// scale, a candle counts as `turnover × interval / tf` — the turnover an interval of it would have
+/// held had the candle traded evenly. An estimate, but the only way the candle history and the
+/// split can share one maximum and one label.
+///
+/// Only candles that OPEN before `boundary_ms` count — the same test the shaders cull on, so the
+/// candle straddling the boundary, which is drawn (the split half covers its tail), scales the
+/// band too; past the boundary the split half draws, and a candle there would scale the band
+/// against a figure nobody sees.
+///
+/// Args:
+///     samples: Retained per-candle samples.
+///     from_ms: Visible window start, unix milliseconds.
+///     to_ms: Visible window end, unix milliseconds.
+///     interval_ms: The sides band's rolling interval, milliseconds.
+///     boundary_ms: Where the split history begins, unix milliseconds.
+///
+/// Returns:
+///     The maximum, or `None` when no candle before the boundary is visible or all are empty.
+pub fn visible_interval_max(
+    samples: &[VolumeSample],
+    from_ms: f64,
+    to_ms: f64,
+    interval_ms: f64,
+    boundary_ms: f64,
+) -> Option<f32> {
+    if !(interval_ms > 0.0) {
+        return None;
+    }
+    let mut max = 0.0f32;
+    for s in samples {
+        if !(s.tf_ms > 0.0)
+            || s.t_open_ms >= boundary_ms
+            || !candle_intersects_window(s.t_open_ms, s.tf_ms, from_ms, to_ms)
+        {
+            continue;
+        }
+        let scaled = (f64::from(s.quote_volume) * interval_ms / s.tf_ms) as f32;
+        if scaled.is_finite() {
+            max = max.max(scaled);
+        }
+    }
+    (max > 0.0).then_some(max)
 }
 
 /// Clamp a bottom-volume band height from a hand-editable chart configuration.

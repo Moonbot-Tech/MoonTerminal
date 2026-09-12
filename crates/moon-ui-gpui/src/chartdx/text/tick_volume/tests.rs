@@ -1,6 +1,9 @@
 //! Independent font-advance fixtures exercise narrow layout without opening a GPU window.
 
-use super::{CandleVolume, fit_tick_readout, tick_amount, tick_lines, tick_readout_origin};
+use super::{
+    BandFigure, CandleVolume, SideVolume, fit_tick_readout, tick_amount, tick_lines,
+    tick_readout_origin,
+};
 use moon_chart::tick_volume::TickVolumeRange;
 
 /// Native band hit testing must reject the candle plot, axes and hidden bands at every scale.
@@ -274,11 +277,76 @@ fn fit_honors_measured_width_height_and_exact_boundary() {
 }
 
 /// One hovered bucket: a 1-minute candle with a real turnover figure.
-fn minute_candle() -> Option<CandleVolume> {
-    Some(CandleVolume {
+fn minute_candle() -> Option<BandFigure> {
+    Some(BandFigure::Candle(CandleVolume {
         quote: 12_345_678.0,
         tf_ms: 60_000.0,
-    })
+    }))
+}
+
+/// One hovered sides bucket: fifteen seconds with both sides traded.
+fn sides_bucket() -> Option<BandFigure> {
+    Some(BandFigure::Sides(SideVolume {
+        buy: 1_500.0,
+        sell: 250.5,
+        tf_ms: 15_000.0,
+    }))
+}
+
+/// The sides bucket names its period and both sides, inline when wide and one per line when
+/// stacked, and is never folded into the tick rows.
+#[test]
+fn sides_bucket_prints_both_sides_under_its_period() {
+    assert_eq!(
+        tick_lines([None, None], sides_bucket(), "USDT", "en", false, false),
+        ["Last 15s: Bv 1 500 · Sv 250.5 USDT"]
+    );
+    let stacked = tick_lines([None, None], sides_bucket(), "USDT", "en", true, false);
+    assert_eq!(
+        stacked,
+        ["Volume, last 15s (USDT)", "Bv: 1 500", "Sv: 250.5"]
+    );
+    // With tick rows above carrying the unit, the heading drops it.
+    let with_ticks = tick_lines(
+        overlapping_ranges(),
+        sides_bucket(),
+        "USDT",
+        "en",
+        true,
+        false,
+    );
+    assert!(with_ticks.contains(&"Volume, last 15s".to_string()));
+    assert!(
+        !with_ticks
+            .iter()
+            .any(|l| l.contains("BUY (") && l.contains("Bv"))
+    );
+}
+
+/// A sides sample with nothing real on either side is no figure; one dead side reads as zero
+/// beside the live one rather than dropping the sample.
+#[test]
+fn a_sides_bucket_needs_one_real_side() {
+    let bucket = |buy, sell| moon_core::market::SideVolumeBucket {
+        t_open_ms: 0,
+        tf_ms: 5_000,
+        buy_quote: buy,
+        sell_quote: sell,
+    };
+    assert_eq!(SideVolume::new(bucket(0.0, 0.0), 180_000), None);
+    assert_eq!(
+        SideVolume::new(bucket(f32::NAN, f32::INFINITY), 180_000),
+        None
+    );
+    // The interval named is the rolling window, not the sample's own screen span.
+    assert_eq!(
+        SideVolume::new(bucket(f32::NAN, 3.0), 180_000),
+        Some(SideVolume {
+            buy: 0.0,
+            sell: 3.0,
+            tf_ms: 180_000.0
+        })
+    );
 }
 
 /// The candle's aggregate is labelled as a candle, never folded into the tick rows.
@@ -483,7 +551,7 @@ fn a_non_finite_or_empty_bucket_contributes_no_candle_line() {
         assert_eq!(CandleVolume::new(bad, 60_000.0), None, "{bad} is not money");
     }
     assert_eq!(
-        CandleVolume::new(12_345_678.0, 60_000.0),
+        CandleVolume::new(12_345_678.0, 60_000.0).map(BandFigure::Candle),
         minute_candle(),
         "a real positive turnover is kept unchanged"
     );
@@ -492,10 +560,10 @@ fn a_non_finite_or_empty_bucket_contributes_no_candle_line() {
 /// A bucket whose width cannot be named prints the amount without inventing a period.
 #[test]
 fn an_unnameable_bucket_width_drops_the_period_not_the_figure() {
-    let candle = Some(CandleVolume {
+    let candle = Some(BandFigure::Candle(CandleVolume {
         quote: 42.0,
         tf_ms: 0.5,
-    });
+    }));
     assert_eq!(
         tick_lines([None, None], candle, "USDT", "en", false, false),
         ["Candle: 42 USDT"]

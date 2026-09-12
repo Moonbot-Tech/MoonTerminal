@@ -75,6 +75,7 @@ impl RenderState {
             // number to show the user would print a rounded lie.
             let volume_style = self.panes[idx].volume_style;
             let volume_stats = self.panes[idx].volume_stats;
+            let volume_scale_right = self.panes[idx].volume_scale_right;
             // Label layout for this frame, used by badges in sync_readout_params. Retain the old
             // layout for comparison: zoom changes Y, so backdrops must move with their text.
             let previous_placed = std::mem::take(&mut self.panes[idx].label_placed);
@@ -108,7 +109,22 @@ impl RenderState {
             if volume_style.m[0] >= 0.5 {
                 if let Some(stats) = volume_stats {
                     let band = volume_band_h;
-                    let avg_frac = volume_style.m[3].clamp(0.0, 1.0).sqrt();
+                    // With the sides switch on (`m3[0]`) the band is LINEAR and its second line
+                    // sits at the ratio itself; otherwise it is square-root scaled, so the line
+                    // sits at the root of the ratio. Both mirror their shader exactly.
+                    let ratio = volume_style.m[3].clamp(0.0, 1.0);
+                    let avg_frac = if volume_style.m3[0] >= 0.5 {
+                        ratio
+                    } else {
+                        ratio.sqrt()
+                    };
+                    // Moonbot's `Ind. Pos`: the labels hug whichever plot edge the reader chose,
+                    // anchored by the edge they hug so the digits never cross it.
+                    let (label_x, label_ax) = if volume_scale_right {
+                        (plot_right - 4.0, 1.0)
+                    } else {
+                        (plot_left + 4.0, 0.0)
+                    };
                     for (frac, value) in [(1.0f32, stats.max), (avg_frac, stats.avg)] {
                         // Too close to the band floor to read: skip rather than overprint. The
                         // room a label needs follows its own line height, so the larger, bolder
@@ -118,15 +134,7 @@ impl RenderState {
                         }
                         let label = super::fmt_amount(value);
                         let y = plot_bottom - band * frac;
-                        self.draw_volume_scale_text(
-                            ctx,
-                            &label,
-                            plot_left + 4.0,
-                            y,
-                            0.0,
-                            0.5,
-                            ink,
-                        )?;
+                        self.draw_volume_scale_text(ctx, &label, label_x, y, label_ax, 0.5, ink)?;
                     }
                 }
             }

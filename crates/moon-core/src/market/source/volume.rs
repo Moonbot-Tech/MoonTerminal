@@ -50,9 +50,11 @@ use crate::util::time::now_unix_ms_i64;
 use super::MarketDataSource;
 
 mod liq;
+mod series;
 mod track;
 
 pub use liq::LiqSpanReadout;
+pub use series::{SIDE_BUCKET_MS, SideVolumeBucket, synthetic_sides};
 
 use track::{MarketTrack, TRACK_SPAN_MS};
 
@@ -83,6 +85,13 @@ const DEEP_TTL_MS: i64 = 5_000;
 /// shrinks — a slow leak that looks like a cache. An entry past this would be rebuilt on its next
 /// read anyway.
 const SPAN_KEEP_MS: i64 = SPAN_TTL_MS * 40;
+
+/// Longest a chart's side series is kept once nothing reads it.
+///
+/// Longer than [`SPAN_KEEP_MS`] on purpose: the chart reads it only when the history moved, so a
+/// quiet market goes that long between reads without the pane having closed, and a series dropped
+/// in between is rebuilt from every retained mini-candle on the next print.
+const SERIES_KEEP_MS: i64 = 60_000;
 
 /// How many rows one drain of a windowed read takes at a time.
 ///
@@ -308,6 +317,9 @@ pub(super) struct VolumeBook {
     /// One track serves every period a chart asks for — the buckets are summed per request — so a
     /// module printing a minute beside another printing the quarter hour is still one accumulator.
     tracks: HashMap<(CoreId, String), MarketTrack>,
+    /// Ordered five-second buckets per market, as deep as the retained history, for the chart's
+    /// sides band. Its own map beside `tracks`: a track is an hour's ring, this is the whole tail.
+    series: HashMap<(CoreId, String), series::SideSeries>,
 }
 
 impl VolumeBook {
@@ -326,6 +338,8 @@ impl VolumeBook {
         // not keep one per coin for the session.
         self.tracks
             .retain(|_, track| now.saturating_sub(track.used_ms) < SPAN_KEEP_MS);
+        self.series
+            .retain(|_, series| now.saturating_sub(series.used_ms) < SERIES_KEEP_MS);
     }
 
     /// Forget everything a core answered.
@@ -338,6 +352,7 @@ impl VolumeBook {
         // The buckets describe a stream this client no longer has a cursor into: a new slot starts
         // its sequence again, and a stale cursor would fold the wrong rows in.
         self.tracks.retain(|(provider, _), _| *provider != core);
+        self.series.retain(|(provider, _), _| *provider != core);
     }
 }
 
@@ -371,6 +386,10 @@ impl MarketDataSource {
         if let Some(hit) = self.volume_cached(provider, market, span, at, now) {
             return Some(hit);
         }
+        // The archive revision, read BEFORE the snapshot: a merge landing between the two is then
+        // seen as a change on the next call and rebuilds against a snapshot that has it, rather
+        // than being missed for the life of the track.
+        let archive_rev = self.market_revisions(core, market)?.archive;
         let snapshot = self.core_client(provider)?.snapshot_versioned()?;
         let readers = snapshot.market_history_readers(market)?;
         // The futures ring first, then spot: the same order every other retained read in this crate
@@ -404,6 +423,7 @@ impl MarketDataSource {
                         market,
                         trades.as_ref(),
                         readers.mini_candles.as_ref(),
+                        archive_rev,
                         (from, to),
                         now,
                     ),
@@ -426,6 +446,83 @@ impl MarketDataSource {
         Some(readout)
     }
 
+    /// Fill `out` with one market's bought/sold turnover as ROLLING sums sampled across a window,
+    /// for the chart's sides band: at every `step_ms`, what each side traded over the `tf_ms`
+    /// that ended there.
+    ///
+    /// The series behind it is seeded from the retained history once and advanced from a cursor
+    /// after that, so a call costs the trades that arrived since the last one plus a walk over the
+    /// slots inside the window — never a scan of the ring.
+    ///
+    /// Args:
+    ///     core: Consumer core whose pane is drawn; its PROVIDER owns the history.
+    ///     market: Data-key market name on that core.
+    ///     tf_ms: Rolling window, milliseconds; below five seconds reads as five seconds.
+    ///     step_ms: Sample spacing, milliseconds; likewise floored at five seconds.
+    ///     window: Inclusive `[from, to]` bounds on sample open time, unix milliseconds.
+    ///     out: Reused buffer; cleared first.
+    ///
+    /// Returns:
+    ///     `None` when the provider, its client, its snapshot or this market's retained history
+    ///     is unavailable — which is NOT the same as a market that did not trade, and leaves `out`
+    ///     empty.
+    pub fn side_volume_buckets(
+        &self,
+        core: CoreId,
+        market: &str,
+        tf_ms: i64,
+        step_ms: i64,
+        window: (i64, i64),
+        out: &mut Vec<SideVolumeBucket>,
+    ) -> Option<()> {
+        out.clear();
+        // Bench first, exactly as `read_chart_history_into` does: a bench process has no client,
+        // and the band it draws is the synthetic split — see `synthetic_sides`.
+        if let Some(fixture) = crate::fixture::active() {
+            if fixture.covers(market) {
+                let cache = {
+                    let inner = self.inner.read().expect("market source poisoned");
+                    inner.kline_cache.clone()
+                };
+                let cache = cache?;
+                // The bench stores minutes at the finest; the rolling window still reads the
+                // configured length. The split reaches back only as far as a live core's chart
+                // archive does (its mini-candle ring: ~42 minutes), so the bench shows the SEAM
+                // between the neutral candle half and the coloured split, which is the picture a
+                // freshly opened live chart shows. The candles are read from one window before
+                // that so the first samples have something behind them.
+                const BENCH_SPLIT_DEPTH_MS: i64 = 42 * 60_000;
+                let from = window.0.max(window.1 - BENCH_SPLIT_DEPTH_MS);
+                let candles = fixture.candles(&cache, 60_000, from - tf_ms.max(60_000), window.1);
+                *out = synthetic_sides(&candles, tf_ms, step_ms, from, window.1);
+                return Some(());
+            }
+        }
+        let provider = self.provider_of(core)?;
+        // The archive revision, read BEFORE the snapshot: a merge landing between the two would
+        // then be seen as a change on the next call and rebuild against a snapshot that has it,
+        // rather than be missed for the life of the series.
+        let archive_rev = self.market_revisions(core, market)?.archive;
+        let now = now_unix_ms_i64();
+        let snapshot = self.core_client(provider)?.snapshot_versioned()?;
+        let readers = snapshot.market_history_readers(market)?;
+        let trades = readers.futures_trades.or(readers.spot_trades);
+        let handle = self.volume_book();
+        let mut book = handle.lock().ok()?;
+        let series = book
+            .series
+            .entry((provider, market.to_string()))
+            .or_insert_with(|| series::SideSeries::new(now));
+        series.advance(
+            trades.as_ref(),
+            readers.mini_candles.as_ref(),
+            archive_rev,
+            now,
+        );
+        series.rolling_into(tf_ms, step_ms, window.0, window.1, out);
+        Some(())
+    }
+
     /// A cached entry still inside its TTL.
     fn volume_cached(
         &self,
@@ -442,12 +539,16 @@ impl MarketDataSource {
     }
 
     /// Sum this market's buckets, bringing them up to date first.
+    // Eight arguments: the two rings, the archive revision and the clock are what `advance`
+    // takes, and bundling them into a struct for one private call site would be ceremony.
+    #[allow(clippy::too_many_arguments)]
     fn volume_tracked(
         &self,
         provider: CoreId,
         market: &str,
         trades: Option<&moonproto::state::SeqRingReader<TradeHistoryRow>>,
         minis: Option<&moonproto::state::SeqRingReader<MiniCandle>>,
+        archive_rev: u64,
         // The window as ONE argument: its two ends are never chosen apart, and splitting them put
         // this call past what a reader can hold at a glance.
         window: (i64, i64),
@@ -461,7 +562,7 @@ impl MarketDataSource {
             .tracks
             .entry((provider, market.to_string()))
             .or_insert_with(|| MarketTrack::new(now));
-        track.advance(trades, minis, now);
+        track.advance(trades, minis, archive_rev, now);
         track.read_range(window.0, window.1)
     }
 

@@ -71,14 +71,22 @@ const VOLUME_STYLES: [u8; 3] = [
     moon_core::market::candles::VOLUME_STYLE_OFF,
 ];
 
+/// Segment widths, in rendered pixels, for rows of two to seven segments. Every row fills the
+/// same content width, so a row's segment width is that width over its count.
+const ROW_W: f32 = 7.0 * 42.0;
+const SEG_W2: f32 = ROW_W / 2.0;
+const SEG_W3: f32 = ROW_W / 3.0;
+const SEG_W6: f32 = ROW_W / 6.0;
+const SEG_W7: f32 = ROW_W / 7.0;
+
 /// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
 ///
-/// Sized on the widest row, of which there are now several: six segments at 42 units each, which
-/// the three 84-unit style segments tie exactly. The checkbox labels wrap rather than widen, the
-/// RGB picker fits within that same width, and the localized ES strings are the
+/// Sized on the widest row: the sides band's seven interval segments at 42 units each. Every
+/// other row divides the same width among its own segments. The checkbox labels wrap rather than
+/// widen, the RGB picker fits within that same width, and the localized ES strings are the
 /// longest of the three.
 pub(super) fn content_width(cx: &App) -> Pixels {
-    px(6.0 * 42.0 + popup_group_inset_px(cx))
+    px(ROW_W + popup_group_inset_px(cx))
 }
 
 /// Index of the step nearest a stored value.
@@ -106,6 +114,15 @@ fn nearest(steps: &[f32], value: f32) -> usize {
         }
     }
     best
+}
+
+/// Label a bucket width in seconds the way the chart's timeframe controls spell one: `5s`, `1m`.
+///
+/// Delegates to the volume band's own `bucket_label` so the popup and the cursor readout can never
+/// spell the same width two ways; a width it cannot name (none on the list) prints its seconds.
+fn tf_label(tf_s: u32) -> String {
+    moon_chart::volume_bars::bucket_label(f64::from(tf_s) * 1_000.0)
+        .unwrap_or_else(|| format!("{tf_s}s"))
 }
 
 /// Label a 0..1 fraction as whole percent.
@@ -167,7 +184,7 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 // readable when the base sizes are retuned.
                 .map(|(index, v)| (format!("{v}x"), index == current))
                 .collect(),
-            42.0,
+            SEG_W6,
             p,
             cx,
             move |ix, app| {
@@ -268,7 +285,7 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 .enumerate()
                 .map(|(index, v)| (format!("{v}x"), index == current))
                 .collect(),
-            42.0,
+            SEG_W6,
             p,
             cx,
             move |ix, app| {
@@ -290,7 +307,7 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 .enumerate()
                 .map(|(index, v)| (percent_label(*v), index == current))
                 .collect(),
-            42.0,
+            SEG_W6,
             p,
             cx,
             move |ix, app| {
@@ -314,7 +331,7 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 // id to the closest NUMBER would light a style the chart is not drawing.
                 .map(|v| (volume_style_label(*v), *v == cfg.candle_volume_style))
                 .collect(),
-            84.0,
+            SEG_W3,
             p,
             cx,
             move |ix, app| {
@@ -336,7 +353,7 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 .enumerate()
                 .map(|(index, v)| (percent_label(*v), index == current))
                 .collect(),
-            42.0,
+            SEG_W6,
             p,
             cx,
             move |ix, app| {
@@ -358,7 +375,7 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 .enumerate()
                 .map(|(index, v)| (percent_label(*v), index == current))
                 .collect(),
-            42.0,
+            SEG_W6,
             p,
             cx,
             move |ix, app| {
@@ -366,6 +383,98 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                     let v = *v;
                     write_cfg(&entity, app, |c| c.candle_volume_alpha = v);
                 }
+            },
+        )
+    };
+    // --- Moonbot's `Vol` on top of either style: the switch, then its kind and interval rows,
+    // which appear only while it is on so the plain popup keeps the shape it had. ---
+    let sides_on = cfg.candle_volume_sides;
+    let volume_sides_cb = {
+        let entity = entity.clone();
+        MoonCheckbox::new(SharedString::from(format!("{id}-volume-sides")))
+            .label(t!("chart.graphics.volume_sides").to_string())
+            .checked(sides_on)
+            .size(MoonCheckboxSize::Compact)
+            .on_change(move |ch: &bool, _w, app| {
+                let v = *ch;
+                write_cfg(&entity, app, |c| c.candle_volume_sides = v);
+            })
+    };
+    let volume_kind_row = sides_on.then(|| {
+        let entity = entity.clone();
+        seg_row(
+            format!("{id}-volume-kind"),
+            t!("chart.graphics.volume_kind").to_string(),
+            vec![
+                (
+                    t!("chart.graphics.volume_kind_overlay").to_string(),
+                    !cfg.candle_volume_stacked,
+                ),
+                (
+                    t!("chart.graphics.volume_kind_stacked").to_string(),
+                    cfg.candle_volume_stacked,
+                ),
+            ],
+            SEG_W2,
+            p,
+            cx,
+            move |ix, app| {
+                write_cfg(&entity, app, |c| c.candle_volume_stacked = ix == 1);
+            },
+        )
+    });
+    let volume_tf_row = sides_on.then(|| {
+        let entity = entity.clone();
+        // Exact equality, like the style row: the stored value is already snapped onto this list
+        // by `normalize_chart_graphics`, so a segment lights only for the width the band draws.
+        let mut labels = vec![(
+            t!("chart.graphics.volume_tf_auto").to_string(),
+            cfg.candle_volume_tf_s == 0,
+        )];
+        labels.extend(
+            moon_chart::side_volume::SIDE_TF_CHOICES_S
+                .iter()
+                .map(|s| (tf_label(*s), *s == cfg.candle_volume_tf_s)),
+        );
+        seg_row(
+            format!("{id}-volume-tf"),
+            t!("chart.graphics.volume_tf").to_string(),
+            labels,
+            SEG_W7,
+            p,
+            cx,
+            move |ix, app| {
+                let v = match ix.checked_sub(1) {
+                    None => 0,
+                    Some(i) => match moon_chart::side_volume::SIDE_TF_CHOICES_S.get(i) {
+                        Some(s) => *s,
+                        None => return,
+                    },
+                };
+                write_cfg(&entity, app, |c| c.candle_volume_tf_s = v);
+            },
+        )
+    });
+    let volume_scale_pos_row = {
+        let entity = entity.clone();
+        seg_row(
+            format!("{id}-volume-scale-pos"),
+            t!("chart.graphics.volume_scale_pos").to_string(),
+            vec![
+                (
+                    t!("chart.graphics.volume_scale_left").to_string(),
+                    !cfg.candle_volume_scale_right,
+                ),
+                (
+                    t!("chart.graphics.volume_scale_right").to_string(),
+                    cfg.candle_volume_scale_right,
+                ),
+            ],
+            SEG_W2,
+            p,
+            cx,
+            move |ix, app| {
+                write_cfg(&entity, app, |c| c.candle_volume_scale_right = ix == 1);
             },
         )
     };
@@ -467,8 +576,12 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 v_flex()
                     .gap(design::ui_px(cx, 6.0))
                     .child(volume_style_row)
+                    .child(volume_sides_cb)
+                    .children(volume_kind_row)
+                    .children(volume_tf_row)
                     .child(volume_height_row)
                     .child(volume_alpha_row)
+                    .child(volume_scale_pos_row)
                     .child(volume_scale_row),
             ),
         )
