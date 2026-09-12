@@ -316,7 +316,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         last_detect_rev: std::collections::HashMap::new(),
         last_orders_alert_rev: std::collections::HashMap::new(),
         price_alert_near: std::collections::HashMap::new(),
-        default_alert_sound: "ding1".to_string(),
+        problem_sound: Default::default(),
         // Seeded right after construction from the persisted schedule, once the clock zone is
         // settled; see `refresh_quiet_state` below.
         quiet_sleeping: false,
@@ -327,6 +327,10 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         strategy_edit_note_cursor: HashMap::new(),
     });
     backend.update(cx, |b, _| b.refresh_header_ticker_default(true));
+    // The user's sounds folder, read off-thread and swapped in whole; the embedded set answers
+    // until it lands. Here rather than earlier because the data-directory override (a fixture
+    // run) must already be in place for the folder to resolve to the right root.
+    crate::media::sound::rescan(cx, |_| {});
     // Seed the queue's retained history from disk exactly once, before any campaign can run.
     // `SessionManager` is the single capped authority for it from here on; persistence only
     // borrows from `core_update_history()` and never drains it (see `core_updates.rs`).
@@ -570,7 +574,10 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     // Moonbot's price-approach alerts, on the same drain and behind their own
                     // per-core revision gate. Preserve their detect-first admission policy; the
                     // shared scheduler then serializes accepted clips with the trade lane.
-                    b.play_price_alert_sounds(detect_played);
+                    let alert_played = b.play_price_alert_sounds(detect_played);
+                    // Moonbot's network-problem alarm, on the core's own switch, last in the
+                    // same admission chain.
+                    b.play_problem_sounds(alert_played);
                     b.collect_trade_sounds();
                     b.pump_sounds();
                     if drain.order_lines_data {

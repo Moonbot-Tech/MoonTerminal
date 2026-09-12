@@ -172,3 +172,35 @@ fn the_ui_check_agrees_with_the_conversion_on_both_branches() {
     assert!(field_text_is_valid("String", "anything at all"));
     assert!(field_text_is_valid("Unknown", ""));
 }
+
+/// A `SoundKind` value is a file name, not an entry in a list this crate keeps.
+///
+/// Plausible breakage: reinstating a whitelist of the embedded stems here would turn a user's own
+/// `MYSOUND.wav` — legitimately named by a Moonbot strategy — back into "no sound field", which the
+/// caller then reads as the schema default. The player is the one place that knows which names
+/// exist, and it reports a missing one rather than swallowing it.
+#[test]
+fn a_sound_kind_is_normalized_not_filtered() {
+    assert_eq!(sound_stem("BABYTOY"), Some("babytoy".into()));
+    assert_eq!(sound_stem(" ding1.wav "), Some("ding1".into()));
+    assert_eq!(sound_stem("MySound.WAV"), Some("mysound".into()));
+    assert_eq!(
+        sound_stem("NotEmbedded"),
+        Some("notembedded".into()),
+        "an unknown name must travel to the player, which reports it; dropping it here is silent"
+    );
+}
+
+/// `NONE` and an empty value both mean silence, in either spelling Moonbot uses.
+#[test]
+fn none_and_empty_mean_silence() {
+    assert_eq!(sound_stem("NONE"), None);
+    assert_eq!(sound_stem("none"), None);
+    assert_eq!(sound_stem(""), None);
+    assert_eq!(sound_stem("   "), None);
+    assert_eq!(
+        sound_stem(".wav"),
+        None,
+        "an extension with no stem names nothing"
+    );
+}

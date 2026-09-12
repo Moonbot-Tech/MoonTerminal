@@ -180,14 +180,16 @@ impl Backend {
             };
             // The same `channels.detects` log the detect sounds write to, and for the same reason:
             // "it did not beep" has several causes here — the alert switched off, the level never
-            // reached, quiet mode, an ordinal this build cannot name, a core with no config yet, the
-            // silent first pass, and another core having taken this drain's one sound — and they
-            // are indistinguishable from outside. The line names which one it was.
+            // reached, quiet mode, a core with no config yet, the silent first pass, and another
+            // core having taken this drain's one sound — and they are indistinguishable from
+            // outside. The line names which one it was. An ordinal past the terminal's sound table
+            // is NOT one of them any more: it plays the default and raises a toast (see
+            // `media::sound::play_ordinal`); the line still says the table had no name for it.
             let name = crate::media::sound::mb_sound_name(ordinal);
             moon_core::detect_diag::line(&format!(
                 "[price-alert] core={} leg={leg:?} sound={ordinal} ({}){}",
                 moon_core::feed::core_label(core),
-                name.unwrap_or("НЕТ ТАКОГО ЗВУКА"),
+                name.as_deref().unwrap_or("NO SUCH SOUND, default plays"),
                 match (self.quiet_sleeping, played) {
                     (true, _) => ", silent: quiet mode",
                     (_, true) => ", silent: another core took this drain's sound",

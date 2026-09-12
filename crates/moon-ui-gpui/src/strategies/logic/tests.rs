@@ -459,6 +459,73 @@ fn a_mixed_folder_displays_unchecked() {
     );
 }
 
+/// The core's list for the sound field is extended with the terminal's own sounds, never
+/// replaced by them and never duplicated against them: the core's `BABYTOY` and the terminal's
+/// embedded `babytoy` are one row, and a file only this terminal has is a new row.
+///
+/// Plausible breakage: returning the core's list as soon as it is non-empty — which it is, the
+/// core sends its eighteen plus `NONE` — leaves every file in the terminal's folder out of the
+/// strategy editor, which is the one place a strategy's sound is chosen.
+#[test]
+fn the_sound_field_merges_the_terminal_sounds_into_the_core_list() {
+    let field = moon_core::feed::SchemaField {
+        name: "SoundKind".to_string(),
+        type_name: "String".to_string(),
+        ui: moon_core::feed::SchemaFieldUi::Combo,
+        // A core whose Moonbot knows one sound this terminal lacks, and spells another in its
+        // own case.
+        picklist: vec![
+            "Alarm".to_string(),
+            "babytoy".to_string(),
+            "CoreOnly".to_string(),
+            "NONE".to_string(),
+        ],
+        default: None,
+    };
+    let rows = super::effective_picklist(&field, "BABYTOY.wav");
+    assert_eq!(
+        &rows[..4],
+        &["Alarm", "babytoy", "CoreOnly", "NONE"],
+        "the core's list leads, in its order and spelling"
+    );
+    assert!(
+        rows.iter().any(|r| r == "ding1"),
+        "a sound the core did not list is appended from the terminal"
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|r| r.eq_ignore_ascii_case("babytoy"))
+            .count(),
+        1,
+        "the terminal's copy of a core-listed sound is not a second row"
+    );
+    assert_eq!(
+        rows.iter().filter(|r| *r == "NONE").count(),
+        1,
+        "the core's own NONE is not doubled"
+    );
+    assert!(
+        !rows.iter().any(|r| r == "BABYTOY.wav"),
+        "the stored value matches a row by stem and is not appended"
+    );
+    let bare = moon_core::feed::SchemaField {
+        picklist: Vec::new(),
+        ui: moon_core::feed::SchemaFieldUi::Edit,
+        ..field
+    };
+    assert_eq!(
+        super::field_control(&bare),
+        super::FieldControl::Picklist,
+        "a core that declares the sound field as plain text still gets the terminal's dropdown"
+    );
+    let rows = super::effective_picklist(&bare, "");
+    assert_eq!(
+        rows[0], "NONE",
+        "with no core list, NONE leads the terminal's own"
+    );
+    assert!(rows.iter().any(|r| r == "ding1"));
+}
+
 /// A schema field of the given type, rendered as a text entry.
 fn edit_field(type_name: &str) -> moon_core::feed::SchemaField {
     moon_core::feed::SchemaField {

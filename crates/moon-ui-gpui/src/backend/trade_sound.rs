@@ -40,7 +40,10 @@ impl PendingTradeSound {
             TradeEdge::Open => &cfg.open,
             TradeEdge::Close => &cfg.close,
         };
-        crate::media::sound::is_playable(name).then(|| name.clone())
+        // An empty stem is the persisted mute. A name no file answers to is NOT filtered here:
+        // the player plays its default for it and reports the name, which is how a deleted
+        // sound file gets noticed at all.
+        (!name.trim().is_empty()).then(|| name.clone())
     }
 }
 

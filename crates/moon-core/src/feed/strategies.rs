@@ -18,76 +18,46 @@ pub(super) struct AlertParams {
     /// Chart-tab number (0 means do not add).
     pub add_to_chart: u32,
     pub keep_in_chart_secs: u32,
-    /// Sound name (WAV stem such as BABYTOY/ding1/…) when set by the strategy. `None` means
-    /// no sound. This is extracted by scanning string fields: the sound field's schema name
-    /// is unstable, but its VALUE matches the file stem.
+    /// The sound the strategy names, as a lowercase WAV stem (`babytoy`, `ding1`, or a user's own
+    /// file), or `None` for silence. Taken from the `SoundKind` field, which is what Moonbot calls
+    /// it in every snapshot on record; the value is a bare name or `NAME.wav`, and the player, not
+    /// this layer, decides whether a file answers to it.
     pub sound_name: Option<String>,
 }
 
-/// Lowercase stems of embedded sounds, used to recognize a strategy's sound field.
-/// Kept here in moon-core because extraction happens in the feed layer; this list mirrors
-/// `moon-ui-gpui::sound::SOUNDS`.
-const SOUND_STEMS: &[&str] = &[
-    "alarm",
-    "babytoy",
-    "bark",
-    "comegetsome",
-    "cork",
-    "ding1",
-    "ding2",
-    "error",
-    "fatality",
-    "gold",
-    "hallo",
-    "letsrock",
-    "milord",
-    "pfiff",
-    "ringin",
-    "ringout",
-    "turnon",
-    "yes_mast",
-];
+/// The strategy field that names the sound. Both the strategy schema and every stored snapshot
+/// spell it this way; `SoundAlert` beside it is the flag that lets the sound play at all.
+const SOUND_KIND_FIELD: &str = "SoundKind";
 
-/// Normalizes a field value to a sound stem by trimming, lowercasing, and stripping the extension.
-/// Moonbot stores names as both `BABYTOY` and `BABYTOY.wav`; a non-sound returns None.
+/// Moonbot's spelling of "no sound" in `SoundKind`.
+const SOUND_NONE: &str = "NONE";
+
+/// Normalizes a `SoundKind` value to a lowercase stem: trimmed, lowercased, `.wav` stripped.
+/// Moonbot stores `BABYTOY` and `BABYTOY.wav` for the same file. No list is consulted here —
+/// which names exist is the player's knowledge, and a name it lacks is reported there rather than
+/// silently dropped on the way.
+///
+/// Returns `None` for an empty value or the explicit `NONE`.
 fn sound_stem(val: &str) -> Option<String> {
     let low = val.trim().to_ascii_lowercase();
     let stem = low.strip_suffix(".wav").unwrap_or(&low);
-    SOUND_STEMS.contains(&stem).then(|| stem.to_string())
+    (!stem.is_empty() && !stem.eq_ignore_ascii_case(SOUND_NONE)).then(|| stem.to_string())
 }
 
-/// Finds a string value in the strategy fields that matches a sound stem.
-fn sound_name_of(s: &StrategySnapshot) -> Option<String> {
-    for (_, v) in s.fields.iter() {
-        if let FieldValue::String(val) = v {
-            if let Some(stem) = sound_stem(val) {
-                return Some(stem);
-            }
-        }
+/// The `SoundKind` value a snapshot carries, if any: `Some(Some(stem))` for a named sound,
+/// `Some(None)` for an explicit `NONE`, `None` when the field is absent (equal to the schema
+/// default, which the server omits).
+fn sound_kind_of(s: &StrategySnapshot) -> Option<Option<String>> {
+    match s.fields.get(SOUND_KIND_FIELD)? {
+        FieldValue::String(val) => Some(sound_stem(val)),
+        _ => None,
     }
-    None
-}
-
-/// Detects an explicit `no sound` selection: a sound-related field (SoundKind/…) set to `NONE`.
-/// Such a detect stays SILENT and does NOT fall back to the default sound. Requiring `sound` in
-/// the field name prevents an unrelated `none` value from muting the sound.
-fn sound_is_none(s: &StrategySnapshot) -> bool {
-    for (name, v) in s.fields.iter() {
-        if let FieldValue::String(val) = v {
-            if val.trim().eq_ignore_ascii_case("none")
-                && name.to_string().to_ascii_lowercase().contains("sound")
-            {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// Reads alert defaults `(SoundAlert, sound)` from the SCHEMA for a strategy kind.
 /// The server does NOT send fields equal to their schema defaults (as with all other strategy
 /// fields), so a strategy using the DEFAULT sound arrives without a sound field and cannot be
-/// found by scanning the snapshot. Read it from this kind's schema-field `default_value`s.
+/// found in the snapshot. Read it from this kind's schema-field `default_value`s.
 fn schema_alert_defaults(
     schema: &StrategySchema,
     s: &StrategySnapshot,
@@ -98,11 +68,7 @@ fn schema_alert_defaults(
         for f in &sec.fields {
             match (f.name.as_str(), f.default_value.as_ref()) {
                 ("SoundAlert", Some(FieldValue::Bool(b))) => sound_alert = Some(*b),
-                (_, Some(FieldValue::String(sv))) => {
-                    if sound.is_none() {
-                        sound = sound_stem(sv);
-                    }
-                }
+                (SOUND_KIND_FIELD, Some(FieldValue::String(sv))) => sound = sound_stem(sv),
                 _ => {}
             }
         }
@@ -197,14 +163,10 @@ pub(super) fn alert_params(s: &StrategySnapshot, schema: Option<&StrategySchema>
     //  - an explicit stem in the snapshot wins;
     //  - SoundKind=NONE means silence (NOT the default);
     //  - no sound field (= schema default) uses the schema default when SoundAlert is enabled.
-    let sound_name = if let Some(n) = sound_name_of(s) {
-        Some(n)
-    } else if sound_is_none(s) {
-        None
-    } else if sound_alert {
-        def_sound
-    } else {
-        None
+    let sound_name = match sound_kind_of(s) {
+        Some(chosen) => chosen,
+        None if sound_alert => def_sound,
+        None => None,
     };
     AlertParams {
         sound_alert,
@@ -411,6 +373,21 @@ pub(super) fn fields_from_text(
 /// Builds a decoupled model from moonproto `StrategySchema`: each kind contains its editor
 /// sections and their fields (name/type/widget kind/picklist/default).
 pub(super) fn build_schema_model(schema: &StrategySchema) -> StrategySchemaModel {
+    // One line per schema arrival: what the core supplies as its own list for the sound field.
+    // The terminal's editor shows that list plus every sound of its own the list lacks, so "a
+    // sound is not in the dropdown" has two possible causes — the core's list and the terminal's
+    // folder scan — and this line settles the first.
+    let sound_list: Vec<&str> = schema
+        .fields
+        .iter()
+        .filter(|f| f.name == SOUND_KIND_FIELD)
+        .flat_map(|f| f.static_picklist.iter().map(String::as_str))
+        .collect();
+    log::info!(
+        "strategy schema: {} kinds, {} fields, {SOUND_KIND_FIELD} picklist from the core: {sound_list:?}",
+        schema.kinds.len(),
+        schema.fields.len()
+    );
     let kinds = schema
         .kinds
         .iter()

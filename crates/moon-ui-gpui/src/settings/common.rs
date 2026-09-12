@@ -134,6 +134,17 @@ pub(super) fn separator(p: MoonPalette, cx: &App) -> impl IntoElement {
         .bg(rgba_from(p.border, 1.0))
 }
 
+/// Opens a folder in the platform file manager.
+pub(super) fn open_folder(path: &std::path::Path) {
+    #[cfg(windows)]
+    let cmd = "explorer";
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let cmd = "xdg-open";
+    let _ = std::process::Command::new(cmd).arg(path).spawn();
+}
+
 /// Build an egui-style section heading with semibold text and top spacing.
 pub(super) fn section(title: &str, p: MoonPalette, cx: &App) -> impl IntoElement {
     div()

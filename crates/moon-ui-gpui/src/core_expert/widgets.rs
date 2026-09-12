@@ -641,23 +641,22 @@ pub(super) fn sound_cell(
 ) -> impl IntoElement {
     let name = crate::media::sound::mb_sound_name(current);
     let mixed = mixed::is_mixed(id, |cfg| set(cfg, 1));
-    // A core holding an ordinal this build has no name for shows that NUMBER rather than a guess.
+    // A core holding an ordinal this terminal's sound table has no row for shows that NUMBER
+    // rather than a guess: the core's `sounds.zip` is longer than ours.
     let label = if mixed {
         design::MIXED_MARK.to_string()
     } else {
-        name.map_or_else(|| format!("#{current}"), str::to_string)
+        name.clone().unwrap_or_else(|| format!("#{current}"))
     };
     let view = view.clone();
-    let options = crate::media::sound::MB_SOUNDS
-        .iter()
-        .enumerate()
-        .map(|(index, sound)| {
-            // The wire ordinal is 1-based; see `media::sound::MB_SOUNDS`.
-            let ordinal = index as i32 + 1;
+    // The catalog's ordinal table: Moonbot's numbering, or the user's archive's.
+    let options = crate::media::sound::ordinals()
+        .into_iter()
+        .map(|(ordinal, _stem, label)| {
             (
                 ordinal,
                 SharedString::from(format!("{id}-{ordinal}")),
-                SharedString::from(*sound),
+                SharedString::from(label),
             )
         });
     let items = crate::panels::common::radio_items(

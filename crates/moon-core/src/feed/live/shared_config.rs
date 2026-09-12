@@ -1117,6 +1117,7 @@ pub(crate) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
             book_orders_opacity: v.book_orders_opacity,
             book_orders_width: v.book_orders_width,
             play_signal_sound: sig.play_signal_sound,
+            signal_sound: sig.signal_sound,
             confirm_close: u.confirm_close,
             hide_demo_button: u.hide_demo_button,
             auto_show_on_signal: sig.auto_show_on_signal,
@@ -1596,6 +1597,7 @@ fn apply_interface(cfg: &mut SharedConfig, i: &InterfaceSettings) {
     v.book_orders_width = i.book_orders_width;
     let s = &mut cfg.signals;
     s.play_signal_sound = i.play_signal_sound;
+    s.signal_sound = i.signal_sound;
     s.auto_show_on_signal = i.auto_show_on_signal;
     s.use_last_detect_caption = i.use_last_detect_caption;
     s.full_screen_prevent_signals = i.full_screen_prevent_signals;

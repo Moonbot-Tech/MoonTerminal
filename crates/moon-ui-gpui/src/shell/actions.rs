@@ -148,6 +148,51 @@ impl Shell {
         });
     }
 
+    /// Names each sound that was asked for and could not be found — the default played instead.
+    ///
+    /// The player records the miss (`media::sound::missing`), once per name per session; this is
+    /// the only pump that shows it, guarded like the two drains above so one miss is one toast,
+    /// not one per group window. The toast stays until dismissed: it names a setting to fix, and
+    /// the sound that prompted it is long over by the time the operator looks up.
+    pub(super) fn drain_missing_sound_toasts(&mut self, cx: &mut Context<Self>) {
+        if !self.window_active {
+            return;
+        }
+        let notices = crate::media::sound::take_missing_notices();
+        if notices.is_empty() {
+            return;
+        }
+        let handle = self.window_handle;
+        cx.defer(move |app| {
+            let _ = handle.update(app, move |_, window, app| {
+                use moon_ui::MoonWindowExt as _;
+                let folder = moon_core::config::paths::sounds_dir().display().to_string();
+                let fallback = crate::media::sound::DEFAULT_SOUND;
+                for notice in notices {
+                    log::warn!("sound not found, default plays: {notice:?}");
+                    let body = match notice {
+                        crate::media::sound::MissingSound::Name(name) => rust_i18n::t!(
+                            "sounds.missing_name",
+                            name = name,
+                            folder = folder,
+                            fallback = fallback
+                        ),
+                        crate::media::sound::MissingSound::Ordinal(n) => rust_i18n::t!(
+                            "sounds.missing_ordinal",
+                            n = n,
+                            folder = folder,
+                            fallback = fallback
+                        ),
+                    };
+                    let note = moon_ui::MoonNotification::warning(body.to_string())
+                        .title(rust_i18n::t!("sounds.missing_title").to_string())
+                        .autohide(false);
+                    window.push_notification(note, app);
+                }
+            });
+        });
+    }
+
     /// Open and focus the inline editor after a fixed-sell S button is double-clicked.
     /// Seeds it with the group's current preset percentage, mirroring the order-size editor.
     pub(super) fn drain_sell_edit_request(&mut self, cx: &mut Context<Self>) {

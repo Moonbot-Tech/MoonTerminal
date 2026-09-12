@@ -9,6 +9,7 @@ mod favorites;
 mod figures;
 mod manual_trading;
 mod open_request;
+mod problem_sound;
 mod quiet;
 pub(crate) mod server_chart;
 pub(crate) mod telegram;
@@ -24,6 +25,7 @@ pub(crate) use manual_trading::{
     strat_field_value,
 };
 pub(crate) use open_request::{ChartHistoryScope, OpenCompareRequest, OpenMainRequest};
+pub(crate) use problem_sound::ProblemSoundState;
 
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;

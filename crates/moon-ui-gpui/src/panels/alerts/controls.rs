@@ -9,6 +9,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::model::ALL_COLUMNS_MASK;
+use crate::panels::common::SoundChoices;
 use crate::panels::{RadioMark, radio_items};
 
 /// Shared bottom-bar control height in pixels, keeping steppers, dropdowns and input aligned.
@@ -392,40 +393,40 @@ impl AlertsPanel {
             )
     }
 
-    /// Builds the Backend default-sound dropdown for an alert without a strategy sound.
+    /// Builds the default-sound dropdown for an alert without a strategy sound.
     ///
-    /// Selecting an entry updates the in-memory default and plays it immediately as a preview.
+    /// Selecting an entry updates the persisted default and plays it immediately as a preview.
     fn sound_dropdown(&self, cx: &Context<Self>) -> impl IntoElement {
-        let cur = self.backend.read(cx).default_alert_sound.clone();
+        let cur = self.backend.read(cx).alert_sound();
         let backend = self.backend.clone();
         // The selection is read from the backend at render time and is not part of the row
         // signature, so the panel is told directly rather than left to catch up on the gate's
         // next second — the label and the check mark would lag a visible beat behind the click.
         let view = cx.entity();
-        let options: Vec<(&'static str, SharedString, SharedString)> = crate::media::sound::names()
-            .map(|n| {
-                (
-                    n,
-                    SharedString::from(format!("snd-{n}")),
-                    SharedString::from(n),
-                )
-            })
-            .collect();
+        let choices = SoundChoices::for_current(&cur);
+        let label = choices
+            .selected_label()
+            .unwrap_or_else(|| SharedString::from(cur.clone()));
+        let options = choices.rows("snd");
+        let stems = std::rc::Rc::new(choices.stems);
         let items = radio_items(
             options,
-            leak_str(&cur),
+            choices.selected.unwrap_or(usize::MAX),
             RadioMark::Check,
-            move |app, name: &'static str| {
+            move |app, row: usize| {
+                let Some(name) = stems.get(row).cloned() else {
+                    return;
+                };
                 backend.update(app, |b, bcx| {
-                    b.default_alert_sound = name.to_string();
+                    b.set_alert_sound(name.clone());
                     bcx.notify();
                 });
                 view.update(app, |_, cx| cx.notify());
-                crate::media::sound::play(name);
+                crate::media::sound::play(&name);
             },
         );
         MoonDropdown::new("alerts-sound")
-            .label(cur)
+            .label(label)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
@@ -434,11 +435,4 @@ impl AlertsPanel {
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
-}
-
-/// Returns the static sound name matching `cur`, as required by `radio_items`' copied selection.
-fn leak_str(cur: &str) -> &'static str {
-    crate::media::sound::names()
-        .find(|n| *n == cur)
-        .unwrap_or("ding1")
 }

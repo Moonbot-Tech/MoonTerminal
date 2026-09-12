@@ -17,7 +17,9 @@ use rust_i18n::t;
 use super::CoreStatusView;
 use crate::Backend;
 use crate::design;
-use crate::panels::common::{RadioMark, popup_close_button, popup_title, radio_items};
+use crate::panels::common::{
+    RadioMark, SoundChoices, popup_close_button, popup_title, radio_items,
+};
 use moon_core::config::layout::{WarnAxesCfg, WarnParams};
 
 // Design-reference column widths, at UI scale 1.0 and Font-slider delta 0, so every control lines
@@ -654,32 +656,35 @@ impl CoreStatusView {
         set_sound: fn(&mut WarnParams, Option<String>),
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        // Match the stored name to a `'static` stem so the dropdown value stays `Copy`.
-        let cur: Option<&'static str> = sound
-            .as_deref()
-            .and_then(|s| crate::media::sound::names().find(|n| *n == s));
-        let label = cur.map_or_else(
+        // Row `None` is "no sound"; the catalog rows are addressed by index — `radio_items`
+        // needs a `Copy` value. A stored name no file answers to is listed and marked rather
+        // than dropped; see `SoundChoices`.
+        let current = sound.unwrap_or_default();
+        let choices = SoundChoices::for_current(&current);
+        let cur: Option<usize> = choices.selected;
+        let label = choices.selected_label().map_or_else(
             || t!("core_status.warn_cfg.sound_none").to_string(),
-            nice_sound,
+            |label| label.to_string(),
         );
         let backend = self.backend.clone();
         let options = std::iter::once((
-            None::<&'static str>,
+            None::<usize>,
             SharedString::from(format!("{id}-none")),
             SharedString::from(t!("core_status.warn_cfg.sound_none").to_string()),
         ))
-        .chain(crate::media::sound::names().map(|stem| {
-            (
-                Some(stem),
-                SharedString::from(format!("{id}-{stem}")),
-                SharedString::from(nice_sound(stem)),
-            )
-        }));
+        .chain(
+            choices
+                .rows(id)
+                .into_iter()
+                .map(|(i, key, label)| (Some(i), key, label)),
+        );
+        let stems = std::rc::Rc::new(choices.stems);
         let items = radio_items(options, cur, RadioMark::Check, move |app, value| {
             let backend = backend.clone();
+            let name = value.and_then(|i| stems.get(i).cloned());
             backend.update(app, |b, cx| {
                 let mut pr = b.warn_params();
-                set_sound(&mut pr, value.map(String::from));
+                set_sound(&mut pr, name);
                 b.set_warn_params(pr);
                 b.mark_backend_dirty(cx);
             });
@@ -706,7 +711,7 @@ impl CoreStatusView {
             // can neither outgrow the row it sits in nor leave a gap under it.
             .child(crate::panels::common::sound_preview_button(
                 SharedString::from(format!("cs-warn-{id}-play")),
-                cur,
+                cur.map(|_| current),
                 px(m.ctrl_h),
                 p,
                 cx,
@@ -786,19 +791,6 @@ fn caption_for(cap: &str, unit: Unit) -> String {
         Unit::Day => format!("{cap} ({})", t!("core_status.warn_cfg.u.day")),
         _ => cap.to_string(),
     }
-}
-
-/// A human sound name from an embedded stem (`yes_mast` → `Yes Mast`).
-fn nice_sound(stem: &str) -> String {
-    stem.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            chars.next().map_or_else(String::new, |first| {
-                first.to_uppercase().collect::<String>() + chars.as_str()
-            })
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// The enable checkbox: reflects `WarnAxesCfg` and writes the flipped set back to the backend.

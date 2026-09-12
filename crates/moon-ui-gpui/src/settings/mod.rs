@@ -22,6 +22,7 @@ mod lines;
 mod render;
 mod security;
 mod share;
+mod sound_folder;
 mod storage;
 mod telegram;
 mod trade_sounds;
@@ -47,7 +48,8 @@ use moon_core::session::CoreId;
 
 use badges::BadgesEd;
 use common::{
-    collapse_block, color_row, draft_color, draft_slider, section, separator, slider_row,
+    collapse_block, color_row, draft_color, draft_slider, open_folder, section, separator,
+    slider_row,
 };
 use connections::{ConnEntry, ConnRow};
 use interface::Iface;

@@ -254,15 +254,24 @@ fn settings_values_and_connections_repin_the_mono_family() {
     );
     let settings = read_src("settings/render.rs");
     let render = render_root(&settings, "impl Render for SettingsView");
-    let connections = chain_between(
-        &render,
-        "if self.active == Tab::Connections {",
-        "} else {",
-        "Settings Connections body",
+    // The bounded branch hosts two tabs; only Connections holds a data table that must stay mono,
+    // so the pin is gated on it rather than applied to the branch.
+    let bounded = chain_between(&render, "if bounded {", "} else {", "Settings bounded body");
+    let gate = ".when(self.active == Tab::Connections, |el| {";
+    let (before_gate, gated) = bounded
+        .split_once(gate)
+        .expect("Settings bounded body: the mono pin must be gated on Connections");
+    let gated = gated
+        .split_once("})")
+        .expect("Settings bounded body: the Connections gate must close")
+        .0;
+    assert!(
+        gated.contains(".font_family(design::mono())"),
+        "Settings Connections must pin mono at its branch because its table inherits the Settings root otherwise"
     );
     assert!(
-        connections.contains(".font_family(design::mono())"),
-        "Settings Connections must pin mono at its branch because its table inherits the Settings root otherwise"
+        !before_gate.contains(".font_family(design::mono())"),
+        "the mono pin belongs inside the Connections gate: Trade sounds shares the branch and sets its own faces per element"
     );
 
     let security = read_src("settings/security.rs");

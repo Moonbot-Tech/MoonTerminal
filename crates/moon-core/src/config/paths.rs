@@ -559,6 +559,13 @@ pub fn tab_badges_path() -> PathBuf {
     cfg_dir().join("tab_badges.json")
 }
 
+/// The user's own notification sounds, as loose `.wav` files. Not created here — an absent folder
+/// is the common case and means "the embedded sounds only"; the player's scan treats it exactly
+/// like an empty one.
+pub fn sounds_dir() -> PathBuf {
+    data_dir().join("sounds")
+}
+
 /// Retained per-core update-queue history, in a small portable JSON file.
 pub fn core_updates_path() -> PathBuf {
     cfg_dir().join("core_updates.json")

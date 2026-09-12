@@ -454,11 +454,79 @@ pub(super) enum FieldControl {
 
 pub(super) fn field_control(f: &SchemaField) -> FieldControl {
     match f.ui {
+        // The sound field is a dropdown whatever widget the core declares for it: the terminal
+        // has a list for it even when the core sends a bare text field.
+        _ if f.name == SOUND_KIND_FIELD => FieldControl::Picklist,
         SchemaFieldUi::Checkbox => FieldControl::Checkbox,
         SchemaFieldUi::Color => FieldControl::Color,
-        SchemaFieldUi::Combo if !f.picklist.is_empty() => FieldControl::Picklist,
+        SchemaFieldUi::Combo if has_picklist(f) => FieldControl::Picklist,
         _ => FieldControl::FreeText,
     }
+}
+
+/// The strategy field that names a sound. The core sends its own list for it — Moonbot's sounds
+/// folder as the CORE sees it, `NONE` included (measured 2026-09-12: 18 names + `NONE`) — and the
+/// terminal adds every sound of its own that list lacks, so a file dropped into the terminal's
+/// folder is selectable here, and a name the core's Moonbot knows but this terminal does not is
+/// still shown: picking it plays the default and raises the toast that names the file to add.
+const SOUND_KIND_FIELD: &str = "SoundKind";
+
+/// Moonbot's spelling of "no sound" in that field.
+const SOUND_NONE: &str = "NONE";
+
+/// Whether a combo field draws as a dropdown: the core sent a list. (The sound field is decided
+/// before this is consulted.)
+fn has_picklist(f: &SchemaField) -> bool {
+    !f.picklist.is_empty()
+}
+
+/// The rows a picklist field offers. For every field but the sound one, the core's own list. For
+/// the sound field: the core's list (or `NONE` alone when it sent none), then every sound of the
+/// terminal's that list lacks, then the stored value when nothing answers to it — so the dropdown
+/// shows what the strategy holds instead of blanking it, and the next click cannot silently
+/// replace a name the user gave in Moonbot. Rows are matched by stem (see [`picklist_row_is`]),
+/// so the core's `BABYTOY` and the terminal's embedded `babytoy` are one row.
+pub(super) fn effective_picklist(f: &SchemaField, value: &str) -> Vec<String> {
+    if f.name != SOUND_KIND_FIELD {
+        return f.picklist.clone();
+    }
+    let mut rows = if f.picklist.is_empty() {
+        vec![SOUND_NONE.to_string()]
+    } else {
+        f.picklist.clone()
+    };
+    if !rows.iter().any(|row| picklist_row_is(f, row, SOUND_NONE)) {
+        rows.insert(0, SOUND_NONE.to_string());
+    }
+    for stem in crate::media::sound::stems() {
+        // A file called `none.wav` would draw a second row answering to Moonbot's reserved word;
+        // the word wins, the file stays reachable from every other picker.
+        if stem.eq_ignore_ascii_case(SOUND_NONE)
+            || rows.iter().any(|row| picklist_row_is(f, row, &stem))
+        {
+            continue;
+        }
+        rows.push(crate::media::sound::label_of(&stem).unwrap_or(stem));
+    }
+    let value = value.trim();
+    if !value.is_empty() && !rows.iter().any(|row| picklist_row_is(f, row, value)) {
+        rows.push(value.to_string());
+    }
+    rows
+}
+
+/// Whether a picklist row IS the stored value. Exact for a core-supplied list; for the sound
+/// field, by stem — `BABYTOY`, `babytoy` and `BABYTOY.wav` are one sound, in the spellings
+/// Moonbot itself stores, and the row must light up for all of them.
+pub(super) fn picklist_row_is(f: &SchemaField, row: &str, value: &str) -> bool {
+    if f.name != SOUND_KIND_FIELD {
+        return row == value;
+    }
+    let stem = |s: &str| {
+        let low = s.trim().to_ascii_lowercase();
+        low.strip_suffix(".wav").unwrap_or(&low).to_string()
+    };
+    stem(row) == stem(value)
 }
 
 /// Whether the text a field currently shows is one the core would refuse to store.

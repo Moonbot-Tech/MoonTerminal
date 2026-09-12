@@ -434,6 +434,7 @@ pub static CORE_FIELDS: &[CoreField] = core_fields! {
         book_orders_opacity,
         book_orders_width,
         play_signal_sound,
+        signal_sound,
         confirm_close,
         hide_demo_button,
         auto_show_on_signal,
