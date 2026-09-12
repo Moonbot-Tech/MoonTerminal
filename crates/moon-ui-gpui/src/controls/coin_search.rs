@@ -420,13 +420,15 @@ pub(crate) fn suggest_volatile(
     // ranking would multiply every market of every provider by its core count — thousands of cloned
     // market names on a many-core config — to produce the same handful of rows.
     let mut heads: Vec<Mover> = Vec::new();
-    for (slot, (provider, members)) in consumers.iter().enumerate() {
+    for (slot, (provider, _members)) in consumers.iter().enumerate() {
         // The rate depends on the QUOTE, and one exchange lists only a handful of them, while this
         // loop walks every market it has. Resolving per market would take the market-source lock
         // and a snapshot hundreds of times to answer the same few questions.
         let mut rates: HashMap<String, Option<f64>> = HashMap::new();
+        // The market half only: a mover is a property of the market, and the per-core rows
+        // `screener_rows` builds would repeat every market once per core sharing the exchange.
         let mut ranked: Vec<Mover> = ms
-            .screener_rows(*provider, members)
+            .screener_market_rows(*provider)
             .into_iter()
             .filter(|row| row.d_24h.is_finite() && row.d_24h > 0.0)
             .map(|row| {

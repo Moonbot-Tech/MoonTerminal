@@ -6,7 +6,6 @@ use gpui::*;
 use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTone};
 
 use moon_core::market::ScreenerRow;
-use moon_core::session::CoreId;
 use moon_core::util::fmt::{self, DeltaSign};
 
 use crate::panels::num;
@@ -41,7 +40,12 @@ pub(super) const COLS: &[ColDef] = &[
     ("lev", "Leverage", 104.0, false),
     ("step", "PriceStep", 92.0, true),
     ("orders", "Orders", 54.0, true),
-    ("session", "Session", 76.0, true),
+    // Two profit counters, named as MoonBot names them. `pnl` is the core's `TotalProfitB/L/S`
+    // (the last figure the exchange pushed for the instrument); `session_profit` is the counter
+    // the markets table's "Reset Session" clears. The first was titled "Session" and KEYED
+    // `session` until 2026-09-12; that key is retired (see `LEGACY_SESSION_KEY`), never reused.
+    ("pnl", "PnL", 76.0, true),
+    ("session_profit", "Session", 76.0, true),
     ("pos", "Pos", 66.0, true),
 ];
 
@@ -53,6 +57,82 @@ pub(super) fn column_title(key: &str) -> &'static str {
     COLS.iter()
         .find(|column| column.0 == key)
         .map_or("", |column| column.1)
+}
+
+/// The column key a layout saved before 2026-09-12 spelled as `session`.
+///
+/// That column printed the core's PnL counter under the title "Session". The key is RETIRED, not
+/// reassigned: the real Session column is `session_profit`, so a saved `session` can only ever mean
+/// the PnL column, and the rewrite below needs no guess about when the layout was written. Had the
+/// new column taken the old key, a layout saved afterwards with PnL hidden and Session shown would
+/// be indistinguishable from a pre-rename one, and every reopen would swap the two.
+const LEGACY_SESSION_KEY: &str = "session";
+const PNL_KEY: &str = "pnl";
+
+/// Map a saved column key to its current spelling.
+///
+/// Read-side only — the visible-column list, the sort preference and the width map all pass their
+/// keys through here on load, and the next write stores current keys.
+///
+/// Args:
+///     key: A column key as it was stored.
+///
+/// Returns:
+///     `pnl` for the retired `session` key; every other key unchanged.
+pub(super) fn current_key(key: &str) -> &str {
+    if key == LEGACY_SESSION_KEY {
+        PNL_KEY
+    } else {
+        key
+    }
+}
+
+/// Rewrite the retired `session` key of a saved column list to `pnl`.
+///
+/// Args:
+///     keys: The saved visible-column keys, in whatever order they were stored.
+///
+/// Returns:
+///     The same keys with the retired entry renamed.
+pub(super) fn migrate_legacy_keys(keys: Vec<String>) -> Vec<String> {
+    keys.into_iter()
+        .map(|key| current_key(&key).to_string())
+        .collect()
+}
+
+/// Rewrite a saved sort on the retired `session` key to `pnl`.
+///
+/// Args:
+///     preference: The saved sort, if any.
+///
+/// Returns:
+///     The preference with its column key brought current.
+pub(super) fn migrate_legacy_sort(
+    preference: Option<moon_core::config::TableSortPreference>,
+) -> Option<moon_core::config::TableSortPreference> {
+    preference.map(|mut p| {
+        p.column = current_key(&p.column).to_string();
+        p
+    })
+}
+
+/// Rewrite the retired `session` key of a saved width map to `pnl`.
+///
+/// A width saved for the old PnL column stays with the PnL column; a layout that somehow carries
+/// both keys keeps the current one, since that width was set after the rename.
+///
+/// Args:
+///     widths: Column widths as they were stored.
+///
+/// Returns:
+///     The map with the retired key renamed, or unchanged when it is absent.
+pub(super) fn migrate_legacy_widths(
+    mut widths: std::collections::HashMap<String, f32>,
+) -> std::collections::HashMap<String, f32> {
+    if let Some(width) = widths.remove(LEGACY_SESSION_KEY) {
+        widths.entry(PNL_KEY.to_string()).or_insert(width);
+    }
+    widths
 }
 
 /// Restore a visible Screener sort as `(key, descending)`.
@@ -82,14 +162,11 @@ pub(super) fn restore_sort(
         })
 }
 
-/// Screener row data plus the displayed core name and the core used to open the chart.
-///
-/// The chart core is the selected core when filtering by one, or the market-data provider when
-/// showing all cores.
+/// Screener row data plus the displayed name of its core, `row.core`, which is also the core a
+/// click opens the chart on.
 pub(super) struct Entry {
     pub(super) row: ScreenerRow,
     pub(super) core_name: SharedString,
-    pub(super) open_core: CoreId,
 }
 
 /// Parse the minimum volume from the DVol filter, such as `500`, `500k`, or `2m`.
@@ -173,7 +250,10 @@ fn num_key(e: &Entry, key: &str) -> f64 {
         "markd" => r.mark_delta_pct.unwrap_or(0.0),
         "step" => r.price_step,
         "orders" => f64::from(r.orders),
-        "session" => r.session_pnl,
+        "pnl" => r.core_pnl,
+        // An unstated counter sorts with the zeros, as `markd` does above: there is no order among
+        // "unknown", and pinning it to either end would push a whole older core to the top.
+        "session_profit" => r.session.unwrap_or(0.0),
         "pos" => r.pos_size,
         _ => 0.0,
     }
@@ -199,14 +279,19 @@ fn pct_cell(formatted: Option<(String, DeltaSign)>) -> MoonDataCell {
     }
 }
 
-/// Map a signed value to positive, danger, or muted tone for positive, negative, or zero.
-fn signed_tone(v: f64) -> MoonTone {
-    if v > 0.0 {
-        MoonTone::Positive
-    } else if v < 0.0 {
-        MoonTone::Danger
-    } else {
-        MoonTone::Muted
+/// Signed dollar cell for a profit counter, at the two fixed places a money column lines up on.
+///
+/// Sign and tone come from the ROUNDED value, through the shared rule: a loss of a tenth of a cent
+/// would otherwise print `-0.00$` in red, a minus wearing a zero. A value that is not a number
+/// prints the dash.
+fn money_cell(v: f64) -> MoonDataCell {
+    match fmt::signed_fixed(v, 2) {
+        Some((text, sign)) => MoonDataCell::text(format!("{text}$")).tone(sign.pick(
+            MoonTone::Positive,
+            MoonTone::Danger,
+            MoonTone::Muted,
+        )),
+        None => MoonDataCell::text("—").tone(MoonTone::Muted),
     }
 }
 
@@ -306,14 +391,14 @@ pub(super) fn screener_row(
                     MoonDataCell::text("0").tone(MoonTone::Muted)
                 }
             }
-            "session" => {
-                if r.session_pnl != 0.0 {
-                    MoonDataCell::text(format!("{:+.2}$", r.session_pnl))
-                        .tone(signed_tone(r.session_pnl))
-                } else {
-                    MoonDataCell::text("0$").tone(MoonTone::Muted)
-                }
-            }
+            "pnl" => money_cell(r.core_pnl),
+            // A dash, not a zero: `None` is "this core does not state the counter" (a build
+            // predating the protocol field, or a base currency the terminal cannot value), and a
+            // real zero arrives as `Some(0.0)` — that one prints, because the core states it.
+            "session_profit" => match r.session {
+                Some(v) => money_cell(v),
+                None => MoonDataCell::text("—").tone(MoonTone::Muted),
+            },
             "pos" => {
                 if r.pos_size != 0.0 {
                     MoonDataCell::text(num(r.pos_size))
@@ -329,7 +414,7 @@ pub(super) fn screener_row(
 
 /// Build a full-cell clickable market cell.
 ///
-/// Clicking asks the ChartTabs group owning `open_core` to open or focus the market in Main and
+/// Clicking asks the ChartTabs group owning `row.core` to open or focus the market in Main and
 /// select `Tab::Main`, without raising or focusing that group's OS window.
 fn market_cell(
     e: &Entry,
@@ -337,7 +422,7 @@ fn market_cell(
     p: MoonPalette,
 ) -> impl IntoElement + 'static {
     let market = e.row.market.clone();
-    let core = e.open_core;
+    let core = e.row.core;
     let view = view.clone();
     div()
         .id(SharedString::from(format!("scr-mkt-{core}-{market}")))

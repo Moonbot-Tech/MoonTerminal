@@ -3,9 +3,12 @@
 //! Market fields (volumes, deltas, funding, and price step) are read once from the provider
 //! core, using the same per-exchange deduplication as the rest of the market layer: the
 //! `BTCUSDT@Bybit` market is identical across all cores on that exchange. Account fields are
-//! specific to each core, so the account overlay uses exactly the supplied `members`: session
-//! profit and position are summed, while leverage is selected as their maximum. A core-filtered
-//! caller may supply only the selected core and omit the market-data provider.
+//! specific to each core, so a row is a market ON ONE CORE: [`MarketDataSource::screener_rows`]
+//! states the market half once and repeats it per supplied member with that member's own PnL,
+//! Session, position and leverage. Until 2026-09-12 those were SUMMED across the members into one
+//! row that carried the provider's name — a row reading "BinF1" while its Session was the whole
+//! exchange's, which is what a chart caption on BinF1 then disagreed with. A caller that needs the
+//! market half alone, such as the coin search, reads [`MarketDataSource::screener_market_rows`].
 //!
 //! Moonproto retained history computes the 1m/3m/5m volumes and short-term deltas. On the
 //! provider it covers ALL exchange markets (`subscribe_all_trades` -> `TradeStorageScope::All`
@@ -15,13 +18,18 @@ use moonproto::{MoonTime, state::DerivedDeltaSnapshot};
 
 use crate::session::CoreId;
 
-use super::source::{MarketDataSource, max_order_notional};
+use super::source::{MarketDataSource, max_order_notional, session_base_rate, session_to_usdt};
 
-/// Screener row combining provider market data with an overlay from the supplied members.
+/// One market on one core: the provider's market data with that core's account fields.
 #[derive(Clone, Debug, Default)]
 pub struct ScreenerRow {
-    /// Market-data provider core associated with this row.
+    /// Market-data provider core the market half was read from — the row's EXCHANGE identity:
+    /// `(provider, market)` is unique across a whole screener, while `market` alone repeats across
+    /// exchanges and `(core, market)` repeats across the cores sharing one.
     pub provider: CoreId,
+    /// The core whose account fields this row states — the one a chart opened from it belongs to.
+    /// Equal to `provider` on a market-only row from [`MarketDataSource::screener_market_rows`].
+    pub core: CoreId,
     /// Canonical market name from `MarketHandle::name()` (exchange `bn_market_name`).
     /// `handles_by_name`, subscriptions, and searches use this key. The Moonbot display name
     /// (`market_name`) cannot open a chart and would produce an empty chart.
@@ -70,15 +78,28 @@ pub struct ScreenerRow {
     pub price_step: f64,
     /// Maximum market leverage; zero means spot or unknown.
     pub max_leverage: i32,
-    /// Active account leverage, maximized across supplied members; zero means unset.
+    /// Active account leverage on [`Self::core`]; zero means unset.
     pub leverage_x: i32,
-    /// Whether margin is isolated on the core supplying active leverage; `None` if leverage is unset.
+    /// Whether margin is isolated on [`Self::core`]; `None` if leverage is unset.
     pub isolated: Option<bool>,
-    /// Per-coin session profit (b+l+s), summed across supplied members.
-    pub session_pnl: f64,
-    /// Aggregate position across supplied members, denominated in the coin.
+    /// The core's own per-coin profit counter (`b + l + s`), which MoonBot prints as `PnL`.
+    ///
+    /// NOT the Session counter — that one is [`Self::session`]. Zero on part of the venues even
+    /// where MoonBot shows an amount, so a zero here is not "traded to break even". Stated RAW, as
+    /// the chart's `PnL` caption prints it: on a coin-margined venue the exchange states it in the
+    /// settlement coin, and neither surface converts it. Until 2026-09-12 this column was titled
+    /// "Session", which is how it came to disagree with the chart caption of that name.
+    pub core_pnl: f64,
+    /// The Session counter MoonBot's markets table resets, in USDT through [`session_to_usdt`] —
+    /// the rule the chart caption reads, so the two print one number for one core.
+    ///
+    /// `None` when the core cannot state it: a build predating the protocol field, a base currency
+    /// the terminal cannot value in USDT, or no balance row for this market on this core. A real
+    /// zero is `Some(0.0)`.
+    pub session: Option<f64>,
+    /// Open position on [`Self::core`], denominated in the coin.
     pub pos_size: f64,
-    /// Open per-coin orders summed across supplied members. The UI overlay fills this from
+    /// Open orders for this market on [`Self::core`]. The UI overlay fills this from
     /// `CoreData.orders` because the market layer does not see orders.
     pub orders: u32,
 }
@@ -103,24 +124,93 @@ impl ScreenerRow {
 }
 
 impl MarketDataSource {
-    /// Builds screener rows for a group of cores on one exchange.
+    /// Builds one screener row per market PER MEMBER core of a group on one exchange.
     ///
     /// `provider` is the group's market-data provider core (see
-    /// [`MarketDataSource::provider_of`]); `members` is the exact set of cores whose account fields
-    /// contribute to the overlay. In core-filtered mode it may exclude `provider`. The function
-    /// returns an empty result if the provider has no client or snapshot yet.
+    /// [`MarketDataSource::provider_of`]); `members` are the cores whose account fields the rows
+    /// state, one row each per market. In core-filtered mode it may exclude `provider`. A member
+    /// whose snapshot lacks a market — or has no snapshot at all yet — still gets every market's
+    /// row, with account fields at their defaults: the market exists on the exchange, this core
+    /// just states nothing for it, and a Screener filtered to a core still connecting shows the
+    /// exchange rather than an unexplained blank. Empty only when the provider has no snapshot.
+    ///
+    /// Args:
+    ///     provider: The group's market-data provider core.
+    ///     members: The cores to state a row for, in the order the rows come out.
+    ///
+    /// Returns:
+    ///     Rows grouped by member, each member's in the provider's market order.
     pub fn screener_rows(&self, provider: CoreId, members: &[CoreId]) -> Vec<ScreenerRow> {
+        let market_rows = self.screener_market_rows(provider);
+        if market_rows.is_empty() {
+            return market_rows;
+        }
+        // Account snapshots come from exactly the supplied members; the provider is not implicit.
+        // Each carries its Session base rate, resolved ONCE per member: the rate is a property of
+        // the account, and the loop below asks for it on every market of the exchange.
+        let member_snaps: Vec<_> = members
+            .iter()
+            .map(|&core| {
+                let snap = self
+                    .core_client(core)
+                    .and_then(|client| client.snapshot_versioned())
+                    .map(|snap| {
+                        let rate = session_base_rate(&snap);
+                        (snap, rate)
+                    });
+                (core, snap)
+            })
+            .collect();
+        let mut rows = Vec::with_capacity(market_rows.len() * member_snaps.len());
+        for (core, msnap) in &member_snaps {
+            let markets = msnap.as_ref().map(|(snap, _)| snap.markets());
+            for market_row in &market_rows {
+                let mut row = market_row.clone();
+                row.core = *core;
+                if let Some((mh, rate)) = markets
+                    .and_then(|markets| markets.get(&row.market))
+                    .zip(msnap.as_ref().map(|(_, rate)| *rate))
+                {
+                    // The Session counter is read inside the same lock as the balance fields
+                    // rather than through `MarketHandle::session_profit`, which would take it a
+                    // second time per market per member. A core without a balance row for this
+                    // market is not a core without a counter: the sparse snapshot states zero for
+                    // every market it omits, so `Some(0.0)` lands here.
+                    let session = mh.with(|m| {
+                        row.core_pnl = m.total_profit();
+                        row.pos_size = m.pos_size;
+                        if m.leverage_x != 0 {
+                            row.leverage_x = m.leverage_x;
+                            row.isolated = Some(m.position_type.is_isolated());
+                        }
+                        m.session_profit
+                    });
+                    row.session = session_to_usdt(session, rate);
+                }
+                rows.push(row);
+            }
+        }
+        rows
+    }
+
+    /// Builds the market half of the screener: one row per market of `provider`, no account fields.
+    ///
+    /// What every core on the exchange shares — volumes, deltas, funding, caps — read once from the
+    /// provider. `core` is the provider and the account fields stay at their defaults; a
+    /// caller that wants them per core goes through [`Self::screener_rows`], which builds on this.
+    ///
+    /// Args:
+    ///     provider: A market-data provider core (see [`MarketDataSource::provider_of`]).
+    ///
+    /// Returns:
+    ///     Rows in the provider's market order; empty when it has no client or snapshot yet.
+    pub fn screener_market_rows(&self, provider: CoreId) -> Vec<ScreenerRow> {
         let Some(client) = self.core_client(provider) else {
             return Vec::new();
         };
         let Some(snap) = client.snapshot_versioned() else {
             return Vec::new();
         };
-        // Account snapshots come from exactly the supplied members; the provider is not implicit.
-        let member_snaps: Vec<_> = members
-            .iter()
-            .filter_map(|&core| self.core_client(core)?.snapshot_versioned())
-            .collect();
         // Closed 5-minute candles are timestamped at the END of their period, so the cutoff
         // accurately limits the high window to the last hour even for markets with no recent trades.
         let hour_cutoff_ms = MoonTime::now().unix_millis() - 3_600_000;
@@ -131,6 +221,7 @@ impl MarketDataSource {
             let name = handle.name();
             let mut row = handle.with(|m| ScreenerRow {
                 provider,
+                core: provider,
                 market: name.to_string(),
                 coin: m.market_currency.clone(),
                 vol_24h: m.volume,
@@ -170,19 +261,6 @@ impl MarketDataSource {
                             row.high_1h = row.high_1h.max(f64::from(c.high()));
                         }
                     })
-                });
-            }
-            for msnap in &member_snaps {
-                let Some(mh) = msnap.markets().get(name) else {
-                    continue;
-                };
-                mh.with(|m| {
-                    row.session_pnl += m.total_profit_b + m.total_profit_l + m.total_profit_s;
-                    row.pos_size += m.pos_size;
-                    if m.leverage_x != 0 && m.leverage_x > row.leverage_x {
-                        row.leverage_x = m.leverage_x;
-                        row.isolated = Some(m.position_type.is_isolated());
-                    }
                 });
             }
             rows.push(row);
