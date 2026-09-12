@@ -8,7 +8,10 @@ use super::{TransportVersion, key_is_readable, seeded_transport, transport_from_
 #[test]
 fn blank_keys_are_readable_but_plain_garbage_is_not() {
     for blank in ["", "   ", "\t\n"] {
-        assert!(key_is_readable(blank), "{blank:?} is a blank first-run value");
+        assert!(
+            key_is_readable(blank),
+            "{blank:?} is a blank first-run value"
+        );
     }
     assert!(!key_is_readable("abc"));
 }
