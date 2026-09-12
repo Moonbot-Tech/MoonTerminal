@@ -4,7 +4,46 @@ use moon_core::feed::ExchangeId;
 use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 
-use super::{NodeData, RowCounts, drop_dest, id_exchange};
+use super::{
+    FolderFill, NodeData, RowCounts, ToggleTarget, drop_dest, heading_chrome, id_exchange,
+};
+
+/// Removing the folder icon or trusting stale expansion on an empty folder hides its identity
+/// or advertises nonexistent children; both locally-created and core-confirmed folders count.
+#[test]
+fn empty_folders_keep_an_icon_without_a_disclosure() {
+    let target = ToggleTarget::Folder(7, vec!["desk".into()]);
+    for fill in [FolderFill::EmptyLocal, FolderFill::EmptyOnCore] {
+        for expanded in [false, true] {
+            assert_eq!(
+                heading_chrome(&target, fill, expanded),
+                (Some("icons/folder-closed.svg"), None)
+            );
+        }
+    }
+}
+
+/// Freezing the icon pose would misidentify an open folder; marking every heading as a folder
+/// would also change core and Deleted chrome outside the folder-row requirement.
+#[test]
+fn populated_folder_icons_follow_their_disclosure_pose() {
+    let folder = ToggleTarget::Folder(7, vec!["desk".into()]);
+    for (expanded, path) in [
+        (false, "icons/folder-closed.svg"),
+        (true, "icons/folder-open.svg"),
+    ] {
+        assert_eq!(
+            heading_chrome(&folder, FolderFill::Populated, expanded),
+            (Some(path), Some(expanded))
+        );
+        for target in [ToggleTarget::Core(7), ToggleTarget::Deleted(7)] {
+            assert_eq!(
+                heading_chrome(&target, FolderFill::Populated, expanded),
+                (None, Some(expanded))
+            );
+        }
+    }
+}
 
 /// Compile-time source used to ensure the checkbox producer retains its action guard.
 const SRC: &str = include_str!("../moon.rs");

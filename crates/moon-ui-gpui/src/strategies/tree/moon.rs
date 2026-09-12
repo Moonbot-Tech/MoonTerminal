@@ -1196,9 +1196,7 @@ fn render_row(
                     true => RowCounts::subtree(*active, *total, 0, *engine),
                     false => RowCounts::empty_folder(fill.empty_tip()),
                 },
-                // An empty folder reads as quieter than one with strategies in it, which is the
-                // whole of what its emptiness looks like — nothing is hidden and no glyph is
-                // invented for it.
+                // Empty folder captions remain quieter than populated ones beside their icon.
                 match fill.has_contents() {
                     true => p.text_soft,
                     false => p.text_muted,
@@ -1487,6 +1485,23 @@ enum ToggleTarget {
     Deleted(CoreId),
 }
 
+/// Resolve the heading's bundled MoonUI icon and passive caret pose.
+///
+/// Empty folders keep their identity even if retained expansion state says open, but never
+/// advertise children. Core and Deleted headings retain their existing disclosure-only chrome.
+fn heading_chrome(
+    target: &ToggleTarget,
+    fill: FolderFill,
+    expanded: bool,
+) -> (Option<&'static str>, Option<bool>) {
+    let caret = fill.has_contents().then_some(expanded);
+    let icon = matches!(target, ToggleTarget::Folder(..)).then_some(match caret {
+        Some(true) => "icons/folder-open.svg",
+        _ => "icons/folder-closed.svg",
+    });
+    (icon, caret)
+}
+
 impl ToggleTarget {
     /// Return the core and folder segments this row acts on, or `None` for Deleted.
     ///
@@ -1587,22 +1602,31 @@ fn core_folder_row(
         .when(!selected, |s| {
             s.hover(move |s| s.bg(moon_alpha(p.panel, 0.74)))
         })
-        // Passive: the whole row carries the click that expands or collapses this node, so the
-        // marker stays hitbox-free and cannot swallow it.
-        // The unscaled base rides the pane's local text step so the caret stays proportional to
-        // the row it marks; `MoonDisclosure` still applies the UI scale on top of it internally,
-        // so the value passed here must stay unscaled.
-        .child(match fill.has_contents() {
-            true => MoonDisclosure::glyph(expanded)
-                .size(design::DISCLOSURE_GLYPH_MARKER + step)
-                .box_size(design::DISCLOSURE_BOX + step)
-                .into_any_element(),
-            // Reserved, not omitted: the caption of an empty folder belongs on the same column as
-            // every sibling's, and a caret that opens onto nothing is a control that lies.
-            false => div()
+        .child({
+            let (icon, caret) = heading_chrome(&target, fill, expanded);
+            let edge = design::ui_px(app, design::DISCLOSURE_BOX + step);
+            // Reuse the disclosure slot for the bundled MoonUI folder icon. Its passive caret
+            // occupies preceding tree indentation, so checkbox and caption widths do not move.
+            div()
+                .relative()
                 .flex_none()
-                .w(design::ui_px(app, design::DISCLOSURE_BOX + step))
-                .into_any_element(),
+                .size(edge)
+                .when_some(icon, |slot, path| {
+                    slot.child(svg().path(path).size(edge).text_color(rgb(color)))
+                })
+                .when_some(caret, |slot, expanded| {
+                    slot.child(
+                        div()
+                            .absolute()
+                            .left(if icon.is_some() { -edge } else { px(0.0) })
+                            .top_0()
+                            .child(
+                                MoonDisclosure::glyph(expanded)
+                                    .size(design::DISCLOSURE_GLYPH_MARKER + step)
+                                    .box_size(design::DISCLOSURE_BOX + step),
+                            ),
+                    )
+                })
         })
         .child(match check_target.filter(|_| fill.has_contents()) {
             Some((core, path, checked)) => {
