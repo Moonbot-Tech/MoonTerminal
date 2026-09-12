@@ -14,6 +14,7 @@
 //! only created on one.
 
 mod cpu_watch;
+mod resource_watch;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -58,6 +59,9 @@ struct Metrics {
     ///
     /// It lives here because this is the ONE place the process polls itself.
     watch: cpu_watch::SpikeDetector,
+    /// Reports resource growth — memory, handles, GUI objects — the same way; see
+    /// [`resource_watch`].
+    resources: resource_watch::ResourceWatch,
 }
 
 impl Metrics {
@@ -74,6 +78,7 @@ impl Metrics {
             gpu: GpuProcessSampler::new(pid_as_u32(pid)),
             mem_hist: VecDeque::new(),
             watch: cpu_watch::SpikeDetector::new(logical_cpus),
+            resources: resource_watch::ResourceWatch::new(),
         }
     }
 
@@ -89,14 +94,17 @@ impl Metrics {
             .refresh_processes(ProcessesToUpdate::Some(&[self.pid]), true);
 
         let cpu_system = self.sys.global_cpu_usage();
-        let (cpu_process, mem_mb) = match self.sys.process(self.pid) {
+        // `None` when sysinfo did not see the process this tick. The status bar shows zeros for
+        // that second, as it always has; the resource watch must NOT see a zero, which it would
+        // read as a release of every megabyte.
+        let seen = self.sys.process(self.pid).map(|p| {
             // `cpu_usage()` uses 100% per core, so divide by the core count to match Task Manager.
-            Some(p) => (
+            (
                 p.cpu_usage() / self.ncpu,
                 p.memory() as f32 / (1024.0 * 1024.0),
-            ),
-            None => (0.0, 0.0),
-        };
+            )
+        });
+        let (cpu_process, mem_mb) = seen.unwrap_or((0.0, 0.0));
 
         self.mem_hist.push_back((now, mem_mb));
         while self
@@ -122,11 +130,20 @@ impl Metrics {
         };
         // The detector counts its samples AS SECONDS, which is exactly why this sits on the
         // refresh path and why the worker's sleep is the only thing pacing it.
-        if let Some(event) = self
-            .watch
-            .observe(crate::util::now_unix_ms_i64(), &self.snap)
-        {
+        let now_ms = crate::util::now_unix_ms_i64();
+        if let Some(event) = self.watch.observe(now_ms, &self.snap) {
             cpu_watch::report(event);
+        }
+        // Two syscalls on Windows, nothing elsewhere; the memory figure is the one just read.
+        let (handles, user_objects, gdi_objects) = resource_watch::platform_counts();
+        let sample = resource_watch::ResourceSample {
+            mem_mb: seen.map(|(_, mem)| mem),
+            handles,
+            user_objects,
+            gdi_objects,
+        };
+        if let Some(event) = self.resources.observe(now_ms, sample) {
+            resource_watch::report(event);
         }
         self.snap
     }

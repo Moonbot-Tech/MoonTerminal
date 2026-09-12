@@ -422,6 +422,21 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     // and leaves `panic.log` empty. Install a top-level SEH filter so these crashes also reach
     // `panic.log` with their code, address, and backtrace. Do this first, before creating windows.
     crash::install_native_handler();
+    // The report names the window message in flight only if the ring was recording; the hooks
+    // bind to THIS thread, which is why they go in here, before GPUI's message loop exists. A
+    // failed hook costs the ring, not the run.
+    #[cfg(windows)]
+    {
+        if let Err(e) = crate::diagnostics::msg_ring::install() {
+            log::warn!("window-message ring not installed: {e}");
+        }
+        // Old dumps go now, not in the handler: the folder is settled here and a crash must not
+        // spend its last moments on housekeeping.
+        crash::minidump::prune(
+            &moon_core::config::paths::logs_dir_no_create(),
+            crash::minidump::KEEP,
+        );
+    }
 
     // Panic hook: a GUI application has no console, so panic messages written to stderr disappear
     // (and with panic=abort this looks like native crash 0xc0000409 in ucrtbase). Write the panic
@@ -643,6 +658,8 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
         // Control-click stops opening context menus on a Mac in exchange, which is the trade the
         // reference makes too.
         gpui::set_macos_control_click_as_secondary(false);
+        // Inert without `MOON_CRASH_PROBE` in the environment.
+        crash::arm_probe_if_requested(cx);
         cx.text_system()
             .add_fonts(embedded_fonts())
             .expect("failed to add embedded Moonbot fonts");

@@ -118,6 +118,8 @@ windows = { version = "0.61", features = [
     # GlobalAlloc/GlobalLock/GlobalUnlock - the GMEM_MOVEABLE blocks the clipboard takes ownership of.
     "Win32_System_Memory",
     "Win32_System_LibraryLoader",
+    # K32EnumProcessModules/K32GetProcessMemoryInfo for the crash report (diagnostics/crash/context.rs).
+    "Win32_System_ProcessStatus",
     "Win32_Storage_FileSystem",
     "Win32_System_Threading",
     # The CF_DIB clipboard format id.
@@ -131,6 +133,12 @@ windows = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 raw-window-handle = "0.6"
+
+# The POSIX crash handler (diagnostics/crash/posix.rs): sigaction/dladdr/write, and the frame
+# walk `backtrace::trace_unsynchronized` — std's own backtrace crate, already in the tree.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+backtrace = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wgpu = { git = "https://github.com/zed-industries/wgpu.git", rev = "357a0c56e0070480ad9daea5d2eaa83150b79e88" }
