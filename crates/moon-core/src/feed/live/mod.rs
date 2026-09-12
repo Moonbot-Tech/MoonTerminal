@@ -181,7 +181,7 @@ impl std::fmt::Display for NeverOperational {
 /// `run` failed before any client existed because the configured key could not be decoded.
 ///
 /// `feed::spawn` reads it to stop the backoff loop: no retry can succeed until the key is
-/// edited, and every edit path (Save, Reconnect) spawns a NEW thread
+/// edited, and both Save and Reconnect spawn a NEW thread
 /// (`session::lifecycle::respawn_session`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::feed) struct KeyUnreadable {
