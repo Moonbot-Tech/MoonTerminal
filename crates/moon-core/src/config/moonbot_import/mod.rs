@@ -15,6 +15,7 @@
 
 pub mod apply;
 pub mod plan;
+pub mod preview;
 pub mod reader;
 pub mod schema_v7;
 pub mod shortcut;

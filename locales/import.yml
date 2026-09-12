@@ -85,3 +85,300 @@ import.clipboard_empty:
   ru: "Буфер обмена пуст — сначала скопируй настройки в MoonBot."
   en: "Clipboard is empty — copy the settings in MoonBot first."
   es: "El portapapeles está vacío — copia primero los ajustes en MoonBot."
+
+import.preview.caption.ui_theme:
+  ru: "Тема UI"
+  en: "UI theme"
+  es: "Tema de la interfaz"
+import.preview.caption.split_parts:
+  ru: "Split Order X: число частей"
+  en: "Split Order X: part count"
+  es: "Split Order X: número de partes"
+import.preview.caption.chart_background:
+  ru: "Фон графика"
+  en: "Chart background"
+  es: "Fondo del gráfico"
+import.preview.caption.grid:
+  ru: "Сетка"
+  en: "Grid"
+  es: "Cuadrícula"
+import.preview.caption.crosshair:
+  ru: "Перекрестие"
+  en: "Crosshair"
+  es: "Cursor en cruz"
+import.preview.caption.neutral_labels:
+  ru: "Нейтральные подписи (оси/курсор)"
+  en: "Neutral labels (axes/cursor)"
+  es: "Etiquetas neutras (ejes/cursor)"
+import.preview.caption.candle_up:
+  ru: "Растущая свеча"
+  en: "Rising candle"
+  es: "Vela alcista"
+import.preview.caption.candle_down:
+  ru: "Падающая свеча"
+  en: "Falling candle"
+  es: "Vela bajista"
+import.preview.caption.candle_neutral:
+  ru: "Нейтральная свеча"
+  en: "Neutral candle"
+  es: "Vela neutra"
+import.preview.caption.book_bid:
+  ru: "Стакан bid"
+  en: "Order book bid"
+  es: "Libro de órdenes bid"
+import.preview.caption.book_ask:
+  ru: "Стакан ask"
+  en: "Order book ask"
+  es: "Libro de órdenes ask"
+import.preview.caption.buy_line:
+  ru: "Линия Buy"
+  en: "Buy line"
+  es: "Línea Buy"
+import.preview.caption.buy_pending_line:
+  ru: "Линия Buy (pending)"
+  en: "Buy line (pending)"
+  es: "Línea Buy (pendiente)"
+import.preview.caption.sell_line:
+  ru: "Линия Sell"
+  en: "Sell line"
+  es: "Línea Sell"
+import.preview.caption.buy_short_line:
+  ru: "Линия Buy (short)"
+  en: "Buy line (short)"
+  es: "Línea Buy (short)"
+import.preview.caption.sell_short_line:
+  ru: "Линия Sell (short)"
+  en: "Sell line (short)"
+  es: "Línea Sell (short)"
+import.preview.caption.trailing_line:
+  ru: "Линия Trailing"
+  en: "Trailing line"
+  es: "Línea Trailing"
+import.preview.caption.liquidation_line:
+  ru: "Линия Liquidation"
+  en: "Liquidation line"
+  es: "Línea de liquidación"
+import.preview.caption.order_sizes:
+  ru: "Размер ордера B1-B6"
+  en: "Order sizes B1-B6"
+  es: "Tamaños de orden B1-B6"
+import.preview.caption.order_size_selection:
+  ru: "Выбранный пресет размера"
+  en: "Selected size preset"
+  es: "Preajuste de tamaño seleccionado"
+import.preview.caption.fixed_sell_prices:
+  ru: "Fixed sell проценты (S1-S6)"
+  en: "Fixed sell percentages (S1-S6)"
+  es: "Porcentajes de venta fija (S1-S6)"
+import.preview.caption.fixed_sell_selection:
+  ru: "Выбранный fixed sell слот"
+  en: "Selected fixed sell slot"
+  es: "Ranura de venta fija seleccionada"
+import.preview.caption.markets_table:
+  ru: "MarketsTable (колонки)"
+  en: "MarketsTable (columns)"
+  es: "MarketsTable (columnas)"
+import.preview.caption.mouse_gestures:
+  ru: "Мышиные жесты"
+  en: "Mouse gestures"
+  es: "Gestos del ratón"
+import.preview.reason.no_action:
+  ru: "в Terminal нет такого действия (нет команды ядра)"
+  en: "Terminal has no such action (no core command)"
+  es: "Terminal no tiene esta acción (sin comando del núcleo)"
+import.preview.reason.no_book_level_color:
+  ru: "в Terminal нет отдельного цвета линий уровней стакана"
+  en: "Terminal has no separate color for order book level lines"
+  es: "Terminal no tiene un color separado para las líneas de niveles del libro"
+import.preview.reason.closed_order_opacity:
+  ru: "закрытые ордера в Terminal — прозрачностью, не цветом"
+  en: "Terminal displays closed orders using opacity, not color"
+  es: "Terminal muestra las órdenes cerradas con transparencia, no con color"
+import.preview.reason.no_style:
+  ru: "в Terminal нет эквивалентного стиля"
+  en: "Terminal has no equivalent style"
+  es: "Terminal no tiene un estilo equivalente"
+import.preview.reason.unmapped_color:
+  ru: "нет в таблице соответствия (не применяем)"
+  en: "Not in the mapping table (not applied)"
+  es: "No está en la tabla de correspondencias (no se aplica)"
+import.preview.reason.unmapped_section:
+  ru: "таблица соответствия для этой секции ещё не определена"
+  en: "The mapping table for this section is not defined yet"
+  es: "La tabla de correspondencias de esta sección aún no está definida"
+import.preview.reason.no_setting:
+  ru: "в Terminal нет эквивалентной настройки"
+  en: "Terminal has no equivalent setting"
+  es: "Terminal no tiene un ajuste equivalente"
+import.preview.reason.unmapped_columns:
+  ru: "смысл столбцов таблиц не сопоставлен — переносить рано"
+  en: "Table column meanings have not been mapped yet; columns are not transferred"
+  es: "Los significados de las columnas aún no se han relacionado; no se transfieren"
+import.preview.reason.gestures_unavailable:
+  ru: "недоступны в этой версии экспорта (появятся с блоком Interop)"
+  en: "Unavailable in this export version (requires the Interop block)"
+  es: "No disponibles en esta versión de exportación (requieren el bloque Interop)"
+import.preview.action.cancel_buy:
+  ru: "Cancel Buy"
+  en: "Cancel Buy"
+  es: "Cancel Buy"
+import.preview.action.panic_sell:
+  ru: "Panic Sell"
+  en: "Panic Sell"
+  es: "Panic Sell"
+import.preview.action.join_sells:
+  ru: "Join Sells"
+  en: "Join Sells"
+  es: "Join Sells"
+import.preview.action.switch_charts:
+  ru: "Switch Charts"
+  en: "Switch Charts"
+  es: "Switch Charts"
+import.preview.action.reload_book:
+  ru: "Reload Book"
+  en: "Reload Book"
+  es: "Reload Book"
+import.preview.action.new_long:
+  ru: "New Long"
+  en: "New Long"
+  es: "New Long"
+import.preview.action.new_short:
+  ru: "New Short"
+  en: "New Short"
+  es: "New Short"
+import.preview.action.split_order:
+  ru: "Split Order"
+  en: "Split Order"
+  es: "Split Order"
+import.preview.action.shift_buy_up:
+  ru: "Shift Buy Up"
+  en: "Shift Buy Up"
+  es: "Shift Buy Up"
+import.preview.action.shift_buy_down:
+  ru: "Shift Buy Down"
+  en: "Shift Buy Down"
+  es: "Shift Buy Down"
+import.preview.action.shift_sell_up:
+  ru: "Shift Sell Up"
+  en: "Shift Sell Up"
+  es: "Shift Sell Up"
+import.preview.action.shift_sell_down:
+  ru: "Shift Sell Down"
+  en: "Shift Sell Down"
+  es: "Shift Sell Down"
+import.preview.action.make_shot:
+  ru: "Make Shot"
+  en: "Make Shot"
+  es: "Make Shot"
+import.preview.action.make_shot_bot:
+  ru: "Make Shot Bot"
+  en: "Make Shot Bot"
+  es: "Make Shot Bot"
+import.preview.action.reload_chart:
+  ru: "Reload Chart"
+  en: "Reload Chart"
+  es: "Reload Chart"
+import.preview.action.scale_plus:
+  ru: "Scale +"
+  en: "Scale +"
+  es: "Scale +"
+import.preview.action.scale_minus:
+  ru: "Scale −"
+  en: "Scale −"
+  es: "Scale −"
+import.preview.action.sell_plus:
+  ru: "Sell +"
+  en: "Sell +"
+  es: "Sell +"
+import.preview.action.sell_minus:
+  ru: "Sell −"
+  en: "Sell −"
+  es: "Sell −"
+import.preview.action.spy_mode:
+  ru: "Spy Mode"
+  en: "Spy Mode"
+  es: "Spy Mode"
+import.preview.action.show_charts:
+  ru: "Show Charts"
+  en: "Show Charts"
+  es: "Show Charts"
+import.preview.action.split_order_x:
+  ru: "Split Order X"
+  en: "Split Order X"
+  es: "Split Order X"
+import.preview.action.switch_figure:
+  ru: "Switch Figure"
+  en: "Switch Figure"
+  es: "Switch Figure"
+import.preview.action.fit_sells:
+  ru: "Fit Sells"
+  en: "Fit Sells"
+  es: "Fit Sells"
+import.preview.action.panic_sell_one:
+  ru: "Panic Sell One"
+  en: "Panic Sell One"
+  es: "Panic Sell One"
+import.preview.action.cancel_all_buys:
+  ru: "Cancel All Buys"
+  en: "Cancel All Buys"
+  es: "Cancel All Buys"
+import.preview.action.broadcast:
+  ru: "Broadcast"
+  en: "Broadcast"
+  es: "Broadcast"
+import.preview.caption.order_size_slot:
+  ru: "Размер ордера %{n}"
+  en: "Order size %{n}"
+  es: "Tamaño de orden %{n}"
+import.preview.caption.fixed_sell_slot:
+  ru: "Fixed sell %{n}"
+  en: "Fixed sell %{n}"
+  es: "Venta fija %{n}"
+import.preview.value.light:
+  ru: "светлая"
+  en: "light"
+  es: "claro"
+import.preview.value.dark:
+  ru: "тёмная"
+  en: "dark"
+  es: "oscuro"
+import.preview.value.selected_group:
+  ru: "зависит от выбранной группы"
+  en: "depends on the selected group"
+  es: "depende del grupo seleccionado"
+import.preview.reason.unknown_key:
+  ru: "неизвестная клавиша (VK 0x%{vk})"
+  en: "unknown key (VK 0x%{vk})"
+  es: "tecla desconocida (VK 0x%{vk})"
+import.preview.reason.invalid_color:
+  ru: "значение «%{value}» не разобрано как цвет"
+  en: "value \"%{value}\" could not be parsed as a color"
+  es: "el valor «%{value}» no se pudo interpretar como color"
+import.preview.reason.color_alpha:
+  ru: "цвет несёт alpha 0x%{alpha}, у целевого поля её нет"
+  en: "color carries alpha 0x%{alpha}, which the target field does not support"
+  es: "el color contiene alpha 0x%{alpha}, que el campo de destino no admite"
+import.preview.warning.split_parts_clamped:
+  ru: "SplitParts = %{parts} больше максимума %{max} — перенесём %{value}"
+  en: "SplitParts = %{parts} exceeds the maximum %{max}; importing %{value}"
+  es: "SplitParts = %{parts} supera el máximo %{max}; se importará %{value}"
+import.preview.warning.hotkeys_unfilled:
+  ru: "Блок Hotkeys в буфере не заполнен — размеры, проценты и выбранные слоты не переносим"
+  en: "The clipboard Hotkeys block is unfilled; sizes, percentages and selected slots are not transferred"
+  es: "El bloque Hotkeys del portapapeles está vacío; no se transfieren tamaños, porcentajes ni ranuras seleccionadas"
+import.preview.warning.invalid_order_sizes:
+  ru: "OSize (F1-F6) = %{values} — есть не-число, ноль или отрицательное значение, размеры не переносим"
+  en: "OSize (F1-F6) = %{values} contains a nonfinite, zero or negative value; sizes are not transferred"
+  es: "OSize (F1-F6) = %{values} contiene un valor no finito, cero o negativo; no se transfieren los tamaños"
+import.preview.warning.order_size_selection:
+  ru: "bNum = %{value} вне диапазона 0..=5 — выбранный пресет не переносим"
+  en: "bNum = %{value} is outside 0..=5; the selected preset is not transferred"
+  es: "bNum = %{value} está fuera de 0..=5; no se transfiere el preajuste seleccionado"
+import.preview.warning.invalid_fixed_sell_prices:
+  ru: "SPrice (S1-S6) = %{values} — есть не-число или отрицательное значение, проценты не переносим"
+  en: "SPrice (S1-S6) = %{values} contains a nonfinite or negative value; percentages are not transferred"
+  es: "SPrice (S1-S6) = %{values} contiene un valor no finito o negativo; no se transfieren los porcentajes"
+import.preview.warning.fixed_sell_selection:
+  ru: "sbNum = %{value} вне диапазона 0..=5 — выбранный fixed sell слот не переносим"
+  en: "sbNum = %{value} is outside 0..=5; the selected fixed sell slot is not transferred"
+  es: "sbNum = %{value} está fuera de 0..=5; no se transfiere la ranura de venta fija seleccionada"

@@ -88,6 +88,7 @@ fn find<'a>(items: &'a [SettingChange], id: &str) -> Option<&'a SettingChange> {
     items.iter().find(|c| c.id == id)
 }
 
+/// Pins the mapping and typed refusal, catching a missing-action hotkey being offered.
 #[test]
 fn theme_mode_and_hotkeys_mapped() {
     let (h, t, o) = (
@@ -107,7 +108,7 @@ fn theme_mode_and_hotkeys_mapped() {
     // `same` set. "Hotkeys" group.
     let cb = find(&plan.hotkeys, "hotkey.cancel_buy").unwrap();
     assert_eq!(cb.value, PlannedValue::Keystroke("alt-z".into()));
-    assert_eq!(cb.current, "alt-z");
+    assert_eq!(cb.current, PreviewValue::Data("alt-z".into()));
     assert!(cb.same);
 
     // The fixture's CancelAllBuys is Ctrl+Delete, which is NOT Moonbot's own Alt+A default that
@@ -131,16 +132,15 @@ fn theme_mode_and_hotkeys_mapped() {
             .filter(|a| action_target(**a).is_some() && h.shortcuts.get(**a) == 0)
             .count();
     assert_eq!(plan.hotkeys_empty, expected_empty);
-    assert!(expected_empty > 0, "фикстура должна содержать пустые слоты");
+    assert!(expected_empty > 0, "the fixture must contain empty slots");
 
     // ReloadBook is assigned but has no action, so it enters unsupported_hotkeys with a reason.
-    assert!(
-        plan.unsupported_hotkeys
-            .iter()
-            .any(|u| u.name == "Reload Book" && u.reason.contains("нет такого действия"))
-    );
+    assert!(plan.unsupported_hotkeys.iter().any(|u| u.name
+        == PreviewCaption::Action(ShortcutAction::ReloadBook)
+        && u.reason == ImportReason::NoAction));
 }
 
+/// Pins color mapping and typed evidence, catching alpha loss and malformed colors being accepted.
 #[test]
 fn colors_mapped_per_theme_side() {
     let (h, t, o) = (
@@ -161,27 +161,35 @@ fn colors_mapped_per_theme_side() {
     assert!(find(&plan.chart, "theme.bg.light").unwrap().same);
 
     // CandleRed with alpha 0x80 goes to unsupported rather than being silently discarded.
-    assert!(
-        plan.unsupported
-            .iter()
-            .any(|u| u.name.starts_with("CandleRed") && u.reason.contains("alpha"))
-    );
+    assert!(plan.unsupported.iter().any(|u| u.name
+        == PreviewCaption::ColorField {
+            key: "CandleRed".into(),
+            light: false
+        }
+        && u.reason == ImportReason::ColorAlpha { alpha: 0x80 }));
     // An unknown key goes to unsupported.
-    assert!(
-        plan.unsupported
-            .iter()
-            .any(|u| u.name.starts_with("Unknown"))
-    );
+    assert!(plan.unsupported.iter().any(|u| u.name
+        == PreviewCaption::ColorField {
+            key: "Unknown".into(),
+            light: false
+        }));
     // An invalid color value goes to unsupported.
-    assert!(
-        plan.unsupported
-            .iter()
-            .any(|u| u.name.starts_with("BuyOrder") && u.reason.contains("не разобрано"))
-    );
+    assert!(plan.unsupported.iter().any(|u| u.name
+        == PreviewCaption::ColorField {
+            key: "BuyOrder".into(),
+            light: false
+        }
+        && u.reason
+            == ImportReason::InvalidColor {
+                value: "junk".into()
+            }));
     // The Charts section has no mapping table and goes entirely to unsupported.
-    assert!(plan.unsupported.iter().any(|u| u.name.contains("Charts")));
+    assert!(plan.unsupported.iter().any(
+        |u| matches!(&u.name, PreviewCaption::IniEntry { section, .. } if section == "Charts")
+    ));
 }
 
+/// Pins group import decisions and warnings, catching dropped range validation or whole-set refusal.
 #[test]
 fn core_items_and_range_checks() {
     let (h, t, o) = (
@@ -198,16 +206,19 @@ fn core_items_and_range_checks() {
         sizes.value,
         PlannedValue::OrderSizes([111.0, 222.0, 333.0, 444.0, 555.0, 666.0])
     );
-    assert_eq!(sizes.new, "111, 222, 333, 444, 555, 666");
+    assert_eq!(
+        sizes.new,
+        PreviewValue::Data("111, 222, 333, 444, 555, 666".into())
+    );
     assert!(
         !plan
             .warnings
             .iter()
-            .any(|warning| warning.contains("OSize"))
+            .any(|warning| matches!(warning, ImportWarning::InvalidOrderSizes { .. }))
     );
     let sel = find(&plan.group_items, "group.order_size_sel").unwrap();
     assert_eq!(sel.value, PlannedValue::OrderSizeSel(3));
-    assert_eq!(sel.new, "B4");
+    assert_eq!(sel.new, PreviewValue::Data("B4".into()));
     assert!(!sel.same);
     let pcts = find(&plan.group_items, "group.fixed_sell_prices").unwrap();
     assert_eq!(
@@ -216,21 +227,29 @@ fn core_items_and_range_checks() {
     );
     let slot = find(&plan.group_items, "group.fixed_sell_sel").unwrap();
     assert_eq!(slot.value, PlannedValue::FixedSellSel(1));
-    assert_eq!(slot.new, "S2");
+    assert_eq!(slot.new, PreviewValue::Data("S2".into()));
 
     // An out-of-range bNum produces a warning and no item.
     let mut mb = mb_config();
     mb.ui.hotkeys.order_size_sel = 9;
     let plan = build_plan(&mb, &ctx(&h, &t, &o));
     assert!(find(&plan.group_items, "group.order_size_sel").is_none());
-    assert!(plan.warnings.iter().any(|w| w.contains("bNum")));
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|w| matches!(w, ImportWarning::OrderSizeSelection { value: 9 }))
+    );
 
     // The same for sbNum.
     let mut mb = mb_config();
     mb.ui.hotkeys.fixed_sell_sel = 6;
     let plan = build_plan(&mb, &ctx(&h, &t, &o));
     assert!(find(&plan.group_items, "group.fixed_sell_sel").is_none());
-    assert!(plan.warnings.iter().any(|w| w.contains("sbNum")));
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|w| matches!(w, ImportWarning::FixedSellSelection { value: 6 }))
+    );
 
     // A set with a value that cannot be a size or a percentage is withheld whole, with a warning.
     let mut mb = mb_config();
@@ -239,15 +258,27 @@ fn core_items_and_range_checks() {
     let plan = build_plan(&mb, &ctx(&h, &t, &o));
     assert!(find(&plan.group_items, "group.order_sizes").is_none());
     assert!(find(&plan.group_items, "group.fixed_sell_prices").is_none());
-    assert!(plan.warnings.iter().any(|w| w.contains("OSize")));
-    assert!(plan.warnings.iter().any(|w| w.contains("SPrice")));
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|w| matches!(w, ImportWarning::InvalidOrderSizes { .. }))
+    );
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|w| matches!(w, ImportWarning::InvalidFixedSellPrices { .. }))
+    );
 
     // A Hotkeys block Moonbot never filled offers nothing at all, whatever its zeros would read as.
     let mut mb = mb_config();
     mb.ui.hotkeys.filled = false;
     let plan = build_plan(&mb, &ctx(&h, &t, &o));
     assert!(plan.group_items.is_empty(), "{:?}", plan.group_items);
-    assert!(plan.warnings.iter().any(|w| w.contains("не заполнен")));
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|w| matches!(w, ImportWarning::HotkeysUnfilled))
+    );
 
     // A fractional percentage previews as typed, not as its widened bits.
     let mut mb = mb_config();
@@ -257,7 +288,7 @@ fn core_items_and_range_checks() {
         find(&plan.group_items, "group.fixed_sell_prices")
             .unwrap()
             .new,
-        "33.3, 5, 10, 25, 50, 100"
+        PreviewValue::Data("33.3, 5, 10, 25, 50, 100".into())
     );
 
     // A zero size is what the group's load-time repair replaces with the default, so it is not
@@ -304,7 +335,7 @@ fn split_parts_import_skips_unset_clamps_high_and_diffs_the_raw_value() {
     let h = HotkeysConfig::default();
     let plan = build_plan(&mb_config(), &ctx(&h, &t, &o));
     let item = find(&plan.hotkeys, "hotkey.split_parts").expect("SplitParts must be importable");
-    assert_eq!(item.new, "2");
+    assert_eq!(item.new, PreviewValue::Data("2".into()));
     assert!(item.same, "the fixture matches the shipped default");
 
     // An unfilled Hotkeys block, and a never-configured zero, are silent rather than "out of range".
@@ -312,7 +343,12 @@ fn split_parts_import_skips_unset_clamps_high_and_diffs_the_raw_value() {
     unset.ui.hotkeys.split_parts = 0;
     let plan = build_plan(&unset, &ctx(&h, &t, &o));
     assert!(find(&plan.hotkeys, "hotkey.split_parts").is_none());
-    assert!(!plan.unsupported.iter().any(|u| u.name == "SplitParts"));
+    assert!(
+        !plan
+            .unsupported
+            .iter()
+            .any(|u| u.name == PreviewCaption::ConfigField("SplitParts".into()))
+    );
     let mut unfilled = mb_config();
     unfilled.ui.hotkeys.filled = false;
     let plan = build_plan(&unfilled, &ctx(&h, &t, &o));
@@ -322,8 +358,18 @@ fn split_parts_import_skips_unset_clamps_high_and_diffs_the_raw_value() {
     let mut high = mb_config();
     high.ui.hotkeys.split_parts = 25;
     let plan = build_plan(&high, &ctx(&h, &t, &o));
-    assert_eq!(find(&plan.hotkeys, "hotkey.split_parts").unwrap().new, "20");
-    assert!(plan.warnings.iter().any(|w| w.contains("SplitParts = 25")));
+    assert_eq!(
+        find(&plan.hotkeys, "hotkey.split_parts").unwrap().new,
+        PreviewValue::Data("20".into())
+    );
+    assert!(plan.warnings.iter().any(|w| matches!(
+        w,
+        ImportWarning::SplitPartsClamped {
+            parts: 25,
+            max: 20,
+            value: 20
+        }
+    )));
 
     // A raw out-of-range local value differs from the import even when its clamped reading matches.
     let broken = HotkeysConfig {

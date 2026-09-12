@@ -19,6 +19,8 @@ use crate::design;
 use moon_core::config::moonbot_import::plan::SettingChange;
 use moon_core::config::moonbot_import::{self, MoonBotImportPlan, PlanContext};
 
+mod wording;
+
 /// Completed import plan and current user selection.
 pub(super) struct ImportReady {
     plan: MoonBotImportPlan,
@@ -374,7 +376,11 @@ impl SettingsView {
 
         // Show warnings and unsupported items with their reasons.
         for w in &state.plan.warnings {
-            body = body.child(div().text_color(rgba_from(p.yellow, 1.0)).child(w.clone()));
+            body = body.child(
+                div()
+                    .text_color(rgba_from(p.yellow, 1.0))
+                    .child(wording::warning(w)),
+            );
         }
         if !state.plan.unsupported.is_empty() {
             let mut group = v_flex().gap_0p5().child(
@@ -391,7 +397,11 @@ impl SettingsView {
                         .font_family(design::mono())
                         .text_size(design::t_caption(cx))
                         .text_color(rgba_from(p.text_muted, 1.0))
-                        .child(format!("{} — {}", u.name, u.reason)),
+                        .child(format!(
+                            "{} — {}",
+                            wording::caption(&u.name),
+                            wording::reason(&u.reason)
+                        )),
                 );
             }
             body = body.child(group);
@@ -456,7 +466,7 @@ impl SettingsView {
             .child(
                 MoonCheckbox::new(SharedString::from(format!("imp-{}", item.id)))
                     .checked(state_checked)
-                    .label(item.label.clone())
+                    .label(wording::caption(&item.label))
                     .on_change(cx.listener(move |this, ch: &bool, _, cx| {
                         if let Some(ImportState::Ready(st)) = this.import.as_mut() {
                             if *ch {
@@ -530,7 +540,11 @@ impl SettingsView {
                     div()
                         .text_size(design::t_caption(cx))
                         .text_color(rgba_from(p.text_muted, 1.0))
-                        .child(format!("{} — {}", u.name, u.reason)),
+                        .child(format!(
+                            "{} — {}",
+                            wording::caption(&u.name),
+                            wording::reason(&u.reason)
+                        )),
                 );
             }
         }
@@ -612,7 +626,7 @@ fn value_el(item: &SettingChange, p: MoonPalette, cx: &Context<SettingsView>) ->
                 .child(muted(format!("· {}", t!("import.same"))))
                 .into_any_element();
         }
-        if let Some(cur) = hex_to_rgb(&item.current) {
+        if let Some(cur) = hex_to_rgb(&wording::preview_value(&item.current)) {
             row = row.child(swatch(cur));
         }
         return row
@@ -621,9 +635,19 @@ fn value_el(item: &SettingChange, p: MoonPalette, cx: &Context<SettingsView>) ->
             .into_any_element();
     }
     if item.same {
-        return muted(format!("{} · {}", item.new, t!("import.same"))).into_any_element();
+        return muted(format!(
+            "{} · {}",
+            wording::preview_value(&item.new),
+            t!("import.same")
+        ))
+        .into_any_element();
     }
-    muted(format!("{} → {}", item.current, item.new)).into_any_element()
+    muted(format!(
+        "{} → {}",
+        wording::preview_value(&item.current),
+        wording::preview_value(&item.new)
+    ))
+    .into_any_element()
 }
 
 /// Parse the `#RRGGBB` format produced by `plan::rgb_hex` into RGB bytes.

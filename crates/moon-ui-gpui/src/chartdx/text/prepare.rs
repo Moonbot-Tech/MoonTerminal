@@ -132,7 +132,26 @@ impl RenderState {
                         if !super::volume_scale_label_fits(band, frac) {
                             continue;
                         }
-                        let label = super::fmt_amount(value);
+                        let Some(label) = super::volume_scale_label(
+                            value,
+                            &self.panes[idx].quote,
+                            plot_w - 8.0,
+                            |text| {
+                                super::measure_sized_text_run(
+                                    &mut self.text_runs,
+                                    self.text_run_cursor,
+                                    ctx,
+                                    text,
+                                    VOLUME_SCALE_FONT_SIZE,
+                                    VOLUME_SCALE_LINE_H,
+                                    VOLUME_SCALE_WEIGHT,
+                                )
+                                .width
+                                .as_f32()
+                            },
+                        ) else {
+                            continue;
+                        };
                         let y = plot_bottom - band * frac;
                         self.draw_volume_scale_text(ctx, &label, label_x, y, label_ax, 0.5, ink)?;
                     }

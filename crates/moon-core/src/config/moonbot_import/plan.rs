@@ -13,6 +13,7 @@
 //!   until an explicit mapping table exists (spec section 9);
 //! - do not silently discard meaningful color alpha; send the item to `unsupported`.
 
+use super::preview::{ImportReason, ImportWarning, PreviewCaption, PreviewValue};
 use super::schema_v7::{MoonBotConfig, SHORTCUT_ACTIONS, ShortcutAction};
 use super::shortcut::{self, DecodedShortcut};
 use crate::config::hotkeys::{HotkeysConfig, KeySlot, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN};
@@ -48,12 +49,12 @@ pub struct SettingChange {
     /// Stable identifier (`hotkey.cancel_buy`, `theme.bg.dark`,
     /// `orders.buy.color.light`, `group.order_size_sel`, …).
     pub id: String,
-    /// Human-readable item label (Moonbot terms remain untranslated).
-    pub label: String,
-    /// Current Terminal value for preview.
-    pub current: String,
+    /// Typed caption; the UI supplies wording in its active locale.
+    pub label: PreviewCaption,
+    /// Current Terminal value or a typed placeholder for preview.
+    pub current: PreviewValue,
     /// New value from MoonBot for preview.
-    pub new: String,
+    pub new: PreviewValue,
     /// Typed value used for application.
     pub value: PlannedValue,
     /// Whether the value ALREADY matches MoonBot. It is shown with a marker and unselected
@@ -64,8 +65,8 @@ pub struct SettingChange {
 /// MoonBot field that is NOT imported, with a reason (spec section 2, group 4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unsupported {
-    pub name: String,
-    pub reason: String,
+    pub name: PreviewCaption,
+    pub reason: ImportReason,
 }
 
 /// Import plan containing preview groups and warnings.
@@ -87,7 +88,7 @@ pub struct MoonBotImportPlan {
     /// "Not imported" group, excluding hotkeys stored in `unsupported_hotkeys`.
     pub unsupported: Vec<Unsupported>,
     /// Warnings such as out-of-range values.
-    pub warnings: Vec<String>,
+    pub warnings: Vec<ImportWarning>,
     /// Hotkeys NOT assigned in MoonBot (empty slots are not imported, preserving local values).
     pub hotkeys_empty: usize,
 }
@@ -134,14 +135,14 @@ pub fn build_plan(mb: &MoonBotConfig, cur: &PlanContext) -> MoonBotImportPlan {
 
 // ── UI theme ─────────────────────────────────────────────────────────────────
 
+/// Describe the imported theme using typed values for UI localization.
 fn map_ui_theme(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPlan) {
     let mb_light = !mb.theme.is_dark();
-    let name = |l: bool| if l { "светлая" } else { "тёмная" };
     plan.terminal.push(SettingChange {
         id: "ui.theme_mode".into(),
-        label: "Тема UI".into(),
-        current: name(cur.ui_theme_light).into(),
-        new: name(mb_light).into(),
+        label: PreviewCaption::UiTheme,
+        current: PreviewValue::ThemeLight(cur.ui_theme_light),
+        new: PreviewValue::ThemeLight(mb_light),
         value: PlannedValue::UiThemeLight(mb_light),
         same: mb_light == cur.ui_theme_light,
     });
@@ -207,46 +208,18 @@ pub(super) fn slot_for_id(id: &str) -> Option<KeySlot> {
     KeySlot::for_name(id.strip_prefix("hotkey.")?)
 }
 
-/// Returns the Moonbot slot name used in preview/unsupported lists.
-fn action_name(action: ShortcutAction) -> &'static str {
-    use ShortcutAction::*;
-    match action {
-        CancelBuy => "Cancel Buy",
-        PanicSell => "Panic Sell",
-        JoinSells => "Join Sells",
-        SwitchCharts => "Switch Charts",
-        ReloadBook => "Reload Book",
-        NewLong => "New Long",
-        NewShort => "New Short",
-        SplitOrder => "Split Order",
-        ShiftBuyUp => "Shift Buy Up",
-        ShiftBuyDown => "Shift Buy Down",
-        ShiftSellUp => "Shift Sell Up",
-        ShiftSellDown => "Shift Sell Down",
-        MakeShot => "Make Shot",
-        MakeShotBot => "Make Shot Bot",
-        ReloadChart => "Reload Chart",
-        ScalePlus => "Scale +",
-        ScaleMinus => "Scale −",
-        SellPlus => "Sell +",
-        SellMinus => "Sell −",
-        SpyMode => "Spy Mode",
-        ShowCharts => "Show Charts",
-        SplitOrderX => "Split Order X",
-        SwitchFigure => "Switch Figure",
-        FitSells => "Fit Sells",
-        PanicSellOne => "Panic Sell One",
-        CancelAllBuys => "Cancel All Buys",
-        Broadcast => "Broadcast",
-    }
-}
-
 /// Adds one hotkey item to the "Hotkeys" group by converting MoonBot `TShortCut` to a GPUI string.
 ///
 /// Shows ALL values, including matches (`same`). Empty values are skipped because import assigns
 /// rather than clears, but they are counted in the summary. Unsupported values go to
 /// `unsupported_hotkeys` with a reason.
-fn push_hotkey(plan: &mut MoonBotImportPlan, id: String, label: String, raw: u16, current: &str) {
+fn push_hotkey(
+    plan: &mut MoonBotImportPlan,
+    id: String,
+    label: PreviewCaption,
+    raw: u16,
+    current: &str,
+) {
     let decoded = shortcut::decode(raw);
     match shortcut::to_gpui_keystroke(decoded) {
         Some(ks) => {
@@ -254,12 +227,12 @@ fn push_hotkey(plan: &mut MoonBotImportPlan, id: String, label: String, raw: u16
             plan.hotkeys.push(SettingChange {
                 id,
                 label,
-                current: if current.is_empty() {
+                current: PreviewValue::Data(if current.is_empty() {
                     "—".into()
                 } else {
                     current.into()
-                },
-                new: shortcut::display(decoded),
+                }),
+                new: PreviewValue::Data(shortcut::display(decoded)),
                 value: PlannedValue::Keystroke(ks),
                 same,
             });
@@ -268,7 +241,7 @@ fn push_hotkey(plan: &mut MoonBotImportPlan, id: String, label: String, raw: u16
             DecodedShortcut::Unsupported { raw } => {
                 plan.unsupported_hotkeys.push(Unsupported {
                     name: label,
-                    reason: format!("неизвестная клавиша (VK 0x{:02X})", raw & 0xFF),
+                    reason: ImportReason::UnknownKey { vk: raw & 0xFF },
                 });
             }
             // Empty values are not imported but are counted for the summary.
@@ -277,6 +250,7 @@ fn push_hotkey(plan: &mut MoonBotImportPlan, id: String, label: String, raw: u16
     }
 }
 
+/// Map hotkeys while keeping slot captions and refusal reasons locale-independent.
 fn map_hotkeys(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPlan) {
     let h = &mb.ui.hotkeys;
     // Order-size slots (OKeys → order_size) and fixed-sell slots (SKeys → sell_preset).
@@ -284,12 +258,12 @@ fn map_hotkeys(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPl
         for (slot, label, raw) in [
             (
                 KeySlot::OrderSize(i),
-                format!("Размер ордера {}", i + 1),
+                PreviewCaption::OrderSizeSlot(i + 1),
                 h.order_size_keys[i],
             ),
             (
                 KeySlot::SellPreset(i),
-                format!("Fixed sell {}", i + 1),
+                PreviewCaption::FixedSellSlot(i + 1),
                 h.fixed_sell_keys[i],
             ),
         ] {
@@ -303,7 +277,7 @@ fn map_hotkeys(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPl
             Some(slot) => push_hotkey(
                 plan,
                 hotkey_id(slot),
-                action_name(action).to_string(),
+                PreviewCaption::Action(action),
                 raw,
                 cur.hotkeys.key(slot),
             ),
@@ -312,8 +286,8 @@ fn map_hotkeys(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPl
                 // ASSIGNED shortcuts because an empty slot has nothing to import.
                 if raw != 0 {
                     plan.unsupported_hotkeys.push(Unsupported {
-                        name: action_name(action).to_string(),
-                        reason: "в Terminal нет такого действия (нет команды ядра)".into(),
+                        name: PreviewCaption::Action(action),
+                        reason: ImportReason::NoAction,
                     });
                 }
             }
@@ -335,15 +309,17 @@ fn map_split_parts(filled: bool, parts: u8, cur: &PlanContext, plan: &mut MoonBo
     }
     let value = parts.min(SPLIT_PARTS_MAX);
     if value != parts {
-        plan.warnings.push(format!(
-            "SplitParts = {parts} больше максимума {SPLIT_PARTS_MAX} — перенесём {value}"
-        ));
+        plan.warnings.push(ImportWarning::SplitPartsClamped {
+            parts,
+            max: SPLIT_PARTS_MAX,
+            value,
+        });
     }
     plan.hotkeys.push(SettingChange {
         id: "hotkey.split_parts".into(),
-        label: "Split Order X: число частей".into(),
-        current: cur.hotkeys.split_n_parts().to_string(),
-        new: value.to_string(),
+        label: PreviewCaption::SplitParts,
+        current: PreviewValue::Data(cur.hotkeys.split_n_parts().to_string()),
+        new: PreviewValue::Data(value.to_string()),
         // Compared against the RAW stored field, not the clamped reading: a hand-edited
         // out-of-range value must show up as a change so applying the import repairs the file.
         same: value == cur.hotkeys.split_parts,
@@ -381,6 +357,7 @@ fn rgb_hex(c: [u8; 3]) -> String {
     format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])
 }
 
+/// Map colors without changing their interpretation; leave all wording to the UI.
 fn map_colors(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPlan) {
     for light in [true, false] {
         let section = if light {
@@ -395,99 +372,136 @@ fn map_colors(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPla
         for (key, value) in &section.entries {
             let Some((rgb, alpha)) = parse_tcolor(value) else {
                 plan.unsupported.push(Unsupported {
-                    name: format!("{key} ({theme_side})"),
-                    reason: format!("значение «{value}» не разобрано как цвет"),
+                    name: PreviewCaption::ColorField {
+                        key: key.clone(),
+                        light,
+                    },
+                    reason: ImportReason::InvalidColor {
+                        value: value.clone(),
+                    },
                 });
                 continue;
             };
             // Our color fields have no alpha; do not silently discard meaningful alpha.
             if alpha != 0 && alpha != 0xFF {
                 plan.unsupported.push(Unsupported {
-                    name: format!("{key} ({theme_side})"),
-                    reason: format!("цвет несёт alpha 0x{alpha:02X}, у целевого поля её нет"),
+                    name: PreviewCaption::ColorField {
+                        key: key.clone(),
+                        light,
+                    },
+                    reason: ImportReason::ColorAlpha { alpha },
                 });
                 continue;
             }
             // Explicit MoonBot key → Terminal field mapping (spec section 8). Keys outside
             // this table go to unsupported: they are decoded but not applied.
-            let (target_id, label, current_rgb): (&str, &str, [u8; 3]) = match key.as_str() {
-                "graphBK" => ("theme.bg", "Фон графика", theme.bg),
-                "graphNet" => ("theme.grid", "Сетка", theme.grid),
-                "graphCursor" => ("theme.cross", "Перекрестие", theme.cross),
-                "graphFont" => (
-                    "theme.labels",
-                    "Нейтральные подписи (оси/курсор)",
-                    theme.axis_label,
-                ),
-                "CandleGreen" => ("theme.candle_up", "Растущая свеча", theme.candle_up),
-                "CandleRed" => ("theme.candle_down", "Падающая свеча", theme.candle_down),
-                "CandleNeutral" => (
-                    "theme.candle_neutral",
-                    "Нейтральная свеча",
-                    theme.candle_neutral,
-                ),
-                "OrderBookGreen" => ("theme.book_bid", "Стакан bid", theme.book_bid),
-                "OrderBookRed" => ("theme.book_ask", "Стакан ask", theme.book_ask),
-                "BuyOrder" => ("orders.buy.color", "Линия Buy", orders.buy.color),
-                "BuyPendingOrder" => (
-                    "orders.buy.pending_color",
-                    "Линия Buy (pending)",
-                    orders.buy.pending_color.unwrap_or(orders.buy.color),
-                ),
-                "SellOrder" => ("orders.sell.color", "Линия Sell", orders.sell.color),
-                "BuyShort" => (
-                    "orders.buy_short.color",
-                    "Линия Buy (short)",
-                    orders.buy_short.color,
-                ),
-                "SellShort" => (
-                    "orders.sell_short.color",
-                    "Линия Sell (short)",
-                    orders.sell_short.color,
-                ),
-                "Trailing" => (
-                    "orders.trailing.color",
-                    "Линия Trailing",
-                    orders.trailing.color,
-                ),
-                "LiqPrice" => ("orders.liq.color", "Линия Liquidation", orders.liq.color),
-                "BookLevelGreen" | "BookLevelRed" => {
-                    plan.unsupported.push(Unsupported {
-                        name: format!("{key} ({theme_side})"),
-                        reason: "в Terminal нет отдельного цвета линий уровней стакана".into(),
-                    });
-                    continue;
-                }
-                "BuyOrderDone" => {
-                    plan.unsupported.push(Unsupported {
-                        name: format!("{key} ({theme_side})"),
-                        reason: "закрытые ордера в Terminal — прозрачностью, не цветом".into(),
-                    });
-                    continue;
-                }
-                "MarkPrice" | "LiqOrdersLong" | "LiqOrdersShort" => {
-                    plan.unsupported.push(Unsupported {
-                        name: format!("{key} ({theme_side})"),
-                        reason: "в Terminal нет эквивалентного стиля".into(),
-                    });
-                    continue;
-                }
-                _ => {
-                    plan.unsupported.push(Unsupported {
-                        name: format!("{key} ({theme_side})"),
-                        reason: "нет в таблице соответствия (не применяем)".into(),
-                    });
-                    continue;
-                }
-            };
+            let (target_id, label, current_rgb): (&str, PreviewCaption, [u8; 3]) =
+                match key.as_str() {
+                    "graphBK" => ("theme.bg", PreviewCaption::ChartBackground, theme.bg),
+                    "graphNet" => ("theme.grid", PreviewCaption::Grid, theme.grid),
+                    "graphCursor" => ("theme.cross", PreviewCaption::Crosshair, theme.cross),
+                    "graphFont" => (
+                        "theme.labels",
+                        PreviewCaption::NeutralLabels,
+                        theme.axis_label,
+                    ),
+                    "CandleGreen" => ("theme.candle_up", PreviewCaption::CandleUp, theme.candle_up),
+                    "CandleRed" => (
+                        "theme.candle_down",
+                        PreviewCaption::CandleDown,
+                        theme.candle_down,
+                    ),
+                    "CandleNeutral" => (
+                        "theme.candle_neutral",
+                        PreviewCaption::CandleNeutral,
+                        theme.candle_neutral,
+                    ),
+                    "OrderBookGreen" => ("theme.book_bid", PreviewCaption::BookBid, theme.book_bid),
+                    "OrderBookRed" => ("theme.book_ask", PreviewCaption::BookAsk, theme.book_ask),
+                    "BuyOrder" => (
+                        "orders.buy.color",
+                        PreviewCaption::BuyLine,
+                        orders.buy.color,
+                    ),
+                    "BuyPendingOrder" => (
+                        "orders.buy.pending_color",
+                        PreviewCaption::BuyPendingLine,
+                        orders.buy.pending_color.unwrap_or(orders.buy.color),
+                    ),
+                    "SellOrder" => (
+                        "orders.sell.color",
+                        PreviewCaption::SellLine,
+                        orders.sell.color,
+                    ),
+                    "BuyShort" => (
+                        "orders.buy_short.color",
+                        PreviewCaption::BuyShortLine,
+                        orders.buy_short.color,
+                    ),
+                    "SellShort" => (
+                        "orders.sell_short.color",
+                        PreviewCaption::SellShortLine,
+                        orders.sell_short.color,
+                    ),
+                    "Trailing" => (
+                        "orders.trailing.color",
+                        PreviewCaption::TrailingLine,
+                        orders.trailing.color,
+                    ),
+                    "LiqPrice" => (
+                        "orders.liq.color",
+                        PreviewCaption::LiquidationLine,
+                        orders.liq.color,
+                    ),
+                    "BookLevelGreen" | "BookLevelRed" => {
+                        plan.unsupported.push(Unsupported {
+                            name: PreviewCaption::ColorField {
+                                key: key.clone(),
+                                light,
+                            },
+                            reason: ImportReason::NoBookLevelColor,
+                        });
+                        continue;
+                    }
+                    "BuyOrderDone" => {
+                        plan.unsupported.push(Unsupported {
+                            name: PreviewCaption::ColorField {
+                                key: key.clone(),
+                                light,
+                            },
+                            reason: ImportReason::ClosedOrderOpacity,
+                        });
+                        continue;
+                    }
+                    "MarkPrice" | "LiqOrdersLong" | "LiqOrdersShort" => {
+                        plan.unsupported.push(Unsupported {
+                            name: PreviewCaption::ColorField {
+                                key: key.clone(),
+                                light,
+                            },
+                            reason: ImportReason::NoStyle,
+                        });
+                        continue;
+                    }
+                    _ => {
+                        plan.unsupported.push(Unsupported {
+                            name: PreviewCaption::ColorField {
+                                key: key.clone(),
+                                light,
+                            },
+                            reason: ImportReason::UnmappedColor,
+                        });
+                        continue;
+                    }
+                };
             // The theme side is NOT in the label: preview groups colors into "Light"/"Dark"
             // columns, with the side encoded in the item id. Matching values are also shown
             // (`same`) to provide the complete import picture.
             plan.chart.push(SettingChange {
                 id: format!("{target_id}.{theme_side}"),
-                label: label.to_string(),
-                current: rgb_hex(current_rgb),
-                new: rgb_hex(rgb),
+                label,
+                current: PreviewValue::Data(rgb_hex(current_rgb)),
+                new: PreviewValue::Data(rgb_hex(rgb)),
                 value: PlannedValue::Rgb(rgb),
                 same: current_rgb == rgb,
             });
@@ -500,8 +514,12 @@ fn map_colors(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPla
         if let Some(s) = mb.ini.section(name) {
             for (key, value) in &s.entries {
                 plan.unsupported.push(Unsupported {
-                    name: format!("[{name}] {key} = {value}"),
-                    reason: "таблица соответствия для этой секции ещё не определена".into(),
+                    name: PreviewCaption::IniEntry {
+                        section: name.into(),
+                        key: key.clone(),
+                        value: value.clone(),
+                    },
+                    reason: ImportReason::UnmappedSection,
                 });
             }
         }
@@ -537,22 +555,20 @@ fn map_core(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) {
     // a zero here is a selected preset, an engaged 0% slot or an empty scale — every one of them
     // a value the group would keep. One line says so; no item is offered.
     if !h.filled {
-        plan.warnings.push(
-            "Блок Hotkeys в буфере не заполнен — размеры, проценты и выбранные слоты не переносим"
-                .into(),
-        );
+        plan.warnings.push(ImportWarning::HotkeysUnfilled);
         return;
     }
-    let group_item = |id: &str, label: &str, new: String, value: PlannedValue| SettingChange {
-        id: id.into(),
-        label: label.into(),
-        current: "зависит от выбранной группы".into(),
-        new,
-        value,
-        // Targets remain editable after planning, so one group's initial value cannot prove that
-        // every ultimately selected group already matches.
-        same: false,
-    };
+    let group_item =
+        |id: &str, label: PreviewCaption, new: String, value: PlannedValue| SettingChange {
+            id: id.into(),
+            label,
+            current: PreviewValue::SelectedGroup,
+            new: PreviewValue::Data(new),
+            value,
+            // Targets remain editable after planning, so one group's initial value cannot prove that
+            // every ultimately selected group already matches.
+            same: false,
+        };
     // Sizes: the group's own load-time rule (`GroupTradeSettings::repair`) replaces a size that
     // is not finite and positive with the shipped default, so writing one would only look applied
     // until the next start. The whole set is then left alone rather than half-written, and the
@@ -560,28 +576,26 @@ fn map_core(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) {
     if h.order_sizes.iter().all(|v| v.is_finite() && *v > 0.0) {
         plan.group_items.push(group_item(
             "group.order_sizes",
-            "Размер ордера B1-B6",
+            PreviewCaption::OrderSizes,
             fmt_nums(&h.order_sizes),
             PlannedValue::OrderSizes(h.order_sizes),
         ));
     } else {
-        plan.warnings.push(format!(
-            "OSize (F1-F6) = {} — есть не-число, ноль или отрицательное значение, размеры не переносим",
-            fmt_nums(&h.order_sizes)
-        ));
+        plan.warnings.push(ImportWarning::InvalidOrderSizes {
+            values: h.order_sizes,
+        });
     }
     // Selected preset: bNum must be in 0..=5; otherwise warn and skip it (spec section 9).
     match usize::try_from(h.order_size_sel).ok().filter(|v| *v <= 5) {
         Some(sel) => plan.group_items.push(group_item(
             "group.order_size_sel",
-            "Выбранный пресет размера",
+            PreviewCaption::OrderSizeSelection,
             format!("B{}", sel + 1),
             PlannedValue::OrderSizeSel(sel),
         )),
-        None => plan.warnings.push(format!(
-            "bNum = {} вне диапазона 0..=5 — выбранный пресет не переносим",
-            h.order_size_sel
-        )),
+        None => plan.warnings.push(ImportWarning::OrderSizeSelection {
+            value: h.order_size_sel,
+        }),
     }
     // Fixed-sell percentages: the same all-or-nothing rule as the sizes.
     if h.fixed_sell_prices
@@ -590,28 +604,26 @@ fn map_core(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) {
     {
         plan.group_items.push(group_item(
             "group.fixed_sell_prices",
-            "Fixed sell проценты (S1-S6)",
+            PreviewCaption::FixedSellPrices,
             fmt_nums(&h.fixed_sell_prices),
             PlannedValue::FixedSellPrices(h.fixed_sell_prices),
         ));
     } else {
-        plan.warnings.push(format!(
-            "SPrice (S1-S6) = {} — есть не-число или отрицательное значение, проценты не переносим",
-            fmt_nums(&h.fixed_sell_prices)
-        ));
+        plan.warnings.push(ImportWarning::InvalidFixedSellPrices {
+            values: h.fixed_sell_prices,
+        });
     }
     if h.fixed_sell_sel <= 5 {
         plan.group_items.push(group_item(
             "group.fixed_sell_sel",
-            "Выбранный fixed sell слот",
+            PreviewCaption::FixedSellSelection,
             format!("S{}", h.fixed_sell_sel + 1),
             PlannedValue::FixedSellSel(h.fixed_sell_sel),
         ));
     } else {
-        plan.warnings.push(format!(
-            "sbNum = {} вне диапазона 0..=5 — выбранный fixed sell слот не переносим",
-            h.fixed_sell_sel
-        ));
+        plan.warnings.push(ImportWarning::FixedSellSelection {
+            value: h.fixed_sell_sel,
+        });
     }
 }
 
@@ -619,7 +631,7 @@ fn map_core(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) {
 
 /// Adds UI-block fields without a working Terminal equivalent (spec section 2, group 4).
 fn collect_static_unsupported(plan: &mut MoonBotImportPlan) {
-    let none = "в Terminal нет эквивалентной настройки";
+    let none = ImportReason::NoSetting;
     for name in [
         "HideDemoButton",
         "ConfirmClose",
@@ -630,17 +642,17 @@ fn collect_static_unsupported(plan: &mut MoonBotImportPlan) {
         "StratExpandedState",
     ] {
         plan.unsupported.push(Unsupported {
-            name: name.into(),
-            reason: none.into(),
+            name: PreviewCaption::ConfigField(name.into()),
+            reason: none.clone(),
         });
     }
     plan.unsupported.push(Unsupported {
-        name: "MarketsTable (колонки)".into(),
-        reason: "смысл столбцов таблиц не сопоставлен — переносить рано".into(),
+        name: PreviewCaption::MarketsTable,
+        reason: ImportReason::UnmappedColumns,
     });
     plan.unsupported.push(Unsupported {
-        name: "Мышиные жесты".into(),
-        reason: "недоступны в этой версии экспорта (появятся с блоком Interop)".into(),
+        name: PreviewCaption::MouseGestures,
+        reason: ImportReason::GesturesUnavailable,
     });
 }
 

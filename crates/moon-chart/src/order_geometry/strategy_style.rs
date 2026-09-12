@@ -2,6 +2,11 @@
 
 use std::collections::HashMap;
 
+use crate::layers::{
+    SEG_PATTERN_DASH, SEG_PATTERN_DASH_DOT, SEG_PATTERN_DASH_DOT_DOT, SEG_PATTERN_DOT,
+    SEG_PATTERN_SOLID,
+};
+
 use moon_core::feed::{StrategyRow, StrategySchemaModel};
 use moon_core::session::order_lines::{LineKind, RetainedOrder};
 
@@ -54,12 +59,7 @@ impl StrategyStyles {
                             .iter()
                             .flat_map(|s| &s.fields)
                             .find(|f| f.name == name)?;
-                        field
-                            .default
-                            .as_deref()
-                            .map(str::trim)
-                            // Without FLAG_DEFAULT_NZ, this numeric schema field defaults to zero.
-                            .or_else(|| (name == "OrderLineKind").then_some("0"))
+                        field.default.as_deref().map(str::trim)
                     })
             };
             let enabled = field("UseCustomColors").is_some_and(|v| {
@@ -69,10 +69,7 @@ impl StrategyStyles {
                 StrategyStyle {
                     buy: field("BuyOrderColor").and_then(parse_color),
                     sell: field("SellOrderColor").and_then(parse_color),
-                    pattern: field("OrderLineKind")
-                        .and_then(|v| v.parse::<u8>().ok())
-                        .filter(|v| *v <= 4)
-                        .map(f32::from),
+                    pattern: field("OrderLineKind").and_then(parse_pattern),
                 }
             } else {
                 StrategyStyle::default()
@@ -97,6 +94,19 @@ impl StrategyStyles {
         };
         self.ids.get(&id)
     }
+}
+
+/// Resolves Moonbot's case-insensitive pen names; unknown values retain the global style.
+fn parse_pattern(value: &str) -> Option<f32> {
+    [
+        ("Solid", SEG_PATTERN_SOLID),
+        ("Dash", SEG_PATTERN_DASH),
+        ("Dot", SEG_PATTERN_DOT),
+        ("DashDot", SEG_PATTERN_DASH_DOT),
+        ("DashDotDot", SEG_PATTERN_DASH_DOT_DOT),
+    ]
+    .into_iter()
+    .find_map(|(name, pattern)| value.eq_ignore_ascii_case(name).then_some(pattern))
 }
 
 /// Accepts RGB or Moonbot ARGB hex, rejecting malformed input instead of inventing a color.

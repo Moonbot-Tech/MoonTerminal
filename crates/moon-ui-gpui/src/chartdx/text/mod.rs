@@ -139,6 +139,29 @@ fn fmt_amount(v: f32) -> String {
     moon_core::util::fmt::compact_si(v as f64)
 }
 
+/// Build a complete quote-turnover label within the available logical width.
+///
+/// Uses the pane's market quote, as the cursor tooltip does. Unknown units and labels wider
+/// than `available_width` are omitted whole: truncating a currency could misidentify the scale.
+/// `measure_width` must use the volume-scale face and size used to draw the returned text.
+fn volume_scale_label(
+    value: f32,
+    quote: &str,
+    available_width: f32,
+    measure_width: impl FnOnce(&str) -> f32,
+) -> Option<String> {
+    if quote.is_empty() {
+        return None;
+    }
+    let amount = fmt_amount(value);
+    let label = if moon_core::symbol::is_usd_stable(quote) {
+        format!("{amount}$")
+    } else {
+        format!("{amount} {quote}")
+    };
+    (measure_width(&label) <= available_width).then_some(label)
+}
+
 /// Formats a prospective order size with compact lowercase SI suffixes for the cursor label.
 fn fmt_prospective_order_size(usd: f64) -> String {
     moon_core::util::fmt::compact_order_size(usd)
