@@ -79,14 +79,30 @@ const SEG_W3: f32 = ROW_W / 3.0;
 const SEG_W6: f32 = ROW_W / 6.0;
 const SEG_W7: f32 = ROW_W / 7.0;
 
-/// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
+/// Gap between the popup's two columns, in rendered pixels.
+///
+/// Wider than the gap between groups in a column: the two columns are read as two pages side by
+/// side — the trade drawing on the left, the bottom band on the right — and a gap no larger than
+/// the one between stacked groups made the four frames read as one grid.
+const COLUMN_GAP: f32 = 12.0;
+
+/// Width of one popup column in rendered pixels: a row plus the group frame around it.
 ///
 /// Sized on the widest row: the sides band's seven interval segments at 42 units each. Every
 /// other row divides the same width among its own segments. The checkbox labels wrap rather than
 /// widen, the RGB picker fits within that same width, and the localized ES strings are the
 /// longest of the three.
+fn column_width(cx: &App) -> f32 {
+    ROW_W + popup_group_inset_px(cx)
+}
+
+/// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
+///
+/// Two columns and the gap between them; see [`column_width`] for what sizes a column. The popup
+/// went two-wide once the bottom band grew its sides rows: single-column, it ran past the height
+/// of a laptop chart, and the volume group is the one that stands on its own.
 pub(super) fn content_width(cx: &App) -> Pixels {
-    px(ROW_W + popup_group_inset_px(cx))
+    px(2.0 * column_width(cx) + COLUMN_GAP)
 }
 
 /// Index of the step nearest a stored value.
@@ -478,6 +494,32 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
             },
         )
     };
+    // Where the plot's bottom captions go once the band takes the floor: lifted above it, or
+    // printed over the bars on their plates. A per-tab switch beside the band's own controls,
+    // because it is the BAND that displaces them; the label editor knows nothing of it.
+    let volume_labels_row = {
+        let entity = entity.clone();
+        seg_row(
+            format!("{id}-volume-labels"),
+            t!("chart.graphics.volume_labels").to_string(),
+            vec![
+                (
+                    t!("chart.graphics.volume_labels_above").to_string(),
+                    !cfg.candle_volume_labels_over,
+                ),
+                (
+                    t!("chart.graphics.volume_labels_over").to_string(),
+                    cfg.candle_volume_labels_over,
+                ),
+            ],
+            SEG_W2,
+            p,
+            cx,
+            move |ix, app| {
+                write_cfg(&entity, app, |c| c.candle_volume_labels_over = ix == 1);
+            },
+        )
+    };
     let volume_scale_row = {
         let entity = entity.clone();
         v_flex()
@@ -514,27 +556,16 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         )
     };
 
-    // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
-    v_flex()
-        .id(SharedString::from(format!("{id}-popup")))
-        .w_full()
+    // Two columns under one head row: what the chart draws OVER the candles on the left — the
+    // trade history, the order lines, the live marks — and the bottom band on the right. The band
+    // is the tallest group and the one with a subject of its own, so it takes a column alone; the
+    // three on the left add up to about its height, which is what keeps the popup's bottom edge
+    // level. Each column is a fixed row wide so a group's rows never stretch to the other's.
+    let col_w = px(column_width(cx));
+    let left_column = v_flex()
+        .w(col_w)
+        .flex_none()
         .gap(design::ui_px(cx, 8.0))
-        .child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .child(popup_title(t!("chart.graphics.title"), p, cx))
-                .child(apply_all_btn)
-                .child(popup_close_button(
-                    SharedString::from(format!("{id}-close")),
-                    {
-                        let entity = entity.clone();
-                        move |_, _w, app: &mut App| {
-                            entity.update(app, |this, cx| this.close_graphics_popup(cx));
-                        }
-                    },
-                )),
-        )
         .child(
             // The two trade-kind checkboxes belong HERE, beside the arrow size and the connector they
             // now share a subject with. They used to sit in the order-lines group because that is
@@ -566,24 +597,55 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                     .child(marker_scale_row)
                     .child(trade_volume_alpha_row),
             ),
+        );
+    let right_column = v_flex().w(col_w).flex_none().child(
+        popup_group(
+            "frame-bottom-volumes",
+            t!("chart.graphics.frame_bottom_volumes"),
         )
         .child(
-            popup_group(
-                "frame-bottom-volumes",
-                t!("chart.graphics.frame_bottom_volumes"),
-            )
-            .child(
-                v_flex()
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(volume_style_row)
-                    .child(volume_sides_cb)
-                    .children(volume_kind_row)
-                    .children(volume_tf_row)
-                    .child(volume_height_row)
-                    .child(volume_alpha_row)
-                    .child(volume_scale_pos_row)
-                    .child(volume_scale_row),
-            ),
+            v_flex()
+                .gap(design::ui_px(cx, 6.0))
+                .child(volume_style_row)
+                .child(volume_sides_cb)
+                .children(volume_kind_row)
+                .children(volume_tf_row)
+                .child(volume_height_row)
+                .child(volume_alpha_row)
+                .child(volume_scale_pos_row)
+                .child(volume_labels_row)
+                .child(volume_scale_row),
+        ),
+    );
+
+    // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
+    v_flex()
+        .id(SharedString::from(format!("{id}-popup")))
+        .w_full()
+        .gap(design::ui_px(cx, 8.0))
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .child(popup_title(t!("chart.graphics.title"), p, cx))
+                .child(apply_all_btn)
+                .child(popup_close_button(
+                    SharedString::from(format!("{id}-close")),
+                    {
+                        let entity = entity.clone();
+                        move |_, _w, app: &mut App| {
+                            entity.update(app, |this, cx| this.close_graphics_popup(cx));
+                        }
+                    },
+                )),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .items_start()
+                .gap(px(COLUMN_GAP))
+                .child(left_column)
+                .child(right_column),
         )
         .into_any_element()
 }

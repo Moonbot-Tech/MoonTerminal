@@ -156,10 +156,13 @@ pub(in crate::chartdx) struct CaptionGeomInput {
     pub orderbook_enabled: bool,
     pub orderbook_left: f32,
     pub scale_factor: f32,
-    /// Height of the bottom volume band, in logical pixels. Zero when the band is off.
+    /// Height of the bottom volume band, in logical pixels. Zero when the band is off — or when
+    /// the tab prints its captions OVER the bars (`candle_volume_labels_over`): the caller passes
+    /// zero for a band that is drawn, and the captions never learn it is there.
     ///
-    /// [`LabelZone::ChartBottom`] sits above this so every module in that zone clears the bars;
-    /// the control strip's floor is the plot's, and the bars never reach it.
+    /// [`LabelZone::ChartBottom`] sits above whatever height arrives here, so every module in
+    /// that zone clears the bars unless the caller chose to hide them; the control strip's floor
+    /// is the plot's, and the bars never reach it.
     pub volume_band_h: f32,
 }
 
@@ -1807,8 +1810,9 @@ fn zone_start_y(zone: LabelZone, geom: &CaptionGeomInput, corner: &CaptionGeom) 
         }
     } else {
         // ChartBottom shares the plot with the volume bars. Every module in that zone sits above
-        // the band; the control strip does not — it runs the full height of the plot, and the bars
-        // never reach it.
+        // the band height the caller reported — zero when the tab prints over the bars; the
+        // control strip does not — it runs the full height of the plot, and the bars never reach
+        // it.
         let floor = match zone {
             LabelZone::ChartBottom => geom.plot_bottom - geom.volume_band_h.max(0.0),
             _ => geom.plot_bottom,

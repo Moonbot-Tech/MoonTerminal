@@ -36,6 +36,10 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
     assert!(!empty.chart_graphics.hide_order_move_history);
     assert_eq!(empty.chart_graphics.trade_arrow_scale, 1.0);
     assert_eq!(empty.chart_graphics.connector_thickness_px, 2.0);
+    assert!(
+        !empty.chart_graphics.candle_volume_labels_over,
+        "a file written before the switch keeps its captions above the band"
+    );
 
     let doc = "analytics_period = \"p-cur-month\"\n\
                [chart_graphics]\n\
@@ -44,7 +48,8 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
                show_real_trades = \"yes\"\n\
                show_emulator_trades = false\n\
                hide_closed_sell_line = false\n\
-               hide_order_move_history = \"not-a-bool\"\n";
+               hide_order_move_history = \"not-a-bool\"\n\
+               candle_volume_labels_over = \"maybe\"\n";
     let decoded: WindowLayout = toml::from_str(doc)
         .expect("one malformed chart-graphics field must not reject the layout document");
     assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
@@ -59,6 +64,10 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
     assert!(
         !decoded.chart_graphics.hide_order_move_history,
         "a malformed opt-in history preference must preserve its false default"
+    );
+    assert!(
+        !decoded.chart_graphics.candle_volume_labels_over,
+        "a malformed captions-over-volume switch must fall back to above"
     );
 }
 

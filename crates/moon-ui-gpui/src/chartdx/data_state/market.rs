@@ -1204,6 +1204,7 @@ impl ChartDataState {
                 moon_chart::visible_volume_stats(&pr.volume_samples, vol_from, vol_to)
             };
             pr.volume_scale_right = self.chart_graphics.candle_volume_scale_right;
+            pr.labels_over_volume = self.chart_graphics.candle_volume_labels_over;
             let next_volume_style = match pr.volume_stats {
                 // Nothing visible, or every visible bucket empty: draw no band rather than
                 // normalise against a zero maximum.

@@ -181,6 +181,32 @@ fn volume_scale_labels_are_larger_and_bolder_than_the_axis() {
     );
 }
 
+/// With the captions-over-volume switch on, the caption pass is told the band is not there while
+/// the band's own scale labels keep the real height.
+///
+/// Breakage this pins: zeroing the shared `volume_band_h` instead of the caption input, which
+/// would drop the max/avg labels onto the plot floor; or forgetting the switch on the caption
+/// input, which is the whole feature.
+#[test]
+fn captions_over_volume_hide_the_band_from_the_caption_pass_only() {
+    let prepare: String = include_str!("prepare.rs")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(
+        prepare.contains("volume_band_h:iflabels_over_volume{0.0}else{volume_band_h},"),
+        "the caption input alone must lose the band under the switch"
+    );
+    // The scale labels are placed from the real band, before the caption input is built.
+    let scale_at = prepare
+        .find("lety=plot_bottom-band*frac;")
+        .expect("the scale labels place from the band height");
+    let captions_at = prepare
+        .find("volume_band_h:iflabels_over_volume")
+        .expect("the caption input applies the switch");
+    assert!(scale_at < captions_at);
+}
+
 /// A reference line too close to the band floor keeps its label off the plot's bottom edge.
 ///
 /// Breakage this pins: the former fixed 6px threshold, which was already under half the axis line

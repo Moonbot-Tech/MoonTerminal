@@ -76,6 +76,7 @@ impl RenderState {
             let volume_style = self.panes[idx].volume_style;
             let volume_stats = self.panes[idx].volume_stats;
             let volume_scale_right = self.panes[idx].volume_scale_right;
+            let labels_over_volume = self.panes[idx].labels_over_volume;
             // Label layout for this frame, used by badges in sync_readout_params. Retain the old
             // layout for comparison: zoom changes Y, so backdrops must move with their text.
             let previous_placed = std::mem::take(&mut self.panes[idx].label_placed);
@@ -183,7 +184,14 @@ impl RenderState {
                 orderbook_enabled,
                 orderbook_left: self.panes[idx].orderbook_view.bounds[0] / sf,
                 scale_factor: sf,
-                volume_band_h,
+                // The band's own scale labels above keep the real height; only the captions are
+                // told the band is not there, so they start at the plot's floor and print over
+                // the bars.
+                volume_band_h: if labels_over_volume {
+                    0.0
+                } else {
+                    volume_band_h
+                },
             };
             readout_metrics_changed |=
                 self.draw_pane_captions(ctx, idx, caption_input, caption_fg)?;
