@@ -10,7 +10,7 @@ use moon_core::config::{
     DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, MANUAL_STRAT_SLOTS,
     ManualStratState, StratSlot, TakeProfitMode,
 };
-use moon_core::feed::{ClientSettingsEdit, FieldMask, StrategyRow};
+use moon_core::feed::{ClientSettingsEdit, FieldMask, OrderRow, StrategyRow};
 use moon_core::market::MarketQuantityUnit;
 use moon_core::session::CoreId;
 
@@ -2531,25 +2531,17 @@ impl Backend {
         true
     }
 
-    /// Cancel pending buy orders across all markets for a core for the "cancel all buys" hotkey.
+    /// Cancel every buy order across all markets of a core for the "cancel all buys" hotkey.
     ///
-    /// The retained order snapshot supplies unique markets with a pending, non-short order whose
-    /// job is not done. A `cancel_market_buys` request is sent for each market, and the return value
-    /// is the number of requests accepted.
+    /// The chart's Cancel Buy button, pressed once per market of the core: the retained order
+    /// snapshot names the markets ([`cancel_all_buys_markets`]) and one `cancel_market_buys` request
+    /// goes to each. The return value is the number of requests accepted.
     pub(crate) fn cancel_all_buys_for_core(&self, core: CoreId) -> usize {
-        let markets: Vec<String> = self
+        let markets = self
             .session
             .store()
             .core(core)
-            .map(|cd| {
-                let mut set = std::collections::BTreeSet::new();
-                for o in &cd.orders {
-                    if !o.is_short && o.pending && !o.job_is_done {
-                        set.insert(o.market.clone());
-                    }
-                }
-                set.into_iter().collect()
-            })
+            .map(|cd| cancel_all_buys_markets(&cd.orders))
             .unwrap_or_default();
         let mut n = 0;
         for m in markets {
@@ -2594,4 +2586,30 @@ impl Backend {
             }
         }
     }
+}
+
+/// Markets a "cancel all buys" press addresses: every market of the snapshot that still carries an
+/// order the core has not finished with.
+///
+/// Nothing narrower on purpose. The per-market path this feeds (`feed::trade::cancel_market_buys`)
+/// picks the entry-phase orders itself, by the wire's own `OrderWorkerStatus`, so a market listed
+/// here that only holds a position costs one no-op core command and nothing on the wire. The gate
+/// this replaces required `pending` — a pending buy CONDITION, which moonproto keeps only while
+/// `status == None` and clears the moment the order is placed — so an ordinary limit buy resting
+/// on the exchange never qualified, and the hotkey sent nothing exactly when the trader had real
+/// buys to pull. Shorts were excluded by the same gate; Moonbot's action is "cancel all buy orders
+/// on all markets", pendings included, both sides, and the per-market button already does both.
+///
+/// Args:
+///     orders: The core's retained order rows.
+///
+/// Returns:
+///     The distinct markets, sorted, so the requests go out in a stable order.
+pub(super) fn cancel_all_buys_markets(orders: &[OrderRow]) -> Vec<String> {
+    let markets: std::collections::BTreeSet<&str> = orders
+        .iter()
+        .filter(|o| !o.job_is_done)
+        .map(|o| o.market.as_str())
+        .collect();
+    markets.into_iter().map(str::to_owned).collect()
 }

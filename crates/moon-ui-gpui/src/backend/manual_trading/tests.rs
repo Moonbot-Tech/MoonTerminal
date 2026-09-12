@@ -5,11 +5,11 @@ use std::time::{Duration, Instant};
 use moon_core::config::{
     DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
 };
-use moon_core::feed::{ClientSettingsEdit, StrategyRow};
+use moon_core::feed::{ClientSettingsEdit, OrderRow, StrategyRow};
 
 use super::{
     HOOK_STRATEGY_KIND, IGNORE_SELL_LOCAL_TTL, MANUAL_STRATEGY_KIND, PANIC_LOCAL_TTL,
-    PANIC_TOGGLE_DEBOUNCE, apply_group_exit_edit, effective_ignore_sell,
+    PANIC_TOGGLE_DEBOUNCE, apply_group_exit_edit, cancel_all_buys_markets, effective_ignore_sell,
     effective_manual_strat_state, effective_panic_armed, exit_source, manual_selection_is_broken,
     manual_strat_seed, manual_strategy_id, panic_local_settled, panic_press_absorbed,
     planned_sell_price, resolve_manual_selection, seed_on_enable, stop_price,
@@ -655,5 +655,90 @@ fn fresh_panic_arm_override_precedes_a_disarmed_snapshot() {
     assert!(
         effective_panic_armed(Some((true, Duration::ZERO)), || false),
         "a fresh local arm must outrank a disarmed core snapshot"
+    );
+}
+
+/// A retained order row as the live feed builds one: a long limit buy resting on the exchange —
+/// `pending` is false because moonproto clears the buy condition once the order is placed.
+fn resting_buy(uid: u64, market: &str) -> OrderRow {
+    OrderRow {
+        market: market.into(),
+        market_display: market.into(),
+        coin: market.trim_end_matches("USDT").into(),
+        quote: "USDT".into(),
+        is_short: false,
+        size: 0.01,
+        remaining_size: 0.01,
+        sl_on: false,
+        ts_on: false,
+        vstop_on: false,
+        sl_fixed: false,
+        ts_fixed: false,
+        vstop_fixed: false,
+        vstop_level: 0.0,
+        vstop_vol: 0.0,
+        buy_price: 60_000.0,
+        sell_price: 0.0,
+        create_time_ms: 1_000.0,
+        sell_create_time_ms: 0.0,
+        entry_fill_time_ms: 0.0,
+        price: 60_000.0,
+        fill_pct: 0.0,
+        strat: "test".into(),
+        strat_name: String::new(),
+        strat_id: 0,
+        status: String::new(),
+        uid,
+        emulator: false,
+        job_is_done: false,
+        pending: false,
+        filled: false,
+        stop_loss: None,
+        trailing: None,
+        take_profit: None,
+        vstop: None,
+        pending_cond: None,
+        liq: None,
+        panic_sell: false,
+        is_moon_shot: false,
+        corridor_price_down: 0.0,
+        corridor_price_up: 0.0,
+        buy_trace: None,
+        sell_trace: None,
+    }
+}
+
+/// Regression target: the Cancel All Buys hotkey addressed only markets holding a LONG PENDING
+/// order. A pending buy condition exists only while the order has not reached the exchange, so a
+/// trader with ordinary limit buys resting in the book pressed the key and nothing at all was sent
+/// (reported 2026-09-11). The hotkey is the chart's Cancel Buy button across every market of the
+/// core, and that button pulls resting buys, pendings and shorts alike.
+#[test]
+fn cancel_all_buys_addresses_every_market_with_an_unfinished_order() {
+    let resting = resting_buy(1, "BTCUSDT");
+    let short = OrderRow {
+        is_short: true,
+        ..resting_buy(2, "ETHUSDT")
+    };
+    let pending = OrderRow {
+        pending: true,
+        pending_cond: Some(0.5),
+        ..resting_buy(3, "ADAUSDT")
+    };
+    let done = OrderRow {
+        job_is_done: true,
+        ..resting_buy(4, "XRPUSDT")
+    };
+    let twice = resting_buy(5, "BTCUSDT");
+
+    let markets = cancel_all_buys_markets(&[resting, short, pending, done, twice]);
+    assert_eq!(
+        markets,
+        vec!["ADAUSDT", "BTCUSDT", "ETHUSDT"],
+        "every market with a live order, once each; the finished one dropped"
+    );
+    assert!(
+        cancel_all_buys_markets(&[]).is_empty(),
+        "an empty snapshot names no market"
     );
 }
