@@ -36,7 +36,9 @@ steps:
       В MoonBot зелёный кружок слева внизу открывает <code>Info</code>; в строке <code>Moon Kernel</code>
       нажмите <code>Settings</code> — откроется <code>Moon Proto</code>; на вкладке <code>Settings</code>
       включите <code>Kernel (VPS)</code>, задайте <code>Port</code> (по умолчанию <code>5017</code>),
-      нажмите <code>Apply</code> — появится зелёное «Server activated on port …». На строке <code>Key:</code>
+      выберите версию переключателями <code>V0</code> / <code>V1</code> / <code>V2</code> (MoonBot
+      по умолчанию создаёт ключ <code>V0</code>: если не сменить версию до <code>Copy Key</code>,
+      терминал прочитает из ключа <code>V0</code>), нажмите <code>Apply</code> — появится зелёное «Server activated on port …». На строке <code>Key:</code>
       нажмите <code>Copy Key</code> (ключа нет — <code>New Key</code>). Вставьте его в поле «Ключ»
       кнопкой из буфера. Хост и порт отдельно вводить не надо — они внутри ключа.'
     en: 'The <code>+ Add core (to "default")</code> button creates a row. The order matters: the key
@@ -47,7 +49,10 @@ steps:
       VPS needs only the Windows rule. In MoonBot the green dot at the bottom left opens <code>Info</code>;
       on the <code>Moon Kernel</code> row press <code>Settings</code>, which opens <code>Moon Proto</code>;
       on its <code>Settings</code> tab tick <code>Kernel (VPS)</code>, set <code>Port</code> (default
-      <code>5017</code>), press <code>Apply</code> — a green "Server activated on port …" appears.
+      <code>5017</code>), choose the version with the <code>V0</code> / <code>V1</code> / <code>V2</code>
+      radio buttons (MoonBot creates a <code>V0</code> key by default: unless you change the version
+      before <code>Copy Key</code>, the terminal reads <code>V0</code> from the key), press
+      <code>Apply</code> — a green "Server activated on port …" appears.
       On the <code>Key:</code> row press <code>Copy Key</code> (<code>New Key</code> if there is no
       key yet). Paste it into the Key field with the clipboard button. Host and port are not entered
       separately — they are inside the key.'
