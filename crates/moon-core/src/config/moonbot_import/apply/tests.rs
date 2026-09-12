@@ -3,12 +3,13 @@
 use super::super::plan::{PlannedValue, SettingChange};
 use super::*;
 
+/// Build a setter fixture with inert typed preview fields; application ignores the wording.
 fn change(id: &str, value: PlannedValue) -> SettingChange {
     SettingChange {
         id: id.into(),
-        label: String::new(),
-        current: String::new(),
-        new: String::new(),
+        label: super::super::preview::PreviewCaption::ConfigField(String::new()),
+        current: super::super::preview::PreviewValue::Data(String::new()),
+        new: super::super::preview::PreviewValue::Data(String::new()),
         value,
         same: false,
     }

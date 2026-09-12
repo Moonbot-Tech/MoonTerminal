@@ -65,6 +65,7 @@ fn config() -> AppConfig {
     cfg
 }
 
+/// Pins the clipboard-to-group path, catching unknown-key refusals or changed application semantics.
 #[test]
 fn a_moonbot_buffer_lands_its_scales_and_keypad_keys_in_the_group() {
     let mb = super::parse_clipboard(&clipboard()).expect("the buffer parses");
@@ -87,7 +88,7 @@ fn a_moonbot_buffer_lands_its_scales_and_keypad_keys_in_the_group() {
     assert!(
         plan.unsupported_hotkeys
             .iter()
-            .all(|u| !u.reason.contains("VK")),
+            .all(|u| !matches!(u.reason, super::preview::ImportReason::UnknownKey { .. })),
         "{:?}",
         plan.unsupported_hotkeys
     );
