@@ -123,10 +123,16 @@ fn volume_scale_labels_are_larger_and_bolder_than_the_axis() {
         .filter(|c| !c.is_whitespace())
         .collect();
     assert!(
-        prepare.contains("self.draw_volume_scale_text(ctx,&label,plot_left+4.0,y,0.0,0.5,ink,)?")
+        prepare.contains("self.draw_volume_scale_text(ctx,&label,label_x,y,label_ax,0.5,ink,)?")
             || prepare
-                .contains("self.draw_volume_scale_text(ctx,&label,plot_left+4.0,y,0.0,0.5,ink)?"),
+                .contains("self.draw_volume_scale_text(ctx,&label,label_x,y,label_ax,0.5,ink)?"),
         "the band's scale labels must take the volume-scale face, not the axis one"
+    );
+    // The edge the labels hug is the reader's choice, and the anchor follows the edge: a label at
+    // the right edge anchored by its left corner would run into the price gutter.
+    assert!(
+        prepare.contains("ifvolume_scale_right{(plot_right-4.0,1.0)}else{(plot_left+4.0,0.0)}"),
+        "the scale labels must anchor by the edge they sit at"
     );
 }
 

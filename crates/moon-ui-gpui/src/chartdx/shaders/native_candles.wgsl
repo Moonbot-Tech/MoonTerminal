@@ -178,6 +178,7 @@ struct VolumeStyle {
     scale: vec4<f32>,
     m: vec4<f32>,  // x style, y height fraction, z 1/max, w avg/max
     m2: vec4<f32>, // x retired band cap, y bar width px, z line px
+    m3: vec4<f32>, // x sides switch (0 off / 1 overlaid / 2 stacked), y split boundary rel ms, z interval rel ms
 };
 
 @group(0) @binding(3) var<uniform> vs: VolumeStyle;
@@ -203,6 +204,12 @@ fn vol_band_h() -> f32 {
 }
 
 fn vol_height_px(cd: Candle) -> f32 {
+    if vs.m3.x >= 0.5 {
+        // Sides switch on: the candle half is read as an interval figure on the linear scale.
+        let tf_rel = select(cs.tf_rel, cd.tf_rel, cd.tf_rel > 0.0);
+        let lin = clamp(cd.vol * (vs.m3.z / max(tf_rel, 1.0)) * vs.m.z, 0.0, 1.0);
+        return lin * vol_band_h();
+    }
     let norm = clamp(cd.vol * vs.m.z, 0.0, 1.0);
     return sqrt(norm) * vol_band_h();
 }
@@ -220,6 +227,9 @@ fn volume_bars_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) 
         return vol_cull();
     }
     let cd = candles[iid];
+    if vs.m3.x >= 0.5 && cd.t_open >= vs.m3.y {
+        return vol_cull(); // the split history begins here; the sides layer draws from it on
+    }
     let c0 = vol_center_px(cd);
     let base = cv.bounds.y + cv.bounds.w - 1.0;
     let h0 = vol_height_px(cd);
@@ -268,7 +278,8 @@ struct VolumeScaleOut {
 @vertex
 fn volume_scale_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VolumeScaleOut {
     var o: VolumeScaleOut;
-    if vs.m.x < 0.5 {
+    if vs.m.x < 0.5 || vs.m3.x >= 0.5 {
+        // Off, or the sides layer draws the (linear) scale for both halves.
         o.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
         return o;
     }

@@ -16,9 +16,9 @@ pub use empty::{EmptyBlock, EmptyPlaces, EmptySlot};
 
 use serde_compat::{
     de_arrow_scale, de_auto_workspace_rail_width, de_candle_volume_alpha, de_candle_volume_height,
-    de_candle_volume_scale, de_candle_volume_style, de_clock_zone, de_connector_thickness,
-    de_lenient_chart_labels, de_lenient_false, de_lenient_graphics, de_lenient_map,
-    de_lenient_seed, de_lenient_true, de_lenient_u32, de_marker_scale,
+    de_candle_volume_scale, de_candle_volume_style, de_candle_volume_tf_s, de_clock_zone,
+    de_connector_thickness, de_lenient_chart_labels, de_lenient_false, de_lenient_graphics,
+    de_lenient_map, de_lenient_seed, de_lenient_true, de_lenient_u32, de_marker_scale,
     de_strategies_tree_text_step, de_table_sort_map, de_trade_volume_alpha,
 };
 pub use serde_compat::{de_lenient, de_lenient_bool};
@@ -1435,6 +1435,27 @@ pub struct ChartGraphicsCfg {
         deserialize_with = "de_candle_volume_scale"
     )]
     pub candle_volume_scale: [u8; 3],
+    /// Moonbot's `Vol` on top of the band: where the retained trade history reaches, the band
+    /// shows BOUGHT and SOLD as rolling sums over `candle_volume_tf_s`; before that it keeps the
+    /// candle turnover in the candle's own colours, scaled to the same interval so the two halves
+    /// share one scale. Rides on hills or bars alike; off, the band is the candle turnover only.
+    #[serde(default, deserialize_with = "de_lenient_false")]
+    pub candle_volume_sides: bool,
+    /// With [`Self::candle_volume_sides`]: draw SOLD on top of BOUGHT so a column's height is
+    /// their sum, rather than overlaying the two from the floor so its height is the larger side.
+    /// Moonbot's `Kind`: `Stacked graph` / `Smooth graph`.
+    #[serde(default, deserialize_with = "de_lenient_false")]
+    pub candle_volume_stacked: bool,
+    /// With [`Self::candle_volume_sides`]: the rolling interval in seconds each side's turnover is
+    /// summed over, one of `moon_chart::side_volume::SIDE_TF_CHOICES_S`; `0` picks one from the
+    /// zoom so the hill stays readable. Not the candle timeframe: Moonbot's `TimeFrame` on its
+    /// `Vol` popup.
+    #[serde(default, deserialize_with = "de_candle_volume_tf_s")]
+    pub candle_volume_tf_s: u32,
+    /// Print the band's scale labels at the plot's RIGHT edge instead of its left. Moonbot's
+    /// `Ind. Pos`; applies to every bottom-volume style.
+    #[serde(default, deserialize_with = "de_lenient_false")]
+    pub candle_volume_scale_right: bool,
 }
 
 impl Default for ChartGraphicsCfg {
@@ -1454,6 +1475,10 @@ impl Default for ChartGraphicsCfg {
             candle_volume_height: def_candle_volume_height(),
             candle_volume_alpha: def_candle_volume_alpha(),
             candle_volume_scale: def_candle_volume_scale(),
+            candle_volume_sides: false,
+            candle_volume_stacked: false,
+            candle_volume_tf_s: 0,
+            candle_volume_scale_right: false,
         }
     }
 }

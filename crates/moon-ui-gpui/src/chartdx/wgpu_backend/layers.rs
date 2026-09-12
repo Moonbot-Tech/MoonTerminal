@@ -23,6 +23,7 @@ impl WgpuLayers {
             price_line_capacity: MIN_COMBO_CAPACITY,
             candles: Vec::new(),
             candle_style: CandleStyleGpu::default(),
+            sides: Vec::new(),
             levels: Vec::new(),
             zones: Vec::new(),
             hlines: Vec::new(),
@@ -54,12 +55,23 @@ impl WgpuLayers {
             candle_style_uniform: BufferSlot::default(),
             volume_style_uniform: BufferSlot::default(),
             volume_style: VolumeStyleGpu::default(),
+            side_buffer: BufferSlot::default(),
             combo_buffers_dirty: true,
             price_line_buffers_dirty: true,
             book_buffer_dirty: true,
             userdata_buffers_dirty: true,
             candle_buffers_dirty: true,
+            side_buffer_dirty: true,
         }
+    }
+
+    /// Replaces the sides band's bucket set when its series is re-read.
+    ///
+    /// The band resides in the base cache, so this invalidates it for rebaking.
+    pub fn set_side_volume(&mut self, data: Vec<SideVolumeGpu>) {
+        self.sides = data;
+        self.side_buffer_dirty = true;
+        self.base_cache.valid = false;
     }
 
     /// Replaces the complete candle set when the series revision changes.
@@ -271,6 +283,7 @@ impl WgpuLayers {
         self.candle_buffer = BufferSlot::default();
         self.candle_style_uniform = BufferSlot::default();
         self.volume_style_uniform = BufferSlot::default();
+        self.side_buffer = BufferSlot::default();
         self.price_style_uniform = BufferSlot::default();
         self.tick_style_uniform = BufferSlot::default();
         self.combo_buffers_dirty = true;
@@ -278,6 +291,7 @@ impl WgpuLayers {
         self.book_buffer_dirty = true;
         self.userdata_buffers_dirty = true;
         self.candle_buffers_dirty = true;
+        self.side_buffer_dirty = true;
     }
 
     /// Borrow the retained wgpu tick ring without a per-cursor copy.

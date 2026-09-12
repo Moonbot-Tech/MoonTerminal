@@ -929,10 +929,16 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                             // which would make nonsense of a maximum. Read it against
                             // `shell_render`: at rest the window repaints about once a second and
                             // this reports roughly a thousand, meaning nothing.
+                            // `gpu` is this process's share of the GPU engines (PDH, Windows
+                            // only, zero elsewhere) and `mem` its working set in MB — the two
+                            // figures a "did the chart get more expensive" question is asked in,
+                            // and the same sampler the status bar already pays for.
                             format!(
-                                "cpu={:.1} sys={:.1} windows={} charts={} gapmax={:.0} drawmax={:.0} dirtymax={:.0}",
+                                "cpu={:.1} sys={:.1} gpu={:.1} mem={:.0} windows={} charts={} gapmax={:.0} drawmax={:.0} dirtymax={:.0}",
                                 b.snap.cpu_process,
                                 b.snap.cpu_system,
+                                b.snap.gpu_process,
+                                b.snap.mem_mb,
                                 windows,
                                 charts,
                                 crate::diag::take_frame_gap_max_ms(),

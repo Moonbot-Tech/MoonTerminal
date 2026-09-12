@@ -71,7 +71,9 @@ impl WgpuLayers {
         }
         // Candles render beneath trade crosses; combo is blitted over the base cache.
         if !self.candles.is_empty() {
-            // The band and its scale draw BEFORE the bodies so the candles sit on top.
+            // The band and its scale draw BEFORE the bodies so the candles sit on top. With the
+            // sides switch on the shader culls the candles past the split boundary and the sides
+            // layer below draws the scale.
             if self.volume_style.m[0] >= 0.5 {
                 crate::diag::bump(&crate::diag::CHART_CANDLE_VOLUME_DRAW);
                 // Hills read `candles[iid + 1]`, so they take one instance fewer.
@@ -83,7 +85,9 @@ impl WgpuLayers {
                 if bars > 0 {
                     draw_pipeline(pass, &pipelines.volume_bars, &binds.candle, 6, bars as u32);
                 }
-                draw_pipeline(pass, &pipelines.volume_scale, &binds.candle, 6, 2);
+                if self.volume_style.m3[0] < 0.5 {
+                    draw_pipeline(pass, &pipelines.volume_scale, &binds.candle, 6, 2);
+                }
             }
             crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
             draw_pipeline(
@@ -93,6 +97,21 @@ impl WgpuLayers {
                 18,
                 self.candles.len() as u32,
             );
+        }
+        // The bought/sold half AFTER the candle layer: it covers the candle band's bucket that
+        // straddles the split boundary, and draws the shared scale whether or not samples exist.
+        if self.volume_style.m3[0] >= 0.5 {
+            crate::diag::bump(&crate::diag::CHART_SIDE_VOLUME_DRAW);
+            if !self.sides.is_empty() {
+                draw_pipeline(
+                    pass,
+                    &pipelines.side_volume,
+                    &binds.side,
+                    12,
+                    self.sides.len() as u32,
+                );
+            }
+            draw_pipeline(pass, &pipelines.side_scale, &binds.side, 6, 2);
         }
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
         draw_pipeline(pass, &pipelines.book_bg, &binds.book, 6, 1);

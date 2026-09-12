@@ -6,7 +6,10 @@
 //!   — overlapping trades stay independent prints and are never summed;
 //! * the hovered candle's own bucket turnover, one aggregate figure, labelled with the period it
 //!   covers. The chart has no per-side candle data, so this figure is never split into BUY/SELL and
-//!   never presented as a trade.
+//!   never presented as a trade;
+//! * or, under the sides band, what was BOUGHT and SOLD over the band's rolling interval ending
+//!   at the hovered sample — two aggregates, which is what that band draws and the only place they
+//!   are split.
 
 use moon_chart::tick_volume::TickVolumeRange;
 use rust_i18n::t;
@@ -60,6 +63,44 @@ impl CandleVolume {
     fn new(quote: f32, tf_ms: f64) -> Option<Self> {
         (quote.is_finite() && quote > 0.0).then_some(Self { quote, tf_ms })
     }
+}
+
+/// The hovered sides-band sample: bought and sold over the band's rolling interval ending there.
+///
+/// Two aggregates, never summed into one and never presented as prints: the band draws them as
+/// two filled series, and the readout says which is which. `tf_ms` is the INTERVAL the sums cover
+/// — the pane's configured window — not the sample's own screen span.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SideVolume {
+    buy: f32,
+    sell: f32,
+    tf_ms: f64,
+}
+
+impl SideVolume {
+    /// Accept a sample only when at least one side is a real, positive amount; a side that is not
+    /// reads as nothing on that side rather than as a figure.
+    ///
+    /// Args:
+    ///     bucket: The sample under the pointer.
+    ///     window_ms: The rolling interval its sums cover, milliseconds.
+    fn new(bucket: moon_core::market::SideVolumeBucket, window_ms: i64) -> Option<Self> {
+        let clean = |v: f32| if v.is_finite() && v > 0.0 { v } else { 0.0 };
+        let (buy, sell) = (clean(bucket.buy_quote), clean(bucket.sell_quote));
+        (buy > 0.0 || sell > 0.0).then_some(Self {
+            buy,
+            sell,
+            tf_ms: window_ms as f64,
+        })
+    }
+}
+
+/// What the band under the pointer contributes beside the tick rows: one aggregate for the candle
+/// band, two for the sides band. Never both — a pane draws one band.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum BandFigure {
+    Candle(CandleVolume),
+    Sides(SideVolume),
 }
 
 /// Complete text and measured line boxes; amounts are never truncated to fit a pane.
@@ -140,10 +181,60 @@ fn candle_lines(
     vec![head, value]
 }
 
+/// The sides sample's lines: the interval and both sides, labelled `Bv`/`Sv` like the chart's own
+/// captions, so the reader meets one spelling of "bought" everywhere.
+///
+/// An interval that cannot be named contributes nothing: the band's interval is a whole number
+/// of seconds (a listed choice, or the sampling step where that is wider), so an unnameable one
+/// is a broken value, not a period to guess at.
+fn side_lines(
+    side: SideVolume,
+    unit: &str,
+    locale: &str,
+    stacked: bool,
+    unit_above: bool,
+    compact: bool,
+) -> Vec<String> {
+    let Some(tf) = moon_chart::volume_bars::bucket_label(side.tf_ms) else {
+        return Vec::new();
+    };
+    let buy = tick_amount(side.buy, compact);
+    let sell = tick_amount(side.sell, compact);
+    if !stacked {
+        return vec![
+            t!(
+                "tick_volume.sides_values",
+                locale = locale,
+                tf = tf,
+                buy = buy,
+                sell = sell,
+                unit = unit
+            )
+            .to_string(),
+        ];
+    }
+    let head = if unit_above {
+        t!("tick_volume.sides_head", locale = locale, tf = tf).to_string()
+    } else {
+        t!(
+            "tick_volume.sides_head_unit",
+            locale = locale,
+            tf = tf,
+            unit = unit
+        )
+        .to_string()
+    };
+    vec![
+        head,
+        t!("tick_volume.sides_buy", locale = locale, value = buy).to_string(),
+        t!("tick_volume.sides_sell", locale = locale, value = sell).to_string(),
+    ]
+}
+
 /// Keep the wide wording intact, then trade width for height without dropping a side or unit.
 fn tick_lines(
     ranges: [Option<TickVolumeRange>; 2],
-    candle: Option<CandleVolume>,
+    band: Option<BandFigure>,
     unit: &str,
     locale: &str,
     stacked: bool,
@@ -197,10 +288,14 @@ fn tick_lines(
             );
         }
     }
-    if let Some(candle) = candle {
-        lines.extend(candle_lines(
+    match band {
+        Some(BandFigure::Candle(candle)) => lines.extend(candle_lines(
             candle, unit, locale, stacked, has_ticks, compact,
-        ));
+        )),
+        Some(BandFigure::Sides(side)) => {
+            lines.extend(side_lines(side, unit, locale, stacked, has_ticks, compact))
+        }
+        None => {}
     }
     lines
 }
@@ -212,18 +307,18 @@ fn tick_lines(
 /// money — the block is dropped whole rather than truncated.
 fn fit_tick_readout(
     ranges: [Option<TickVolumeRange>; 2],
-    candle: Option<CandleVolume>,
+    band: Option<BandFigure>,
     unit: &str,
     locale: &str,
     size: [f32; 2],
     mut measure: impl FnMut(&str) -> [f32; 2],
 ) -> Option<TickReadout> {
-    if (ranges.iter().all(Option::is_none) && candle.is_none()) || unit.is_empty() {
+    if (ranges.iter().all(Option::is_none) && band.is_none()) || unit.is_empty() {
         return None;
     }
     let pad = READOUT_PAD_X + READOUT_INSET;
     for (stacked, compact) in [(false, false), (true, false), (true, true)] {
-        let lines: Vec<_> = tick_lines(ranges, candle, unit, locale, stacked, compact)
+        let lines: Vec<_> = tick_lines(ranges, band, unit, locale, stacked, compact)
             .into_iter()
             .map(|line| {
                 let metrics = measure(&line);
@@ -324,7 +419,10 @@ impl RenderState {
         // a plain pan, exactly as the band's own statistics are, so the figure survives the gesture
         // that never refills the history buffer. `t_open_ms` is absolute while the view's times are
         // relative to the chart epoch, hence the epoch added back here.
-        let candle = moon_chart::tick_volume::cursor_time(
+        // With the sides switch on, the hover reads the sides sample where the split history
+        // reaches (from the first resident sample on) and the candle before that — the same
+        // boundary the band itself changes colour at.
+        let band = moon_chart::tick_volume::cursor_time(
             view.bounds,
             view.view_time0,
             view.time_to_px,
@@ -332,13 +430,26 @@ impl RenderState {
         )
         .filter(|_| hover_candle)
         .and_then(|at| {
-            moon_chart::volume_bars::sample_at(&pr.volume_samples, pr.epoch_ms + at as f64)
-        })
-        .and_then(|sample| CandleVolume::new(sample.quote_volume, sample.tf_ms));
+            let t_ms = pr.epoch_ms + at as f64;
+            let split_from = pr
+                .side_samples
+                .first()
+                .map(|b| b.t_open_ms as f64)
+                .unwrap_or(f64::INFINITY);
+            if pr.volume_style.m3[0] >= 0.5 && t_ms >= split_from {
+                moon_chart::side_volume::bucket_at(&pr.side_samples, t_ms)
+                    .and_then(|b| SideVolume::new(b, pr.side_tf_ms))
+                    .map(BandFigure::Sides)
+            } else {
+                moon_chart::volume_bars::sample_at(&pr.volume_samples, t_ms)
+                    .and_then(|sample| CandleVolume::new(sample.quote_volume, sample.tf_ms))
+                    .map(BandFigure::Candle)
+            }
+        });
         let unit = pr.quote.clone();
         let Some(readout) = fit_tick_readout(
             ranges,
-            candle,
+            band,
             &unit,
             &rust_i18n::locale(),
             [width / sf, height / sf],

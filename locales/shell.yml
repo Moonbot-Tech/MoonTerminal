@@ -1044,6 +1044,45 @@ chart.graphics.volume_style_off:
   ru: "Выключены"
   en: "Off"
   es: "Desactivados"
+# The switch that puts Moonbot's `Vol` on top of hills or bars: bought and sold as rolling sums
+# where the trade history reaches, the candle turnover before that. Named after the
+# reference terminal at the user's request — the reader knows the picture by that name.
+chart.graphics.volume_sides:
+  ru: "МБ: покупки/продажи по трейдам"
+  en: "MB: bought/sold from trades"
+  es: "MB: compras/ventas por operaciones"
+chart.graphics.volume_kind:
+  ru: "Вид"
+  en: "Kind"
+  es: "Tipo"
+chart.graphics.volume_kind_overlay:
+  ru: "Наложение"
+  en: "Overlaid"
+  es: "Superpuesto"
+chart.graphics.volume_kind_stacked:
+  ru: "Стопка"
+  en: "Stacked"
+  es: "Apilado"
+chart.graphics.volume_tf:
+  ru: "Интервал"
+  en: "Interval"
+  es: "Intervalo"
+chart.graphics.volume_tf_auto:
+  ru: "Авто"
+  en: "Auto"
+  es: "Auto"
+chart.graphics.volume_scale_pos:
+  ru: "Шкала"
+  en: "Scale"
+  es: "Escala"
+chart.graphics.volume_scale_left:
+  ru: "Слева"
+  en: "Left"
+  es: "Izquierda"
+chart.graphics.volume_scale_right:
+  ru: "Справа"
+  en: "Right"
+  es: "Derecha"
 chart.graphics.candle_volume_height:
   ru: "Высота полосы объёмов"
   en: "Volume band height"

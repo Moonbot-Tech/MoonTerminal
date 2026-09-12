@@ -351,6 +351,7 @@ struct VolumeStyle {
     float4 scale;
     float4 m;  // x style, y height fraction, z 1/max, w avg/max
     float4 m2; // x retired band cap, y bar width px, z line px
+    float4 m3; // x sides switch (0 off / 1 overlaid / 2 stacked), y split boundary rel ms, z interval rel ms
 };
 
 struct VolumeBarOut {
@@ -370,7 +371,14 @@ static inline float vol_band_h(constant ChartView& cv, constant VolumeStyle& vs)
     return cv.bounds.w * vs.m.y;
 }
 
-static inline float vol_height_px(constant ChartView& cv, constant VolumeStyle& vs, Candle cd) {
+static inline float vol_height_px(constant ChartView& cv, constant CandleStyle& cs,
+                                  constant VolumeStyle& vs, Candle cd) {
+    if (vs.m3.x >= 0.5) {
+        // Sides switch on: the candle half is read as an interval figure on the linear scale.
+        float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs.tf_rel;
+        float lin = saturate(cd.vol * (vs.m3.z / max(tf_rel, 1.0)) * vs.m.z);
+        return lin * vol_band_h(cv, vs);
+    }
     float norm = saturate(cd.vol * vs.m.z);
     return sqrt(norm) * vol_band_h(cv, vs);
 }
@@ -384,9 +392,12 @@ vertex VolumeBarOut volume_bars_vertex(uint vid [[vertex_id]], uint iid [[instan
         return { float4(2.0, 2.0, 0.0, 1.0), 0u };
     }
     Candle cd = candles[iid];
+    if (vs.m3.x >= 0.5 && cd.t_open >= vs.m3.y) {
+        return { float4(2.0, 2.0, 0.0, 1.0), 0u }; // the split history begins here
+    }
     float2 c0 = vol_center_px(cv, cs, cd);
     float base = cv.bounds.y + cv.bounds.w - 1.0;
-    float h0 = vol_height_px(cv, vs, cd);
+    float h0 = vol_height_px(cv, cs, vs, cd);
     float2 corner = CORNERS_01[vid % 6u];
     uint up = (cd.c >= cd.o) ? 1u : 0u;
 
@@ -404,7 +415,7 @@ vertex VolumeBarOut volume_bars_vertex(uint vid [[vertex_id]], uint iid [[instan
         return { float4(2.0, 2.0, 0.0, 1.0), 0u };
     }
     float2 c1 = vol_center_px(cv, cs, cd1);
-    float h1 = vol_height_px(cv, vs, cd1);
+    float h1 = vol_height_px(cv, cs, vs, cd1);
     float x = mix(c0.x, c1.x, corner.x);
     float h = mix(h0, h1, corner.x);
     float2 pxh = float2(x, base - h * (1.0 - corner.y));
@@ -424,7 +435,8 @@ struct VolumeScaleOut {
 vertex VolumeScaleOut volume_scale_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                                           constant ChartView& cv [[buffer(0)]],
                                           constant VolumeStyle& vs [[buffer(3)]]) {
-    if (vs.m.x < 0.5) {
+    if (vs.m.x < 0.5 || vs.m3.x >= 0.5) {
+        // Off, or the sides layer draws the (linear) scale for both halves.
         return { float4(2.0, 2.0, 0.0, 1.0) };
     }
     float band = vol_band_h(cv, vs);
@@ -438,6 +450,83 @@ vertex VolumeScaleOut volume_scale_vertex(uint vid [[vertex_id]], uint iid [[ins
 }
 
 fragment float4 volume_scale_fragment(constant VolumeStyle& vs [[buffer(3)]]) {
+    return vs.scale;
+}
+
+// ---- Sides volume band (mirrors side_volume.hlsl) --------------------------
+// One instance = one bucket, twelve vertices: the buy column (0-5) then the sell column (6-11)
+// over it. Kinds: vs.m3.x 1 overlaid / 2 stacked. Heights are LINEAR; the reference lines sit at
+// the maximum and at vs.m.w. Binds ChartView at 0, VolumeStyle at 3 (the candle band's slot, the
+// same uniform) and the bucket storage at 2.
+struct SideBucket {
+    float t_open;
+    float tf_rel;
+    float buy;
+    float sell;
+};
+
+struct SideOut {
+    float4 position [[position]];
+    uint sell [[flat]];
+};
+
+static inline float side_height_px(constant ChartView& cv, constant VolumeStyle& vs, float value) {
+    return saturate(value * vs.m.z) * vol_band_h(cv, vs);
+}
+
+vertex SideOut side_band_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
+                                  constant ChartView& cv [[buffer(0)]],
+                                  const device SideBucket* buckets [[buffer(2)]],
+                                  constant VolumeStyle& vs [[buffer(3)]]) {
+    if (vs.m3.x < 0.5) {
+        return { float4(2.0, 2.0, 0.0, 1.0), 0u };
+    }
+    SideBucket b = buckets[iid];
+    uint sell = (vid >= 6u) ? 1u : 0u;
+    float value = (sell == 1u) ? b.sell : b.buy;
+    if (value <= 0.0) {
+        return { float4(2.0, 2.0, 0.0, 1.0), 0u };
+    }
+    float x0 = cv.bounds.x + (b.t_open - cv.view_time0) * cv.time_to_px;
+    float w = max(b.tf_rel * cv.time_to_px, 1.0);
+    if (x0 > cv.bounds.x + cv.bounds.z || x0 + w < cv.bounds.x) {
+        return { float4(2.0, 2.0, 0.0, 1.0), 0u };
+    }
+    float base = cv.bounds.y + cv.bounds.w - 1.0;
+    float h = side_height_px(cv, vs, value);
+    float lift = (sell == 1u && vs.m3.x >= 1.5) ? side_height_px(cv, vs, b.buy) : 0.0;
+    float2 corner = CORNERS_01[vid % 6u];
+    // Samples abut: from this sample's rounded left edge to the next one's, no seams, no gaps.
+    float x1 = round(x0 + w);
+    float2 p0 = float2(round(x0), base - lift - h);
+    float2 sz = float2(max(x1 - round(x0), 1.0), h);
+    float2 px = p0 + corner * sz;
+    px.x = clamp(px.x, cv.bounds.x, cv.bounds.x + cv.bounds.z);
+    return { to_clip(px, cv.resolution), sell };
+}
+
+fragment float4 side_band_fragment(SideOut in [[stage_in]],
+                                     constant VolumeStyle& vs [[buffer(3)]]) {
+    return (in.sell == 1u) ? vs.down : vs.up;
+}
+
+vertex VolumeScaleOut side_scale_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
+                                        constant ChartView& cv [[buffer(0)]],
+                                        constant VolumeStyle& vs [[buffer(3)]]) {
+    if (vs.m3.x < 0.5) {
+        return { float4(2.0, 2.0, 0.0, 1.0) };
+    }
+    float band = vol_band_h(cv, vs);
+    float frac = (iid == 0u) ? 1.0 : saturate(vs.m.w);
+    float base = cv.bounds.y + cv.bounds.w - 1.0;
+    float y = round(base - band * frac);
+    float th = max(vs.m2.z, 1.0);
+    float2 corner = CORNERS_01[vid % 6u];
+    float2 px = float2(cv.bounds.x, y) + corner * float2(cv.bounds.z, th);
+    return { to_clip(px, cv.resolution) };
+}
+
+fragment float4 side_scale_fragment(constant VolumeStyle& vs [[buffer(3)]]) {
     return vs.scale;
 }
 

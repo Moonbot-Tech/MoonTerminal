@@ -175,6 +175,7 @@ cbuffer VolumeStyle : register(b2) {
     float4 vs_scale; // reference-line rgb + alpha
     float4 vs_m;     // x style, y height fraction, z 1/max, w avg/max
     float4 vs_m2;    // x retired band cap, y bar width px, z line px
+    float4 vs_m3;    // x sides switch (0 off / 1 overlaid / 2 stacked), y split boundary rel ms, z interval rel ms
 };
 
 struct VolumeBarOut {
@@ -198,6 +199,13 @@ float vol_band_h() {
 }
 
 float vol_height_px(Candle cd) {
+    if (vs_m3.x >= 0.5) {
+        // Sides switch on: the candle half continues the split's rolling sums, so its turnover
+        // is read as an interval figure (vol × interval / tf) on the same LINEAR scale.
+        float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs_tf_rel;
+        float norm = saturate(cd.vol * (vs_m3.z / max(tf_rel, 1.0)) * vs_m.z);
+        return norm * vol_band_h();
+    }
     float norm = saturate(cd.vol * vs_m.z);
     // sqrt matches the per-trade band: a linear scale buries every ordinary bucket under one spike.
     return sqrt(norm) * vol_band_h();
@@ -215,6 +223,9 @@ VolumeBarOut volume_bars_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID
         return vol_cull(); // style OFF
     }
     Candle cd = candles[iid];
+    if (vs_m3.x >= 0.5 && cd.t_open >= vs_m3.y) {
+        return vol_cull(); // the split history begins here; side_volume.hlsl draws from it on
+    }
     float2 c0 = vol_center_px(cd);
     float base = cv_bounds.y + cv_bounds.w - 1.0;
     float h0 = vol_height_px(cd);
@@ -272,7 +283,8 @@ struct VolumeScaleOut {
 
 VolumeScaleOut volume_scale_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     VolumeScaleOut o;
-    if (vs_m.x < 0.5) {
+    if (vs_m.x < 0.5 || vs_m3.x >= 0.5) {
+        // Off, or the sides layer draws the (linear) scale for both halves.
         o.pos = float4(2.0, 2.0, 0.0, 1.0);
         return o;
     }

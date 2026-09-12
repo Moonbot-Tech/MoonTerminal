@@ -44,6 +44,8 @@ pub mod pane;
 #[cfg(windows)]
 pub mod readout;
 mod render_state;
+#[cfg(windows)]
+pub mod side_volume;
 pub(crate) use render_state::arrival_flash_enabled;
 mod text;
 /// The caption editor formats its sample line with the chart's OWN formatter, never a second
@@ -87,8 +89,9 @@ use backend::PlatformLayers;
 use pane::{Container, ContainerKind};
 use types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, PriceStyleGpu, ReadoutRect, TickStyleGpu, VolumeStyleGpu, cover_uv,
-    fill_candle_upload, fill_cross_upload, fill_liq_upload, fill_price_upload, rgb4, rgba3,
+    GridParams, PriceStyleGpu, ReadoutRect, SideVolumeGpu, TickStyleGpu, VolumeStyleGpu, cover_uv,
+    fill_candle_upload, fill_cross_upload, fill_liq_upload, fill_price_upload,
+    fill_side_volume_upload, rgb4, rgba3,
 };
 
 const CHART_PHOTO_BACKGROUND_ENABLED: bool = false;
@@ -623,6 +626,31 @@ struct PaneRender {
     /// The numeric labels read these rather than inverting `VolumeStyleGpu.m`, whose fields are
     /// normalisation reciprocals and are deliberately quantized for cache stability.
     volume_stats: Option<moon_chart::VolumeStats>,
+    /// Retained bought/sold samples behind the sides half of the band (`candle_volume_sides`),
+    /// for its visible-range maximum, the split boundary and the cursor readout; empty while
+    /// the switch is off.
+    ///
+    /// Retained for the same reason `volume_samples` is: the series is re-read only when the
+    /// history moved, while a plain pan must still rescale the band from what is resident.
+    side_samples: Vec<moon_core::market::SideVolumeBucket>,
+    /// Reusable sides-layer upload buffer.
+    side_upload: Vec<SideVolumeGpu>,
+    /// Spare bucket buffer a re-read lands in, compared against `side_samples` before anything
+    /// is shipped; swapped in when it differs, so neither read allocates.
+    side_scratch: Vec<moon_core::market::SideVolumeBucket>,
+    /// Rolling window the resident sides samples were summed over, milliseconds; `0` while the
+    /// sides style is off. A different effective window — a zoom under `Auto`, or a popup pick —
+    /// is a re-read even when the history did not move. The cursor readout names this window.
+    side_tf_ms: i64,
+    /// Sampling step of the resident sides samples, milliseconds (each sample's `tf_ms`); `0`
+    /// while off. Follows the zoom, and moving it is a re-read for the same reason.
+    side_step_ms: i64,
+    /// Absolute `[from, to]` the resident sides samples were read for, unix milliseconds. The
+    /// visible window leaving it is a re-read; `(MAX, MIN)` — nothing resident — makes the first
+    /// visible window leave it at once.
+    side_range: (i64, i64),
+    /// Whether the band's scale labels sit at the plot's right edge; read by the text pass.
+    volume_scale_right: bool,
     combo_cross_capacity: usize,
     combo_price_line_capacity: usize,
     orderbook_view: ChartViewGpu,
@@ -847,6 +875,13 @@ impl PaneRender {
             volume_style: VolumeStyleGpu::default(),
             volume_samples: Vec::new(),
             volume_stats: None,
+            side_samples: Vec::new(),
+            side_upload: Vec::new(),
+            side_scratch: Vec::new(),
+            side_tf_ms: 0,
+            side_step_ms: 0,
+            side_range: (i64::MAX, i64::MIN),
+            volume_scale_right: false,
             combo_cross_capacity: 0,
             combo_price_line_capacity: 0,
             orderbook_view: ChartViewGpu::default(),

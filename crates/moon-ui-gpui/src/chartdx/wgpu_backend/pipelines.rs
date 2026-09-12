@@ -15,6 +15,7 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
     let seg_shader = shader(device, "moon_chart_seg_wgsl", SEG_SHADER);
     let marker_shader = shader(device, "moon_chart_marker_wgsl", MARKER_SHADER);
     let candles_shader = shader(device, "moon_chart_candles_wgsl", CANDLES_SHADER);
+    let side_volume_shader = shader(device, "moon_chart_side_volume_wgsl", SIDE_VOLUME_SHADER);
     let bg_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("moon_chart_bg_layout"),
         entries: &[
@@ -90,6 +91,14 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
             uniform_entry(1, std::mem::size_of::<CandleStyleGpu>()),
             storage_entry(2),
             uniform_entry(3, std::mem::size_of::<VolumeStyleGpu>()),
+        ],
+    });
+    let side_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("moon_chart_side_layout"),
+        entries: &[
+            uniform_entry(0, std::mem::size_of::<ChartViewGpu>()),
+            uniform_entry(1, std::mem::size_of::<VolumeStyleGpu>()),
+            storage_entry(2),
         ],
     });
     let background = pipeline(
@@ -183,6 +192,23 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         "volume_scale_vertex",
         "volume_scale_fragment",
     );
+    // The sides band and its own linear scale, on the same VolumeStyle the candle band reads.
+    let side_volume = pipeline(
+        device,
+        format,
+        &side_volume_shader,
+        &side_layout,
+        "side_band_vertex",
+        "side_band_fragment",
+    );
+    let side_scale = pipeline(
+        device,
+        format,
+        &side_volume_shader,
+        &side_layout,
+        "side_scale_vertex",
+        "side_scale_fragment",
+    );
     let book_bg = opaque_pipeline(
         device,
         format,
@@ -261,6 +287,7 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         cross_layout,
         book_layout,
         candle_layout,
+        side_layout,
         background,
         blit,
         grid,
@@ -275,6 +302,8 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         candles,
         volume_bars,
         volume_scale,
+        side_volume,
+        side_scale,
         zone,
         hline,
         seg,

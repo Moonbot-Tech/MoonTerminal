@@ -85,6 +85,25 @@ where
         let _ = std::fs::write(&note, format!("--fixture {name}: {error}\n"));
         eprintln!("--fixture {name}: {error} (см. {})", note.display());
     })?;
+    // A layout the bench should open with. The bench's `cfg/` is fresh on every run, so a
+    // setting that lives in `layout.toml` — a bottom-volume style, a band height — can only reach
+    // it by hand through the popup, which a scripted or blind run cannot do. `MOON_FIXTURE_LAYOUT`
+    // names a file to copy in BEFORE the configuration is read; the rest of the bench is untouched.
+    if let Some(from) = std::env::var_os("MOON_FIXTURE_LAYOUT") {
+        let to = moon_core::config::paths::layout_path();
+        if let Err(error) = std::fs::copy(&from, &to) {
+            let note = std::env::temp_dir().join("moonterminal-fixture-error.log");
+            let message = format!(
+                "--fixture {name}: MOON_FIXTURE_LAYOUT {} -> {}: {error}
+",
+                std::path::Path::new(&from).display(),
+                to.display()
+            );
+            let _ = std::fs::write(&note, &message);
+            eprintln!("{message}(см. {})", note.display());
+            anyhow::bail!(message);
+        }
+    }
     for (key, value) in environment_for(fixture.market(), fixture.last_price()) {
         // SAFETY: `bootstrap` is the first statement of `startup::run`, which runs on the main
         // thread before the logger, the config, GPUI, or any background worker exists. Nothing

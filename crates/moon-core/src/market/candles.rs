@@ -44,6 +44,11 @@ pub const VOLUME_STYLE_BARS: u8 = 1;
 pub const VOLUME_STYLE_HILLS: u8 = 2;
 /// Highest valid style id, for clamping a hand-edited chart configuration.
 pub const VOLUME_STYLE_MAX: u8 = VOLUME_STYLE_HILLS;
+/// A style id one build wrote for "Moonbot's `Vol` as its own style" before the bought/sold split
+/// became the `candle_volume_sides` switch that rides on top of hills or bars. A stored file
+/// carrying it reads as hills with the switch on — `moon_chart::normalize_chart_graphics` does
+/// the translation; nothing else may treat this number as a style.
+pub const VOLUME_STYLE_LEGACY_SIDES: u8 = 3;
 
 /// Candle/trade chart display settings controlled by the candle button in the tab strip.
 /// `layout.toml` stores the global default as `WindowLayout::candle_view`, while

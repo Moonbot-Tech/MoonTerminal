@@ -7,7 +7,7 @@ use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, PriceStyleGpu, ReadoutRect, TickStyleGpu, VolumeStyleGpu,
+    GridParams, PriceStyleGpu, ReadoutRect, SideVolumeGpu, TickStyleGpu, VolumeStyleGpu,
 };
 
 #[cfg(target_os = "macos")]
@@ -24,6 +24,7 @@ use super::{
     grid::GridLayer,
     orderbook::OrderBookLayer,
     readout::ReadoutLayer,
+    side_volume::SideVolumeLayer,
     userdata::UserDataLayer,
 };
 
@@ -37,6 +38,8 @@ pub struct PlatformLayers {
     background: BackgroundLayer,
     #[cfg(windows)]
     candles: CandleLayer,
+    #[cfg(windows)]
+    side_volume: SideVolumeLayer,
     #[cfg(windows)]
     combo: ComboLayer,
     #[cfg(windows)]
@@ -102,6 +105,8 @@ impl PlatformLayers {
             background: BackgroundLayer::new(BACKGROUND_3DLOGO_PNG),
             #[cfg(windows)]
             candles: CandleLayer::new(),
+            #[cfg(windows)]
+            side_volume: SideVolumeLayer::new(),
             #[cfg(windows)]
             combo: ComboLayer::new(),
             #[cfg(windows)]
@@ -199,10 +204,29 @@ impl PlatformLayers {
         }
     }
 
+    /// Fully replaces the sides band's bucket set when its series was re-read.
+    pub fn set_side_volume(&mut self, data: Vec<SideVolumeGpu>) {
+        #[cfg(windows)]
+        self.side_volume.set(data);
+        #[cfg(target_os = "linux")]
+        self.wgpu.set_side_volume(data);
+        #[cfg(target_os = "macos")]
+        self.metal.set_side_volume(data);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            let _ = data;
+        }
+    }
+
     /// Idempotently sets the bottom-volume band style, height, opacity and normalisation.
+    ///
+    /// One struct for both band layers: the style id in it decides whether the candle layer or the
+    /// sides layer draws, so they can never both draw or both stay silent.
     pub fn set_volume_style(&mut self, style: VolumeStyleGpu) {
         #[cfg(windows)]
         self.candles.set_volume_style(style);
+        #[cfg(windows)]
+        self.side_volume.set_style(style);
         #[cfg(target_os = "linux")]
         self.wgpu.set_volume_style(style);
         #[cfg(target_os = "macos")]
@@ -297,6 +321,7 @@ impl PlatformLayers {
         gpu: &gpui::RawGpuAccess,
     ) {
         self.candles.prepare(device, context, gpu);
+        self.side_volume.prepare(device, context, gpu);
         self.combo.prepare(view, device, context, gpu);
         self.orderbook
             .prepare(orderbook_view, book_style, device, context, gpu);
@@ -391,12 +416,17 @@ impl PlatformLayers {
         // Draw candles below trade crosses; the combo layer is blitted on top.
         crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
         self.candles.render(view, context, rtv, gpu, panel_clip);
+        // The bought/sold half AFTER the candle layer: it covers the candle band's bucket that
+        // straddles the split boundary, and its translucent fill over a body is the reference
+        // terminal's look too.
+        self.side_volume.render(view, context, rtv, gpu, panel_clip);
         crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
         self.combo.render(view, context, rtv, gpu, panel_clip);
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
         self.orderbook
             .render(orderbook_view, context, rtv, gpu, panel_clip);
-        if self.combo.has_data() {
+        // The bench has no trade ring, so on it the sides band is what says "something drew".
+        if self.combo.has_data() || self.side_volume.has_data() {
             super::gpu::debug_dump_rtv_once(device, context, rtv);
         }
     }

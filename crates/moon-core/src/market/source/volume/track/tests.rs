@@ -141,3 +141,25 @@ fn a_window_running_past_the_live_edge_is_marked() {
         "the half that did happen is still stated"
     );
 }
+
+/// The core's archive prepends rows older than the cursor, so a changed archive revision must
+/// rebuild the track; the same revision must not. Both rings absent: the rebuild is judged by
+/// what happens to the buckets, not by what a ring would refill.
+#[test]
+fn a_changed_archive_revision_rebuilds_the_track() {
+    let mut track = seeded(60_000);
+    track.archive_rev = 1;
+    track.add_trade(trade(10_000, 100.0, 2.0));
+    let filled = |t: &MarketTrack| t.buckets.iter().filter(|b| b.id != i64::MIN).count();
+    // Same revision: the bucket survives.
+    track.advance(None, None, 1, 65_000);
+    assert_eq!(filled(&track), 1);
+    // A merged archive: the track starts over (and, with rings, would reseed from them).
+    track.advance(None, None, 2, 70_000);
+    assert_eq!(filled(&track), 0);
+    assert!(
+        track.seeded,
+        "re-seeded under the new revision, even from nothing"
+    );
+    assert_eq!(track.archive_rev, 2);
+}
