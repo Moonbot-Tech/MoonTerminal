@@ -29,18 +29,14 @@ import.group.window_group:
   ru: "Группа окон (локальные настройки)"
   en: "Window group (local settings)"
   es: "Grupo de ventanas (ajustes locales)"
-import.group.core_commands:
-  ru: "Ядро (команды — пока не отправляются)"
-  en: "Core (commands — not sent yet)"
-  es: "Núcleo (comandos — aún no se envían)"
 import.group.unsupported:
   ru: "Не перенесено"
   en: "Not transferred"
   es: "No transferido"
 import.core_targets:
-  ru: "Применить к группам выбранных ядер:"
-  en: "Apply to groups of selected cores:"
-  es: "Aplicar a grupos de núcleos seleccionados:"
+  ru: "Применить к группам выбранных ядер (ядро со своими настройками пропускается):"
+  en: "Apply to groups of selected cores (a core on its own settings is skipped):"
+  es: "Aplicar a grupos de núcleos seleccionados (se omite un núcleo con ajustes propios):"
 import.all_cores:
   ru: "Все"
   en: "All"
@@ -53,10 +49,6 @@ import.col_dark:
   ru: "Тёмная тема"
   en: "Dark theme"
   es: "Tema oscuro"
-import.core_commands_hint:
-  ru: "Fixed-sell принадлежит ядру: отправка выбранным ядрам появится следующим шагом (ClientSettings)."
-  en: "Fixed-sell belongs to the core: sending to selected cores arrives in a next step (ClientSettings)."
-  es: "Fixed-sell pertenece al núcleo: el envío a los núcleos seleccionados llegará en un próximo paso (ClientSettings)."
 import.group.hotkeys:
   ru: "Хоткеи"
   en: "Hotkeys"

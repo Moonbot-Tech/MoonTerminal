@@ -30,9 +30,11 @@ pub enum PlannedValue {
     Rgb([u8; 3]),
     /// Selected size-preset index.
     OrderSizeSel(usize),
-    /// Six fixed-sell percentages reserved for preview; no application path consumes them.
+    /// Six F1-F6 order sizes, taken as the group's USD-equivalent numbers as they are.
+    OrderSizes([f64; 6]),
+    /// Six fixed-sell percentages S1-S6.
     FixedSellPrices([f32; 6]),
-    /// Selected fixed-sell slot (core-owned).
+    /// Selected fixed-sell slot, 0-based as Moonbot's `sbNum`.
     FixedSellSel(u8),
     /// Part count for the `Split N` action (Moonbot `Hotkeys.SplitParts`).
     SplitParts(u8),
@@ -78,10 +80,10 @@ pub struct MoonBotImportPlan {
     pub unsupported_hotkeys: Vec<Unsupported>,
     /// "Chart and lines" group: colors for both themes.
     pub chart: Vec<SettingChange>,
-    /// "Window group" local config: group-local preset selection.
+    /// "Window group" local config: the manual-trading generation — F1-F6 sizes and the selected
+    /// one, S1-S6 percentages and the engaged slot. Written into the group's own set once; a core
+    /// on its own per-core set is left alone, and nothing goes to any core.
     pub group_items: Vec<SettingChange>,
-    /// "Core" preview/reserved group: fixed-sell values are not applied or sent to cores.
-    pub core_commands: Vec<SettingChange>,
     /// "Not imported" group, excluding hotkeys stored in `unsupported_hotkeys`.
     pub unsupported: Vec<Unsupported>,
     /// Warnings such as out-of-range values.
@@ -96,7 +98,6 @@ impl MoonBotImportPlan {
             && self.hotkeys.is_empty()
             && self.chart.is_empty()
             && self.group_items.is_empty()
-            && self.core_commands.is_empty()
     }
 
     /// Returns all applicable local items for selection construction and application iteration.
@@ -510,67 +511,102 @@ fn map_colors(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPla
 // ── Core ─────────────────────────────────────────────────────────────────────
 
 /// Formats a compact preview list such as `70, 80, 300` instead of `[70.0, 80.0, 300.0]`.
-fn fmt_nums<T: Into<f64> + Copy>(vals: &[T]) -> String {
+///
+/// Each value is printed in ITS OWN width: `Display` for a float is the shortest string that reads
+/// back as that same value, and a whole number prints without a fraction — so an `f32` of `33.3`
+/// prints as `33.3`, where widening it to `f64` first would print the bits, `33.29999923706055`.
+fn fmt_nums<T: std::fmt::Display>(vals: &[T]) -> String {
     vals.iter()
-        .map(|v| {
-            let v: f64 = (*v).into();
-            if v.fract() == 0.0 && v.abs() < 1e12 {
-                format!("{}", v as i64)
-            } else {
-                format!("{v}")
-            }
-        })
+        .map(|v| v.to_string())
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-/// Map unit-independent group selections and preview-only core settings.
+/// Map the manual-trading generation Moonbot keeps beside its hotkeys into group-local items.
+///
+/// Every number is copied as it is — F1-F6 sizes included, although Moonbot's buffer does not say
+/// what currency they are in and the group stores a USD equivalent: the user asked for the scale
+/// they see in Moonbot to appear here once, verbatim, and to adjust it themselves after. A guess
+/// at a conversion would be silently wrong; the plain copy is visibly what they typed there.
+///
+/// `current` cannot be shown: the target groups are chosen AFTER planning, so no single group's
+/// value stands for what the import will overwrite. `same` is therefore always `false` here.
 fn map_core(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) {
     let h = &mb.ui.hotkeys;
-    // MoonBot exports raw base-currency quantities without their base asset. Reinterpreting those
-    // values as Terminal USD equivalents could turn 0.01 BTC into $0.01, so skip them explicitly.
-    plan.warnings.push(
-        "OSize (F1-F6) не переносим: в буфере MoonBot нет валюты размера, а Terminal хранит USD-эквивалент"
-            .into(),
-    );
+    // The same gate as `map_split_parts`: a Hotkeys block Moonbot never filled reads as zeros, and
+    // a zero here is a selected preset, an engaged 0% slot or an empty scale — every one of them
+    // a value the group would keep. One line says so; no item is offered.
+    if !h.filled {
+        plan.warnings.push(
+            "Блок Hotkeys в буфере не заполнен — размеры, проценты и выбранные слоты не переносим"
+                .into(),
+        );
+        return;
+    }
+    let group_item = |id: &str, label: &str, new: String, value: PlannedValue| SettingChange {
+        id: id.into(),
+        label: label.into(),
+        current: "зависит от выбранной группы".into(),
+        new,
+        value,
+        // Targets remain editable after planning, so one group's initial value cannot prove that
+        // every ultimately selected group already matches.
+        same: false,
+    };
+    // Sizes: the group's own load-time rule (`GroupTradeSettings::repair`) replaces a size that
+    // is not finite and positive with the shipped default, so writing one would only look applied
+    // until the next start. The whole set is then left alone rather than half-written, and the
+    // preview says why.
+    if h.order_sizes.iter().all(|v| v.is_finite() && *v > 0.0) {
+        plan.group_items.push(group_item(
+            "group.order_sizes",
+            "Размер ордера B1-B6",
+            fmt_nums(&h.order_sizes),
+            PlannedValue::OrderSizes(h.order_sizes),
+        ));
+    } else {
+        plan.warnings.push(format!(
+            "OSize (F1-F6) = {} — есть не-число, ноль или отрицательное значение, размеры не переносим",
+            fmt_nums(&h.order_sizes)
+        ));
+    }
     // Selected preset: bNum must be in 0..=5; otherwise warn and skip it (spec section 9).
     match usize::try_from(h.order_size_sel).ok().filter(|v| *v <= 5) {
-        Some(sel) => {
-            plan.group_items.push(SettingChange {
-                id: "group.order_size_sel".into(),
-                label: "Выбранный пресет размера".into(),
-                current: "зависит от выбранной группы".into(),
-                new: format!("F{}", sel + 1),
-                value: PlannedValue::OrderSizeSel(sel),
-                // Targets remain editable after planning, so one group's initial value cannot
-                // prove that every ultimately selected group already matches.
-                same: false,
-            });
-        }
+        Some(sel) => plan.group_items.push(group_item(
+            "group.order_size_sel",
+            "Выбранный пресет размера",
+            format!("B{}", sel + 1),
+            PlannedValue::OrderSizeSel(sel),
+        )),
         None => plan.warnings.push(format!(
             "bNum = {} вне диапазона 0..=5 — выбранный пресет не переносим",
             h.order_size_sel
         )),
     }
-    // Keep fixed-sell percentages and the selected slot in a reserved preview group. Terminal
-    // does not currently apply these values or send them to cores.
-    plan.core_commands.push(SettingChange {
-        id: "core.fixed_sell_prices".into(),
-        label: "Fixed sell проценты (S1-S6)".into(),
-        current: "текущие значения ядра".into(),
-        new: fmt_nums(&h.fixed_sell_prices),
-        value: PlannedValue::FixedSellPrices(h.fixed_sell_prices),
-        same: false, // Current core values are not known locally.
-    });
+    // Fixed-sell percentages: the same all-or-nothing rule as the sizes.
+    if h.fixed_sell_prices
+        .iter()
+        .all(|v| v.is_finite() && *v >= 0.0)
+    {
+        plan.group_items.push(group_item(
+            "group.fixed_sell_prices",
+            "Fixed sell проценты (S1-S6)",
+            fmt_nums(&h.fixed_sell_prices),
+            PlannedValue::FixedSellPrices(h.fixed_sell_prices),
+        ));
+    } else {
+        plan.warnings.push(format!(
+            "SPrice (S1-S6) = {} — есть не-число или отрицательное значение, проценты не переносим",
+            fmt_nums(&h.fixed_sell_prices)
+        ));
+    }
     if h.fixed_sell_sel <= 5 {
-        plan.core_commands.push(SettingChange {
-            id: "core.fixed_sell_sel".into(),
-            label: "Выбранный fixed sell слот".into(),
-            current: "текущий слот ядра".into(),
-            new: format!("S{}", h.fixed_sell_sel + 1),
-            value: PlannedValue::FixedSellSel(h.fixed_sell_sel),
-            same: false,
-        });
+        plan.group_items.push(group_item(
+            "group.fixed_sell_sel",
+            "Выбранный fixed sell слот",
+            format!("S{}", h.fixed_sell_sel + 1),
+            PlannedValue::FixedSellSel(h.fixed_sell_sel),
+        ));
     } else {
         plan.warnings.push(format!(
             "sbNum = {} вне диапазона 0..=5 — выбранный fixed sell слот не переносим",

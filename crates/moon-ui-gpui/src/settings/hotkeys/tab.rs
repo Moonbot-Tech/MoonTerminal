@@ -1,11 +1,16 @@
 //! Builds the Hotkeys tab in a Moonbot-style layout: an always-visible block of hard-coded
 //! built-in hotkeys, a group sub-tab switcher (`SettingsView.hotkeys_group`), and the active
 //! group's rows — read off [`super::registry`], which is the one place that says what the page
-//! shows and in what order. The rows form one TABLE with a header: help · title · surface ·
-//! problems · key · mouse · parameter · MB; the title grows, every other cell is fixed, so a row
-//! that lacks an editor leaves its cell empty rather than pulling the next one over. The row editors (`slot_row`, `split_parts_row`,
-//! `same_move_row`) update the draft. The "pull layout from core" preview is a page of its own —
-//! what a pull would change, with its own columns — not rows of this table.
+//! shows and in what order. The rows form one TABLE with a header: title · surface · problems ·
+//! key · mouse · parameter · MB; the title grows, every other cell is fixed, so a row that lacks
+//! an editor leaves its cell empty rather than pulling the next one over. A row's description is
+//! not a column: it opens as a popup ABOVE the row while the pointer is on it, anchored to the
+//! title rather than to the pointer (`SettingsView::hotkeys_hover_row`). The title and the
+//! problems columns share what the window has left over — the title up to a maximum, the rest to
+//! the problems, whose captions wrap.
+//! The row editors (`slot_row`, `same_move_row`) update the draft. The "pull layout from core"
+//! preview is a page of its own — what a pull would change, with its own columns — not rows of
+//! this table.
 
 use gpui::*;
 use moon_core::config::moonbot_import::shortcut;
@@ -18,7 +23,7 @@ use moon_core::session::CoreId;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
     MoonHotkeyInput, MoonKbd, MoonKbdSize, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTabItem,
-    MoonTabStrip, MoonText, MoonTooltipView, h_flex, rgba_from, v_flex,
+    MoonTabStrip, MoonText, MoonTooltip, MoonTooltipView, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -31,24 +36,25 @@ use crate::design;
 use crate::hotkeys::meta::{self, Origin, SlotMeta};
 use crate::settings::SettingsView;
 
-/// Logical width of the `?` cell that opens a row's description on hover.
-///
-/// A cell of its own, first in the row, so the titles start at one x and the glyph is where the
-/// eye goes for "what does this do" — a description printed on every row was the column that made
-/// the page long, and the one thing nobody re-reads once they know the action.
-const ROW_HINT_WIDTH: f32 = 14.0;
-
-/// The least the title column gets. It is the one column that GROWS: every other cell is fixed
-/// and pushed to the right edge, and whatever the window has left over goes to the titles.
+/// The least the title column gets. Two columns GROW — this one and the problems column, which
+/// split what the window has left over — while every other cell is fixed and pushed to the right
+/// edge.
 const ROW_TITLE_MIN_WIDTH: f32 = 130.0;
 
-/// Readable width of the description tooltip, in rendered pixels.
+/// The most the title column takes: the longest title fits in one line well before this, and
+/// past it every extra pixel of a wider window goes to the problems column, whose captions are
+/// the text on this page that actually runs long.
+const ROW_TITLE_MAX_WIDTH: f32 = 260.0;
+
+/// Readable width of a header caption's tooltip, in rendered pixels — `MoonTooltip::max_width`
+/// takes rendered pixels — and, through `ui_px`, of a row's description.
 const HINT_TOOLTIP_MAX_WIDTH: f32 = 380.0;
 
-/// Width of the surface column — where the binding acts.
-const ROW_SCOPE_WIDTH: f32 = 84.0;
+/// Room after the widest surface label, logical pixels — see [`scope_column_px`].
+const ROW_SCOPE_PAD: f32 = 6.0;
 
-/// Width of the problems column: the conflict captions, which have to be seen without asking.
+/// The least the problems column gets: the conflict captions have to be seen without asking, and
+/// they wrap within whatever the column has — this at the default window, more in a wider one.
 const ROW_PROBLEMS_WIDTH: f32 = 170.0;
 
 /// Width of the last column: a `+` on the rows a Moonbot paste or a core pull writes.
@@ -57,32 +63,33 @@ const ROW_MB_WIDTH: f32 = 28.0;
 /// Gap between the table's columns.
 const COLUMN_GAP: f32 = 10.0;
 
-/// The fixed columns and the seven gaps beside the growing title — 14, 84, 170, 184, 140, 184, 28
-/// and 70 of gaps, 874 in all — past the 824 the DEFAULT 860-pixel Settings window leaves, by
-/// design: the user works this page in a wider window, and the titles were the column that could
-/// not be read at the default. The rows do not wrap — a table that wraps is not a table — so below that width
-/// the right edge is cut rather than reflowed. The key column is the one that cannot give:
-/// `MoonHotkeyInput` keeps a minimum width of 176 of its own.
+/// The fixed columns of a stated width, the problems column at its minimum and the six gaps beside
+/// the growing title — 170, 184, 140, 184, 28 and 60 of gaps, 766 in all — plus the surface
+/// column, which is measured from its labels ([`scope_column_px`]). Past the 824 the DEFAULT
+/// 860-pixel Settings window leaves, by design: the user works this page in a wider window, and
+/// the titles were the column that could not be read at the default. The rows do not wrap — a
+/// table that wraps is not a table — so below that width the right edge is cut rather than
+/// reflowed. The key column is the one that cannot give: `MoonHotkeyInput` keeps a minimum width
+/// of 176 of its own.
 ///
 /// Logical pixels: the window is opened at an unscaled 860, so at a UI scale other than 1.0 the
 /// table is wider or narrower than the body by that factor — the same tension every fixed-width
 /// table in this window carries, and the user's slider to resolve.
-const FIXED_COLUMNS_WIDTH: f32 = ROW_HINT_WIDTH
-    + ROW_SCOPE_WIDTH
-    + ROW_PROBLEMS_WIDTH
+const FIXED_COLUMNS_WIDTH: f32 = ROW_PROBLEMS_WIDTH
     + ROW_KEY_WIDTH
     + ROW_CONTROL_WIDTH
     + ROW_CONTROL_WIDTH
     + ROW_KIND_EXTRA
     + ROW_MB_WIDTH
-    + 7.0 * COLUMN_GAP;
+    + 6.0 * COLUMN_GAP;
 
 /// The contents of one table row, cell by cell. `None` leaves a cell empty at its width.
 struct TableRow {
-    /// Stable element id, keyed on by the help glyph's hover state.
+    /// Stable element id: the row's hover state is keyed on it, and so are its editors.
     id: String,
     title: String,
-    /// The description behind the `?`, or `None` for a row that explains itself.
+    /// The description shown after the title while the pointer is on the row, or `None` for a
+    /// row that explains itself.
     hint: Option<String>,
     /// The surface and the origin, or `None` for a row that owns no slot.
     meta: Option<SlotMeta>,
@@ -120,6 +127,30 @@ fn muted_line(text: String, p: &MoonPalette) -> impl IntoElement {
         .line_height(14.0)
         .color(p.text_muted)
         .render()
+}
+
+/// The rendered width of the surface column: the widest surface label the registry can show, in
+/// the tab's own typography, plus [`ROW_SCOPE_PAD`] — so "window / cursor" is one line in every
+/// locale, and a wider window no longer has to be asked for it.
+///
+/// Measured from the UNRESOLVED labels: `Scope::resolved` only ever drops a surface, so the
+/// widest resolved label is never wider than this, and flipping the separate-zones setting cannot
+/// move the column. Per-glyph cached in `design::ui_text_width`, so one Settings render costs a
+/// hash lookup per character, not a shaping call.
+fn scope_column_px(cx: &App) -> Pixels {
+    let base = 11.0; // The one size the tab uses — `muted_line`.
+    let width = |text: &str| design::ui_text_width(cx, text, base, 400.0, false);
+    let widest = registry::rows()
+        .iter()
+        .filter_map(|row| match row {
+            Row::Slot(spec) => Some(spec.meta().scope),
+            Row::SameForMove => Some(meta::SAME_FOR_MOVE.scope),
+            Row::CorePull => None,
+        })
+        .map(|scope| width(&scope.label()))
+        .chain(std::iter::once(width(&t!("hotkeys.col.scope"))))
+        .fold(0.0_f32, f32::max);
+    px(widest) + design::ui_px(cx, ROW_SCOPE_PAD)
 }
 
 /// The rendered width of the gesture dropdown's trigger; the parameter column's triggers add
@@ -196,6 +227,9 @@ impl SettingsView {
                 self.builtin_row(t!("hotkeys.builtin.wheel_pan").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.x_sync").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.cancel_hover").to_string(), cx),
+                self.builtin_row(t!("hotkeys.builtin.draw_click").to_string(), cx),
+                self.builtin_row(t!("hotkeys.builtin.fig_menu").to_string(), cx),
+                self.builtin_row(t!("hotkeys.builtin.order_menu").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.esc_close").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.close_all").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.reset_windows").to_string(), cx),
@@ -219,6 +253,8 @@ impl SettingsView {
                 entity.update(app, |this, c| {
                     if this.hotkeys_group != g {
                         this.hotkeys_group = g;
+                        // The pointer is on the strip, not on a row of the page it just left.
+                        this.hotkeys_hover_row = None;
                         c.notify();
                     }
                 });
@@ -226,6 +262,8 @@ impl SettingsView {
         let strip = design::chrome_tab_strip(strip, p, window, cx);
         let switcher = div().w_full().h(strip_h).child(strip);
 
+        // Once per render, for the header and every row alike.
+        let scope_w = scope_column_px(cx);
         let body = v_flex()
             .w_full()
             .gap(design::ui_px(cx, 3.0))
@@ -233,9 +271,9 @@ impl SettingsView {
             .children(
                 self.hotkeys_group
                     .is_table()
-                    .then(|| self.columns_header(cx)),
+                    .then(|| self.columns_header(scope_w, cx)),
             )
-            .children(self.group_rows(self.hotkeys_group, &hotkeys, cx));
+            .children(self.group_rows(self.hotkeys_group, &hotkeys, scope_w, cx));
 
         v_flex()
             .w_full()
@@ -253,6 +291,7 @@ impl SettingsView {
         &self,
         group: HotkeyGroup,
         hotkeys: &HotkeysConfig,
+        scope_w: Pixels,
         cx: &Context<Self>,
     ) -> Vec<AnyElement> {
         // Built once for the whole group rather than per row: it is an index over every slot, and
@@ -262,9 +301,8 @@ impl SettingsView {
         let mut out = Vec::new();
         for row in registry::rows().iter().filter(|row| row.group() == group) {
             match *row {
-                Row::Slot(spec) => out.push(self.slot_row(spec, hotkeys, &clashes, cx)),
-                Row::SplitParts => out.push(self.split_parts_row(hotkeys, cx)),
-                Row::SameForMove => out.push(self.same_move_row(hotkeys, cx)),
+                Row::Slot(spec) => out.push(self.slot_row(spec, hotkeys, &clashes, scope_w, cx)),
+                Row::SameForMove => out.push(self.same_move_row(hotkeys, scope_w, cx)),
                 Row::CorePull => out.extend(self.core_pull_section(hotkeys, cx)),
             }
         }
@@ -300,7 +338,7 @@ impl SettingsView {
     fn clash_line(&self, clash: &Clash, p: &MoonPalette) -> AnyElement {
         let color = match clash.severity {
             Severity::Shadowed => p.red_text,
-            Severity::Shares => p.amber,
+            Severity::Shares | Severity::Bare => p.amber,
         };
         MoonText::new(clash.text.clone())
             .uppercase(false)
@@ -315,7 +353,7 @@ impl SettingsView {
 
     /// The table's header: one caption per column, centred over the column, at the columns' own
     /// widths — the title's caption over the growing cell.
-    fn columns_header(&self, cx: &Context<Self>) -> AnyElement {
+    fn columns_header(&self, scope_w: Pixels, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         let caption = |key: &str| muted_line(t!(key).to_string(), &p);
         let fixed = |key: &str, width: f32| {
@@ -327,20 +365,31 @@ impl SettingsView {
         };
         h_flex()
             .w_full()
-            .min_w(design::ui_px(cx, FIXED_COLUMNS_WIDTH + ROW_TITLE_MIN_WIDTH))
+            .min_w(design::ui_px(cx, FIXED_COLUMNS_WIDTH + ROW_TITLE_MIN_WIDTH) + scope_w)
             .gap(design::ui_px(cx, COLUMN_GAP))
             .items_end()
-            // The help column needs no caption: the glyphs under it are their own.
-            .child(empty_cell(ROW_HINT_WIDTH, cx))
             .child(
                 h_flex()
                     .flex_1()
                     .min_w(design::ui_px(cx, ROW_TITLE_MIN_WIDTH))
+                    .max_w(design::ui_px(cx, ROW_TITLE_MAX_WIDTH))
                     .justify_center()
                     .child(caption("hotkeys.col.title")),
             )
-            .child(fixed("hotkeys.col.scope", ROW_SCOPE_WIDTH))
-            .child(fixed("hotkeys.col.problems", ROW_PROBLEMS_WIDTH))
+            .child(
+                h_flex()
+                    .flex_none()
+                    .w(scope_w)
+                    .justify_center()
+                    .child(caption("hotkeys.col.scope")),
+            )
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w(design::ui_px(cx, ROW_PROBLEMS_WIDTH))
+                    .justify_center()
+                    .child(caption("hotkeys.col.problems")),
+            )
             .child(fixed("hotkeys.col.key", ROW_KEY_WIDTH))
             .child(fixed("hotkeys.col.mouse", ROW_CONTROL_WIDTH))
             .child(fixed(
@@ -360,8 +409,9 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// One row of the table: the eight cells at the header's widths — the conflict captions in the
-    /// problems cell, where they are seen without asking.
+    /// One row of the table: the seven cells at the header's widths — the conflict captions in the
+    /// problems cell, where they are seen without asking, and the description after the title
+    /// while the pointer is on the row.
     ///
     /// Every row goes through here, editors or not, which is what makes it a table: a row without a
     /// key leaves the key cell empty instead of sliding its mouse editor into it, as the old
@@ -370,11 +420,12 @@ impl SettingsView {
     ///
     /// Args:
     ///     row: The cells' contents. See [`TableRow`].
+    ///     scope_w: The surface column's rendered width, from [`scope_column_px`].
     ///     cx: Settings context used for palette and scaled layout.
     ///
     /// Returns:
     ///     The rendered row.
-    fn table_row(&self, row: TableRow, cx: &Context<Self>) -> AnyElement {
+    fn table_row(&self, row: TableRow, scope_w: Pixels, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         // The surface a row's two-way set resolves to right now, rather than the disjunction: the
         // reader wants the answer for the terminal in front of them.
@@ -389,48 +440,75 @@ impl SettingsView {
             Some(content) => sized_cell(content, width, cx),
             None => empty_cell(width, cx),
         };
+        // Hover is view state, not a style: the description is painted DEFERRED — after every
+        // cell of the table, so it lies over the cells to its right rather than under them — and a
+        // deferred element paints outside its row's group, where `group_hover` has nothing to
+        // read. One re-render per row entered or left; nothing per pointer move.
+        let hovered = self.hotkeys_hover_row.as_deref() == Some(row.id.as_str());
+        let row_id = row.id.clone();
         h_flex()
+            .id(SharedString::from(format!("row-{}", row.id)))
+            .on_hover(cx.listener(move |this, entered: &bool, _window, cx| {
+                let next = entered.then(|| row_id.clone());
+                // A leave clears only this row: the next row's enter may already have landed.
+                if *entered || this.hotkeys_hover_row.as_deref() == Some(row_id.as_str()) {
+                    if this.hotkeys_hover_row != next {
+                        this.hotkeys_hover_row = next;
+                        cx.notify();
+                    }
+                }
+            }))
             .w_full()
-            .min_w(design::ui_px(cx, FIXED_COLUMNS_WIDTH + ROW_TITLE_MIN_WIDTH))
+            .min_w(design::ui_px(cx, FIXED_COLUMNS_WIDTH + ROW_TITLE_MIN_WIDTH) + scope_w)
             .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
             .gap(design::ui_px(cx, COLUMN_GAP))
             .items_center()
-            .child(match row.hint {
-                Some(hint) => self
-                    .hint_glyph(format!("hint-{}", row.id), hint, &p, cx)
-                    .into_any_element(),
-                None => empty_cell(ROW_HINT_WIDTH, cx).into_any_element(),
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w(design::ui_px(cx, ROW_TITLE_MIN_WIDTH))
+                    .max_w(design::ui_px(cx, ROW_TITLE_MAX_WIDTH))
+                    .items_center()
+                    .child(
+                        // The title shrinks and wraps as it did when it was the cell itself; the
+                        // description opens above it and takes none of its room.
+                        div()
+                            .relative()
+                            .min_w_0()
+                            .child(
+                                MoonText::new(row.title)
+                                    .uppercase(false)
+                                    .mono(row.mono_title)
+                                    .wrap()
+                                    .font_size(11.0)
+                                    .line_height(14.0)
+                                    .color(if row.muted { p.text_muted } else { p.text })
+                                    .render(),
+                            )
+                            .children(
+                                row.hint
+                                    .filter(|_| hovered)
+                                    .map(|hint| self.row_description(hint, cx)),
+                            ),
+                    ),
+            )
+            .child(match row.meta {
+                Some(m) => div()
+                    .flex_none()
+                    .w(scope_w)
+                    .child(muted_line(m.scope.resolved(separate_zones).label(), &p)),
+                None => div().flex_none().w(scope_w),
             })
             .child(
                 div()
                     .flex_1()
-                    .min_w(design::ui_px(cx, ROW_TITLE_MIN_WIDTH))
-                    .child(
-                        MoonText::new(row.title)
-                            .uppercase(false)
-                            .mono(row.mono_title)
-                            .wrap()
-                            .font_size(11.0)
-                            .line_height(14.0)
-                            .color(if row.muted { p.text_muted } else { p.text })
-                            .render(),
-                    ),
+                    .min_w(design::ui_px(cx, ROW_PROBLEMS_WIDTH))
+                    .children((!row.notes.is_empty()).then(|| {
+                        v_flex()
+                            .gap(design::ui_px(cx, 2.0))
+                            .children(row.notes.iter().map(|note| self.clash_line(note, &p)))
+                    })),
             )
-            .child(cell(
-                row.meta.map(|m| {
-                    muted_line(m.scope.resolved(separate_zones).label(), &p).into_any_element()
-                }),
-                ROW_SCOPE_WIDTH,
-            ))
-            .child(cell(
-                (!row.notes.is_empty()).then(|| {
-                    v_flex()
-                        .gap(design::ui_px(cx, 2.0))
-                        .children(row.notes.iter().map(|note| self.clash_line(note, &p)))
-                        .into_any_element()
-                }),
-                ROW_PROBLEMS_WIDTH,
-            ))
             .child(cell(row.key, ROW_KEY_WIDTH))
             .child(cell(row.mouse, ROW_CONTROL_WIDTH))
             .child(cell(row.param, ROW_CONTROL_WIDTH + ROW_KIND_EXTRA))
@@ -466,6 +544,7 @@ impl SettingsView {
         spec: SlotSpec,
         hotkeys: &HotkeysConfig,
         clashes: &Clashes,
+        scope_w: Pixels,
         cx: &Context<Self>,
     ) -> AnyElement {
         // A greyed short row follows its long twin, so a clash reported on it would name a binding
@@ -474,6 +553,7 @@ impl SettingsView {
         let mut notes: Vec<Clash> = Vec::new();
         if let Some(key) = spec.key() {
             notes.extend(clashes.key(hotkeys, key));
+            notes.extend(super::clash::bare_key(hotkeys, key));
         }
         if let Some(mouse) = spec.mouse()
             && !disabled
@@ -501,11 +581,15 @@ impl SettingsView {
                     self.gesture_dropdown(mouse, hotkeys, disabled, cx)
                         .into_any_element()
                 }),
-                param: spec.kind().map(|kind| {
-                    self.move_kind_dropdown(kind, hotkeys, disabled, cx)
-                        .into_any_element()
-                }),
+                param: match spec.key() {
+                    Some(KeySlot::SplitOrderX) => Some(self.split_parts_dropdown(hotkeys, cx)),
+                    _ => spec.kind().map(|kind| {
+                        self.move_kind_dropdown(kind, hotkeys, disabled, cx)
+                            .into_any_element()
+                    }),
+                },
             },
+            scope_w,
             cx,
         )
     }
@@ -643,29 +727,40 @@ impl SettingsView {
         .items(items)
     }
 
-    /// The `?` cell of a row: a glyph that brightens under the pointer and opens the description as
-    /// a tooltip. Nothing to click — it only answers hover.
+    /// A row's description, shown while the pointer is on the row: the same popup the `?` glyph
+    /// used to open, but anchored ABOVE the title rather than under the pointer, so the row being
+    /// read and the row below it stay visible — the popup lies over the row above, and only while
+    /// the pointer rests here. Wrapped at [`HINT_TOOLTIP_MAX_WIDTH`], as the glyph's tooltip was.
+    /// A line to the right of the title was tried first and ran into the editors at the default
+    /// window width.
     ///
-    /// Args:
-    ///     id: Stable element id, which the tooltip state is keyed on.
-    ///     hint: The description, already localized.
-    ///     p: Active palette.
-    ///     cx: Settings context used for scaled geometry.
-    ///
-    /// Returns:
-    ///     The fixed-width hint cell.
-    fn hint_glyph(
-        &self,
-        id: String,
-        hint: String,
-        p: &MoonPalette,
-        cx: &Context<Self>,
-    ) -> Stateful<Div> {
-        self.hint_cell(id, "?".to_string(), hint, ROW_HINT_WIDTH, p, cx)
+    /// Deferred, because the cells to the right paint after the title cell and would otherwise
+    /// paint over it. Absolute at the title's top-left corner, growing upward from there.
+    /// `anchored`'s default fit — switch the anchor, then clamp — is the one wanted: a row hovered
+    /// within a popup's height of the window's top edge (only after the page is scrolled; the
+    /// built-ins block sits above the table) opens its popup DOWNWARD from the same corner, over
+    /// its own row, rather than being pushed down over it by a clamp alone. No `occlude`: the
+    /// popup must not take the pointer from the row's own hitbox in that downward case, or the
+    /// row un-hovers, the popup goes, the row re-hovers — a flicker. No arrow either, since a
+    /// flipped popup would point it the wrong way.
+    fn row_description(&self, hint: String, cx: &Context<Self>) -> AnyElement {
+        deferred(
+            div().absolute().left_0().top_0().child(
+                anchored()
+                    .anchor(Anchor::BottomLeft)
+                    .offset(point(px(0.0), -design::ui_px(cx, 4.0)))
+                    .child(
+                        MoonTooltip::new(hint)
+                            .max_width(HINT_TOOLTIP_MAX_WIDTH)
+                            .arrow(false),
+                    ),
+            ),
+        )
+        .into_any_element()
     }
 
-    /// A cell whose text brightens under the pointer and opens `hint` as a tooltip — the `?` of
-    /// a row, or a header caption that has something to explain. Nothing to click.
+    /// A header caption that brightens under the pointer and opens `hint` as a tooltip — the one
+    /// caption that has something to explain. Nothing to click.
     fn hint_cell(
         &self,
         id: String,
@@ -702,11 +797,12 @@ impl SettingsView {
             .menu_size(MoonMenuSize::Compact)
     }
 
-    /// Builds the part-count selector for `Split N` (Moonbot `Hotkeys.SplitParts`).
+    /// Builds the part-count selector for `Split N` (Moonbot `Hotkeys.SplitParts`) — the parameter
+    /// cell of the `Split Order X` row, so the number sits on the line of the action it serves.
     ///
     /// A dropdown over the allowed range rather than a text field: the value goes straight into a
     /// live split command, and a picker cannot leave a half-typed number in the draft.
-    fn split_parts_row(&self, hotkeys: &HotkeysConfig, cx: &Context<Self>) -> AnyElement {
+    fn split_parts_dropdown(&self, hotkeys: &HotkeysConfig, cx: &Context<Self>) -> AnyElement {
         let current = hotkeys.split_n_parts();
         let items = (SPLIT_PARTS_MIN..=SPLIT_PARTS_MAX).map(|parts| {
             let backend = self.backend.clone();
@@ -723,30 +819,17 @@ impl SettingsView {
                     });
                 })
         });
-
-        self.table_row(
-            TableRow {
-                id: "split-parts".to_string(),
-                title: t!("hotkeys.split_parts").to_string(),
-                hint: Some(t!("hotkeys.split_parts_hint").to_string()),
-                meta: Some(meta::SPLIT_PARTS),
-                mono_title: false,
-                muted: false,
-                notes: Vec::new(),
-                key: None,
-                mouse: None,
-                param: Some(
-                    Self::row_dropdown("hotkey-split-parts".into(), current.to_string(), cx)
-                        // The parameter column's width, like the kind dropdowns beside it.
-                        .trigger_width(design::ui_value(cx, ROW_EDITOR_WIDTH + ROW_KIND_EXTRA))
-                        .trigger_variant(MoonButtonVariant::Blue)
-                        .menu_width_scaled(120.0)
-                        .items(items)
-                        .into_any_element(),
-                ),
-            },
+        Self::row_dropdown(
+            "hotkey-split-parts".into(),
+            t!("hotkeys.split_parts_value", n = current).to_string(),
             cx,
         )
+        // The parameter column's width, like the kind dropdowns beside it.
+        .trigger_width(design::ui_value(cx, ROW_EDITOR_WIDTH + ROW_KIND_EXTRA))
+        .trigger_variant(MoonButtonVariant::Blue)
+        .menu_width_scaled(120.0)
+        .items(items)
+        .into_any_element()
     }
 
     /// The move-mirroring switch as a row of the table: its sentence in the title cell, the
@@ -758,7 +841,12 @@ impl SettingsView {
     ///
     /// Returns:
     ///     The rendered row.
-    fn same_move_row(&self, hotkeys: &HotkeysConfig, cx: &Context<Self>) -> AnyElement {
+    fn same_move_row(
+        &self,
+        hotkeys: &HotkeysConfig,
+        scope_w: Pixels,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let backend = self.backend.clone();
         let checkbox = MoonCheckbox::new("same-hotkeys-for-move")
             .checked(hotkeys.same_hotkeys_for_move)
@@ -796,6 +884,7 @@ impl SettingsView {
                 mouse: Some(checkbox.into_any_element()),
                 param: None,
             },
+            scope_w,
             cx,
         )
     }

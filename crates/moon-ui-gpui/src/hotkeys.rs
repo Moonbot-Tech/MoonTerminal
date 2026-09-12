@@ -351,6 +351,33 @@ fn belongs_to_the_field(keystroke: &Keystroke) -> bool {
     keystroke.key_char.is_some() || keystroke.key == "tab"
 }
 
+/// Whether a binding is a single unmodified letter or digit — the class Moonbot refuses outright.
+///
+/// The danger is not a field: [`belongs_to_the_field`] already keeps a press out of the bindings
+/// while one is focused. It is the press that was MEANT for a field that is not focused — the eye
+/// on the coin search, the caret on the chart — where a bare `g` on Panic Sell closes a position
+/// as typing. Moonbot forbids the binding; here it is allowed and the row says so, in amber, so
+/// the user who wants it takes it knowingly (`settings::hotkeys::clash::bare_key`).
+///
+/// Shift is not a modifier for this purpose: a shifted letter is a capital, typed as easily, but
+/// Moonbot allows it and the user asked for the same line. Space, punctuation and the keypad's
+/// `+`/`-` are not letters or digits and stay out of it — Moonbot's own Shift Buy defaults sit
+/// on the keypad.
+///
+/// Args:
+///     keystroke: The binding as parsed from the configuration.
+///
+/// Returns:
+///     `true` for an unmodified single ASCII letter or digit.
+pub fn is_bare_alnum(keystroke: &Keystroke) -> bool {
+    let modifiers = keystroke.modifiers;
+    if modifiers.control || modifiers.alt || modifiers.platform || modifiers.shift {
+        return false;
+    }
+    let mut chars = keystroke.key.chars();
+    matches!((chars.next(), chars.next()), (Some(c), None) if c.is_ascii_alphanumeric())
+}
+
 /// Resolve a key-down event to the action bound to it.
 ///
 /// `typing` withholds every binding the focused field consumes, and it is a parameter for the same

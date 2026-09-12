@@ -74,6 +74,34 @@ fn letters_digits_and_oem() {
 }
 
 #[test]
+fn keypad_keys_record_as_their_characters() {
+    // Moonbot's own Shift Buy Up / Down defaults: VK_ADD / VK_SUBTRACT, no modifiers.
+    assert_eq!(
+        decode(0x006B),
+        DecodedShortcut::Key {
+            mods: ShortcutMods::default(),
+            key: ShortcutKey::Oem('+'),
+        }
+    );
+    assert_eq!(to_gpui_keystroke(decode(0x006B)).unwrap(), "+");
+    assert_eq!(
+        to_gpui_keystroke(decode(MOD_SHIFT | 0x006D)).unwrap(),
+        "shift--"
+    );
+    // Keypad digits are the same characters as the top row.
+    assert_eq!(
+        to_gpui_keystroke(decode(MOD_ALT | 0x0067)).unwrap(),
+        "alt-7"
+    );
+    assert_eq!(to_gpui_keystroke(decode(0x006A)).unwrap(), "*");
+    assert_eq!(to_gpui_keystroke(decode(0x006F)).unwrap(), "/");
+    // VK_SEPARATOR has no key on a common keyboard, and VK_DECIMAL's character is the layout's
+    // decimal separator, which no fixed string could match: both stay unsupported.
+    assert_eq!(decode(0x006C), DecodedShortcut::Unsupported { raw: 0x006C });
+    assert_eq!(decode(0x006E), DecodedShortcut::Unsupported { raw: 0x006E });
+}
+
+#[test]
 fn unknown_vk_is_unsupported_not_guessed() {
     // 0xE5 (VK_PROCESSKEY) is absent from the table, so it is Unsupported rather than guessed.
     assert_eq!(decode(0x00E5), DecodedShortcut::Unsupported { raw: 0x00E5 });

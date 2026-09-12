@@ -73,6 +73,10 @@ hotkeys.clash.shares_gesture:
   ru: "Тот же жест у: %{rows}. Работают оба — каждый на своём."
   en: "Same gesture as %{rows}. Both work, each on its own ground."
   es: "Mismo gesto que %{rows}. Ambos funcionan, cada uno en lo suyo."
+hotkeys.clash.bare_key:
+  ru: "Одиночная клавиша: сработает при любом её нажатии вне текстового поля — на свой страх и риск."
+  en: "A bare key: fires on any press of it outside a text field — at your own risk."
+  es: "Tecla suelta: se dispara con cualquier pulsación fuera de un campo de texto — bajo tu responsabilidad."
 hotkeys.clash.wins_key:
   ru: "Клавиша забирает бинд у: %{rows} — там она не сработает."
   en: "The key takes this binding from %{rows}, where it will not fire."
@@ -98,29 +102,29 @@ hotkeys.clash.builtin.cancel_hover:
   en: "the built-in cancel order under cursor (Tab/Delete)"
   es: "la cancelación integrada de la orden bajo el cursor (Tab/Delete)"
 hotkeys.clash.layer.order_menu:
-  ru: "меню ордера"
-  en: "the order menu"
-  es: "el menú de la orden"
+  ru: "встроенное меню ордера (ПКМ по линии ордера)"
+  en: "the built-in order menu (right click on an order line)"
+  es: "el menú de orden integrado (clic derecho en una línea de orden)"
 hotkeys.clash.layer.draw:
-  ru: "рисование фигур"
-  en: "figure drawing"
-  es: "dibujo de figuras"
+  ru: "встроенное рисование фигур (Ctrl+ЛКМ, пока выбран инструмент)"
+  en: "the built-in figure drawing (Ctrl+left click while a tool is selected)"
+  es: "el dibujo de figuras integrado (Ctrl+clic izquierdo con una herramienta elegida)"
 hotkeys.clash.layer.fig_menu:
-  ru: "меню фигуры"
-  en: "the figure menu"
-  es: "el menú de la figura"
+  ru: "встроенное меню фигуры (ПКМ по фигуре)"
+  en: "the built-in figure menu (right click on a figure)"
+  es: "el menú de figura integrado (clic derecho en una figura)"
 hotkeys.clash.layer.x_scale:
-  ru: "синхрон X-масштаба"
-  en: "the X-scale sync"
-  es: "la sincronización de escala X"
+  ru: "встроенная синхронизация X-масштаба (Shift+средняя кнопка)"
+  en: "the built-in X-scale sync (Shift+middle button)"
+  es: "la sincronización de escala X integrada (Shift+botón central)"
 hotkeys.unassigned:
   ru: "Не задано"
   en: "Unassigned"
   es: "Sin asignar"
 hotkeys.recording:
-  ru: "Нажмите сочетание..."
-  en: "Press shortcut..."
-  es: "Pulsa el atajo..."
+  ru: "Нажмите сочетание"
+  en: "Press shortcut"
+  es: "Pulsa el atajo"
 hotkeys.group.builtin:
   ru: "Встроенные хоткеи"
   en: "Built-in hotkeys"
@@ -153,6 +157,18 @@ hotkeys.builtin.cancel_hover:
   ru: "[Tab или Del] навести на линию ордера — отменить этот ордер (Del при выделенной фигуре удаляет фигуру)"
   en: "[Tab or Del] hover an order line — cancel that order (Del deletes the figure when one is selected)"
   es: "[Tab o Del] sobre una línea de orden — cancelar esa orden (Del elimina la figura si hay una seleccionada)"
+hotkeys.builtin.draw_click:
+  ru: "[Ctrl+ЛКМ] на графике, пока выбран инструмент рисования — начать фигуру или захватить существующую"
+  en: "[Ctrl+Left click] on the chart while a drawing tool is selected — start a figure or grab an existing one"
+  es: "[Ctrl+Clic izquierdo] en el gráfico con una herramienta de dibujo elegida — iniciar una figura o tomar una existente"
+hotkeys.builtin.fig_menu:
+  ru: "[ПКМ] по фигуре — меню фигуры"
+  en: "[Right click] on a figure — the figure menu"
+  es: "[Clic derecho] en una figura — el menú de la figura"
+hotkeys.builtin.order_menu:
+  ru: "[ПКМ] по линии ордера — меню ордера"
+  en: "[Right click] on an order line — the order menu"
+  es: "[Clic derecho] en una línea de orden — el menú de la orden"
 hotkeys.builtin.close_all:
   ru: "[Shift+Esc] закрыть все графики Main во всех группах"
   en: "[Shift+Esc] close all Main charts in every group"
@@ -163,9 +179,9 @@ hotkeys.group.presets:
   en: "Order presets"
   es: "Preajustes de orden"
 hotkeys.group.presets_hint:
-  ru: "F1–F6 — размер ручного ордера, S1–S6 — фикс. Sell, как в Moonbot."
-  en: "F1–F6 — manual order size, S1–S6 — fixed sell, as in Moonbot."
-  es: "F1–F6: tamaño de la orden manual; S1–S6: venta fija, como en Moonbot."
+  ru: "B1–B6 — фикс. Buy (размер ручного ордера), S1–S6 — фикс. Sell, как в Moonbot."
+  en: "B1–B6 — fixed Buy (manual order size), S1–S6 — fixed Sell, as in Moonbot."
+  es: "B1–B6: Buy fijo (tamaño de la orden manual); S1–S6: Sell fijo, como en Moonbot."
 hotkeys.order_size:
   ru: "Выбрать размер ручного ордера %{n}"
   en: "Select manual order size %{n}"
@@ -240,9 +256,9 @@ hotkeys.new_short_hint:
   en: "Create a short scenario when the active core supports it."
   es: "Crea escenario short si el núcleo activo lo admite."
 hotkeys.split_order:
-  ru: "Split Order"
-  en: "Split Order"
-  es: "Split Order"
+  ru: "Split Order %{n}"
+  en: "Split Order %{n}"
+  es: "Split Order %{n}"
 hotkeys.split_order_hint:
   ru: "Разбить ордер под курсором на %{n} части. Курсор не на ордере — берётся единственный активный sell рынка."
   en: "Split the order under the cursor into %{n} parts. With the cursor off any order, the market's only active sell is used."
@@ -252,9 +268,9 @@ hotkeys.split_order_x:
   en: "Split Order X"
   es: "Split Order X"
 hotkeys.split_order_x_hint:
-  ru: "То же самое, но на число частей из поля ниже (Moonbot SplitParts)."
-  en: "The same, but into the part count from the field below (Moonbot SplitParts)."
-  es: "Lo mismo, pero con el número de partes del campo inferior (Moonbot SplitParts)."
+  ru: "То же самое, но на число частей из параметра справа (Moonbot SplitParts); столько же частей делает второй пункт «Split order» в меню ордера."
+  en: "The same, but into the part count from the parameter on the right (Moonbot SplitParts); the second «Split order» entry in the order menu uses the same count."
+  es: "Lo mismo, pero con el número de partes del parámetro de la derecha (Moonbot SplitParts); la segunda entrada «Split order» del menú de la orden usa el mismo número."
 hotkeys.sells_to_rect:
   ru: "Sells to rectangle"
   en: "Sells to rectangle"
@@ -263,14 +279,10 @@ hotkeys.sells_to_rect_hint:
   ru: "Режим зоны: каждая пара Ctrl-кликов задаёт границы, ядро раскладывает по ним продажи рынка. Выход — повтор, Escape или другой инструмент."
   en: "Zone mode: each pair of Ctrl-clicks names a band and the core spreads the market's sells across it. Leave by pressing it again, Escape, or picking another tool."
   es: "Modo zona: cada par de Ctrl-clics define una banda y el core reparte las ventas del mercado. Salir: pulsarlo de nuevo, Escape u otra herramienta."
-hotkeys.split_parts:
-  ru: "Частей для Split Order X"
-  en: "Parts for Split Order X"
-  es: "Partes para Split Order X"
-hotkeys.split_parts_hint:
-  ru: "Moonbot SplitParts: на это число частей делит второй пункт «Split order» в меню ордера."
-  en: "Moonbot SplitParts: the number of parts the second «Split order» entry in the order menu uses."
-  es: "Moonbot SplitParts: el número de partes que usa la segunda entrada «Split order» del menú de la orden."
+hotkeys.split_parts_value:
+  ru: "Частей: %{n}"
+  en: "Parts: %{n}"
+  es: "Partes: %{n}"
 
 hotkeys.group.chart:
   ru: "График"

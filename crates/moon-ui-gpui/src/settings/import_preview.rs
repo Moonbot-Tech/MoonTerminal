@@ -372,34 +372,6 @@ impl SettingsView {
             body = body.child(row);
         }
 
-        // Show fixed-sell core commands for preview only; this local apply path does not send them.
-        if !state.plan.core_commands.is_empty() {
-            let mut group = v_flex()
-                .gap_1()
-                .child(
-                    div()
-                        .font_bold()
-                        .child(t!("import.group.core_commands").to_string()),
-                )
-                .child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(rgba_from(p.text_muted, 1.0))
-                        .child(t!("import.core_commands_hint").to_string()),
-                );
-            for item in &state.plan.core_commands {
-                group = group.child(
-                    div()
-                        // `label: new` is a config key beside the value it will take -- the same
-                        // data `value_el` pins below, just rendered through a bare `format!`.
-                        .font_family(design::mono())
-                        .text_color(rgba_from(p.text_soft, 1.0))
-                        .child(format!("{}: {}", item.label, item.new)),
-                );
-            }
-            body = body.child(group);
-        }
-
         // Show warnings and unsupported items with their reasons.
         for w in &state.plan.warnings {
             body = body.child(div().text_color(rgba_from(p.yellow, 1.0)).child(w.clone()));

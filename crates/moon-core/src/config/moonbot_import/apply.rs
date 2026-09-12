@@ -1,7 +1,8 @@
 //! Applies SELECTED [`MoonBotImportPlan`] items to an `AppConfig` draft copy.
-//! Local settings only: terminal (UI theme, hotkeys), chart/lines (colors), and group-local
-//! preset selection applied through target cores. The `core_commands` group (fixed-sell) is NOT
-//! included here: it is reserved for preview and is not currently sent to cores.
+//! Local settings only: terminal (UI theme, hotkeys), chart/lines (colors), and the group-local
+//! manual-trading generation applied through target cores. Nothing here reaches a core: the
+//! sizes and percentages land in the group's own set, once, and the cores read them from there
+//! the way they read a toolbar edit.
 //!
 //! The function mutates the supplied config IN MEMORY and writes nothing to disk. The Save button
 //! calls `AppConfig::save()` (spec section 12). Daily recovery snapshots remain independent of the
@@ -146,7 +147,10 @@ fn apply_color(cfg: &mut AppConfig, id: &str, rgb: [u8; 3]) -> bool {
 
 /// Applies a group-local item to the unique groups containing selected cores.
 ///
-/// An empty core list is not a plan error: the item is deliberately applied to no groups.
+/// An empty core list is not a plan error: the item is deliberately applied to no groups. A
+/// selected core that keeps its OWN manual-trading set (`own_trade_config`) is skipped: the
+/// import writes the group's set and never a core's, so through such a core nothing would be
+/// visible — and its group is still reached through any other selected core in it.
 fn apply_group_item(cfg: &mut AppConfig, item: &SettingChange, target_core_ids: &[u64]) -> bool {
     /// Return selected group names once even when multiple target cores share a group.
     fn target_groups(cfg: &AppConfig, target_core_ids: &[u64]) -> Vec<String> {
@@ -154,7 +158,7 @@ fn apply_group_item(cfg: &mut AppConfig, item: &SettingChange, target_core_ids: 
         for server in cfg
             .servers
             .iter()
-            .filter(|server| target_core_ids.contains(&server.id))
+            .filter(|server| target_core_ids.contains(&server.id) && !server.own_trade_config)
         {
             if !groups.contains(&server.group) {
                 groups.push(server.group.clone());
@@ -163,10 +167,42 @@ fn apply_group_item(cfg: &mut AppConfig, item: &SettingChange, target_core_ids: 
         groups
     }
 
+    let groups = target_groups(cfg, target_core_ids);
     match (&item.value, item.id.as_str()) {
         (PlannedValue::OrderSizeSel(sel), "group.order_size_sel") => {
-            for group in target_groups(cfg, target_core_ids) {
+            for group in groups {
                 cfg.group_mut(&group).trade.order_size_sel = *sel;
+            }
+            true
+        }
+        (PlannedValue::OrderSizes(sizes), "group.order_sizes") => {
+            for group in groups {
+                cfg.group_mut(&group).trade.order_sizes_usd = *sizes;
+            }
+            true
+        }
+        (PlannedValue::FixedSellPrices(pcts), "group.fixed_sell_prices") => {
+            for group in groups {
+                let exit = &mut cfg.group_mut(&group).trade.exit;
+                // Through the same quantization a toolbar edit gets, in the group's own TP mode:
+                // the number shown must be the number the wire will carry. The plan admits only
+                // finite non-negative values, which this never refuses.
+                for (slot, pct) in exit.fixed_sell_pcts.iter_mut().zip(pcts) {
+                    if let Some(canonical) = exit
+                        .take_profit_mode
+                        .canonical_fixed_sell_pct(f64::from(*pct))
+                    {
+                        *slot = canonical;
+                    }
+                }
+            }
+            true
+        }
+        (PlannedValue::FixedSellSel(sel), "group.fixed_sell_sel") => {
+            // Moonbot's `sbNum` is 0-based; the group's slot is 1..=6 (`None` = main TP).
+            let slot = usize::from(*sel) + 1;
+            for group in groups {
+                cfg.group_mut(&group).trade.exit.fixed_sell_slot = Some(slot);
             }
             true
         }

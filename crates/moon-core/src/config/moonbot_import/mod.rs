@@ -20,6 +20,9 @@ pub mod schema_v7;
 pub mod shortcut;
 pub mod transport;
 
+#[cfg(test)]
+mod tests;
+
 pub use apply::apply_local;
 pub use plan::{MoonBotImportPlan, PlanContext};
 pub use schema_v7::MoonBotConfig;

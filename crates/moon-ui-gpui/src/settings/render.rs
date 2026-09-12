@@ -313,6 +313,9 @@ impl SettingsView {
                     .label(t.title())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.active = t;
+                        // A row of the Hotkeys page hovered when the page went away gets no
+                        // leave event; without this its popup would be back on return.
+                        this.hotkeys_hover_row = None;
                         cx.notify();
                     }))
                     .render(),

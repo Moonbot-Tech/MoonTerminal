@@ -207,8 +207,6 @@ impl SlotSpec {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Row {
     Slot(SlotSpec),
-    /// The part count `Split N` reads, after the two split rows it serves.
-    SplitParts,
     /// The mirror switch, between the long move rows and the short ones it owns.
     SameForMove,
     /// The "pull layout from core" preview — the whole of its own page.
@@ -220,7 +218,6 @@ impl Row {
     pub fn group(&self) -> HotkeyGroup {
         match self {
             Self::Slot(spec) => spec.group,
-            Self::SplitParts => HotkeyGroup::Trading,
             Self::SameForMove => HotkeyGroup::Mouse,
             Self::CorePull => HotkeyGroup::CorePull,
         }
@@ -276,7 +273,6 @@ fn build_rows() -> Vec<Row> {
         key(G::Trading, KeySlot::NewShort),
         key(G::Trading, KeySlot::SplitOrder),
         key(G::Trading, KeySlot::SplitOrderX),
-        Row::SplitParts,
         key(G::Trading, KeySlot::SellsToRect),
         key(G::Chart, KeySlot::SwitchCharts),
         key(G::Chart, KeySlot::ScalePlus),
@@ -346,9 +342,14 @@ pub(super) fn gesture_id(slot: GestureSlot) -> String {
 /// rival — hold a slot, not a row.
 pub(super) fn key_title(slot: KeySlot) -> String {
     match slot {
-        KeySlot::OrderSize(i) => format!("F{}", i + 1),
+        // `B` for Buy beside `S` for Sell, since 2026-09-12: `F` read as the function keys, which
+        // is where the shipped bindings for these very rows sit.
+        KeySlot::OrderSize(i) => format!("B{}", i + 1),
         KeySlot::SellPreset(i) => format!("S{}", i + 1),
         KeySlot::ManualStrategy(i) => t!("hotkeys.manual_strategy", n = i + 1).to_string(),
+        // The count in the title, not only in the hint: `Split Order 3` says at a glance what
+        // separates it from `Split Order X` below it.
+        KeySlot::SplitOrder => t!("hotkeys.split_order", n = SPLIT_ORDER_PARTS).to_string(),
         named => {
             let key = format!("hotkeys.{}", named.stem());
             t!(&key).to_string()

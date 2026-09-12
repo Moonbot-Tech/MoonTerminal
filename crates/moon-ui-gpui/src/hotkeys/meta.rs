@@ -181,11 +181,6 @@ const fn meta(origin: Origin, scope: Scope) -> SlotMeta {
 /// writes it, and it decides whether the four short rows follow the long ones at all.
 pub const SAME_FOR_MOVE: SlotMeta = meta(Origin::Shared, Scope::BOOK.or(Scope::PLOT));
 
-/// The part-count row's facts. Not a [`KeySlot`] — it stores a number, not a key — but a Moonbot
-/// paste rewrites it (`Hotkeys.SplitParts`), so it belongs in this table rather than stated inline
-/// in the renderer where nothing checks it.
-pub const SPLIT_PARTS: SlotMeta = meta(Origin::Shared, Scope::WINDOW);
-
 /// The two facts about one keyboard slot.
 ///
 /// Surfaces are read off the routers, not chosen here. The one that decides most rows is
