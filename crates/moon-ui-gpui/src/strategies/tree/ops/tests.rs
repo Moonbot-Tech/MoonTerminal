@@ -84,6 +84,28 @@ fn a_slash_with_whitespace_beside_it_belongs_to_the_folder_name() {
     assert_eq!(split_path("a\\b"), vec!["a", "b"]);
 }
 
+/// `strategies/tree/ops.rs::split_folder_names` keeps every distinct folder name that MoonBot
+/// will split, in the order the planned destinations first expose it.
+///
+/// Plausible edit this catches: dropping the `seen` set while collecting warning names. The
+/// create warning would repeat one folder for every pasted strategy and obscure the actionable
+/// folder name.
+#[test]
+fn split_folder_names_deduplicates_spaced_separators_in_first_seen_order() {
+    let paths = [
+        "Dest/STRIKE / ALL COINS",
+        "Other/STRIKE / ALL COINS",
+        "A/B",
+        "Dest\\STRIKE \\ ALL COINS",
+    ];
+
+    assert_eq!(
+        split_folder_names(paths),
+        vec!["STRIKE / ALL COINS", "STRIKE \\ ALL COINS"],
+        "ordinary nested paths are safe, while each spaced slash or backslash folder is warned once"
+    );
+}
+
 #[test]
 fn rows_under_includes_nested() {
     let rows = vec![

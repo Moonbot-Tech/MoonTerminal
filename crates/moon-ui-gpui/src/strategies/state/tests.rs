@@ -87,86 +87,76 @@ fn seed_a_then_hand_expand_b() {
     assert!(!core_is_open(&expanded, rail, 1), "A was never persisted");
 }
 
-/// (c) Seed A, the user collapses A (which clears the overlay too), then the user expands A by
-/// hand: the persisted set becomes `{A}`, A is open, and the snapshot carries A.
+/// `strategies/state.rs::toggle_core_expansion` leaves a rail-selected core open without
+/// persisting a hand expansion.
+///
+/// Plausible edit this catches: restoring the old branch that clears the rail overlay when the
+/// selected root is toggled. The singleton Auto workspace would show a collapsed root with none
+/// of its strategies visible.
 #[test]
-fn seed_a_collapse_then_hand_expand_again() {
+fn seeding_a_then_toggling_a_leaves_the_rail_root_open() {
     let workspace = [1, 2];
     let mut expanded: HashSet<CoreId> = HashSet::new();
     let mut rail = rail_seed_core(Some(1), Some(&workspace));
     toggle_core_expansion(&mut expanded, &mut rail, 1);
     assert!(
-        !core_is_open(&expanded, rail, 1),
-        "collapsing the seeded core must close it"
+        core_is_open(&expanded, rail, 1),
+        "the rail-selected root must remain visible"
     );
-    assert_eq!(rail, None, "collapsing it must clear the overlay too");
+    assert_eq!(rail, Some(1), "toggling must not clear the rail overlay");
+    assert_eq!(
+        expanded,
+        HashSet::new(),
+        "the rail invariant must not create a persisted hand expansion"
+    );
+}
+
+/// `strategies/state.rs::toggle_core_expansion` preserves a rail-selected core even when it was
+/// also expanded by hand before Auto scope selected it.
+///
+/// Plausible edit this catches: removing the rail early return. A click would silently discard
+/// the user's persisted expansion, so leaving Auto later would collapse a root they had opened.
+#[test]
+fn toggling_a_rail_core_open_via_both_sources_leaves_both_unchanged() {
+    let mut expanded: HashSet<CoreId> = HashSet::from([1]);
+    let mut rail = Some(1);
     toggle_core_expansion(&mut expanded, &mut rail, 1);
     assert!(core_is_open(&expanded, rail, 1));
     assert_eq!(
         expanded,
         HashSet::from([1]),
-        "a hand re-expand must land in the persisted set"
+        "the persisted hand expansion must survive the no-op"
     );
-    let snapshot = expanded.clone();
-    assert_eq!(snapshot, HashSet::from([1]));
+    assert_eq!(rail, Some(1), "the rail overlay must remain pinned");
 }
 
-/// (d) A core open through BOTH the persisted set and the overlay collapses on one call: both
-/// clear together.
+/// `strategies/state.rs::toggle_core_expansion` still toggles a core that is not the Auto rail
+/// root.
+///
+/// Plausible edit this catches: broadening the rail early return to every core while any rail
+/// exists. A user could no longer collapse or re-expand another strategy tree in an Auto window.
 #[test]
-fn collapsing_a_core_open_via_both_sources_clears_both() {
-    let mut expanded: HashSet<CoreId> = HashSet::from([1]);
-    let mut rail = Some(1);
-    toggle_core_expansion(&mut expanded, &mut rail, 1);
-    assert!(!core_is_open(&expanded, rail, 1));
-    assert_eq!(
-        expanded,
-        HashSet::new(),
-        "the persisted membership must clear"
-    );
-    assert_eq!(rail, None, "the overlay must clear in the same call");
-}
-
-/// (e) Seed A, the user collapses A, then an unrelated workspace revision resolves the SAME rail
-/// selection. Comparing the fresh resolve against the stored `rail_seen_core` (still `Some(A)`)
-/// says nothing moved, so A stays collapsed. Contrasted against comparing the overlay instead,
-/// which would wrongly say it moved — that contrast is the item-4 regression this catches.
-#[test]
-fn unrelated_revision_after_a_hand_collapse_does_not_reopen_it() {
+fn a_non_rail_core_still_collapses_and_expands() {
     let workspace = [1, 2];
     let mut expanded: HashSet<CoreId> = HashSet::new();
     let mut rail = rail_seed_core(Some(1), Some(&workspace));
-    let mut rail_seen = rail;
-    toggle_core_expansion(&mut expanded, &mut rail, 1);
-    assert_eq!(rail, None, "collapsing A must clear the overlay");
+    toggle_core_expansion(&mut expanded, &mut rail, 2);
     assert_eq!(
-        rail_seen,
-        Some(1),
-        "rail_seen_core is untouched by a hand collapse"
+        expanded,
+        HashSet::from([2]),
+        "a non-rail core must still open through the hand-managed set"
     );
-
-    let resolved = rail_seed_core(Some(1), Some(&workspace));
-
-    let rail_moved = resolved != rail_seen;
-    assert!(
-        !rail_moved,
-        "an unchanged rail selection compared against rail_seen_core must not look like it moved"
-    );
-    if rail_moved {
-        rail_seen = resolved;
-        rail = resolved;
-    }
+    assert_eq!(rail, Some(1), "the rail selection belongs to A, not B");
+    toggle_core_expansion(&mut expanded, &mut rail, 2);
     assert_eq!(
-        rail_seen,
-        Some(1),
-        "an unmoved rail must leave rail_seen_core untouched"
+        expanded,
+        HashSet::new(),
+        "the second toggle must collapse the non-rail core"
     );
-    assert!(!core_is_open(&expanded, rail, 1), "A must stay collapsed");
-
-    let would_move_against_overlay = resolved != rail;
-    assert!(
-        would_move_against_overlay,
-        "comparing against the overlay instead of rail_seen_core is exactly the regression item 4 guards against"
+    assert_eq!(
+        rail,
+        Some(1),
+        "toggling B must not disturb the rail-selected root"
     );
 }
 
