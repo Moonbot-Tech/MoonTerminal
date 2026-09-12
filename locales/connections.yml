@@ -240,13 +240,17 @@ conn.tip.name:
   en: "Core name (arbitrary, for display in the terminal)"
   es: "Nombre del núcleo (arbitrario, para mostrar en el terminal)"
 conn.tip.key:
-  ru: "Ключ ядра Moonbot. Кнопка «Вставить» вставит его из буфера обмена; глаз — показать/скрыть."
-  en: "Moonbot core key. The Paste button inserts it from the clipboard; the eye shows/hides it."
-  es: "Clave del núcleo Moonbot. El botón Pegar la inserta desde el portapapeles; el ojo la muestra/oculta."
+  ru: "Ключ создаётся в MoonBot, не на сайте, и копируется ПОСЛЕ настройки ядра — он несёт адрес, порт и режим с собой, вводить их здесь не надо. Порядок: 1) на сервере с MoonBot открыть UDP-порт ядра для входящих; 2) в MoonBot: зелёный кружок слева внизу (окно Info) → Moon Kernel → Settings → окно Moon Proto, вкладка Settings: включить Kernel (VPS), задать Port, нажать Apply; 3) там же Key: → Copy Key (ключа нет — New Key); 4) вставить сюда кнопкой «Вставить» и нажать «Сохранить». Глаз — показать/скрыть."
+  en: "The key is made in MoonBot, not on the website, and is copied AFTER the core is set up — it carries host, port and mode with it, so none of them is entered here. Order: 1) on the MoonBot server, open the core's UDP port for inbound traffic; 2) in MoonBot: the green dot at the bottom left (the Info window) → Moon Kernel → Settings → the Moon Proto window, Settings tab: tick Kernel (VPS), set Port, press Apply; 3) there, Key: → Copy Key (no key yet — New Key); 4) paste it here with the Paste button and press Save. The eye shows/hides it."
+  es: "La clave se crea en MoonBot, no en el sitio web, y se copia DESPUÉS de configurar el núcleo: lleva consigo host, puerto y modo, así que aquí no se introduce ninguno. Orden: 1) en el servidor de MoonBot, abre el puerto UDP del núcleo para tráfico entrante; 2) en MoonBot: el punto verde abajo a la izquierda (ventana Info) → Moon Kernel → Settings → ventana Moon Proto, pestaña Settings: activa Kernel (VPS), fija el Port, pulsa Apply; 3) ahí mismo Key: → Copy Key (sin clave: New Key); 4) pégala aquí con el botón Pegar y pulsa Guardar. El ojo la muestra/oculta."
 conn.key_ph:
-  ru: "вставьте ключ ядра"
-  en: "paste the core key"
-  es: "pega la clave del núcleo"
+  ru: "Copy Key в MoonBot"
+  en: "Copy Key in MoonBot"
+  es: "Copy Key en MoonBot"
+conn.key_unreadable:
+  ru: "Это не ключ MoonBot — терминал не может его прочитать. Скопируйте ключ в MoonBot кнопкой Copy Key (окно Moon Proto → Settings → Key:) и вставьте сюда целиком кнопкой «Вставить»"
+  en: "This is not a MoonBot key — the terminal cannot read it. Copy the key in MoonBot with Copy Key (Moon Proto window → Settings → Key:) and paste the whole of it here with the Paste button"
+  es: "Esto no es una clave MoonBot: el terminal no puede leerla. Copia la clave en MoonBot con Copy Key (ventana Moon Proto → Settings → Key:) y pégala entera aquí con el botón Pegar"
 # Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
 # `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".
 conn.bundle_ph:
@@ -270,9 +274,9 @@ conn.tip.flags:
   en: "Data received from the core. Gray = all on; colored = some categories off. Click to configure."
   es: "Datos recibidos del núcleo. Gris = todo activado; en color = algunas categorías desactivadas. Clic para configurar."
 conn.tip.proto:
-  ru: "Режим транспорта MoonProto — та же тройка V0/V1/V2, что в настройках ядра «Moon Proto»; обе стороны должны стоять на ОДНОМ. Берётся из ключа ОДИН раз — пока режима ещё нет; дальше только отсюда, и новый ключ его уже не перебьёт — так что перевыпускать ключ ради смены режима не нужно. Прочерк = ключ ничего не сообщил (старый экспорт), соединение идёт как V0. Применяется по «Сохранить»: ядро переподключится само."
-  en: "MoonProto transport mode - the same V0/V1/V2 trio as in the core's Moon Proto settings; both sides must be on the SAME one. Taken from the key ONCE, while no mode is set yet; after that it is yours, and a new key no longer overrides it - so no key has to be reissued just to change the mode. A dash means the key named nothing (an older export) and the connection runs as V0. Applied on Save: the core reconnects by itself."
-  es: "Modo de transporte MoonProto: el mismo trío V0/V1/V2 que en los ajustes Moon Proto del núcleo; ambos lados deben estar en el MISMO. Se toma de la clave UNA vez, mientras no haya modo definido; después es tuyo y una clave nueva ya no lo sobrescribe, así que no hace falta reemitir ninguna clave para cambiar de modo. Un guion significa que la clave no indicó nada (exportación antigua) y la conexión usa V0. Se aplica al guardar: el núcleo se reconecta solo."
+  ru: "Режим транспорта MoonProto — та же тройка V0/V1/V2, что в настройках ядра «Moon Proto»; обе стороны должны стоять на ОДНОМ. Берётся из ключа ОДИН раз — пока режима ещё нет; дальше только отсюда, и новый ключ его уже не перебьёт — так что перевыпускать ключ ради смены режима не нужно. Прочерк = ключ ничего не сообщил (старый экспорт), соединение идёт как V0. Применяется по «Сохранить»: ядро переподключится само. Поэтому Copy Key нажимайте уже ПОСЛЕ того, как на ядре выставлены Port и режим: ключ несёт их с собой."
+  en: "MoonProto transport mode - the same V0/V1/V2 trio as in the core's Moon Proto settings; both sides must be on the SAME one. Taken from the key ONCE, while no mode is set yet; after that it is yours, and a new key no longer overrides it - so no key has to be reissued just to change the mode. A dash means the key named nothing (an older export) and the connection runs as V0. Applied on Save: the core reconnects by itself. So press Copy Key only AFTER Port and the mode are set on the core: the key carries them with it."
+  es: "Modo de transporte MoonProto: el mismo trío V0/V1/V2 que en los ajustes Moon Proto del núcleo; ambos lados deben estar en el MISMO. Se toma de la clave UNA vez, mientras no haya modo definido; después es tuyo y una clave nueva ya no lo sobrescribe, así que no hace falta reemitir ninguna clave para cambiar de modo. Un guion significa que la clave no indicó nada (exportación antigua) y la conexión usa V0. Se aplica al guardar: el núcleo se reconecta solo. Por eso pulsa Copy Key solo DESPUÉS de fijar el Port y el modo en el núcleo: la clave los lleva consigo."
 conn.tip.preset:
   ru: "В каком режиме рабочего пространства ядро видно в списках: везде, только в MANUAL или только в AUTO. Это только отображение — скрытое ядро всё равно подключается и записывает данные."
   en: "Which workspace mode shows this core in every list: both, MANUAL only, or AUTO only. Display only — a hidden core still connects and still records."

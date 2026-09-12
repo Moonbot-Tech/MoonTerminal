@@ -1,6 +1,17 @@
 //! What a MoonBot key can and cannot say about the transport mode.
 
-use super::{TransportVersion, seeded_transport, transport_from_key};
+use super::{TransportVersion, key_is_readable, seeded_transport, transport_from_key};
+
+/// `config/servers.rs:key_is_readable` must treat blank key fields as not-yet-filled rather than
+/// invalid: dropping its trimming short circuit paints a first-run field red instead of leaving
+/// its onboarding hint visible.
+#[test]
+fn blank_keys_are_readable_but_plain_garbage_is_not() {
+    for blank in ["", "   ", "\t\n"] {
+        assert!(key_is_readable(blank), "{blank:?} is a blank first-run value");
+    }
+    assert!(!key_is_readable("abc"));
+}
 
 /// A key is the seed for the mode, not a requirement for having one: an empty field and a
 /// mistyped key must both come back as "nothing to seed" rather than as `V0`, or every core

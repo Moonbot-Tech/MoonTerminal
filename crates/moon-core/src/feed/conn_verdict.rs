@@ -31,6 +31,10 @@
 //! an exchange account outside the referral) as "predates this terminal", and send its owner to
 //! update MoonBot for an evening over a checkbox. So the flag needs a populated field, and the truly
 //! ancient core simply goes unnamed. Silence about a fact beats confidence about the wrong one.
+//!
+//! The earliest fact this module can report is [`FailureClass::KeyUnparsable`]: observed locally,
+//! before any socket existed, because the configured key could not be decoded. It deliberately
+//! says nothing about ports — nothing was ever sent.
 
 use super::{ConnFault, ConnFaultKind, ConnStatus, CoreInitStep, CoreStartupStatus};
 
@@ -44,6 +48,12 @@ mod tests;
 /// terminal can honestly support.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FailureClass {
+    /// The key in the Connections row could not be decoded, so nothing was ever sent.
+    ///
+    /// The strongest evidence in this enum: observed locally, before any socket existed.
+    /// `empty` forks the WORDING only (a blank field vs. a pasted non-key); it is a fact,
+    /// not a guess.
+    KeyUnparsable { empty: bool },
     /// THIS machine could not open its own UDP socket, so nothing was ever sent.
     ///
     /// Nothing here is about the core: a local VPN, a local firewall, or exhausted ephemeral ports.
@@ -117,6 +127,18 @@ pub enum FailureClass {
     },
 }
 
+impl FailureClass {
+    /// Whether the reconnect loop keeps trying behind this class.
+    ///
+    /// `false` only where `feed::spawn` STOPS — a fault that cannot resolve without a settings
+    /// edit — so the verdict never promises an attempt that is not running. Paired with
+    /// `feed::retry_can_help(&anyhow::Error)`, which makes the same decision one type earlier;
+    /// the two cannot be one function and are pinned by separate tests.
+    pub fn retry_can_help(&self) -> bool {
+        !matches!(self, Self::KeyUnparsable { .. })
+    }
+}
+
 /// One core's connection verdict: the class, plus the facts a wording layer adds around it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnosis {
@@ -125,9 +147,12 @@ pub struct Diagnosis {
     /// Whether a replacement attempt is already running behind this reason.
     ///
     /// The application-level reconnect loop retries retained faults except after an explicit
-    /// disconnect. A `Disconnected` status means the terminal deliberately stopped the client, so
-    /// saying that it is retrying would be a false promise; every other retained fault has another
-    /// attempt on its way and the wording says so.
+    /// disconnect, and except for a key that cannot be decoded: that loop has stopped, because no
+    /// retry can succeed until the field is edited. A `Disconnected` status means the terminal
+    /// deliberately stopped the client; a [`FailureClass::KeyUnparsable`] class means the same
+    /// for a different reason. Saying that either is retrying would be a false promise. A live
+    /// `Connecting` or `Stage` outranks the class: the class describes the attempt that ENDED,
+    /// and a replacement feed starts while that fault is still retained.
     pub retrying: bool,
     /// The core identified itself, and what it sent carried NO protocol version.
     ///
@@ -225,6 +250,7 @@ pub fn diagnose(
     // it explains.
     let s = &fault.startup;
     let class = match &fault.kind {
+        ConnFaultKind::KeyUnparsable { empty } => FailureClass::KeyUnparsable { empty: *empty },
         ConnFaultKind::LocalBindFailed {
             consecutive_failures,
         } => FailureClass::LocalPort {
@@ -258,15 +284,27 @@ pub fn diagnose(
         } => step_class(*step, raw_step, Some(message.clone()), s),
     };
 
+    // Bound before the literal: `class` is moved into the first field, and `FailureClass` is
+    // `Clone` not `Copy`.
+    // A live attempt is POSITIVE evidence that something is being tried right now, and it
+    // outranks what the retained fault's class says about the attempt that already died: a
+    // replacement feed (Save, or the Reconnect button) starts at `Connecting` while the previous
+    // fault is still retained on purpose (`session/store.rs:718-732` keeps it so the verdict is
+    // not blanked once per backoff cycle). Without this, a corrected key reads as "stopped" for
+    // the whole window between Save and the first result of the new attempt.
+    let attempting = matches!(status, ConnStatus::Connecting | ConnStatus::Stage(_));
+    let retrying =
+        attempting || (class.retry_can_help() && !matches!(status, ConnStatus::Disconnected));
     Some(Diagnosis {
         class,
         // The application-level reconnect loop runs for every failure it is TOLD about, so a
-        // retained fault normally means another attempt is on its way. `Disconnected` is the one
-        // exception and it is not a subtlety: every `client.disconnect()` in this crate is followed
-        // by `run` returning `Ok(())`, which the outer loop treats as `break`. Telling a user that
-        // a deliberately stopped core is reconnecting is the same over-claim the class table exists
+        // retained fault normally means another attempt is on its way. Two exceptions, both
+        // `break`s in `feed::spawn`: `Disconnected` (the terminal stopped the client; every
+        // `client.disconnect()` is followed by `run` returning `Ok(())`) and `KeyUnparsable`
+        // (the key cannot be decoded; no retry can succeed until it is edited). Telling a user
+        // that a stopped core is reconnecting is the same over-claim the class table exists
         // to prevent, applied to a flag instead of to a cause.
-        retrying: !matches!(status, ConnStatus::Disconnected),
+        retrying,
         // The ONE age claim in this feature, and it fires only on POSITIVE evidence that the
         // `BaseCheck` payload was really read: a stable identity id, or a reported MoonBot version
         // (the append-only tail puts `server_version` BEFORE `moonproto_version`, so a truncated

@@ -578,6 +578,26 @@ pub(super) fn stall_fault(
     fault(ConnFaultKind::StartupStalled, info, startup)
 }
 
+/// Build the fault for a key that could not be decoded — no client was ever built.
+///
+/// There is no client at this point, so there are no identity facts and no startup snapshot to
+/// carry — the defaults are the honest values, and going through the shared [`fault`] assembler
+/// keeps the three constructors in step.
+///
+/// Args:
+///     empty: `true` when the field was blank after trimming; `false` when something was pasted
+///         that is not a MoonBot key export.
+///
+/// Returns:
+///     The fault record for an unreadable key.
+pub(super) fn key_fault(empty: bool) -> ConnFault {
+    fault(
+        ConnFaultKind::KeyUnparsable { empty },
+        None,
+        CoreStartupStatus::default(),
+    )
+}
+
 /// Convert one successful `CheckAPIExpirationTime` answer into terminal state.
 ///
 /// The day count is the core's own (`reported_days_left`), because the terminal's clock plays no

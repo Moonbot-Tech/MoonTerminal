@@ -29,6 +29,21 @@ fn server(id: CoreId, mode: Option<TransportVersion>) -> ServerConfig {
     }
 }
 
+/// `conn_diag.rs:reason` and `fault_short` must keep the empty-key and non-key wording separate;
+/// coalescing their arms sends users after the wrong correction, while the key next step must keep
+/// the Copy Key route rather than the undetermined-support route.
+#[test]
+fn key_unparsable_wording_distinguishes_blank_from_pasted_garbage() {
+    let empty = FailureClass::KeyUnparsable { empty: true };
+    let garbage = FailureClass::KeyUnparsable { empty: false };
+
+    assert_ne!(reason(&empty), reason(&garbage));
+    assert_ne!(fault_short(&empty), fault_short(&garbage));
+    let next = next_step(&empty, None);
+    assert!(next.contains("Copy Key"));
+    assert!(!next.contains("support"));
+}
+
 /// Physical inbound datagrams must not reuse either the silence sentence or its firewall advice.
 ///
 /// Breakage: keying the verdict only off accepted Sliced bytes tells an operator to open a port
@@ -105,6 +120,7 @@ fn only_no_response_verdicts_receive_a_mode_suggestion() {
         );
     }
     let other_classes = [
+        FailureClass::KeyUnparsable { empty: true },
         FailureClass::LocalPort { attempts: 1 },
         FailureClass::Access {
             refused: true,

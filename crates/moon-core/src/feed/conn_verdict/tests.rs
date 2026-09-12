@@ -4,6 +4,59 @@
 use super::*;
 use crate::feed::{ConnStatus, CoreIdentityFacts, INIT_STEPS_TOTAL};
 
+/// `conn_verdict.rs:diagnose` must preserve `ConnFaultKind::KeyUnparsable` instead of falling
+/// through to `Undetermined`; deleting that arm tells a user with an empty key to contact support
+/// despite the terminal knowing that no key was pasted.
+#[test]
+fn an_empty_key_fault_has_its_own_non_legacy_diagnosis() {
+    let fault = ConnFault {
+        kind: ConnFaultKind::KeyUnparsable { empty: true },
+        identity: CoreIdentityFacts::default(),
+        startup: CoreStartupStatus::default(),
+    };
+    let diagnosis = diagnose(
+        &ConnStatus::Failed("key empty".to_string()),
+        Some(&fault),
+        &CoreStartupStatus::default(),
+    )
+    .expect("a retained key fault must have a diagnosis");
+
+    assert_eq!(diagnosis.class, FailureClass::KeyUnparsable { empty: true });
+    assert!(!diagnosis.legacy_core);
+}
+
+/// `conn_verdict.rs:diagnose` must combine the class-side `FailureClass::retry_can_help` half of
+/// the retry decision with the status guard; removing it falsely promises a retry for a bad key,
+/// while hard-coding false hides a real timeout retry.
+#[test]
+fn key_faults_do_not_promise_retries_but_timeouts_do() {
+    let key_fault = ConnFault {
+        kind: ConnFaultKind::KeyUnparsable { empty: false },
+        identity: CoreIdentityFacts::default(),
+        startup: CoreStartupStatus::default(),
+    };
+    let key = diagnose(
+        &ConnStatus::Failed("key unparsable".to_string()),
+        Some(&key_fault),
+        &CoreStartupStatus::default(),
+    )
+    .expect("a retained key fault must have a diagnosis");
+    let timeout = ConnFault {
+        kind: ConnFaultKind::ConnectTimedOut { timeout_ms: 1_000 },
+        identity: CoreIdentityFacts::default(),
+        startup: CoreStartupStatus::default(),
+    };
+    let retrying_timeout = diagnose(
+        &ConnStatus::Failed("connect timeout".to_string()),
+        Some(&timeout),
+        &CoreStartupStatus::default(),
+    )
+    .expect("a retained timeout must have a diagnosis");
+
+    assert!(!key.retrying);
+    assert!(retrying_timeout.retrying);
+}
+
 /// A transport timeout must distinguish no return path from packets that reached the process but
 /// were rejected above the UDP socket.
 ///

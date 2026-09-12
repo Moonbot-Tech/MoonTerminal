@@ -404,7 +404,7 @@ pub struct ConnFault {
 
 /// The distinguishable ways a connection attempt can end — mostly mirrored from MoonProto's
 /// `ConnectError` and `LifecycleEvent::BindFailed`, plus the ones this terminal decides for itself
-/// when the library reports no failure at all ([`Self::StartupStalled`]).
+/// ([`Self::KeyUnparsable`], and [`Self::StartupStalled`] when the library reports no failure at all).
 ///
 /// Deliberately close to the wire shape rather than to the user-facing classes: turning these into
 /// causes is a decision with its own tests, and it belongs in the layer that can also word them.
@@ -412,6 +412,13 @@ pub struct ConnFault {
 /// naming the stage honestly beats guessing the cause.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnFaultKind {
+    /// The configured key could not be decoded, so no client was ever built and nothing was sent.
+    /// Decided by this terminal (`feed::live::run`), like `StartupStalled`; MoonProto never saw it.
+    KeyUnparsable {
+        /// `true` when the field was blank (after trimming); `false` when something was pasted
+        /// that is not a MoonBot key export.
+        empty: bool,
+    },
     /// THIS machine could not bind its own UDP socket — repeated 200-port sweeps failed.
     ///
     /// From `LifecycleEvent::BindFailed`, so it says nothing about the core: the usual causes are a

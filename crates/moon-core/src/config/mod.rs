@@ -100,7 +100,7 @@ pub use schema::{TelegramConfig, UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN, UiThemeMo
 pub use secrets::Secret;
 pub use servers::{
     ChartBucket, CoreSortMode, FeedFlags, MANUAL_STRAT_SLOTS, ManualStratState, ServerConfig,
-    StratSlot, TransportVersion, WorkspaceMembership, seeded_transport,
+    StratSlot, TransportVersion, WorkspaceMembership, key_is_readable, seeded_transport,
 };
 pub use tab_badges::TabBadgeSettings;
 pub use theme::{ChartTheme, ChartThemeSet};

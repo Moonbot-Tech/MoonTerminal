@@ -178,6 +178,28 @@ impl std::fmt::Display for NeverOperational {
     }
 }
 
+/// `run` failed before any client existed because the configured key could not be decoded.
+///
+/// `feed::spawn` reads it to stop the backoff loop: no retry can succeed until the key is
+/// edited, and every edit path (Save, Reconnect) spawns a NEW thread
+/// (`session::lifecycle::respawn_session`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::feed) struct KeyUnreadable {
+    pub(in crate::feed) empty: bool,
+}
+
+impl std::fmt::Display for KeyUnreadable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.empty {
+            f.write_str("key empty")
+        } else {
+            f.write_str("key unparsable")
+        }
+    }
+}
+
+impl std::error::Error for KeyUnreadable {}
+
 /// Tag one `run` failure with whether the attempt had ever become operational.
 ///
 /// Args:
@@ -417,7 +439,8 @@ struct RunStateSeen {
 ///     Success after orderly shutdown, or the terminal setup/live-loop error.
 ///
 /// Errors:
-///     Returns an error when the key is invalid, the client cannot connect, or the event loop fails.
+///     Returns [`KeyUnreadable`] when the configured key cannot be decoded; otherwise an error
+///     when the client cannot connect, or the event loop fails.
 pub(super) fn run(
     server: &ServerConfig,
     chart_memory_percent: u16,
@@ -438,8 +461,12 @@ pub(super) fn run(
     chart_text.begin_client();
 
     // 1. Decode the key into master/MAC keys and its suggested network.
-    let info = moonproto::parse_key_info(server.key.expose())
-        .ok_or_else(|| anyhow::anyhow!("не удалось разобрать ключ Moonbot (server.key)"))?;
+    let raw = server.key.expose();
+    let Some(info) = moonproto::parse_key_info(raw) else {
+        let empty = raw.trim().is_empty();
+        let _ = tx.send(FeedMsg::ConnFault(convert::key_fault(empty)));
+        return Err(KeyUnreadable { empty }.into());
+    };
 
     // 2. Derive the endpoint from the key, which embeds host and port; the config no longer has
     //    separate fields for those. The transport mode is the exception: the key only seeds it,

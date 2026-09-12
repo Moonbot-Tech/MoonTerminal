@@ -28,11 +28,29 @@ steps:
     ru: Добавьте ядро и вставьте ключ
     en: Add a core and paste the key
   body:
-    ru: 'Кнопка <code>+ Добавить ядро (в «default»)</code> создаёт строку. Хост и порт отдельно вводить
-      не надо: они зашиты в сам ключ Moonbot — вставьте его в поле «Ключ» кнопкой из буфера.'
-    en: 'The <code>+ Add core (to "default")</code> button creates a row. There is no separate host or
-      port field: both are encoded in the Moonbot key itself — paste it into the Key field with the clipboard
-      button.'
+    ru: 'Кнопка <code>+ Добавить ядро (в «default»)</code> создаёт строку. Порядок важен: ключ несёт
+      порт и режим внутри себя — ключ, скопированный до их настройки, уже устарел. На машине с MoonBot
+      откройте UDP-порт ядра для входящих: в Windows это <code>netsh advfirewall firewall add rule
+      name="MoonBot-UDP-5017" dir=in action=allow protocol=UDP localport=5017</code>; у хостера со своим
+      фаерволом (AWS и подобные) порт нужно открыть и там, на обычном VPS достаточно правила Windows.
+      В MoonBot зелёный кружок слева внизу открывает <code>Info</code>; в строке <code>Moon Kernel</code>
+      нажмите <code>Settings</code> — откроется <code>Moon Proto</code>; на вкладке <code>Settings</code>
+      включите <code>Kernel (VPS)</code>, задайте <code>Port</code> (по умолчанию <code>5017</code>),
+      нажмите <code>Apply</code> — появится зелёное «Server activated on port …». На строке <code>Key:</code>
+      нажмите <code>Copy Key</code> (ключа нет — <code>New Key</code>). Вставьте его в поле «Ключ»
+      кнопкой из буфера. Хост и порт отдельно вводить не надо — они внутри ключа.'
+    en: 'The <code>+ Add core (to "default")</code> button creates a row. The order matters: the key
+      carries the port and mode inside it — a key copied before they are set is stale. On the machine
+      running MoonBot, open the core''s UDP port for inbound traffic: on Windows that is <code>netsh
+      advfirewall firewall add rule name="MoonBot-UDP-5017" dir=in action=allow protocol=UDP localport=5017</code>;
+      a hoster with its own firewall (AWS and the like) needs the port opened there too, while a plain
+      VPS needs only the Windows rule. In MoonBot the green dot at the bottom left opens <code>Info</code>;
+      on the <code>Moon Kernel</code> row press <code>Settings</code>, which opens <code>Moon Proto</code>;
+      on its <code>Settings</code> tab tick <code>Kernel (VPS)</code>, set <code>Port</code> (default
+      <code>5017</code>), press <code>Apply</code> — a green "Server activated on port …" appears.
+      On the <code>Key:</code> row press <code>Copy Key</code> (<code>New Key</code> if there is no
+      key yet). Paste it into the Key field with the clipboard button. Host and port are not entered
+      separately — they are inside the key.'
     html: true
 - title:
     ru: Отметьте, что принимать
