@@ -91,6 +91,24 @@ fn field_edit_plan_authorized(
     ) && captured == current
 }
 
+/// Enable refresh only for supported MoonShot drafts with no overlapping core edit.
+///
+/// The raw names are the wire/schema identifiers. An unchanged resubmission is not a forced
+/// refresh; the core remains responsible for deciding whether an accepted field changed.
+fn buy_refresh_enabled<'a>(
+    fields: impl IntoIterator<Item = (&'a str, &'a str)>,
+    has_open_edit: bool,
+) -> bool {
+    !has_open_edit
+        && fields.into_iter().any(|(kind, name)| {
+            kind == "MoonShot"
+                && matches!(
+                    name,
+                    "OrderSize" | "Short" | "EmulatorMode" | "AutoCancelBuy"
+                )
+        })
+}
+
 impl StrategiesView {
     /// Capture the complete Start/Stop payload represented by the current action button.
     ///
@@ -324,6 +342,30 @@ impl StrategiesView {
             .collect()
     }
 
+    /// Check refresh eligibility against the sendable drafts and current per-core edit state.
+    ///
+    /// The same check runs at render and dispatch so a delayed click cannot send an ineligible
+    /// refresh. Kind changes use their staged SignalType, matching the feed's serializer path.
+    pub(super) fn can_refresh_buys(&self, keys: &[FieldEditKey], store: &CoreStore) -> bool {
+        let has_open_edit = keys.iter().any(|(core, _, _)| {
+            store
+                .core(*core)
+                .is_some_and(|cd| !cd.strategy_edits.is_empty())
+        });
+        buy_refresh_enabled(
+            keys.iter().filter_map(|(core, id, name)| {
+                let strategy = row(store, *core, *id)?;
+                let kind = self
+                    .field_edits
+                    .get(&(*core, *id, "SignalType".to_string()))
+                    .map(String::as_str)
+                    .unwrap_or(strategy.kind.as_str());
+                Some((kind, name.as_str()))
+            }),
+            has_open_edit,
+        )
+    }
+
     /// Dispatch one exact field-edit plan and retain every draft hidden by the current scope.
     ///
     /// The current visible plan and workspace generation must still equal the producer snapshot;
@@ -331,11 +373,17 @@ impl StrategiesView {
     ///
     /// Args:
     ///     plan: Complete field-edit payload captured by the rendered Apply button.
+    ///     apply_to_orders: Request a BUY refresh with this edit batch only.
     ///     cx: View context used to reach the session and publish cleared visible editors.
     ///
     /// Returns:
     ///     Nothing; a failed core dispatch returns before clearing any visible or hidden draft.
-    pub(super) fn apply_field_edits(&mut self, plan: &FieldEditPlan, cx: &mut Context<Self>) {
+    pub(super) fn apply_field_edits(
+        &mut self,
+        plan: &FieldEditPlan,
+        apply_to_orders: bool,
+        cx: &mut Context<Self>,
+    ) {
         let current_generation = self.action_workspace_generation(cx);
         let current = self.field_edit_plan(cx);
         if plan.edit_keys.is_empty()
@@ -373,11 +421,27 @@ impl StrategiesView {
         }
         let actions = self.group_field_edits(&sendable);
         let b = self.backend.read(cx);
+        if apply_to_orders && !self.can_refresh_buys(&sendable, b.session.store()) {
+            return;
+        }
+        let mut requested = 0;
         for (core, edits) in &actions {
-            if let Err(error) = b.session.edit_strategies(*core, edits.clone()) {
+            if let Err(error) =
+                b.session
+                    .edit_strategies_with_order_refresh(*core, edits.clone(), apply_to_orders)
+            {
+                if requested > 0 {
+                    log::info!("{}", t!("strat.buy_refresh_requested", n = requested));
+                }
                 log::warn!("edit strategies failed: {error}");
                 return;
             }
+            if apply_to_orders {
+                requested += edits.len();
+            }
+        }
+        if requested > 0 {
+            log::info!("{}", t!("strat.buy_refresh_requested", n = requested));
         }
         // Clearing here is correct, not lossy: the value these keys displayed now arrives from
         // `CoreData::strategy_edit`/`strategy_edit_notes_since` (the pending/adjusted/superseded

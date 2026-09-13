@@ -328,6 +328,8 @@ pub enum CoreCmd {
     /// set, so the second sync would overwrite the first edit.
     EditStrategyFields {
         edits: Vec<(u64, Vec<(String, String)>)>,
+        /// Request a standing MoonShot BUY refresh with this submission only.
+        apply_to_orders: bool,
     },
     /// Logically delete one core strategy by `id` using `TStratDelete` with `folder_path=""`. Its
     /// history remains in `strat_db`, and the UI can restore it under the same ID. The UI enforces

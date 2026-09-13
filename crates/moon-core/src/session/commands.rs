@@ -153,12 +153,28 @@ impl SessionManager {
         core: CoreId,
         edits: Vec<(u64, Vec<(String, String)>)>,
     ) -> Result<()> {
+        self.edit_strategies_with_order_refresh(core, edits, false)
+    }
+
+    /// Send one edit batch, optionally requesting a standing MoonShot BUY refresh with it.
+    ///
+    /// `apply_to_orders` belongs only to this submission. Queue acceptance and subsequent edit
+    /// confirmation concern settings, not order cancellation or replacement.
+    pub fn edit_strategies_with_order_refresh(
+        &self,
+        core: CoreId,
+        edits: Vec<(u64, Vec<(String, String)>)>,
+        apply_to_orders: bool,
+    ) -> Result<()> {
         if edits.is_empty() {
             return Ok(());
         }
         self.send_core_cmd(
             core,
-            CoreCmd::EditStrategyFields { edits },
+            CoreCmd::EditStrategyFields {
+                edits,
+                apply_to_orders,
+            },
             "edit strategies",
         )
     }

@@ -37,6 +37,46 @@ fn an_anchor_from_another_core_is_dropped() {
 /// The source file, read at COMPILE time so the guard below cannot drift from it.
 const SRC: &str = include_str!("../commands.rs");
 
+/// Removing the flag from the session/handler route queues plain settings and silently misses
+/// the user's BUY refresh. Each match arm must submit once; folders remain on their own path.
+#[test]
+fn edit_refresh_flag_reaches_the_single_flagged_sync() {
+    let session = include_str!("../../../session/commands.rs");
+    assert!(session.contains("self.edit_strategies_with_order_refresh(core, edits, false)"));
+    let dispatch = command_arm(
+        session,
+        "pub fn edit_strategies_with_order_refresh(",
+        "pub fn delete_strategy(",
+    );
+    let dispatch: String = dispatch.split_whitespace().collect();
+    assert!(
+        dispatch
+            .replace(",}", "}")
+            .contains("CoreCmd::EditStrategyFields{edits,apply_to_orders}")
+    );
+    let edit = command_arm(
+        SRC,
+        "Ok(CoreCmd::EditStrategyFields",
+        "Ok(CoreCmd::DeleteStrategy",
+    );
+    assert!(edit.contains("apply_to_orders,"));
+    let call = edit.split_once("let queued = rebuild_sync(").unwrap().1;
+    let call: String = call.split_whitespace().collect();
+    assert!(call.contains("None,apply_to_orders,|full,schema,now|"));
+    assert_eq!(edit.matches("rebuild_sync(").count(), 1);
+    let rebuild = command_arm(SRC, "fn rebuild_sync(", "pub(super) fn drain_commands(");
+    let flagged = command_arm(rebuild, "None if apply_to_orders =>", "None =>");
+    assert!(flagged.contains(".sync_local_strategies_and_apply_to_orders(full)"));
+    assert!(!flagged.contains(".sync_local_strategies(full)"));
+    assert_eq!(
+        rebuild
+            .matches(".sync_local_strategies_and_apply_to_orders(full)")
+            .count(),
+        1
+    );
+    assert!(rebuild.contains(".sync_local_strategies_with_folders(full, paths)"));
+}
+
 /// A copy lands directly after the strategy it was copied from.
 #[test]
 fn a_copy_is_inserted_directly_after_its_source() {
