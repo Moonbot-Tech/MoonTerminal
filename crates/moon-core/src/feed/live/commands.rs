@@ -956,7 +956,8 @@ pub(super) fn drain_commands(
                 }
             }
             Ok(CoreCmd::DeleteFolder { path }) => {
-                // `TStratDelete(strategy_id=0, folder_path=path)` deletes an entire folder.
+                // `TStratDelete(strategy_id=0, folder_path=path)` deletes an EMPTY folder; a
+                // populated one is refused by the core with a log line and no reply event.
                 if let Err(error) = client.strategies().delete(0, path.as_str()) {
                     log::warn!(
                         "core {} delete folder {path} failed: {error}",

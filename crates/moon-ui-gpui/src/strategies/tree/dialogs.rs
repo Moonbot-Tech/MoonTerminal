@@ -1393,9 +1393,18 @@ impl StrategiesView {
 
     /// Delete a folder only while its captured core remains workspace-visible.
     ///
+    /// A populated folder is deleted strategy by strategy first, then as a folder: the wire has no
+    /// command that removes a folder together with its contents. `TStratDelete(0, path)` deletes
+    /// an EMPTY folder only, and omission from the folder tree cannot remove a folder a strategy
+    /// still occupies (moonproto `docs/strats.md`, "Strategy delete has two independent effects"
+    /// and "Folders, Including Empty Folders"). The core answers a populated-folder delete with a
+    /// log line and no event, so a folder sent alone is a confirmed "Yes" that does nothing.
+    ///
     /// Args:
     ///     core: Core captured when the delete confirmation opened.
     ///     path: Canonical folder segments captured by the confirmation.
+    ///     targets: Exact child identities and enabled states shown for confirmation.
+    ///     workspace_generation: Auto generation captured with the confirmation, or Classic.
     ///     cx: View context used to revalidate scope and dispatch deletion.
     ///
     /// Returns:
@@ -1408,12 +1417,19 @@ impl StrategiesView {
         workspace_generation: Option<u64>,
         cx: &mut Context<Self>,
     ) -> Result<()> {
-        let current_targets = {
+        let (current_targets, by_omission) = {
             let store = self.backend.read(cx).session.store();
             let Some(cd) = store.core(core) else {
                 return Ok(());
             };
-            folder_targets(&ops::rows_under(&cd.strategies, path))
+            let current_targets = folder_targets(&ops::rows_under(&cd.strategies, path));
+            // Two shapes, and which one applies is decided by what the folder HOLDS, not only by
+            // what the core can do. Omission from the desired tree removes a folder and nothing
+            // else — the core keeps any folder a strategy still occupies, and moonproto re-adds
+            // it — so it reaches exactly the folder the legacy command cannot: an empty one on a
+            // core that keeps a tree. A populated folder goes the legacy way, once emptied below.
+            let by_omission = cd.folders.editable && current_targets.is_empty();
+            (current_targets, by_omission)
         };
         if !folder_delete_authorized(
             workspace_generation,
@@ -1425,23 +1441,27 @@ impl StrategiesView {
         ) {
             return Ok(());
         }
-        // Two shapes, and which one applies is decided by what the folder HOLDS, not only by what
-        // the core can do. Omission from the desired tree removes a folder and nothing else — the
-        // core keeps any folder a strategy still occupies, and moonproto re-adds it — so it reaches
-        // exactly the folder the legacy command cannot: an empty one on a core that keeps a tree.
-        // A folder with strategies in it still goes the legacy way, which deletes the rows with it.
-        let by_omission = {
-            let store = self.backend.read(cx).session.store();
-            store
-                .core(core)
-                .is_some_and(|cd| cd.folders.editable && !ops::has_row_under(&cd.strategies, path))
-        };
-        let backend = self.backend.read(cx);
-        match by_omission {
-            true => backend
-                .session
-                .remove_core_folder(core, ops::join_path(path))?,
-            false => backend.session.delete_folder(core, ops::join_path(path))?,
+        {
+            let backend = self.backend.read(cx);
+            // The rows first, in the same per-core FIFO the folder command follows: the core
+            // handles one connection's commands in order, so by the time it reads the folder
+            // delete the folder is empty. Every id here was confirmed disabled by the guard above.
+            // Another client adding a row in between makes the core refuse the folder — it stays,
+            // nothing is lost — which is the failure mode this ordering is allowed to have.
+            for (id, _) in &current_targets {
+                backend.session.delete_strategy(core, *id)?;
+            }
+            match by_omission {
+                true => backend
+                    .session
+                    .remove_core_folder(core, ops::join_path(path))?,
+                false => backend.session.delete_folder(core, ops::join_path(path))?,
+            }
+        }
+        let deleted: HashSet<Key> = current_targets.iter().map(|(id, _)| (core, *id)).collect();
+        self.sel.retain(|key| !deleted.contains(key));
+        if self.selected.is_some_and(|key| deleted.contains(&key)) {
+            self.selected = None;
         }
         self.remove_ui_folder(core, path);
         self.persist_session(cx);

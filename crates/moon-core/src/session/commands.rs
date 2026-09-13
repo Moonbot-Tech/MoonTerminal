@@ -212,7 +212,11 @@ impl SessionManager {
         )
     }
 
-    /// Delete an entire core folder by path, including any strategies it still contains.
+    /// Delete an EMPTY core folder by path.
+    ///
+    /// `TStratDelete(0, path)` removes a folder only when it holds no strategy; the core answers a
+    /// populated folder with a log line and no event. A caller removing a populated folder deletes
+    /// its rows first, through this same per-core queue, so the folder command lands after them.
     pub fn delete_folder(&self, core: CoreId, path: String) -> Result<()> {
         if path.is_empty() {
             return Ok(());
