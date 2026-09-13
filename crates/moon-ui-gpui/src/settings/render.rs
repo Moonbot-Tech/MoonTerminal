@@ -316,6 +316,9 @@ impl SettingsView {
                         // A row of the Hotkeys page hovered when the page went away gets no
                         // leave event; without this its popup would be back on return.
                         this.hotkeys_hover_row = None;
+                        if t == Tab::Telegram {
+                            this.telegram_tab_activated(cx);
+                        }
                         cx.notify();
                     }))
                     .render(),

@@ -6,15 +6,16 @@
 //! when one core is displayed in multiple panels.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 use crate::applog::LogLine;
 use crate::feed::{
     AssetsSnapshot, ChartAlertUpdate, ChartTextRows, ClientSettings, ConnStatus, CoreConfig,
     CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
-    CoreConfigState, DetectRow, EngineActionResult, FeedMsg, LicenseState, NewsSnapshot, OrderRow,
-    ProfitState, RuntimeState, STRATEGY_EDIT_NOTE_CAP, StrategyEditNote, StrategyEditOutcome,
-    StrategyEditPhase, StrategyEditRow, StrategyRow, StrategySchemaModel, TempBlacklistRow,
-    TransferAssetsSnapshot,
+    CoreConfigState, CoreTelegramState, DetectRow, EngineActionResult, FeedMsg, LicenseState,
+    NewsSnapshot, OrderRow, ProfitState, RuntimeState, STRATEGY_EDIT_NOTE_CAP, StrategyEditNote,
+    StrategyEditOutcome, StrategyEditPhase, StrategyEditRow, StrategyRow, StrategySchemaModel,
+    TempBlacklistRow, TransferAssetsSnapshot,
 };
 use crate::session::clock_skew::CoreClockSkew;
 use crate::session::order_lines::OrderLineStore;
@@ -284,6 +285,12 @@ pub struct CoreData {
     /// connection, so the cost of clearing is the seconds until it arrives, stated honestly as
     /// "not known" rather than as a clean bill.
     pub problems: crate::feed::CoreProblems,
+    /// Latest Telegram reader snapshot from the core, observed through `telegram_rev`.
+    ///
+    /// `None` is a real answer — the library holds no snapshot — not an absence of the field.
+    /// CLEARED by a replacement connection: the account belongs to the MoonBot behind the
+    /// endpoint, and a replacement feed may point at a different one.
+    pub telegram: Option<Arc<CoreTelegramState>>,
     /// The core's folder tree, empty folders included, observed through `folders_rev`.
     ///
     /// Its `supported` flag is what tells a caller whether an empty folder can be sent to this core
@@ -410,6 +417,10 @@ pub struct CoreData {
     /// list on every reconnect and again for each newly confirmed row, so an ungated counter would
     /// repaint the panel for a list that has not changed at all.
     pub problems_rev: u64,
+    /// Bumped on EVERY Telegram receipt, not only on a content change. See the apply arm.
+    pub telegram_rev: u64,
+    /// False until a real snapshot arrives, and again from the moment contact is lost.
+    pub telegram_fresh: bool,
     /// Advances when the reported folder tree actually differs.
     pub folders_rev: u64,
     /// Advances when the polled startup snapshot reports different PROGRESS, per
@@ -533,7 +544,10 @@ impl CoreData {
             sys_rev: 0,
             problems: crate::feed::CoreProblems::default(),
             folders: crate::feed::CoreFolders::default(),
+            telegram: None,
             problems_rev: 0,
+            telegram_rev: 0,
+            telegram_fresh: false,
             folders_rev: 0,
             startup_rev: 0,
             news_rev: 0,
@@ -752,6 +766,13 @@ impl CoreData {
             self.folders = crate::feed::CoreFolders::default();
             self.folders_rev = self.folders_rev.wrapping_add(1);
         }
+        // The Telegram snapshot belongs to the replaced MoonBot. An in-loop reconnect never
+        // reaches here — only a REPLACEMENT feed does — so this is not the freshness latch;
+        // that latch lives on `FeedMsg::TelegramStale` and on a non-Ready status.
+        if self.telegram.take().is_some() || self.telegram_fresh {
+            self.telegram_fresh = false;
+            self.telegram_rev = self.telegram_rev.wrapping_add(1);
+        }
         // A replacement feed may point at a different MoonBot on a different clock, so last
         // connection's estimate carries no evidence about this one.
         //
@@ -863,6 +884,14 @@ impl CoreData {
                     }
                 }
                 self.status = s;
+                // Ready does not mean the Telegram snapshot is current: an in-loop reconnect maps
+                // straight to Ready without clearing retained state. Drop the latch here whenever
+                // contact is lost, and only when it actually changed — a backoff of Connecting
+                // messages must not bump `telegram_rev` on every tick.
+                if !matches!(self.status, ConnStatus::Ready) && self.telegram_fresh {
+                    self.telegram_fresh = false;
+                    self.telegram_rev = self.telegram_rev.wrapping_add(1);
+                }
             }
             FeedMsg::Orders(mut orders) => {
                 // Observe and correct clock skew, then update the retained line store (traces,
@@ -1180,6 +1209,22 @@ impl CoreData {
                     self.problems = problems;
                     self.problems_rev = self.problems_rev.wrapping_add(1);
                 }
+            }
+            FeedMsg::Telegram(state) => {
+                // A RECEIPT, not a content gate. MoonProto emits `TelegramUpdated` for every
+                // snapshot it receives with no value comparison, and its guide allows an unchanged
+                // reply and an old-step snapshot right after an action. The UI clears its "sent,
+                // waiting" banner on a rev change, so gating on `!=` would hang that banner on a
+                // successful refresh of unchanged state or a repeated identical wrong-code error.
+                // Safe where `Problems` is not: this event is never a heartbeat.
+                self.telegram = state;
+                self.telegram_fresh = true;
+                self.telegram_rev = self.telegram_rev.wrapping_add(1);
+            }
+            FeedMsg::TelegramStale => {
+                // The snapshot is KEPT so the panel can render it muted; only its freshness dies.
+                self.telegram_fresh = false;
+                self.telegram_rev = self.telegram_rev.wrapping_add(1);
             }
             FeedMsg::Folders(folders) => {
                 // Compared before adopting, like the diagnostics above: the tree is republished

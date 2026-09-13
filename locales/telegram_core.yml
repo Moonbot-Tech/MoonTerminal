@@ -1,0 +1,463 @@
+# Settings -> Telegram: the picked core's built-in Telegram reader.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
+_version: 2
+
+telegram_core.section:
+  ru: "Telegram на ядре"
+  en: "Telegram on the core"
+  es: "Telegram en el núcleo"
+
+telegram_core.intro:
+  ru: "Управление встроенным Telegram-ридером выбранного ядра. Состояние принадлежит ядру, не этому терминалу."
+  en: "Control the built-in Telegram reader on the selected core. State belongs to the core, not this terminal."
+  es: "Controla el lector de Telegram integrado del núcleo seleccionado. El estado pertenece al núcleo, no a este terminal."
+
+telegram_core.core_pick:
+  ru: "Ядро"
+  en: "Core"
+  es: "Núcleo"
+
+telegram_core.core_pick_none:
+  ru: "Выберите ядро"
+  en: "Select a core"
+  es: "Selecciona un núcleo"
+
+telegram_core.details:
+  ru: "Параметры ядра"
+  en: "Core settings"
+  es: "Ajustes del núcleo"
+
+telegram_core.enable:
+  ru: "Включить ридер"
+  en: "Enable reader"
+  es: "Activar lector"
+
+telegram_core.enable_tip:
+  ru: "Выключение останавливает только ридер этого ядра и не выходит из аккаунта Telegram."
+  en: "Turning this off stops only this core's reader and does not log the Telegram account out."
+  es: "Desactivar esto detiene solo el lector de este núcleo y no cierra la sesión de Telegram."
+
+telegram_core.unsupported:
+  ru: "Удалённый вход на этой службе недоступен."
+  en: "Remote login is not available on this service."
+  es: "El inicio de sesión remoto no está disponible en este servicio."
+
+telegram_core.unsupported_ver:
+  ru: "Удалённый вход на этой службе недоступен (версия %{v})."
+  en: "Remote login is not available on this service (version %{v})."
+  es: "El inicio de sesión remoto no está disponible en este servicio (versión %{v})."
+
+telegram_core.stale:
+  ru: "Снимок устарел — до свежего состояния ядра действия заблокированы."
+  en: "Snapshot is stale — actions stay disabled until a fresh state arrives."
+  es: "La instantánea está desactualizada: las acciones siguen bloqueadas hasta que llegue un estado reciente."
+
+telegram_core.sent_waiting:
+  ru: "Отправлено, ждём ответ ядра…"
+  en: "Sent, waiting for the core…"
+  es: "Enviado, esperando al núcleo…"
+
+telegram_core.service_online:
+  ru: "Служба онлайн"
+  en: "Service online"
+  es: "Servicio en línea"
+
+telegram_core.service_offline:
+  ru: "Служба офлайн"
+  en: "Service offline"
+  es: "Servicio desconectado"
+
+telegram_core.client_state:
+  ru: "Состояние"
+  en: "State"
+  es: "Estado"
+
+telegram_core.setup_error:
+  ru: "Ошибка установки"
+  en: "Setup error"
+  es: "Error de instalación"
+
+telegram_core.client_error:
+  ru: "Ошибка клиента"
+  en: "Client error"
+  es: "Error del cliente"
+
+telegram_core.disconnected:
+  ru: "Ядро не подключено."
+  en: "Core is not connected."
+  es: "El núcleo no está conectado."
+
+telegram_core.no_snapshot:
+  ru: "Нет снимка состояния."
+  en: "No state snapshot."
+  es: "No hay instantánea de estado."
+
+telegram_core.proxy_section:
+  ru: "Прокси"
+  en: "Proxy"
+  es: "Proxy"
+
+telegram_core.proxy_kind_none:
+  ru: "Без прокси"
+  en: "No proxy"
+  es: "Sin proxy"
+
+telegram_core.proxy_kind_socks5:
+  ru: "SOCKS5"
+  en: "SOCKS5"
+  es: "SOCKS5"
+
+telegram_core.proxy_kind_mtproto:
+  ru: "MTProto"
+  en: "MTProto"
+  es: "MTProto"
+
+telegram_core.proxy_host:
+  ru: "Хост"
+  en: "Host"
+  es: "Host"
+
+telegram_core.proxy_port:
+  ru: "Порт"
+  en: "Port"
+  es: "Puerto"
+
+telegram_core.proxy_user:
+  ru: "Пользователь"
+  en: "User"
+  es: "Usuario"
+
+telegram_core.proxy_password:
+  ru: "Пароль"
+  en: "Password"
+  es: "Contraseña"
+
+telegram_core.proxy_secret:
+  ru: "Секрет"
+  en: "Secret"
+  es: "Secreto"
+
+telegram_core.proxy_save:
+  ru: "Сохранить прокси"
+  en: "Save proxy"
+  es: "Guardar proxy"
+
+telegram_core.proxy_secret_hint:
+  ru: "Ядро не возвращает сохранённый пароль или секрет — его нужно ввести снова. Пустое значение стирает его, а не оставляет прежнее."
+  en: "The core never returns a saved password or secret, so type it again. Leaving it empty clears it, rather than keeping the old value."
+  es: "El núcleo nunca devuelve la contraseña o el secreto guardados: hay que introducirlos de nuevo. Dejarlo vacío los borra, no conserva el valor anterior."
+
+telegram_core.proxy_actual:
+  ru: "Фактический прокси"
+  en: "Active proxy"
+  es: "Proxy activo"
+
+telegram_core.proxy_actual_unknown:
+  ru: "ещё не известно"
+  en: "not known yet"
+  es: "aún desconocido"
+
+telegram_core.proxy_error:
+  ru: "Ошибка прокси"
+  en: "Proxy error"
+  es: "Error de proxy"
+
+telegram_core.proxy_password_set:
+  ru: "пароль задан"
+  en: "password is set"
+  es: "contraseña definida"
+
+telegram_core.phone:
+  ru: "Телефон"
+  en: "Phone"
+  es: "Teléfono"
+
+telegram_core.phone_hint:
+  ru: "Международный формат, например +79001234567."
+  en: "International format, for example +15551234567."
+  es: "Formato internacional, por ejemplo +34600111222."
+
+telegram_core.phone_send:
+  ru: "Отправить номер"
+  en: "Send number"
+  es: "Enviar número"
+
+telegram_core.login_qr:
+  ru: "Войти по QR"
+  en: "Log in by QR instead"
+  es: "Entrar con QR"
+
+telegram_core.login_phone:
+  ru: "Войти по номеру телефона"
+  en: "Use a phone number instead"
+  es: "Usar un número de teléfono"
+
+telegram_core.cancel_to_phone:
+  ru: "Отменить вход и вернуться к номеру телефона"
+  en: "Cancel login and return to phone entry"
+  es: "Cancelar el inicio de sesión y volver al número"
+
+telegram_core.code:
+  ru: "Код"
+  en: "Code"
+  es: "Código"
+
+telegram_core.code_send:
+  ru: "Отправить код"
+  en: "Send code"
+  es: "Enviar código"
+
+telegram_core.password:
+  ru: "Пароль 2FA"
+  en: "2FA password"
+  es: "Contraseña 2FA"
+
+telegram_core.password_send:
+  ru: "Отправить пароль"
+  en: "Send password"
+  es: "Enviar contraseña"
+
+telegram_core.password_hint_label:
+  ru: "Подсказка"
+  en: "Hint"
+  es: "Pista"
+
+telegram_core.recovery_email:
+  ru: "Почта восстановления"
+  en: "Recovery email"
+  es: "Correo de recuperación"
+
+telegram_core.email:
+  ru: "Почта"
+  en: "Email"
+  es: "Correo"
+
+telegram_core.email_send:
+  ru: "Отправить почту"
+  en: "Send email"
+  es: "Enviar correo"
+
+telegram_core.email_code:
+  ru: "Код с почты"
+  en: "Email code"
+  es: "Código del correo"
+
+telegram_core.email_code_send:
+  ru: "Отправить код с почты"
+  en: "Send email code"
+  es: "Enviar código del correo"
+
+telegram_core.email_pattern:
+  ru: "Письмо придёт на %{pattern}"
+  en: "The message will arrive at %{pattern}"
+  es: "El mensaje llegará a %{pattern}"
+
+telegram_core.code_length:
+  ru: "Длина кода: %{n}"
+  en: "Code length: %{n}"
+  es: "Longitud del código: %{n}"
+
+telegram_core.first_name:
+  ru: "Имя"
+  en: "First name"
+  es: "Nombre"
+
+telegram_core.last_name:
+  ru: "Фамилия"
+  en: "Last name"
+  es: "Apellido"
+
+telegram_core.terms_accept:
+  ru: "Принимаю условия"
+  en: "I accept the terms"
+  es: "Acepto las condiciones"
+
+telegram_core.register:
+  ru: "Зарегистрироваться"
+  en: "Register"
+  es: "Registrarse"
+
+telegram_core.min_age:
+  ru: "Минимальный возраст: %{n}"
+  en: "Minimum age: %{n}"
+  es: "Edad mínima: %{n}"
+
+telegram_core.logged_in:
+  ru: "Аккаунт %{phone}"
+  en: "Account %{phone}"
+  es: "Cuenta %{phone}"
+
+telegram_core.logged_in_unknown:
+  ru: "Аккаунт готов"
+  en: "Account is ready"
+  es: "La cuenta está lista"
+
+telegram_core.logout:
+  ru: "Выйти"
+  en: "Log out"
+  es: "Cerrar sesión"
+
+telegram_core.logout_title:
+  ru: "Выход из Telegram на ядре"
+  en: "Log out of Telegram on the core"
+  es: "Cerrar sesión de Telegram en el núcleo"
+
+telegram_core.logout_q:
+  ru: "Это выйдет из аккаунта и сбросит общие данные Telegram на машине этого ядра. Затронуты все процессы MoonBot на той машине, не только это ядро."
+  en: "This logs out and resets the shared Telegram account data on that core's machine. Every MoonBot process on that machine is affected, not just this core."
+  es: "Esto cierra la sesión y restablece los datos compartidos de Telegram en la máquina de ese núcleo. Afecta a todos los procesos MoonBot de esa máquina, no solo a este núcleo."
+
+telegram_core.premium:
+  ru: "Нужен внешний шаг Telegram. Отмените вход, чтобы вернуться к номеру телефона."
+  en: "An external Telegram step is required. Cancel login to return to the phone number."
+  es: "Hace falta un paso externo de Telegram. Cancela el inicio de sesión para volver al número."
+
+telegram_core.support_email:
+  ru: "Почта поддержки"
+  en: "Support email"
+  es: "Correo de soporte"
+
+telegram_core.support_subject:
+  ru: "Тема"
+  en: "Subject"
+  es: "Asunto"
+
+telegram_core.cancel_login:
+  ru: "Отменить вход"
+  en: "Cancel login"
+  es: "Cancelar inicio de sesión"
+
+telegram_core.transitional:
+  ru: "Ядро работает, подождите…"
+  en: "The core is working, wait…"
+  es: "El núcleo está trabajando, espera…"
+
+telegram_core.step_unknown:
+  ru: "Неизвестный шаг входа. Обновите состояние, не отправляйте данные наугад."
+  en: "Unknown login step. Refresh the state; do not guess which input to send."
+  es: "Paso de inicio de sesión desconocido. Actualiza el estado; no envíes datos a ciegas."
+
+telegram_core.refresh:
+  ru: "Обновить"
+  en: "Refresh"
+  es: "Actualizar"
+
+telegram_core.service_error:
+  ru: "Ошибка %{code}: %{message}"
+  en: "Error %{code}: %{message}"
+  es: "Error %{code}: %{message}"
+
+telegram_core.connection:
+  ru: "Сеть Telegram"
+  en: "Telegram network"
+  es: "Red de Telegram"
+
+telegram_core.conn.unknown:
+  ru: "неизвестно"
+  en: "unknown"
+  es: "desconocido"
+
+telegram_core.conn.waiting_for_network:
+  ru: "нет сети"
+  en: "waiting for network"
+  es: "sin red"
+
+telegram_core.conn.connecting_to_proxy:
+  ru: "подключение к прокси"
+  en: "connecting to proxy"
+  es: "conectando al proxy"
+
+telegram_core.conn.connecting:
+  ru: "подключение"
+  en: "connecting"
+  es: "conectando"
+
+telegram_core.conn.updating:
+  ru: "обновление"
+  en: "updating"
+  es: "actualizando"
+
+telegram_core.conn.ready:
+  ru: "готова"
+  en: "ready"
+  es: "lista"
+
+telegram_core.qr_failed:
+  ru: "Не удалось построить QR. Обновите состояние."
+  en: "Could not build the QR. Refresh the state."
+  es: "No se pudo generar el QR. Actualiza el estado."
+
+telegram_core.qr_wait:
+  ru: "Ждём ссылку для QR…"
+  en: "Waiting for the QR link…"
+  es: "Esperando el enlace del QR…"
+
+telegram_core.resend:
+  ru: "Отправить код ещё раз"
+  en: "Resend code"
+  es: "Reenviar código"
+
+telegram_core.resend_in:
+  ru: "Повтор через %{wait}"
+  en: "Resend in %{wait}"
+  es: "Reenviar en %{wait}"
+
+telegram_core.no_answer:
+  ru: "Ядро не ответило. Обновите состояние и повторите действие."
+  en: "The core did not answer. Refresh the state and try again."
+  es: "El núcleo no respondió. Actualiza el estado e inténtalo de nuevo."
+
+telegram_core.next_code:
+  ru: "Следующий способ"
+  en: "Next method"
+  es: "Siguiente método"
+
+telegram_core.code_kind.telegram:
+  ru: "Код в приложении Telegram."
+  en: "Code in the Telegram app."
+  es: "Código en la aplicación Telegram."
+
+telegram_core.code_kind.sms:
+  ru: "SMS."
+  en: "SMS."
+  es: "SMS."
+
+telegram_core.code_kind.sms_word:
+  ru: "SMS-слово, начинается с «%{first_letter}», первое слово «%{first_word}»."
+  en: "SMS word, starts with “%{first_letter}”, first word “%{first_word}”."
+  es: "Palabra por SMS, empieza por «%{first_letter}», primera palabra «%{first_word}»."
+
+telegram_core.code_kind.sms_phrase:
+  ru: "SMS-фраза: %{first_word} (%{pattern})."
+  en: "SMS phrase: %{first_word} (%{pattern})."
+  es: "Frase por SMS: %{first_word} (%{pattern})."
+
+telegram_core.code_kind.call:
+  ru: "Звонок."
+  en: "Phone call."
+  es: "Llamada."
+
+telegram_core.code_kind.flash_call:
+  ru: "Flash-звонок, префикс %{prefix}."
+  en: "Flash call, prefix %{prefix}."
+  es: "Llamada flash, prefijo %{prefix}."
+
+telegram_core.code_kind.missed_call:
+  ru: "Пропущенный звонок, префикс %{prefix}."
+  en: "Missed call, prefix %{prefix}."
+  es: "Llamada perdida, prefijo %{prefix}."
+
+telegram_core.code_kind.fragment:
+  ru: "Fragment: %{url}"
+  en: "Fragment: %{url}"
+  es: "Fragment: %{url}"
+
+telegram_core.code_kind.unsupported:
+  ru: "Этот способ доставки не поддерживается."
+  en: "This delivery method is not supported."
+  es: "Este método de entrega no es compatible."
+
+telegram_core.code_kind.other:
+  ru: "%{kind}"
+  en: "%{kind}"
+  es: "%{kind}"

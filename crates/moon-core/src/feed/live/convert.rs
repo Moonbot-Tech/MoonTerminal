@@ -3,7 +3,10 @@
 
 use std::sync::Arc;
 
-use moonproto::state::{Order, OrderTraceChartPoint, OrderTraceLine};
+use moonproto::state::{
+    Order, OrderTraceChartPoint, OrderTraceLine, TelegramActiveProxy, TelegramAuthDetails,
+    TelegramCodeType, TelegramError, TelegramServiceState, TelegramState,
+};
 use moonproto::{Event, MoonClient};
 
 use crate::config::TakeProfitMode;
@@ -11,8 +14,10 @@ use crate::feed::strategies::strat_kind_name;
 use crate::feed::{
     ApiKeyExpiry, ClientSettings, ClientSettingsEdit, ConnFault, ConnFaultKind, CoreIdentityFacts,
     CoreInitStep, CoreProblem, CoreProblemCategory, CoreProblems, CoreStartupState,
-    CoreStartupStatus, CoreSysStatus, EngineActionKind, EngineActionResult, LicenseState,
-    NewsSnapshot, OrderRow, OrderTrace, OrderTracePoint, ProfitState, RuntimeState, WalletKind,
+    CoreStartupStatus, CoreSysStatus, CoreTelegramActiveProxy, CoreTelegramAuthDetails,
+    CoreTelegramCodeType, CoreTelegramError, CoreTelegramService, CoreTelegramState,
+    EngineActionKind, EngineActionResult, LicenseState, NewsSnapshot, OrderRow, OrderTrace,
+    OrderTracePoint, ProfitState, RuntimeState, WalletKind,
 };
 
 /// Project moonproto's retained `NewsState` into a moonproto-free [`NewsSnapshot`]: reduce its flat
@@ -163,6 +168,104 @@ pub(super) fn problems_from_proto(problems: &moonproto::state::ProblemsState) ->
                 confirmations: p.confirmations,
             })
             .collect(),
+    }
+}
+
+/// Project the core's built-in Telegram reader snapshot into the terminal's own model.
+///
+/// Field-for-field, including absents: each protocol snapshot REPLACES the previous one, so a
+/// field dropped here would read as "unavailable" forever. Strings are cloned; this is the one
+/// place that sees both moonproto and the moon-core mirror.
+///
+/// Args:
+///     state: The core's retained Telegram snapshot from the client.
+///
+/// Returns:
+///     The moonproto-free projection the UI and the store consume.
+pub(super) fn telegram_from_proto(state: &TelegramState) -> CoreTelegramState {
+    CoreTelegramState {
+        enabled: state.enabled,
+        proxy_type: state.proxy_type,
+        proxy_host: state.proxy_host.clone(),
+        proxy_port: state.proxy_port,
+        proxy_user: state.proxy_user.clone(),
+        proxy_password_set: state.proxy_password_set,
+        client_state: state.client_state.clone(),
+        service_online: state.service_online,
+        state_supported: state.state_supported,
+        service_version: state.service_version.clone(),
+        setup_error: state.setup_error.clone(),
+        client_error: state.client_error.clone(),
+        service: state.service.as_ref().map(telegram_service_from_proto),
+    }
+}
+
+/// Project the nested service snapshot, cloning strings and mapping nested optionals.
+fn telegram_service_from_proto(service: &TelegramServiceState) -> CoreTelegramService {
+    CoreTelegramService {
+        auth_state: service.auth_state.clone(),
+        details: telegram_auth_details_from_proto(&service.details),
+        connection: service.connection.clone(),
+        phone: service.phone.clone(),
+        error: service.error.as_ref().map(telegram_error_from_proto),
+        proxy: service.proxy.as_ref().map(telegram_active_proxy_from_proto),
+        proxy_error: service.proxy_error.as_ref().map(telegram_error_from_proto),
+    }
+}
+
+/// Project step-specific auth hints, including the QR link, without logging them.
+fn telegram_auth_details_from_proto(details: &TelegramAuthDetails) -> CoreTelegramAuthDetails {
+    CoreTelegramAuthDetails {
+        qr_link: details.qr_link.clone(),
+        phone: details.phone.clone(),
+        code_type: details
+            .code_type
+            .as_ref()
+            .map(telegram_code_type_from_proto),
+        next_code_type: details
+            .next_code_type
+            .as_ref()
+            .map(telegram_code_type_from_proto),
+        resend_at: details.resend_at,
+        password_hint: details.password_hint.clone(),
+        recovery_email_pattern: details.recovery_email_pattern.clone(),
+        email_pattern: details.email_pattern.clone(),
+        code_length: details.code_length,
+        terms: details.terms.clone(),
+        min_user_age: details.min_user_age,
+        show_popup: details.show_popup,
+        support_email: details.support_email.clone(),
+        support_subject: details.support_subject.clone(),
+    }
+}
+
+/// Project a code-delivery method; unknown `kind` strings are preserved.
+fn telegram_code_type_from_proto(code_type: &TelegramCodeType) -> CoreTelegramCodeType {
+    CoreTelegramCodeType {
+        kind: code_type.kind.clone(),
+        length: code_type.length,
+        first_letter: code_type.first_letter.clone(),
+        first_word: code_type.first_word.clone(),
+        pattern: code_type.pattern.clone(),
+        prefix: code_type.prefix.clone(),
+        url: code_type.url.clone(),
+    }
+}
+
+/// Project a service error next to the current step or proxy settings.
+fn telegram_error_from_proto(error: &TelegramError) -> CoreTelegramError {
+    CoreTelegramError {
+        code: error.code,
+        message: error.message.clone(),
+    }
+}
+
+/// Project the proxy the service currently has enabled.
+fn telegram_active_proxy_from_proto(proxy: &TelegramActiveProxy) -> CoreTelegramActiveProxy {
+    CoreTelegramActiveProxy {
+        mode: proxy.mode.clone(),
+        host: proxy.host.clone(),
+        port: proxy.port,
     }
 }
 

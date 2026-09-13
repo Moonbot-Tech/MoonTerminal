@@ -10,6 +10,7 @@ use super::account_reconciliation::BALANCE_TRACE_LEVEL;
 use super::client_settings::{ClientSettingsSequence, ManualOrder, ManualOrderKind};
 use super::market_role::MarketRoleState;
 use super::shared_config::SharedConfigSequence;
+use super::telegram;
 use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
 use crate::feed::strategies::{fields_from_text, fv_from_str, strat_kind_name};
@@ -1596,6 +1597,7 @@ pub(super) fn drain_commands(
                     crate::feed::core_label(server.id)
                 );
             }
+            Ok(CoreCmd::Telegram(cmd)) => telegram::handle(client, server.id, cmd),
             Ok(CoreCmd::SetAutoDetect(on)) => {
                 // Passive mode off/on; the new value reaches the store via RuntimeStateUpdated,
                 // the same command that carries `is_started`.

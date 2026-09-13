@@ -17,6 +17,7 @@ mod dirty;
 mod market_role;
 mod shared_config;
 mod startup_watchdog;
+mod telegram;
 mod temp_blacklist;
 #[cfg(test)]
 mod tests;
@@ -301,7 +302,7 @@ use commands::{CommandDrain, LocalStratEdits, StrategyPlacementGuard, drain_comm
 use convert::{
     build_order_rows, client_settings_from_proto, license_state_from_proto,
     profit_state_from_proto, runtime_state_from_proto, settings_event_snapshot,
-    sys_status_from_proto,
+    sys_status_from_proto, telegram_from_proto,
 };
 use deadline::CoalescedDeadline;
 use dirty::market_dirty_from_events;
@@ -850,6 +851,13 @@ pub(super) fn run(
                 }
                 _ => false,
             };
+            // Captured before `match ev` moves `ev`. Same predicate as the Ready mapping: an
+            // in-loop reconnect is operational only once init has finished.
+            let reconnected = matches!(
+                &ev,
+                LifecycleEvent::Connected { fresh }
+                    if reconnect_is_operational(*fresh, init_completed)
+            );
             let st = match ev {
                 LifecycleEvent::Connecting => ConnStatus::Stage("connecting…".into()),
                 LifecycleEvent::Connected { fresh } => {
@@ -902,6 +910,9 @@ pub(super) fn run(
                     // Same rule, higher stakes: this queue also holds manual ORDERS, priced off a
                     // chart the departed process was feeding.
                     client_settings_sequence.forget_queue(server.id);
+                    // moonproto drops its retained Telegram snapshot on a peer-token / ServerToken
+                    // change with no event; a restart is the same hole. Nothing left to show muted.
+                    let _ = tx.send(FeedMsg::Telegram(None));
                     ConnStatus::Stage("server restart…".into())
                 }
                 LifecycleEvent::ConnectFailed { error } => {
@@ -941,7 +952,10 @@ pub(super) fn run(
                     )));
                     ConnStatus::Failed(format!("udp bind failed x{consecutive_failures}"))
                 }
-                LifecycleEvent::Disconnected => ConnStatus::Disconnected,
+                LifecycleEvent::Disconnected => {
+                    let _ = tx.send(FeedMsg::TelegramStale);
+                    ConnStatus::Disconnected
+                }
             };
             // Tracked for the API-key poll below: an Engine API request sent to a core that is not
             // Ready buys nothing but a pending timeout. Reaching Ready is also the moment to ask —
@@ -963,6 +977,17 @@ pub(super) fn run(
                 version_sent = false;
             }
             let _ = tx.send(FeedMsg::Status(st));
+            if reconnected {
+                // Mark the retained snapshot stale BEFORE asking for a new one, so a pre-outage
+                // QR cannot become actionable the instant the badge flips to Ready.
+                let _ = tx.send(FeedMsg::TelegramStale);
+                if let Err(error) = client.telegram().refresh() {
+                    log::warn!(
+                        "core {} telegram refresh failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
+                }
+            }
             if request_license_state {
                 if let Err(error) = client.settings().request_kernel_license_state() {
                     log::warn!(
@@ -1657,6 +1682,29 @@ pub(super) fn run(
         });
         if let Some(problems) = problems {
             if tx.send(FeedMsg::Problems(problems)).is_err() {
+                break;
+            }
+        }
+        // The core's Telegram reader snapshot. Read from the RETAINED snapshot on
+        // `TelegramUpdated`, wrapping the inner `Option` in `Some` because `None` is a real
+        // answer — the library holds no snapshot — and the helper would otherwise drop it.
+        // No republish flag: a user Refresh is `client.telegram().refresh()` only.
+        let telegram = settings_event_snapshot(
+            &events,
+            &client,
+            |ev| matches!(ev, &Event::Settings(SettingsEvent::TelegramUpdated)),
+            |state| {
+                Some(
+                    state
+                        .settings()
+                        .telegram
+                        .as_ref()
+                        .map(|t| Arc::new(telegram_from_proto(t))),
+                )
+            },
+        );
+        if let Some(telegram) = telegram {
+            if tx.send(FeedMsg::Telegram(telegram)).is_err() {
                 break;
             }
         }

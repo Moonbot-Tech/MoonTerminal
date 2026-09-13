@@ -16,6 +16,8 @@ use crate::{Backend, design};
 use moon_core::config::Secret;
 
 mod access;
+mod core_section;
+mod qr;
 
 /// Password-field width in unscaled pixels, matching the Security tab.
 const TOKEN_FIELD_W: f32 = 240.0;
@@ -34,6 +36,7 @@ pub(super) struct TelegramEd {
     history_loaded: bool,
     history_loading: bool,
     history_failed: bool,
+    core: core_section::CoreTelegramEd,
 }
 
 /// Build masked token input bound to the Settings draft.
@@ -113,6 +116,7 @@ pub(super) fn build(
         history_loaded: false,
         history_loading: false,
         history_failed: false,
+        core: core_section::build(window, cx),
     }
 }
 
@@ -356,5 +360,6 @@ impl SettingsView {
                         )
                     }),
             )
+            .child(self.core_telegram_section(cx))
     }
 }

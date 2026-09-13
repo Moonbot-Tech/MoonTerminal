@@ -1046,6 +1046,72 @@ fn a_new_problem_list_replaces_the_old_one_and_gates_the_revision() {
     assert_eq!(core.problems_rev, after_first + 1);
 }
 
+/// `session/store.rs:CoreData::apply` and `begin_connection_attempt` must treat every Telegram
+/// snapshot as a receipt, retain a stale snapshot only as non-actionable, and clear it for a
+/// replacement connection; otherwise Settings can leave a sent-action banner hanging or expose a
+/// pre-outage QR as live.
+#[test]
+fn telegram_receipts_advance_the_revision_and_the_freshness_latch() {
+    let mut core = CoreData::new();
+    let snapshot = std::sync::Arc::new(crate::feed::CoreTelegramState {
+        enabled: true,
+        ..Default::default()
+    });
+
+    core.apply(FeedMsg::Telegram(Some(snapshot.clone())));
+    let first_receipt = core.telegram_rev;
+    assert_eq!(core.telegram.as_deref(), Some(snapshot.as_ref()));
+    assert!(core.telegram_fresh, "a received snapshot is actionable");
+
+    core.apply(FeedMsg::Telegram(Some(snapshot.clone())));
+    assert_eq!(
+        core.telegram_rev,
+        first_receipt + 1,
+        "an identical reply still acknowledges a pending action"
+    );
+
+    let before_stale = core.telegram_rev;
+    core.apply(FeedMsg::TelegramStale);
+    assert_eq!(core.telegram.as_deref(), Some(snapshot.as_ref()));
+    assert!(
+        !core.telegram_fresh,
+        "a stale snapshot cannot enable actions"
+    );
+    assert_eq!(core.telegram_rev, before_stale + 1);
+
+    core.apply(FeedMsg::Telegram(Some(snapshot.clone())));
+    let before_disconnect = core.telegram_rev;
+    core.apply(FeedMsg::Status(ConnStatus::Disconnected));
+    assert!(
+        !core.telegram_fresh,
+        "lost contact makes a retained snapshot stale"
+    );
+    assert_eq!(core.telegram_rev, before_disconnect + 1);
+
+    core.apply(FeedMsg::Status(ConnStatus::Connecting));
+    assert_eq!(
+        core.telegram_rev,
+        before_disconnect + 1,
+        "another non-Ready status does not re-announce an already stale snapshot"
+    );
+
+    core.apply(FeedMsg::Telegram(Some(snapshot)));
+    let before_replacement = core.telegram_rev;
+    core.begin_connection_attempt();
+    assert!(
+        core.telegram.is_none(),
+        "a replacement core cannot inherit a Telegram snapshot"
+    );
+    assert!(
+        !core.telegram_fresh,
+        "a replacement core starts without a current Telegram snapshot"
+    );
+    assert!(
+        core.telegram_rev > before_replacement,
+        "clearing retained Telegram state must wake Settings"
+    );
+}
+
 /// The folder tree follows the same rule as the diagnostics beside it, and for the same reason: a
 /// replacement feed may point at a MoonBot that cannot hold an empty folder at all. Carrying
 /// `supported` forward would leave the window promising a persistence the new core does not offer.

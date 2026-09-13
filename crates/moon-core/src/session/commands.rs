@@ -9,7 +9,8 @@ use crate::config::{MoveKind, MoveSide};
 use crate::data::OrderBookModel;
 use crate::feed::{
     ClientSettingsEdit, CoreCmd, CoreConfig, FeedWakeTx, FieldMask, NewStrategySpec,
-    OrderLinePriceKind, OrderStopKind, OrderStopsForm, ResetProfitKind, UpdateTarget, WalletKind,
+    OrderLinePriceKind, OrderStopKind, OrderStopsForm, ResetProfitKind, TelegramCmd, UpdateTarget,
+    WalletKind,
 };
 use crate::market::{MarketDataMode, MarketDataSource};
 use crate::venue::CoreVenue;
@@ -1024,6 +1025,21 @@ impl SessionManager {
         self.send_many(cores, "refresh problems", |core| {
             self.refresh_core_problems(core)
         })
+    }
+
+    /// Send one intent for the core's built-in Telegram reader.
+    ///
+    /// A successful send means queued, never completed. The core answers with a new snapshot
+    /// through `SettingsEvent::TelegramUpdated`; there are no per-action result tickets.
+    ///
+    /// Args:
+    ///     core: Core to command.
+    ///     cmd: The typed intent, one variant per MoonTelegram method.
+    ///
+    /// Returns:
+    ///     Whether the command reached the core's channel.
+    pub fn telegram_cmd(&self, core: CoreId, cmd: TelegramCmd) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::Telegram(cmd), "telegram")
     }
 
     /// Turn one core's AutoDetect on or off — Moonbot's passive mode, inverted.
