@@ -127,7 +127,10 @@ impl Shell {
         // Blur has NOT fired by the time OK runs: without this the popup would commit the text the
         // field held when it was last blurred and silently discard what the user just typed.
         self.stage_blacklist_text(cx);
-        let Some(draft) = self.core_settings_draft.clone() else {
+        let (Some(draft), Some(seed)) = (
+            self.core_settings_draft.clone(),
+            self.core_settings_seed.as_ref(),
+        ) else {
             return;
         };
         if !send_core_config(
@@ -135,6 +138,7 @@ impl Shell {
             &self.group,
             self.core_settings_target,
             draft,
+            seed,
             FieldMask::RENDERED_SECTIONS,
             cx,
         ) {
@@ -253,6 +257,7 @@ impl editors::CoreDraftHost for Shell {
 ///     group: Group whose active trading core the seed is checked against.
 ///     seeded: Core the page was seeded from; the only core it may reach.
 ///     draft: Staged page, taken by value because the leverage clamp below rewrites it.
+///     seeded_from: The page `draft` was seeded with; see [`send_core_config_to`].
 ///     cx: Application context used to read the session.
 ///
 /// Returns:
@@ -263,6 +268,7 @@ pub(crate) fn send_core_config(
     group: &str,
     seeded: Option<CoreId>,
     draft: CoreConfig,
+    seeded_from: &CoreConfig,
     sections: FieldMask,
     cx: &App,
 ) -> bool {
@@ -274,7 +280,7 @@ pub(crate) fn send_core_config(
         log::warn!("core settings OK ignored: the active core moved since the page was seeded");
         return false;
     };
-    send_core_config_to(b, core, draft, sections)
+    send_core_config_to(b, core, draft, seeded_from, sections)
 }
 
 /// Send one projection to one named core.
@@ -288,6 +294,9 @@ pub(crate) fn send_core_config(
 ///     b: Application state holding the session the page travels through.
 ///     core: Core the page is written to.
 ///     draft: The page, taken by value because the leverage clamp below rewrites it.
+///     seeded_from: The page `draft` was built on — the popup's seed, the expert window's latest
+///         live page before its staged fields were laid over. What the surface's user actually
+///         changed is `draft` against this; the blacklist send below needs exactly that.
 ///     sections: Which areas of `draft` this write may touch; see [`FieldMask`].
 ///
 /// Returns:
@@ -296,6 +305,7 @@ pub(crate) fn send_core_config_to(
     b: &Backend,
     core: CoreId,
     mut draft: CoreConfig,
+    seeded_from: &CoreConfig,
     sections: FieldMask,
 ) -> bool {
     // One clamp for the whole page, here rather than per keystroke: the exchange refuses a
@@ -332,6 +342,35 @@ pub(crate) fn send_core_config_to(
     let by_trades = sections
         .writes_order_rules()
         .then_some(draft.order_rules.deltas_by_trades);
+    // The global blacklist goes out through the COMPACT channel (`TClientSettingsCommand`), ahead
+    // of the page. Measured on a live core on 2026-09-13 (`docs-internal/
+    // proto_global_blacklist_shared_config.md`): the safe-share packet the page travels in updates
+    // the text the core echoes back, and nothing else — the per-market "blacklisted" flag its
+    // strategies read is rebuilt only by the compact command or by an edit in the core's own
+    // window, so a coin removed here alone stayed blocked until someone touched the list there.
+    // This is the list's ONE writer: the safe-share applier leaves the two fields alone
+    // (`feed::live::shared_config::apply_general` says why), so the page goes out carrying whatever
+    // the core holds when it is built. Issued FIRST, because the safe-share queue waits for the
+    // compact one to be echoed before it builds that packet from the retained snapshot — the
+    // reverse order would let the page carry the pre-edit text out.
+    //
+    // Only when THIS surface changed the list. The page is frozen from the moment its user touches
+    // any field, and the list is a whole string: an OK on the leverage row would otherwise carry
+    // the frozen list out and undo a coin the context menu, a second terminal or the core's own
+    // Telegram bot put there in the meantime. Judged against the page the surface was built from,
+    // not against the core's newest snapshot: against the latter a concurrent change would read as
+    // "differs" and be sent back, the exact revert this guards against.
+    if sections.writes_general()
+        && (draft.general.blacklist_on != seeded_from.general.blacklist_on
+            || draft.general.blacklist_text != seeded_from.general.blacklist_text)
+        && let Err(error) = b.session.set_blacklist(
+            core,
+            draft.general.blacklist_on,
+            draft.general.blacklist_text.clone(),
+        )
+    {
+        log::warn!("blacklist send failed: {error:#}");
+    }
     if let Err(error) = b.session.edit_core_config(core, draft, sections) {
         // The page never reached the session. Reporting success here is what would let a caller
         // close on it.

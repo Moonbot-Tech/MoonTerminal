@@ -384,6 +384,8 @@ fn every_rendered_field_survives_a_write_and_read_back() {
     wanted.general.vol_drop_level = -12;
     wanted.general.buy_iceberg = !wanted.general.buy_iceberg;
     wanted.general.sell_iceberg = !wanted.general.sell_iceberg;
+    // The blacklist is the one pair the General area does NOT write — `apply_general` says why —
+    // so the projection is asked to change it and the round trip below asserts it did not.
     wanted.general.blacklist_on = !wanted.general.blacklist_on;
     wanted.general.blacklist_text = "ALPACA,hmstr".to_string();
     wanted.general.exclude_blacklisted_from_deltas =
@@ -407,7 +409,18 @@ fn every_rendered_field_survives_a_write_and_read_back() {
     let round_tripped = core_config_from_proto(&written);
     assert_eq!(round_tripped.auto_start, wanted.auto_start);
     assert_eq!(round_tripped.btc_blink, wanted.btc_blink);
-    assert_eq!(round_tripped.general, wanted.general);
+    assert_eq!(
+        written.trading.use_coins_black_list, base.trading.use_coins_black_list,
+        "the safe-share write must leave the blacklist flag to the compact channel"
+    );
+    assert_eq!(
+        written.trading.coins_black_list_text, base.trading.coins_black_list_text,
+        "the safe-share write must leave the blacklist text to the compact channel"
+    );
+    let mut general = wanted.general.clone();
+    general.blacklist_on = base.trading.use_coins_black_list;
+    general.blacklist_text = base.trading.coins_black_list_text.clone();
+    assert_eq!(round_tripped.general, general);
     assert_eq!(round_tripped.leverage, wanted.leverage);
     assert_eq!(round_tripped.signals, wanted.signals);
 }
