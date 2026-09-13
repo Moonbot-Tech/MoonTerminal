@@ -89,3 +89,7 @@ lines.hint:
   ru: "Линии Stop/Trailing/Liq появляются только после исполнения входа."
   en: "Stop/Trailing/Liq lines appear only after the entry is filled."
   es: "Las líneas Stop/Trailing/Liq aparecen solo tras ejecutarse la entrada."
+lines.theme_hint:
+  ru: "Редактируется набор линий активной темы: Light — светлый, Dark и Graphite — общий тёмный; тема меняется на вкладке «Общие». «Сохранить» записывает оба набора в cfg/orders.toml рядом с программой — файлом можно делиться."
+  en: "Editing the active theme's line set: Light uses the light set, Dark and Graphite share the dark set; change theme on the General tab. Save writes both sets to cfg/orders.toml next to the app — you can share the file."
+  es: "Se edita el conjunto de líneas del tema activo: Light usa el claro, Dark y Graphite comparten el oscuro; cambia el tema en la pestaña General. Guardar escribe ambos conjuntos en cfg/orders.toml junto a la app; puedes compartir el archivo."

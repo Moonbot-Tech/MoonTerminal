@@ -1,6 +1,72 @@
 use super::*;
 use moon_core::feed::{SchemaField, SchemaFieldUi, SchemaKind, SchemaSection, StrategyRow};
 
+/// Moving only direct children instead of the full prefix would strand nested strategies.
+/// The frozen sequence also catches splitting the neighboring subtree or losing an id.
+#[test]
+fn folder_reorder_moves_recursive_blocks_and_stops_at_boundaries() {
+    let rows = [
+        row(1, "a", "F", false),
+        row(2, "b", "F/N", false),
+        row(3, "c", "F/N/Deep", false),
+        row(4, "d", "G/N", false),
+        row(5, "e", "G", false),
+    ];
+    let refs: Vec<_> = rows.iter().collect();
+    let folder = split_path("F");
+    let moved = reorder_folder_step(&refs, &folder, MoveStep::Down).unwrap();
+    assert_eq!(moved, [4, 5, 1, 2, 3]);
+    assert_eq!(
+        moved.iter().copied().collect::<HashSet<_>>(),
+        HashSet::from([1, 2, 3, 4, 5])
+    );
+    assert_eq!(reorder_folder_step(&refs, &folder, MoveStep::Up), None);
+    assert_eq!(
+        reorder_folder_step(&refs, &split_path("G"), MoveStep::Down),
+        None
+    );
+    assert_eq!(
+        reorder_folder_step(&refs, &split_path("Empty"), MoveStep::Down),
+        None
+    );
+    let reordered: Vec<_> = moved
+        .iter()
+        .map(|id| rows.iter().find(|row| row.id == *id).unwrap())
+        .collect();
+    assert_eq!(
+        reorder_folder_step(&reordered, &folder, MoveStep::Down),
+        None
+    );
+    assert_eq!(
+        reorder_folder_step(&reordered, &folder, MoveStep::Up),
+        Some(vec![1, 2, 3, 4, 5])
+    );
+}
+
+/// Using string prefixes or the root sibling level would move unrelated folders; ignoring
+/// loose siblings would prevent a folder from crossing a strategy directly inside its parent.
+#[test]
+fn folder_reorder_respects_parent_segments_and_loose_siblings() {
+    let rows = [
+        row(1, "outside", "Pine", false),
+        row(2, "a", "P/F", false),
+        row(3, "b", "P\\F\\Deep", false),
+        row(4, "loose", "P", false),
+        row(5, "sibling", "P/G", false),
+        row(6, "outside", "Q", false),
+    ];
+    let refs: Vec<_> = rows.iter().collect();
+    assert_eq!(
+        reorder_folder_step(&refs, &split_path("P/F"), MoveStep::Down),
+        Some(vec![1, 4, 2, 3, 5, 6])
+    );
+    assert_eq!(
+        reorder_folder_step(&refs, &split_path("P/F"), MoveStep::Up),
+        None
+    );
+    assert_eq!(reorder_folder_step(&refs, &[], MoveStep::Down), None);
+}
+
 fn row(id: u64, name: &str, path: &str, checked: bool) -> StrategyRow {
     StrategyRow {
         id,

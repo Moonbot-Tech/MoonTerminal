@@ -1,9 +1,9 @@
-//! Moving strategies up and down inside their folder, and holding the result on screen until the
+//! Moving strategies within folders and folder subtrees among siblings, holding the result until the
 //! core confirms it.
 //!
 //! A core's strategy list is an ORDER, not a set: the operator arranges it in MoonBot and moonproto
 //! synchronizes that arrangement as the row sequence of a Full snapshot. The permutation itself is
-//! [`ops::reorder_step`]; this module is the part that has a window — which rows a press acts on,
+//! [`ops::reorder_step`] or [`ops::reorder_folder_step`]; this module resolves the arrow subject,
 //! the command that carries the result to the core, and the overlay below.
 //!
 //! ## Why the overlay
@@ -124,7 +124,97 @@ struct MoveScope<'a> {
     cores: Vec<MovableCore<'a>>,
 }
 
+/// Select exactly one non-root folder only when no strategy is retained and its core is visible.
+/// This keeps mixed selection and workspace changes on their existing command paths.
+///
+/// Args:
+///     folders: Retained folder selections.
+///     has_strategies: Whether a strategy selection must retain strategy-arrow behavior.
+///     workspace: Optional visible-core scope of the current workspace.
+///
+/// Returns:
+///     The workspace-visible non-root folder's core and canonical path segments, if it is the only subject.
+fn folder_subject(
+    folders: &HashSet<(CoreId, String)>,
+    has_strategies: bool,
+    workspace: Option<&[CoreId]>,
+) -> Option<(CoreId, Vec<String>)> {
+    if folders.len() != 1 || has_strategies {
+        return None;
+    }
+    let (core, path) = folders.iter().next()?;
+    if !super::super::logic::strategy_core_is_visible(workspace, *core) {
+        return None;
+    }
+    let parts = ops::split_path(path);
+    (!parts.is_empty()).then_some((*core, parts))
+}
+
 impl StrategiesView {
+    /// Read the single-folder arrow subject without changing either selection set.
+    /// Mixed and multiple-folder selections retain the existing strategy-only behavior.
+    ///
+    /// Returns:
+    ///     The workspace-visible non-root folder's core and canonical path segments, if it is the only subject.
+    pub(in crate::strategies) fn reorder_folder(&self) -> Option<(CoreId, Vec<String>)> {
+        folder_subject(
+            &self.folder_sel,
+            !self.sel.is_empty() || self.selected.is_some(),
+            self.workspace_cores.as_deref(),
+        )
+    }
+
+    /// Resolve a folder move from the same displayed order as strategy moves.
+    /// A hidden core or folder cannot be the subject; collapsed folder contents still move whole.
+    ///
+    /// Args:
+    ///     store: Live per-core strategy snapshots.
+    ///     venues: Session venue identities used by the exchange filter.
+    ///     core: Visible core containing the selected folder.
+    ///     folder: Canonical segments of the selected non-root folder.
+    ///     step: Direction in which to move the subtree.
+    ///
+    /// Returns:
+    ///     The complete reordered id sequence, or `None` when the folder cannot move.
+    fn folder_reorder_plan(
+        &self,
+        store: &CoreStore,
+        venues: &HashMap<CoreId, CoreVenue>,
+        core: CoreId,
+        folder: &[String],
+        step: MoveStep,
+    ) -> Option<Vec<u64>> {
+        if !self.filter.core_matches(venues.get(&core)) {
+            return None;
+        }
+        let filter = self.filter.prepare();
+        if !filter.searching() {
+            if !super::super::state::core_is_open(
+                &self.expanded_cores,
+                self.rail_expanded_core,
+                core,
+            ) {
+                return None;
+            }
+            for depth in 1..folder.len() {
+                if !self
+                    .expanded_folders
+                    .contains(&(core, ops::join_path(&folder[..depth])))
+                {
+                    return None;
+                }
+            }
+        }
+        let rows = self.displayed_rows(store, core);
+        if !rows
+            .iter()
+            .any(|row| ops::path_starts_with(&row.folder_path, folder) && filter.matches(row))
+        {
+            return None;
+        }
+        ops::reorder_folder_step(&rows, folder, step)
+    }
+
     /// The sequence one core's rows are currently DRAWN in: its own, unless an unconfirmed reorder
     /// is overlaying it.
     ///
@@ -199,7 +289,7 @@ impl StrategiesView {
         MoveScope { filter, cores }
     }
 
-    /// Plan one reorder step for every core the selection reaches.
+    /// Plan a single-folder subtree move, or the existing strategy move for each selected core.
     ///
     /// Args:
     ///     store: Live per-core strategy snapshots.
@@ -214,6 +304,13 @@ impl StrategiesView {
         venues: &HashMap<CoreId, CoreVenue>,
         step: MoveStep,
     ) -> Vec<(CoreId, Vec<u64>)> {
+        if let Some((core, folder)) = self.reorder_folder() {
+            return self
+                .folder_reorder_plan(store, venues, core, &folder, step)
+                .map(|order| (core, order))
+                .into_iter()
+                .collect();
+        }
         let scope = self.movable_selection(store, venues);
         scope
             .cores
@@ -234,7 +331,8 @@ impl StrategiesView {
     ///
     /// Derived from the same rows the click acts on, so a button is enabled exactly when pressing
     /// it would change something — a selection at the top of its folder disables Up and nothing
-    /// else. Both directions come out of ONE grouping pass; asking twice walked every strategy of
+    /// else. A folder-only subject swaps its complete subtree among siblings. For strategies,
+    /// both directions come out of ONE grouping pass; asking twice walked every strategy of
     /// every selected core a second time for an answer built from identical inputs.
     ///
     /// Called through the pane cache rather than per frame: see [`super::pane_cache`].
@@ -250,6 +348,13 @@ impl StrategiesView {
         store: &CoreStore,
         venues: &HashMap<CoreId, CoreVenue>,
     ) -> (bool, bool) {
+        if let Some((core, folder)) = self.reorder_folder() {
+            let ask = |step| {
+                self.folder_reorder_plan(store, venues, core, &folder, step)
+                    .is_some()
+            };
+            return (ask(MoveStep::Up), ask(MoveStep::Down));
+        }
         let scope = self.movable_selection(store, venues);
         let mut up = false;
         let mut down = false;
@@ -262,7 +367,7 @@ impl StrategiesView {
         (up, down)
     }
 
-    /// Move the selection one place inside its folder and send the new order to each core.
+    /// Move strategies within their folders or one folder among siblings, sending the full order.
     ///
     /// Args:
     ///     step: Direction the operator asked for.

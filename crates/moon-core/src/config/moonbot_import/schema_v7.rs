@@ -1,6 +1,6 @@
 //! Schema for a decompressed `MBSP` v7 container: header plus `(kind u8, size u32 LE)` blocks.
-//! Reads UI v3 (kind 6), Theme v1 (kind 4), and Ini v1 (kind 5). Signals/Trading/Visual
-//! (kinds 1/2/3) must be present, but their contents are skipped entirely (spec section 10).
+//! Reads UI v3 (kind 6), Theme v1 (kind 4), and Ini v1 (kind 5). The pinned MoonProto
+//! decoder optionally supplies Trading.xTMode; other Signals/Trading/Visual values are unused.
 //! An unread tail in a KNOWN block is allowed as an append-only extension of the same version;
 //! an unknown kind is skipped by size, while a repeated known block is an error.
 
@@ -170,6 +170,8 @@ impl IniBlock {
 pub struct MoonBotConfig {
     /// MoonBot `ConfigVersion` from the header, used only for diagnostics and NOT as a Terminal schema version.
     pub config_version: u16,
+    /// Trading.xTMode, or false when the optional full decoder cannot read this payload.
+    pub x_t_mode: bool,
     pub ui: UiBlock,
     pub theme: ThemeBlock,
     pub ini: IniBlock,
@@ -180,7 +182,17 @@ const SUPPORTED_CONTAINER: u8 = 7;
 /// Known blocks: each kind must appear exactly once.
 const KNOWN_KINDS: [u8; 6] = [1, 2, 3, 4, 5, 6];
 
-/// Parses a decompressed payload containing the `MBSP` header and all blocks.
+/// Parses the import schema, optionally reading xTMode through the pinned full decoder.
+/// A full-decoder rejection leaves xTMode false and never rejects an otherwise valid import.
+///
+/// Args:
+///     payload: Decompressed `MBSP` container bytes.
+///
+/// Returns:
+///     The fields this importer supports, with `x_t_mode` when the optional full decoder accepts it.
+///
+/// Errors:
+///     [`ImportError`] when the required container header or supported blocks are malformed.
 pub fn parse_payload(payload: &[u8]) -> Result<MoonBotConfig, ImportError> {
     let mut r = Reader::new(payload);
 
@@ -245,6 +257,10 @@ pub fn parse_payload(payload: &[u8]) -> Result<MoonBotConfig, ImportError> {
     match (ui, theme, ini) {
         (Some(ui), Some(theme), Some(ini)) => Ok(MoonBotConfig {
             config_version,
+            // MoonProto has stricter guards for blocks this importer historically skips.
+            // Failure only withholds the optional mode row; existing imports stay accepted.
+            x_t_mode: moonproto::shared_config::parse_payload(payload)
+                .is_ok_and(|config| config.trading.x_t_mode),
             ui,
             theme,
             ini,

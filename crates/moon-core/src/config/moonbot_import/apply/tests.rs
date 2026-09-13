@@ -209,3 +209,143 @@ fn a_core_on_its_own_settings_is_skipped() {
     assert_eq!(cfg.group("desk-b").trade, before);
     assert!(cfg.servers[2].trade.is_none());
 }
+
+/// Removing main-TP canonicalization makes a default group lose its exit generation on repair;
+/// dropping x10 scaling imports percentages ten times smaller than MoonBot displays. Applying
+/// S-values before the mode also changes the wire bits of 0.7 to the nearest normal-mode float.
+#[test]
+fn exported_xtmode_preserves_the_exit_generation() {
+    use crate::config::groups::TakeProfitMode;
+    use crate::config::moonbot_import::{plan, schema_v7};
+
+    for (current, expected) in [(0.0, 100.0), (250.0, 250.0), (5000.0, 900.0)] {
+        let mut source = moonproto::shared_config::SharedConfig::default();
+        source.trading.x_t_mode = true;
+        source.ui.hotkeys_config.filled = true;
+        source.ui.hotkeys_config.s_price = [3.0, 0.7, 5.0, 6.0, 7.0, 8.0];
+        source.ui.hotkeys_config.sb_num = 2;
+        let payload = moonproto::shared_config::serialize_payload(&source).unwrap();
+        let imported = schema_v7::parse_payload(&payload).unwrap();
+        let mut cfg = three_cores();
+        cfg.servers[2].own_trade_config = true;
+        cfg.group_mut("desk-a").trade.exit.take_profit_pct = current;
+        let untouched = cfg.group("desk-b").trade.clone();
+        let plan = plan::build_plan(
+            &imported,
+            &plan::PlanContext {
+                hotkeys: &cfg.hotkeys,
+                theme: &cfg.theme,
+                orders: &cfg.orders,
+                ui_theme_light: false,
+            },
+        );
+        assert_eq!(
+            group_item_preview(&cfg, &plan.group_items[0], &[1, 2, 3]),
+            PreviewValue::ExtendedTakeProfit {
+                groups: vec![("desk-a".into(), expected)]
+            }
+        );
+        assert_eq!(
+            plan.group_items
+                .iter()
+                .find(|item| item.id == "group.fixed_sell_prices")
+                .unwrap()
+                .new,
+            PreviewValue::Data("30, 7, 50, 60, 70, 80".into())
+        );
+        let outcome = apply_local(&mut cfg, &plan, &all_ids(&plan), &[1, 2, 3]);
+        assert!(outcome.unknown_ids.is_empty());
+        let mut exit = cfg.group("desk-a").trade.exit;
+        assert_eq!(exit.take_profit_mode, TakeProfitMode::Extended);
+        assert_eq!(exit.take_profit_pct, expected);
+        assert_eq!(
+            exit.fixed_sell_pcts,
+            [30.0, 6.9999998807907104, 50.0, 60.0, 70.0, 80.0]
+        );
+        assert_eq!(exit.fixed_sell_slot, Some(3));
+        assert!(exit.canonicalize());
+        assert!(!cfg.group_mut("desk-a").trade.repair());
+        assert_eq!(cfg.group("desk-a").trade.exit, exit);
+        assert_eq!(cfg.group("desk-b").trade, untouched);
+        assert!(cfg.servers.iter().all(|server| server.trade.is_none()));
+    }
+}
+
+/// Scaling when xTMode is off breaks the existing import; ignoring row deselection changes
+/// the main TP despite the user's choice. Exported S-values keep their own visible scale.
+#[test]
+fn exported_xtmode_precedes_quantization_and_respects_selection() {
+    use crate::config::groups::TakeProfitMode;
+    use crate::config::moonbot_import::{plan, schema_v7};
+
+    for (enabled, selected_mode) in [(true, true), (false, true), (true, false)] {
+        let mut source = moonproto::shared_config::SharedConfig::default();
+        source.trading.x_t_mode = enabled;
+        source.ui.hotkeys_config.filled = true;
+        source.ui.hotkeys_config.s_price = [3.0; 6];
+        let payload = moonproto::shared_config::serialize_payload(&source).unwrap();
+        let imported = schema_v7::parse_payload(&payload).unwrap();
+        let mut cfg = three_cores();
+        cfg.servers[2].own_trade_config = true;
+        cfg.group_mut("desk-a").trade.exit.take_profit_mode = TakeProfitMode::Normal;
+        cfg.group_mut("desk-a").trade.exit.take_profit_pct = 50.0;
+        let untouched = cfg.group("desk-b").trade.clone();
+        let plan = plan::build_plan(
+            &imported,
+            &plan::PlanContext {
+                hotkeys: &cfg.hotkeys,
+                theme: &cfg.theme,
+                orders: &cfg.orders,
+                ui_theme_light: false,
+            },
+        );
+        let mut selected = all_ids(&plan);
+        if !selected_mode {
+            selected.remove("group.take_profit_mode");
+        }
+        let outcome = apply_local(&mut cfg, &plan, &selected, &[1, 2, 3]);
+        assert!(outcome.unknown_ids.is_empty());
+        let exit = cfg.group("desk-a").trade.exit;
+        if enabled && selected_mode {
+            assert_eq!(exit.take_profit_mode, TakeProfitMode::Extended);
+            assert_eq!(exit.take_profit_pct, 100.0);
+        } else {
+            assert_eq!(exit.take_profit_mode, TakeProfitMode::Normal);
+            assert_eq!(exit.take_profit_pct, 50.0);
+        }
+        assert_eq!(
+            exit.fixed_sell_pcts,
+            if enabled { [30.0; 6] } else { [3.0; 6] }
+        );
+        assert_eq!(cfg.group("desk-b").trade, untouched);
+    }
+}
+
+/// Caching one group's main TP would misstate a second target or a toolbar edit during preview.
+#[test]
+fn xtmode_preview_tracks_current_unique_targets() {
+    use crate::config::groups::TakeProfitMode;
+    let mut cfg = three_cores();
+    cfg.group_mut("desk-b").trade.exit.take_profit_pct = 250.0;
+    let mode = change(
+        "group.take_profit_mode",
+        PlannedValue::TakeProfitMode(TakeProfitMode::Extended),
+    );
+    assert_eq!(
+        group_item_preview(&cfg, &mode, &[1, 2, 3]),
+        PreviewValue::ExtendedTakeProfit {
+            groups: vec![("desk-a".into(), 100.0), ("desk-b".into(), 250.0)],
+        }
+    );
+    cfg.group_mut("desk-b").trade.exit.take_profit_pct = 430.0;
+    assert_eq!(
+        group_item_preview(&cfg, &mode, &[3]),
+        PreviewValue::ExtendedTakeProfit {
+            groups: vec![("desk-b".into(), 430.0)],
+        }
+    );
+    assert_eq!(
+        group_item_preview(&cfg, &mode, &[]),
+        PreviewValue::ExtendedTakeProfit { groups: vec![] }
+    );
+}

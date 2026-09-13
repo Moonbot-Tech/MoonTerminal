@@ -19,6 +19,7 @@ fn mb_config() -> MoonBotConfig {
     shortcuts[25] = 0x4000 | 0x2E; // CancelAllBuys = Ctrl+Delete (matches the default)
     MoonBotConfig {
         config_version: 1,
+        x_t_mode: false,
         ui: UiBlock {
             hide_demo_button: false,
             confirm_close: false,
@@ -278,5 +279,33 @@ fn every_preview_key_has_all_locales_and_matching_parameters() {
             let value: String = serde_json::from_str(value).unwrap();
             translations.push((locale, value));
         }
+    }
+}
+
+/// A missing locale or an untranslated mode value would hide the imported x10 mode.
+#[test]
+fn extended_tp_mode_is_localized_in_all_import_languages() {
+    for (locale, expected) in [
+        ("ru", "Режим TP: расширенный ×10"),
+        ("en", "TP mode: extended ×10"),
+        ("es", "Modo TP: ampliado ×10"),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        assert_eq!(
+            preview_value(&PreviewValue::ExtendedTakeProfit { groups: Vec::new() }),
+            expected
+        );
+        assert_eq!(
+            preview_value(&PreviewValue::ExtendedTakeProfit {
+                groups: vec![("desk-a".into(), 100.0)]
+            }),
+            format!("{expected} (TP 100%)")
+        );
+        assert_eq!(
+            preview_value(&PreviewValue::ExtendedTakeProfit {
+                groups: vec![("desk-a".into(), 100.0), ("desk-b".into(), 250.0)]
+            }),
+            format!("{expected} (desk-a: TP 100%; desk-b: TP 250%)")
+        );
     }
 }

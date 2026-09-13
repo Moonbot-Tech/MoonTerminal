@@ -8,6 +8,54 @@ use super::{
     FolderFill, NodeData, RowCounts, ToggleTarget, drop_dest, heading_chrome, id_exchange,
 };
 
+/// Minimal row fixture for sibling ordering, with a folder path independent of its id.
+fn ordering_row(id: u64, path: &str) -> moon_core::feed::StrategyRow {
+    moon_core::feed::StrategyRow {
+        id,
+        name: id.to_string(),
+        kind: "Long".into(),
+        kind_ordinal: 1,
+        folder_path: path.into(),
+        checked: false,
+        is_short: false,
+        fields: Vec::new(),
+    }
+}
+
+/// Rendering folders before loose strategies would hide a successful folder move on screen.
+/// Ranking a folder from only its visible rows would also reorder it when its first row is hidden.
+#[test]
+fn folder_and_loose_strategy_siblings_follow_the_complete_order() {
+    use crate::strategies::filter::StrategyFilter;
+    use crate::strategies::logic::{FolderCounts, build_node, ensure_folder};
+    use std::collections::HashMap;
+
+    let rows = [
+        ordering_row(1, ""),
+        ordering_row(2, "F/Deep"),
+        ordering_row(3, ""),
+        ordering_row(4, "F"),
+        ordering_row(5, "G"),
+    ];
+    let mut node = build_node(rows.iter().filter(|row| row.id != 2));
+    ensure_folder(&mut node, &["Empty".into()]);
+    let filter = StrategyFilter::default().prepare();
+    let mut counts = FolderCounts::default();
+    let mut ranks = HashMap::new();
+    for (at, row) in rows.iter().enumerate() {
+        counts.add(row, &filter, at);
+        ranks.insert(row.id, at);
+    }
+    let labels: Vec<_> = super::ordered_siblings(&node, "", &counts, &ranks)
+        .into_iter()
+        .map(|sibling| match sibling {
+            super::OrderedSibling::Folder { path, .. } => path,
+            super::OrderedSibling::Strategy(row) => row.id.to_string(),
+        })
+        .collect();
+    assert_eq!(labels, ["1", "F", "3", "G", "Empty"]);
+}
+
 /// Removing the folder icon or trusting stale expansion on an empty folder hides its identity
 /// or advertises nonexistent children; both locally-created and core-confirmed folders count.
 #[test]

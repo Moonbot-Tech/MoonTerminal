@@ -63,8 +63,8 @@ pub(in crate::strategies) struct LeftPaneFrame {
     pub(super) footer_label_width: f32,
     /// Staged checkbox count the footer both measures against and renders.
     pub(super) staged: usize,
-    /// Whether the footer's two move buttons have anything to do, as `(up, down)`.
-    pub(super) moves: (bool, bool),
+    /// Arrow enablement and the empty-folder explanation, as `(up, down, empty_folder)`.
+    pub(super) moves: (bool, bool, bool),
 }
 
 /// Everything the Start/Stop plan reads, as one comparable key.
@@ -97,7 +97,7 @@ pub(in crate::strategies) struct PaneCache {
     exchanges: Option<(u64, SharedString, ExchangeList)>,
     plan: Option<(PlanKey, Arc<StartStopPlan>)>,
     labels: Option<(LabelKey, f32)>,
-    moves: Option<(MoveKey, (bool, bool))>,
+    moves: Option<(MoveKey, (bool, bool, bool))>,
 }
 
 /// Everything the move buttons' enablement reads, as one comparable key.
@@ -157,8 +157,8 @@ impl StrategiesView {
     ///     cx: Application context used to read the store.
     ///
     /// Returns:
-    ///     Whether a move up, and a move down, would rearrange anything.
-    fn pane_moves(&mut self, sig: TreeSig, cx: &App) -> (bool, bool) {
+    ///     Arrow enablement and whether the selected folder has no position on the wire.
+    fn pane_moves(&mut self, sig: TreeSig, cx: &App) -> (bool, bool, bool) {
         let key = MoveKey {
             store: sig.store,
             view: sig.view,
@@ -173,7 +173,13 @@ impl StrategiesView {
         let built = {
             let backend = self.backend.read(cx);
             let store = backend.session.store();
-            self.move_availability(store, backend.session.core_venues())
+            let (up, down) = self.move_availability(store, backend.session.core_venues());
+            let empty_folder = self.reorder_folder().is_some_and(|(core, folder)| {
+                store
+                    .core(core)
+                    .is_some_and(|data| !super::ops::has_row_under(&data.strategies, &folder))
+            });
+            (up, down, empty_folder)
         };
         self.pane_cache.moves = Some((key, built));
         built

@@ -11,6 +11,7 @@
 use std::collections::HashSet;
 
 use super::plan::{MoonBotImportPlan, PlannedValue, SettingChange};
+use super::preview::PreviewValue;
 use crate::config::{AppConfig, UiThemeMode};
 
 /// Application result: how many items were applied and which ids were unrecognized.
@@ -145,30 +146,33 @@ fn apply_color(cfg: &mut AppConfig, id: &str, rgb: [u8; 3]) -> bool {
     true
 }
 
-/// Applies a group-local item to the unique groups containing selected cores.
+/// Applies a group-local item, including a canonicalized TP mode, to selected cores' unique groups.
 ///
 /// An empty core list is not a plan error: the item is deliberately applied to no groups. A
 /// selected core that keeps its OWN manual-trading set (`own_trade_config`) is skipped: the
 /// import writes the group's set and never a core's, so through such a core nothing would be
 /// visible — and its group is still reached through any other selected core in it.
+///
+/// Args:
+///     cfg: Draft configuration to update.
+///     item: Planned group-local setting.
+///     target_core_ids: Selected cores whose shared groups receive the setting.
+///
+/// Returns:
+///     Whether the item id and typed value form a supported group-local change.
 fn apply_group_item(cfg: &mut AppConfig, item: &SettingChange, target_core_ids: &[u64]) -> bool {
-    /// Return selected group names once even when multiple target cores share a group.
-    fn target_groups(cfg: &AppConfig, target_core_ids: &[u64]) -> Vec<String> {
-        let mut groups = Vec::new();
-        for server in cfg
-            .servers
-            .iter()
-            .filter(|server| target_core_ids.contains(&server.id) && !server.own_trade_config)
-        {
-            if !groups.contains(&server.group) {
-                groups.push(server.group.clone());
-            }
-        }
-        groups
-    }
-
     let groups = target_groups(cfg, target_core_ids);
     match (&item.value, item.id.as_str()) {
+        (PlannedValue::TakeProfitMode(mode), "group.take_profit_mode") => {
+            for group in groups {
+                let exit = &mut cfg.group_mut(&group).trade.exit;
+                if let Some(pct) = mode.canonical_take_profit_pct(exit.take_profit_pct) {
+                    exit.take_profit_mode = *mode;
+                    exit.take_profit_pct = pct;
+                }
+            }
+            true
+        }
         (PlannedValue::OrderSizeSel(sel), "group.order_size_sel") => {
             for group in groups {
                 cfg.group_mut(&group).trade.order_size_sel = *sel;
@@ -188,10 +192,7 @@ fn apply_group_item(cfg: &mut AppConfig, item: &SettingChange, target_core_ids: 
                 // the number shown must be the number the wire will carry. The plan admits only
                 // finite non-negative values, which this never refuses.
                 for (slot, pct) in exit.fixed_sell_pcts.iter_mut().zip(pcts) {
-                    if let Some(canonical) = exit
-                        .take_profit_mode
-                        .canonical_fixed_sell_pct(f64::from(*pct))
-                    {
+                    if let Some(canonical) = exit.take_profit_mode.canonical_fixed_sell_pct(*pct) {
                         *slot = canonical;
                     }
                 }
@@ -208,6 +209,59 @@ fn apply_group_item(cfg: &mut AppConfig, item: &SettingChange, target_core_ids: 
         }
         _ => false,
     }
+}
+
+/// Resolve a group-local item's preview against current targets so it matches application.
+///
+/// The TP-mode row reports each target group whose main TP can be canonicalized. Other group-local
+/// rows retain their planned preview value because they do not depend on the target configuration.
+///
+/// Args:
+///     cfg: Current draft configuration containing the target groups.
+///     item: Planned group-local setting to preview.
+///     target_core_ids: Selected cores used to resolve unique target groups.
+///
+/// Returns:
+///     The target-aware TP preview, or the item's original planned preview for other settings.
+pub fn group_item_preview(
+    cfg: &AppConfig,
+    item: &SettingChange,
+    target_core_ids: &[u64],
+) -> PreviewValue {
+    if let PlannedValue::TakeProfitMode(mode) = item.value {
+        let groups = target_groups(cfg, target_core_ids)
+            .into_iter()
+            .filter_map(|group| {
+                mode.canonical_take_profit_pct(cfg.group(&group).trade.exit.take_profit_pct)
+                    .map(|pct| (group, pct))
+            })
+            .collect();
+        PreviewValue::ExtendedTakeProfit { groups }
+    } else {
+        item.new.clone()
+    }
+}
+
+/// Return selected group names once, excluding cores that use their own manual-trading set.
+///
+/// Args:
+///     cfg: Configuration that maps selected cores to groups.
+///     target_core_ids: Core ids selected for import.
+///
+/// Returns:
+///     Unique groups reached through selected cores that inherit their group's trading settings.
+fn target_groups(cfg: &AppConfig, target_core_ids: &[u64]) -> Vec<String> {
+    let mut groups = Vec::new();
+    for server in cfg
+        .servers
+        .iter()
+        .filter(|server| target_core_ids.contains(&server.id) && !server.own_trade_config)
+    {
+        if !groups.contains(&server.group) {
+            groups.push(server.group.clone());
+        }
+    }
+    groups
 }
 
 #[cfg(test)]

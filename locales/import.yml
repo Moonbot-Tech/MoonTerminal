@@ -382,3 +382,14 @@ import.preview.warning.fixed_sell_selection:
   ru: "sbNum = %{value} вне диапазона 0..=5 — выбранный fixed sell слот не переносим"
   en: "sbNum = %{value} is outside 0..=5; the selected fixed sell slot is not transferred"
   es: "sbNum = %{value} está fuera de 0..=5; no se transfiere la ranura de venta fija seleccionada"
+
+
+import.preview.value.extended_take_profit:
+  ru: "Режим TP: расширенный ×10"
+  en: "TP mode: extended ×10"
+  es: "Modo TP: ampliado ×10"
+
+import.preview.value.take_profit:
+  ru: "TP %{pct}%"
+  en: "TP %{pct}%"
+  es: "TP %{pct}%"

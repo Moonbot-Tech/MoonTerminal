@@ -63,11 +63,37 @@ pub(super) fn caption(value: &PreviewCaption) -> String {
     }
 }
 
-/// Render a before/after value without changing its numeric or shortcut representation.
+/// Render a before/after value, including each target group's resulting main TP.
+///
+/// Args:
+///     value: Typed preview value whose data stays locale-neutral until this render step.
+///
+/// Returns:
+///     Localized display text, retaining raw numeric and shortcut data verbatim.
 pub(super) fn preview_value(value: &PreviewValue) -> String {
     match value {
         PreviewValue::Data(data) => data.clone(),
         PreviewValue::ThemeLight(light) => theme_name(*light),
+        PreviewValue::ExtendedTakeProfit { groups } => {
+            let values = groups
+                .iter()
+                .map(|(group, pct)| {
+                    let tp = t!("import.preview.value.take_profit", pct = pct).to_string();
+                    if groups.len() == 1 {
+                        tp
+                    } else {
+                        format!("{group}: {tp}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            let mode = t!("import.preview.value.extended_take_profit");
+            if values.is_empty() {
+                mode.to_string()
+            } else {
+                format!("{mode} ({values})")
+            }
+        }
         PreviewValue::SelectedGroup => t!("import.preview.value.selected_group").to_string(),
     }
 }
