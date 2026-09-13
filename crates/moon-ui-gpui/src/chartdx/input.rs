@@ -23,16 +23,64 @@ const WHEEL_THRESHOLD: f32 = 100.0;
 /// Precise zoom uses `2^(pixels / WHEEL_PX_PER_2X)` instead of the discrete wheel threshold, which
 /// caused inertial pixel deltas to trigger repeated jumps and axis jitter.
 const WHEEL_PX_PER_2X: f32 = 300.0;
-/// Fraction of plot width the LMB must travel in X before Live detaches into a pan.
-const ANCHOR_BREAK_PCT: f32 = 0.20;
-/// Device-pixel floor so a narrow (or 1 px broom) plot cannot break live on 1–2 px of jitter.
-const ANCHOR_BREAK_MIN_PX: f32 = 32.0;
+/// Logical pixels per millisecond a drag toward history must reach before a live chart lets go of
+/// the live edge: only a flick breaks the pin. A slower drag pans price and leaves time following.
+const LIVE_BREAK_SPEED: f32 = 1.9;
+/// Span over which [`LIVE_BREAK_SPEED`] is measured; a window never shorter than this is what keeps
+/// one coarse move event from reading as a flick.
+const LIVE_BREAK_WINDOW_MS: f64 = 50.0;
+/// Logical pixels past [`ChartView::live_rejoin_px`] a flick has to carry the drag before the chart
+/// detaches, so the pull-back does not catch it again on the next pixel of jitter.
+const LIVE_BREAK_HYSTERESIS_PX: f32 = 16.0;
 const RMB_ZOOM_START_PX: f32 = 4.0;
 
-/// True when accumulated LMB travel is a deliberate X pan that should leave live follow.
-fn x_drag_breaks_live(accum_x: f32, accum_y: f32, plot_w: f32) -> bool {
-    let threshold = (plot_w * ANCHOR_BREAK_PCT).max(ANCHOR_BREAK_MIN_PX);
-    accum_x.abs() >= threshold && accum_x.abs() >= accum_y.abs()
+/// A left drag on a LIVE view, held at the live edge until it proves to be a flick.
+///
+/// Travel keeps accumulating while time is held, and is paid out in one step when the chart lets go,
+/// so the chart lands where the pointer is rather than where the flick was detected.
+#[derive(Default)]
+struct LiveHold {
+    /// Signed X travel, in device pixels, since the view last held live. Positive is toward history.
+    travel: f32,
+    /// Start of the current speed window (unix ms), or `None` before the first move of the hold.
+    window_start_ms: Option<f64>,
+    window_dx: f32,
+    window_dy: f32,
+    /// Whether a flick has been seen since the hold began. Latched: the flick is the intent, and the
+    /// rest of the distance may be covered at any speed.
+    flicked: bool,
+}
+
+impl LiveHold {
+    /// Record one move of the held drag.
+    fn step(&mut self, dx: f32, dy: f32, now_ms: f64, ppp: f32) {
+        self.travel += dx;
+        let Some(start) = self.window_start_ms else {
+            // The first move carries motion from before the hold's clock started; timing it against a
+            // zero-length window would turn any press jitter into a flick.
+            self.window_start_ms = Some(now_ms);
+            return;
+        };
+        self.window_dx += dx;
+        self.window_dy += dy;
+        let elapsed = (now_ms - start).max(LIVE_BREAK_WINDOW_MS);
+        let needed = LIVE_BREAK_SPEED * ppp.max(1.0) * elapsed as f32;
+        if self.window_dx >= needed && self.window_dx >= self.window_dy.abs() {
+            self.flicked = true;
+        }
+        if now_ms - start >= LIVE_BREAK_WINDOW_MS {
+            self.window_start_ms = Some(now_ms);
+            self.window_dx = 0.0;
+            self.window_dy = 0.0;
+        }
+    }
+
+    /// Whether the drag has flicked AND carried the chart clear of the pull-back radius.
+    fn breaks(&self, plot_w: f32, ppp: f32) -> bool {
+        self.flicked
+            && self.travel
+                >= ChartView::live_rejoin_px(plot_w) + LIVE_BREAK_HYSTERESIS_PX * ppp.max(1.0)
+    }
 }
 
 #[derive(Default)]
@@ -65,9 +113,8 @@ pub struct ChartInput {
     pub pending_to_main: Option<(CoreId, String)>,
 
     lmb_down: bool,
-    lmb_x_active: bool,
     drag_pane: Option<usize>,
-    drag_accum: (f32, f32),
+    live_hold: LiveHold,
     wheel_accum: f32,
     wheel_pane: Option<usize>,
     /// Whether the accumulated lines were gathered while PANNING, so a change of modifiers
@@ -221,6 +268,8 @@ impl ChartInput {
     /// caller may still use [`rmb_moved`](Self::rmb_moved) to gate a parent stack toggle.
     /// `allow_dbl_to_main` permits an eligible left double-click to fill `pending_to_main`.
     /// The return value reports a view change; the caller handles the pending market separately.
+    /// No transition changes a view today — the live pull-back that the left release used to run
+    /// now runs on every drag step — but callers keep honouring the result.
     pub fn mouse_button(
         &mut self,
         button: Btn,
@@ -231,7 +280,7 @@ impl ChartInput {
         ppp: f32,
         fallback_w: f32,
     ) -> bool {
-        let mut changed = false;
+        let _ = fallback_w;
         match button {
             Btn::Left => {
                 if pressed {
@@ -249,20 +298,11 @@ impl ChartInput {
                         self.try_dblclick_to_main(container, ppp);
                     }
                     self.lmb_down = true;
-                    self.lmb_x_active = false;
                     self.drag_pane = self.hovered_pane;
-                    self.drag_accum = (0.0, 0.0);
+                    self.live_hold = LiveHold::default();
                 } else {
-                    if self.lmb_down && self.lmb_x_active {
-                        let target = self.drag_pane;
-                        let (plot_w, _) = self.plot_metrics_for(target, fallback_w, ppp);
-                        let now = now_unix_ms();
-                        if let Some(view) = self.view_mut(container, target) {
-                            changed |= view.snap_to_live_if_near(now, plot_w);
-                        }
-                    }
+                    // No rejoin on release: the pull-back already ran on every step of the drag.
                     self.lmb_down = false;
-                    self.lmb_x_active = false;
                     if !self.rmb_down {
                         self.drag_pane = None;
                     }
@@ -292,13 +332,17 @@ impl ChartInput {
                 }
             }
         }
-        changed
+        false
     }
 
     /// Apply the navigation portion of a pointer-drag event and update `last_ptr`.
     ///
     /// Left drag pans X/Y, while right drag vertically zooms price from the press-time range and
     /// center snapshot. Returns whether the event actually changed a view and needs presentation.
+    ///
+    /// On a LIVE view the left drag pans price only, and time stays on the live edge until a flick
+    /// ([`LiveHold`]) carries the drag clear of the pull-back radius. On a view already off live it
+    /// pans time at once, and every step toward now may pull it back onto the live edge.
     pub fn pointer_drag(
         &mut self,
         x: f32,
@@ -316,21 +360,27 @@ impl ChartInput {
         if self.lmb_down {
             let target = self.drag_pane.or(self.hovered_pane);
             let (plot_w, _) = self.plot_metrics_for(target, fallback_w, ppp);
-            self.drag_accum.0 += dx;
-            self.drag_accum.1 += dy;
             let now = now_unix_ms();
             if let Some(view) = self.view_mut(container, target) {
                 if dy != 0.0 {
                     view.pan_y_px(dy, now);
                     changed = true;
                 }
-                if !self.lmb_x_active
-                    && x_drag_breaks_live(self.drag_accum.0, self.drag_accum.1, plot_w)
-                {
-                    self.lmb_x_active = true;
-                }
-                if self.lmb_x_active && dx != 0.0 {
+                if view.follow {
+                    if dx != 0.0 || dy != 0.0 {
+                        self.live_hold.step(dx, dy, now, ppp);
+                    }
+                    if self.live_hold.breaks(plot_w, ppp) {
+                        view.pan_x_px(self.live_hold.travel, now, plot_w);
+                        self.live_hold = LiveHold::default();
+                        changed = true;
+                    }
+                } else if dx != 0.0 {
                     view.pan_x_px(dx, now, plot_w);
+                    if view.follow {
+                        // Pulled back onto the live edge mid-drag: leaving again takes a new flick.
+                        self.live_hold = LiveHold::default();
+                    }
                     changed = true;
                 }
             }
@@ -362,7 +412,6 @@ impl ChartInput {
     pub fn sync_pressed(&mut self, left_held: bool, right_held: bool) {
         if !left_held {
             self.lmb_down = false;
-            self.lmb_x_active = false;
         }
         if !right_held {
             self.rmb_down = false;
@@ -388,3 +437,6 @@ impl ChartInput {
             .map(|(i, _)| *i)
     }
 }
+
+#[cfg(test)]
+mod tests;
