@@ -154,7 +154,8 @@ fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, LineKind); 7] {
 }
 
 /// Builds order-line geometry for `market`: primary order lines, a separate trace history
-/// of their movement (unless `graphics.hide_order_move_history` hides it, along with the
+/// of their movement in `style.path` — server-sent or locally reconstructed, one style for both
+/// (unless `graphics.hide_order_move_history` or `style.path.show` hides it, along with the
 /// fallback-step knots that mark it), start crosses plus end crosses or filled-entry arrows,
 /// and a continuous liquidation line. The server's `SetStopPrice` segment remains visible. Culls
 /// orders outside the visible time window. Confirmed strategies must belong to the same core
@@ -306,12 +307,6 @@ pub fn build_order_geometry(
         }
 
         let path = &style.path;
-        let path_col = rgba(path.color, alpha);
-        let path_dash = if path.dashed {
-            SEG_PATTERN_DASH_DOT_DOT
-        } else {
-            SEG_PATTERN_SOLID
-        };
 
         for (st, kind) in kinds {
             // After an order closes (filled/cancelled), ONLY its entry/exit (Buy/Sell) remain
@@ -385,38 +380,51 @@ pub fn build_order_geometry(
             // Gates the three draw sites that reconstruct a line's repricing HISTORY: the server
             // trace below, the local staircase and its risers, and the knot markers. Never folded
             // into `has_server_trace` itself — that flag still decides which of the two mutually
-            // exclusive representations applies; this is an extra gate on both.
+            // exclusive representations applies; this is an extra gate on both. Per chart tab,
+            // where `path.show` below is the global one from `orders.toml`.
             let show_move_history = !graphics.hide_order_move_history;
-            // Hoisted out of the trace block below because the SetStopPrice line at the end of
-            // this arm is drawn at the same opacity and outlives the flag that hides the trace.
             let show_light_lines = (right_rel - left_rel) > MB_TRACE_LIGHT_RANGE_MS;
-            let base_trace_alpha = if highlighted {
-                style.trace_alpha.max(0.7)
-            } else {
-                style.trace_alpha
+            // The opacity of the repricing history, and of the SetStopPrice line at the end of
+            // this arm, which shares it (and outlives the flags that hide the trace — hence hoisted
+            // out of the trace block). `trace_alpha` scaled by the ORDER's lifecycle alpha, so the
+            // history is never brighter than the line it belongs to: a closed order's trail fades
+            // with the order (as the local staircase always did), a pending order's sits at the
+            // pending level, and a live filled order is at `active_alpha`, one by default. Then
+            // Moonbot's highlight floor and wide-window halving, as always.
+            let trace_alpha = {
+                let base = style.trace_alpha * alpha;
+                let base = if highlighted { base.max(0.7) } else { base };
+                if show_light_lines { base * 0.5 } else { base }
             };
-            let trace_alpha = if show_light_lines {
-                base_trace_alpha * 0.5
+            // The path style, resolved ONCE for both representations of the repricing history.
+            // Whether the core sent the trace or the terminal reconstructed it is invisible to the
+            // user, so the two must answer to the same colour, thickness and dash — a setting that
+            // reached only the local staircase read as a setting that did nothing (#508).
+            // Moonbot's `ShowLightLines` rule stays on top of the user's dash: on a window wide
+            // enough that the dashes would smear into noise, the path goes solid whatever the
+            // setting says.
+            let trace_color = if path.use_line_color {
+                color(trace_alpha)
             } else {
-                base_trace_alpha
+                rgba(path.color, trace_alpha)
             };
-            if has_server_trace && show_move_history {
+            let trace_thickness = path.thickness * highlight_thickness_mul;
+            let trace_dashed = path.dashed && !show_light_lines;
+            let trace_dash = if trace_dashed {
+                SEG_PATTERN_DASH_DOT_DOT
+            } else {
+                SEG_PATTERN_SOLID
+            };
+            if has_server_trace && show_move_history && path.show {
                 // MoonProtoBeta already stores repricing points in the same format as Delphi's
                 // TOrderLine.SetPointTrade: an anchor plus groups of three points. Draw them
                 // exactly like TOrderLine.DrawInternal, not as an ordinary polyline. The separate
                 // SetStopPrice segment below shares their arrival but is not part of this trace.
                 // IMPORTANT: this trace does not replace the live price of the primary order line.
-                let trace_color = color(trace_alpha);
-                let trace_thickness = if highlighted { 2.0 } else { 1.0 };
-                let trace_dash = if show_light_lines {
-                    SEG_PATTERN_SOLID
-                } else {
-                    SEG_PATTERN_DASH_DOT_DOT
-                };
-                let trace_inner_dash = if show_light_lines {
-                    SEG_PATTERN_SOLID
-                } else {
+                let trace_inner_dash = if trace_dashed {
                     SEG_PATTERN_DOT
+                } else {
+                    SEG_PATTERN_SOLID
                 };
                 let valid_trace_point = |(t, p): (f64, f32)| t > 1.0 && p.is_finite() && p > 0.0;
 
@@ -466,7 +474,7 @@ pub fn build_order_geometry(
                             p0: p1.1,
                             t1_rel: to_rel(p2.0),
                             p1: p2.1,
-                            thickness: 1.0,
+                            thickness: trace_thickness,
                             pattern: trace_inner_dash,
                             extend: SEG_EXTEND_NONE,
                             clamp: SEG_CLAMP_NONE,
@@ -487,7 +495,7 @@ pub fn build_order_geometry(
                                 p0: last_p,
                                 t1_rel: to_rel(tmp_t),
                                 p1: tmp_p,
-                                thickness: 1.0,
+                                thickness: trace_thickness,
                                 pattern: SEG_PATTERN_DOT,
                                 extend: SEG_EXTEND_NONE,
                                 clamp: SEG_CLAMP_NONE,
@@ -597,6 +605,9 @@ pub fn build_order_geometry(
                 None => edge_rel,
             };
 
+            // The local staircase: the same style as the server trace above, because to the user
+            // it IS the same object — the line's repricing history — just reconstructed here when
+            // the core sent none.
             if !has_server_trace && show_move_history && path.show && n > 1 {
                 for i in 0..n {
                     let (t, p) = points[i];
@@ -616,11 +627,11 @@ pub fn build_order_geometry(
                             p0: p,
                             t1_rel: to_rel(seg_end_t),
                             p1: p,
-                            thickness: path.thickness,
-                            pattern: path_dash,
+                            thickness: trace_thickness,
+                            pattern: trace_dash,
                             extend: SEG_EXTEND_NONE,
                             clamp: SEG_CLAMP_NONE,
-                            color: path_col,
+                            color: trace_color,
                         });
                     }
                     // The riser to the next price is drawn only where that reprice actually falls
@@ -635,11 +646,11 @@ pub fn build_order_geometry(
                             p0: p,
                             t1_rel: to_rel(seg_end_t),
                             p1: p2,
-                            thickness: path.thickness,
-                            pattern: path_dash,
+                            thickness: trace_thickness,
+                            pattern: trace_dash,
                             extend: SEG_EXTEND_NONE,
                             clamp: SEG_CLAMP_NONE,
-                            color: path_col,
+                            color: trace_color,
                         });
                     }
                 }
@@ -701,8 +712,10 @@ pub fn build_order_geometry(
 
             // Knots are fallback-step points on the straight line. For a server trace, do not
             // duplicate knots on the primary line because the trace is already a separate object.
-            // A knot is also part of the move HISTORY it marks, so it is hidden along with it.
-            if st.knots && !has_server_trace && show_move_history {
+            // A knot is also part of the move HISTORY it marks, so it is hidden along with it —
+            // by the per-tab flag and by `path.show` alike, or "show path" off would leave a row
+            // of dots marking steps of a staircase that is no longer there.
+            if st.knots && !has_server_trace && show_move_history && path.show {
                 for i in 1..n {
                     markers.push(MarkerInstance::at_price(
                         to_rel(points[i].0),

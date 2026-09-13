@@ -172,6 +172,8 @@ pub(super) struct Lines {
     liq: LineEd,
     path_color: Entity<MoonColorPickerState>,
     path_thickness: Entity<MoonSliderState>,
+    /// `OrdersStyle::trace_alpha`: the path's opacity, edited beside the rest of the path.
+    path_alpha: Entity<MoonSliderState>,
     active_alpha: Entity<MoonSliderState>,
     closed_alpha: Entity<MoonSliderState>,
     max_closed: Entity<MoonSliderState>,
@@ -211,6 +213,15 @@ pub(super) fn build(
             0.5,
             6.0,
             0.1,
+        ),
+        path_alpha: ord_slider(
+            backend,
+            cx,
+            |o| o.trace_alpha,
+            |o, v| o.trace_alpha = v,
+            0.05,
+            1.0,
+            0.01,
         ),
         active_alpha: ord_slider(
             backend,
@@ -756,8 +767,20 @@ impl SettingsView {
                 )],
             ))
             .child(separator(MoonPalette::active(cx), cx))
-            // Path (the trailing trace) has its own collapsible section.
+            // Path (the repricing trail, server-sent or local alike) has its own collapsible
+            // section. The colour picker is only a control while the path has a colour of its own:
+            // with "line colour" on it reads as a dead knob, so it is disabled rather than hidden,
+            // keeping the row's shape while saying why it does nothing.
             .child({
+                let use_line_color = {
+                    let b = self.backend.read(cx);
+                    let draft = b.preview.as_ref().unwrap_or(&b.config);
+                    draft
+                        .orders
+                        .get(draft.ui_theme_mode.is_light())
+                        .path
+                        .use_line_color
+                };
                 let body = v_flex()
                     .w_full()
                     .gap_1()
@@ -769,13 +792,21 @@ impl SettingsView {
                         |o| o.path.show,
                         |o, v| o.path.show = v,
                     ))
+                    .child(self.ord_check(
+                        cx,
+                        "path-line-color",
+                        &t!("lines.path_line_color"),
+                        |o| o.path.use_line_color,
+                        |o, v| o.path.use_line_color = v,
+                    ))
                     .child(
                         h_flex()
                             .gap(px(10.0))
                             .items_center()
                             .child(
                                 MoonColorPicker::new(&l.path_color)
-                                    .colors(design::picker_palette()),
+                                    .colors(design::picker_palette())
+                                    .disabled(use_line_color),
                             )
                             .child(slider_row(
                                 &t!("lines.thickness"),
@@ -792,6 +823,21 @@ impl SettingsView {
                         |o| o.path.dashed,
                         |o, v| o.path.dashed = v,
                     ))
+                    .child(slider_row(
+                        &t!("lines.path_alpha"),
+                        &l.path_alpha,
+                        0.05..=1.0,
+                        |v| {
+                            fmt::pct((v * 100.0) as f64, 0)
+                                .map_or_else(|| "0%".to_string(), |(text, _)| text)
+                        },
+                        cx,
+                    ))
+                    .child(
+                        div()
+                            .text_color(rgb(MoonPalette::active(cx).text_soft))
+                            .child(t!("lines.path_hint").to_string()),
+                    )
                     .into_any_element();
                 self.collapse_section(cx, "path", &t!("lines.path_title"), body)
             })
