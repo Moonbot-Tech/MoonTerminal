@@ -1308,11 +1308,15 @@ impl StrategiesView {
         // workspace moves before its callback runs, `apply_field_edits` rejects this plan whole.
         let apply_plan = Arc::new(self.field_edit_plan(cx));
         // What Apply will actually land: drafts the core would refuse are not part of it.
-        let sendable = {
+        let (sendable, can_refresh) = {
             let backend = self.backend.read(cx);
             let store = backend.session.store();
-            self.sendable_field_edits(apply_plan.edit_keys(), store)
-                .len()
+            let keys: Vec<_> = self
+                .sendable_field_edits(apply_plan.edit_keys(), store)
+                .into_iter()
+                .cloned()
+                .collect();
+            (keys.len(), self.can_refresh_buys(&keys, store))
         };
         // Two-item switch between per-section and full mode, built per the pinned MoonUI source:
         // `on_click` takes a plain indexed `Fn`, not a `cx.listener`.
@@ -1334,7 +1338,9 @@ impl StrategiesView {
             .render();
         let mut header = h_flex()
             .w_full()
-            .h(design::fit_h_px(cx, 28.0, 14.0, 7.0))
+            .min_h(design::fit_h_px(cx, 28.0, 14.0, 7.0))
+            .flex_wrap()
+            .gap_2()
             .items_center()
             .justify_between()
             .child(
@@ -1345,6 +1351,9 @@ impl StrategiesView {
             )
             .child(
                 h_flex()
+                    .flex_wrap()
+                    .min_w_0()
+                    .max_w_full()
                     .items_center()
                     .gap_2()
                     .child(mode_switch)
@@ -1368,12 +1377,26 @@ impl StrategiesView {
                                     .on_click({
                                         let apply_plan = apply_plan.clone();
                                         cx.listener(move |this, _, _, cx| {
-                                            this.apply_field_edits(apply_plan.as_ref(), cx)
+                                            this.apply_field_edits(apply_plan.as_ref(), false, cx)
                                         })
                                     })
                                     .render(),
                             )
                         })
+                        .child(
+                            MoonButton::new("strat-fields-refresh-buys")
+                                .size(MoonButtonSize::Micro)
+                                .label(t!("strat.fields_refresh_buys"))
+                                .tooltip(t!("strat.fields_refresh_buys_tip"))
+                                .disabled(!can_refresh)
+                                .on_click({
+                                    let apply_plan = apply_plan.clone();
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.apply_field_edits(apply_plan.as_ref(), true, cx)
+                                    })
+                                })
+                                .render(),
+                        )
                         .child(
                             MoonButton::new("strat-fields-revert")
                                 .ghost()

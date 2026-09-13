@@ -4,8 +4,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonScrollableElement,
-    MoonWindowFrame, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonScrollAxis,
+    MoonScrollbarVisibility, MoonWindowFrame, h_flex, moon_scrollbar_overlay_with_palette,
+    rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -55,14 +56,12 @@ impl Render for SettingsView {
             Tab::Badges => self.badges_tab(cx).into_any_element(),
             Tab::Connections => self.connections_tab(cx).into_any_element(),
             Tab::Storage => self.storage_tab(cx).into_any_element(),
-            Tab::Telegram => self.telegram_tab(cx).into_any_element(),
+            Tab::Telegram => self.telegram_tab(chrome_width, cx).into_any_element(),
             Tab::TradeSounds => self.trade_sounds_tab(chrome_width, cx).into_any_element(),
         };
-        // Make tall tabs scroll through a stateful div with a visible vertical scrollbar.
-        // `Scrollable` inherits only `size`, not `flex_1`, and renders at `size_full`; on its own it
-        // would consume the full column height and push out the footer. The outer `flex_1 +
-        // min_h(0)` container takes the remaining height and permits shrinking, while the inner
-        // scroll div fills that container.
+        // Keep the viewport bounded but measure its child at intrinsic height. The convenience
+        // scrollbar wrapper forces its child to flex_1, so expanded descendants can overflow
+        // that child's bounds without increasing the scroll extent.
         //
         // Two tabs are the exception and get a BOUNDED, non-scrolling parent of their own.
         // Connections owns a virtualized core list: nesting it inside this scrollbar would give it
@@ -91,18 +90,24 @@ impl Render for SettingsView {
                 .child(content)
                 .into_any_element()
         } else {
+            let scroll = window
+                .use_keyed_state("settings-body-scroll", cx, |_, _| ScrollHandle::new())
+                .read(cx)
+                .clone();
             div()
-                .id("settings-body")
+                .relative()
                 .size_full()
                 .bg(rgba_from(p.shell, 1.0))
-                .child(
-                    v_flex()
-                        .w_full()
-                        .p(design::ui_px(cx, 18.0))
-                        .gap(design::ui_px(cx, 10.0))
-                        .child(content),
-                )
-                .overflow_y_scrollbar()
+                .child(scrollable_tab_content(content, &scroll, cx))
+                .children(moon_scrollbar_overlay_with_palette(
+                    "settings-body-scrollbar",
+                    &scroll,
+                    MoonScrollAxis::Vertical,
+                    MoonScrollbarVisibility::Always,
+                    p,
+                    window,
+                    cx,
+                ))
                 .into_any_element()
         };
         let body = div().flex_1().min_h(px(0.0)).w_full().child(body_inner);
@@ -316,6 +321,9 @@ impl SettingsView {
                         // A row of the Hotkeys page hovered when the page went away gets no
                         // leave event; without this its popup would be back on return.
                         this.hotkeys_hover_row = None;
+                        if t == Tab::Telegram {
+                            this.telegram_tab_activated(cx);
+                        }
                         cx.notify();
                     }))
                     .render(),
@@ -354,3 +362,43 @@ fn settings_header(p: MoonPalette, cx: &App) -> impl IntoElement {
             )
         })
 }
+
+/// Measure the whole padded tab at intrinsic height inside a fixed scroll viewport.
+///
+/// The direct non-flex child makes expanded descendants contribute to the scroll extent.
+fn scrollable_tab_content(
+    content: impl IntoElement,
+    scroll: &ScrollHandle,
+    cx: &App,
+) -> impl IntoElement {
+    let measured_scroll = scroll.clone();
+    let previous = (scroll.bounds(), scroll.max_offset(), scroll.offset());
+    div()
+        .on_children_prepainted(move |_, window, _| {
+            // MoonUI builds its overlay from the previous layout. Repaint once when the new
+            // measurement changes, including first layout, expansion, resizing, and scrolling.
+            let current = (
+                measured_scroll.bounds(),
+                measured_scroll.max_offset(),
+                measured_scroll.offset(),
+            );
+            if current != previous {
+                window.request_animation_frame();
+            }
+        })
+        .id("settings-body")
+        .size_full()
+        .overflow_y_scroll()
+        .track_scroll(scroll)
+        .child(
+            v_flex()
+                .w_full()
+                .flex_none()
+                .p(design::ui_px(cx, 18.0))
+                .gap(design::ui_px(cx, 10.0))
+                .child(content),
+        )
+}
+
+#[cfg(test)]
+mod tests;

@@ -2717,3 +2717,90 @@ fn closedate_desc_source_limit_uses_the_total_replica_key() {
         "the source-local LIMIT must retain the rows selected by closedate, core uid, and record id"
     );
 }
+
+/// `db/report_read.rs:query_chart_trade_history` -- making the optional millisecond columns
+/// required, coalescing an absent close value to zero, or shifting their projection positions
+/// would either blank legacy chart history or draw a still-open row with a 1970 exit arrow.
+#[test]
+fn chart_history_preserves_optional_millisecond_columns_and_legacy_rows() {
+    let with_columns = Connection::open_in_memory().expect("open millisecond fixture");
+    with_columns
+        .execute_batch(
+            "CREATE TABLE orders_rep (
+                 core_uid INTEGER NOT NULL,
+                 newrecid INTEGER NOT NULL,
+                 coin TEXT,
+                 buydate INTEGER,
+                 closedate INTEGER,
+                 buyprice REAL,
+                 sellprice REAL,
+                 quantity REAL,
+                 isshort INTEGER,
+                 buydatems INTEGER,
+                 closedatems INTEGER
+             );
+             INSERT INTO orders_rep VALUES
+                 (7, 21, 'BTCUSDT', 50, 100, 10.0, 12.0, 2.0, 0, 50_766, 100_766),
+                 (7, 22, 'BTCUSDT', 60, 110, 10.0, 12.0, 2.0, 0, 60_766, NULL),
+                 (7, 23, 'BTCUSDT', 70, 120, 10.0, 12.0, 2.0, 0, NULL, NULL),
+                 (7, 24, 'BTCUSDT', 80, 130, 10.0, 12.0, 2.0, 0, 80_766, 0);",
+        )
+        .expect("seed millisecond fixture");
+    let result = query_chart_trade_history(&with_columns, 7, &["btcusdt".to_string()], None, 10)
+        .expect("read history with optional millisecond columns");
+    let mut timestamps = result
+        .records
+        .iter()
+        .map(|record| (record.record_id, record.buy_ms, record.close_ms))
+        .collect::<Vec<_>>();
+    timestamps.sort_unstable_by_key(|(record_id, _, _)| *record_id);
+    assert_eq!(
+        timestamps,
+        vec![
+            (21, Some(50_766), Some(100_766)),
+            (22, Some(60_766), None),
+            (23, None, None),
+            (24, Some(80_766), Some(0)),
+        ]
+    );
+    let still_open = result
+        .records
+        .iter()
+        .find(|record| record.record_id == 24)
+        .expect("seeded sentinel row is returned");
+    assert_eq!(
+        still_open.close_stamp(),
+        crate::db::ReportStamp::Seconds(130),
+        "the wire's zero sentinel must fall back to the seconds close date"
+    );
+
+    let legacy = Connection::open_in_memory().expect("open legacy millisecond fixture");
+    legacy
+        .execute_batch(
+            "CREATE TABLE orders_rep (
+                 core_uid INTEGER NOT NULL,
+                 newrecid INTEGER NOT NULL,
+                 coin TEXT,
+                 buydate INTEGER,
+                 closedate INTEGER,
+                 buyprice REAL,
+                 sellprice REAL,
+                 quantity REAL,
+                 isshort INTEGER
+             );
+             INSERT INTO orders_rep VALUES
+                 (7, 31, 'BTCUSDT', 50, 100, 10.0, 12.0, 2.0, 0),
+                 (7, 32, 'BTCUSDT', 60, 110, 10.0, 12.0, 2.0, 0);",
+        )
+        .expect("seed legacy millisecond fixture");
+    let legacy_result = query_chart_trade_history(&legacy, 7, &["btcusdt".to_string()], None, 10)
+        .expect("legacy history remains readable");
+    assert_eq!(legacy_result.records.len(), 2);
+    assert!(
+        legacy_result
+            .records
+            .iter()
+            .all(|record| record.buy_ms.is_none() && record.close_ms.is_none()),
+        "missing optional columns must project NULL for every legacy row"
+    );
+}

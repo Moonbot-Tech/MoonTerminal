@@ -5,6 +5,7 @@ mod core_folders;
 mod core_problem;
 mod core_settings;
 mod core_status;
+mod core_telegram;
 
 pub use core_folders::CoreFolders;
 pub use core_problem::{CoreProblem, CoreProblemCategory, CoreProblems};
@@ -21,6 +22,11 @@ pub use core_settings::{
 pub use core_status::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreEndpoint, CoreIdentityFacts, CoreInitStep,
     CoreStartupState, CoreStartupStatus, CoreSysStatus, INIT_STEPS_TOTAL,
+};
+pub use core_telegram::{
+    AuthStep, CoreTelegramActiveProxy, CoreTelegramAuthDetails, CoreTelegramCodeType,
+    CoreTelegramError, CoreTelegramLoginMode, CoreTelegramProxy, CoreTelegramService,
+    CoreTelegramState, ResendState, TelegramCmd, auth_controls_visible, auth_step, resend_state,
 };
 
 /// Side of a trade.
@@ -1419,6 +1425,11 @@ pub enum FeedMsg {
     /// counter rather than on arrival — the core republishes the same list on reconnect and on
     /// every newly confirmed row alike.
     Problems(CoreProblems),
+    /// A Telegram snapshot RECEIVED from the core. `None` means the library holds no snapshot.
+    Telegram(Option<std::sync::Arc<CoreTelegramState>>),
+    /// The retained Telegram snapshot is no longer current: keep showing it, muted, but treat
+    /// no part of it as actionable until a real `Telegram(..)` arrives.
+    TelegramStale,
     /// The core's folder tree, empty folders included, whenever it or the folders the strategies
     /// imply have changed.
     ///

@@ -4353,6 +4353,7 @@ dependencies = [
  "moon-gpui-platform",
  "moon-ui",
  "objc",
+ "qrcode",
  "raw-window-handle",
  "resvg",
  "rusqlite",
@@ -4382,7 +4383,7 @@ dependencies = [
 [[package]]
 name = "moonproto"
 version = "0.1.0"
-source = "git+https://github.com/Moonbot-Tech/MoonProtoBeta#2e67562f29294228db2996aa818d6cbef4d62e27"
+source = "git+https://github.com/Moonbot-Tech/MoonProtoBeta#11d170a10ed4c5d9837c8178d2e8cbf3692feeb5"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -4395,6 +4396,8 @@ dependencies = [
  "parking_lot",
  "polling",
  "rand 0.8.7",
+ "serde",
+ "serde_json",
  "sha3",
  "socket2 0.5.10",
  "sysinfo 0.33.1",
@@ -5630,6 +5633,12 @@ checksum = "7f6d64c71eb498fe9eae14ce4ec935c555749aef511cca85b5568910d6e48001"
 dependencies = [
  "bytemuck",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"

@@ -44,11 +44,9 @@ Live/Pause preserves the chosen time zoom. History upload bounds include prefetc
 uses a separate visible interval for live data, fixtures and frozen replay. Candles intersecting
 the visible boundary contribute at their displayed timeframe, including on cached repeat reads.
 
-Live trade markers retain report prices and may estimate subsecond display time from an ordinary
-public print at the same feed-precision price within the report's second. This is not an execution
-timestamp: missing matches preserve report coordinates. A separate exact-timestamp source cursor
-works even when candles hide ticks; market-only updates replace the retained trade geometry without
-waking the panel. Provider/generation changes reset matches, and archive revisions request a reseed.
+Closed-trade arrows sit at the report timestamps. `ReportStamp` plus
+`ReportAxis::stamp_pair_to_utc_ms` feed `chartdx::trade_history_sync::trade_mark` with milliseconds
+when the core supplied them and whole seconds otherwise; nothing moves a mark afterwards.
 
 Текущий live-path ушёл от старого постоянного polling и top-down переноса chart data:
 
@@ -754,6 +752,30 @@ HTTP — синхронный `ureq`, `getUpdates` держит сокет до 
   `TelegramState::restart`. Снятие галки Mini App не трогает бота (`MiniAppOwner::stop`: сначала
   туннель, потом слушатель). Выход — `TelegramState::stop`. `Drop` у `TelegramService` и
   `MiniAppOwner` делает то же.
+
+### Telegram на ядре
+
+Settings → вкладка Telegram, вторая секция под ботом терминала, заголовок «Telegram на ядре»,
+с выбором ядра. Секция выше — бот самого терминала (`moon-core/src/telegram/**`, парность,
+пуши, Mini App): другая сущность, не этот ридер.
+
+Вход: `SettingsEvent::TelegramUpdated` → `feed/live/convert.rs::telegram_from_proto` →
+`FeedMsg::Telegram(Option<Arc<CoreTelegramState>>)` → `CoreData.telegram` и `telegram_rev`;
+панель читает это через `settings_sig`, панели не подписываются. Выход:
+`CoreCmd::Telegram(TelegramCmd)` → `feed/live/telegram.rs::handle` →
+`client.telegram().<method>()`.
+
+`telegram_rev` — счётчик квитанций, не контентный: MoonProto шлёт событие на каждый снимок,
+включая неизменный ответ, и баннер «отправлено, ждём» сбрасывается по этому счётчику.
+`telegram_fresh` и `FeedMsg::TelegramStale`: `ConnStatus::Ready` не значит, что снимок свежий —
+reconnect в цикле сразу даёт `Ready`, поэтому `live = Ready && telegram_fresh`; устаревший
+снимок рисуется приглушённо, действия выключены, QR нет.
+
+Телефон, код, пароль 2FA, почта, пароль прокси / секрет MTProto и `qr_link` вводятся,
+отправляются и забываются: ни настройка, ни черновик, ни строка лога. Зеркальные типы пишут
+`Debug` вручную, чтобы `{:?}` не унёс секрет. `refresh()` ровно на трёх триггерах — активация
+вкладки, раскрытие секции, выбор ядра — плюс один раз после `Connected { fresh: false }`;
+login / QR / code / reset / logout сами не повторяются.
 
 ## UI Components
 

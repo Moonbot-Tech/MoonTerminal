@@ -46,6 +46,9 @@ include_dir = "0.7"
 # multi-colour brand tile at all. resvg is already in the tree as a gpui dependency, so this adds a
 # direct name rather than a new build.
 resvg = "0.45"
+# QR encoding for the core's Telegram QR login. `default-features = false` drops the crate's
+# `image`/`svg`/`pic` renderers: we only need the module matrix and draw it with GPUI quads.
+qrcode = { version = "0.14", default-features = false }
 
 # Canonical Moon UI source: standalone GPUI runtime + Moon components.
 # Local development overrides this Git source through untracked `.cargo/config.toml`.

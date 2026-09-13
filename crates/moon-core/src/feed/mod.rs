@@ -328,6 +328,8 @@ pub enum CoreCmd {
     /// set, so the second sync would overwrite the first edit.
     EditStrategyFields {
         edits: Vec<(u64, Vec<(String, String)>)>,
+        /// Request a standing MoonShot BUY refresh with this submission only.
+        apply_to_orders: bool,
     },
     /// Logically delete one core strategy by `id` using `TStratDelete` with `folder_path=""`. Its
     /// history remains in `strat_db`, and the UI can restore it under the same ID. The UI enforces
@@ -724,6 +726,12 @@ pub enum CoreCmd {
     /// instance's findings. That replacement is the point, not a hazard: it is the same rule
     /// `CoreData::begin_connection_attempt` applies when the terminal itself reconnects a core.
     RefreshProblems,
+    /// One intent for the core's built-in Telegram reader. See [`TelegramCmd`].
+    ///
+    /// Nested rather than twelve flat arms: this enum's live handler sits in a file two sibling
+    /// goals are editing right now, and one arm delegating to `feed/live/telegram.rs` keeps the
+    /// textual footprint there to a few lines.
+    Telegram(TelegramCmd),
 }
 
 /// Complete market-role assignment published independently of the bounded command backlog.

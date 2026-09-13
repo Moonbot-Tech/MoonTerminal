@@ -10,7 +10,7 @@ mod replay;
 mod tests;
 mod volume;
 
-pub use read::{ReplayAddress, ReplayAddressError, TradeTickCursor};
+pub use read::{ReplayAddress, ReplayAddressError};
 pub use volume::{
     LiqSpanReadout, SIDE_BUCKET_MS, SideVolumeBucket, VolumeAt, VolumeSpan, VolumeSpanReadout,
 };

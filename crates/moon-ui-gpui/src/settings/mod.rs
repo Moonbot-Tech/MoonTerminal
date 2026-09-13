@@ -714,6 +714,10 @@ fn settings_sig(b: &Backend) -> u64 {
             s.completed_mask.hash(&mut h);
             (s.elapsed_ms / 1000).hash(&mut h);
         }
+        if let Some(data) = b.session.store().core(id) {
+            data.telegram_rev.hash(&mut h);
+            data.telegram_fresh.hash(&mut h);
+        }
     }
 
     h.finish()

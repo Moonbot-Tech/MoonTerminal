@@ -6,6 +6,7 @@ use rusqlite::types::Value;
 use super::name_fold::{install_unicode_casefold, strategy_name_casefold};
 use super::read_fail::read_fail;
 use super::rep;
+use super::report_axis::ReportStamp;
 use super::valuation::ValuationMode;
 use super::{
     QuoteBreakdown, QuoteCurrency, ReadResult, ReadSource, read_sources_res, table_columns_res,
@@ -181,6 +182,19 @@ pub struct ChartTradeRecord {
     pub buy_date: i64,
     /// Close timestamp, same core-local caveat as `buy_date` above.
     pub close_date: i64,
+    /// Raw `buydatems` as the core stored it: core-local MILLISECONDS, same clock and same
+    /// caveat as `buy_date` above.
+    ///
+    /// `None` when the source predates the column or the cell is NULL — never derived from
+    /// `buy_date`, because an absence is the wire's own statement that the core had no
+    /// millisecond to give. Resolve it against the seconds column with
+    /// [`ReportStamp::resolve`]; never read it directly.
+    pub buy_ms: Option<i64>,
+    /// Raw `closedatems`, same caveats as [`Self::buy_ms`].
+    ///
+    /// A stored `0` is the wire's "this row is STILL OPEN" sentinel, not an instant;
+    /// [`ReportStamp::resolve`] is what keeps it from being read as 1970.
+    pub close_ms: Option<i64>,
     /// Entry price.
     pub buy_price: f64,
     /// Exit price.
@@ -222,6 +236,24 @@ pub struct ChartTradeRecord {
     /// definition the Report's own profit-percent column already uses. Unitless, and therefore
     /// readable even where [`Self::quote`] could not be resolved.
     pub profit_pct: Option<f64>,
+}
+
+impl ChartTradeRecord {
+    /// The entry stamp to use, preferring the millisecond column when the core supplied one.
+    ///
+    /// Returns:
+    ///     The typed core-local stamp for this row's entry.
+    pub fn buy_stamp(&self) -> ReportStamp {
+        ReportStamp::resolve(self.buy_date, self.buy_ms)
+    }
+
+    /// The exit stamp to use, preferring the millisecond column when the core supplied one.
+    ///
+    /// Returns:
+    ///     The typed core-local stamp for this row's exit.
+    pub fn close_stamp(&self) -> ReportStamp {
+        ReportStamp::resolve(self.close_date, self.close_ms)
+    }
 }
 
 /// Bounded durable chart-history result with explicit truncation state.
@@ -390,6 +422,13 @@ pub fn display_columns(conn: &Connection) -> ReadResult<Vec<String>> {
         "sql",
         "created_ms",
         "updated_ms",
+        // Replication detail BEHIND the seconds columns, not facts of their own: the chart's trade
+        // query names them directly, so hiding them here costs it nothing, while leaving them out
+        // would surface three raw epoch numbers in the column menu and in the all-column CSV the
+        // moment any core supplies them.
+        "buydatems",
+        "sellsetdatems",
+        "closedatems",
     ];
     let mut have = rep::table_cols_res(conn)?;
     let legacy = table_columns_res(conn)?;
@@ -2181,10 +2220,25 @@ pub fn query_chart_trade_history(
         } else {
             "0"
         };
+        // OPTIONAL exactly like `emulator` above: a replica whose table predates these columns, and the
+        // legacy `closed_sell_reports` source which never has them, project NULL and fall back to the
+        // seconds columns. `REQUIRED_COLUMNS` must NOT name them, or such a source would return no
+        // trades at all.
+        let buy_ms_sql = if source.cols.contains("buydatems") {
+            "r.buydatems"
+        } else {
+            "NULL"
+        };
+        let close_ms_sql = if source.cols.contains("closedatems") {
+            "r.closedatems"
+        } else {
+            "NULL"
+        };
         let sql = format!(
             "SELECT {record_id}, r.core_uid, r.coin, r.buydate, r.closedate, \
              r.buyprice, r.sellprice, r.quantity, r.isshort, \
-             {profit_sql}, {quote_sql}, {percent_sql}, {emulator_sql} \
+             {profit_sql}, {quote_sql}, {percent_sql}, {emulator_sql}, \
+             {buy_ms_sql}, {close_ms_sql} \
              FROM {} r{where_sql} \
              ORDER BY r.closedate DESC, {record_id} DESC LIMIT ?",
             source.table
@@ -2211,6 +2265,8 @@ pub fn query_chart_trade_history(
                     row.get::<_, Value>(10)?,
                     row.get::<_, Value>(11)?,
                     row.get::<_, Value>(12)?,
+                    row.get::<_, Value>(13)?,
+                    row.get::<_, Value>(14)?,
                 ))
             })
             .map_err(|error| read_fail(CONTEXT, error))?;
@@ -2229,6 +2285,8 @@ pub fn query_chart_trade_history(
                 quote,
                 profit_percent,
                 emulator,
+                buy_ms,
+                close_ms,
             ) = row.map_err(|error| read_fail(CONTEXT, error))?;
             let Some(buy_date) = report_value_i64(&buy_date) else {
                 continue;
@@ -2257,6 +2315,9 @@ pub fn query_chart_trade_history(
                 coin: report_value_text(&coin).unwrap_or_default(),
                 buy_date,
                 close_date,
+                // `report_value_i64` maps NULL to `None`, which is exactly the absence the wire means.
+                buy_ms: report_value_i64(&buy_ms),
+                close_ms: report_value_i64(&close_ms),
                 buy_price,
                 sell_price,
                 quantity: report_value_f64(&quantity).unwrap_or_default(),

@@ -2,6 +2,15 @@
 # rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
 _version: 2
 
+telegram.segment_terminal_bot:
+  ru: "Бот терминала"
+  en: "Terminal bot"
+  es: "Bot del terminal"
+telegram.segment_core_reader:
+  ru: "Telegram на ядре"
+  en: "Telegram on core"
+  es: "Telegram en el núcleo"
+
 telegram.intro:
   ru: "Подключите своего бота и привяжите чат для отчётов в Telegram. Mini App включается отдельно."
   en: "Connect your bot and pair your chat for Telegram reports. Mini App is enabled separately."

@@ -232,6 +232,18 @@ strat.fields_revert:
   ru: "откатить"
   en: "revert"
   es: "revertir"
+strat.fields_refresh_buys:
+  ru: "Сохранить и обновить BUY"
+  en: "Save and refresh BUYs"
+  es: "Guardar y actualizar BUY"
+strat.fields_refresh_buys_tip:
+  ru: "Сохранить правки и запросить обновление BUY для MoonShot при изменении OrderSize, Short, EmulatorMode или AutoCancelBuy. Ядро отменяет затронутые стоящие BUY по одному за такт таймера MoonShot; новые ордера выставляются при обычных условиях, не обязательно сразу. Ордера в фазе продажи не затрагиваются. Подтверждение относится только к настройкам. Старые ядра игнорируют запрос. Дождитесь подтверждения перед следующей отправкой; неизменённые настройки не вызывают принудительное обновление. После таймаута проверьте ордера и при необходимости используйте обычное управление ордерами."
+  en: "Save edits and request a MoonShot BUY refresh when OrderSize, Short, EmulatorMode or AutoCancelBuy changes. The core cancels affected standing BUYs one per MoonShot timer tick; new orders follow normal conditions and may not appear immediately. Orders already selling are untouched. Confirmation covers settings only. Older cores ignore the request. Wait for confirmation before another submission; unchanged settings do not force a refresh. After a timeout, inspect orders and use normal order controls if needed."
+  es: "Guardar los cambios y solicitar la actualización de BUY de MoonShot al cambiar OrderSize, Short, EmulatorMode o AutoCancelBuy. El núcleo cancela los BUY pendientes afectados uno por ciclo del temporizador de MoonShot; los nuevos se colocan bajo las condiciones habituales, no necesariamente de inmediato. Las órdenes en fase de venta no se modifican. La confirmación solo cubre los ajustes. Los núcleos antiguos ignoran la solicitud. Espere la confirmación antes de otro envío; los ajustes sin cambios no fuerzan la actualización. Tras un tiempo de espera agotado, revise las órdenes y use sus controles habituales si es necesario."
+strat.buy_refresh_requested:
+  ru: "Запрошено обновление BUY для %{n} стратегий"
+  en: "BUY refresh requested for %{n} strategies"
+  es: "Actualización de BUY solicitada para %{n} estrategias"
 strat.edit_pending:
   ru: "отправлено"
   en: "sent"

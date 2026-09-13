@@ -29,6 +29,7 @@ mod shell;
 mod shot;
 mod startup;
 mod strategies;
+mod telegram_core;
 mod theme;
 mod theme_selector;
 mod tuner;

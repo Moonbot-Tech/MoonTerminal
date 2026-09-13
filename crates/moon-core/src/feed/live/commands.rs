@@ -10,6 +10,7 @@ use super::account_reconciliation::BALANCE_TRACE_LEVEL;
 use super::client_settings::{ClientSettingsSequence, ManualOrder, ManualOrderKind};
 use super::market_role::MarketRoleState;
 use super::shared_config::SharedConfigSequence;
+use super::telegram;
 use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
 use crate::feed::strategies::{fields_from_text, fv_from_str, strat_kind_name};
@@ -675,6 +676,7 @@ fn regroup_moved(full: &mut Vec<StrategySnapshot>, relocated: &[(u64, String)]) 
 /// Returns whether the sync was actually ACCEPTED by the client queue: a caller that records the
 /// change somewhere else — `local_strat_edits`, say — must not claim it happened when the send
 /// failed or when `build` changed nothing.
+/// `apply_to_orders` selects the one-shot flagged sync for field edits, which carry no folders.
 #[must_use]
 fn rebuild_sync(
     client: &MoonClient,
@@ -682,6 +684,7 @@ fn rebuild_sync(
     action: &str,
     strategy_placements: &mut StrategyPlacementGuard,
     folders: Option<Vec<String>>,
+    apply_to_orders: bool,
     build: impl FnOnce(&mut Vec<StrategySnapshot>, Option<&StrategySchema>, u64) -> usize,
 ) -> bool {
     if let Some(snap) = client.snapshot() {
@@ -713,6 +716,9 @@ fn rebuild_sync(
                 Some(paths) => client
                     .strategies()
                     .sync_local_strategies_with_folders(full, paths),
+                None if apply_to_orders => client
+                    .strategies()
+                    .sync_local_strategies_and_apply_to_orders(full),
                 None => client.strategies().sync_local_strategies(full),
             };
             match queued {
@@ -817,7 +823,10 @@ pub(super) fn drain_commands(
                     start_stop
                 );
             }
-            Ok(CoreCmd::EditStrategyFields { edits }) => {
+            Ok(CoreCmd::EditStrategyFields {
+                edits,
+                apply_to_orders,
+            }) => {
                 // Which strategies this command actually changed, filled inside the rebuild below.
                 // Claiming an id as locally edited before knowing that would hand `strat_db` a
                 // 30 s window in which a genuinely EXTERNAL change is stamped `origin = "local"`.
@@ -833,6 +842,7 @@ pub(super) fn drain_commands(
                     strategy_placements,
                     // No folder tree: these edit rows, never the set of folders.
                     None,
+                    apply_to_orders,
                     |full, schema, now| {
                         let mut edited = 0usize;
                         for sc in full.iter_mut() {
@@ -1000,6 +1010,7 @@ pub(super) fn drain_commands(
                     strategy_placements,
                     // No folder tree: these edit rows, never the set of folders.
                     None,
+                    false,
                     |full, schema, now| {
                         let mut next_id = full.iter().map(|s| s.strategy_id).max().unwrap_or(0) + 1;
                         // Plan the whole batch before insertion because each insertion shifts every
@@ -1051,6 +1062,7 @@ pub(super) fn drain_commands(
                     strategy_placements,
                     // No folder tree: these edit rows, never the set of folders.
                     None,
+                    false,
                     |full, schema, now| {
                         // It is already live (double-click in the menu or an echo), so do not duplicate it.
                         if full.iter().any(|s| s.strategy_id == id) {
@@ -1123,6 +1135,7 @@ pub(super) fn drain_commands(
                     "move",
                     strategy_placements,
                     folders,
+                    false,
                     |full, _schema, now| {
                         let mut changed = 0usize;
                         let mut relocated: Vec<(u64, String)> = Vec::new();
@@ -1178,6 +1191,7 @@ pub(super) fn drain_commands(
                     "reorder",
                     strategy_placements,
                     None,
+                    false,
                     |full, _schema, _now| {
                         let ranks: std::collections::HashMap<u64, usize> = order
                             .iter()
@@ -1583,6 +1597,7 @@ pub(super) fn drain_commands(
                     crate::feed::core_label(server.id)
                 );
             }
+            Ok(CoreCmd::Telegram(cmd)) => telegram::handle(client, server.id, cmd),
             Ok(CoreCmd::SetAutoDetect(on)) => {
                 // Passive mode off/on; the new value reaches the store via RuntimeStateUpdated,
                 // the same command that carries `is_started`.

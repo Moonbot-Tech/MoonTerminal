@@ -31,23 +31,33 @@ pub(super) struct RowTarget {
     filter: ReportFilter,
 }
 
-/// Render one replicated Unix second on the Report's own time axis.
+/// Render one replicated stamp on the Report's own time axis.
 ///
 /// The zone is the panel's, not a second clock of the window's own: the times beside the chart
-/// must read exactly as the row the user clicked.
+/// must read exactly as the row the user clicked. The lift from core-local to true UTC happens
+/// inside: `buy_date`/`close_date` (and their millisecond siblings) carry the CORE's wall clock,
+/// so the user's display zone must not be applied on top of an already-zoned value.
 ///
 /// Args:
-///     seconds: Unix seconds.
-///     zone: Zone of the Report's axis. `buy_date`/`close_date` come straight off the replica and
-///         carry the CORE's wall clock, so the user's display zone must not be applied on top.
+///     axis: Report axis that both lifts the stamp and supplies the display zone.
+///     core: Stable uid of the core that produced the row.
+///     stamp: The typed core-local stamp for this end.
 ///
 /// Returns:
-///     `YYYY-MM-DD HH:MM:SS`, or a dash for an unusable stamp.
-fn stamp(seconds: i64, zone: chrono_tz::Tz) -> String {
-    match zone.timestamp_opt(seconds, 0).single() {
-        Some(moment) => moment.format("%Y-%m-%d %H:%M:%S").to_string(),
-        None => "-".to_string(),
+///     `YYYY-MM-DD HH:MM:SS` or `YYYY-MM-DD HH:MM:SS.mmm`, or a dash for an unusable stamp.
+fn stamp(axis: &moon_core::db::ReportAxis, core: u64, stamp: moon_core::db::ReportStamp) -> String {
+    let Some(moment) = axis
+        .zone()
+        .timestamp_millis_opt(axis.stamp_to_utc_ms(stamp, core))
+        .single()
+    else {
+        return "-".to_string();
+    };
+    match stamp {
+        moon_core::db::ReportStamp::Seconds(_) => moment.format("%Y-%m-%d %H:%M:%S"),
+        moon_core::db::ReportStamp::Millis(_) => moment.format("%Y-%m-%d %H:%M:%S%.3f"),
     }
+    .to_string()
 }
 
 impl ReportPanel {
@@ -101,8 +111,8 @@ impl ReportPanel {
                     return;
                 };
                 let stamps = (
-                    stamp(axis.to_utc(record.buy_date, core), axis.zone()),
-                    stamp(axis.to_utc(record.close_date, core), axis.zone()),
+                    stamp(&axis, core, record.buy_stamp()),
+                    stamp(&axis, core, record.close_stamp()),
                 );
                 crate::trade_window::open_trade_window(
                     &backend, record, meta, core, market, stamps, cx,

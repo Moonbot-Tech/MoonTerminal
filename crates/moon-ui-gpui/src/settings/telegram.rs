@@ -1,4 +1,4 @@
-//! Telegram Settings tab: token, pairing status, Mini App.
+//! Telegram Settings navigation between the terminal bot and the core reader.
 //!
 //! Edits stay on `Backend.preview` and persist through the existing Save transaction. Live
 //! service status and pairing come from the live service, independently of unsaved edits.
@@ -6,8 +6,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonCheckboxSize, MoonGroupBox, MoonInput, MoonInputEvent, MoonInputState,
-    MoonPalette, h_flex, rgba_from, v_flex,
+    MoonAccent, MoonButton, MoonCheckboxSize, MoonGroupBox, MoonInput, MoonInputEvent,
+    MoonInputState, MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -16,12 +16,23 @@ use crate::{Backend, design};
 use moon_core::config::Secret;
 
 mod access;
+mod core_section;
+mod qr;
 
 /// Password-field width in unscaled pixels, matching the Security tab.
 const TOKEN_FIELD_W: f32 = 240.0;
 
-/// Per-window editor state for the Telegram tab.
+/// Session-only navigation; deliberately absent from configuration and draft signatures.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum TelegramSegment {
+    #[default]
+    TerminalBot,
+    CoreReader,
+}
+
+/// Per-window Telegram editors retained together while navigation changes the visible segment.
 pub(super) struct TelegramEd {
+    segment: TelegramSegment,
     token: Entity<MoonInputState>,
     /// One expanded chat keeps long client lists compact.
     active_chat: Option<i64>,
@@ -34,9 +45,17 @@ pub(super) struct TelegramEd {
     history_loaded: bool,
     history_loading: bool,
     history_failed: bool,
+    core: core_section::CoreTelegramEd,
 }
 
-/// Build masked token input bound to the Settings draft.
+impl TelegramEd {
+    /// Change navigation only, preserving inputs and the selected core without sending commands.
+    fn select_segment(&mut self, segment: TelegramSegment) {
+        self.segment = segment;
+    }
+}
+
+/// Build retained editors bound to the Settings draft, initially showing the terminal bot.
 ///
 /// Args:
 ///     backend: Settings backend that owns the draft configuration.
@@ -104,6 +123,7 @@ pub(super) fn build(
     })
     .detach();
     TelegramEd {
+        segment: TelegramSegment::default(),
         token,
         active_chat: None,
         pending_owner: None,
@@ -113,11 +133,62 @@ pub(super) fn build(
         history_loaded: false,
         history_loading: false,
         history_failed: false,
+        core: core_section::build(window, cx),
     }
 }
 
 impl SettingsView {
-    /// Render the Telegram Settings tab.
+    /// Render session-only sub-tabs fitted to the window width, with their own intro and content.
+    pub(super) fn telegram_tab(&self, width: f32, cx: &Context<Self>) -> impl IntoElement {
+        let selected = self.telegram.segment;
+        // Divide the padded viewport between two cells, converting pixels to font-scaled units.
+        let cell_max = ((width - design::ui_value(cx, 36.0)) / design::font_w(cx, 2.0)).min(220.0);
+        let view = cx.entity();
+        let navigation = MoonSegmentedControl::new("telegram-segments")
+            .accent(MoonAccent::Blue)
+            .items([
+                MoonSegmentItem::new("", t!("telegram.segment_terminal_bot").to_string())
+                    .fit_width(cx, 110.0, cell_max)
+                    .tooltip(t!("telegram.segment_terminal_bot").to_string())
+                    .selected(selected == TelegramSegment::TerminalBot),
+                MoonSegmentItem::new("", t!("telegram.segment_core_reader").to_string())
+                    .fit_width(cx, 110.0, cell_max)
+                    .tooltip(t!("telegram.segment_core_reader").to_string())
+                    .selected(selected == TelegramSegment::CoreReader),
+            ])
+            .on_click(move |index, _, _, app| {
+                view.update(app, |this, cx| {
+                    this.telegram.select_segment(if index == 0 {
+                        TelegramSegment::TerminalBot
+                    } else {
+                        TelegramSegment::CoreReader
+                    });
+                    cx.notify();
+                });
+            })
+            .render();
+        let content = match selected {
+            TelegramSegment::TerminalBot => self.terminal_bot_segment(cx).into_any_element(),
+            TelegramSegment::CoreReader => v_flex()
+                .gap(design::ui_px(cx, 16.0))
+                .child(
+                    div()
+                        .font_family(design::ui_font())
+                        .text_color(rgba_from(MoonPalette::active(cx).text_muted, 1.0))
+                        .child(t!("telegram_core.intro").to_string()),
+                )
+                .child(self.core_telegram_section(cx))
+                .into_any_element(),
+        };
+        v_flex()
+            .w_full()
+            .max_w(design::font_w_px(cx, 680.0))
+            .gap(design::ui_px(cx, 16.0))
+            .child(navigation)
+            .child(content)
+    }
+
+    /// Render the terminal bot's four existing settings sections in their original order.
     ///
     /// Controls stack vertically so a 620-pixel Settings width does not need a horizontal
     /// scrollbar. Unsaved edits remain explicit while live transport health is shown
@@ -127,8 +198,8 @@ impl SettingsView {
     ///     cx: Settings context used for palette, draft, and callbacks.
     ///
     /// Returns:
-    ///     The assembled Telegram tab.
-    pub(super) fn telegram_tab(&self, cx: &Context<Self>) -> impl IntoElement {
+    ///     The terminal-bot segment, including its own introduction.
+    fn terminal_bot_segment(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
         let cfg = self.backend.read(cx);
@@ -358,3 +429,6 @@ impl SettingsView {
             )
     }
 }
+
+#[cfg(test)]
+mod tests;

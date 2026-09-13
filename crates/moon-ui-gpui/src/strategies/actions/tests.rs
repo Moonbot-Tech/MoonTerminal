@@ -1,8 +1,76 @@
 //! Atomic authority tests for delayed Strategies actions.
 
 use super::{
-    FieldEditPlan, field_edit_plan_authorized, strategy_action_authorized, strategy_targets_exist,
+    FieldEditPlan, buy_refresh_enabled, field_edit_plan_authorized, strategy_action_authorized,
+    strategy_targets_exist,
 };
+
+/// Removing a supported wire name disables real MoonShot edits; broadening the names/kinds offers
+/// an action the core ignores. The oracle is MoonProto's standing-BUY refresh protocol contract.
+#[test]
+fn buy_refresh_requires_supported_moonshot_fields_and_no_open_edit() {
+    for name in ["OrderSize", "Short", "EmulatorMode", "AutoCancelBuy"] {
+        assert!(buy_refresh_enabled([("MoonShot", name)], false), "{name}");
+        assert!(
+            !buy_refresh_enabled([("MoonShot", name)], true),
+            "overlapping {name}"
+        );
+        assert!(
+            !buy_refresh_enabled([("MoonHook", name)], false),
+            "other kind {name}"
+        );
+    }
+    for name in [
+        "SellPrice",
+        "AutoCancelLowerBuy",
+        "SignalType",
+        "order_size",
+        "ordersize",
+    ] {
+        assert!(!buy_refresh_enabled([("MoonShot", name)], false), "{name}");
+    }
+    assert!(!buy_refresh_enabled([], false));
+    assert!(buy_refresh_enabled(
+        [("MoonHook", "Short"), ("MoonShot", "OrderSize")],
+        false
+    ));
+    assert!(!buy_refresh_enabled(
+        [("MoonHook", "OrderSize"), ("MoonShot", "SellPrice")],
+        false
+    ));
+}
+
+/// Dropping the flag at either UI boundary silently turns the explicit action into plain Save.
+#[test]
+fn refresh_button_dispatches_one_flagged_edit_and_rechecks_eligibility() {
+    let params = include_str!("../params.rs");
+    let actions = include_str!("../actions.rs");
+    assert!(params.contains("this.apply_field_edits(apply_plan.as_ref(), true, cx)"));
+    assert!(params.contains("this.apply_field_edits(apply_plan.as_ref(), false, cx)"));
+    assert!(params.contains(".disabled(!can_refresh)"));
+    let apply = actions
+        .split_once("pub(super) fn apply_field_edits(")
+        .unwrap()
+        .1;
+    let check = apply
+        .find("!self.can_refresh_buys(&sendable, b.session.store())")
+        .unwrap();
+    let send = apply.find(".edit_strategies_with_order_refresh(").unwrap();
+    assert!(check < send);
+    assert_eq!(
+        apply
+            .matches(".edit_strategies_with_order_refresh(")
+            .count(),
+        1
+    );
+    assert!(!apply.contains(".edit_strategies("));
+    let compact: String = apply.split_whitespace().collect();
+    assert!(
+        compact
+            .replace(",)", ")")
+            .contains(".edit_strategies_with_order_refresh(*core,edits.clone(),apply_to_orders)")
+    );
+}
 
 /// Build a one-target field plan with an explicit value for payload-drift tests.
 fn field_plan(value: &str) -> FieldEditPlan {
