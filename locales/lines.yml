@@ -46,13 +46,25 @@ lines.pending_alpha:
   en: "alpha"
   es: "opacidad"
 lines.path_title:
-  ru: "Путь (трейл / змейка)"
-  en: "Path (trail)"
-  es: "Ruta (trail)"
+  ru: "История переносов (путь / змейка)"
+  en: "Repricing trail (path)"
+  es: "Rastro de reprecios (ruta)"
 lines.show_path:
   ru: "показывать путь"
   en: "show path"
   es: "mostrar ruta"
+lines.path_line_color:
+  ru: "цветом своей линии"
+  en: "in the line's own colour"
+  es: "con el color de su línea"
+lines.path_alpha:
+  ru: "прозрачность"
+  en: "alpha"
+  es: "opacidad"
+lines.path_hint:
+  ru: "Ступеньки переносов цены ордера — и присланные ядром, и собранные терминалом. Отрезок переноса стопа рисуется всегда."
+  en: "The steps an order's price was moved through — sent by the core or reconstructed here. A stop's own move segment is always drawn."
+  es: "Los escalones por los que se movió el precio de la orden — enviados por el núcleo o reconstruidos aquí. El tramo de traslado del stop siempre se dibuja."
 lines.global:
   ru: "Общее"
   en: "Global"

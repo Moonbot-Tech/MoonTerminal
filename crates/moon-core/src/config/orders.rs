@@ -90,13 +90,28 @@ impl LineStyle {
 
 /// Path (trail) style — the actual line movement through its repricing history.
 /// Separate from the primary (straight) line, with its own visibility toggle, color, thickness, and dash setting.
+///
+/// ONE style for both representations of that history: the trace the core sends with the order
+/// (`buy_trace`/`sell_trace`) and the staircase the terminal reconstructs itself when the core sends
+/// none. They are mutually exclusive on a given line, and the user cannot tell which one is on the
+/// chart, so a setting that reached only one of them read as a setting that does nothing (#508).
+/// The opacity is [`OrdersStyle::trace_alpha`], kept beside the other global alphas.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PathStyle {
     /// Whether to show the path through historical positions.
     pub show: bool,
-    /// Path color (sRGB).
+    /// Path color (sRGB). Ignored while [`Self::use_line_color`] is set.
     pub color: [u8; 3],
+    /// Draw the path in the colour of the line it belongs to instead of [`Self::color`].
+    ///
+    /// On by default: that is how the server trace was always drawn, and it is the trace nearly
+    /// every user sees, so the default keeps the chart looking as it did before the two
+    /// representations shared a style. The cost is deliberate: an `orders.toml` from before this
+    /// field carries a `color` whether or not the user ever touched it (`load` writes the full
+    /// default file), so its presence says nothing, and a user who did recolour the local
+    /// staircase — visible only with a core that sends no trace — unticks one box to get it back.
+    pub use_line_color: bool,
     /// Path thickness, in pixels.
     pub thickness: f32,
     /// Whether the path is dashed.
@@ -108,6 +123,7 @@ impl Default for PathStyle {
         Self {
             show: true,
             color: palette::TEXT_3,
+            use_line_color: true,
             thickness: 1.0,
             dashed: true,
         }
@@ -140,9 +156,13 @@ pub struct OrdersStyle {
     pub pending_cond: LineStyle,
     /// Liquidation line. Red, WITHOUT start/end markers (continuous).
     pub liq: LineStyle,
-    /// Path (trail) — line movement through the repricing history (optional).
+    /// Path (trail) — line movement through the repricing history, server-sent or local alike.
     pub path: PathStyle,
-    /// Opacity of the server-provided order trace (`CO_OrderLine.Thikness2` in Moonbot).
+    /// Opacity of the repricing path (`CO_OrderLine.Thikness2` in Moonbot), scaled at draw time
+    /// by the order's own alpha (`active_alpha` / pending / `closed_alpha`) so the history is never
+    /// brighter than its line. Applies to both representations [`PathStyle`] styles, and to the
+    /// server's `SetStopPrice` segment, which shares the trace's arrival and opacity but not its
+    /// visibility toggle.
     pub trace_alpha: f32,
 
     /// Active-line opacity, 0..1.
@@ -362,3 +382,6 @@ impl OrdersStyleSet {
         None
     }
 }
+
+#[cfg(test)]
+mod tests;

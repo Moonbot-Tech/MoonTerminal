@@ -423,7 +423,12 @@ fn hidden_move_history_keeps_server_stop_line_but_removes_server_trace() {
             ..ChartGraphicsCfg::default()
         },
     );
-    let stop_color = crate::layers::rgb_with_alpha(style.stop.color, style.trace_alpha);
+    // The stop interval shares the trace's opacity: `trace_alpha` scaled by the order's own alpha,
+    // which for this unfilled long fixture is the entry line's pending alpha.
+    let stop_color = crate::layers::rgb_with_alpha(
+        style.stop.color,
+        style.trace_alpha * style.buy.pending_alpha,
+    );
 
     assert!(
         !hidden.iter().any(|seg| {
@@ -590,6 +595,257 @@ fn dragging_order_keeps_server_trace_visible() {
                 && near(s.pattern, SEG_PATTERN_DASH_DOT_DOT)
         }),
         "drag preview must not hide the server trace object"
+    );
+}
+
+/// Whether a segment matches the fixture's server-trace history step: 1 000..2 000 ms at 60 000.
+fn is_server_history_step(seg: &SegInstance) -> bool {
+    near(seg.extend, SEG_EXTEND_NONE)
+        && near(seg.t0_rel, 1_000.0)
+        && near(seg.t1_rel, 2_000.0)
+        && near(seg.p0, 60_000.0)
+        && near(seg.p1, 60_000.0)
+}
+
+/// Whether a segment is the fixture's Moonbot `SetStopPrice` interval: 1 000..2 000 ms at 59 500.
+fn is_server_stop_segment(seg: &SegInstance) -> bool {
+    near(seg.t0_rel, 1_000.0)
+        && near(seg.t1_rel, 2_000.0)
+        && near(seg.p0, 59_500.0)
+        && near(seg.p1, 59_500.0)
+        && near(seg.pattern, SEG_PATTERN_DOT)
+}
+
+/// A store holding one order WITHOUT a server trace, repriced once locally: 60 000 → 61 000.
+fn store_with_local_staircase() -> OrderLineStore {
+    let mut row = test_order_with_buy_trace();
+    row.buy_trace = None;
+    row.create_time_ms = 1_000.0;
+    row.buy_price = 60_000.0;
+    let mut store = OrderLineStore::default();
+    assert!(store.update(&[row.clone()], 0));
+    row.buy_price = 61_000.0;
+    assert!(store.update(&[row], 0));
+    store
+}
+
+/// Whether a segment is the local staircase's first step: a finite horizontal at 60 000.
+fn is_local_history_step(seg: &SegInstance) -> bool {
+    near(seg.extend, SEG_EXTEND_NONE) && near(seg.p0, 60_000.0) && near(seg.p1, 60_000.0)
+}
+
+/// `order_geometry.rs:build_order_geometry` must gate the SERVER trace on `PathStyle::show` as it
+/// gates the local staircase (#508): with the toggle off the trace and its temporary-point riser
+/// go, while the live line and Moonbot's `SetStopPrice` interval stay. Gating only the staircase
+/// is the defect the issue describes — a toggle that does nothing on nearly every chart.
+#[test]
+fn path_show_off_hides_the_server_trace_but_keeps_the_stop_segment_and_live_line() {
+    let mut store = OrderLineStore::default();
+    assert!(store.update(&[test_order_with_buy_trace()], 0));
+    let mut style = OrdersStyle::default();
+    style.path.show = false;
+
+    let segs = draw_order_segments(&store, &style, &ChartGraphicsCfg::default());
+
+    assert!(
+        !segs.iter().any(is_server_history_step),
+        "path.show=false must remove the server trace"
+    );
+    assert!(
+        !segs.iter().any(|seg| {
+            near(seg.t0_rel, 2_500.0) && near(seg.t1_rel, 2_500.0) && near(seg.p1, 61_500.0)
+        }),
+        "path.show=false must remove the server temporary-point riser"
+    );
+    assert!(
+        segs.iter().any(is_server_stop_segment),
+        "path.show=false must leave Moonbot's SetStopPrice interval alone"
+    );
+    assert!(
+        segs.iter().any(|seg| {
+            near(seg.extend, SEG_EXTEND_EDGE) && near(seg.p0, 60_000.0) && near(seg.p1, 60_000.0)
+        }),
+        "path.show=false must retain the current-price order line"
+    );
+
+    // The local staircase's knots mark the steps of that staircase, so they go with it — or the
+    // toggle would leave a row of dots on the live line with nothing under them.
+    let local = store_with_local_staircase();
+    let markers = draw_order_markers(&local, &style, &ChartGraphicsCfg::default());
+    assert!(
+        !markers
+            .iter()
+            .any(|marker| near(marker.shape, MARKER_SHAPE_KNOT)),
+        "path.show=false must remove the fallback reprice knots along with the staircase"
+    );
+    assert!(
+        markers
+            .iter()
+            .any(|marker| near(marker.shape, MARKER_SHAPE_CROSS)),
+        "path.show=false must keep the live line's own start cross"
+    );
+}
+
+/// `order_geometry.rs:build_order_geometry` must scale the path's opacity by the ORDER's own
+/// alpha: a closed order without a server trace keeps fading its staircase to `closed_alpha`, as it
+/// did before the two representations shared a style, rather than jumping to a full-strength
+/// `trace_alpha` over a line drawn at a third of it.
+#[test]
+fn a_closed_orders_local_staircase_fades_with_the_order() {
+    let now = now_unix_ms();
+    let mut row = filled_order_without_trace(now);
+    row.buy_price = 60_000.0;
+    let mut store = OrderLineStore::default();
+    assert!(store.update(&[row.clone()], 0));
+    row.buy_price = 60_100.0;
+    assert!(store.update(&[row.clone()], 0));
+    row.job_is_done = true;
+    assert!(store.update(&[row], 0));
+
+    let style = OrdersStyle::default();
+    let mut zones = Vec::new();
+    let mut hlines = Vec::new();
+    let mut segs = Vec::new();
+    let mut markers = Vec::new();
+    build_order_geometry(
+        &store,
+        &[],
+        None,
+        "BTCUSDT",
+        &style,
+        &ChartGraphicsCfg::default(),
+        1.0,
+        None,
+        None,
+        now - 700_000.0,
+        now + 100_000.0,
+        0.0,
+        800_000.0,
+        800_000.0,
+        true,
+        &mut zones,
+        &mut hlines,
+        &mut segs,
+        &mut markers,
+    );
+
+    // A filled long's line colour is the buy colour proper, and a closed order sits at closed_alpha.
+    let want =
+        crate::layers::rgb_with_alpha(style.buy.color, style.trace_alpha * style.closed_alpha);
+    let step = segs
+        .iter()
+        .find(|seg| is_local_history_step(seg))
+        .expect("the closed order's first staircase step must still be drawn");
+    assert!(
+        (0..4).all(|i| near(step.color[i], want[i])),
+        "a closed order's staircase must fade to trace_alpha × closed_alpha, got {:?} want {:?}",
+        step.color,
+        want
+    );
+}
+
+/// `order_geometry.rs:build_order_geometry` must draw the server trace AND the local staircase
+/// from one `PathStyle`: an explicit colour, thickness and dash reach both representations of the
+/// repricing history. A trace that keeps its own hard-coded pen while the staircase follows the
+/// settings is how "Lines → Path changes nothing" came to be reported.
+#[test]
+fn path_style_colour_thickness_and_dash_reach_both_trace_representations() {
+    let mut server = OrderLineStore::default();
+    assert!(server.update(&[test_order_with_buy_trace()], 0));
+    let local = store_with_local_staircase();
+
+    let mut style = OrdersStyle::default();
+    style.path.use_line_color = false;
+    style.path.color = [12, 34, 56];
+    style.path.thickness = 3.0;
+    style.path.dashed = false;
+    // Both fixtures are unfilled longs, so the path sits at the trace alpha scaled by the entry
+    // line's pending alpha — the history is never brighter than the line it belongs to.
+    let want =
+        crate::layers::rgb_with_alpha([12, 34, 56], style.trace_alpha * style.buy.pending_alpha);
+    let same_color = |seg: &SegInstance| (0..4).all(|i| near(seg.color[i], want[i]));
+
+    let server_segs = draw_order_segments(&server, &style, &ChartGraphicsCfg::default());
+    let step = server_segs
+        .iter()
+        .find(|seg| is_server_history_step(seg))
+        .expect("the server trace step must be drawn");
+    assert!(same_color(step), "server trace must take the path colour");
+    assert!(
+        near(step.thickness, 3.0),
+        "server trace must take the path thickness"
+    );
+    assert!(
+        near(step.pattern, SEG_PATTERN_SOLID),
+        "server trace must take the path dash setting"
+    );
+    let riser = server_segs
+        .iter()
+        .find(|seg| {
+            near(seg.t0_rel, 2_000.0) && near(seg.t1_rel, 2_000.0) && near(seg.p1, 61_000.0)
+        })
+        .expect("the server trace riser must be drawn");
+    assert!(
+        near(riser.thickness, 3.0),
+        "server trace riser must take the path thickness"
+    );
+    assert!(
+        near(riser.pattern, SEG_PATTERN_SOLID),
+        "an undashed path draws a solid riser, not Moonbot's dotted one"
+    );
+
+    let local_segs = draw_order_segments(&local, &style, &ChartGraphicsCfg::default());
+    let step = local_segs
+        .iter()
+        .find(|seg| is_local_history_step(seg))
+        .expect("the local staircase step must be drawn");
+    assert!(
+        same_color(step),
+        "local staircase must take the path colour"
+    );
+    assert!(
+        near(step.thickness, 3.0),
+        "local staircase must take the path thickness"
+    );
+    assert!(
+        near(step.pattern, SEG_PATTERN_SOLID),
+        "local staircase must take the path dash setting"
+    );
+}
+
+/// `order_geometry.rs:build_order_geometry` with `PathStyle::use_line_color` must paint both
+/// representations in the colour of the line they belong to — the server trace's historical look,
+/// now the shipped default for the staircase too, so a fresh install keeps the chart it had.
+#[test]
+fn path_in_line_colour_paints_both_trace_representations_like_their_line() {
+    let mut server = OrderLineStore::default();
+    assert!(server.update(&[test_order_with_buy_trace()], 0));
+    let local = store_with_local_staircase();
+
+    let style = OrdersStyle::default();
+    assert!(
+        style.path.use_line_color,
+        "the shipped default is the line's own colour"
+    );
+    // The fixture entry is unfilled, so its line colour is the buy line's PENDING colour and the
+    // path's alpha is the trace alpha scaled by the pending alpha.
+    let line_rgb = style.buy.pending_color.unwrap_or(style.buy.color);
+    let want = crate::layers::rgb_with_alpha(line_rgb, style.trace_alpha * style.buy.pending_alpha);
+    let same_color = |seg: &SegInstance| (0..4).all(|i| near(seg.color[i], want[i]));
+
+    let server_segs = draw_order_segments(&server, &style, &ChartGraphicsCfg::default());
+    assert!(
+        server_segs
+            .iter()
+            .any(|seg| is_server_history_step(seg) && same_color(seg)),
+        "server trace must be drawn in its line's colour"
+    );
+    let local_segs = draw_order_segments(&local, &style, &ChartGraphicsCfg::default());
+    assert!(
+        local_segs
+            .iter()
+            .any(|seg| is_local_history_step(seg) && same_color(seg)),
+        "local staircase must be drawn in its line's colour"
     );
 }
 
