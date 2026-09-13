@@ -465,8 +465,9 @@ impl HotkeyAction {
     /// ownership. A
     /// held key would do that tens of times a second and leave the clipboard thrashing.
     ///
-    /// The ones still repeating: cancels (the second press finds nothing left to cancel) and the
-    /// presets (setting a value twice sets it once).
+    /// The ones still repeating: cancels — a repeat sweeps on to the next line under the pointer,
+    /// and `ChartPanel::cancel_hovered_order` refuses to resend for the line it already cancelled —
+    /// and the presets (setting a value twice sets it once).
     fn suppress_on_repeat(self) -> bool {
         matches!(
             self,
@@ -713,9 +714,12 @@ pub fn recorded_keystroke(mut keystroke: Keystroke) -> Keystroke {
 /// This is shared by the built-in Tab/Delete route and the caller's `FigDelete` fallback when no
 /// figure is selected. The default `fig_delete = Delete` resolves before the built-in branch and
 /// would otherwise shadow hovered-order cancellation. Returns `false` when no hovered chart or
-/// order exists, allowing the key event to continue propagating.
-pub fn cancel_hovered_order(backend: &Entity<Backend>, cx: &mut App) -> bool {
-    with_hovered_chart(backend, cx, |panel, pcx| panel.cancel_hovered_order(pcx))
+/// order exists, allowing the key event to continue propagating. `repeat` is the key's auto-repeat
+/// flag; the panel spends a repeat over an order it already cancelled without sending again.
+pub fn cancel_hovered_order(backend: &Entity<Backend>, repeat: bool, cx: &mut App) -> bool {
+    with_hovered_chart(backend, cx, |panel, pcx| {
+        panel.cancel_hovered_order(repeat, pcx)
+    })
 }
 
 /// Log target for the manual-order trace that this module contributes to.
@@ -761,6 +765,14 @@ fn hovered_chart(backend: &Entity<Backend>, cx: &App) -> Option<Entity<crate::pa
         .hovered_chart
         .clone()
         .and_then(|w| w.upgrade())
+}
+
+/// Whether the pointer rests on a chart at all — the scope of the Tab repeat rule in `boot.rs`.
+///
+/// Over a chart Tab is the cancel key and a held one is a sweep across order lines, not a walk
+/// through the controls; anywhere else a held Tab keeps its ordinary auto-repeat navigation.
+pub fn chart_hovered(backend: &Entity<Backend>, cx: &App) -> bool {
+    hovered_chart(backend, cx).is_some()
 }
 
 /// Run `f` against the globally hovered chart panel, if there is one.
@@ -877,14 +889,17 @@ pub fn dispatch_from_chart(
         .map(|root| root.read(cx).view().clone());
     let routed = inner.and_then(|inner| match inner.downcast::<crate::shell::Shell>() {
         Ok(shell) => {
-            Some(shell.update(cx, |shell, scx| shell.dispatch_hotkey(action, window, scx)))
+            // A click is never an auto-repeat, so the cursor-addressed cancel always sends.
+            Some(shell.update(cx, |shell, scx| {
+                shell.dispatch_hotkey(action, false, window, scx)
+            }))
         }
         Err(other) => other
             .downcast::<crate::chart_tabs::DetachedChartHost>()
             .ok()
             .map(|host| {
                 host.update(cx, |host, hcx| {
-                    host.dispatch_hotkey_at(action, clicked, window, hcx)
+                    host.dispatch_hotkey_at(action, clicked, false, window, hcx)
                 })
             }),
     });

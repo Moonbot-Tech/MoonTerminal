@@ -270,7 +270,7 @@ impl Shell {
             cx.stop_propagation();
             return;
         }
-        if self.dispatch_hotkey(action, window, cx) {
+        if self.dispatch_hotkey(action, ev.is_held, window, cx) {
             cx.stop_propagation();
         }
     }
@@ -299,7 +299,7 @@ impl Shell {
             cx.stop_propagation();
             return;
         }
-        if self.dispatch_hotkey(action, window, cx) {
+        if self.dispatch_hotkey(action, false, window, cx) {
             cx.stop_propagation();
         }
     }
@@ -308,6 +308,9 @@ impl Shell {
     ///
     /// Args:
     ///     action: The action a binding resolved to, whichever event carried it.
+    ///     repeat: Whether the event is a key's auto-repeat. A modifier change and a mouse action
+    ///         click never repeat; the cursor-addressed cancel reads it to not resend for the
+    ///         order it already cancelled.
     ///     window: The window the binding arrived at.
     ///     cx: Shell context used to route the action.
     ///
@@ -316,6 +319,7 @@ impl Shell {
     pub(crate) fn dispatch_hotkey(
         &mut self,
         action: crate::hotkeys::HotkeyAction,
+        repeat: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -367,7 +371,7 @@ impl Shell {
             }
             // Built-in Tab/Delete cancels the order tracked by the hovered chart.
             HotkeyAction::CancelHoveredOrder => {
-                crate::hotkeys::cancel_hovered_order(&self.backend, cx)
+                crate::hotkeys::cancel_hovered_order(&self.backend, repeat, cx)
             }
             // Delete prioritizes the selected figure, then falls back to hovered-order cancellation.
             // The default figure binding resolves before built-in Tab/Delete and would otherwise
@@ -376,7 +380,7 @@ impl Shell {
                 self.backend.update(cx, |b, bcx| {
                     // Figure deletion does not use a chart target or active core.
                     crate::hotkeys::apply(action, b, bcx, &group, None, None)
-                }) || crate::hotkeys::cancel_hovered_order(&self.backend, cx)
+                }) || crate::hotkeys::cancel_hovered_order(&self.backend, repeat, cx)
             }
             // Built-in Shift+Escape increments the global revision that closes every Main stack.
             HotkeyAction::CloseAllCharts => {

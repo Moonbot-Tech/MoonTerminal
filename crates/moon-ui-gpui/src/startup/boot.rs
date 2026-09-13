@@ -353,8 +353,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     // the root::Tab action (focus_next), and GPUI dispatches actions BEFORE on_key_down, ahead
     // of the hotkey resolver (`hotkeys::resolve` -> CancelHoveredOrder). Tab therefore never
     // reached the resolver and merely moved focus across controls. This interceptor runs BEFORE
-    // actions: cancel the hovered order and stop the event when one exists; otherwise let it
-    // through so Tab remains focus navigation.
+    // actions: cancel the hovered order and stop the event when one exists; otherwise let a
+    // PRESS through so Tab remains focus navigation — but never a repeat, see below.
     let tab_backend = backend.clone();
     cx.intercept_keystrokes(move |ev, window, cx| {
         // Interceptors run before ACTIONS and before element dispatch, so this is the only place
@@ -370,12 +370,26 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         // cancel a live order before the field ever saw the key. Spelled inline rather than
         // through the resolver — this path holds no `KeyDownEvent` and resolves no binding — and
         // placed after the key test so a non-Tab press, which is most of them, never pays for it.
-        if ev.keystroke.key == "tab"
-            && ev.keystroke.modifiers == Modifiers::default()
-            && !window.is_text_input_active()
-            && crate::hotkeys::cancel_hovered_order(&tab_backend, cx)
-        {
-            cx.stop_propagation();
+        if ev.keystroke.key == "tab" && !window.is_text_input_active() {
+            let bare = ev.keystroke.modifiers == Modifiers::default();
+            let cancelled =
+                bare && crate::hotkeys::cancel_hovered_order(&tab_backend, ev.is_held, cx);
+            // A held Tab auto-repeats at the system rate, and the desk holds it while sweeping the
+            // pointer across the order lines to be cancelled. Between two lines nothing is hovered,
+            // and every repeat let through would be one `focus_next`: focus walks the whole
+            // terminal control by control, and each hop is `Window::refresh` — a full draw of the
+            // window at the repeat rate (measured: shell_render 1/s -> 23/s, one draw per repeat).
+            // So a repeat OVER A CHART is spent whether or not it cancelled anything: there Tab is
+            // the cancel key. A fresh press with nothing under the pointer still navigates, and
+            // away from a chart a held Tab keeps its ordinary auto-repeat walk. Shift+Tab is the
+            // same walk backwards (`root::TabPrev` -> `focus_prev`) with the same draw per repeat
+            // and nothing to cancel, so its repeat follows the same rule.
+            let repeat_over_chart = ev.is_held
+                && (bare || ev.keystroke.modifiers == Modifiers::shift())
+                && crate::hotkeys::chart_hovered(&tab_backend, cx);
+            if cancelled || repeat_over_chart {
+                cx.stop_propagation();
+            }
         }
     })
     .detach();
