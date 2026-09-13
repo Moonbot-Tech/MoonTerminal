@@ -8,9 +8,9 @@ use std::time::{Duration, Instant};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDisclosure,
-    MoonDisclosureDirection, MoonDropdown, MoonGroupBox, MoonInput, MoonInputState, MoonMenuItem,
-    MoonMenuSize, MoonPalette, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
+    MoonCheckboxSize, MoonDisclosureDirection, MoonDropdown, MoonGroupBox, MoonInput,
+    MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -103,7 +103,7 @@ impl SettingsView {
                     .text_color(muted)
                     .child(t!("telegram_core.intro").to_string()),
             )
-            .child(self.core_picker_row(cx, p, muted))
+            .child(self.core_picker_row(cx, p))
             .when(self.telegram.core.expanded, |box_| {
                 box_.child(self.core_telegram_body(cx, p, muted))
             })
@@ -116,8 +116,8 @@ impl SettingsView {
         }
     }
 
-    /// Render the core selector with a menu fitted to its names and exchange headings.
-    fn core_picker_row(&self, cx: &Context<Self>, p: MoonPalette, muted: Hsla) -> impl IntoElement {
+    /// Render the fitted core selector and a full-button disclosure for its parameters.
+    fn core_picker_row(&self, cx: &Context<Self>, p: MoonPalette) -> impl IntoElement {
         let b = self.backend.read(cx);
         let cores: Vec<(u64, String)> = b
             .config
@@ -182,32 +182,25 @@ impl SettingsView {
                     .into_any_element(),
             )
             .child(
-                MoonDisclosure::button("telegram-core-disc", expanded)
-                    .direction(MoonDisclosureDirection::DownUp)
-                    .size(design::DISCLOSURE_GLYPH)
-                    .box_size(design::DISCLOSURE_BOX)
-                    .hover_color(p.text)
+                MoonButton::new("telegram-core-disc")
+                    .outline()
+                    .padding_x(12.0)
+                    .mono(false)
+                    .label(t!("telegram_core.details").to_string())
+                    .leading_icon(MoonButtonIconSlot::caret(
+                        MoonDisclosureDirection::DownUp,
+                        expanded,
+                    ))
                     .tooltip(t!("telegram_core.details").to_string())
-                    .on_toggle(cx.listener(|this, next: &bool, _, cx| {
-                        let was = this.telegram.core.expanded;
-                        this.telegram.core.expanded = *next;
-                        if !was
-                            && *next
-                            && let Some(core) = this.telegram.core.picked
-                        {
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let next = !this.telegram.core.expanded;
+                        this.telegram.core.expanded = next;
+                        if next && let Some(core) = this.telegram.core.picked {
                             this.send_telegram(core, TelegramCmd::Refresh, cx);
                         }
                         cx.notify();
                     }))
-                    .into_any_element(),
-            )
-            .child(
-                div()
-                    .font_family(design::ui_font())
-                    .text_color(muted)
-                    .when(!expanded, |d| {
-                        d.child(t!("telegram_core.details").to_string())
-                    }),
+                    .render(),
             )
     }
 
