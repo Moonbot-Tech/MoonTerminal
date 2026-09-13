@@ -131,7 +131,7 @@ pub(super) fn slot_settings_content(
                 .gap(gap)
                 .child(
                     div()
-                        .w(px(design::font_w(cx, SLOT_COL_W)))
+                        .min_w(px(design::font_w(cx, SLOT_COL_W)))
                         .flex_none()
                         .child(
                             MoonCheckbox::new(SharedString::from(format!("ms-slot-show-{slot}")))

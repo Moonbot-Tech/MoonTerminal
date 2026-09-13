@@ -28,10 +28,6 @@ use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::TimeWindow;
 
-/// Width of the row-checkbox column, in `design::ui_px` units. The header spacer and the
-/// slider lead-in reuse it so the field names stay in one line down the card; it is sized
-/// above the compact checkbox's own box, which moonui draws at a fixed size.
-pub(in crate::analytics::tuner) const CHECK_COL: f32 = 16.0;
 /// Field-name column: fits "WorkingWeekTime" on one line next to the checkbox.
 pub(in crate::analytics::tuner) const NAME_COL: f32 = 110.0;
 
@@ -386,7 +382,7 @@ impl AnalyticsView {
             .bg(moon(p.table_head))
             // Master checkbox over the rows' column — the filter tuner's "all on/off".
             .child(
-                div().w(design::ui_px(cx, CHECK_COL)).flex_none().child(
+                div().flex_none().child(
                     MoonCheckbox::new("tt-en-all")
                         .checked(self.time_tuner.enabled.iter().all(|&e| e))
                         .size(MoonSize::Sm)
@@ -530,7 +526,6 @@ impl AnalyticsView {
         let check = div()
             .id(SharedString::from(format!("tt-en-w-{field}")))
             .flex_none()
-            .w(design::ui_px(cx, CHECK_COL))
             .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tip.clone())).into())
             .child(
                 MoonCheckbox::new(SharedString::from(format!("tt-en-{field}")))
