@@ -1097,6 +1097,7 @@ impl StrategiesView {
     ///     store: Current strategy snapshot used for action enablement.
     ///     show_labels: Shared density decision for every footer button.
     ///     has_visible_cores: Whether the caller's canonical core list has anywhere to paste into.
+    ///     moves: Arrow enablement and whether an empty selected folder needs an explanatory tooltip.
     ///     cx: View context used to create callbacks and scaled button widths.
     ///
     /// Returns:

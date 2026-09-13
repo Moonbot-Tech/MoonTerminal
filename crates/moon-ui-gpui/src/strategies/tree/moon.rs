@@ -607,7 +607,30 @@ fn empty_folder_paths(
     empty
 }
 
-/// Builds the folder and strategy rows of one open core, followed by its Deleted folder.
+/// Build the folder and strategy rows of one open core, followed by its Deleted folder.
+///
+/// `row_ranks` keeps folders and loose strategies in the same displayed order while a pending
+/// reorder overlays the core-confirmed sequence.
+///
+/// Args:
+///     view: Strategies state that owns selections, folders, and deleted rows.
+///     cd: Live snapshot for the open core.
+///     core: Core whose rows are being built.
+///     filter: Prepared predicate shared by the complete tree build.
+///     searching: Whether a text query forces child folders open.
+///     engine: Confirmed global-engine state copied onto folder headings.
+///     counts: Filter-aware totals and folder ranks for the displayed rows.
+///     row_ranks: Display rank for each strategy, including a pending reorder overlay.
+///     matched: Visible live strategies in their displayed order.
+///     empty_folders: Empty folders retained by the UI or confirmed by the core.
+///     children: Output rows for the core subtree.
+///     data: Output metadata keyed by tree id.
+///     flat: Output strategy ids in visual order.
+///     nav: Output node order for keyboard navigation.
+///     expanded: Output ids that MoonTree should draw open.
+///
+/// Returns:
+///     Nothing; all rendered tree data is appended to the supplied outputs.
 #[allow(clippy::too_many_arguments)]
 fn build_core_subtree(
     view: &StrategiesView,
@@ -806,6 +829,15 @@ enum OrderedSibling<'node, 'row> {
 /// Merge child folders and loose strategies by the complete displayed order.
 /// Folder ranks include filtered-out descendants; empty folders sort after positioned siblings.
 /// The returned sequence drives rendering and keyboard navigation together.
+///
+/// Args:
+///     node: Folder-tree node whose direct folders and strategies are merged.
+///     parent: Canonical path preceding the direct children.
+///     counts: Folder occupancy and ranks in the displayed order.
+///     row_ranks: Display ranks for direct strategies, including a pending reorder overlay.
+///
+/// Returns:
+///     Direct child folders and strategies in their shared displayed order.
 fn ordered_siblings<'node, 'row>(
     node: &'node super::super::logic::FolderNode<'row>,
     parent: &str,
@@ -842,6 +874,31 @@ fn ordered_siblings<'node, 'row>(
 /// Every node reached here is visible, so recursion stops at a closed folder because
 /// `MoonTreeState` cannot render its descendants. `engine` is the owning core's confirmed
 /// global-engine flag, copied onto every folder heading so its counters match the core row.
+/// `row_ranks` lets direct strategies join folder siblings at their pending displayed positions.
+///
+/// Args:
+///     node: Visible folder-tree node to convert.
+///     core: Owning core for output ids and metadata.
+///     counts: Filter-aware folder totals and ranks.
+///     row_ranks: Display rank for each strategy, including a pending reorder overlay.
+///     confirmed_folders: Core-owned folder paths, folded for lookup.
+///     order_counts: Open-order counts by strategy id.
+///     selected_ids: Shared drag payload for selected strategies in the core.
+///     folders: Open-folder paths for the core.
+///     prefix: Current canonical path, extended during recursion.
+///     view: Strategies state that owns selection and staged checkbox state.
+///     strategies: Live strategies used for checkbox coverage.
+///     filter: Prepared predicate shared by the complete tree build.
+///     searching: Whether a text query forces child folders open.
+///     engine: Confirmed global-engine state copied onto folder headings.
+///     out: Output rows for this subtree.
+///     data: Output metadata keyed by tree id.
+///     flat: Output strategy ids in visual order.
+///     nav: Output node order for keyboard navigation.
+///     expanded: Output ids that MoonTree should draw open.
+///
+/// Returns:
+///     Nothing; all rendered subtree data is appended to the supplied outputs.
 #[allow(clippy::too_many_arguments)]
 fn convert_node(
     node: &super::super::logic::FolderNode,

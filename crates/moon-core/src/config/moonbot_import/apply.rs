@@ -146,12 +146,20 @@ fn apply_color(cfg: &mut AppConfig, id: &str, rgb: [u8; 3]) -> bool {
     true
 }
 
-/// Applies a group-local item, including TP mode, to the unique groups containing selected cores.
+/// Applies a group-local item, including a canonicalized TP mode, to selected cores' unique groups.
 ///
 /// An empty core list is not a plan error: the item is deliberately applied to no groups. A
 /// selected core that keeps its OWN manual-trading set (`own_trade_config`) is skipped: the
 /// import writes the group's set and never a core's, so through such a core nothing would be
 /// visible — and its group is still reached through any other selected core in it.
+///
+/// Args:
+///     cfg: Draft configuration to update.
+///     item: Planned group-local setting.
+///     target_core_ids: Selected cores whose shared groups receive the setting.
+///
+/// Returns:
+///     Whether the item id and typed value form a supported group-local change.
 fn apply_group_item(cfg: &mut AppConfig, item: &SettingChange, target_core_ids: &[u64]) -> bool {
     let groups = target_groups(cfg, target_core_ids);
     match (&item.value, item.id.as_str()) {
@@ -203,7 +211,18 @@ fn apply_group_item(cfg: &mut AppConfig, item: &SettingChange, target_core_ids: 
     }
 }
 
-/// Resolve the mode row against current targets so preview and application use the same TP rule.
+/// Resolve a group-local item's preview against current targets so it matches application.
+///
+/// The TP-mode row reports each target group whose main TP can be canonicalized. Other group-local
+/// rows retain their planned preview value because they do not depend on the target configuration.
+///
+/// Args:
+///     cfg: Current draft configuration containing the target groups.
+///     item: Planned group-local setting to preview.
+///     target_core_ids: Selected cores used to resolve unique target groups.
+///
+/// Returns:
+///     The target-aware TP preview, or the item's original planned preview for other settings.
 pub fn group_item_preview(
     cfg: &AppConfig,
     item: &SettingChange,
@@ -224,6 +243,13 @@ pub fn group_item_preview(
 }
 
 /// Return selected group names once, excluding cores that use their own manual-trading set.
+///
+/// Args:
+///     cfg: Configuration that maps selected cores to groups.
+///     target_core_ids: Core ids selected for import.
+///
+/// Returns:
+///     Unique groups reached through selected cores that inherit their group's trading settings.
 fn target_groups(cfg: &AppConfig, target_core_ids: &[u64]) -> Vec<String> {
     let mut groups = Vec::new();
     for server in cfg

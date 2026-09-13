@@ -64,6 +64,12 @@ pub(super) fn caption(value: &PreviewCaption) -> String {
 }
 
 /// Render a before/after value, including each target group's resulting main TP.
+///
+/// Args:
+///     value: Typed preview value whose data stays locale-neutral until this render step.
+///
+/// Returns:
+///     Localized display text, retaining raw numeric and shortcut data verbatim.
 pub(super) fn preview_value(value: &PreviewValue) -> String {
     match value {
         PreviewValue::Data(data) => data.clone(),

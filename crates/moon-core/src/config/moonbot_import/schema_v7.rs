@@ -184,6 +184,15 @@ const KNOWN_KINDS: [u8; 6] = [1, 2, 3, 4, 5, 6];
 
 /// Parses the import schema, optionally reading xTMode through the pinned full decoder.
 /// A full-decoder rejection leaves xTMode false and never rejects an otherwise valid import.
+///
+/// Args:
+///     payload: Decompressed `MBSP` container bytes.
+///
+/// Returns:
+///     The fields this importer supports, with `x_t_mode` when the optional full decoder accepts it.
+///
+/// Errors:
+///     [`ImportError`] when the required container header or supported blocks are malformed.
 pub fn parse_payload(payload: &[u8]) -> Result<MoonBotConfig, ImportError> {
     let mut r = Reader::new(payload);
 

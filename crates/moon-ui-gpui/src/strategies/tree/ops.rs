@@ -675,7 +675,14 @@ pub fn reorder_step(
 /// either a child folder of the same parent (all descendants) or one strategy directly in that
 /// parent. Empty folders have no ids and therefore no movable position. Nested moves rewrite
 /// only their parent's slots; every block retains its current internal order.
-/// Returns the complete id sequence, or `None` for an empty folder, root, or boundary move.
+///
+/// Args:
+///     rows: Complete displayed strategy order, including rows hidden by the active filter.
+///     folder: Canonical segments of the folder to move.
+///     step: Direction in which to swap the folder subtree.
+///
+/// Returns:
+///     The complete id sequence, or `None` for an empty folder, root, or boundary move.
 pub fn reorder_folder_step(
     rows: &[&StrategyRow],
     folder: &[String],

@@ -554,6 +554,13 @@ fn fmt_nums<T: std::fmt::Display>(vals: &[T]) -> String {
 ///
 /// `current` cannot be shown: the target groups are chosen AFTER planning, so no single group's
 /// value stands for what the import will overwrite. `same` is therefore always `false` here.
+///
+/// Args:
+///     mb: Parsed MoonBot configuration whose Trading and Hotkeys values are mapped.
+///     plan: Import plan receiving group-local settings and validation warnings.
+///
+/// Returns:
+///     Nothing; supported values and warnings are appended to `plan`.
 fn map_core(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) {
     if mb.x_t_mode {
         plan.group_items.push(SettingChange {

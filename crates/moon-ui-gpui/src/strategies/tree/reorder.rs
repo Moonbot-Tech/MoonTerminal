@@ -126,6 +126,14 @@ struct MoveScope<'a> {
 
 /// Select exactly one non-root folder only when no strategy is retained and its core is visible.
 /// This keeps mixed selection and workspace changes on their existing command paths.
+///
+/// Args:
+///     folders: Retained folder selections.
+///     has_strategies: Whether a strategy selection must retain strategy-arrow behavior.
+///     workspace: Optional visible-core scope of the current workspace.
+///
+/// Returns:
+///     The workspace-visible non-root folder's core and canonical path segments, if it is the only subject.
 fn folder_subject(
     folders: &HashSet<(CoreId, String)>,
     has_strategies: bool,
@@ -145,6 +153,9 @@ fn folder_subject(
 impl StrategiesView {
     /// Read the single-folder arrow subject without changing either selection set.
     /// Mixed and multiple-folder selections retain the existing strategy-only behavior.
+    ///
+    /// Returns:
+    ///     The workspace-visible non-root folder's core and canonical path segments, if it is the only subject.
     pub(in crate::strategies) fn reorder_folder(&self) -> Option<(CoreId, Vec<String>)> {
         folder_subject(
             &self.folder_sel,
@@ -155,6 +166,16 @@ impl StrategiesView {
 
     /// Resolve a folder move from the same displayed order as strategy moves.
     /// A hidden core or folder cannot be the subject; collapsed folder contents still move whole.
+    ///
+    /// Args:
+    ///     store: Live per-core strategy snapshots.
+    ///     venues: Session venue identities used by the exchange filter.
+    ///     core: Visible core containing the selected folder.
+    ///     folder: Canonical segments of the selected non-root folder.
+    ///     step: Direction in which to move the subtree.
+    ///
+    /// Returns:
+    ///     The complete reordered id sequence, or `None` when the folder cannot move.
     fn folder_reorder_plan(
         &self,
         store: &CoreStore,

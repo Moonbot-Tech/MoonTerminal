@@ -453,6 +453,14 @@ impl SettingsView {
     }
 
     /// Render an item's checkbox and values, resolving main TP against the current target groups.
+    ///
+    /// Args:
+    ///     cx: View context used to read the draft configuration and selected target cores.
+    ///     item: Planned setting whose label and values are rendered.
+    ///     p: Active palette used by the value element.
+    ///
+    /// Returns:
+    ///     One wrapped checkbox-and-value row for the import preview.
     fn change_row(&self, cx: &Context<Self>, item: &SettingChange, p: MoonPalette) -> AnyElement {
         let mut resolved;
         let item = if matches!(
