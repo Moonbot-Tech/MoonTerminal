@@ -970,6 +970,7 @@ pub(super) fn hover(
         settle_paced_drag(this, cx);
         let had_order_drag = this.order_drag.take().is_some();
         let had_order_hover = this.order_hover.take().is_some();
+        this.hotkey_cancelled = None;
         if had_order_drag || had_order_hover {
             this.apply_order_visual(cx);
             cx.notify();

@@ -2211,3 +2211,66 @@ fn every_binding_path_answers_the_typing_question() {
         "the app-level keystroke interceptor must not act on a press a field is taking"
     );
 }
+
+/// A held Tab over a chart must never reach focus navigation, and a repeat must never resend a
+/// cancel.
+///
+/// The desk holds Tab while sweeping the pointer across the order lines it wants gone. Between two
+/// lines nothing is hovered, and a repeat let through is one `root::Tab` -> `focus_next` ->
+/// `Window::refresh`: focus walks the whole terminal and the window redraws once per repeat
+/// (measured 1/s -> 23/s). The interceptor is the only code that sees the key before the action,
+/// so it is the only place that can spend the repeat; the `is_held` flag reached it through
+/// `KeystrokeEvent` for exactly this. The same flag feeds the panel's cancel route, which would
+/// otherwise send the same cancel on every repeat until the core echoed.
+#[test]
+fn a_held_tab_is_spent_before_focus_navigation() {
+    let boot = code_only(&read_src("startup/boot.rs"));
+    let at = boot
+        .find("cx.intercept_keystrokes(")
+        .expect("boot.rs installs the Tab interceptor");
+    let body = &boot[at..];
+    // The stop must be THIS branch's: `code_only` keeps indentation, so the two lines are matched
+    // together rather than any `stop_propagation` later in the file.
+    assert!(
+        body.contains(
+            "if cancelled || repeat_over_chart {
+                cx.stop_propagation();"
+        ),
+        "a Tab repeat over a chart must be stopped whether or not it cancelled an order"
+    );
+    assert!(
+        body.contains("cancel_hovered_order(&tab_backend, ev.is_held, cx)"),
+        "the Tab route must hand the repeat flag to the cancel route"
+    );
+    // Scoped to the chart under the pointer — away from one, a held Tab keeps the ordinary
+    // auto-repeat walk every other application has — and covering Shift+Tab, which walks backwards
+    // with the same draw per hop.
+    assert!(
+        body.contains("let repeat_over_chart = ev.is_held")
+            && body.contains("(bare || ev.keystroke.modifiers == Modifiers::shift())")
+            && body.contains("&& crate::hotkeys::chart_hovered(&tab_backend, cx);"),
+        "the repeat rule must be scoped to a hovered chart and cover Shift+Tab"
+    );
+    // Every caller of the cancel route, including the Delete path through `on_hotkey`, passes the
+    // event's own flag down — a constant would either resend on every repeat or never send at all.
+    for path in ["shell/actions.rs", "chart_tabs/detached_host/mod.rs"] {
+        let source = code_only(&read_src(path));
+        let calls = source.matches("hotkeys::cancel_hovered_order(").count();
+        let flagged = source
+            .matches("hotkeys::cancel_hovered_order(&self.backend, repeat, cx)")
+            .count();
+        assert!(
+            calls >= 1 && calls == flagged,
+            "{path}: {flagged} of {calls} cancel_hovered_order calls pass the repeat flag"
+        );
+        assert!(
+            source.contains("self.dispatch_hotkey(action, ev.is_held, window, cx)"),
+            "{path}: on_hotkey must hand the event's is_held to dispatch_hotkey"
+        );
+    }
+    let trade = code_only(&read_src("panels/chart/trade.rs"));
+    assert!(
+        trade.contains("if repeat && self.hotkey_cancelled == Some((core, uid)) {"),
+        "the panel must spend a repeat over the order it already cancelled without resending"
+    );
+}

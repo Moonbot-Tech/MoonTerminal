@@ -933,7 +933,12 @@ impl ChartPanel {
     ///
     /// `order_hover` identifies the hovered `(core, uid)`. Returns `false` when no order is hovered
     /// so the key can continue propagating, for example to Tab focus navigation.
-    pub fn cancel_hovered_order(&mut self, cx: &mut Context<Self>) -> bool {
+    ///
+    /// `repeat` is the key's auto-repeat flag. The cancelled line stays on the chart until the core
+    /// echoes, so a held key would send the same cancel again on every repeat; a repeat over the
+    /// order this route already cancelled is spent without sending. A fresh press always sends —
+    /// the user pressing again is the retry.
+    pub fn cancel_hovered_order(&mut self, repeat: bool, cx: &mut Context<Self>) -> bool {
         // Historical viewer: no orders. Rationale at `try_place_order_click`.
         if self.historical {
             return false;
@@ -942,6 +947,10 @@ impl ChartPanel {
             return false;
         };
         let (core, uid) = (hover.core, hover.uid);
+        if repeat && self.hotkey_cancelled == Some((core, uid)) {
+            return true;
+        }
+        self.hotkey_cancelled = Some((core, uid));
         let workspace_group = self.workspace_group.clone();
         self.backend.update(cx, |b, _| {
             if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
@@ -1037,6 +1046,12 @@ impl ChartPanel {
             return false;
         }
         self.order_hover = next;
+        // The hotkey cancel slot lives exactly as long as the pointer stays on the ORDER it was sent
+        // for (see its field): the key also tells the line from the start cross, and sliding between
+        // the two is not a new order.
+        if next.map(|hover| (hover.core, hover.uid)) != self.hotkey_cancelled {
+            self.hotkey_cancelled = None;
+        }
         self.apply_order_visual(cx)
     }
 

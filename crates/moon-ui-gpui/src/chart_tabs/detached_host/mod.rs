@@ -476,7 +476,7 @@ impl DetachedChartHost {
             cx.stop_propagation();
             return;
         }
-        if self.dispatch_hotkey(action, window, cx) {
+        if self.dispatch_hotkey(action, ev.is_held, window, cx) {
             cx.stop_propagation();
         }
     }
@@ -504,7 +504,7 @@ impl DetachedChartHost {
             cx.stop_propagation();
             return;
         }
-        if self.dispatch_hotkey(action, window, cx) {
+        if self.dispatch_hotkey(action, false, window, cx) {
             cx.stop_propagation();
         }
     }
@@ -513,6 +513,7 @@ impl DetachedChartHost {
     ///
     /// Args:
     ///     action: The action a binding resolved to, whichever event carried it.
+    ///     repeat: Whether the event is a key's auto-repeat; see `Shell::dispatch_hotkey`.
     ///     window: The window the binding arrived at.
     ///     cx: Host context used to route the action.
     ///
@@ -521,11 +522,12 @@ impl DetachedChartHost {
     fn dispatch_hotkey(
         &mut self,
         action: crate::hotkeys::HotkeyAction,
+        repeat: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         let target = self.window_target(cx);
-        self.dispatch_hotkey_at(action, target, window, cx)
+        self.dispatch_hotkey_at(action, target, repeat, window, cx)
     }
 
     /// The routing behind [`Self::dispatch_hotkey`], with the market the action addresses handed
@@ -539,6 +541,7 @@ impl DetachedChartHost {
         &mut self,
         action: crate::hotkeys::HotkeyAction,
         target: Option<(CoreId, String)>,
+        repeat: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -556,7 +559,7 @@ impl DetachedChartHost {
             }
             // Built-in Tab/Delete cancels the order under the cursor on the hovered chart.
             HotkeyAction::CancelHoveredOrder => {
-                crate::hotkeys::cancel_hovered_order(&self.backend, cx)
+                crate::hotkeys::cancel_hovered_order(&self.backend, repeat, cx)
             }
             // Delete prioritizes the selected figure. With no selection, fall back to built-in order
             // cancellation under the cursor; otherwise `fig_delete=Delete` would shadow it. See Shell.
@@ -564,7 +567,7 @@ impl DetachedChartHost {
                 self.backend.update(cx, |b, bcx| {
                     // `FigDelete` does not use a target or core.
                     crate::hotkeys::apply(action, b, bcx, &self.group, None, None)
-                }) || crate::hotkeys::cancel_hovered_order(&self.backend, cx)
+                }) || crate::hotkeys::cancel_hovered_order(&self.backend, repeat, cx)
             }
             // Built-in Shift+Esc closes every group's Main charts.
             HotkeyAction::CloseAllCharts => {
