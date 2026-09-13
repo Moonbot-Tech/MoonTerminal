@@ -888,5 +888,11 @@ impl SettingsView {
                     .text_color(rgb(MoonPalette::active(cx).text_soft))
                     .child(t!("lines.hint").to_string()),
             )
+            .child(
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(MoonPalette::active(cx).text_soft))
+                    .child(t!("lines.theme_hint").to_string()),
+            )
     }
 }
