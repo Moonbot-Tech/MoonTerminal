@@ -154,3 +154,44 @@ fn full_clipboard_roundtrip_through_transport() {
     let cfg = super::super::parse_clipboard(&text).unwrap();
     assert_eq!(cfg.ui.hotkeys.order_sizes[5], 50000.0);
 }
+
+/// Dropping the optional decoder loses the real Trading flag; reading a neighboring flag
+/// instead would incorrectly enable extended TP on an x9-only export.
+#[test]
+fn trading_xtmode_is_read_from_a_complete_export() {
+    for enabled in [false, true] {
+        let mut source = moonproto::shared_config::SharedConfig::default();
+        source.trading.x_t_mode = enabled;
+        source.trading.x9_mode = !enabled;
+        let payload = moonproto::shared_config::serialize_payload(&source).unwrap();
+        let imported = parse_payload(&payload).unwrap();
+        assert_eq!(imported.x_t_mode, enabled);
+    }
+}
+
+/// Making the full decoder mandatory would reject exports whose previously skipped blocks
+/// are unsupported; such exports must retain the old import plan without a mode row.
+#[test]
+fn unsupported_optional_blocks_do_not_reject_import() {
+    let imported = parse_payload(&full_payload(&[])).unwrap();
+    assert!(!imported.x_t_mode);
+    assert_eq!(
+        imported.ui.hotkeys.fixed_sell_prices,
+        [1.0, 5.0, 10.0, 25.0, 50.0, 100.0]
+    );
+
+    let mut source = moonproto::shared_config::SharedConfig::default();
+    source.trading.x_t_mode = true;
+    let mut payload = moonproto::shared_config::serialize_payload(&source).unwrap();
+    let mut pos = 7;
+    while pos < payload.len() {
+        let kind = payload[pos];
+        let size = u32::from_le_bytes(payload[pos + 1..pos + 5].try_into().unwrap()) as usize;
+        if kind == 2 {
+            payload[pos + 5] = 4;
+            break;
+        }
+        pos += 5 + size;
+    }
+    assert!(!parse_payload(&payload).unwrap().x_t_mode);
+}

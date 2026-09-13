@@ -15,6 +15,7 @@ fn mb_config() -> MoonBotConfig {
     shortcuts[25] = 0x4000 | 0x2E; // CancelAllBuys = Ctrl+Delete (matches the default)
     MoonBotConfig {
         config_version: 1,
+        x_t_mode: false,
         ui: UiBlock {
             hide_demo_button: false,
             confirm_close: false,
@@ -432,4 +433,51 @@ fn an_unknown_plan_id_names_no_slot() {
     ] {
         assert_eq!(slot_for_id(id), None, "{id} must name no slot");
     }
+}
+
+/// Removing the Trading mapping, placing it after S1-S6, or gating it on Hotkeys.Filled
+/// would lose the exported TP representation or quantize percentages in the old mode.
+#[test]
+fn xtmode_adds_a_typed_mode_row_before_fixed_sell_prices() {
+    let (h, t, o) = (
+        HotkeysConfig::default(),
+        ChartThemeSet::default(),
+        OrdersStyleSet::default(),
+    );
+    let mut mb = mb_config();
+    let before = build_plan(&mb, &ctx(&h, &t, &o));
+    assert!(find(&before.group_items, "group.take_profit_mode").is_none());
+    mb.x_t_mode = true;
+    let mut extended = build_plan(&mb, &ctx(&h, &t, &o));
+    let mode = extended.group_items.remove(0);
+    assert_eq!(mode.id, "group.take_profit_mode");
+    assert_eq!(
+        mode.value,
+        PlannedValue::TakeProfitMode(TakeProfitMode::Extended)
+    );
+    assert_eq!(
+        mode.new,
+        PreviewValue::ExtendedTakeProfit { groups: Vec::new() }
+    );
+    let pcts = extended
+        .group_items
+        .iter_mut()
+        .find(|item| item.id == "group.fixed_sell_prices")
+        .unwrap();
+    assert_eq!(
+        pcts.value,
+        PlannedValue::FixedSellPrices([10.0, 50.0, 100.0, 250.0, 500.0, 1000.0])
+    );
+    assert_eq!(
+        pcts.new,
+        PreviewValue::Data("10, 50, 100, 250, 500, 1000".into())
+    );
+    *pcts = find(&before.group_items, "group.fixed_sell_prices")
+        .unwrap()
+        .clone();
+    assert_eq!(extended, before);
+
+    mb.ui.hotkeys.filled = false;
+    let unfilled = build_plan(&mb, &ctx(&h, &t, &o));
+    assert_eq!(unfilled.group_items, vec![mode]);
 }

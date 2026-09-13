@@ -16,6 +16,7 @@
 use super::preview::{ImportReason, ImportWarning, PreviewCaption, PreviewValue};
 use super::schema_v7::{MoonBotConfig, SHORTCUT_ACTIONS, ShortcutAction};
 use super::shortcut::{self, DecodedShortcut};
+use crate::config::groups::TakeProfitMode;
 use crate::config::hotkeys::{HotkeysConfig, KeySlot, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN};
 use crate::config::orders::OrdersStyleSet;
 use crate::config::theme::ChartThemeSet;
@@ -33,8 +34,10 @@ pub enum PlannedValue {
     OrderSizeSel(usize),
     /// Six F1-F6 order sizes, taken as the group's USD-equivalent numbers as they are.
     OrderSizes([f64; 6]),
-    /// Six fixed-sell percentages S1-S6.
-    FixedSellPrices([f32; 6]),
+    /// Group TP representation; canonicalize each target's current main TP when applying.
+    TakeProfitMode(TakeProfitMode),
+    /// Six visible fixed-sell percentages S1-S6, widened before optional x10 scaling.
+    FixedSellPrices([f64; 6]),
     /// Selected fixed-sell slot, 0-based as Moonbot's `sbNum`.
     FixedSellSel(u8),
     /// Part count for the `Split N` action (Moonbot `Hotkeys.SplitParts`).
@@ -540,9 +543,11 @@ fn fmt_nums<T: std::fmt::Display>(vals: &[T]) -> String {
         .join(", ")
 }
 
-/// Map the manual-trading generation Moonbot keeps beside its hotkeys into group-local items.
+/// Map Trading.xTMode and the manual-trading hotkey generation into group-local items.
+/// The mode precedes percentages so application uses the imported representation.
 ///
-/// Every number is copied as it is — F1-F6 sizes included, although Moonbot's buffer does not say
+/// S1-S6 are multiplied by ten only for xTMode. Other numbers are copied as is,
+/// F1-F6 sizes included, although Moonbot's buffer does not say
 /// what currency they are in and the group stores a USD equivalent: the user asked for the scale
 /// they see in Moonbot to appear here once, verbatim, and to adjust it themselves after. A guess
 /// at a conversion would be silently wrong; the plain copy is visibly what they typed there.
@@ -550,6 +555,16 @@ fn fmt_nums<T: std::fmt::Display>(vals: &[T]) -> String {
 /// `current` cannot be shown: the target groups are chosen AFTER planning, so no single group's
 /// value stands for what the import will overwrite. `same` is therefore always `false` here.
 fn map_core(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) {
+    if mb.x_t_mode {
+        plan.group_items.push(SettingChange {
+            id: "group.take_profit_mode".into(),
+            label: PreviewCaption::ConfigField("TP".into()),
+            current: PreviewValue::SelectedGroup,
+            new: PreviewValue::ExtendedTakeProfit { groups: Vec::new() },
+            value: PlannedValue::TakeProfitMode(TakeProfitMode::Extended),
+            same: false,
+        });
+    }
     let h = &mb.ui.hotkeys;
     // The same gate as `map_split_parts`: a Hotkeys block Moonbot never filled reads as zeros, and
     // a zero here is a selected preset, an engaged 0% slot or an empty scale — every one of them
@@ -602,11 +617,29 @@ fn map_core(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) {
         .iter()
         .all(|v| v.is_finite() && *v >= 0.0)
     {
+        // Widen before scaling: every finite wire f32 remains representable under Extended,
+        // including values whose visible x10 percentage would overflow f32.
+        let pcts = h
+            .fixed_sell_prices
+            .map(|pct| f64::from(pct) * if mb.x_t_mode { 10.0 } else { 1.0 });
         plan.group_items.push(group_item(
             "group.fixed_sell_prices",
             PreviewCaption::FixedSellPrices,
-            fmt_nums(&h.fixed_sell_prices),
-            PlannedValue::FixedSellPrices(h.fixed_sell_prices),
+            if mb.x_t_mode {
+                // Keep the native float's compact display rather than exposing widened bits.
+                // Values beyond f32 still get a finite visible percentage.
+                fmt_nums(&pcts.map(|pct| {
+                    let compact = pct as f32;
+                    if compact.is_finite() {
+                        compact.to_string()
+                    } else {
+                        pct.to_string()
+                    }
+                }))
+            } else {
+                fmt_nums(&h.fixed_sell_prices)
+            },
+            PlannedValue::FixedSellPrices(pcts),
         ));
     } else {
         plan.warnings.push(ImportWarning::InvalidFixedSellPrices {

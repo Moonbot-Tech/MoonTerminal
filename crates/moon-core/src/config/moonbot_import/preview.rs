@@ -72,12 +72,14 @@ pub enum PreviewCaption {
 }
 
 /// A before/after preview value; numeric and shortcut spellings are locale-neutral data.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PreviewValue {
     /// A number, numeric list, shortcut, slot identifier, or RGB hex value.
     Data(String),
     /// The light/dark color set, expressed without core-owned wording.
     ThemeLight(bool),
+    /// Extended TP with each selected group's resulting main TP, resolved at preview time.
+    ExtendedTakeProfit { groups: Vec<(String, f64)> },
     /// The target group is selected after planning, so no single current value exists.
     SelectedGroup,
 }

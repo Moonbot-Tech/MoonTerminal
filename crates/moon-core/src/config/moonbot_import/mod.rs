@@ -6,12 +6,12 @@
 //!   and limits;
 //! - [`reader`] is a bounded little-endian reader (`WriteStringX` strings, INI lists, bounds);
 //! - [`schema_v7`] models the decompressed `MBSP` v7 payload (UI v3 / Theme v1 / Ini v1
-//!   blocks; Signals/Trading/Visual presence is validated while their contents are skipped);
+//!   blocks; Signals/Trading/Visual presence is validated, with optional Trading.xTMode);
 //! - [`shortcut`] decodes Delphi `TShortCut` values (modifiers + Windows VK).
 //!
 //! All reads use explicit little-endian primitives and checked arithmetic without `unsafe`.
-//! Any corruption, truncation, or newer format rejects the entire import; no partial result
-//! is returned.
+//! Corruption, truncation, or a newer required import schema rejects the entire import.
+//! An unsupported optional full decode only withholds Trading.xTMode and its preview row.
 
 pub mod apply;
 pub mod plan;

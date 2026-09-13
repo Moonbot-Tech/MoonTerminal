@@ -452,8 +452,32 @@ impl SettingsView {
         Some(backdrop().child(card).into_any_element())
     }
 
-    /// Render an item's checkbox beside its current-to-new value; colors use swatches.
+    /// Render an item's checkbox and values, resolving main TP against the current target groups.
     fn change_row(&self, cx: &Context<Self>, item: &SettingChange, p: MoonPalette) -> AnyElement {
+        let mut resolved;
+        let item = if matches!(
+            item.value,
+            moonbot_import::plan::PlannedValue::TakeProfitMode(_)
+        ) {
+            let targets = self
+                .import_ready()
+                .map(|state| {
+                    state
+                        .cores
+                        .iter()
+                        .filter(|(_, _, on)| *on)
+                        .map(|(id, _, _)| *id)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let backend = self.backend.read(cx);
+            let cfg = backend.preview.as_ref().unwrap_or(&backend.config);
+            resolved = item.clone();
+            resolved.new = moonbot_import::apply::group_item_preview(cfg, item, &targets);
+            &resolved
+        } else {
+            item
+        };
         let state_checked = self
             .import_ready()
             .is_some_and(|st| st.selected.contains(&item.id));
