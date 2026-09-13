@@ -11,8 +11,9 @@ use super::*;
 use moon_ui::{MoonCheckbox, MoonGroupBox, MoonPopover, MoonPopoverPlacement, MoonSize, MoonTheme};
 
 use crate::panels::{
-    COMPACT_CHECKBOX_FONT, COMPACT_CHECKBOX_GAP, COMPACT_CHECKBOX_MARK, POPUP_GROUP_CAPTION_FONT,
-    popup_close_button, popup_gear_trigger, popup_group, popup_group_inset_px, popup_title,
+    COMPACT_CHECKBOX_FONT, COMPACT_CHECKBOX_GAP, COMPACT_CHECKBOX_MARK, COMPACT_CHECKBOX_WEIGHT,
+    POPUP_GROUP_CAPTION_FONT, popup_close_button, popup_gear_trigger, popup_group,
+    popup_group_inset_px, popup_title,
 };
 
 /// Caption of the popup's display-preferences group.
@@ -162,11 +163,11 @@ fn settings_content_width(cx: &App) -> f32 {
         600.0,
         true,
     );
-    let label_width = design::ui_text_width(
+    let label_width = design::ui_text_width_zoomed(
         cx,
         &t!(GROUP_BY_VENUE_LABEL),
         COMPACT_CHECKBOX_FONT,
-        400.0,
+        COMPACT_CHECKBOX_WEIGHT,
         false,
     );
     let checkbox_leading = f32::from(design::ui_px(

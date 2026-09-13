@@ -1085,15 +1085,18 @@ pub const ACTION_LABEL_BASE: f32 = 10.5;
 /// font: a key derived from a hand-copied version of these three lines would keep validating stale
 /// widths the day the resolution changes.
 fn measure_font(cx: &App, base_font_size: f32, weight: f32, mono: bool) -> (FontId, Pixels) {
+    let size = MoonTheme::active_tokens(cx).font(base_font_size);
+    measure_font_at(cx, px(size), weight, mono)
+}
+
+/// Resolve the active theme font at an already rendered `size`.
+fn measure_font_at(cx: &App, size: Pixels, weight: f32, mono: bool) -> (FontId, Pixels) {
     let tokens = MoonTheme::active_tokens(cx);
     let font = Font {
         weight: FontWeight(weight),
         ..font(tokens.font_family(mono))
     };
-    (
-        cx.text_system().resolve_font(&font),
-        px(tokens.font(base_font_size)),
-    )
+    (cx.text_system().resolve_font(&font), size)
 }
 
 /// Identity of the typography a text measurement was taken under.
@@ -1134,6 +1137,37 @@ pub fn text_metrics_key(cx: &App, base_font_size: f32, weight: f32, mono: bool) 
 /// Returns:
 ///     The summed glyph-advance estimate in pixels.
 pub fn ui_text_width(cx: &App, text: &str, base_font_size: f32, weight: f32, mono: bool) -> f32 {
+    glyph_advance_width(cx, text, measure_font(cx, base_font_size, weight, mono))
+}
+
+/// Estimate text width for text that follows only the UI zoom, not the Font slider.
+///
+/// For MoonUI controls whose tiers fix their text size, such as the `Sm`/`Md` `MoonCheckbox`
+/// label: that text renders at `ui(base_font_size)` whatever the Font slider says, so measuring it
+/// through [`ui_text_width`] would over-reserve by the slider's delta. Same estimate otherwise.
+///
+/// Args:
+///     cx: Application context providing active tokens and the text system.
+///     text: Text to measure.
+///     base_font_size: Design size before UI zoom.
+///     weight: Font weight represented as the GPUI numeric value.
+///     mono: Whether to use the theme's monospaced rather than UI font family.
+///
+/// Returns:
+///     The summed glyph-advance estimate in pixels.
+pub fn ui_text_width_zoomed(
+    cx: &App,
+    text: &str,
+    base_font_size: f32,
+    weight: f32,
+    mono: bool,
+) -> f32 {
+    let size = ui_px(cx, base_font_size);
+    glyph_advance_width(cx, text, measure_font_at(cx, size, weight, mono))
+}
+
+/// Sum the cached glyph advances of `text` in one resolved font and size.
+fn glyph_advance_width(cx: &App, text: &str, (font_id, size): (FontId, Pixels)) -> f32 {
     // Counted, because the callers run this every frame: see `diag::UI_TEXT_WIDTH_CALLS`.
     let measured = crate::diag::timer();
     crate::diag::bump(&crate::diag::UI_TEXT_WIDTH_CALLS);
@@ -1141,7 +1175,6 @@ pub fn ui_text_width(cx: &App, text: &str, base_font_size: f32, weight: f32, mon
         &crate::diag::UI_TEXT_WIDTH_CHARS,
         text.chars().count() as u64,
     );
-    let (font_id, size) = measure_font(cx, base_font_size, weight, mono);
     let size_bits = size.as_f32().to_bits();
     let ts = cx.text_system();
     let width: f32 = GLYPH_ADVANCE.with(|cache| {

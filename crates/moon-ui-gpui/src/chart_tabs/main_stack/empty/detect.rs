@@ -505,7 +505,7 @@ fn field_row(
             // soft text, and the same fade when dead.
             div()
                 .flex_1()
-                .text_size(design::text_px(cx, COMPACT_CHECKBOX_FONT))
+                .text_size(design::ui_px(cx, COMPACT_CHECKBOX_FONT))
                 .text_color(if enabled {
                     rgba_from(palette.text_soft, 1.0)
                 } else {
