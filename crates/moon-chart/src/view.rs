@@ -1,13 +1,12 @@
 //! Chart view state — a port of the Moonbot/WebGame interactions:
 //!   X (time): wheel zoom around the cursor, LMB/Shift-wheel pan. Live/latest is
-//!             determined spatially: when the right edge is within 5% of the window
-//!             from now, it re-anchors to now. Panning into HISTORY starts a 3-second
-//!             manual hold, while the toolbar's manual mode remains persistent.
-//!             Panning the other way walks past the live edge into empty future chart,
-//!             as far as putting `now` on the left edge of the plot — a place to draw a
-//!             plan, so while the view is AHEAD there is no hold timer at all. Panning
-//!             back onto the data restores the ordinary 3-second hold. The live edge is
-//!             never allowed off screen: `clamp_future_anchor` owns that ceiling.
+//!             determined spatially: a pan or zoom that brings the right edge within the
+//!             rejoin radius of now ([`ChartView::live_rejoin_px`]) re-anchors to now on
+//!             that very step, pinning it there. Panning into HISTORY starts a 3-second
+//!             manual hold, while the toolbar's manual mode remains persistent. A pan
+//!             never walks past the live edge into the future; only a framed interval can
+//!             sit ahead of now, and `clamp_future_anchor` keeps its live edge on screen.
+//!             WHICH drag may leave live at all is the input layer's call (a fast flick).
 //!   Y (price): auto/fixed-percent scaling and manual Y-pan/RMB-zoom are independent
 //!              of X-follow, so browsing history horizontally does not freeze the
 //!              price scale. What the auto-fit is given to cover is decided OUTSIDE this
@@ -165,8 +164,12 @@ const YSCALE_PX_PER_2X: f32 = 150.0;
 const RANGE_HYST: f32 = 1.15;
 /// Y-center movement threshold in pixels: the center remains fixed until the price moves farther.
 const CENTER_SNAP_PX: f32 = 8.0;
-/// Treat the view as live again when the right live anchor is this close to now.
+/// Treat the view as live again when the right live anchor is this close to now, as a fraction
+/// of the plot width.
 const LIVE_REJOIN_FRAC: f32 = 0.05;
+/// Pixel floor under [`LIVE_REJOIN_FRAC`], so a narrow pane still has a pull-back worth feeling:
+/// 5% of a 300 px stack pane is 15 px, which a drag crosses without noticing it.
+const LIVE_REJOIN_MIN_PX: f32 = 40.0;
 /// Maximum visible time window in ms. It used to be 6 hours (Delphi MaxTimeRange=360 min)
 /// for a tick chart; candles (deep history from the core, with timeframes up to one day) need
 /// a MUCH larger window: 365 days (about 365 daily candles). Trades do not become more
@@ -288,13 +291,8 @@ pub struct ChartView {
     /// `tick_auto_live` automatically returns to live. 0 means no pending return (or already live).
     manual_until: f64,
     /// Whether following was turned off EXPLICITLY — [`Self::set_manual_persistent`], which is what
-    /// the toolbar's Live button reaches — so that no later pan may schedule a return that was not
-    /// asked for.
-    ///
-    /// A separate flag rather than `manual_until == 0`, which a pan ahead of the live edge produces
-    /// too. Those two states are identical to the timer and mean opposite things to the user, and
-    /// reading the timer for both made one excursion into the future switch a pane's three-second
-    /// return off for the rest of its life.
+    /// the toolbar's Live button reaches — so that no later pan may schedule a return, or a pull-back
+    /// rejoin, that was not asked for.
     manual_persistent: bool,
     /// Interval this view has been asked to frame, retained until a user gesture overrides it.
     frame_request: Option<FrameRequest>,
@@ -455,8 +453,8 @@ impl ChartView {
         self.follow
     }
 
-    /// Latest time the right anchor may hold, which is how far ahead of the live edge the user may
-    /// pan in order to draw on empty chart.
+    /// Latest time the right anchor may hold. A pan never goes past `now`, so this bounds only a view
+    /// that something else put ahead of the live edge — a framed interval that ends near now.
     ///
     /// The limit is not a new number: it is the point at which `now` reaches the LEFT edge of the
     /// plot. [`Self::visible_x`] places the left edge at `right + window*margin - window`, so
@@ -499,11 +497,6 @@ impl ChartView {
         }
         self.right_time_ms = ceiling;
         true
-    }
-
-    /// Whether the right anchor sits ahead of the live edge — the view is showing future.
-    fn is_ahead_of_now(&self, now_ms: f64) -> bool {
-        self.right_time_ms > now_ms
     }
 
     /// Anchors the right edge to `edge_ms` while live, quantized to whole-pixel time steps.
@@ -572,15 +565,24 @@ impl ChartView {
         self.x_init_pending = true;
     }
 
+    /// Distance from the live edge, in pixels, inside which a pan or zoom re-anchors to live: a
+    /// fraction of the plot width with a floor of [`LIVE_REJOIN_MIN_PX`].
+    ///
+    /// Public because the input layer has to carry a drag clear of it before letting go of live, or
+    /// the pull-back would catch the chart again on the next pixel.
+    pub fn live_rejoin_px(area_w: f32) -> f32 {
+        (area_w.max(1.0) * LIVE_REJOIN_FRAC).max(LIVE_REJOIN_MIN_PX)
+    }
+
     pub fn snap_to_live_if_near(&mut self, now_ms: f64, area_w: f32) -> bool {
         if self.follow || self.manual_persistent {
             return false;
         }
         let tolerance_ms =
-            (area_w.max(1.0) * LIVE_REJOIN_FRAC) as f64 / self.px_per_ms.max(MIN_PX_PER_MS) as f64;
-        // ABSOLUTE distance, because the anchor can now sit on either side of `now`. A signed
-        // comparison reads every future anchor as "near", so releasing a drag one whole window into
-        // the future would snap the view back to live and delete the empty chart just drawn on.
+            Self::live_rejoin_px(area_w) as f64 / self.px_per_ms.max(MIN_PX_PER_MS) as f64;
+        // ABSOLUTE distance, because a framed interval can put the anchor on either side of `now`. A
+        // signed comparison reads every future anchor as "near", so a zoom on a view framed one
+        // whole window ahead would snap it back to live.
         if (now_ms - self.right_time_ms).abs() <= tolerance_ms {
             self.resume_live(now_ms);
             true
@@ -804,23 +806,26 @@ impl ChartView {
     }
 
     // ── Mouse pan/zoom ───────────────────────────────────────────────────────────
-    // X drag detaches the view from live immediately; re-anchoring is checked separately on mouse-up.
+    // An X pan detaches the view from live; the pull-back is checked on every step that moves toward
+    // now. Whether a DRAG may start detaching at all is decided by the input layer.
 
     /// Pans X by dx pixels (LMB drag/Shift-wheel).
     ///
-    /// Panning LEFT walks into the future, up to [`Self::max_right_time_ms`], so a plan can be
-    /// drawn on empty chart ahead of the live edge.
+    /// Panning LEFT stops at the live edge: the anchor never passes `now`, and a view that a framed
+    /// interval already put ahead may come back but not go further. A step toward now that lands
+    /// inside [`Self::live_rejoin_px`] re-anchors to live right there, so the pull-back is felt during
+    /// the drag rather than after the button comes up. A step AWAY from now never rejoins — that is
+    /// the hysteresis that lets a drag leave the radius it starts in.
     pub fn pan_x_px(&mut self, dx: f32, now_ms: f64, area_w: f32) {
         self.clear_frame_request();
+        let before = self.right_time_ms;
         let dt_ms = dx as f64 / self.px_per_ms.max(MIN_PX_PER_MS) as f64;
-        self.right_time_ms -= dt_ms;
+        self.right_time_ms = (before - dt_ms).min(before.max(now_ms));
         self.follow = false;
-        self.clamp_future_anchor(now_ms, area_w);
-        if self.is_ahead_of_now(now_ms) || self.manual_persistent {
-            // Ahead of the live edge there is nothing to follow, and an automatic return would
-            // erase the future the user just panned into. The condition is the CURRENT position and
-            // not a memory of having been there: panning back onto the data restores the ordinary
-            // three-second return, so a stray forward nudge cannot silently switch it off for good.
+        if dx < 0.0 && self.snap_to_live_if_near(now_ms, area_w) {
+            return;
+        }
+        if self.manual_persistent {
             self.manual_until = 0.0;
         } else {
             // Item 9: panning does not disable live permanently. Start a manual hold window,
@@ -885,9 +890,9 @@ impl ChartView {
         let left = cursor_time - self.epoch_ms - cursor_x as f64 / self.px_per_ms as f64;
         // Zoom's OWN rule: it must not SCROLL the chart. Anywhere left of the right margin the cursor
         // holds its time while the window grows around it, which walks the anchor forward — measured,
-        // one 0.5x notch with the cursor at the left edge landed 0.42 windows into the future, and
-        // repeating it crossed the live edge with nothing to pull it back. So a zoom may KEEP a view
-        // already parked ahead, and may never push one further ahead than it already was.
+        // one 0.5x notch with the cursor at the left edge landed 0.42 windows into the future. So a
+        // zoom may KEEP a framed view already ahead, and may never push one further ahead than it
+        // already was — nor walk a view in history past the live edge.
         self.right_time_ms =
             (self.epoch_ms + left + new_window as f64 * (1.0 - self.right_margin_frac as f64))
                 .min(right_before.max(now_ms));

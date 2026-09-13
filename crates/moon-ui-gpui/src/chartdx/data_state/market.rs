@@ -299,8 +299,8 @@ impl ChartDataState {
             // Prepare is the only place that knows the anchor, the scale AND the width at once, so
             // the future ceiling is re-applied here rather than in each mutator that can break it.
             // Not while the pane shows only its order book: `chart_w` is floored at 1 px there, and
-            // a ceiling computed from a one-pixel window would drag a view parked six hours ahead
-            // down to six seconds ahead and lose the drawing position on a mode toggle.
+            // a ceiling computed from a one-pixel window would drag a view framed ahead of now onto
+            // the live edge and lose the framed interval on a mode toggle.
             if !pr.orderbook_only {
                 pane.view.clamp_future_anchor(now, chart_area.w);
             }

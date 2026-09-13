@@ -243,11 +243,25 @@ fn live_view(now: f64, width: f32) -> ChartView {
     view
 }
 
-/// A view panned as far forward as it goes, for the future-navigation cases below.
-fn panned_to_the_future_limit(now: f64, width: f32) -> ChartView {
+/// A manual view parked as far ahead of the live edge as the ceiling allows.
+///
+/// No pan can get there any more; a framed interval ending near `now` can, and the ceiling and zoom
+/// rules below exist for that view. Built directly, and WITHOUT persistent-manual, so the geometry is
+/// tested apart from the framing flag that would otherwise short-circuit the rejoin checks.
+fn parked_at_the_future_limit(now: f64, width: f32) -> ChartView {
     let mut view = live_view(now, width);
+    view.follow = false;
     // Far more than the ceiling allows, so the clamp is what decides where it stops.
-    view.pan_x_px(-100.0 * width, now, width);
+    view.right_time_ms = now + 1.0e12;
+    view.clamp_future_anchor(now, width);
+    view
+}
+
+/// A manual view `px` pixels into history from the live edge.
+fn in_history(now: f64, width: f32, px: f32) -> ChartView {
+    let mut view = live_view(now, width);
+    view.pan_x_px(px, now, width);
+    assert!(!view.follow, "a {px} px pan did not leave live");
     view
 }
 
@@ -265,21 +279,85 @@ fn settle_y(view: &mut ChartView, now: f64, band: (f32, f32), last: f32) {
     }
 }
 
-/// Restoring the `min(now_ms)` clamp in `view.rs:pan_x_px` must fail: there would be nowhere to
-/// draw a plan, which is the whole point of walking past the live edge.
-///
-/// The ceiling is stated as a POSITION — at the limit the live edge sits on the left border of the
-/// plot — because that is the invariant a user can see, and it holds at every zoom. Asserted to
-/// within half a pixel, which is what the geometry delivers; a tolerance in milliseconds would be
-/// hundreds of pixels of slack at the default scale and would hide any later drift.
+/// Dropping the `min(before.max(now_ms))` bound in `view.rs:pan_x_px` must fail: a pan must never walk
+/// past the live edge into empty future chart.
 #[test]
-fn panning_forward_stops_with_now_on_the_left_edge() {
-    let view = panned_to_the_future_limit(NOW, WIDTH);
-
-    let x_now = live_edge_px(&view, NOW, WIDTH);
+fn panning_forward_stops_at_the_live_edge() {
+    // From live, a forward pan has nowhere to go and the view stays live where it was.
+    let mut live = live_view(NOW, WIDTH);
+    live.pan_x_px(-100.0 * WIDTH, NOW, WIDTH);
+    assert!(live.follow, "a forward pan detached a live view");
     assert!(
-        x_now.abs() <= 0.5,
-        "the live edge stopped {x_now} px from the left border"
+        live.right_time_ms <= NOW,
+        "a forward pan left live ahead of now"
+    );
+
+    // From history it lands on the live edge and rejoins — the pin catches it.
+    let mut manual = in_history(NOW, WIDTH, WIDTH * 2.0);
+    manual.pan_x_px(-100.0 * WIDTH, NOW, WIDTH);
+    assert!(
+        manual.follow,
+        "a pan back onto the live edge did not rejoin live"
+    );
+
+    // An explicit Live-off may not rejoin, and still stops exactly at now.
+    let mut persistent = in_history(NOW, WIDTH, WIDTH * 2.0);
+    persistent.set_manual_persistent();
+    persistent.pan_x_px(-100.0 * WIDTH, NOW, WIDTH);
+    assert!(!persistent.follow);
+    assert_eq!(persistent.right_time_ms, NOW);
+
+    // A framed view already ahead may come back, but a forward pan does not push it further.
+    let mut parked = parked_at_the_future_limit(NOW, WIDTH);
+    parked.set_manual_persistent();
+    let ahead = parked.right_time_ms;
+    parked.pan_x_px(-WIDTH, NOW, WIDTH);
+    assert_eq!(parked.right_time_ms, ahead);
+    parked.pan_x_px(WIDTH * 0.25, NOW, WIDTH);
+    assert!(parked.right_time_ms < ahead);
+}
+
+/// Checking the pull-back only on release — the old `snap_to_live_if_near` call in the input
+/// layer's mouse-up — must fail: a pan step that enters the radius rejoins live on that step.
+#[test]
+fn a_pan_step_toward_now_rejoins_live_inside_the_radius() {
+    let radius = ChartView::live_rejoin_px(WIDTH);
+    let mut view = in_history(NOW, WIDTH, radius * 2.5);
+
+    view.pan_x_px(-radius, NOW, WIDTH);
+    assert!(!view.follow, "rejoined from one and a half radii out");
+    view.pan_x_px(-radius, NOW, WIDTH);
+    assert!(
+        view.follow,
+        "a step ending half a radius from now did not rejoin"
+    );
+}
+
+/// Dropping the `dx < 0.0` gate in `view.rs:pan_x_px` must fail: a step AWAY from now inside the
+/// radius would snap straight back to live, and a drag could never leave the radius it starts in.
+#[test]
+fn a_pan_step_away_from_now_never_rejoins() {
+    let mut view = live_view(NOW, WIDTH);
+
+    view.pan_x_px(1.0, NOW, WIDTH);
+    view.pan_x_px(1.0, NOW, WIDTH);
+
+    assert!(!view.follow);
+}
+
+/// Dropping the `LIVE_REJOIN_MIN_PX` floor in `view.rs:live_rejoin_px` must fail: 5% of a narrow
+/// stack pane is a pull-back a drag crosses without feeling it.
+#[test]
+fn a_narrow_pane_keeps_a_pixel_floor_on_the_rejoin_radius() {
+    let narrow = 300.0;
+    assert!(ChartView::live_rejoin_px(narrow) > narrow * 0.05);
+    assert_eq!(ChartView::live_rejoin_px(WIDTH * 4.0), WIDTH * 4.0 * 0.05);
+
+    let mut view = in_history(NOW, narrow, 60.0);
+    view.pan_x_px(-30.0, NOW, narrow);
+    assert!(
+        view.follow,
+        "30 px from now on a 300 px pane did not rejoin"
     );
 }
 
@@ -290,9 +368,17 @@ fn panning_forward_stops_with_now_on_the_left_edge() {
 /// pan: this reproduces a resize, which halves the window and therefore the ceiling while leaving
 /// the anchor where it was. Unclamped, the live edge ends up 450 px off the left of the plot with
 /// nothing but empty future on screen.
+///
+/// The ceiling is stated as a POSITION — the live edge on the left border of the plot — because that
+/// is the invariant a user can see, and it holds at every zoom.
 #[test]
 fn a_narrowed_pane_cannot_push_the_live_edge_off_screen() {
-    let mut view = panned_to_the_future_limit(NOW, WIDTH);
+    let mut view = parked_at_the_future_limit(NOW, WIDTH);
+    let x_now = live_edge_px(&view, NOW, WIDTH);
+    assert!(
+        x_now.abs() <= 0.5,
+        "the ceiling put the live edge {x_now} px from the left border"
+    );
 
     let narrowed = WIDTH * 0.5;
     assert!(
@@ -311,39 +397,8 @@ fn a_narrowed_pane_cannot_push_the_live_edge_off_screen() {
     );
 }
 
-/// Arming the timed hold for a forward pan must fail: `tick_auto_live` would yank the chart back to
-/// the live edge three seconds after the user got to the empty part they went there to draw on.
-#[test]
-fn a_pan_into_the_future_holds_without_a_timer() {
-    let mut view = panned_to_the_future_limit(NOW, WIDTH);
-
-    assert_eq!(view.auto_live_deadline_ms(), None);
-    assert!(!view.tick_auto_live(NOW + MANUAL_HOLD_MS * 100.0));
-}
-
-/// Latching the suppressed hold on HAVING BEEN ahead — rather than on being ahead now — must fail.
-///
-/// A forward wheel notch is 6% of the window and needs no mouse-up, so crossing the live edge by
-/// accident is easy; if that switched the three-second return off until the pane died, an accident
-/// would silently change how the chart behaves for the rest of the session.
-#[test]
-fn coming_back_from_the_future_re_arms_the_hold() {
-    let mut view = panned_to_the_future_limit(NOW, WIDTH);
-    assert_eq!(view.auto_live_deadline_ms(), None, "parked ahead, no timer");
-
-    // Back into history, far enough to be nowhere near the rejoin zone.
-    view.pan_x_px(WIDTH * 2.0, NOW, WIDTH);
-
-    assert!(view.right_time_ms < NOW, "the pan did not reach history");
-    assert!(view.tick_auto_live(NOW + MANUAL_HOLD_MS + 1.0));
-}
-
-/// Deriving persistent-manual from `manual_until == 0` must fail: a forward pan produces that same
-/// state, so the two cannot be told apart and one of them gets the other's behaviour.
-///
-/// This also pins a case that was broken BEFORE any of this: the toolbar's Live-off is documented as
-/// having no automatic return, but a later pan used to arm the three-second hold anyway and drag the
-/// user back to live they had explicitly switched off.
+/// The toolbar's Live-off is documented as having no automatic return; a later pan arming the
+/// three-second hold anyway must fail, since it would drag the user back to live they switched off.
 #[test]
 fn an_explicit_live_off_is_not_undone_by_a_pan() {
     let mut view = live_view(NOW, WIDTH);
@@ -357,11 +412,11 @@ fn an_explicit_live_off_is_not_undone_by_a_pan() {
 }
 
 /// Restoring the signed comparison in `view.rs:snap_to_live_if_near` must fail: `now - right` is
-/// negative for EVERY future anchor, so releasing a drag one window ahead would read as "near live"
-/// and snap the view back.
+/// negative for EVERY future anchor, so a view framed one window ahead would read as "near live"
+/// and snap back.
 #[test]
-fn releasing_a_drag_ahead_of_now_does_not_count_as_near_live() {
-    let mut view = panned_to_the_future_limit(NOW, WIDTH);
+fn a_view_ahead_of_now_does_not_count_as_near_live() {
+    let mut view = parked_at_the_future_limit(NOW, WIDTH);
 
     assert!(!view.snap_to_live_if_near(NOW, WIDTH));
 
@@ -376,8 +431,8 @@ fn releasing_a_drag_ahead_of_now_does_not_count_as_near_live() {
 ///
 /// Anywhere left of the right margin the cursor holds its own time while the window grows around it,
 /// which walks the anchor forward — measured, one 0.5x notch with the cursor at the left edge moved
-/// it 0.42 windows. Under the old `min(now_ms)` that was invisible; with the future open it
-/// accumulates into a chart that drifts off the live edge on nothing but wheel input.
+/// it 0.42 windows, which accumulates into a chart that drifts off the live edge on nothing but
+/// wheel input.
 #[test]
 fn zooming_out_does_not_walk_the_view_into_the_future() {
     let mut view = live_view(NOW, WIDTH);
@@ -401,10 +456,10 @@ fn zooming_out_does_not_walk_the_view_into_the_future() {
         "only {manual_steps} zoom step(s) ran while manual — the drift case is not exercised"
     );
 
-    // The other half of the same bound: a view already parked ahead KEEPS its position through a
-    // zoom. Restoring the old `.min(now_ms)` satisfies the loop above and fails here — one wheel
-    // notch would drag the plan being drawn back to the live edge.
-    let mut parked = panned_to_the_future_limit(NOW, WIDTH);
+    // The other half of the same bound: a framed view already ahead KEEPS its position through a
+    // zoom. A bare `.min(now_ms)` satisfies the loop above and fails here — one wheel notch would
+    // drag the framed interval off its place.
+    let mut parked = parked_at_the_future_limit(NOW, WIDTH);
     parked.zoom_x_at(0.5, WIDTH, WIDTH * 0.5, NOW);
     assert!(
         parked.right_time_ms > NOW,
@@ -415,11 +470,11 @@ fn zooming_out_does_not_walk_the_view_into_the_future() {
 
 /// Dropping the `clamp_future_anchor` call from `view.rs:zoom_x_at` must fail: zooming in shortens
 /// the window, so an anchor legal at the old scale can end up further ahead than any pan could reach
-/// — asserted as the same visible invariant the pan case uses rather than by re-deriving the
+/// — asserted as the same visible invariant the resize case uses rather than by re-deriving the
 /// formula, which would pass even if that formula were wrong in both places.
 #[test]
 fn zooming_in_cannot_escape_the_future_ceiling() {
-    let mut view = panned_to_the_future_limit(NOW, WIDTH);
+    let mut view = parked_at_the_future_limit(NOW, WIDTH);
 
     for _ in 0..6 {
         view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, NOW);
@@ -446,8 +501,11 @@ fn a_window_with_nothing_to_fit_leaves_the_price_scale_alone() {
     let (center, range) = (view.render_center, view.render_range);
     assert!(range > 10.0, "the settled range is degenerate: {range}");
 
-    view.pan_x_px(-100.0 * WIDTH, NOW, WIDTH);
-    // The price has run since; nothing of it is inside the window the user is drawing in.
+    // Parked ahead of the live edge, as a framed interval can be.
+    view.follow = false;
+    view.right_time_ms = NOW + 1.0e12;
+    view.clamp_future_anchor(NOW, WIDTH);
+    // The price has run since; nothing of it is inside the window being looked at.
     for i in 0..4 {
         view.update_y(NOW + 100.0 + i as f64 * 16.0, 400.0, None, Some(1200.0));
     }

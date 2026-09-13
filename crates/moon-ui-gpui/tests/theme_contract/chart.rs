@@ -727,8 +727,8 @@ fn the_price_fit_is_told_what_the_window_holds_and_what_only_has_to_be_visible()
         src.contains("pane.view.follow || !pr.saw_window_data"),
         "a pane that has never had window data is not allowed to fall back to the reference band"
     );
-    // The other link no unit test can reach: the ceiling on a future pan depends on the plot width
-    // and the X scale, and both change without any pan (a resize, a Shift+MMB scale sync). Prepare
+    // The other link no unit test can reach: the ceiling on a view framed ahead of now depends on the
+    // plot width and the X scale, and both change without any pan (a resize, a Shift+MMB scale sync). Prepare
     // is the only place that sees all three, so it has to re-apply it or the live edge ends up off
     // the left of the plot with nothing on screen to navigate back by.
     assert!(
