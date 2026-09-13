@@ -507,9 +507,10 @@ impl StrategiesView {
                     }
                 }
                 for folder in &plan.empty_folders {
-                    // `delete_folder` removes whatever the folder CURRENTLY holds, so it is not
-                    // safe here: a row added after the copy was never carried. The rows above are
-                    // already going individually, so what is left is the empty shell.
+                    // The rows above are already going individually, so what is left is the
+                    // empty shell. Conditional rather than the bare `delete_folder`: the core
+                    // refuses a populated folder either way, but this one also fails closed when
+                    // a row added after the copy — never carried — has landed in it meanwhile.
                     match session.delete_empty_folder(src, ops::join_path(folder), Vec::new()) {
                         Ok(()) => cleared.push(folder.clone()),
                         Err(error) => log::warn!("cut source folder cleanup failed: {error}"),

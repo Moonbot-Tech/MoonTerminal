@@ -90,3 +90,32 @@ fn folder_delete_dispatch_uses_the_captured_snapshot() {
         .1;
     assert!(dispatch.contains("folder_delete_authorized("));
 }
+
+/// `dialogs.rs:delete_folder` must delete the folder's strategies BEFORE the folder command.
+///
+/// The wire has no "delete a populated folder": `TStratDelete(0, path)` and omission from the
+/// folder tree both leave a folder that still holds a strategy, and the core answers with a log
+/// line and no event (GateF, 2026-09-13: `Folder delete request ... Demo (not empty or not
+/// found)`, three times). Sending the folder alone is a confirmed "Yes" that does nothing.
+#[test]
+fn folder_delete_empties_the_folder_before_removing_it() {
+    let source = include_str!("../dialogs.rs");
+    let dispatch = source
+        .split_once("fn delete_folder(")
+        .expect("folder delete dispatcher must exist")
+        .1;
+    // The loop must walk the revalidated live snapshot, not the captured one: a row that
+    // appeared after confirmation fails the guard, a row that vanished must not be re-sent.
+    let strategies = dispatch
+        .find("for (id, _) in &current_targets")
+        .expect("populated folder must delete every live row under it");
+    assert!(dispatch[strategies..].contains("delete_strategy(core, *id)"));
+    let folder = dispatch
+        .find(".delete_folder(")
+        .expect("folder command must follow");
+    assert!(strategies < folder);
+    let omission = dispatch
+        .find(".remove_core_folder(")
+        .expect("empty folder on a versioned-tree core still goes by omission");
+    assert!(strategies < omission);
+}
