@@ -133,7 +133,7 @@ pub enum TradeReplaySource {
 }
 
 impl TradeReplaySource {
-    /// Whether this source supplies tape points for rendering trade markers.
+    /// Whether this source supplies individual replay tick points.
     pub const fn is_ticks(self) -> bool {
         matches!(self, Self::Ticks | Self::CoreTicks)
     }

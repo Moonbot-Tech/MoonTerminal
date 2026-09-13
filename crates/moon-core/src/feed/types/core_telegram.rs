@@ -275,11 +275,13 @@ pub fn auth_step(auth_state: &str) -> AuthStep {
     }
 }
 
-/// Whether the Settings -> Telegram auth-step panel is actionable.
+/// Whether the Settings -> Telegram auth-step panel is actionable for a current snapshot.
 ///
-/// All five must hold: a live core connection, the reader enabled, the service pipe up, recoverable
-/// login state supported, and a received `service` snapshot. Missing any one of them is not
-/// actionable; a retained snapshot still renders muted rather than inferring a step.
+/// `core_live` must be false for a stale snapshot even when the connection is `Ready`; Settings
+/// combines that status with its `telegram_fresh` latch before calling this helper. All five must
+/// then hold: a current core connection, the reader enabled, the service pipe up, recoverable login
+/// state supported, and a received `service` snapshot. Missing any one is not actionable; a
+/// retained snapshot still renders muted rather than inferring a step.
 pub fn auth_controls_visible(core_live: bool, s: &CoreTelegramState) -> bool {
     core_live && s.enabled && s.service_online && s.state_supported && s.service.is_some()
 }
