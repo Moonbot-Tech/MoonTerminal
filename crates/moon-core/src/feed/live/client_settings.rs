@@ -48,6 +48,12 @@ pub(super) struct ManualOrder {
     /// order, whose sell comes from `planned_sell_price` or the strategy and whose stop is applied
     /// to the order itself. Waiting there costs a full retry budget of round trips before the
     /// order goes out, which is the delay a trader feels between the click and the order.
+    ///
+    /// `true` is also what makes the order BARE on the core's side: the generation it waits for
+    /// includes the core's own manual-strategy switch being off, because a zero `StratID` is not
+    /// "no strategy" but "whatever that switch names" (see [`SettingsMutation::NoManualStrategy`]).
+    /// The budget above is per mutation the order waits behind: a core contesting both the exits
+    /// and the switch holds it for two of them, each abandoned in turn.
     pub sync_exit: bool,
     /// Which wire command this becomes, and the payload only that one carries.
     ///
@@ -76,6 +82,16 @@ enum SettingsMutation {
     },
     /// Complete visible group exit state.
     GroupExit(GroupExitSettings),
+    /// The core's own manual-strategy switch off, so a bare order stays bare.
+    ///
+    /// A zero `StratID` has no "deliberately none" reading on the wire: when the core's
+    /// `use_manual_strategy` is on it substitutes the strategy that switch names into the order,
+    /// and the order this terminal priced from the group's TP/SL then sells and trails by that
+    /// strategy instead — that is how an order placed with the terminal's mode OFF followed a hook
+    /// strategy on 2026-09-13. Queued only ahead of an order that carries no strategy; an order
+    /// that names one leaves the switch alone, because an explicit id is honoured regardless of it
+    /// and Moonbot's own screen stays where its user put it.
+    NoManualStrategy,
 }
 
 /// What a sent packet asked of the temporary blacklist: per symbol, the remaining time it must
@@ -260,6 +276,19 @@ impl ClientSettingsSequence {
                 .push_back(SequenceOp::Mutation(SettingsMutation::GroupExit(
                     order.exit,
                 )));
+            // Part of the same generation: an order priced under the group's exits must also be
+            // the one the core reads those exits for, which it is not while its own switch would
+            // hand the order to a manual strategy. Folded into the same packet as the exits by
+            // `next_action`, so this costs no extra round trip.
+            //
+            // For a PENDING as well, although moonproto documents a bare pending as one the core
+            // does not hand its manual strategy to: that sentence has not been checked against a
+            // live core, the pending waits for its trigger anyway, and the flip costs it one echo
+            // only on a core whose switch is on. The money side of that trade is the cheaper one.
+            if order.strategy_id.is_none() {
+                self.queue
+                    .push_back(SequenceOp::Mutation(SettingsMutation::NoManualStrategy));
+            }
         }
         self.queue.push_back(SequenceOp::Order(order));
     }
@@ -427,6 +456,30 @@ impl ClientSettingsSequence {
                                 client_settings_from_proto(settings).group_exit_settings()
                             ),
                         ),
+                        // Named with its consequence, because for this mutation the fallback
+                        // below is NOT harmless: the order behind it goes out under a zero
+                        // StratID, and the switch the core kept on hands it to the strategy that
+                        // switch names — the very thing the mutation was queued to prevent.
+                        SettingsMutation::NoManualStrategy => {
+                            let market = self
+                                .queue
+                                .iter()
+                                .find_map(|op| match op {
+                                    SequenceOp::Order(order) => Some(order.market.as_str()),
+                                    SequenceOp::Mutation(_) => None,
+                                })
+                                .unwrap_or("?");
+                            (
+                                format!(
+                                    "the core's own manual-strategy switch off; the {market} order \
+                                     behind it WILL be attached to the strategy that switch names"
+                                ),
+                                format!(
+                                    "use_manual_strategy={} manual_strategy_id={}",
+                                    settings.use_manual_strategy, settings.manual_strategy_id
+                                ),
+                            )
+                        }
                         other => (
                             format!("{other:?}"),
                             format!(
@@ -443,7 +496,10 @@ impl ClientSettingsSequence {
                     // itself, which is what a manual strategy owning the sell price does. Drop the
                     // mutation instead of re-sending it forever: the order behind it is the thing
                     // the trader is waiting on, and it goes out under the core's own values, which
-                    // are the ones the core would have used anyway.
+                    // are the ones the core would have used anyway. For `NoManualStrategy` that
+                    // last clause is the defect itself, not a consolation — hence the wording of
+                    // its `wanted` above; a click that silently does nothing was judged the worse
+                    // of the two, as it was for the exits.
                     self.queue.pop_front();
                     self.attempts = 0;
                 }
@@ -496,6 +552,7 @@ fn apply_mutation(settings: &mut moonproto::ClientSettingsCommand, mutation: &Se
             settings.use_coins_black_list = *on;
             settings.coins_black_list_text.clone_from(text);
         }
+        SettingsMutation::NoManualStrategy => settings.use_manual_strategy = false,
         SettingsMutation::TempBlacklist { adds, removes } => {
             apply_temp_blacklist(settings, adds, removes);
         }

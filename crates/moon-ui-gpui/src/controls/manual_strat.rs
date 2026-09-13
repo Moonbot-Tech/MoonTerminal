@@ -1,9 +1,11 @@
 //! Header toggle and picker for Moonbot manual strategies.
 //!
-//! The mode is TERMINAL state, stored per core in `ServerConfig::manual_strategy` and never sent:
-//! an order names its strategy explicitly, so the core's own `use_manual_strategy` switch stays
-//! where its user left it and two terminals on one core can work on different strategies. A core
-//! that has never been set here is seeded once from its own snapshot
+//! The mode is TERMINAL state, stored per core in `ServerConfig::manual_strategy` and not mirrored
+//! to the core: an order names its strategy explicitly, so the core's own `use_manual_strategy`
+//! switch stays where its user left it and two terminals on one core can work on different
+//! strategies. The one exception is an order placed with the mode OFF — the exit barrier switches
+//! the core's own mode off first, or the core would attach the strategy that switch names to a
+//! zero `StratID`. A core that has never been set here is seeded once from its own snapshot
 //! (`Backend::tick_manual_strat_seed`), which is what carries an upgrade over.
 //!
 //! With a strategy selected, the core derives the sell from that strategy unless its "ignore the

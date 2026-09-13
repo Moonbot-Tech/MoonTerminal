@@ -475,7 +475,8 @@ pub(crate) struct ManualOrderTerms {
     /// Explicit rather than `None`: a zero `StratID` asks the CORE to substitute whatever its own
     /// `use_manual_strategy` currently names, which makes the order depend on a switch this
     /// terminal does not own and another client can move. Naming the strategy makes the order say
-    /// what it is, and leaves Moonbot's own screen alone.
+    /// what it is, and leaves Moonbot's own screen alone. `None` is the mode being off, and then
+    /// the exit barrier switches the core's own mode off ahead of the order so it stays bare.
     pub(crate) strategy_id: Option<u64>,
 }
 
@@ -1964,25 +1965,12 @@ impl Backend {
         // apply and travel with the order — rather than fall between the two and produce an order
         // with neither a strategy nor a take profit.
         let manual_on = self.manual_strat_active(core).is_some();
-        // The core's own switch is no longer written by this terminal, so it can be left on by
-        // Moonbot's screen or an older build. A zero StratID then makes the CORE substitute its own
-        // manual strategy into an order this terminal priced from the group generation. Nothing on
-        // the wire can forbid that — `StratID` has no "deliberately none" value — so the least this
-        // can do is say so where the order is logged.
-        if !manual_on
-            && self
-                .session
-                .store()
-                .core(core)
-                .and_then(|data| data.client_settings.as_ref())
-                .is_some_and(|settings| settings.use_manual_strategy)
-        {
-            log::warn!(
-                "core {} still has its OWN manual-strategy switch on: it may attach that strategy \
-                 to this order, which the terminal is placing without one",
-                moon_core::feed::core_label(core)
-            );
-        }
+        // With the mode off the order goes out under a zero StratID, which the core reads as
+        // "whatever my own manual-strategy switch names" — Moonbot's screen or an older build can
+        // have left that switch on. `sync_exit` below is what handles it: the exit barrier the
+        // order waits behind switches the core's own mode off in the same packet as the exits
+        // (`feed::live::client_settings`, `SettingsMutation::NoManualStrategy`), so the order the
+        // terminal priced from the group generation is also the one the core prices that way.
         let terminal_owns_sell = !manual_on || self.ignore_strat_sell_price(core).unwrap_or(false);
         // The take profit the trader SEES: the manual-strategy overlay while it is in force, the
         // saved generation otherwise.
@@ -2095,9 +2083,11 @@ impl Backend {
 
     /// Set this core's manual-strategy mode, which is terminal state and stays here.
     ///
-    /// Nothing is sent to the core: the strategy travels with the order instead
+    /// Nothing is sent to the core here: the strategy travels with the order instead
     /// ([`ManualOrderTerms::strategy_id`]), so Moonbot's own manual-strategy switch is left exactly
-    /// where its user put it, and two terminals on one core can sit on different strategies.
+    /// where its user put it, and two terminals on one core can sit on different strategies. The
+    /// one write happens at order time and only with the mode OFF: the exit barrier switches the
+    /// core's own mode off so a bare order is not handed to the strategy that switch names.
     ///
     /// Args:
     ///     core: Core whose mode is being set.

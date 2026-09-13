@@ -39,10 +39,12 @@ pub struct StratSlot {
 /// THIS terminal fires is nothing the core has to be switched into. Two terminals on one core can
 /// therefore sit on different strategies.
 ///
-/// The terminal no longer WRITES the core's own switch, which is a narrower promise than leaving it
-/// untouched: every ClientSettings edit still travels as a full snapshot, so an unrelated setting
-/// changed here re-sends whatever `use_manual_strategy` the terminal last read. What is gone is
-/// this mode driving that field.
+/// The terminal does not mirror this mode into the core's own switch, which is a narrower promise
+/// than leaving that switch untouched: every ClientSettings edit still travels as a full snapshot,
+/// so an unrelated setting changed here re-sends whatever `use_manual_strategy` the terminal last
+/// read — and an order placed with the mode OFF switches it off outright, because a zero `StratID`
+/// otherwise hands the order to the strategy that switch names (`feed::live::client_settings`,
+/// `SettingsMutation::NoManualStrategy`). What is gone is this mode driving that field ON.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ManualStratState {
     /// Whether manual-strategy mode is on for this core.
