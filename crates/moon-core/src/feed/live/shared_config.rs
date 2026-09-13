@@ -144,7 +144,8 @@ impl FieldMask {
         self.general
     }
 
-    /// Name the `general` section: the exits, the risk limits and the blacklist.
+    /// Name the `general` section: the exits, the risk limits and the blacklist's delta filter.
+    /// The blacklist itself rides the compact channel; see [`apply_general`].
     pub const fn with_general(mut self) -> Self {
         self.general = true;
         self
@@ -1419,7 +1420,18 @@ fn apply_order_rules(cfg: &mut SharedConfig, r: &OrderRulesSettings) {
     t.deltas_by_trades = r.deltas_by_trades;
 }
 
-/// Apply the General tab to the exit rules, iceberg flags and blacklist in `trading`.
+/// Apply the General tab to the exit rules, iceberg flags and the blacklist's delta filter in
+/// `trading`.
+///
+/// NOT the blacklist itself (`use_coins_black_list` / `coins_black_list_text`), although the
+/// projection carries it and the tab draws it. Measured on 2026-09-13
+/// (`docs-internal/proto_global_blacklist_shared_config.md`): the core stores what this packet
+/// says about the list but never rebuilds its per-market flag from it, so the field is written
+/// through the compact channel instead (`shell::core_settings::draft::send_core_config_to`). It
+/// also must not be written HERE as well: a page is frozen once its user touches anything, and the
+/// list is one string — an OK on the leverage row would carry the frozen list out and paint the
+/// core's echo over with a copy that lacks the coin someone else added meanwhile. Left alone, the
+/// packet carries what the core holds at build time, compact overlay included.
 fn apply_general(cfg: &mut SharedConfig, g: &GeneralSettings) {
     let t = &mut cfg.trading;
     t.use_g_take_profit = g.take_profit_on;
@@ -1430,8 +1442,6 @@ fn apply_general(cfg: &mut SharedConfig, g: &GeneralSettings) {
     t.vol_drop_level = g.vol_drop_level;
     t.buy_iceberg = g.buy_iceberg;
     t.sell_iceberg = g.sell_iceberg;
-    t.use_coins_black_list = g.blacklist_on;
-    t.coins_black_list_text = g.blacklist_text.clone();
     t.exclude_black_list_delta = g.exclude_blacklisted_from_deltas;
 }
 

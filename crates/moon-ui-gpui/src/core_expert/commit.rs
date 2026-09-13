@@ -223,7 +223,7 @@ impl CoreExpertView {
                 earlier.sent.overlay(&mut page);
             }
             self.changes.overlay(&mut page);
-            if send_core_config_to(b, *core, page.clone(), sections) {
+            if send_core_config_to(b, *core, page.clone(), latest, sections) {
                 reached.push((*core, page));
             } else {
                 refused += 1;
