@@ -12,16 +12,17 @@ use moon_core::config::layout::{
     STRATEGIES_TREE_TEXT_STEP_MIN, WindowLayout, clamp_strategies_tree_text_step,
 };
 use moon_ui::{
-    MoonCheckbox, MoonCheckboxSize, MoonGroupBox, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonCheckbox, MoonGroupBox, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize,
     MoonStepper, MoonStepperSize, MoonTheme, h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use super::StrategiesView;
-use crate::design::{self, moon};
+use crate::design;
 use crate::panels::{
-    COMPACT_CHECKBOX_FONT, COMPACT_CHECKBOX_GAP, COMPACT_CHECKBOX_MARK, POPUP_GROUP_CAPTION_FONT,
-    popup_close_button, popup_gear_trigger, popup_group, popup_group_inset_px, popup_title,
+    COMPACT_CHECKBOX_FONT, COMPACT_CHECKBOX_GAP, COMPACT_CHECKBOX_MARK, COMPACT_CHECKBOX_WEIGHT,
+    POPUP_GROUP_CAPTION_FONT, popup_close_button, popup_gear_trigger, popup_group,
+    popup_group_inset_px, popup_title,
 };
 
 #[cfg(test)]
@@ -260,59 +261,31 @@ impl StrategiesView {
         self.write_pref(&PARAMS_FULL, value, cx);
     }
 
-    /// Build the filter-row active-only toggle: its label, then its compact checkbox.
+    /// Build the filter-row active-only toggle: a labelled `Sm` checkbox.
     ///
-    /// The label sits left of the mark because the row reads left to right into the settings gear
-    /// that follows it — which is also why this is not a labelled `MoonCheckbox`, the one thing that
-    /// component cannot place. Clicking either half writes the same preference, so the label is not
-    /// a dead zone beside a live checkbox, and the cluster carries one tooltip spelling the
-    /// preference out in full.
+    /// The caption is the checkbox's own MoonUI label, so a press on the box or the caption writes
+    /// the same preference, and the control carries one tooltip spelling the preference out in full.
     ///
     /// Args:
-    ///     palette: Active MoonUI palette, resolved once by the caller.
-    ///     cx: View context used to read the resolved preference and wire the callbacks.
+    ///     cx: View context used to read the resolved preference and wire the callback.
     ///
     /// Returns:
-    ///     The label and checkbox as one flex-none cluster.
-    pub(super) fn active_only_toggle(
-        &self,
-        palette: MoonPalette,
-        cx: &Context<Self>,
-    ) -> AnyElement {
+    ///     The checkbox as one flex-none control.
+    pub(super) fn active_only_toggle(&self, cx: &Context<Self>) -> AnyElement {
         let checked = (ACTIVE_ONLY.read)(&self.prefs);
         let view = cx.entity();
-        h_flex()
+        div()
             .id("strategies-active-only")
             .flex_none()
-            .items_center()
-            .gap(design::ui_px(cx, COMPACT_CHECKBOX_GAP))
             .tooltip(crate::panels::common::text_tooltip(
                 t!(ACTIVE_ONLY.label).to_string(),
             ))
             .child(
-                div()
-                    .id("strategies-active-only-label")
-                    .cursor_pointer()
-                    .font_family(design::ui_font())
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon(palette.text_soft))
-                    .child(t!("strat.active_only").to_string())
-                    // Reads the preference at click time rather than flipping the value this frame
-                    // captured, so the label cannot write a stale flip.
-                    .on_click({
-                        let view = view.clone();
-                        move |_, _window, app: &mut App| {
-                            view.update(app, |this, cx| {
-                                let next = !(ACTIVE_ONLY.read)(&this.prefs);
-                                this.set_active_only(next, cx);
-                            });
-                        }
-                    }),
-            )
-            .child(
+                // The caption is the checkbox's own label, so a press on either toggles it.
                 MoonCheckbox::new("strategies-active-only-mark")
+                    .label(t!("strat.active_only").to_string())
                     .checked(checked)
-                    .size(MoonCheckboxSize::Compact)
+                    .size(MoonSize::Sm)
                     .on_change(move |value: &bool, _window, app| {
                         let value = *value;
                         view.update(app, |this, cx| this.set_active_only(value, cx));
@@ -411,18 +384,13 @@ fn settings_content_width(cx: &App) -> f32 {
     let group_width = design::ui_text_width(cx, &group, POPUP_GROUP_CAPTION_FONT, 600.0, true);
     let checkbox_label_width = POPUP_ROWS
         .iter()
-        .map(|row| popup_text_width(cx, &t!(row.label), COMPACT_CHECKBOX_FONT, 400.0))
+        .map(|row| checkbox_face_width(cx, &t!(row.label), COMPACT_CHECKBOX_WEIGHT))
         .fold(0.0_f32, f32::max);
     let checkbox_leading = f32::from(design::ui_px(
         cx,
         COMPACT_CHECKBOX_MARK + COMPACT_CHECKBOX_GAP,
     ));
-    let text_step_label_width = popup_text_width(
-        cx,
-        &t!("strat.settings.text_step"),
-        COMPACT_CHECKBOX_FONT,
-        400.0,
-    );
+    let text_step_label_width = checkbox_face_width(cx, &t!("strat.settings.text_step"), 400.0);
     // The stepper's two halves scale differently, so they are reserved differently: its buttons
     // reach `MoonButton::width`, which draws a RAW pixel width, while its value cell is
     // `ui()`-scaled. Reserving `ui(button*2 + value)` agreed with the rendered control only at
@@ -461,6 +429,22 @@ fn settings_content_width(cx: &App) -> f32 {
 ///     The summed glyph-advance estimate in pixels.
 fn popup_text_width(cx: &App, text: &str, base_size: f32, weight: f32) -> f32 {
     design::ui_text_width(cx, text, base_size, weight, false)
+}
+
+/// Measure text set in the `Sm` checkbox label's face, in the popup's proportional family.
+///
+/// That face follows the UI zoom but not the Font slider (see [`COMPACT_CHECKBOX_FONT`]), so it is
+/// measured apart from [`popup_text_width`], which adds the slider's delta.
+///
+/// Args:
+///     cx: Application context providing active tokens and the text system.
+///     text: Text to measure.
+///     weight: Font weight represented as the GPUI numeric value.
+///
+/// Returns:
+///     The summed glyph-advance estimate in pixels.
+fn checkbox_face_width(cx: &App, text: &str, weight: f32) -> f32 {
+    design::ui_text_width_zoomed(cx, text, COMPACT_CHECKBOX_FONT, weight, false)
 }
 
 /// Pure arithmetic core of [`settings_content_width`], free of `cx` and the GPUI text system.
@@ -525,7 +509,7 @@ fn tree_text_step_row(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_size(design::text_px(cx, COMPACT_CHECKBOX_FONT))
+                .text_size(design::ui_px(cx, COMPACT_CHECKBOX_FONT))
                 .child(t!("strat.settings.text_step").to_string()),
         )
         .child(
@@ -629,7 +613,7 @@ fn pref_group(
                 MoonCheckbox::new(SharedString::from(format!("strategies-pref-{}", row.id)))
                     .label(t!(row.label).to_string())
                     .checked((row.read)(&prefs))
-                    .size(MoonCheckboxSize::Compact)
+                    .size(MoonSize::Sm)
                     .on_change(move |checked: &bool, _window, app| {
                         let checked = *checked;
                         target.update(app, |this, cx| this.write_pref(row, checked, cx));

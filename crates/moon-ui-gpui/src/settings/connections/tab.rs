@@ -9,10 +9,9 @@ use std::sync::Arc;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
-    MoonCheckboxSize, MoonDropdown, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonScrollbarVisibility, MoonSelect, MoonTooltipView, MoonVirtualList, StyledExt, h_flex,
-    v_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown,
+    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonScrollbarVisibility,
+    MoonSelect, MoonSize, MoonTooltipView, MoonVirtualList, StyledExt, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -330,7 +329,7 @@ fn group_header_row(
         .child(
             MoonCheckbox::new(SharedString::from(format!("grp-{name}")))
                 .checked(active)
-                .size(MoonCheckboxSize::Compact)
+                .size(MoonSize::Sm)
                 .on_change({
                     let weak = weak.clone();
                     move |ch: &bool, _window, cx| {

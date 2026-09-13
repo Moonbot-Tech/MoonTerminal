@@ -5,8 +5,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonCheckboxSize, MoonColorPicker, MoonColorPickerState, MoonPalette, MoonSliderState,
-    StyledExt, h_flex, v_flex,
+    MoonColorPicker, MoonColorPickerState, MoonPalette, MoonSize, MoonSliderState, StyledExt,
+    h_flex, v_flex,
 };
 
 use super::{SettingsView, separator, slider_row};
@@ -283,7 +283,7 @@ impl SettingsView {
             }
         })
         .label(label)
-        .size(MoonCheckboxSize::Compact)
+        .size(MoonSize::Sm)
     }
 
     /// Wrap [`super::collapse_block`] for the Lines tab, storing expansion by `key`.

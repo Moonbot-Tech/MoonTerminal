@@ -219,17 +219,14 @@ fn consume_report_commit(dirty: Option<&std::sync::atomic::AtomicBool>, on_commi
     }
 }
 
+/// Fonts the terminal registers on top of MoonUI's own.
+///
+/// Inter is not among them: `moon_ui::init` registers MoonUI's static Inter cuts (Regular, Medium,
+/// SemiBold, Bold) under the `"Inter"` family the theme and `design::ui_font` name, and a second
+/// `"Inter"` registered here would compete with them for every weight. Geist Mono stays, because
+/// MoonUI ships only its Regular and Bold while the chart draws at 500 and 600.
 fn embedded_fonts() -> Vec<Cow<'static, [u8]>> {
     vec![
-        include_bytes!("../../../assets/fonts/Inter-400.ttf")
-            .as_slice()
-            .into(),
-        include_bytes!("../../../assets/fonts/Inter-500.ttf")
-            .as_slice()
-            .into(),
-        include_bytes!("../../../assets/fonts/Inter-600.ttf")
-            .as_slice()
-            .into(),
         include_bytes!("../../../assets/fonts/GeistMono-400.ttf")
             .as_slice()
             .into(),

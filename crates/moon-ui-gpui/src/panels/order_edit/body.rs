@@ -159,14 +159,16 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
                   apply: fn(&mut OrderEditState, bool)|
      -> AnyElement {
         let st = state.clone();
+        // A floor, not a fixed width: it lines the rows' columns up, but a localized label can be
+        // longer than the column and must never be clipped by it.
         div()
-            .w(px(w))
+            .min_w(px(w))
             .flex_none()
             .child(
                 MoonCheckbox::new(SharedString::from(id))
                     .label(label)
                     .checked(checked)
-                    .size(MoonCheckboxSize::Compact)
+                    .size(MoonSize::Sm)
                     .on_change(move |ch: &bool, _w, app| {
                         let on = *ch;
                         st.update(app, |s, cx| {

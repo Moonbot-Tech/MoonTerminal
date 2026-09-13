@@ -194,7 +194,7 @@ impl StrategiesView {
                                         .cleanable(true),
                                 ),
                             )
-                            .child(self.active_only_toggle(p, cx))
+                            .child(self.active_only_toggle(cx))
                             .child(settings),
                     )
                     .child(

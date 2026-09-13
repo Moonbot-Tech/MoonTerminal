@@ -268,7 +268,7 @@ fn row(
             div()
                 .flex_1()
                 .min_w_0()
-                .text_size(design::text_px(cx, COMPACT_CHECKBOX_FONT))
+                .text_size(design::ui_px(cx, COMPACT_CHECKBOX_FONT))
                 .text_color(rgb(palette.text_soft))
                 .child(t!(block_label(block)).to_string()),
         )

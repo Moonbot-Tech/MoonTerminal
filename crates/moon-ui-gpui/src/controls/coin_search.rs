@@ -21,8 +21,8 @@ use std::collections::{HashMap, HashSet};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDisclosure,
-    MoonDisclosureDirection, MoonInputState, MoonPalette, h_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDisclosure,
+    MoonDisclosureDirection, MoonInputState, MoonPalette, MoonSize, h_flex,
 };
 use rust_i18n::t;
 
@@ -980,7 +980,7 @@ where
                                         "{id}-{section}-cb-{i}"
                                     )))
                                     .checked(checked)
-                                    .size(MoonCheckboxSize::Compact)
+                                    .size(MoonSize::Sm)
                                     .on_change(
                                         move |_v: &bool, _w, app| {
                                             on_toggle_row(pick_core_id, market_toggle.clone(), app);
@@ -1099,7 +1099,7 @@ where
                                             "{id}-{section}-cb-{i}"
                                         )))
                                         .checked(checked)
-                                        .size(MoonCheckboxSize::Compact)
+                                        .size(MoonSize::Sm)
                                         .on_change(
                                             move |_v: &bool, _w, app| {
                                                 on_toggle_child(core, market_toggle.clone(), app);

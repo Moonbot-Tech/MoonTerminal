@@ -12,7 +12,7 @@
 //! Both boxes are built here so their tone, size and id convention cannot drift apart, and both
 //! stage through [`stage_value`], the one rule deciding what a click leaves in `staged`.
 
-use moon_ui::{MoonCheckbox, MoonCheckboxSize, MoonTone};
+use moon_ui::{MoonCheckbox, MoonSize, MoonTone};
 
 use super::super::logic::{
     strategy_core_is_visible, subtree_check_targets, subtree_displayed_all_checked,
@@ -37,7 +37,7 @@ pub(super) fn row_checkbox(id: SharedString, checked: bool) -> MoonCheckbox {
     MoonCheckbox::new(id)
         .checked(checked)
         .tone(MoonTone::Positive)
-        .size(MoonCheckboxSize::Compact)
+        .size(MoonSize::Sm)
 }
 
 /// Decide what one checkbox click leaves in [`StrategiesView::staged`] for a single strategy.

@@ -14,8 +14,8 @@ use std::collections::HashSet;
 use gpui::*;
 use moon_core::config::layout::WindowLayout;
 use moon_ui::{
-    MoonCheckbox, MoonCheckboxSize, MoonGroupBox, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    h_flex, v_flex,
+    MoonCheckbox, MoonGroupBox, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize, h_flex,
+    v_flex,
 };
 use rust_i18n::t;
 
@@ -523,7 +523,7 @@ fn pref_group(
                 )))
                 .label(t!(row.label).to_string())
                 .checked((row.read)(&prefs))
-                .size(MoonCheckboxSize::Compact)
+                .size(MoonSize::Sm)
                 .on_change(move |checked: &bool, _window, app| {
                     let checked = *checked;
                     target.update(app, |this, cx| {

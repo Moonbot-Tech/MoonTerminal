@@ -6,8 +6,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonAccent, MoonButton, MoonCheckboxSize, MoonGroupBox, MoonInput, MoonInputEvent,
-    MoonInputState, MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex, rgba_from, v_flex,
+    MoonAccent, MoonButton, MoonGroupBox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette,
+    MoonSegmentItem, MoonSegmentedControl, MoonSize, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -402,12 +402,8 @@ impl SettingsView {
                             }
                         })
                         .label(t!("telegram.mini_app").to_string())
-                        .size(MoonCheckboxSize::Normal),
-                    )
-                    .child(
-                        div()
-                            .text_color(muted)
-                            .child(t!("telegram.mini_app_hint").to_string()),
+                        .description(t!("telegram.mini_app_hint").to_string())
+                        .size(MoonSize::Sm),
                     )
                     .child(div().text_color(rgba_from(p.text, 1.0)).child(mini_status))
                     .when_some(mini_url, |tab, url| {

@@ -31,10 +31,10 @@ mod view;
 use crate::panels::line_list::{self, RowSelection};
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette,
-    MoonScrollbarVisibility, MoonVirtualList, MoonVirtualListScrollHandle, Panel, PanelEvent,
-    PanelState, StyledExt, h_flex, v_flex,
+    DockArea, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
+    MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette,
+    MoonScrollbarVisibility, MoonSize, MoonVirtualList, MoonVirtualListScrollHandle, Panel,
+    PanelEvent, PanelState, StyledExt, h_flex, v_flex,
 };
 
 use rust_i18n::t;

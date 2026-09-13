@@ -21,8 +21,8 @@ use moon_core::config::{
 use moon_core::feed::CoreConfigState;
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonHotkeyInput, MoonKbd, MoonKbdSize, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTabItem,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonHotkeyInput,
+    MoonKbd, MoonKbdSize, MoonMenuItem, MoonMenuSize, MoonPalette, MoonSize, MoonTabItem,
     MoonTabStrip, MoonText, MoonTooltip, MoonTooltipView, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
@@ -850,7 +850,7 @@ impl SettingsView {
         let backend = self.backend.clone();
         let checkbox = MoonCheckbox::new("same-hotkeys-for-move")
             .checked(hotkeys.same_hotkeys_for_move)
-            .size(MoonCheckboxSize::Compact)
+            .size(MoonSize::Sm)
             .on_change(move |value, _window, cx| {
                 backend.update(cx, |b, bcx| {
                     if let Some(p) = b.preview.as_mut() {

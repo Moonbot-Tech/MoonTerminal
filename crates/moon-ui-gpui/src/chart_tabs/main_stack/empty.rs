@@ -41,7 +41,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, Window, div, px, rgb,
 };
 use moon_core::config::layout::{EmptyBlock, EmptyPlaces, WindowLayout};
-use moon_ui::{MoonCheckbox, MoonCheckboxSize, MoonPalette, MoonPopover, MoonPopoverPlacement};
+use moon_ui::{MoonCheckbox, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize};
 use rust_i18n::t;
 
 use super::MainChartStack;
@@ -678,7 +678,7 @@ fn settings_content(
                     MoonCheckbox::new(id(switch.id))
                         .label(t!(switch.label).to_string())
                         .checked((switch.read)(&screen))
-                        .size(MoonCheckboxSize::Compact)
+                        .size(MoonSize::Sm)
                         .on_change(move |checked: &bool, _window, app| {
                             let checked = *checked;
                             view.update(app, |this, cx| this.set_switch(switch, checked, cx));

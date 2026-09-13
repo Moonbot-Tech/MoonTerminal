@@ -31,10 +31,10 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
+    DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonContextMenuWindowExt as _, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState,
     MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonTooltipView, MoonWindowExt as _, Panel, PanelEvent, PanelState, h_flex, v_flex,
+    MoonSize, MoonTooltipView, MoonWindowExt as _, Panel, PanelEvent, PanelState, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -759,7 +759,7 @@ impl NewsView {
                 }),
             ));
         // "No tags" visibility toggle — untagged news carry nothing to colour, so it has no swatches.
-        let untagged = self.untagged_row(!settings.hide_untagged(), p, cx);
+        let untagged = self.untagged_row(!settings.hide_untagged(), cx);
         let tag_rows: Vec<AnyElement> = rows
             .into_iter()
             .map(|(key, label)| {
@@ -798,27 +798,18 @@ impl NewsView {
 
     /// The "no tags" row: a visibility checkbox for news that carry no tags at all (no colour picker).
     /// `shown` is the checkbox state (checked = show tagless news).
-    fn untagged_row(&self, shown: bool, p: MoonPalette, cx: &mut Context<Self>) -> AnyElement {
+    fn untagged_row(&self, shown: bool, cx: &mut Context<Self>) -> AnyElement {
         let checkbox = MoonCheckbox::new("news-untagged-vis")
+            .label(t!("news.tags.untagged").to_string())
             .checked(shown)
-            .size(MoonCheckboxSize::Compact)
+            .size(MoonSize::Sm)
             .on_change(cx.listener(|this, checked: &bool, _w, cx| {
                 this.set_hide_untagged(!*checked, cx);
             }));
-        h_flex()
+        div()
             .w_full()
-            .items_center()
-            .gap(design::ui_px(cx, 8.0))
             .py(design::ui_px(cx, 2.0))
             .child(checkbox)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_muted))
-                    .child(t!("news.tags.untagged").to_string()),
-            )
             .into_any_element()
     }
 
@@ -835,9 +826,12 @@ impl NewsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let cb_key = key.clone();
+        // User-defined tag identifiers are values rather than prose, so the label is mono.
         let checkbox = MoonCheckbox::new(SharedString::from(format!("news-tagvis-{key}")))
+            .label(format!("#{label}"))
+            .mono(true)
             .checked(!hidden)
-            .size(MoonCheckboxSize::Compact)
+            .size(MoonSize::Sm)
             .on_change(cx.listener(move |this, checked: &bool, _w, cx| {
                 this.toggle_tag_hidden(&cb_key, !*checked, cx);
             }));
@@ -902,7 +896,7 @@ impl NewsView {
         let fixed_toggle = MoonCheckbox::new(SharedString::from(format!("nt-fixed-{key}")))
             .label(t!("chart_labels.color_fixed").to_string())
             .checked(fixed.is_some())
-            .size(MoonCheckboxSize::Compact)
+            .size(MoonSize::Sm)
             .on_change(cx.listener(move |this, checked: &bool, _, cx| {
                 let color = checked.then(|| format!("#{seed:06X}"));
                 this.set_tag_color(&fixed_key, color.as_deref(), cx);
@@ -925,23 +919,7 @@ impl NewsView {
             .w_full()
             .gap(design::ui_px(cx, 4.0))
             .py(design::ui_px(cx, 2.0))
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(checkbox)
-                    .child(
-                        // User-defined tag identifiers are values rather than prose.
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .font_family(design::mono())
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text))
-                            .child(format!("#{label}")),
-                    ),
-            )
+            .child(checkbox)
             .child(
                 h_flex()
                     .items_center()
@@ -1264,7 +1242,7 @@ impl Render for NewsView {
                 MoonCheckbox::new("news-translate")
                     .label(t!("news.translate").to_string())
                     .checked(self.translate)
-                    .size(MoonCheckboxSize::Compact)
+                    .size(MoonSize::Sm)
                     .on_change(cx.listener(|this, ch: &bool, _w, cx| this.set_translate(*ch, cx))),
             )
             .child(

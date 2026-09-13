@@ -9,8 +9,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonCheckboxSize,
-    MoonColorPicker, MoonColorPickerState, MoonInput, MoonInputEvent, MoonInputState, MoonPalette,
+    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonColorPicker,
+    MoonColorPickerState, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, MoonSize,
     MoonTooltipView, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
@@ -290,7 +290,7 @@ impl SettingsView {
                 },
             )
             .label(t!("badges.col_active").to_string())
-            .size(MoonCheckboxSize::Compact);
+            .size(MoonSize::Sm);
 
         let distinguish_chk = self
             .draft_checkbox(
@@ -308,7 +308,7 @@ impl SettingsView {
                 },
             )
             .label(t!("badges.distinguish").to_string())
-            .size(MoonCheckboxSize::Compact);
+            .size(MoonSize::Sm);
 
         let outline_chk = self
             .draft_checkbox(
@@ -326,7 +326,7 @@ impl SettingsView {
                 },
             )
             .label(t!("badges.use_outline").to_string())
-            .size(MoonCheckboxSize::Compact);
+            .size(MoonSize::Sm);
 
         // Keep everything on one row. Color pickers use `flex_none` at their natural 128px width
         // so they do not overlap the next badge. Outline colors appear to the right as L for long

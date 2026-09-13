@@ -343,20 +343,27 @@ pub(crate) const POPUP_GROUP_PAD: f32 = 6.0;
 /// all three.
 pub(crate) const POPUP_GROUP_INSET: f32 = 2.0 * (POPUP_GROUP_PAD + 1.0);
 
-/// Compact `MoonCheckbox` mark width in design units.
+/// `MoonSize::Sm` `MoonCheckbox` box width in design units.
 ///
-/// The Compact checkbox's own geometry, which MoonUI exposes as a size variant rather than as
-/// readable tokens: a settings popup that measures its content has to know how much room the mark
-/// and its gap take before the label starts. Stated once here for the same reason
-/// [`POPUP_GROUP_INSET`] is — two popups measuring the same control with numbers of their own
-/// drift apart the first time either is nudged.
-pub(crate) const COMPACT_CHECKBOX_MARK: f32 = 12.0;
+/// The `Sm` checkbox's own geometry, which MoonUI exposes as a size tier rather than as readable
+/// tokens: a settings popup that measures its content has to know how much room the box and its
+/// gap take before the label starts. Stated once here for the same reason [`POPUP_GROUP_INSET`]
+/// is — two popups measuring the same control with numbers of their own drift apart the first time
+/// either is nudged. MIRRORS MoonUI's `MoonCheckboxMetrics::base_for_size(Size::Small)`.
+pub(crate) const COMPACT_CHECKBOX_MARK: f32 = 16.0;
 
-/// Design-unit gap a compact `MoonCheckbox` leaves between its mark and its label.
-pub(crate) const COMPACT_CHECKBOX_GAP: f32 = 6.0;
+/// Design-unit gap an `Sm` `MoonCheckbox` leaves between its box and its label.
+pub(crate) const COMPACT_CHECKBOX_GAP: f32 = 8.0;
 
-/// Compact `MoonCheckbox` label size before font scaling.
-pub(crate) const COMPACT_CHECKBOX_FONT: f32 = 9.5;
+/// `Sm` `MoonCheckbox` label size before UI zoom.
+///
+/// MoonUI fixes a tier checkbox's text: it follows the UI zoom but not the Font slider. Size text
+/// that matches this label with `design::ui_px` and measure it with `design::ui_text_width_zoomed`,
+/// never through the font-scaled `text_px` / `ui_text_width`, which would add the slider's delta.
+pub(crate) const COMPACT_CHECKBOX_FONT: f32 = 14.0;
+
+/// `Sm` `MoonCheckbox` label weight (medium), as GPUI's numeric font weight.
+pub(crate) const COMPACT_CHECKBOX_WEIGHT: f32 = 500.0;
 
 /// Opacity a compact `MoonCheckbox` fades its label to while disabled.
 ///

@@ -30,7 +30,7 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonPalette,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonSize,
     MoonTooltipView, h_flex, v_flex,
 };
 
@@ -527,7 +527,7 @@ fn fill_row<V: 'static>(
         MoonCheckbox::new("figset-fill-off")
             .label(t!("chart.fig.no_fill").to_string())
             .checked(!has_fill)
-            .size(MoonCheckboxSize::Compact)
+            .size(MoonSize::Sm)
             .on_change(move |off, _, app| {
                 backend_off.update(app, |b, bcx| {
                     if edit_style(b, &target_off, &authority_off, |s| {
@@ -712,7 +712,7 @@ fn hotkey_cycle_row<V: 'static>(
         .child(
             MoonCheckbox::new("figset-hotkey-cb")
                 .checked(on)
-                .size(MoonCheckboxSize::Compact)
+                .size(MoonSize::Sm)
                 .label(t!("chart.fig.hotkey").to_string())
                 .on_change(move |checked: &bool, _window, app| {
                     edit_hotkey_cycle(&backend, tool, *checked, app);

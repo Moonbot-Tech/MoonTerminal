@@ -20,8 +20,8 @@ mod widgets;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonInputState,
-    MoonPalette, MoonSliderState, MoonTabItem, MoonTabStrip, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonInputState, MoonPalette,
+    MoonSize, MoonSliderState, MoonTabItem, MoonTabStrip, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -308,9 +308,7 @@ pub(crate) fn core_settings_content(
 /// Returns:
 ///     The switch row.
 fn expert_switch(ctx: &TabCtx<'_>, view: &Entity<Shell>, cx: &App) -> impl IntoElement {
-    let TabCtx {
-        backend, group, p, ..
-    } = *ctx;
+    let TabCtx { backend, group, .. } = *ctx;
     // Read rather than assumed: this popup is only drawn while the preference is off, but a
     // hardcoded tick is how the two faces would come to disagree if that ever stopped holding.
     let checked = backend.read(cx).core_settings_expert();
@@ -324,8 +322,9 @@ fn expert_switch(ctx: &TabCtx<'_>, view: &Entity<Shell>, cx: &App) -> impl IntoE
         .child(
             MoonCheckbox::new("core-settings-expert")
                 .label(t!("core_settings.expert").to_string())
+                .description(t!("core_settings.expert_hint").to_string())
                 .checked(checked)
-                .size(MoonCheckboxSize::Compact)
+                .size(MoonSize::Sm)
                 .on_change(move |value, window, app| {
                     if !*value {
                         return;
@@ -342,11 +341,6 @@ fn expert_switch(ctx: &TabCtx<'_>, view: &Entity<Shell>, cx: &App) -> impl IntoE
                     );
                 }),
         )
-        .child(widgets::caption(
-            t!("core_settings.expert_hint").to_string(),
-            p,
-            cx,
-        ))
 }
 
 /// Immediate actions above the tab strip: restart, emulator, cancel all orders.

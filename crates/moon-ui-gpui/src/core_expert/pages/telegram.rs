@@ -21,8 +21,8 @@ use crate::shell::editors::{CoreDraftHost, EditorStore};
 
 use super::super::CoreExpertView;
 use super::super::widgets::{
-    action, action_live, caption, columns, field, flag, group, hint, list_box_select, rows,
-    text_block,
+    action, action_live, caption, columns, field, flag, flag_described, group, list_box_select,
+    rows, text_block,
 };
 
 /// See [`super::scratch_specs`].
@@ -295,21 +295,15 @@ pub(super) fn body(
                 .w_full()
                 .items_start()
                 .gap(design::ui_px(cx, 12.0))
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap(design::ui_px(cx, 2.0))
-                        .child(flag(
-                            "exp-tlg-premium",
-                            t!("core_expert.tlg_premium").to_string(),
-                            t.listen_moon_channel,
-                            true,
-                            view,
-                            |d, on| d.telegram.listen_moon_channel = on,
-                        ))
-                        .child(hint(t!("core_expert.tlg_premium_paid").to_string(), p, cx)),
-                )
+                .child(div().flex_1().min_w_0().child(flag_described(
+                    "exp-tlg-premium",
+                    t!("core_expert.tlg_premium").to_string(),
+                    Some(t!("core_expert.tlg_premium_paid").to_string()),
+                    t.listen_moon_channel,
+                    true,
+                    view,
+                    |d, on| d.telegram.listen_moon_channel = on,
+                )))
                 .child(div().flex_1().min_w_0().child(flag(
                     "exp-tlg-send-stats",
                     t!("core_expert.tlg_send_stats").to_string(),

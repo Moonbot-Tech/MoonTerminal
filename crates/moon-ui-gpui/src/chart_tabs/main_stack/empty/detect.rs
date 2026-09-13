@@ -26,7 +26,7 @@ use moon_core::config::layout::{EmptyPlaces, WindowLayout};
 use moon_core::crowd::CrowdRule;
 use moon_core::crowd::detect::{DEFAULT_PROFIT, DEFAULT_TRADES, SEATS};
 use moon_ui::{
-    MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex,
+    MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, MoonSize, h_flex,
     rgba_from,
 };
 use rust_i18n::t;
@@ -461,7 +461,7 @@ pub(super) fn block(
                 .label(t!("crowd.settings.detect_evict", max = SEATS.to_string()).to_string())
                 .checked(cards.evict)
                 .disabled(!enabled)
-                .size(MoonCheckboxSize::Compact)
+                .size(MoonSize::Sm)
                 .on_change(move |checked: &bool, _window, app| {
                     let checked = *checked;
                     view.update(app, |this, cx| this.set_crowd_evict(checked, cx));
@@ -505,7 +505,7 @@ fn field_row(
             // soft text, and the same fade when dead.
             div()
                 .flex_1()
-                .text_size(design::text_px(cx, COMPACT_CHECKBOX_FONT))
+                .text_size(design::ui_px(cx, COMPACT_CHECKBOX_FONT))
                 .text_color(if enabled {
                     rgba_from(palette.text_soft, 1.0)
                 } else {

@@ -7,8 +7,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown, MoonInput,
-    MoonMenuSize, MoonPalette, MoonSlider, h_flex, v_flex,
+    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput, MoonMenuSize,
+    MoonPalette, MoonSize, MoonSlider, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -141,7 +141,7 @@ pub(super) fn cs_checkbox(
     MoonCheckbox::new(SharedString::from(id.to_string()))
         .label(label)
         .checked(checked)
-        .size(MoonCheckboxSize::Compact)
+        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| {
             let on = *ch;
             let b = backend.read(app);
@@ -241,7 +241,7 @@ pub(super) fn flag(
     MoonCheckbox::new(SharedString::from(id))
         .label(label)
         .checked(checked)
-        .size(MoonCheckboxSize::Compact)
+        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| {
             let on = *ch;
             view.update(app, |this, cx| {

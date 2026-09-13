@@ -19,8 +19,8 @@ use crate::shell::editors::EditorStore;
 
 use super::super::CoreExpertView;
 use super::super::widgets::{
-    action, caption, columns, dropdown, field, field_masked, flag, group, hint, labeled, link,
-    rows, text_block, text_line,
+    action, caption, columns, dropdown, field, field_masked, flag, flag_described, group, hint,
+    labeled, link, rows, text_block, text_line,
 };
 
 /// Nothing on this page reaches the draft; every field stages through this.
@@ -151,15 +151,15 @@ pub(super) fn body(
             t!("core_expert.log_change_password").to_string(),
             false,
         ))
-        .child(flag(
+        .child(flag_described(
             "exp-log-debug-data",
             t!("core_expert.log_debug_data").to_string(),
+            Some(t!("core_expert.log_debug_hint").to_string()),
             false,
             false,
             view,
             |_, _| {},
-        ))
-        .child(hint(t!("core_expert.log_debug_hint").to_string(), p, cx));
+        ));
 
     // --- Right: licence, support, and what Moonbot sends to its own server -----------------------
     let support = group(

@@ -21,8 +21,8 @@ mod vault;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputEvent,
-    MoonInputState, MoonPalette, MoonProgress, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonSize, MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState,
+    MoonPalette, MoonProgress, MoonSize, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -298,7 +298,7 @@ impl SettingsView {
     ) -> MoonCheckbox {
         MoonCheckbox::new(id)
             .checked(checked)
-            .size(MoonCheckboxSize::Normal)
+            .size(MoonSize::Sm)
             // Nothing to attach a password to until the config file is open.
             .disabled(!self.security.vault.editable)
             .on_change(cx.listener(move |this, checked: &bool, _window, cx| {
@@ -309,19 +309,14 @@ impl SettingsView {
 
     /// Build the launch-password group: checkbox, both fields, and the mismatch line.
     fn launch_group(&self, cx: &Context<Self>) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
         let on = self.security.launch_on;
         let (value, confirm) = self.security.launch.read(cx);
         v_flex()
             .gap(design::ui_px(cx, 4.0))
             .child(
                 self.security_checkbox(cx, "sec-launch", on, |ed, v| ed.launch_on = v)
-                    .label(t!("security.launch").to_string()),
-            )
-            .child(
-                div()
-                    .text_color(rgba_from(p.text_muted, 1.0))
-                    .child(t!("security.launch_hint").to_string()),
+                    .label(t!("security.launch").to_string())
+                    .description(t!("security.launch_hint").to_string()),
             )
             .when(on, |this| {
                 this.child(password_row(
@@ -353,12 +348,8 @@ impl SettingsView {
             .gap(design::ui_px(cx, 4.0))
             .child(
                 self.security_checkbox(cx, "sec-file", on, |ed, v| ed.file_on = v)
-                    .label(t!("security.file").to_string()),
-            )
-            .child(
-                div()
-                    .text_color(rgba_from(p.text_muted, 1.0))
-                    .child(t!("security.file_hint").to_string()),
+                    .label(t!("security.file").to_string())
+                    .description(t!("security.file_hint").to_string()),
             )
             .when(on, |this| {
                 this.child(password_row(

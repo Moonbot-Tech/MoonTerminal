@@ -21,8 +21,8 @@ use gpui::*;
 use moon_core::config::MANUAL_STRAT_SLOTS;
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
-    MoonCheckboxSize, MoonDropdown, MoonMenuItem, MoonMenuSize, MoonPalette, h_flex, v_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown,
+    MoonMenuItem, MoonMenuSize, MoonPalette, MoonSize, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -131,13 +131,13 @@ pub(super) fn slot_settings_content(
                 .gap(gap)
                 .child(
                     div()
-                        .w(px(design::font_w(cx, SLOT_COL_W)))
+                        .min_w(px(design::font_w(cx, SLOT_COL_W)))
                         .flex_none()
                         .child(
                             MoonCheckbox::new(SharedString::from(format!("ms-slot-show-{slot}")))
                                 .label(format!("{}", slot + 1))
                                 .checked(current.show)
-                                .size(MoonCheckboxSize::Compact)
+                                .size(MoonSize::Sm)
                                 .on_change(move |checked: &bool, _w, app| {
                                     let show = *checked;
                                     show_backend.update(app, |b, cx| {
@@ -220,27 +220,18 @@ pub(super) fn slot_settings_content(
         // Moonbot's own stop rule, and the default. Local state, so it is offered whether or not
         // the core has reported anything.
         .child(
-            v_flex()
-                .gap(design::ui_px(cx, 2.0))
-                .child(
-                    MoonCheckbox::new("ms-mb-logic")
-                        .label(t!("header.ms_mb_logic").to_string())
-                        .checked(mb_logic)
-                        .size(MoonCheckboxSize::Compact)
-                        .on_change(move |checked: &bool, _w, app| {
-                            let on = *checked;
-                            logic_backend.update(app, |b, cx| {
-                                b.set_ms_mb_logic(core, on);
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(rgb(p.text_muted))
-                        .child(t!("header.ms_mb_logic_hint").to_string()),
-                ),
+            MoonCheckbox::new("ms-mb-logic")
+                .label(t!("header.ms_mb_logic").to_string())
+                .description(t!("header.ms_mb_logic_hint").to_string())
+                .checked(mb_logic)
+                .size(MoonSize::Sm)
+                .on_change(move |checked: &bool, _w, app| {
+                    let on = *checked;
+                    logic_backend.update(app, |b, cx| {
+                        b.set_ms_mb_logic(core, on);
+                        cx.notify();
+                    });
+                }),
         )
         // The core's own flag, not a local one: while it is OFF the core applies a manual
         // strategy's own sell price and the toolbar's TP/S do not reach a manual order at all.
@@ -248,7 +239,7 @@ pub(super) fn slot_settings_content(
             MoonCheckbox::new("ms-ignore-strat-sell")
                 .label(t!("header.ms_ignore_strat_sell").to_string())
                 .checked(on)
-                .size(MoonCheckboxSize::Compact)
+                .size(MoonSize::Sm)
                 .on_change(move |checked: &bool, _w, app| {
                     let on = *checked;
                     sell_backend.update(app, |b, cx| {
