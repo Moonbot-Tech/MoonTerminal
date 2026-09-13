@@ -116,6 +116,7 @@ impl SettingsView {
         }
     }
 
+    /// Render the core selector with a menu fitted to its names and exchange headings.
     fn core_picker_row(&self, cx: &Context<Self>, p: MoonPalette, muted: Hsla) -> impl IntoElement {
         let b = self.backend.read(cx);
         let cores: Vec<(u64, String)> = b
@@ -174,6 +175,8 @@ impl SettingsView {
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::Action)
                     .fit_trigger_width(crate::controls::CORE_COMBO_TRIGGER_W, 260.0)
+                    // Font-scaled bounds (tokens.font()); MoonUI measures the widest menu row.
+                    .fit_menu_width(crate::controls::CORE_COMBO_TRIGGER_W, 560.0)
                     .menu_size(MoonMenuSize::Compact)
                     .items(items)
                     .into_any_element(),
