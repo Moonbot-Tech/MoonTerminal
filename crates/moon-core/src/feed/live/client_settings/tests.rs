@@ -289,6 +289,101 @@ fn an_order_that_ignores_the_exit_generation_is_sent_immediately() {
     }
 }
 
+/// Regression target: an order placed with the terminal's manual-strategy mode OFF went out under a
+/// zero `StratID` while the core's OWN switch was still on, and the core substituted the strategy
+/// that switch named — the order then sold and trailed by that strategy's hook, not by the TP/SL
+/// the terminal had just confirmed (BB1, 2026-09-13). The switch must travel off in the SAME packet
+/// as the exits, and the order must wait for that packet's echo like for any other generation.
+#[test]
+fn a_bare_order_switches_the_cores_manual_strategy_off_first() {
+    let mut core_settings = moonproto::ClientSettingsCommand::default();
+    core_settings.use_manual_strategy = true;
+    core_settings.manual_strategy_id = 4242;
+    let mut sequence = ClientSettingsSequence::new();
+    sequence.enqueue_order(waiting_order(0.04, 10.0));
+
+    let sent = next_settings(&mut sequence, &core_settings);
+    assert!(
+        !sent.use_manual_strategy,
+        "the switch must go off in the exit packet"
+    );
+    assert_eq!(
+        sent.manual_strategy_id, 4242,
+        "the selection stays: only the switch is the terminal's business"
+    );
+    assert_eq!(
+        client_settings_from_proto(&sent).group_exit_settings(),
+        exit_settings(10.0, false),
+        "one packet, both halves: the exits ride with the switch"
+    );
+    sequence.observe_send_success(&sent, 2, Vec::new());
+    sequence.observe_update();
+
+    // The core still holds its switch on: the order must NOT go out yet.
+    assert!(
+        matches!(
+            sequence.next_action(&core_settings, TEST_CORE),
+            SequenceAction::Send { .. }
+        ),
+        "the order must wait until the core shows the switch off"
+    );
+    sequence.observe_send_success(&sent, 2, Vec::new());
+    sequence.observe_update();
+    match sequence.next_action(&sent, TEST_CORE) {
+        SequenceAction::Place(order) => assert_eq!(order.strategy_id, None),
+        other => panic!(
+            "the order must release once the echo shows the switch off, got {}",
+            action_name(&other)
+        ),
+    }
+}
+
+/// An order that names its strategy is honoured by the core regardless of its own switch, so the
+/// switch is left exactly where Moonbot's user put it — two terminals on one core can then sit on
+/// different strategies, and this terminal never moves the other's screen.
+#[test]
+fn an_order_with_a_strategy_leaves_the_cores_switch_alone() {
+    let mut core_settings = moonproto::ClientSettingsCommand::default();
+    core_settings.use_manual_strategy = true;
+    core_settings.manual_strategy_id = 4242;
+    let mut sequence = ClientSettingsSequence::new();
+    sequence.enqueue_order(ManualOrder {
+        strategy_id: Some(77),
+        sync_exit: false,
+        ..waiting_order(0.04, 10.0)
+    });
+
+    match sequence.next_action(&core_settings, TEST_CORE) {
+        SequenceAction::Place(order) => assert_eq!(order.strategy_id, Some(77)),
+        other => panic!(
+            "nothing to send ahead of a strategy order, got {}",
+            action_name(&other)
+        ),
+    }
+}
+
+/// A core that keeps its switch on whatever we send — the same shape as one rewriting `x_sell`
+/// under a manual strategy — must not hold the order forever: the mutation is abandoned after the
+/// retry budget and the order goes out, with the warning naming what the core would not hold.
+#[test]
+fn a_core_that_keeps_its_switch_on_does_not_strand_the_order() {
+    let mut core_settings = moonproto::ClientSettingsCommand::default();
+    core_settings.use_manual_strategy = true;
+    // The exits already match, so the switch is the ONLY thing the core refuses.
+    super::apply_group_exit_settings(&mut core_settings, exit_settings(10.0, false));
+    let mut sequence = ClientSettingsSequence::new();
+    sequence.enqueue_order(waiting_order(0.04, 10.0));
+
+    burn_retry_budget(&mut sequence, &core_settings);
+    match sequence.next_action(&core_settings, TEST_CORE) {
+        SequenceAction::Place(order) => assert_eq!(order.market, "BULLAUSDT"),
+        other => panic!(
+            "the order must be released after the retry budget, got {}",
+            action_name(&other)
+        ),
+    }
+}
+
 // --- Temporary blacklist (TempBL) -----------------------------------------------------------
 
 use std::time::Duration;

@@ -964,10 +964,12 @@ pub struct ClientSettings {
     pub fixed_sell_slot: usize,
     /// Whether the CORE's own manual-strategy mode is enabled, through `use_manual_strategy`.
     ///
-    /// Read-only here, and it is not this terminal's mode: an order this terminal places carries
-    /// its strategy explicitly, so this describes only what the core does with an order that
-    /// arrives without one — a Moonbot-placed order, or one from another client. It seeds this
-    /// terminal's own mode once, on a core that has never had one stored locally.
+    /// Not this terminal's mode: an order this terminal places on a strategy carries it
+    /// explicitly, so this describes what the core does with an order that arrives without one — a
+    /// Moonbot-placed order, or one from another client. It seeds this terminal's own mode once,
+    /// on a core that has never had one stored locally. Written from here in one case only: the
+    /// exit barrier ahead of a bare order switches it off, so that order stays bare
+    /// (`live::client_settings`, `SettingsMutation::NoManualStrategy`).
     pub use_manual_strategy: bool,
     /// Selected manual-strategy ID from `manual_strategy_id`; `0` means none is selected. Read on
     /// the same terms as [`Self::use_manual_strategy`].
