@@ -63,6 +63,42 @@ fn chart_history_floor_ms(cfg: moon_core::market::CandleViewCfg) -> f32 {
         .min(HISTORY_FLOOR_MAX_BARS * tf) as f32
 }
 
+/// The shader boundary of the hide-candles zone, in milliseconds relative to the pane epoch:
+/// candles whose bucket opens at or after it are omitted and only the trade crosses stay.
+///
+/// `hide_candles` buckets counted back from the one holding `now_ms`; zero disables the zone.
+/// `combo_left_rel` is where the resident trade crosses ACTUALLY begin (the first tick the last
+/// full read returned, or the first one the live drain delivered on an empty ring), and the zone
+/// never reaches left of it: the setting means "draw ticks here rather than candles", so a bucket
+/// with no ticks to show has to keep its candle — otherwise a freshly opened market, whose trade
+/// ring the core has not streamed yet, renders the whole zone as empty space. NaN means no crosses
+/// are resident at all, which suppresses the zone entirely rather than clamping it.
+///
+/// The clamp is taken at the OPEN of the bucket holding that first tick, not at the tick itself.
+/// The shader compares bucket opens against this value, and a raw tick timestamp — always later
+/// than the open of its own bucket — put the boundary past that open, so the bucket with the first
+/// trade was drawn as a candle over its crosses in every configuration, and with `trade_candles`
+/// no wider than `hide_candles` the setting hid one candle fewer than asked, permanently.
+fn hide_start_rel(
+    hide_candles: u16,
+    now_ms: f64,
+    tf_ms: i64,
+    epoch_ms: f64,
+    combo_left_rel: f32,
+) -> f32 {
+    if hide_candles == 0 {
+        return f32::MAX;
+    }
+    if combo_left_rel.is_nan() {
+        return f32::MAX;
+    }
+    let hide_open = moon_core::market::candles::bucket_open_ms(now_ms, tf_ms)
+        - (hide_candles as f64 - 1.0) * tf_ms as f64;
+    let first_cross_open =
+        moon_core::market::candles::bucket_open_ms(epoch_ms + combo_left_rel as f64, tf_ms);
+    (hide_open.max(first_cross_open) - epoch_ms) as f32
+}
+
 impl ChartDataState {
     /// Re-read what the MEASURING captions show, because the pointer moved.
     ///
@@ -471,25 +507,13 @@ impl ChartDataState {
             // The hide-candles zone makes the last N buckets trade-only. This shader boundary does
             // not alter data and moves once per bucket; the style update below picks it up on the
             // next synchronization.
-            let hide_start_rel = if candle_cfg.hide_candles == 0 {
-                f32::MAX
-            } else {
-                let hide_open = moon_core::market::candles::bucket_open_ms(now, candle_tf_ms)
-                    - (candle_cfg.hide_candles as f64 - 1.0) * candle_tf_ms as f64;
-                let hide_rel = (hide_open - pane.view.epoch_ms) as f32;
-                // Never blank a bucket that has no trades to show instead. The setting means "draw
-                // ticks here rather than candles", so where there are no ticks it has to mean
-                // nothing at all — otherwise a freshly opened market, whose trade ring the core has
-                // not streamed yet, renders the whole zone as empty space. NaN means no crosses are
-                // resident at all, which suppresses the zone entirely rather than clamping it.
-                // The live drain stamps it too (below), so a pane that opened on an empty ring
-                // switches the zone on with its first batch instead of waiting for the next reset.
-                if pr.combo_left_rel.is_nan() {
-                    f32::MAX
-                } else {
-                    hide_rel.max(pr.combo_left_rel)
-                }
-            };
+            let hide_start_rel = hide_start_rel(
+                candle_cfg.hide_candles,
+                now,
+                candle_tf_ms,
+                pane.view.epoch_ms,
+                pr.combo_left_rel,
+            );
             // Diagnose X geometry for gaps between the plot and order book after zooming out. Once
             // per second per panel, log the window, anchor, and latest data to distinguish a camera
             // whose right edge drifted from now from data whose ticks or candles legitimately end earlier.
@@ -799,8 +823,8 @@ impl ChartDataState {
                     // Where the trade crosses ACTUALLY begin, as opposed to where the read asked
                     // them to. A freshly connected market has no trade history at all until the
                     // core streams some, and the hide-candles zone below refuses to blank a bucket
-                    // that has no crosses to replace it. Stamped only on a full range read, since
-                    // an incremental drain returns just the live edge.
+                    // that has no crosses to replace it. Re-stamped on every full range read; an
+                    // incremental drain returns just the live edge, so it only fills a NaN (below).
                     pr.combo_left_rel = history
                         .combo_left_rel_ms
                         .map(|v| v as f32)
