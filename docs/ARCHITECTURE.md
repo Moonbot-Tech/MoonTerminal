@@ -44,11 +44,9 @@ Live/Pause preserves the chosen time zoom. History upload bounds include prefetc
 uses a separate visible interval for live data, fixtures and frozen replay. Candles intersecting
 the visible boundary contribute at their displayed timeframe, including on cached repeat reads.
 
-Live trade markers retain report prices and may estimate subsecond display time from an ordinary
-public print at the same feed-precision price within the report's second. This is not an execution
-timestamp: missing matches preserve report coordinates. A separate exact-timestamp source cursor
-works even when candles hide ticks; market-only updates replace the retained trade geometry without
-waking the panel. Provider/generation changes reset matches, and archive revisions request a reseed.
+Closed-trade arrows sit at the report timestamps. `ReportStamp` plus
+`ReportAxis::stamp_pair_to_utc_ms` feed `chartdx::trade_history_sync::trade_mark` with milliseconds
+when the core supplied them and whole seconds otherwise; nothing moves a mark afterwards.
 
 Текущий live-path ушёл от старого постоянного polling и top-down переноса chart data:
 

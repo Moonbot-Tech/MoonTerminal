@@ -374,21 +374,11 @@ impl ChartDataState {
             }
             let source_generation = source_revs.map(|revs| revs.generation).unwrap_or(0);
             let source_generation_changed = source_generation != pr.source_generation;
-            let live_trade_source = source_revs.map(|revs| (revs.provider, revs.generation));
-            let mut trade_snap_changed =
-                self.draws_live_market() && pr.live_trade_source != live_trade_source;
-            if trade_snap_changed {
-                pr.live_trade_snap.reset_matches();
-                pr.live_trade_source = live_trade_source;
-            }
             // The core's chart archive was merged, prepending history OLDER than every cursor this
             // pane holds. A wake is not enough: an incremental drain starts at the cursor and can
             // never reach behind it, so this forces a full window re-read exactly once per archive.
             let source_archive = source_revs.map(|revs| revs.archive).unwrap_or(0);
             let source_archive_changed = source_archive != pr.source_archive;
-            if source_archive_changed && self.draws_live_market() {
-                pr.live_trade_snap.request_seed();
-            }
             let mut history_source_sig = 0xcbf29ce4_84222325u64;
             if let Some(revs) = source_revs {
                 history_source_sig = mix_sig(history_source_sig, revs.provider);
@@ -1408,13 +1398,6 @@ impl ChartDataState {
             }
             pr.last_device_gen = device_gen;
             pr.active = true;
-            if self.draws_live_market() && history_source_changed {
-                trade_snap_changed |= self.sync_live_trade_ticks(pane.core, pr);
-            }
-            if trade_snap_changed || (pr.live_trade_snap.needs_seed() && history_source_changed) {
-                self.refresh_live_trade_geometry(*idx, pane.core, &pane.view, pr);
-                pixels_changed = true;
-            }
         }
         // Caption inputs that come from the market snapshot. The readout is only READ when a
         // caption actually asks for it: `market_ticker` takes the source lock and a versioned

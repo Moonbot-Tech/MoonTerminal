@@ -47,7 +47,7 @@ pub use read_cancel::{ReadCancellation, with_read_cancellation};
 pub use read_fail::{FailKind, ReadFail, ReadResult};
 pub(crate) use rep::ReportStart;
 pub use rep::{DbMsg, ReportSink};
-pub use report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS, OffsetSegment, ReportAxis};
+pub use report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS, OffsetSegment, ReportAxis, ReportStamp};
 pub(crate) use report_read::max_core_uid_in;
 pub use report_read::{
     COLUMNS_ADDED_SINCE_V2, ChartTradeHistory, ChartTradeRecord, DISPLAY_COLUMNS,

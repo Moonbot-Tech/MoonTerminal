@@ -20,7 +20,7 @@ fn hash_order_zones(zones: &[moon_chart::layers::ZoneInstance]) -> u64 {
 }
 
 impl ChartDataState {
-    /// Synchronize order layers and retained trade geometry, including late live-time estimates.
+    /// Synchronize order layers and retained trade geometry.
     pub(crate) fn sync_orders_from_session(
         &mut self,
         session: &SessionManager,
@@ -317,8 +317,13 @@ impl ChartDataState {
                         pr.last_order_zone_sig = zone_sig;
                         base_changed = true;
                     }
-                    pr.trade_userdata
-                        .set(&mut pr.layers, zones, hlines, segs, markers);
+                    crate::chartdx::trade_history_sync::set(
+                        &mut pr.layers,
+                        zones,
+                        hlines,
+                        segs,
+                        markers,
+                    );
                     let quote_usd = self
                         .market_source
                         .as_ref()
@@ -386,8 +391,13 @@ impl ChartDataState {
                         &mut segs,
                     );
                     self.append_warn_geometry(pane.view.epoch_ms, &mut markers);
-                    pr.trade_userdata
-                        .set(&mut pr.layers, Vec::new(), Vec::new(), segs, markers);
+                    crate::chartdx::trade_history_sync::set(
+                        &mut pr.layers,
+                        Vec::new(),
+                        Vec::new(),
+                        segs,
+                        markers,
+                    );
                     pr.order_labels.clear();
                     pr.order_label_order.clear();
                     pr.orderbook_labels.clear();

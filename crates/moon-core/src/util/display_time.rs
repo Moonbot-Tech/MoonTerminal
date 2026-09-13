@@ -308,6 +308,30 @@ pub fn format_utc_millis_clock(text: &str, zone: Tz) -> String {
         .unwrap_or_else(|_| text.rsplit(' ').next().unwrap_or(text).to_string())
 }
 
+/// Shared body of the chart clock formatters: apply `pattern` in `zone`, prefixing `DD.MM`
+/// when the instant is not on the same local date as `now_ms`.
+///
+/// Args:
+///     unix_ms: Event timestamp in UTC Unix milliseconds.
+///     zone: Selected display zone.
+///     pattern: Chrono clock pattern, including any fraction.
+///     now_ms: Current UTC Unix milliseconds used for the local-day comparison.
+///
+/// Returns:
+///     The formatted clock, or `DD.MM` plus that clock for another local date, or empty when
+///     the instant is unrepresentable.
+fn chart_clock(unix_ms: i64, zone: Tz, pattern: &str, now_ms: i64) -> String {
+    let Some(value) = at_millis(unix_ms, zone) else {
+        return String::new();
+    };
+    let clock = value.format(pattern).to_string();
+    if at_millis(now_ms, zone).is_some_and(|now| now.date_naive() == value.date_naive()) {
+        clock
+    } else {
+        format!("{} {clock}", value.format("%d.%m"))
+    }
+}
+
 /// Format a chart instant as local clock time, adding `DD.MM` when it is not today locally.
 ///
 /// Args:
@@ -319,19 +343,29 @@ pub fn format_utc_millis_clock(text: &str, zone: Tz) -> String {
 /// Returns:
 ///     `HH:MM[:SS]`, or `DD.MM HH:MM[:SS]` for another local date.
 pub fn format_chart_clock(unix_ms: i64, zone: Tz, with_seconds: bool, now_ms: i64) -> String {
-    let Some(value) = at_millis(unix_ms, zone) else {
-        return String::new();
-    };
-    let clock = if with_seconds {
-        value.format("%H:%M:%S").to_string()
-    } else {
-        value.format("%H:%M").to_string()
-    };
-    if at_millis(now_ms, zone).is_some_and(|now| now.date_naive() == value.date_naive()) {
-        clock
-    } else {
-        format!("{} {clock}", value.format("%d.%m"))
-    }
+    chart_clock(
+        unix_ms,
+        zone,
+        if with_seconds { "%H:%M:%S" } else { "%H:%M" },
+        now_ms,
+    )
+}
+
+/// Same as [`format_chart_clock`] with seconds, plus the millisecond fraction.
+///
+/// A SEPARATE entry point rather than a flag on [`format_chart_clock`]: the caller decides by
+/// matching on the report stamp's own variant, so a second-resolution value has no code path
+/// that could reach a `.mmm` and print a fraction the core never supplied.
+///
+/// Args:
+///     unix_ms: True-UTC instant, in milliseconds.
+///     zone: Selected display zone.
+///     now_ms: Current UTC Unix milliseconds used for the local-day comparison.
+///
+/// Returns:
+///     `HH:MM:SS.mmm`, or `DD.MM HH:MM:SS.mmm` for another local date.
+pub fn format_chart_clock_ms(unix_ms: i64, zone: Tz, now_ms: i64) -> String {
+    chart_clock(unix_ms, zone, "%H:%M:%S%.3f", now_ms)
 }
 
 /// Return the start of the civil bucket containing one UTC instant.

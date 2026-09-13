@@ -283,3 +283,67 @@ fn shift_bound_adds_the_offset_to_move_a_true_utc_bound_into_core_local_terms() 
     assert_eq!(ReportAxis::shift_bound(true_utc, 3_600), 1_700_013_600);
     assert_eq!(ReportAxis::shift_bound(true_utc, -3_600), 1_700_006_400);
 }
+
+/// `db/report_axis.rs:ReportAxis::to_utc_ms` -- replacing Euclidean splitting with `/` and `%`,
+/// or dropping the millisecond scale after offset conversion, puts pre-epoch or skewed-core chart
+/// marks on a different instant from the one the core reported.
+#[test]
+fn millisecond_stamps_correct_the_seconds_axis_once_and_preserve_the_remainder() {
+    let axis = ReportAxis::from_measured(
+        HashMap::from([
+            (
+                7,
+                vec![OffsetSegment {
+                    from_utc: 0,
+                    offset_secs: 10_800,
+                }],
+            ),
+            (
+                9,
+                vec![
+                    OffsetSegment {
+                        from_utc: -1,
+                        offset_secs: 10_800,
+                    },
+                    OffsetSegment {
+                        from_utc: 0,
+                        offset_secs: 0,
+                    },
+                ],
+            ),
+        ]),
+        chrono_tz::UTC,
+    );
+
+    assert_eq!(axis.to_utc_ms(1_700_000_000_766, 7), 1_699_989_200_766);
+    assert_eq!(
+        axis.stamp_to_utc_ms(ReportStamp::Seconds(1_700_000_000), 7),
+        1_699_989_200_000
+    );
+    assert_eq!(
+        axis.stamp_to_utc_ms(ReportStamp::Millis(1_700_000_000_766), 7),
+        1_699_989_200_766
+    );
+    assert_eq!(axis.to_utc_ms(-1, 9), -10_800_001);
+    assert_eq!(axis.to_utc_ms(1_700_000_000_766, 8), 1_700_000_000_766);
+}
+
+/// `db/report_axis.rs:ReportStamp::resolve` -- accepting `CloseDateMs = 0` as milliseconds
+/// would draw an open trade's exit at 1970, while rejecting a positive millisecond loses the
+/// exact chart timestamp the core supplied.
+#[test]
+fn report_stamp_prefers_only_positive_millisecond_values() {
+    assert_eq!(
+        ReportStamp::resolve(100, Some(100_766)),
+        ReportStamp::Millis(100_766)
+    );
+    assert_eq!(ReportStamp::resolve(100, None), ReportStamp::Seconds(100));
+    assert_eq!(
+        ReportStamp::resolve(100, Some(0)),
+        ReportStamp::Seconds(100)
+    );
+    assert_eq!(
+        ReportStamp::resolve(100, Some(-5)),
+        ReportStamp::Seconds(100)
+    );
+}

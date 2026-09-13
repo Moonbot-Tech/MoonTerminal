@@ -117,5 +117,21 @@ pub fn format_clock_dated(unix_ms: f64, with_seconds: bool, now_ms: f64) -> Stri
     )
 }
 
+/// Format a chart instant in the selected zone WITH milliseconds, adding a date outside
+/// selected-zone today.
+///
+/// The millisecond sibling of [`format_clock_dated`]. Separate rather than a flag, so a
+/// second-resolution value has no code path that could print a fraction the core never gave.
+///
+/// Args:
+///     unix_ms: Event timestamp in UTC Unix milliseconds.
+///     now_ms: Current UTC Unix milliseconds used for the civil-day comparison.
+///
+/// Returns:
+///     Selected-zone `HH:MM:SS.mmm` label, optionally prefixed by `DD.MM`.
+pub fn format_clock_dated_ms(unix_ms: i64, now_ms: i64) -> String {
+    moon_core::util::display_time::format_chart_clock_ms(unix_ms, display_zone(), now_ms)
+}
+
 #[cfg(test)]
 mod tests;

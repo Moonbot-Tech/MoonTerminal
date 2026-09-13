@@ -426,8 +426,8 @@ fn profit_text(record: &ChartTradeRecord) -> Option<(String, fmt::DeltaSign)> {
 ///
 /// Args:
 ///     record: Durable trade record to render.
-///     axis: This engine's current report axis, used to lift the record's core-local
-///         `buy_date`/`close_date` onto the true-UTC axis the clock formatter expects.
+///     axis: This engine's current report axis, used to lift each end's typed stamp onto the
+///         true-UTC axis the clock formatter expects.
 ///     now_ms: Current Unix time in milliseconds for dated clock formatting.
 ///     p: Active theme palette.
 ///     cx: Application context used for scaled design tokens and translations.
@@ -448,17 +448,27 @@ fn trade_row(
         SIDE_LONG
     };
     // The chart's own axis formatter, so the card and the axis under it cannot disagree about when
-    // a trade happened — and it adds the date when the trade is not from today. It treats its
-    // argument as true-UTC seconds, so the caller must have already lifted it through `axis`.
-    let clock = |seconds: i64| {
-        crate::chartdx::axes::format_clock_dated(
-            seconds.saturating_mul(1_000) as f64,
-            true,
-            now_ms as f64,
-        )
+    // a trade happened — and it adds the date when the trade is not from today. Per END, and
+    // deliberately NOT through `stamp_pair_to_utc_ms`: this card states what the core reported for
+    // each leg, so neither leg is reconciled against the other.
+    let clock = |stamp: moon_core::db::ReportStamp| {
+        let utc_ms = axis.stamp_to_utc_ms(stamp, record.core_uid);
+        match stamp {
+            moon_core::db::ReportStamp::Seconds(_) => {
+                crate::chartdx::axes::format_clock_dated(utc_ms as f64, true, now_ms as f64)
+            }
+            moon_core::db::ReportStamp::Millis(_) => {
+                crate::chartdx::axes::format_clock_dated_ms(utc_ms, now_ms)
+            }
+        }
     };
+    // WRAP rather than clip or truncate: a dated millisecond pair outgrows the card's fixed width
+    // at the default font delta, and both of the alternatives lose the end of the string -- which is
+    // exactly the `.mmm` the reader opened this card for. The card is `max_h`, not a fixed height,
+    // so a second line costs nothing a deep stack does not already cost.
     let head = h_flex()
         .w_full()
+        .flex_wrap()
         .items_center()
         .gap(design::ui_px(cx, 6.0))
         .child(
@@ -476,8 +486,8 @@ fn trade_row(
                 .font_family(design::mono())
                 .child(format!(
                     "{} → {}",
-                    clock(axis.to_utc(record.buy_date, record.core_uid)),
-                    clock(axis.to_utc(record.close_date, record.core_uid))
+                    clock(record.buy_stamp()),
+                    clock(record.close_stamp())
                 )),
         );
     let prices = h_flex()

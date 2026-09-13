@@ -3,7 +3,7 @@ use super::*;
 /// Wide candle context must never expand either native or REST tick requests past five minutes.
 #[test]
 fn detailed_tick_window_excludes_wide_candle_context() {
-    let window = replay_window(100_000, 100_060).expect("one-minute trade");
+    let window = replay_window_ms(100_000_000, 100_060_000).expect("one-minute trade");
     let narrow = window.tick_window();
     assert_eq!((narrow.from_ms, narrow.to_ms), (99_700_000, 100_360_000));
     let plan = tick_plan(window, Some(60 * MINUTE_MS), None);
@@ -380,7 +380,7 @@ fn cache_coverage_rejects_prefixes_and_oversized_holes() {
 /// floors, reject reversed or non-positive stamps, and retain a pre-epoch trade at the Unix epoch.
 #[test]
 fn replay_window_accepts_same_second_stamps_and_rejects_invalid_inputs() {
-    let same_second = replay_window(100_000, 100_000).expect("same-second trade");
+    let same_second = replay_window_ms(100_000_000, 100_000_000).expect("same-second trade");
     assert_eq!(
         (same_second.from_ms, same_second.to_ms),
         (78_400_000, 107_200_000),
@@ -391,17 +391,17 @@ fn replay_window_accepts_same_second_stamps_and_rejects_invalid_inputs() {
         "the floor-only same-second window stays inside the replay budget"
     );
     assert_eq!(
-        replay_window(101, 100),
+        replay_window_ms(101_000, 100_000),
         None,
         "replay_window accepting an exit before its open would request an impossible chart"
     );
     assert_eq!(
-        replay_window(0, 100),
+        replay_window_ms(0, 100_000),
         None,
         "replay_window accepting a non-positive open would send an invalid venue request"
     );
 
-    let pre_epoch = replay_window(1, 2).expect("short positive trade");
+    let pre_epoch = replay_window_ms(1_000, 2_000).expect("short positive trade");
     assert_eq!(
         pre_epoch.from_ms, 0,
         "replay_window must not send a negative start time to a venue"
@@ -420,7 +420,7 @@ fn replay_window_uses_maximum_floors_and_proportional_context() {
     let open_ms = open_s * 1_000;
     for (held_hours, lead_hours, trail_hours) in [(0, 6, 2), (4, 6, 2), (16, 8, 8), (32, 16, 16)] {
         let close_s = open_s + held_hours * 60 * 60;
-        let window = replay_window(open_s, close_s).expect("valid trade");
+        let window = replay_window_ms(open_s * 1_000, close_s * 1_000).expect("valid trade");
         assert_eq!(
             open_ms - window.from_ms,
             lead_hours * 60 * MINUTE_MS,
@@ -447,7 +447,7 @@ fn replay_window_keeps_trade_and_floors_when_trimming_the_budget() {
     let close_s = open_s + 8 * 24 * 60 * 60;
     let open_ms = open_s * 1_000;
     let close_ms = close_s * 1_000;
-    let long = replay_window(open_s, close_s).expect("valid eight-day trade");
+    let long = replay_window_ms(open_s * 1_000, close_s * 1_000).expect("valid eight-day trade");
 
     assert!(
         long.from_ms <= open_ms,
@@ -473,9 +473,10 @@ fn replay_window_keeps_trade_and_floors_when_trimming_the_budget() {
     let threshold_ms = 7 * 24 * 60 * MINUTE_MS - 8 * 60 * MINUTE_MS;
     let just_under_s = threshold_ms / 1_000 - 60;
     let just_over_s = threshold_ms / 1_000 + 60;
-    let just_under =
-        replay_window(open_s, open_s + just_under_s).expect("valid under-budget trade");
-    let just_over = replay_window(open_s, open_s + just_over_s).expect("valid over-budget trade");
+    let just_under = replay_window_ms(open_s * 1_000, (open_s + just_under_s) * 1_000)
+        .expect("valid under-budget trade");
+    let just_over = replay_window_ms(open_s * 1_000, (open_s + just_over_s) * 1_000)
+        .expect("valid over-budget trade");
 
     assert!(
         !just_under.over_budget,
@@ -577,7 +578,8 @@ fn time_slices_keeps_unbounded_windows_whole_and_bounded_windows_gap_free() {
 /// spends the budget on lead context and makes a partial replay omit the trade itself.
 #[test]
 fn tick_plan_prioritizes_focus_and_keeps_every_prefix_contiguous_after_clipping() {
-    let window = replay_window(100_000, 100_000).expect("a same-second scalp has floor context");
+    let window =
+        replay_window_ms(100_000_000, 100_000_000).expect("a same-second scalp has floor context");
     let earliest_ms = window.from_ms + 20 * MINUTE_MS;
     let plan = tick_plan(window, Some(60 * MINUTE_MS), Some(earliest_ms));
     let focus = window.focus();

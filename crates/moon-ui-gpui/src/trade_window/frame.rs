@@ -1,6 +1,6 @@
 //! Where a trade window puts its viewport: one pure rule over the trade's own stamps.
 //!
-//! Separate from `trade_replay::replay_window`, which decides what is FETCHED. Those two answer
+//! Separate from `trade_replay::replay_window_ms`, which decides what is FETCHED. Those two answer
 //! different questions and must not be confused. The fetch buys context generously and
 //! ASYMMETRICALLY - six hours before the entry against two after the exit - because what
 //! the market did beforehand is worth more than what it did after. The VIEW cannot inherit that
@@ -80,8 +80,8 @@ const CONTEXT_CEILING_MS: i64 = 2 * 60 * 60 * 1_000;
 /// Returns:
 ///     The interval to show, or `None` when the stamps cannot describe one.
 pub(crate) fn trade_frame(entry_ms: i64, exit_ms: i64, bar_ms: i64) -> Option<(i64, i64)> {
-    // A zero-length position is legitimate - the stamps carry whole seconds, so a trade that
-    // filled and closed inside one second arrives with `exit_ms == entry_ms`. It frames on the
+    // A zero-length position is legitimate - a same-second trade, or an ms-exact pair that
+    // filled and closed at one instant, arrives with `exit_ms == entry_ms`. It frames on the
     // floor alone, which is the same window every sub-floor trade gets. Only an exit BEFORE the
     // entry is unusable.
     if exit_ms < entry_ms {

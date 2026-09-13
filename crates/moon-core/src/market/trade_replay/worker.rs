@@ -861,7 +861,7 @@ fn serve(
     }
     // The venue answered, so its refusal history is stale whatever the rows say.
     gate.clear(route.host());
-    // A window's right edge is routinely in the FUTURE: `replay_window` pads the trade's close by
+    // A window's right edge is routinely in the FUTURE: `replay_window_ms` pads the trade's close by
     // at least `TRAIL_FLOOR_MS`, and nothing clamps that to now. So replaying a trade that closed
     // minutes ago asks every venue for the minute currently forming, and most of them send it.
     // That bar is still changing, and the rows below are merged into the kline cache the LIVE

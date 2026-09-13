@@ -133,7 +133,7 @@ pub enum TradeReplaySource {
 }
 
 impl TradeReplaySource {
-    /// Whether this source supplies tape points for rendering and snapping trade markers.
+    /// Whether this source supplies tape points for rendering trade markers.
     pub const fn is_ticks(self) -> bool {
         matches!(self, Self::Ticks | Self::CoreTicks)
     }
@@ -213,8 +213,12 @@ pub struct ReplayWindow {
     /// Last millisecond the replay covers.
     pub to_ms: i64,
     /// The trade's own open, in milliseconds — the position's real entry stamp, not [`Self::from_ms`].
+    ///
+    /// Millisecond-exact when the core supplied a millisecond column, whole seconds otherwise.
     pub open_ms: i64,
     /// The trade's own close, in milliseconds — the position's real exit stamp, not [`Self::to_ms`].
+    ///
+    /// Millisecond-exact when the core supplied a millisecond column, whole seconds otherwise.
     pub close_ms: i64,
     /// Whether this window is WIDER than [`MAX_SPAN_MS`] because its floors demanded it.
     ///
@@ -271,7 +275,7 @@ impl ReplayWindow {
     }
 }
 
-/// Compute the window to fetch around one trade.
+/// Compute the window to fetch around one trade from millisecond bounds.
 ///
 /// The window is the position padded by [`CONTEXT_FRACTION`] of its own duration on each side, so
 /// a long trade gets proportionally more context than a short one — but never less than
@@ -279,27 +283,23 @@ impl ReplayWindow {
 /// a forty-second scalp a picture of a market rather than a picture of two candles. The result is
 /// then trimmed back toward those floors — never past them — when the result outruns
 /// [`MAX_SPAN_MS`]. The budget spends the CONTEXT, so an exit with no bars after it is not a
-/// state this function can produce at any position length.
+/// state this function can produce at any position length. Sub-second opens and closes are
+/// legitimate.
 ///
 /// Args:
-///     buy_date_s: Position open, in Unix SECONDS, as the report row stores it.
-///     close_date_s: Position close, in Unix seconds.
+///     open_ms: Position open, in Unix milliseconds.
+///     close_ms: Position close, in Unix milliseconds.
 ///
 /// Returns:
 ///     The window to fetch, or `None` when the stamps cannot describe one.
-pub fn replay_window(buy_date_s: i64, close_date_s: i64) -> Option<ReplayWindow> {
-    // A close in the SAME second as the open is a real trade, not a bad stamp. These stamps carry
-    // whole seconds, so a position that filled and closed inside one of them is recorded with two
-    // identical numbers - a scalp, which is exactly the kind of trade a reader most wants replayed
-    // and the kind this guard used to refuse outright. Only a close BEFORE the open, or a
-    // non-positive stamp, is unusable. A zero-length position needs no special handling
-    // downstream: its proportional context is zero, so the floors below decide the whole window,
-    // which is what they exist for.
-    if buy_date_s <= 0 || close_date_s <= 0 || close_date_s < buy_date_s {
+pub fn replay_window_ms(open_ms: i64, close_ms: i64) -> Option<ReplayWindow> {
+    // A close at the SAME INSTANT as the open is a real trade: a scalp that filled and closed
+    // inside one millisecond. Only a close BEFORE the open, or a non-positive stamp, is
+    // unusable. A zero-length position needs no special handling downstream: its proportional
+    // context is zero, so the floors below decide the whole window, which is what they exist for.
+    if open_ms <= 0 || close_ms <= 0 || close_ms < open_ms {
         return None;
     }
-    let open_ms = buy_date_s.checked_mul(1_000)?;
-    let close_ms = close_date_s.checked_mul(1_000)?;
     let held_ms = close_ms - open_ms;
     let pad_ms = (held_ms as f64 * CONTEXT_FRACTION).round() as i64;
     // The floors are a MAXIMUM against the proportional context, never a sum with it: a long trade

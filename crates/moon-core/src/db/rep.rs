@@ -465,6 +465,32 @@ pub(super) fn apply_schema(
     Ok(())
 }
 
+/// Build the idempotent upsert for one row, naming ONLY the columns that row actually carries.
+///
+/// Pure and separated from [`apply_upsert`] so the replica's write shape can be asserted
+/// directly: naming every KNOWN column instead would make a partial live update NULL out
+/// values an earlier catch-up page had already filled.
+///
+/// Args:
+///     names: Column names present in this row, already lowercased and validated.
+///
+/// Returns:
+///     The `INSERT ... ON CONFLICT(core_uid, newrecid) DO UPDATE SET ...` statement.
+pub(super) fn upsert_sql(names: &[String]) -> String {
+    let mut cols_sql = String::from("core_uid, core_name, newrecid");
+    let mut ph = String::from("?, ?, ?");
+    let mut set_sql = String::from("core_name=excluded.core_name");
+    for n in names {
+        cols_sql.push_str(&format!(", \"{n}\""));
+        ph.push_str(", ?");
+        set_sql.push_str(&format!(", \"{n}\"=excluded.\"{n}\""));
+    }
+    format!(
+        "INSERT INTO {TABLE} ({cols_sql}) VALUES ({ph}) \
+         ON CONFLICT(core_uid, newrecid) DO UPDATE SET {set_sql}"
+    )
+}
+
 /// Idempotently upsert a row by `(core_uid, newrecid)`.
 ///
 /// Write only fields present in the row because live updates may be partial;
@@ -514,18 +540,7 @@ pub(super) fn apply_upsert(
         vals.push(Value::Integer(0));
         names.push(DELETED_COL.to_owned());
     }
-    let mut cols_sql = String::from("core_uid, core_name, newrecid");
-    let mut ph = String::from("?, ?, ?");
-    let mut set_sql = String::from("core_name=excluded.core_name");
-    for n in &names {
-        cols_sql.push_str(&format!(", \"{n}\""));
-        ph.push_str(", ?");
-        set_sql.push_str(&format!(", \"{n}\"=excluded.\"{n}\""));
-    }
-    let sql = format!(
-        "INSERT INTO {TABLE} ({cols_sql}) VALUES ({ph}) \
-         ON CONFLICT(core_uid, newrecid) DO UPDATE SET {set_sql}"
-    );
+    let sql = upsert_sql(&names);
     let uid = core_uid as i64;
     let mut params: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(vals.len() + 3);
     params.push(&uid);

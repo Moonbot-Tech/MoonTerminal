@@ -6,7 +6,7 @@ use moon_core::config::layout::GeomRect;
 fn progressive_trade_ticks_preserve_view_and_accept_core_completion() {
     use super::{TradeWindowState, fold_outcome};
     use moon_core::market::trade_replay::{
-        TickStatus, TradeReplayOutcome, TradeReplaySeries, TradeReplaySource, replay_window,
+        TickStatus, TradeReplayOutcome, TradeReplaySeries, TradeReplaySource, replay_window_ms,
     };
     let state = TradeWindowState::Ready {
         source: TradeReplaySource::Ticks,
@@ -19,7 +19,7 @@ fn progressive_trade_ticks_preserve_view_and_accept_core_completion() {
     let mut series = TradeReplaySeries {
         source: TradeReplaySource::Ticks,
         venue: moon_core::venue::venue(3).expect("spot venue"),
-        window: replay_window(100_000, 100_060).expect("valid trade"),
+        window: replay_window_ms(100_000_000, 100_060_000).expect("valid trade"),
         tf_ms: 60_000,
         candles: Vec::new(),
         ticks: vec![moon_core::feed::Tick {

@@ -4,7 +4,9 @@
 //!
 //! Three time axes run through the terminal, and until this module only two of them were named:
 //!
-//! - **CORE-LOCAL** — `orders_rep.buydate` / `sellsetdate` / `closedate`, [`crate::feed::CoreLogLine::time_ms`],
+//! - **CORE-LOCAL** — `orders_rep.buydate` / `sellsetdate` / `closedate`,
+//!   `buydatems` / `sellsetdatems` / `closedatems` (same axis, same authority, whole milliseconds
+//!   instead of whole seconds), [`crate::feed::CoreLogLine::time_ms`],
 //!   MoonBot's own trade-log filenames, and the `WorkingTime` schedule strings the tuner writes
 //!   back. Authority: the MoonBot machine's wall clock. `db::rep::apply_upsert` stores every
 //!   replicated field verbatim, so whatever second the core sent is exactly what lands in the
@@ -58,6 +60,9 @@
 //! - MoonBot trade-log filename lookups are core-local on BOTH sides.
 //! - The tuner's `WorkingTime` output is read back by MoonBot in the core's own local time, so its
 //!   schedule axis stays core-local permanently.
+//! - A millisecond value goes through [`ReportAxis::to_utc_ms`], never [`ReportAxis::to_utc`] —
+//!   `to_utc` subtracts a seconds offset, so applying it to milliseconds is wrong by a factor of a
+//!   thousand.
 
 use std::collections::HashMap;
 
@@ -81,6 +86,41 @@ pub struct OffsetSegment {
     pub from_utc: i64,
     /// Seconds east of UTC on the core's clock: `core_clock - true_utc`.
     pub offset_secs: i32,
+}
+
+/// One replicated report instant, core-local, tagged by the precision the core supplied.
+///
+/// Both variants live on the CORE's own wall clock, exactly like the raw columns behind them:
+/// lift either through [`ReportAxis::stamp_to_utc_ms`] before treating it as a Unix instant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReportStamp {
+    /// From `buydate`/`closedate`: whole seconds on the core's clock.
+    Seconds(i64),
+    /// From `BuyDateMs`/`CloseDateMs`: milliseconds on the same core clock.
+    Millis(i64),
+}
+
+impl ReportStamp {
+    /// Pick the better of one row's two stamps for a single column.
+    ///
+    /// A POSITIVE millisecond value wins; absent, NULL, zero or negative falls back to the
+    /// seconds column as a second-resolution value. Zero is excluded deliberately and is not
+    /// an edge case: the wire defines `CloseDateMs = 0` as "this report row is STILL OPEN",
+    /// so reading it as an instant would date every open position to 1970.
+    ///
+    /// Args:
+    ///     secs: The seconds column, always present.
+    ///     ms: The optional millisecond column, `None` when the source lacks it or the cell
+    ///         is NULL.
+    ///
+    /// Returns:
+    ///     The stamp to use for this column.
+    pub fn resolve(secs: i64, ms: Option<i64>) -> Self {
+        match ms.filter(|ms| *ms > 0) {
+            Some(ms) => Self::Millis(ms),
+            None => Self::Seconds(secs),
+        }
+    }
 }
 
 /// The axis every read of a replicated report timestamp passes through.
@@ -208,6 +248,83 @@ impl ReportAxis {
             Some(offset) => secs - i64::from(offset),
             None => secs,
         }
+    }
+
+    /// Convert one core-local millisecond timestamp to true UTC.
+    ///
+    /// The correction is applied to the seconds part EXACTLY ONCE through [`Self::to_utc`], and
+    /// the sub-second remainder is re-attached untouched. The offset segment is selected by that
+    /// same seconds part, identically to the seconds path.
+    ///
+    /// Args:
+    ///     core_local_ms: Value as stored in the replica, in milliseconds on the core's own clock.
+    ///     core_uid: Stable uid of the core that produced the row.
+    ///
+    /// Returns:
+    ///     The same instant in true UTC milliseconds, or `core_local_ms` unchanged when this core
+    ///     has no measured offset.
+    pub fn to_utc_ms(&self, core_local_ms: i64, core_uid: u64) -> i64 {
+        let secs = core_local_ms.div_euclid(1_000);
+        let sub = core_local_ms.rem_euclid(1_000);
+        self.to_utc(secs, core_uid)
+            .saturating_mul(1_000)
+            .saturating_add(sub)
+    }
+
+    /// Lift a typed core-local stamp onto true-UTC milliseconds.
+    ///
+    /// The [`ReportStamp::Seconds`] arm is byte-for-byte the conversion the chart already does
+    /// today (`to_utc` then scale by 1_000). The [`ReportStamp::Millis`] arm goes through
+    /// [`Self::to_utc_ms`].
+    ///
+    /// Args:
+    ///     stamp: The core-local stamp, tagged by the precision the core supplied.
+    ///     core_uid: Stable uid of the core that produced the row.
+    ///
+    /// Returns:
+    ///     The same instant in true UTC milliseconds, or the stamp's own value scaled to
+    ///     milliseconds when this core has no measured offset.
+    pub fn stamp_to_utc_ms(&self, stamp: ReportStamp, core_uid: u64) -> i64 {
+        match stamp {
+            ReportStamp::Seconds(secs) => self.to_utc(secs, core_uid).saturating_mul(1_000),
+            ReportStamp::Millis(ms) => self.to_utc_ms(ms, core_uid),
+        }
+    }
+
+    /// Lift one trade's two ends onto true-UTC milliseconds together.
+    ///
+    /// The two columns resolve INDEPENDENTLY, so a real row may carry an ms entry and a
+    /// seconds-only exit inside the SAME second — `(x.500, x.000)`. Read literally the exit
+    /// precedes the entry and every downstream guard refuses the trade. It is TRUNCATION, not an
+    /// inversion: a seconds-sourced end is only known to within its own second, so when the two
+    /// ends share a second and at least one came from the seconds column, the seconds-sourced end
+    /// is raised to meet the other. Two MILLISECOND ends that genuinely invert, and any pair more
+    /// than a second apart, are left alone — those are real bad data and the existing guards must
+    /// still see them.
+    ///
+    /// Args:
+    ///     buy: The entry stamp, already resolved per column.
+    ///     close: The exit stamp, already resolved per column.
+    ///     core_uid: Stable uid of the core that produced the row.
+    ///
+    /// Returns:
+    ///     `(buy_utc_ms, close_utc_ms)`, with a same-second mixed-precision inversion collapsed
+    ///     as described above.
+    pub fn stamp_pair_to_utc_ms(
+        &self,
+        buy: ReportStamp,
+        close: ReportStamp,
+        core_uid: u64,
+    ) -> (i64, i64) {
+        let buy_ms = self.stamp_to_utc_ms(buy, core_uid);
+        let close_ms = self.stamp_to_utc_ms(close, core_uid);
+        let same_second = buy_ms.div_euclid(1_000) == close_ms.div_euclid(1_000);
+        let both_exact =
+            matches!(buy, ReportStamp::Millis(_)) && matches!(close, ReportStamp::Millis(_));
+        if close_ms < buy_ms && same_second && !both_exact {
+            return (buy_ms, buy_ms);
+        }
+        (buy_ms, close_ms)
     }
 
     /// Convert one true-UTC instant into the core-local value a stored column would hold.

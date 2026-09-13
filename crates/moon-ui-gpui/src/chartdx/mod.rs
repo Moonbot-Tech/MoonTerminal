@@ -723,14 +723,6 @@ struct PaneRender {
     /// one bucket the view keeps moving while the buffers do not, so re-clustering from the live
     /// scale would answer about a picture that is not on screen. Hit-testing reads this.
     trade_geometry: trade_history_sync::TradeGeometry,
-    /// Same-market display-time estimates retained across live tick-ring eviction.
-    live_trade_snap: moon_chart::trade_marks::live_snap::LiveTradeSnap,
-    /// Provider generations are local to a provider, so both fields identify the tape authority.
-    live_trade_source: Option<(CoreId, u64)>,
-    /// Exact-source cursor independent of the displayed candle/tick range.
-    live_trade_cursor: moon_core::market::TradeTickCursor,
-    /// CPU userdata union retained for market-only trade updates without a session/UI refresh.
-    trade_userdata: trade_history_sync::TradeUserdata,
     /// Warning-badge signature encoded into userdata; `u64::MAX` means dirty.
     last_warn_sig: u64,
     /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
@@ -915,10 +907,6 @@ impl PaneRender {
             last_news_sig: u64::MAX,
             last_trade_history_sig: u64::MAX,
             trade_geometry: trade_history_sync::TradeGeometry::default(),
-            live_trade_snap: moon_chart::trade_marks::live_snap::LiveTradeSnap::default(),
-            live_trade_source: None,
-            live_trade_cursor: Default::default(),
-            trade_userdata: trade_history_sync::TradeUserdata::default(),
             last_warn_sig: u64::MAX,
             order_labels: Vec::new(),
             figure_labels: Vec::new(),
@@ -1484,9 +1472,6 @@ struct ChartDataState {
     /// is no shared key either could collide on. Contrast `moon_core::fixture`, whose bench state
     /// is process-wide by design.
     trade_replay: Option<Rc<moon_core::market::trade_replay::TradeReplaySeries>>,
-    /// Converted tape for [`trade_history_sync`] snap, rebuilt only when [`Self::trade_replay`]
-    /// changes so hover/zoom userdata rebuilds do not reallocate 40k prints.
-    replay_tape: Rc<Vec<moon_chart::TapePrint>>,
     last_frame_tick_at: Option<Instant>,
     present_rate_candidate_hz: f32,
     present_rate_candidate_hits: u8,
