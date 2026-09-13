@@ -280,6 +280,7 @@ impl SettingsView {
                 moon_ui::MoonCheckbox::new("strat-db-enabled")
                     .checked(enabled)
                     .label(t!("storage.strategies_enabled").to_string())
+                    .description(t!("storage.strategies_enabled_hint").to_string())
                     .size(MoonSize::Sm)
                     .on_change(cx.listener(|this, v: &bool, _, cx| {
                         let v = *v;
@@ -291,7 +292,6 @@ impl SettingsView {
                         }
                     })),
             )
-            .child(hint(t!("storage.strategies_enabled_hint").to_string()))
             // MIXED NODE: same as the reports readout above — stays mono.
             .child(
                 hint(format!(

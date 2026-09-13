@@ -18,7 +18,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::StrategiesView;
-use crate::design::{self, moon};
+use crate::design;
 use crate::panels::{
     COMPACT_CHECKBOX_FONT, COMPACT_CHECKBOX_GAP, COMPACT_CHECKBOX_MARK, COMPACT_CHECKBOX_WEIGHT,
     POPUP_GROUP_CAPTION_FONT, popup_close_button, popup_gear_trigger, popup_group,
@@ -261,57 +261,29 @@ impl StrategiesView {
         self.write_pref(&PARAMS_FULL, value, cx);
     }
 
-    /// Build the filter-row active-only toggle: its label, then its compact checkbox.
+    /// Build the filter-row active-only toggle: a labelled `Sm` checkbox.
     ///
-    /// The label sits left of the mark because the row reads left to right into the settings gear
-    /// that follows it — which is also why this is not a labelled `MoonCheckbox`, the one thing that
-    /// component cannot place. Clicking either half writes the same preference, so the label is not
-    /// a dead zone beside a live checkbox, and the cluster carries one tooltip spelling the
-    /// preference out in full.
+    /// The caption is the checkbox's own MoonUI label, so a press on the box or the caption writes
+    /// the same preference, and the control carries one tooltip spelling the preference out in full.
     ///
     /// Args:
-    ///     palette: Active MoonUI palette, resolved once by the caller.
-    ///     cx: View context used to read the resolved preference and wire the callbacks.
+    ///     cx: View context used to read the resolved preference and wire the callback.
     ///
     /// Returns:
-    ///     The label and checkbox as one flex-none cluster.
-    pub(super) fn active_only_toggle(
-        &self,
-        palette: MoonPalette,
-        cx: &Context<Self>,
-    ) -> AnyElement {
+    ///     The checkbox as one flex-none control.
+    pub(super) fn active_only_toggle(&self, cx: &Context<Self>) -> AnyElement {
         let checked = (ACTIVE_ONLY.read)(&self.prefs);
         let view = cx.entity();
-        h_flex()
+        div()
             .id("strategies-active-only")
             .flex_none()
-            .items_center()
-            .gap(design::ui_px(cx, COMPACT_CHECKBOX_GAP))
             .tooltip(crate::panels::common::text_tooltip(
                 t!(ACTIVE_ONLY.label).to_string(),
             ))
             .child(
-                div()
-                    .id("strategies-active-only-label")
-                    .cursor_pointer()
-                    .font_family(design::ui_font())
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon(palette.text_soft))
-                    .child(t!("strat.active_only").to_string())
-                    // Reads the preference at click time rather than flipping the value this frame
-                    // captured, so the label cannot write a stale flip.
-                    .on_click({
-                        let view = view.clone();
-                        move |_, _window, app: &mut App| {
-                            view.update(app, |this, cx| {
-                                let next = !(ACTIVE_ONLY.read)(&this.prefs);
-                                this.set_active_only(next, cx);
-                            });
-                        }
-                    }),
-            )
-            .child(
+                // The caption is the checkbox's own label, so a press on either toggles it.
                 MoonCheckbox::new("strategies-active-only-mark")
+                    .label(t!("strat.active_only").to_string())
                     .checked(checked)
                     .size(MoonSize::Sm)
                     .on_change(move |value: &bool, _window, app| {

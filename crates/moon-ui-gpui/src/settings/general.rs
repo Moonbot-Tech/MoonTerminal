@@ -5,8 +5,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonInput, MoonInputEvent, MoonInputState, MoonMenuSize,
-    MoonPalette, MoonSelect, MoonSize, MoonSlider, MoonSliderEvent, MoonSliderState,
+    MoonButton, MoonButtonSize, MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState,
+    MoonMenuSize, MoonPalette, MoonSelect, MoonSize, MoonSlider, MoonSliderEvent, MoonSliderState,
     MoonTooltipView, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
@@ -65,27 +65,67 @@ fn labeled_select<T: Clone + PartialEq + 'static>(
 /// Returns:
 ///     The hint row, with a tooltip only when the visible text was shortened.
 fn settings_hint(key: &'static str, text: &str, muted: Hsla) -> AnyElement {
+    let (shown, full) = hint_parts(text);
+    let Some(full) = full else {
+        return div().text_color(muted).child(shown).into_any_element();
+    };
+
+    div()
+        .id(key)
+        .text_color(muted)
+        .child(shown)
+        .tooltip(hint_tooltip(full))
+        .into_any_element()
+}
+
+/// Attach a settings hint to its checkbox as the checkbox's description.
+///
+/// The hint is shortened exactly as [`settings_hint`] shortens it. A shortened hint's full text
+/// moves to the same wide tooltip, hosted on the whole control because the description is part of
+/// the checkbox rather than an element of its own.
+///
+/// Args:
+///     checkbox: The labelled checkbox the hint explains.
+///     key: Stable localization key used as the tooltip host ID.
+///     text: Complete localized hint text.
+///
+/// Returns:
+///     The checkbox, wrapped in a tooltip host only when the visible text was shortened.
+fn checkbox_with_hint(checkbox: MoonCheckbox, key: &'static str, text: &str) -> AnyElement {
+    let (shown, full) = hint_parts(text);
+    let checkbox = checkbox.description(shown);
+    let Some(full) = full else {
+        return checkbox.into_any_element();
+    };
+
+    div()
+        .id(key)
+        .child(checkbox)
+        .tooltip(hint_tooltip(full))
+        .into_any_element()
+}
+
+/// Split a hint into its visible text and, when that is shortened, the complete text.
+///
+/// Multi-sentence text is cut after its first sentence, keeping the sentence-ending punctuation and
+/// adding an ellipsis. Text without a sentence boundary is returned unchanged with no full text.
+fn hint_parts(text: &str) -> (String, Option<String>) {
     let sentence_end = [". ", "! ", "? "]
         .into_iter()
         .filter_map(|boundary| text.find(boundary).map(|index| index + 1))
         .min();
-    let Some(sentence_end) = sentence_end else {
-        return div()
-            .text_color(muted)
-            .child(text.to_string())
-            .into_any_element();
-    };
+    match sentence_end {
+        Some(end) => (format!("{} …", &text[..end]), Some(text.to_string())),
+        None => (text.to_string(), None),
+    }
+}
 
-    let full = text.to_string();
-    div()
-        .id(key)
-        .text_color(muted)
-        .child(format!("{} …", &text[..sentence_end]))
-        .tooltip(move |_window, cx| {
-            cx.new(|_| MoonTooltipView::new(full.clone()).max_width(420.0))
-                .into()
-        })
-        .into_any_element()
+/// Build the standard wide settings tooltip showing a hint's complete text.
+fn hint_tooltip(full: String) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    move |_window, cx| {
+        cx.new(|_| MoonTooltipView::new(full.clone()).max_width(420.0))
+            .into()
+    }
 }
 
 impl SettingsView {
@@ -316,7 +356,7 @@ impl SettingsView {
             ))
             .child(super::separator(p, cx))
             // Place each core in a separate chart tab.
-            .child(
+            .child(checkbox_with_hint(
                 self.draft_checkbox(cx, "split", split, |p, v| {
                     if p.charts_split_by_core != v {
                         p.charts_split_by_core = v;
@@ -327,15 +367,12 @@ impl SettingsView {
                 })
                 .label(t!("general.charts_split_by_core").to_string())
                 .size(MoonSize::Sm),
-            )
-            .child(settings_hint(
                 "general.charts_split_by_core_hint",
                 &t!("general.charts_split_by_core_hint"),
-                muted,
             ))
             .child(super::separator(p, cx))
             // Restrict order and line controls to the order-book control zone.
-            .child(
+            .child(checkbox_with_hint(
                 self.draft_checkbox(cx, "separate-zones", scz, |p, v| {
                     if p.separate_control_zones != v {
                         p.separate_control_zones = v;
@@ -346,15 +383,13 @@ impl SettingsView {
                 })
                 .label(t!("general.separate_control_zones").to_string())
                 .size(MoonSize::Sm),
-            )
-            .child(settings_hint(
                 "general.separate_control_zones_hint",
                 &t!("general.separate_control_zones_hint"),
-                muted,
             ))
             .child(super::separator(p, cx))
-            // Close Main charts after window inactivity; zero disables the timeout.
-            .child(
+            // Close Main charts after window inactivity; zero disables the timeout. The hint defines
+            // "idle" for the checkbox, so it is the checkbox's description, above the stepper.
+            .child(checkbox_with_hint(
                 self.draft_checkbox(cx, "idle-close", idle_secs > 0, move |p, v| {
                     // Enabling restores the last remembered value; disabling stores zero.
                     let want = if v { idle_restore } else { 0 };
@@ -373,7 +408,9 @@ impl SettingsView {
                 })
                 .label(t!("general.main_idle_close").to_string())
                 .size(MoonSize::Sm),
-            )
+                "general.main_idle_close_hint",
+                &t!("general.main_idle_close_hint"),
+            ))
             .child(
                 h_flex()
                     .gap(design::ui_px(cx, 8.0))
@@ -397,15 +434,10 @@ impl SettingsView {
                         Self::adjust_idle,
                     )),
             )
-            .child(settings_hint(
-                "general.main_idle_close_hint",
-                &t!("general.main_idle_close_hint"),
-                muted,
-            ))
             .child(super::separator(p, cx))
             // Stack layout is now configured per tab from the chart-tabs layout popup.
             // File logging and retention period.
-            .child(
+            .child(checkbox_with_hint(
                 self.draft_checkbox(cx, "logf", logf, |p, v| {
                     if p.log_to_file != v {
                         p.log_to_file = v;
@@ -416,11 +448,8 @@ impl SettingsView {
                 })
                 .label(t!("general.log_to_file").to_string())
                 .size(MoonSize::Sm),
-            )
-            .child(settings_hint(
                 "general.log_to_file_hint",
                 &t!("general.log_to_file_hint"),
-                muted,
             ))
             // Retention controls are enabled only while file logging is enabled; otherwise the
             // buttons are disabled and the value and labels are muted.

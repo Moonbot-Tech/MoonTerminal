@@ -51,6 +51,20 @@ pub(super) fn flag(
     view: &Entity<CoreExpertView>,
     set: fn(&mut CoreConfig, bool),
 ) -> impl IntoElement {
+    flag_described(id, label, None, checked, enabled, view, set)
+}
+
+/// [`flag`] with Moonbot's explanatory line for the row, drawn as the checkbox's own description
+/// under its caption rather than as a separate [`hint`] beside it.
+pub(super) fn flag_described(
+    id: &'static str,
+    label: String,
+    description: Option<String>,
+    checked: bool,
+    enabled: bool,
+    view: &Entity<CoreExpertView>,
+    set: fn(&mut CoreConfig, bool),
+) -> impl IntoElement {
     let view = view.clone();
     // Mixed across the selection: drawn EMPTY inside the mixed frame until the trader picks one,
     // and the first click then stages `true` for every selected core. Not `indeterminate`:
@@ -63,6 +77,9 @@ pub(super) fn flag(
         mixed,
         MoonCheckbox::new(SharedString::from(id))
             .label(label)
+            .when_some(description, |this, description| {
+                this.description(description)
+            })
             .checked(checked && !mixed)
             .tone(design::mixed_tone(mixed))
             .disabled(!enabled)

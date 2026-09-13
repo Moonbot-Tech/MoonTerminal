@@ -800,7 +800,6 @@ impl AnalyticsView {
         let header = self.shell_toolbar(
             TunerKind::Filter,
             t!("analytics.tuner.fields_title").to_string(),
-            p,
             cx,
         );
         v_flex()

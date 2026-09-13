@@ -402,12 +402,8 @@ impl SettingsView {
                             }
                         })
                         .label(t!("telegram.mini_app").to_string())
+                        .description(t!("telegram.mini_app_hint").to_string())
                         .size(MoonSize::Sm),
-                    )
-                    .child(
-                        div()
-                            .text_color(muted)
-                            .child(t!("telegram.mini_app_hint").to_string()),
                     )
                     .child(div().text_color(rgba_from(p.text, 1.0)).child(mini_status))
                     .when_some(mini_url, |tab, url| {

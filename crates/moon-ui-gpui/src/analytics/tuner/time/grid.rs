@@ -355,7 +355,6 @@ impl AnalyticsView {
         let header = self.shell_toolbar(
             TunerKind::Time,
             t!("analytics.time.autopick_title").to_string(),
-            p,
             cx,
         );
         let cfg_row = self.shell_config_row(TunerKind::Time, p, window, cx);

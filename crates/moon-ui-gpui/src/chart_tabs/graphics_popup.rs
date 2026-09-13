@@ -262,6 +262,7 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         let entity = entity.clone();
         MoonCheckbox::new(SharedString::from(format!("{id}-hide-closed-sell")))
             .label(t!("chart.graphics.hide_closed_sell").to_string())
+            .description(t!("chart.graphics.hide_closed_sell_hint").to_string())
             .checked(cfg.hide_closed_sell_line)
             .size(MoonSize::Sm)
             .on_change(move |ch: &bool, _w, app| {
@@ -269,14 +270,11 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 write_cfg(&entity, app, |c| c.hide_closed_sell_line = v);
             })
     };
-    let hide_sell_hint = div()
-        .text_size(design::t_caption(cx))
-        .text_color(rgb(p.text_muted))
-        .child(t!("chart.graphics.hide_closed_sell_hint").to_string());
     let hide_move_cb = {
         let entity = entity.clone();
         MoonCheckbox::new(SharedString::from(format!("{id}-hide-move-history")))
             .label(t!("chart.graphics.hide_move_history").to_string())
+            .description(t!("chart.graphics.hide_move_history_hint").to_string())
             .checked(cfg.hide_order_move_history)
             .size(MoonSize::Sm)
             .on_change(move |ch: &bool, _w, app| {
@@ -284,10 +282,6 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 write_cfg(&entity, app, |c| c.hide_order_move_history = v);
             })
     };
-    let hide_move_hint = div()
-        .text_size(design::t_caption(cx))
-        .text_color(rgb(p.text_muted))
-        .child(t!("chart.graphics.hide_move_history_hint").to_string());
 
     // --- Trade marks: the live trade crosses and their per-trade volume bars. ---
     let marker_scale_row = {
@@ -585,9 +579,7 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 v_flex()
                     .gap(design::ui_px(cx, 6.0))
                     .child(hide_sell_cb)
-                    .child(hide_sell_hint)
-                    .child(hide_move_cb)
-                    .child(hide_move_hint),
+                    .child(hide_move_cb),
             ),
         )
         .child(

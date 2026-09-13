@@ -514,7 +514,6 @@ impl AnalyticsView {
                     Some(n) => format!("{} {n}", t!("analytics.coins.pick_title")),
                     None => t!("analytics.coins.pick_title").to_string(),
                 },
-                p,
                 cx,
             ))
             // The field's own label, spelled as the strategy parameter it will be written to

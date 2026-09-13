@@ -329,12 +329,17 @@ fn persisted_active_filter_does_not_restore_retired_controls_or_hide_params() {
         tree_panel.contains("self.active_only_toggle("),
         "the pane must render the active-only toggle it delegates to settings.rs"
     );
-    // Twice: the label and the mark are separate hit targets, and a half that stopped writing
-    // through the setter would look alive while persisting nothing.
+    // Once, through a labelled checkbox: the caption is MoonUI's own label, so the box and the
+    // caption are one hit target, and a separate caption handler would be a second writer to keep
+    // in step.
     assert_eq!(
         toggle.matches("set_active_only(").count(),
-        2,
-        "both halves of the filter-row toggle must write through the persisted setter"
+        1,
+        "the filter-row toggle must write through the persisted setter exactly once"
+    );
+    assert!(
+        toggle.contains(".label(") && toggle.contains("strat.active_only"),
+        "the filter-row toggle must own its localized clickable label"
     );
     assert!(
         !toggle.contains("prefs.active_only ="),

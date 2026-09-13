@@ -220,27 +220,18 @@ pub(super) fn slot_settings_content(
         // Moonbot's own stop rule, and the default. Local state, so it is offered whether or not
         // the core has reported anything.
         .child(
-            v_flex()
-                .gap(design::ui_px(cx, 2.0))
-                .child(
-                    MoonCheckbox::new("ms-mb-logic")
-                        .label(t!("header.ms_mb_logic").to_string())
-                        .checked(mb_logic)
-                        .size(MoonSize::Sm)
-                        .on_change(move |checked: &bool, _w, app| {
-                            let on = *checked;
-                            logic_backend.update(app, |b, cx| {
-                                b.set_ms_mb_logic(core, on);
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(rgb(p.text_muted))
-                        .child(t!("header.ms_mb_logic_hint").to_string()),
-                ),
+            MoonCheckbox::new("ms-mb-logic")
+                .label(t!("header.ms_mb_logic").to_string())
+                .description(t!("header.ms_mb_logic_hint").to_string())
+                .checked(mb_logic)
+                .size(MoonSize::Sm)
+                .on_change(move |checked: &bool, _w, app| {
+                    let on = *checked;
+                    logic_backend.update(app, |b, cx| {
+                        b.set_ms_mb_logic(core, on);
+                        cx.notify();
+                    });
+                }),
         )
         // The core's own flag, not a local one: while it is OFF the core applies a manual
         // strategy's own sell price and the toolbar's TP/S do not reach a manual order at all.

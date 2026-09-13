@@ -102,7 +102,6 @@ impl AnalyticsView {
         &self,
         kind: TunerKind,
         title: String,
-        p: MoonPalette,
         cx: &Context<Self>,
     ) -> AnyElement {
         let k = match kind {
@@ -142,41 +141,35 @@ impl AnalyticsView {
         // Rounding the result affects the SUGGESTION — always shown (the suggestion is
         // available without a selected strategy too, over the current scope).
         if let Some(round) = round {
-            header = header
-                .child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(p.text_muted))
-                        .child(t!("analytics.tuner.round_lbl").to_string()),
-                )
-                .child(
-                    div().flex_none().child(
-                        MoonCheckbox::new(SharedString::from(format!("tun-round-{k}")))
-                            .checked(round)
-                            .size(MoonSize::Sm)
-                            .on_change({
-                                let view = cx.entity();
-                                move |ch: &bool, _w, app| {
-                                    let on = *ch;
-                                    view.update(app, |this, cx| {
-                                        match kind {
-                                            TunerKind::Filter => {
-                                                this.tuner.round_results = on;
-                                                this.tuner.invalidate_suggest();
-                                            }
-                                            TunerKind::Time => {
-                                                this.time_tuner.round_results = on;
-                                                this.time_tuner.invalidate_suggest();
-                                            }
-                                            // No rounding on this axis — the control is hidden.
-                                            TunerKind::Coins => {}
+            header = header.child(
+                div().flex_none().child(
+                    MoonCheckbox::new(SharedString::from(format!("tun-round-{k}")))
+                        .label(t!("analytics.tuner.round_lbl").to_string())
+                        .checked(round)
+                        .size(MoonSize::Sm)
+                        .on_change({
+                            let view = cx.entity();
+                            move |ch: &bool, _w, app| {
+                                let on = *ch;
+                                view.update(app, |this, cx| {
+                                    match kind {
+                                        TunerKind::Filter => {
+                                            this.tuner.round_results = on;
+                                            this.tuner.invalidate_suggest();
                                         }
-                                        cx.notify();
-                                    });
-                                }
-                            }),
-                    ),
-                );
+                                        TunerKind::Time => {
+                                            this.time_tuner.round_results = on;
+                                            this.time_tuner.invalidate_suggest();
+                                        }
+                                        // No rounding on this axis — the control is hidden.
+                                        TunerKind::Coins => {}
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                ),
+            );
         }
         // Render write controls for a retained anchor, but enable them only when the action
         // authority admits at least one selected target.
@@ -724,6 +717,7 @@ impl AnalyticsView {
                             .child(
                                 MoonCheckbox::new(SharedString::from("tun-cfg-compose-f"))
                                     .label(t!("analytics.tuner.compose_toggle").to_string())
+                                    .description(t!("analytics.tuner.compose_short").to_string())
                                     .checked(self.tuner.compose)
                                     .size(MoonSize::Sm)
                                     // `on_change` hands the callback an `&mut App`, not a
@@ -744,12 +738,6 @@ impl AnalyticsView {
                                             });
                                         }
                                     }),
-                            )
-                            .child(
-                                div()
-                                    .w_full()
-                                    .text_color(moon(p.text_muted))
-                                    .child(t!("analytics.tuner.compose_short").to_string()),
                             )
                             .child(
                                 h_flex()
