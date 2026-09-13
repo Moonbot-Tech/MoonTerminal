@@ -3,7 +3,7 @@
 use moon_core::market::CandleViewCfg;
 use moon_core::market::candles::{CANDLE_MODE_FILLED, CANDLE_MODE_OFF, CANDLE_TF_CHOICES_MIN};
 
-use super::chart_history_floor_ms;
+use super::{chart_history_floor_ms, hide_start_rel};
 
 /// `market.rs:chart_history_floor_ms` must keep every supported candle timeframe within the
 /// 120-to-1500-bar request band; swapping the clamps or lowering the floor would silently request
@@ -168,4 +168,50 @@ fn price_fit_cache_tracks_viewport_and_accumulates_subpixel_motion() {
         None,
         (1000.0, 60000.0, 0.01)
     ));
+}
+
+/// Measured on 2026-09-13 (Main pane, 5m, bucket open at 524454 rel): with `hide_candles = 3` the
+/// boundary was `-52298` — the first trade's timestamp, 23 s past the open of the third-from-last
+/// bucket at `-75546` — so that bucket kept its candle and two were hidden instead of three.
+#[test]
+fn hide_zone_boundary_snaps_the_first_trade_to_its_bucket_open() {
+    let tf_ms = 300_000;
+    let epoch_ms = 1_700_000_000_000.0;
+    let now_ms = epoch_ms + 637_474.0;
+    let bucket_open_rel =
+        (moon_core::market::candles::bucket_open_ms(now_ms, tf_ms) - epoch_ms) as f32;
+    let hide_open_rel = bucket_open_rel - 2.0 * tf_ms as f32;
+    // First resident trade 23 s into the third-from-last bucket.
+    let first_trade_rel = hide_open_rel + 23_000.0;
+    let boundary = hide_start_rel(3, now_ms, tf_ms, epoch_ms, first_trade_rel);
+    assert_eq!(
+        boundary, hide_open_rel,
+        "the bucket holding the first trade must be hidden too"
+    );
+}
+
+/// The zone never reaches left of the first resident trade: with trades starting in the last
+/// bucket only, `hide_candles = 3` hides that one bucket, not three.
+#[test]
+fn hide_zone_boundary_is_clamped_at_the_first_trade_bucket() {
+    let tf_ms = 300_000;
+    let epoch_ms = 1_700_000_000_000.0;
+    let now_ms = epoch_ms + 637_474.0;
+    let bucket_open_rel =
+        (moon_core::market::candles::bucket_open_ms(now_ms, tf_ms) - epoch_ms) as f32;
+    let first_trade_rel = bucket_open_rel + 90_000.0;
+    let boundary = hide_start_rel(3, now_ms, tf_ms, epoch_ms, first_trade_rel);
+    assert_eq!(boundary, bucket_open_rel);
+}
+
+#[test]
+fn hide_zone_is_off_without_a_count_or_without_resident_trades() {
+    let tf_ms = 300_000;
+    let epoch_ms = 1_700_000_000_000.0;
+    let now_ms = epoch_ms + 637_474.0;
+    assert_eq!(hide_start_rel(0, now_ms, tf_ms, epoch_ms, 0.0), f32::MAX);
+    assert_eq!(
+        hide_start_rel(3, now_ms, tf_ms, epoch_ms, f32::NAN),
+        f32::MAX
+    );
 }
