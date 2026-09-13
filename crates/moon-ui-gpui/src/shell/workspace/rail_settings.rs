@@ -8,7 +8,7 @@
 use gpui::*;
 use moon_core::config::layout::WindowLayout;
 use moon_ui::{
-    MoonCheckbox, MoonCheckboxSize, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex,
+    MoonCheckbox, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -264,7 +264,7 @@ fn settings_content(
                 )))
                 .label(t!(row.label).to_string())
                 .checked((row.read)(&prefs))
-                .size(MoonCheckboxSize::Compact)
+                .size(MoonSize::Sm)
                 .on_change(move |checked: &bool, _window, app| {
                     let checked = *checked;
                     backend.update(app, |backend, backend_cx| {

@@ -54,12 +54,12 @@ use gpui::*;
 use moon_ui::MoonWindowExt as _;
 use moon_ui::{
     DockArea, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
-    MoonCheckboxSize, MoonCombobox, MoonComboboxEvent, MoonComboboxMenuChrome, MoonComboboxState,
-    MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState,
-    MoonDataTableWidthPolicy, MoonDateTimePicker, MoonDateTimePickerEvent, MoonDateTimePickerState,
-    MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize,
-    MoonNotification, MoonPalette, MoonScrollbarVisibility, MoonTone, MoonWindowFrame, Panel,
-    PanelEvent, PanelState, Root, StyledExt, h_flex, rgba_from, v_flex,
+    MoonCombobox, MoonComboboxEvent, MoonComboboxMenuChrome, MoonComboboxState, MoonDataCell,
+    MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState, MoonDataTableWidthPolicy,
+    MoonDateTimePicker, MoonDateTimePickerEvent, MoonDateTimePickerState, MoonDropdown, MoonInput,
+    MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette,
+    MoonScrollbarVisibility, MoonSize, MoonTone, MoonWindowFrame, Panel, PanelEvent, PanelState,
+    Root, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rusqlite::types::Value;
 use rust_i18n::t;

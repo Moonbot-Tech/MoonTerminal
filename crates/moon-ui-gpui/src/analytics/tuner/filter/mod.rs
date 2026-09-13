@@ -20,8 +20,7 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex,
-    v_flex,
+    MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, MoonSize, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -506,7 +505,7 @@ impl AnalyticsView {
                         // The master checkbox ignores unmapped fields (no matching
                         // strategy parameter): 'all enabled' = all MAPPED ones.
                         .checked(self.tuner.all_mapped_enabled())
-                        .size(MoonCheckboxSize::Compact)
+                        .size(MoonSize::Sm)
                         .on_change({
                             let view = cx.entity();
                             move |ch: &bool, _w, app| {
@@ -633,7 +632,7 @@ impl AnalyticsView {
                     div().flex_none().child(
                         MoonCheckbox::new(SharedString::from(format!("tun-en-{fi}")))
                             .checked(self.tuner.enabled[fi])
-                            .size(MoonCheckboxSize::Compact)
+                            .size(MoonSize::Sm)
                             .on_change({
                                 let view = cx.entity();
                                 move |ch: &bool, _w, app| {

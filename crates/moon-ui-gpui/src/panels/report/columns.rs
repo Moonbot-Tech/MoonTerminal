@@ -589,7 +589,7 @@ fn deleted_cell(ri: usize, val: &Value) -> MoonDataCell {
     let checked = as_i64(val).unwrap_or(0) != 0;
     let cb = MoonCheckbox::new(SharedString::from(format!("rep-del-{ri}")))
         .checked(checked)
-        .size(MoonCheckboxSize::Compact)
+        .size(MoonSize::Sm)
         .disabled(true);
     MoonDataCell::element(
         div()

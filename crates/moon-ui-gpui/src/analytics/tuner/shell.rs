@@ -12,9 +12,9 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::db::ReadFail;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonInput, MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette, MoonPopover,
-    MoonPopoverPlacement, MoonTag, MoonTooltipView, h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
+    MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonSize, MoonTag, MoonTooltipView, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -153,7 +153,7 @@ impl AnalyticsView {
                     div().flex_none().child(
                         MoonCheckbox::new(SharedString::from(format!("tun-round-{k}")))
                             .checked(round)
-                            .size(MoonCheckboxSize::Compact)
+                            .size(MoonSize::Sm)
                             .on_change({
                                 let view = cx.entity();
                                 move |ch: &bool, _w, app| {
@@ -725,7 +725,7 @@ impl AnalyticsView {
                                 MoonCheckbox::new(SharedString::from("tun-cfg-compose-f"))
                                     .label(t!("analytics.tuner.compose_toggle").to_string())
                                     .checked(self.tuner.compose)
-                                    .size(MoonCheckboxSize::Compact)
+                                    .size(MoonSize::Sm)
                                     // `on_change` hands the callback an `&mut App`, not a
                                     // `Context`, so this is one of the call sites where a
                                     // `cx.listener` does not fit.

@@ -15,8 +15,8 @@
 use gpui::*;
 use moon_core::config::ChartTabKind;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonPalette,
-    h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonSize, h_flex,
+    v_flex,
 };
 use rust_i18n::t;
 
@@ -120,7 +120,7 @@ pub(super) fn render_apply_row<T: ApplyRowHost>(
             MoonCheckbox::new(SharedString::from(format!("{id_prefix}-apply-{index}")))
                 .label(label)
                 .checked(targets.has(kind))
-                .size(MoonCheckboxSize::Compact)
+                .size(MoonSize::Sm)
                 .on_change(move |checked: &bool, _w, app| {
                     let checked = *checked;
                     toggle_entity.update(app, |this, cx| {

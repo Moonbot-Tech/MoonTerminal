@@ -7,7 +7,7 @@
 //! on the UI thread would freeze the interface.
 
 use gpui::*;
-use moon_ui::{MoonButton, MoonCheckboxSize, MoonPalette, StyledExt, h_flex, rgba_from, v_flex};
+use moon_ui::{MoonButton, MoonPalette, MoonSize, StyledExt, h_flex, rgba_from, v_flex};
 use rust_i18n::t;
 
 use super::{SettingsView, StatusMsg, open_folder, section, separator};
@@ -280,7 +280,7 @@ impl SettingsView {
                 moon_ui::MoonCheckbox::new("strat-db-enabled")
                     .checked(enabled)
                     .label(t!("storage.strategies_enabled").to_string())
-                    .size(MoonCheckboxSize::Normal)
+                    .size(MoonSize::Sm)
                     .on_change(cx.listener(|this, v: &bool, _, cx| {
                         let v = *v;
                         if this.storage.cfg.strategies.enabled != v {

@@ -12,7 +12,7 @@ use moon_core::config::layout::{
     STRATEGIES_TREE_TEXT_STEP_MIN, WindowLayout, clamp_strategies_tree_text_step,
 };
 use moon_ui::{
-    MoonCheckbox, MoonCheckboxSize, MoonGroupBox, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonCheckbox, MoonGroupBox, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize,
     MoonStepper, MoonStepperSize, MoonTheme, h_flex, v_flex,
 };
 use rust_i18n::t;
@@ -312,7 +312,7 @@ impl StrategiesView {
             .child(
                 MoonCheckbox::new("strategies-active-only-mark")
                     .checked(checked)
-                    .size(MoonCheckboxSize::Compact)
+                    .size(MoonSize::Sm)
                     .on_change(move |value: &bool, _window, app| {
                         let value = *value;
                         view.update(app, |this, cx| this.set_active_only(value, cx));
@@ -629,7 +629,7 @@ fn pref_group(
                 MoonCheckbox::new(SharedString::from(format!("strategies-pref-{}", row.id)))
                     .label(t!(row.label).to_string())
                     .checked((row.read)(&prefs))
-                    .size(MoonCheckboxSize::Compact)
+                    .size(MoonSize::Sm)
                     .on_change(move |checked: &bool, _window, app| {
                         let checked = *checked;
                         target.update(app, |this, cx| this.write_pref(row, checked, cx));

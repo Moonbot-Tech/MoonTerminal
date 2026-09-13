@@ -14,8 +14,8 @@ use moon_core::config::{
 };
 use moon_core::util::fmt::DeltaSign;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonInput, MoonMenuSize, MoonPalette, MoonWindowExt as _, h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
+    MoonMenuSize, MoonPalette, MoonSize, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -90,7 +90,7 @@ pub(super) fn dialog_body(state: &Entity<LabelEditState>, cx: &mut App) -> AnyEl
             MoonCheckbox::new("le-plate")
                 .label(t!("chart_labels.plate").to_string())
                 .checked(on)
-                .size(MoonCheckboxSize::Compact)
+                .size(MoonSize::Sm)
                 .on_change(move |v: &bool, _w, cx| {
                     let v = *v;
                     write_row(&state, cx, |s| s.row.plate = v);
@@ -103,7 +103,7 @@ pub(super) fn dialog_body(state: &Entity<LabelEditState>, cx: &mut App) -> AnyEl
                 .label(t!("chart_labels.show_name").to_string())
                 .checked(on && named)
                 .disabled(!named)
-                .size(MoonCheckboxSize::Compact)
+                .size(MoonSize::Sm)
                 .on_change(move |v: &bool, _w, cx| {
                     let v = *v;
                     write_row(&state, cx, |s| s.row.show_name = v);
@@ -591,7 +591,7 @@ fn caption_settings(
             MoonCheckbox::new("le-bar")
                 .label(t!("chart_labels.menu.bars").to_string())
                 .checked(on)
-                .size(MoonCheckboxSize::Compact)
+                .size(MoonSize::Sm)
                 .on_change(move |v: &bool, _w, cx| {
                     let v = *v;
                     write_row(&state, cx, |s| s.row.parts[selected].bar = v);
@@ -691,7 +691,7 @@ fn caption_settings(
             MoonCheckbox::new("le-value-only")
                 .label(t!("chart_labels.value_only").to_string())
                 .checked(on)
-                .size(MoonCheckboxSize::Compact)
+                .size(MoonSize::Sm)
                 .on_change(move |v: &bool, _w, cx| {
                     let v = *v;
                     write_row(&state, cx, |s| {
@@ -748,7 +748,7 @@ fn caption_settings(
         MoonCheckbox::new("le-caption")
             .label(label.to_string())
             .checked(on)
-            .size(MoonCheckboxSize::Compact)
+            .size(MoonSize::Sm)
             .on_change(move |v: &bool, _w, cx| {
                 let v = *v;
                 write_row(&state, cx, |s| {

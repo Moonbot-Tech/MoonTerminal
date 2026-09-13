@@ -31,10 +31,10 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
+    DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonContextMenuWindowExt as _, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState,
     MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonTooltipView, MoonWindowExt as _, Panel, PanelEvent, PanelState, h_flex, v_flex,
+    MoonSize, MoonTooltipView, MoonWindowExt as _, Panel, PanelEvent, PanelState, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -801,7 +801,7 @@ impl NewsView {
     fn untagged_row(&self, shown: bool, p: MoonPalette, cx: &mut Context<Self>) -> AnyElement {
         let checkbox = MoonCheckbox::new("news-untagged-vis")
             .checked(shown)
-            .size(MoonCheckboxSize::Compact)
+            .size(MoonSize::Sm)
             .on_change(cx.listener(|this, checked: &bool, _w, cx| {
                 this.set_hide_untagged(!*checked, cx);
             }));
@@ -837,7 +837,7 @@ impl NewsView {
         let cb_key = key.clone();
         let checkbox = MoonCheckbox::new(SharedString::from(format!("news-tagvis-{key}")))
             .checked(!hidden)
-            .size(MoonCheckboxSize::Compact)
+            .size(MoonSize::Sm)
             .on_change(cx.listener(move |this, checked: &bool, _w, cx| {
                 this.toggle_tag_hidden(&cb_key, !*checked, cx);
             }));
@@ -902,7 +902,7 @@ impl NewsView {
         let fixed_toggle = MoonCheckbox::new(SharedString::from(format!("nt-fixed-{key}")))
             .label(t!("chart_labels.color_fixed").to_string())
             .checked(fixed.is_some())
-            .size(MoonCheckboxSize::Compact)
+            .size(MoonSize::Sm)
             .on_change(cx.listener(move |this, checked: &bool, _, cx| {
                 let color = checked.then(|| format!("#{seed:06X}"));
                 this.set_tag_color(&fixed_key, color.as_deref(), cx);
@@ -1264,7 +1264,7 @@ impl Render for NewsView {
                 MoonCheckbox::new("news-translate")
                     .label(t!("news.translate").to_string())
                     .checked(self.translate)
-                    .size(MoonCheckboxSize::Compact)
+                    .size(MoonSize::Sm)
                     .on_change(cx.listener(|this, ch: &bool, _w, cx| this.set_translate(*ch, cx))),
             )
             .child(

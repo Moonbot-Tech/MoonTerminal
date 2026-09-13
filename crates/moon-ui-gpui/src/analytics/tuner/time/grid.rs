@@ -16,7 +16,7 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState, MoonPalette,
+    MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, MoonSize,
     MoonTooltipView, h_flex, v_flex,
 };
 use rust_i18n::t;
@@ -389,7 +389,7 @@ impl AnalyticsView {
                 div().w(design::ui_px(cx, CHECK_COL)).flex_none().child(
                     MoonCheckbox::new("tt-en-all")
                         .checked(self.time_tuner.enabled.iter().all(|&e| e))
-                        .size(MoonCheckboxSize::Compact)
+                        .size(MoonSize::Sm)
                         .on_change({
                             let view = cx.entity();
                             move |ch: &bool, _w, app| {
@@ -535,7 +535,7 @@ impl AnalyticsView {
             .child(
                 MoonCheckbox::new(SharedString::from(format!("tt-en-{field}")))
                     .checked(enabled)
-                    .size(MoonCheckboxSize::Compact)
+                    .size(MoonSize::Sm)
                     .on_change({
                         let view = cx.entity();
                         move |ch: &bool, _w, app| {

@@ -5,8 +5,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState,
-    MoonMenuSize, MoonPalette, MoonSelect, MoonSlider, MoonSliderEvent, MoonSliderState,
+    MoonButton, MoonButtonSize, MoonInput, MoonInputEvent, MoonInputState, MoonMenuSize,
+    MoonPalette, MoonSelect, MoonSize, MoonSlider, MoonSliderEvent, MoonSliderState,
     MoonTooltipView, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
@@ -326,7 +326,7 @@ impl SettingsView {
                     }
                 })
                 .label(t!("general.charts_split_by_core").to_string())
-                .size(MoonCheckboxSize::Normal),
+                .size(MoonSize::Sm),
             )
             .child(settings_hint(
                 "general.charts_split_by_core_hint",
@@ -345,7 +345,7 @@ impl SettingsView {
                     }
                 })
                 .label(t!("general.separate_control_zones").to_string())
-                .size(MoonCheckboxSize::Normal),
+                .size(MoonSize::Sm),
             )
             .child(settings_hint(
                 "general.separate_control_zones_hint",
@@ -372,7 +372,7 @@ impl SettingsView {
                     }
                 })
                 .label(t!("general.main_idle_close").to_string())
-                .size(MoonCheckboxSize::Normal),
+                .size(MoonSize::Sm),
             )
             .child(
                 h_flex()
@@ -415,7 +415,7 @@ impl SettingsView {
                     }
                 })
                 .label(t!("general.log_to_file").to_string())
-                .size(MoonCheckboxSize::Normal),
+                .size(MoonSize::Sm),
             )
             .child(settings_hint(
                 "general.log_to_file_hint",

@@ -16,8 +16,8 @@ mod tests;
 
 use gpui::*;
 use moon_ui::{
-    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown, MoonInput,
-    MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, h_flex,
+    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput, MoonInputEvent,
+    MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonSize, h_flex,
 };
 use rust_i18n::t;
 use std::cmp::Ordering;
@@ -441,7 +441,7 @@ impl AnalyticsView {
                 div().font_family(design::ui_font()).child(
                     MoonCheckbox::new("an-strat-active")
                         .checked(self.strat_active_only)
-                        .size(MoonCheckboxSize::Compact)
+                        .size(MoonSize::Sm)
                         .label(t!("analytics.strat.active_only").to_string())
                         .on_change({
                             let view = cx.entity();

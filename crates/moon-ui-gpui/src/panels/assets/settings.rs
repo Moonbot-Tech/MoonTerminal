@@ -8,9 +8,7 @@
 //! disagree about the shape of the list.
 
 use super::*;
-use moon_ui::{
-    MoonCheckbox, MoonCheckboxSize, MoonGroupBox, MoonPopover, MoonPopoverPlacement, MoonTheme,
-};
+use moon_ui::{MoonCheckbox, MoonGroupBox, MoonPopover, MoonPopoverPlacement, MoonSize, MoonTheme};
 
 use crate::panels::{
     COMPACT_CHECKBOX_FONT, COMPACT_CHECKBOX_GAP, COMPACT_CHECKBOX_MARK, POPUP_GROUP_CAPTION_FONT,
@@ -230,7 +228,7 @@ fn display_group(group_by_venue: bool, view: Entity<AssetsView>) -> MoonGroupBox
         MoonCheckbox::new("assets-pref-group-by-venue")
             .label(t!(GROUP_BY_VENUE_LABEL).to_string())
             .checked(group_by_venue)
-            .size(MoonCheckboxSize::Compact)
+            .size(MoonSize::Sm)
             .on_change(move |checked: &bool, _window, app| {
                 let checked = *checked;
                 view.update(app, |this, cx| this.write_group_by_venue(checked, cx));

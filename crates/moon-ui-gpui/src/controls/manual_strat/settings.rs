@@ -21,8 +21,8 @@ use gpui::*;
 use moon_core::config::MANUAL_STRAT_SLOTS;
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
-    MoonCheckboxSize, MoonDropdown, MoonMenuItem, MoonMenuSize, MoonPalette, h_flex, v_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown,
+    MoonMenuItem, MoonMenuSize, MoonPalette, MoonSize, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -137,7 +137,7 @@ pub(super) fn slot_settings_content(
                             MoonCheckbox::new(SharedString::from(format!("ms-slot-show-{slot}")))
                                 .label(format!("{}", slot + 1))
                                 .checked(current.show)
-                                .size(MoonCheckboxSize::Compact)
+                                .size(MoonSize::Sm)
                                 .on_change(move |checked: &bool, _w, app| {
                                     let show = *checked;
                                     show_backend.update(app, |b, cx| {
@@ -226,7 +226,7 @@ pub(super) fn slot_settings_content(
                     MoonCheckbox::new("ms-mb-logic")
                         .label(t!("header.ms_mb_logic").to_string())
                         .checked(mb_logic)
-                        .size(MoonCheckboxSize::Compact)
+                        .size(MoonSize::Sm)
                         .on_change(move |checked: &bool, _w, app| {
                             let on = *checked;
                             logic_backend.update(app, |b, cx| {
@@ -248,7 +248,7 @@ pub(super) fn slot_settings_content(
             MoonCheckbox::new("ms-ignore-strat-sell")
                 .label(t!("header.ms_ignore_strat_sell").to_string())
                 .checked(on)
-                .size(MoonCheckboxSize::Compact)
+                .size(MoonSize::Sm)
                 .on_change(move |checked: &bool, _w, app| {
                     let on = *checked;
                     sell_backend.update(app, |b, cx| {

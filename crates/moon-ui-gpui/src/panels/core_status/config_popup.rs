@@ -9,8 +9,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonMenuSize,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -803,7 +803,7 @@ fn enable_checkbox(
     let backend = backend.clone();
     MoonCheckbox::new(SharedString::from(id))
         .checked(checked)
-        .size(MoonCheckboxSize::Compact)
+        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| {
             let on = *ch;
             backend.update(app, |b, cx| {
@@ -825,7 +825,7 @@ fn chart_checkbox(
     let backend = backend.clone();
     MoonCheckbox::new(SharedString::from(id))
         .checked(checked)
-        .size(MoonCheckboxSize::Compact)
+        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| {
             let on = *ch;
             backend.update(app, |b, cx| {
