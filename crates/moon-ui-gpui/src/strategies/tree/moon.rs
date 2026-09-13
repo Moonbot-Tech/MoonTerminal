@@ -374,6 +374,7 @@ pub(crate) fn build(
 }
 
 /// Build one visible core root with identical contents in grouped and flat tree modes.
+/// Folder positions follow the pending full order immediately, before the core echoes it.
 ///
 /// Args:
 ///     view: Strategies state providing expansion, selection, and retained folders.
@@ -424,12 +425,14 @@ fn build_core_root(
         FolderCounts::totals_only()
     };
     let mut matched: Vec<&StrategyRow> = Vec::new();
+    let mut row_ranks = HashMap::new();
     let mut any_matched = false;
     for (at, row) in cd.strategies.iter().enumerate() {
         counts.add(row, filter, at);
         if filter.matches(row) {
             any_matched = true;
             if core_open {
+                row_ranks.insert(row.id, at);
                 matched.push(row);
             }
         }
@@ -458,6 +461,13 @@ fn build_core_root(
         // reads the whole one, does not agree with.
         let mut all: Vec<&StrategyRow> = cd.strategies.iter().collect();
         moon_core::feed::strategy_order::resequence(&mut all, |row| pending.rank(row.id));
+        // Folder headings must follow the sent order too, including when their first row is hidden.
+        counts = FolderCounts::default();
+        row_ranks.clear();
+        for (at, row) in all.iter().enumerate() {
+            counts.add(row, filter, at);
+            row_ranks.insert(row.id, at);
+        }
         matched = all.into_iter().filter(|row| filter.matches(row)).collect();
     }
     let (active, total) = counts.root();
@@ -478,6 +488,7 @@ fn build_core_root(
             searching,
             engine,
             &counts,
+            &row_ranks,
             &matched,
             &empty_folders,
             &mut children,
@@ -606,6 +617,7 @@ fn build_core_subtree(
     searching: bool,
     engine: Option<bool>,
     counts: &FolderCounts,
+    row_ranks: &HashMap<u64, usize>,
     matched: &[&StrategyRow],
     empty_folders: &[Vec<String>],
     children: &mut Vec<MoonTreeItem>,
@@ -651,6 +663,7 @@ fn build_core_subtree(
         &root,
         core,
         counts,
+        row_ranks,
         &confirmed_folders,
         &order_counts,
         &selected_ids,
@@ -778,8 +791,54 @@ fn core_paths(
         .collect()
 }
 
+/// One rendered child, ordered jointly with folders and strategies by its first wire position.
+enum OrderedSibling<'node, 'row> {
+    /// A folder heading carries its whole rendered subtree at this position.
+    Folder {
+        path: String,
+        name: &'node str,
+        child: &'node super::super::logic::FolderNode<'row>,
+    },
+    /// A strategy directly inside this parent is a one-row sibling block.
+    Strategy(&'row StrategyRow),
+}
+
+/// Merge child folders and loose strategies by the complete displayed order.
+/// Folder ranks include filtered-out descendants; empty folders sort after positioned siblings.
+/// The returned sequence drives rendering and keyboard navigation together.
+fn ordered_siblings<'node, 'row>(
+    node: &'node super::super::logic::FolderNode<'row>,
+    parent: &str,
+    counts: &FolderCounts,
+    row_ranks: &HashMap<u64, usize>,
+) -> Vec<OrderedSibling<'node, 'row>> {
+    let mut siblings: Vec<_> = node
+        .children()
+        .map(|(name, child)| {
+            let path = if parent.is_empty() {
+                name.to_string()
+            } else {
+                format!("{parent}/{name}")
+            };
+            (
+                counts.order_of(&path).unwrap_or(usize::MAX),
+                OrderedSibling::Folder { path, name, child },
+            )
+        })
+        .collect();
+    siblings.extend(node.strategies.iter().map(|row| {
+        (
+            row_ranks.get(&row.id).copied().unwrap_or(usize::MAX),
+            OrderedSibling::Strategy(row),
+        )
+    }));
+    siblings.sort_by_key(|(rank, _)| *rank);
+    siblings.into_iter().map(|(_, sibling)| sibling).collect()
+}
+
 /// Converts one folder node and its subtree.
 ///
+/// Folders and loose strategies share wire order, including a pending folder move.
 /// Every node reached here is visible, so recursion stops at a closed folder because
 /// `MoonTreeState` cannot render its descendants. `engine` is the owning core's confirmed
 /// global-engine flag, copied onto every folder heading so its counters match the core row.
@@ -788,6 +847,7 @@ fn convert_node(
     node: &super::super::logic::FolderNode,
     core: CoreId,
     counts: &FolderCounts,
+    row_ranks: &HashMap<u64, usize>,
     confirmed_folders: &std::collections::HashSet<String>,
     order_counts: &HashMap<u64, usize>,
     selected_ids: &Rc<[u64]>,
@@ -804,134 +864,114 @@ fn convert_node(
     nav: &mut Vec<ops::NavNode>,
     expanded: &mut Vec<SharedString>,
 ) {
-    // Ordered by where each folder's first strategy sits in the core's OWN list — not by where its
-    // first visible one sits, which is what the child order alone would say and which would let a
-    // search box rearrange the tree. An empty folder has no such place and keeps the order it was
-    // appended in, after every folder that does. One allocation per child per level, inside a build
-    // the frame cache already skips on an unchanged signature.
     let parent = prefix.join("/");
-    let mut children: Vec<(usize, String, &str, &super::super::logic::FolderNode)> = node
-        .children()
-        .map(|(name, child)| {
-            // One joined path per child for the whole level. It decides the order here and is then
-            // handed to the loop, which needs the same string for this node's id, its expansion
-            // probe, its selection comparison and its count lookup.
-            let path = match parent.is_empty() {
-                true => name.to_string(),
-                false => format!("{parent}/{name}"),
-            };
-            (
-                counts.order_of(&path).unwrap_or(usize::MAX),
-                path,
-                name,
-                child,
-            )
-        })
-        .collect();
-    children.sort_by_key(|(at, _, _, _)| *at);
-    for (_, path, name, child) in children {
-        prefix.push(name.to_string());
-        let fid = id_folder(core, &path);
-        let fopen = searching || folders.open.contains(path.as_str());
-        // Read before `path` is moved into the selection comparison below.
-        let fchecked = subtree_displayed_all_checked(
-            &subtree_check_targets(strategies, prefix, filter),
-            &view.staged,
-            core,
-        );
-        let (active, total) = counts.for_path(&path);
-        // Asked of the COUNTS, not of `total`, which the kind and direction filters narrow: a
-        // folder whose strategies are all filtered away is not an empty folder, and drawing it as
-        // one would take its caret away while its contents are one filter click from returning.
-        let fill = match counts.knows(&path) {
-            true => FolderFill::Populated,
-            false => match confirmed_folders.contains(&path.to_lowercase()) {
-                true => FolderFill::EmptyOnCore,
-                false => FolderFill::EmptyLocal,
-            },
-        };
-        // The folder row itself, before whatever it contains. A CLOSED folder is still pushed —
-        // it is drawn — while its children are not, which is what keeps the order navigable.
-        nav.push(ops::NavNode::Folder(core, path.clone()));
-        let mut fchildren = Vec::new();
-        if fopen {
-            expanded.push(fid.clone());
-            convert_node(
-                child,
-                core,
-                counts,
-                confirmed_folders,
-                order_counts,
-                selected_ids,
-                folders,
-                prefix,
-                view,
-                strategies,
-                filter,
-                searching,
-                engine,
-                &mut fchildren,
-                data,
-                flat,
-                nav,
-                expanded,
-            );
+    for sibling in ordered_siblings(node, &parent, counts, row_ranks) {
+        match sibling {
+            OrderedSibling::Folder { path, name, child } => {
+                prefix.push(name.to_string());
+                let fid = id_folder(core, &path);
+                let fopen = searching || folders.open.contains(path.as_str());
+                // Read before `path` is moved into the selection comparison below.
+                let fchecked = subtree_displayed_all_checked(
+                    &subtree_check_targets(strategies, prefix, filter),
+                    &view.staged,
+                    core,
+                );
+                let (active, total) = counts.for_path(&path);
+                // Asked of the COUNTS, not of `total`, which the kind and direction filters narrow: a
+                // folder whose strategies are all filtered away is not an empty folder, and drawing it as
+                // one would take its caret away while its contents are one filter click from returning.
+                let fill = match counts.knows(&path) {
+                    true => FolderFill::Populated,
+                    false => match confirmed_folders.contains(&path.to_lowercase()) {
+                        true => FolderFill::EmptyOnCore,
+                        false => FolderFill::EmptyLocal,
+                    },
+                };
+                // The folder row itself, before whatever it contains. A CLOSED folder is still pushed —
+                // it is drawn — while its children are not, which is what keeps the order navigable.
+                nav.push(ops::NavNode::Folder(core, path.clone()));
+                let mut fchildren = Vec::new();
+                if fopen {
+                    expanded.push(fid.clone());
+                    convert_node(
+                        child,
+                        core,
+                        counts,
+                        row_ranks,
+                        confirmed_folders,
+                        order_counts,
+                        selected_ids,
+                        folders,
+                        prefix,
+                        view,
+                        strategies,
+                        filter,
+                        searching,
+                        engine,
+                        &mut fchildren,
+                        data,
+                        flat,
+                        nav,
+                        expanded,
+                    );
+                }
+                data.insert(
+                    fid.clone(),
+                    NodeData::Folder {
+                        core,
+                        path: prefix.clone(),
+                        label: name.to_string(),
+                        active,
+                        total,
+                        selected: view.folder_sel.contains(&(core, path)),
+                        checked: fchecked,
+                        fill,
+                        engine,
+                    },
+                );
+                out.push(
+                    MoonTreeItem::new(fid, name.to_string())
+                        .folder(true)
+                        .children(fchildren),
+                );
+                prefix.pop();
+            }
+            OrderedSibling::Strategy(r) => {
+                let key: Key = (core, r.id);
+                let sid = id_strat(core, r.id);
+                let staged = view.staged.get(&key).copied();
+                let cut = view
+                    .cut
+                    .as_ref()
+                    .is_some_and(|cut| cut.dims(key, &r.folder_path));
+                let in_sel = view.sel.contains(&key);
+                let highlighted = if view.sel.is_empty() {
+                    view.selected == Some(key)
+                } else {
+                    in_sel
+                };
+                flat.push(key);
+                nav.push(ops::NavNode::Strategy(core, r.id));
+                data.insert(
+                    sid.clone(),
+                    NodeData::Strategy {
+                        core,
+                        id: r.id,
+                        name: r.name.clone(),
+                        kind: r.kind.clone(),
+                        open_orders: order_counts.get(&r.id).copied().unwrap_or(0),
+                        server_checked: r.checked,
+                        staged,
+                        highlighted,
+                        is_short: r.is_short,
+                        cut,
+                        drag_ids: in_sel.then(|| selected_ids.clone()),
+                    },
+                );
+                out.push(MoonTreeItem::new(sid, r.name.clone()));
+            }
         }
-        data.insert(
-            fid.clone(),
-            NodeData::Folder {
-                core,
-                path: prefix.clone(),
-                label: name.to_string(),
-                active,
-                total,
-                selected: view.folder_sel.contains(&(core, path)),
-                checked: fchecked,
-                fill,
-                engine,
-            },
-        );
-        out.push(
-            MoonTreeItem::new(fid, name.to_string())
-                .folder(true)
-                .children(fchildren),
-        );
-        prefix.pop();
-    }
-
-    for r in &node.strategies {
-        let key: Key = (core, r.id);
-        let sid = id_strat(core, r.id);
-        let staged = view.staged.get(&key).copied();
-        let cut = view
-            .cut
-            .as_ref()
-            .is_some_and(|cut| cut.dims(key, &r.folder_path));
-        let in_sel = view.sel.contains(&key);
-        let highlighted = if view.sel.is_empty() {
-            view.selected == Some(key)
-        } else {
-            in_sel
-        };
-        flat.push(key);
-        nav.push(ops::NavNode::Strategy(core, r.id));
-        data.insert(
-            sid.clone(),
-            NodeData::Strategy {
-                core,
-                id: r.id,
-                name: r.name.clone(),
-                kind: r.kind.clone(),
-                open_orders: order_counts.get(&r.id).copied().unwrap_or(0),
-                server_checked: r.checked,
-                staged,
-                highlighted,
-                is_short: r.is_short,
-                cut,
-                drag_ids: in_sel.then(|| selected_ids.clone()),
-            },
-        );
-        out.push(MoonTreeItem::new(sid, r.name.clone()));
     }
 }
 

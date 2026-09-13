@@ -1,9 +1,29 @@
-//! Unit tests for the unconfirmed-order overlay.
+//! Unit tests for the folder arrow subject and unconfirmed-order overlay.
 //!
 //! Imports are explicit rather than `use super::*`: this module's ancestors re-export `gpui::*`,
 //! whose `test` shadows the attribute and makes `#[test]` recurse (see `presentation/tests.rs`).
 
-use super::PendingOrder;
+use super::{PendingOrder, folder_subject};
+use std::collections::HashSet;
+
+/// Dropping any subject guard would let arrows move multiple folders, a stale hidden core,
+/// or a folder while the existing strategy selection still owns the command.
+#[test]
+fn folder_subject_requires_one_folder_without_strategies_in_the_workspace() {
+    let mut folders = HashSet::from([(7, "P/F".to_string())]);
+    assert_eq!(
+        folder_subject(&folders, false, Some(&[7])),
+        Some((7, vec!["P".into(), "F".into()]))
+    );
+    assert_eq!(folder_subject(&folders, true, Some(&[7])), None);
+    assert_eq!(folder_subject(&folders, false, Some(&[8])), None);
+    folders.insert((7, "P/G".into()));
+    assert_eq!(folder_subject(&folders, false, None), None);
+    assert_eq!(
+        folder_subject(&HashSet::from([(7, String::new())]), false, None),
+        None
+    );
+}
 
 /// The core has applied exactly what was sent, so the overlay has done its job and must go — a
 /// confirmed overlay that stayed would keep outranking the core on every later change.

@@ -669,6 +669,52 @@ pub fn reorder_step(
     moved.then_some(order)
 }
 
+/// Swap a populated folder's complete subtree with its adjacent sibling block.
+///
+/// `rows` is the complete displayed order, including filtered-out strategies. A sibling is
+/// either a child folder of the same parent (all descendants) or one strategy directly in that
+/// parent. Empty folders have no ids and therefore no movable position. Nested moves rewrite
+/// only their parent's slots; every block retains its current internal order.
+/// Returns the complete id sequence, or `None` for an empty folder, root, or boundary move.
+pub fn reorder_folder_step(
+    rows: &[&StrategyRow],
+    folder: &[String],
+    step: MoveStep,
+) -> Option<Vec<u64>> {
+    let (name, parent) = folder.split_last()?;
+    let mut slots = Vec::new();
+    let mut blocks: Vec<Vec<u64>> = Vec::new();
+    let mut folders = std::collections::HashMap::new();
+    for (at, row) in rows.iter().enumerate() {
+        if !path_starts_with(&row.folder_path, parent) {
+            continue;
+        }
+        slots.push(at);
+        let block = match path_segments(&row.folder_path).nth(parent.len()) {
+            Some(child) => *folders.entry(child).or_insert_with(|| {
+                blocks.push(Vec::new());
+                blocks.len() - 1
+            }),
+            None => {
+                blocks.push(Vec::new());
+                blocks.len() - 1
+            }
+        };
+        blocks[block].push(row.id);
+    }
+    let at = *folders.get(name.as_str())?;
+    let neighbor = match step {
+        MoveStep::Up => at.checked_sub(1)?,
+        MoveStep::Down => (at + 1 < blocks.len()).then_some(at + 1)?,
+    };
+    blocks.swap(at, neighbor);
+    let mut order: Vec<u64> = rows.iter().map(|row| row.id).collect();
+    for (slot, id) in slots.into_iter().zip(blocks.into_iter().flatten()) {
+        order[slot] = id;
+    }
+    Some(order)
+}
+
 // --- Keyboard navigation over the drawn rows ------------------------------
 
 /// One row the tree currently DRAWS, in draw order.

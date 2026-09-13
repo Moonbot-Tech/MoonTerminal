@@ -2,6 +2,11 @@
 # rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
 _version: 2
 
+strat.empty_folder_reorder:
+  ru: "У пустой папки нет стратегий: ядро не может сохранить её позицию."
+  en: "An empty folder has no strategies, so the core cannot store its position."
+  es: "Una carpeta vacía no tiene estrategias, por lo que el núcleo no puede guardar su posición."
+
 strat.window_title:
   ru: "MoonTerminal — Стратегии"
   en: "MoonTerminal — Strategies"

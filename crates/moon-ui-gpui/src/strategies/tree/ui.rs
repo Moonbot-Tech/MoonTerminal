@@ -1106,7 +1106,7 @@ impl StrategiesView {
         store: &CoreStore,
         show_labels: bool,
         has_visible_cores: bool,
-        moves: (bool, bool),
+        moves: (bool, bool, bool),
         cx: &Context<Self>,
     ) -> AnyElement {
         let (has_sel, all_off) = self.selection_summary(store);
@@ -1131,8 +1131,8 @@ impl StrategiesView {
         let delete_label = t!("strat.action_delete").to_string();
         let icon_width = design::glyph_btn_w(cx);
 
-        let move_up = self.move_button(ops::MoveStep::Up, moves.0, icon_width, cx);
-        let move_down = self.move_button(ops::MoveStep::Down, moves.1, icon_width, cx);
+        let move_up = self.move_button(ops::MoveStep::Up, moves.0, moves.2, icon_width, cx);
+        let move_down = self.move_button(ops::MoveStep::Down, moves.1, moves.2, icon_width, cx);
 
         let mut copy = MoonButton::new("sel-copy")
             .outline()
@@ -1192,6 +1192,7 @@ impl StrategiesView {
     /// Args:
     ///     step: Direction this button moves the selection.
     ///     enabled: Whether the cached plan says it would rearrange anything.
+    ///     empty_folder: Whether the selected folder has no position the core can store.
     ///     icon_width: Shared icon-density button width.
     ///     cx: View context used to build the click listener.
     ///
@@ -1201,6 +1202,7 @@ impl StrategiesView {
         &self,
         step: ops::MoveStep,
         enabled: bool,
+        empty_folder: bool,
         icon_width: f32,
         cx: &Context<Self>,
     ) -> MoonButton {
@@ -1223,7 +1225,11 @@ impl StrategiesView {
             .size(MoonButtonSize::Action)
             .width(icon_width)
             .leading_icon(MoonButtonIconSlot::new(icon))
-            .tooltip(format!("{label} · {chord}"))
+            .tooltip(if empty_folder {
+                t!("strat.empty_folder_reorder").to_string()
+            } else {
+                format!("{label} · {chord}")
+            })
             .disabled(!enabled)
             .on_click(cx.listener(move |this, _, _, cx| this.move_selection(step, cx)))
     }
