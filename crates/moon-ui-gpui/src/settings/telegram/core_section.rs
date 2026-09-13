@@ -89,7 +89,7 @@ fn masked_input(window: &mut Window, cx: &mut Context<SettingsView>) -> Entity<M
 }
 
 impl SettingsView {
-    /// Render the core-reader group box as the last child of the Telegram tab.
+    /// Render the core-reader group box beneath its segment's introduction.
     pub(super) fn core_telegram_section(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
@@ -97,12 +97,6 @@ impl SettingsView {
             .title(t!("telegram_core.section").to_string())
             .padding(14.0)
             .gap(10.0)
-            .child(
-                div()
-                    .font_family(design::ui_font())
-                    .text_color(muted)
-                    .child(t!("telegram_core.intro").to_string()),
-            )
             .child(self.core_picker_row(cx, p))
             .when(self.telegram.core.expanded, |box_| {
                 box_.child(self.core_telegram_body(cx, p, muted))

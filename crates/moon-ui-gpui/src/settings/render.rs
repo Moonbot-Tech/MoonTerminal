@@ -56,7 +56,7 @@ impl Render for SettingsView {
             Tab::Badges => self.badges_tab(cx).into_any_element(),
             Tab::Connections => self.connections_tab(cx).into_any_element(),
             Tab::Storage => self.storage_tab(cx).into_any_element(),
-            Tab::Telegram => self.telegram_tab(cx).into_any_element(),
+            Tab::Telegram => self.telegram_tab(chrome_width, cx).into_any_element(),
             Tab::TradeSounds => self.trade_sounds_tab(chrome_width, cx).into_any_element(),
         };
         // Keep the viewport bounded but measure its child at intrinsic height. The convenience
