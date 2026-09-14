@@ -768,8 +768,8 @@ impl ChartTabs {
         // exist, but leave startup window/tab presentation to Shell's seeded revision cursor.
         this.handle_open_request(false, cx);
         this.sync_active_scale(cx);
-        this.sync_super_zoom(cx);
         this.initialize_main_chart_target(cx);
+        this.sync_super_zoom(cx);
         this.persist_scales(cx);
         this
     }
