@@ -2,7 +2,6 @@
 //! shared [`Backend`] creation, background loops (feed wakes and coordination), and group windows.
 //! Extracted verbatim from `main.rs` (the former `main()` body is now [`run`]).
 
-use std::borrow::Cow;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -217,26 +216,6 @@ fn consume_report_commit(dirty: Option<&std::sync::atomic::AtomicBool>, on_commi
     if dirty.is_some_and(|dirty| dirty.swap(false, Ordering::AcqRel)) {
         on_commit();
     }
-}
-
-/// Fonts the terminal registers on top of MoonUI's own.
-///
-/// Inter is not among them: `moon_ui::init` registers MoonUI's static Inter cuts (Regular, Medium,
-/// SemiBold, Bold) under the `"Inter"` family the theme and `design::ui_font` name, and a second
-/// `"Inter"` registered here would compete with them for every weight. Geist Mono stays, because
-/// MoonUI ships only its Regular and Bold while the chart draws at 500 and 600.
-fn embedded_fonts() -> Vec<Cow<'static, [u8]>> {
-    vec![
-        include_bytes!("../../../assets/fonts/GeistMono-400.ttf")
-            .as_slice()
-            .into(),
-        include_bytes!("../../../assets/fonts/GeistMono-500.ttf")
-            .as_slice()
-            .into(),
-        include_bytes!("../../../assets/fonts/GeistMono-600.ttf")
-            .as_slice()
-            .into(),
-    ]
 }
 
 /// The MoonUI theme for one interface mode, with `ThemeMode` already set on it.
@@ -642,6 +621,11 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     // (such as the `cleanable` clear icon, CircleX) cannot find their SVGs and render empty.
     let app = gpui_platform::application().with_assets(moon_ui::MoonAssets);
     app.run(move |cx| {
+        // Also registers every font the terminal draws with: MoonUI's static Inter and Geist Mono
+        // cuts at Regular, Medium, SemiBold and Bold, the families `design::ui_font` and
+        // `design::mono` name. Register no copy of either here: macOS maps a shaped run back to its
+        // font by PostScript name, so a second file under an existing name draws one cut's glyph
+        // ids from the other's outlines (#558).
         init_moon_ui(cx);
         // Right after the components, never before: `init_moon_ui` installs an inspector renderer
         // of its own, and both that renderer and the per-state registration are last-one-wins.
@@ -657,9 +641,6 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
         gpui::set_macos_control_click_as_secondary(false);
         // Inert without `MOON_CRASH_PROBE` in the environment.
         crash::arm_probe_if_requested(cx);
-        cx.text_system()
-            .add_fonts(embedded_fonts())
-            .expect("failed to add embedded Moonbot fonts");
         // The configuration is loaded HERE rather than before the event loop, because opening it
         // may require asking the user for a password, and asking requires a window. `unlock` runs
         // whatever prompts are due and calls `boot` once the terminal is actually unlocked.

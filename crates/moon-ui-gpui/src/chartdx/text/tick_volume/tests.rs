@@ -67,7 +67,7 @@ fn volume_readout_requires_hovering_a_visible_band() {
     );
 }
 
-/// Measured from bundled GeistMono-Regular.ttf with fontTools: head.unitsPerEm = 1000,
+/// Measured from MoonUI's bundled GeistMono-Regular.ttf with fontTools: head.unitsPerEm = 1000,
 /// hmtx advance = 600 for digits, punctuation, Latin and Cyrillic characters used here.
 /// At the requested 13px default, the independent 0.6em advance is 7.8px and the
 /// four-pixel leading gives a 17px line. Do not derive these from production constants.
