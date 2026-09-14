@@ -1,5 +1,54 @@
 use super::*;
 
+/// Sending the inclusive end as an exclusive timestamp drops all exit-ms ticks; completing on
+/// equality at the left edge also loses siblings when a same-ms scalp takes multiple pages.
+#[test]
+fn initial_anchor_includes_exit_and_id_pages_exhaust_same_millisecond() {
+    let trades = [(103u64, 5_001i64), (102, 5_000), (101, 5_000), (100, 4_999)];
+    let mut cursor = None;
+    let mut retained = Vec::new();
+    for _ in 0..3 {
+        let (kind, after) = trade_anchor(5_000, cursor);
+        let bound = after.parse::<u64>().unwrap();
+        let &(id, ts) = trades
+            .iter()
+            .find(|(id, ts)| match kind {
+                "2" => (*ts as u64) < bound,
+                "1" => *id < bound,
+                _ => panic!("invalid pagination type"),
+            })
+            .expect("fake exclusive-bound server has a matching row");
+        let page = parse_history_trades(
+            &serde_json::json!({"data": [{
+                "tradeId": id.to_string(), "ts": ts.to_string(),
+                "px": "10", "sz": "1", "side": "buy"
+            }]}),
+            1,
+            5_000,
+        )
+        .unwrap();
+        retained.extend(
+            page.ticks
+                .iter()
+                .filter(|t| t.time_ms == 5_000.0)
+                .map(|_| id),
+        );
+        cursor = page.next;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(
+        retained,
+        vec![102, 101],
+        "both exit-ms siblings must survive, without the later trade"
+    );
+    assert_eq!(
+        cursor, None,
+        "only an older timestamp proves the scalp fully fetched"
+    );
+}
+
 fn fixture(name: &str) -> Value {
     let text = match name {
         "spot" => include_str!("fixtures/spot_klines.json"),
