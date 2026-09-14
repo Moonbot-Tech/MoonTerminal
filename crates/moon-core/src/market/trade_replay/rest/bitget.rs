@@ -223,6 +223,7 @@ pub(super) fn classify_fills(status: u16, body: &Value) -> Result<(), FetchError
 }
 
 /// Parse a BitGet fills envelope into a page of ticks.
+/// A full page ending at the inclusive left edge must continue to retain same-ms sibling IDs.
 ///
 /// Rows arrive DESCENDING (newest first, per the vendor's own doc), so the oldest row in this
 /// page is the LAST one — that is what both the next cursor and the window-covered check key on.
@@ -263,7 +264,7 @@ pub(super) fn parse_fills(
         .map(|v| v as u64);
     let oldest_time_ms = rows.last().and_then(|r| r.get("ts")).and_then(cell_i64);
     let full = rows.len() >= max_rows;
-    let covered = oldest_time_ms.is_some_and(|t| t <= from_ms);
+    let covered = oldest_time_ms.is_some_and(|t| t < from_ms);
     let next = match (full, covered, oldest_id) {
         (true, false, Some(id)) => Some(TradeCursor::LessThanId(id)),
         // Full page, window not covered, but the oldest row's own `tradeId` did not parse: the
