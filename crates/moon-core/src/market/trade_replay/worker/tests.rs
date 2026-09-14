@@ -347,6 +347,7 @@ fn late_core_upgrade_is_detected_between_pages() {
 fn paginator_publishes_contiguous_groups() {
     let plan = TickPlan {
         slices: vec![(100, 199), (200, 299)],
+        trade_len: 0,
         focus_len: 1,
     };
     let mut observer = FakeObserver::default();
@@ -356,7 +357,7 @@ fn paginator_publishes_contiguous_groups() {
         100,
         10,
         || false,
-        || false,
+        |_| false,
         &mut observer,
         |from, _, _| page(vec![tick(from + 5, 10.0)]),
     );
@@ -454,6 +455,7 @@ fn retention_is_decided_from_the_trade_focus_not_padded_context() {
 fn budget_stops_after_whole_focus_slices_and_serves_their_harvest() {
     let plan = TickPlan {
         slices: vec![(100, 199), (200, 299), (0, 99)],
+        trade_len: 0,
         focus_len: 2,
     };
     let mut observer = FakeObserver::default();
@@ -464,7 +466,7 @@ fn budget_stops_after_whole_focus_slices_and_serves_their_harvest() {
         40_000,
         10,
         || false,
-        || false,
+        |_| false,
         &mut observer,
         |from_ms, _, _| {
             page(
@@ -501,6 +503,7 @@ fn budget_stops_after_whole_focus_slices_and_serves_their_harvest() {
 fn deadline_with_a_non_empty_harvest_is_ready_not_abandoned() {
     let plan = TickPlan {
         slices: vec![(100, 199), (0, 99)],
+        trade_len: 0,
         focus_len: 1,
     };
     let fetched = Cell::new(false);
@@ -512,7 +515,7 @@ fn deadline_with_a_non_empty_harvest_is_ready_not_abandoned() {
         40_000,
         10,
         || false,
-        || fetched.get(),
+        |_| fetched.get(),
         &mut observer,
         |from_ms, _, _| {
             fetched.set(true);
@@ -545,6 +548,7 @@ fn deadline_with_a_non_empty_harvest_is_ready_not_abandoned() {
 fn each_fetched_page_is_clipped_to_its_own_slice_before_collection() {
     let plan = TickPlan {
         slices: vec![(100, 199), (200, 299)],
+        trade_len: 0,
         focus_len: 1,
     };
     let mut observer = FakeObserver::default();
@@ -554,7 +558,7 @@ fn each_fetched_page_is_clipped_to_its_own_slice_before_collection() {
         40_000,
         10,
         || false,
-        || false,
+        |_| false,
         &mut observer,
         |from_ms, _, _| match from_ms {
             100 => page(vec![

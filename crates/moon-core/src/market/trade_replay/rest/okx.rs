@@ -175,7 +175,7 @@ fn parse_row(row: &Value, volume_cell: usize) -> Option<ChartCandle> {
 ///
 /// `history-trades` has no `startTime`/`endTime` pair whatsoever, unlike the candle endpoint. The
 /// FIRST page of a slice has nothing else to anchor to, so it uses `type=2&after=<right edge
-/// ms>`, walking strictly backward from the slice's own right edge.
+/// ms + 1>`, walking strictly backward while including the slice's own right edge.
 ///
 /// Every LATER page switches to `type=1&after=<oldest row's tradeId>` instead of continuing with
 /// `type=2` at the previous page's oldest timestamp. `type=2`'s `after` is EXCLUSIVE of the given
@@ -202,27 +202,33 @@ pub(super) fn fetch_trades(
     max_rows: usize,
     cursor: Option<TradeCursor>,
 ) -> Result<Value, FetchError> {
+    let (kind, after) = trade_anchor(to_ms, cursor);
     let request = agent
         .get(route.url())
         .query("instId", market)
-        .query("limit", max_rows.to_string());
-    let request = match cursor {
-        Some(TradeCursor::LessThanId(id)) => {
-            request.query("type", "1").query("after", id.to_string())
-        }
-        None => request.query("type", "2").query("after", to_ms.to_string()),
+        .query("limit", max_rows.to_string())
+        .query("type", kind)
+        .query("after", after);
+    let response = request
+        .call()
+        .map_err(|error| FetchError::Transient(error.to_string()))?;
+    super::decode_and_classify(response, "okx", classify)
+}
+
+/// Translate an inclusive slice end into OKX's exclusive anchor; ID continuations stay exact.
+/// Returns the pagination type and its `after` value without making an HTTP request.
+fn trade_anchor(to_ms: i64, cursor: Option<TradeCursor>) -> (&'static str, String) {
+    match cursor {
+        Some(TradeCursor::LessThanId(id)) => ("1", id.to_string()),
+        None => ("2", to_ms.saturating_add(1).to_string()),
         Some(_) => {
             debug_assert!(
                 false,
                 "okx trade route hands back only LessThanId after the first page"
             );
-            request.query("type", "2").query("after", to_ms.to_string())
+            ("2", to_ms.saturating_add(1).to_string())
         }
-    };
-    let response = request
-        .call()
-        .map_err(|error| FetchError::Transient(error.to_string()))?;
-    super::decode_and_classify(response, "okx", classify)
+    }
 }
 
 /// Parse an OKX `history-trades` envelope into a page of ticks.

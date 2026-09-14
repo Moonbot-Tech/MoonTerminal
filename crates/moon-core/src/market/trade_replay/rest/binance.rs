@@ -212,6 +212,7 @@ pub(super) fn fetch_trades(
 }
 
 /// Parse a Binance aggregate-trade array into a page of ticks.
+/// A full page ending at the inclusive right edge must continue: more IDs may share that stamp.
 ///
 /// Args:
 ///     body: Decoded response.
@@ -245,7 +246,7 @@ pub(super) fn parse_agg_trades(
     let last_id = rows.last().and_then(|r| r.get("a")).and_then(Value::as_u64);
     let last_time_ms = rows.last().and_then(|r| r.get("T")).and_then(Value::as_i64);
     let full = rows.len() >= max_rows;
-    let covered = last_time_ms.is_some_and(|t| t >= to_ms);
+    let covered = last_time_ms.is_some_and(|t| t > to_ms);
     let next = match (full, covered, last_id) {
         (true, false, Some(id)) => Some(TradeCursor::FromId(id + 1)),
         // The page is full and the window is not yet covered, but the last row's own `a` (trade
@@ -298,3 +299,6 @@ fn parse_trade_row(row: &Value) -> Option<Tick> {
         side,
     })
 }
+
+#[cfg(test)]
+mod tests;

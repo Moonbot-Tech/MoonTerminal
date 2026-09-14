@@ -2,6 +2,22 @@ use super::*;
 
 use serde_json::json;
 
+/// Completing on equality drops older fill IDs at the entry millisecond. Only crossing the
+/// bound or exhausting a short page proves that every boundary sibling was fetched.
+#[test]
+fn full_boundary_pages_continue_until_entry_siblings_are_exhausted() {
+    let row =
+        |id, stamp| json!({"tradeId": id, "ts": stamp, "price": "10", "size": "1", "side": "buy"});
+    let first = parse_fills(&json!({"data": [row("102", "5000")]}), 1, 5_000).unwrap();
+    assert_eq!(first.next, Some(TradeCursor::LessThanId(102)));
+    let sibling = parse_fills(&json!({"data": [row("101", "5000")]}), 1, 5_000).unwrap();
+    assert_eq!(sibling.next, Some(TradeCursor::LessThanId(101)));
+    let crossed = parse_fills(&json!({"data": [row("100", "4999")]}), 1, 5_000).unwrap();
+    assert_eq!(crossed.next, None);
+    let exhausted = parse_fills(&json!({"data": [row("101", "5000")]}), 2, 5_000).unwrap();
+    assert_eq!(exhausted.next, None);
+}
+
 fn fixture(name: &str) -> Value {
     let text = match name {
         "spot" => include_str!("fixtures/spot_klines.json"),
