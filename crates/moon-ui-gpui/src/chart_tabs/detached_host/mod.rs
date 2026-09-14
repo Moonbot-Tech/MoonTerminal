@@ -576,6 +576,12 @@ impl DetachedChartHost {
                 });
                 true
             }
+            HotkeyAction::SuperZoomIn | HotkeyAction::SuperZoomOut => {
+                self.panel.update(cx, |st, scx| {
+                    st.super_zoom(matches!(action, HotkeyAction::SuperZoomIn), scx);
+                });
+                true
+            }
             HotkeyAction::ScalePlus | HotkeyAction::ScaleMinus => {
                 // "+" is the scale NUMBER growing, not the zoom: Moonbot's Scale + widens the band.
                 let scale_up = matches!(action, HotkeyAction::ScalePlus);

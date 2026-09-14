@@ -195,8 +195,10 @@ const DEFAULT_HISTORY_MS: f32 = 6.0 * 60.0 * 60.0 * 1000.0;
 const DEFAULT_RIGHT_MARGIN_FRAC: f32 = 0.10;
 /// Full default viewport required to retain the history after reserving the future margin.
 const DEFAULT_WINDOW_MS: f32 = DEFAULT_HISTORY_MS / (1.0 - DEFAULT_RIGHT_MARGIN_FRAC);
-/// Minimum visible window at maximum zoom-in (previously limited to the default 60 s).
+/// Plain wheel zoom stops at a 30-second plot window.
 const MIN_WINDOW_MS: f32 = 30_000.0;
+/// Ctrl+Shift+wheel and super-zoom hotkeys allow a three-second plot window.
+const SUPER_MIN_WINDOW_MS: f32 = 3_000.0;
 /// How long to keep manual X mode after the last pan before automatically returning to live.
 const MANUAL_HOLD_MS: f64 = 3000.0;
 
@@ -847,6 +849,8 @@ impl ChartView {
     /// X view, preserves the time under the cursor and may re-anchor to live after a discrete step.
     ///
     /// Args:
+    ///     super_zoom: Allow the three-second floor instead of the plain 30-second floor.
+    ///         Plain input preserves a narrower current window instead of snapping back.
     ///     factor: Multiplicative zoom step.
     ///     area_w: Plot width in logical pixels.
     ///     cursor_x: Cursor coordinate within the plot.
@@ -854,7 +858,14 @@ impl ChartView {
     ///
     /// Returns:
     ///     Nothing; the X scale and anchor are updated in place.
-    pub fn zoom_x_at(&mut self, factor: f32, area_w: f32, cursor_x: f32, now_ms: f64) {
+    pub fn zoom_x_at(
+        &mut self,
+        factor: f32,
+        area_w: f32,
+        cursor_x: f32,
+        now_ms: f64,
+        super_zoom: bool,
+    ) {
         // A local invariant rather than a promise extracted from every caller: the clamp below
         // returns a NaN unchanged, `next` is computed from the RAW `px_per_ms` rather than the
         // floored `old_px`, and `x_default_scale`'s comparison never matches a NaN again — so one
@@ -876,9 +887,15 @@ impl ChartView {
         } else {
             0.0005
         };
-        // Manual zoom remains independent of the much wider built-in default and reaches the same
-        // 30-second minimum window at every plot width.
-        let hi = (area_w.max(1.0) / MIN_WINDOW_MS).max(lo);
+        // Plain input may zoom out from super zoom, but must never widen on a zoom-in step.
+        let floor = if super_zoom {
+            SUPER_MIN_WINDOW_MS
+        } else {
+            MIN_WINDOW_MS
+        };
+        let current_window = area_w.max(1.0) / old_px;
+        let effective_floor = floor.min(current_window).max(SUPER_MIN_WINDOW_MS);
+        let hi = (area_w.max(1.0) / effective_floor).max(lo);
         self.px_per_ms = next.clamp(lo, hi);
         self.x_default_scale = (self.px_per_ms - self.phase_default_px_per_ms).abs() <= 1e-9;
         if was_follow {

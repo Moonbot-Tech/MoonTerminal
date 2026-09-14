@@ -270,6 +270,12 @@ struct Backend {
     /// Addressable scale-request revision, incremented by dropdown changes, scale hotkeys, and FireTest.
     /// `ChartTabs` applies `price_scale` to the active panel when this grows, not on every frame.
     price_scale_rev: u64,
+    /// Group owning the latest time-axis super-zoom hotkey step.
+    super_zoom_group: Option<String>,
+    /// Direction of the latest time-axis step.
+    super_zoom_in: bool,
+    /// Revision consumed by the addressed group's active chart tab.
+    super_zoom_rev: u64,
     /// Window group whose Main stack should switch its active chart for the `switch_charts` hotkey.
     switch_charts_group: Option<String>,
     /// Active-chart switch-request revision, incremented on every hotkey press.

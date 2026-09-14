@@ -120,6 +120,10 @@ groups:
     action:
       ru: Зум по времени
       en: Zoom by time
+  - combo: Ctrl+Shift+Wheel
+    action:
+      ru: Супер-зум по времени до 3 секунд
+      en: Super zoom by time down to 3 seconds
   - combo: Shift+Wheel / Alt+Wheel
     action:
       ru: Прокрутка графика влево-вправо

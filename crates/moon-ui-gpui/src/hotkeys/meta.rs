@@ -219,6 +219,8 @@ pub fn key_slot_meta(slot: KeySlot) -> SlotMeta {
         S::CancelAllBuys => meta(Shared, Scope::WINDOW),
         // Group-owned: the group's charts and the group's price scale.
         S::SwitchCharts | S::ScalePlus | S::ScaleMinus => meta(Shared, Scope::WINDOW),
+        // The Moonbot schema has no super-zoom key slots to import.
+        S::SuperZoomIn | S::SuperZoomOut => meta(Local, Scope::WINDOW),
         // Shoots the last chart the pointer visited IN THIS WINDOW (`panels::chart::shot`), so it is
         // window-bounded and pointer-chosen at once.
         S::ChartShot => meta(Shared, AIMED),

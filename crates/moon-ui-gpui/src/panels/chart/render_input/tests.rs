@@ -27,3 +27,21 @@ fn a_shift_wheel_is_read_off_the_axis_windows_files_it_under() {
     // A Shift gesture that really did move Y keeps Y, so the fallback cannot steal it.
     assert_eq!(wheel_delta(9.0, 3.0, Modifiers::shift()), 3.0);
 }
+
+/// Checking Shift pan before Ctrl+Shift turns super zoom into a horizontal pan on Windows.
+#[test]
+fn super_zoom_routes_windows_shift_delta_before_pan() {
+    use super::wheel_mode;
+    use crate::chartdx::input::WheelMode;
+    let super_mods = Modifiers {
+        control: true,
+        shift: true,
+        ..Modifiers::default()
+    };
+    assert_eq!(wheel_mode(super_mods), WheelMode::SuperZoom);
+    assert_eq!(wheel_delta(3.0, 0.0, super_mods), 3.0);
+    assert_eq!(wheel_delta(-3.0, 0.0, super_mods), -3.0);
+    assert_eq!(wheel_mode(Modifiers::shift()), WheelMode::Pan);
+    assert_eq!(wheel_mode(Modifiers::alt()), WheelMode::Pan);
+    assert_eq!(wheel_mode(Modifiers::default()), WheelMode::Zoom);
+}

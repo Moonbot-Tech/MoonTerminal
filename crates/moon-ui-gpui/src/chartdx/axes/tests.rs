@@ -52,3 +52,18 @@ fn fall_back_axis_keeps_both_real_hour_boundaries_in_order() {
             .all(|pair| pair[1] - pair[0] == 3_600_000.0)
     );
 }
+
+/// Rounding sub-minute axis boundaries to minutes would erase the super-zoom time scale.
+#[test]
+fn super_zoom_axis_keeps_three_distinct_second_boundaries() {
+    let left = 1_700_000_000_250.0;
+    let ticks = aligned_ticks_ms_in_zone(left, left + 3000.0, 1000.0, chrono_tz::UTC);
+    assert_eq!(
+        ticks,
+        vec![
+            1_700_000_001_000.0,
+            1_700_000_002_000.0,
+            1_700_000_003_000.0
+        ]
+    );
+}

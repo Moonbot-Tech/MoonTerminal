@@ -296,3 +296,19 @@ fn the_gesture_marks_name_exactly_the_gestures_the_pull_writes() {
         );
     }
 }
+
+/// Misclassifying super zoom as a core-imported slot would overwrite the user's local binding.
+#[test]
+fn super_zoom_rows_are_local_unbound_chart_actions() {
+    let config = HotkeysConfig::default();
+    for slot in [KeySlot::SuperZoomIn, KeySlot::SuperZoomOut] {
+        let row = slots()
+            .find(|row| row.key() == Some(slot))
+            .expect("super zoom row");
+        assert_eq!(row.group, HotkeyGroup::Chart);
+        assert_eq!(row.meta().origin, Origin::Local);
+        assert_eq!(row.meta().scope, Scope::WINDOW);
+        assert!(config.key(slot).is_empty());
+        assert!(!slots_the_pull_writes().contains(&slot));
+    }
+}
