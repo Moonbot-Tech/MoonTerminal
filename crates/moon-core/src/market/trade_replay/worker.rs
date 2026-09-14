@@ -58,13 +58,16 @@ const BAR_MS: i64 = 60_000;
 /// narrow enough that a genuinely interrupted fetch is still recognised as incomplete.
 const MAX_GAP_BARS: i64 = 3;
 
-/// Ceiling on the whole job, however many pages it takes.
+/// Normal stage deadline; trade-only tick tiles use [`TRADE_DEADLINE`] instead.
 ///
 /// The HTTP client bounds each REQUEST at fifteen seconds, which says nothing about a paginated
 /// job: a wide window can be many requests, and without this a single slow venue would hold the
 /// one worker — and therefore every later window — for minutes. On expiry the caller is told the
 /// fetch is transient, which is true and retryable.
 const JOB_DEADLINE: Duration = Duration::from_secs(45);
+
+/// Hard deadline for the position itself, so dense trades get priority without blocking forever.
+const TRADE_DEADLINE: Duration = Duration::from_secs(180);
 
 /// How many answered windows the in-memory outcome cache remembers.
 ///
@@ -82,7 +85,7 @@ const OUTCOME_CACHE_LEN: usize = 8;
 const OUTCOME_CACHE_MAX_TICKS: usize = 2 * TICK_BUDGET;
 
 /// Bounds the COMPOSED series and the outcome ring for one tick series — never the in-flight
-/// fetch, which is bounded instead by [`TICK_PAGE_BUDGET`] times a route's own page size. A
+/// fetch, which is bounded instead by [`TRADE_PAGE_BUDGET`] times a route's own page size. A
 /// budget crossed while paginating STOPS the walk and serves what is already held rather than
 /// discarding it (see the module header's degrade ladder), so this constant ceilings what gets
 /// drawn and remembered, not what a stage may fetch before giving up.
@@ -100,6 +103,9 @@ pub(crate) const TICK_BUDGET: usize = 40_000;
 /// still costs one round trip apiece, so the true page count for a given window depends on how
 /// many tiles it takes as much as on how much data each holds.
 const TICK_PAGE_BUDGET: usize = 60;
+
+/// Hard page allowance for trade-only tiles; context never receives this extension.
+const TRADE_PAGE_BUDGET: usize = 240;
 
 /// What one answered question is remembered as.
 ///
@@ -233,12 +239,11 @@ fn next_job(queue: &mut VecDeque<Job>) -> Option<Job> {
     }
 }
 
-/// Why a tick stage's walk stopped without a usable harvest, or was cancelled outright.
+/// Why a tick stage stopped, logged for partial harvests as well as empty abandonments.
 ///
 /// `Cancelled` throws away whatever was collected because the window itself closed. Every other
-/// arm here is reached only when the harvest that stopped for that reason turned out EMPTY —
-/// a non-empty one is served instead, whatever the stop reason was; see [`paginate_ticks`]. Each
-/// arm is a DIFFERENT log line and a different test.
+/// stop serves a non-empty harvest instead of abandoning it; see [`paginate_ticks`]. Budget
+/// and deadline stops with paid-for rows log their reason and covered span once before returning.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TickAbandon {
     Cancelled,
@@ -247,6 +252,8 @@ pub(crate) enum TickAbandon {
     Empty,
     UnknownSymbol,
     OverPageBudget,
+    /// A non-focus tile would exceed the retained tick allowance.
+    OverTickBudget,
     /// The stage's own [`TickObserver::claim`] was refused: an active refusal is already
     /// recorded for this host by some other request, and the tick stage must respect it rather
     /// than send anyway on the strength of a candle stage's claim that already cleared.
@@ -288,7 +295,7 @@ pub(crate) enum TickVerdict {
 /// `claim` takes a REAL send permit rather than merely observing one: the candle stage that ran
 /// immediately before this one claimed and cleared its OWN permit already, and neither a
 /// cache-answered candle stage nor a memory-ring reopen ever reaches `gate.claim` at all, so a
-/// tick stage that trusted that prior claim would send its up-to-60 requests blind to an active
+/// tick stage that trusted that prior claim would send its bounded requests blind to an active
 /// refusal recorded for this host by any other request — the exact escalation-to-ban path
 /// [`ReplayGate`] exists to prevent.
 pub(crate) trait TickObserver {
@@ -1055,6 +1062,7 @@ pub(crate) fn inside_retention(route: TradeRoute, window: ReplayWindow, now_ms: 
 }
 
 /// Run one queued tick stage to completion.
+/// Trade-only tiles use a bounded extended allowance before optional focus margins are fetched.
 ///
 /// Args:
 ///     agent: Shared HTTP client.
@@ -1094,7 +1102,8 @@ fn serve_ticks(
         true => route.retention_ms().map(|r| now_ms - r),
         false => None,
     };
-    let plan = tick_plan(request.window, route.max_query_ms(), earliest_ms);
+    let trade_deadline = deadline + (TRADE_DEADLINE - JOB_DEADLINE);
+    let plan = tick_plan(request.window, route, earliest_ms);
     if plan.slices.is_empty() {
         // The FOCUS itself — the trade, not its optional context — lies entirely before
         // `earliest_ms`: nothing worth fetching remains, so this is reported as retention rather
@@ -1162,7 +1171,7 @@ fn serve_ticks(
                 || read_core(request),
             )
         },
-        || Instant::now() >= deadline,
+        |trade| Instant::now() >= if trade { trade_deadline } else { deadline },
         &mut observer,
         |from_ms, to_ms, cursor| {
             rest::fetch_trades(agent, route, &request.market, from_ms, to_ms, cursor)
@@ -1205,7 +1214,8 @@ fn serve_ticks(
                 | TickAbandon::Deadline
                 | TickAbandon::Empty
                 | TickAbandon::UnknownSymbol
-                | TickAbandon::OverPageBudget => gate.clear(route.host()),
+                | TickAbandon::OverPageBudget
+                | TickAbandon::OverTickBudget => gate.clear(route.host()),
             }
             log::info!(
                 "[x] trade-replay tick stage abandoned on {}: {reason:?}",
@@ -1284,11 +1294,10 @@ fn serve_ticks(
 /// full):
 /// - [`cancelled`] stops EVERYTHING, always, and discards whatever was collected — the window is
 ///   gone and there is no one left to serve it to.
-/// - The job deadline and the page budget each stop the WALK without abandoning it, at any point:
-///   the harvest collected so far is kept, and the loop moves straight to the verdict. This is
-///   the whole point of this function's redesign — a budget or a deadline crossed an hour of lead
-///   context away from the trade must never throw away the tiles around the trade that were
-///   already paid for.
+/// - The normal deadline and page budget cannot interrupt the leading trade-only tiles. These
+///   use the bounded trade deadline and [`TRADE_PAGE_BUDGET`] allowance instead. After the trade
+///   completes, normal limits apply immediately, before any optional margin is requested.
+///   Hard stops retain the truthful partial harvest even if the entire trade could not fit.
 /// - A venue's own answer — `Transient`/`UnknownSymbol` — also stops the walk rather than the
 ///   whole stage, and marks the harvest [`TickHarvest::venue_refused`], so [`serve_ticks`] knows
 ///   not to clear a refusal the venue just gave it.
@@ -1310,9 +1319,9 @@ fn serve_ticks(
 ///     plan: The window's own [`tick_plan`] output — tiles in fetch-priority order, with the
 ///         first [`TickPlan::focus_len`] of them being the trade's own focus.
 ///     tick_budget: Ceiling on the total ticks collected before a non-focus tile is skipped.
-///     page_budget: Ceiling on the total pages fetched across every tile.
+///     page_budget: Normal page ceiling; trade tiles get at least [`TRADE_PAGE_BUDGET`].
 ///     cancelled: Answers whether the requester's window has closed.
-///     expired: Answers whether this stage's own deadline has passed.
+///     expired: Answers whether the deadline has passed; `true` selects the hard trade deadline.
 ///     observer: Records the `claim`/`pace` calls this stage makes.
 ///     fetch: Fetches one page for a given slice and cursor.
 ///
@@ -1324,7 +1333,7 @@ pub(crate) fn paginate_ticks<F, O>(
     tick_budget: usize,
     page_budget: usize,
     cancelled: impl Fn() -> bool,
-    expired: impl Fn() -> bool,
+    expired: impl Fn(bool) -> bool,
     observer: &mut O,
     mut fetch: F,
 ) -> TickVerdict
@@ -1353,11 +1362,13 @@ where
 
     'walk: for (index, &(slice_from, slice_to)) in plan.slices.iter().enumerate() {
         let is_focus = index < plan.focus_len;
+        let is_trade = index < plan.trade_len;
         // The tick budget never truncates a focus slice — checked only around a NON-focus one, so
         // a slice is whole or absent rather than cut mid-body. See the after-check below for the
         // other half of this rule.
         if !is_focus && ticks.len() >= tick_budget {
             complete = false;
+            stop_reason = Some(TickAbandon::OverTickBudget);
             break;
         }
         let start_len = ticks.len();
@@ -1367,13 +1378,18 @@ where
                 // The window is gone; nothing collected so far is worth keeping.
                 return TickVerdict::Abandoned(TickAbandon::Cancelled);
             }
-            if expired() {
+            if expired(is_trade) {
                 complete = false;
                 stop_reason = Some(TickAbandon::Deadline);
                 interrupted = Some((slice_from, slice_to, start_len, cursor));
                 break 'walk;
             }
-            if pages_fetched >= page_budget {
+            let page_limit = if is_trade {
+                page_budget.max(TRADE_PAGE_BUDGET)
+            } else {
+                page_budget
+            };
+            if pages_fetched >= page_limit {
                 complete = false;
                 stop_reason = Some(TickAbandon::OverPageBudget);
                 interrupted = Some((slice_from, slice_to, start_len, cursor));
@@ -1429,6 +1445,7 @@ where
         if !is_focus && ticks.len() > tick_budget {
             ticks.truncate(start_len);
             complete = false;
+            stop_reason = Some(TickAbandon::OverTickBudget);
             break;
         }
         covered = Some(match covered {
@@ -1489,6 +1506,18 @@ where
         });
         (lo, hi)
     });
+    if let Some(
+        reason
+        @ (TickAbandon::Deadline | TickAbandon::OverPageBudget | TickAbandon::OverTickBudget),
+    ) = stop_reason
+    {
+        log::info!(
+            "[x] trade-replay tick stage partial on {}: {reason:?}, covered={}..{} ms, pages={pages_fetched}",
+            route.host(),
+            covered.0,
+            covered.1
+        );
+    }
     TickVerdict::Ready(TickHarvest {
         ticks,
         covered,

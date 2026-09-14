@@ -1,14 +1,304 @@
 use super::*;
 
+/// Tracks fake-server intervals to verify that published snapshots never cover unfetched time.
+#[derive(Default)]
+struct CoverageObserver {
+    fetched: std::rc::Rc<std::cell::RefCell<Vec<(i64, i64)>>>,
+    snapshots: Vec<(i64, i64)>,
+    paces: usize,
+}
+
+impl worker::TickObserver for CoverageObserver {
+    /// A fake permit never contacts a venue.
+    fn claim(&mut self, _: &str) -> Result<(), u32> {
+        Ok(())
+    }
+
+    /// Count sends to ensure extended budgets do not bypass pacing.
+    fn pace(&mut self, _: &str) {
+        self.paces += 1;
+    }
+
+    /// A snapshot must be exhaustive and may only extend its predecessor.
+    fn progress(&mut self, ticks: &[Tick], covered: (i64, i64)) {
+        assert_fetched_span(&self.fetched.borrow(), covered);
+        if let Some(&(from, to)) = self.snapshots.last() {
+            assert!(
+                covered.0 <= from && covered.1 >= to,
+                "progress cannot shrink"
+            );
+        }
+        assert!(
+            ticks
+                .iter()
+                .any(|t| t.time_ms >= covered.0 as f64 && t.time_ms <= covered.1 as f64)
+        );
+        self.snapshots.push(covered);
+    }
+}
+
+/// Merge the fake server's paid-for intervals independently of production coverage helpers.
+fn assert_fetched_span(fetched: &[(i64, i64)], covered: (i64, i64)) {
+    let mut intervals = fetched.to_vec();
+    intervals.sort_unstable();
+    let mut next = covered.0;
+    for (from, to) in intervals {
+        if to < next {
+            continue;
+        }
+        assert!(from <= next, "unfetched gap at {next} in {covered:?}");
+        if to >= covered.1 {
+            return;
+        }
+        next = to + 1;
+    }
+    panic!("coverage {covered:?} extends beyond fetched intervals");
+}
+
+/// Emit dense pages in either direction with overshoots that must be clipped by the paginator.
+fn dense_page(
+    route: venue_caps::TradeRoute,
+    from: i64,
+    to: i64,
+    cursor: Option<rest::TradeCursor>,
+    width: i64,
+    fetched: &std::cell::RefCell<Vec<(i64, i64)>>,
+) -> Result<rest::TradePage, rest::FetchError> {
+    let backward = matches!(
+        route,
+        venue_caps::TradeRoute::OkxHistoryTrades | venue_caps::TradeRoute::BitgetMixFills
+    );
+    let (lo, hi) = if backward {
+        let hi = match cursor {
+            Some(rest::TradeCursor::LessThanId(id)) => id as i64 - 1,
+            None => to,
+            _ => panic!("wrong backward cursor"),
+        };
+        ((hi - width + 1).max(from), hi)
+    } else {
+        let lo = match cursor {
+            Some(rest::TradeCursor::FromId(id)) => id as i64,
+            None => from,
+            _ => panic!("wrong forward cursor"),
+        };
+        (lo, (lo + width - 1).min(to))
+    };
+    fetched.borrow_mut().push((lo, hi));
+    let next = if backward {
+        (lo > from).then_some(rest::TradeCursor::LessThanId(lo as u64))
+    } else {
+        (hi < to).then_some(rest::TradeCursor::FromId((hi + 1) as u64))
+    };
+    Ok(rest::TradePage {
+        ticks: [lo, hi, from - 1, to + 1]
+            .map(|time_ms| Tick {
+                time_ms: time_ms as f64,
+                price: 10.0,
+                qty: 1.0,
+                side: crate::feed::Side::Buy,
+            })
+            .to_vec(),
+        next,
+    })
+}
+
+/// Restoring chronological focus tiles or normal limits inside trade tiles loses entry/exit
+/// on a dense venue. Both paging directions must finish the trade before spending on margins.
+#[test]
+fn trade_first_paging_protects_position_from_soft_page_and_deadline_stops() {
+    use venue_caps::TradeRoute::*;
+    for route in [OkxHistoryTrades, BitgetMixFills, BinanceUsdMAggTrades] {
+        for soft_deadline in [false, true] {
+            for duration in [0, 120_000, 1_260_000] {
+                let window = replay_window_ms(100_000_000, 100_000_000 + duration).unwrap();
+                let plan = tick_plan(window, route, None);
+                let mut observer = CoverageObserver::default();
+                let fetched = observer.fetched.clone();
+                let calls = std::cell::Cell::new(0);
+                let verdict = worker::paginate_ticks(
+                    route,
+                    &plan,
+                    1,
+                    if soft_deadline { 100 } else { 1 },
+                    || false,
+                    |trade| soft_deadline && calls.get() >= 1 && !trade,
+                    &mut observer,
+                    |from, to, cursor| {
+                        assert!(
+                            from >= window.open_ms && to <= window.close_ms,
+                            "context before protected trade"
+                        );
+                        if calls.get() == 0 {
+                            match route {
+                                OkxHistoryTrades | BitgetMixFills => {
+                                    assert_eq!(to, window.close_ms)
+                                }
+                                _ => assert_eq!(from, window.open_ms),
+                            }
+                        }
+                        calls.set(calls.get() + 1);
+                        dense_page(route, from, to, cursor, 30_000, &fetched)
+                    },
+                );
+                let worker::TickVerdict::Ready(harvest) = verdict else {
+                    panic!("trade must be served")
+                };
+                assert_eq!(harvest.covered, (window.open_ms, window.close_ms));
+                assert!(!harvest.complete, "optional margins were not fetched");
+                assert_fetched_span(&fetched.borrow(), harvest.covered);
+                assert!(
+                    harvest
+                        .ticks
+                        .iter()
+                        .all(|t| t.time_ms >= window.open_ms as f64
+                            && t.time_ms <= window.close_ms as f64),
+                    "overshoot leaked into harvest"
+                );
+                assert_eq!(observer.paces, calls.get());
+                assert_eq!(observer.snapshots.last(), Some(&harvest.covered));
+            }
+        }
+    }
+}
+
+/// Removing hard bounds makes a busy trade occupy the only replay worker indefinitely;
+/// cancellation and venue refusal must retain precedence over trade protection.
+#[test]
+fn trade_first_paging_still_obeys_hard_stops_cancellation_and_venue_errors() {
+    use venue_caps::TradeRoute::*;
+    for route in [OkxHistoryTrades, BinanceUsdMAggTrades] {
+        for stop in ["pages", "deadline", "cancel", "venue"] {
+            let window = replay_window_ms(100_000_000, 100_120_000).unwrap();
+            let plan = tick_plan(window, route, None);
+            let mut observer = CoverageObserver::default();
+            let fetched = observer.fetched.clone();
+            let calls = std::cell::Cell::new(0);
+            let verdict = worker::paginate_ticks(
+                route,
+                &plan,
+                1,
+                1,
+                || stop == "cancel" && calls.get() == 2,
+                |_| stop == "deadline" && calls.get() == 2,
+                &mut observer,
+                |from, to, cursor| {
+                    if stop == "venue" && calls.get() == 2 {
+                        return Err(rest::FetchError::Transient("fixture refusal".into()));
+                    }
+                    calls.set(calls.get() + 1);
+                    dense_page(route, from, to, cursor, 1, &fetched)
+                },
+            );
+            if stop == "cancel" {
+                assert!(matches!(
+                    verdict,
+                    worker::TickVerdict::Abandoned(worker::TickAbandon::Cancelled)
+                ));
+                continue;
+            }
+            let worker::TickVerdict::Ready(harvest) = verdict else {
+                panic!("paid-for pages must survive")
+            };
+            assert_eq!(calls.get(), if stop == "pages" { 240 } else { 2 });
+            assert!(!harvest.complete);
+            assert_eq!(harvest.venue_refused, stop == "venue");
+            assert_fetched_span(&fetched.borrow(), harvest.covered);
+            assert!(harvest.covered.0 > window.open_ms || harvest.covered.1 < window.close_ms);
+        }
+    }
+}
+
+/// Reordering completed tiles across a gap or joining far-side partial pages hides candles
+/// over unfetched time; verify every prefix against independent fake-server coverage.
+#[test]
+fn trade_first_paging_keeps_progress_contiguous_across_both_margins_and_retention() {
+    use venue_caps::TradeRoute::*;
+    for route in [OkxHistoryTrades, BitgetMixFills, BinanceUsdMAggTrades] {
+        let window = replay_window_ms(100_000_000, 100_120_000).unwrap();
+        for earliest in [
+            None,
+            Some(99_850_000),
+            Some(100_060_000),
+            Some(100_180_000),
+            Some(100_420_001),
+        ] {
+            let plan = tick_plan(window, route, earliest);
+            let mut observer = CoverageObserver::default();
+            let fetched = observer.fetched.clone();
+            let verdict = worker::paginate_ticks(
+                route,
+                &plan,
+                1,
+                100,
+                || false,
+                |_| false,
+                &mut observer,
+                |from, to, cursor| dense_page(route, from, to, cursor, 30_000, &fetched),
+            );
+            if earliest == Some(100_420_001) {
+                assert!(matches!(
+                    verdict,
+                    worker::TickVerdict::Abandoned(worker::TickAbandon::Empty)
+                ));
+                assert!(fetched.borrow().is_empty());
+                continue;
+            }
+            let worker::TickVerdict::Ready(harvest) = verdict else {
+                panic!("retained focus must finish")
+            };
+            assert!(harvest.complete);
+            assert_eq!(
+                harvest.covered,
+                (earliest.unwrap_or(99_700_000).max(99_700_000), 100_420_000)
+            );
+            assert_fetched_span(&fetched.borrow(), harvest.covered);
+            assert_eq!(observer.snapshots.last(), Some(&harvest.covered));
+        }
+    }
+}
+
+/// Unioning an interrupted far-side margin unconditionally fabricates a gap in the final
+/// harvest, even if progressive publications were correct. Stop inside each margin to catch it.
+#[test]
+fn trade_first_paging_partial_margins_never_expand_past_fetched_coverage() {
+    use venue_caps::TradeRoute::*;
+    for route in [OkxHistoryTrades, BitgetMixFills, BinanceUsdMAggTrades] {
+        for budget in [6, 16] {
+            let window = replay_window_ms(100_000_000, 100_120_000).unwrap();
+            let plan = tick_plan(window, route, None);
+            let mut observer = CoverageObserver::default();
+            let fetched = observer.fetched.clone();
+            let verdict = worker::paginate_ticks(
+                route,
+                &plan,
+                1,
+                budget,
+                || false,
+                |_| false,
+                &mut observer,
+                |from, to, cursor| dense_page(route, from, to, cursor, 30_000, &fetched),
+            );
+            let worker::TickVerdict::Ready(harvest) = verdict else {
+                panic!("trade must remain visible")
+            };
+            assert!(!harvest.complete);
+            assert_eq!(observer.paces, budget);
+            assert_fetched_span(&fetched.borrow(), harvest.covered);
+            assert!(harvest.covered.0 <= window.open_ms && harvest.covered.1 >= window.close_ms);
+            assert_eq!(observer.snapshots.last(), Some(&harvest.covered));
+        }
+    }
+}
+
 /// Wide candle context must never expand either native or REST tick requests past five minutes.
 #[test]
 fn detailed_tick_window_excludes_wide_candle_context() {
     let window = replay_window_ms(100_000_000, 100_060_000).expect("one-minute trade");
     let narrow = window.tick_window();
     assert_eq!((narrow.from_ms, narrow.to_ms), (99_700_000, 100_360_000));
-    let plan = tick_plan(window, Some(60 * MINUTE_MS), None);
-    assert_eq!(plan.slices.first().map(|s| s.0), Some(99_700_000));
-    assert_eq!(plan.slices.last().map(|s| s.1), Some(100_360_000));
+    let plan = tick_plan(window, venue_caps::TradeRoute::BinanceUsdMAggTrades, None);
+    assert_eq!(plan.slices.iter().map(|s| s.0).min(), Some(99_700_000));
+    assert_eq!(plan.slices.iter().map(|s| s.1).max(), Some(100_360_000));
     assert!(
         plan.slices
             .iter()
@@ -581,7 +871,11 @@ fn tick_plan_prioritizes_focus_and_keeps_every_prefix_contiguous_after_clipping(
     let window =
         replay_window_ms(100_000_000, 100_000_000).expect("a same-second scalp has floor context");
     let earliest_ms = window.from_ms + 20 * MINUTE_MS;
-    let plan = tick_plan(window, Some(60 * MINUTE_MS), Some(earliest_ms));
+    let plan = tick_plan(
+        window,
+        venue_caps::TradeRoute::BinanceUsdMAggTrades,
+        Some(earliest_ms),
+    );
     let focus = window.focus();
 
     assert!(
@@ -594,12 +888,12 @@ fn tick_plan_prioritizes_focus_and_keeps_every_prefix_contiguous_after_clipping(
     );
     let focus_slices = &plan.slices[..plan.focus_len];
     assert_eq!(
-        focus_slices.first().map(|slice| slice.0),
+        focus_slices.iter().map(|slice| slice.0).min(),
         Some(focus.0),
         "the focus prefix begins at the independently derived focus edge"
     );
     assert_eq!(
-        focus_slices.last().map(|slice| slice.1),
+        focus_slices.iter().map(|slice| slice.1).max(),
         Some(focus.1),
         "the focus prefix reaches the independently derived focus edge"
     );

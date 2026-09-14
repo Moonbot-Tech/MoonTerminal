@@ -417,22 +417,34 @@ pub fn time_slices(window: ReplayWindow, max_span_ms: Option<i64>) -> Vec<(i64, 
 /// Contiguous tick-fetch tiles. Every completed prefix can be published as one covered span.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TickPlan {
-    /// Narrow focus tiles in chronological order; distant candle context is excluded.
+    /// Trade tiles first, then adjoining margins; distant candle context is excluded.
     pub slices: Vec<(i64, i64)>,
+    /// Leading tiles containing only the retained entry..exit interval, given extended budgets.
+    pub trade_len: usize,
     /// How many leading entries of [`Self::slices`] cover [`ReplayWindow::focus`].
     pub focus_len: usize,
 }
 
 /// Tile only the position and its five-minute margins, leaving wider context as candles.
 ///
-/// Retention clips this narrow range before paging. Completed prefixes remain contiguous so
-/// progressive snapshots never claim a gap between independently fetched sections.
+/// Retention clips this narrow range before paging. Split at entry and exit so a backward
+/// route starts at exit and a forward route at entry, spending nothing on optional margins
+/// until the trade is complete. Completed prefixes remain contiguous, including long trades
+/// spanning several tiles and the later switch to the opposite margin.
+///
+/// Args:
+///     window: The trade and its candle context.
+///     route: Determines the query cap and paging direction; Gate keeps its existing page order.
+///     earliest_ms: Optional retention boundary, applied before splitting the trade and margins.
+///
+/// Returns:
+///     Non-overlapping tiles in fetch order, with the protected trade prefix counted separately.
 pub(crate) fn tick_plan(
     window: ReplayWindow,
-    max_query_ms: Option<i64>,
+    route: venue_caps::TradeRoute,
     earliest_ms: Option<i64>,
 ) -> TickPlan {
-    let span = match max_query_ms {
+    let span = match route.max_query_ms() {
         Some(cap) if cap > 0 => TICK_SLICE_MS.min(cap),
         _ => TICK_SLICE_MS,
     };
@@ -444,6 +456,7 @@ pub(crate) fn tick_plan(
         if focus_to < earliest {
             return TickPlan {
                 slices: Vec::new(),
+                trade_len: 0,
                 focus_len: 0,
             };
         }
@@ -453,17 +466,53 @@ pub(crate) fn tick_plan(
         None => from,
     };
 
-    let focus_slices = time_slices(
-        ReplayWindow {
-            from_ms: clip_from(focus_from),
-            to_ms: focus_to,
-            ..window
-        },
-        Some(span),
+    let backward = matches!(
+        route,
+        venue_caps::TradeRoute::OkxHistoryTrades
+            | venue_caps::TradeRoute::BitgetSpotFills
+            | venue_caps::TradeRoute::BitgetMixFills
     );
-    let focus_len = focus_slices.len();
+    let tiles = |from_ms, to_ms, reverse| {
+        let mut slices = time_slices(
+            ReplayWindow {
+                from_ms: clip_from(from_ms),
+                to_ms,
+                ..window
+            },
+            Some(span),
+        );
+        if reverse {
+            slices.reverse();
+        }
+        slices
+    };
+    let mut slices = tiles(
+        window.open_ms.max(focus_from),
+        window.close_ms.min(focus_to),
+        backward,
+    );
+    let trade_len = slices.len();
+    let lead = tiles(
+        focus_from,
+        window.open_ms.saturating_sub(1).min(focus_to),
+        true,
+    );
+    let trail = tiles(
+        window.close_ms.saturating_add(1).max(focus_from),
+        focus_to,
+        false,
+    );
+    if backward {
+        slices.extend(lead);
+        slices.extend(trail);
+    } else {
+        slices.extend(trail);
+        slices.extend(lead);
+    }
+    let focus_len = slices.len();
     TickPlan {
-        slices: focus_slices,
+        slices,
+        trade_len,
         focus_len,
     }
 }
