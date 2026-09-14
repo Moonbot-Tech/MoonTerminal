@@ -12,8 +12,12 @@ use rust_i18n::t;
 
 use super::{ReportPanel, columns, selection};
 
-/// Bound on the durable read, matching the chart's own trade-history cap.
-const HISTORY_LIMIT: usize = 1_000;
+/// SQLite's largest positive limit, reserving the history reader's truncation probe row.
+/// A trade window must retain the whole period, including a clicked row older than 1,000 trades.
+const HISTORY_LIMIT: usize = (i64::MAX - 1) as usize;
+
+#[cfg(test)]
+mod tests;
 
 /// Everything the opener needs from the clicked row, resolved on the UI thread.
 ///
@@ -107,7 +111,7 @@ impl ReportPanel {
                 .spawn(async move { load_trade(core, coin, record_id, filter) })
                 .await;
             cx.update(|cx| {
-                let Some((record, meta)) = found else {
+                let Some((record, meta, history)) = found else {
                     return;
                 };
                 let stamps = (
@@ -115,7 +119,7 @@ impl ReportPanel {
                     stamp(&axis, core, record.close_stamp()),
                 );
                 crate::trade_window::open_trade_window(
-                    &backend, record, meta, core, market, stamps, cx,
+                    &backend, record, meta, history, market, stamps, cx,
                 );
             });
         })
@@ -163,57 +167,74 @@ impl ReportPanel {
     }
 }
 
-/// Read one trade back from the durable replica, with what it carried beside its prices.
+/// Read the focused trade, its metadata, and every neighbour on one durable snapshot.
 ///
-/// Scoped to the row's own coin so the bounded read is spent where the target actually is; a
-/// whole-filter read would be both slower and likelier to push the target past the cap.
-///
-/// TWO reads on ONE snapshot: the record comes from the same bounded history the chart's own
-/// markers are drawn from, and the metadata from a single-row lookup beside it. They share the
-/// snapshot so the window cannot end up describing a row from one moment with a detect line from
-/// another — and the metadata is not folded into the history read because that one returns a
-/// thousand rows and none of the others needs a sentence of prose attached.
-///
-/// A metadata read that FAILS is not a failed open: the window's whole point is that the trade is
-/// there even when something else is not, so an unreadable detect line degrades to empty captions
-/// rather than to no window.
+/// The history query preserves the published non-period predicates and exact core/coin scope.
+/// Its usual exit-only period is applied here to either endpoint instead. Metadata failure still
+/// degrades to empty captions, as before; history failure prevents opening a misleading window.
 ///
 /// Args:
 ///     core: Core that recorded the row.
-///     coin: The row's coin token, as stored.
-///     record_id: Durable record id of the clicked trade.
-///     filter: The published filter that produced the row.
+///     coin: Exact stored coin token.
+///     record_id: Clicked record identity.
+///     filter: Published Report filter, including its time axis.
 ///
 /// Returns:
-///     The typed trade and its metadata, or `None` when the replica cannot answer or the row fell
-///     past the cap.
+///     Focus, metadata and period history, or `None` when the replica cannot resolve the focus.
 fn load_trade(
     core: u64,
     coin: String,
     record_id: i64,
     filter: ReportFilter,
-) -> Option<(ChartTradeRecord, TradeMeta)> {
+) -> Option<(ChartTradeRecord, TradeMeta, Vec<ChartTradeRecord>)> {
     let conn = db::open_reader().ok()?;
     let snapshot = db::read_snapshot(&conn).ok()?;
-    let history = db::query_chart_trade_history(
-        &snapshot,
-        core,
-        std::slice::from_ref(&coin),
-        Some(&filter),
-        HISTORY_LIMIT,
-    )
-    .ok()?;
+    let history = period_history(&snapshot, core, &coin, &filter).ok()?;
     let record = history
-        .records
-        .into_iter()
-        .find(|record| record.record_id == record_id)?;
-    // The RECORD, not its id: while both report sources hold rows for one core, a bare id can
-    // name a different trade in the other table — see `moon_core::db::trade_meta`.
+        .iter()
+        .find(|record| record.record_id == record_id)?
+        .clone();
     let meta = db::query_trade_meta(&snapshot, &record)
         .ok()
         .flatten()
         .unwrap_or_default();
-    Some((record, meta))
+    Some((record, meta, history))
+}
+
+/// Read all matching closed trades and retain those with either endpoint in the Report period.
+///
+/// Uses the same current per-core offset and inclusive seconds bounds as the Report SQL. Keeping
+/// selection outside the shared reader leaves the Main chart's exit-only history unchanged.
+fn period_history(
+    snapshot: &rusqlite::Connection,
+    core: u64,
+    coin: &str,
+    filter: &ReportFilter,
+) -> db::ReadResult<Vec<ChartTradeRecord>> {
+    let mut scope = filter.clone();
+    scope.date_from = None;
+    scope.date_to = None;
+    let history = db::query_chart_trade_history(
+        snapshot,
+        core,
+        &[coin.to_owned()],
+        Some(&scope),
+        HISTORY_LIMIT,
+    )?;
+    let now = moon_core::util::now_unix_ms_i64().div_euclid(1_000);
+    let offset = filter.axis.offset_secs(core, now).unwrap_or(0);
+    let from = filter
+        .date_from
+        .map(|bound| db::ReportAxis::shift_bound(bound, offset));
+    let to = filter
+        .date_to
+        .map(|bound| db::ReportAxis::shift_bound(bound, offset));
+    let inside = |stamp| from.is_none_or(|from| stamp >= from) && to.is_none_or(|to| stamp <= to);
+    Ok(history
+        .records
+        .into_iter()
+        .filter(|record| inside(record.buy_date) || inside(record.close_date))
+        .collect())
 }
 
 /// Label of the row-menu entry that opens this window.

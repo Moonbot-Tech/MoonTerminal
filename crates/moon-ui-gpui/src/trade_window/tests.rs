@@ -150,3 +150,53 @@ fn remembered_trade_window_geometry_never_persists_a_cascade_offset() {
         );
     }
 }
+
+/// Publishing only the focus when enabled, or the full history when disabled, hides/shows the
+/// wrong arrows. Restoring the retained snapshot must also preserve neighbours outside replay.
+#[test]
+fn neighbour_toggle_selects_all_or_focus_without_losing_the_snapshot() {
+    use moon_core::db::ChartTradeRecord;
+    use std::rc::Rc;
+    let focus = ChartTradeRecord {
+        record_id: 1,
+        core_uid: 7,
+        coin: "BTC".to_owned(),
+        buy_date: 100,
+        close_date: 200,
+        buy_ms: None,
+        close_ms: None,
+        buy_price: 10.0,
+        sell_price: 12.0,
+        quantity: 2.0,
+        is_short: false,
+        emulator: false,
+        profit: None,
+        profit_pct: None,
+        quote: None,
+    };
+    let neighbour = ChartTradeRecord {
+        record_id: 2,
+        buy_date: 100_000,
+        close_date: 100_200,
+        emulator: true,
+        ..focus.clone()
+    };
+    let history = Rc::new(vec![neighbour, focus.clone()]);
+    let shown = super::visible_history(&history, &focus, true);
+    assert_eq!(
+        shown.iter().map(|r| r.record_id).collect::<Vec<_>>(),
+        vec![2, 1]
+    );
+    let hidden = super::visible_history(&history, &focus, false);
+    assert_eq!(
+        hidden.iter().map(|r| r.record_id).collect::<Vec<_>>(),
+        vec![1]
+    );
+    assert_eq!(hidden[0], focus);
+    let restored = super::visible_history(&history, &focus, true);
+    assert!(Rc::ptr_eq(&restored, &history));
+    assert!(
+        restored[0].emulator,
+        "the chart's existing kind filter owns emulator visibility"
+    );
+}

@@ -11,8 +11,8 @@ use moon_core::market::trade_replay::{
     TickStatus, TradeReplayEmpty, TradeReplayFailure, TradeReplaySource,
 };
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonPalette, MoonWindowFrame, MoonWindowFrameControls, h_flex,
-    v_flex,
+    MoonButton, MoonButtonSize, MoonCheckbox, MoonPalette, MoonWindowFrame,
+    MoonWindowFrameControls, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -65,6 +65,7 @@ pub(super) fn rail_wraps(viewport_w: f32) -> bool {
 }
 
 impl Render for TradeWindowView {
+    /// Render the focused trade and its remembered neighbouring-trades control.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::hotkeys::restore_root_focus(&self.focus, window, cx);
         let p = MoonPalette::active(cx);
@@ -108,6 +109,16 @@ impl Render for TradeWindowView {
                             .flex_1()
                             .min_w_0()
                             .items_center(),
+                    )
+                    .child(
+                        design::chrome_section(cx).child(
+                            MoonCheckbox::new("trade-window-other-trades")
+                                .label(t!("trade_window.other_trades").to_string())
+                                .checked(self.show_other_trades)
+                                .on_change(cx.listener(|this, show: &bool, _window, cx| {
+                                    this.set_other_trades(*show, cx);
+                                })),
+                        ),
                     )
                     // THE VERTICAL-SCALE CONTROL: one remembered zoom for every trade window,
                     // written through `pick_scale` into `WindowLayout.trade_window_scale` and

@@ -717,6 +717,10 @@ pub struct WindowLayout {
     /// Auto. Read leniently so a malformed hand edit cannot discard the complete window layout.
     #[serde(default, deserialize_with = "de_lenient")]
     pub trade_window_scale: Option<f32>,
+    /// Show neighbouring Report-period trades in trade windows; absent means ON.
+    /// Stored alongside the shared scale and read leniently to preserve older layouts.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub trade_window_other_trades: Option<bool>,
 
     /// Selected Profit Monitor period id.
     #[serde(default, deserialize_with = "de_lenient")]

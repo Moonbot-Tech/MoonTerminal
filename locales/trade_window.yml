@@ -18,6 +18,11 @@ trade_window.retry:
   en: "Retry"
   es: "Reintentar"
 
+trade_window.other_trades:
+  ru: "Другие сделки"
+  en: "Show other trades"
+  es: "Mostrar otras operaciones"
+
 trade_window.state.loading:
   ru: "Загружаю рынок вокруг сделки…"
   en: "Loading the market around this trade…"
