@@ -364,3 +364,25 @@ fn width_measurements_agree_with_their_rendered_family_and_cache_key() {
         "row-fit signature must hash the mono family used by its Report filter caller"
     );
 }
+
+/// Every font the terminal draws with is registered by `moon_ui::init`; the binary embeds none.
+///
+/// Breakage: registering a second copy of "Inter" or "Geist Mono" here — even one weight — puts
+/// two files under one PostScript name. The macOS text system maps a shaped run back to its font
+/// by that name, so text shaped with one file is rasterized with the other's glyph order: every
+/// mono string renders as the wrong letters (#558). Windows keys fonts by face pointer and never
+/// shows it, which is why this ban is static rather than a platform test.
+#[test]
+fn startup_registers_no_fonts_of_its_own() {
+    for path in ["startup.rs", "startup/boot.rs", "startup/unlock.rs"] {
+        let source = code_only(&read_src(path));
+        for banned in ["add_fonts(", "include_bytes!(\"../../../assets/fonts/"] {
+            assert!(
+                !source.contains(banned),
+                "{path} must not register fonts ({banned:?}): MoonUI bundles Inter and Geist Mono at \
+                 400/500/600/700, and a second file under an existing PostScript name garbles mono \
+                 text on macOS (#558)"
+            );
+        }
+    }
+}
