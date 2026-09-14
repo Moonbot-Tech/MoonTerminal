@@ -12,8 +12,8 @@ pub(super) const LINE_H: f32 = FONT_SIZE + 4.0;
 ///
 /// Unlike a price-axis label, which sits in an empty gutter, these two are drawn ON the band, over
 /// the bars they annotate. At the axis size and weight they read as part of that texture instead of
-/// as its scale, so they take one step up in size and the SEMIBOLD face — the heaviest Geist Mono
-/// weight the binary embeds (`startup::embedded_fonts`), so no synthetic emboldening is involved.
+/// as its scale, so they take one step up in size and the SEMIBOLD face — a static Geist Mono cut
+/// MoonUI bundles (`moon_ui::init`), so no synthetic emboldening is involved.
 const VOLUME_SCALE_FONT_SIZE: f32 = FONT_SIZE + 1.5;
 const VOLUME_SCALE_LINE_H: f32 = VOLUME_SCALE_FONT_SIZE + 4.0;
 const VOLUME_SCALE_WEIGHT: FontWeight = FontWeight::SEMIBOLD;
@@ -202,7 +202,7 @@ fn volume_scale_label_fits(band: f32, frac: f32) -> bool {
     band * frac >= VOLUME_SCALE_LINE_H * 0.5
 }
 
-/// The chart's mono face at one weight; SEMIBOLD resolves to the embedded GeistMono-600.
+/// The chart's mono face at one weight; SEMIBOLD resolves to MoonUI's bundled GeistMono-SemiBold.
 fn mono_font(weight: FontWeight) -> gpui::Font {
     let mut font = gpui::font(crate::design::mono());
     font.weight = weight;
