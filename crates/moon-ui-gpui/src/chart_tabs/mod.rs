@@ -319,7 +319,7 @@ pub struct ChartTabs {
     /// Last observed toolbar `price_scale_rev`; a larger revision applies the selected scale only
     /// to the active panel, while unchanged revisions mirror the active tab's displayed scale.
     last_scale_rev: u64,
-    /// Last consumed group-owned time-axis hotkey revision.
+    /// Last observed time-axis hotkey revision, including requests for other groups.
     last_super_zoom_rev: u64,
     /// Last observed `switch_charts_rev`; only a larger revision addressed to this group advances
     /// the Main stack's active chart, exactly once.

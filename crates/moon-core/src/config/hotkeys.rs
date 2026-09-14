@@ -312,9 +312,9 @@ pub enum KeySlot {
     ShiftSellDown,
     ScalePlus,
     ScaleMinus,
-    /// Zoom the time axis in down to three seconds.
+    /// Zoom the time axis in to the three-second floor.
     SuperZoomIn,
-    /// Zoom the time axis out with the three-second floor.
+    /// Zoom the time axis out while respecting the three-second floor.
     SuperZoomOut,
     SwitchFigure,
     ChartShot,

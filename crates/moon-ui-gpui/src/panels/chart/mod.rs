@@ -1209,7 +1209,7 @@ impl ChartPanel {
         }
     }
 
-    /// Step time zoom at the plot center using the same floor and geometry as Ctrl+Shift+wheel.
+    /// Step time zoom at each plot center using the Ctrl+Shift+wheel floor and pane layout.
     pub(crate) fn super_zoom(&mut self, zoom_in: bool, cx: &mut Context<Self>) {
         if self.orderbook_only {
             return;
