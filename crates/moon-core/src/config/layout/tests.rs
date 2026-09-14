@@ -1865,3 +1865,15 @@ fn a_layout_written_before_the_quota_axis_still_loads() {
     );
     assert_eq!(params.api_quota.min, 5_000);
 }
+
+/// Dropping the stored false value would re-enable neighbours after every reopen.
+#[test]
+fn trade_window_other_trades_preserves_false_and_defaults_on() {
+    let old: WindowLayout = toml::from_str("").expect("legacy layout");
+    assert!(old.trade_window_other_trades.unwrap_or(true));
+    let saved: WindowLayout =
+        toml::from_str("trade_window_other_trades = false").expect("disabled");
+    let encoded = toml::to_string(&saved).expect("serialize preference");
+    let reopened: WindowLayout = toml::from_str(&encoded).expect("reopen preference");
+    assert_eq!(reopened.trade_window_other_trades, Some(false));
+}

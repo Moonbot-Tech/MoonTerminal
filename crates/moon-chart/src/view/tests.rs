@@ -110,7 +110,7 @@ fn zoom_in_is_clamped_to_min_window_30s() {
     view.ensure_default_window(width, 60.0, None);
 
     for _ in 0..20 {
-        view.zoom_x_at(2.0, width, width * 0.5, now);
+        view.zoom_x_at(2.0, width, width * 0.5, now, false);
     }
 
     let (_, window_ms) = view.visible_x(width);
@@ -132,7 +132,7 @@ fn a_saved_x_scale_wins_during_initialization_and_explicit_reset() {
     view.ensure_default_window(width, 60.0, Some(saved_ppm));
     assert!((view.px_per_ms - saved_ppm).abs() < 1e-9);
 
-    view.zoom_x_at(2.0, width, width * 0.5, 100_000.0);
+    view.zoom_x_at(2.0, width, width * 0.5, 100_000.0, false);
     assert!((view.px_per_ms - saved_ppm).abs() >= 1e-9);
     view.reset_default_window_on_next_prepare();
     view.ensure_default_window(width, 60.0, Some(saved_ppm));
@@ -147,7 +147,7 @@ fn explicit_reset_without_a_saved_scale_restores_six_hours_of_history() {
     let width = 1000.0;
     let mut view = ChartView::new(0.0);
     view.ensure_default_window(width, 60.0, None);
-    view.zoom_x_at(2.0, width, width * 0.5, 0.0);
+    view.zoom_x_at(2.0, width, width * 0.5, 0.0, false);
 
     view.reset_default_window_on_next_prepare();
     view.ensure_default_window(width, 60.0, None);
@@ -163,7 +163,7 @@ fn explicit_reset_without_a_saved_scale_restores_six_hours_of_history() {
 fn a_manual_zoom_survives_later_default_window_preparation() {
     let mut view = ChartView::new(0.0);
     view.ensure_default_window(1000.0, 60.0, None);
-    view.zoom_x_at(2.0, 1000.0, 500.0, 100_000.0);
+    view.zoom_x_at(2.0, 1000.0, 500.0, 100_000.0, false);
     let manual_ppm = view.px_per_ms;
 
     view.ensure_default_window(1600.0, 120.0, None);
@@ -443,7 +443,7 @@ fn zooming_out_does_not_walk_the_view_into_the_future() {
 
     let mut manual_steps = 0;
     while !view.follow && manual_steps < 6 {
-        view.zoom_x_at(0.5, WIDTH, 0.0, NOW);
+        view.zoom_x_at(0.5, WIDTH, 0.0, NOW, false);
         manual_steps += 1;
         assert!(
             view.right_time_ms <= NOW + 1.0,
@@ -460,7 +460,7 @@ fn zooming_out_does_not_walk_the_view_into_the_future() {
     // zoom. A bare `.min(now_ms)` satisfies the loop above and fails here — one wheel notch would
     // drag the framed interval off its place.
     let mut parked = parked_at_the_future_limit(NOW, WIDTH);
-    parked.zoom_x_at(0.5, WIDTH, WIDTH * 0.5, NOW);
+    parked.zoom_x_at(0.5, WIDTH, WIDTH * 0.5, NOW, false);
     assert!(
         parked.right_time_ms > NOW,
         "a zoom pulled the parked view {} ms back behind the live edge",
@@ -477,7 +477,7 @@ fn zooming_in_cannot_escape_the_future_ceiling() {
     let mut view = parked_at_the_future_limit(NOW, WIDTH);
 
     for _ in 0..6 {
-        view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, NOW);
+        view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, NOW, false);
         let x_now = live_edge_px(&view, NOW, WIDTH);
         assert!(
             x_now >= -0.5,
@@ -655,7 +655,7 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
 
     // Zoom out until clamped (min ppm = area / MAX_WINDOW_MS, about 4e-8 < 1e-6).
     for _ in 0..40 {
-        view.zoom_x_at(0.5, area, area * 0.5, now);
+        view.zoom_x_at(0.5, area, area * 0.5, now, false);
     }
     let lo = area / super::MAX_WINDOW_MS;
     assert!(
@@ -693,7 +693,7 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
     // Repeated zoom attempts at the limit do not shift the view (no leftward drift).
     let (left_before, _) = view.visible_x(area);
     for _ in 0..5 {
-        view.zoom_x_at(0.5, area, area * 0.3, now);
+        view.zoom_x_at(0.5, area, area * 0.3, now, false);
     }
     let (left_after, _) = view.visible_x(area);
     assert!(
@@ -860,4 +860,46 @@ fn frame_requests_wait_for_real_width_reframe_on_resize_and_yield_to_user_naviga
     let anchor_after_pan = view.right_time_ms;
     assert!(!view.apply_frame_request(900.0));
     assert_eq!(view.right_time_ms, anchor_after_pan);
+}
+
+/// Removing the super floor or applying the plain floor below 30 s loses spike detail.
+#[test]
+fn super_zoom_floor_and_plain_escape_work_at_every_width() {
+    for width in [180.0, 760.0, 1900.0] {
+        let now = 1_700_000_000_000.0;
+        let mut view = ChartView::new(now);
+        view.ensure_default_window(width, 60.0, None);
+        view.zoom_x_at(1_000_000.0, width, width * 0.5, now, false);
+        assert!((view.visible_x(width).1 - 30_000.0).abs() < 0.1);
+        view.zoom_x_at(2.0, width, width * 0.5, now, true);
+        assert!((view.visible_x(width).1 - 15_000.0).abs() < 0.1);
+        view.zoom_x_at(2.0, width, width * 0.5, now, false);
+        assert!((view.visible_x(width).1 - 15_000.0).abs() < 0.1);
+        view.zoom_x_at(1_000_000.0, width, width * 0.5, now, true);
+        assert!((view.visible_x(width).1 - 3_000.0).abs() < 0.1);
+        view.zoom_x_at(2.0, width, width * 0.5, now, false);
+        assert!((view.visible_x(width).1 - 3_000.0).abs() < 0.1);
+        view.zoom_x_at(0.5, width, width * 0.5, now, false);
+        assert!((view.visible_x(width).1 - 6_000.0).abs() < 0.1);
+        view.zoom_x_at(0.125, width, width * 0.5, now, false);
+        assert!((view.visible_x(width).1 - 48_000.0).abs() < 0.1);
+        view.zoom_x_at(2.0, width, width * 0.5, now, false);
+        assert!((view.visible_x(width).1 - 30_000.0).abs() < 0.1);
+    }
+}
+
+/// Losing the manual cursor anchor in super mode would move the spike being inspected.
+#[test]
+fn super_zoom_preserves_manual_cursor_time() {
+    let width = 900.0;
+    let now = 1_700_000_000_000.0;
+    let mut view = ChartView::new(now - 100_000.0);
+    view.ensure_default_window(width, 60.0, None);
+    view.set_manual_persistent();
+    view.zoom_x_at(1_000_000.0, width, width * 0.4, now, true);
+    let before = view.visible_x(width).0 + width * 0.4 / view.px_per_ms;
+    view.zoom_x_at(0.5, width, width * 0.4, now, true);
+    let after = view.visible_x(width).0 + width * 0.4 / view.px_per_ms;
+    assert!((after - before).abs() < 1.0);
+    assert!(!view.is_live(now));
 }

@@ -225,6 +225,7 @@ impl SettingsView {
             .children([
                 self.builtin_row(t!("hotkeys.builtin.wheel_zoom").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.wheel_pan").to_string(), cx),
+                self.builtin_row(t!("hotkeys.builtin.wheel_super_zoom").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.x_sync").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.cancel_hover").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.draw_click").to_string(), cx),

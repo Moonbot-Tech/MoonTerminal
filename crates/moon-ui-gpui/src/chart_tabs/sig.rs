@@ -21,6 +21,9 @@ pub(super) fn chart_tabs_sig(b: &Backend, group: &str) -> u64 {
     sig = sig
         .wrapping_mul(31)
         .wrapping_add(u64::from(b.config.charts_split_by_core));
+    if b.super_zoom_group.as_deref() == Some(group) {
+        sig = sig.wrapping_mul(31).wrapping_add(b.super_zoom_rev);
+    }
     if b.price_scale_group.as_deref() == Some(group) {
         sig = sig.wrapping_mul(31).wrapping_add(b.price_scale_rev);
     }

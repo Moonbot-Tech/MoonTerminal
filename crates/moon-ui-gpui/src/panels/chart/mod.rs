@@ -1209,6 +1209,25 @@ impl ChartPanel {
         }
     }
 
+    /// Step time zoom at each plot center using the Ctrl+Shift+wheel floor and pane layout.
+    pub(crate) fn super_zoom(&mut self, zoom_in: bool, cx: &mut Context<Self>) {
+        if self.orderbook_only {
+            return;
+        }
+        let Some((_, sf, _)) = self.chart.slot_geometry() else {
+            return;
+        };
+        let fb = self.chart.slot_dev_width();
+        let input = &self.input;
+        let changed = self
+            .chart
+            .with_container_mut(|container| input.super_zoom(zoom_in, container, fb, sf));
+        if changed {
+            self.mark_input_changed(cx);
+            cx.notify();
+        }
+    }
+
     /// Sets this panel's price scale, where `None` means Auto. Rendering applies it through the
     /// engine's `set_scale`.
     pub fn set_scale(&mut self, pct: Option<f32>, cx: &mut Context<Self>) {

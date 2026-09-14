@@ -1,4 +1,4 @@
-//! A dedicated window showing ONE closed trade in its market context.
+//! A dedicated window focusing one closed trade with optional Report-period neighbours.
 //!
 //! # What it answers
 //!
@@ -332,6 +332,10 @@ pub(crate) struct TradeWindowView {
     panel: Entity<ChartPanel>,
     /// The trade being shown; every figure comes from here and needs no network.
     record: ChartTradeRecord,
+    /// Full Report-period snapshot retained independently of the drawing preference.
+    history: std::rc::Rc<Vec<ChartTradeRecord>>,
+    /// This window's drawing preference, remembered for later opens.
+    show_other_trades: bool,
     /// Core and exchange-native market the trade was resolved to.
     core: CoreId,
     market: String,
@@ -386,6 +390,36 @@ pub(crate) struct TradeWindowView {
 }
 
 impl TradeWindowView {
+    /// Adopt a newly clicked Report snapshot without resetting the existing window's view.
+    fn replace_history(&mut self, history: Vec<ChartTradeRecord>, cx: &mut Context<Self>) {
+        self.history = std::rc::Rc::new(history);
+        let history = visible_history(&self.history, &self.record, self.show_other_trades);
+        self.panel.update(cx, |panel, pcx| {
+            panel.publish_trade_history(history, pcx);
+        });
+        cx.notify();
+    }
+
+    /// Change only the published arrow set and remember the preference through layout persistence.
+    /// The retained snapshot makes toggling independent of DB reads, replay fetches and framing.
+    fn set_other_trades(&mut self, show: bool, cx: &mut Context<Self>) {
+        if self.show_other_trades == show {
+            return;
+        }
+        self.show_other_trades = show;
+        let history = visible_history(&self.history, &self.record, show);
+        self.panel.update(cx, |panel, pcx| {
+            panel.publish_trade_history(history, pcx);
+        });
+        self.backend.update(cx, |backend, _| {
+            if backend.layout.trade_window_other_trades != Some(show) {
+                backend.layout.trade_window_other_trades = Some(show);
+                backend.layout_dirty = true;
+            }
+        });
+        cx.notify();
+    }
+
     /// Close this window on a bare Escape.
     ///
     /// A SECOND way out, never the first: the close button in the header is the affordance, and a
@@ -784,10 +818,10 @@ impl TradeWindowView {
         let frame = first_publish
             .then(|| frame::trade_frame(buy_utc_ms, close_utc_ms, series.tf_ms))
             .flatten();
-        // The RAW record, deliberately: correcting it here would double-correct, since B.1
+        // The RAW records, deliberately: correcting them here would double-correct, since B.1
         // (`chartdx/trade_history_sync.rs`) already applies the axis inside
         // `append_trade_history_geometry`.
-        let record = self.record.clone();
+        let history = visible_history(&self.history, &self.record, self.show_other_trades);
         self.panel.update(cx, |panel, pcx| {
             panel.attach_trade_replay(Some(std::rc::Rc::new(series)), pcx);
             if !first_publish {
@@ -799,7 +833,7 @@ impl TradeWindowView {
             // drain, which this window deliberately never touches, so the clicked trade has to be
             // published here or the window shows a chart with nothing marked on it — which is the
             // one thing this whole feature exists to fix.
-            panel.publish_trade_history(std::rc::Rc::new(vec![record]), pcx);
+            panel.publish_trade_history(history, pcx);
             // The viewport is placed on the TRADE with its own proportional context, not on the
             // window the rows cover. Those differ on purpose: the fetch is asymmetric by design,
             // so framing it put a short position three quarters of the way to the right while a
@@ -833,5 +867,19 @@ impl TradeWindowView {
             }
         });
         cx.notify();
+    }
+}
+
+/// Select arrows from the retained snapshot without changing the focused trade or re-reading SQL.
+/// The full set stays shared while hidden; the focused record remains present in either mode.
+fn visible_history(
+    history: &std::rc::Rc<Vec<ChartTradeRecord>>,
+    focus: &ChartTradeRecord,
+    show_other_trades: bool,
+) -> std::rc::Rc<Vec<ChartTradeRecord>> {
+    if show_other_trades {
+        history.clone()
+    } else {
+        std::rc::Rc::new(vec![focus.clone()])
     }
 }

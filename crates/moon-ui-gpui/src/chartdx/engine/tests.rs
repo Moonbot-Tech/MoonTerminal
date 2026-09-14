@@ -14,7 +14,7 @@ fn pause_and_live_preserve_time_zoom_through_the_next_prepare() {
             let mut container = engine.container.borrow_mut();
             let view = &mut container.panes_mut().first_mut().expect("main pane").view;
             view.ensure_default_window(width, 60.0, None);
-            view.zoom_x_at(128.0, width, width * 0.5, now);
+            view.zoom_x_at(128.0, width, width * 0.5, now, false);
             view.px_per_ms
         };
         for cycle in 1..=3 {

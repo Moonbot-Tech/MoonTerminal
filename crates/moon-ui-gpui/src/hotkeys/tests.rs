@@ -369,3 +369,28 @@ fn horizontal_ray_shortcut_resolves_only_when_configured() {
         Some(HotkeyAction::FigTool(_))
     ));
 }
+
+/// Omitting either dispatch slot makes a saved super-zoom binding editable but inert.
+#[test]
+fn super_zoom_bindings_resolve_to_their_time_actions() {
+    use super::{HotkeyAction, resolve_binding};
+    let mut config = moon_core::config::HotkeysConfig::default();
+    for (slot, binding, action) in [
+        (
+            moon_core::config::KeySlot::SuperZoomIn,
+            "ctrl-alt-i",
+            HotkeyAction::SuperZoomIn,
+        ),
+        (
+            moon_core::config::KeySlot::SuperZoomOut,
+            "ctrl-alt-o",
+            HotkeyAction::SuperZoomOut,
+        ),
+    ] {
+        assert!(config.set_key(slot, binding.to_string()));
+        assert_eq!(
+            resolve_binding(&Keystroke::parse(binding).unwrap(), &config),
+            Some(action)
+        );
+    }
+}

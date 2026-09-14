@@ -326,6 +326,15 @@ impl Shell {
         use crate::hotkeys::HotkeyAction;
         let group = self.group.clone();
         let handled = match action {
+            HotkeyAction::SuperZoomIn | HotkeyAction::SuperZoomOut => {
+                self.backend.update(cx, |b, bcx| {
+                    b.super_zoom_group = Some(group.clone());
+                    b.super_zoom_in = matches!(action, HotkeyAction::SuperZoomIn);
+                    b.super_zoom_rev = b.super_zoom_rev.wrapping_add(1);
+                    bcx.notify();
+                });
+                true
+            }
             // Step the active tab's Y scale and address the revision to this group. Its ChartTabs
             // applies the change to the active panel and consumes only revisions for its group.
             HotkeyAction::ScalePlus | HotkeyAction::ScaleMinus => {

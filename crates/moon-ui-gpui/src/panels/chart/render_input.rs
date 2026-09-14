@@ -162,6 +162,17 @@ fn wheel_delta(x: f32, y: f32, modifiers: Modifiers) -> f32 {
     if y == 0.0 && modifiers.shift { x } else { y }
 }
 
+/// Resolve Ctrl+Shift before the Shift/Alt pan gesture, including Windows X-axis wheel events.
+fn wheel_mode(modifiers: Modifiers) -> input::WheelMode {
+    if modifiers.control && modifiers.shift {
+        input::WheelMode::SuperZoom
+    } else if modifiers.shift || modifiers.alt {
+        input::WheelMode::Pan
+    } else {
+        input::WheelMode::Zoom
+    }
+}
+
 /// Routes a wheel event to chart zoom/pan or leaves it for the surrounding stack to scroll.
 pub(super) fn scroll_wheel(
     this: &mut ChartPanel,
@@ -215,9 +226,15 @@ pub(super) fn scroll_wheel(
     let changed = {
         let input = &mut this.input;
         this.chart.with_container_mut(|container| {
-            // Built-in gesture: Shift OR Alt + wheel pans time left/right; no modifier zooms time.
-            let pan = e.modifiers.shift || e.modifiers.alt;
-            input.wheel(dy, precise, pan, within, container, fb, sf)
+            input.wheel(
+                dy,
+                precise,
+                wheel_mode(e.modifiers),
+                within,
+                container,
+                fb,
+                sf,
+            )
         })
     };
     if changed {

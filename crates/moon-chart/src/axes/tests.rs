@@ -28,3 +28,11 @@ fn time_label_target_medium_plot_is_four() {
 fn time_label_target_sub_floor_plot_is_three() {
     assert_eq!(time_label_target(1.0), 3.0);
 }
+
+/// Removing the one-second step leaves the three-second view without useful round labels.
+#[test]
+fn super_zoom_has_one_second_time_labels() {
+    for width in [180.0, 760.0, 1900.0] {
+        assert_eq!(super::nice_time_step(3.0, time_label_target(width)), 1.0);
+    }
+}

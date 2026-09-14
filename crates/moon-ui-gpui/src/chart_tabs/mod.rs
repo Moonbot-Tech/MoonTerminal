@@ -319,6 +319,8 @@ pub struct ChartTabs {
     /// Last observed toolbar `price_scale_rev`; a larger revision applies the selected scale only
     /// to the active panel, while unchanged revisions mirror the active tab's displayed scale.
     last_scale_rev: u64,
+    /// Last observed time-axis hotkey revision, including requests for other groups.
+    last_super_zoom_rev: u64,
     /// Last observed `switch_charts_rev`; only a larger revision addressed to this group advances
     /// the Main stack's active chart, exactly once.
     last_switch_charts_rev: u64,
@@ -403,6 +405,8 @@ impl ChartTabs {
         let initial_auto_workspace_core = auto_workspace_chart_core(backend.read(cx), &group);
         let initial_main_target = main.read(cx).active_target(cx);
         let initial_x_sync_rev = backend.read(cx).chart_x_sync_rev;
+        // A new tab controller must not replay a zoom key pressed before it existed.
+        let initial_super_zoom_rev = backend.read(cx).super_zoom_rev;
         #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
         {
             if let Some(main_handle) = main.read(cx).debug_data_handle(cx) {
@@ -601,6 +605,7 @@ impl ChartTabs {
             this.ingest(cx);
             this.drain_chart_repin(cx);
             this.sync_active_scale(cx);
+            this.sync_super_zoom(cx);
             this.sync_switch_charts(cx);
             this.sync_close_all_charts(cx);
             this.sync_close_active_chart(cx);
@@ -735,6 +740,7 @@ impl ChartTabs {
                 initial_main_target,
             ),
             last_scale_rev: 0,
+            last_super_zoom_rev: initial_super_zoom_rev,
             last_switch_charts_rev: 0,
             last_close_all_charts_rev: 0,
             last_close_active_chart_rev: 0,
@@ -763,6 +769,7 @@ impl ChartTabs {
         this.handle_open_request(false, cx);
         this.sync_active_scale(cx);
         this.initialize_main_chart_target(cx);
+        this.sync_super_zoom(cx);
         this.persist_scales(cx);
         this
     }
@@ -843,6 +850,7 @@ impl ChartTabs {
         self.sync_inactive_chart_visibility(cx);
         self.sync_seen_for_active(cx);
         self.sync_active_scale(cx);
+        self.sync_super_zoom(cx);
         self.sync_main_chart_target(cx);
         self.persist_scales(cx);
         cx.notify();
@@ -918,6 +926,7 @@ impl ChartTabs {
             self.sync_inactive_chart_visibility(cx);
             self.sync_seen_for_active(cx);
             self.sync_active_scale(cx);
+            self.sync_super_zoom(cx);
             self.sync_main_chart_target(cx);
             self.persist_scales(cx);
             let group = self.group.clone();
@@ -1154,6 +1163,33 @@ impl ChartTabs {
             {
                 let cnt = panel.read(cx).pane_count(cx);
                 self.seen.insert((n, c), cnt);
+            }
+        }
+    }
+
+    /// Consume a time-axis hotkey once, only in its owning group's active tab.
+    fn sync_super_zoom(&mut self, cx: &mut Context<Self>) {
+        let (rev, zoom_in, ours) = {
+            let b = self.backend.read(cx);
+            (
+                b.super_zoom_rev,
+                b.super_zoom_in,
+                b.super_zoom_group.as_deref() == Some(&self.group),
+            )
+        };
+        if rev == self.last_super_zoom_rev {
+            return;
+        }
+        self.last_super_zoom_rev = rev;
+        if !ours {
+            return;
+        }
+        match &self.active {
+            Tab::Main => self.main.update(cx, |p, pcx| p.super_zoom(zoom_in, pcx)),
+            Tab::Add(n, bucket) | Tab::Custom(n, bucket) => {
+                if let Some(stack) = self.add_stack(*n, bucket) {
+                    stack.update(cx, |p, pcx| p.super_zoom(zoom_in, pcx));
+                }
             }
         }
     }

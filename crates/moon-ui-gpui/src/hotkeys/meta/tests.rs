@@ -36,6 +36,8 @@ fn the_aimed_trading_keys_claim_the_pointer_as_well_as_the_window() {
         KeySlot::OrderSize(0),
         KeySlot::SwitchCharts,
         KeySlot::ScalePlus,
+        KeySlot::SuperZoomIn,
+        KeySlot::SuperZoomOut,
         KeySlot::CancelAllBuys,
     ] {
         assert_eq!(key_slot_meta(slot).scope, Scope::WINDOW, "{}", slot.stem());

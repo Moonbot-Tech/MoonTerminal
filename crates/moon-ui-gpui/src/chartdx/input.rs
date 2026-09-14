@@ -17,6 +17,17 @@ pub enum Btn {
     Right,
 }
 
+/// Navigation gesture, also identifying which discrete wheel accumulator owns a delta.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WheelMode {
+    /// Ordinary time zoom with the 30-second floor.
+    Zoom,
+    /// Time zoom with the three-second floor.
+    SuperZoom,
+    /// Horizontal time pan.
+    Pan,
+}
+
 const WHEEL_THRESHOLD: f32 = 100.0;
 /// Pixel distance that doubles or halves X scale for precise macOS trackpad input.
 ///
@@ -117,9 +128,9 @@ pub struct ChartInput {
     live_hold: LiveHold,
     wheel_accum: f32,
     wheel_pane: Option<usize>,
-    /// Whether the accumulated lines were gathered while PANNING, so a change of modifiers
+    /// Gesture that gathered the accumulated lines, so a change of modifiers
     /// mid-scroll starts a fresh count instead of spending them on the other gesture.
-    wheel_was_pan: Option<bool>,
+    wheel_mode: Option<WheelMode>,
     rmb_down: bool,
     /// Whether right-button movement crossed the price-zoom drag threshold.
     rmb_moved: bool,
@@ -198,14 +209,14 @@ impl ChartInput {
 
     /// Apply wheel X zoom or X pan to the hovered pane.
     ///
-    /// `dy` is a line delta for discrete input or a pixel delta when `precise` is true. `pan`
-    /// selects Shift/Alt wheel panning instead of zooming, and `gate_ok` requires the pointer to be
+    /// `dy` is a line delta for discrete input or a pixel delta when `precise` is true. `mode`
+    /// selects plain zoom, super zoom, or Shift/Alt panning, and `gate_ok` requires the pointer to be
     /// inside the chart zone. Returns whether a view changed and needs presentation.
     pub fn wheel(
         &mut self,
         dy: f32,
         precise: bool,
-        pan: bool,
+        mode: WheelMode,
         gate_ok: bool,
         container: &mut Container,
         fallback_w: f32,
@@ -225,15 +236,15 @@ impl ChartInput {
         // The accumulator belongs to one pane AND one gesture. Carrying it across a change of
         // either spends lines gathered while panning on the zoom step that follows, which fires
         // early and at whichever multiplier the modifiers happen to hold at that instant.
-        if self.wheel_pane != self.hovered_pane || self.wheel_was_pan != Some(pan) {
+        if self.wheel_pane != self.hovered_pane || self.wheel_mode != Some(mode) {
             self.wheel_accum = 0.0;
             self.wheel_pane = self.hovered_pane;
-            self.wheel_was_pan = Some(pan);
+            self.wheel_mode = Some(mode);
         }
         let (plot_w, cursor_x) = self.plot_metrics_for(self.hovered_pane, fallback_w, ppp);
         let now = now_unix_ms();
         if let Some(view) = self.hovered_view_mut(container) {
-            if pan {
+            if mode == WheelMode::Pan {
                 // Precise panning follows gesture pixels; a discrete line event uses a fixed
                 // 60-device-pixel step in its sign direction.
                 let dx = if precise { -dy } else { -dy.signum() * 60.0 };
@@ -243,7 +254,7 @@ impl ChartInput {
                 // threshold accumulation, avoiding repeated jumps from inertial pixel deltas.
                 self.wheel_accum = 0.0;
                 let factor = 2f32.powf(dy / WHEEL_PX_PER_2X);
-                view.zoom_x_at(factor, plot_w, cursor_x, now);
+                view.zoom_x_at(factor, plot_w, cursor_x, now, mode == WheelMode::SuperZoom);
             } else {
                 // Accumulate discrete wheel lines and apply the step at the threshold.
                 self.wheel_accum += dy * 40.0;
@@ -253,11 +264,40 @@ impl ChartInput {
                 // Terminal UX: wheel up zooms in, wheel down zooms out.
                 let factor = 2f32.powf(self.wheel_accum.signum());
                 self.wheel_accum = 0.0;
-                view.zoom_x_at(factor, plot_w, cursor_x, now);
+                view.zoom_x_at(factor, plot_w, cursor_x, now, mode == WheelMode::SuperZoom);
             }
             return true;
         }
         false
+    }
+
+    /// Apply one super-zoom hotkey step at each prepared pane's plot center.
+    /// Book-only and unprepared panes have no plot and are left alone.
+    pub(crate) fn super_zoom(
+        &self,
+        zoom_in: bool,
+        container: &mut Container,
+        fallback_w: f32,
+        ppp: f32,
+    ) -> bool {
+        if self.orderbook_only {
+            return false;
+        }
+        let mut changed = false;
+        for (idx, _) in &self.pane_rects {
+            let (width, _) = self.plot_metrics_for(Some(*idx), fallback_w, ppp);
+            if let Some(view) = container.view_mut(*idx) {
+                view.zoom_x_at(
+                    if zoom_in { 2.0 } else { 0.5 },
+                    width,
+                    width * 0.5,
+                    now_unix_ms(),
+                    true,
+                );
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Update chart-navigation state for a left or right mouse-button transition.

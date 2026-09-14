@@ -711,3 +711,24 @@ hotkeys.ms_button_unresolved:
   ru: "Стратегия «%{name}» не найдена среди Manual-стратегий ядра"
   en: "Strategy \"%{name}\" not found among the core's Manual strategies"
   es: "Estrategia «%{name}» no encontrada entre las estrategias Manual del núcleo"
+
+hotkeys.super_zoom_in:
+  ru: "Супер-зум ближе"
+  en: "Super zoom in"
+  es: "Acercar con superzoom"
+hotkeys.super_zoom_in_hint:
+  ru: "Приблизить шкалу времени до окна в 3 секунды. По умолчанию не назначено."
+  en: "Zoom the time axis in down to a 3-second window. Unbound by default."
+  es: "Acercar el eje temporal hasta una ventana de 3 segundos. Sin asignar por defecto."
+hotkeys.super_zoom_out:
+  ru: "Супер-зум дальше"
+  en: "Super zoom out"
+  es: "Alejar con superzoom"
+hotkeys.super_zoom_out_hint:
+  ru: "Отдалить шкалу времени с минимальным окном в 3 секунды. По умолчанию не назначено."
+  en: "Zoom the time axis out with a 3-second minimum window. Unbound by default."
+  es: "Alejar el eje temporal con una ventana mínima de 3 segundos. Sin asignar por defecto."
+hotkeys.builtin.wheel_super_zoom:
+  ru: "[Ctrl+Shift + Колёсико] супер-зум по времени до 3 секунд"
+  en: "[Ctrl+Shift + Wheel] super zooms time down to 3 seconds"
+  es: "[Ctrl+Shift + Rueda] superzoom temporal hasta 3 segundos"

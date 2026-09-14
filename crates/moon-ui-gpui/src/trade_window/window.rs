@@ -5,7 +5,6 @@ use std::sync::atomic::AtomicBool;
 
 use gpui::*;
 use moon_core::db::{ChartTradeRecord, TradeMeta};
-use moon_core::session::CoreId;
 use moon_ui::{MoonBackgroundPolicy, Root};
 
 use super::{TradeWindowState, TradeWindowView};
@@ -48,15 +47,15 @@ const MAX_WINDOWS: usize = 2;
 
 /// Open — or focus — the trade-detail window for one closed trade.
 ///
-/// Re-clicking a trade whose window is already open FOCUSES it rather than opening a duplicate:
-/// two identical windows would be two identical fetches and two identical pictures.
+/// Re-clicking a trade focuses its existing window and refreshes its Report-period neighbours.
+/// Its replay and viewport stay intact rather than fetching an identical picture again.
 ///
 /// Args:
 ///     backend: Shared application state.
 ///     record: The clicked trade, already resolved from the durable replica.
 ///     meta: What that trade carried beside its prices — the detect line, the strategy, the exit
 ///         reason — read in the same background pass as the record itself.
-///     core: Core that recorded it.
+///     history: All closed neighbours selected from the same Report snapshot.
 ///     market: Exchange-native market the coin resolved to.
 ///     stamps: Entry and exit times, already formatted in the Report's own clock.
 ///     cx: Application context.
@@ -64,15 +63,21 @@ pub(crate) fn open_trade_window(
     backend: &Entity<Backend>,
     record: ChartTradeRecord,
     meta: TradeMeta,
-    core: CoreId,
+    history: Vec<ChartTradeRecord>,
     market: String,
     stamps: (String, String),
     cx: &mut App,
 ) {
+    let core = record.core_uid;
     let key = (record.core_uid, record.record_id);
     let open: Vec<((u64, i64), WindowHandle<Root>)> = backend.read(cx).trade_windows.clone();
     if let Some((_, handle)) = open.iter().find(|(k, _)| *k == key) {
-        let _ = handle.update(cx, |_, window, _| window.activate_window());
+        if let Ok(Some(view)) = handle.update(cx, |root, window, _| {
+            window.activate_window();
+            root.view().clone().downcast::<TradeWindowView>().ok()
+        }) {
+            view.update(cx, |view, cx| view.replace_history(history, cx));
+        }
         return;
     }
     // Retire the oldest BEFORE opening, so the cap is never momentarily exceeded and the cascade
@@ -267,6 +272,12 @@ pub(crate) fn open_trade_window(
                     window.window_handle().window_id(),
                 ),
                 record: record.clone(),
+                history: std::rc::Rc::new(history),
+                show_other_trades: owner
+                    .read(vcx)
+                    .layout
+                    .trade_window_other_trades
+                    .unwrap_or(true),
                 core,
                 market: market.clone(),
                 stamps: stamps.clone(),

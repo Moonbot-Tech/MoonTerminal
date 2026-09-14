@@ -1014,3 +1014,18 @@ fn horizontal_ray_binding_is_optional_and_survives_config_roundtrip() {
         "explicitly cleared remains unassigned"
     );
 }
+
+/// Removing serde defaults breaks old layouts; aliasing the slots loses one saved direction.
+#[test]
+fn super_zoom_slots_load_unbound_and_persist_independently() {
+    let mut config: HotkeysConfig = toml::from_str("schema = 2").unwrap();
+    assert!(config.key(KeySlot::SuperZoomIn).is_empty());
+    assert!(config.key(KeySlot::SuperZoomOut).is_empty());
+    config.set_key(KeySlot::SuperZoomIn, "ctrl-alt-i".into());
+    config.set_key(KeySlot::SuperZoomOut, "ctrl-alt-o".into());
+    let saved = toml::to_string(&config).unwrap();
+    let mut restored: HotkeysConfig = toml::from_str(&saved).unwrap();
+    restored.fill_unbound_slots();
+    assert_eq!(restored.key(KeySlot::SuperZoomIn), "ctrl-alt-i");
+    assert_eq!(restored.key(KeySlot::SuperZoomOut), "ctrl-alt-o");
+}

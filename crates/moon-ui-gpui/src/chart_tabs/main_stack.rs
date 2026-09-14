@@ -820,6 +820,13 @@ impl MainChartStack {
         true
     }
 
+    /// Step time zoom on every chart in this stack.
+    pub(crate) fn super_zoom(&mut self, zoom_in: bool, cx: &mut Context<Self>) {
+        for entry in &self.charts {
+            entry.panel.update(cx, |p, pcx| p.super_zoom(zoom_in, pcx));
+        }
+    }
+
     pub(crate) fn scale(&self) -> Option<f32> {
         self.scale
     }

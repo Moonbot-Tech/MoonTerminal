@@ -277,6 +277,8 @@ fn build_rows() -> Vec<Row> {
         key(G::Chart, KeySlot::SwitchCharts),
         key(G::Chart, KeySlot::ScalePlus),
         key(G::Chart, KeySlot::ScaleMinus),
+        key(G::Chart, KeySlot::SuperZoomIn),
+        key(G::Chart, KeySlot::SuperZoomOut),
         key(G::Chart, KeySlot::ChartShot),
         key(G::Draw, KeySlot::SwitchFigure),
         key(G::Draw, KeySlot::DrawHline),

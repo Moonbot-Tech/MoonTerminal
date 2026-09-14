@@ -312,6 +312,10 @@ pub enum KeySlot {
     ShiftSellDown,
     ScalePlus,
     ScaleMinus,
+    /// Zoom the time axis in to the three-second floor.
+    SuperZoomIn,
+    /// Zoom the time axis out while respecting the three-second floor.
+    SuperZoomOut,
     SwitchFigure,
     ChartShot,
     DrawHline,
@@ -332,7 +336,7 @@ impl KeySlot {
     /// unenumerated. What checks it is a test that serializes the config with every slot written a
     /// marker and looks for a stored keystroke that kept its own value: the STRUCT is the reference,
     /// never this list, because a test that walks this list to verify this list proves nothing.
-    pub const NAMED: [Self; 27] = [
+    pub const NAMED: [Self; 29] = [
         Self::CancelBuy,
         Self::PanicSell,
         Self::PanicSellOne,
@@ -350,6 +354,8 @@ impl KeySlot {
         Self::ShiftSellDown,
         Self::ScalePlus,
         Self::ScaleMinus,
+        Self::SuperZoomIn,
+        Self::SuperZoomOut,
         Self::SwitchFigure,
         Self::ChartShot,
         Self::DrawHline,
@@ -405,6 +411,8 @@ impl KeySlot {
             Self::ShiftSellDown => "shift_sell_down",
             Self::ScalePlus => "scale_plus",
             Self::ScaleMinus => "scale_minus",
+            Self::SuperZoomIn => "super_zoom_in",
+            Self::SuperZoomOut => "super_zoom_out",
             Self::SwitchFigure => "switch_figure",
             Self::ChartShot => "chart_shot",
             Self::DrawHline => "draw_hline",
@@ -709,6 +717,8 @@ impl HotkeysConfig {
             KeySlot::ShiftSellDown => &self.shift_sell_down,
             KeySlot::ScalePlus => &self.scale_plus,
             KeySlot::ScaleMinus => &self.scale_minus,
+            KeySlot::SuperZoomIn => &self.super_zoom_in,
+            KeySlot::SuperZoomOut => &self.super_zoom_out,
             KeySlot::SwitchFigure => &self.switch_figure,
             KeySlot::ChartShot => &self.chart_shot,
             KeySlot::DrawHline => &self.draw_hline,
@@ -757,6 +767,8 @@ impl HotkeysConfig {
             KeySlot::ShiftSellDown => &mut self.shift_sell_down,
             KeySlot::ScalePlus => &mut self.scale_plus,
             KeySlot::ScaleMinus => &mut self.scale_minus,
+            KeySlot::SuperZoomIn => &mut self.super_zoom_in,
+            KeySlot::SuperZoomOut => &mut self.super_zoom_out,
             KeySlot::SwitchFigure => &mut self.switch_figure,
             KeySlot::ChartShot => &mut self.chart_shot,
             KeySlot::DrawHline => &mut self.draw_hline,
@@ -1001,6 +1013,12 @@ pub struct HotkeysConfig {
     pub scale_plus: String,
     #[serde(default = "default_scale_minus")]
     pub scale_minus: String,
+    /// Local time-axis super zoom; no Moonbot import slot or default binding.
+    #[serde(default)]
+    pub super_zoom_in: String,
+    /// Local time-axis zoom out; no Moonbot import slot or default binding.
+    #[serde(default)]
+    pub super_zoom_out: String,
     #[serde(default = "default_switch_figure")]
     pub switch_figure: String,
 
@@ -1136,6 +1154,7 @@ pub struct HotkeysConfig {
 }
 
 impl Default for HotkeysConfig {
+    /// Seed the standard bindings, leaving terminal-only super zoom explicitly unbound.
     fn default() -> Self {
         Self {
             schema: SCHEMA,
@@ -1160,6 +1179,8 @@ impl Default for HotkeysConfig {
             shift_sell_down: default_shift_sell_down(),
             scale_plus: default_scale_plus(),
             scale_minus: default_scale_minus(),
+            super_zoom_in: String::new(),
+            super_zoom_out: String::new(),
             switch_figure: default_switch_figure(),
             chart_shot: default_chart_shot(),
             draw_hline: default_draw_hline(),

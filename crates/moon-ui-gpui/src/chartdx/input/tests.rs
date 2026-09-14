@@ -87,3 +87,114 @@ fn the_break_speed_scales_with_the_display() {
     assert!(at_1x.hold.flicked);
     assert!(!at_2x.hold.flicked);
 }
+
+/// Passing the plain floor from either wheel branch or the hotkey loses the three-second view.
+#[test]
+fn super_zoom_wheel_and_hotkey_share_the_plot_floor() {
+    use crate::chartdx::pane::ContainerKind;
+    let mut container = Container::new(ContainerKind::Main);
+    container.open_manual(42, "TESTUSDT", now_unix_ms());
+    let mut input = ChartInput {
+        hovered_pane: Some(0),
+        pane_rects: vec![(
+            0,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 900.0,
+                h: 500.0,
+            },
+        )],
+        ..Default::default()
+    };
+    let (width, _) = input.plot_metrics_for(Some(0), 900.0, 1.0);
+    for precise in [false, true] {
+        container
+            .view_mut(0)
+            .unwrap()
+            .ensure_default_window(width, 60.0, None);
+        for _ in 0..20 {
+            assert!(input.wheel(
+                if precise { 300.0 } else { 3.0 },
+                precise,
+                WheelMode::SuperZoom,
+                true,
+                &mut container,
+                900.0,
+                1.0
+            ));
+        }
+        assert!((container.view_mut(0).unwrap().visible_x(width).1 - 3000.0).abs() < 0.1);
+        assert!(input.wheel(
+            -3.0,
+            false,
+            WheelMode::Zoom,
+            true,
+            &mut container,
+            900.0,
+            1.0
+        ));
+        assert!((container.view_mut(0).unwrap().visible_x(width).1 - 6000.0).abs() < 0.1);
+        assert!(input.super_zoom(true, &mut container, 900.0, 1.0));
+        assert!((container.view_mut(0).unwrap().visible_x(width).1 - 3000.0).abs() < 0.1);
+        assert!(input.super_zoom(false, &mut container, 900.0, 1.0));
+        assert!((container.view_mut(0).unwrap().visible_x(width).1 - 6000.0).abs() < 0.1);
+    }
+    input.orderbook_only = true;
+    assert!(!input.super_zoom(true, &mut container, 900.0, 1.0));
+}
+
+/// Reusing ordinary-wheel accumulated lines makes the first super-zoom notch fire too early.
+#[test]
+fn super_zoom_starts_a_fresh_wheel_accumulator() {
+    use crate::chartdx::pane::ContainerKind;
+    let mut container = Container::new(ContainerKind::Main);
+    container.open_manual(42, "TESTUSDT", now_unix_ms());
+    let mut input = ChartInput {
+        hovered_pane: Some(0),
+        ..Default::default()
+    };
+    assert!(!input.wheel(
+        2.0,
+        false,
+        WheelMode::Zoom,
+        true,
+        &mut container,
+        900.0,
+        1.0
+    ));
+    assert!(!input.wheel(
+        1.0,
+        false,
+        WheelMode::SuperZoom,
+        true,
+        &mut container,
+        900.0,
+        1.0
+    ));
+    assert!(input.wheel(
+        2.0,
+        false,
+        WheelMode::SuperZoom,
+        true,
+        &mut container,
+        900.0,
+        1.0
+    ));
+    let view = container.view_mut(0).unwrap();
+    view.set_manual_persistent();
+    let before = view.px_per_ms;
+    let anchor = view.right_time_ms;
+    assert!(input.wheel(
+        -3.0,
+        false,
+        WheelMode::Pan,
+        true,
+        &mut container,
+        900.0,
+        1.0
+    ));
+    let view = container.view_mut(0).unwrap();
+    assert_eq!(view.px_per_ms, before);
+    assert!(view.right_time_ms < anchor);
+}
