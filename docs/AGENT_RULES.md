@@ -53,35 +53,39 @@ A SessionStart hook injects this file, and `CONTRIBUTING.md` beside it, into eve
     condition: if your configuration already schedules such a pass, follow it; if it says nothing,
     this rule is what adds it. A swarm that only polishes what was written never asks whether
     writing it was right.
+13. Before opening the PR, check the open issues: if the change closes one, link it with a
+    `Closes #N` line in the PR description (GitHub then closes the issue on merge and ties it to
+    the PR) and leave a comment on the issue saying what fixed it. An issue closed by hand with
+    no PR reference loses the trail from the report to the code.
 
 ## Code
 
-13. Comments and docstrings in English, every one you write or rewrite
+14. Comments and docstrings in English, every one you write or rewrite
     (→ `CONTRIBUTING.md` § Comments and strings).
-14. MoonUI first — never hand-roll a widget the stack already has
+15. MoonUI first — never hand-roll a widget the stack already has
     (→ `CONTRIBUTING.md` § UI).
-15. Treat UI/UX quality as a functional requirement for every new or materially changed
+16. Treat UI/UX quality as a functional requirement for every new or materially changed
     interface: establish a clear visual hierarchy, use consistent spacing, alignment and existing
     design tokens, and define loading, empty, error, disabled, hover, focus and selected states.
     Preserve keyboard accessibility and readable contrast, then verify the result in the running
     app at narrow and wide sizes and in every supported theme; a compile or a happy-path screenshot
     alone is not sufficient.
-16. Never silence a warning to get green — `#[allow(...)]`, an `unwrap()` over the error, a
+17. Never silence a warning to get green — `#[allow(...)]`, an `unwrap()` over the error, a
     suppression comment. Fix the cause; if you genuinely must suppress, say why in the same line.
 
 ## Tests
 
-17. Never edit a test to make it pass — fix the code. A red test is information, and deleting the
+18. Never edit a test to make it pass — fix the code. A red test is information, and deleting the
     messenger costs you the message.
-18. A test must fail on a real regression — if you cannot name the edit that breaks it, drop it
+19. A test must fail on a real regression — if you cannot name the edit that breaks it, drop it
     (→ `CONTRIBUTING.md` § What makes a test worth keeping).
-19. Unit tests live in a sibling `tests.rs`, never in an inline `#[cfg(test)] mod tests { … }`
+20. Unit tests live in a sibling `tests.rs`, never in an inline `#[cfg(test)] mod tests { … }`
     block (→ `CONTRIBUTING.md` § Tests).
 
 ## Safety
 
-20. Never force-push and never reset a shared `main` — fix forward with a new commit or a revert.
-21. Never commit `servers.enc`, `cfg/`, `data/` or `backups/` — they hold keys and local state.
-22. A green compile is not a working change. Drive the affected flow in the built exe, or say
+21. Never force-push and never reset a shared `main` — fix forward with a new commit or a revert.
+22. Never commit `servers.enc`, `cfg/`, `data/` or `backups/` — they hold keys and local state.
+23. A green compile is not a working change. Drive the affected flow in the built exe, or say
     plainly that the behaviour is unverified. FireTest is the scripted way to do it
     (→ [`docs/FIRETEST.md`](FIRETEST.md)).
