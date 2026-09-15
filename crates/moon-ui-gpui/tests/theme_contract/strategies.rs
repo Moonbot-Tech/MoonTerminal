@@ -903,7 +903,12 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
     assert!(measured_width.contains("checkbox_metrics(cx).mark"));
     assert!(measured_width.contains("checkbox_metrics(cx).gap"));
     assert!(measured_width.contains("strat.settings.text_step"));
-    assert!(measured_width.contains("TEXT_STEP_BUTTON_W * 2.0"));
+    assert!(measured_width.contains("tokens.tier().nearest"));
+    assert!(measured_width.contains("tier.control_metrics().height"));
+    assert!(
+        measured_width
+            .contains("tokens.ui(height * 2.0 + (height * ratio).round() + COMPACT_CHECKBOX_GAP)")
+    );
     assert!(measured_width.contains("popup_group_inset_px(cx)"));
     assert!(!settings.contains("const CONTENT_WIDTH"));
     for tuner_symbol in [

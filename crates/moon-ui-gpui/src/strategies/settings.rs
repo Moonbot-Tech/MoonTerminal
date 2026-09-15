@@ -12,8 +12,8 @@ use moon_core::config::layout::{
     STRATEGIES_TREE_TEXT_STEP_MIN, WindowLayout, clamp_strategies_tree_text_step,
 };
 use moon_ui::{
-    MoonCheckbox, MoonGroupBox, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonStepper,
-    MoonStepperSize, MoonTheme, h_flex, v_flex,
+    MoonCheckbox, MoonGroupBox, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize,
+    MoonStepper, MoonTheme, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -26,25 +26,6 @@ use crate::panels::{
 
 #[cfg(test)]
 mod tests;
-
-/// `MoonStepperSize::Compact`'s per-button width, in design units. RAW — never `ui()`-scaled.
-///
-/// Mirrored from `MoonStepper::metrics`'s `MoonStepperSize::Compact` arm, whose
-/// `StepperMetrics` is private because the component exposes no public rendered-width or metrics
-/// API. MoonUI is a ROLLING dependency (`CONTRIBUTING.md`), so re-check both halves on a refresh.
-/// Follow-up recorded for the coordinator: ask MoonUI for a public metrics accessor so this mirror
-/// can be deleted.
-const TEXT_STEP_BUTTON_W: f32 = 24.0;
-
-/// `MoonStepperSize::Compact`'s value-cell width, mirrored from the same private table.
-///
-/// Split from [`TEXT_STEP_BUTTON_W`] because the two halves scale DIFFERENTLY and a single
-/// combined constant therefore cannot be scaled correctly: `MoonStepper`'s `RenderOnce::render`
-/// renders the value cell as `div().w(px(tokens.ui(value_width)))` but passes each button's raw
-/// width to `MoonButton::width`. Scaling the combined 100 agreed with reality only at
-/// `ui_scale == 1.0`; at a hand-edited `0.5` it reserved 50px for a control occupying 74px and
-/// truncated the label.
-const TEXT_STEP_VALUE_W: f32 = 52.0;
 
 /// Resolved display preferences of the Strategies window.
 ///
@@ -394,11 +375,20 @@ fn settings_content_width(cx: &App) -> f32 {
     // reach `MoonButton::width`, which draws a RAW pixel width, while its value cell is
     // `ui()`-scaled. Reserving `ui(button*2 + value)` agreed with the rendered control only at
     // `ui_scale == 1.0`.
-    let stepper_reserve_px = TEXT_STEP_BUTTON_W * 2.0
-        + design::ui_value(
-            cx,
-            TEXT_STEP_VALUE_W + crate::panels::common::checkbox_metrics(cx).gap,
-        );
+    let tier = tokens
+        .tier()
+        .nearest(&[MoonSize::Xs, MoonSize::Sm, MoonSize::Md]);
+    let height = tier.control_metrics().height;
+    // Match the stepper's compact/normal value-width ratios; all widths follow UI zoom. The
+    // gap between the checkbox mark and its label follows the density tier as well.
+    let ratio = if tier == MoonSize::Md {
+        64.0 / 26.0
+    } else {
+        52.0 / 22.0
+    };
+    let stepper_reserve_px = tokens.ui(
+        height * 2.0 + (height * ratio).round() + crate::panels::common::checkbox_metrics(cx).gap,
+    );
     settings_content_width_value(
         title_width,
         group_width,
@@ -489,7 +479,7 @@ fn settings_content_width_value(
     title_w.max(group_content + group_inset_px)
 }
 
-/// Build the tree text-step row: its label, then a compact stepper.
+/// Build the tree text-step row: its label, then a density-sized stepper.
 ///
 /// A sibling of [`pref_group`]'s checkbox rows rather than a member of [`POPUP_ROWS`] — the
 /// preference is numeric, not boolean, so it cannot share `PrefRow`'s bool-typed function
@@ -530,7 +520,6 @@ fn tree_text_step_row(
                 .step(1.0)
                 .precision(0)
                 .value(prefs.tree_text_step)
-                .size(MoonStepperSize::Compact)
                 .on_change(move |value: f32, _window, app| {
                     view.update(app, |this, cx| this.set_tree_text_step(value, cx));
                 }),

@@ -18,7 +18,7 @@ use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonGroupBox,
     MoonInput, MoonLink, MoonMenuItem, MoonMenuSize, MoonPalette, MoonRadio, MoonSlider,
-    MoonStepper, MoonStepperSize, MoonText, MoonTone, h_flex, v_flex,
+    MoonStepper, MoonText, MoonTone, h_flex, v_flex,
 };
 
 use rust_i18n::t;
@@ -486,7 +486,6 @@ pub(super) fn stepper_live(
         .value(value as f32)
         .step(1.0)
         .precision(0)
-        .size(MoonStepperSize::Compact)
         .tone(design::mixed_tone(mixed))
         .on_change(move |v, _w, app| {
             // `as i32` saturates rather than wrapping.
