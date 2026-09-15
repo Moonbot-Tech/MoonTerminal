@@ -220,7 +220,7 @@ fn consume_report_commit(dirty: Option<&std::sync::atomic::AtomicBool>, on_commi
 
 /// The MoonUI theme for one interface mode, with `ThemeMode` already set on it.
 ///
-/// The ONE place our three modes map onto MoonUI's bundled themes. It is a separate function
+/// The ONE place our modes map onto MoonUI's bundled themes. It is a separate function
 /// because there are two callers that cannot share a `&AppConfig`: the shell below, and the login
 /// window, which is drawn before any configuration has been loaded. Each used to carry its own
 /// copy of this match, and a copy is exactly what silently keeps two arms while the other grows a
@@ -237,12 +237,19 @@ pub(crate) fn moon_theme_config_for_mode(mode: UiThemeMode) -> MoonThemeConfig {
         UiThemeMode::Dark => MoonThemeConfig::moon_terminal(),
         UiThemeMode::Graphite => MoonThemeConfig::moon_graphite(),
         UiThemeMode::Light => MoonThemeConfig::moon_light(),
+        // One config carries both colour modes, dark roles on the dark side and light roles on
+        // the light side; `theme.mode` below picks the side.
+        UiThemeMode::DarkExperimental | UiThemeMode::LightExperimental => {
+            MoonThemeConfig::moon_color_modes()
+        }
     };
     // Graphite is a dark theme, just a softer one, so it takes MoonUI's dark side. Everything
     // downstream that asks "is this light?" measures the palette rather than reading this field.
     theme.mode = match mode {
         UiThemeMode::Dark | UiThemeMode::Graphite => ThemeMode::Dark,
         UiThemeMode::Light => ThemeMode::Light,
+        UiThemeMode::DarkExperimental => ThemeMode::Dark,
+        UiThemeMode::LightExperimental => ThemeMode::Light,
     };
     theme
 }
