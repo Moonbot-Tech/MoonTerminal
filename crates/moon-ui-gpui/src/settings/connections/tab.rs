@@ -10,8 +10,8 @@ use std::sync::Arc;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown,
-    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonScrollbarVisibility,
-    MoonSelect, MoonTooltipView, MoonVirtualList, StyledExt, h_flex, v_flex,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonScrollbarVisibility, MoonSelect,
+    MoonTooltipView, MoonVirtualList, StyledExt, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -240,7 +240,6 @@ fn bulk_proto_dropdown(weak: &WeakEntity<SettingsView>, name: &str) -> impl Into
                 .trigger_size(MoonButtonSize::Micro)
                 .trigger_width_scaled(58.0)
                 .menu_width_scaled(96.0)
-                .menu_size(MoonMenuSize::Compact)
                 .items(items),
         )
 }
@@ -549,8 +548,7 @@ impl SettingsView {
                 div().w(px(260.0)).child(
                     MoonSelect::new(&self.mode)
                         .trigger_size(MoonButtonSize::Action)
-                        .menu_width(design::font_w(cx, 260.0))
-                        .menu_size(MoonMenuSize::Compact),
+                        .menu_width(design::font_w(cx, 260.0)),
                 ),
             )
     }
@@ -577,8 +575,7 @@ impl SettingsView {
                 div().w(px(260.0)).child(
                     MoonSelect::new(&self.core_sort)
                         .trigger_size(MoonButtonSize::Action)
-                        .menu_width(design::font_w(cx, 260.0))
-                        .menu_size(MoonMenuSize::Compact),
+                        .menu_width(design::font_w(cx, 260.0)),
                 ),
             )
     }

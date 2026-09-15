@@ -4,8 +4,8 @@
 use super::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDataCell, MoonDataRow,
-    MoonDataTable, MoonDataTableColumn, MoonDropdown, MoonMenuSize, MoonPopover,
-    MoonPopoverPlacement, MoonTone, h_flex,
+    MoonDataTable, MoonDataTableColumn, MoonDropdown, MoonPopover, MoonPopoverPlacement, MoonTone,
+    h_flex,
 };
 use rust_i18n::t;
 
@@ -321,7 +321,6 @@ fn strategy_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
         .trigger_size(MoonButtonSize::Action)
         .trigger_width_scaled(150.0)
         .menu_width_scaled(220.0)
-        .menu_size(MoonMenuSize::Compact)
         .items(items)
         .into_any_element()
 }

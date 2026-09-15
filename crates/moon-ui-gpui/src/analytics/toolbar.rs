@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use gpui::*;
 use moon_ui::{
     MoonAlert, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant,
-    MoonDateTimePicker, MoonDropdown, MoonInput, MoonMenuItem, MoonMenuSize, MoonPalette,
-    MoonSegmentItem, MoonSegmentedControl, h_flex,
+    MoonDateTimePicker, MoonDropdown, MoonInput, MoonMenuItem, MoonPalette, MoonSegmentItem,
+    MoonSegmentedControl, h_flex,
 };
 use rust_i18n::t;
 
@@ -680,7 +680,6 @@ impl AnalyticsView {
             .trigger_size(MoonButtonSize::Action)
             .trigger_width_scaled(METRIC_TRIGGER_W)
             .fit_menu_width(120.0, 240.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
 
@@ -797,7 +796,6 @@ impl AnalyticsView {
             .trigger_size(MoonButtonSize::Action)
             .trigger_width_scaled(SIDE_TRIGGER_W)
             .menu_width_scaled(120.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
 
@@ -844,7 +842,6 @@ impl AnalyticsView {
             .trigger_size(MoonButtonSize::Action)
             .trigger_width_scaled(KIND_TRIGGER_W)
             .menu_width_scaled(138.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
 
@@ -1183,7 +1180,6 @@ impl AnalyticsView {
             .trigger_size(MoonButtonSize::Action)
             .fit_trigger_width(PRESET_CELL_MIN_W, PRESET_CELL_MAX_W)
             .fit_menu_width(120.0, 220.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
 

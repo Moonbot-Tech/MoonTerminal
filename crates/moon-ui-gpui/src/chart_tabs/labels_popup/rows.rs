@@ -10,8 +10,7 @@ use moon_core::config::{
     ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelFlow, LabelPreset, LabelZone,
 };
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize,
-    h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -137,7 +136,6 @@ fn row_line<T: LabelsPopupHost>(
         .trigger_size(MoonButtonSize::Micro)
         .trigger_width_scaled(ZONE_W)
         .menu_width_scaled(168.0)
-        .menu_size(MoonMenuSize::Compact)
         .items(zone_items(entity, cfg, ix));
     // Where in the band the module sits. Three visible states rather than one cycling button: the
     // current edge has to be readable at a glance, and a cycler answers "what is it now" only from
@@ -192,7 +190,6 @@ fn row_line<T: LabelsPopupHost>(
             .trigger_size(MoonButtonSize::Micro)
             .trigger_width_scaled(GAP_W)
             .menu_width_scaled(70.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
     };
     let remove = {
@@ -302,7 +299,6 @@ pub(super) fn add_row_dropdown<T: LabelsPopupHost>(
         .trigger_size(MoonButtonSize::Micro)
         .trigger_width_scaled(NAME_W + FIELD_W)
         .menu_width_scaled(190.0)
-        .menu_size(MoonMenuSize::Compact)
         .disabled(cfg.first_free_row().is_none())
         .items(items)
 }

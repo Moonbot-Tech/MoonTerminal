@@ -22,8 +22,8 @@ use moon_core::feed::CoreConfigState;
 use moon_core::session::CoreId;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonHotkeyInput,
-    MoonKbd, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTabItem, MoonTabStrip, MoonText,
-    MoonTooltip, MoonTooltipView, h_flex, rgba_from, v_flex,
+    MoonKbd, MoonMenuItem, MoonPalette, MoonTabItem, MoonTabStrip, MoonText, MoonTooltip,
+    MoonTooltipView, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -795,7 +795,6 @@ impl SettingsView {
             .trigger_caret(true)
             .trigger_size(MoonButtonSize::Micro)
             .trigger_width(design::ui_value(cx, ROW_EDITOR_WIDTH))
-            .menu_size(MoonMenuSize::Compact)
     }
 
     /// Builds the part-count selector for `Split N` (Moonbot `Hotkeys.SplitParts`) — the parameter

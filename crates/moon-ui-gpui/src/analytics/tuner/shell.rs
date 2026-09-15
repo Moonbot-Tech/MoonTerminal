@@ -13,8 +13,8 @@ use gpui::*;
 use moon_core::db::ReadFail;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
-    MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonTag, MoonTooltipView, h_flex, v_flex,
+    MoonInputEvent, MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonTag,
+    MoonTooltipView, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -556,7 +556,6 @@ impl AnalyticsView {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Micro)
             .menu_width_scaled(96.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(tr_items);
         let edges = self.tuner.edges;
         let ed_view = cx.entity();
@@ -585,7 +584,6 @@ impl AnalyticsView {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Micro)
             .menu_width_scaled(64.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(ed_items);
         let gap = design::ui_px(cx, 6.0);
         let section_gap = design::ui_px(cx, 8.0);

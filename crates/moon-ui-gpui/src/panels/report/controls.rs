@@ -272,7 +272,6 @@ impl Render for ReportScopeControl {
                     .trigger_size(MoonButtonSize::Action)
                     .fit_trigger_width(102.0, 170.0)
                     .menu_width_scaled(210.0)
-                    .menu_size(MoonMenuSize::Compact)
                     .close_on_select(false)
                     .open(self.menu_open)
                     .on_open_change(move |open, _, app| {
@@ -784,7 +783,6 @@ impl ReportPanel {
             // old figures, and MoonUI's font-aware fitting knows their advance at the live UI scale.
             .fit_trigger_width(100.0, 150.0)
             .fit_menu_width(130.0, 190.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
 
@@ -932,7 +930,6 @@ impl ReportPanel {
                     .trigger_size(MoonButtonSize::Action)
                     .trigger_width(design::glyph_btn_w(cx))
                     .menu_width_scaled(200.0)
-                    .menu_size(MoonMenuSize::Compact)
                     .items(items),
             )
     }
@@ -993,7 +990,6 @@ impl ReportPanel {
                     .trigger_width(design::glyph_btn_w(cx))
                     .menu_width_scaled(230.0)
                     .menu_max_height_ui(420.0)
-                    .menu_size(MoonMenuSize::Compact)
                     .close_on_select(false)
                     .items(items),
             )

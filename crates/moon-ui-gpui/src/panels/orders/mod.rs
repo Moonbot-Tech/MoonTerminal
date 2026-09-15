@@ -30,8 +30,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     DockArea, MoonButtonSize, MoonButtonVariant, MoonDataCell, MoonDataRow, MoonDataTable,
-    MoonDataTableColumn, MoonDataTableState, MoonDropdown, MoonMenuItem, MoonMenuSize, MoonPalette,
-    MoonTone, Panel, PanelEvent, PanelInfo, PanelState, h_flex, v_flex,
+    MoonDataTableColumn, MoonDataTableState, MoonDropdown, MoonMenuItem, MoonPalette, MoonTone,
+    Panel, PanelEvent, PanelInfo, PanelState, h_flex, v_flex,
 };
 
 use rust_i18n::t;

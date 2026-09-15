@@ -15,8 +15,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonColorPicker, MoonDropdown,
-    MoonInput, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonText, MoonTone,
-    MoonTooltipView, StyledExt, h_flex,
+    MoonInput, MoonInputState, MoonMenuItem, MoonPalette, MoonText, MoonTone, MoonTooltipView,
+    StyledExt, h_flex,
 };
 use rust_i18n::t;
 
@@ -636,7 +636,6 @@ fn feed_popover(
         .trigger_size(MoonButtonSize::Micro)
         .trigger_width_scaled(ConnColId::Data.spec().basis)
         .menu_width_scaled(272.0)
-        .menu_size(MoonMenuSize::Compact)
         .close_on_select(false)
         .items(items)
         .open(open)
@@ -751,7 +750,6 @@ fn proto_dropdown(
         .trigger_size(MoonButtonSize::Micro)
         .trigger_width_scaled(ConnColId::Proto.spec().basis)
         .menu_width_scaled(96.0)
-        .menu_size(MoonMenuSize::Compact)
         .items(items)
         .open(open)
         // Controlled mode leaves the repaint to us, as on the feed menu beside it.
@@ -850,7 +848,6 @@ fn preset_dropdown(
         .trigger_size(MoonButtonSize::Micro)
         .trigger_width_scaled(ConnColId::Preset.spec().basis)
         .menu_width_scaled(140.0)
-        .menu_size(MoonMenuSize::Compact)
         .items(items)
         .open(open)
         // Controlled mode leaves the repaint to us, as on the transport menu beside it.

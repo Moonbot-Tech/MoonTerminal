@@ -8,8 +8,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem,
-    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect,
-    MoonSelectorPill, MoonSelectorSegment, MoonTag, MoonWindowFrame, h_flex,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect, MoonSelectorPill,
+    MoonSelectorSegment, MoonSize, MoonTag, MoonWindowFrame, h_flex,
 };
 use rust_i18n::t;
 
@@ -532,7 +532,7 @@ fn workspace_mode_selector(group: &str, backend: &Entity<Backend>, cx: &App) -> 
                 .trigger_size(MoonButtonSize::Action)
                 .trigger_width_scaled(MODE_TRIGGER_W)
                 .menu_width_scaled(MODE_MENU_W)
-                .menu_size(MoonMenuSize::Compact)
+                .menu_size(MoonSize::Xs)
                 .items(items),
         )
 }
@@ -897,7 +897,7 @@ fn core_selector(
         .content(
             MoonPopupMenu::new("header-core-menu")
                 .fit_width(180.0, 560.0)
-                .size(MoonMenuSize::Compact)
+                .size(MoonSize::Xs)
                 .max_height_ui(520.0)
                 .items(items)
                 .render(),

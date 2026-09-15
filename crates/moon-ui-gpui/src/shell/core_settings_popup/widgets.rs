@@ -7,8 +7,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput, MoonMenuSize,
-    MoonPalette, MoonSlider, h_flex, v_flex,
+    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput, MoonPalette,
+    MoonSlider, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -115,7 +115,6 @@ pub(super) fn def_alert_strategy_row(
                     .fit_trigger_width(120.0, 240.0)
                     .menu_width_scaled(240.0)
                     .menu_max_height_ui(220.0)
-                    .menu_size(MoonMenuSize::Compact)
                     .items(items),
             )
             .into_any_element(),
@@ -308,7 +307,6 @@ pub(super) fn sound_cell(
                 .trigger_size(MoonButtonSize::Action)
                 .trigger_width_scaled(94.0)
                 .menu_width_scaled(128.0)
-                .menu_size(MoonMenuSize::Compact)
                 .items(items),
         )
         .child(sound_preview_button(

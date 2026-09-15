@@ -34,9 +34,8 @@ use moon_core::db::valuation::ValuationMode;
 use moon_core::db::{FailKind, ProfitMetric, ProfitUnit, ReadFail, SideFilter};
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize, MoonPalette,
-    MoonSegmentItem, MoonSegmentedControl, MoonVirtualListScrollHandle, MoonWindowFrame, h_flex,
-    v_flex,
+    MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonPalette, MoonSegmentItem,
+    MoonSegmentedControl, MoonVirtualListScrollHandle, MoonWindowFrame, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -1521,7 +1520,6 @@ fn period_dropdown(selected: MonitorPeriod, view: Entity<ProfitMonitorView>) -> 
         .trigger_size(MoonButtonSize::Action)
         .fit_trigger_width(100.0, 150.0)
         .fit_menu_width(130.0, 190.0)
-        .menu_size(MoonMenuSize::Compact)
         .items(items)
 }
 

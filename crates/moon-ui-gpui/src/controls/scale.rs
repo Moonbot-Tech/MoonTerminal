@@ -4,8 +4,8 @@ use gpui::*;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize,
-    MoonPalette, MoonTooltipView,
+    MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonPalette,
+    MoonTooltipView,
 };
 
 /// Price-scale (Y) presets matching egui `dock/controls.rs::SCALES` one-for-one.
@@ -129,7 +129,6 @@ fn scale_dropdown(
                 .trigger_variant(MoonButtonVariant::Neutral)
                 .trigger_size(trigger_size)
                 .menu_width_scaled(116.0)
-                .menu_size(MoonMenuSize::Compact)
                 .segment(
                     MoonButtonSegment::new("🔍")
                         .color(p.text_muted)

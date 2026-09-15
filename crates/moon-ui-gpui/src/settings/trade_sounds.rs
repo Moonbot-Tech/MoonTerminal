@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuSize, MoonPalette,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonPalette,
     MoonScrollableElement, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
@@ -265,7 +265,6 @@ impl SettingsView {
                         .trigger_size(MoonButtonSize::Action)
                         .trigger_width(design::font_w(cx, 150.0))
                         .menu_width_scaled(170.0)
-                        .menu_size(MoonMenuSize::Compact)
                         .items(items),
                 )
                 .child(

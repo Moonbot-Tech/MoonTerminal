@@ -352,7 +352,6 @@ fn op_dialog_body(
                             .trigger_size(MoonButtonSize::Action)
                             .trigger_width(field_w)
                             .menu_width(field_w)
-                            .menu_size(MoonMenuSize::Compact)
                             .menu_max_height_ui(240.0)
                             .items(kind_items),
                     ),

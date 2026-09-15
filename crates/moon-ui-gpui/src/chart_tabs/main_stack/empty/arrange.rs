@@ -27,8 +27,8 @@ use gpui::{
 };
 use moon_core::config::layout::{EmptyBlock, EmptyPlaces, EmptySlot};
 use moon_ui::{
-    IndexPath, MoonButton, MoonButtonSize, MoonButtonVariant, MoonMenuSize, MoonPalette,
-    MoonSelect, MoonSelectEvent, MoonSelectItem, MoonSelectState, h_flex, v_flex,
+    IndexPath, MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonSelect,
+    MoonSelectEvent, MoonSelectItem, MoonSelectState, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -282,8 +282,7 @@ fn row(
                 MoonSelect::new(state)
                     .in_popover()
                     .trigger_size(MoonButtonSize::Micro)
-                    .menu_width(design::font_w(cx, SELECT_WIDTH))
-                    .menu_size(MoonMenuSize::Compact),
+                    .menu_width(design::font_w(cx, SELECT_WIDTH)),
             ),
         )
         .into_any_element()

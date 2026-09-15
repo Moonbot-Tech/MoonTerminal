@@ -9,8 +9,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonMenuSize,
-    MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonPalette,
+    MoonPopover, MoonPopoverPlacement, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -703,7 +703,6 @@ impl CoreStatusView {
                     .trigger_size(MoonButtonSize::Action)
                     .trigger_width_scaled(94.0)
                     .menu_width_scaled(128.0)
-                    .menu_size(MoonMenuSize::Compact)
                     .items(items),
             )
             // The square preview, shared with the core-settings alert pickers so the two sound

@@ -10,8 +10,8 @@
 use gpui::*;
 use moon_ui::{
     MoonAccent, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown,
-    MoonMenuSize, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonSegmentItem, MoonSegmentedControl, MoonSlider, MoonWindowExt as _, h_flex, v_flex,
+    MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSegmentItem,
+    MoonSegmentedControl, MoonSlider, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -261,7 +261,6 @@ fn slot_cell(
         .trigger_size(MoonButtonSize::Micro)
         .trigger_width_scaled(76.0)
         .menu_width_scaled(130.0)
-        .menu_size(MoonMenuSize::Compact)
         .items(items);
 
     // Keep buttons adjacent to the field with no spacers, packing the cell to the left.

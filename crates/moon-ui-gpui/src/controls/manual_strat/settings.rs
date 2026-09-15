@@ -22,7 +22,7 @@ use moon_core::config::MANUAL_STRAT_SLOTS;
 use moon_core::session::CoreId;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown,
-    MoonMenuItem, MoonMenuSize, MoonPalette, h_flex, v_flex,
+    MoonMenuItem, MoonPalette, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -443,7 +443,6 @@ fn strategy_picker(
         .trigger_size(MoonButtonSize::ToolbarCompact)
         .trigger_width_scaled(STRATEGY_COL_W)
         .menu_width_scaled(MENU_W)
-        .menu_size(MoonMenuSize::Compact)
         .menu_max_height_ui(MENU_MAX_H)
         .items(items)
         .into_any_element()
@@ -522,7 +521,6 @@ fn hook_picker(
         .trigger_size(MoonButtonSize::ToolbarCompact)
         .trigger_width_scaled(HOOK_COL_W)
         .menu_width_scaled(MENU_W)
-        .menu_size(MoonMenuSize::Compact)
         .menu_max_height_ui(MENU_MAX_H)
         .disabled(sid.is_none())
         .items(items)

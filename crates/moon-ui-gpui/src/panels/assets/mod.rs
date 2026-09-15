@@ -50,9 +50,8 @@ use gpui::*;
 use moon_ui::{
     DockArea, MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonDataCell,
     MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState, MoonDropdown, MoonInput,
-    MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonSlider, MoonSliderEvent,
-    MoonSliderState, MoonTone, MoonWindowFrame, Panel, PanelEvent, PanelState, Root, h_flex,
-    v_flex,
+    MoonInputState, MoonMenuItem, MoonPalette, MoonSlider, MoonSliderEvent, MoonSliderState,
+    MoonTone, MoonWindowFrame, Panel, PanelEvent, PanelState, Root, h_flex, v_flex,
 };
 
 use crate::Backend;

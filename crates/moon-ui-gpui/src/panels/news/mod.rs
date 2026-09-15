@@ -33,7 +33,7 @@ use gpui::*;
 use moon_ui::{
     DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonContextMenuWindowExt as _, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState,
-    MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonMenuItem, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement,
     MoonTooltipView, MoonWindowExt as _, Panel, PanelEvent, PanelState, h_flex, v_flex,
 };
 use rust_i18n::t;
@@ -629,7 +629,6 @@ impl NewsView {
             .fit_trigger_width(118.0, 260.0)
             .fit_menu_width(140.0, 560.0)
             .menu_max_height_ui(360.0)
-            .menu_size(MoonMenuSize::Compact)
             .close_on_select(false)
             .item(
                 MoonMenuItem::with_key("news-coins-all", all_label)

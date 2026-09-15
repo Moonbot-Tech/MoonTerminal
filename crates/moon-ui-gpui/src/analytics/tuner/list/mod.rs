@@ -17,7 +17,7 @@ mod tests;
 use gpui::*;
 use moon_ui::{
     MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput, MoonInputEvent,
-    MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, h_flex,
+    MoonInputState, MoonMenuItem, MoonPalette, h_flex,
 };
 use rust_i18n::t;
 use std::cmp::Ordering;
@@ -471,8 +471,7 @@ impl AnalyticsView {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Micro)
             .trigger_width_scaled(116.0)
-            .menu_width_scaled(150.0)
-            .menu_size(MoonMenuSize::Compact);
+            .menu_width_scaled(150.0);
         let all_view = view.clone();
         menu = menu.item(
             MoonMenuItem::with_key("type-all", t!("report.filter.all").to_string())
@@ -514,8 +513,7 @@ impl AnalyticsView {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Micro)
             .trigger_width_scaled(96.0)
-            .menu_width_scaled(130.0)
-            .menu_size(MoonMenuSize::Compact);
+            .menu_width_scaled(130.0);
         for f in [
             StratListFilter::All,
             StratListFilter::Black,
@@ -559,7 +557,6 @@ impl AnalyticsView {
             .trigger_size(MoonButtonSize::Micro)
             .trigger_width_scaled(30.0)
             .menu_width_scaled(160.0)
-            .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
         let all_view = view.clone();
         menu = menu.item(

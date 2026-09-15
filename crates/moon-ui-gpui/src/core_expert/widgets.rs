@@ -17,8 +17,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonGroupBox,
-    MoonInput, MoonLink, MoonMenuItem, MoonMenuSize, MoonPalette, MoonRadio, MoonSlider,
-    MoonStepper, MoonText, MoonTone, h_flex, v_flex,
+    MoonInput, MoonLink, MoonMenuItem, MoonPalette, MoonRadio, MoonSlider, MoonStepper, MoonText,
+    MoonTone, h_flex, v_flex,
 };
 
 use rust_i18n::t;
@@ -418,7 +418,6 @@ pub(super) fn choice_live(
         .trigger_caret(true)
         .trigger_variant(design::mixed_trigger_variant(mixed))
         .trigger_size(MoonButtonSize::Action)
-        .menu_size(MoonMenuSize::Compact)
         .items(items)
         .disabled(!enabled)
 }
@@ -697,7 +696,6 @@ pub(super) fn sound_cell(
                 .trigger_size(MoonButtonSize::Action)
                 .trigger_width_scaled(94.0)
                 .menu_width_scaled(128.0)
-                .menu_size(MoonMenuSize::Compact)
                 .items(items),
         )
         .child(crate::panels::common::sound_preview_button(

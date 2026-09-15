@@ -5,9 +5,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonCheckbox, MoonMenuSize, MoonPalette, MoonSegmentItem,
-    MoonSegmentedControl, MoonSelect, MoonSliderState, MoonTooltipView, StyledExt, h_flex,
-    rgba_from, v_flex,
+    MoonButton, MoonButtonSize, MoonCheckbox, MoonPalette, MoonSegmentItem, MoonSegmentedControl,
+    MoonSelect, MoonSliderState, MoonTooltipView, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -48,8 +47,7 @@ fn labeled_select<T: Clone + PartialEq + 'static>(
             div().w(px(width)).child(
                 MoonSelect::new(state)
                     .trigger_size(MoonButtonSize::Action)
-                    .menu_width(design::font_w(cx, width))
-                    .menu_size(MoonMenuSize::Compact),
+                    .menu_width(design::font_w(cx, width)),
             ),
         )
 }

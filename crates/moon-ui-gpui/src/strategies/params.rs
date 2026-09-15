@@ -1856,7 +1856,6 @@ impl StrategiesView {
                     .trigger_size(MoonButtonSize::Action)
                     .trigger_width_scaled(180.0)
                     .menu_width_scaled(220.0)
-                    .menu_size(MoonMenuSize::Compact)
                     .menu_max_height_ui(220.0)
                     .disabled(!active)
                     .items(items)

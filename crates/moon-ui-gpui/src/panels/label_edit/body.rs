@@ -15,7 +15,7 @@ use moon_core::config::{
 use moon_core::util::fmt::DeltaSign;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
-    MoonMenuSize, MoonPalette, MoonWindowExt as _, h_flex, v_flex,
+    MoonPalette, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -187,7 +187,6 @@ fn dropdown_row(
                 .trigger_size(MoonButtonSize::Micro)
                 .trigger_width_scaled(84.0)
                 .menu_width_scaled(104.0)
-                .menu_size(MoonMenuSize::Compact)
                 .items(items),
         )
 }

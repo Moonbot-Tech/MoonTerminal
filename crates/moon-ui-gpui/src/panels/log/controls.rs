@@ -136,7 +136,6 @@ impl LogPanel {
             // ("BinF3", an exchange, "Локальный"), not a "Ядер: 3" summary.
             .fit_trigger_width(crate::controls::CORE_COMBO_TRIGGER_W, 260.0)
             .fit_menu_width(180.0, 560.0)
-            .menu_size(MoonMenuSize::Compact)
             .menu_max_height_ui(360.0)
             .items(items)
             .into_any_element()
@@ -197,7 +196,6 @@ impl LogPanel {
             .trigger_size(MoonButtonSize::Action)
             .fit_trigger_width(180.0, 260.0)
             .fit_menu_width(220.0, 560.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
             .into_any_element()
     }

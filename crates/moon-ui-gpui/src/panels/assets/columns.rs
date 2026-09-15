@@ -440,7 +440,6 @@ impl AssetsView {
             .trigger_size(MoonButtonSize::Action)
             .trigger_width(design::glyph_btn_w(cx))
             .menu_width_scaled(170.0)
-            .menu_size(MoonMenuSize::Compact)
             .close_on_select(false)
             .item(
                 MoonMenuItem::with_key("col-all", t!("report.filter.all").to_string())

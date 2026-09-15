@@ -410,7 +410,6 @@ impl StrategiesView {
             .trigger_size(MoonButtonSize::Action)
             .fit_trigger_width(96.0, 116.0)
             .menu_width_scaled(180.0)
-            .menu_size(MoonMenuSize::Compact)
             .menu_max_height_ui(240.0)
             .items(items)
             .into_any_element()
@@ -448,7 +447,6 @@ impl StrategiesView {
             .trigger_size(MoonButtonSize::Action)
             .fit_trigger_width(96.0, 128.0)
             .menu_width_scaled(140.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
             .into_any_element()
     }
@@ -525,7 +523,6 @@ impl StrategiesView {
             // kind ("Binance Quarterly"), and a HIP-3 core appends its DEX name on top of that.
             .fit_trigger_width(96.0, 150.0)
             .fit_menu_width(160.0, 320.0)
-            .menu_size(MoonMenuSize::Compact)
             .menu_max_height_ui(240.0)
             .items(items)
             .into_any_element()

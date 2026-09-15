@@ -18,9 +18,9 @@ use gpui::*;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize,
-    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSelectorPill,
-    MoonSelectorSegment, MoonTheme, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex,
+    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonPalette,
+    MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSelectorPill, MoonSelectorSegment,
+    MoonSize, MoonTheme, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex,
 };
 
 use moon_core::config::MANUAL_STRAT_SLOTS;
@@ -427,7 +427,7 @@ pub fn manual_strategy_controls(
                 .content(
                     MoonPopupMenu::new("header-ms-menu")
                         .fit_width(200.0, 560.0)
-                        .size(MoonMenuSize::Compact)
+                        .size(MoonSize::Xs)
                         .items(items)
                         .render(),
                 )
@@ -621,7 +621,7 @@ pub fn manual_strategy_controls(
                                             "ms-slot-list-{i}"
                                         )))
                                         .fit_width(160.0, 420.0)
-                                        .size(MoonMenuSize::Compact)
+                                        .size(MoonSize::Xs)
                                         .items(menu_items)
                                         .render(),
                                     ),

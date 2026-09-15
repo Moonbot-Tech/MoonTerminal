@@ -3,8 +3,7 @@
 
 use super::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonInput, MoonMenuItem,
-    MoonMenuSize, h_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonInput, MoonMenuItem, h_flex,
 };
 use rust_i18n::t;
 
@@ -219,7 +218,6 @@ impl AlertsPanel {
             // label that would otherwise be ellipsised.
             .fit_trigger_width(102.0, 170.0)
             .menu_width_scaled(200.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
 
@@ -239,7 +237,6 @@ impl AlertsPanel {
             .trigger_size(MoonButtonSize::Action)
             .trigger_width(design::glyph_btn_w(cx))
             .menu_width_scaled(180.0)
-            .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
         let all_on = cur.columns == ALL_COLUMNS_MASK;
         let all_view = view.clone();
@@ -432,7 +429,6 @@ impl AlertsPanel {
             .trigger_size(MoonButtonSize::Action)
             .trigger_width_scaled(120.0)
             .menu_width_scaled(150.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
 }

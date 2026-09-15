@@ -146,7 +146,6 @@ impl OrdersPanel {
             .trigger_size(MoonButtonSize::Action)
             .trigger_width_scaled(102.0)
             .menu_width_scaled(138.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
 
@@ -166,7 +165,6 @@ impl OrdersPanel {
             .trigger_size(MoonButtonSize::Action)
             .trigger_width(design::glyph_btn_w(cx))
             .menu_width_scaled(170.0)
-            .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
         // The All item enables every column; clicking it again leaves only the first canonical one.
         // `ALL_COLUMNS_MASK` is the single source of truth for "every column visible".
