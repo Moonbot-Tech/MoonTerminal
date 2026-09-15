@@ -877,7 +877,8 @@ impl Render for CoreStatusView {
                 self.group_sort,
                 self.by_ip_width,
                 // Row insets are `rems`, so the By-IP width budget needs the window's rem size —
-                // MoonUI's Root sets it from the theme font size, which the Font slider moves.
+                // MoonUI's Root sets it from the theme font size, which the legacy font-delta
+                // channel moves.
                 f32::from(window.rem_size()),
                 // The user's dragged widths, BORROWED: the callee resolves them into `Copy`
                 // geometries synchronously and nothing in the render tree holds the map, so a

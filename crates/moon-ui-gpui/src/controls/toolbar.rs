@@ -34,8 +34,9 @@ const SELL_CAPTION_GAP: f32 = 8.0;
 /// Caption for a preset group, muted and one step below the strip's own cells.
 ///
 /// `MoonLabel` rather than a hand-rolled text div: it applies the theme's mono family and runs the
-/// size through `tokens.font()` itself, so the caption follows the Font slider like every other
-/// MoonUI text. Pass the BASE size — a pre-scaled `design::t_*` value would be scaled twice.
+/// size through `tokens.font()` itself, so the caption follows the legacy font-delta channel like
+/// every other MoonUI text. Pass the BASE size — a pre-scaled `design::t_*` value would be scaled
+/// twice.
 ///
 /// The text is a literal, not `t!`: `Size`/`Sell` are on the deliberately-untranslated list
 /// (`locales/README.md`), as are the neighbouring `Lev`/`SL`/`TP`. The tooltip is translated, the
@@ -100,7 +101,7 @@ fn captioned_strip(
 ///
 /// The text-bearing ones are passed through `design::font_w` at the point of use: their consumer
 /// (`MoonButton::width`) puts the value into `px(..)` verbatim, so a raw width would squeeze a
-/// label that grows with the Font slider — the same ailment the preset cells had.
+/// label that grows with the legacy font-delta channel — the same ailment the preset cells had.
 ///
 /// [`ICON_BTN_W`] is the exception and stays RAW. An icon-only button holds no text: its glyph is
 /// capped at `clamp(font_size + 1, 10, 14)` while its height comes from a fit formula, so a
@@ -116,17 +117,17 @@ const LIVE_W: f32 = 62.0;
 /// Raw width of each icon-only singleton-window button. Shared so the Report panel's trash
 /// button (`panels::report::controls`) matches the toolbar launchers from one source.
 pub(crate) const ICON_BTN_W: f32 = 30.0;
-/// Base font size of a ToolbarCompact text segment in MoonUI.
+/// Base font size of a Sm-tier text segment in MoonUI.
 const TOOLBAR_LAUNCHER_TEXT_SIZE: f32 = 10.0;
 /// Font weight used by the toolbar launchers' localized text segments.
 const TOOLBAR_LAUNCHER_TEXT_WEIGHT: f32 = 500.0;
-/// Base font size from which MoonUI derives a ToolbarCompact leading-icon size.
+/// Base font size from which MoonUI derives a Sm-tier leading-icon size.
 const TOOLBAR_LAUNCHER_ICON_FONT_SIZE: f32 = 10.5;
-/// UI-scaled gap between a ToolbarCompact leading icon and its label.
+/// UI-scaled gap between a Sm-tier leading icon and its label.
 const TOOLBAR_LAUNCHER_ICON_GAP: f32 = 6.0;
 /// Two raw one-pixel borders enclosing a labeled Soft button's horizontal content.
 const TOOLBAR_LAUNCHER_BORDER_W: f32 = 2.0;
-/// Horizontal inset on each side of a labeled launcher. Action/ToolbarCompact ship with
+/// Horizontal inset on each side of a labeled launcher. Action/Sm ship with
 /// `pad_x = 0` so icon-only targets stay square; labeled buttons must opt into the same
 /// 7-unit inset used by other Action labels (`core_settings_popup`, connections tab).
 const TOOLBAR_LAUNCHER_PAD_X: f32 = 7.0;
@@ -135,7 +136,7 @@ const SELL_CAPTION: &str = "Sell";
 /// Stable unit for group-local manual order-size equivalents.
 const SIZE_UNIT: &str = "USDT eq.";
 
-/// Measure one complete localized launcher button at ToolbarCompact geometry.
+/// Measure one complete localized launcher button at Sm-tier geometry.
 ///
 /// The label is measured AND rendered in [`design::ui_font`]: it is a control caption, and the two
 /// sections that host labeled launchers set that family so `MoonButton`'s text segment inherits it
@@ -1240,7 +1241,7 @@ pub fn toolbar(
 }
 
 /// A toolbar button that opens a singleton window, styled like Live
-/// (Soft/ToolbarCompact). `labeled_width = None` renders the icon alone with its name as a tooltip;
+/// (Soft/Sm). `labeled_width = None` renders the icon alone with its name as a tooltip;
 /// `Some(w)` renders icon + label inside the fixed width `w`. Every destination uses one shared
 /// open signature and deduplicates or focuses its own singleton window.
 ///

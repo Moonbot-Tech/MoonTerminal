@@ -26,7 +26,8 @@
 //! keeps what -- while a wide window is a GROW regime, where the caps are what stop the key and
 //! the group from spending width they have nothing readable to put in it. Both dials are needed,
 //! and neither is the other's fallback. All three carry ONE width policy, which is what makes
-//! their 150 > 140 > 85 ordering a property of the literals rather than of the Font slider.
+//! their 150 > 140 > 85 ordering a property of the literals rather than of the legacy font-delta
+//! channel.
 //!
 //! Pure and GPUI-free on purpose -- its sibling test file can assert the header and the rows agree
 //! without a window.

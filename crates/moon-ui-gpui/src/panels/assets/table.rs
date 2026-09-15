@@ -114,8 +114,8 @@ pub(super) struct RosterDragAnchor {
 /// language.
 #[derive(Clone, PartialEq)]
 pub(super) struct RosterWidthEnv {
-    /// Rendered body text size, which moves with the theme base and the Font slider. Covers the
-    /// caption size too — it is derived from the same base.
+    /// Rendered body text size, which moves with the theme base and the legacy font-delta channel.
+    /// Covers the caption size too — it is derived from the same base.
     body_bits: u32,
     /// UI geometry scale, which moves the row's padding and the figure's internal gap.
     ui_bits: u32,
@@ -669,7 +669,7 @@ impl AssetsView {
                     }))
                     // Passive: the enclosing toggle row owns the click, so the caret must not
                     // take a hitbox of its own and swallow it. Unlike the label beside it this
-                    // caret rides the UI slider, not the Font slider — it is chrome.
+                    // caret rides the UI slider, not the legacy font-delta channel — it is chrome.
                     .child(
                         MoonDisclosure::glyph(!collapsed)
                             .size(design::DISCLOSURE_GLYPH_MARKER)
@@ -788,8 +788,9 @@ impl AssetsView {
         //
         // Those two numbers now live as `roster_width::{DEFAULT_BASE_W, MIN_BASE_W}` (base,
         // unscaled units — see that module) rather than as the fixed law above: the column tracks
-        // the Font slider like every other metric in the panel, and the user can drag it wider
-        // himself via the resize handle at its right edge, with the result persisted.
+        // the legacy font-delta channel like every other metric in the panel, and the user can
+        // drag it wider himself via the resize handle at its right edge, with the result
+        // persisted.
         //
         // And the DEFAULT is now measured rather than fixed. 420 px was chosen against the names
         // above, but a name is the user's own free text: at the shipped width every row read

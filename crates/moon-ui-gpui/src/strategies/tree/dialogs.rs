@@ -134,7 +134,7 @@ const TREE_OP_DIALOG_W: f32 = 360.0;
 ///
 /// Subtract this only when converting the outer card (`MoonDialog::w`) into trigger/menu field
 /// width. The outer-card clamp uses the client viewport after window-frame insets, not these pads:
-/// MoonUI leaves the content pad unscaled while the card grows with the Font slider.
+/// MoonUI leaves the content pad unscaled while the card grows with the legacy font-delta channel.
 const TREE_OP_DIALOG_PAD: f32 = 16.0;
 
 /// Client width MoonUI Dialog uses as overlay bounds: viewport minus window-frame insets.
@@ -212,10 +212,10 @@ fn tree_op_window_frame_pads(window: &Window) -> (f32, f32) {
 
 /// Font-scale the tree-op dialog card and clamp it to the current client viewport.
 ///
-/// Pair the card with `font_w`, not `ui_px`: MoonDropdown's scaled trigger uses the Font slider,
-/// while UI scale only grows control height. The outer card is clamped once to MoonUI's client
-/// width (`viewport - window_paddings.left/right`); DialogContent's unscaled 16 px pads are
-/// subtracted only for trigger/menu field width.
+/// Pair the card with `font_w`, not `ui_px`: MoonDropdown's scaled trigger uses the legacy
+/// font-delta channel, while UI scale only grows control height. The outer card is clamped once
+/// to MoonUI's client width (`viewport - window_paddings.left/right`); DialogContent's unscaled
+/// 16 px pads are subtracted only for trigger/menu field width.
 ///
 /// Args:
 ///     window: Window whose client viewport bounds the card.

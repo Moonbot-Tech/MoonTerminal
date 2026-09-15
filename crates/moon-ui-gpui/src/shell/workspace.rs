@@ -1205,8 +1205,9 @@ fn render_rail_item(
                 // row below it selects exactly one. Weight, a step up in size and a rule beneath
                 // separate it from the list it sits on top of, without giving it a surface of its
                 // own — the rail already reads as one recessed pane. ONE step up, not `t_title`:
-                // the virtual list's row height is fixed and does not track the Font slider, so a
-                // three-step jump clips its own text at the top of that slider's range.
+                // the virtual list's row height is fixed and does not track the legacy font-delta
+                // channel, so a three-step jump clips its own text at the top of that channel's
+                // range.
                 .text_size(design::t_body_lg(cx))
                 .font_weight(FontWeight::SEMIBOLD)
                 .border_b_1()

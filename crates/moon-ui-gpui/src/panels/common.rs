@@ -349,9 +349,13 @@ pub(crate) struct CheckboxMetrics {
     pub(crate) font: f32,
 }
 
-/// Resolves the active density to the same box, gap and font used by MoonCheckbox.
+/// Resolves the active density to the same box, gap and font used by `MoonCheckbox`.
 ///
-/// Returns unscaled metrics for use with ui_px and ui_text_width_zoomed.
+/// Args:
+///     cx: Application context used to read the active density tier.
+///
+/// Returns:
+///     Unscaled metrics for use with [`design::ui_px`] and [`design::ui_text_width_zoomed`].
 pub(crate) fn checkbox_metrics(cx: &App) -> CheckboxMetrics {
     let tokens = moon_ui::MoonTheme::active_tokens(cx);
     let tier = tokens

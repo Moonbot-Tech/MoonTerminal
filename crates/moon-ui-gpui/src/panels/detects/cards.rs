@@ -420,8 +420,8 @@ fn strategy_chip(it: &DetectItem, name_w: f32, p: MoonPalette, cx: &App) -> Opti
     // One glyph measured, multiplied by the count — the rows are monospace, so the product is exact
     // for ASCII and close enough elsewhere for what it decides. Both sides are final screen pixels,
     // which is the point of comparing them: the budget is card geometry and follows the UI scale
-    // while the text follows the Font slider, so a name outgrows its area exactly where the two
-    // scales diverge.
+    // while the text follows the legacy font-delta channel, so a name outgrows its area exactly
+    // where the two scales diverge.
     let at_risk = design::mono_caption_text_width(cx, "0", 400.0) * full.chars().count() as f32
         > f32::from(max_w);
     // The text is a direct child rather than a `MoonText`: an ellipsis needs the string in the

@@ -1250,7 +1250,7 @@ impl AnalyticsView {
                 + design::ui_text_width(cx, &to_lbl, design::base_text(cx), 400.0, false);
         // `date_field`'s own `h_flex().gap_1()` between its caption and picker — GPUI's
         // `rems(0.25)`, at the window's rem size, which this app never overrides from GPUI's
-        // default `px(16.)`. One gap per field, not scaled by the Font slider.
+        // default `px(16.)`. One gap per field, not scaled by the legacy font-delta channel.
         let date_field_gaps_w = f32::from(rems(0.25).to_pixels(px(16.0))) * 2.0;
         let custom_group_w = 1.0
             + design::ui_text_width(cx, &custom_label, 10.5, 400.0, false)

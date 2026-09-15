@@ -81,7 +81,7 @@ impl RunSlots {
     /// takes out of its own layout budget is stated in design units, so the column must grow on
     /// exactly the scale that budget was spent on. The buttons inside are given the same
     /// `ui_value` — deliberately not the `font_w` the other micro buttons take, which would let
-    /// the control outgrow the column the Font slider never widened.
+    /// the control outgrow the column the legacy font-delta channel never widened.
     ///
     /// Args:
     ///     cx: Application context supplying the UI scale.

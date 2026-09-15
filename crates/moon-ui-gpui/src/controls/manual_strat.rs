@@ -39,7 +39,7 @@ use fit::{LabelMode, SlotWidths, resolve_strat_fit};
 const PILL_H: f32 = 26.0;
 /// Gap between two adjacent quick-strategy buttons in the header cluster.
 const BTN_GAP: f32 = 4.0;
-/// Estimated non-text chrome (padding, border) of one `ToolbarCompact` button carrying one
+/// Estimated non-text chrome (padding, border) of one `Sm`-tier button carrying one
 /// segment, at design-reference scale — run through `design::ui_value` before use, like every
 /// other estimate below. MoonUI computes the real value from its own metrics; this is a
 /// conservative estimate for the fit ladder, pending an on-screen check.
@@ -53,7 +53,7 @@ const BTN_CHROME_W: f32 = 20.0;
 /// what `.width()` hands the button, so widening it would fatten every button instead of the frame
 /// around it. The frame is the wrapper's, and only the fit ladder adds it.
 ///
-/// ONE, not two, and the height is what fixes it: a `ToolbarCompact` button is 26 + font delta tall
+/// ONE, not two, and the height is what fixes it: a `Sm`-tier button is 26 + font delta tall
 /// inside a 32 + font delta header strip, so the frame has exactly 6px to spend on both sides
 /// together — `2 * (1 pad + 2 border)`. At two the buttons would overhang the strip they sit in.
 const HOOK_FRAME_PAD: f32 = 1.0;

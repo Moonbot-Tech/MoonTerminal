@@ -295,8 +295,8 @@ impl TradeWindowView {
                 // ticks, bucketed ticks, or candles and the reason for them — so it must not be
                 // the smallest text in the window. It now matches the figures rail's VALUES
                 // (`figures.rs`, `t_body`) rather than its field labels, which is the right
-                // company for it. A design step, never a hard-coded size, so the Font slider and
-                // the UI scale keep carrying it.
+                // company for it. A design step, never a hard-coded size, so the legacy
+                // font-delta channel and the UI scale keep carrying it.
                 .child(
                     div()
                         .absolute()

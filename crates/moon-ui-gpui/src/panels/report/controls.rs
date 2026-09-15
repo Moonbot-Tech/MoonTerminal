@@ -679,7 +679,8 @@ impl ReportPanel {
             (
                 summary.clone(),
                 // The Action scale, like the core selector beside it: `font_w`'s mono body scale
-                // would size the pair differently as soon as the Font slider leaves zero.
+                // would size the pair differently as soon as the legacy font-delta channel leaves
+                // zero.
                 px(crate::controls::wrap_fit::action_width(
                     cx,
                     crate::controls::CORE_COMBO_TRIGGER_W,

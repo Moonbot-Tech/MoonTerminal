@@ -37,7 +37,7 @@ pub(super) struct StrategiesPrefs {
     pub(super) group_by_venue: bool,
     /// Whether unchecked live strategies are hidden from the tree.
     pub(super) active_only: bool,
-    /// Local text-size step for the tree pane, on top of the global Font slider.
+    /// Local text-size step for the tree pane, on top of the global legacy font-delta channel.
     pub(super) tree_text_step: f32,
     /// Whether the parameters pane shows every section at once instead of one.
     pub(super) params_full: bool,
@@ -422,8 +422,9 @@ fn popup_text_width(cx: &App, text: &str, base_size: f32, weight: f32) -> f32 {
 
 /// Measure text set in the density-selected checkbox label's face, in the popup's proportional family.
 ///
-/// That face follows the UI zoom but not the Font slider (see [`crate::panels::common::checkbox_metrics`]), so it is
-/// measured apart from [`popup_text_width`], which adds the slider's delta.
+/// That face follows the UI zoom but not the legacy font-delta channel (see
+/// [`crate::panels::common::checkbox_metrics`]), so it is measured apart from
+/// [`popup_text_width`], which adds that delta.
 ///
 /// Args:
 ///     cx: Application context providing active tokens and the text system.
