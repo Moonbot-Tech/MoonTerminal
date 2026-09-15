@@ -20,7 +20,7 @@ use rust_i18n::t;
 use moon_ui::{
     MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize,
     MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSelectorPill,
-    MoonSelectorSegment, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex,
+    MoonSelectorSegment, MoonTheme, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex,
 };
 
 use moon_core::config::MANUAL_STRAT_SLOTS;
@@ -87,9 +87,6 @@ const SLOT_SETTINGS_W: f32 = 540.0;
 const SLOT_GEAR_W: f32 = 26.0;
 const BTN_NAME_TEXT_SIZE: f32 = 11.0;
 const BTN_TEXT_WEIGHT: f32 = 500.0;
-/// Estimated rendered width of the "MS" toggle (track plus label), at design-reference scale, for
-/// the same reason as [`BTN_CHROME_W`].
-const MS_TOGGLE_W: f32 = 70.0;
 /// Estimated non-text chrome of the picker pill at design-reference scale: leading dot, padding,
 /// and border.
 const PILL_CHROME_W: f32 = 40.0;
@@ -107,6 +104,16 @@ const REDUCED_PILL_MAX_W: f32 = 120.0;
 /// with it, because a budget that under-reserves lets THIS cluster claim room the header has
 /// already spent.
 const HEADER_OTHER_SECTIONS_W: f32 = 778.0;
+
+/// Width of the "MS" toggle (track, gap and label) at the density-default tier.
+///
+/// The label is measured in the mono family because the MS toggle sets no `.mono()` and
+/// `MoonToggle` defaults `mono: true`.
+fn ms_toggle_width(cx: &App) -> f32 {
+    let m = MoonToggleSize::density_default(&MoonTheme::active_tokens(cx)).reference_metrics();
+    design::ui_value(cx, m.track_width + m.gap)
+        + design::ui_text_width_zoomed(cx, "MS", m.font_size, m.label_weight, true)
+}
 
 /// One quick-select button slot: `(slot index, strategy name, resolved strategy id, caption,
 /// numeric fallback caption)`.
@@ -209,7 +216,7 @@ pub fn manual_strategy_controls(
         // on all ten so its geometry cannot depend on which strategies carry a hook. Budgeting the
         // button alone proves a fit the row then overflows by six pixels a button.
         let frame_w = (design::ui_value(cx, HOOK_FRAME_PAD) + HOOK_FRAME_BORDER) * 2.0;
-        let ms_toggle_w = design::ui_value(cx, MS_TOGGLE_W);
+        let ms_toggle_w = ms_toggle_width(cx);
         let pill_chrome_w = design::ui_value(cx, PILL_CHROME_W);
         let header_other_sections_w = design::ui_value(cx, HEADER_OTHER_SECTIONS_W);
         let widths: Vec<SlotWidths> = slots
@@ -354,7 +361,6 @@ pub fn manual_strategy_controls(
                 .label("MS")
                 .label_side(MoonToggleLabelSide::Left)
                 .checked(on)
-                .size(MoonToggleSize::Compact)
                 // Never disabled, including with nothing selected: the picker and the gear appear
                 // only while the mode is ON, so a switch that refused to turn on without a strategy
                 // would hide the one control able to choose one. The mode with no selection places

@@ -8,7 +8,7 @@ use rust_i18n::t;
 use moon_ui::{
     MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonInput,
     MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSlider, MoonSliderState,
-    MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex, v_flex,
+    MoonToggle, MoonToggleLabelSide, h_flex, v_flex,
 };
 
 use moon_core::feed::ClientSettingsEdit;
@@ -508,7 +508,6 @@ pub(super) fn sl_toggle(
         .label("SL")
         .label_side(MoonToggleLabelSide::Left)
         .checked(on)
-        .size(MoonToggleSize::Compact)
         .disabled(disabled)
         .tone(design::chrome_toggle_tone(on, false))
         .on_change(move |ch: &bool, _w, app| {

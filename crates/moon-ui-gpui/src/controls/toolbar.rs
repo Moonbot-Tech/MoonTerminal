@@ -9,7 +9,7 @@ use rust_i18n::t;
 
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonSize, MoonButtonVariant,
-    MoonInputState, MoonLabel, MoonPalette, MoonToggle, MoonToggleSize, h_flex,
+    MoonInputState, MoonLabel, MoonPalette, MoonTheme, MoonToggle, MoonToggleSize, h_flex,
 };
 
 use super::DASH;
@@ -111,20 +111,6 @@ const LEV_W: f32 = 61.6;
 const SL_W: f32 = 58.0;
 /// Base width of the take-profit metric button.
 const TP_W: f32 = 74.6;
-/// The SL toggle's width, for the row budget ONLY — `MoonToggle` sizes itself and takes no width,
-/// so unlike its neighbours nothing renders from these two numbers.
-///
-/// Split because the widget's halves follow DIFFERENT scales: MoonUI puts the Compact track (28)
-/// and its label gap (7) through `tokens.ui()`, while the "SL" label follows the font. Scaling the
-/// sum by either one alone drifts the budget on the other slider.
-const SL_TOGGLE_TRACK_W: f32 = 35.0;
-/// Base width of the SL text beside the toggle, used only by the row budget.
-const SL_TOGGLE_LABEL_W: f32 = 13.0;
-/// The per-core order-size switch's width, for the row budget ONLY, on the same terms as
-/// [`SL_TOGGLE_TRACK_W`]: `MoonToggle` sizes itself and nothing renders from this number. It is the
-/// bare Compact track without [`SL_TOGGLE_TRACK_W`]'s label gap, because this switch carries no
-/// label — its meaning is in the tooltip.
-const OWN_TRADE_TOGGLE_W: f32 = 28.0;
 /// Base width of the Live/Pause button.
 const LIVE_W: f32 = 62.0;
 /// Raw width of each icon-only singleton-window button. Shared so the Report panel's trash
@@ -184,6 +170,22 @@ fn launcher_label_width(cx: &App, label: &str) -> f32 {
         + design::ui_value(cx, TOOLBAR_LAUNCHER_PAD_X) * 2.0
         + TOOLBAR_LAUNCHER_BORDER_W;
     (text + chrome).max(ICON_BTN_W)
+}
+
+/// Width of the SL toggle (track + gap + "SL" label) at the density-default tier.
+///
+/// The label is measured in the mono family because `sl_toggle` sets no `.mono()` and `MoonToggle`
+/// defaults `mono: true`.
+fn sl_toggle_width(cx: &App) -> f32 {
+    let m = MoonToggleSize::density_default(&MoonTheme::active_tokens(cx)).reference_metrics();
+    design::ui_value(cx, m.track_width + m.gap)
+        + design::ui_text_width_zoomed(cx, "SL", m.font_size, m.label_weight, true)
+}
+
+/// Width of the unlabeled own-trade toggle track at the density-default tier.
+fn own_trade_toggle_width(cx: &App) -> f32 {
+    let m = MoonToggleSize::density_default(&MoonTheme::active_tokens(cx)).reference_metrics();
+    design::ui_value(cx, m.track_width)
 }
 
 /// The localized labels of the three singleton-window launchers at the row's trailing edge.
@@ -318,19 +320,18 @@ fn row_fit(
     let gap = design::ui_value(cx, design::CHROME_GAP);
     let fw = |v: f32| design::font_w(cx, v);
     // Everything the row cannot shed, with the settings button at its icon-only width. The SL
-    // toggle is the one entry the row does not render from a width — the widget sizes itself, and
-    // its two halves follow different scales (see [`SL_TOGGLE_TRACK_W`]).
+    // toggle is the one entry the row does not render from a width — the widget sizes itself, so
+    // the budget reads the live density-default metrics via [`sl_toggle_width`].
     let controls = size.total_width()
         + sell.total_width()
         + fw(LEV_W)
         + fw(SL_W)
         + fw(TP_W)
-        + design::ui_value(cx, SL_TOGGLE_TRACK_W)
-        + fw(SL_TOGGLE_LABEL_W)
+        + sl_toggle_width(cx)
         // Budgeted unconditionally even though it is drawn only for an addressed core: a budget
         // that shrank with the switch would let the row fit at a width it cannot hold the moment a
         // chart is addressed, and re-widen only after the clipping had already happened.
-        + design::ui_value(cx, OWN_TRADE_TOGGLE_W)
+        + own_trade_toggle_width(cx)
         + fw(LIVE_W)
         + ICON_BTN_W * 5.0
         // The exchange max-order VALUE is permanent — outcome 4 asks for a readout that is always
@@ -522,7 +523,6 @@ fn own_trade_toggle(
             .child(
                 MoonToggle::new("toolbar-own-trade-toggle")
                     .checked(on)
-                    .size(MoonToggleSize::Compact)
                     .tone(design::chrome_toggle_tone(on, false))
                     .on_change(move |checked: &bool, _w, app| {
                         let on = *checked;

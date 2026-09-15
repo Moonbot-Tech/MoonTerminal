@@ -337,13 +337,13 @@ fn width_measurements_agree_with_their_rendered_family_and_cache_key() {
     let quiet = read_src("chrome/quiet.rs");
     assert!(
         code_only(braced_body(&quiet, "pub(crate) fn header_quiet_width("))
-            .contains("design::ui_caption_text_width("),
-        "header_quiet_width must measure the UI caption family because shell::ticker reuses this width as its popup offset"
+            .contains("design::ui_text_width_zoomed("),
+        "header_quiet_width must measure the toggle's own zoomed tier text because shell::ticker reuses this width as its popup offset"
     );
     assert!(
         code_only(braced_body(&quiet, "pub(crate) fn header_quiet_cluster("))
-            .contains(".font_family(design::ui_font())"),
-        "the quiet toggle caption must render in the UI family that header_quiet_width measures"
+            .contains(".mono(false)"),
+        "the quiet toggle's label must render in the UI family that header_quiet_width measures"
     );
     let wrap_fit = read_src("controls/wrap_fit.rs");
     let signature = code_only(braced_body(&wrap_fit, "pub(crate) fn signature("));
