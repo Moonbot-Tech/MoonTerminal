@@ -383,9 +383,9 @@ fn settings_content_width(cx: &App) -> f32 {
     } else {
         52.0 / 22.0
     };
-    let stepper_reserve_px = tokens.ui(
-        height * 2.0 + (height * ratio).round() + crate::panels::common::checkbox_metrics(cx).gap,
-    );
+    let stepper_reserve_px = tokens.ui(height * 2.0
+        + (height * ratio).round()
+        + crate::panels::common::checkbox_metrics(cx).gap);
     settings_content_width_value(
         title_width,
         group_width,

@@ -906,10 +906,12 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
     assert!(measured_width.contains(".tier()"));
     assert!(measured_width.contains(".nearest(&[MoonSize::Xs, MoonSize::Sm, MoonSize::Md])"));
     assert!(measured_width.contains("tier.control_metrics().height"));
-    assert!(
-        measured_width
-            .contains("tokens.ui(height * 2.0 + (height * ratio).round() + COMPACT_CHECKBOX_GAP)")
-    );
+    // The reserve is the tier's two square buttons plus the ratio-derived value cell plus the
+    // density checkbox gap, all under one `tokens.ui(..)`; pinned piecewise so rustfmt's line
+    // breaking cannot red this contract.
+    assert!(measured_width.contains("tokens.ui(height * 2.0"));
+    assert!(measured_width.contains("+ (height * ratio).round()"));
+    assert!(measured_width.contains("+ crate::panels::common::checkbox_metrics(cx).gap)"));
     assert!(measured_width.contains("popup_group_inset_px(cx)"));
     assert!(!settings.contains("const CONTENT_WIDTH"));
     for tuner_symbol in [
