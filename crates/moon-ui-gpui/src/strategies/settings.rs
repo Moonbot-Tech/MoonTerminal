@@ -371,10 +371,7 @@ fn settings_content_width(cx: &App) -> f32 {
             + crate::panels::common::checkbox_metrics(cx).gap,
     ));
     let text_step_label_width = checkbox_face_width(cx, &t!("strat.settings.text_step"), 400.0);
-    // The stepper's two halves scale differently, so they are reserved differently: its buttons
-    // reach `MoonButton::width`, which draws a RAW pixel width, while its value cell is
-    // `ui()`-scaled. Reserving `ui(button*2 + value)` agreed with the rendered control only at
-    // `ui_scale == 1.0`.
+    // Reserve the density tier's full stepper width; buttons and value cell share UI zoom.
     let tier = tokens
         .tier()
         .nearest(&[MoonSize::Xs, MoonSize::Sm, MoonSize::Md]);

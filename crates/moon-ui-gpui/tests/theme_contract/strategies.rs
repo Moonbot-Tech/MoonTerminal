@@ -903,7 +903,8 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
     assert!(measured_width.contains("checkbox_metrics(cx).mark"));
     assert!(measured_width.contains("checkbox_metrics(cx).gap"));
     assert!(measured_width.contains("strat.settings.text_step"));
-    assert!(measured_width.contains("tokens.tier().nearest"));
+    assert!(measured_width.contains(".tier()"));
+    assert!(measured_width.contains(".nearest(&[MoonSize::Xs, MoonSize::Sm, MoonSize::Md])"));
     assert!(measured_width.contains("tier.control_metrics().height"));
     assert!(
         measured_width

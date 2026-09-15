@@ -259,7 +259,7 @@ fn inner_w(scfg: &DetectSizeCfg, pad_left: f32, pad_right: f32) -> f32 {
 
 // --- Field chips use the shared MoonText, MoonBadge, and delta styles. ---
 
-/// Build the detection-type badge from its long/short code, theme color, and optional outline.
+/// Build an Xs detection badge that fits the fixed-height card bands and mini-card rows.
 ///
 /// Return `None` when this detection type's badge is disabled.
 fn type_badge(it: &DetectItem, badges: &BadgesConfig, is_light: bool) -> Option<MoonBadge> {
@@ -271,6 +271,7 @@ fn type_badge(it: &DetectItem, badges: &BadgesConfig, is_light: bool) -> Option<
         let code = badges.code(it.kind, it.is_short).to_string();
         let bcol = design::rgb_to_u32(badges.color(it.kind, is_light));
         let mut badge = MoonBadge::new(code)
+            .size(moon_ui::MoonSize::Xs.into())
             .variant(MoonBadgeVariant::Soft)
             .bg_color(bcol)
             .text_color(bcol)
@@ -283,7 +284,7 @@ fn type_badge(it: &DetectItem, badges: &BadgesConfig, is_light: bool) -> Option<
     })
 }
 
-/// Build a density-sized badge naming where the detection came from.
+/// Build an Xs source badge that fits the fixed-height card bands and mini-card rows.
 ///
 /// A core's name, or — for a card no core reported — the source that did. Resolved at render
 /// rather than frozen with the card, so it follows a live locale switch like every other word on
@@ -295,6 +296,7 @@ fn core_badge(it: &DetectItem, color: u32) -> MoonBadge {
         None => t!("crowd.detect.source").to_string(),
     };
     MoonBadge::new(name)
+        .size(moon_ui::MoonSize::Xs.into())
         .variant(MoonBadgeVariant::Soft)
         .bg_color(color)
         .text_color(color)
