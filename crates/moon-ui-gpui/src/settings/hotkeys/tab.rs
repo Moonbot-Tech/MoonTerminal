@@ -22,8 +22,8 @@ use moon_core::feed::CoreConfigState;
 use moon_core::session::CoreId;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonHotkeyInput,
-    MoonKbd, MoonKbdSize, MoonMenuItem, MoonMenuSize, MoonPalette, MoonSize, MoonTabItem,
-    MoonTabStrip, MoonText, MoonTooltip, MoonTooltipView, h_flex, rgba_from, v_flex,
+    MoonKbd, MoonMenuItem, MoonMenuSize, MoonPalette, MoonSize, MoonTabItem, MoonTabStrip,
+    MoonText, MoonTooltip, MoonTooltipView, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -1079,12 +1079,10 @@ impl SettingsView {
                     .render(),
             )
             .child(
-                MoonKbd::new(shortcut::display(row.core_decoded))
-                    .size(MoonKbdSize::Compact)
-                    .outline(matches!(
-                        row.verdict,
-                        PullVerdict::Empty | PullVerdict::Unsupported
-                    )),
+                MoonKbd::new(shortcut::display(row.core_decoded)).outline(matches!(
+                    row.verdict,
+                    PullVerdict::Empty | PullVerdict::Unsupported
+                )),
             )
             .child(
                 div()
