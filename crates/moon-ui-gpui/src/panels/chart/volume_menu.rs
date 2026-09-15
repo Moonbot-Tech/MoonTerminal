@@ -132,7 +132,7 @@ impl ChartPanel {
     /// Apply an edited caption set: to this panel now, and to its tab through the host.
     ///
     /// See the module docs for why the persist half is a relay rather than a write from here.
-    pub(super) fn apply_volume_edit(&mut self, cfg: ChartLabelsCfg, cx: &mut Context<Self>) {
+    pub(super) fn apply_labels_edit(&mut self, cfg: ChartLabelsCfg, cx: &mut Context<Self>) {
         let mut cfg = cfg;
         cfg.sanitize();
         self.set_chart_labels(Some(cfg.clone()), cx);
@@ -199,7 +199,7 @@ fn edit_row(
             return;
         };
         edit(row);
-        panel.apply_volume_edit(cfg, cx);
+        panel.apply_labels_edit(cfg, cx);
     });
 }
 

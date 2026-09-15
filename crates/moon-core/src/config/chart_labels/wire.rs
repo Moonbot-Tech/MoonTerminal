@@ -80,6 +80,7 @@ where
     })
 }
 
+/// Persisted caption row, with absent collapse state preserving the expanded display.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct RowWire {
@@ -103,6 +104,9 @@ struct RowWire {
     align: LabelAlign,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     show_name: bool,
+    /// Only strategy-filter modules consume this optional display preference.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    collapsed: bool,
     /// Absent means DRAWN: every file written before the plate moved from the captions to the
     /// module had a plate under each of them, which is what a module-wide one now reproduces.
     #[serde(skip_serializing_if = "is_true")]
@@ -132,6 +136,7 @@ impl Default for RowWire {
             zone: LabelZone::default(),
             align: LabelAlign::default(),
             show_name: false,
+            collapsed: false,
             plate: true,
             visible: true,
             flow: LabelFlow::Row,
@@ -214,6 +219,7 @@ impl Serialize for ChartLabelsCfg {
                 zone: row.zone,
                 align: row.align,
                 show_name: row.show_name,
+                collapsed: row.collapsed,
                 plate: row.plate,
                 visible: row.visible,
                 flow: row.flow,
@@ -262,6 +268,7 @@ fn from_rows(rows: Vec<RowWire>) -> ChartLabelsCfg {
         row.name = wire.name;
         row.preset = wire.preset;
         row.show_name = wire.show_name;
+        row.collapsed = wire.collapsed;
         row.plate = wire.plate;
         row.visible = wire.visible;
         row.flow = wire.flow;

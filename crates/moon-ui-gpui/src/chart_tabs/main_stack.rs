@@ -1387,6 +1387,7 @@ impl MainChartStack {
     ///     palette: Active MoonUI palette.
     ///     fullscreen: Whether this is the single full-bleed active chart.
     ///     title_size: Resolved title font size.
+    ///     tokens: Active theme tokens for chart-card geometry.
     ///
     /// Returns:
     ///     The sized chart card with its fullscreen toggle handler attached.
@@ -1404,6 +1405,7 @@ impl MainChartStack {
         palette: MoonPalette,
         fullscreen: bool,
         title_size: Pixels,
+        tokens: &moon_ui::MoonThemeTokens,
     ) -> Stateful<Div> {
         let panel_for_event = panel.clone();
         let label = self
@@ -1433,6 +1435,7 @@ impl MainChartStack {
             palette,
             border,
             title_size,
+            tokens,
             tile_gutter(fullscreen, self.charts.len()),
             trailing,
         )
@@ -1696,6 +1699,7 @@ impl MainChartStack {
                     palette,
                     true,
                     crate::design::t_body(cx),
+                    &moon_ui::MoonTheme::active_tokens(cx),
                 )
                 .size_full()
                 .into_any_element();
@@ -1720,6 +1724,7 @@ impl MainChartStack {
         let entity = cx.entity();
         let p = palette;
         let title_size = crate::design::t_body(cx);
+        let tokens = moon_ui::MoonTheme::active_tokens(cx);
         let on_visible_range = cx.processor(|this, range: Range<usize>, _window, cx| {
             this.sync_stack_visible_range(range, cx);
         });
@@ -1741,6 +1746,7 @@ impl MainChartStack {
             move |s, ix, panel, size, flex, min_w, horizontal, border, ent| {
                 s.render_tile(
                     ix, panel, size, flex, min_w, horizontal, border, ent, p, false, title_size,
+                    &tokens,
                 )
                 .into_any_element()
             },

@@ -246,7 +246,7 @@ pub(super) fn scroll_wheel(
     cx.stop_propagation();
 }
 
-/// Routes left-button down through figures, trading, order drag, and chart navigation.
+/// Routes left-button down through caption controls, figures, trading, drag, and navigation.
 pub(super) fn mouse_down_left(
     this: &mut ChartPanel,
     e: &MouseDownEvent,
@@ -303,9 +303,12 @@ pub(super) fn mouse_down_left(
     // system's double-click box, which would otherwise send that press to the trading gestures
     // below instead of to the figure layer. It does NOT lift for the press that FINISHES one — that
     // press sends a live bulk move, and an accidental Ctrl+double-click must not be what sends it.
-    // A click on an arbitrage venue's NAME opens this coin there, and it is checked first: the name
-    // is a small, unambiguous target drawn over the plot, and falling through would place an order
-    // under it. Nothing else on the chart claims that rectangle.
+    // Caption controls come before plot gestures: the filters header folds its module and a venue
+    // name opens the coin there. Falling through either drawn target could place an order under it.
+    if within && this.try_toggle_strategy_filters(pos, cx) {
+        cx.stop_propagation();
+        return;
+    }
     if within
         && this.try_open_arb_venue(pos, e.position, super::arb_open::ArbOpen::Chart, window, cx)
     {

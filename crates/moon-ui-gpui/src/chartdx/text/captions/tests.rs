@@ -11,6 +11,37 @@ use super::super::caption::CaptionGeom;
 use super::super::labels::LabelText;
 use super::{CaptionGeomInput, ZONE_PAD, group_lines, zone_start_y};
 
+/// Treating the filters header like an ordinary name places it beside the lines instead of
+/// above them; retaining hidden texts prevents the following module from reclaiming height.
+#[test]
+fn filter_header_and_lines_share_one_stack() {
+    use super::super::labels::{LabelInputs, LabelState};
+    use std::rc::Rc;
+    let mut cfg = ChartLabelsCfg::empty();
+    cfg.rows[0] = moon_core::config::strategy_filters_row();
+    cfg.rows[0].flow = LabelFlow::Row;
+    cfg.rows[1] = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    cfg.rows[1].push_part(ChartLabelField::Coin);
+    let inputs = LabelInputs {
+        ticker: "BTC".into(),
+        filter_lines: vec!["first".into(), "second".into()],
+        ..Default::default()
+    };
+    let view = Rc::new(moon_core::config::ArbViewCfg::default());
+    let mut state = LabelState::default();
+    state.update(&Rc::new(cfg.clone()), &view, inputs.clone());
+    assert_eq!(
+        group_lines(&cfg, &state.texts, LabelZone::ChartTop, LabelAlign::Left),
+        vec![vec![vec![0, 1, 2]], vec![vec![3]]]
+    );
+    cfg.rows[0].collapsed = true;
+    state.update(&Rc::new(cfg.clone()), &view, inputs);
+    assert_eq!(
+        group_lines(&cfg, &state.texts, LabelZone::ChartTop, LabelAlign::Left),
+        vec![vec![vec![0]], vec![vec![1]]]
+    );
+}
+
 /// The shape that prompted the two axes: a scale badge, then a two-caption delta module, both in
 /// the plot's top band and pushed right.
 fn cfg(deltas_flow: LabelFlow, deltas_placement: LabelFlow) -> ChartLabelsCfg {
@@ -338,6 +369,124 @@ fn wrap_item(part: usize, wraps: bool) -> super::Item {
         wraps,
         lines: 1,
         wrap_ix: usize::MAX,
+    }
+}
+
+/// Omitting the pre-anchor trim puts an oversized bottom module's only control above the pane.
+/// The exact-height and one-pixel-short cases also protect the last complete visible entry.
+#[test]
+fn overflowing_filter_cells_keep_the_header_inside_the_bottom_band() {
+    use super::super::labels::{LabelInputs, LabelState};
+    use std::rc::Rc;
+    let mut cfg = ChartLabelsCfg::empty();
+    cfg.rows[0] = moon_core::config::strategy_filters_row();
+    cfg.rows[0].zone = LabelZone::ChartBottom;
+    let mut state = LabelState::default();
+    state.update(
+        &Rc::new(cfg),
+        &Rc::new(Default::default()),
+        LabelInputs {
+            filter_lines: vec!["reason".into(); 5],
+            ..Default::default()
+        },
+    );
+    let cell = || super::Cell {
+        gap: 0.0,
+        items: state
+            .texts
+            .iter()
+            .enumerate()
+            .map(|(pos, text)| {
+                let mut item = wrap_item(text.part, false);
+                item.pos = pos;
+                item
+            })
+            .collect(),
+    };
+    for (height, expected_items) in [(45.0, 3), (44.0, 2), (15.0, 1)] {
+        let mut fitted = cell();
+        fitted.fit_filter_header(&state.texts, height);
+        assert_eq!(fitted.items.len(), expected_items);
+        assert_eq!(fitted.items[0].part, moon_core::config::FILTER_HEADER_PART);
+        assert!(
+            100.0 - fitted.height() >= 100.0 - height,
+            "bottom anchoring must keep the header above the retained filter lines and on-pane"
+        );
+    }
+    let mut wrapped = cell();
+    wrapped.items[1].lines = 3;
+    wrapped.fit_filter_header(&state.texts, 60.0);
+    assert_eq!(
+        wrapped.items.len(),
+        2,
+        "a wrapped entry consumes all three lines"
+    );
+    let mut ordinary = cell();
+    ordinary.items.remove(0);
+    ordinary.fit_filter_header(&state.texts, 15.0);
+    assert_eq!(
+        ordinary.items.len(),
+        5,
+        "other caption cells keep their existing clipping"
+    );
+}
+
+/// Moving the filter control back to the row name separates it from entries after Coin,
+/// disabling the bottom-band trim and pushing the only collapse target above a short pane.
+#[test]
+fn mixed_filter_column_keeps_its_header_above_entries_inside_a_short_pane() {
+    use super::super::labels::{LabelAction, LabelInputs, LabelState};
+    use std::rc::Rc;
+    for zone in [LabelZone::ChartBottom, LabelZone::ZoneBottom] {
+        for flow in [LabelFlow::Row, LabelFlow::Column] {
+            let mut cfg = ChartLabelsCfg::empty();
+            let row = &mut cfg.rows[0];
+            *row = ChartLabelRow::new(zone, LabelAlign::Left);
+            row.flow = flow;
+            row.push_part(ChartLabelField::Coin);
+            row.push_part(ChartLabelField::StrategyFilters);
+            let mut state = LabelState::default();
+            state.update(
+                &Rc::new(cfg.clone()),
+                &Rc::new(Default::default()),
+                LabelInputs {
+                    ticker: "BTC".into(),
+                    filter_lines: vec!["reason".into(); 5],
+                    ..Default::default()
+                },
+            );
+            let grouped = group_lines(&cfg, &state.texts, zone, LabelAlign::Left);
+            assert_eq!(grouped, vec![vec![vec![0], vec![1, 2, 3, 4, 5, 6]]]);
+            let mut column = super::Cell {
+                gap: 0.0,
+                items: grouped[0][1]
+                    .iter()
+                    .map(|&pos| {
+                        let mut item = wrap_item(state.texts[pos].part, false);
+                        item.pos = pos;
+                        item
+                    })
+                    .collect(),
+            };
+            assert!(column.fit_filter_header(&state.texts, 45.0));
+            assert_eq!(column.items.len(), 3);
+            let header = column.items[0];
+            assert_eq!(
+                state.texts[header.pos].action,
+                Some(LabelAction::ToggleStrategyFilters)
+            );
+            assert_eq!(
+                super::caption_style(&cfg.rows[0], header.part),
+                Some(ChartLabelRow::name_style())
+            );
+            let pane_top = 55.0;
+            let bottom_anchor = 100.0;
+            let header_y = bottom_anchor - column.height();
+            assert!(header_y >= pane_top);
+            let first_entry_y = header_y + header.block_h();
+            assert!(first_entry_y > header_y);
+            assert!(first_entry_y + column.items[1].block_h() <= bottom_anchor);
+        }
     }
 }
 

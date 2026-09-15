@@ -410,7 +410,8 @@ fn profit_monitor_group_hierarchy_stays_visually_distinct() {
 /// Breakage: replacing the period dropdown with another segmented strip recreates the crowded
 /// header; forcing the `layout.inline_controls` branch keeps every control on one clipped row below
 /// 460px; restoring `open` to a literal unscaled 460px minimum blocks the supported narrow window,
-/// while unscaled 390px clips it above 100% UI scale; deleting any layout assignment or constructor
+/// while unscaled 390px clips it above 100% UI scale; restoring a raw 320px minimum height
+/// breaks the window proportions at 75% and 150%; deleting any layout assignment or constructor
 /// restore silently resets that choice after restart even though the layout serializer's isolated
 /// round-trip remains green.
 #[test]
@@ -448,9 +449,11 @@ fn profit_monitor_controls_and_all_choice_persistence_stay_wired() {
             && controls.contains(".child(h_flex().w_full().justify_center().child(group_control))"),
         "narrow controls must move complete period/clock and grouping units onto two rows"
     );
+    let minimum = chain_between(&open, "Some(size(", ")),", "Profit Monitor minimum");
     assert!(
-        open.contains("Some(size(design::ui_px(cx, MIN_WINDOW_WIDTH), px(320.0)))"),
-        "the OS window minimum must scale the responsive-width constant with its rendered geometry"
+        minimum.contains("design::ui_px(cx, MIN_WINDOW_WIDTH)")
+            && minimum.contains("design::ui_px(cx, 320.0)"),
+        "both OS window minimum dimensions must scale with the rendered geometry"
     );
     for key in [
         "profit_monitor_period",

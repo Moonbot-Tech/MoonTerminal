@@ -26,6 +26,8 @@ pub mod cursor;
 mod data_state;
 mod engine;
 mod figure_snap;
+mod filter_headers;
+use filter_headers::FilterHeaderHit;
 mod figures_sync;
 mod news_sync;
 pub(crate) mod trade_history_sync;
@@ -451,6 +453,8 @@ struct PaneRender {
     /// Rebuilt every frame beside [`Self::arb_hits`], and for the same reason: a right-click has to
     /// hit what the last frame actually drew.
     pub(super) volume_hits: Vec<VolumeHit>,
+    /// Measured strategy-filter header targets from the last successful caption pass.
+    filter_header_hits: Vec<FilterHeaderHit>,
     /// Where each pressable caption reserved its room, on the same terms as [`Self::volume_hits`]:
     /// rebuilt every frame, because the panel places a control at what the LAST frame laid out.
     pub(super) action_rects: Vec<ActionPlacement>,
@@ -810,6 +814,7 @@ impl PaneRender {
             caption_bars_scratch: Vec::new(),
             volume_boxes: Vec::new(),
             volume_hits: Vec::new(),
+            filter_header_hits: Vec::new(),
             action_rects: Vec::new(),
             action_draws: Vec::new(),
             labels: text::LabelState::default(),

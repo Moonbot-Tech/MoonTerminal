@@ -131,7 +131,7 @@ impl AssetsView {
         let kind = snapshot.kind;
         let drop_bg = design::moon_alpha(p.blue, 0.13);
 
-        let mut list = v_flex().w_full().gap_0().p(px(4.0));
+        let mut list = v_flex().w_full().gap_0().p(design::ui_px(cx, 4.0));
         if snapshot.rows.is_empty() {
             let empty = if snapshot.total_count == 0 {
                 "—".to_string()
@@ -146,7 +146,7 @@ impl AssetsView {
             list = list.child(
                 div()
                     .px(design::ui_px(cx, 6.0))
-                    .py(px(2.0))
+                    .py(design::ui_px(cx, 2.0))
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text_muted))
                     .child(empty),

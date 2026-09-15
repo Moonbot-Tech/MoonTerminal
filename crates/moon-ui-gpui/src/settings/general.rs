@@ -28,8 +28,8 @@ const DENSITIES: [UiDensity; 3] = [UiDensity::Compact, UiDensity::Standard, UiDe
 /// Args:
 ///     label: Localization key for the caption.
 ///     state: Select state driving the dropdown.
-///     width: Trigger and menu width in unscaled pixels.
-///     cx: Context used to scale the menu width with the UI font.
+///     width: Trigger and menu width in design units.
+///     cx: Context used to scale the trigger geometry and menu text width.
 ///
 /// Returns:
 ///     The assembled row.
@@ -40,11 +40,11 @@ fn labeled_select<T: Clone + PartialEq + 'static>(
     cx: &Context<SettingsView>,
 ) -> impl IntoElement {
     h_flex()
-        .gap(px(10.0))
+        .gap(design::ui_px(cx, 10.0))
         .items_center()
         .child(div().font_bold().child(t!(label).to_string()))
         .child(
-            div().w(px(width)).child(
+            div().w(design::ui_px(cx, width)).child(
                 MoonSelect::new(state)
                     .trigger_size(MoonButtonSize::density(cx))
                     .menu_width(design::font_w(cx, width)),

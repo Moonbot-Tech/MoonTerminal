@@ -41,7 +41,7 @@ pub const CHART_LABEL_ROWS: usize = 16;
 /// room around there.
 pub const CHART_LABEL_PARTS: usize = 8;
 
-/// First run index a module's COLUMN rows occupy, past its captions and its name.
+/// First run index a module's COLUMN entries occupy, past its captions, name and filter header.
 ///
 /// A column caption — the venue roster, or the strategy-filter skip lines — prints many lines from
 /// a single configured caption, so those lines cannot be addressed as parts: there are more of
@@ -49,7 +49,11 @@ pub const CHART_LABEL_PARTS: usize = 8;
 /// saved. They get their own range of the same per-row stride instead, which keeps one addressing
 /// rule for every retained run and costs nothing while no chart prints one (the pool grows by
 /// index, on demand). Two column captions in one row share this range; the first one drawn wins.
-pub const ARB_PART_BASE: usize = ROW_NAME_PART + 1;
+pub const ARB_PART_BASE: usize = FILTER_HEADER_PART + 1;
+
+/// Run index of the strategy-filter column's control, separate from the module's own name.
+/// Reserving it before the entries keeps the full entry limit and every prefix run disjoint.
+pub const FILTER_HEADER_PART: usize = ROW_NAME_PART + 1;
 
 /// First run index reserved for a caption's PREFIX.
 ///
@@ -60,9 +64,9 @@ pub const ARB_PART_BASE: usize = ROW_NAME_PART + 1;
 /// allocates any of this.
 pub const PREFIX_PART_BASE: usize = ARB_PART_BASE + super::arb_view::ARB_MAX_ROWS;
 
-/// Retained text runs reserved per row: one per part, one for the row's printed name, the
-/// arbitrage column's own range, a prefix run mirroring each of them, and the continuation lines
-/// of the one caption in the row that may wrap.
+/// Retained text runs reserved per row: one per part, the row's printed name, the filter header,
+/// the shared column range, a prefix run mirroring each of them, and the continuation lines of
+/// the one caption in the row that may wrap.
 pub const ROW_RUN_STRIDE: usize = WRAP_PART_BASE + (LABEL_WRAP_LINES - 1);
 
 /// How many lines a caption that WRAPS may take, its first line included.
@@ -926,6 +930,9 @@ pub struct ChartLabelRow {
     pub align: LabelAlign,
     /// Whether the name is printed on the chart as the row's leading caption.
     pub show_name: bool,
+    /// Whether the strategy-filter module shows only its clickable header.
+    /// Other modules ignore this flag; absent persisted values keep the filters expanded.
+    pub collapsed: bool,
     /// Whether a translucent plate is drawn under this module.
     ///
     /// The MODULE's, not a caption's, and that is what the switch means to a reader: the plate is
@@ -980,6 +987,7 @@ pub struct ChartLabelRow {
 }
 
 impl Default for ChartLabelRow {
+    /// Keep new rows visible and their strategy filters expanded.
     fn default() -> Self {
         Self {
             name: String::new(),
@@ -988,6 +996,7 @@ impl Default for ChartLabelRow {
             zone: LabelZone::ZoneTop,
             align: LabelAlign::Center,
             show_name: false,
+            collapsed: false,
             visible: true,
             // The chart's own shape before either axis existed: captions across a line, each module
             // on a line of its own.
@@ -1073,6 +1082,16 @@ impl ChartLabelRow {
         self.parts
             .iter()
             .any(|part| part.field == ChartLabelField::StrategyFilters)
+    }
+
+    /// Whether the first drawn column is strategy filters and therefore owns a collapse header.
+    /// A hidden column or a second column cannot claim the first column's shared run range.
+    pub fn draws_strategy_filters(&self) -> bool {
+        self.visible
+            && self.parts[..self.used_parts()]
+                .iter()
+                .find(|part| part.is_drawn() && part.field.is_column())
+                .is_some_and(|part| part.field == ChartLabelField::StrategyFilters)
     }
 
     /// Whether the row prints its own name as a caption.

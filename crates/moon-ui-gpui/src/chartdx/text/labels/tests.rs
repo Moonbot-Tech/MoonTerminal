@@ -14,6 +14,149 @@ use moon_core::util::fmt::DeltaSign;
 
 use super::{ActionInputs, LabelInputs, LabelState, basis_index, collect_open_stats, preview_row};
 
+/// Removing the column's collapsed early return leaves filter lines covering the chart; dropping the
+/// forced header removes the only way to reopen a module whose show_name is off.
+#[test]
+fn strategy_filters_collapse_to_a_counted_header() {
+    let mut cfg = ChartLabelsCfg::empty();
+    cfg.rows[0] = moon_core::config::strategy_filters_row();
+    cfg.rows[0].name = "Filters".into();
+    let inputs = LabelInputs {
+        filter_lines: vec!["first".into(), String::new(), "second".into()],
+        ..Default::default()
+    };
+    let view = Rc::new(ArbViewCfg::default());
+    let mut state = LabelState::default();
+    state.update(&Rc::new(cfg.clone()), &view, inputs.clone());
+    assert_eq!(
+        state
+            .texts
+            .iter()
+            .map(|text| text.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["v Filters", "first", "second"]
+    );
+    assert_eq!(state.texts[0].part, moon_core::config::FILTER_HEADER_PART);
+    assert_eq!(
+        state.texts[0].action,
+        Some(super::LabelAction::ToggleStrategyFilters)
+    );
+    cfg.rows[0].collapsed = true;
+    assert!(state.update(&Rc::new(cfg.clone()), &view, inputs.clone()));
+    assert_eq!(state.texts.len(), 1);
+    assert_eq!(state.texts[0].text, "> Filters \u{b7} 2");
+    cfg.rows[0].collapsed = false;
+    assert!(state.update(&Rc::new(cfg), &view, inputs));
+    assert_eq!(state.texts.len(), 3);
+}
+
+/// Counting raw input instead of drawable capped rows overstates the collapsed module's contents.
+#[test]
+fn collapsed_filter_count_uses_the_column_limit_and_handles_empty_data() {
+    let mut cfg = ChartLabelsCfg::empty();
+    cfg.rows[0] = moon_core::config::strategy_filters_row();
+    cfg.rows[0].name = "Filters".into();
+    cfg.rows[0].collapsed = true;
+    let cfg = Rc::new(cfg);
+    let view = Rc::new(ArbViewCfg::default());
+    let mut state = LabelState::default();
+    state.update(&cfg, &view, LabelInputs::default());
+    assert_eq!(state.texts[0].text, "> Filters \u{b7} 0");
+    let inputs = LabelInputs {
+        filter_lines: vec!["reason".into(); moon_core::config::ARB_MAX_ROWS + 1],
+        ..Default::default()
+    };
+    state.update(&cfg, &view, inputs);
+    assert_eq!(
+        state.texts[0].text,
+        format!("> Filters \u{b7} {}", moon_core::config::ARB_MAX_ROWS)
+    );
+}
+
+/// Emitting the control as the row name reorders mixed captions; folding the row hides its
+/// ordinary captions. The live and preview expansions must preserve both sides of the column.
+#[test]
+fn mixed_filters_keep_the_title_and_ordinary_captions_when_collapsed() {
+    let mut cfg = cfg_of(&[
+        ChartLabelField::Coin,
+        ChartLabelField::StrategyFilters,
+        ChartLabelField::Core,
+    ]);
+    cfg.rows[0].name = "Mixed".into();
+    cfg.rows[0].show_name = true;
+    let inputs = LabelInputs {
+        ticker: "BTC".into(),
+        core_name: "Core".into(),
+        filter_lines: vec!["first".into(), "second".into()],
+        ..Default::default()
+    };
+    let mut state = LabelState::default();
+    let view = Rc::new(ArbViewCfg::default());
+    for collapsed in [false, true] {
+        cfg.rows[0].collapsed = collapsed;
+        state.update(&Rc::new(cfg.clone()), &view, inputs.clone());
+        let expected = if collapsed {
+            vec!["Mixed", "BTC", "> Mixed \u{b7} 2", "Core"]
+        } else {
+            vec!["Mixed", "BTC", "v Mixed", "first", "second", "Core"]
+        };
+        assert_eq!(
+            state
+                .texts
+                .iter()
+                .map(|t| t.text.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(state.texts[0].part, moon_core::config::ROW_NAME_PART);
+        assert_eq!(state.texts[0].action, None);
+        assert_eq!(state.texts[2].part, moon_core::config::FILTER_HEADER_PART);
+        assert_eq!(
+            state.texts[2].action,
+            Some(super::LabelAction::ToggleStrategyFilters)
+        );
+        let preview = preview_row(&cfg.rows[0], 60_000);
+        assert_eq!(preview[0].text, "Mixed");
+        assert!(!preview[0].column);
+        assert!(!preview[1].column);
+        assert!(preview[2].column);
+        assert!(
+            preview[2]
+                .text
+                .starts_with(if collapsed { "> Mixed" } else { "v Mixed" })
+        );
+        assert_eq!(preview[2].style, ChartLabelRow::name_style());
+        assert!(!preview.last().unwrap().column);
+        assert_eq!(preview.len(), if collapsed { 4 } else { 6 });
+    }
+}
+
+/// A collapse flag must not fold another module or supersede the first visible column.
+#[test]
+fn collapse_does_not_claim_other_or_hidden_columns() {
+    let mut cfg = cfg_of(&[ChartLabelField::Coin]);
+    cfg.rows[0].collapsed = true;
+    let view = Rc::new(ArbViewCfg::default());
+    let mut state = LabelState::default();
+    state.update(
+        &Rc::new(cfg),
+        &view,
+        LabelInputs {
+            ticker: "BTC".into(),
+            ..Default::default()
+        },
+    );
+    assert_eq!(state.texts.len(), 1);
+    assert_eq!(state.texts[0].text, "BTC");
+    let mut row = moon_core::config::strategy_filters_row();
+    row.parts[0].visible = false;
+    assert!(!row.draws_strategy_filters());
+    row.parts[0].field = ChartLabelField::ArbColumn;
+    row.parts[0].visible = true;
+    row.push_part(ChartLabelField::StrategyFilters);
+    assert!(!row.draws_strategy_filters());
+}
+
 /// One open BTC row with a filled one-unit long position.
 fn order(entry: f64, mark: f32) -> OrderRow {
     OrderRow {
@@ -588,7 +731,7 @@ fn the_strategy_name_comes_from_the_newest_open_order() {
 // --- caption resolution -------------------------------------------------------------------------
 
 /// A field with nothing to report prints nothing at all, so the default configuration's optional
-/// captions cost no rows on an ordinary chart.
+/// captions cost no rows on an ordinary chart; the filters control remains available without data.
 #[test]
 fn an_unresolved_field_occupies_no_row() {
     let cfg = ChartLabelsCfg::default();
@@ -613,13 +756,14 @@ fn an_unresolved_field_occupies_no_row() {
             "Bv: —".to_string(),
             "Sv: —".to_string(),
             "L: —".to_string(),
+            "v Strategy filters".to_string(),
         ],
         "no scale badge and no comparison delta still means those two cost no captions"
     );
 }
 
 /// The caption's address travels with the text: it addresses the retained GPU run, and a hidden
-/// neighbour must not shift it.
+/// neighbour must not shift it, including the always-present filters header's reserved address.
 #[test]
 fn the_caption_address_survives_a_skipped_neighbour() {
     // The shipped roster, with only some of its figures answering: the venue has no name here, the
@@ -647,7 +791,8 @@ fn the_caption_address_survives_a_skipped_neighbour() {
             (4, 0),
             (4, 1),
             (4, 2),
-            (4, 3)
+            (4, 3),
+            (10, moon_core::config::FILTER_HEADER_PART),
         ],
         "every caption keeps the address its CONFIGURATION gives it, whatever its neighbours          resolved to: the skipped venue does not renumber the deltas, and the skipped badge module          does not renumber the module after it"
     );
@@ -965,7 +1110,13 @@ fn the_preview_answers_for_every_field() {
         let captions = preview_row(&row, TF_5M);
         // One line for an ordinary caption; a column caption previews as the whole column, which is
         // the sample roster's two venues.
-        let expected = if field.is_column() { 2 } else { 1 };
+        let expected = if field == ChartLabelField::StrategyFilters {
+            3 // The collapse header and two sample lines.
+        } else if field.is_column() {
+            2
+        } else {
+            1
+        };
         assert_eq!(
             captions.len(),
             expected,
@@ -1672,5 +1823,8 @@ fn a_button_carries_what_it_would_do() {
         },
     );
     let mark = state.texts[0].action.expect("a button carries its mark");
-    assert_eq!(mark.action, moon_core::config::ChartAction::TempBan);
+    assert_eq!(
+        mark.market().expect("market button").action,
+        moon_core::config::ChartAction::TempBan
+    );
 }

@@ -522,23 +522,27 @@ fn fill_row<V: 'static>(
     let backend_off = backend.clone();
     let target_off = target.clone();
     let authority_off = authority.clone();
-    let mut row = h_flex().items_center().gap(px(3.0)).flex_wrap().child(
-        MoonCheckbox::new("figset-fill-off")
-            .label(t!("chart.fig.no_fill").to_string())
-            .checked(!has_fill)
-            .on_change(move |off, _, app| {
-                backend_off.update(app, |b, bcx| {
-                    if edit_style(b, &target_off, &authority_off, |s| {
-                        let alpha = if *off { 0 } else { DEFAULT_FILL_ALPHA };
-                        let changed = s.fill[3] != alpha;
-                        s.fill[3] = alpha;
-                        changed
-                    }) {
-                        bcx.notify();
-                    }
-                });
-            }),
-    );
+    let mut row = h_flex()
+        .items_center()
+        .gap(design::ui_px(cx, 3.0))
+        .flex_wrap()
+        .child(
+            MoonCheckbox::new("figset-fill-off")
+                .label(t!("chart.fig.no_fill").to_string())
+                .checked(!has_fill)
+                .on_change(move |off, _, app| {
+                    backend_off.update(app, |b, bcx| {
+                        if edit_style(b, &target_off, &authority_off, |s| {
+                            let alpha = if *off { 0 } else { DEFAULT_FILL_ALPHA };
+                            let changed = s.fill[3] != alpha;
+                            s.fill[3] = alpha;
+                            changed
+                        }) {
+                            bcx.notify();
+                        }
+                    });
+                }),
+        );
     if let Some([r, g, b]) = snap.scale_swatch {
         let backend_on = backend.clone();
         let target_on = target.clone();
@@ -546,8 +550,8 @@ fn fill_row<V: 'static>(
         row = row.child(
             div()
                 .id("figset-fill-scale")
-                .w(px(16.0))
-                .h(px(16.0))
+                .w(design::ui_px(cx, 16.0))
+                .h(design::ui_px(cx, 16.0))
                 .rounded(design::ui_px(cx, 3.0))
                 .bg(gpui::rgb(((r as u32) << 16) | ((g as u32) << 8) | b as u32))
                 .border_2()

@@ -1511,3 +1511,22 @@ fn the_shipped_sets_survive_their_own_repair() {
         );
     }
 }
+
+/// Removing the wire default or either mapping loses the saved collapse choice on restart.
+#[test]
+fn strategy_filter_collapse_round_trips_and_defaults_expanded() {
+    let legacy = r#"{"rows":[{"parts":[{"field":"strategy_filters"}]}]}"#;
+    let mut cfg: ChartLabelsCfg = serde_json::from_str(legacy).unwrap();
+    assert!(!cfg.rows[0].collapsed);
+    cfg.rows[0].collapsed = true;
+    let json = serde_json::to_string(&cfg).unwrap();
+    let restored: ChartLabelsCfg = serde_json::from_str(&json).unwrap();
+    assert!(restored.rows[0].collapsed);
+    let toml = toml::to_string(&cfg).unwrap();
+    let restored: ChartLabelsCfg = toml::from_str(&toml).unwrap();
+    assert!(restored.rows[0].collapsed);
+    cfg.rows[0].collapsed = false;
+    let restored: ChartLabelsCfg =
+        serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+    assert!(!restored.rows[0].collapsed);
+}
