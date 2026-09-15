@@ -160,8 +160,8 @@ type VisibleRangeHandler = Box<dyn Fn(Range<usize>, &mut Window, &mut App)>;
 /// UnderScene, so any opaque quad over the plot zone would hide it. Only the header, border, and a
 /// separate gutter outside the plot zone receive color. The caller resolves `title_size` through
 /// `design::t_body(cx)` because the `Clone + 'static` layout closure cannot capture `&App`.
-/// `gutter` draws the 8px separator strip below the card; it exists to space STACKED tiles apart
-/// and is dropped for a single full-bleed chart. `trailing` is an optional muted note pinned to the
+/// `tokens` scales the chrome in that closure. The `gutter` is an 8-unit separator strip below
+/// the card, spacing stacked tiles apart; it is dropped for a single full-bleed chart. `trailing` is an optional muted note pinned to the
 /// header's right, such as which chart of how many is on screen.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn chart_stack_card(
@@ -171,6 +171,7 @@ pub(super) fn chart_stack_card(
     p: MoonPalette,
     border: Rgba,
     title_size: Pixels,
+    tokens: &moon_ui::MoonThemeTokens,
     gutter: bool,
     trailing: Option<SharedString>,
 ) -> Stateful<Div> {
@@ -188,7 +189,7 @@ pub(super) fn chart_stack_card(
                     .left_0()
                     .right_0()
                     .bottom_0()
-                    .h(px(STACK_GUTTER))
+                    .h(px(tokens.ui(STACK_GUTTER)))
                     .bg(rgb(p.gutter)),
             )
         })
@@ -198,7 +199,7 @@ pub(super) fn chart_stack_card(
                 .top_0()
                 .left_0()
                 .right_0()
-                .bottom(px(gutter_h))
+                .bottom(px(tokens.ui(gutter_h)))
                 .overflow_hidden()
                 .border_1()
                 .border_color(border)
@@ -208,9 +209,9 @@ pub(super) fn chart_stack_card(
                         .top_0()
                         .left_0()
                         .right_0()
-                        .h(px(STACK_HEADER_H))
-                        .pl(px(11.0))
-                        .pr(px(8.0))
+                        .h(px(tokens.ui(STACK_HEADER_H)))
+                        .pl(px(tokens.ui(11.0)))
+                        .pr(px(tokens.ui(8.0)))
                         .items_center()
                         .overflow_hidden()
                         .bg(rgb(p.panel_head))
@@ -229,7 +230,7 @@ pub(super) fn chart_stack_card(
                             div()
                                 .ml_auto()
                                 .flex_none()
-                                .pl(px(8.0))
+                                .pl(px(tokens.ui(8.0)))
                                 .font_family(crate::design::mono())
                                 .text_size(title_size)
                                 .text_color(rgb(p.text_muted))
@@ -240,7 +241,7 @@ pub(super) fn chart_stack_card(
                 .child(
                     div()
                         .absolute()
-                        .top(px(STACK_HEADER_H))
+                        .top(px(tokens.ui(STACK_HEADER_H)))
                         .left_0()
                         .right_0()
                         .bottom_0()

@@ -344,8 +344,9 @@ pub(super) fn cumulative_area(
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
+    let chart_h = design::ui_px(cx, CHART_H);
     if days.is_empty() {
-        return div().h(px(CHART_H)).into_any_element();
+        return div().h(chart_h).into_any_element();
     }
     let n = days.len();
     // A non-finite profit would poison the whole curve: `f32::max/min` folds skip NaN, so
@@ -418,7 +419,7 @@ pub(super) fn cumulative_area(
     } else {
         label_h + lift
     };
-    let plot_h = (CHART_H - band).max(20.0);
+    let plot_h = (f32::from(chart_h) - band).max(20.0);
     // Labels: resolved HERE against the same vmin/span the canvas paints with, so the
     // points can move into the paint closure instead of being cloned for it.
     let cands: Vec<(f32, f32, String, u32)> = swings
@@ -549,7 +550,7 @@ pub(super) fn cumulative_area(
     let mut stack = div()
         .relative()
         .w_full()
-        .h(px(CHART_H))
+        .h(chart_h)
         .child(
             div()
                 .absolute()

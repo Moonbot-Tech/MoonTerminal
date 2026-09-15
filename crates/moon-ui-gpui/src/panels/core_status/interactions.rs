@@ -1176,7 +1176,7 @@ impl CoreStatusView {
                 )
                 .to_string();
                 dialog
-                    .w(px(360.0))
+                    .w(design::ui_px(cx, 360.0))
                     .close_button(true)
                     .overlay(true)
                     .overlay_closable(true)
@@ -1345,7 +1345,7 @@ fn problem_confirm_dialog(
 ) -> moon_ui::MoonDialog {
     let p = MoonPalette::active(cx);
     dialog
-        .w(px(380.0))
+        .w(design::ui_px(cx, 380.0))
         .close_button(true)
         .overlay(true)
         .overlay_closable(true)

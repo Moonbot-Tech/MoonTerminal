@@ -120,7 +120,7 @@ pub(super) fn news_card(
             .left(px(0.0))
             .top(px(0.0))
             .bottom(px(0.0))
-            .w(px(3.0))
+            .w(design::ui_px(cx, 3.0))
             .flex()
             .flex_col()
             .overflow_hidden()

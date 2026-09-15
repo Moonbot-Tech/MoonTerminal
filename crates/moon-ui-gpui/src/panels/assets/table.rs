@@ -170,7 +170,7 @@ impl AssetsView {
             .child(
                 div()
                     .id("assets-min-value-wheel")
-                    .w(px(120.0))
+                    .w(design::ui_px(cx, 120.0))
                     // Explain that zero shows everything and the mouse wheel adjusts the value.
                     .tooltip(|_window, cx| {
                         cx.new(|_| {

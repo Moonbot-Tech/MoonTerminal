@@ -319,7 +319,7 @@ impl Render for ReportPanel {
         let coin_field = div()
             .relative()
             .child(
-                div().w(px(90.0)).child(
+                div().w(design::ui_px(cx, 90.0)).child(
                     MoonInput::new("rep-coin")
                         .state(&self.coin)
                         .small()

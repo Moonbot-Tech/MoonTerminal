@@ -493,8 +493,9 @@ pub(super) fn daily_bars(
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
+    let chart_h = design::ui_px(cx, CHART_H);
     if days.is_empty() {
-        return div().h(px(CHART_H)).into_any_element();
+        return div().h(chart_h).into_any_element();
     }
     let vmax = days
         .iter()
@@ -546,13 +547,13 @@ pub(super) fn daily_bars(
     // labels it never draws.
     let pad_top = label_band;
     let pad_bottom = if vmin < 0.0 { label_band } else { 0.0 };
-    let area_h = (CHART_H - pad_top - pad_bottom).max(10.0);
+    let area_h = (f32::from(chart_h) - pad_top - pad_bottom).max(10.0);
     let zero_from_bottom = pad_bottom + area_h * (1.0 - up_frac);
     let n = days.len();
 
     let mut row = h_flex()
         .w_full()
-        .h(px(CHART_H))
+        .h(chart_h)
         .items_end()
         .gap(px(if n > 120 { 0.0 } else { 1.0 }));
     for (bi, d) in days.iter().enumerate() {

@@ -1137,6 +1137,7 @@ impl Render for AddChartStack {
         let entity = cx.entity();
         let p = palette;
         let title_size = crate::design::t_body(cx);
+        let tokens = moon_ui::MoonTheme::active_tokens(cx);
         let visible_order = render_order.clone();
         let panel_order = render_order.clone();
         let tile_order = render_order.clone();
@@ -1192,6 +1193,7 @@ impl Render for AddChartStack {
                     p,
                     border,
                     title_size,
+                    &tokens,
                     tile_gutter(false, s.charts.len()),
                     None,
                 );

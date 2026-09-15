@@ -18,7 +18,7 @@ use rust_i18n::t;
 use super::{ChartWindow, CoreStatusView};
 use crate::design;
 
-/// Plot height in pixels (the drawing area between legend and X labels).
+/// Plot height in design units (the drawing area between legend and X labels).
 const PLOT_H: f32 = 110.0;
 /// Left gutter for the percent scale.
 const AXIS_W: f32 = 26.0;
@@ -69,7 +69,7 @@ fn to_series<T>(points: &VecDeque<T>, span: usize, pick: impl Fn(&T) -> f32) -> 
 ///     now_sec: Current Unix second for the X-axis labels.
 ///     view: Panel handle for the window-switch buttons.
 ///     p: Active Moon palette.
-///     cx: Application context for themed text sizing.
+///     cx: Application context for themed text and plot geometry.
 ///
 /// Returns:
 ///     A fixed-height chart block for the bottom of the detached window.
@@ -187,14 +187,14 @@ pub(super) fn server_chart(
     let plot_area = div()
         .relative()
         .w_full()
-        .h(px(PLOT_H))
+        .h(design::ui_px(cx, PLOT_H))
         .child(
             div()
                 .absolute()
                 .top_0()
                 .bottom_0()
-                .left(px(AXIS_W))
-                .right(px(VAL_W))
+                .left(design::ui_px(cx, AXIS_W))
+                .right(design::ui_px(cx, VAL_W))
                 .child(plot),
         )
         .children(GRID.iter().rev().map(|&v| axis_label(v, p, cx)))
@@ -269,8 +269,8 @@ fn axis_label(value: u8, p: MoonPalette, cx: &App) -> impl IntoElement {
     div()
         .absolute()
         .left_0()
-        .top(px(top - 6.0))
-        .w(px(AXIS_W - 4.0))
+        .top(design::ui_px(cx, top - 6.0))
+        .w(design::ui_px(cx, AXIS_W - 4.0))
         .flex()
         .justify_end()
         .text_size(design::t_caption(cx))
@@ -284,8 +284,8 @@ fn value_label(value: u8, color: Hsla, cx: &App) -> impl IntoElement {
     div()
         .absolute()
         .right_0()
-        .top(px(top - 6.0))
-        .w(px(VAL_W))
+        .top(design::ui_px(cx, top - 6.0))
+        .w(design::ui_px(cx, VAL_W))
         .pl_1()
         .text_size(design::t_caption(cx))
         .text_color(color)
@@ -299,8 +299,8 @@ fn ping_value_label(ms: u16, ping_scale: f32, color: Hsla, cx: &App) -> impl Int
     div()
         .absolute()
         .right_0()
-        .top(px(top - 6.0))
-        .w(px(VAL_W))
+        .top(design::ui_px(cx, top - 6.0))
+        .w(design::ui_px(cx, VAL_W))
         .pl_1()
         .text_size(design::t_caption(cx))
         .text_color(color)
@@ -396,33 +396,39 @@ fn legend_chip(label: String, color: Hsla, p: MoonPalette) -> impl IntoElement {
 fn x_axis_row(now_sec: i64, window: ChartWindow, p: MoonPalette, cx: &App) -> impl IntoElement {
     let span = window.secs() as i64;
     // Reserve the gutters so labels line up with the plot, then place them by fraction inside.
-    h_flex().w_full().pl(px(AXIS_W)).pr(px(VAL_W)).child(
-        div()
-            .relative()
-            .w_full()
-            .h(px(14.0))
-            .text_size(design::t_caption(cx))
-            .text_color(rgb(p.text_muted))
-            .children((0..=GRID_DIVISIONS).step_by(LABEL_EVERY).map(|k| {
-                let frac = k as f32 / GRID_DIVISIONS as f32;
-                // Right edge (frac 1) is "now"; the left edge is one window back.
-                let secs_ago = ((1.0 - frac) * span as f32).round() as i64;
-                // Nudge end labels inward so neither hangs past the plot.
-                let shift = if k == 0 {
-                    px(0.0)
-                } else if k == GRID_DIVISIONS {
-                    px(-48.0)
-                } else {
-                    px(-24.0)
-                };
-                div()
-                    .absolute()
-                    .left(relative(frac))
-                    .ml(shift)
-                    .whitespace_nowrap()
-                    .child(hms(now_sec - secs_ago))
-            })),
-    )
+    h_flex()
+        .w_full()
+        .pl(design::ui_px(cx, AXIS_W))
+        .pr(design::ui_px(cx, VAL_W))
+        .child(
+            div()
+                .relative()
+                .w_full()
+                .h(design::ui_px(cx, 14.0))
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.text_muted))
+                .children((0..=GRID_DIVISIONS).step_by(LABEL_EVERY).map(|k| {
+                    let frac = k as f32 / GRID_DIVISIONS as f32;
+                    // Right edge (frac 1) is "now"; the left edge is one window back.
+                    let secs_ago = ((1.0 - frac) * span as f32).round() as i64;
+                    // Nudge end labels inward so neither hangs past the plot. The nudge
+                    // compensates the label's own width, which follows the UI zoom, so it
+                    // scales with it.
+                    let shift = if k == 0 {
+                        px(0.0)
+                    } else if k == GRID_DIVISIONS {
+                        design::ui_px(cx, -48.0)
+                    } else {
+                        design::ui_px(cx, -24.0)
+                    };
+                    div()
+                        .absolute()
+                        .left(relative(frac))
+                        .ml(shift)
+                        .whitespace_nowrap()
+                        .child(hms(now_sec - secs_ago))
+                })),
+        )
 }
 
 /// Format a Unix second as `HH:MM:SS` in the selected display zone.

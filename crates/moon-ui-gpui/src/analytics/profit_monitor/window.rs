@@ -185,7 +185,10 @@ fn open_window(
                 t!("profit_monitor.window_title").to_string(),
                 crate::window::windowing::restored_window_bounds(saved, bounds),
                 display_id,
-                Some(size(design::ui_px(cx, MIN_WINDOW_WIDTH), px(320.0))),
+                Some(size(
+                    design::ui_px(cx, MIN_WINDOW_WIDTH),
+                    design::ui_px(cx, 320.0),
+                )),
             );
             let view_backend = backend.clone();
             let opened = cx.open_window(options, move |window, cx| {
