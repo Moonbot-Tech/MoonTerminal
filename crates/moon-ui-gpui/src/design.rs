@@ -1069,12 +1069,6 @@ impl<'a> MonoBodyTextMeasurer<'a> {
     }
 }
 
-/// Unscaled base size used by existing label-measurement callers for ordinary button text.
-///
-/// Not derived from the shared control metrics this round; those callers still measure against
-/// this hand-kept number.
-pub const ACTION_LABEL_BASE: f32 = 10.5;
-
 /// Resolve the exact font and rendered size one measurement will use.
 ///
 /// The single place [`ui_text_width`] and [`text_metrics_key`] agree on how a request becomes a
@@ -1352,9 +1346,9 @@ pub fn wrap_text(
 
 /// [`fit_text`] at the size a selector pill draws its label.
 ///
-/// The literal is deliberately NOT [`ACTION_LABEL_BASE`]: a pill is not an Action-size button, and
-/// tying its truncation budget to that constant would move this text the day MoonUI moves the
-/// button metric.
+/// The literal is deliberately NOT the button tier's font size: a pill is not an Action-size
+/// button, and tying its truncation budget to the tier metrics would move this text the day MoonUI
+/// moves the button metric.
 pub fn fit_label(cx: &App, text: &str, max_w: f32) -> String {
     fit_text(text, max_w, |s| ui_text_width(cx, s, 10.5, 400.0, true)).0
 }
