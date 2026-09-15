@@ -44,7 +44,7 @@ pub struct Merged {
     pub log_to_file: bool,
     /// Log-file retention period in days (0 = keep everything).
     pub log_retention_days: u32,
-    /// Resolved interface density from the new key or a legacy font adjustment.
+    /// Explicit interface density, or Standard when the key is absent.
     pub ui_density: UiDensity,
     /// Dark/light MoonUI theme.
     pub ui_theme_mode: UiThemeMode,
@@ -82,7 +82,7 @@ pub struct Merged {
 /// counter is raised above `uid_floor` before any missing uids are assigned, and a raised counter
 /// marks the result dirty so the high-water mark is persisted. Saved core groups are sanitized
 /// without consulting the current server list, preserving temporarily absent members.
-/// Missing density is migrated from the legacy font delta and marked dirty for one write-back.
+/// Missing density resolves to Standard and is marked dirty for one write-back.
 pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Merged {
     let mut next_uid = next_free_uid(&sf, &meta, uid_floor);
     // A counter that had to be raised is written back, so the repair survives a later boot on

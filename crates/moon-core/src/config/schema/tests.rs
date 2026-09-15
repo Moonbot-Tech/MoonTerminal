@@ -4,23 +4,16 @@ use moonproto::state::MarketHistorySizing;
 
 use super::*;
 
-/// Catches changing legacy thresholds or letting a retired key override explicit density.
-/// Either regression changes text and component size after an upgrade or settings save.
+/// Restoring legacy delta thresholds would resize upgraded users away from Standard.
+/// Every upgraded user starts at Standard unless an explicit density key overrides it.
 #[test]
-fn density_migration_respects_legacy_boundaries_and_new_key_precedence() {
-    for (legacy, expected) in [
-        ("-2.0", UiDensity::Compact),
-        ("0.0", UiDensity::Compact),
-        ("0.01", UiDensity::Standard),
-        ("3.0", UiDensity::Standard),
-        ("3.01", UiDensity::Large),
-        ("6.0", UiDensity::Large),
-        ("nan", UiDensity::Standard),
-        ("inf", UiDensity::Standard),
+fn density_ignores_legacy_values_and_respects_explicit_choices() {
+    for legacy in [
+        "-2.0", "0.0", "0.01", "3.0", "3.01", "6.0", "nan", "inf", "-inf",
     ] {
         let input = format!("ui_font_delta = {legacy}");
         let parsed: SettingsFile = toml::from_str(&input).unwrap();
-        assert_eq!(parsed.resolved_ui_density(), expected);
+        assert_eq!(parsed.resolved_ui_density(), UiDensity::Standard);
         for (stored, density) in [
             ("compact", UiDensity::Compact),
             ("standard", UiDensity::Standard),
@@ -35,16 +28,17 @@ fn density_migration_respects_legacy_boundaries_and_new_key_precedence() {
     assert_eq!(missing.resolved_ui_density(), UiDensity::Standard);
 }
 
-/// Catches serializing the retired key, which would leave obsolete font settings on disk.
+/// Catches serializing the retired key or restoring its mapping on save.
+/// Every upgraded user starts at Standard, and the saved choice must keep that on reload.
 #[test]
 fn density_serialization_drops_the_legacy_key() {
     let mut settings: SettingsFile = toml::from_str("ui_font_delta = 6.0").unwrap();
     settings.ui_density = Some(settings.resolved_ui_density());
     let saved = toml::to_string(&settings).unwrap();
     assert!(!saved.contains("ui_font_delta"));
-    assert!(saved.contains("ui_density = \"large\""));
+    assert!(saved.contains("ui_density = \"standard\""));
     let reloaded: SettingsFile = toml::from_str(&saved).unwrap();
-    assert_eq!(reloaded.resolved_ui_density(), UiDensity::Large);
+    assert_eq!(reloaded.resolved_ui_density(), UiDensity::Standard);
 }
 
 /// The plausible production mutation is `config/schema.rs:clamp_chart_memory_percent`: restoring

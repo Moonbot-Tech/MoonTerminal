@@ -339,7 +339,7 @@ pub struct SettingsFile {
     /// Number of days to retain log files; older files are deleted. 0 keeps all. Defaults to 14.
     #[serde(default = "servers::default_log_retention_days")]
     pub log_retention_days: u32,
-    /// Legacy font adjustment, read only to seed density when the new key is absent.
+    /// Retired font adjustment, accepted for old files but ignored and dropped on save.
     #[serde(default, skip_serializing)]
     pub ui_font_delta: Option<f32>,
     /// Selected density. None means a legacy file; writers always supply the resolved choice.
@@ -397,16 +397,11 @@ pub struct SettingsFile {
 }
 
 impl SettingsFile {
-    /// Resolve density once at load, with an explicit new key taking precedence over legacy data.
+    /// Return the explicit density, or Standard so every upgraded user starts at Standard.
     ///
-    /// Finite legacy deltas map at the old default: <= 0 is Compact, <= 3 is Standard,
-    /// and > 3 is Large. Missing or non-finite legacy values keep Standard.
+    /// The retired font slider never influences density.
     pub fn resolved_ui_density(&self) -> UiDensity {
-        self.ui_density.unwrap_or_else(|| match self.ui_font_delta {
-            Some(delta) if delta.is_finite() && delta <= 0.0 => UiDensity::Compact,
-            Some(delta) if delta.is_finite() && delta > 3.0 => UiDensity::Large,
-            _ => UiDensity::Standard,
-        })
+        self.ui_density.unwrap_or(UiDensity::Standard)
     }
 }
 

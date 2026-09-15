@@ -6,7 +6,7 @@ use super::{Merged, merge, split};
 use crate::config::{CoreGroup, DEFAULT_ORDER_SIZES_USD, GroupConfig, Language};
 use crate::market::MarketDataMode;
 
-/// Merge a settings file carrying nothing but the two scaling knobs.
+/// Merge a settings file carrying UI zoom and the retired font adjustment.
 fn merged_with(ui_scale: f32, ui_font_delta: f32) -> Merged {
     merge(
         ServersFile::default(),
@@ -57,18 +57,28 @@ fn an_unusual_but_usable_scale_survives_the_load() {
     }
 }
 
-/// Catches skipping legacy density resolution during merge: zero must migrate to Compact,
-/// while a non-finite legacy value must preserve the Standard presentation.
+/// Restoring legacy delta mapping during merge would resize upgraded users.
+/// Every upgraded user starts at Standard regardless of their retired slider value.
 #[test]
-fn legacy_font_delta_is_resolved_during_merge() {
-    for broken in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
-        assert_eq!(merged_with(1.0, broken).ui_density, UiDensity::Standard);
+fn legacy_font_delta_is_ignored_during_merge() {
+    for legacy in [
+        -2.0,
+        0.0,
+        0.01,
+        3.0,
+        3.01,
+        6.0,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+    ] {
+        assert_eq!(merged_with(1.0, legacy).ui_density, UiDensity::Standard);
     }
-    assert_eq!(merged_with(1.0, 0.0).ui_density, UiDensity::Compact);
 }
 
 /// Catches removing the density migration dirty bit or losing the choice in split.
-/// An unchanged current-version file must be rewritten once and then stop migrating.
+/// Every upgraded user starts at Standard; a current-version file must write that choice
+/// once and then stop migrating, without changing the independently stored zoom.
 #[test]
 fn density_migrates_through_the_persistence_pipeline_once() {
     let settings: SettingsFile = toml::from_str(&format!(
@@ -80,7 +90,7 @@ fn density_migrates_through_the_persistence_pipeline_once() {
         merged.dirty,
         "density migration must request a write even at the current schema"
     );
-    assert_eq!(merged.ui_density, UiDensity::Large);
+    assert_eq!(merged.ui_density, UiDensity::Standard);
     let (servers, settings) = split(
         &merged.servers,
         &merged.groups,
@@ -106,13 +116,13 @@ fn density_migrates_through_the_persistence_pipeline_once() {
     );
     let saved = toml::to_string(&settings).unwrap();
     assert!(!saved.contains("ui_font_delta"));
-    assert!(saved.contains("ui_density = \"large\""));
+    assert!(saved.contains("ui_density = \"standard\""));
     let reloaded = merge(servers, toml::from_str(&saved).unwrap(), None);
     assert!(
         !reloaded.dirty,
         "saved density must not trigger migration again"
     );
-    assert_eq!(reloaded.ui_density, UiDensity::Large);
+    assert_eq!(reloaded.ui_density, UiDensity::Standard);
     assert_eq!(reloaded.ui_scale, 1.25);
 }
 
