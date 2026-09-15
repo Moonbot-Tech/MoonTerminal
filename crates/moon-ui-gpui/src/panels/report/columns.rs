@@ -13,7 +13,7 @@ const CORE_NAME_COLUMN: &str = "core_name";
 ///
 /// Built ONCE at the top of [`report_data_row`] and passed by reference, so [`report_data_cell`]
 /// takes four parameters instead of eight — it already sat at the `too_many_arguments` clippy
-/// threshold (7, no raised limit in `clippy.toml`), and `docs/AGENT_RULES.md` rule 16 bans an
+/// threshold (7, no raised limit in `clippy.toml`), and `docs/AGENT_RULES.md` rule 17 bans an
 /// `#[allow]` to paper over it.
 struct RowCellCtx<'a> {
     quote: Option<QuoteCurrency>,
