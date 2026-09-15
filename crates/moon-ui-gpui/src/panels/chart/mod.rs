@@ -16,6 +16,7 @@
 mod arb_open;
 mod click_series;
 mod figures;
+mod filter_headers;
 mod geom;
 mod market_actions;
 mod news;

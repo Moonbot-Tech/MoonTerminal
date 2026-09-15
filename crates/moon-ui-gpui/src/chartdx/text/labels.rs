@@ -259,13 +259,32 @@ pub(in crate::chartdx) struct LabelText {
     /// target: the reader aims at the figures, not at the one line that happens to name the period.
     /// The menu edits the module the caption belongs to, which [`Self::row`] identifies.
     pub volume_menu: bool,
-    /// What a PRESS on this caption does, for the captions that are buttons.
+    /// What a press on this caption does, including the strategy-filter header control.
     ///
-    /// `None` on every reporting caption, which is all but three of them. Carried on the text
+    /// `None` on reporting captions. Carried on the text
     /// rather than looked up from the configuration by the drawing pass, exactly like
     /// [`Self::volume_menu`] beside it: the pass has the resolved captions and not the parts, and
     /// re-deriving a button's state there would need the pane's inputs a second time.
-    pub action: Option<ActionMark>,
+    pub action: Option<LabelAction>,
+}
+
+/// An action on a caption: a market-button overlay or the GPU-drawn filters header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::chartdx) enum LabelAction {
+    /// Existing market controls retain their own overlay, geometry, and authorization.
+    Market(ActionMark),
+    /// Fold or unfold this caption's strategy-filter module.
+    ToggleStrategyFilters,
+}
+
+impl LabelAction {
+    /// Return only actions that reserve a market-button overlay instead of drawing GPU text.
+    pub fn market(self) -> Option<ActionMark> {
+        match self {
+            Self::Market(mark) => Some(mark),
+            Self::ToggleStrategyFilters => None,
+        }
+    }
 }
 
 /// A drawn caption that can be PRESSED, and what it would do.
@@ -386,7 +405,15 @@ impl LabelState {
                 .any(|p| p.is_drawn() && p.field.in_volume_block());
             // The row's own name leads its captions, which is where a reader looks for what the
             // row IS before reading the figures on it.
-            if let (true, Some(title)) = (row.show_name, crate::controls::row_title(row)) {
+            let filters_header = row.draws_strategy_filters();
+            let title = if filters_header {
+                Some(filter_header(row, &self.inputs.filter_lines))
+            } else {
+                row.show_name
+                    .then(|| crate::controls::row_title(row))
+                    .flatten()
+            };
+            if let Some(title) = title {
                 scratch.push(LabelText {
                     row: row_ix,
                     part: ROW_NAME_PART,
@@ -399,10 +426,14 @@ impl LabelState {
                     bar: None,
                     // A module's own NAME is part of its block, so the menu opens from it too.
                     volume_menu: row_reads_volume,
-                    // A name is not a button, whatever the module beside it holds: a press has to
-                    // land on the control it names, not on the heading over it.
-                    action: None,
+                    // Other names are not buttons: a press must land on the control they name.
+                    // The filters header IS its collapse control and uses a caption hit target,
+                    // preserving GPU text styling rather than placing a trading-button overlay.
+                    action: filters_header.then_some(LabelAction::ToggleStrategyFilters),
                 });
+            }
+            if filters_header && row.collapsed {
+                continue;
             }
             let mut column_drawn = false;
             for (part_ix, part) in row.parts.iter().enumerate() {
@@ -484,10 +515,10 @@ fn stats_for(inputs: &LabelInputs, basis: PnlBasis) -> &BasisStats {
 ///
 /// Returns:
 ///     The mark, or `None` for a caption that only reports.
-fn action_mark(field: ChartLabelField) -> Option<ActionMark> {
-    Some(ActionMark {
+fn action_mark(field: ChartLabelField) -> Option<LabelAction> {
+    Some(LabelAction::Market(ActionMark {
         action: field.action()?,
-    })
+    }))
 }
 
 /// Format one caption's VALUE, or report that it has nothing to print.
@@ -936,6 +967,23 @@ fn push_arb_rows(
             volume_menu: false,
             action: None,
         });
+    }
+}
+
+/// The collapse control's title and, when folded, the number of lines the column would emit.
+/// Geist Mono lacks the triangular carets, so the control uses supported ASCII markers.
+fn filter_header(row: &moon_core::config::ChartLabelRow, lines: &[String]) -> String {
+    let title = crate::controls::row_title(row)
+        .unwrap_or_else(|| t!("chart_labels.field.strategy_filters").to_string());
+    if row.collapsed {
+        let count = lines
+            .iter()
+            .filter(|line| !line.is_empty())
+            .take(moon_core::config::ARB_MAX_ROWS)
+            .count();
+        format!("> {title} \u{b7} {count}")
+    } else {
+        format!("v {title}")
     }
 }
 
@@ -1490,8 +1538,14 @@ pub(crate) fn preview_row(
     }
     let preview_roster = preview_roster();
     let mut out = Vec::new();
-    if row.show_name {
-        if let Some(title) = crate::controls::row_title(row) {
+    let filters_header = row.draws_strategy_filters();
+    if filters_header || row.show_name {
+        let title = if filters_header {
+            Some(filter_header(row, &inputs.filter_lines))
+        } else {
+            crate::controls::row_title(row)
+        };
+        if let Some(title) = title {
             out.push(PreviewCaption {
                 column: false,
                 prefix: String::new(),
@@ -1500,6 +1554,9 @@ pub(crate) fn preview_row(
                 style: moon_core::config::ChartLabelRow::name_style(),
             });
         }
+    }
+    if filters_header && row.collapsed {
+        return out;
     }
     let mut column_drawn = false;
     for part in &row.parts[..row.used_parts()] {

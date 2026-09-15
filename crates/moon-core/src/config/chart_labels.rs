@@ -926,6 +926,9 @@ pub struct ChartLabelRow {
     pub align: LabelAlign,
     /// Whether the name is printed on the chart as the row's leading caption.
     pub show_name: bool,
+    /// Whether the strategy-filter module shows only its clickable header.
+    /// Other modules ignore this flag; absent persisted values keep the filters expanded.
+    pub collapsed: bool,
     /// Whether a translucent plate is drawn under this module.
     ///
     /// The MODULE's, not a caption's, and that is what the switch means to a reader: the plate is
@@ -980,6 +983,7 @@ pub struct ChartLabelRow {
 }
 
 impl Default for ChartLabelRow {
+    /// Keep new rows visible and their strategy filters expanded.
     fn default() -> Self {
         Self {
             name: String::new(),
@@ -988,6 +992,7 @@ impl Default for ChartLabelRow {
             zone: LabelZone::ZoneTop,
             align: LabelAlign::Center,
             show_name: false,
+            collapsed: false,
             visible: true,
             // The chart's own shape before either axis existed: captions across a line, each module
             // on a line of its own.
@@ -1073,6 +1078,16 @@ impl ChartLabelRow {
         self.parts
             .iter()
             .any(|part| part.field == ChartLabelField::StrategyFilters)
+    }
+
+    /// Whether the first drawn column is strategy filters and therefore owns a collapse header.
+    /// A hidden column or a second column cannot claim the first column's shared run range.
+    pub fn draws_strategy_filters(&self) -> bool {
+        self.visible
+            && self.parts[..self.used_parts()]
+                .iter()
+                .find(|part| part.is_drawn() && part.field.is_column())
+                .is_some_and(|part| part.field == ChartLabelField::StrategyFilters)
     }
 
     /// Whether the row prints its own name as a caption.

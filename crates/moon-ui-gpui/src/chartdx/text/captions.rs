@@ -36,7 +36,7 @@ use moon_core::config::{
 use moon_core::util::fmt::DeltaSign;
 
 use super::caption::{CaptionBox, CaptionGeom, caption_geom};
-use super::labels::LabelText;
+use super::labels::{LabelAction, LabelText};
 use super::{CAPTION_PAD_X, CAPTION_PAD_Y};
 use crate::chartdx::RenderState;
 use crate::chartdx::{ActionPlacement, ArbHit, VolumeHit};
@@ -216,6 +216,32 @@ struct Cell {
 }
 
 impl Cell {
+    /// Keep a filters header and the complete entries that fit below it in the available height.
+    /// Trimming before bottom anchoring prevents a tall list from placing its control offscreen.
+    /// Returns whether entries were removed and their remaining wrap positions need recalculation.
+    fn fit_filter_header(&mut self, texts: &[LabelText], max_h: f32) -> bool {
+        let Some(first) = self.items.first() else {
+            return false;
+        };
+        if texts.get(first.pos).and_then(|text| text.action)
+            != Some(LabelAction::ToggleStrategyFilters)
+        {
+            return false;
+        }
+        let mut height = first.block_h();
+        let mut keep = 1;
+        for item in self.items.iter().skip(1) {
+            if height + item.block_h() > max_h {
+                break;
+            }
+            height += item.block_h();
+            keep += 1;
+        }
+        let trimmed = keep < self.items.len();
+        self.items.truncate(keep);
+        trimmed
+    }
+
     /// Whether this column holds wrapping PROSE — a detect line — as opposed to a stacked column
     /// that also wraps. Prose is elastic (the zone is divided for it); a column is only hungry.
     fn has_prose(&self) -> bool {
@@ -372,6 +398,7 @@ impl RenderState {
         // Cleared before the pass, so a frame that fails leaves no rectangle behind: the panel
         // would otherwise keep a button standing where nothing was drawn.
         self.panes[idx].action_rects.clear();
+        self.panes[idx].filter_header_hits.clear();
         // The wrapped lines belong to THIS pane's pass. Cleared rather than dropped so the
         // allocation is reused, and cleared HERE because the indices `Item` holds are handed out
         // during the pass: carrying entries across panes would leak a Vec per frame and let a
@@ -394,6 +421,7 @@ impl RenderState {
         self.panes[idx].labels.texts = texts;
         self.panes[idx].arb_hits = hits;
         if let Err(error) = result {
+            self.panes[idx].filter_header_hits.clear();
             // Nothing was drawn: the rectangles cleared before the pass stay cleared, so a press
             // cannot land on a button from a frame that was thrown away, and the build buffer goes
             // back rather than being dropped.
@@ -830,6 +858,24 @@ impl RenderState {
                 }
                 self.wrap_hungry_row(ctx, texts, row, budget, travelled, downward);
             }
+            let available_h = if downward {
+                limit_y - y - gap
+            } else {
+                y - gap - limit_y
+            };
+            loop {
+                let mut trimmed = false;
+                for cell in &mut row.cells {
+                    trimmed |= cell.fit_filter_header(texts, available_h);
+                }
+                let Some(budget) = hungry.filter(|_| trimmed) else {
+                    break;
+                };
+                // Removing bottom-anchored entries changes the retained lines' depths beside
+                // neighbouring bands. Rewrap at those positions, then recheck the height. Each
+                // repeat removes an entry, so the bounded column guarantees termination.
+                self.wrap_hungry_row(ctx, texts, row, budget, travelled, downward);
+            }
             let row_h = row.height();
             // The band stacks until it runs out of pane. Lines past that are dropped rather than
             // drawn: a caption over the time axis — or outside the pane entirely — reads as a
@@ -1143,7 +1189,7 @@ impl RenderState {
                 // aims at and what the module beside it has to clear. Reserved here, out of the
                 // same budget the bar track comes from, so a cramped band truncates the label
                 // rather than drawing a plate over its neighbour.
-                let act_w = match entry.action {
+                let act_w = match entry.action.and_then(LabelAction::market) {
                     Some(_) => ACTION_PLATE_W,
                     None => 0.0,
                 };
@@ -1221,7 +1267,11 @@ impl RenderState {
                 // button and publish the rectangle; the panel puts the application's own control in
                 // it — see `panels::chart::market_actions`. Drawing the label here as well would
                 // print it twice, in two different fonts.
-                let (text_w, line_h) = match entry.action.map(|mark| mark.action) {
+                let (text_w, line_h) = match entry
+                    .action
+                    .and_then(LabelAction::market)
+                    .map(|mark| mark.action)
+                {
                     // A SQUARE button reserves its own height and measures nothing: the lock is one
                     // glyph whose whole meaning is its shape, and a box that followed the glyph's
                     // width would stop being square the moment the face or the size changed.
@@ -1276,6 +1326,15 @@ impl RenderState {
                     (false, true) => item_x,
                     (false, false) => item_x - w,
                 };
+                if entry.action == Some(LabelAction::ToggleStrategyFilters) {
+                    self.panes[idx]
+                        .filter_header_hits
+                        .push(crate::chartdx::FilterHeaderHit {
+                            rect: [box_left, y, w, line_h],
+                            row: item.row,
+                            cfg: self.chart_labels.clone(),
+                        });
+                }
                 // The module's right-click target grows with every line of it — the heading, the
                 // figures and the bars beside them — so the menu opens from anywhere on the block.
                 // Independent of the plate: a module with its backing switched off is still a
@@ -1295,7 +1354,7 @@ impl RenderState {
                 // `ACTION_PLATE_W` on the side the line fills towards, so the rectangle has to grow
                 // the same way: a symmetric box would overhang the module before it by half the pad
                 // and leave the other half of the reserve empty.
-                if let Some(mark) = entry.action {
+                if let Some(mark) = entry.action.and_then(LabelAction::market) {
                     let left = match rightwards {
                         true => item_x,
                         false => item_x - w - ACTION_PLATE_W,
@@ -1317,7 +1376,7 @@ impl RenderState {
                 // plate is switched off never opens one, so its captions grow nothing — and
                 // neither does a button, which has a backing of its own and would otherwise be
                 // drawn on two plates at once.
-                if item.plate && entry.action.is_none() {
+                if item.plate && entry.action.and_then(LabelAction::market).is_none() {
                     match plates.iter_mut().find(|(row, _)| *row == item.row) {
                         Some((_, box_)) => box_.add(box_left, w, y, line_h),
                         None => {
@@ -1394,7 +1453,7 @@ impl RenderState {
                 let bar_reserve = reserve;
                 // The button's own backing, charged per CAPTION rather than per column like the
                 // bar track beside it: two buttons in one module each draw a plate of their own.
-                let act_w = match entry.action {
+                let act_w = match entry.action.and_then(LabelAction::market) {
                     Some(_) => ACTION_PLATE_W,
                     None => 0.0,
                 };
@@ -1669,7 +1728,9 @@ fn group_lines(
         // the module's flow does not apply to it: that switch decides how the module's ordinary
         // captions run, and a module can hold both. So arbitrage lines join each other and nothing
         // else joins them.
-        let is_column_line = text.part >= ARB_PART_BASE;
+        // Filters keep their header above their lines even if the module's ordinary flow is Row.
+        let is_column_line = text.part >= ARB_PART_BASE
+            || (text.part == ROW_NAME_PART && row_cfg.draws_strategy_filters());
         let joins = match (is_column_line, was_column_line) {
             (true, true) => same_module,
             (true, false) | (false, true) => false,
