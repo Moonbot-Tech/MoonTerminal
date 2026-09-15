@@ -13,29 +13,19 @@
 //! a "something is switched off" state: sounds the operator normally relies on are being withheld,
 //! and that should read as a caution the moment the header is glanced at.
 //!
-//! The label is drawn here rather than handed to `MoonToggle` precisely so it can carry that
-//! colour: the component paints its own label in `text_soft` with no way to override it.
+//! The label is the component's own, coloured through `MoonToggle::label_color`. Its size is the
+//! density tier's and therefore follows UI zoom only, so it is measured with
+//! [`design::ui_text_width_zoomed`], not the font-scaled caption steps.
 
 use gpui::*;
-use moon_ui::{MoonPopoverPlacement, MoonToggle, MoonToggleSize, h_flex};
+use moon_ui::{
+    MoonPopoverPlacement, MoonTheme, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex,
+};
 use rust_i18n::t;
 
-use crate::panels::popup_gear_trigger;
+use crate::panels::common::popup_gear_trigger_dense;
 use crate::shell::Shell;
 use crate::{Backend, design};
-
-/// `MoonToggleSize::Compact` geometry, mirrored from MoonUI's private `ToggleMetrics` exactly as
-/// `design::glyph_btn_w` mirrors its button metrics. Nothing checks this automatically — if
-/// MoonUI's Compact toggle moves, this follows by hand.
-///
-/// Only the SWITCH is mirrored. The label beside it is drawn at the terminal's own caption step
-/// (`design::t_caption`), not at the component's 9.5: this file draws that text itself, and the
-/// three named steps in `design.rs` are the only sizes terminal text is allowed to take, so the
-/// Font slider moves it with everything else.
-const TOGGLE_TRACK_W: f32 = 28.0;
-const TOGGLE_GAP: f32 = 7.0;
-/// Normal weight, matching what `div()` draws with and what MoonUI gives its own toggle label.
-const TOGGLE_LABEL_WEIGHT: f32 = 400.0;
 
 /// The toggle's fixed label, drawn in both states.
 fn toggle_label() -> String {
@@ -53,15 +43,12 @@ fn toggle_label() -> String {
 /// Returns:
 ///     Toggle (label + gap + track), the chrome gap, and the square gear button.
 pub(crate) fn header_quiet_width(cx: &App) -> f32 {
-    // The UI family, matching the caption's own `font_family` below: the toggle label is a control
-    // caption. `shell::ticker` offsets its popup BY this width, so a measurement in the other
-    // family would move the popup as well as the cluster.
-    let label = design::ui_caption_text_width(cx, &toggle_label(), TOGGLE_LABEL_WEIGHT);
-    label
-        + design::ui_value(cx, TOGGLE_GAP)
-        + design::ui_value(cx, TOGGLE_TRACK_W)
+    let m = MoonToggleSize::density_default(&MoonTheme::active_tokens(cx)).reference_metrics();
+    design::ui_text_width_zoomed(cx, &toggle_label(), m.font_size, m.label_weight, false)
+        + design::ui_value(cx, m.gap)
+        + design::ui_value(cx, m.track_width)
         + design::ui_value(cx, design::CHROME_GAP)
-        // The gear is `popup_gear_trigger`, icon-only at Micro, so MoonUI draws it square and its
+        // The gear is `popup_gear_trigger_dense`, icon-only at Xs, so MoonUI draws it square and its
         // width IS its height.
         + design::micro_control_h_value(cx)
 }
@@ -104,22 +91,14 @@ pub(crate) fn header_quiet_cluster(
                 .id("header-quiet-tip")
                 .flex()
                 .items_center()
-                .gap(design::ui_px(cx, TOGGLE_GAP))
                 .tooltip(crate::panels::common::text_tooltip(tooltip))
                 .child(
-                    div()
-                        .flex_none()
-                        // A control caption, measured in the same family by
-                        // `header_quiet_width` above.
-                        .font_family(design::ui_font())
-                        .text_size(design::t_caption(cx))
-                        .text_color(rgb(design::chrome_toggle_label_color(p, sleeping, true)))
-                        .child(toggle_label()),
-                )
-                .child(
                     MoonToggle::new("header-quiet")
+                        .label(toggle_label())
+                        .label_side(MoonToggleLabelSide::Left)
+                        .mono(false)
+                        .label_color(design::chrome_toggle_label_color(p, sleeping, true))
                         .checked(sleeping)
-                        .size(MoonToggleSize::Compact)
                         // Amber while asleep, matching the label: the switch is the larger target
                         // for the eye, so both have to carry the state or it reads as decoration.
                         .tone(design::chrome_toggle_tone(sleeping, true))
@@ -141,7 +120,7 @@ pub(crate) fn header_quiet_cluster(
             content,
             // The same gear the Detects view configurator uses, so every settings popup in the
             // terminal is opened by one control: Micro, icon-only, lit while its popup is up.
-            popup_gear_trigger("header-quiet-gear", t!("quiet.gear_tip").to_string(), open),
+            popup_gear_trigger_dense("header-quiet-gear", t!("quiet.gear_tip").to_string(), open),
             move |open, window, cx| {
                 shell.update(cx, |s, cx| s.set_quiet_settings_open(open, window, cx));
             },

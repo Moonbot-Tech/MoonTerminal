@@ -3,8 +3,7 @@
 
 use super::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonInput, MoonMenuItem,
-    MoonMenuSize, h_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonInput, MoonMenuItem, h_flex,
 };
 use rust_i18n::t;
 
@@ -124,6 +123,7 @@ impl AlertsPanel {
                 |n| t!("alerts.cores_n", n = n).to_string(),
                 170.0,
                 extras,
+                cx,
                 move |id, app| {
                     view.update(app, |this, cx| this.toggle_core(id, cx));
                 },
@@ -214,12 +214,11 @@ impl AlertsPanel {
             .label(label)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             // Report's rule for the same kind of field: 102 is the floor, and it grows only for a
             // label that would otherwise be ellipsised.
             .fit_trigger_width(102.0, 170.0)
             .menu_width_scaled(200.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
 
@@ -236,10 +235,9 @@ impl AlertsPanel {
             // `design::COLUMN_SELECTOR_ICON`'s contract.
             .trigger_icon(design::COLUMN_SELECTOR_ICON)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width(design::glyph_btn_w(cx))
             .menu_width_scaled(180.0)
-            .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
         let all_on = cur.columns == ALL_COLUMNS_MASK;
         let all_view = view.clone();
@@ -323,7 +321,6 @@ impl AlertsPanel {
                 .child(
                     MoonButton::new((id, 0u64))
                         .label("‹")
-                        .size(MoonButtonSize::Action)
                         .variant(MoonButtonVariant::Soft)
                         .on_click(cx.listener(move |this, _, _w, cx| {
                             dn(this);
@@ -341,7 +338,6 @@ impl AlertsPanel {
                 .child(
                     MoonButton::new((id, 1u64))
                         .label("›")
-                        .size(MoonButtonSize::Action)
                         .variant(MoonButtonVariant::Soft)
                         .on_click(cx.listener(move |this, _, _w, cx| {
                             up(this);
@@ -429,10 +425,9 @@ impl AlertsPanel {
             .label(label)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(120.0)
             .menu_width_scaled(150.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
 }

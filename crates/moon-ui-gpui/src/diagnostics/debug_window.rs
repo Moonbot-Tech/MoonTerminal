@@ -10,8 +10,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use moon_ui::{
-    MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette,
-    MoonWindowFrame, Root, h_flex, v_flex,
+    MoonBackgroundPolicy, MoonButton, MoonButtonVariant, MoonPalette, MoonWindowFrame, Root,
+    h_flex, v_flex,
 };
 
 use moon_core::feed::ConnStatus;
@@ -283,7 +283,6 @@ impl Render for DebugPerfWindow {
                         MoonButton::new("debug-fill-main-cap")
                             .width(150.0)
                             .variant(MoonButtonVariant::Neutral)
-                            .size(MoonButtonSize::Toolbar)
                             .label("Fill Main CAP")
                             .on_click(move |_, _, cx| {
                                 fill_backend.update(cx, |b, bcx| {
@@ -304,7 +303,6 @@ impl Render for DebugPerfWindow {
                         MoonButton::new("debug-open-10-btc")
                             .width(210.0)
                             .variant(MoonButtonVariant::Neutral)
-                            .size(MoonButtonSize::Toolbar)
                             .label("Открыть 10 BTC графиков")
                             .on_click(move |_, _, cx| {
                                 spawn_debug_chart_windows(cx, open_backend.clone());
@@ -315,7 +313,6 @@ impl Render for DebugPerfWindow {
                         MoonButton::new("debug-close-10-btc")
                             .width(110.0)
                             .variant(MoonButtonVariant::Neutral)
-                            .size(MoonButtonSize::Toolbar)
                             .label("Закрыть 10")
                             .on_click(move |_, _, cx| {
                                 close_debug_btc_chart_windows(cx, close_backend.clone());

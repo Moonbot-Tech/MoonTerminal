@@ -15,8 +15,8 @@ use gpui::{
 };
 use moon_core::config::CoreGroup;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonInputEvent, MoonInputState,
-    MoonNotification, MoonPalette, MoonWindowExt as _, h_flex, v_flex,
+    MoonButton, MoonButtonVariant, MoonInput, MoonInputEvent, MoonInputState, MoonNotification,
+    MoonPalette, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -183,14 +183,12 @@ fn save_footer(create: Entity<SaveCoreGroup>, p: MoonPalette) -> gpui::AnyElemen
         .child(
             MoonButton::new("core-group-cancel")
                 .ghost()
-                .size(MoonButtonSize::Micro)
                 .label(t!("dialogs.cancel").to_string())
                 .on_click(move |_, window, cx| window.close_dialog(cx))
                 .render(),
         )
         .child(
             MoonButton::new("core-group-create")
-                .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Blue)
                 .label(t!("dialogs.create").to_string())
                 .on_click(move |_, window, cx| {
@@ -488,7 +486,6 @@ impl Render for ManageCoreGroups {
                     .child(move_button(&this, index, down_key, false, index == last))
                     .child(
                         MoonButton::new(("core-group-delete", index))
-                            .size(MoonButtonSize::Micro)
                             .variant(if armed {
                                 MoonButtonVariant::Danger
                             } else {
@@ -536,7 +533,6 @@ fn move_button(
     };
     MoonButton::new((id, index))
         .ghost()
-        .size(MoonButtonSize::Micro)
         .label(if up { "↑" } else { "↓" })
         .disabled(at_end)
         .on_click(move |_, _window, cx| {
@@ -579,7 +575,6 @@ pub(crate) fn open_manage_dialog(backend: Entity<Backend>, window: &mut Window, 
                 .child(
                     MoonButton::new("core-groups-close")
                         .ghost()
-                        .size(MoonButtonSize::Micro)
                         .label(t!("dialogs.close").to_string())
                         .on_click(move |_, window, cx| window.close_dialog(cx))
                         .render(),

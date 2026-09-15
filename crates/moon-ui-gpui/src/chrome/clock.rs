@@ -23,7 +23,7 @@ use std::rc::Rc;
 use chrono::{DateTime, Utc};
 use gpui::*;
 use moon_ui::{
-    MoonMenuItem, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu,
+    MoonMenuItem, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSize,
     MoonTooltipView, h_flex,
 };
 use rust_i18n::t;
@@ -398,7 +398,7 @@ fn render_header_clock(
                 // list's budget. MoonUI floors it at the menu's own row height regardless.
                 .header(20.0, t!("header.clock_pick").to_string())
                 .fit_width(200.0, 560.0)
-                .size(MoonMenuSize::Compact)
+                .size(MoonSize::Xs)
                 .mono(true)
                 // Cap the viewport at about 11 cities so the full curated list cannot overrun a
                 // short window; the remaining rows stay reachable by scrolling.

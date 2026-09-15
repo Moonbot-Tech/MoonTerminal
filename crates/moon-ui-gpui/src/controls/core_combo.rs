@@ -42,7 +42,7 @@ use crate::controls::wrap_fit;
 use crate::core_order::OrderedCores;
 use moon_core::config::CoreGroup;
 use moon_core::venue::CoreVenue;
-use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize};
+use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem};
 
 #[cfg(test)]
 mod tests;
@@ -503,6 +503,7 @@ pub(crate) fn core_combo<F, G>(
     cores_n: impl Fn(usize) -> String,
     min_menu_w: f32,
     extras: Option<CoreComboExtras<'_>>,
+    cx: &App,
     on_toggle: F,
     on_toggle_exchange: G,
 ) -> MoonDropdown
@@ -519,11 +520,10 @@ where
         .label(cur)
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::Action)
+        .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(CORE_COMBO_TRIGGER_W)
         .fit_menu_width(min_menu_w, 560.0)
         .menu_max_height_ui(520.0)
-        .menu_size(MoonMenuSize::Compact)
         .close_on_select(false)
         .item(
             // The All item clears the filter in every consumer: empty means all cores.

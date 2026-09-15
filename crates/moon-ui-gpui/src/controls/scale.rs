@@ -4,8 +4,8 @@ use gpui::*;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize,
-    MoonPalette, MoonTooltipView,
+    MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonPalette,
+    MoonSize, MoonTooltipView,
 };
 
 /// Price-scale (Y) presets matching egui `dock/controls.rs::SCALES` one-for-one.
@@ -83,8 +83,8 @@ pub(crate) fn step_scale(current: Option<f32>, scale_up: bool) -> Option<f32> {
 
 /// Builds the shared price-scale dropdown.
 ///
-/// Tab and AddToChart-stack variants differ only in IDs, trigger size (`Micro` or
-/// `ToolbarCompact`), and the `on_pick` destination. Appearance, tooltip, magnifier, and the
+/// Tab and AddToChart-stack variants differ only in IDs and the `on_pick` destination; every
+/// caller passes the same `MoonSize::Xs` trigger. Appearance, tooltip, magnifier, and the
 /// localized short Auto marker are shared.
 fn scale_dropdown(
     _cx: &App,
@@ -129,7 +129,6 @@ fn scale_dropdown(
                 .trigger_variant(MoonButtonVariant::Neutral)
                 .trigger_size(trigger_size)
                 .menu_width_scaled(116.0)
-                .menu_size(MoonMenuSize::Compact)
                 .segment(
                     MoonButtonSegment::new("🔍")
                         .color(p.text_muted)
@@ -161,7 +160,7 @@ pub(crate) fn scale_dropdown_for_tabs(
         "tabs-scale-tip",
         "tabs-scale-dropdown",
         "scale-tab",
-        MoonButtonSize::Micro,
+        MoonSize::Xs.into(),
         p,
         move |pct, cx| {
             tabs.update(cx, |t, tcx| t.pick_active_scale(pct, tcx));
@@ -179,8 +178,8 @@ pub(crate) fn scale_dropdown_for_tabs(
 /// two together always answer "what zoom is this": the badge while the pane fits itself, the
 /// trigger the moment the reader pins a step.
 ///
-/// Micro trigger rather than the detached window's taller one: this sits in a window header
-/// beside a title cluster, which is the tab strip's proportions and not a toolbar's.
+/// Shares [`scale_dropdown`]'s `MoonSize::Xs` trigger: this sits in a window header beside a
+/// title cluster, which is the tab strip's proportions and not a toolbar's.
 ///
 /// Args:
 ///     cx: Application context used to create the shared dropdown.
@@ -202,7 +201,7 @@ pub(crate) fn scale_dropdown_for_trade_window(
         "trade-window-scale-tip",
         "trade-window-scale-dropdown",
         "scale-trade",
-        MoonButtonSize::Micro,
+        MoonSize::Xs.into(),
         p,
         move |pct, cx| {
             view.update(cx, |this, vcx| this.pick_scale(pct, vcx));
@@ -227,7 +226,7 @@ pub(crate) fn scale_dropdown_for_add_stack(
         "detached-stack-scale-tip",
         "detached-stack-scale-dropdown",
         "scale-stack",
-        MoonButtonSize::ToolbarCompact,
+        MoonSize::Xs.into(),
         p,
         move |pct, cx| {
             stack.update(cx, |st, scx| st.set_scale(pct, scx));

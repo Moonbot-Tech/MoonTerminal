@@ -107,25 +107,27 @@ fn pinned_scope_host_keeps_its_tooltip() {
     );
 }
 
-/// `design::action_control_h_value` and `design::glyph_btn_w` are two INDEPENDENTLY written
-/// mirrors of the same upstream MoonUI metric — `glyph_btn_w`'s own doc names it "which
-/// `MoonButtonSize::Action` resolves to" — so they must keep agreeing with each other even though
-/// neither can be checked against the private `MoonButtonMetrics` directly. Source vs source, not
-/// a constant compared against its own literal: this is the one oracle available for either.
+/// `design::action_control_h_value` and `design::glyph_btn_w` must read the SAME upstream MoonUI
+/// metric — `glyph_btn_w` now delegates straight to `action_control_h_value`, which itself reads
+/// the density tier's `control_metrics().height` rather than a hand-copied literal. Source vs
+/// source, not a constant compared against its own literal: this is the one oracle available for
+/// either, since neither can be checked against the private `MoonButtonMetrics` directly.
 ///
-/// Mutation: move `action_control_h_value`'s triple without moving `glyph_btn_w`'s, or vice versa.
-/// Consequence: the pinned chip (sized off `action_control_h_value`) stops matching the
-/// Action-size controls standing beside it in the same row — a font-scale drift neither
-/// function's own body would ever reveal by itself.
+/// Mutation: re-fork them — give `glyph_btn_w` its own literal instead of delegating, or have
+/// `action_control_h_value` stop reading `button_tier(cx).control_metrics().height`. Consequence:
+/// the pinned chip (sized off `glyph_btn_w`) stops matching the density-tier controls standing
+/// beside it in the same row — a drift neither function's own body would ever reveal by itself.
 #[test]
 fn action_control_h_value_agrees_with_glyph_btn_w() {
     let design = code_only(&read_src("design.rs"));
     let action = braced_body(&design, "fn action_control_h_value(");
     let glyph = braced_body(&design, "fn glyph_btn_w(");
-    let triple = "fit_h_value(cx, 26.0, 14.0, 6.0)";
     assert!(
-        action.contains(triple) && glyph.contains(triple),
-        "action_control_h_value and glyph_btn_w must mirror the SAME MoonUI Action metrics: {triple}"
+        action.contains("button_tier(cx).control_metrics().height")
+            && glyph.contains("action_control_h_value(cx)"),
+        "glyph_btn_w must delegate to action_control_h_value, which must read the density \
+         tier's own control_metrics — anything else re-forks the two Action metrics this goal \
+         exists to unify"
     );
 }
 

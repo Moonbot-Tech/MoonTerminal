@@ -8,12 +8,11 @@
 //! disagree about the shape of the list.
 
 use super::*;
-use moon_ui::{MoonCheckbox, MoonGroupBox, MoonPopover, MoonPopoverPlacement, MoonSize, MoonTheme};
+use moon_ui::{MoonCheckbox, MoonGroupBox, MoonPopover, MoonPopoverPlacement, MoonTheme};
 
 use crate::panels::{
-    COMPACT_CHECKBOX_FONT, COMPACT_CHECKBOX_GAP, COMPACT_CHECKBOX_MARK, COMPACT_CHECKBOX_WEIGHT,
-    POPUP_GROUP_CAPTION_FONT, popup_close_button, popup_gear_trigger, popup_group,
-    popup_group_inset_px, popup_title,
+    COMPACT_CHECKBOX_WEIGHT, POPUP_GROUP_CAPTION_FONT, popup_close_button, popup_gear_trigger,
+    popup_group, popup_group_inset_px, popup_title,
 };
 
 /// Caption of the popup's display-preferences group.
@@ -166,13 +165,14 @@ fn settings_content_width(cx: &App) -> f32 {
     let label_width = design::ui_text_width_zoomed(
         cx,
         &t!(GROUP_BY_VENUE_LABEL),
-        COMPACT_CHECKBOX_FONT,
+        crate::panels::common::checkbox_metrics(cx).font,
         COMPACT_CHECKBOX_WEIGHT,
         false,
     );
     let checkbox_leading = f32::from(design::ui_px(
         cx,
-        COMPACT_CHECKBOX_MARK + COMPACT_CHECKBOX_GAP,
+        crate::panels::common::checkbox_metrics(cx).mark
+            + crate::panels::common::checkbox_metrics(cx).gap,
     ));
     let group_content = group_width.max(checkbox_leading + label_width);
     title_width.max(group_content + popup_group_inset_px(cx))
@@ -229,7 +229,6 @@ fn display_group(group_by_venue: bool, view: Entity<AssetsView>) -> MoonGroupBox
         MoonCheckbox::new("assets-pref-group-by-venue")
             .label(t!(GROUP_BY_VENUE_LABEL).to_string())
             .checked(group_by_venue)
-            .size(MoonSize::Sm)
             .on_change(move |checked: &bool, _window, app| {
                 let checked = *checked;
                 view.update(app, |this, cx| this.write_group_by_venue(checked, cx));

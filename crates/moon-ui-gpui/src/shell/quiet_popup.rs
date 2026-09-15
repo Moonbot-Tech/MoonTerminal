@@ -10,7 +10,7 @@
 //! The checkbox rows write straight through the backend, like the Core Status alert popup.
 
 use gpui::*;
-use moon_ui::{MoonCheckbox, MoonInput, MoonPalette, MoonSize, h_flex, v_flex};
+use moon_ui::{MoonCheckbox, MoonInput, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use moon_core::config::quiet::QuietCfg;
@@ -223,7 +223,6 @@ impl Shell {
         MoonCheckbox::new(SharedString::from(format!("header-{id}")))
             .label(label)
             .checked(checked)
-            .size(MoonSize::Sm)
             .mono(true)
             .on_change(move |value, _window, cx| {
                 let value = *value;

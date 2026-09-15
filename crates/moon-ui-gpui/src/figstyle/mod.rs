@@ -30,8 +30,7 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonSize,
-    MoonTooltipView, h_flex, v_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonTooltipView, h_flex, v_flex,
 };
 
 use moon_core::figures::{
@@ -527,7 +526,6 @@ fn fill_row<V: 'static>(
         MoonCheckbox::new("figset-fill-off")
             .label(t!("chart.fig.no_fill").to_string())
             .checked(!has_fill)
-            .size(MoonSize::Sm)
             .on_change(move |off, _, app| {
                 backend_off.update(app, |b, bcx| {
                     if edit_style(b, &target_off, &authority_off, |s| {
@@ -614,7 +612,6 @@ fn stepper_row<V: 'static>(
             if up { "up" } else { "dn" }
         ))))
         .label(glyph)
-        .size(MoonButtonSize::Micro)
         .variant(MoonButtonVariant::Ghost)
         .on_click(move |_, _w, app| {
             backend.update(app, |b, bcx| {
@@ -660,7 +657,6 @@ fn kind_row(
                 "figset-kind-{i}"
             ))))
             .label(kind.label())
-            .size(MoonButtonSize::Micro)
             .variant(if selected {
                 MoonButtonVariant::Blue
             } else {
@@ -712,7 +708,6 @@ fn hotkey_cycle_row<V: 'static>(
         .child(
             MoonCheckbox::new("figset-hotkey-cb")
                 .checked(on)
-                .size(MoonSize::Sm)
                 .label(t!("chart.fig.hotkey").to_string())
                 .on_change(move |checked: &bool, _window, app| {
                     edit_hotkey_cycle(&backend, tool, *checked, app);
@@ -746,7 +741,6 @@ fn switch_row(
                 "figset-switch-{i}"
             ))))
             .label(s.label.clone())
-            .size(MoonButtonSize::Micro)
             .variant(if on {
                 MoonButtonVariant::Blue
             } else {

@@ -33,8 +33,8 @@ use gpui::*;
 use moon_ui::{
     DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonContextMenuWindowExt as _, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState,
-    MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonSize, MoonTooltipView, MoonWindowExt as _, Panel, PanelEvent, PanelState, h_flex, v_flex,
+    MoonMenuItem, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonTooltipView, MoonWindowExt as _, Panel, PanelEvent, PanelState, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -625,11 +625,10 @@ impl NewsView {
             .label(cur)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .fit_trigger_width(118.0, 260.0)
             .fit_menu_width(140.0, 560.0)
             .menu_max_height_ui(360.0)
-            .menu_size(MoonMenuSize::Compact)
             .close_on_select(false)
             .item(
                 MoonMenuItem::with_key("news-coins-all", all_label)
@@ -712,12 +711,16 @@ impl NewsView {
     /// The popover wrapper owns open/close behavior; `selected` brightens the trigger while a
     /// filter is active.
     fn tags_trigger(&self, label: String, active: bool, cx: &App) -> impl IntoElement + use<> {
-        let (label, trigger_w) =
-            MoonDropdown::fitted_trigger_label(cx, &label, MoonButtonSize::Action, 118.0, 260.0);
+        let (label, trigger_w) = MoonDropdown::fitted_trigger_label(
+            cx,
+            &label,
+            MoonButtonSize::density(cx),
+            118.0,
+            260.0,
+        );
         MoonButton::new("news-tags-trigger")
             .label(label)
             .variant(MoonButtonVariant::Soft)
-            .size(MoonButtonSize::Action)
             .mono(true)
             .selected(active)
             .width(trigger_w)
@@ -737,7 +740,6 @@ impl NewsView {
             .child(
                 MoonButton::new("news-tags-showall")
                     .label(t!("news.tags.show_all").to_string())
-                    .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Ghost)
                     .on_click(cx.listener(|this, _, _w, cx| this.set_all_tags_hidden(false, cx)))
                     .render(),
@@ -745,7 +747,6 @@ impl NewsView {
             .child(
                 MoonButton::new("news-tags-hideall")
                     .label(t!("news.tags.hide_all").to_string())
-                    .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Ghost)
                     .on_click(cx.listener(|this, _, _w, cx| this.set_all_tags_hidden(true, cx)))
                     .render(),
@@ -802,7 +803,6 @@ impl NewsView {
         let checkbox = MoonCheckbox::new("news-untagged-vis")
             .label(t!("news.tags.untagged").to_string())
             .checked(shown)
-            .size(MoonSize::Sm)
             .on_change(cx.listener(|this, checked: &bool, _w, cx| {
                 this.set_hide_untagged(!*checked, cx);
             }));
@@ -831,7 +831,6 @@ impl NewsView {
             .label(format!("#{label}"))
             .mono(true)
             .checked(!hidden)
-            .size(MoonSize::Sm)
             .on_change(cx.listener(move |this, checked: &bool, _w, cx| {
                 this.toggle_tag_hidden(&cb_key, !*checked, cx);
             }));
@@ -896,7 +895,6 @@ impl NewsView {
         let fixed_toggle = MoonCheckbox::new(SharedString::from(format!("nt-fixed-{key}")))
             .label(t!("chart_labels.color_fixed").to_string())
             .checked(fixed.is_some())
-            .size(MoonSize::Sm)
             .on_change(cx.listener(move |this, checked: &bool, _, cx| {
                 let color = checked.then(|| format!("#{seed:06X}"));
                 this.set_tag_color(&fixed_key, color.as_deref(), cx);
@@ -1242,7 +1240,6 @@ impl Render for NewsView {
                 MoonCheckbox::new("news-translate")
                     .label(t!("news.translate").to_string())
                     .checked(self.translate)
-                    .size(MoonSize::Sm)
                     .on_change(cx.listener(|this, ch: &bool, _w, cx| this.set_translate(*ch, cx))),
             )
             .child(

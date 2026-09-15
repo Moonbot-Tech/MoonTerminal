@@ -21,8 +21,8 @@ mod vault;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState,
-    MoonPalette, MoonProgress, MoonSize, h_flex, rgba_from, v_flex,
+    MoonButton, MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, MoonProgress,
+    h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -298,7 +298,6 @@ impl SettingsView {
     ) -> MoonCheckbox {
         MoonCheckbox::new(id)
             .checked(checked)
-            .size(MoonSize::Sm)
             // Nothing to attach a password to until the config file is open.
             .disabled(!self.security.vault.editable)
             .on_change(cx.listener(move |this, checked: &bool, _window, cx| {
@@ -414,7 +413,6 @@ impl SettingsView {
             .child(
                 MoonButton::new("sec-forget-machines")
                     .outline()
-                    .size(MoonButtonSize::Micro)
                     // One slot means only this machine, so there is nothing to forget.
                     .disabled(used <= 1 || !self.security.vault.editable)
                     .label(format!("  {}  ", t!("security.forget_machines")))

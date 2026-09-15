@@ -13,8 +13,8 @@ use gpui::*;
 use moon_core::db::ReadFail;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
-    MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonSize, MoonTag, MoonTooltipView, h_flex, v_flex,
+    MoonInputEvent, MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonTag,
+    MoonTooltipView, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -146,7 +146,6 @@ impl AnalyticsView {
                     MoonCheckbox::new(SharedString::from(format!("tun-round-{k}")))
                         .label(t!("analytics.tuner.round_lbl").to_string())
                         .checked(round)
-                        .size(MoonSize::Sm)
                         .on_change({
                             let view = cx.entity();
                             move |ch: &bool, _w, app| {
@@ -181,7 +180,6 @@ impl AnalyticsView {
                 header = header.child(
                     MoonButton::new(SharedString::from(format!("tun-copy-{k}")))
                         .variant(MoonButtonVariant::Soft)
-                        .size(MoonButtonSize::Micro)
                         .label(t!("analytics.tuner.copy_btn").to_string())
                         .disabled(!workspace_target_visible)
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -213,7 +211,6 @@ impl AnalyticsView {
                     } else {
                         MoonButtonVariant::Soft
                     })
-                    .size(MoonButtonSize::Micro)
                     .label(t!("analytics.tuner.save_btn").to_string())
                     .disabled(!workspace_target_visible)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -324,7 +321,6 @@ impl AnalyticsView {
                 el.child(
                     MoonButton::new(SharedString::from("tun-suggest-stop-f"))
                         .variant(MoonButtonVariant::Soft)
-                        .size(MoonButtonSize::Micro)
                         .label(if stopping {
                             t!("analytics.tuner.stopping").to_string()
                         } else {
@@ -341,7 +337,6 @@ impl AnalyticsView {
             .child(
                 MoonButton::new(SharedString::from("tun-suggest-one-f"))
                     .variant(MoonButtonVariant::Soft)
-                    .size(MoonButtonSize::Micro)
                     .label(t!("analytics.tuner.suggest_one").to_string())
                     .disabled(running)
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -355,7 +350,6 @@ impl AnalyticsView {
             .child(
                 MoonButton::new(SharedString::from("tun-suggest-run-f"))
                     .variant(MoonButtonVariant::Blue)
-                    .size(MoonButtonSize::Micro)
                     // The label carries the mode, because the two searches answer different
                     // questions and take very different amounts of time. One button whose
                     // meaning is silently switched by a checkbox two clicks away is how a user
@@ -490,7 +484,6 @@ impl AnalyticsView {
             .trigger(
                 MoonButton::new("tun-cfg-gear")
                     .label("⚙")
-                    .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Soft)
                     .tooltip(t!("analytics.tuner.cfg_title").to_string())
                     .render(),
@@ -555,9 +548,8 @@ impl AnalyticsView {
             .label(train_label(train_pct))
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .menu_width_scaled(96.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(tr_items);
         let edges = self.tuner.edges;
         let ed_view = cx.entity();
@@ -584,9 +576,8 @@ impl AnalyticsView {
             .label(edges.to_string())
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .menu_width_scaled(64.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(ed_items);
         let gap = design::ui_px(cx, 6.0);
         let section_gap = design::ui_px(cx, 8.0);
@@ -607,7 +598,6 @@ impl AnalyticsView {
             .child(
                 MoonButton::new("tun-cfg-close")
                     .label("✕")
-                    .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Ghost)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.tuner.sugg_cfg_open = false;
@@ -719,7 +709,6 @@ impl AnalyticsView {
                                     .label(t!("analytics.tuner.compose_toggle").to_string())
                                     .description(t!("analytics.tuner.compose_short").to_string())
                                     .checked(self.tuner.compose)
-                                    .size(MoonSize::Sm)
                                     // `on_change` hands the callback an `&mut App`, not a
                                     // `Context`, so this is one of the call sites where a
                                     // `cx.listener` does not fit.
@@ -793,7 +782,6 @@ impl AnalyticsView {
                     .child(
                         MoonButton::new("tun-cfg-seed-pin")
                             .label(t!("analytics.tuner.seed_pin").to_string())
-                            .size(MoonButtonSize::Micro)
                             .variant(MoonButtonVariant::Soft)
                             .on_click(cx.listener(|this, _, _, cx| this.pin_last_seed(cx)))
                             .render(),
@@ -836,7 +824,6 @@ impl AnalyticsView {
             .child(
                 MoonButton::new(SharedString::from("tun-suggest-run-t"))
                     .variant(MoonButtonVariant::Blue)
-                    .size(MoonButtonSize::Micro)
                     .label(if busy {
                         "…".to_string()
                     } else {

@@ -26,7 +26,8 @@
 //! keeps what -- while a wide window is a GROW regime, where the caps are what stop the key and
 //! the group from spending width they have nothing readable to put in it. Both dials are needed,
 //! and neither is the other's fallback. All three carry ONE width policy, which is what makes
-//! their 150 > 140 > 85 ordering a property of the literals rather than of the Font slider.
+//! their 150 > 140 > 85 ordering a property of the literals rather than of the legacy font-delta
+//! channel.
 //!
 //! Pure and GPUI-free on purpose -- its sibling test file can assert the header and the rows agree
 //! without a window.
@@ -86,9 +87,9 @@ pub(super) enum ConnColWidth {
     ///
     /// The three text columns share it for a second reason: their shrink order at a narrow window
     /// is decided by their RESOLVED bases, so a mixed policy would let one Font setting overtake
-    /// another column. `repair_ui_font_delta` (`moon-core/src/config/schema.rs`) deliberately
-    /// preserves any finite hand-edited delta, well past the slider's +6, so "no reachable setting
-    /// reverses it" is only true when the comparison is scale-free.
+    /// another column. Density now selects the text adjustment, while MoonUI still permits
+    /// custom finite font deltas. A scale-free comparison keeps that ordering independent
+    /// of either source.
     TextScaled,
 }
 

@@ -19,8 +19,8 @@ mod year;
 use chrono::{Datelike, NaiveDate};
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonSegmentItem,
-    MoonSegmentedControl, h_flex, v_flex,
+    MoonButton, MoonButtonVariant, MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex,
+    v_flex,
 };
 use rust_i18n::t;
 
@@ -539,7 +539,6 @@ impl AnalyticsView {
         let nav_btn = |id: &'static str, label: String, forward: bool, off: bool| {
             MoonButton::new(id)
                 .variant(MoonButtonVariant::Soft)
-                .size(MoonButtonSize::Micro)
                 .disabled(off)
                 .label(label)
                 .on_click(cx.listener(move |this, _, _, cx| this.cal_shift(forward, cx)))

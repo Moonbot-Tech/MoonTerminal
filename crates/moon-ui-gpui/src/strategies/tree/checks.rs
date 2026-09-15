@@ -37,6 +37,7 @@ pub(super) fn row_checkbox(id: SharedString, checked: bool) -> MoonCheckbox {
     MoonCheckbox::new(id)
         .checked(checked)
         .tone(MoonTone::Positive)
+        // Fixed tree rows and invisible bulk slots share this same Sm column.
         .size(MoonSize::Sm)
 }
 
@@ -104,9 +105,8 @@ pub(super) fn bulk_check(
 /// depth, which reads as a different indentation level rather than as a missing control.
 ///
 /// The reservation is a real checkbox made invisible rather than a width taken from a mirrored
-/// metric: MoonUI resolves the Compact box against the active typography (`MoonCheckboxMetrics`
-/// grows it with the font delta), so any number stated here would be right only at the shipped
-/// font size. Hidden costs nothing beyond layout — GPUI returns before painting the subtree or
+/// metric: both visible and hidden boxes use row_checkbox and its fixed Sm tier, so their
+/// widths stay identical at every density and UI zoom. Hidden costs nothing beyond layout — GPUI returns before painting the subtree or
 /// registering its mouse listeners (`div.rs`), so the reserved column has no hitbox of its own.
 pub(super) fn bulk_check_slot(row_id: &SharedString) -> AnyElement {
     div()

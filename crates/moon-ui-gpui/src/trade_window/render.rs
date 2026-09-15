@@ -11,8 +11,7 @@ use moon_core::market::trade_replay::{
     TickStatus, TradeReplayEmpty, TradeReplayFailure, TradeReplaySource,
 };
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonCheckbox, MoonPalette, MoonWindowFrame,
-    MoonWindowFrameControls, h_flex, v_flex,
+    MoonButton, MoonCheckbox, MoonPalette, MoonWindowFrame, MoonWindowFrameControls, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -296,8 +295,8 @@ impl TradeWindowView {
                 // ticks, bucketed ticks, or candles and the reason for them — so it must not be
                 // the smallest text in the window. It now matches the figures rail's VALUES
                 // (`figures.rs`, `t_body`) rather than its field labels, which is the right
-                // company for it. A design step, never a hard-coded size, so the Font slider and
-                // the UI scale keep carrying it.
+                // company for it. A design step, never a hard-coded size, so the legacy
+                // font-delta channel and the UI scale keep carrying it.
                 .child(
                     div()
                         .absolute()
@@ -326,7 +325,6 @@ impl TradeWindowView {
             .when(self.state.retryable(), |el| {
                 el.child(
                     MoonButton::new("trade-window-retry")
-                        .size(MoonButtonSize::Micro)
                         .outline()
                         .label(t!("trade_window.retry").to_string())
                         .on_click(cx.listener(|this, _, _window, cx| this.fetch(cx)))

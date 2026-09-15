@@ -1,6 +1,7 @@
 //! [AssetsView] event/focus/panel/render trait impls.
 
 use super::*;
+use moon_ui::MoonSize;
 
 impl EventEmitter<PanelEvent> for AssetsView {}
 impl Focusable for AssetsView {
@@ -65,7 +66,7 @@ impl Panel for AssetsView {
             buttons.push(
                 MoonButton::new("assets-open-global")
                     .ghost()
-                    .size(MoonButtonSize::Action)
+                    .size(MoonSize::Sm)
                     .label("⧉")
                     .tooltip(t!("assets.open_global_hint").to_string())
                     .on_click(move |_, window, app| {

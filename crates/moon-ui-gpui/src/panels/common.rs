@@ -11,9 +11,8 @@ use std::time::{Duration, Instant};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonBackgroundPolicy, MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton,
-    MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonGroupBox, MoonMenuItem, MoonPalette,
-    MoonTooltipView,
+    DockArea, MoonBackgroundPolicy, MoonBadge, MoonBadgeVariant, MoonButton, MoonButtonIconSlot,
+    MoonButtonVariant, MoonGroupBox, MoonMenuItem, MoonPalette, MoonSize, MoonTooltipView,
 };
 
 use crate::Backend;
@@ -111,7 +110,7 @@ pub(crate) fn side_badge(is_short: bool, p: MoonPalette) -> MoonBadge {
 /// The shape [`side_badge`] introduced, with the direction knowledge taken out, so any surface that
 /// needs "one word standing for a state" draws the same pill instead of inventing another. The Log
 /// panel's severity and category tags are the second caller; a third must reuse this rather than
-/// spell `Soft` + `Tiny` again, or the two drift apart the moment either is retuned.
+/// spell the density-sized `Soft` badge again, or the two drift apart the moment either is retuned.
 ///
 /// Returns the BUILDER rather than a rendered element for [`side_badge`]'s reason: rendered as a
 /// plain child, its `RenderOnce` impl reads the window's live theme tokens — font scale included —
@@ -126,7 +125,6 @@ pub(crate) fn side_badge(is_short: bool, p: MoonPalette) -> MoonBadge {
 pub(crate) fn tag_badge(text: impl Into<SharedString>, color: u32) -> MoonBadge {
     MoonBadge::new(text)
         .variant(MoonBadgeVariant::Soft)
-        .size(MoonBadgeSize::Tiny)
         .bg_color(color)
         .text_color(color)
 }
@@ -167,7 +165,6 @@ pub(crate) fn count_badge(n: usize, color: u32) -> impl IntoElement {
     MoonBadge::new("")
         .count_max(n, COUNT_BADGE_MAX)
         .variant(MoonBadgeVariant::Soft)
-        .size(MoonBadgeSize::Tiny)
         .bg_color(color)
         .text_color(color)
         .mono(true)
@@ -343,26 +340,40 @@ pub(crate) const POPUP_GROUP_PAD: f32 = 6.0;
 /// all three.
 pub(crate) const POPUP_GROUP_INSET: f32 = 2.0 * (POPUP_GROUP_PAD + 1.0);
 
-/// `MoonSize::Sm` `MoonCheckbox` box width in design units.
+/// Design-unit checkbox metrics mirrored for popup measurement and neighbouring captions.
 ///
-/// The `Sm` checkbox's own geometry, which MoonUI exposes as a size tier rather than as readable
-/// tokens: a settings popup that measures its content has to know how much room the box and its
-/// gap take before the label starts. Stated once here for the same reason [`POPUP_GROUP_INSET`]
-/// is — two popups measuring the same control with numbers of their own drift apart the first time
-/// either is nudged. MIRRORS MoonUI's `MoonCheckboxMetrics::base_for_size(Size::Small)`.
-pub(crate) const COMPACT_CHECKBOX_MARK: f32 = 16.0;
+/// The base checkbox supports Sm and Md only; geometry and text follow UI zoom at the caller.
+pub(crate) struct CheckboxMetrics {
+    pub(crate) mark: f32,
+    pub(crate) gap: f32,
+    pub(crate) font: f32,
+}
 
-/// Design-unit gap an `Sm` `MoonCheckbox` leaves between its box and its label.
-pub(crate) const COMPACT_CHECKBOX_GAP: f32 = 8.0;
-
-/// `Sm` `MoonCheckbox` label size before UI zoom.
+/// Resolves the active density to the same box, gap and font used by `MoonCheckbox`.
 ///
-/// MoonUI fixes a tier checkbox's text: it follows the UI zoom but not the Font slider. Size text
-/// that matches this label with `design::ui_px` and measure it with `design::ui_text_width_zoomed`,
-/// never through the font-scaled `text_px` / `ui_text_width`, which would add the slider's delta.
-pub(crate) const COMPACT_CHECKBOX_FONT: f32 = 14.0;
+/// Args:
+///     cx: Application context used to read the active density tier.
+///
+/// Returns:
+///     Unscaled metrics for use with [`design::ui_px`] and [`design::ui_text_width_zoomed`].
+pub(crate) fn checkbox_metrics(cx: &App) -> CheckboxMetrics {
+    let tokens = moon_ui::MoonTheme::active_tokens(cx);
+    let tier = tokens
+        .tier()
+        .nearest(&[moon_ui::MoonSize::Sm, moon_ui::MoonSize::Md]);
+    let control = tier.control_metrics();
+    CheckboxMetrics {
+        mark: if tier == moon_ui::MoonSize::Sm {
+            16.0
+        } else {
+            20.0
+        },
+        gap: control.gap,
+        font: control.font_size,
+    }
+}
 
-/// `Sm` `MoonCheckbox` label weight (medium), as GPUI's numeric font weight.
+/// `MoonCheckbox` label weight (medium), as GPUI's numeric font weight.
 pub(crate) const COMPACT_CHECKBOX_WEIGHT: f32 = 500.0;
 
 /// Opacity a compact `MoonCheckbox` fades its label to while disabled.
@@ -453,7 +464,6 @@ fn micro_frame(
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> MoonButton {
     MoonButton::new(id)
-        .size(MoonButtonSize::Micro)
         .width(width)
         .variant(variant)
         .tooltip(tip)
@@ -555,7 +565,6 @@ pub(crate) fn popup_close_button(
 ) -> impl IntoElement {
     MoonButton::new(id)
         .label("✕")
-        .size(MoonButtonSize::Micro)
         .variant(MoonButtonVariant::Ghost)
         .on_click(on_click)
         .render()
@@ -582,7 +591,6 @@ pub(crate) fn popup_apply_all_button(
     MoonButton::new(id)
         .label("⧉")
         .tooltip(tooltip)
-        .size(MoonButtonSize::Micro)
         .variant(MoonButtonVariant::Ghost)
         .on_click(on_click)
         .render()
@@ -613,7 +621,28 @@ pub(crate) fn popup_gear_trigger(
     MoonButton::new(id)
         .leading_icon(MoonButtonIconSlot::new("icons/settings.svg"))
         .tooltip(tooltip)
-        .size(MoonButtonSize::Micro)
+        .variant(if open {
+            MoonButtonVariant::Blue
+        } else {
+            MoonButtonVariant::Ghost
+        })
+        .selected(open)
+        .render()
+}
+
+/// Builds the ⚙ that opens a settings popup on a fixed-height chrome strip.
+///
+/// Same as [`popup_gear_trigger`] but pinned to `MoonSize::Xs` so it stays dense regardless of
+/// the app's density setting.
+pub(crate) fn popup_gear_trigger_dense(
+    id: impl Into<ElementId>,
+    tooltip: impl Into<SharedString>,
+    open: bool,
+) -> impl IntoElement {
+    MoonButton::new(id)
+        .leading_icon(MoonButtonIconSlot::new("icons/settings.svg"))
+        .tooltip(tooltip)
+        .size(MoonSize::Xs)
         .variant(if open {
             MoonButtonVariant::Blue
         } else {
@@ -716,7 +745,10 @@ pub(crate) fn pinned_scope_label(
         .border_1()
         .border_color(design::moon_alpha(p.border, 0.42))
         .font_family(design::mono())
-        .text_size(design::text_px(cx, design::ACTION_LABEL_BASE))
+        .text_size(design::ui_px(
+            cx,
+            design::button_tier(cx).control_metrics().font_size,
+        ))
         .text_color(rgb(design::chrome_label_color(p)))
         .child(div().flex_none().child(design::PINNED_SCOPE_GLYPH))
         .child(div().min_w_0().truncate().child(label))
@@ -817,11 +849,10 @@ pub(crate) fn footer_text_style(el: Div, weight: FooterWeight, color: u32, cx: &
 /// The container every panel's top band builds: one full-width row floored at
 /// [`design::action_control_h_px`].
 ///
-/// Every sibling band derives its height from the Action-size control it carries (Orders, Alerts,
-/// Core Status, Report and News all use the same chain with no explicit height), while the
-/// Detects band carries only a Micro gear ([`popup_gear_trigger`]) — so without this floor the
-/// Detects row would sit visibly shorter than every tab beside it, which is the defect this
-/// helper exists to remove.
+/// Every sibling band derives its height from the density-tier control it carries (Orders, Alerts,
+/// Core Status, Report and News all use the same chain with no explicit height). The Detects band
+/// carries only a gear ([`popup_gear_trigger`]) that follows the same tier, and this floor tracks
+/// that height so the row cannot sit shorter than every tab beside it.
 pub(crate) fn panel_band(cx: &App) -> Div {
     moon_ui::h_flex()
         .w_full()
@@ -883,7 +914,7 @@ pub fn detach_button(
     }
     MoonButton::new(SharedString::from(format!("detach-{name}")))
         .ghost()
-        .size(MoonButtonSize::Action)
+        .size(MoonSize::Sm)
         .label("⧉")
         .tooltip(rust_i18n::t!("dock.detach_hint").to_string())
         .on_click(move |_, window, app| {

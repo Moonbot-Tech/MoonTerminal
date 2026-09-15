@@ -20,8 +20,8 @@ use gpui::*;
 use moon_core::config::{ChartAction, TempBanSpan};
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant,
-    MoonContextMenuWindowExt as _, MoonMenuItem, MoonRect, MoonWindowExt as _,
+    MoonButton, MoonButtonSegment, MoonButtonVariant, MoonContextMenuWindowExt as _, MoonMenuItem,
+    MoonRect, MoonWindowExt as _,
 };
 use rust_i18n::t;
 
@@ -188,7 +188,6 @@ impl ChartPanel {
                                         ))
                                         .mono(true),
                                 )
-                                .size(MoonButtonSize::Micro)
                                 .variant(variant)
                                 .selected(selected)
                                 .disabled(!button.enabled)

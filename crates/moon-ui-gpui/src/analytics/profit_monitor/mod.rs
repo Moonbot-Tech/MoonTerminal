@@ -34,9 +34,8 @@ use moon_core::db::valuation::ValuationMode;
 use moon_core::db::{FailKind, ProfitMetric, ProfitUnit, ReadFail, SideFilter};
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize, MoonPalette,
-    MoonSegmentItem, MoonSegmentedControl, MoonVirtualListScrollHandle, MoonWindowFrame, h_flex,
-    v_flex,
+    MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonPalette, MoonSegmentItem,
+    MoonSegmentedControl, MoonVirtualListScrollHandle, MoonWindowFrame, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -1025,7 +1024,7 @@ impl ProfitMonitorView {
                 view.update(app, |this, cx| this.set_group(group, cx));
             })
             .render();
-        let period = period_dropdown(self.period, cx.entity());
+        let period = period_dropdown(self.period, cx.entity(), cx);
         let settings = self.settings_popover(settings_trigger(self.settings_open), palette, cx);
         let status_clock = h_flex()
             .flex_none()
@@ -1486,7 +1485,11 @@ fn group_title(group: GroupMode) -> String {
 ///
 /// Returns:
 ///     A compact dropdown carrying every period choice, grouped by family.
-fn period_dropdown(selected: MonitorPeriod, view: Entity<ProfitMonitorView>) -> MoonDropdown {
+fn period_dropdown(
+    selected: MonitorPeriod,
+    view: Entity<ProfitMonitorView>,
+    cx: &App,
+) -> MoonDropdown {
     let mut items: Vec<MoonMenuItem> = Vec::new();
     for group in MonitorPeriod::GROUPS {
         if !items.is_empty() {
@@ -1518,10 +1521,9 @@ fn period_dropdown(selected: MonitorPeriod, view: Entity<ProfitMonitorView>) -> 
         .label(selected.title())
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::Action)
+        .trigger_size(MoonButtonSize::density(cx))
         .fit_trigger_width(100.0, 150.0)
         .fit_menu_width(130.0, 190.0)
-        .menu_size(MoonMenuSize::Compact)
         .items(items)
 }
 

@@ -27,15 +27,15 @@ use gpui::{
 };
 use moon_core::config::layout::{EmptyBlock, EmptyPlaces, EmptySlot};
 use moon_ui::{
-    IndexPath, MoonButton, MoonButtonSize, MoonButtonVariant, MoonMenuSize, MoonPalette,
-    MoonSelect, MoonSelectEvent, MoonSelectItem, MoonSelectState, h_flex, v_flex,
+    IndexPath, MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonSelect,
+    MoonSelectEvent, MoonSelectItem, MoonSelectState, h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use super::{EmptyScreen, switch_of};
 use crate::chart_tabs::MainChartStack;
 use crate::design;
-use crate::panels::{COMPACT_CHECKBOX_FONT, POPUP_GROUP_GAP};
+use crate::panels::POPUP_GROUP_GAP;
 
 /// Gap between a caption and its control, and between two rows, in design units: the pitch a popup
 /// group packs its rows at, so these rows and the framed ones under them read as one list.
@@ -228,7 +228,6 @@ pub(super) fn block(
                 .child(
                     MoonButton::new(id("places-reset"))
                         .label(t!("crowd.settings.places_reset").to_string())
-                        .size(MoonButtonSize::Micro)
                         .variant(MoonButtonVariant::Ghost)
                         .tooltip(t!("crowd.settings.places_reset_tip").to_string())
                         .on_click(move |_, _window, app: &mut App| {
@@ -263,12 +262,15 @@ fn row(
         .items_center()
         .gap(design::ui_px(cx, ROW_GAP))
         .child(
-            // The face a compact checkbox gives its label — its size, soft text — so this row and
+            // The face a density-selected checkbox gives its label — its size, soft text — so this row and
             // the rule's switch under it read as one list rather than as a heading over a note.
             div()
                 .flex_1()
                 .min_w_0()
-                .text_size(design::ui_px(cx, COMPACT_CHECKBOX_FONT))
+                .text_size(design::ui_px(
+                    cx,
+                    crate::panels::common::checkbox_metrics(cx).font,
+                ))
                 .text_color(rgb(palette.text_soft))
                 .child(t!(block_label(block)).to_string()),
         )
@@ -278,9 +280,8 @@ fn row(
             div().w(design::font_w_px(cx, SELECT_WIDTH)).child(
                 MoonSelect::new(state)
                     .in_popover()
-                    .trigger_size(MoonButtonSize::Micro)
-                    .menu_width(design::font_w(cx, SELECT_WIDTH))
-                    .menu_size(MoonMenuSize::Compact),
+                    .trigger_size(MoonButtonSize::density(cx))
+                    .menu_width(design::font_w(cx, SELECT_WIDTH)),
             ),
         )
         .into_any_element()

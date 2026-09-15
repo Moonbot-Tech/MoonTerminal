@@ -46,13 +46,13 @@ use std::time::Duration;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonAlert, MoonBackgroundPolicy, MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton,
-    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonColorPicker, MoonColorPickerEvent,
-    MoonColorPickerState, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
-    MoonMenuSize, MoonPalette, MoonScrollbarVisibility, MoonSegmentItem, MoonSegmentedControl,
-    MoonSize, MoonTextArea, MoonTextAreaEvent, MoonTextAreaState, MoonTone, MoonTreeEvent,
-    MoonTreeItem, MoonTreeState, MoonVirtualList, MoonVirtualListScrollHandle, MoonWindowExt as _,
-    MoonWindowFrame, Root, h_flex, v_flex,
+    MoonAlert, MoonBackgroundPolicy, MoonBadge, MoonBadgeVariant, MoonButton, MoonButtonSize,
+    MoonButtonVariant, MoonCheckbox, MoonColorPicker, MoonColorPickerEvent, MoonColorPickerState,
+    MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonPalette,
+    MoonScrollbarVisibility, MoonSegmentItem, MoonSegmentedControl, MoonTextArea,
+    MoonTextAreaEvent, MoonTextAreaState, MoonTone, MoonTreeEvent, MoonTreeItem, MoonTreeState,
+    MoonVirtualList, MoonVirtualListScrollHandle, MoonWindowExt as _, MoonWindowFrame, Root,
+    h_flex, v_flex,
 };
 
 use crate::design::{moon, moon_alpha};

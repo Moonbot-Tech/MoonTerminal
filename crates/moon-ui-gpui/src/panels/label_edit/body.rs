@@ -15,7 +15,7 @@ use moon_core::config::{
 use moon_core::util::fmt::DeltaSign;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
-    MoonMenuSize, MoonPalette, MoonSize, MoonWindowExt as _, h_flex, v_flex,
+    MoonPalette, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -90,7 +90,6 @@ pub(super) fn dialog_body(state: &Entity<LabelEditState>, cx: &mut App) -> AnyEl
             MoonCheckbox::new("le-plate")
                 .label(t!("chart_labels.plate").to_string())
                 .checked(on)
-                .size(MoonSize::Sm)
                 .on_change(move |v: &bool, _w, cx| {
                     let v = *v;
                     write_row(&state, cx, |s| s.row.plate = v);
@@ -103,7 +102,6 @@ pub(super) fn dialog_body(state: &Entity<LabelEditState>, cx: &mut App) -> AnyEl
                 .label(t!("chart_labels.show_name").to_string())
                 .checked(on && named)
                 .disabled(!named)
-                .size(MoonSize::Sm)
                 .on_change(move |v: &bool, _w, cx| {
                     let v = *v;
                     write_row(&state, cx, |s| s.row.show_name = v);
@@ -186,10 +184,9 @@ fn dropdown_row(
                 .label(current.to_string())
                 .trigger_caret(true)
                 .trigger_variant(MoonButtonVariant::Soft)
-                .trigger_size(MoonButtonSize::Micro)
+                .trigger_size(MoonButtonSize::density(cx))
                 .trigger_width_scaled(84.0)
                 .menu_width_scaled(104.0)
-                .menu_size(MoonMenuSize::Compact)
                 .items(items),
         )
 }
@@ -214,7 +211,6 @@ fn caption_list(
             let state = state.clone();
             MoonButton::new(SharedString::from(format!("le-pick-{ix}")))
                 .label(t!(part.field.locale_key()).to_string())
-                .size(MoonButtonSize::Micro)
                 .width(design::font_w(cx, LIST_W - 4.0 * MICRO_W - 10.0))
                 .variant(if is_selected {
                     MoonButtonVariant::Soft
@@ -591,7 +587,6 @@ fn caption_settings(
             MoonCheckbox::new("le-bar")
                 .label(t!("chart_labels.menu.bars").to_string())
                 .checked(on)
-                .size(MoonSize::Sm)
                 .on_change(move |v: &bool, _w, cx| {
                     let v = *v;
                     write_row(&state, cx, |s| s.row.parts[selected].bar = v);
@@ -691,7 +686,6 @@ fn caption_settings(
             MoonCheckbox::new("le-value-only")
                 .label(t!("chart_labels.value_only").to_string())
                 .checked(on)
-                .size(MoonSize::Sm)
                 .on_change(move |v: &bool, _w, cx| {
                     let v = *v;
                     write_row(&state, cx, |s| {
@@ -748,7 +742,6 @@ fn caption_settings(
         MoonCheckbox::new("le-caption")
             .label(label.to_string())
             .checked(on)
-            .size(MoonSize::Sm)
             .on_change(move |v: &bool, _w, cx| {
                 let v = *v;
                 write_row(&state, cx, |s| {
@@ -760,7 +753,6 @@ fn caption_settings(
         let state = state.clone();
         MoonButton::new("le-style-reset")
             .label(t!("chart_labels.style_reset").to_string())
-            .size(MoonButtonSize::Micro)
             .variant(MoonButtonVariant::Ghost)
             .on_click(move |_, _w, cx: &mut App| {
                 write_row(&state, cx, |s| {

@@ -22,8 +22,8 @@ use moon_core::feed::CoreConfigState;
 use moon_core::session::CoreId;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonHotkeyInput,
-    MoonKbd, MoonKbdSize, MoonMenuItem, MoonMenuSize, MoonPalette, MoonSize, MoonTabItem,
-    MoonTabStrip, MoonText, MoonTooltip, MoonTooltipView, h_flex, rgba_from, v_flex,
+    MoonKbd, MoonMenuItem, MoonPalette, MoonTabItem, MoonTabStrip, MoonText, MoonTooltip,
+    MoonTooltipView, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -793,9 +793,8 @@ impl SettingsView {
         MoonDropdown::new(SharedString::from(id))
             .label(label)
             .trigger_caret(true)
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width(design::ui_value(cx, ROW_EDITOR_WIDTH))
-            .menu_size(MoonMenuSize::Compact)
     }
 
     /// Builds the part-count selector for `Split N` (Moonbot `Hotkeys.SplitParts`) — the parameter
@@ -851,7 +850,6 @@ impl SettingsView {
         let backend = self.backend.clone();
         let checkbox = MoonCheckbox::new("same-hotkeys-for-move")
             .checked(hotkeys.same_hotkeys_for_move)
-            .size(MoonSize::Sm)
             .on_change(move |value, _window, cx| {
                 backend.update(cx, |b, bcx| {
                     if let Some(p) = b.preview.as_mut() {
@@ -1079,12 +1077,10 @@ impl SettingsView {
                     .render(),
             )
             .child(
-                MoonKbd::new(shortcut::display(row.core_decoded))
-                    .size(MoonKbdSize::Compact)
-                    .outline(matches!(
-                        row.verdict,
-                        PullVerdict::Empty | PullVerdict::Unsupported
-                    )),
+                MoonKbd::new(shortcut::display(row.core_decoded)).outline(matches!(
+                    row.verdict,
+                    PullVerdict::Empty | PullVerdict::Unsupported
+                )),
             )
             .child(
                 div()

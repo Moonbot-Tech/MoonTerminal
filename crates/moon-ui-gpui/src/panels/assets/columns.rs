@@ -437,10 +437,9 @@ impl AssetsView {
             // the choice and the childless trigger are `design::COLUMN_SELECTOR_ICON`'s contract.
             .trigger_icon(design::COLUMN_SELECTOR_ICON)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width(design::glyph_btn_w(cx))
             .menu_width_scaled(170.0)
-            .menu_size(MoonMenuSize::Compact)
             .close_on_select(false)
             .item(
                 MoonMenuItem::with_key("col-all", t!("report.filter.all").to_string())

@@ -11,9 +11,7 @@ use moon_core::market::candles::{
     CANDLE_MODE_FILLED, CANDLE_MODE_OFF, CANDLE_MODE_OUTLINE, CANDLE_MODE_OUTLINE_IN_ZONE,
     CandleViewCfg,
 };
-use moon_ui::{
-    MoonCheckbox, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize, h_flex, v_flex,
-};
+use moon_ui::{MoonCheckbox, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::common::{LayoutPopupHost, StackSetting, seg_row};
@@ -108,7 +106,6 @@ fn flag_cb<T: CandlePopupHost>(
     MoonCheckbox::new(SharedString::from(format!("{id}-{suffix}")))
         .label(t!(label_key).to_string())
         .checked(checked)
-        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| {
             let v = *ch;
             write_cfg(&entity, app, |c| set(c, v));

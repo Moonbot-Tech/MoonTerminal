@@ -7,9 +7,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem,
-    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect,
-    MoonSelectorPill, MoonSelectorSegment, MoonTag, MoonWindowFrame, h_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonPalette,
+    MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect, MoonSelectorPill,
+    MoonSelectorSegment, MoonSize, MoonTag, MoonWindowFrame, h_flex,
 };
 use rust_i18n::t;
 
@@ -31,7 +31,7 @@ use crate::{Backend, design};
 fn gear_trigger() -> MoonButton {
     MoonButton::new("core-gear")
         .leading_icon(MoonButtonIconSlot::new("icons/settings-2.svg"))
-        .size(MoonButtonSize::Action)
+        .size(MoonSize::Sm)
         .variant(MoonButtonVariant::Panel)
         .tooltip(t!("core_settings.title").to_string())
 }
@@ -336,7 +336,7 @@ pub fn header(
                         .child(
                             MoonButton::new("terminal-update")
                                 .label(label)
-                                .size(MoonButtonSize::Micro)
+                                .size(MoonSize::Xs)
                                 .variant(variant)
                                 .loading(busy)
                                 .on_click(move |_, _window, cx| {
@@ -529,10 +529,10 @@ fn workspace_mode_selector(group: &str, backend: &Entity<Backend>, cx: &App) -> 
                 .label(label)
                 .trigger_caret(true)
                 .trigger_variant(MoonButtonVariant::Soft)
-                .trigger_size(MoonButtonSize::Action)
+                .trigger_size(MoonSize::Sm.into())
                 .trigger_width_scaled(MODE_TRIGGER_W)
                 .menu_width_scaled(MODE_MENU_W)
-                .menu_size(MoonMenuSize::Compact)
+                .menu_size(MoonSize::Xs)
                 .items(items),
         )
 }
@@ -897,7 +897,7 @@ fn core_selector(
         .content(
             MoonPopupMenu::new("header-core-menu")
                 .fit_width(180.0, 560.0)
-                .size(MoonMenuSize::Compact)
+                .size(MoonSize::Xs)
                 .max_height_ui(520.0)
                 .items(items)
                 .render(),

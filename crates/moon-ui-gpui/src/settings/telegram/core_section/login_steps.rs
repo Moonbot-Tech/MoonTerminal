@@ -5,8 +5,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputState,
-    MoonPalette, MoonSize, MoonWindowExt as _, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputState, MoonPalette,
+    MoonWindowExt as _, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -471,7 +471,6 @@ impl SettingsView {
                 .label(t!("telegram_core.terms_accept").to_string())
                 .checked(accepted)
                 .mono(false)
-                .size(MoonSize::Sm)
                 .on_change(cx.listener(move |this, ch: &bool, _, cx| {
                     this.telegram.core.terms_accepted = if *ch {
                         Some((core, terms_for_click.clone()))
@@ -753,7 +752,6 @@ impl SettingsView {
                         .child(
                             MoonButton::new("telegram-core-logout-no")
                                 .outline()
-                                .size(MoonButtonSize::Action)
                                 .mono(false)
                                 .label(format!("  {}  ", t!("dialogs.no")))
                                 .on_click(move |_, window, cx| {
@@ -763,7 +761,6 @@ impl SettingsView {
                         )
                         .child(
                             MoonButton::new("telegram-core-logout-yes")
-                                .size(MoonButtonSize::Action)
                                 .variant(MoonButtonVariant::Danger)
                                 .mono(false)
                                 .label(format!("  {}  ", t!("dialogs.yes")))

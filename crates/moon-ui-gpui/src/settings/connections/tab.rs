@@ -10,8 +10,8 @@ use std::sync::Arc;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown,
-    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonScrollbarVisibility,
-    MoonSelect, MoonSize, MoonTooltipView, MoonVirtualList, StyledExt, h_flex, v_flex,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonScrollbarVisibility, MoonSelect,
+    MoonTooltipView, MoonVirtualList, StyledExt, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -189,7 +189,7 @@ pub(super) fn apply_group_transport(
 ///
 /// Returns:
 ///     A compact "Mode" dropdown that applies the picked mode to every member on selection.
-fn bulk_proto_dropdown(weak: &WeakEntity<SettingsView>, name: &str) -> impl IntoElement {
+fn bulk_proto_dropdown(weak: &WeakEntity<SettingsView>, name: &str, cx: &App) -> impl IntoElement {
     let weak_select = weak.clone();
     let group_name = name.to_string();
     // `Option<TransportVersion>` with no single CURRENT value: a group's members may already
@@ -237,10 +237,9 @@ fn bulk_proto_dropdown(weak: &WeakEntity<SettingsView>, name: &str) -> impl Into
                 .label(t!("conn.bulk_mode_btn").to_string())
                 .trigger_caret(true)
                 .trigger_variant(MoonButtonVariant::Neutral)
-                .trigger_size(MoonButtonSize::Micro)
+                .trigger_size(MoonButtonSize::density(cx))
                 .trigger_width_scaled(58.0)
                 .menu_width_scaled(96.0)
-                .menu_size(MoonMenuSize::Compact)
                 .items(items),
         )
 }
@@ -304,7 +303,6 @@ fn group_header_row(
         .trigger(
             MoonButton::new(SharedString::from(format!("pick-{name}")))
                 .outline()
-                .size(MoonButtonSize::Micro)
                 .width(54.0)
                 .label(t!("conn.icon_btn").to_string())
                 .render(),
@@ -329,7 +327,6 @@ fn group_header_row(
         .child(
             MoonCheckbox::new(SharedString::from(format!("grp-{name}")))
                 .checked(active)
-                .size(MoonSize::Sm)
                 .on_change({
                     let weak = weak.clone();
                     move |ch: &bool, _window, cx| {
@@ -379,7 +376,6 @@ fn group_header_row(
                 .child(
                     MoonButton::new(SharedString::from(format!("eye-{name}")))
                         .ghost()
-                        .size(MoonButtonSize::Micro)
                         .width(34.0)
                         // The label read "win" -- an untranslated abbreviation of an action this
                         // button does NOT perform: it opens the group's window
@@ -405,12 +401,11 @@ fn group_header_row(
                         })
                         .render(),
                 )
-                .child(bulk_proto_dropdown(weak, name))
+                .child(bulk_proto_dropdown(weak, name, cx))
                 .child(popover)
                 .child(
                     MoonButton::new(SharedString::from(format!("addgrp-{name}")))
                         .outline()
-                        .size(MoonButtonSize::Micro)
                         .width(56.0)
                         .label(format!("+ {}", t!("conn.add_core_short")))
                         .on_click({
@@ -505,7 +500,6 @@ fn icon_picker_grid(
                 .child(
                     MoonButton::new("pick-close")
                         .ghost()
-                        .size(MoonButtonSize::Micro)
                         .width(24.0)
                         .label("x")
                         .on_click(move |_, _, cx| {
@@ -549,9 +543,8 @@ impl SettingsView {
             .child(
                 div().w(px(260.0)).child(
                     MoonSelect::new(&self.mode)
-                        .trigger_size(MoonButtonSize::Action)
-                        .menu_width(design::font_w(cx, 260.0))
-                        .menu_size(MoonMenuSize::Compact),
+                        .trigger_size(MoonButtonSize::density(cx))
+                        .menu_width(design::font_w(cx, 260.0)),
                 ),
             )
     }
@@ -577,9 +570,8 @@ impl SettingsView {
             .child(
                 div().w(px(260.0)).child(
                     MoonSelect::new(&self.core_sort)
-                        .trigger_size(MoonButtonSize::Action)
-                        .menu_width(design::font_w(cx, 260.0))
-                        .menu_size(MoonMenuSize::Compact),
+                        .trigger_size(MoonButtonSize::density(cx))
+                        .menu_width(design::font_w(cx, 260.0)),
                 ),
             )
     }

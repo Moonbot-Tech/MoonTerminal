@@ -17,9 +17,7 @@ use std::rc::Rc;
 
 use gpui::*;
 use moon_core::config::ArbViewCfg;
-use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonWindowExt as _, h_flex,
-};
+use moon_ui::{MoonButton, MoonButtonVariant, MoonPalette, MoonWindowExt as _, h_flex};
 use rust_i18n::t;
 
 use crate::design::{self, moon};
@@ -146,7 +144,6 @@ fn dialog_footer(state: Entity<ArbEditState>, p: MoonPalette) -> AnyElement {
         .child(
             MoonButton::new("arb-reset")
                 .ghost()
-                .size(MoonButtonSize::Micro)
                 .label(t!("arb.reset").to_string())
                 .variant(MoonButtonVariant::Ghost)
                 .on_click(move |_, _w, cx: &mut App| {

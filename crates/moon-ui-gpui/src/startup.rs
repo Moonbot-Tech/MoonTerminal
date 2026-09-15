@@ -247,12 +247,35 @@ pub(crate) fn moon_theme_config_for_mode(mode: UiThemeMode) -> MoonThemeConfig {
     theme
 }
 
-pub(crate) fn moon_theme_config_for(cfg: &AppConfig) -> MoonThemeConfig {
-    moon_theme_config_for_mode(cfg.ui_theme_mode)
-        .with_font_delta(cfg.ui_font_delta)
-        .with_ui_scale(cfg.ui_scale)
+/// Map persisted density onto MoonUI's tier and remaining non-tier text metrics.
+///
+/// Standard retains today's +3 logical pixels: every non-tier text metric still runs through
+/// font_delta, so dropping it would shrink existing users' text on upgrade. The login window
+/// and shell both use this mapping, keeping their presentation identical.
+pub(crate) fn moon_theme_config_for_presentation(
+    mode: UiThemeMode,
+    density: moon_core::config::UiDensity,
+    ui_scale: f32,
+) -> MoonThemeConfig {
+    use moon_core::config::UiDensity;
+    use moon_ui::MoonSize;
+    let (tier, font_delta) = match density {
+        UiDensity::Compact => (MoonSize::Xs, 0.0),
+        UiDensity::Standard => (MoonSize::Sm, 3.0),
+        UiDensity::Large => (MoonSize::Md, 6.0),
+    };
+    moon_theme_config_for_mode(mode)
+        .with_tier(tier)
+        .with_font_delta(font_delta)
+        .with_ui_scale(ui_scale)
 }
 
+/// Return the theme for the full configuration, including density and UI zoom.
+pub(crate) fn moon_theme_config_for(cfg: &AppConfig) -> MoonThemeConfig {
+    moon_theme_config_for_presentation(cfg.ui_theme_mode, cfg.ui_density, cfg.ui_scale)
+}
+
+/// Install the configured palette, density and zoom into the active MoonUI theme.
 pub(crate) fn install_moon_theme_for_config(cfg: &AppConfig, cx: &mut App) {
     MoonTheme::install_config(moon_theme_config_for(cfg), cx);
 }

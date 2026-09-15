@@ -217,7 +217,6 @@ impl StrategiesView {
                                 h_flex().ml_auto().flex_none().items_center().child(
                                     MoonButton::new("expand-all")
                                         .ghost()
-                                        .size(MoonButtonSize::Micro)
                                         .leading_icon(MoonButtonIconSlot::caret(
                                             MoonDisclosureDirection::DownUp,
                                             !collapsed,
@@ -407,10 +406,9 @@ impl StrategiesView {
             .label(current)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .fit_trigger_width(96.0, 116.0)
             .menu_width_scaled(180.0)
-            .menu_size(MoonMenuSize::Compact)
             .menu_max_height_ui(240.0)
             .items(items)
             .into_any_element()
@@ -445,10 +443,9 @@ impl StrategiesView {
             .label(current)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .fit_trigger_width(96.0, 128.0)
             .menu_width_scaled(140.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
             .into_any_element()
     }
@@ -520,12 +517,11 @@ impl StrategiesView {
             .label(current)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             // Roomier than its neighbours at both ends: a venue caption is a brand plus a market
             // kind ("Binance Quarterly"), and a HIP-3 core appends its DEX name on top of that.
             .fit_trigger_width(96.0, 150.0)
             .fit_menu_width(160.0, 320.0)
-            .menu_size(MoonMenuSize::Compact)
             .menu_max_height_ui(240.0)
             .items(items)
             .into_any_element()
@@ -571,10 +567,10 @@ impl StrategiesView {
         // The two move buttons are counted separately below because they never take a label: they
         // cost their own width and one group gap each in BOTH densities, and leaving them out of
         // this sum would let the labelled state be chosen for a row that no longer fits it.
-        let action_icon_width =
-            (design::font_value(cx, design::ACTION_LABEL_BASE) + 1.0).clamp(10.0, 14.0);
-        // Action size ships with pad_x = 0. Labeled footer buttons opt into the same 7-unit
-        // inset used by other Action labels so text does not sit on the border.
+        let action_icon_width = design::action_icon_px(cx);
+        // Labeled footer buttons set `.padding_x(7.0)`, which replaces the tier's pad_x rather
+        // than adding to it — so this 7-unit inset is the pad they actually draw, not a second
+        // copy on top of Sm/Md/Lg's 8/12/16.
         let labeled_pad = design::ui_value(cx, 7.0) * 2.0 * 5.0;
         let fixed_width = 5.0 * action_icon_width
             + design::ui_value(cx, 5.0 * 6.0 + 6.0 * design::CHROME_GAP + 16.0)
@@ -593,7 +589,6 @@ impl StrategiesView {
         let icon_width = design::glyph_btn_w(cx);
         let mut start = MoonButton::new("start-checked")
             .primary()
-            .size(MoonButtonSize::Action)
             .leading_icon(MoonButtonIconSlot::new("icons/play.svg"))
             .tooltip(format!("▶ {start_tip}"))
             .on_click({
@@ -604,7 +599,6 @@ impl StrategiesView {
             });
         let mut stop = MoonButton::new("stop-checked")
             .outline()
-            .size(MoonButtonSize::Action)
             .leading_icon(MoonButtonIconSlot::new("icons/pause.svg"))
             .tooltip(format!("■ {stop_tip}"))
             .on_click({

@@ -9,8 +9,8 @@ use gpui::*;
 use moon_core::feed::{OrderRow, OrderStopsForm, StopGroupEdit, TakeProfitEdit, VStopEdit};
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputState,
-    MoonNotification, MoonPalette, MoonSize, MoonTone, MoonWindowExt as _, h_flex, v_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputState, MoonNotification,
+    MoonPalette, MoonTone, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 

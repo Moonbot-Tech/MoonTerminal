@@ -11,9 +11,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonIconSlot, MoonButtonSize,
-    MoonContextMenuWindowExt as _, MoonMenuItem, MoonPalette, MoonTone, MoonWindowExt as _, h_flex,
-    v_flex,
+    MoonBadge, MoonBadgeVariant, MoonButton, MoonButtonIconSlot, MoonContextMenuWindowExt as _,
+    MoonMenuItem, MoonPalette, MoonTone, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -857,7 +856,6 @@ impl StrategiesView {
                 let inner: AnyElement = if f.badge {
                     MoonBadge::new(f.text)
                         .variant(MoonBadgeVariant::Soft)
-                        .size(MoonBadgeSize::Status)
                         .tone(f.tone)
                         .render()
                         .into_any_element()
@@ -986,7 +984,6 @@ impl StrategiesView {
     ) -> AnyElement {
         let mut btn = MoonButton::new("strat-version-restore")
             .outline()
-            .size(MoonButtonSize::Micro)
             .leading_icon(MoonButtonIconSlot::new("icons/undo-2.svg"))
             .tooltip(t!("strat.version_restore_tip").to_string())
             .on_click(cx.listener(move |this, _, _, cx| this.stage_version_into_current(vf, cx)));

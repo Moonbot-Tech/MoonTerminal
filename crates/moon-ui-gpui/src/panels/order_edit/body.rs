@@ -168,7 +168,6 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
                 MoonCheckbox::new(SharedString::from(id))
                     .label(label)
                     .checked(checked)
-                    .size(MoonSize::Sm)
                     .on_change(move |ch: &bool, _w, app| {
                         let on = *ch;
                         st.update(app, |s, cx| {
@@ -306,7 +305,6 @@ pub(super) fn dialog_footer(state: Entity<OrderEditState>, p: MoonPalette) -> An
         .child(
             MoonButton::new("oe-cancel")
                 .ghost()
-                .size(MoonButtonSize::Micro)
                 .label(t!("dialogs.cancel").to_string())
                 .on_click(move |_, window, cx| {
                     window.close_dialog(cx);
@@ -315,7 +313,6 @@ pub(super) fn dialog_footer(state: Entity<OrderEditState>, p: MoonPalette) -> An
         )
         .child(
             MoonButton::new("oe-ok")
-                .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Blue)
                 .label("OK")
                 .on_click(move |_, window, cx| match apply(&ok_state, cx) {

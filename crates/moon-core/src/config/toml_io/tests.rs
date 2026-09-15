@@ -1,4 +1,4 @@
-use super::super::schema::{SettingsFile, default_ui_font_delta, default_ui_scale};
+use super::super::schema::{SettingsFile, default_ui_scale};
 use super::{ConfigLoad, load_or_default, load_or_default_status};
 use std::path::{Path, PathBuf};
 
@@ -27,11 +27,6 @@ fn an_absent_file_yields_the_schema_defaults_not_zeroes() {
         cfg.ui_scale,
         default_ui_scale(),
         "an absent settings.toml must load the schema default scale, not f32::default()"
-    );
-    assert_eq!(
-        cfg.ui_font_delta,
-        default_ui_font_delta(),
-        "an absent settings.toml must load the schema default font delta, not f32::default()"
     );
 }
 

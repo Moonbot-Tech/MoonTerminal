@@ -20,8 +20,8 @@ mod widgets;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonInputState, MoonPalette,
-    MoonSize, MoonSliderState, MoonTabItem, MoonTabStrip, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonInputState, MoonPalette, MoonSliderState,
+    MoonTabItem, MoonTabStrip, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -324,7 +324,6 @@ fn expert_switch(ctx: &TabCtx<'_>, view: &Entity<Shell>, cx: &App) -> impl IntoE
                 .label(t!("core_settings.expert").to_string())
                 .description(t!("core_settings.expert_hint").to_string())
                 .checked(checked)
-                .size(MoonSize::Sm)
                 .on_change(move |value, window, app| {
                     if !*value {
                         return;
@@ -362,7 +361,6 @@ fn action_row(
         let group = group.to_string();
         MoonButton::new("core-restart")
             .label(t!("core_settings.restart").to_string())
-            .size(MoonButtonSize::Action)
             .variant(MoonButtonVariant::Blue)
             .padding_x(12.0)
             .on_click(move |_, _w, app| {
@@ -394,7 +392,6 @@ fn action_row(
         } else {
             t!("core_settings.cancel_all").to_string()
         })
-        .size(MoonButtonSize::Action)
         .variant(MoonButtonVariant::Danger)
         .selected(cancel_confirm)
         .padding_x(12.0)
@@ -443,7 +440,6 @@ fn footer(view: &Entity<Shell>, cx: &App) -> impl IntoElement {
         .child(
             MoonButton::new("core-settings-cancel")
                 .label(t!("core_settings.cancel").to_string())
-                .size(MoonButtonSize::Action)
                 .variant(MoonButtonVariant::Soft)
                 .padding_x(14.0)
                 .on_click(move |_, _w, app| {
@@ -454,7 +450,6 @@ fn footer(view: &Entity<Shell>, cx: &App) -> impl IntoElement {
         .child(
             MoonButton::new("core-settings-ok")
                 .label(t!("core_settings.ok").to_string())
-                .size(MoonButtonSize::Action)
                 .variant(MoonButtonVariant::Blue)
                 .padding_x(18.0)
                 .on_click(move |_, _w, app| {

@@ -16,12 +16,18 @@ fn graphite_startup_mapping_installs_the_graphite_dark_theme() {
 }
 
 /// Catches `startup/unlock.rs:install_login_theme` returning to a separate two-arm mapping.
-/// Login and the running application must use one theme-mapping authority for every mode.
+/// Login and the running application must share mode, density and zoom presentation mapping.
 #[test]
 fn login_theme_reuses_the_application_theme_mapping_for_all_three_modes() {
     let unlock = code_only(&read_src("startup/unlock.rs"));
     let install = braced_body(&unlock, "fn install_login_theme(cx: &mut App)");
-    assert!(install.contains("moon_theme_config_for_mode(prefs.ui_theme_mode)"));
+    assert!(install.contains("moon_theme_config_for_presentation("));
+    for preference in ["prefs.ui_theme_mode", "prefs.ui_density", "prefs.ui_scale"] {
+        assert!(install.contains(preference));
+    }
+    let startup = code_only(&read_src("startup.rs"));
+    let application = braced_body(&startup, "pub(crate) fn moon_theme_config_for(cfg:");
+    assert!(application.contains("moon_theme_config_for_presentation("));
     assert!(!install.contains("UiThemeMode::Light => moon_ui::MoonThemeConfig::moon_light()"));
 }
 

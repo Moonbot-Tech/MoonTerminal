@@ -168,8 +168,8 @@ fn brand_cuts_match_their_geometry_and_scheme() {
 // `theme_contract` toggle-tone check instead).
 
 use super::{CHROME_RULE_H, HEADER_TOP_H, TOOLBAR_H, chrome_toggle_tone, readout_color};
-use moon_core::config::{UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN};
-use moon_ui::{MoonPalette, MoonThemeTokens};
+use moon_core::config::{UiDensity, UiThemeMode};
+use moon_ui::MoonPalette;
 
 /// `design::readout_color` is the ONE place a toolbar readout decides muted-vs-present.
 ///
@@ -198,13 +198,13 @@ fn readout_color_is_muted_when_absent_and_full_strength_when_present() {
 }
 
 /// `CHROME_RULE_H` must stay strictly under the shorter of the header and toolbar bands at EVERY
-/// supported font delta (`UI_FONT_DELTA_MIN..=UI_FONT_DELTA_MAX`), or the seam
+/// density-derived font delta, or the seam
 /// `design::chrome_divider` draws paints outside the chrome strip and over the dock border below
 /// it — and since `chrome_divider` has ~11 consumers app-wide, that lands in every one of them at
 /// once.
 ///
 /// Breakage this pins: raising `CHROME_RULE_H` to make the seam more visible without checking the
-/// narrowest band (at `UI_FONT_DELTA_MIN` both bands are 32px; the token is 20).
+/// narrowest band (at Compact density both bands are 32px; the token is 20).
 ///
 /// Computed directly against `MoonThemeTokens::fit_height` rather than through
 /// `design::header_height`/`design::toolbar_height`, because those two need a live `App` this
@@ -213,10 +213,11 @@ fn readout_color_is_muted_when_absent_and_full_strength_when_present() {
 /// approximation.
 #[test]
 fn chrome_rule_h_stays_under_both_chrome_bands_at_every_font_delta() {
-    let mut tokens = MoonThemeTokens::default();
-    let mut delta = UI_FONT_DELTA_MIN;
-    while delta <= UI_FONT_DELTA_MAX {
-        tokens.scale.font_delta = delta as f32;
+    for density in [UiDensity::Compact, UiDensity::Standard, UiDensity::Large] {
+        let tokens =
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, density, 1.0)
+                .dark;
+        let delta = tokens.scale.font_delta;
         let header = tokens.fit_height(HEADER_TOP_H, 14.0, 9.0);
         let toolbar = tokens.fit_height(TOOLBAR_H, 13.0, 9.5);
         assert!(
@@ -224,7 +225,6 @@ fn chrome_rule_h_stays_under_both_chrome_bands_at_every_font_delta() {
             "font delta {delta}: CHROME_RULE_H {CHROME_RULE_H} must stay under header {header} \
              and toolbar {toolbar}"
         );
-        delta += 1;
     }
 }
 
@@ -281,4 +281,43 @@ fn the_font_inverse_lands_on_the_size_it_was_asked_for() {
 #[test]
 fn a_degenerate_scale_answers_the_target_itself() {
     assert_eq!(invert_font_scale(12.0, 12.0, 14.0), 14.0);
+}
+
+// --- MoonButton density tier: dense strips vs ordinary rows ------------------------------------
+
+/// `design::micro_control_h_value` is PINNED to `MoonSize::Xs` while `design::action_control_h_value`
+/// FOLLOWS the app's density tier through [`super::button_tier`] — the whole point of splitting a
+/// dense strip's height from an ordinary control row's.
+///
+/// Breakage this pins: swapping the two helpers' bodies. That inversion — dense strips growing
+/// with density while ordinary rows stop growing — is the single most damaging way this goal can
+/// be silently undone, and nothing else in either repo catches it.
+#[gpui::test]
+fn micro_control_h_value_stays_pinned_while_action_follows_density(cx: &mut gpui::TestAppContext) {
+    for (density, expected_action) in [
+        (UiDensity::Compact, 20.0),
+        (UiDensity::Standard, 24.0),
+        (UiDensity::Large, 32.0),
+    ] {
+        cx.update(|cx| {
+            moon_ui::MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, density, 1.0),
+                cx,
+            );
+        });
+        let (micro, action) = cx.update(|cx| {
+            (
+                super::micro_control_h_value(cx),
+                super::action_control_h_value(cx),
+            )
+        });
+        assert_eq!(
+            micro, 20.0,
+            "{density:?}: micro_control_h_value must stay pinned to MoonSize::Xs, got {micro}"
+        );
+        assert_eq!(
+            action, expected_action,
+            "{density:?}: action_control_h_value must follow the density tier, got {action}"
+        );
+    }
 }

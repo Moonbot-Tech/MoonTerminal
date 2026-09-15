@@ -3,9 +3,9 @@
 
 use super::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDataCell, MoonDataRow,
-    MoonDataTable, MoonDataTableColumn, MoonDropdown, MoonMenuSize, MoonPopover,
-    MoonPopoverPlacement, MoonSize, MoonTone, h_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonDataCell, MoonDataRow, MoonDataTable,
+    MoonDataTableColumn, MoonDropdown, MoonPopover, MoonPopoverPlacement, MoonSize, MoonTone,
+    h_flex,
 };
 use rust_i18n::t;
 
@@ -242,7 +242,6 @@ fn alert_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
             MoonCheckbox::new(SharedString::from(format!("al-arm-{core}-{id}")))
                 .checked(row.armed)
                 .disabled(!editable)
-                .size(MoonSize::Sm)
                 .on_change(move |on: &bool, _w, app| {
                     let (on, market) = (*on, market.clone());
                     ctx.commit_core(app, core, move |b| {
@@ -319,10 +318,9 @@ fn strategy_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
         .label(row.strategy.clone())
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::Action)
+        .trigger_size(MoonSize::Sm.into())
         .trigger_width_scaled(150.0)
         .menu_width_scaled(220.0)
-        .menu_size(MoonMenuSize::Compact)
         .items(items)
         .into_any_element()
 }
@@ -364,7 +362,7 @@ fn actions_cell(row: &FigRow, ctx: &RowCtx, app: &mut App) -> AnyElement {
         .child(
             MoonButton::new(SharedString::from(format!("al-del-{core}-{id}")))
                 .label("✕")
-                .size(MoonButtonSize::Micro)
+                .size(MoonSize::Xs)
                 .variant(MoonButtonVariant::Ghost)
                 .tooltip(delete_tip)
                 .on_click(move |_, _w, app| {
@@ -394,7 +392,7 @@ fn settings_popover(
         target.core, target.id
     )))
     .label("⚙")
-    .size(MoonButtonSize::Micro)
+    .size(MoonSize::Xs)
     .variant(MoonButtonVariant::Ghost)
     .tooltip(t!("alerts.settings").to_string())
     .render();

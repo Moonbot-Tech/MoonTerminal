@@ -900,9 +900,18 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
     let measured_width = code_only(braced_body(&settings, "fn settings_content_width("));
     let popup_measurement = code_only(braced_body(&settings, "fn popup_text_width("));
     assert!(popup_measurement.contains("design::ui_text_width("));
-    assert!(measured_width.contains("COMPACT_CHECKBOX_MARK + COMPACT_CHECKBOX_GAP"));
+    assert!(measured_width.contains("checkbox_metrics(cx).mark"));
+    assert!(measured_width.contains("checkbox_metrics(cx).gap"));
     assert!(measured_width.contains("strat.settings.text_step"));
-    assert!(measured_width.contains("TEXT_STEP_BUTTON_W * 2.0"));
+    assert!(measured_width.contains(".tier()"));
+    assert!(measured_width.contains(".nearest(&[MoonSize::Xs, MoonSize::Sm, MoonSize::Md])"));
+    assert!(measured_width.contains("tier.control_metrics().height"));
+    // The reserve is the tier's two square buttons plus the ratio-derived value cell plus the
+    // density checkbox gap, all under one `tokens.ui(..)`; pinned piecewise so rustfmt's line
+    // breaking cannot red this contract.
+    assert!(measured_width.contains("tokens.ui(height * 2.0"));
+    assert!(measured_width.contains("+ (height * ratio).round()"));
+    assert!(measured_width.contains("+ crate::panels::common::checkbox_metrics(cx).gap)"));
     assert!(measured_width.contains("popup_group_inset_px(cx)"));
     assert!(!settings.contains("const CONTENT_WIDTH"));
     for tuner_symbol in [
@@ -938,7 +947,7 @@ fn strategy_footer_is_one_atomic_action_row() {
     // still come from measuring the CURRENT locale and staged text, never from a stored constant.
     let pane_cache = read_src("strategies/tree/pane_cache.rs");
     let measured = code_only(braced_body(&pane_cache, "fn footer_label_width("));
-    assert!(measured.contains("design::ui_text_width("));
+    assert!(measured.contains("design::ui_text_width_zoomed("));
     assert!(
         measured.contains("t!(\"strat.staged\""),
         "the staged label is part of the width the footer collapses against"
@@ -957,7 +966,15 @@ fn strategy_footer_is_one_atomic_action_row() {
     let selection = code_only(braced_body(&ui, "pub(super) fn selection_toolbar("));
     assert!(!selection.contains("v_flex()") && !selection.contains(".flex_wrap()"));
     assert!(!selection.contains("176.0") && !selection.contains("MoonButtonSize::Micro"));
-    assert!(selection.matches("MoonButtonSize::Action").count() >= 3);
+    assert!(
+        !selection.contains(".size("),
+        "the selection toolbar's buttons must inherit the app's density tier, never pin one \
+         back explicitly"
+    );
+    assert!(
+        selection.matches("MoonButton::new(\"sel-").count() >= 3,
+        "the footer's selection toolbar must still build at least three same-family controls"
+    );
     for icon in ["icons/copy.svg", "icons/inbox.svg", "icons/delete.svg"] {
         assert!(selection.contains(icon), "missing {icon}");
     }

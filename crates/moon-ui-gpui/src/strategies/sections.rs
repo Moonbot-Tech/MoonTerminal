@@ -276,7 +276,6 @@ impl StrategiesView {
                     h_flex().ml_auto().flex_none().child(
                         MoonBadge::new(total.to_string())
                             .variant(MoonBadgeVariant::Soft)
-                            .size(MoonBadgeSize::Status)
                             .tone(MoonTone::Muted)
                             .render(),
                     ),
@@ -324,7 +323,6 @@ impl StrategiesView {
                         h_flex().ml_auto().flex_none().child(
                             MoonBadge::new(n.to_string())
                                 .variant(MoonBadgeVariant::Soft)
-                                .size(MoonBadgeSize::Status)
                                 .tone(MoonTone::Muted)
                                 .render(),
                         ),

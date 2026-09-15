@@ -24,8 +24,7 @@ use moon_core::feed::{CoreProblem, CoreProblemCategory};
 use crate::controls::ellipsize;
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDataCell, MoonDataRow, MoonDataTable,
-    MoonDataTableColumn,
+    MoonButton, MoonButtonVariant, MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn,
 };
 
 use super::*;
@@ -407,7 +406,6 @@ fn action_button(
 ) -> impl IntoElement {
     MoonButton::new(id)
         .label(label)
-        .size(MoonButtonSize::Micro)
         .variant(MoonButtonVariant::Panel)
         .disabled(refusal.is_some())
         .tooltip(refusal.unwrap_or(tip))

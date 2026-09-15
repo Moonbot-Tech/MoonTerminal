@@ -1,40 +1,38 @@
-use super::{font_delta_text, parse_font_delta};
+//! Density presentation and zoom-caption regressions for the General tab.
 
+use super::zoom_text;
+use moon_core::config::{UiDensity, UiThemeMode};
+use moon_ui::{MoonSize, MoonTheme};
+
+/// Catches removing percentage conversion or leaking floating step noise into zoom captions.
 #[test]
-fn text_is_integer_canonical() {
-    assert_eq!(font_delta_text(2.0), "2");
-    assert_eq!(font_delta_text(-2.0), "-2");
-    assert_eq!(font_delta_text(0.0), "0");
-    assert_eq!(font_delta_text(-0.0), "0"); // No negative-zero representation.
-    assert_eq!(font_delta_text(2.6), "3"); // Rounded to the integer step.
-    assert_eq!(font_delta_text(2.4), "2");
+fn zoom_captions_show_percentages_at_endpoints_and_steps() {
+    for (scale, text) in [(0.75, "75%"), (1.0, "100%"), (1.05, "105%"), (1.50, "150%")] {
+        assert_eq!(zoom_text(scale), text);
+    }
 }
 
+/// Catches omitting density from theme construction or losing the +3 Standard text adjustment.
+/// The installed tokens must keep existing 10px text at 13px while zoom changes geometry only.
 #[test]
-fn parse_rounds_and_clamps() {
-    assert_eq!(parse_font_delta("3"), Some(3.0));
-    assert_eq!(parse_font_delta("2.6"), Some(3.0)); // Rounded to the integer step.
-    assert_eq!(parse_font_delta("2.4"), Some(2.0));
-    assert_eq!(parse_font_delta("2,4"), Some(2.0)); // A comma is accepted as the decimal point.
-    assert_eq!(parse_font_delta("+4"), Some(4.0));
-    assert_eq!(parse_font_delta("  5  "), Some(5.0)); // trim
-    assert_eq!(parse_font_delta("10"), Some(6.0)); // Clamped at the upper bound.
-    assert_eq!(parse_font_delta("-9"), Some(-2.0)); // Clamped at the lower bound.
-}
-
-#[test]
-fn parse_rejects_garbage_and_nonfinite() {
-    assert_eq!(parse_font_delta(""), None);
-    assert_eq!(parse_font_delta("-"), None); // Incomplete input.
-    assert_eq!(parse_font_delta("abc"), None);
-    assert_eq!(parse_font_delta("nan"), None); // NaN must not reach the configuration.
-    assert_eq!(parse_font_delta("inf"), None); // Infinity must not reach it either.
-}
-
-#[test]
-fn parse_normalizes_negative_zero() {
-    // Normalize "-0" to canonical +0.0 so IEEE negative zero does not reach settings.toml.
-    let v = parse_font_delta("-0").unwrap();
-    assert_eq!(v, 0.0);
-    assert!(v.is_sign_positive());
+fn density_reaches_both_theme_modes_without_zooming_text_twice() {
+    for mode in [UiThemeMode::Dark, UiThemeMode::Graphite, UiThemeMode::Light] {
+        for (density, tier, text_px) in [
+            (UiDensity::Compact, MoonSize::Xs, 10.0),
+            (UiDensity::Standard, MoonSize::Sm, 13.0),
+            (UiDensity::Large, MoonSize::Md, 16.0),
+        ] {
+            let theme = MoonTheme::from_config(crate::startup::moon_theme_config_for_presentation(
+                mode, density, 1.25,
+            ));
+            let tokens = if mode.is_light() {
+                &theme.config.light
+            } else {
+                &theme.config.dark
+            };
+            assert_eq!(tokens.tier(), tier);
+            assert_eq!(tokens.font(10.0), text_px);
+            assert_eq!(tokens.ui(20.0), 25.0);
+        }
+    }
 }

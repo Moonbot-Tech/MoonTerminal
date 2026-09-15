@@ -17,7 +17,7 @@ mod tests;
 use gpui::*;
 use moon_ui::{
     MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput, MoonInputEvent,
-    MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonSize, h_flex,
+    MoonInputState, MoonMenuItem, MoonPalette, h_flex,
 };
 use rust_i18n::t;
 use std::cmp::Ordering;
@@ -441,7 +441,6 @@ impl AnalyticsView {
                 div().font_family(design::ui_font()).child(
                     MoonCheckbox::new("an-strat-active")
                         .checked(self.strat_active_only)
-                        .size(MoonSize::Sm)
                         .label(t!("analytics.strat.active_only").to_string())
                         .on_change({
                             let view = cx.entity();
@@ -470,10 +469,9 @@ impl AnalyticsView {
             .label(label)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(116.0)
-            .menu_width_scaled(150.0)
-            .menu_size(MoonMenuSize::Compact);
+            .menu_width_scaled(150.0);
         let all_view = view.clone();
         menu = menu.item(
             MoonMenuItem::with_key("type-all", t!("report.filter.all").to_string())
@@ -513,10 +511,9 @@ impl AnalyticsView {
             .label(cur.label())
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(96.0)
-            .menu_width_scaled(130.0)
-            .menu_size(MoonMenuSize::Compact);
+            .menu_width_scaled(130.0);
         for f in [
             StratListFilter::All,
             StratListFilter::Black,
@@ -557,10 +554,9 @@ impl AnalyticsView {
             // `glyph_btn_w` (the Action preset's 26px height) would not fit the row.
             .trigger_icon(design::COLUMN_SELECTOR_ICON)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(30.0)
             .menu_width_scaled(160.0)
-            .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
         let all_view = view.clone();
         menu = menu.item(

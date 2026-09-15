@@ -35,8 +35,7 @@ use gpui::{
 use moon_core::db;
 use moon_core::feed::{ConnStatus, StrategyRow};
 use moon_ui::{
-    MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonWindowExt as _,
-    h_flex, v_flex,
+    MoonAlert, MoonButton, MoonButtonVariant, MoonPalette, MoonWindowExt as _, h_flex, v_flex,
 };
 use rusqlite::Connection;
 use rust_i18n::t;
@@ -1219,7 +1218,6 @@ fn purge_actions(view: Entity<AnalyticsView>, state: &PurgeState, p: MoonPalette
         .child(
             MoonButton::new("an-purge-cancel")
                 .ghost()
-                .size(MoonButtonSize::Micro)
                 .label(if ended {
                     t!("dialogs.close").to_string()
                 } else {
@@ -1234,7 +1232,6 @@ fn purge_actions(view: Entity<AnalyticsView>, state: &PurgeState, p: MoonPalette
     if !ended {
         row = row.child(
             MoonButton::new("an-purge-ok")
-                .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Danger)
                 // Never confirm a deletion whose size is still unknown or already under way.
                 .disabled(!confirmable)

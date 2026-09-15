@@ -21,8 +21,8 @@ use gpui::*;
 use moon_core::config::MANUAL_STRAT_SLOTS;
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown,
-    MoonMenuItem, MoonMenuSize, MoonPalette, MoonSize, h_flex, v_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonMenuItem,
+    MoonPalette, MoonSize, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -137,7 +137,6 @@ pub(super) fn slot_settings_content(
                             MoonCheckbox::new(SharedString::from(format!("ms-slot-show-{slot}")))
                                 .label(format!("{}", slot + 1))
                                 .checked(current.show)
-                                .size(MoonSize::Sm)
                                 .on_change(move |checked: &bool, _w, app| {
                                     let show = *checked;
                                     show_backend.update(app, |b, cx| {
@@ -224,7 +223,6 @@ pub(super) fn slot_settings_content(
                 .label(t!("header.ms_mb_logic").to_string())
                 .description(t!("header.ms_mb_logic_hint").to_string())
                 .checked(mb_logic)
-                .size(MoonSize::Sm)
                 .on_change(move |checked: &bool, _w, app| {
                     let on = *checked;
                     logic_backend.update(app, |b, cx| {
@@ -239,7 +237,6 @@ pub(super) fn slot_settings_content(
             MoonCheckbox::new("ms-ignore-strat-sell")
                 .label(t!("header.ms_ignore_strat_sell").to_string())
                 .checked(on)
-                .size(MoonSize::Sm)
                 .on_change(move |checked: &bool, _w, app| {
                     let on = *checked;
                     sell_backend.update(app, |b, cx| {
@@ -254,7 +251,7 @@ pub(super) fn slot_settings_content(
                 .justify_between()
                 .child(
                     MoonButton::new("ms-slots-hotkeys")
-                        .size(MoonButtonSize::ToolbarCompact)
+                        .size(MoonSize::Sm)
                         .variant(MoonButtonVariant::Ghost)
                         .label(t!("header.ms_slots_hotkeys").to_string())
                         .tooltip(t!("header.ms_slots_hotkeys_tip").to_string())
@@ -274,7 +271,7 @@ pub(super) fn slot_settings_content(
                 )
                 .child(
                     MoonButton::new("ms-slots-pull")
-                        .size(MoonButtonSize::ToolbarCompact)
+                        .size(MoonSize::Sm)
                         .variant(MoonButtonVariant::Soft)
                         .label(t!("header.ms_slots_pull").to_string())
                         .disabled(!core_known)
@@ -346,9 +343,9 @@ fn goto_button(
     // square, same Soft variant. One gesture should not look like two different things in two
     // windows.
     MoonButton::new(id)
-        .size(MoonButtonSize::Micro)
         .variant(MoonButtonVariant::Soft)
         .width(design::micro_control_h_value(cx))
+        .size(MoonSize::Xs)
         // No explicit icon colour: the button's own foreground already answers to the variant and
         // to the disabled state, and an explicit one would override the dimming a disabled robot
         // needs. Which strategy each button opens is said by where it sits, not by a colour.
@@ -443,10 +440,9 @@ fn strategy_picker(
         })
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::ToolbarCompact)
+        .trigger_size(MoonSize::Sm.into())
         .trigger_width_scaled(STRATEGY_COL_W)
         .menu_width_scaled(MENU_W)
-        .menu_size(MoonMenuSize::Compact)
         .menu_max_height_ui(MENU_MAX_H)
         .items(items)
         .into_any_element()
@@ -522,10 +518,9 @@ fn hook_picker(
         } else {
             MoonButtonVariant::Amber
         })
-        .trigger_size(MoonButtonSize::ToolbarCompact)
+        .trigger_size(MoonSize::Sm.into())
         .trigger_width_scaled(HOOK_COL_W)
         .menu_width_scaled(MENU_W)
-        .menu_size(MoonMenuSize::Compact)
         .menu_max_height_ui(MENU_MAX_H)
         .disabled(sid.is_none())
         .items(items)

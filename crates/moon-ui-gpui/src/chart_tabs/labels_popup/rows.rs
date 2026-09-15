@@ -10,8 +10,7 @@ use moon_core::config::{
     ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelFlow, LabelPreset, LabelZone,
 };
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize,
-    h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -121,7 +120,6 @@ fn row_line<T: LabelsPopupHost>(
         );
         MoonButton::new(SharedString::from(format!("cl-open-{ix}")))
             .label(label)
-            .size(MoonButtonSize::Micro)
             .width(design::font_w(cx, NAME_W))
             .variant(MoonButtonVariant::Ghost)
             .tooltip(t!("chart_labels.row_edit").to_string())
@@ -134,10 +132,9 @@ fn row_line<T: LabelsPopupHost>(
         .label(t!(row.zone.locale_key()).to_string())
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::Micro)
+        .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(ZONE_W)
         .menu_width_scaled(168.0)
-        .menu_size(MoonMenuSize::Compact)
         .items(zone_items(entity, cfg, ix));
     // Where in the band the module sits. Three visible states rather than one cycling button: the
     // current edge has to be readable at a glance, and a cycler answers "what is it now" only from
@@ -189,10 +186,9 @@ fn row_line<T: LabelsPopupHost>(
             } else {
                 MoonButtonVariant::Soft
             })
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(GAP_W)
             .menu_width_scaled(70.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
     };
     let remove = {
@@ -258,6 +254,7 @@ pub(super) fn add_row_dropdown<T: LabelsPopupHost>(
     id: &str,
     entity: &Entity<T>,
     cfg: &ChartLabelsCfg,
+    cx: &App,
 ) -> impl IntoElement {
     let mut items = Vec::new();
     for preset in LabelPreset::ALL {
@@ -299,10 +296,9 @@ pub(super) fn add_row_dropdown<T: LabelsPopupHost>(
         .label(t!("chart_labels.add_row").to_string())
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::Micro)
+        .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(NAME_W + FIELD_W)
         .menu_width_scaled(190.0)
-        .menu_size(MoonMenuSize::Compact)
         .disabled(cfg.first_free_row().is_none())
         .items(items)
 }

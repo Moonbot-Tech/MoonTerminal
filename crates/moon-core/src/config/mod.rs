@@ -96,7 +96,7 @@ pub use layout::{
 pub use news_tags::NewsTagSettings;
 pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
 pub use quiet::{QuietCfg, QuietWarnBypass};
-pub use schema::{TelegramConfig, UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN, UiThemeMode};
+pub use schema::{TelegramConfig, UiDensity, UiThemeMode};
 pub use secrets::Secret;
 pub use servers::{
     ChartBucket, CoreSortMode, FeedFlags, MANUAL_STRAT_SLOTS, ManualStratState, ServerConfig,
@@ -121,7 +121,7 @@ use crate::market::MarketDataMode;
 #[derive(Clone, Copy, Debug)]
 pub struct PresentationPrefs {
     pub ui_theme_mode: UiThemeMode,
-    pub ui_font_delta: f32,
+    pub ui_density: UiDensity,
     pub ui_scale: f32,
     pub language: Language,
 }
@@ -212,7 +212,7 @@ pub fn presentation_prefs() -> PresentationPrefs {
     let (settings, load) = store::read_settings();
     PresentationPrefs {
         ui_theme_mode: schema::resolve_ui_theme_mode(settings.ui_theme_mode, load, profile_age()),
-        ui_font_delta: schema::repair_ui_font_delta(settings.ui_font_delta),
+        ui_density: settings.resolved_ui_density(),
         ui_scale: schema::repair_ui_scale(settings.ui_scale),
         language: settings.language,
     }
@@ -289,8 +289,8 @@ pub struct AppConfig {
     pub log_to_file: bool,
     /// Log-file retention in days; 0 keeps everything (settings.toml). Defaults to 14.
     pub log_retention_days: u32,
-    /// Addition to base UI font sizes in logical pixels. Defaults to +3.
-    pub ui_font_delta: f32,
+    /// Interface density; Standard retains the historical +3 text adjustment in the UI crate.
+    pub ui_density: UiDensity,
     /// Interface theme mode (plaintext settings.toml); Graphite shares the dark colour set.
     pub ui_theme_mode: UiThemeMode,
     /// Overall UI geometry scale. Defaults to 1.0.
@@ -363,7 +363,7 @@ impl AppConfig {
             main_idle_close_secs: Default::default(),
             log_to_file: Default::default(),
             log_retention_days: Default::default(),
-            ui_font_delta: Default::default(),
+            ui_density: Default::default(),
             ui_theme_mode: Default::default(),
             ui_scale: Default::default(),
             chart_memory_percent: Default::default(),
@@ -463,7 +463,7 @@ impl AppConfig {
                 main_idle_close_secs: merged.main_idle_close_secs,
                 log_to_file: merged.log_to_file,
                 log_retention_days: merged.log_retention_days,
-                ui_font_delta: merged.ui_font_delta,
+                ui_density: merged.ui_density,
                 ui_theme_mode: merged.ui_theme_mode,
                 ui_scale: merged.ui_scale,
                 chart_memory_percent: merged.chart_memory_percent,
@@ -517,7 +517,7 @@ impl AppConfig {
             cfg.chart_stack_height = schema::default_chart_stack_height();
             cfg.log_to_file = true;
             cfg.log_retention_days = 14;
-            cfg.ui_font_delta = schema::default_ui_font_delta();
+            cfg.ui_density = UiDensity::default();
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
             // The serde default is `true` while the field's `Default` is `false`; `save()` below
@@ -545,7 +545,7 @@ impl AppConfig {
             cfg.chart_stack_height = schema::default_chart_stack_height();
             cfg.log_to_file = true;
             cfg.log_retention_days = 14;
-            cfg.ui_font_delta = schema::default_ui_font_delta();
+            cfg.ui_density = UiDensity::default();
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
             // The serde default is `true` while the field's `Default` is `false`; `save()` below
@@ -575,7 +575,7 @@ impl AppConfig {
             chart_stack_height: schema::default_chart_stack_height(),
             log_to_file: true,
             log_retention_days: 14,
-            ui_font_delta: schema::default_ui_font_delta(),
+            ui_density: meta.resolved_ui_density(),
             // A brand-new profile opens LIGHT; anyone else keeps exactly what they had. Reaching
             // this branch already proves `servers.enc` and both legacy configs are absent, but NOT
             // that `settings.toml` and `layout.toml` are — so the shared fact is asked rather than
@@ -588,7 +588,7 @@ impl AppConfig {
                 meta_load,
                 profile_age(),
             ),
-            ui_scale: schema::default_ui_scale(),
+            ui_scale: schema::repair_ui_scale(meta.ui_scale),
             chart_memory_percent: schema::default_chart_memory_percent(),
             hotkeys: hotkeys_file.unwrap_or_default(),
             // Set explicitly instead of inheriting it from `blank` because the serde default is
@@ -769,6 +769,7 @@ impl AppConfig {
                 workspace_membership: WorkspaceMembership::default(),
             })
             .collect();
+        let ui_density = settings.resolved_ui_density();
         let mut config = Self {
             servers,
             groups: Vec::new(),
@@ -785,7 +786,7 @@ impl AppConfig {
             main_idle_close_secs: 0,
             log_to_file: settings.log_to_file,
             log_retention_days: settings.log_retention_days,
-            ui_font_delta: settings.ui_font_delta,
+            ui_density,
             ui_theme_mode: settings.ui_theme_mode,
             ui_scale: settings.ui_scale,
             chart_memory_percent: settings.chart_memory_percent,
@@ -891,7 +892,7 @@ impl AppConfig {
             self.main_idle_close_secs,
             self.log_to_file,
             self.log_retention_days,
-            self.ui_font_delta,
+            self.ui_density,
             self.ui_theme_mode,
             self.ui_scale,
             self.chart_memory_percent,
@@ -1032,7 +1033,7 @@ impl AppConfig {
             0,     // main_idle_close_secs is behavioral.
             true,  // Log settings are non-structural.
             14,
-            schema::default_ui_font_delta(),
+            UiDensity::default(),
             UiThemeMode::default(),
             schema::default_ui_scale(),
             schema::default_chart_memory_percent(),

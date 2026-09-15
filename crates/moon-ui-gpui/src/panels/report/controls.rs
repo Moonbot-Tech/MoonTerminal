@@ -269,10 +269,9 @@ impl Render for ReportScopeControl {
                     .label(label)
                     .trigger_caret(true)
                     .trigger_variant(MoonButtonVariant::Soft)
-                    .trigger_size(MoonButtonSize::Action)
+                    .trigger_size(MoonButtonSize::density(cx))
                     .fit_trigger_width(102.0, 170.0)
                     .menu_width_scaled(210.0)
-                    .menu_size(MoonMenuSize::Compact)
                     .close_on_select(false)
                     .open(self.menu_open)
                     .on_open_change(move |open, _, app| {
@@ -508,7 +507,7 @@ impl ReportPanel {
                 MoonDropdown::fitted_trigger_label(
                     cx,
                     label,
-                    MoonButtonSize::Action,
+                    MoonButtonSize::density(cx),
                     crate::controls::CORE_COMBO_TRIGGER_W,
                     AUTO_CORE_TRIGGER_MAX_W,
                 )
@@ -557,6 +556,7 @@ impl ReportPanel {
                 |n| t!("report.cores_n", n = n).to_string(),
                 180.0,
                 extras,
+                cx,
                 move |uid, app| {
                     view.update(app, |t, c| t.toggle_core(uid, c));
                 },
@@ -679,7 +679,8 @@ impl ReportPanel {
             (
                 summary.clone(),
                 // The Action scale, like the core selector beside it: `font_w`'s mono body scale
-                // would size the pair differently as soon as the Font slider leaves zero.
+                // would size the pair differently as soon as the legacy font-delta channel leaves
+                // zero.
                 px(crate::controls::wrap_fit::action_width(
                     cx,
                     crate::controls::CORE_COMBO_TRIGGER_W,
@@ -695,7 +696,7 @@ impl ReportPanel {
             .child(
                 MoonCombobox::new(&self.strategy_select)
                     .trigger_variant(MoonButtonVariant::Soft)
-                    .trigger_size(MoonButtonSize::Action)
+                    .trigger_size(MoonButtonSize::density(cx))
                     .menu_chrome(MoonComboboxMenuChrome::Menu)
                     .font_family(design::mono())
                     .placeholder(t!("report.all_strategies").to_string())
@@ -779,12 +780,11 @@ impl ReportPanel {
             .label(self.period.label())
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             // Fitted rather than a literal width: the longest localized labels no longer fit the
             // old figures, and MoonUI's font-aware fitting knows their advance at the live UI scale.
             .fit_trigger_width(100.0, 150.0)
             .fit_menu_width(130.0, 190.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
 
@@ -834,7 +834,6 @@ impl ReportPanel {
             )
             .child(
                 MoonButton::new("report-selection-clear")
-                    .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Ghost)
                     .label(t!("report.selection.clear").to_string())
                     .leading_icon(MoonButtonIconSlot::new("icons/close.svg"))
@@ -843,7 +842,6 @@ impl ReportPanel {
             )
             .child(
                 MoonButton::new("report-selection-copy")
-                    .size(MoonButtonSize::Micro)
                     .outline()
                     .label(t!("report.selection.copy").to_string())
                     .leading_icon(MoonButtonIconSlot::new("icons/copy.svg"))
@@ -865,7 +863,6 @@ impl ReportPanel {
                 )
             };
             let mutation = MoonButton::new("report-selection-mutate")
-                .size(MoonButtonSize::Micro)
                 .label(label)
                 .leading_icon(MoonButtonIconSlot::new(icon))
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -929,10 +926,9 @@ impl ReportPanel {
                 MoonDropdown::new("rep-export")
                     .segment(moon_ui::MoonButtonSegment::new("⇩"))
                     .trigger_variant(MoonButtonVariant::Soft)
-                    .trigger_size(MoonButtonSize::Action)
+                    .trigger_size(MoonButtonSize::density(cx))
                     .trigger_width(design::glyph_btn_w(cx))
                     .menu_width_scaled(200.0)
-                    .menu_size(MoonMenuSize::Compact)
                     .items(items),
             )
     }
@@ -989,11 +985,10 @@ impl ReportPanel {
                 MoonDropdown::new("rep-cols")
                     .trigger_icon(design::COLUMN_SELECTOR_ICON)
                     .trigger_variant(MoonButtonVariant::Soft)
-                    .trigger_size(MoonButtonSize::Action)
+                    .trigger_size(MoonButtonSize::density(cx))
                     .trigger_width(design::glyph_btn_w(cx))
                     .menu_width_scaled(230.0)
                     .menu_max_height_ui(420.0)
-                    .menu_size(MoonMenuSize::Compact)
                     .close_on_select(false)
                     .items(items),
             )

@@ -124,7 +124,6 @@ impl Render for AnalyticsView {
                                 .child(
                                     moon_ui::MoonButton::new("an-write-error-x")
                                         .variant(moon_ui::MoonButtonVariant::Ghost)
-                                        .size(moon_ui::MoonButtonSize::Micro)
                                         .label(t!("analytics.write_failed_ok").to_string())
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.write_error = None;

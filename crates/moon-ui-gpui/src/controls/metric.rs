@@ -6,9 +6,9 @@ use gpui::*;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonInput,
-    MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize, MoonSlider,
-    MoonSliderState, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex, v_flex,
+    MoonButton, MoonButtonSegment, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputState,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize, MoonSlider, MoonSliderState,
+    MoonToggle, MoonToggleLabelSide, h_flex, v_flex,
 };
 
 use moon_core::feed::ClientSettingsEdit;
@@ -446,7 +446,7 @@ pub(super) fn metric_button(
         } else {
             MoonButtonVariant::Neutral
         })
-        .size(MoonButtonSize::ToolbarCompact)
+        .size(MoonSize::Sm)
         .selected(lit)
         .disabled(!enabled);
     if metric.shows_label() {
@@ -508,7 +508,6 @@ pub(super) fn sl_toggle(
         .label("SL")
         .label_side(MoonToggleLabelSide::Left)
         .checked(on)
-        .size(MoonToggleSize::Compact)
         .disabled(disabled)
         .tone(design::chrome_toggle_tone(on, false))
         .on_change(move |ch: &bool, _w, app| {
@@ -673,7 +672,7 @@ pub fn metric_popup_content(
                 MoonButton::new(SharedString::from(format!("toolbar-lev-x{preset}")))
                     .label(format!("×{preset}"))
                     .variant(MoonButtonVariant::Neutral)
-                    .size(MoonButtonSize::ToolbarCompact)
+                    .size(MoonSize::Sm)
                     .disabled(!available)
                     .tooltip(tip)
                     .on_click(move |_, window, app| {
@@ -728,7 +727,6 @@ pub fn metric_popup_content(
             MoonCheckbox::new("toolbar-tp-ext")
                 .label(t!("toolbar.tp_ext").to_string())
                 .checked(extended)
-                .size(MoonSize::Sm)
                 .on_change(move |ch: &bool, _w, app| {
                     let ext = *ch;
                     let is_live = {
@@ -790,7 +788,6 @@ pub fn metric_popup_content(
             MoonCheckbox::new("toolbar-stop-market")
                 .label(t!("toolbar.stop_market").to_string())
                 .checked(stop_market_on)
-                .size(MoonSize::Sm)
                 .on_change(move |ch: &bool, _w, app| {
                     let on = *ch;
                     let is_live = {
@@ -814,7 +811,6 @@ pub fn metric_popup_content(
             MoonCheckbox::new("toolbar-hedge")
                 .label(t!("toolbar.hedge").to_string())
                 .checked(hedge_on)
-                .size(MoonSize::Sm)
                 .on_change({
                     let backend = backend.clone();
                     let group = group.clone();
@@ -849,7 +845,7 @@ pub fn metric_popup_content(
             MoonButton::new("toolbar-lev-apply")
                 .label(t!("toolbar.apply").to_string())
                 .variant(MoonButtonVariant::Blue)
-                .size(MoonButtonSize::ToolbarCompact)
+                .size(MoonSize::Sm)
                 .full_width()
                 .on_click(move |_, _w, app| {
                     // Leverage is whole: a fraction is refused rather than truncated, the same

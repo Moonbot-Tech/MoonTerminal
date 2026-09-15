@@ -10,8 +10,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::feed::{StrategyEditOutcome, StrategyEditResult};
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonNotification, MoonPalette,
-    MoonWindowExt as _, h_flex, v_flex,
+    MoonButton, MoonButtonVariant, MoonInput, MoonNotification, MoonPalette, MoonWindowExt as _,
+    h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -1020,7 +1020,6 @@ impl AnalyticsView {
                                 .child(
                                     MoonButton::new("an-save-no")
                                         .variant(MoonButtonVariant::Ghost)
-                                        .size(MoonButtonSize::Micro)
                                         .label(t!("analytics.tuner.save_no").to_string())
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.tuner.save_dialog = None;
@@ -1031,7 +1030,6 @@ impl AnalyticsView {
                                 .child(
                                     MoonButton::new("an-save-yes")
                                         .variant(MoonButtonVariant::Blue)
-                                        .size(MoonButtonSize::Micro)
                                         .label(t!("analytics.tuner.save_yes").to_string())
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.confirm_save_dialog(window, cx);

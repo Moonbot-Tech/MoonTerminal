@@ -7,8 +7,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput, MoonMenuSize,
-    MoonPalette, MoonSize, MoonSlider, h_flex, v_flex,
+    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput, MoonPalette,
+    MoonSlider, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -109,13 +109,12 @@ pub(super) fn def_alert_strategy_row(
                     .label(label)
                     .trigger_caret(true)
                     .trigger_variant(MoonButtonVariant::Soft)
-                    .trigger_size(MoonButtonSize::Action)
+                    .trigger_size(MoonButtonSize::density(cx))
                     // Fits the chosen name between a readable floor and the popup's own
                     // width, so a long strategy name is not clipped to a fixed trigger.
                     .fit_trigger_width(120.0, 240.0)
                     .menu_width_scaled(240.0)
                     .menu_max_height_ui(220.0)
-                    .menu_size(MoonMenuSize::Compact)
                     .items(items),
             )
             .into_any_element(),
@@ -141,7 +140,6 @@ pub(super) fn cs_checkbox(
     MoonCheckbox::new(SharedString::from(id.to_string()))
         .label(label)
         .checked(checked)
-        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| {
             let on = *ch;
             let b = backend.read(app);
@@ -241,7 +239,6 @@ pub(super) fn flag(
     MoonCheckbox::new(SharedString::from(id))
         .label(label)
         .checked(checked)
-        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| {
             let on = *ch;
             view.update(app, |this, cx| {
@@ -307,10 +304,9 @@ pub(super) fn sound_cell(
                 .label(label)
                 .trigger_caret(true)
                 .trigger_variant(MoonButtonVariant::Soft)
-                .trigger_size(MoonButtonSize::Action)
+                .trigger_size(MoonButtonSize::density(cx))
                 .trigger_width_scaled(94.0)
                 .menu_width_scaled(128.0)
-                .menu_size(MoonMenuSize::Compact)
                 .items(items),
         )
         .child(sound_preview_button(

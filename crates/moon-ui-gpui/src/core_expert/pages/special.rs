@@ -571,7 +571,12 @@ pub(super) fn body(
                         v_flex()
                             .gap(design::ui_px(cx, 2.0))
                             .child(hint(t!("core_expert.sp_connection").to_string(), p, cx))
-                            .child(dropdown("exp-sp-connection", NO_VALUE.to_string(), false)),
+                            .child(dropdown(
+                                "exp-sp-connection",
+                                NO_VALUE.to_string(),
+                                false,
+                                cx,
+                            )),
                     )
                     .child(
                         v_flex()
@@ -599,7 +604,7 @@ pub(super) fn body(
                             .child(hint("stream.binance.com IP".to_string(), p, cx))
                             .children(num(store, "exp-sp-stream-ip", 128.0, false, cx)),
                     )
-                    .child(dropdown("exp-sp-auth", NO_VALUE.to_string(), false)),
+                    .child(dropdown("exp-sp-auth", NO_VALUE.to_string(), false, cx)),
             )
             .child(
                 h_flex()
@@ -722,6 +727,7 @@ pub(super) fn body(
                         "exp-sp-system-reports",
                         NO_VALUE.to_string(),
                         false,
+                        cx,
                     ))
                     .child(flag_live(
                         "exp-sp-multiline",

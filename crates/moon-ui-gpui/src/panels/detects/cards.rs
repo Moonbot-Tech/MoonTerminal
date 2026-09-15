@@ -8,9 +8,7 @@
 //! visuals only; [`super`] owns card ordering and attaches left- and right-click actions.
 
 use gpui::*;
-use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonText, h_flex, rgba_from, v_flex,
-};
+use moon_ui::{MoonBadge, MoonBadgeVariant, MoonPalette, MoonText, h_flex, rgba_from, v_flex};
 
 use rust_i18n::t;
 
@@ -261,7 +259,7 @@ fn inner_w(scfg: &DetectSizeCfg, pad_left: f32, pad_right: f32) -> f32 {
 
 // --- Field chips use the shared MoonText, MoonBadge, and delta styles. ---
 
-/// Build the detection-type badge from its long/short code, theme color, and optional outline.
+/// Build an Xs detection badge that fits the fixed-height card bands and mini-card rows.
 ///
 /// Return `None` when this detection type's badge is disabled.
 fn type_badge(it: &DetectItem, badges: &BadgesConfig, is_light: bool) -> Option<MoonBadge> {
@@ -273,8 +271,8 @@ fn type_badge(it: &DetectItem, badges: &BadgesConfig, is_light: bool) -> Option<
         let code = badges.code(it.kind, it.is_short).to_string();
         let bcol = design::rgb_to_u32(badges.color(it.kind, is_light));
         let mut badge = MoonBadge::new(code)
+            .size(moon_ui::MoonSize::Xs.into())
             .variant(MoonBadgeVariant::Soft)
-            .size(MoonBadgeSize::Tiny)
             .bg_color(bcol)
             .text_color(bcol)
             .mono(true);
@@ -286,7 +284,7 @@ fn type_badge(it: &DetectItem, badges: &BadgesConfig, is_light: bool) -> Option<
     })
 }
 
-/// Build a tiny badge naming where the detection came from.
+/// Build an Xs source badge that fits the fixed-height card bands and mini-card rows.
 ///
 /// A core's name, or — for a card no core reported — the source that did. Resolved at render
 /// rather than frozen with the card, so it follows a live locale switch like every other word on
@@ -298,8 +296,8 @@ fn core_badge(it: &DetectItem, color: u32) -> MoonBadge {
         None => t!("crowd.detect.source").to_string(),
     };
     MoonBadge::new(name)
+        .size(moon_ui::MoonSize::Xs.into())
         .variant(MoonBadgeVariant::Soft)
-        .size(MoonBadgeSize::Tiny)
         .bg_color(color)
         .text_color(color)
         .border_color(color)
@@ -422,8 +420,8 @@ fn strategy_chip(it: &DetectItem, name_w: f32, p: MoonPalette, cx: &App) -> Opti
     // One glyph measured, multiplied by the count — the rows are monospace, so the product is exact
     // for ASCII and close enough elsewhere for what it decides. Both sides are final screen pixels,
     // which is the point of comparing them: the budget is card geometry and follows the UI scale
-    // while the text follows the Font slider, so a name outgrows its area exactly where the two
-    // scales diverge.
+    // while the text follows the legacy font-delta channel, so a name outgrows its area exactly
+    // where the two scales diverge.
     let at_risk = design::mono_caption_text_width(cx, "0", 400.0) * full.chars().count() as f32
         > f32::from(max_w);
     // The text is a direct child rather than a `MoonText`: an ellipsis needs the string in the

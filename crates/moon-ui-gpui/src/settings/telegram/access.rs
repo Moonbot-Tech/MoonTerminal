@@ -2,9 +2,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::config::telegram_access::TelegramReportAccess;
-use moon_ui::{
-    MoonButton, MoonGroupBox, MoonInput, MoonPalette, MoonSize, h_flex, rgba_from, v_flex,
-};
+use moon_ui::{MoonButton, MoonGroupBox, MoonInput, MoonPalette, h_flex, rgba_from, v_flex};
 use rust_i18n::t;
 
 use super::SettingsView;
@@ -387,8 +385,7 @@ impl SettingsView {
                         true
                     },
                 )
-                .label(label)
-                .size(MoonSize::Sm),
+                .label(label),
             );
         }
         content.when(count == 0, |content| {

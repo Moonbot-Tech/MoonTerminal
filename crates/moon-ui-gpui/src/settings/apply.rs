@@ -284,7 +284,7 @@ impl SettingsView {
         // avoid a second publish when the struct branch below already published one for the same
         // save (a membership edit bundled with a structural one).
         let membership_changed = membership_changed(&before.servers, &after.servers);
-        let ui_theme_changed = before.ui_font_delta != after.ui_font_delta
+        let ui_theme_changed = before.ui_density != after.ui_density
             || before.ui_theme_mode != after.ui_theme_mode
             || before.ui_scale != after.ui_scale;
 

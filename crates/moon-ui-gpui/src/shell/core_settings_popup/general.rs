@@ -8,9 +8,7 @@
 //! keeps the level it was switched off at.
 
 use gpui::*;
-use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonTextArea, h_flex, v_flex,
-};
+use moon_ui::{MoonButton, MoonButtonVariant, MoonInput, MoonTextArea, h_flex, v_flex};
 use rust_i18n::t;
 
 use moon_core::feed::CoreConfig;
@@ -222,7 +220,6 @@ pub(super) fn general_tab(
     // popover.
     let bl_expand_btn = MoonButton::new("core-bl-expand")
         .label("…")
-        .size(MoonButtonSize::Micro)
         .variant(MoonButtonVariant::Soft)
         .selected(blacklist_expanded)
         .on_click(move |_, w, app| on_toggle_blacklist(w, app))

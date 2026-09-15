@@ -30,14 +30,30 @@ iface.sec_font:
   ru: "График: шрифт подписей"
   en: "Chart: label font"
   es: "Gráfico: fuente de etiquetas"
-iface.font_delta:
-  ru: "Прибавка к размеру шрифта"
-  en: "Font size increase"
-  es: "Aumento del tamaño de fuente"
-iface.font_delta_hint:
-  ru: "Масштаб шрифта всего интерфейса MoonUI. Меняется сразу."
-  en: "Font scale of the whole MoonUI interface. Applies instantly."
-  es: "Escala de fuente de toda la interfaz MoonUI. Se aplica al instante."
+iface.density:
+  ru: "Плотность"
+  en: "Density"
+  es: "Densidad"
+iface.density_compact:
+  ru: "Компакт"
+  en: "Compact"
+  es: "Compacta"
+iface.density_standard:
+  ru: "Стандарт"
+  en: "Standard"
+  es: "Estándar"
+iface.density_large:
+  ru: "Крупно"
+  en: "Large"
+  es: "Grande"
+iface.density_hint:
+  ru: "Размер элементов и текста интерфейса. Меняется сразу."
+  en: "Interface control and text size. Applies instantly."
+  es: "Tamaño de controles y texto de la interfaz. Se aplica al instante."
+iface.ui_zoom:
+  ru: "Масштаб интерфейса"
+  en: "UI zoom"
+  es: "Zoom de la interfaz"
 iface.label_font_delta:
   ru: "Коррекция размера подписей линий и курсора (px)"
   en: "Order-line & cursor label size adjustment (px)"

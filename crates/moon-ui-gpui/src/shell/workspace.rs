@@ -13,9 +13,9 @@ use moon_core::feed::{ConnStatus, CoreStartupStatus};
 use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 use moon_ui::{
-    DockTopologyByName, DockTopologyNode, MoonBackgroundPolicy, MoonBadge, MoonBadgeSize,
-    MoonBadgeVariant, MoonPalette, MoonScrollbarVisibility, MoonTooltipView, MoonVirtualList,
-    PanelView, h_flex, moon_h_resizable, moon_resizable_panel, v_flex,
+    DockTopologyByName, DockTopologyNode, MoonBackgroundPolicy, MoonBadge, MoonBadgeVariant,
+    MoonPalette, MoonScrollbarVisibility, MoonTooltipView, MoonVirtualList, PanelView, h_flex,
+    moon_h_resizable, moon_resizable_panel, v_flex,
 };
 use rust_i18n::t;
 
@@ -1205,8 +1205,9 @@ fn render_rail_item(
                 // row below it selects exactly one. Weight, a step up in size and a rule beneath
                 // separate it from the list it sits on top of, without giving it a surface of its
                 // own — the rail already reads as one recessed pane. ONE step up, not `t_title`:
-                // the virtual list's row height is fixed and does not track the Font slider, so a
-                // three-step jump clips its own text at the top of that slider's range.
+                // the virtual list's row height is fixed and does not track the legacy font-delta
+                // channel, so a three-step jump clips its own text at the top of that channel's
+                // range.
                 .text_size(design::t_body_lg(cx))
                 .font_weight(FontWeight::SEMIBOLD)
                 .border_b_1()
@@ -1486,25 +1487,18 @@ fn workspace_core_tooltip(row: &WorkspaceRosterRow) -> String {
 /// Build the tinted danger pill that replaces the plain status label for a `Problem` core row in
 /// Full density.
 ///
-/// `MoonBadge` with `MoonBadgeSize::Status` — sized for exactly this use, through the crate's
-/// `tokens.ui(..)`/`tokens.line_height(..)` pipeline rather than raw px — reuses the same tinted
-/// idiom this pill hand-rolled before: `danger_color` is a text token, never a fill (`design.rs`'s
-/// own docstring), so the badge's background and border stay the raw `p.red` hue and only the text
-/// carries the legible per-theme colour, matching the amber warnings in
-/// `analytics/tuner/list/table.rs` and `analytics/calendar/day.rs`. Confirmed at the Font slider's
-/// +6 ceiling: `MoonBadgeSize::Status` scales to a 23px box (`line_height(12.0)` = 18px, plus
-/// `ui(2.5)` pad_y on each side = 5px, for 23px total), well inside the fixed 30-unit row cell.
+/// The density tier gives a 16/20/24-unit text-height badge inside the fixed 30-unit
+/// row. Background and border keep the raw red hue; text uses the legible per-theme color.
 ///
-/// Args:
+////// Args:
 ///     status: Localized status text, already resolved to "Problem" in the active locale.
 ///     p: Active Moon palette.
 ///
 /// Returns:
-///     A rounded, tinted badge, well inside the fixed 30-unit cell at every font scale.
+///     A rounded, tinted badge, well inside the fixed 30-unit cell at every supported density.
 fn rail_problem_pill(status: String, p: MoonPalette) -> impl IntoElement {
     MoonBadge::new(status)
         .variant(MoonBadgeVariant::Outline)
-        .size(MoonBadgeSize::Status)
         .bg_color(p.red)
         .bg_alpha(design::RAIL_PILL_BG_ALPHA)
         .border_color(p.red)

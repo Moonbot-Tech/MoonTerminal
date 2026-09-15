@@ -13,9 +13,7 @@
 //! cannot drift apart: a control added for a figure appears here by existing.
 
 use gpui::*;
-use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize, h_flex,
-};
+use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, h_flex};
 
 use moon_core::figures::{FigureTool, ToolDef};
 use rust_i18n::t;
@@ -138,10 +136,9 @@ impl ChartTabs {
             } else {
                 MoonButtonVariant::Soft
             })
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(PICKER_W)
             .menu_width_scaled(180.0)
-            .menu_size(MoonMenuSize::Compact)
             .items(items);
         // `MoonDropdown` carries no tooltip of its own, so the hint hangs on a wrapper. It is the
         // only place the Ctrl gesture is written down now that the pencil's tooltip is gone.
@@ -162,7 +159,6 @@ impl ChartTabs {
             .child(
                 MoonButton::new("fig-settings")
                     .label("⚙")
-                    .size(MoonButtonSize::Micro)
                     .variant(if open {
                         MoonButtonVariant::Blue
                     } else {

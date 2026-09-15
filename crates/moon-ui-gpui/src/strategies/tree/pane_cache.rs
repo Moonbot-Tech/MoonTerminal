@@ -285,8 +285,12 @@ impl StrategiesView {
     fn pane_footer_label_width(&mut self, staged: usize, cx: &App) -> f32 {
         let locale = rust_i18n::locale();
         let locale: &str = &locale;
-        let metrics =
-            design::text_metrics_key(cx, design::ACTION_LABEL_BASE, FOOTER_LABEL_WEIGHT, false);
+        let font_size = design::button_tier(cx).control_metrics().font_size;
+        // Fold the density tier (via its control font) and the UI-zoom size the measurement
+        // actually uses: `text_metrics_key` is the font channel, so without the `ui()` bits a
+        // density or zoom change would keep a stale width for every already-cached row.
+        let metrics = design::text_metrics_key(cx, font_size, FOOTER_LABEL_WEIGHT, false)
+            ^ u64::from(design::ui_value(cx, font_size).to_bits());
         // Compared field by field rather than against a freshly built key: owning the locale means
         // allocating it, and doing that on a HIT would put a per-frame allocation in the one path
         // this module exists to keep empty.
@@ -372,7 +376,7 @@ fn exchanges_present(
 /// Measure one full set of footer labels at the size and weight they are rendered with.
 ///
 /// Every measurement is a per-character glyph advance with no cache underneath
-/// (`design::ui_text_width`), which is why the result is retained rather than recomputed per frame.
+/// (`design::ui_text_width_zoomed`), which is why the result is retained rather than recomputed per frame.
 ///
 /// Args:
 ///     cx: Application context providing the text system and font tokens.
@@ -390,10 +394,10 @@ fn footer_label_width(cx: &App, staged: usize) -> f32 {
     ]
     .iter()
     .map(|label| {
-        design::ui_text_width(
+        design::ui_text_width_zoomed(
             cx,
             label,
-            design::ACTION_LABEL_BASE,
+            design::button_tier(cx).control_metrics().font_size,
             FOOTER_LABEL_WEIGHT,
             false,
         )
@@ -403,10 +407,10 @@ fn footer_label_width(cx: &App, staged: usize) -> f32 {
         // MONO, unlike the action labels summed above: `strat.staged` welds its label to a COUNT
         // in one locale string, so `staged_slot` keeps the data face while the rest of the footer
         // reads in the UI face. This term measures the family that slot actually draws.
-        width += design::ui_text_width(
+        width += design::ui_text_width_zoomed(
             cx,
             &t!("strat.staged", n = staged),
-            design::ACTION_LABEL_BASE,
+            design::button_tier(cx).control_metrics().font_size,
             FOOTER_LABEL_WEIGHT,
             true,
         );

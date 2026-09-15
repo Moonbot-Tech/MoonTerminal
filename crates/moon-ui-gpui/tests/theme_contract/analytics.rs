@@ -430,7 +430,7 @@ fn profit_monitor_controls_and_all_choice_persistence_stay_wired() {
     assert!(
         period_dropdown.contains("MoonDropdown::new(\"profit-monitor-period\")")
             && controls
-                .matches("period_dropdown(self.period, cx.entity())")
+                .matches("period_dropdown(self.period, cx.entity(), cx)")
                 .count()
                 == 1
             && controls.contains("let groups = [GroupMode::Core, GroupMode::Exchange];")
@@ -802,7 +802,7 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
         // that ignores the Font slider's delta. Standing in a row of MoonDropdown filters it must
         // ask MoonUI for the button look instead of re-deriving it here.
         ".trigger_variant(MoonButtonVariant::Soft)",
-        ".trigger_size(MoonButtonSize::Action)",
+        ".trigger_size(MoonButtonSize::density(cx))",
         ".menu_chrome(MoonComboboxMenuChrome::Menu)",
         ".font_family(design::mono())",
         ".cleanable(false)",
@@ -1110,7 +1110,10 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
     assert!(
         toolbar.contains("crate::controls::CORE_COMBO_TRIGGER_W")
             && core_combo.contains(".trigger_width_scaled(CORE_COMBO_TRIGGER_W)")
-            && body.contains("let action_trigger_scale = design::font_value(cx, 10.5) / 10.5;")
+            && body.contains(
+                "let font_size = design::button_tier(cx).control_metrics().font_size.max(1.0);"
+            )
+            && body.contains("design::ui_value(cx, font_size) / font_size")
             && body.contains("* action_trigger_scale"),
         "the responsive floor and shared core dropdown must use the same width and Action scaling"
     );

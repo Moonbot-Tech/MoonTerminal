@@ -17,8 +17,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonGroupBox,
-    MoonInput, MoonLink, MoonMenuItem, MoonMenuSize, MoonPalette, MoonRadio, MoonRadioSize,
-    MoonSize, MoonSlider, MoonStepper, MoonStepperSize, MoonText, MoonTone, h_flex, v_flex,
+    MoonInput, MoonLink, MoonMenuItem, MoonPalette, MoonRadio, MoonSlider, MoonStepper, MoonText,
+    MoonTone, h_flex, v_flex,
 };
 
 use rust_i18n::t;
@@ -83,7 +83,6 @@ pub(super) fn flag_described(
             .checked(checked && !mixed)
             .tone(design::mixed_tone(mixed))
             .disabled(!enabled)
-            .size(MoonSize::Sm)
             .on_change(move |ch: &bool, _w, app| {
                 let on = *ch;
                 view.update(app, |this, cx| {
@@ -268,7 +267,6 @@ pub(super) fn field_masked(
 pub(super) fn action(id: &'static str, label: String, enabled: bool) -> impl IntoElement {
     MoonButton::new(id)
         .label(label)
-        .size(MoonButtonSize::Action)
         .variant(MoonButtonVariant::Soft)
         .disabled(!enabled)
         .padding_x(14.0)
@@ -345,12 +343,17 @@ pub(super) fn link(id: &'static str, label: String, enabled: bool) -> impl IntoE
 
 /// A selector showing one value. Moonbot fills these from its own machine state, so a mirrored page
 /// shows the value and refuses the menu.
-pub(super) fn dropdown(id: &'static str, current: String, enabled: bool) -> impl IntoElement {
+pub(super) fn dropdown(
+    id: &'static str,
+    current: String,
+    enabled: bool,
+    cx: &App,
+) -> impl IntoElement {
     MoonDropdown::new(id)
         .label(current)
         .items(Vec::<MoonMenuItem>::new())
         .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::Action)
+        .trigger_size(MoonButtonSize::density(cx))
         .disabled(!enabled)
 }
 
@@ -377,6 +380,7 @@ pub(super) fn choice_live(
     current: u8,
     enabled: bool,
     view: &Entity<CoreExpertView>,
+    cx: &App,
     // A closure, not a `fn` pointer like this module's other setters: a Move row addresses its two
     // gesture slots through one projection method and has to carry which row it is.
     set: impl Fn(&mut CoreConfig, u8) + 'static,
@@ -418,8 +422,7 @@ pub(super) fn choice_live(
         .label(label)
         .trigger_caret(true)
         .trigger_variant(design::mixed_trigger_variant(mixed))
-        .trigger_size(MoonButtonSize::Action)
-        .menu_size(MoonMenuSize::Compact)
+        .trigger_size(MoonButtonSize::density(cx))
         .items(items)
         .disabled(!enabled)
 }
@@ -451,7 +454,6 @@ pub(super) fn radio_live(
             .label(label)
             .checked(selected && !mixed)
             .tone(design::mixed_tone(mixed))
-            .size(MoonRadioSize::Compact)
             .on_change(move |_, _w, app| {
                 // Re-picking the option already picked stages nothing — unless the group is
                 // mixed, where picking the drawn core's own option is the decision "this one,
@@ -488,7 +490,6 @@ pub(super) fn stepper_live(
         .value(value as f32)
         .step(1.0)
         .precision(0)
-        .size(MoonStepperSize::Compact)
         .tone(design::mixed_tone(mixed))
         .on_change(move |v, _w, app| {
             // `as i32` saturates rather than wrapping.
@@ -603,7 +604,6 @@ pub(super) fn action_live(
 ) -> impl IntoElement {
     MoonButton::new(id)
         .label(label)
-        .size(MoonButtonSize::Action)
         .variant(MoonButtonVariant::Soft)
         .disabled(!enabled)
         .padding_x(14.0)
@@ -697,10 +697,9 @@ pub(super) fn sound_cell(
                 .label(label)
                 .trigger_caret(true)
                 .trigger_variant(design::mixed_trigger_variant(mixed))
-                .trigger_size(MoonButtonSize::Action)
+                .trigger_size(MoonButtonSize::density(cx))
                 .trigger_width_scaled(94.0)
                 .menu_width_scaled(128.0)
-                .menu_size(MoonMenuSize::Compact)
                 .items(items),
         )
         .child(crate::panels::common::sound_preview_button(

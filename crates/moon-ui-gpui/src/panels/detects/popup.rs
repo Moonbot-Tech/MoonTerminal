@@ -10,9 +10,8 @@
 use gpui::*;
 use moon_ui::{
     MoonAccent, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown,
-    MoonMenuSize, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonSegmentItem, MoonSegmentedControl, MoonSize, MoonSlider, MoonWindowExt as _, h_flex,
-    v_flex,
+    MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSegmentItem,
+    MoonSegmentedControl, MoonSlider, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -202,7 +201,6 @@ fn slot_toggle(
 ) -> impl IntoElement {
     MoonButton::new(id)
         .label(glyph)
-        .size(MoonButtonSize::Micro)
         .width(20.0)
         .variant(if on {
             MoonButtonVariant::Blue
@@ -259,10 +257,9 @@ fn slot_cell(
         .label(t!(field_key(slot.field)).to_string())
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::Micro)
+        .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(76.0)
         .menu_width_scaled(130.0)
-        .menu_size(MoonMenuSize::Compact)
         .items(items);
 
     // Keep buttons adjacent to the field with no spacers, packing the cell to the left.
@@ -337,7 +334,6 @@ fn content(
         .child(
             MoonButton::new("det-view-copy")
                 .label(t!("settings.copy").to_string())
-                .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Ghost)
                 .on_click(cx.listener(|this, _, window, cx| this.copy_view(window, cx)))
                 .render(),
@@ -345,7 +341,6 @@ fn content(
         .child(
             MoonButton::new("det-view-paste")
                 .label(t!("settings.paste").to_string())
-                .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Ghost)
                 .on_click(cx.listener(|this, _, window, cx| this.paste_view(window, cx)))
                 .render(),
@@ -422,7 +417,6 @@ fn content(
         MoonCheckbox::new("det-view-add-to-chart")
             .label(t!("detects.cfg.show_add_to_chart").to_string())
             .checked(cfg.show_add_to_chart)
-            .size(MoonSize::Sm)
             .on_change(move |checked: &bool, _w, app| {
                 let checked = *checked;
                 entity_atc.update(app, |this, cx| {

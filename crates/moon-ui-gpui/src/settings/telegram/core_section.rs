@@ -10,7 +10,7 @@ use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonDisclosureDirection, MoonDropdown, MoonGroupBox, MoonInput, MoonInputState, MoonMenuItem,
-    MoonMenuSize, MoonPalette, MoonSize, h_flex, rgba_from, v_flex,
+    MoonPalette, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -167,11 +167,10 @@ impl SettingsView {
                     .label(caption)
                     .trigger_caret(true)
                     .trigger_variant(MoonButtonVariant::Soft)
-                    .trigger_size(MoonButtonSize::Action)
+                    .trigger_size(MoonButtonSize::density(cx))
                     .fit_trigger_width(crate::controls::CORE_COMBO_TRIGGER_W, 260.0)
                     // Font-scaled bounds (tokens.font()); MoonUI measures the widest menu row.
                     .fit_menu_width(crate::controls::CORE_COMBO_TRIGGER_W, 560.0)
-                    .menu_size(MoonMenuSize::Compact)
                     .items(items)
                     .into_any_element(),
             )
@@ -293,7 +292,6 @@ impl SettingsView {
                     .checked(enabled)
                     .disabled(!live)
                     .mono(false)
-                    .size(MoonSize::Sm)
                     .on_change(cx.listener(move |this, ch: &bool, _, cx| {
                         let v = *ch;
                         if let Some(core) = this.telegram.core.picked {
