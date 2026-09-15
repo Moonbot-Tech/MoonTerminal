@@ -17,8 +17,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonGroupBox,
-    MoonInput, MoonLink, MoonMenuItem, MoonMenuSize, MoonPalette, MoonRadio, MoonRadioSize,
-    MoonSize, MoonSlider, MoonStepper, MoonStepperSize, MoonText, MoonTone, h_flex, v_flex,
+    MoonInput, MoonLink, MoonMenuItem, MoonMenuSize, MoonPalette, MoonRadio, MoonSize, MoonSlider,
+    MoonStepper, MoonStepperSize, MoonText, MoonTone, h_flex, v_flex,
 };
 
 use rust_i18n::t;
@@ -451,7 +451,6 @@ pub(super) fn radio_live(
             .label(label)
             .checked(selected && !mixed)
             .tone(design::mixed_tone(mixed))
-            .size(MoonRadioSize::Compact)
             .on_change(move |_, _w, app| {
                 // Re-picking the option already picked stages nothing — unless the group is
                 // mixed, where picking the drawn core's own option is the decision "this one,
