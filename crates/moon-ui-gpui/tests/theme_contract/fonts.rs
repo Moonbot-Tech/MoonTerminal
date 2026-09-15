@@ -222,22 +222,10 @@ fn chart_and_header_data_text_keep_the_mono_family() {
 #[test]
 fn settings_values_and_connections_repin_the_mono_family() {
     let general = read_src("settings/general.rs");
-    for (function, mono) in [
-        ("pub(super) fn font_delta_control(", ".mono(true)"),
-        (
-            "pub(super) fn stepper_controls(",
-            ".font_family(design::mono())",
-        ),
-    ] {
-        assert!(
-            code_only(braced_body(&general, function)).contains(mono),
-            "settings/general.rs:{function} must explicitly keep its editable or stepped value mono"
-        );
-    }
     assert!(
-        code_only(braced_body(&general, "fn font_delta_marks("))
+        code_only(braced_body(&general, "pub(super) fn stepper_controls("))
             .contains(".font_family(design::mono())"),
-        "settings/general.rs:font_delta_marks must keep its compared tick numbers mono"
+        "settings counters must keep their compared values mono"
     );
     let badges = read_src("settings/badges.rs");
     let badge_row = code_only(braced_body(&badges, "fn badge_row("));

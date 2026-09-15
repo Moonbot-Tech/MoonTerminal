@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use moon_core::config::{CoreGroup, UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN};
+use moon_core::config::{CoreGroup, UiDensity, UiThemeMode};
 use moon_core::db::analytics::UndatedCloses;
 use moon_core::db::{QuoteBreakdown, QuoteCurrency, QuoteTotal, ReadFail};
 
@@ -15,6 +15,16 @@ use super::{
     CoreSelectionCaption, KIND_TRIGGER_W, METRIC_TRIGGER_W, SIDE_TRIGGER_W, UndatedBanner,
     analytics_core_filter_ids, presets_row_fits, sole_core_name, undated_banner_state,
 };
+
+/// Read the font deltas from the same density mapping used when installing the UI theme.
+fn density_font_deltas() -> [f32; 3] {
+    [UiDensity::Compact, UiDensity::Standard, UiDensity::Large].map(|density| {
+        crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, density, 1.0)
+            .dark
+            .scale
+            .font_delta
+    })
+}
 
 /// `analytics/toolbar.rs:presets_row_fits` must keep the inline presets at the exact available
 /// width; changing `>=` to `>` collapses the Analytics period bar one pixel early for a window
@@ -59,8 +69,8 @@ fn every_preset_label_fits_its_fitted_cell_without_truncation(cx: &mut gpui::Tes
     }
 
     // Every preset except the pre-existing, out-of-scope Week overflow must survive the supported
-    // font-delta extremes, which is the failure class this regression is meant to catch.
-    for delta in [UI_FONT_DELTA_MIN as f32, UI_FONT_DELTA_MAX as f32] {
+    // density-derived font deltas, which is the failure class this regression is meant to catch.
+    for delta in density_font_deltas() {
         let ceiling = cx.update(|cx| {
             moon_ui::MoonTheme::global_mut(cx).scale.font_delta = delta;
             moon_ui::MoonTheme::active_tokens(cx).font_width(super::PRESET_CELL_MAX_W)
@@ -116,8 +126,8 @@ fn captioned_filter_labels_fit_without_ellipsis_in_every_locale(cx: &mut gpui::T
         ),
     ] {
         let _locale = crate::test_locale::force(locale);
-        for delta in UI_FONT_DELTA_MIN..=UI_FONT_DELTA_MAX {
-            cx.update(|cx| moon_ui::MoonTheme::global_mut(cx).scale.font_delta = delta as f32);
+        for delta in density_font_deltas() {
+            cx.update(|cx| moon_ui::MoonTheme::global_mut(cx).scale.font_delta = delta);
             for (label, width) in labels {
                 let fitted = cx.update(|cx| {
                     moon_ui::MoonDropdown::fitted_trigger_label(

@@ -1,22 +1,25 @@
 //! General-tab editor for personal and machine settings in `settings.toml`.
-//! Changes remain in `Backend.preview`. UI mode/font, separate control zones, and the Main-window
+//! Changes remain in `Backend.preview`. UI theme, density, zoom, control zones and the Main-window
 //! idle timeout are consumed live from that draft and roll back when Settings closes unsaved;
 //! other settings take effect after saving and reconciling the relevant runtime state.
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState,
-    MoonMenuSize, MoonPalette, MoonSelect, MoonSize, MoonSlider, MoonSliderEvent, MoonSliderState,
-    MoonTooltipView, StyledExt, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonSize, MoonCheckbox, MoonMenuSize, MoonPalette, MoonSegmentItem,
+    MoonSegmentedControl, MoonSelect, MoonSize, MoonSliderState, MoonTooltipView, StyledExt,
+    h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
 use super::SettingsView;
 use crate::{Backend, design};
-// Aliased to their historical local names here to keep this file's call sites unchanged. Owned by
-// `moon-core` beside `default_ui_font_delta`, so a value and the range it must lie inside cannot
-// split across crates.
-use moon_core::config::{UI_FONT_DELTA_MAX as FONT_DELTA_MAX, UI_FONT_DELTA_MIN as FONT_DELTA_MIN};
+use moon_core::config::UiDensity;
+
+/// Zoom endpoints shared by the slider state and its displayed captions.
+const UI_ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.75..=1.50;
+
+/// The three settings choices, in the order shown by the segmented control.
+const DENSITIES: [UiDensity; 3] = [UiDensity::Compact, UiDensity::Standard, UiDensity::Large];
 
 /// One bold caption beside a MoonUI select, the General tab's shape for an enum setting.
 ///
@@ -219,60 +222,51 @@ impl SettingsView {
             .child(btn("+large", ">>", large))
     }
 
-    /// Store `ui_font_delta` in the draft and reinstall the MoonUI theme for a live preview.
-    /// Returns whether the value changed so callers can synchronize the paired control without
-    /// emitting redundant notifications or redraws for a no-op.
-    pub(super) fn set_ui_font_delta(&mut self, v: f32, cx: &mut Context<Self>) -> bool {
-        let changed = self.backend.update(cx, |b, bcx| {
-            let Some(p) = b.preview.as_mut() else {
-                return false;
-            };
-            if p.ui_font_delta == v {
-                return false;
+    /// Store the selected density in the draft and reinstall the theme for live preview.
+    fn set_ui_density(&mut self, density: UiDensity, cx: &mut Context<Self>) {
+        self.backend.update(cx, |b, bcx| {
+            if let Some(p) = b.preview.as_mut() {
+                if p.ui_density != density {
+                    p.ui_density = density;
+                    crate::install_moon_theme_for_config(p, bcx);
+                    bcx.notify();
+                }
             }
-            p.ui_font_delta = v;
-            crate::install_moon_theme_for_config(p, bcx);
-            bcx.notify();
-            true
         });
-        if changed {
-            cx.notify();
-        }
-        changed
+        cx.notify();
     }
 
-    /// Build the General-tab UI-font control: a slider with integer marks and an exact input.
-    /// The explanatory hint below replaces a separate label. The slider and marks share the
-    /// `track_w` column so each tick aligns with the slider thumb center.
-    pub(super) fn font_delta_control(&self, cx: &Context<Self>) -> impl IntoElement {
-        let track_w = design::ui_value(cx, 210.0);
-        h_flex()
-            .w_full()
-            .min_h(design::fit_h_px(cx, 28.0, 14.0, 7.0))
-            .gap(design::ui_px(cx, 10.0))
-            .items_center()
+    /// Build the localized three-way density choice from the current settings draft.
+    fn density_control(&self, cx: &Context<Self>) -> impl IntoElement {
+        let b = self.backend.read(cx);
+        let selected = b.preview.as_ref().unwrap_or(&b.config).ui_density;
+        let labels = [
+            t!("iface.density_compact").to_string(),
+            t!("iface.density_standard").to_string(),
+            t!("iface.density_large").to_string(),
+        ];
+        let view = cx.entity();
+        v_flex()
+            .gap(design::ui_px(cx, 4.0))
+            .font_family(design::ui_font())
+            .child(t!("iface.density").to_string())
             .child(
-                v_flex()
-                    .w(px(track_w))
-                    .gap(design::ui_px(cx, 2.0))
-                    .child(
-                        div().w(px(track_w)).child(
-                            MoonSlider::new(&self.ui_font).height(design::ui_value(cx, 22.0)),
-                        ),
-                    )
-                    .child(font_delta_marks(cx, track_w)),
-            )
-            .child(
-                div().w(design::font_w_px(cx, 56.0)).child(
-                    MoonInput::new("ui-font-delta")
-                        .state(&self.ui_font_input)
-                        .small()
-                        .mono(true),
-                ),
+                MoonSegmentedControl::new("ui-density")
+                    .items(DENSITIES.into_iter().zip(labels).map(|(density, label)| {
+                        MoonSegmentItem::new("", label)
+                            .fit_width(cx, 90.0, 180.0)
+                            .selected(selected == density)
+                    }))
+                    .on_click(move |index, _, _, app| {
+                        if let Some(&density) = DENSITIES.get(index) {
+                            view.update(app, |this, cx| this.set_ui_density(density, cx));
+                        }
+                    })
+                    .render(),
             )
     }
 
-    /// Build the General tab for UI mode/font, locale, chart grouping, control zones,
+    /// Build the General tab for UI theme, density and zoom, locale, chart grouping, control zones,
     /// Main-window idle closing, and file-log retention settings.
     ///
     /// Args:
@@ -311,7 +305,7 @@ impl SettingsView {
         v_flex()
             .w_full()
             .gap_1()
-            // UI theme and font are personal settings in settings.toml; the portable chart theme
+            // UI theme, density and zoom are personal settings in settings.toml. The chart theme
             // is edited on the Interface tab and stored in theme.toml. The selector's own
             // behaviour -- live preview and rebuilding the per-mode editors -- lives with its
             // state in `settings/mod.rs`, beside every other dropdown on this tab.
@@ -326,11 +320,18 @@ impl SettingsView {
                 &t!("iface.light_theme_hint"),
                 muted,
             ))
-            .child(self.font_delta_control(cx))
+            .child(self.density_control(cx))
             .child(settings_hint(
-                "iface.font_delta_hint",
-                &t!("iface.font_delta_hint"),
+                "iface.density_hint",
+                &t!("iface.density_hint"),
                 muted,
+            ))
+            .child(super::slider_row(
+                &t!("iface.ui_zoom"),
+                &self.ui_zoom,
+                UI_ZOOM_RANGE,
+                zoom_text,
+                cx,
             ))
             .child(super::separator(p, cx))
             // Interface locale selector.
@@ -484,149 +485,37 @@ impl SettingsView {
     }
 }
 
-/// Format a font delta as its canonical integer-step text, normalizing negative zero.
-fn font_delta_text(v: f32) -> String {
-    (v.round() as i32).to_string()
+/// Format a UI scale as a whole percentage, hiding floating-point step noise.
+fn zoom_text(value: f32) -> String {
+    format!("{:.0}%", value * 100.0)
 }
 
-/// Parse font-delta input after trimming whitespace and treating a comma as a decimal point.
-/// Rejects incomplete, nonnumeric, and non-finite values before rounding; valid values are
-/// rounded to the integer step, clamped to the supported range, and normalized from `-0.0`.
-fn parse_font_delta(s: &str) -> Option<f32> {
-    let v: f32 = s.trim().replace(',', ".").parse().ok()?;
-    if !v.is_finite() {
-        return None;
-    }
-    let v = v
-        .round()
-        .clamp(FONT_DELTA_MIN as f32, FONT_DELTA_MAX as f32);
-    Some(if v == 0.0 { 0.0 } else { v })
-}
-
-/// Build slider marks at every integer in the font range and label the even values.
-/// Marks use `(m - MIN) / span` across `track_w` to align with the full-width slider. Edge
-/// labels are anchored to the track ends so they do not clip or overlap the input field.
-fn font_delta_marks(cx: &App, track_w: f32) -> impl IntoElement {
-    let span = (FONT_DELTA_MAX - FONT_DELTA_MIN) as f32;
-    let p = MoonPalette::active(cx);
-    let tick = rgba_from(p.border, 1.0);
-    let label = rgba_from(p.text_muted, 1.0);
-    let tick_h = design::ui_value(cx, 4.0);
-    let label_w = design::font_w(cx, 20.0);
-    let mut row = div()
-        .relative()
-        .w(px(track_w))
-        .h(design::fit_h_px(cx, 16.0, 11.0, 1.0));
-    for m in FONT_DELTA_MIN..=FONT_DELTA_MAX {
-        let x = (m - FONT_DELTA_MIN) as f32 / span * track_w;
-        row = row.child(
-            div()
-                .absolute()
-                .left(px((x - 0.5).max(0.0)))
-                .top(px(0.0))
-                .w(px(1.0))
-                .h(px(tick_h))
-                .bg(tick),
-        );
-        if m % 2 == 0 {
-            let left = if m == FONT_DELTA_MIN {
-                0.0
-            } else if m == FONT_DELTA_MAX {
-                track_w - label_w
-            } else {
-                x - label_w / 2.0
-            };
-            row = row.child(
-                div()
-                    .absolute()
-                    .left(px(left))
-                    .top(px(tick_h + design::ui_value(cx, 1.0)))
-                    .w(px(label_w))
-                    .text_center()
-                    // Scale marks are figures read against each other along the slider. The
-                    // current-value cell and the input beside them are already pinned; without
-                    // this the marks would be the one part of the control left proportional.
-                    .font_family(design::mono())
-                    .text_size(design::t_caption(cx))
-                    .text_color(label)
-                    .child(m.to_string()),
-            );
-        }
-    }
-    row
-}
-
-/// Build the bidirectionally synchronized UI-font slider and numeric input.
-/// The range is -2 through 6 logical pixels in integer steps. Both subscriptions use
-/// `subscribe_in` because updating the paired control requires `&mut Window`; field updates
-/// suppress emitted events so synchronization does not form a feedback loop.
-pub(super) fn build_font(
+/// Build the zoom slider with a 5% step and live draft preview.
+///
+/// Initializing the thumb does not rewrite an existing hand-edited scale outside the UI range.
+pub(super) fn build_zoom(
     backend: &Entity<Backend>,
-    window: &mut Window,
     cx: &mut Context<SettingsView>,
-) -> (Entity<MoonSliderState>, Entity<MoonInputState>) {
+) -> Entity<MoonSliderState> {
     let cur = {
         let b = backend.read(cx);
-        b.preview.as_ref().unwrap_or(&b.config).ui_font_delta
+        b.preview.as_ref().unwrap_or(&b.config).ui_scale
     };
-    let slider = cx.new(|_| {
-        MoonSliderState::new()
-            .min(FONT_DELTA_MIN as f32)
-            .max(FONT_DELTA_MAX as f32)
-            .step(1.0)
-            .default_value(cur)
-    });
-    let input = cx.new(|cx| MoonInputState::new(window, cx).default_value(font_delta_text(cur)));
-
-    // Slider changes update the draft and mirror the canonical value into the input. The closure
-    // deliberately obtains the paired input through `this` to avoid a strong-reference cycle.
-    cx.subscribe_in(
-        &slider,
-        window,
-        move |this, _slider, ev: &MoonSliderEvent, window, cx| {
-            let MoonSliderEvent::Change(v) = ev else {
-                return;
-            };
-            // Quantization in the negative subrange can produce IEEE -0.0; normalize it.
-            let v = v.end();
-            let v = if v == 0.0 { 0.0 } else { v };
-            if this.set_ui_font_delta(v, cx) {
-                this.ui_font_input
-                    .update(cx, |st, c| st.set_value(font_delta_text(v), window, c));
+    super::draft_slider(
+        cx,
+        *UI_ZOOM_RANGE.start(),
+        *UI_ZOOM_RANGE.end(),
+        0.05,
+        cur,
+        |p, value, bcx| {
+            if p.ui_scale == value {
+                return false;
             }
+            p.ui_scale = value;
+            crate::install_moon_theme_for_config(p, bcx);
+            true
         },
     )
-    .detach();
-
-    // Input changes update the draft and slider without rewriting text mid-entry. Blur or Enter
-    // canonicalizes the text, falling back to the current value for invalid input. The closure
-    // receives its emitter and obtains the slider through `this` to avoid a reference cycle.
-    cx.subscribe_in(
-        &input,
-        window,
-        move |this, field, ev: &MoonInputEvent, window, cx| match ev {
-            MoonInputEvent::Change => {
-                // End the field's immutable `cx` borrow before calling `set_ui_font_delta`.
-                let parsed = parse_font_delta(&field.read(cx).value());
-                if let Some(v) = parsed {
-                    if this.set_ui_font_delta(v, cx) {
-                        this.ui_font.update(cx, |st, c| st.set_value(v, window, c));
-                    }
-                }
-            }
-            MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. } => {
-                let cur = {
-                    let b = this.backend.read(cx);
-                    b.preview.as_ref().unwrap_or(&b.config).ui_font_delta
-                };
-                field.update(cx, |st, c| st.set_value(font_delta_text(cur), window, c));
-            }
-            _ => {}
-        },
-    )
-    .detach();
-
-    (slider, input)
 }
 
 #[cfg(test)]

@@ -202,12 +202,13 @@ fn fail_to_start(error: anyhow::Error, cx: &mut App) {
 fn install_login_theme(cx: &mut App) {
     let prefs = moon_core::config::presentation_prefs();
     // The mapping itself lives once, beside the shell's own call site.
-    let theme = super::moon_theme_config_for_mode(prefs.ui_theme_mode);
     rust_i18n::set_locale(prefs.language.code());
     moon_ui::MoonTheme::install_config(
-        theme
-            .with_font_delta(prefs.ui_font_delta)
-            .with_ui_scale(prefs.ui_scale),
+        super::moon_theme_config_for_presentation(
+            prefs.ui_theme_mode,
+            prefs.ui_density,
+            prefs.ui_scale,
+        ),
         cx,
     );
 }

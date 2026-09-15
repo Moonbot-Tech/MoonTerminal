@@ -88,7 +88,7 @@ fn a_plaintext_config_keeps_the_settings_it_was_given() {
     let mut settings = super::schema::SettingsFile::default();
     settings.charts_split_by_core = false;
     settings.chart_stack_height = 321;
-    settings.ui_font_delta = 2.5;
+    settings.ui_density = Some(super::UiDensity::Large);
 
     let config = AppConfig::build_plaintext_config(
         None,
@@ -106,7 +106,7 @@ fn a_plaintext_config_keeps_the_settings_it_was_given() {
 
     assert!(!config.charts_split_by_core);
     assert_eq!(config.chart_stack_height, 321);
-    assert_eq!(config.ui_font_delta, 2.5);
+    assert_eq!(config.ui_density, super::UiDensity::Large);
     // …except the one thing a bench must never inherit: a Main chart that closes itself after a
     // quiet minute takes the screenshot with it.
     assert_eq!(config.main_idle_close_secs, 0);

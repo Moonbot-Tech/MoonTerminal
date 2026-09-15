@@ -732,7 +732,7 @@ pub fn base_text(cx: &App) -> f32 {
 /// Return the caption text size for raw GPUI elements such as `div().text_size(...)`.
 ///
 /// The raw-GPUI tiers derive from MoonUI's base and pass through `font()`, so they respond to the
-/// Settings Font slider. MoonUI components such as `MoonText`, `MoonButtonSegment`, and
+/// Settings density choice. MoonUI components such as `MoonText`, `MoonButtonSegment`, and
 /// `MoonDataCell` already scale their own default or supplied base size. Do not pass a `t_*` result
 /// or `font_value(...)` into them, because that applies font scaling twice.
 ///
@@ -740,7 +740,7 @@ pub fn base_text(cx: &App) -> f32 {
 ///     cx: Application context used to read active theme tokens.
 ///
 /// Returns:
-///     Approximately 9px at the default theme base with zero Font-slider delta, for badges, small
+///     Approximately 9px at the default theme base with zero font delta (Compact density), for badges, small
 ///     labels, and counters. The application's default +3 delta makes it approximately 12px.
 pub fn t_caption(cx: &App) -> Pixels {
     text_px(cx, base_text(cx) - 2.0)
@@ -752,7 +752,7 @@ pub fn t_caption(cx: &App) -> Pixels {
 ///     cx: Application context used to read active theme tokens.
 ///
 /// Returns:
-///     Approximately 11px at the default theme base with zero Font-slider delta. The application's
+///     Approximately 11px at the default theme base with zero font delta (Compact density). The application's
 ///     default +3 delta makes it approximately 14px.
 pub fn t_body(cx: &App) -> Pixels {
     text_px(cx, base_text(cx))
@@ -769,7 +769,7 @@ pub fn t_body(cx: &App) -> Pixels {
 ///     cx: Application context used to read active theme tokens.
 ///
 /// Returns:
-///     Approximately 12px at the default theme base with zero Font-slider delta. The application's
+///     Approximately 12px at the default theme base with zero font delta (Compact density). The application's
 ///     default +3 delta makes it approximately 15px.
 pub fn t_body_lg(cx: &App) -> Pixels {
     text_px(cx, base_text(cx) + 1.0)
@@ -781,7 +781,7 @@ pub fn t_body_lg(cx: &App) -> Pixels {
 ///     cx: Application context used to read active theme tokens.
 ///
 /// Returns:
-///     Approximately 14px at the default theme base with zero Font-slider delta. The application's
+///     Approximately 14px at the default theme base with zero font delta (Compact density). The application's
 ///     default +3 delta makes it approximately 17px.
 pub fn t_title(cx: &App) -> Pixels {
     text_px(cx, base_text(cx) + 3.0)
@@ -1392,7 +1392,7 @@ pub fn table_head_h(cx: &App) -> f32 {
 
 /// Return the current font-size scale relative to the theme base.
 ///
-/// Delegates to MoonUI so the Settings Font slider and fixed-width text containers share one width
+/// Delegates to MoonUI so the Settings density choice and fixed-width text containers share one width
 /// scale definition.
 ///
 /// Args:
@@ -1408,7 +1408,7 @@ pub fn font_scale(cx: &App) -> f32 {
 ///
 /// Args:
 ///     cx: Application context used to calculate [`font_scale`].
-///     base: Width at zero Font-slider delta.
+///     base: Width at zero font delta (Compact density).
 ///
 /// Returns:
 ///     The font-scaled width as `Pixels`.
@@ -1423,7 +1423,7 @@ pub fn font_w_px(cx: &App, base: f32) -> Pixels {
 ///
 /// Args:
 ///     cx: Application context used to calculate [`font_scale`].
-///     base: Width at zero Font-slider delta.
+///     base: Width at zero font delta (Compact density).
 ///
 /// Returns:
 ///     The font-scaled raw pixel width.

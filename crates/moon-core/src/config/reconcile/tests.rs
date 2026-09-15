@@ -1,5 +1,5 @@
 use super::super::schema::{
-    SCHEMA_VERSION, ServersFile, SettingsFile, TelegramConfig, UiThemeMode, default_ui_font_delta,
+    SCHEMA_VERSION, ServersFile, SettingsFile, TelegramConfig, UiDensity, UiThemeMode,
     default_ui_scale,
 };
 use super::{Merged, merge, split};
@@ -12,7 +12,7 @@ fn merged_with(ui_scale: f32, ui_font_delta: f32) -> Merged {
         ServersFile::default(),
         SettingsFile {
             ui_scale,
-            ui_font_delta,
+            ui_font_delta: Some(ui_font_delta),
             ..Default::default()
         },
         None,
@@ -42,8 +42,7 @@ fn a_degenerate_stored_ui_scale_is_repaired_on_load() {
 /// The other half of the contract, and the half that is easy to break while "hardening" the
 /// first: repair must not become a range clamp.
 ///
-/// `ui_scale` has no settings-UI control, so hand-editing `settings.toml` is the only way to
-/// set it — and the loaded value is written straight back by the next `save()`. A clamp would
+/// Hand-editing `settings.toml` can select scales outside the Settings zoom range — and the loaded value is written straight back by the next `save()`. A clamp would
 /// therefore not just ignore an unusual choice, it would DESTROY it on disk, with nothing in
 /// the UI to restore it from. `0.25` is MoonUI's own floor in `MoonThemeTokens::ui` and `6.0`
 /// is far past any preset; both are usable, so both must survive untouched.
@@ -58,23 +57,63 @@ fn an_unusual_but_usable_scale_survives_the_load() {
     }
 }
 
-/// `ui_font_delta` splits the other way from `ui_scale`: `0.0` means "no adjustment" and is a
-/// real choice, while a non-finite value is not — TOML parses `inf`/`nan`, and MoonUI adds
-/// this delta directly into text metrics, where an infinity spreads into layout dimensions.
+/// Catches skipping legacy density resolution during merge: zero must migrate to Compact,
+/// while a non-finite legacy value must preserve the Standard presentation.
 #[test]
-fn a_non_finite_font_delta_is_repaired_while_zero_is_kept() {
+fn legacy_font_delta_is_resolved_during_merge() {
     for broken in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
-        assert_eq!(
-            merged_with(1.0, broken).ui_font_delta,
-            default_ui_font_delta(),
-            "a font delta of {broken} reaches MoonUI text metrics; it must be repaired"
-        );
+        assert_eq!(merged_with(1.0, broken).ui_density, UiDensity::Standard);
     }
-    assert_eq!(
-        merged_with(1.0, 0.0).ui_font_delta,
-        0.0,
-        "zero font delta is 'no adjustment', a legitimate choice — it must NOT be repaired"
+    assert_eq!(merged_with(1.0, 0.0).ui_density, UiDensity::Compact);
+}
+
+/// Catches removing the density migration dirty bit or losing the choice in split.
+/// An unchanged current-version file must be rewritten once and then stop migrating.
+#[test]
+fn density_migrates_through_the_persistence_pipeline_once() {
+    let settings: SettingsFile = toml::from_str(&format!(
+        "version = {SCHEMA_VERSION}\nnext_uid = 1\nui_font_delta = 6.0\nui_scale = 1.25"
+    ))
+    .unwrap();
+    let merged = merge(ServersFile::default(), settings, None);
+    assert!(
+        merged.dirty,
+        "density migration must request a write even at the current schema"
     );
+    assert_eq!(merged.ui_density, UiDensity::Large);
+    let (servers, settings) = split(
+        &merged.servers,
+        &merged.groups,
+        &merged.core_groups,
+        merged.language,
+        merged.market_mode,
+        merged.charts_split_by_core,
+        merged.charts_stack_scroll,
+        merged.charts_stack_compress,
+        merged.chart_stack_height,
+        merged.separate_control_zones,
+        merged.main_idle_close_secs,
+        merged.log_to_file,
+        merged.log_retention_days,
+        merged.ui_density,
+        merged.ui_theme_mode,
+        merged.ui_scale,
+        merged.chart_memory_percent,
+        merged.core_sort,
+        merged.report_valuation_mode,
+        merged.next_uid.get(),
+        merged.telegram,
+    );
+    let saved = toml::to_string(&settings).unwrap();
+    assert!(!saved.contains("ui_font_delta"));
+    assert!(saved.contains("ui_density = \"large\""));
+    let reloaded = merge(servers, toml::from_str(&saved).unwrap(), None);
+    assert!(
+        !reloaded.dirty,
+        "saved density must not trigger migration again"
+    );
+    assert_eq!(reloaded.ui_density, UiDensity::Large);
+    assert_eq!(reloaded.ui_scale, 1.25);
 }
 
 #[test]
@@ -323,6 +362,7 @@ fn a_clean_core_group_list_round_trips_through_merge_and_split() {
         version: SCHEMA_VERSION,
         next_uid: 1,
         core_groups: groups.clone(),
+        ui_density: Some(UiDensity::Standard),
         ..Default::default()
     };
 
@@ -347,7 +387,7 @@ fn a_clean_core_group_list_round_trips_through_merge_and_split() {
         merged.main_idle_close_secs,
         merged.log_to_file,
         merged.log_retention_days,
-        merged.ui_font_delta,
+        merged.ui_density,
         merged.ui_theme_mode,
         merged.ui_scale,
         merged.chart_memory_percent,
@@ -432,7 +472,7 @@ fn the_transport_survives_a_split() {
         0,
         true,
         14,
-        default_ui_font_delta(),
+        UiDensity::default(),
         UiThemeMode::default(),
         default_ui_scale(),
         100,
@@ -495,7 +535,7 @@ id = 2981",
         0,
         true,
         14,
-        default_ui_font_delta(),
+        UiDensity::default(),
         UiThemeMode::default(),
         default_ui_scale(),
         100,

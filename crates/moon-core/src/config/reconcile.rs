@@ -10,8 +10,8 @@ use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
 use super::schema::{
     COREID_UID_VERSION, SCHEMA_VERSION, ServerEntry, ServerMeta, ServersFile, SettingsFile,
-    TelegramConfig, UiThemeMode, clamp_chart_memory_percent, clamp_chart_stack_height,
-    repair_ui_font_delta, repair_ui_scale,
+    TelegramConfig, UiDensity, UiThemeMode, clamp_chart_memory_percent, clamp_chart_stack_height,
+    repair_ui_scale,
 };
 use super::servers::{self, CoreSortMode};
 use super::uid_counter::UidCounter;
@@ -44,8 +44,8 @@ pub struct Merged {
     pub log_to_file: bool,
     /// Log-file retention period in days (0 = keep everything).
     pub log_retention_days: u32,
-    /// Addition to base UI font sizes in logical pixels.
-    pub ui_font_delta: f32,
+    /// Resolved interface density from the new key or a legacy font adjustment.
+    pub ui_density: UiDensity,
     /// Dark/light MoonUI theme.
     pub ui_theme_mode: UiThemeMode,
     /// Overall UI geometry scale.
@@ -64,8 +64,7 @@ pub struct Merged {
     /// Legacy hotkeys from settings.toml (schema < v13), used only for one-time migration
     /// to `hotkeys.toml`; ignored when hotkeys.toml already exists.
     pub hotkeys: HotkeysConfig,
-    /// Whether the merged config must be persisted because the schema, assigned uids, or durable
-    /// uid counter changed.
+    /// Whether schema, density migration, assigned uids or the durable uid counter require a save.
     pub dirty: bool,
     /// The config version was below `COREID_UID_VERSION`, so `charts.json` contains POSITIONAL
     /// CoreIds that must be rebound once to stable uids. The UI does this at startup because the
@@ -83,11 +82,14 @@ pub struct Merged {
 /// counter is raised above `uid_floor` before any missing uids are assigned, and a raised counter
 /// marks the result dirty so the high-water mark is persisted. Saved core groups are sanitized
 /// without consulting the current server list, preserving temporarily absent members.
+/// Missing density is migrated from the legacy font delta and marked dirty for one write-back.
 pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Merged {
     let mut next_uid = next_free_uid(&sf, &meta, uid_floor);
     // A counter that had to be raised is written back, so the repair survives a later boot on
     // which the stores cannot be read.
-    let mut dirty = meta.version < SCHEMA_VERSION || next_uid.get() > meta.next_uid;
+    let mut dirty = meta.version < SCHEMA_VERSION
+        || next_uid.get() > meta.next_uid
+        || meta.ui_density.is_none();
     // Before v11, runtime CoreId was positional, so charts.json contains positional ids.
     let chart_core_remap_needed = meta.version < COREID_UID_VERSION;
     let language = meta.language;
@@ -100,7 +102,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     let main_idle_close_secs = meta.main_idle_close_secs;
     let log_to_file = meta.log_to_file;
     let log_retention_days = meta.log_retention_days;
-    let ui_font_delta = repair_ui_font_delta(meta.ui_font_delta);
+    let ui_density = meta.resolved_ui_density();
     let ui_theme_mode = meta.ui_theme_mode;
     let ui_scale = repair_ui_scale(meta.ui_scale);
     let chart_memory_percent = clamp_chart_memory_percent(meta.chart_memory_percent);
@@ -215,7 +217,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
         main_idle_close_secs,
         log_to_file,
         log_retention_days,
-        ui_font_delta,
+        ui_density,
         ui_theme_mode,
         ui_scale,
         chart_memory_percent,
@@ -234,6 +236,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
 /// Server connection keys go to `ServersFile`; server metadata, server-group settings, saved core
 /// groups, and presentation preferences go to `SettingsFile`. Saved core groups are copied as
 /// supplied because the caller owns sanitizing the runtime list before persistence.
+/// Density is always written explicitly; the retired font adjustment is never written.
 #[allow(clippy::too_many_arguments)]
 pub fn split(
     servers: &[ServerConfig],
@@ -249,7 +252,7 @@ pub fn split(
     main_idle_close_secs: u32,
     log_to_file: bool,
     log_retention_days: u32,
-    ui_font_delta: f32,
+    ui_density: UiDensity,
     ui_theme_mode: UiThemeMode,
     ui_scale: f32,
     chart_memory_percent: u16,
@@ -281,7 +284,8 @@ pub fn split(
         main_idle_close_secs,
         log_to_file,
         log_retention_days,
-        ui_font_delta,
+        ui_density: Some(ui_density),
+        ui_font_delta: None,
         ui_theme_mode,
         ui_scale,
         chart_memory_percent: clamp_chart_memory_percent(chart_memory_percent),

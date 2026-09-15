@@ -44,27 +44,17 @@ pub fn default_version() -> u32 {
     0
 }
 
-/// Lower bound the settings-UI Font slider and tick loop hold `ui_font_delta` within.
-///
-/// [`default_ui_font_delta`] must lie inside `UI_FONT_DELTA_MIN..=UI_FONT_DELTA_MAX`, so a future
-/// range narrowing cannot ship a default the slider cannot represent. `repair_ui_font_delta` does
-/// NOT clamp to this range: a hand-edited `settings.toml` is allowed a deliberate out-of-range
-/// choice, and these constants exist for the slider and for that assertion, not for repair.
-pub const UI_FONT_DELTA_MIN: i32 = -2;
-/// Upper bound the settings-UI Font slider and tick loop hold `ui_font_delta` within. See
-/// [`UI_FONT_DELTA_MIN`].
-pub const UI_FONT_DELTA_MAX: i32 = 6;
-
-/// Return the `ui_font_delta` used when a `settings.toml` field is ABSENT, and as the repair
-/// fallback [`repair_ui_font_delta`] applies to a PRESENT but non-finite stored value.
-///
-/// A present FINITE value — including `0.0` — is never replaced by either path, which is what
-/// keeps an existing user's chosen delta untouched. `3.0` lies within
-/// `UI_FONT_DELTA_MIN..=UI_FONT_DELTA_MAX` (`settings/general.rs`).
-pub fn default_ui_font_delta() -> f32 {
-    3.0
+/// User-selected interface density, mapped to MoonUI tiers by the UI crate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UiDensity {
+    Compact,
+    #[default]
+    Standard,
+    Large,
 }
 
+/// Return the default UI geometry scale.
 pub fn default_ui_scale() -> f32 {
     1.0
 }
@@ -78,28 +68,14 @@ pub fn default_ui_scale() -> f32 {
 /// `settings.toml` written before the loader applied schema defaults holds exactly that.
 ///
 /// Only non-finite and non-positive values are repaired. There is deliberately NO upper or lower
-/// bound beyond that: `ui_scale` has no settings-UI control, so hand-editing the file is the only
-/// way to set it, and the repaired value is persisted by the next `save()` — clamping a merely
-/// unusual number would silently destroy a deliberate choice with no way to get it back.
+/// bound beyond that: hand-edited scales outside the Settings slider range remain valid.
+/// The repaired value is persisted by the next save; clamping a merely unusual number
+/// would silently destroy a deliberate choice.
 pub fn repair_ui_scale(value: f32) -> f32 {
     if value.is_finite() && value > 0.0 {
         value
     } else {
         default_ui_scale()
-    }
-}
-
-/// Repair a stored UI font delta, preserving every value that can mean something.
-///
-/// `0.0` is a legitimate choice here — it is "no adjustment", not a missing value — so unlike a
-/// scale it is passed through untouched. Only non-finite values are repaired: TOML parses `nan`
-/// and `inf` happily, so they survive the loader, and MoonUI adds this delta straight into text
-/// metrics (`MoonThemeTokens::font`), where an infinity propagates into layout dimensions.
-pub fn repair_ui_font_delta(value: f32) -> f32 {
-    if value.is_finite() {
-        value
-    } else {
-        default_ui_font_delta()
     }
 }
 
@@ -324,6 +300,7 @@ pub struct ServerMeta {
     pub workspace_membership: WorkspaceMembership,
 }
 
+/// Plaintext preferences; absent density is distinguished from an explicit Standard choice.
 #[derive(Default, Serialize, Deserialize)]
 pub struct SettingsFile {
     #[serde(default = "default_version")]
@@ -362,15 +339,16 @@ pub struct SettingsFile {
     /// Number of days to retain log files; older files are deleted. 0 keeps all. Defaults to 14.
     #[serde(default = "servers::default_log_retention_days")]
     pub log_retention_days: u32,
-    /// Addition to base UI font sizes in logical pixels. Default +3 turns designed 10 px text
-    /// into 13 px at 1x without zooming the whole interface.
-    #[serde(default = "default_ui_font_delta")]
-    pub ui_font_delta: f32,
+    /// Legacy font adjustment, read only to seed density when the new key is absent.
+    #[serde(default, skip_serializing)]
+    pub ui_font_delta: Option<f32>,
+    /// Selected density. None means a legacy file; writers always supply the resolved choice.
+    #[serde(default)]
+    pub ui_density: Option<UiDensity>,
     /// Interface theme mode. Graphite shares dark colour data; this plaintext setting is not secret.
     #[serde(default)]
     pub ui_theme_mode: UiThemeMode,
-    /// Overall UI geometry scale. It currently has no public control but is stored beside
-    /// font_delta so the component theme has one source of truth.
+    /// Overall UI geometry scale, edited independently of density in Settings.
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
     /// Startup retained-history depth percentage passed to MoonProto.
@@ -416,6 +394,20 @@ pub struct SettingsFile {
     pub next_uid: u64,
     #[serde(default)]
     pub servers: Vec<ServerMeta>,
+}
+
+impl SettingsFile {
+    /// Resolve density once at load, with an explicit new key taking precedence over legacy data.
+    ///
+    /// Finite legacy deltas map at the old default: <= 0 is Compact, <= 3 is Standard,
+    /// and > 3 is Large. Missing or non-finite legacy values keep Standard.
+    pub fn resolved_ui_density(&self) -> UiDensity {
+        self.ui_density.unwrap_or_else(|| match self.ui_font_delta {
+            Some(delta) if delta.is_finite() && delta <= 0.0 => UiDensity::Compact,
+            Some(delta) if delta.is_finite() && delta > 3.0 => UiDensity::Large,
+            _ => UiDensity::Standard,
+        })
+    }
 }
 
 #[cfg(test)]

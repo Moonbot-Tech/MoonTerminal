@@ -86,9 +86,9 @@ pub(super) enum ConnColWidth {
     ///
     /// The three text columns share it for a second reason: their shrink order at a narrow window
     /// is decided by their RESOLVED bases, so a mixed policy would let one Font setting overtake
-    /// another column. `repair_ui_font_delta` (`moon-core/src/config/schema.rs`) deliberately
-    /// preserves any finite hand-edited delta, well past the slider's +6, so "no reachable setting
-    /// reverses it" is only true when the comparison is scale-free.
+    /// another column. Density now selects the text adjustment, while MoonUI still permits
+    /// custom finite font deltas. A scale-free comparison keeps that ordering independent
+    /// of either source.
     TextScaled,
 }
 

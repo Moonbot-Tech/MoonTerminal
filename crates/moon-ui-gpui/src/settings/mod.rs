@@ -34,7 +34,7 @@ use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{
-    IndexPath, MoonBackgroundPolicy, MoonCheckbox, MoonInputState, MoonSelectEvent, MoonSelectItem,
+    IndexPath, MoonBackgroundPolicy, MoonCheckbox, MoonSelectEvent, MoonSelectItem,
     MoonSelectState, MoonSliderState, MoonVirtualListScrollHandle, Root,
 };
 use rust_i18n::t;
@@ -175,10 +175,8 @@ pub struct SettingsView {
     conn_hint_armed: bool,
     /// Per-server editor states for the Connections tab; rebuilt after additions and removals.
     conn: Vec<ConnRow>,
-    /// UI-font slider for the personal `ui_font_delta` setting in `settings.toml`.
-    ui_font: Entity<MoonSliderState>,
-    /// Numeric UI-font input synchronized bidirectionally with the `ui_font` slider.
-    ui_font_input: Entity<MoonInputState>,
+    /// UI-zoom slider for the personal geometry scale in settings.toml.
+    ui_zoom: Entity<MoonSliderState>,
     /// Interface-theme selector for the General tab.
     theme_mode: Entity<MoonSelectState<UiThemeMode>>,
     /// Language selector for the General tab.
@@ -338,10 +336,8 @@ impl SettingsView {
         let security_ed = security::build(&backend, window, cx);
         let telegram_ed = telegram::build(&backend, window, cx);
 
-        // Build the General tab's personal `settings.toml` UI-font control: a labeled slider and
-        // bidirectionally synchronized numeric input. Edits reinstall the MoonUI theme live so
-        // the entire UI font scale updates. `general::build_font` owns the complete control.
-        let (ui_font, ui_font_input) = general::build_font(&backend, window, cx);
+        // The zoom slider reinstalls the draft theme for immediate preview.
+        let ui_zoom = general::build_zoom(&backend, cx);
 
         // Persist the Settings window position and size in layout so it reopens in the same place.
         // The debounced persistence loop drains `layout_dirty`, as it does for Strategies/Assets.
@@ -587,8 +583,7 @@ impl SettingsView {
             lines,
             badges,
             conn,
-            ui_font,
-            ui_font_input,
+            ui_zoom,
             theme_mode,
             lang,
             valuation,
@@ -640,7 +635,7 @@ fn settings_sig(b: &Backend) -> u64 {
     cfg.chart_stack_height.hash(&mut h);
     cfg.log_to_file.hash(&mut h);
     cfg.log_retention_days.hash(&mut h);
-    cfg.ui_font_delta.to_bits().hash(&mut h);
+    cfg.ui_density.hash(&mut h);
     cfg.ui_theme_mode.hash(&mut h);
     cfg.ui_scale.to_bits().hash(&mut h);
     cfg.hotkeys.hash(&mut h);
@@ -858,7 +853,7 @@ fn draft_sig(cfg: &AppConfig) -> u64 {
     cfg.log_to_file.hash(&mut h);
     cfg.log_retention_days.hash(&mut h);
     cfg.chart_memory_percent.hash(&mut h);
-    cfg.ui_font_delta.to_bits().hash(&mut h);
+    cfg.ui_density.hash(&mut h);
     cfg.ui_scale.to_bits().hash(&mut h);
 
     h.finish()

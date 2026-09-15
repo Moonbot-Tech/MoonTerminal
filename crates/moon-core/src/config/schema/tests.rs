@@ -1,8 +1,51 @@
-//! Compatibility tests for persisted MoonProto retained-history sizing and theme defaults.
+//! Compatibility tests for persisted history sizing, theme defaults and density migration.
 
 use moonproto::state::MarketHistorySizing;
 
 use super::*;
+
+/// Catches changing legacy thresholds or letting a retired key override explicit density.
+/// Either regression changes text and component size after an upgrade or settings save.
+#[test]
+fn density_migration_respects_legacy_boundaries_and_new_key_precedence() {
+    for (legacy, expected) in [
+        ("-2.0", UiDensity::Compact),
+        ("0.0", UiDensity::Compact),
+        ("0.01", UiDensity::Standard),
+        ("3.0", UiDensity::Standard),
+        ("3.01", UiDensity::Large),
+        ("6.0", UiDensity::Large),
+        ("nan", UiDensity::Standard),
+        ("inf", UiDensity::Standard),
+    ] {
+        let input = format!("ui_font_delta = {legacy}");
+        let parsed: SettingsFile = toml::from_str(&input).unwrap();
+        assert_eq!(parsed.resolved_ui_density(), expected);
+        for (stored, density) in [
+            ("compact", UiDensity::Compact),
+            ("standard", UiDensity::Standard),
+            ("large", UiDensity::Large),
+        ] {
+            let parsed: SettingsFile =
+                toml::from_str(&format!("{input}\nui_density = \"{stored}\"")).unwrap();
+            assert_eq!(parsed.resolved_ui_density(), density);
+        }
+    }
+    let missing: SettingsFile = toml::from_str("").unwrap();
+    assert_eq!(missing.resolved_ui_density(), UiDensity::Standard);
+}
+
+/// Catches serializing the retired key, which would leave obsolete font settings on disk.
+#[test]
+fn density_serialization_drops_the_legacy_key() {
+    let mut settings: SettingsFile = toml::from_str("ui_font_delta = 6.0").unwrap();
+    settings.ui_density = Some(settings.resolved_ui_density());
+    let saved = toml::to_string(&settings).unwrap();
+    assert!(!saved.contains("ui_font_delta"));
+    assert!(saved.contains("ui_density = \"large\""));
+    let reloaded: SettingsFile = toml::from_str(&saved).unwrap();
+    assert_eq!(reloaded.resolved_ui_density(), UiDensity::Large);
+}
 
 /// The plausible production mutation is `config/schema.rs:clamp_chart_memory_percent`: restoring
 /// `value.clamp(100, 800)` rejects MoonProto's 75% depth setting, so a saved 75 reloads as 100.
