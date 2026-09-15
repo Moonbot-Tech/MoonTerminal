@@ -133,7 +133,7 @@ fn captioned_filter_labels_fit_without_ellipsis_in_every_locale(cx: &mut gpui::T
                     moon_ui::MoonDropdown::fitted_trigger_label(
                         cx,
                         label,
-                        moon_ui::MoonButtonSize::Action,
+                        moon_ui::MoonSize::Sm.into(),
                         width,
                         width,
                     )

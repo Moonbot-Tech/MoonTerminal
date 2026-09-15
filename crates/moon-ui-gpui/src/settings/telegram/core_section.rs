@@ -167,7 +167,7 @@ impl SettingsView {
                     .label(caption)
                     .trigger_caret(true)
                     .trigger_variant(MoonButtonVariant::Soft)
-                    .trigger_size(MoonButtonSize::Action)
+                    .trigger_size(MoonButtonSize::density(cx))
                     .fit_trigger_width(crate::controls::CORE_COMBO_TRIGGER_W, 260.0)
                     // Font-scaled bounds (tokens.font()); MoonUI measures the widest menu row.
                     .fit_menu_width(crate::controls::CORE_COMBO_TRIGGER_W, 560.0)

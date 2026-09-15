@@ -38,8 +38,8 @@ use crate::design;
 
 /// Design-reference edge of one slot in the run column.
 ///
-/// The height a `MoonButtonSize::Micro` control takes at zero scale, so a slot is square and a
-/// column of them lines up with the row heights around it.
+/// The unscaled edge of a dense-strip slot, so a slot is square and a column of them lines up
+/// with the row heights around it.
 const SLOT_W: f32 = 18.0;
 
 /// Gap between two adjacent slots.

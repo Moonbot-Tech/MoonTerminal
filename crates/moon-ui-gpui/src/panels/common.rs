@@ -12,7 +12,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     DockArea, MoonBackgroundPolicy, MoonBadge, MoonBadgeVariant, MoonButton, MoonButtonIconSlot,
-    MoonButtonSize, MoonButtonVariant, MoonGroupBox, MoonMenuItem, MoonPalette, MoonTooltipView,
+    MoonButtonVariant, MoonGroupBox, MoonMenuItem, MoonPalette, MoonSize, MoonTooltipView,
 };
 
 use crate::Backend;
@@ -460,7 +460,6 @@ fn micro_frame(
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> MoonButton {
     MoonButton::new(id)
-        .size(MoonButtonSize::Micro)
         .width(width)
         .variant(variant)
         .tooltip(tip)
@@ -562,7 +561,6 @@ pub(crate) fn popup_close_button(
 ) -> impl IntoElement {
     MoonButton::new(id)
         .label("✕")
-        .size(MoonButtonSize::Micro)
         .variant(MoonButtonVariant::Ghost)
         .on_click(on_click)
         .render()
@@ -589,7 +587,6 @@ pub(crate) fn popup_apply_all_button(
     MoonButton::new(id)
         .label("⧉")
         .tooltip(tooltip)
-        .size(MoonButtonSize::Micro)
         .variant(MoonButtonVariant::Ghost)
         .on_click(on_click)
         .render()
@@ -620,7 +617,28 @@ pub(crate) fn popup_gear_trigger(
     MoonButton::new(id)
         .leading_icon(MoonButtonIconSlot::new("icons/settings.svg"))
         .tooltip(tooltip)
-        .size(MoonButtonSize::Micro)
+        .variant(if open {
+            MoonButtonVariant::Blue
+        } else {
+            MoonButtonVariant::Ghost
+        })
+        .selected(open)
+        .render()
+}
+
+/// Builds the ⚙ that opens a settings popup on a fixed-height chrome strip.
+///
+/// Same as [`popup_gear_trigger`] but pinned to `MoonSize::Xs` so it stays dense regardless of
+/// the app's density setting.
+pub(crate) fn popup_gear_trigger_dense(
+    id: impl Into<ElementId>,
+    tooltip: impl Into<SharedString>,
+    open: bool,
+) -> impl IntoElement {
+    MoonButton::new(id)
+        .leading_icon(MoonButtonIconSlot::new("icons/settings.svg"))
+        .tooltip(tooltip)
+        .size(MoonSize::Xs)
         .variant(if open {
             MoonButtonVariant::Blue
         } else {
@@ -723,7 +741,10 @@ pub(crate) fn pinned_scope_label(
         .border_1()
         .border_color(design::moon_alpha(p.border, 0.42))
         .font_family(design::mono())
-        .text_size(design::text_px(cx, design::ACTION_LABEL_BASE))
+        .text_size(design::ui_px(
+            cx,
+            design::button_tier(cx).control_metrics().font_size,
+        ))
         .text_color(rgb(design::chrome_label_color(p)))
         .child(div().flex_none().child(design::PINNED_SCOPE_GLYPH))
         .child(div().min_w_0().truncate().child(label))
@@ -824,11 +845,10 @@ pub(crate) fn footer_text_style(el: Div, weight: FooterWeight, color: u32, cx: &
 /// The container every panel's top band builds: one full-width row floored at
 /// [`design::action_control_h_px`].
 ///
-/// Every sibling band derives its height from the Action-size control it carries (Orders, Alerts,
-/// Core Status, Report and News all use the same chain with no explicit height), while the
-/// Detects band carries only a Micro gear ([`popup_gear_trigger`]) — so without this floor the
-/// Detects row would sit visibly shorter than every tab beside it, which is the defect this
-/// helper exists to remove.
+/// Every sibling band derives its height from the density-tier control it carries (Orders, Alerts,
+/// Core Status, Report and News all use the same chain with no explicit height). The Detects band
+/// carries only a gear ([`popup_gear_trigger`]) that follows the same tier, and this floor tracks
+/// that height so the row cannot sit shorter than every tab beside it.
 pub(crate) fn panel_band(cx: &App) -> Div {
     moon_ui::h_flex()
         .w_full()
@@ -890,7 +910,7 @@ pub fn detach_button(
     }
     MoonButton::new(SharedString::from(format!("detach-{name}")))
         .ghost()
-        .size(MoonButtonSize::Action)
+        .size(MoonSize::Sm)
         .label("⧉")
         .tooltip(rust_i18n::t!("dock.detach_hint").to_string())
         .on_click(move |_, window, app| {

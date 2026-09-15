@@ -19,8 +19,8 @@ use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonContextMenuWindowExt as _, MoonInput,
-    MoonInputState, MoonMenuItem, MoonPalette, MoonWindowExt as _, h_flex, v_flex,
+    MoonButton, MoonButtonVariant, MoonContextMenuWindowExt as _, MoonInput, MoonInputState,
+    MoonMenuItem, MoonPalette, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -458,14 +458,12 @@ fn named_footer(
         .child(
             MoonButton::new("core-update-named-cancel")
                 .ghost()
-                .size(MoonButtonSize::Micro)
                 .label(t!("dialogs.cancel").to_string())
                 .on_click(move |_, window, cx| window.close_dialog(cx))
                 .render(),
         )
         .child(
             MoonButton::new("core-update-named-confirm")
-                .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Blue)
                 .label(t!("dialogs.done").to_string())
                 .on_click(move |_, window, cx| {

@@ -13,8 +13,8 @@
 use gpui::*;
 use moon_core::config::{ChartLabelField, ChartLabelGroup, ChartLabelRow};
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonListItem, MoonPalette, MoonPopover,
-    MoonPopoverPlacement, MoonSeparator, h_flex, v_flex,
+    MoonButton, MoonButtonVariant, MoonListItem, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonSeparator, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -229,7 +229,6 @@ pub(crate) fn field_picker(
                 // The caret is part of the LABEL: `MoonButton` has no disclosure of its own, and a
                 // trigger with no hint that something opens under it reads as a dead button.
                 .label(format!("{label}  ▾"))
-                .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Soft)
                 .disabled(disabled)
                 .render(),

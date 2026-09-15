@@ -61,7 +61,7 @@ impl OrdersPanel {
                 px(MoonDropdown::fitted_trigger_label(
                     cx,
                     &label,
-                    MoonButtonSize::Action,
+                    MoonButtonSize::density(cx),
                     crate::controls::CORE_COMBO_TRIGGER_W,
                     AUTO_CORE_TRIGGER_MAX_W,
                 )
@@ -96,6 +96,7 @@ impl OrdersPanel {
                 |n| t!("orders.cores_n", n = n).to_string(),
                 170.0,
                 extras,
+                cx,
                 move |id, app| {
                     view.update(app, |t, c| t.toggle_core(id, c));
                 },
@@ -143,7 +144,7 @@ impl OrdersPanel {
             .label(cur)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(102.0)
             .menu_width_scaled(138.0)
             .items(items)
@@ -162,7 +163,7 @@ impl OrdersPanel {
             // deliberately NOT `sort_menu`'s gear below: the two sit side by side in this bar.
             .trigger_icon(design::COLUMN_SELECTOR_ICON)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width(design::glyph_btn_w(cx))
             .menu_width_scaled(170.0)
             .close_on_select(false);
@@ -230,7 +231,7 @@ impl OrdersPanel {
         let menu = MoonDropdown::new("orders-sort")
             .trigger_icon("icons/settings-2.svg")
             .trigger_variant(MoonButtonVariant::Ghost)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width(design::glyph_btn_w(cx))
             .fit_menu_width(SETTINGS_MENU_MIN_W, SETTINGS_MENU_MAX_W)
             .items(Self::sort_menu_items(&view, self.view));

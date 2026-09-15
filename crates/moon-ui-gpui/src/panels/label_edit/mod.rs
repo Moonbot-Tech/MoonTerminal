@@ -16,8 +16,7 @@ use std::rc::Rc;
 use gpui::*;
 use moon_core::config::ChartLabelRow;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInputState, MoonPalette, MoonWindowExt as _,
-    h_flex,
+    MoonButton, MoonButtonVariant, MoonInputState, MoonPalette, MoonWindowExt as _, h_flex,
 };
 use rust_i18n::t;
 
@@ -192,7 +191,6 @@ fn dialog_footer(state: Entity<LabelEditState>, p: MoonPalette) -> AnyElement {
         .child(
             MoonButton::new("le-cancel")
                 .ghost()
-                .size(MoonButtonSize::Micro)
                 .label(t!("dialogs.cancel").to_string())
                 .on_click(move |_, window: &mut Window, cx: &mut App| {
                     window.close_dialog(cx);
@@ -201,7 +199,6 @@ fn dialog_footer(state: Entity<LabelEditState>, p: MoonPalette) -> AnyElement {
         )
         .child(
             MoonButton::new("le-ok")
-                .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Blue)
                 .label(t!("dialogs.done").to_string())
                 .on_click(move |_, window: &mut Window, cx: &mut App| {

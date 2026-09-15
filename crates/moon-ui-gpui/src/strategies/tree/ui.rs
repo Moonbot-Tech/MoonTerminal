@@ -1137,21 +1137,18 @@ impl StrategiesView {
 
         let mut copy = MoonButton::new("sel-copy")
             .outline()
-            .size(MoonButtonSize::Action)
             .leading_icon(MoonButtonIconSlot::new("icons/copy.svg"))
             .tooltip(copy_label.clone())
             .disabled(!can_copy)
             .on_click(cx.listener(|this, _, _, cx| this.copy_tree_target(cx)));
         let mut paste = MoonButton::new("sel-paste")
             .outline()
-            .size(MoonButtonSize::Action)
             .leading_icon(MoonButtonIconSlot::new("icons/inbox.svg"))
             .tooltip(paste_label.clone())
             .disabled(!can_paste)
             .on_click(cx.listener(|this, _, window, cx| this.paste_to_targets(window, cx)));
         let mut delete = MoonButton::new("sel-delete")
             .danger()
-            .size(MoonButtonSize::Action)
             .leading_icon(MoonButtonIconSlot::new("icons/delete.svg"))
             .tooltip(delete_label.clone())
             .disabled(!can_delete)
@@ -1223,7 +1220,6 @@ impl StrategiesView {
         };
         MoonButton::new(id)
             .outline()
-            .size(MoonButtonSize::Action)
             .width(icon_width)
             .leading_icon(MoonButtonIconSlot::new(icon))
             .tooltip(if empty_folder {
@@ -1268,7 +1264,7 @@ impl StrategiesView {
             .label(format!("＋ {}", t!("strat.menu_create")))
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .fit_trigger_width(96.0, 110.0)
             .menu_width_scaled(180.0)
             .items(items)

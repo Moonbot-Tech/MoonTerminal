@@ -205,8 +205,15 @@ pub(crate) fn signature(cx: &App, composition: impl Hash) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     composition.hash(&mut h);
     // The RESOLVED font, not the requested size: a fallback or an availability change moves every
-    // measured width without moving the slider.
-    design::text_metrics_key(cx, design::ACTION_LABEL_BASE, 400.0, true).hash(&mut h);
+    // measured width without moving the slider. Keyed on the density-tier control font the
+    // compact trigger actually draws, not the legacy ACTION_LABEL_BASE font channel.
+    design::text_metrics_key(
+        cx,
+        design::button_tier(cx).control_metrics().font_size,
+        400.0,
+        true,
+    )
+    .hash(&mut h);
     // Sampled at 100 so a UI-scale step survives the rounding.
     design::ui_value(cx, 100.0).to_bits().hash(&mut h);
     rust_i18n::locale().hash(&mut h);
@@ -235,7 +242,14 @@ pub(crate) fn compact_trigger_width(cx: &App, label: &str, all_word: &str) -> f3
     // where MoonUI applies it too — clamping the text first and adding the glyph after would land
     // one reservation away from what the component draws.
     let natural = |text: &str| {
-        MoonDropdown::fitted_trigger_label(cx, text, MoonButtonSize::Action, 0.0, UNBOUNDED_FIT_W).1
+        MoonDropdown::fitted_trigger_label(
+            cx,
+            text,
+            MoonButtonSize::density(cx),
+            0.0,
+            UNBOUNDED_FIT_W,
+        )
+        .1
     };
     let text_w = if label == all_word {
         natural(label)
@@ -274,19 +288,19 @@ pub(crate) fn compact_design_floor(cx: &App, all_word: &str) -> f32 {
     compact_trigger_width(cx, all_word, all_word) / action_scale(cx)
 }
 
-/// The rendered width a design-reference width becomes on an Action-sized trigger.
+/// The rendered width a design-reference width becomes on a density-tier trigger.
 ///
-/// MIRRORS MoonUI: `fit_dropdown_trigger_label` scales its bounds by `font(font_size)/font_size` at
-/// the trigger's own size, which for Action is [`design::ACTION_LABEL_BASE`] — NOT the mono body
-/// scale `design::font_w` applies, from which it diverges as soon as the Font slider leaves zero.
-/// A row whose selectors mixed the two would size them differently for the same shape.
+/// Scales by `ui(font_size)/font_size` at [`design::button_tier`]'s control font — the same `ui`
+/// channel the button draws through. The Font-slider `font()` scale that [`design::font_w`] uses
+/// is a different number the moment the slider leaves zero.
 pub(crate) fn action_width(cx: &App, design_w: f32) -> f32 {
     design_w * action_scale(cx)
 }
 
-/// The factor MoonUI applies to an Action-sized trigger's design-reference widths.
+/// The factor a density-tier trigger applies to design-reference widths (`tokens.ui`).
 fn action_scale(cx: &App) -> f32 {
-    design::font_value(cx, design::ACTION_LABEL_BASE) / design::ACTION_LABEL_BASE
+    let font_size = design::button_tier(cx).control_metrics().font_size.max(1.0);
+    design::ui_value(cx, font_size) / font_size
 }
 
 /// The line height one frame measured, shared between the two probes below.

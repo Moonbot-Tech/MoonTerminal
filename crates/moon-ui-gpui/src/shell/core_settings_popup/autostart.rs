@@ -11,7 +11,7 @@
 //! action on the core, not a setting to be staged.
 
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex, v_flex};
+use moon_ui::{MoonButton, MoonButtonVariant, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use moon_core::feed::{CoreConfig, ResetProfitKind};
@@ -58,7 +58,6 @@ fn profit_line(
         let group = group.to_string();
         MoonButton::new(SharedString::from(id))
             .label(reset_label)
-            .size(MoonButtonSize::Micro)
             .variant(MoonButtonVariant::Soft)
             .on_click(move |_, _w, app| {
                 let b = backend.read(app);

@@ -15,8 +15,7 @@
 use gpui::*;
 use moon_core::config::ChartLabelsCfg;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    h_flex, v_flex,
+    MoonButton, MoonButtonVariant, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -47,11 +46,10 @@ const MICRO_COUNT: f32 = 9.0;
 pub(super) const NAME_W: f32 = 150.0;
 /// Unscaled size the name button draws its label at.
 ///
-/// `MoonButtonSize::Micro` resolves to the native `Size::XSmall`, whose label is 9.0. Named here
-/// because the FIT below measures against it: measuring a string at a narrower font underestimates
-/// its width and the label overflows the box anyway, which is exactly the bug this module is
-/// fixing. The SIZE is only half of that — the family matters just as much, and it is the
-/// MONOSPACED one the shell root imposes on the whole tree, not the theme's UI family.
+/// [`NAME_TEXT`] is the size the FIT below measures against: measuring a string at a narrower
+/// font underestimates its width and the label overflows the box anyway, which is exactly the bug
+/// this module is fixing. The SIZE is only half of that — the family matters just as much, and it
+/// is the MONOSPACED one the shell root imposes on the whole tree, not the theme's UI family.
 pub(super) const NAME_TEXT: f32 = 9.0;
 /// Unscaled padding a `Micro` button keeps on EACH side of its label.
 ///
@@ -183,7 +181,6 @@ fn render_labels_popup<T: LabelsPopupHost>(
         let entity = entity.clone();
         MoonButton::new(SharedString::from(format!("{id}-reset")))
             .label(t!("chart_labels.reset").to_string())
-            .size(MoonButtonSize::Micro)
             .variant(MoonButtonVariant::Ghost)
             .tooltip(t!("chart_labels.reset_tip").to_string())
             .on_click(move |_, _w, app: &mut App| {
@@ -241,7 +238,7 @@ fn render_labels_popup<T: LabelsPopupHost>(
                 .w_full()
                 .items_center()
                 .gap(design::ui_px(cx, 8.0))
-                .child(rows::add_row_dropdown(id, &entity, &cfg))
+                .child(rows::add_row_dropdown(id, &entity, &cfg, cx))
                 .child(reset_all),
         )
         .into_any_element()

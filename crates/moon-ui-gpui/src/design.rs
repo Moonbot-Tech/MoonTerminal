@@ -7,7 +7,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::util::fmt::DeltaSign;
 use moon_ui::{
-    MoonButtonVariant, MoonMetrics, MoonPalette, MoonTableStyle, MoonTheme, MoonTone, rgba_from,
+    MoonButtonSize, MoonButtonVariant, MoonMetrics, MoonPalette, MoonSize, MoonTableStyle,
+    MoonTheme, MoonTone, rgba_from,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -341,38 +342,33 @@ pub fn table_style(p: MoonPalette) -> MoonTableStyle {
 pub const COLUMN_SELECTOR_ICON: &str = "icons/layout-dashboard.svg";
 
 /// Rendered width that makes a SQUARE one-symbol button — the report export (`⇩`) and the
-/// Action-sized column selectors, which draw [`COLUMN_SELECTOR_ICON`] rather than a glyph.
+/// column selectors, which draw [`COLUMN_SELECTOR_ICON`] rather than a glyph.
 ///
 /// It returns the button's own drawn height, so the caller must pass it to a RENDERED width
 /// (`MoonDropdown::trigger_width`, `MoonButton::width`), never to a `*_scaled` variant: MoonUI
 /// scales a scaled trigger width by `font()` (which adds the Font-slider delta) while it scales the
-/// height by `ui()` (a pure multiply), so the two diverge as soon as the slider leaves zero — a
-/// scaled 26 renders ≈33×26 at the shipped default delta.
+/// height by `ui()` (a pure multiply), so the two diverge as soon as the slider leaves zero.
 ///
-/// MIRRORS MoonUI, like [`micro_control_h_value`]: `MoonButtonMetrics::base_for_size(Size::Small)`,
-/// which `MoonButtonSize::Action` resolves to, is `height 26`, `line_height 14`, so its `pad_y` is
-/// `6` — exactly the arguments below. `MoonButtonMetrics` is private there, so nothing checks this
-/// automatically; if MoonUI's Small metrics move, this must follow by hand.
+/// Reads [`action_control_h_value`]: a square control matches the ordinary button height at the
+/// app's density tier.
 pub fn glyph_btn_w(cx: &App) -> f32 {
-    fit_h_value(cx, 26.0, 14.0, 6.0)
+    action_control_h_value(cx)
 }
 
-/// Rendered size of an Action-sized button's leading glyph.
+/// Rendered size of a density-tier button's leading glyph.
 ///
-/// MIRRORS MoonUI, like [`glyph_btn_w`]: `button_leading_icon_reservation` clamps the icon from the
-/// Action preset's own font metrics, `(font(10.5) + 1).clamp(10, 14)`. `MoonButton` and
-/// `MoonDropdown` apply it themselves; this exists for the callers that draw their own trigger
-/// content and must leave the component's room for it. The upstream helper is private, so nothing
-/// checks this automatically — if MoonUI's Action icon metrics move, this must follow.
+/// Reads `MoonButtonSize::tier_icon_size` for [`button_tier`]. `MoonButton` and `MoonDropdown`
+/// apply it themselves; this exists for the callers that draw their own trigger content and must
+/// leave the component's room for it.
 pub fn action_icon_px(cx: &App) -> f32 {
-    (font_value(cx, ACTION_LABEL_BASE) + 1.0).clamp(10.0, 14.0)
+    ui_value(cx, MoonButtonSize::tier_icon_size(button_tier(cx)))
 }
 
-/// Rendered width an Action-sized leading glyph takes, including the gap after it.
+/// Rendered width a density-tier leading glyph takes, including the gap after it.
 ///
-/// The gap is MoonUI's own `ui(6)` for this size; see [`action_icon_px`] for the mirror's terms.
+/// The gap is the density tier's `control_metrics().gap`; see [`action_icon_px`] for the glyph.
 pub fn action_icon_reservation(cx: &App) -> f32 {
-    action_icon_px(cx) + ui_value(cx, 6.0)
+    action_icon_px(cx) + ui_value(cx, button_tier(cx).control_metrics().gap)
 }
 
 /// Ceiling for a header selector label (core, manual strategy).
@@ -811,21 +807,27 @@ pub fn fit_h_px(cx: &App, base_height: f32, base_line_height: f32, base_pad_y: f
     px(fit_h_value(cx, base_height, base_line_height, base_pad_y))
 }
 
-/// Return the drawn height of a `MoonButtonSize::Micro` control, in base px.
+/// The size tier a Moon button actually renders at, snapped to what buttons support.
 ///
-/// MIRRORS MoonUI: `MoonButtonMetrics::base_for_size(Size::XSmall)` is `height 18`,
-/// `line_height 12`, whose `pad_y` works out to `3` — exactly the arguments below. Only those
-/// three numbers are mirrored; the scaling goes through MoonUI's own `MoonTheme::fit_height`.
+/// Args:
+///     cx: Application context used to read the active Moon scale.
 ///
-/// Two callers need it: a plain `div` sitting BESIDE such a button (a card title) takes the same
-/// box so the row's `items_center` centres two equal heights instead of centring a text line box
-/// against a taller pill, and the chart's action overlay sizes its own layout from it.
+/// Returns:
+///     `tokens.tier().nearest(MoonButtonSize::SUPPORTED)`.
+pub fn button_tier(cx: &App) -> MoonSize {
+    MoonTheme::active_tokens(cx)
+        .tier()
+        .nearest(MoonButtonSize::SUPPORTED)
+}
+
+/// Return the drawn height of a dense-strip button, in base px.
 ///
-/// Nothing checks this against MoonUI: `MoonButtonMetrics` is private there and the sibling
-/// checkout is not guaranteed present in CI, so a test can neither call it nor grep it. If
-/// MoonUI's XSmall metrics move, this must follow by hand.
+/// Pinned to `MoonSize::Xs.control_metrics().height`, not the density tier. Two callers need it:
+/// a plain `div` sitting BESIDE such a button (a card title) takes the same box so the row's
+/// `items_center` centres two equal heights instead of centring a text line box against a taller
+/// pill, and the chart's action overlay sizes its own layout from it.
 pub fn micro_control_h_value(cx: &App) -> f32 {
-    fit_h_value(cx, 18.0, 12.0, 3.0)
+    ui_value(cx, MoonSize::Xs.control_metrics().height)
 }
 
 /// [`micro_control_h_value`] as `Pixels` — the `*_value`/`*_px` pair every geometry helper in
@@ -836,17 +838,12 @@ pub fn micro_control_h(cx: &App) -> Pixels {
 
 // ---- Goal C: dock chrome shared by every panel ----
 
-/// Return the drawn height of an Action-size control, in base px.
+/// Return the drawn height of an ordinary button at the app's density tier, in base px.
 ///
-/// Derived the same way [`micro_control_h_value`] derives XSmall: base height, base line-height,
-/// and `pad_y` as `(height - line_height) / 2`. Nothing checks this against MoonUI automatically
-/// (`MoonButtonMetrics` is private there and the sibling checkout is not guaranteed present in
-/// CI) — if MoonUI's Action metrics move, this must follow by hand. This is a THIRD
-/// control-height tier beside [`micro_control_h_value`]: reuse was not possible because the Micro
-/// height is genuinely smaller and the pinned chip must match the Action-size controls standing
-/// beside it in the same row.
+/// Reads [`button_tier`]'s `control_metrics().height` through [`ui_value`]. This is the
+/// ordinary-control family; dense strips use [`micro_control_h_value`].
 pub fn action_control_h_value(cx: &App) -> f32 {
-    fit_h_value(cx, 26.0, 14.0, 6.0)
+    ui_value(cx, button_tier(cx).control_metrics().height)
 }
 
 /// [`action_control_h_value`] as `Pixels` — the `*_value`/`*_px` pair every geometry helper in
@@ -856,9 +853,9 @@ pub fn action_control_h_px(cx: &App) -> Pixels {
 }
 
 /// Height floor a panel footer row never sits below, so a footer carrying only text never reads
-/// shorter than one carrying a Micro control beside it.
+/// shorter than one carrying an ordinary density-tier control beside it.
 pub fn panel_band_min_h_px(cx: &App) -> Pixels {
-    px(micro_control_h_value(cx))
+    action_control_h_px(cx)
 }
 
 /// Glyph a pinned scope chip draws in place of the interactive trigger's dropdown caret.
@@ -1072,11 +1069,10 @@ impl<'a> MonoBodyTextMeasurer<'a> {
     }
 }
 
-/// Unscaled base size an Action-size button renders its label at.
+/// Unscaled base size used by existing label-measurement callers for ordinary button text.
 ///
-/// MIRRORS MoonUI, like [`glyph_btn_w`]: the text size inside `MoonButtonMetrics` for the Small
-/// metrics that `MoonButtonSize::Action` resolves to. Those metrics are private there, so nothing
-/// checks this automatically; if they move, this must follow by hand.
+/// Not derived from the shared control metrics this round; those callers still measure against
+/// this hand-kept number.
 pub const ACTION_LABEL_BASE: f32 = 10.5;
 
 /// Resolve the exact font and rendered size one measurement will use.
@@ -1444,7 +1440,7 @@ pub const R_BUTTON_BASE: f32 = M.button_radius;
 /// Unscaled shared `container_radius` token for MoonUI builders that apply UI scaling internally.
 pub const R_CONTAINER_BASE: f32 = M.container_radius;
 
-/// Return the scaled MoonUI `button_radius`, default 4, for buttons, cards, popups, and panels.
+/// Return the density-tier control radius for buttons, cards, popups, and panels.
 ///
 /// Args:
 ///     cx: Application context used to apply UI scaling.
@@ -1452,7 +1448,7 @@ pub const R_CONTAINER_BASE: f32 = M.container_radius;
 /// Returns:
 ///     The ready-to-use raw-GPUI radius.
 pub fn r_button(cx: &App) -> Pixels {
-    ui_px(cx, R_BUTTON_BASE)
+    ui_px(cx, button_tier(cx).control_metrics().radius)
 }
 
 /// Return the scaled MoonUI `container_radius`, default 8, for dialogs, modals, and containers.

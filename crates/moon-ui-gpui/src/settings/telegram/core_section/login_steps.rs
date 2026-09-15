@@ -5,8 +5,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputState,
-    MoonPalette, MoonWindowExt as _, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputState, MoonPalette,
+    MoonWindowExt as _, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -752,7 +752,6 @@ impl SettingsView {
                         .child(
                             MoonButton::new("telegram-core-logout-no")
                                 .outline()
-                                .size(MoonButtonSize::Action)
                                 .mono(false)
                                 .label(format!("  {}  ", t!("dialogs.no")))
                                 .on_click(move |_, window, cx| {
@@ -762,7 +761,6 @@ impl SettingsView {
                         )
                         .child(
                             MoonButton::new("telegram-core-logout-yes")
-                                .size(MoonButtonSize::Action)
                                 .variant(MoonButtonVariant::Danger)
                                 .mono(false)
                                 .label(format!("  {}  ", t!("dialogs.yes")))

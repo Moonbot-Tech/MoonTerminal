@@ -184,7 +184,7 @@ fn dropdown_row(
                 .label(current.to_string())
                 .trigger_caret(true)
                 .trigger_variant(MoonButtonVariant::Soft)
-                .trigger_size(MoonButtonSize::Micro)
+                .trigger_size(MoonButtonSize::density(cx))
                 .trigger_width_scaled(84.0)
                 .menu_width_scaled(104.0)
                 .items(items),
@@ -211,7 +211,6 @@ fn caption_list(
             let state = state.clone();
             MoonButton::new(SharedString::from(format!("le-pick-{ix}")))
                 .label(t!(part.field.locale_key()).to_string())
-                .size(MoonButtonSize::Micro)
                 .width(design::font_w(cx, LIST_W - 4.0 * MICRO_W - 10.0))
                 .variant(if is_selected {
                     MoonButtonVariant::Soft
@@ -754,7 +753,6 @@ fn caption_settings(
         let state = state.clone();
         MoonButton::new("le-style-reset")
             .label(t!("chart_labels.style_reset").to_string())
-            .size(MoonButtonSize::Micro)
             .variant(MoonButtonVariant::Ghost)
             .on_click(move |_, _w, cx: &mut App| {
                 write_row(&state, cx, |s| {

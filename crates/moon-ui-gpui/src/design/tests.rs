@@ -282,3 +282,42 @@ fn the_font_inverse_lands_on_the_size_it_was_asked_for() {
 fn a_degenerate_scale_answers_the_target_itself() {
     assert_eq!(invert_font_scale(12.0, 12.0, 14.0), 14.0);
 }
+
+// --- MoonButton density tier: dense strips vs ordinary rows ------------------------------------
+
+/// `design::micro_control_h_value` is PINNED to `MoonSize::Xs` while `design::action_control_h_value`
+/// FOLLOWS the app's density tier through [`super::button_tier`] — the whole point of splitting a
+/// dense strip's height from an ordinary control row's.
+///
+/// Breakage this pins: swapping the two helpers' bodies. That inversion — dense strips growing
+/// with density while ordinary rows stop growing — is the single most damaging way this goal can
+/// be silently undone, and nothing else in either repo catches it.
+#[gpui::test]
+fn micro_control_h_value_stays_pinned_while_action_follows_density(cx: &mut gpui::TestAppContext) {
+    for (density, expected_action) in [
+        (UiDensity::Compact, 20.0),
+        (UiDensity::Standard, 24.0),
+        (UiDensity::Large, 32.0),
+    ] {
+        cx.update(|cx| {
+            moon_ui::MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, density, 1.0),
+                cx,
+            );
+        });
+        let (micro, action) = cx.update(|cx| {
+            (
+                super::micro_control_h_value(cx),
+                super::action_control_h_value(cx),
+            )
+        });
+        assert_eq!(
+            micro, 20.0,
+            "{density:?}: micro_control_h_value must stay pinned to MoonSize::Xs, got {micro}"
+        );
+        assert_eq!(
+            action, expected_action,
+            "{density:?}: action_control_h_value must follow the density tier, got {action}"
+        );
+    }
+}

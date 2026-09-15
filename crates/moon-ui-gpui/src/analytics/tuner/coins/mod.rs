@@ -29,9 +29,9 @@ pub(in crate::analytics::tuner) mod state;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputEvent,
-    MoonInputState, MoonPalette, MoonScrollbarVisibility, MoonSlider, MoonSliderEvent,
-    MoonSliderState, MoonVirtualList, h_flex, v_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState,
+    MoonPalette, MoonScrollbarVisibility, MoonSlider, MoonSliderEvent, MoonSliderState,
+    MoonVirtualList, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -145,7 +145,6 @@ impl AnalyticsView {
                     } else {
                         MoonButtonVariant::Soft
                     })
-                    .size(MoonButtonSize::Micro)
                     .selected(on)
                     .disabled(!enabled)
                     .label(label)
@@ -485,7 +484,6 @@ impl AnalyticsView {
                             div().font_family(design::ui_font()).child(
                                 MoonButton::new("an-coin-revert")
                                     .variant(MoonButtonVariant::Soft)
-                                    .size(MoonButtonSize::Micro)
                                     .label(t!("analytics.coins.revert").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.coins.revert();

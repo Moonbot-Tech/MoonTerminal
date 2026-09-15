@@ -3,8 +3,8 @@
 
 use super::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDataCell, MoonDataRow,
-    MoonDataTable, MoonDataTableColumn, MoonDropdown, MoonPopover, MoonPopoverPlacement, MoonTone,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonDataCell, MoonDataRow, MoonDataTable,
+    MoonDataTableColumn, MoonDropdown, MoonPopover, MoonPopoverPlacement, MoonSize, MoonTone,
     h_flex,
 };
 use rust_i18n::t;
@@ -318,7 +318,7 @@ fn strategy_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
         .label(row.strategy.clone())
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::Action)
+        .trigger_size(MoonSize::Sm.into())
         .trigger_width_scaled(150.0)
         .menu_width_scaled(220.0)
         .items(items)
@@ -362,7 +362,7 @@ fn actions_cell(row: &FigRow, ctx: &RowCtx, app: &mut App) -> AnyElement {
         .child(
             MoonButton::new(SharedString::from(format!("al-del-{core}-{id}")))
                 .label("✕")
-                .size(MoonButtonSize::Micro)
+                .size(MoonSize::Xs)
                 .variant(MoonButtonVariant::Ghost)
                 .tooltip(delete_tip)
                 .on_click(move |_, _w, app| {
@@ -392,7 +392,7 @@ fn settings_popover(
         target.core, target.id
     )))
     .label("⚙")
-    .size(MoonButtonSize::Micro)
+    .size(MoonSize::Xs)
     .variant(MoonButtonVariant::Ghost)
     .tooltip(t!("alerts.settings").to_string())
     .render();

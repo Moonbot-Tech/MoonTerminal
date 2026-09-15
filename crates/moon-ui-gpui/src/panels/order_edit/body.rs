@@ -305,7 +305,6 @@ pub(super) fn dialog_footer(state: Entity<OrderEditState>, p: MoonPalette) -> An
         .child(
             MoonButton::new("oe-cancel")
                 .ghost()
-                .size(MoonButtonSize::Micro)
                 .label(t!("dialogs.cancel").to_string())
                 .on_click(move |_, window, cx| {
                     window.close_dialog(cx);
@@ -314,7 +313,6 @@ pub(super) fn dialog_footer(state: Entity<OrderEditState>, p: MoonPalette) -> An
         )
         .child(
             MoonButton::new("oe-ok")
-                .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Blue)
                 .label("OK")
                 .on_click(move |_, window, cx| match apply(&ok_state, cx) {

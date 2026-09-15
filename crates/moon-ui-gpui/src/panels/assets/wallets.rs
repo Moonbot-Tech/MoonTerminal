@@ -391,7 +391,6 @@ impl AssetsView {
                         .child(
                             MoonButton::new("transfer-cancel")
                                 .outline()
-                                .size(MoonButtonSize::Action)
                                 .label(format!("  {}  ", t!("dialogs.cancel")))
                                 .on_click(move |_, window, cx| {
                                     footer_cancel_view
@@ -403,7 +402,6 @@ impl AssetsView {
                         .child(
                             MoonButton::new("transfer-confirm")
                                 .primary()
-                                .size(MoonButtonSize::Action)
                                 .label(format!("  {}  ", t!("assets.transfer_btn")))
                                 .on_click(move |_, window, cx| {
                                     match footer_confirm_view

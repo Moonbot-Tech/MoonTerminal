@@ -42,9 +42,9 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonDataTableState, MoonInputState,
-    MoonPalette, MoonSegmentItem, MoonSegmentedControl, MoonTreeState, Panel, PanelEvent,
-    PanelState, h_flex, v_flex,
+    DockArea, MoonButton, MoonButtonVariant, MoonDataTableState, MoonInputState, MoonPalette,
+    MoonSegmentItem, MoonSegmentedControl, MoonTreeState, Panel, PanelEvent, PanelState, h_flex,
+    v_flex,
 };
 
 use crate::Backend;
@@ -1390,6 +1390,7 @@ impl CoreStatusView {
                 |n| t!("core_status.cores_n", n = n).to_string(),
                 170.0,
                 extras,
+                cx,
                 move |id, app| {
                     view.update(app, |t, c| t.toggle_core(id, c));
                 },
@@ -1647,7 +1648,6 @@ impl CoreStatusView {
                             } else {
                                 t!("core_update.fleet.all").to_string()
                             })
-                            .size(MoonButtonSize::Micro)
                             .variant(MoonButtonVariant::Panel)
                             .disabled(all_empty)
                             .on_click(move |_, window, cx| {
@@ -1664,7 +1664,6 @@ impl CoreStatusView {
                     .child({
                         let behind_button = MoonButton::new("core-status-update-behind")
                             .label(t!("core_update.fleet.behind").to_string())
-                            .size(MoonButtonSize::Micro)
                             .variant(behind_variant)
                             .disabled(behind_empty)
                             .on_click(move |_, window, cx| {
@@ -1689,7 +1688,6 @@ impl CoreStatusView {
                         // prompt and then a confirm would be two gates on one action.
                         MoonButton::new("core-status-update-named")
                             .label(t!("core_update.fleet.named").to_string())
-                            .size(MoonButtonSize::Micro)
                             .variant(MoonButtonVariant::Panel)
                             .disabled(all_empty)
                             .on_click(move |_, window, cx| {

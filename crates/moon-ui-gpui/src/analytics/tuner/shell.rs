@@ -180,7 +180,6 @@ impl AnalyticsView {
                 header = header.child(
                     MoonButton::new(SharedString::from(format!("tun-copy-{k}")))
                         .variant(MoonButtonVariant::Soft)
-                        .size(MoonButtonSize::Micro)
                         .label(t!("analytics.tuner.copy_btn").to_string())
                         .disabled(!workspace_target_visible)
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -212,7 +211,6 @@ impl AnalyticsView {
                     } else {
                         MoonButtonVariant::Soft
                     })
-                    .size(MoonButtonSize::Micro)
                     .label(t!("analytics.tuner.save_btn").to_string())
                     .disabled(!workspace_target_visible)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -323,7 +321,6 @@ impl AnalyticsView {
                 el.child(
                     MoonButton::new(SharedString::from("tun-suggest-stop-f"))
                         .variant(MoonButtonVariant::Soft)
-                        .size(MoonButtonSize::Micro)
                         .label(if stopping {
                             t!("analytics.tuner.stopping").to_string()
                         } else {
@@ -340,7 +337,6 @@ impl AnalyticsView {
             .child(
                 MoonButton::new(SharedString::from("tun-suggest-one-f"))
                     .variant(MoonButtonVariant::Soft)
-                    .size(MoonButtonSize::Micro)
                     .label(t!("analytics.tuner.suggest_one").to_string())
                     .disabled(running)
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -354,7 +350,6 @@ impl AnalyticsView {
             .child(
                 MoonButton::new(SharedString::from("tun-suggest-run-f"))
                     .variant(MoonButtonVariant::Blue)
-                    .size(MoonButtonSize::Micro)
                     // The label carries the mode, because the two searches answer different
                     // questions and take very different amounts of time. One button whose
                     // meaning is silently switched by a checkbox two clicks away is how a user
@@ -489,7 +484,6 @@ impl AnalyticsView {
             .trigger(
                 MoonButton::new("tun-cfg-gear")
                     .label("⚙")
-                    .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Soft)
                     .tooltip(t!("analytics.tuner.cfg_title").to_string())
                     .render(),
@@ -554,7 +548,7 @@ impl AnalyticsView {
             .label(train_label(train_pct))
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .menu_width_scaled(96.0)
             .items(tr_items);
         let edges = self.tuner.edges;
@@ -582,7 +576,7 @@ impl AnalyticsView {
             .label(edges.to_string())
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .menu_width_scaled(64.0)
             .items(ed_items);
         let gap = design::ui_px(cx, 6.0);
@@ -604,7 +598,6 @@ impl AnalyticsView {
             .child(
                 MoonButton::new("tun-cfg-close")
                     .label("✕")
-                    .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Ghost)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.tuner.sugg_cfg_open = false;
@@ -789,7 +782,6 @@ impl AnalyticsView {
                     .child(
                         MoonButton::new("tun-cfg-seed-pin")
                             .label(t!("analytics.tuner.seed_pin").to_string())
-                            .size(MoonButtonSize::Micro)
                             .variant(MoonButtonVariant::Soft)
                             .on_click(cx.listener(|this, _, _, cx| this.pin_last_seed(cx)))
                             .render(),
@@ -832,7 +824,6 @@ impl AnalyticsView {
             .child(
                 MoonButton::new(SharedString::from("tun-suggest-run-t"))
                     .variant(MoonButtonVariant::Blue)
-                    .size(MoonButtonSize::Micro)
                     .label(if busy {
                         "…".to_string()
                     } else {

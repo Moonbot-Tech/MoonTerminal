@@ -469,7 +469,7 @@ impl AnalyticsView {
             .label(label)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(116.0)
             .menu_width_scaled(150.0);
         let all_view = view.clone();
@@ -511,7 +511,7 @@ impl AnalyticsView {
             .label(cur.label())
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(96.0)
             .menu_width_scaled(130.0);
         for f in [
@@ -554,7 +554,7 @@ impl AnalyticsView {
             // `glyph_btn_w` (the Action preset's 26px height) would not fit the row.
             .trigger_icon(design::COLUMN_SELECTOR_ICON)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(30.0)
             .menu_width_scaled(160.0)
             .close_on_select(false);

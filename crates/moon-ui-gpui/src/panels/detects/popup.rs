@@ -201,7 +201,6 @@ fn slot_toggle(
 ) -> impl IntoElement {
     MoonButton::new(id)
         .label(glyph)
-        .size(MoonButtonSize::Micro)
         .width(20.0)
         .variant(if on {
             MoonButtonVariant::Blue
@@ -258,7 +257,7 @@ fn slot_cell(
         .label(t!(field_key(slot.field)).to_string())
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::Micro)
+        .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(76.0)
         .menu_width_scaled(130.0)
         .items(items);
@@ -335,7 +334,6 @@ fn content(
         .child(
             MoonButton::new("det-view-copy")
                 .label(t!("settings.copy").to_string())
-                .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Ghost)
                 .on_click(cx.listener(|this, _, window, cx| this.copy_view(window, cx)))
                 .render(),
@@ -343,7 +341,6 @@ fn content(
         .child(
             MoonButton::new("det-view-paste")
                 .label(t!("settings.paste").to_string())
-                .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Ghost)
                 .on_click(cx.listener(|this, _, window, cx| this.paste_view(window, cx)))
                 .render(),

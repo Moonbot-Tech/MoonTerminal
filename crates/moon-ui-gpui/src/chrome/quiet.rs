@@ -23,7 +23,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use crate::panels::popup_gear_trigger;
+use crate::panels::common::popup_gear_trigger_dense;
 use crate::shell::Shell;
 use crate::{Backend, design};
 
@@ -48,7 +48,7 @@ pub(crate) fn header_quiet_width(cx: &App) -> f32 {
         + design::ui_value(cx, m.gap)
         + design::ui_value(cx, m.track_width)
         + design::ui_value(cx, design::CHROME_GAP)
-        // The gear is `popup_gear_trigger`, icon-only at Micro, so MoonUI draws it square and its
+        // The gear is `popup_gear_trigger_dense`, icon-only at Xs, so MoonUI draws it square and its
         // width IS its height.
         + design::micro_control_h_value(cx)
 }
@@ -120,7 +120,7 @@ pub(crate) fn header_quiet_cluster(
             content,
             // The same gear the Detects view configurator uses, so every settings popup in the
             // terminal is opened by one control: Micro, icon-only, lit while its popup is up.
-            popup_gear_trigger("header-quiet-gear", t!("quiet.gear_tip").to_string(), open),
+            popup_gear_trigger_dense("header-quiet-gear", t!("quiet.gear_tip").to_string(), open),
             move |open, window, cx| {
                 shell.update(cx, |s, cx| s.set_quiet_settings_open(open, window, cx));
             },

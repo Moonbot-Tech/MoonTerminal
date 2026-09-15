@@ -5,7 +5,7 @@ use rust_i18n::t;
 
 use moon_ui::{
     MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonPalette,
-    MoonTooltipView,
+    MoonSize, MoonTooltipView,
 };
 
 /// Price-scale (Y) presets matching egui `dock/controls.rs::SCALES` one-for-one.
@@ -160,7 +160,7 @@ pub(crate) fn scale_dropdown_for_tabs(
         "tabs-scale-tip",
         "tabs-scale-dropdown",
         "scale-tab",
-        MoonButtonSize::Micro,
+        MoonSize::Xs.into(),
         p,
         move |pct, cx| {
             tabs.update(cx, |t, tcx| t.pick_active_scale(pct, tcx));
@@ -201,7 +201,7 @@ pub(crate) fn scale_dropdown_for_trade_window(
         "trade-window-scale-tip",
         "trade-window-scale-dropdown",
         "scale-trade",
-        MoonButtonSize::Micro,
+        MoonSize::Xs.into(),
         p,
         move |pct, cx| {
             view.update(cx, |this, vcx| this.pick_scale(pct, vcx));
@@ -226,7 +226,7 @@ pub(crate) fn scale_dropdown_for_add_stack(
         "detached-stack-scale-tip",
         "detached-stack-scale-dropdown",
         "scale-stack",
-        MoonButtonSize::ToolbarCompact,
+        MoonSize::Xs.into(),
         p,
         move |pct, cx| {
             stack.update(cx, |st, scx| st.set_scale(pct, scx));

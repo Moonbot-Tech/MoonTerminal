@@ -71,6 +71,7 @@ pub(super) fn body(
                     "exp-log-exchange",
                     t!("core_expert.log_exchange_none").to_string(),
                     false,
+                    cx,
                 ))
                 .child(action(
                     "exp-log-apply",

@@ -1372,7 +1372,6 @@ impl StrategiesView {
                             row.child(
                                 MoonButton::new("strat-fields-apply")
                                     .success()
-                                    .size(MoonButtonSize::Micro)
                                     .label(t!("strat.fields_apply", n = sendable).to_string())
                                     .on_click({
                                         let apply_plan = apply_plan.clone();
@@ -1385,7 +1384,6 @@ impl StrategiesView {
                         })
                         .child(
                             MoonButton::new("strat-fields-refresh-buys")
-                                .size(MoonButtonSize::Micro)
                                 .label(t!("strat.fields_refresh_buys"))
                                 .tooltip(t!("strat.fields_refresh_buys_tip"))
                                 .disabled(!can_refresh)
@@ -1400,7 +1398,6 @@ impl StrategiesView {
                         .child(
                             MoonButton::new("strat-fields-revert")
                                 .ghost()
-                                .size(MoonButtonSize::Micro)
                                 .label(t!("strat.fields_revert").to_string())
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.discard_field_edits(cx)),
@@ -1481,7 +1478,6 @@ impl StrategiesView {
                         .child(
                             MoonButton::new("strat-version-staged-dismiss")
                                 .ghost()
-                                .size(MoonButtonSize::Micro)
                                 .label(t!("strat.edit_banner_dismiss").to_string())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.versions.staged_note = None;
@@ -1625,7 +1621,6 @@ impl StrategiesView {
                     .child(
                         MoonButton::new("strat-edit-note-dismiss")
                             .ghost()
-                            .size(MoonButtonSize::Micro)
                             .label(t!("strat.edit_banner_dismiss").to_string())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let entry = this.last_edit_note_seq.entry(core).or_insert(0);
@@ -1853,7 +1848,7 @@ impl StrategiesView {
                     } else {
                         MoonButtonVariant::Soft
                     })
-                    .trigger_size(MoonButtonSize::Action)
+                    .trigger_size(MoonButtonSize::density(cx))
                     .trigger_width_scaled(180.0)
                     .menu_width_scaled(220.0)
                     .menu_max_height_ui(220.0)
@@ -1911,7 +1906,6 @@ impl StrategiesView {
                         row = row.child(
                             MoonButton::new(SharedString::from(format!("field-edit-{row_id}")))
                                 .ghost()
-                                .size(MoonButtonSize::Micro)
                                 .label(t!("strat.params_edit_in_sections").to_string())
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     // Two selectors, one per view: `params_model` resolves a
@@ -2065,7 +2059,6 @@ impl StrategiesView {
                 line = line.child(
                     MoonButton::new(SharedString::from(format!("copy-cur-{row_id}")))
                         .ghost()
-                        .size(MoonButtonSize::Micro)
                         .label(t!("strat.copy_to_current").to_string())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             // Intentionally bypass the viewing_version gate: copying from a

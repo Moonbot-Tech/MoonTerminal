@@ -380,6 +380,7 @@ pub(super) fn body(
                         g.move_gesture(row, false),
                         true,
                         view,
+                        cx,
                         move |d, v| d.gestures.set_move_gesture(row, false, v),
                     ))
                     .child(choice_live(
@@ -388,9 +389,10 @@ pub(super) fn body(
                         g.move_gesture(row, true),
                         shorts,
                         view,
+                        cx,
                         move |d, v| d.gestures.set_move_gesture(row, true, v),
                     ))
-                    .child(choice_live(ids[2], &kinds, kind, true, view, kind_set))
+                    .child(choice_live(ids[2], &kinds, kind, true, view, cx, kind_set))
             };
             // One pending row: Moonbot stacks these two under their own labels rather than in the
             // grid, and the wire keeps them in different records — the long one is
@@ -402,7 +404,7 @@ pub(super) fn body(
                         .min_w_0()
                         .gap(design::ui_px(cx, 2.0))
                         .child(hint(label, p, cx))
-                        .child(choice_live(id, gestures, value, true, view, set))
+                        .child(choice_live(id, gestures, value, true, view, cx, set))
                 };
             v_flex()
                 .w_full()
@@ -424,6 +426,7 @@ pub(super) fn body(
                             g.buy_set_click,
                             true,
                             view,
+                            cx,
                             |d, v| d.gestures.buy_set_click = v,
                         ))
                         .child(caption(
@@ -438,6 +441,7 @@ pub(super) fn body(
                             g.short_set_click,
                             true,
                             view,
+                            cx,
                             |d, v| d.gestures.short_set_click = v,
                         )),
                 )

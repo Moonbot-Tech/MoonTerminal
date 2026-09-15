@@ -46,7 +46,7 @@ fn labeled_select<T: Clone + PartialEq + 'static>(
         .child(
             div().w(px(width)).child(
                 MoonSelect::new(state)
-                    .trigger_size(MoonButtonSize::Action)
+                    .trigger_size(MoonButtonSize::density(cx))
                     .menu_width(design::font_w(cx, width)),
             ),
         )
@@ -196,7 +196,6 @@ impl SettingsView {
         let btn = |suffix: &'static str, label: &'static str, delta: i32| {
             MoonButton::new(SharedString::from(format!("{id}{suffix}")))
                 .ghost()
-                .size(MoonButtonSize::Micro)
                 .width(28.0)
                 .label(label)
                 .disabled(!enabled)

@@ -11,8 +11,7 @@ use moon_core::market::trade_replay::{
     TickStatus, TradeReplayEmpty, TradeReplayFailure, TradeReplaySource,
 };
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonCheckbox, MoonPalette, MoonWindowFrame,
-    MoonWindowFrameControls, h_flex, v_flex,
+    MoonButton, MoonCheckbox, MoonPalette, MoonWindowFrame, MoonWindowFrameControls, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -326,7 +325,6 @@ impl TradeWindowView {
             .when(self.state.retryable(), |el| {
                 el.child(
                     MoonButton::new("trade-window-retry")
-                        .size(MoonButtonSize::Micro)
                         .outline()
                         .label(t!("trade_window.retry").to_string())
                         .on_click(cx.listener(|this, _, _window, cx| this.fetch(cx)))

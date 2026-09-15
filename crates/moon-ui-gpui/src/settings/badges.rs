@@ -9,9 +9,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonColorPicker, MoonColorPickerState,
-    MoonInput, MoonInputEvent, MoonInputState, MoonPalette, MoonSize, MoonTooltipView, StyledExt,
-    h_flex, rgba_from, v_flex,
+    MoonBadge, MoonBadgeVariant, MoonButton, MoonColorPicker, MoonColorPickerState, MoonInput,
+    MoonInputEvent, MoonInputState, MoonPalette, MoonTooltipView, StyledExt, h_flex, rgba_from,
+    v_flex,
 };
 use rust_i18n::t;
 
@@ -425,7 +425,6 @@ impl SettingsView {
             .child(
                 MoonButton::new(SharedString::from(format!("badge-del-{idx}")))
                     .danger()
-                    .size(MoonButtonSize::Micro)
                     .width(24.0)
                     .label("x")
                     .on_click(cx.listener(move |this, _, w, cx| this.delete_badge(idx, w, cx)))

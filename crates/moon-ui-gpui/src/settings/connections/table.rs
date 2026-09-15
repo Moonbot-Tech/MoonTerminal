@@ -369,7 +369,7 @@ fn paste_key_affix(
 /// Returns:
 ///     The scale and floor every core-table column is laid out against.
 fn micro_trigger_metrics(cx: &App) -> MicroTriggerMetrics {
-    /// Design-reference font size of a `MoonButtonSize::Micro` trigger.
+    /// Design-reference font size this table uses when measuring a dense trigger.
     const MICRO_TRIGGER_FONT: f32 = 10.0;
     /// MoonUI's `DROPDOWN_TRIGGER_PAD_X`, its trigger's horizontal visual padding.
     const TRIGGER_PAD_X: f32 = 14.0;
@@ -633,7 +633,7 @@ fn feed_popover(
         } else {
             MoonButtonVariant::Neutral
         })
-        .trigger_size(MoonButtonSize::Micro)
+        .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(ConnColId::Data.spec().basis)
         .menu_width_scaled(272.0)
         .close_on_select(false)
@@ -747,7 +747,7 @@ fn proto_dropdown(
         .label(cur.map_or(SharedString::from("-"), |v| SharedString::from(v.label())))
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Neutral)
-        .trigger_size(MoonButtonSize::Micro)
+        .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(ConnColId::Proto.spec().basis)
         .menu_width_scaled(96.0)
         .items(items)
@@ -845,7 +845,7 @@ fn preset_dropdown(
         .label(SharedString::from(preset_label(cur)))
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Neutral)
-        .trigger_size(MoonButtonSize::Micro)
+        .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(ConnColId::Preset.spec().basis)
         .menu_width_scaled(140.0)
         .items(items)
@@ -925,7 +925,6 @@ pub(super) fn server_row(
             .child(
                 MoonButton::new(ids.rec.clone())
                     .ghost()
-                    .size(MoonButtonSize::Micro)
                     .width(24.0)
                     .label("↻")
                     .on_click(move |_, _, cx| {
@@ -1039,7 +1038,6 @@ pub(super) fn server_row(
             let weak_del = weak.clone();
             MoonButton::new(ids.del.clone())
                 .danger()
-                .size(MoonButtonSize::Micro)
                 .width(24.0)
                 .label("x")
                 .on_click(move |_, window, cx| {

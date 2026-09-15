@@ -9,8 +9,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonPalette,
-    MoonTabItem, MoonTabStrip, MoonWindowFrame, h_flex, v_flex,
+    MoonAlert, MoonButton, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonTabItem, MoonTabStrip,
+    MoonWindowFrame, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -454,7 +454,6 @@ impl CoreExpertView {
             .child(
                 MoonButton::new("core-expert-cancel")
                     .label(t!("core_settings.cancel").to_string())
-                    .size(MoonButtonSize::Action)
                     .variant(MoonButtonVariant::Soft)
                     .padding_x(14.0)
                     .on_click(move |_, window, app| {
@@ -465,7 +464,6 @@ impl CoreExpertView {
             .child(
                 MoonButton::new("core-expert-apply")
                     .label(t!("common.apply").to_string())
-                    .size(MoonButtonSize::Action)
                     .variant(MoonButtonVariant::Soft)
                     // Dark while there is nothing to apply: unlike OK, it has no "close" to offer
                     // instead.
@@ -479,7 +477,6 @@ impl CoreExpertView {
             .child(
                 MoonButton::new("core-expert-ok")
                     .label(t!("core_settings.ok").to_string())
-                    .size(MoonButtonSize::Action)
                     .variant(MoonButtonVariant::Blue)
                     .disabled(!can_send)
                     .padding_x(18.0)

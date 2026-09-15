@@ -262,7 +262,7 @@ impl SettingsView {
                         .label(trigger_label)
                         .trigger_caret(true)
                         .trigger_variant(MoonButtonVariant::Soft)
-                        .trigger_size(MoonButtonSize::Action)
+                        .trigger_size(MoonButtonSize::density(cx))
                         .trigger_width(design::font_w(cx, 150.0))
                         .menu_width_scaled(170.0)
                         .items(items),
@@ -274,7 +274,6 @@ impl SettingsView {
                     )))
                     .label("▶")
                     .tooltip(t!("trade_sounds.preview").to_string())
-                    .size(MoonButtonSize::Action)
                     .variant(MoonButtonVariant::Soft)
                     .width(design::font_w(cx, 28.0))
                     .disabled(preview_disabled)

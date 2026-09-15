@@ -21,8 +21,8 @@ use std::collections::{HashMap, HashSet};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDisclosure,
-    MoonDisclosureDirection, MoonInputState, MoonPalette, h_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonDisclosure, MoonDisclosureDirection,
+    MoonInputState, MoonPalette, h_flex,
 };
 use rust_i18n::t;
 
@@ -1450,7 +1450,6 @@ where
             .child(
                 MoonButton::new(SharedString::from(format!("{id}-open-new")))
                     .label(label)
-                    .size(MoonButtonSize::Toolbar)
                     .variant(if selected_count > 0 {
                         MoonButtonVariant::Blue
                     } else {

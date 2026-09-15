@@ -625,7 +625,7 @@ impl NewsView {
             .label(cur)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .fit_trigger_width(118.0, 260.0)
             .fit_menu_width(140.0, 560.0)
             .menu_max_height_ui(360.0)
@@ -711,12 +711,16 @@ impl NewsView {
     /// The popover wrapper owns open/close behavior; `selected` brightens the trigger while a
     /// filter is active.
     fn tags_trigger(&self, label: String, active: bool, cx: &App) -> impl IntoElement + use<> {
-        let (label, trigger_w) =
-            MoonDropdown::fitted_trigger_label(cx, &label, MoonButtonSize::Action, 118.0, 260.0);
+        let (label, trigger_w) = MoonDropdown::fitted_trigger_label(
+            cx,
+            &label,
+            MoonButtonSize::density(cx),
+            118.0,
+            260.0,
+        );
         MoonButton::new("news-tags-trigger")
             .label(label)
             .variant(MoonButtonVariant::Soft)
-            .size(MoonButtonSize::Action)
             .mono(true)
             .selected(active)
             .width(trigger_w)
@@ -736,7 +740,6 @@ impl NewsView {
             .child(
                 MoonButton::new("news-tags-showall")
                     .label(t!("news.tags.show_all").to_string())
-                    .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Ghost)
                     .on_click(cx.listener(|this, _, _w, cx| this.set_all_tags_hidden(false, cx)))
                     .render(),
@@ -744,7 +747,6 @@ impl NewsView {
             .child(
                 MoonButton::new("news-tags-hideall")
                     .label(t!("news.tags.hide_all").to_string())
-                    .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Ghost)
                     .on_click(cx.listener(|this, _, _w, cx| this.set_all_tags_hidden(true, cx)))
                     .render(),

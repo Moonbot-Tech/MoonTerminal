@@ -8,8 +8,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::applog::LogLine;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonPalette, MoonScrollbarVisibility, MoonVirtualList,
-    MoonWindowExt as _, h_flex, rgba_from, v_flex,
+    MoonButton, MoonPalette, MoonScrollbarVisibility, MoonVirtualList, MoonWindowExt as _, h_flex,
+    rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -147,7 +147,6 @@ fn dialog_footer(entity: Entity<TradeLog>, p: MoonPalette) -> AnyElement {
         .child(div().flex_1())
         .child(
             MoonButton::new("trade-log-copy-all")
-                .size(MoonButtonSize::Micro)
                 .outline()
                 .label(t!("report.trade_log.copy_all").to_string())
                 .on_click(move |_, _window, app| {
@@ -158,7 +157,6 @@ fn dialog_footer(entity: Entity<TradeLog>, p: MoonPalette) -> AnyElement {
         .child(
             MoonButton::new("trade-log-close")
                 .ghost()
-                .size(MoonButtonSize::Micro)
                 .label(t!("dialogs.close").to_string())
                 .on_click(move |_, window, cx| window.close_dialog(cx))
                 .render(),

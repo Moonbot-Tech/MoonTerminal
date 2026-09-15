@@ -17,8 +17,8 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonAccent, MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonSegmentItem,
-    MoonSegmentedControl, h_flex,
+    MoonAccent, MoonButton, MoonButtonVariant, MoonPalette, MoonSegmentItem, MoonSegmentedControl,
+    h_flex,
 };
 use rust_i18n::t;
 
@@ -644,7 +644,6 @@ where
                 .children(on_press.map(|press| {
                     MoonButton::new(SharedString::from(format!("{row_id}-act")))
                         .label(design::GLYPH_CLOSE)
-                        .size(MoonButtonSize::Micro)
                         .variant(MoonButtonVariant::Soft)
                         // What it does, or — while this window may no longer command the core —
                         // why it cannot. The refusal reads the same on every acting list, so it is

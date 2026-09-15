@@ -30,8 +30,7 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonTooltipView,
-    h_flex, v_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonTooltipView, h_flex, v_flex,
 };
 
 use moon_core::figures::{
@@ -613,7 +612,6 @@ fn stepper_row<V: 'static>(
             if up { "up" } else { "dn" }
         ))))
         .label(glyph)
-        .size(MoonButtonSize::Micro)
         .variant(MoonButtonVariant::Ghost)
         .on_click(move |_, _w, app| {
             backend.update(app, |b, bcx| {
@@ -659,7 +657,6 @@ fn kind_row(
                 "figset-kind-{i}"
             ))))
             .label(kind.label())
-            .size(MoonButtonSize::Micro)
             .variant(if selected {
                 MoonButtonVariant::Blue
             } else {
@@ -744,7 +741,6 @@ fn switch_row(
                 "figset-switch-{i}"
             ))))
             .label(s.label.clone())
-            .size(MoonButtonSize::Micro)
             .variant(if on {
                 MoonButtonVariant::Blue
             } else {

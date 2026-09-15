@@ -57,25 +57,6 @@ const ROW_SLACK: f32 = 16.0;
 /// A fixed band shorter than that clips the glyphs rather than overflowing visibly, which is why
 /// the two band heights below take it as a floor.
 const LINE_BOX: f32 = 1.3;
-/// MoonUI's own HEIGHT metrics for a `MoonButtonSize::Action` control — the size the sound column's
-/// `MoonDropdown` trigger runs at, and the TALLEST thing standing in the control band.
-///
-/// Copied from `MoonButtonMetrics::base_for_size(Size::Small)`, which is what a `MoonButton` of that
-/// size actually resolves through: `height: 26`, `line_height: 14`, and a vertical pad its `scaled()`
-/// derives as `(height - line_height) * 0.5`. Do NOT take these from `button_text_metrics(Action)`
-/// instead — that returns `(font_size, line_height, GAP)` for the label, whose third field is a
-/// HORIZONTAL icon gap, and its `(26, 16, 5)` only happens to give the same answer because
-/// `16 + 2*5 == 14 + 2*6`; it would stop agreeing the moment MoonUI retunes either function.
-///
-/// The height resolves as `fit_height(base, line, pad) = max(ui(base), line_height(line) +
-/// 2 * ui(pad))`, and `line_height` is ADDITIVE in the Font-slider delta — so the trigger is 26px at
-/// delta 0, 29px at the shipped +3 and 32px at +6, past `CTRL_H` exactly where the goal says nothing
-/// may clip. Deriving the floor from MoonUI's own contract rather than from a generic text ratio is
-/// what makes the band track the CONTROL instead of merely the text beside it.
-const ACTION_H: f32 = 26.0;
-const ACTION_LINE_H: f32 = 14.0;
-const ACTION_PAD_Y: f32 = (ACTION_H - ACTION_LINE_H) * 0.5;
-
 /// Every rendered dimension of the alert table, resolved once from the active scales.
 ///
 /// The popup mixes two scales that MoonUI moves independently: its captions and values are raw
@@ -110,8 +91,8 @@ impl WarnCfgMetrics {
     ///         multiply `MoonPopover` itself uses — not the ADDITIVE `font()` used for text sizes.
     ///     cap_px: The rendered caption font size.
     ///     body_px: The rendered body font size.
-    ///     action_h: The rendered height of a `MoonButtonSize::Action` control, from MoonUI's own
-    ///         fit-height rule — see [`ACTION_H`]. The control band can never be shorter than the
+    ///     action_h: The rendered height of a density-tier button, from
+    ///         `design::action_control_h_value`. The control band can never be shorter than the
     ///         tallest control standing in it.
     ///
     /// Returns:
@@ -157,7 +138,7 @@ fn warn_cfg_metrics(cx: &App) -> WarnCfgMetrics {
         design::font_scale(cx),
         f32::from(design::t_caption(cx)),
         f32::from(design::t_body(cx)),
-        design::fit_h_value(cx, ACTION_H, ACTION_LINE_H, ACTION_PAD_Y),
+        design::action_control_h_value(cx),
     )
 }
 
@@ -208,7 +189,6 @@ impl CoreStatusView {
         let view = cx.entity();
         let gear = MoonButton::new("core-status-warn-gear")
             .label("⚙")
-            .size(MoonButtonSize::Micro)
             .variant(MoonButtonVariant::Ghost)
             .tooltip(t!("core_status.warn_cfg.title").to_string())
             .render();
@@ -625,7 +605,6 @@ impl CoreStatusView {
             .child(
                 MoonButton::new(SharedString::from(format!("{id}-dec")))
                     .label("−")
-                    .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Ghost)
                     .on_click(bump(&self.backend, -1)),
             )
@@ -642,7 +621,6 @@ impl CoreStatusView {
             .child(
                 MoonButton::new(SharedString::from(format!("{id}-inc")))
                     .label("+")
-                    .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Ghost)
                     .on_click(bump(&self.backend, 1)),
             )
@@ -700,7 +678,7 @@ impl CoreStatusView {
                     .label(label)
                     .trigger_caret(true)
                     .trigger_variant(MoonButtonVariant::Soft)
-                    .trigger_size(MoonButtonSize::Action)
+                    .trigger_size(MoonButtonSize::density(cx))
                     .trigger_width_scaled(94.0)
                     .menu_width_scaled(128.0)
                     .items(items),

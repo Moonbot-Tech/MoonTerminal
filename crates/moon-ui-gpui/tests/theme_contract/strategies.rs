@@ -947,7 +947,7 @@ fn strategy_footer_is_one_atomic_action_row() {
     // still come from measuring the CURRENT locale and staged text, never from a stored constant.
     let pane_cache = read_src("strategies/tree/pane_cache.rs");
     let measured = code_only(braced_body(&pane_cache, "fn footer_label_width("));
-    assert!(measured.contains("design::ui_text_width("));
+    assert!(measured.contains("design::ui_text_width_zoomed("));
     assert!(
         measured.contains("t!(\"strat.staged\""),
         "the staged label is part of the width the footer collapses against"
@@ -966,7 +966,15 @@ fn strategy_footer_is_one_atomic_action_row() {
     let selection = code_only(braced_body(&ui, "pub(super) fn selection_toolbar("));
     assert!(!selection.contains("v_flex()") && !selection.contains(".flex_wrap()"));
     assert!(!selection.contains("176.0") && !selection.contains("MoonButtonSize::Micro"));
-    assert!(selection.matches("MoonButtonSize::Action").count() >= 3);
+    assert!(
+        !selection.contains(".size("),
+        "the selection toolbar's buttons must inherit the app's density tier, never pin one \
+         back explicitly"
+    );
+    assert!(
+        selection.matches("MoonButton::new(\"sel-").count() >= 3,
+        "the footer's selection toolbar must still build at least three same-family controls"
+    );
     for icon in ["icons/copy.svg", "icons/inbox.svg", "icons/delete.svg"] {
         assert!(selection.contains(icon), "missing {icon}");
     }

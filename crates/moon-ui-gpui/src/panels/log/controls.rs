@@ -130,7 +130,7 @@ impl LogPanel {
             .label(cur)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             // Starts at the width the shared core selector uses everywhere else, and grows only
             // for a label that does not fit: unlike those, this trigger shows one source NAME
             // ("BinF3", an exchange, "Локальный"), not a "Ядер: 3" summary.
@@ -193,7 +193,7 @@ impl LogPanel {
             .label(cur)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .fit_trigger_width(180.0, 260.0)
             .fit_menu_width(220.0, 560.0)
             .items(items)

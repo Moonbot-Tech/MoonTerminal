@@ -67,9 +67,9 @@ impl MetricChoice {
 /// is part of the label string, so a width kept at the bare value would ellipsise the very word
 /// that was added to explain the filter. `toolbar/tests.rs` measures all three against MoonUI's
 /// own fitter rather than against an estimate.
-const SIDE_TRIGGER_W: f32 = 124.0;
+const SIDE_TRIGGER_W: f32 = 141.0;
 /// Unscaled width of the Analytics trade-kind-selector trigger. See [`SIDE_TRIGGER_W`].
-const KIND_TRIGGER_W: f32 = 156.0;
+const KIND_TRIGGER_W: f32 = 182.0;
 /// Unscaled width of the Analytics profit-metric-selector trigger. See [`SIDE_TRIGGER_W`].
 const METRIC_TRIGGER_W: f32 = 152.0;
 /// Unscaled horizontal spacing between neighboring toolbar controls.
@@ -529,8 +529,12 @@ impl AnalyticsView {
         }
         // Keep the selector widths and their internal gaps together. One additional gap belongs to
         // the caption, so the whole semantic group moves to the next line before any control is
-        // clipped. MoonUI scales Action dropdown widths from their 10.5px reference font.
-        let action_trigger_scale = design::font_value(cx, 10.5) / 10.5;
+        // clipped. Density-tier triggers scale those design-reference widths through `tokens.ui`
+        // at the button tier's control font, not the legacy 10.5px font channel.
+        let action_trigger_scale = {
+            let font_size = design::button_tier(cx).control_metrics().font_size.max(1.0);
+            design::ui_value(cx, font_size) / font_size
+        };
         let clear_core_filter_w = if workspace_pinned || self.sel_cores.is_empty() {
             0.0
         } else {
@@ -547,7 +551,6 @@ impl AnalyticsView {
             MoonButton::new("an-core-clear")
                 .width(design::glyph_btn_w(cx))
                 .variant(MoonButtonVariant::Ghost)
-                .size(MoonButtonSize::Action)
                 .leading_icon(MoonButtonIconSlot::new("icons/close.svg"))
                 .tooltip(t!("analytics.core_selection.clear").to_string())
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_core(None, cx)))
@@ -677,7 +680,7 @@ impl AnalyticsView {
             .label(cur)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(METRIC_TRIGGER_W)
             .fit_menu_width(120.0, 240.0)
             .items(items)
@@ -741,6 +744,7 @@ impl AnalyticsView {
             |n| t!("report.cores_n", n = n).to_string(),
             180.0,
             extras,
+            cx,
             move |uid, app| {
                 toggle_view.update(app, |t, c| t.toggle_core(uid, c));
             },
@@ -793,7 +797,7 @@ impl AnalyticsView {
             .label(cur)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(SIDE_TRIGGER_W)
             .menu_width_scaled(120.0)
             .items(items)
@@ -839,7 +843,7 @@ impl AnalyticsView {
             .label(cur)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(KIND_TRIGGER_W)
             .menu_width_scaled(138.0)
             .items(items)
@@ -1013,7 +1017,6 @@ impl AnalyticsView {
                 .child(
                     MoonButton::new("an-undated-hide")
                         .variant(MoonButtonVariant::Ghost)
-                        .size(MoonButtonSize::Micro)
                         .label(t!("analytics.undated_hide").to_string())
                         .on_click(cx.listener(|this, _, _, cx| this.undated_hide(cx)))
                         .render(),
@@ -1039,7 +1042,6 @@ impl AnalyticsView {
                 .child(
                     MoonButton::new("an-undated-show")
                         .variant(MoonButtonVariant::Ghost)
-                        .size(MoonButtonSize::Micro)
                         .label(t!("analytics.undated_show").to_string())
                         .on_click(cx.listener(|this, _, _, cx| this.undated_show(cx)))
                         .render(),
@@ -1177,7 +1179,7 @@ impl AnalyticsView {
             .label(active.title(self.display_zone))
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
+            .trigger_size(MoonButtonSize::density(cx))
             .fit_trigger_width(PRESET_CELL_MIN_W, PRESET_CELL_MAX_W)
             .fit_menu_width(120.0, 220.0)
             .items(items)
@@ -1380,7 +1382,6 @@ impl AnalyticsView {
             .children(has_note.then(|| {
                 MoonButton::new("an-undated-show")
                     .variant(MoonButtonVariant::Ghost)
-                    .size(MoonButtonSize::Micro)
                     .label(t!("analytics.undated_show").to_string())
                     .on_click(cx.listener(|this, _, _, cx| this.undated_show(cx)))
                     .render()

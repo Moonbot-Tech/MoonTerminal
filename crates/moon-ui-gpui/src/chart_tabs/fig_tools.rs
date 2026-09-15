@@ -136,7 +136,7 @@ impl ChartTabs {
             } else {
                 MoonButtonVariant::Soft
             })
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(PICKER_W)
             .menu_width_scaled(180.0)
             .items(items);
@@ -159,7 +159,6 @@ impl ChartTabs {
             .child(
                 MoonButton::new("fig-settings")
                     .label("⚙")
-                    .size(MoonButtonSize::Micro)
                     .variant(if open {
                         MoonButtonVariant::Blue
                     } else {

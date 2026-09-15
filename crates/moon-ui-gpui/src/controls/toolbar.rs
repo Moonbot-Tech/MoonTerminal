@@ -8,8 +8,8 @@ use moon_core::session::CoreId;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonSize, MoonButtonVariant,
-    MoonInputState, MoonLabel, MoonPalette, MoonTheme, MoonToggle, MoonToggleSize, h_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonVariant, MoonInputState,
+    MoonLabel, MoonPalette, MoonSize, MoonTheme, MoonToggle, MoonToggleSize, h_flex,
 };
 
 use super::DASH;
@@ -1123,7 +1123,7 @@ pub fn toolbar(
             MoonButton::new("live")
                 .width(design::font_w(cx, LIVE_W))
                 .variant(MoonButtonVariant::Soft)
-                .size(MoonButtonSize::ToolbarCompact)
+                .size(MoonSize::Sm)
                 // Keep the localized interaction hint reachable without adding another row label.
                 .tooltip(t!("toolbar.live_tip").to_string())
                 .segment(
@@ -1271,7 +1271,7 @@ fn open_window_button(
         // The icon-only width stays raw — see [`ICON_BTN_W`].
         .width(labeled_width.unwrap_or(ICON_BTN_W))
         .variant(MoonButtonVariant::Soft)
-        .size(MoonButtonSize::ToolbarCompact)
+        .size(MoonSize::Sm)
         .leading_icon(MoonButtonIconSlot::new(icon).color(p.text_soft));
     btn = if labeled_width.is_some() {
         btn.padding_x(TOOLBAR_LAUNCHER_PAD_X)

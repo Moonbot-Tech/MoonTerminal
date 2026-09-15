@@ -4,8 +4,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MOON_SCROLLBAR_TRACK, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant,
-    MoonPalette, MoonScrollbarVisibility, MoonVirtualList, h_flex, v_flex,
+    MOON_SCROLLBAR_TRACK, MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonPalette,
+    MoonScrollbarVisibility, MoonSize, MoonVirtualList, h_flex, v_flex,
 };
 use rust_i18n::t;
 use std::collections::HashSet;
@@ -168,7 +168,6 @@ impl AnalyticsView {
                 } else {
                     MoonButtonVariant::Soft
                 })
-                .size(MoonButtonSize::Micro)
                 .selected(on)
                 .label(label)
                 .on_click(cx.listener(move |this, _, _, cx| this.set_strat_mode(mode, cx)))
@@ -311,7 +310,7 @@ fn strategy_row(
                 MoonButton::new(SharedString::from(format!("an-open-strategy-{}", g.key)))
                     .width(design::micro_control_h_value(cx))
                     .variant(MoonButtonVariant::Soft)
-                    .size(MoonButtonSize::Micro)
+                    .size(MoonSize::Xs)
                     .leading_icon(MoonButtonIconSlot::new("icons/bot.svg").color(p.text_soft))
                     .tooltip(t!("toolbar.strategies").to_string())
                     .on_click(move |_, window, app| {

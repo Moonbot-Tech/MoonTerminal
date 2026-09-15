@@ -793,7 +793,7 @@ impl SettingsView {
         MoonDropdown::new(SharedString::from(id))
             .label(label)
             .trigger_caret(true)
-            .trigger_size(MoonButtonSize::Micro)
+            .trigger_size(MoonButtonSize::density(cx))
             .trigger_width(design::ui_value(cx, ROW_EDITOR_WIDTH))
     }
 

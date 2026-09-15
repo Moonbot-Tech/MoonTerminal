@@ -18,9 +18,9 @@ use gpui::*;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonPalette,
-    MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSelectorPill, MoonSelectorSegment,
-    MoonSize, MoonTheme, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex,
+    MoonButton, MoonButtonSegment, MoonButtonVariant, MoonMenuItem, MoonPalette, MoonPopover,
+    MoonPopoverPlacement, MoonPopupMenu, MoonSelectorPill, MoonSelectorSegment, MoonSize,
+    MoonTheme, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex,
 };
 
 use moon_core::config::MANUAL_STRAT_SLOTS;
@@ -390,7 +390,7 @@ pub fn manual_strategy_controls(
                 slots_open,
                 content,
                 MoonButton::new("ms-slots-gear")
-                    .size(MoonButtonSize::ToolbarCompact)
+                    .size(MoonSize::Sm)
                     .variant(MoonButtonVariant::Ghost)
                     .icon("icons/settings.svg")
                     .tooltip(t!("header.ms_slots_gear").to_string())
@@ -471,7 +471,7 @@ pub fn manual_strategy_controls(
             let btn_w = design::ui_value(cx, BTN_CHROME_W) + label_w;
 
             let mut btn = MoonButton::new(SharedString::from(format!("ms-btn-{i}")))
-                .size(MoonButtonSize::ToolbarCompact)
+                .size(MoonSize::Sm)
                 // The active slot carries the accent variant rather than only `selected`: on a
                 // Panel button the selected state is a few percent of background and reads as
                 // nothing on a row of ten. Fill is therefore the SELECTION and nothing else — the

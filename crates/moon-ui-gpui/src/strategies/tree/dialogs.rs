@@ -349,7 +349,7 @@ fn op_dialog_body(
                             .label(kind_name)
                             .trigger_caret(true)
                             .trigger_variant(MoonButtonVariant::Soft)
-                            .trigger_size(MoonButtonSize::Action)
+                            .trigger_size(MoonButtonSize::density(cx))
                             .trigger_width(field_w)
                             .menu_width(field_w)
                             .menu_max_height_ui(240.0)
@@ -505,7 +505,6 @@ fn op_dialog_footer(
         .child(
             MoonButton::new("modal-cancel")
                 .ghost()
-                .size(MoonButtonSize::Micro)
                 .label(t!("dialogs.cancel").to_string())
                 .on_click(move |_, window, cx| {
                     cancel_view.update(cx, |this, cx| this.close_op_dialog(cx));
@@ -515,7 +514,6 @@ fn op_dialog_footer(
         )
         .child(
             MoonButton::new("modal-ok")
-                .size(MoonButtonSize::Micro)
                 .variant(ok_variant)
                 .label(ok_label)
                 .on_click(move |_, window, cx| {

@@ -14,9 +14,7 @@
 
 use gpui::*;
 use moon_core::config::ChartTabKind;
-use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonPalette, h_flex, v_flex,
-};
+use moon_ui::{MoonButton, MoonButtonVariant, MoonCheckbox, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::apply_all::{ApplyAll, ApplyMode, KindTargets};
@@ -152,7 +150,6 @@ pub(super) fn render_apply_row<T: ApplyRowHost>(
             let entity = entity.clone();
             MoonButton::new(SharedString::from(format!("{id_prefix}-apply-{suffix}")))
                 .label(label)
-                .size(MoonButtonSize::Micro)
                 .variant(variant)
                 // A press with no ticks reaches nothing, so the button says so instead of
                 // accepting the click. The click path is guarded too — `ChartTabs::apply_all`

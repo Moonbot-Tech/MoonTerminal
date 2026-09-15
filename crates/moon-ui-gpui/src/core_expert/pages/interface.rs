@@ -422,7 +422,7 @@ pub(super) fn body(
                                 p,
                                 cx,
                             ))
-                            .child(dropdown("exp-int-style", NO_VALUE.to_string(), false)),
+                            .child(dropdown("exp-int-style", NO_VALUE.to_string(), false, cx)),
                     )
                     .child(
                         v_flex()
@@ -442,6 +442,7 @@ pub(super) fn body(
                                 "exp-int-icons",
                                 i.icon_selection.to_string(),
                                 false,
+                                cx,
                             )),
                     ),
             )
@@ -542,7 +543,12 @@ pub(super) fn body(
                                 view,
                                 |d, on| d.interface.orders_captions_lower = on,
                             )))
-                            .child(dropdown("exp-int-price-panel", NO_VALUE.to_string(), false)),
+                            .child(dropdown(
+                                "exp-int-price-panel",
+                                NO_VALUE.to_string(),
+                                false,
+                                cx,
+                            )),
                     ),
             )
             .child(caption(

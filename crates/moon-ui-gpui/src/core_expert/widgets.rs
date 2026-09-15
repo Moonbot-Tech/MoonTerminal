@@ -267,7 +267,6 @@ pub(super) fn field_masked(
 pub(super) fn action(id: &'static str, label: String, enabled: bool) -> impl IntoElement {
     MoonButton::new(id)
         .label(label)
-        .size(MoonButtonSize::Action)
         .variant(MoonButtonVariant::Soft)
         .disabled(!enabled)
         .padding_x(14.0)
@@ -344,12 +343,17 @@ pub(super) fn link(id: &'static str, label: String, enabled: bool) -> impl IntoE
 
 /// A selector showing one value. Moonbot fills these from its own machine state, so a mirrored page
 /// shows the value and refuses the menu.
-pub(super) fn dropdown(id: &'static str, current: String, enabled: bool) -> impl IntoElement {
+pub(super) fn dropdown(
+    id: &'static str,
+    current: String,
+    enabled: bool,
+    cx: &App,
+) -> impl IntoElement {
     MoonDropdown::new(id)
         .label(current)
         .items(Vec::<MoonMenuItem>::new())
         .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::Action)
+        .trigger_size(MoonButtonSize::density(cx))
         .disabled(!enabled)
 }
 
@@ -376,6 +380,7 @@ pub(super) fn choice_live(
     current: u8,
     enabled: bool,
     view: &Entity<CoreExpertView>,
+    cx: &App,
     // A closure, not a `fn` pointer like this module's other setters: a Move row addresses its two
     // gesture slots through one projection method and has to carry which row it is.
     set: impl Fn(&mut CoreConfig, u8) + 'static,
@@ -417,7 +422,7 @@ pub(super) fn choice_live(
         .label(label)
         .trigger_caret(true)
         .trigger_variant(design::mixed_trigger_variant(mixed))
-        .trigger_size(MoonButtonSize::Action)
+        .trigger_size(MoonButtonSize::density(cx))
         .items(items)
         .disabled(!enabled)
 }
@@ -599,7 +604,6 @@ pub(super) fn action_live(
 ) -> impl IntoElement {
     MoonButton::new(id)
         .label(label)
-        .size(MoonButtonSize::Action)
         .variant(MoonButtonVariant::Soft)
         .disabled(!enabled)
         .padding_x(14.0)
@@ -693,7 +697,7 @@ pub(super) fn sound_cell(
                 .label(label)
                 .trigger_caret(true)
                 .trigger_variant(design::mixed_trigger_variant(mixed))
-                .trigger_size(MoonButtonSize::Action)
+                .trigger_size(MoonButtonSize::density(cx))
                 .trigger_width_scaled(94.0)
                 .menu_width_scaled(128.0)
                 .items(items),

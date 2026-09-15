@@ -8,8 +8,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonAccent, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonInput,
-    MoonInputState, MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex, v_flex,
+    MoonAccent, MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputState,
+    MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -459,7 +459,6 @@ where
     let orientation_btn = MoonButton::new(SharedString::from(format!("{id}-orientation")))
         .label(if horizontal { "↔" } else { "↕" })
         .tooltip(t!("chart.layout.orientation_tip").to_string())
-        .size(MoonButtonSize::Micro)
         .variant(if horizontal {
             MoonButtonVariant::Blue
         } else {

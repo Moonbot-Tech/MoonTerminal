@@ -5,8 +5,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette,
-    MoonRect, rgba_from,
+    MoonBadge, MoonBadgeVariant, MoonButton, MoonButtonVariant, MoonPalette, MoonRect, MoonSize,
+    rgba_from,
 };
 use rust_i18n::t;
 
@@ -434,7 +434,6 @@ impl Render for ChartPanel {
                         this.child(
                             MoonButton::new("chart-trade-history-retry")
                                 .label(t!("chart.trade_history.retry").to_string())
-                                .size(MoonButtonSize::Micro)
                                 .variant(MoonButtonVariant::Ghost)
                                 .on_click(move |_, _window, app| {
                                     entity.update(app, |this, cx| this.retry_trade_history(cx));
@@ -507,7 +506,7 @@ impl Render for ChartPanel {
                     // and weight 700; backdrop and hover still follow Ghost (transparent by
                     // default, with a light hover background).
                     .text_segment("×", palette.text, 700.0)
-                    .size(MoonButtonSize::Micro)
+                    .size(MoonSize::Xs)
                     .variant(MoonButtonVariant::Ghost)
                     // Use a 22×22 hit area to avoid missing into the book when closing charts quickly.
                     .bounds(MoonRect::new(right - 26.0, top + 3.0, 22.0, 22.0))
@@ -521,7 +520,7 @@ impl Render for ChartPanel {
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-pin-{idx}")))
                     .label(if pinned { "●" } else { "○" })
-                    .size(MoonButtonSize::Micro)
+                    .size(MoonSize::Xs)
                     .variant(if pinned {
                         MoonButtonVariant::Blue
                     } else {
@@ -540,7 +539,7 @@ impl Render for ChartPanel {
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-lock-{idx}")))
                     .label("🔒")
-                    .size(MoonButtonSize::Micro)
+                    .size(MoonSize::Xs)
                     .variant(if compare_anchor {
                         MoonButtonVariant::Blue
                     } else {
@@ -558,7 +557,7 @@ impl Render for ChartPanel {
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-broom-{idx}")))
                     .label("🧹")
-                    .size(MoonButtonSize::Micro)
+                    .size(MoonSize::Xs)
                     .variant(if compare_broom_on {
                         MoonButtonVariant::Blue
                     } else {

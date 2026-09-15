@@ -228,7 +228,6 @@ pub(super) fn block(
                 .child(
                     MoonButton::new(id("places-reset"))
                         .label(t!("crowd.settings.places_reset").to_string())
-                        .size(MoonButtonSize::Micro)
                         .variant(MoonButtonVariant::Ghost)
                         .tooltip(t!("crowd.settings.places_reset_tip").to_string())
                         .on_click(move |_, _window, app: &mut App| {
@@ -281,7 +280,7 @@ fn row(
             div().w(design::font_w_px(cx, SELECT_WIDTH)).child(
                 MoonSelect::new(state)
                     .in_popover()
-                    .trigger_size(MoonButtonSize::Micro)
+                    .trigger_size(MoonButtonSize::density(cx))
                     .menu_width(design::font_w(cx, SELECT_WIDTH)),
             ),
         )

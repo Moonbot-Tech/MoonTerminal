@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonInputEvent, MoonInputState,
-    MoonNotification, MoonPalette, MoonWindowExt as _, h_flex, v_flex,
+    MoonButton, MoonButtonVariant, MoonInput, MoonInputEvent, MoonInputState, MoonNotification,
+    MoonPalette, MoonWindowExt as _, h_flex, v_flex,
 };
 
 use super::by_ip_header::ByIpDragAnchor;
@@ -1244,7 +1244,6 @@ impl CoreStatusView {
                             .child(
                                 MoonButton::new("core-status-fleet-confirm-no")
                                     .outline()
-                                    .size(MoonButtonSize::Action)
                                     .label(format!("  {}  ", t!("dialogs.no")))
                                     .on_click(move |_, window, cx| {
                                         window.close_dialog(cx);
@@ -1253,7 +1252,6 @@ impl CoreStatusView {
                             )
                             .child(
                                 MoonButton::new("core-status-fleet-confirm-yes")
-                                    .size(MoonButtonSize::Action)
                                     .variant(MoonButtonVariant::Danger)
                                     .label(format!("  {}  ", t!("dialogs.yes")))
                                     .on_click(move |_, window, cx| {
@@ -1395,7 +1393,6 @@ fn problem_confirm_dialog(
                 .child(
                     MoonButton::new(SharedString::from(format!("{id_prefix}-no")))
                         .outline()
-                        .size(MoonButtonSize::Action)
                         .label(format!("  {}  ", t!("dialogs.no")))
                         .on_click(move |_, window, cx| {
                             window.close_dialog(cx);
@@ -1404,7 +1401,6 @@ fn problem_confirm_dialog(
                 )
                 .child(
                     MoonButton::new(SharedString::from(format!("{id_prefix}-yes")))
-                        .size(MoonButtonSize::Action)
                         .variant(confirm)
                         .label(format!("  {}  ", t!("dialogs.yes")))
                         .on_click(move |_, window, cx| {

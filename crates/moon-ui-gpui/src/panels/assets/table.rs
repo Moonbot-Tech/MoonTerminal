@@ -12,7 +12,9 @@ use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
 use gpui::prelude::FluentBuilder;
 use moon_core::util::fmt;
-use moon_ui::{MoonButtonVariant, MoonDisclosure, MoonNotification, MoonText, MoonWindowExt as _};
+use moon_ui::{
+    MoonButtonVariant, MoonDisclosure, MoonNotification, MoonSize, MoonText, MoonWindowExt as _,
+};
 use rust_i18n::t;
 
 /// Open the shared coin context menu from an Assets row's ticker right-click.
@@ -285,6 +287,7 @@ impl AssetsView {
                 |n| t!("assets.cores_n", n = n).to_string(),
                 170.0,
                 extras,
+                cx,
                 move |id, app| {
                     view.update(app, |t, c| t.toggle_core(id, c));
                 },
@@ -684,7 +687,6 @@ impl AssetsView {
             header = header.child(
                 MoonButton::new("assets-refresh-transfer")
                     .ghost()
-                    .size(MoonButtonSize::Micro)
                     .label("↻")
                     .tooltip(t!("assets.refresh_hint").to_string())
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -1274,7 +1276,7 @@ fn actions_cell(
         .child(
             MoonButton::new(msell_id)
                 .label(t!("assets.market_sell").to_string())
-                .size(MoonButtonSize::Micro)
+                .size(MoonSize::Xs)
                 .variant(MoonButtonVariant::Danger)
                 .on_click(move |_, window, app| {
                     // Require confirmation before the irreversible market close; only the dialog's
@@ -1294,7 +1296,7 @@ fn actions_cell(
         .child(
             MoonButton::new(order_id)
                 .label(t!("assets.order").to_string())
-                .size(MoonButtonSize::Micro)
+                .size(MoonSize::Xs)
                 .variant(MoonButtonVariant::Soft)
                 .on_click(move |_, _w, _app| {
                     // Placeholder for a future order-settings window.
@@ -1420,7 +1422,6 @@ fn open_market_sell_confirm(
                         .child(
                             MoonButton::new("assets-msell-no")
                                 .outline()
-                                .size(MoonButtonSize::Action)
                                 .label(format!("  {}  ", t!("dialogs.no")))
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
@@ -1429,7 +1430,6 @@ fn open_market_sell_confirm(
                         )
                         .child(
                             MoonButton::new("assets-msell-yes")
-                                .size(MoonButtonSize::Action)
                                 .variant(MoonButtonVariant::Danger)
                                 .label(format!("  {}  ", t!("dialogs.yes")))
                                 .on_click(move |_, window, cx| {

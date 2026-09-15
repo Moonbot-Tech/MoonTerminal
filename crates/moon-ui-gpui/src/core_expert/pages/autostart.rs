@@ -12,7 +12,7 @@
 //! would leave a button the user pressed doing nothing until they also pressed OK.
 
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex, v_flex};
+use moon_ui::{MoonButton, MoonButtonVariant, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use moon_core::feed::{CoreConfig, ResetProfitKind};
@@ -271,7 +271,6 @@ fn profit_line(
         .child(
             MoonButton::new(SharedString::from(id))
                 .label(reset_label)
-                .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Soft)
                 .on_click(move |_, _w, app| {
                     // The counters drawn beside this button are the seeded core's, and the window

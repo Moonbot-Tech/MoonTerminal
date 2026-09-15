@@ -7,7 +7,7 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette,
+    MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonInput, MoonPalette, MoonSize,
     MoonTabItem, MoonTabStrip, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
@@ -181,7 +181,7 @@ impl Render for ChartTabs {
                 // The glyph it replaces carried the button's whole meaning, so dropping it without
                 // a tooltip would leave the action unnamed.
                 .tooltip(t!("chart.gather_windows.tip").to_string())
-                .size(MoonButtonSize::Micro)
+                .size(MoonSize::Xs)
                 .variant(MoonButtonVariant::Ghost)
                 .on_click(move |_, _w, app| {
                     entity.update(app, |this, cx| this.gather_windows(cx));
@@ -218,7 +218,7 @@ impl Render for ChartTabs {
         let settings_btn = common::layout_popup_host(
             self,
             "chart-layout",
-            crate::panels::popup_gear_trigger(
+            crate::panels::common::popup_gear_trigger_dense(
                 "chart-layout-settings",
                 t!("chart.layout.tip").to_string(),
                 popup_open,
@@ -238,7 +238,7 @@ impl Render for ChartTabs {
             MoonButton::new("chart-candle-settings")
                 .leading_icon(MoonButtonIconSlot::new("icons/chart-candlestick.svg"))
                 .tooltip(t!("chart.candles.tip").to_string())
-                .size(MoonButtonSize::Micro)
+                .size(MoonSize::Xs)
                 .variant(if candle_popup_open {
                     MoonButtonVariant::Blue
                 } else {
@@ -256,7 +256,7 @@ impl Render for ChartTabs {
             MoonButton::new("chart-graphics-settings")
                 .leading_icon(MoonButtonIconSlot::new("icons/palette.svg"))
                 .tooltip(t!("chart.graphics.tip").to_string())
-                .size(MoonButtonSize::Micro)
+                .size(MoonSize::Xs)
                 .variant(if graphics_popup_open {
                     MoonButtonVariant::Blue
                 } else {
@@ -274,7 +274,7 @@ impl Render for ChartTabs {
             MoonButton::new("chart-labels-settings")
                 .leading_icon(MoonButtonIconSlot::new("icons/chart-labels.svg"))
                 .tooltip(t!("chart_labels.tip").to_string())
-                .size(MoonButtonSize::Micro)
+                .size(MoonSize::Xs)
                 .variant(if labels_popup_open {
                     MoonButtonVariant::Blue
                 } else {
