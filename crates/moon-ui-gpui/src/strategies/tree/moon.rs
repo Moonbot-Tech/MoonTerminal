@@ -80,16 +80,9 @@ const ROW_LINE_BASE: f32 = 14.0;
 /// does not grow with `step` — see [`row_h`].
 const ROW_PAD_BASE: f32 = 4.5;
 
-/// Hand-kept mirror of MoonUI's `MoonBadgeSize::Tiny` unscaled metrics (`badge.rs:301-308`),
-/// consulted ONLY by [`row_badge_size`] when `step` is above zero — every user at the shipped
-/// default renders genuine `MoonBadgeSize::Tiny` instead, so a MoonUI metrics change reaches the
-/// tree normally.
-///
-/// `BadgeMetrics` is private in MoonUI, so nothing here can check this automatically — if MoonUI's
-/// Tiny metrics move, this must follow by hand. Same convention as [`crate::design::glyph_btn_w`]
-/// and [`crate::design::micro_control_h_value`]. MoonUI is a rolling dependency
-/// (`CONTRIBUTING.md`), so re-check this against `moon/badge.rs`'s `BadgeMetrics` whenever it is
-/// refreshed.
+/// Historical custom badge metrics used only when the local tree-text step is positive.
+/// The zero-step branch uses the shared Xs tier; these explicit custom values retain the
+/// existing local adjustment contract and its legacy font scaling.
 const BADGE_TINY_H: f32 = 13.0;
 const BADGE_TINY_RADIUS: f32 = 4.0;
 const BADGE_TINY_FONT: f32 = 8.5;
@@ -133,24 +126,16 @@ fn row_h(app: &App, step: f32) -> Pixels {
     design::fit_h_px(app, ROW_H_BASE + step, ROW_LINE_BASE + step, ROW_PAD_BASE)
 }
 
-/// Badge size at the tree's local text step.
+/// Return Xs for an unadjusted tree badge, or the existing custom dimensions plus a local step.
 ///
-/// Opt-in on the mirror: at `step` zero — every user until one deliberately raises the dial —
-/// this returns genuine `MoonBadgeSize::Tiny`, so MoonUI owns the metrics and a future MoonUI
-/// change reaches the tree normally. Only a raised step consults the hand-kept mirror, and the
-/// worst case there is a badge that looks like the OLD `Tiny` plus the step — cosmetic staleness,
-/// never a broken row. Only `height`, `font_size` and `line_height` take the step, because the box
-/// must contain the text; `radius`, `pad_x` and `min_width` are pure geometry and stay at the
-/// `Tiny` values, which `BadgeMetrics::scaled` already puts through `ui()`.
-///
+/// The positive-step custom branch deliberately retains its historical metrics and text scaling.
 /// Args:
-///     step: Local unscaled text-size step, `0.0` for no local adjustment.
-///
+///     step: Local unscaled text adjustment; nonpositive values select the shared Xs tier.
 /// Returns:
-///     `MoonBadgeSize::Tiny` at `step` zero, otherwise a `Custom` mirror grown by `step`.
+///     An explicit Xs tier or the existing locally enlarged custom badge.
 fn row_badge_size(step: f32) -> MoonBadgeSize {
     if step <= 0.0 {
-        return MoonBadgeSize::Tiny;
+        return MoonBadgeSize::Tier(moon_ui::MoonSize::Xs);
     }
     MoonBadgeSize::Custom {
         height: BADGE_TINY_H + step,

@@ -11,9 +11,8 @@ use std::time::{Duration, Instant};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonBackgroundPolicy, MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton,
-    MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonGroupBox, MoonMenuItem, MoonPalette,
-    MoonTooltipView,
+    DockArea, MoonBackgroundPolicy, MoonBadge, MoonBadgeVariant, MoonButton, MoonButtonIconSlot,
+    MoonButtonSize, MoonButtonVariant, MoonGroupBox, MoonMenuItem, MoonPalette, MoonTooltipView,
 };
 
 use crate::Backend;
@@ -111,7 +110,7 @@ pub(crate) fn side_badge(is_short: bool, p: MoonPalette) -> MoonBadge {
 /// The shape [`side_badge`] introduced, with the direction knowledge taken out, so any surface that
 /// needs "one word standing for a state" draws the same pill instead of inventing another. The Log
 /// panel's severity and category tags are the second caller; a third must reuse this rather than
-/// spell `Soft` + `Tiny` again, or the two drift apart the moment either is retuned.
+/// spell the density-sized `Soft` badge again, or the two drift apart the moment either is retuned.
 ///
 /// Returns the BUILDER rather than a rendered element for [`side_badge`]'s reason: rendered as a
 /// plain child, its `RenderOnce` impl reads the window's live theme tokens — font scale included —
@@ -126,7 +125,6 @@ pub(crate) fn side_badge(is_short: bool, p: MoonPalette) -> MoonBadge {
 pub(crate) fn tag_badge(text: impl Into<SharedString>, color: u32) -> MoonBadge {
     MoonBadge::new(text)
         .variant(MoonBadgeVariant::Soft)
-        .size(MoonBadgeSize::Tiny)
         .bg_color(color)
         .text_color(color)
 }
@@ -167,7 +165,6 @@ pub(crate) fn count_badge(n: usize, color: u32) -> impl IntoElement {
     MoonBadge::new("")
         .count_max(n, COUNT_BADGE_MAX)
         .variant(MoonBadgeVariant::Soft)
-        .size(MoonBadgeSize::Tiny)
         .bg_color(color)
         .text_color(color)
         .mono(true)

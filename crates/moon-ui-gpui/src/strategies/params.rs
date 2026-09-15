@@ -2220,7 +2220,6 @@ impl StrategiesView {
                         el.child(
                             MoonBadge::new(label)
                                 .variant(MoonBadgeVariant::Soft)
-                                .size(MoonBadgeSize::Status)
                                 .tone(tone)
                                 .render(),
                         )

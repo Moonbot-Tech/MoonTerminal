@@ -11,7 +11,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonIconSlot, MoonButtonSize,
+    MoonBadge, MoonBadgeVariant, MoonButton, MoonButtonIconSlot, MoonButtonSize,
     MoonContextMenuWindowExt as _, MoonMenuItem, MoonPalette, MoonTone, MoonWindowExt as _, h_flex,
     v_flex,
 };
@@ -857,7 +857,6 @@ impl StrategiesView {
                 let inner: AnyElement = if f.badge {
                     MoonBadge::new(f.text)
                         .variant(MoonBadgeVariant::Soft)
-                        .size(MoonBadgeSize::Status)
                         .tone(f.tone)
                         .render()
                         .into_any_element()

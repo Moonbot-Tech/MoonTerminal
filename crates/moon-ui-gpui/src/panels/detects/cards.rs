@@ -8,9 +8,7 @@
 //! visuals only; [`super`] owns card ordering and attaches left- and right-click actions.
 
 use gpui::*;
-use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonText, h_flex, rgba_from, v_flex,
-};
+use moon_ui::{MoonBadge, MoonBadgeVariant, MoonPalette, MoonText, h_flex, rgba_from, v_flex};
 
 use rust_i18n::t;
 
@@ -274,7 +272,6 @@ fn type_badge(it: &DetectItem, badges: &BadgesConfig, is_light: bool) -> Option<
         let bcol = design::rgb_to_u32(badges.color(it.kind, is_light));
         let mut badge = MoonBadge::new(code)
             .variant(MoonBadgeVariant::Soft)
-            .size(MoonBadgeSize::Tiny)
             .bg_color(bcol)
             .text_color(bcol)
             .mono(true);
@@ -286,7 +283,7 @@ fn type_badge(it: &DetectItem, badges: &BadgesConfig, is_light: bool) -> Option<
     })
 }
 
-/// Build a tiny badge naming where the detection came from.
+/// Build a density-sized badge naming where the detection came from.
 ///
 /// A core's name, or — for a card no core reported — the source that did. Resolved at render
 /// rather than frozen with the card, so it follows a live locale switch like every other word on
@@ -299,7 +296,6 @@ fn core_badge(it: &DetectItem, color: u32) -> MoonBadge {
     };
     MoonBadge::new(name)
         .variant(MoonBadgeVariant::Soft)
-        .size(MoonBadgeSize::Tiny)
         .bg_color(color)
         .text_color(color)
         .border_color(color)

@@ -10,8 +10,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonIconSlot, MoonButtonSize,
-    MoonButtonVariant, MoonDisclosureDirection, MoonPalette, h_flex, v_flex,
+    MoonBadge, MoonBadgeVariant, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant,
+    MoonDisclosureDirection, MoonPalette, h_flex, v_flex,
 };
 use rust_i18n::t;
 use std::time::Instant;
@@ -22,13 +22,12 @@ use moon_core::config::{Language, NewsTagSettings};
 use moon_core::feed::NewsItem;
 
 /// Build a soft tinted badge (source / ticker / coloured tag) using the house `MoonBadge`, sized to
-/// the card's caption tier. `color` (a `MoonPalette` token) tints both the fill and the text.
+/// the active density tier. `color` (a `MoonPalette` token) tints both the fill and the text.
 ///
 /// Also used by the chart's news-mark hover card, so both surfaces label a source identically.
 pub(crate) fn badge(text: impl Into<SharedString>, color: u32) -> impl IntoElement {
     MoonBadge::new(text)
         .variant(MoonBadgeVariant::Soft)
-        .size(MoonBadgeSize::Tiny)
         .bg_color(color)
         .text_color(color)
         .mono(true)

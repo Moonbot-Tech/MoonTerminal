@@ -9,9 +9,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonColorPicker,
-    MoonColorPickerState, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, MoonTooltipView,
-    StyledExt, h_flex, rgba_from, v_flex,
+    MoonBadge, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonColorPicker, MoonColorPickerState,
+    MoonInput, MoonInputEvent, MoonInputState, MoonPalette, MoonSize, MoonTooltipView, StyledExt,
+    h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -404,8 +404,8 @@ impl SettingsView {
             .child(
                 div().flex_none().w(px(42.0)).flex().justify_center().child(
                     MoonBadge::new(code)
+                        .size(moon_ui::MoonSize::Xs.into())
                         .variant(MoonBadgeVariant::Soft)
-                        .size(MoonBadgeSize::Status)
                         .bg_color(bcol)
                         .text_color(bcol)
                         .mono(true),

@@ -5,8 +5,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonButtonVariant,
-    MoonPalette, MoonRect, rgba_from,
+    MoonBadge, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette,
+    MoonRect, rgba_from,
 };
 use rust_i18n::t;
 
@@ -427,7 +427,7 @@ impl Render for ChartPanel {
                     .children(trade_status.map(|status| {
                         MoonBadge::new(status)
                             .variant(MoonBadgeVariant::Soft)
-                            .size(MoonBadgeSize::Tiny)
+                            .size(moon_ui::MoonSize::Xs.into())
                             .render()
                     }))
                     .when(trade_retry, |this| {
