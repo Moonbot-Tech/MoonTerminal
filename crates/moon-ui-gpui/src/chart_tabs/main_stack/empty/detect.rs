@@ -26,14 +26,13 @@ use moon_core::config::layout::{EmptyPlaces, WindowLayout};
 use moon_core::crowd::CrowdRule;
 use moon_core::crowd::detect::{DEFAULT_PROFIT, DEFAULT_TRADES, SEATS};
 use moon_ui::{
-    MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, MoonSize, h_flex,
-    rgba_from,
+    MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex, rgba_from,
 };
 use rust_i18n::t;
 
 use crate::chart_tabs::MainChartStack;
 use crate::design;
-use crate::panels::{COMPACT_CHECKBOX_DISABLED_ALPHA, COMPACT_CHECKBOX_FONT, POPUP_GROUP_GAP};
+use crate::panels::{COMPACT_CHECKBOX_DISABLED_ALPHA, POPUP_GROUP_GAP};
 
 /// Width of one field, in design units. Sized for six digits and a decimal point.
 const FIELD_WIDTH: f32 = 84.0;
@@ -461,7 +460,6 @@ pub(super) fn block(
                 .label(t!("crowd.settings.detect_evict", max = SEATS.to_string()).to_string())
                 .checked(cards.evict)
                 .disabled(!enabled)
-                .size(MoonSize::Sm)
                 .on_change(move |checked: &bool, _window, app| {
                     let checked = *checked;
                     view.update(app, |this, cx| this.set_crowd_evict(checked, cx));
@@ -501,11 +499,14 @@ fn field_row(
         .items_center()
         .gap(design::ui_px(cx, FIELD_GAP))
         .child(
-            // The face the compact checkbox beside these gives its label, on and off: its size,
+            // The face the density-selected checkbox beside these gives its label, on and off: its size,
             // soft text, and the same fade when dead.
             div()
                 .flex_1()
-                .text_size(design::ui_px(cx, COMPACT_CHECKBOX_FONT))
+                .text_size(design::ui_px(
+                    cx,
+                    crate::panels::common::checkbox_metrics(cx).font,
+                ))
                 .text_color(if enabled {
                     rgba_from(palette.text_soft, 1.0)
                 } else {

@@ -10,7 +10,7 @@ use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonDisclosureDirection, MoonDropdown, MoonGroupBox, MoonInput, MoonInputState, MoonMenuItem,
-    MoonMenuSize, MoonPalette, MoonSize, h_flex, rgba_from, v_flex,
+    MoonMenuSize, MoonPalette, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -293,7 +293,6 @@ impl SettingsView {
                     .checked(enabled)
                     .disabled(!live)
                     .mono(false)
-                    .size(MoonSize::Sm)
                     .on_change(cx.listener(move |this, ch: &bool, _, cx| {
                         let v = *ch;
                         if let Some(core) = this.telegram.core.picked {

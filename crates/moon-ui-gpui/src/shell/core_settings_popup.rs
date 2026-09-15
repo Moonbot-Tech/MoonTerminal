@@ -21,7 +21,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonInputState, MoonPalette,
-    MoonSize, MoonSliderState, MoonTabItem, MoonTabStrip, h_flex, rgba_from, v_flex,
+    MoonSliderState, MoonTabItem, MoonTabStrip, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -324,7 +324,6 @@ fn expert_switch(ctx: &TabCtx<'_>, view: &Entity<Shell>, cx: &App) -> impl IntoE
                 .label(t!("core_settings.expert").to_string())
                 .description(t!("core_settings.expert_hint").to_string())
                 .checked(checked)
-                .size(MoonSize::Sm)
                 .on_change(move |value, window, app| {
                     if !*value {
                         return;

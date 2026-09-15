@@ -9,7 +9,7 @@
 use gpui::*;
 use moon_ui::{
     MoonAccent, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonInput,
-    MoonInputState, MoonPalette, MoonSegmentItem, MoonSegmentedControl, MoonSize, h_flex, v_flex,
+    MoonInputState, MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -315,7 +315,6 @@ where
     let exact_cb = MoonCheckbox::new(SharedString::from(format!("{id}-divider-exact")))
         .label(t!("chart.layout.divider_exact").to_string())
         .checked(divider_exact)
-        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| on_toggle_exact(*ch, app));
     // Shown only where it can act: FIT-stretch, whose slots share the space and so state no size
     // that could say when the charts have stopped fitting.
@@ -359,49 +358,42 @@ where
     let orderbook_cb = MoonCheckbox::new(SharedString::from(format!("{id}-orderbook")))
         .label(t!("chart.layout.orderbook").to_string())
         .checked(orderbook_enabled)
-        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| on_toggle_orderbook(*ch, app));
 
     // "Liquidations" toggles liquidation-trade crosses on this tab's charts.
     let liquidations_cb = MoonCheckbox::new(SharedString::from(format!("{id}-liquidations")))
         .label(t!("chart.layout.liquidations").to_string())
         .checked(liquidations_enabled)
-        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| on_toggle_liquidations(*ch, app));
 
     // "Show control zone" toggles the dim order-zone fill while the order book is hidden.
     let show_zone_cb = MoonCheckbox::new(SharedString::from(format!("{id}-show-zone")))
         .label(t!("chart.layout.show_zone").to_string())
         .checked(show_zone)
-        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| on_toggle_show_zone(*ch, app));
 
     // "Auto-pin on order" pins a chart when placing a long or short order.
     let auto_pin_cb = MoonCheckbox::new(SharedString::from(format!("{id}-auto-pin")))
         .label(t!("chart.layout.auto_pin").to_string())
         .checked(auto_pin)
-        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| on_toggle_auto_pin(*ch, app));
 
     // "Time axis" toggles bottom time labels on this tab's charts.
     let time_axis_cb = MoonCheckbox::new(SharedString::from(format!("{id}-time-axis")))
         .label(t!("chart.layout.time_axis").to_string())
         .checked(time_axis_visible)
-        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| on_toggle_time_axis(*ch, app));
 
     // "Line labels" toggles values beside order lines, including size, percentage, and stop.
     let line_labels_cb = MoonCheckbox::new(SharedString::from(format!("{id}-line-labels")))
         .label(t!("chart.layout.line_labels").to_string())
         .checked(line_labels)
-        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| on_toggle_line_labels(*ch, app));
 
     // "Crosshair label" toggles the cursor readout for time, price, percentage, volume, and size.
     let cursor_labels_cb = MoonCheckbox::new(SharedString::from(format!("{id}-cursor-labels")))
         .label(t!("chart.layout.cursor_labels").to_string())
         .checked(cursor_labels)
-        .size(MoonSize::Sm)
         .on_change(move |ch: &bool, _w, app| on_toggle_cursor_labels(*ch, app));
 
     // "Detect flow" frame: how many charts detects may open on this tab, what a detect does once
@@ -431,7 +423,6 @@ where
             let evict_cb = MoonCheckbox::new(SharedString::from(format!("{id}-max-charts-evict")))
                 .label(t!("chart.layout.max_charts_evict").to_string())
                 .checked(cap.evict)
-                .size(MoonSize::Sm)
                 .on_change(move |ch: &bool, _w, app| (cap.on_toggle_evict)(*ch, app));
             v_flex()
                 .gap(design::ui_px(cx, 6.0))
@@ -444,7 +435,6 @@ where
         let flash_cb = MoonCheckbox::new(SharedString::from(format!("{id}-no-arrival-flash")))
             .label(t!("chart.layout.no_arrival_flash").to_string())
             .checked(!flow.flash)
-            .size(MoonSize::Sm)
             .on_change(move |ch: &bool, _w, app| (flow.on_toggle_flash)(!*ch, app));
         popup_group("frame-detect-flow", t!("chart.layout.frame_detect_flow")).child(
             v_flex()

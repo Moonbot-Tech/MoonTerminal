@@ -900,7 +900,8 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
     let measured_width = code_only(braced_body(&settings, "fn settings_content_width("));
     let popup_measurement = code_only(braced_body(&settings, "fn popup_text_width("));
     assert!(popup_measurement.contains("design::ui_text_width("));
-    assert!(measured_width.contains("COMPACT_CHECKBOX_MARK + COMPACT_CHECKBOX_GAP"));
+    assert!(measured_width.contains("checkbox_metrics(cx).mark"));
+    assert!(measured_width.contains("checkbox_metrics(cx).gap"));
     assert!(measured_width.contains("strat.settings.text_step"));
     assert!(measured_width.contains("TEXT_STEP_BUTTON_W * 2.0"));
     assert!(measured_width.contains("popup_group_inset_px(cx)"));

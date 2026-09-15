@@ -35,7 +35,7 @@ use rust_i18n::t;
 use super::{EmptyScreen, switch_of};
 use crate::chart_tabs::MainChartStack;
 use crate::design;
-use crate::panels::{COMPACT_CHECKBOX_FONT, POPUP_GROUP_GAP};
+use crate::panels::POPUP_GROUP_GAP;
 
 /// Gap between a caption and its control, and between two rows, in design units: the pitch a popup
 /// group packs its rows at, so these rows and the framed ones under them read as one list.
@@ -263,12 +263,15 @@ fn row(
         .items_center()
         .gap(design::ui_px(cx, ROW_GAP))
         .child(
-            // The face a compact checkbox gives its label — its size, soft text — so this row and
+            // The face a density-selected checkbox gives its label — its size, soft text — so this row and
             // the rule's switch under it read as one list rather than as a heading over a note.
             div()
                 .flex_1()
                 .min_w_0()
-                .text_size(design::ui_px(cx, COMPACT_CHECKBOX_FONT))
+                .text_size(design::ui_px(
+                    cx,
+                    crate::panels::common::checkbox_metrics(cx).font,
+                ))
                 .text_color(rgb(palette.text_soft))
                 .child(t!(block_label(block)).to_string()),
         )

@@ -9,7 +9,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonSize,
+    MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonPalette,
     MoonTabItem, MoonTabStrip, MoonWindowFrame, h_flex, v_flex,
 };
 use rust_i18n::t;
@@ -154,7 +154,6 @@ impl CoreExpertView {
                 MoonCheckbox::new("core-expert-mode")
                     .label(t!("core_settings.expert").to_string())
                     .checked(expert)
-                    .size(MoonSize::Sm)
                     .on_change(move |value, window, cx| {
                         if *value {
                             return;

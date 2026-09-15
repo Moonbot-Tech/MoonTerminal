@@ -1762,7 +1762,6 @@ impl StrategiesView {
                     .checked(on)
                     .indeterminate(differ)
                     .disabled(!active)
-                    .size(MoonSize::Sm)
                     .on_change(cx.listener(move |this, ch: &bool, _, cx| {
                         this.stage_field_value(
                             &keys,

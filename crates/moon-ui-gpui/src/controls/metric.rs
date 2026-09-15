@@ -7,8 +7,8 @@ use rust_i18n::t;
 
 use moon_ui::{
     MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonInput,
-    MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize, MoonSlider,
-    MoonSliderState, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex, v_flex,
+    MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSlider, MoonSliderState,
+    MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex, v_flex,
 };
 
 use moon_core::feed::ClientSettingsEdit;
@@ -728,7 +728,6 @@ pub fn metric_popup_content(
             MoonCheckbox::new("toolbar-tp-ext")
                 .label(t!("toolbar.tp_ext").to_string())
                 .checked(extended)
-                .size(MoonSize::Sm)
                 .on_change(move |ch: &bool, _w, app| {
                     let ext = *ch;
                     let is_live = {
@@ -790,7 +789,6 @@ pub fn metric_popup_content(
             MoonCheckbox::new("toolbar-stop-market")
                 .label(t!("toolbar.stop_market").to_string())
                 .checked(stop_market_on)
-                .size(MoonSize::Sm)
                 .on_change(move |ch: &bool, _w, app| {
                     let on = *ch;
                     let is_live = {
@@ -814,7 +812,6 @@ pub fn metric_popup_content(
             MoonCheckbox::new("toolbar-hedge")
                 .label(t!("toolbar.hedge").to_string())
                 .checked(hedge_on)
-                .size(MoonSize::Sm)
                 .on_change({
                     let backend = backend.clone();
                     let group = group.clone();

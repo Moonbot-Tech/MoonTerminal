@@ -5,7 +5,7 @@
 
 use gpui::*;
 use moon_core::config::{ArbShow, ArbVenueCfg};
-use moon_ui::{MoonButtonVariant, MoonCheckbox, MoonPalette, MoonSize, h_flex, v_flex};
+use moon_ui::{MoonButtonVariant, MoonCheckbox, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::ArbEditState;
@@ -68,7 +68,6 @@ pub(super) fn dialog_body(state: &Entity<ArbEditState>, cx: &mut App) -> AnyElem
         MoonCheckbox::new("arb-blocked")
             .label(t!("arb.mark_blocked").to_string())
             .checked(on)
-            .size(MoonSize::Sm)
             .on_change(move |v: &bool, _w, cx| {
                 let v = *v;
                 ArbEditState::write(&state, cx, |cfg| cfg.mark_blocked = v);

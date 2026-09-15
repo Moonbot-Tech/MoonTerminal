@@ -15,8 +15,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonColorPicker, MoonDropdown,
-    MoonInput, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonSize, MoonText,
-    MoonTone, MoonTooltipView, StyledExt, h_flex,
+    MoonInput, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonText, MoonTone,
+    MoonTooltipView, StyledExt, h_flex,
 };
 use rust_i18n::t;
 
@@ -267,8 +267,7 @@ fn srv_check(
             }
         }
         false
-    })
-    .size(MoonSize::Sm);
+    });
     if !label.is_empty() {
         checkbox = checkbox.label(label);
     }

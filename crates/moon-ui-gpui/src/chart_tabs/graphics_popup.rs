@@ -19,9 +19,7 @@
 
 use gpui::*;
 use moon_core::config::ChartGraphicsCfg;
-use moon_ui::{
-    MoonCheckbox, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize, h_flex, v_flex,
-};
+use moon_ui::{MoonCheckbox, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::common::{LayoutPopupHost, StackSetting, seg_row};
@@ -241,7 +239,6 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         MoonCheckbox::new(SharedString::from(format!("{id}-real")))
             .label(t!("chart.graphics.real_trades").to_string())
             .checked(cfg.show_real_trades)
-            .size(MoonSize::Sm)
             .on_change(move |ch: &bool, _w, app| {
                 let v = *ch;
                 write_cfg(&entity, app, |c| c.show_real_trades = v);
@@ -252,7 +249,6 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         MoonCheckbox::new(SharedString::from(format!("{id}-emulator")))
             .label(t!("chart.graphics.emulator_trades").to_string())
             .checked(cfg.show_emulator_trades)
-            .size(MoonSize::Sm)
             .on_change(move |ch: &bool, _w, app| {
                 let v = *ch;
                 write_cfg(&entity, app, |c| c.show_emulator_trades = v);
@@ -264,7 +260,6 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
             .label(t!("chart.graphics.hide_closed_sell").to_string())
             .description(t!("chart.graphics.hide_closed_sell_hint").to_string())
             .checked(cfg.hide_closed_sell_line)
-            .size(MoonSize::Sm)
             .on_change(move |ch: &bool, _w, app| {
                 let v = *ch;
                 write_cfg(&entity, app, |c| c.hide_closed_sell_line = v);
@@ -276,7 +271,6 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
             .label(t!("chart.graphics.hide_move_history").to_string())
             .description(t!("chart.graphics.hide_move_history_hint").to_string())
             .checked(cfg.hide_order_move_history)
-            .size(MoonSize::Sm)
             .on_change(move |ch: &bool, _w, app| {
                 let v = *ch;
                 write_cfg(&entity, app, |c| c.hide_order_move_history = v);
@@ -404,7 +398,6 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         MoonCheckbox::new(SharedString::from(format!("{id}-volume-sides")))
             .label(t!("chart.graphics.volume_sides").to_string())
             .checked(sides_on)
-            .size(MoonSize::Sm)
             .on_change(move |ch: &bool, _w, app| {
                 let v = *ch;
                 write_cfg(&entity, app, |c| c.candle_volume_sides = v);

@@ -30,7 +30,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputEvent,
-    MoonInputState, MoonPalette, MoonScrollbarVisibility, MoonSize, MoonSlider, MoonSliderEvent,
+    MoonInputState, MoonPalette, MoonScrollbarVisibility, MoonSlider, MoonSliderEvent,
     MoonSliderState, MoonVirtualList, h_flex, v_flex,
 };
 use rust_i18n::t;
@@ -594,7 +594,6 @@ fn coin_row(
                     if black_side { "bl" } else { "wl" }
                 )))
                 .checked(on)
-                .size(MoonSize::Sm)
                 .on_change(move |_, _w, app| {
                     let token = coin_token(&coin);
                     // The view may already be gone; a dropped window is not an error here.

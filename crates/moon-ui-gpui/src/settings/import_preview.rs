@@ -9,8 +9,8 @@ use std::collections::HashSet;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonCheckbox, MoonPalette, MoonScrollableElement, MoonSize, StyledExt, h_flex,
-    rgba_from, v_flex,
+    MoonButton, MoonCheckbox, MoonPalette, MoonScrollableElement, StyledExt, h_flex, rgba_from,
+    v_flex,
 };
 use rust_i18n::t;
 
@@ -344,7 +344,6 @@ impl SettingsView {
                 // The All checkbox toggles every target at once.
                 .child(
                     MoonCheckbox::new("imp-core-all")
-                        .size(MoonSize::Sm)
                         .checked(all_on)
                         .label(t!("import.all_cores").to_string())
                         .on_change(cx.listener(|this, ch: &bool, _, cx| {
@@ -360,7 +359,6 @@ impl SettingsView {
             for (idx, (_, name, on)) in state.cores.iter().enumerate() {
                 row = row.child(
                     MoonCheckbox::new(SharedString::from(format!("imp-core-{idx}")))
-                        .size(MoonSize::Sm)
                         .checked(*on)
                         .label(name.clone())
                         .on_change(cx.listener(move |this, ch: &bool, _, cx| {
@@ -499,7 +497,6 @@ impl SettingsView {
             .gap(design::ui_px(cx, 6.0))
             .child(
                 MoonCheckbox::new(SharedString::from(format!("imp-{}", item.id)))
-                    .size(MoonSize::Sm)
                     .checked(state_checked)
                     .label(wording::caption(&item.label))
                     .on_change(cx.listener(move |this, ch: &bool, _, cx| {

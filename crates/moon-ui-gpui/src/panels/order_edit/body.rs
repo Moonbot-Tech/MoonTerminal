@@ -168,7 +168,6 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
                 MoonCheckbox::new(SharedString::from(id))
                     .label(label)
                     .checked(checked)
-                    .size(MoonSize::Sm)
                     .on_change(move |ch: &bool, _w, app| {
                         let on = *ch;
                         st.update(app, |s, cx| {

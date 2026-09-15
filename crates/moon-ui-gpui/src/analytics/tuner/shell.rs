@@ -14,7 +14,7 @@ use moon_core::db::ReadFail;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
     MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonSize, MoonTag, MoonTooltipView, h_flex, v_flex,
+    MoonTag, MoonTooltipView, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -146,7 +146,6 @@ impl AnalyticsView {
                     MoonCheckbox::new(SharedString::from(format!("tun-round-{k}")))
                         .label(t!("analytics.tuner.round_lbl").to_string())
                         .checked(round)
-                        .size(MoonSize::Sm)
                         .on_change({
                             let view = cx.entity();
                             move |ch: &bool, _w, app| {
@@ -719,7 +718,6 @@ impl AnalyticsView {
                                     .label(t!("analytics.tuner.compose_toggle").to_string())
                                     .description(t!("analytics.tuner.compose_short").to_string())
                                     .checked(self.tuner.compose)
-                                    .size(MoonSize::Sm)
                                     // `on_change` hands the callback an `&mut App`, not a
                                     // `Context`, so this is one of the call sites where a
                                     // `cx.listener` does not fit.

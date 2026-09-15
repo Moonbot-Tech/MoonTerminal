@@ -5,7 +5,7 @@ use super::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDataCell, MoonDataRow,
     MoonDataTable, MoonDataTableColumn, MoonDropdown, MoonMenuSize, MoonPopover,
-    MoonPopoverPlacement, MoonSize, MoonTone, h_flex,
+    MoonPopoverPlacement, MoonTone, h_flex,
 };
 use rust_i18n::t;
 
@@ -242,7 +242,6 @@ fn alert_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
             MoonCheckbox::new(SharedString::from(format!("al-arm-{core}-{id}")))
                 .checked(row.armed)
                 .disabled(!editable)
-                .size(MoonSize::Sm)
                 .on_change(move |on: &bool, _w, app| {
                     let (on, market) = (*on, market.clone());
                     ctx.commit_core(app, core, move |b| {

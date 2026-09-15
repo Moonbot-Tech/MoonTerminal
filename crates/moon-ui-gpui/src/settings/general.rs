@@ -6,8 +6,8 @@
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonCheckbox, MoonMenuSize, MoonPalette, MoonSegmentItem,
-    MoonSegmentedControl, MoonSelect, MoonSize, MoonSliderState, MoonTooltipView, StyledExt,
-    h_flex, rgba_from, v_flex,
+    MoonSegmentedControl, MoonSelect, MoonSliderState, MoonTooltipView, StyledExt, h_flex,
+    rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -366,8 +366,7 @@ impl SettingsView {
                         false
                     }
                 })
-                .label(t!("general.charts_split_by_core").to_string())
-                .size(MoonSize::Sm),
+                .label(t!("general.charts_split_by_core").to_string()),
                 "general.charts_split_by_core_hint",
                 &t!("general.charts_split_by_core_hint"),
             ))
@@ -382,8 +381,7 @@ impl SettingsView {
                         false
                     }
                 })
-                .label(t!("general.separate_control_zones").to_string())
-                .size(MoonSize::Sm),
+                .label(t!("general.separate_control_zones").to_string()),
                 "general.separate_control_zones_hint",
                 &t!("general.separate_control_zones_hint"),
             ))
@@ -407,8 +405,7 @@ impl SettingsView {
                         false
                     }
                 })
-                .label(t!("general.main_idle_close").to_string())
-                .size(MoonSize::Sm),
+                .label(t!("general.main_idle_close").to_string()),
                 "general.main_idle_close_hint",
                 &t!("general.main_idle_close_hint"),
             ))
@@ -447,8 +444,7 @@ impl SettingsView {
                         false
                     }
                 })
-                .label(t!("general.log_to_file").to_string())
-                .size(MoonSize::Sm),
+                .label(t!("general.log_to_file").to_string()),
                 "general.log_to_file_hint",
                 &t!("general.log_to_file_hint"),
             ))

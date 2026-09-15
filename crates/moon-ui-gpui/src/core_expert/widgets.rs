@@ -17,7 +17,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonGroupBox,
-    MoonInput, MoonLink, MoonMenuItem, MoonMenuSize, MoonPalette, MoonRadio, MoonSize, MoonSlider,
+    MoonInput, MoonLink, MoonMenuItem, MoonMenuSize, MoonPalette, MoonRadio, MoonSlider,
     MoonStepper, MoonStepperSize, MoonText, MoonTone, h_flex, v_flex,
 };
 
@@ -83,7 +83,6 @@ pub(super) fn flag_described(
             .checked(checked && !mixed)
             .tone(design::mixed_tone(mixed))
             .disabled(!enabled)
-            .size(MoonSize::Sm)
             .on_change(move |ch: &bool, _w, app| {
                 let on = *ch;
                 view.update(app, |this, cx| {

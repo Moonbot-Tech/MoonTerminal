@@ -74,7 +74,6 @@ impl Render for LogPanel {
                 MoonCheckbox::new("log-errors-only")
                     .label(t!("log.errors_only").to_string())
                     .checked(self.errors_only)
-                    .size(MoonSize::Sm)
                     .on_change(cx.listener(|t, ch: &bool, _, cx| {
                         if t.errors_only != *ch {
                             t.errors_only = *ch;
@@ -88,7 +87,6 @@ impl Render for LogPanel {
                 MoonCheckbox::new("log-live")
                     .label(t!("log.follow_tail").to_string())
                     .checked(self.following())
-                    .size(MoonSize::Sm)
                     .on_change(cx.listener(|t, ch: &bool, _, cx| {
                         // A manual toggle invalidates any delayed automatic resumption.
                         t.scroll_gen = t.scroll_gen.wrapping_add(1);
