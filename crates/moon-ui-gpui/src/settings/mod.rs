@@ -132,11 +132,20 @@ const VALUATION_LABELS: [(&str, ValuationMode); 2] = [
 ];
 
 /// Labels and values for the interface-theme selector, ordered light to dark so the list reads
-/// as a brightness ramp rather than as the order the themes happened to be written in.
-const THEME_MODE_LABELS: [(&str, UiThemeMode); 3] = [
+/// as a brightness ramp rather than as the order the themes happened to be written in. The
+/// experimental colour-role modes follow the reviewed three, as the same light-to-dark pair.
+const THEME_MODE_LABELS: [(&str, UiThemeMode); 5] = [
     ("iface.light_theme", UiThemeMode::Light),
     ("iface.graphite_theme", UiThemeMode::Graphite),
     ("iface.dark_theme", UiThemeMode::Dark),
+    (
+        "iface.light_experimental_theme",
+        UiThemeMode::LightExperimental,
+    ),
+    (
+        "iface.dark_experimental_theme",
+        UiThemeMode::DarkExperimental,
+    ),
 ];
 
 /// Labels and values for the global core-order selector.

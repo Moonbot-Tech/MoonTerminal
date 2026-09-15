@@ -40,7 +40,12 @@ fn graphite_selector_keys_define_each_shipped_language() {
     )
     .expect("Interface locales must be readable")
     .replace("\r\n", "\n");
-    for key in ["iface.theme_mode", "iface.graphite_theme"] {
+    for key in [
+        "iface.theme_mode",
+        "iface.graphite_theme",
+        "iface.light_experimental_theme",
+        "iface.dark_experimental_theme",
+    ] {
         let members: Vec<&str> = locale
             .split_once(&format!("{key}:\n"))
             .unwrap_or_else(|| panic!("interface locale must define {key}"))
