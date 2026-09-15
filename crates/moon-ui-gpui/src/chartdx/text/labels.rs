@@ -12,7 +12,7 @@
 
 use std::rc::Rc;
 
-use moon_core::config::{ARB_PART_BASE, ArbViewCfg};
+use moon_core::config::{ARB_PART_BASE, ArbViewCfg, FILTER_HEADER_PART};
 use moon_core::config::{
     ChartLabelField, ChartLabelPart, ChartLabelsCfg, LabelSpan, PnlBasis, ROW_NAME_PART,
     SpanAnchor, VolumeUnits,
@@ -405,14 +405,10 @@ impl LabelState {
                 .any(|p| p.is_drawn() && p.field.in_volume_block());
             // The row's own name leads its captions, which is where a reader looks for what the
             // row IS before reading the figures on it.
-            let filters_header = row.draws_strategy_filters();
-            let title = if filters_header {
-                Some(filter_header(row, &self.inputs.filter_lines))
-            } else {
-                row.show_name
-                    .then(|| crate::controls::row_title(row))
-                    .flatten()
-            };
+            let title = row
+                .show_name
+                .then(|| crate::controls::row_title(row))
+                .flatten();
             if let Some(title) = title {
                 scratch.push(LabelText {
                     row: row_ix,
@@ -426,14 +422,9 @@ impl LabelState {
                     bar: None,
                     // A module's own NAME is part of its block, so the menu opens from it too.
                     volume_menu: row_reads_volume,
-                    // Other names are not buttons: a press must land on the control they name.
-                    // The filters header IS its collapse control and uses a caption hit target,
-                    // preserving GPU text styling rather than placing a trading-button overlay.
-                    action: filters_header.then_some(LabelAction::ToggleStrategyFilters),
+                    // Names are not buttons: a press must land on the control they name.
+                    action: None,
                 });
-            }
-            if filters_header && row.collapsed {
-                continue;
             }
             let mut column_drawn = false;
             for (part_ix, part) in row.parts.iter().enumerate() {
@@ -457,9 +448,12 @@ impl LabelState {
                                 self.arb_view.as_deref(),
                                 part.resolved_style(),
                             ),
-                            ChartLabelField::StrategyFilters => {
-                                push_filter_rows(&mut scratch, row_ix, &self.inputs.filter_lines)
-                            }
+                            ChartLabelField::StrategyFilters => push_filter_rows(
+                                &mut scratch,
+                                row_ix,
+                                row,
+                                &self.inputs.filter_lines,
+                            ),
                             _ => {}
                         }
                         column_drawn = true;
@@ -987,12 +981,33 @@ fn filter_header(row: &moon_core::config::ChartLabelRow, lines: &[String]) -> St
     }
 }
 
-/// Build the strategy-filter column: one line per skip reason, addressed from [`ARB_PART_BASE`].
+/// Build the strategy-filter column with its control immediately before the skip reasons.
 ///
-/// Capped at [`moon_core::config::ARB_MAX_ROWS`] so the column cannot outgrow the run range it
-/// shares with the arbitrage roster — they never occupy the same module, so the indices cannot
-/// collide, but the pool is sized to that constant.
-fn push_filter_rows(out: &mut Vec<LabelText>, row_ix: usize, lines: &[String]) {
+/// The header has its own run; entries are capped at [`moon_core::config::ARB_MAX_ROWS`] in
+/// the shared column range. Folding omits only these entries, preserving ordinary row captions.
+fn push_filter_rows(
+    out: &mut Vec<LabelText>,
+    row_ix: usize,
+    row: &moon_core::config::ChartLabelRow,
+    lines: &[String],
+) {
+    out.push(LabelText {
+        row: row_ix,
+        part: FILTER_HEADER_PART,
+        text: filter_header(row, lines),
+        prefix: String::new(),
+        sign: None,
+        reachable: false,
+        venue: None,
+        color: None,
+        bar: None,
+        volume_menu: false,
+        // This header IS the control; the row's ordinary name remains noninteractive.
+        action: Some(LabelAction::ToggleStrategyFilters),
+    });
+    if row.collapsed {
+        return;
+    }
     for (n, line) in lines
         .iter()
         .filter(|line| !line.is_empty())
@@ -1538,13 +1553,8 @@ pub(crate) fn preview_row(
     }
     let preview_roster = preview_roster();
     let mut out = Vec::new();
-    let filters_header = row.draws_strategy_filters();
-    if filters_header || row.show_name {
-        let title = if filters_header {
-            Some(filter_header(row, &inputs.filter_lines))
-        } else {
-            crate::controls::row_title(row)
-        };
+    if row.show_name {
+        let title = crate::controls::row_title(row);
         if let Some(title) = title {
             out.push(PreviewCaption {
                 column: false,
@@ -1554,9 +1564,6 @@ pub(crate) fn preview_row(
                 style: moon_core::config::ChartLabelRow::name_style(),
             });
         }
-    }
-    if filters_header && row.collapsed {
-        return out;
     }
     let mut column_drawn = false;
     for part in &row.parts[..row.used_parts()] {
@@ -1576,7 +1583,7 @@ pub(crate) fn preview_row(
             let mut lines = Vec::new();
             match part.field {
                 ChartLabelField::StrategyFilters => {
-                    push_filter_rows(&mut lines, 0, &inputs.filter_lines)
+                    push_filter_rows(&mut lines, 0, row, &inputs.filter_lines)
                 }
                 _ => push_arb_rows(&mut lines, 0, &inputs, Some(&preview_roster), base),
             }
@@ -1585,12 +1592,16 @@ pub(crate) fn preview_row(
                 prefix: line.prefix,
                 text: line.text,
                 sign: line.sign,
-                style: moon_core::config::ResolvedLabelStyle {
-                    color: match line.color {
-                        Some(rgb) => moon_core::config::LabelColor::Fixed(rgb),
-                        None => base.color,
-                    },
-                    ..base
+                style: if line.part == FILTER_HEADER_PART {
+                    moon_core::config::ChartLabelRow::name_style()
+                } else {
+                    moon_core::config::ResolvedLabelStyle {
+                        color: match line.color {
+                            Some(rgb) => moon_core::config::LabelColor::Fixed(rgb),
+                            None => base.color,
+                        },
+                        ..base
+                    }
                 },
             }));
             continue;

@@ -30,8 +30,8 @@
 use gpui::{Hsla, point, px};
 use moon_core::config::{
     ARB_PART_BASE, CHART_LABEL_ROWS, ChartLabelField, ChartLabelRow, ChartLabelsCfg,
-    LABEL_WRAP_LINES, LabelAlign, LabelColor, LabelZone, PREFIX_PART_BASE, ROW_NAME_PART,
-    ROW_RUN_STRIDE, ResolvedLabelStyle, WRAP_PART_BASE,
+    FILTER_HEADER_PART, LABEL_WRAP_LINES, LabelAlign, LabelColor, LabelZone, PREFIX_PART_BASE,
+    ROW_NAME_PART, ROW_RUN_STRIDE, ResolvedLabelStyle, WRAP_PART_BASE,
 };
 use moon_core::util::fmt::DeltaSign;
 
@@ -258,7 +258,9 @@ impl Cell {
     /// Whether this column is a stacked field — filter skip lines, the venue roster — whose
     /// natural width is the longest line it holds, not a single figure.
     fn has_column(&self) -> bool {
-        self.items.iter().any(|item| item.part >= ARB_PART_BASE)
+        self.items
+            .iter()
+            .any(|item| item.part >= FILTER_HEADER_PART)
     }
 
     /// How tall the cell is: its captions stack, so their heights add up — and a wrapped caption
@@ -1644,9 +1646,9 @@ impl RenderState {
 ///
 /// Column lines are not configured parts — there are more of them than a module holds — so the
 /// part index does not look them up. They inherit the field of the visible column caption that
-/// produced them, which is how wrap/style/plate stay one setting for the whole list.
+/// produced them. Names and filter headers have no field, preserving their single-line titles.
 fn caption_field(row: &ChartLabelRow, part: usize) -> Option<ChartLabelField> {
-    if part == ROW_NAME_PART {
+    if part == ROW_NAME_PART || part == FILTER_HEADER_PART {
         return None;
     }
     if part >= ARB_PART_BASE {
@@ -1660,11 +1662,10 @@ fn caption_field(row: &ChartLabelRow, part: usize) -> Option<ChartLabelField> {
 
 /// Style one caption of a module draws with, or `None` when the module holds no such caption.
 ///
-/// The row's own NAME is not a configured caption and carries no style of its own; any other index
-/// the module does not hold is not a caption at all — a hand-edited file can state one — and is
-/// dropped rather than drawn with a guessed style.
+/// The row's own name and the filter control keep the ordinary name style. Neither is a
+/// configured caption; column entries inherit the style of the field that produced them.
 fn caption_style(row: &ChartLabelRow, part: usize) -> Option<ResolvedLabelStyle> {
-    if part == ROW_NAME_PART {
+    if part == ROW_NAME_PART || part == FILTER_HEADER_PART {
         return Some(ChartLabelRow::name_style());
     }
     // An arbitrage line is drawn in its OWN run range, past every part index, and takes the style
@@ -1729,8 +1730,7 @@ fn group_lines(
         // captions run, and a module can hold both. So arbitrage lines join each other and nothing
         // else joins them.
         // Filters keep their header above their lines even if the module's ordinary flow is Row.
-        let is_column_line = text.part >= ARB_PART_BASE
-            || (text.part == ROW_NAME_PART && row_cfg.draws_strategy_filters());
+        let is_column_line = text.part >= FILTER_HEADER_PART;
         let joins = match (is_column_line, was_column_line) {
             (true, true) => same_module,
             (true, false) | (false, true) => false,

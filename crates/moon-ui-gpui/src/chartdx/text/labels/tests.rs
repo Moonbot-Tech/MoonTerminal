@@ -14,7 +14,7 @@ use moon_core::util::fmt::DeltaSign;
 
 use super::{ActionInputs, LabelInputs, LabelState, basis_index, collect_open_stats, preview_row};
 
-/// Removing the collapsed early return leaves filter lines covering the chart; dropping the
+/// Removing the column's collapsed early return leaves filter lines covering the chart; dropping the
 /// forced header removes the only way to reopen a module whose show_name is off.
 #[test]
 fn strategy_filters_collapse_to_a_counted_header() {
@@ -36,7 +36,7 @@ fn strategy_filters_collapse_to_a_counted_header() {
             .collect::<Vec<_>>(),
         vec!["v Filters", "first", "second"]
     );
-    assert_eq!(state.texts[0].part, moon_core::config::ROW_NAME_PART);
+    assert_eq!(state.texts[0].part, moon_core::config::FILTER_HEADER_PART);
     assert_eq!(
         state.texts[0].action,
         Some(super::LabelAction::ToggleStrategyFilters)
@@ -71,6 +71,64 @@ fn collapsed_filter_count_uses_the_column_limit_and_handles_empty_data() {
         state.texts[0].text,
         format!("> Filters \u{b7} {}", moon_core::config::ARB_MAX_ROWS)
     );
+}
+
+/// Emitting the control as the row name reorders mixed captions; folding the row hides its
+/// ordinary captions. The live and preview expansions must preserve both sides of the column.
+#[test]
+fn mixed_filters_keep_the_title_and_ordinary_captions_when_collapsed() {
+    let mut cfg = cfg_of(&[
+        ChartLabelField::Coin,
+        ChartLabelField::StrategyFilters,
+        ChartLabelField::Core,
+    ]);
+    cfg.rows[0].name = "Mixed".into();
+    cfg.rows[0].show_name = true;
+    let inputs = LabelInputs {
+        ticker: "BTC".into(),
+        core_name: "Core".into(),
+        filter_lines: vec!["first".into(), "second".into()],
+        ..Default::default()
+    };
+    let mut state = LabelState::default();
+    let view = Rc::new(ArbViewCfg::default());
+    for collapsed in [false, true] {
+        cfg.rows[0].collapsed = collapsed;
+        state.update(&Rc::new(cfg.clone()), &view, inputs.clone());
+        let expected = if collapsed {
+            vec!["Mixed", "BTC", "> Mixed \u{b7} 2", "Core"]
+        } else {
+            vec!["Mixed", "BTC", "v Mixed", "first", "second", "Core"]
+        };
+        assert_eq!(
+            state
+                .texts
+                .iter()
+                .map(|t| t.text.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(state.texts[0].part, moon_core::config::ROW_NAME_PART);
+        assert_eq!(state.texts[0].action, None);
+        assert_eq!(state.texts[2].part, moon_core::config::FILTER_HEADER_PART);
+        assert_eq!(
+            state.texts[2].action,
+            Some(super::LabelAction::ToggleStrategyFilters)
+        );
+        let preview = preview_row(&cfg.rows[0], 60_000);
+        assert_eq!(preview[0].text, "Mixed");
+        assert!(!preview[0].column);
+        assert!(!preview[1].column);
+        assert!(preview[2].column);
+        assert!(
+            preview[2]
+                .text
+                .starts_with(if collapsed { "> Mixed" } else { "v Mixed" })
+        );
+        assert_eq!(preview[2].style, ChartLabelRow::name_style());
+        assert!(!preview.last().unwrap().column);
+        assert_eq!(preview.len(), if collapsed { 4 } else { 6 });
+    }
 }
 
 /// A collapse flag must not fold another module or supersede the first visible column.
@@ -734,7 +792,7 @@ fn the_caption_address_survives_a_skipped_neighbour() {
             (4, 1),
             (4, 2),
             (4, 3),
-            (10, 8),
+            (10, moon_core::config::FILTER_HEADER_PART),
         ],
         "every caption keeps the address its CONFIGURATION gives it, whatever its neighbours          resolved to: the skipped venue does not renumber the deltas, and the skipped badge module          does not renumber the module after it"
     );

@@ -407,7 +407,7 @@ fn overflowing_filter_cells_keep_the_header_inside_the_bottom_band() {
         let mut fitted = cell();
         fitted.fit_filter_header(&state.texts, height);
         assert_eq!(fitted.items.len(), expected_items);
-        assert_eq!(fitted.items[0].part, moon_core::config::ROW_NAME_PART);
+        assert_eq!(fitted.items[0].part, moon_core::config::FILTER_HEADER_PART);
         assert!(
             100.0 - fitted.height() >= 100.0 - height,
             "bottom anchoring must keep the header above the retained filter lines and on-pane"
@@ -429,6 +429,65 @@ fn overflowing_filter_cells_keep_the_header_inside_the_bottom_band() {
         5,
         "other caption cells keep their existing clipping"
     );
+}
+
+/// Moving the filter control back to the row name separates it from entries after Coin,
+/// disabling the bottom-band trim and pushing the only collapse target above a short pane.
+#[test]
+fn mixed_filter_column_keeps_its_header_above_entries_inside_a_short_pane() {
+    use super::super::labels::{LabelAction, LabelInputs, LabelState};
+    use std::rc::Rc;
+    for zone in [LabelZone::ChartBottom, LabelZone::ZoneBottom] {
+        for flow in [LabelFlow::Row, LabelFlow::Column] {
+            let mut cfg = ChartLabelsCfg::empty();
+            let row = &mut cfg.rows[0];
+            *row = ChartLabelRow::new(zone, LabelAlign::Left);
+            row.flow = flow;
+            row.push_part(ChartLabelField::Coin);
+            row.push_part(ChartLabelField::StrategyFilters);
+            let mut state = LabelState::default();
+            state.update(
+                &Rc::new(cfg.clone()),
+                &Rc::new(Default::default()),
+                LabelInputs {
+                    ticker: "BTC".into(),
+                    filter_lines: vec!["reason".into(); 5],
+                    ..Default::default()
+                },
+            );
+            let grouped = group_lines(&cfg, &state.texts, zone, LabelAlign::Left);
+            assert_eq!(grouped, vec![vec![vec![0], vec![1, 2, 3, 4, 5, 6]]]);
+            let mut column = super::Cell {
+                gap: 0.0,
+                items: grouped[0][1]
+                    .iter()
+                    .map(|&pos| {
+                        let mut item = wrap_item(state.texts[pos].part, false);
+                        item.pos = pos;
+                        item
+                    })
+                    .collect(),
+            };
+            assert!(column.fit_filter_header(&state.texts, 45.0));
+            assert_eq!(column.items.len(), 3);
+            let header = column.items[0];
+            assert_eq!(
+                state.texts[header.pos].action,
+                Some(LabelAction::ToggleStrategyFilters)
+            );
+            assert_eq!(
+                super::caption_style(&cfg.rows[0], header.part),
+                Some(ChartLabelRow::name_style())
+            );
+            let pane_top = 55.0;
+            let bottom_anchor = 100.0;
+            let header_y = bottom_anchor - column.height();
+            assert!(header_y >= pane_top);
+            let first_entry_y = header_y + header.block_h();
+            assert!(first_entry_y > header_y);
+            assert!(first_entry_y + column.items[1].block_h() <= bottom_anchor);
+        }
+    }
 }
 
 /// Skip-reason lines wrap, but they must not count as elastic prose. Two wrapping bands skip the
