@@ -12,15 +12,15 @@ fn zoom_captions_show_percentages_at_endpoints_and_steps() {
     }
 }
 
-/// Catches omitting density from theme construction or losing the +3 Standard text adjustment.
-/// The installed tokens must keep existing 10px text at 13px while zoom changes geometry only.
+/// Catches omitting the font scale or scaling density's font delta twice during theme construction.
+/// At 125% zoom, Standard's 10px base plus 3px density adjustment must render as 16.25px.
 #[test]
-fn density_reaches_both_theme_modes_without_zooming_text_twice() {
+fn density_and_zoom_scale_installed_text_proportionally() {
     for mode in [UiThemeMode::Dark, UiThemeMode::Graphite, UiThemeMode::Light] {
         for (density, tier, text_px) in [
-            (UiDensity::Compact, MoonSize::Xs, 10.0),
-            (UiDensity::Standard, MoonSize::Sm, 13.0),
-            (UiDensity::Large, MoonSize::Md, 16.0),
+            (UiDensity::Compact, MoonSize::Xs, 12.5),
+            (UiDensity::Standard, MoonSize::Sm, 16.25),
+            (UiDensity::Large, MoonSize::Md, 20.0),
         ] {
             let theme = MoonTheme::from_config(crate::startup::moon_theme_config_for_presentation(
                 mode, density, 1.25,

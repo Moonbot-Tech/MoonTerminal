@@ -1,4 +1,4 @@
-//! Report-writer coordination tests.
+//! Report-writer coordination and presentation mapping tests.
 
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -6,6 +6,45 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use super::{ReportRevisionDecision, ReportRevisionGate, TickEdges, consume_report_commit};
+
+/// Removing either font multiplier assignment or leaving the density delta unscaled makes
+/// non-tier text ignore zoom or grow out of proportion to tier-sized controls.
+#[test]
+fn presentation_zoom_scales_text_and_density_on_both_palettes() {
+    use moon_core::config::{UiDensity, UiThemeMode};
+
+    for mode in [UiThemeMode::Dark, UiThemeMode::Graphite, UiThemeMode::Light] {
+        for (density, delta) in [
+            (UiDensity::Compact, 0.0),
+            (UiDensity::Standard, 4.5),
+            (UiDensity::Large, 9.0),
+        ] {
+            let theme = super::moon_theme_config_for_presentation(mode, density, 1.5);
+            for scale in [theme.dark.scale, theme.light.scale] {
+                assert_eq!(scale.ui, 1.5);
+                assert_eq!(scale.font, 1.5);
+                assert_eq!(scale.font_delta, delta);
+            }
+        }
+    }
+}
+
+/// Bypassing the shared scale guard lets invalid settings poison text metrics even when
+/// MoonUI's geometry setter falls back, leaving text and controls at different zoom levels.
+#[test]
+fn presentation_zoom_rejects_non_finite_and_non_positive_scales() {
+    use moon_core::config::{UiDensity, UiThemeMode};
+
+    for zoom in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0] {
+        let theme =
+            super::moon_theme_config_for_presentation(UiThemeMode::Dark, UiDensity::Standard, zoom);
+        for scale in [theme.dark.scale, theme.light.scale] {
+            assert_eq!(scale.ui, 1.0);
+            assert_eq!(scale.font, 1.0);
+            assert_eq!(scale.font_delta, 3.0);
+        }
+    }
+}
 
 /// Build one tick's edges from the four flags, in declaration order.
 ///
