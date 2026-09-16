@@ -120,6 +120,17 @@ fn a_core_issued_strategy_id_cannot_break_the_whole_settings_file() {
     }
 }
 
+/// Catches dropping `serde(other)` from `config/schema.rs:UiThemeMode::Dark`. A theme value only
+/// a newer build knows must load as Dark with every other setting intact, not fail the whole
+/// file — the loader quarantines a failed file to `.bak` and the downgrade loses all settings.
+#[test]
+fn unknown_theme_mode_loads_as_dark_without_failing_the_settings_file() {
+    let reread: SettingsFile = toml::from_str("ui_theme_mode = \"neon-future\"\nui_scale = 1.25\n")
+        .expect("an unknown theme value must not fail the settings file");
+    assert_eq!(reread.ui_theme_mode, UiThemeMode::Dark);
+    assert_eq!(reread.ui_scale, 1.25);
+}
+
 /// Catches dropping `config/schema.rs:UiThemeMode`'s `serde(rename_all = "lowercase")`.
 /// Without it, Graphite persists as `"Graphite"`, which the same build cannot read from settings.
 #[test]
@@ -140,13 +151,40 @@ fn graphite_theme_mode_round_trips_as_the_lowercase_settings_value() {
     assert_eq!(reread.ui_theme_mode, UiThemeMode::Graphite);
 }
 
-/// Catches changing `config/schema.rs:UiThemeMode::is_light` to include Graphite.
-/// That would route Graphite through every light color branch in badges, orders, lines, and charts.
+/// Catches changing `config/schema.rs:UiThemeMode::is_light` to include Graphite, or leaving the
+/// light experimental mode out. Either would route a mode through the other side's color branches
+/// in badges, orders, lines, and charts.
 #[test]
 fn graphite_is_dark_while_light_remains_the_only_light_mode() {
     assert!(UiThemeMode::Light.is_light());
+    assert!(UiThemeMode::LightExperimental.is_light());
     assert!(!UiThemeMode::Graphite.is_light());
     assert!(!UiThemeMode::Dark.is_light());
+    assert!(!UiThemeMode::DarkExperimental.is_light());
+}
+
+/// Catches renaming the experimental `UiThemeMode` variants without their explicit serde names.
+/// Under `rename_all = "lowercase"` they would persist as `"darkexperimental"`, and a settings file
+/// written by this build would then stop loading the moment the spelling changed.
+#[test]
+fn experimental_theme_modes_round_trip_under_their_hyphenated_settings_values() {
+    for (mode, value) in [
+        (UiThemeMode::DarkExperimental, "dark-experimental"),
+        (UiThemeMode::LightExperimental, "light-experimental"),
+    ] {
+        let stored = SettingsFile {
+            ui_theme_mode: mode,
+            ..SettingsFile::default()
+        };
+        let persisted = toml::to_string(&stored).expect("settings file must serialize");
+        let line = format!("ui_theme_mode = \"{value}\"");
+        assert!(
+            persisted.lines().any(|l| l == line),
+            "settings.toml must persist {mode:?} as {value}"
+        );
+        let reread: SettingsFile = toml::from_str(&line).expect("stored mode must load");
+        assert_eq!(reread.ui_theme_mode, mode);
+    }
 }
 
 /// `config::store::read_servers` must continue accepting a pre-cut Telegram table whose removed

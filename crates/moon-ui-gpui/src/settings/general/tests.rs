@@ -16,7 +16,13 @@ fn zoom_captions_show_percentages_at_endpoints_and_steps() {
 /// At 125% zoom, Standard's 10px base plus 3px density adjustment must render as 16.25px.
 #[test]
 fn density_and_zoom_scale_installed_text_proportionally() {
-    for mode in [UiThemeMode::Dark, UiThemeMode::Graphite, UiThemeMode::Light] {
+    for mode in [
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::Light,
+        UiThemeMode::DarkExperimental,
+        UiThemeMode::LightExperimental,
+    ] {
         for (density, tier, text_px) in [
             (UiDensity::Compact, MoonSize::Xs, 12.5),
             (UiDensity::Standard, MoonSize::Sm, 16.25),
@@ -34,5 +40,37 @@ fn density_and_zoom_scale_installed_text_proportionally() {
             assert_eq!(tokens.font(10.0), text_px);
             assert_eq!(tokens.ui(20.0), 25.0);
         }
+    }
+}
+
+/// Catches `startup.rs:moon_theme_config_for_mode` installing a bundled palette theme for an
+/// experimental mode, or putting it on the wrong side. The experimental modes must install MoonUI's
+/// colour roles on the side the mode names, so checkboxes and radios paint the colour modes exactly.
+#[test]
+fn experimental_modes_install_moonui_colour_roles_on_their_own_side() {
+    use moon_ui::{MoonColors, ThemeMode};
+    for (mode, side, roles) in [
+        (
+            UiThemeMode::DarkExperimental,
+            ThemeMode::Dark,
+            MoonColors::DARK,
+        ),
+        (
+            UiThemeMode::LightExperimental,
+            ThemeMode::Light,
+            MoonColors::LIGHT,
+        ),
+    ] {
+        let theme = MoonTheme::from_config(crate::startup::moon_theme_config_for_mode(mode));
+        assert_eq!(theme.config.mode, side);
+        assert_eq!(theme.colors, Some(roles));
+        assert_eq!(theme.palette, roles.to_palette());
+    }
+    for mode in [UiThemeMode::Dark, UiThemeMode::Graphite, UiThemeMode::Light] {
+        let theme = MoonTheme::from_config(crate::startup::moon_theme_config_for_mode(mode));
+        assert_eq!(
+            theme.colors, None,
+            "{mode:?} keeps its bundled palette theme"
+        );
     }
 }

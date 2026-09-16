@@ -99,34 +99,52 @@ pub fn clamp_chart_stack_height(value: u16) -> u16 {
 
 /// Interface theme the user picked on the General tab.
 ///
-/// THREE modes, but only TWO colour sets. `Graphite` is a middle theme — mid-tone neutral
+/// FIVE modes, but only TWO colour sets. `Graphite` is a middle theme — mid-tone neutral
 /// surfaces between `Dark`'s near-black and `Light` — and it shares the DARK set for badges,
-/// order styles, lines and the chart theme. Nothing here is a third table.
+/// order styles, lines and the chart theme. The two experimental modes are MoonUI's colour-role
+/// modes and draw the set of the side they are on. Nothing here is a third table.
 ///
 /// [`Self::is_light`] is the only sanctioned way to ask which set a mode draws. A bare equality
 /// test against the `Light` variant reads correctly today and then silently answers "not light,
-/// therefore dark" for a fourth variant added later — which is exactly how Graphite would have
-/// been handed the light set at half of its call sites.
+/// therefore dark" for a variant added later — which is exactly how Graphite would have been
+/// handed the light set at half of its call sites.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UiThemeMode {
     Light,
     /// Mid-tone neutral surfaces with light text; draws the DARK colour set.
     Graphite,
+    /// MoonUI's light colour mode, built from its colour roles; draws the LIGHT colour set.
+    ///
+    /// Experimental: the roles are still being adopted, so components not yet migrated take the
+    /// palette MoonUI derives from the roles rather than a reviewed design.
+    #[serde(rename = "light-experimental")]
+    LightExperimental,
+    /// MoonUI's dark colour mode, built from its colour roles; draws the DARK colour set.
+    ///
+    /// Experimental for the same reason as [`Self::LightExperimental`].
+    #[serde(rename = "dark-experimental")]
+    DarkExperimental,
+    /// Also the catch-all for a value this build does not know, which is why it is declared
+    /// LAST (`serde(other)` demands it). A newer build persists modes this one has no variant
+    /// for; without the catch-all that one string fails the WHOLE `SettingsFile`, which the
+    /// loader quarantines to `.bak` and replaces with defaults — a downgrade then loses every
+    /// setting, not just the theme.
     #[default]
+    #[serde(other)]
     Dark,
 }
 
 impl UiThemeMode {
     /// Whether this mode draws the LIGHT colour set.
     ///
-    /// `Graphite` is dark-leaning and answers `false`, so every per-mode colour table
-    /// (`badges`, `orders`, `lines`, the chart theme) keeps its two entries.
+    /// `Graphite` and `DarkExperimental` are dark and answer `false`, so every per-mode colour
+    /// table (`badges`, `orders`, `lines`, the chart theme) keeps its two entries.
     ///
     /// Returns:
-    ///     `true` only for [`UiThemeMode::Light`].
+    ///     `true` for [`UiThemeMode::Light`] and [`UiThemeMode::LightExperimental`].
     pub const fn is_light(self) -> bool {
-        matches!(self, UiThemeMode::Light)
+        matches!(self, UiThemeMode::Light | UiThemeMode::LightExperimental)
     }
 }
 
