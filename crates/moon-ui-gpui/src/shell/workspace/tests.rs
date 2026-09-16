@@ -21,7 +21,8 @@ use super::{
     auto_only_detached_panel_names, auto_workspace_activation_fallback,
     auto_workspace_tab_is_eligible, core_rail_metrics, default_auto_workspace_topology,
     ensure_auto_topology_contains_panel, fitted_auto_rail_width, icon_workspace_summary,
-    resolved_auto_workspace_tab, workspace_core_tooltip, workspace_status_label_visible,
+    rehome_auto_panel, resolved_auto_workspace_tab, workspace_core_tooltip,
+    workspace_status_label_visible,
 };
 use crate::window::detached::DetachedSpec;
 
@@ -784,4 +785,164 @@ fn auto_rail_sync_defers_to_an_in_flight_drag_before_reading_the_stored_width() 
         guard < stored_width_read,
         "the in-flight-drag guard must precede the stored-width read, not follow it"
     );
+}
+
+/// Removing recursive split cleanup from `shell/workspace.rs:rehome_auto_panel` must fail: close
+/// would leave Report outside the upper Auto tab strip after one or repeated split drops.
+#[test]
+fn rehome_auto_panel_returns_split_leaves_to_the_upper_strip_in_preset_order() {
+    let topology = DockTopologyByName {
+        center: DockTopologyNode::Split {
+            horizontal: false,
+            items: vec![
+                DockTopologyNode::Panel {
+                    name: "Report".into(),
+                },
+                DockTopologyNode::Tabs {
+                    names: ["ChartTabs", "Assets", "Log"]
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect(),
+                },
+                DockTopologyNode::Panel {
+                    name: "Orders".into(),
+                },
+            ],
+            sizes: vec![None, None, Some(260.0)],
+        },
+        left: None,
+        right: None,
+        bottom: None,
+    };
+
+    let rehoused = rehome_auto_panel(topology, "Report");
+
+    assert_eq!(
+        rehoused.panel_names(),
+        ["ChartTabs", "Report", "Assets", "Log", "Orders"],
+        "Report must rejoin the upper strip before Assets and remain above Orders"
+    );
+}
+
+/// Replacing the ChartTabs-strip insertion with the generic first-accepting walker must fail:
+/// Report would be wrapped with the unrelated Assets leaf instead of returning to its home strip.
+#[test]
+fn rehome_auto_panel_targets_chart_tabs_instead_of_the_first_panel_leaf() {
+    let topology = DockTopologyByName {
+        center: DockTopologyNode::Split {
+            horizontal: false,
+            items: vec![
+                DockTopologyNode::Panel {
+                    name: "Assets".into(),
+                },
+                DockTopologyNode::Tabs {
+                    names: ["ChartTabs", "Report", "CoreStatus", "Log"]
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect(),
+                },
+                DockTopologyNode::Panel {
+                    name: "Orders".into(),
+                },
+            ],
+            sizes: vec![None, None, Some(260.0)],
+        },
+        left: None,
+        right: None,
+        bottom: None,
+    };
+
+    let rehoused = rehome_auto_panel(topology, "Report");
+    let DockTopologyNode::Split { items, .. } = rehoused.center else {
+        panic!("the non-default split must retain its surrounding leaves");
+    };
+
+    assert!(matches!(
+        items.first(),
+        Some(DockTopologyNode::Panel { name }) if name == "Assets"
+    ));
+    assert!(matches!(
+        items.get(1),
+        Some(DockTopologyNode::Tabs { names })
+            if names == &[
+                "ChartTabs".to_string(),
+                "Report".to_string(),
+                "CoreStatus".to_string(),
+                "Log".to_string(),
+            ]
+    ));
+}
+
+/// Removing nested same-axis recursion from `shell/workspace.rs:rehome_auto_panel` must fail: a
+/// panel dropped twice would remain pinned in a stale dock area after close.
+#[test]
+fn rehome_auto_panel_collapses_nested_same_axis_splits() {
+    let topology = DockTopologyByName {
+        center: DockTopologyNode::Split {
+            horizontal: false,
+            items: vec![
+                DockTopologyNode::Split {
+                    horizontal: false,
+                    items: vec![
+                        DockTopologyNode::Panel {
+                            name: "Report".into(),
+                        },
+                        DockTopologyNode::Tabs {
+                            names: ["ChartTabs", "Assets", "Log"]
+                                .into_iter()
+                                .map(str::to_string)
+                                .collect(),
+                        },
+                    ],
+                    sizes: vec![None, None],
+                },
+                DockTopologyNode::Panel {
+                    name: "Orders".into(),
+                },
+            ],
+            sizes: vec![None, Some(260.0)],
+        },
+        left: None,
+        right: None,
+        bottom: None,
+    };
+
+    let rehoused = rehome_auto_panel(topology, "Report");
+
+    assert_eq!(
+        rehoused.panel_names(),
+        ["ChartTabs", "Report", "Assets", "Log", "Orders"],
+        "re-homing must remove Report from every nested split before restoring its preset tab"
+    );
+}
+
+/// Re-typing Orders' height in `shell/workspace.rs:rehome_auto_panel` must fail: a future default
+/// change would make a recovered Orders surface disagree with first-run Auto geometry.
+#[test]
+fn rehome_auto_panel_restores_orders_with_the_default_builder_height() {
+    let topology = DockTopologyByName::tab_preset(["ChartTabs", "Report", "Assets", "Log"]);
+    let rehoused = rehome_auto_panel(topology, "Orders");
+    let default = default_auto_workspace_topology();
+
+    let DockTopologyNode::Split { sizes, .. } = rehoused.center else {
+        panic!("Orders must return below the upper tab strip");
+    };
+    let DockTopologyNode::Split {
+        sizes: default_sizes,
+        ..
+    } = default.center
+    else {
+        panic!("the default Auto topology must define the Orders split");
+    };
+    assert_eq!(sizes[1], default_sizes[1]);
+}
+
+/// Letting `shell/workspace.rs:rehome_auto_panel` move ChartTabs or unknown names must fail:
+/// pinned Charts or a Classic-only panel could be destructively rewritten by an Auto close event.
+#[test]
+fn rehome_auto_panel_leaves_pinned_and_unknown_names_unchanged() {
+    let topology = DockTopologyByName::tab_preset(["ChartTabs", "Report", "News"]);
+
+    assert_eq!(rehome_auto_panel(topology.clone(), "ChartTabs"), topology);
+    assert_eq!(rehome_auto_panel(topology.clone(), "News"), topology);
 }

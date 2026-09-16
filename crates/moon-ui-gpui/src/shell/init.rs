@@ -8,8 +8,8 @@ use std::time::Instant;
 use gpui::*;
 
 use moon_ui::{
-    DockArea, DockEvent, DockItem, MoonBackgroundPolicy, MoonInputEvent, MoonInputState,
-    MoonSliderEvent, MoonSliderState, PanelView,
+    DockArea, DockEvent, MoonBackgroundPolicy, MoonInputEvent, MoonInputState, MoonSliderEvent,
+    MoonSliderState, PanelView,
 };
 
 use moon_core::feed::ClientSettingsEdit;
@@ -21,6 +21,7 @@ use crate::panels::DetectsPanel;
 use crate::persistence::dock_persist::{DOCK_VERSION, is_compatible_version};
 use crate::shell::core_settings_popup;
 use crate::{Backend, controls};
+use rust_i18n::t;
 
 impl Shell {
     /// Construct a group window shell, restore or create its dock, and wire its long-lived inputs.
@@ -51,9 +52,11 @@ impl Shell {
         // and Orders plus the other utility panels the bottom tabs. No-fill background policies
         // let MoonPalette and the chart UnderScene control their own backgrounds.
         let dock = cx.new(|cx| {
-            DockArea::new("group-dock", Some(DOCK_VERSION), window, cx)
+            let mut area = DockArea::new("group-dock", Some(DOCK_VERSION), window, cx)
                 .background_policy(MoonBackgroundPolicy::NoFill)
-                .tab_background_policy(MoonBackgroundPolicy::NoFill)
+                .tab_background_policy(MoonBackgroundPolicy::NoFill);
+            area.set_panel_control_tooltips(Self::resolved_dock_control_tooltips(), cx);
+            area
         });
         let weak = dock.downgrade();
 
@@ -113,30 +116,16 @@ impl Shell {
                 }
             }
 
-            // Place the entire default layout in the center split: charts on the left, Detects in
-            // a roughly 220px right slot, and utility tabs in a roughly 220px bottom slot. Split
-            // handles resize panels; tab docking and edge dragging are separate dock behavior.
-            // The size/sell/scale toolbar remains a fixed Shell::render row outside the dock.
-            let chart_item = DockItem::tab(charts, &weak, window, cx);
-            let right = DockItem::tab(detects, &weak, window, cx);
-            let top = DockItem::split_with_sizes(
-                Axis::Horizontal,
-                vec![chart_item, right],
-                vec![None, Some(px(220.0))],
+            // Place the entire default layout in the center split. The same builder is the
+            // Classic reset path, so a fresh window and a reset cannot diverge.
+            let center = Self::default_classic_center(
+                Rc::new(charts),
+                Rc::new(detects),
+                bottom_tabs,
                 &weak,
                 window,
                 cx,
             );
-            let bottom = DockItem::tabs(bottom_tabs, &weak, window, cx);
-            let center = DockItem::split_with_sizes(
-                Axis::Vertical,
-                vec![top, bottom],
-                vec![None, Some(px(220.0))],
-                &weak,
-                window,
-                cx,
-            );
-
             dock.update(cx, |area, cx| area.set_center(center, window, cx));
         }
 
@@ -264,6 +253,7 @@ impl Shell {
                     }
                     DockEvent::PanelCloseRequested { panel_name } => {
                         if auto {
+                            this.rehome_auto_panel_from_user(panel_name, cx);
                             return;
                         }
                         this.defer_restore_closed_panel(panel_name.to_string(), cx);
@@ -527,6 +517,8 @@ impl Shell {
         // rendering would keep itself awake through its own repaints forever (`pulse::arm`).
         let settings_hint_at =
             (!backend.read(cx).config.core_ever_configured()).then(std::time::Instant::now);
+        let served_dock_layout_reset = backend.read(cx).dock_layout_reset_generation();
+        let dock_control_tooltips_locale = SharedString::from(rust_i18n::locale().to_string());
         let mut shell = Self {
             settings_hint_at,
             settings_hint_armed: false,
@@ -544,6 +536,7 @@ impl Shell {
             workspace_resize_state,
             applied_auto_rail_width: initial_auto_rail_width,
             applied_workspace_mode: moon_core::config::WorkspaceMode::Classic,
+            served_dock_layout_reset,
             last_auto_surface_revision,
             workspace_sync_pending: false,
             last_frame: None,
@@ -552,6 +545,7 @@ impl Shell {
             last_follow: true,
             last_price_scale: None,
             last_order_size_rev: 0,
+            dock_control_tooltips_locale,
             window_handle,
             size_input,
             size_edit: None,
@@ -728,5 +722,19 @@ impl Shell {
         // The leverage field never commits on Blur or Enter. Leverage is an exchange action sent
         // only by the popup's Apply button; the field and slider merely select its value.
         let _ = lev_input;
+    }
+
+    /// Resolve the five dock-header control tooltips against the current global locale.
+    ///
+    /// Shared by construction and by `render`'s locale compare (`dock_control_tooltips_locale`) so
+    /// a language change re-pushes exactly what a fresh Shell would have built.
+    pub(super) fn resolved_dock_control_tooltips() -> moon_ui::DockPanelControlTooltips {
+        moon_ui::DockPanelControlTooltips {
+            detach: Some(t!("dock.detach_hint").into()),
+            zoom_in: Some(t!("dock.ctl.zoom_in").into()),
+            zoom_out: Some(t!("dock.ctl.zoom_out").into()),
+            close: Some(t!("dock.ctl.close").into()),
+            overflow: Some(t!("dock.ctl.overflow").into()),
+        }
     }
 }

@@ -254,6 +254,8 @@ struct Backend {
     /// `docks.json` after `DockEvent::LayoutChanged` through the same debounce loop.
     dock_states: HashMap<String, DockAreaState>,
     dock_dirty: bool,
+    /// Runtime generation for an in-app dock-layout reset. Not persisted: a restart must not replay it.
+    dock_layout_reset_generation: u64,
     /// Process-wide topology-only Auto dock authority loaded from `auto_dock.json`.
     auto_dock_topology: Option<DockTopologyByName>,
     /// Whether programmatic Auto seed and repair transitions may persist the current topology.

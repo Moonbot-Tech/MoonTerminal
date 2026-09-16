@@ -295,9 +295,14 @@ height. Auto entry activates the saved eligible per-group tab after installing t
 preset with the shared topology; the Classic layout never participates in that update.
 
 Auto permits reorder, split, and resize. `ChartTabs` is pinned first, visually separated from the
-operational tabs, and cannot be moved or bypassed by a drop. Ordinary panel close/detach and chart
-detach remain disabled independently of structural editing. Auto contains every operational
-surface except the Classic-only `News` and `Alerts` panels. Before applying even a stale topology
+operational tabs, and cannot be moved or bypassed by a drop. Ordinary panel detach and chart
+detach remain disabled independently of structural editing; panel close returns the panel to its
+home strip instead of destroying it. Auto contains every operational
+surface except the Classic-only `News` and `Alerts` panels. A Settings → Interface → Panels
+action resets the current workspace mode's panel layout in every open group window: Auto
+reinstalls the first-run shared topology, Classic rebuilds the default centre from live panel
+instances. It does not touch saved servers, theme values, table column preferences, chart
+persistence, or detached-window geometry. Before applying even a stale topology
 that names either panel, Shell extracts each docked Classic-only panel and retains its exact
 identity in `Shell::classic_only_panels`; neither name can therefore be recreated by shared Auto
 topology. Returning to Classic supplies those retained identities while applying the saved

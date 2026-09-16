@@ -1332,6 +1332,28 @@ impl Backend {
         true
     }
 
+    /// Force the shared Auto topology back to `topology` and unlock persistence even on equality.
+    ///
+    /// [`Self::set_auto_dock_topology`] returns before unlocking when the in-memory tree already
+    /// matches, which is exactly the locked-invalid-file case a user reset has to repair.
+    ///
+    /// Args:
+    ///     topology: First-run Auto topology to install as the shared authority.
+    ///     cx: Backend context used to notify every open Auto Shell.
+    ///
+    /// Returns:
+    ///     Nothing; persistence is unlocked and dirtied regardless of equality.
+    pub(crate) fn reset_auto_dock_topology(
+        &mut self,
+        topology: DockTopologyByName,
+        cx: &mut Context<Self>,
+    ) {
+        self.auto_dock_topology = Some(topology.normalized());
+        self.auto_dock_automatic_persistence_allowed = true;
+        self.auto_dock_dirty = true;
+        self.publish_auto_workspace_layout_revision(cx);
+    }
+
     /// Store a live dock dump only while the group is in Classic mode.
     ///
     /// Args:
@@ -1467,6 +1489,30 @@ impl Backend {
         }
         self.publish_workspace_revision(cx);
         true
+    }
+
+    /// Ask every open group window to reset the current workspace mode's dock layout once.
+    ///
+    /// Settings has no handle on those windows, so the request rides the existing workspace
+    /// revision channel. A generation (not a bool) is what lets each Shell compare-and-serve
+    /// exactly once, including when several group windows are open.
+    ///
+    /// Args:
+    ///     cx: Backend context used to publish the dedicated revision.
+    ///
+    /// Returns:
+    ///     Nothing; each Shell that existed at the request serves it on its next reconcile.
+    pub(crate) fn request_dock_layout_reset(&mut self, cx: &mut Context<Self>) {
+        self.dock_layout_reset_generation = self.dock_layout_reset_generation.wrapping_add(1);
+        self.publish_workspace_revision(cx);
+    }
+
+    /// Return the runtime dock-layout reset generation.
+    ///
+    /// Returns:
+    ///     The current generation, including `0` when no reset has been requested this process.
+    pub(crate) fn dock_layout_reset_generation(&self) -> u64 {
+        self.dock_layout_reset_generation
     }
 
     /// Select one live core or Overview for an already active Auto workspace.

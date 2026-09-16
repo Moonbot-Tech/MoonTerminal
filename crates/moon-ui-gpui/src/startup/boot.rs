@@ -219,6 +219,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         last_header_ticker_refresh: None,
         dock_states,
         dock_dirty: false,
+        dock_layout_reset_generation: 0,
         auto_dock_topology: auto_dock_startup.topology,
         auto_dock_automatic_persistence_allowed: auto_dock_startup.automatic_persistence_allowed,
         auto_dock_dirty: false,

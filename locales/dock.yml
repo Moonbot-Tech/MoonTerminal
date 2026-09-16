@@ -277,6 +277,22 @@ dock.tab.repin:
   ru: "Вернуть в док"
   en: "Return to dock"
   es: "Volver al panel"
+dock.ctl.zoom_in:
+  ru: "Развернуть панель на весь док"
+  en: "Zoom the panel to fill the dock"
+  es: "Ampliar el panel a todo el dock"
+dock.ctl.zoom_out:
+  ru: "Вернуть обычную раскладку"
+  en: "Restore the normal layout"
+  es: "Volver a la disposición normal"
+dock.ctl.close:
+  ru: "Закрыть — вернуть панель на её место"
+  en: "Close: return the panel to its home strip"
+  es: "Cerrar: devolver el panel a su lugar"
+dock.ctl.overflow:
+  ru: "Другие вкладки"
+  en: "More tabs"
+  es: "Más pestañas"
 
 # --- Tab right-click menu (unread counters) ---
 dock.tab_menu.counters:

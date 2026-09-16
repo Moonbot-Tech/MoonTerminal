@@ -1,5 +1,6 @@
 // NOT `use super::*`: the glob would pull in the `gpui::test` macro, and `#[test]` would
 // expand into itself (recursion limit).
+use super::dock_placement_key_belongs_to;
 use crate::panels::registry::home_ordered_names;
 use crate::persistence::panel_meta::tab_label;
 
@@ -48,4 +49,17 @@ fn every_home_tab_has_a_localized_label() {
             "{name} is a home dock tab but has no entry in panel_meta::tab_label"
         );
     }
+}
+
+/// Replacing `shell/docks.rs:dock_placement_key_belongs_to` with a plain prefix check must fail:
+/// resetting group `g` would erase `gx` or `g:sub` placement state and silently damage another
+/// group's layout.
+#[test]
+fn dock_placement_key_matches_only_its_own_group() {
+    assert!(dock_placement_key_belongs_to("g:Report", "g"));
+    assert!(dock_placement_key_belongs_to("g:Orders", "g"));
+    assert!(!dock_placement_key_belongs_to("gx:Report", "g"));
+    assert!(!dock_placement_key_belongs_to("g:sub:Report", "g"));
+    assert!(!dock_placement_key_belongs_to("g-archive:Report", "g"));
+    assert!(!dock_placement_key_belongs_to("g", "g"));
 }

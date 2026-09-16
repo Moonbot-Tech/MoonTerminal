@@ -8,11 +8,11 @@
 //! popup (`crate::chart_tabs::graphics_popup`).
 
 use gpui::*;
-use moon_ui::{MoonColorPickerState, MoonPalette, MoonSliderState, v_flex};
+use moon_ui::{MoonButton, MoonColorPickerState, MoonPalette, MoonSliderState, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::{SettingsView, color_row, section, separator, slider_row};
-use crate::Backend;
+use crate::{Backend, design};
 use moon_core::{config::ChartTheme, util::fmt};
 
 /// Theme editor state with one retained control entity per field.
@@ -399,6 +399,28 @@ impl SettingsView {
             // Panels.
             .child(section(&t!("iface.sec_panels"), p, cx))
             .child(color_row(&t!("iface.panel_bg"), &i.panel_bg, p, cx))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(design::ui_px(cx, 10.0))
+                    .child(
+                        div()
+                            .text_color(rgb(p.text_soft))
+                            .child(t!("iface.dock_reset").to_string()),
+                    )
+                    .child(
+                        MoonButton::new("iface-dock-reset")
+                            .outline()
+                            .label(format!("  {}  ", t!("iface.dock_reset_btn")))
+                            .tooltip(t!("iface.dock_reset_tip").to_string())
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.backend.update(cx, |b, bcx| {
+                                    b.request_dock_layout_reset(bcx);
+                                });
+                            }))
+                            .render(),
+                    ),
+            )
             .child(
                 div()
                     .mt_2()
