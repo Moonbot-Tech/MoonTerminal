@@ -12,9 +12,10 @@ use moon_core::session::CoreId;
 use moon_core::session::order_lines::LineKind;
 
 use super::ChartPanel;
+use crate::hotkeys::cancel_hold::{self, CancelRefusal, PressKind};
 
 mod pick;
-use pick::OrderCandidate;
+use pick::{OrderCandidate, OrderHitMode};
 
 const ORDER_DRAG_PREVIEW_HOLD: Duration = Duration::from_millis(3_000);
 
@@ -618,13 +619,16 @@ impl ChartPanel {
 
     /// Hit-test interactive order lines under the cursor.
     ///
-    /// `cross_only` applies outside the order book in separate-zone mode, where the only target is
-    /// an unfilled Buy line's click-to-cancel start cross. It scans only Buy lines and gates on the
-    /// cross's X range before computing unnecessary distances for all draggable kinds, as in Delphi.
+    /// `OrderHitMode::Drag` is the pointer's own grab. With `cross_only` it applies outside the
+    /// order book in separate-zone mode, where the only target is an unfilled Buy line's
+    /// click-to-cancel start cross: it scans only Buy lines and gates on the cross's X range
+    /// before computing unnecessary distances for all draggable kinds, as in Delphi. Without
+    /// `cross_only` it scans every draggable kind. `OrderHitMode::EntryCancel` is the Tab/Del
+    /// route: the whole ENTRY line, in any zone, at any fill.
     fn hit_order_line(
         &self,
         pos: (f32, f32),
-        cross_only: bool,
+        mode: OrderHitMode,
         cx: &mut Context<Self>,
     ) -> Option<OrderHit> {
         let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
@@ -674,25 +678,14 @@ impl ChartPanel {
                 .iter_market(&market)
                 .filter(|order| order.closed_ms.is_none())
             {
-                // Drag Buy/Sell through `move_order` and SL/Trailing/TakeProfit through absolute
-                // `move_order_stop_price` updates. VStop and pending-condition lines have no price
-                // level set by dragging and are therefore excluded.
-                let kinds: &[LineKind] = if cross_only {
-                    &[LineKind::Buy]
-                } else {
-                    &[
-                        LineKind::Buy,
-                        LineKind::Sell,
-                        LineKind::Stop,
-                        LineKind::Trailing,
-                        LineKind::TakeProfit,
-                    ]
-                };
+                let kinds = mode.kinds();
                 for &kind in kinds {
                     // A Buy entry, including a short entry, is draggable only while unfilled: its
                     // live limit can be replaced through `move_order`. After any fill, the Buy line
                     // is historical; manage the position through its Sell exit and stops instead.
-                    if kind == LineKind::Buy && order.fill_pct > 0.0 {
+                    // The keyboard route admits a filled entry because it is still cancellable on
+                    // the exchange.
+                    if !mode.admits(kind, order.fill_pct) {
                         continue;
                     }
                     let line = &order.lines[kind as usize];
@@ -708,10 +701,10 @@ impl ChartPanel {
                             continue;
                         }
                         // In `cross_only` mode, accept only the X band around the start cross.
-                        if cross_only && (pos.0 - start_x).abs() > threshold {
+                        if mode.cross_band_only() && (pos.0 - start_x).abs() > threshold {
                             continue;
                         }
-                    } else if cross_only {
+                    } else if mode.cross_band_only() {
                         continue;
                     }
                     let rel_y = 0.5 - (price - center) / range;
@@ -792,6 +785,18 @@ impl ChartPanel {
         })
     }
 
+    /// The ENTRY order the Tab/Del route addresses at `pos`, if any.
+    ///
+    /// The keyboard route's own target, deliberately not `order_hover`: that one is recomputed only
+    /// on mouse motion past a pixel threshold and it carries the DRAG restrictions, which is why a
+    /// partially filled entry and a whole line under split zones answer the pointer but not the key.
+    /// `OrderHitMode::EntryCancel` scans buy lines only, so a sell, stop, trailing or take-profit
+    /// line can never be returned here — Moonbot's `CheckDeletePressed` touches only `O_BUY`.
+    fn cancel_target_at(&self, pos: (f32, f32), cx: &mut Context<Self>) -> Option<(CoreId, u64)> {
+        self.hit_order_line(pos, OrderHitMode::EntryCancel, cx)
+            .map(|hit| (hit.core, hit.uid))
+    }
+
     /// Cancel an unfilled entry by left-clicking its start cross, matching Moonbot.
     ///
     /// The precise cross target remains active in the chart area under separate-zone mode, unlike
@@ -808,7 +813,7 @@ impl ChartPanel {
         // Use the hover gate in separate-zone chart space so only the start cross competes. A nearer
         // Sell line must not shadow a cross that was presented with the pointer cursor.
         let cross_only = self.separate_zones(cx) && self.chart_gesture_pane_at(pos).is_some();
-        let Some(hit) = self.hit_order_line(pos, cross_only, cx) else {
+        let Some(hit) = self.hit_order_line(pos, OrderHitMode::Drag { cross_only }, cx) else {
             return false;
         };
         if !hit.on_start_cross {
@@ -866,7 +871,9 @@ impl ChartPanel {
         if self.order_hover.is_none() {
             return false;
         }
-        let Some(hit) = self.hit_order_line(local_pos, false, cx) else {
+        let Some(hit) =
+            self.hit_order_line(local_pos, OrderHitMode::Drag { cross_only: false }, cx)
+        else {
             return false;
         };
         let (core, uid, market, short) = (hit.core, hit.uid, hit.market, hit.short);
@@ -929,38 +936,140 @@ impl ChartPanel {
         true
     }
 
-    /// Cancel the order under this panel's cursor for the built-in Tab/Delete route.
+    /// One evaluation of the cancel key against the entry line under this panel's cursor.
     ///
-    /// `order_hover` identifies the hovered `(core, uid)`. Returns `false` when no order is hovered
-    /// so the key can continue propagating, for example to Tab focus navigation.
+    /// The single decision point for the Tab/Del route: it asks whether the hold is live, finds the
+    /// entry order under the pointer, deduplicates against this hold, classifies, logs exactly one
+    /// line, and only then sends. Both the press route and the sweep route come through here so the
+    /// two can never drift apart.
+    fn evaluate_cancel_hold(&mut self, press: PressKind, cx: &mut Context<Self>) -> bool {
+        if self.historical {
+            return false;
+        }
+        let live = self.backend.update(cx, |b, bcx| {
+            let active = b.cancel_hold_window_active(bcx);
+            let probe = b
+                .cancel_hold
+                .armed_key()
+                .and_then(cancel_hold::physical_key_down);
+            b.cancel_hold.poll(Instant::now(), active, probe)
+        });
+        if !live && press == PressKind::Repeat {
+            return false;
+        }
+        if press == PressKind::Repeat && !self.backend.read(cx).cancel_hold_owns_hovered_chart(cx) {
+            return false;
+        }
+        let target = self
+            .input
+            .cursor
+            .and_then(|pos| self.cancel_target_at(pos, cx));
+        let workspace_group = self.workspace_group.clone();
+        let classified = {
+            let b = self.backend.read(cx);
+            match target {
+                Some((core, uid)) => {
+                    let core_allowed =
+                        b.workspace_action_allows_core(workspace_group.as_deref(), core);
+                    let status = b
+                        .session
+                        .store()
+                        .core(core)
+                        .and_then(|cd| cd.orders.iter().find(|o| o.uid == uid))
+                        .map(|o| o.status.as_str());
+                    cancel_hold::classify_cancel(target, core_allowed, status)
+                }
+                None => cancel_hold::classify_cancel(None, true, None),
+            }
+        };
+        match classified {
+            Ok((core, uid)) => {
+                if !self
+                    .backend
+                    .update(cx, |b, _| b.cancel_hold.address((core, uid)))
+                {
+                    return true;
+                }
+                self.backend
+                    .update(cx, |b, _| match b.session.cancel_order(core, uid) {
+                        Ok(()) => log::info!(
+                            "hotkey cancel entry order: core={} uid={uid}",
+                            moon_core::feed::core_label(core)
+                        ),
+                        Err(error) => log::warn!("hotkey cancel hovered order failed: {error}"),
+                    });
+            }
+            Err(refusal) => {
+                match &refusal {
+                    CancelRefusal::CoreNotAllowed { core, uid }
+                    | CancelRefusal::NotCancellable { core, uid, .. } => {
+                        if !self
+                            .backend
+                            .update(cx, |b, _| b.cancel_hold.address((*core, *uid)))
+                        {
+                            return true;
+                        }
+                    }
+                    CancelRefusal::NoTarget | CancelRefusal::NoOrderRow { .. } => {}
+                }
+                if cancel_hold::reports(&refusal, press) {
+                    match refusal {
+                        CancelRefusal::NoTarget => {
+                            log::debug!(
+                                target: moon_core::diagnostics::CHART_INPUT_TARGET,
+                                "hotkey cancel refused: no entry order under the cursor"
+                            );
+                        }
+                        CancelRefusal::CoreNotAllowed { core, uid } => {
+                            log::warn!(
+                                "hotkey cancel refused: core={} uid={uid} is not authorized for this workspace group, nothing sent",
+                                moon_core::feed::core_label(core)
+                            );
+                        }
+                        CancelRefusal::NoOrderRow { core, uid } => {
+                            log::warn!(
+                                "hotkey cancel refused: core={} uid={uid} has no order row in the store, nothing sent",
+                                moon_core::feed::core_label(core)
+                            );
+                        }
+                        CancelRefusal::NotCancellable { core, uid, status } => {
+                            log::info!(
+                                "hotkey cancel refused: core={} uid={uid} status={status} is not cancellable, nothing sent",
+                                moon_core::feed::core_label(core)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        target.is_some()
+    }
+
+    /// Re-evaluate the cancel key against whatever the pointer is over now, while the key is held.
     ///
-    /// `repeat` is the key's auto-repeat flag. The cancelled line stays on the chart until the core
-    /// echoes, so a held key would send the same cancel again on every repeat; a repeat over the
-    /// order this route already cancelled is spent without sending. A fresh press always sends —
-    /// the user pressing again is the retry.
-    pub fn cancel_hovered_order(&mut self, repeat: bool, cx: &mut Context<Self>) -> bool {
+    /// Moonbot's gesture: hold, sweep, every entry line crossed is cancelled. Window ownership is
+    /// checked inside `evaluate_cancel_hold` for every `Repeat`, including OS auto-repeat that never
+    /// comes through this function. A fresh press is deliberately not gated.
+    pub(super) fn sweep_cancel_hold(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.historical {
+            return false;
+        }
+        if !self.backend.read(cx).cancel_hold.is_armed() {
+            return false;
+        }
+        self.evaluate_cancel_hold(PressKind::Repeat, cx)
+    }
+
+    /// Cancel the entry order under this panel's cursor for the built-in Tab/Delete route.
+    ///
+    /// Returns `false` when no entry is under the pointer so the key can continue propagating, for
+    /// example to Tab focus navigation. A held key's per-order dedupe lives on the hold.
+    pub fn cancel_hovered_order(&mut self, press: PressKind, cx: &mut Context<Self>) -> bool {
         // Historical viewer: no orders. Rationale at `try_place_order_click`.
         if self.historical {
             return false;
         }
-        let Some(hover) = self.order_hover else {
-            return false;
-        };
-        let (core, uid) = (hover.core, hover.uid);
-        if repeat && self.hotkey_cancelled == Some((core, uid)) {
-            return true;
-        }
-        self.hotkey_cancelled = Some((core, uid));
-        let workspace_group = self.workspace_group.clone();
-        self.backend.update(cx, |b, _| {
-            if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
-                return;
-            }
-            if let Err(error) = b.session.cancel_order(core, uid) {
-                log::warn!("hotkey cancel hovered order failed: {error}");
-            }
-        });
-        true
+        self.evaluate_cancel_hold(press, cx)
     }
 
     /// Spread this chart's sells across a band named on it, for both ways of naming one: the
@@ -1037,6 +1146,10 @@ impl ChartPanel {
         true
     }
 
+    /// Record the interactive order line under the pointer and refresh its visual.
+    ///
+    /// Does not clear cancel-hold bookkeeping: the old per-hover `hotkey_cancelled` slot became a
+    /// per-hold `addressed` set whose lifetime is the key, not this hover.
     pub(super) fn set_order_interaction(
         &mut self,
         next: Option<OrderHoverKey>,
@@ -1046,12 +1159,6 @@ impl ChartPanel {
             return false;
         }
         self.order_hover = next;
-        // The hotkey cancel slot lives exactly as long as the pointer stays on the ORDER it was sent
-        // for (see its field): the key also tells the line from the start cross, and sliding between
-        // the two is not a new order.
-        if next.map(|hover| (hover.core, hover.uid)) != self.hotkey_cancelled {
-            self.hotkey_cancelled = None;
-        }
         self.apply_order_visual(cx)
     }
 
@@ -1122,6 +1229,10 @@ impl ChartPanel {
         .detach();
     }
 
+    /// Hit-test order lines under `pos` once the cursor has moved past the Delphi pixel threshold.
+    ///
+    /// Separate-zone chart space uses the start-cross-only drag mode; the keyboard cancel route
+    /// does not go through this — it asks `cancel_target_at` on every pixel.
     pub(super) fn sync_order_hover(&mut self, pos: (f32, f32), cx: &mut Context<Self>) -> bool {
         // Apply the Delphi threshold instead of hit-testing every raw mouse-move event.
         if !hover_probe_due(self.order_hover_probe, pos) {
@@ -1132,7 +1243,7 @@ impl ChartPanel {
         // use the reduced hit test for the click-to-cancel start cross only.
         let cross_only = self.separate_zones(cx) && self.chart_gesture_pane_at(pos).is_some();
         let next = self
-            .hit_order_line(pos, cross_only, cx)
+            .hit_order_line(pos, OrderHitMode::Drag { cross_only }, cx)
             .map(|hit| OrderHoverKey {
                 core: hit.core,
                 uid: hit.uid,
@@ -1181,7 +1292,8 @@ impl ChartPanel {
         if self.separate_zones(cx) && self.chart_gesture_pane_at(pos).is_some() {
             return false;
         }
-        let Some(hit) = self.hit_order_line(pos, false, cx) else {
+        let Some(hit) = self.hit_order_line(pos, OrderHitMode::Drag { cross_only: false }, cx)
+        else {
             return false;
         };
         // The start cross is handled as click-to-cancel before dragging in `mouse_down_left`. Never

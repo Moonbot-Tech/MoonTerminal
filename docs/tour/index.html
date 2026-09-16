@@ -903,7 +903,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
       <li><strong>Live / Пауза</strong> — Live: график бежит за рынком. Пауза: заморожен, можно листать (ЛКМ-перетаскивание, колесо).</li>
       <li><strong>Запуск отдельных окон</strong> — Монитор прибыли · Скринер · Стратегии · Аналитика · Настройки. Каждое — отдельное окно ОС; Аналитика открывается сама один раз при старте.</li>
       <li><strong>Вкладки графиков</strong> — Открытые графики группы. Escape закрывает активный Main-график, Shift+Escape — все Main-графики во всех группах.</li>
-      <li><strong>Область графика</strong> — Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо — зум по времени, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на ордерной линии отменяет этот ордер. Ctrl+Shift+колесо — супер-зум до 3 секунд.</li>
+      <li><strong>Область графика</strong> — Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо — зум по времени, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на линии ордера на вход — отменить его; зажать и провести мышью — снять все входы под курсором. Ctrl+Shift+колесо — супер-зум до 3 секунд.</li>
       <li><strong>Стакан</strong> — Глубина рынка справа от графика. По нему же работают мышиные жесты: двойной клик — поставить лонг, Shift+клик — двинуть открытый лонг, Ctrl+клик — двинуть линии выхода.</li>
       <li><strong>Лента детектов</strong> — Карточки сработавших детектов по паре «ядро — монета». Вид настраивается шестерёнкой: размер, поля, мини-график, цветная полоса сервера.</li>
       <li><strong>Вкладки дока</strong> — Клик — выбрать · двойной клик или перетаскивание — открепить в окно. Правый клик по вкладке включает счётчики непрочитанного.</li>
@@ -1440,11 +1440,11 @@ const MODES = {
         "n": 14,
         "ru": [
           "Область графика",
-          "Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо — зум по времени, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на ордерной линии отменяет этот ордер. Ctrl+Shift+колесо — супер-зум до 3 секунд."
+          "Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо — зум по времени, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на линии ордера на вход — отменить его; зажать и провести мышью — снять все входы под курсором. Ctrl+Shift+колесо — супер-зум до 3 секунд."
         ],
         "en": [
           "Chart area",
-          "Candles, order lines and closed trades drawn by a dedicated GPU pass. Wheel zooms by time, Shift or Alt + wheel pans left/right. Ctrl+Shift+wheel super zooms down to 3 seconds. Tab or Delete over an order line cancels that order."
+          "Candles, order lines and closed trades drawn by a dedicated GPU pass. Wheel zooms by time, Shift or Alt + wheel pans left/right. Ctrl+Shift+wheel super zooms down to 3 seconds. Tab or Delete over an entry order line cancels it; hold and sweep to cancel every entry the pointer crosses."
         ],
         "src": "locales/hotkeys.yml — встроенные"
       },
@@ -2185,8 +2185,8 @@ const HOTKEYS = [
       [
         "Tab / Delete",
         {
-          "ru": "На ордерной линии — отменить ордер; с выделенной фигурой Delete удаляет фигуру",
-          "en": "Over an order line — cancel that order; with a figure selected, Delete removes the figure"
+          "ru": "На линии ордера на вход — отменить его; зажать и провести мышью — снять все входы под курсором; с выделенной фигурой Delete удаляет фигуру",
+          "en": "Over an entry order line — cancel it; hold and sweep to cancel every entry the pointer crosses; with a figure selected, Delete removes the figure"
         }
       ],
       [

@@ -318,13 +318,6 @@ pub struct ChartPanel {
     order_drag: Option<OrderDrag>,
     pending_order_drag: Option<PendingOrderDrag>,
     order_hover: Option<OrderHoverKey>,
-    /// The `(core, uid)` the built-in Tab/Delete route addressed during the CURRENT hover — sent a
-    /// cancel for, or refused under the workspace rule, which a repeat need not ask again.
-    /// A held key repeats at the system rate and the line stays on the chart until the core echoes,
-    /// so without this every repeat would send the same cancel again; a repeat over this order
-    /// sends nothing. Cleared with the hover (`set_order_interaction`, the slot's leave), so it can
-    /// never outlive the line it was sent for: a uid the core reuses later is a new hover.
-    hotkey_cancelled: Option<(CoreId, u64)>,
     /// Point of the most recent order-line hover hit-test. The Delphi-style movement threshold keeps
     /// subpixel raw mouse movement from scanning the lines again.
     order_hover_probe: Option<(f32, f32)>,
@@ -387,6 +380,7 @@ impl ChartPanel {
             let b = self.backend.read(cx);
             self.chart.sync_orders_if_visible(&b.session, false);
         }
+        self.sweep_cancel_hold(cx);
         // A figure EDITED anywhere — this window's settings panel, another window's, a hotkey —
         // bumps the store's revision but no order does, and the userdata rebuild below is gated on
         // the order signature. Without this the new colour would wait for an unrelated order tick;
@@ -709,7 +703,6 @@ impl ChartPanel {
             order_drag: None,
             pending_order_drag: None,
             order_hover: None,
-            hotkey_cancelled: None,
             order_hover_probe: None,
             drag_notify_at: None,
             drag_notify_pending: false,
@@ -899,7 +892,6 @@ impl ChartPanel {
             order_drag: None,
             pending_order_drag: None,
             order_hover: None,
-            hotkey_cancelled: None,
             order_hover_probe: None,
             drag_notify_at: None,
             drag_notify_pending: false,

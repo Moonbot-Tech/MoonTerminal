@@ -286,6 +286,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         persist_allowed: firetest_config.is_none(),
         hovered_chart: None,
         last_chart: HashMap::new(),
+        cancel_hold: crate::hotkeys::cancel_hold::CancelHold::default(),
         detached,
         detached_dirty: false,
         repin_request: Vec::new(),
@@ -376,8 +377,13 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         // placed after the key test so a non-Tab press, which is most of them, never pays for it.
         if ev.keystroke.key == "tab" && !window.is_text_input_active() {
             let bare = ev.keystroke.modifiers == Modifiers::default();
-            let cancelled =
-                bare && crate::hotkeys::cancel_hovered_order(&tab_backend, ev.is_held, cx);
+            let cancelled = bare
+                && crate::hotkeys::cancel_hovered_order(
+                    &tab_backend,
+                    &crate::hotkeys::HotkeyPress::key(&ev.keystroke, ev.is_held),
+                    window,
+                    cx,
+                );
             // A held Tab auto-repeats at the system rate, and the desk holds it while sweeping the
             // pointer across the order lines to be cancelled. Between two lines nothing is hovered,
             // and every repeat let through would be one `focus_next`: focus walks the whole

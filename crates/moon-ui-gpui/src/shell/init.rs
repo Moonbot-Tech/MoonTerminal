@@ -334,6 +334,8 @@ impl Shell {
                 // A platform that sends no such re-announcement simply costs the first press after
                 // the window comes back, which is the safe side of this trade.
                 this.modifier_watch.forget();
+                // The cancel hold dies with focus for the same reason the modifier snapshot does.
+                this.backend.update(cx, |b, _| b.cancel_hold.clear());
             }
             if this.window_active {
                 let group = this.group.clone();

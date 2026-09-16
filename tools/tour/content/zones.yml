@@ -155,10 +155,11 @@ maps:
       en: Chart area
     body:
       ru: Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо — зум по
-        времени, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на ордерной линии отменяет
-        этот ордер. Ctrl+Shift+колесо — супер-зум до 3 секунд.
+        времени, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на линии ордера на вход —
+        отменить его; зажать и провести мышью — снять все входы под курсором. Ctrl+Shift+колесо — супер-зум до 3 секунд.
       en: Candles, order lines and closed trades drawn by a dedicated GPU pass. Wheel zooms by time, Shift
-        or Alt + wheel pans left/right. Ctrl+Shift+wheel super zooms down to 3 seconds. Tab or Delete over an order line cancels that order.
+        or Alt + wheel pans left/right. Ctrl+Shift+wheel super zooms down to 3 seconds. Tab or Delete over an
+        entry order line cancels it; hold and sweep to cancel every entry the pointer crosses.
     src:
       code: locales/hotkeys.yml — встроенные
   - id: book

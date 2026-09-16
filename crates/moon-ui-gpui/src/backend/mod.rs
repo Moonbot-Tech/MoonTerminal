@@ -31,7 +31,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-use gpui::{Context, WindowId};
+use gpui::{App, Context, WindowId};
 
 use crate::Backend;
 use crate::backend::core_warn::axis_has_series;
@@ -1035,6 +1035,34 @@ impl Backend {
                 || self
                     .effective_workspace_scope(group, crate::workspace::RetainedCoreScope::All)
                     .contains(core))
+    }
+
+    /// Whether the window that armed the cancel hold is the platform's active window.
+    ///
+    /// The hold's first fail-safe: a hold armed in one window is inert the moment focus moves
+    /// anywhere else — another window of ours, the Settings window, or another application.
+    pub(crate) fn cancel_hold_window_active(&self, cx: &App) -> bool {
+        match (self.cancel_hold.armed_window(), cx.active_window()) {
+            (Some(armed), Some(active)) => armed == active,
+            _ => false,
+        }
+    }
+
+    /// Whether the chart under the pointer belongs to the window that armed the cancel hold.
+    ///
+    /// The SWEEP's gate and only the sweep's (see AM-2): `hovered_chart` is application-global while
+    /// a keystroke is not, so without this a hold taken in one window would sweep a chart in
+    /// another. A fresh single press is deliberately NOT gated on this — it keeps today's behaviour.
+    pub(crate) fn cancel_hold_owns_hovered_chart(&self, _cx: &App) -> bool {
+        let Some(armed) = self.cancel_hold.armed_window() else {
+            return false;
+        };
+        let (Some(hovered), Some(last)) =
+            (self.hovered_chart.as_ref(), self.last_chart.get(&armed))
+        else {
+            return false;
+        };
+        hovered.entity_id() == last.entity_id()
     }
 
     /// Queue one Main-chart navigation only while its captured core remains workspace-visible.

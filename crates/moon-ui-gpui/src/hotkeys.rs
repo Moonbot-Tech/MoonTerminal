@@ -16,10 +16,13 @@
 //! modifier is used on both Windows and macOS, as Moonbot does; bindings that need no modifier keep
 //! their bare function-key or Delete forms.
 
+pub(crate) mod cancel_hold;
 mod layout;
 pub mod meta;
 #[cfg(test)]
 mod tests;
+
+use std::time::Instant;
 
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, KeyDownEvent, Keystroke, KeystrokeEvent,
@@ -32,6 +35,34 @@ use moon_core::session::CoreId;
 use moon_ui::{MoonHotkeyCapture, MoonHotkeyModifierWatch, MoonInputState};
 
 use crate::Backend;
+
+/// What a hotkey dispatch knows about the key that produced it.
+///
+/// Was a bare `repeat: bool`. The cancel route now needs two more facts the bool threw away:
+/// WHICH key it was, so the held-state probe can ask the OS about that physical key, and which
+/// WINDOW it arrived in, so a hold knows where it was taken. A pointer-driven dispatch carries
+/// neither and uses `POINTER`.
+#[derive(Clone, Debug)]
+pub(crate) struct HotkeyPress {
+    pub repeat: bool,
+    pub key: Option<Keystroke>,
+}
+
+impl HotkeyPress {
+    /// A real key press or auto-repeat.
+    pub(crate) fn key(keystroke: &Keystroke, is_held: bool) -> Self {
+        Self {
+            repeat: is_held,
+            key: Some(keystroke.clone()),
+        }
+    }
+
+    /// A dispatch with no keystroke behind it — a mouse gesture or a modifier route.
+    pub(crate) const POINTER: Self = Self {
+        repeat: false,
+        key: None,
+    };
+}
 
 /// Semantic hotkey action independent of its configured key binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,10 +145,11 @@ pub enum HotkeyAction {
     ///
     /// The caller executes this because it requires application-wide window access.
     ResetWindows,
-    /// Cancel the order under the cursor for the built-in unmodified Tab/Delete binding.
+    /// Cancel the entry order under the cursor for the built-in unmodified Tab/Delete binding.
     ///
-    /// The caller routes this through `Backend::hovered_chart`, whose `order_hover` state identifies
-    /// the order. With no hovered order the action remains unhandled, allowing Tab focus navigation.
+    /// The caller routes this through `Backend::hovered_chart`. With no hovered entry the action
+    /// remains unhandled, allowing Tab focus navigation. A held key's per-order dedupe lives on
+    /// the hold, not on `order_hover`.
     CancelHoveredOrder,
     /// Close every group's Main-stack charts with the built-in Shift+Escape binding.
     ///
@@ -469,8 +501,8 @@ impl HotkeyAction {
     /// ownership. A
     /// held key would do that tens of times a second and leave the clipboard thrashing.
     ///
-    /// The ones still repeating: cancels — a repeat sweeps on to the next line under the pointer,
-    /// and `ChartPanel::cancel_hovered_order` refuses to resend for the line it already cancelled —
+    /// The ones still repeating: cancels — a repeat sweeps on to the next entry order under the
+    /// pointer, and the hold's per-order dedupe refuses to resend for a line it already addressed —
     /// and the presets (setting a value twice sets it once).
     fn suppress_on_repeat(self) -> bool {
         matches!(
@@ -722,12 +754,42 @@ pub fn recorded_keystroke(mut keystroke: Keystroke) -> Keystroke {
 /// This is shared by the built-in Tab/Delete route and the caller's `FigDelete` fallback when no
 /// figure is selected. The default `fig_delete = Delete` resolves before the built-in branch and
 /// would otherwise shadow hovered-order cancellation. Returns `false` when no hovered chart or
-/// order exists, allowing the key event to continue propagating. `repeat` is the key's auto-repeat
-/// flag; the panel spends a repeat over an order it already cancelled without sending again.
-pub fn cancel_hovered_order(backend: &Entity<Backend>, repeat: bool, cx: &mut App) -> bool {
+/// order exists, allowing the key event to continue propagating. Arms the cancel hold here — the
+/// single shared entry — so a Del that deleted a selected figure never starts a sweep.
+pub fn cancel_hovered_order(
+    backend: &Entity<Backend>,
+    press: &HotkeyPress,
+    window: &Window,
+    cx: &mut App,
+) -> bool {
+    let kind = backend.update(cx, |b, _| {
+        let hold_key = press
+            .key
+            .as_ref()
+            .and_then(|k| cancel_hold::HoldKey::from_key_name(&k.key));
+        b.cancel_hold.press(
+            hold_key,
+            window.window_handle(),
+            press.repeat,
+            Instant::now(),
+        )
+    });
     with_hovered_chart(backend, cx, |panel, pcx| {
-        panel.cancel_hovered_order(repeat, pcx)
+        panel.cancel_hovered_order(kind, pcx)
     })
+}
+
+/// Clear the cancel hold when its key is released.
+///
+/// Best-effort ONLY. GPUI's keystroke interceptor never sees a key-up, and a key-up reaches only
+/// the focus-routed element listeners this calls — which the window root can miss entirely. The
+/// hold's real safety is `CancelHold::poll`, which asks the OS whether the key is physically
+/// down; this merely releases it sooner when the event does arrive.
+pub(crate) fn release_cancel_key(backend: &Entity<Backend>, keystroke: &Keystroke, cx: &mut App) {
+    let Some(key) = cancel_hold::HoldKey::from_key_name(&keystroke.key) else {
+        return;
+    };
+    backend.update(cx, |b, _| b.cancel_hold.release(key));
 }
 
 /// Log target for the manual-order trace that this module contributes to.
@@ -899,7 +961,7 @@ pub fn dispatch_from_chart(
         Ok(shell) => {
             // A click is never an auto-repeat, so the cursor-addressed cancel always sends.
             Some(shell.update(cx, |shell, scx| {
-                shell.dispatch_hotkey(action, false, window, scx)
+                shell.dispatch_hotkey(action, HotkeyPress::POINTER, window, scx)
             }))
         }
         Err(other) => other
@@ -907,7 +969,7 @@ pub fn dispatch_from_chart(
             .ok()
             .map(|host| {
                 host.update(cx, |host, hcx| {
-                    host.dispatch_hotkey_at(action, clicked, false, window, hcx)
+                    host.dispatch_hotkey_at(action, clicked, HotkeyPress::POINTER, window, hcx)
                 })
             }),
     });

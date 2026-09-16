@@ -2229,18 +2229,26 @@ fn a_held_tab_is_spent_before_focus_navigation() {
         .find("cx.intercept_keystrokes(")
         .expect("boot.rs installs the Tab interceptor");
     let body = &boot[at..];
-    // The stop must be THIS branch's: `code_only` keeps indentation, so the two lines are matched
-    // together rather than any `stop_propagation` later in the file.
+    let body_flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    // The stop must be THIS branch's. Whitespace is intentionally flattened because rustfmt may
+    // re-indent this call without changing the interceptor contract.
     assert!(
-        body.contains(
-            "if cancelled || repeat_over_chart {
-                cx.stop_propagation();"
+        body_flat.contains(
+            &"if cancelled || repeat_over_chart { cx.stop_propagation();"
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
         ),
         "a Tab repeat over a chart must be stopped whether or not it cancelled an order"
     );
     assert!(
-        body.contains("cancel_hovered_order(&tab_backend, ev.is_held, cx)"),
-        "the Tab route must hand the repeat flag to the cancel route"
+        body_flat.contains(
+            &"cancel_hovered_order( &tab_backend, &crate::hotkeys::HotkeyPress::key(&ev.keystroke, ev.is_held), window, cx, )"
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        "the Tab route must hand its HotkeyPress and window to the cancel route"
     );
     // Scoped to the chart under the pointer — away from one, a held Tab keeps the ordinary
     // auto-repeat walk every other application has — and covering Shift+Tab, which walks backwards
@@ -2257,20 +2265,27 @@ fn a_held_tab_is_spent_before_focus_navigation() {
         let source = code_only(&read_src(path));
         let calls = source.matches("hotkeys::cancel_hovered_order(").count();
         let flagged = source
-            .matches("hotkeys::cancel_hovered_order(&self.backend, repeat, cx)")
+            .matches("hotkeys::cancel_hovered_order(&self.backend, &press, window, cx)")
             .count();
         assert!(
             calls >= 1 && calls == flagged,
             "{path}: {flagged} of {calls} cancel_hovered_order calls pass the repeat flag"
         );
         assert!(
-            source.contains("self.dispatch_hotkey(action, ev.is_held, window, cx)"),
-            "{path}: on_hotkey must hand the event's is_held to dispatch_hotkey"
+            source.contains(
+                "self.dispatch_hotkey(
+            action,
+            crate::hotkeys::HotkeyPress::key(&ev.keystroke, ev.is_held),
+            window,
+            cx,
+        )"
+            ),
+            "{path}: on_hotkey must construct HotkeyPress from the event keystroke and held status"
         );
     }
     let trade = code_only(&read_src("panels/chart/trade.rs"));
     assert!(
-        trade.contains("if repeat && self.hotkey_cancelled == Some((core, uid)) {"),
+        trade.contains("b.cancel_hold.address((core, uid))"),
         "the panel must spend a repeat over the order it already cancelled without resending"
     );
 }

@@ -142,8 +142,8 @@ groups:
       en: Close every Main chart in every group
   - combo: Tab / Delete
     action:
-      ru: На ордерной линии — отменить ордер; с выделенной фигурой Delete удаляет фигуру
-      en: Over an order line — cancel that order; with a figure selected, Delete removes the figure
+      ru: На линии ордера на вход — отменить его; зажать и провести мышью — снять все входы под курсором; с выделенной фигурой Delete удаляет фигуру
+      en: Over an entry order line — cancel it; hold and sweep to cancel every entry the pointer crosses; with a figure selected, Delete removes the figure
   - combo: Ctrl+Shift+F10
     action:
       ru: Вернуть все окна на экран

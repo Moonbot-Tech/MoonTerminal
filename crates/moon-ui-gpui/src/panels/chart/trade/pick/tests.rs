@@ -1,6 +1,6 @@
 // Do not use `super::*` for gpui: this crate's modules re-export GPUI's `test` attribute macro,
 // which would shadow the built-in `#[test]`. Only the ranking is under test here.
-use super::OrderCandidate;
+use super::{OrderCandidate, OrderHitMode};
 use moon_core::session::order_lines::LineKind;
 
 fn candidate(dist: f32, overshoot: f32, size: f32, seq: u64) -> OrderCandidate {
@@ -58,4 +58,35 @@ fn an_on_screen_line_outranks_a_pinned_one_by_distance() {
     let pinned = candidate(3.0, 500.0, 1_000.0, 99);
     assert!(on_screen.beats(&pinned));
     assert!(!pinned.beats(&on_screen));
+}
+
+/// `trade/pick.rs:OrderHitMode::kinds` must keep `EntryCancel` on Buy alone; changing it to the
+/// five-line drag list would let a held cancel remove a live sell-side exit.
+#[test]
+fn entry_cancel_mode_targets_buy_lines_only() {
+    assert_eq!(OrderHitMode::EntryCancel.kinds(), &[LineKind::Buy]);
+}
+
+/// `trade/pick.rs:OrderHitMode::admits` must accept a filled Buy for `EntryCancel`; applying the
+/// drag fill guard here would leave an entry order under the cursor impossible to cancel.
+#[test]
+fn entry_cancel_admits_a_partially_filled_entry() {
+    assert!(OrderHitMode::EntryCancel.admits(LineKind::Buy, 37.5));
+}
+
+/// `trade/pick.rs:OrderHitMode::admits` must reject a filled Buy during Drag; removing that guard
+/// would make dragging a historical entry send a move command for a completed order.
+#[test]
+fn drag_mode_rejects_a_filled_entry() {
+    assert!(OrderHitMode::Drag { cross_only: false }.admits(LineKind::Buy, 0.0));
+    assert!(!OrderHitMode::Drag { cross_only: false }.admits(LineKind::Buy, 0.01));
+}
+
+/// `trade/pick.rs:OrderHitMode::cross_band_only` must be true only for cross-only Drag; widening
+/// it would make ordinary drags or entry cancellation miss a line outside its start cross.
+#[test]
+fn only_cross_only_drag_limits_to_the_start_band() {
+    assert!(OrderHitMode::Drag { cross_only: true }.cross_band_only());
+    assert!(!OrderHitMode::Drag { cross_only: false }.cross_band_only());
+    assert!(!OrderHitMode::EntryCancel.cross_band_only());
 }

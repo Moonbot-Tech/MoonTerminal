@@ -201,6 +201,11 @@ impl Render for DetachedChartHost {
                 crate::hotkeys::trace_key_arrived(ev);
                 this.modifier_watch.interrupt();
             }))
+            // Capture phase, like the key-down trace below it: a key-up consumed by a focused field never
+            // bubbles, and a release the root never hears would leave the cancel hold armed.
+            .capture_key_up(cx.listener(|this, ev: &KeyUpEvent, _window, cx| {
+                crate::hotkeys::release_cancel_key(&this.backend, &ev.keystroke, cx);
+            }))
             .child(
                 h_flex()
                     .h(header_h)
