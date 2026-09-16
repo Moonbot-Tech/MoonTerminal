@@ -62,6 +62,73 @@ pub fn compact_order_size(v: f64) -> String {
     label
 }
 
+/// Format a bottom-volume SCALE figure: lowercase suffix after a space, precision fixed by
+/// magnitude so neighbouring labels read at one density (issue #579).
+///
+/// The reader compares the band's maximum against its average by eye, and two labels of
+/// different length or different precision defeat that. So the rule is tiered, not
+/// significant-digit based like [`compact_si`]:
+///
+/// - below `1 k` — two places, and the `k` is still there: `0.86 k`, `0.03 k`;
+/// - `1–9.99 k` — one place: `1.6 k`;
+/// - `10–999 k` — none: `16 k`, `163 k`;
+/// - `m`, `b` and `t` — one place at any mantissa: `1.2 m`, `875.3 m`, `15.4 b`.
+///
+/// A fraction that is ALL zeros is dropped (`1 b`, not `1.0 b`); a fraction with a zero in its
+/// last place is kept (`0.50 k`), because that zero is what holds the tier's density. Rounding
+/// picks the tier: `999.6 k` prints as `1 m`, never `1000 k`. The top tier has nowhere to carry
+/// to, so `t` alone can show a four-digit mantissa — a quadrillion in quote is not a chart.
+///
+/// `k` from zero is the requester's rule and it stays — with one floor. Under five units the
+/// two-place mantissa rounds to `0.00`, which prints a non-zero turnover as nothing; that is the
+/// everyday case on a BTC-quoted market, where the whole band lives below one coin. Such a value
+/// prints through [`adaptive`] as the bare figure (`0.125`, `4.9`) — the suffix only ever goes
+/// missing where it would have carried no digit.
+///
+/// Scale labels ONLY. Every other compact figure keeps [`compact_si`]: a profit of `12.5$` as
+/// `0.01 k$` or an order of `999` as `1 k` would trade a meaningful figure for a uniform one.
+pub fn compact_scale(v: f64) -> String {
+    const UNITS: [(f64, &str); 4] = [(1e12, "t"), (1e9, "b"), (1e6, "m"), (1e3, "k")];
+    const BARE_BELOW: f64 = 5.0;
+    let a = v.abs();
+    // A non-finite input has no tier; it prints whatever `adaptive` makes of it rather than an
+    // `inf t` that looks like a figure.
+    if !v.is_finite() || a < BARE_BELOW {
+        return adaptive(v);
+    }
+    // Everything under a thousand still prints in `k`, so the search falls through to it.
+    let mut idx = UNITS
+        .iter()
+        .position(|(scale, _)| a >= *scale)
+        .unwrap_or(UNITS.len() - 1);
+    loop {
+        let (scale, suffix) = UNITS[idx];
+        let n = v / scale;
+        let decimals = if suffix != "k" {
+            1
+        } else if n.abs() < 1.0 {
+            2
+        } else if n.abs() < 10.0 {
+            1
+        } else {
+            0
+        };
+        let rounded = round_to(n, decimals).unwrap_or(n);
+        // Rounding carried the mantissa into the next unit: print it there.
+        if rounded.abs() >= 1000.0 && idx > 0 {
+            idx -= 1;
+            continue;
+        }
+        let mut s = format!("{rounded:.decimals$}");
+        if let Some(dot) = s.find('.') {
+            if s[dot + 1..].bytes().all(|b| b == b'0') {
+                s.truncate(dot);
+            }
+        }
+        return format!("{s} {suffix}");
+    }
+}
+
 /// Format to `decimals` places and trim trailing zeros. When formatting includes a decimal point
 /// (`decimals > 0` for the current finite callers, which pass 1–3), AT LEAST one fractional digit
 /// remains ("45.20" → "45.2", "45.00" → "45.0", "10000.000" → "10000.0"). With

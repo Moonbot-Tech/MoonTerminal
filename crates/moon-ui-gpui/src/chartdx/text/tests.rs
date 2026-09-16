@@ -5,23 +5,26 @@
 use crate::chartdx::text::{cursor_ref_price, fmt_prospective_order_size, volume_scale_label};
 
 /// Removing the suffix would again present quote turnover as a bare coin count (issue #486).
+/// The figure is the scale's own tiered format (issue #579): lowercase `k` after a space, one
+/// place in the `1–9.99 k` tier, and the `$` right after the suffix.
 #[test]
 fn volume_scale_label_identifies_dollar_turnover() {
     assert_eq!(
-        volume_scale_label(10_800.0, "USDT", 200.0, |_| 48.0).as_deref(),
-        Some("10.8K$")
+        volume_scale_label(1_600.0, "USDT", 200.0, |_| 48.0).as_deref(),
+        Some("1.6 k$")
     );
     assert_eq!(
-        volume_scale_label(10_800.0, "USDC", 200.0, |_| 48.0).as_deref(),
-        Some("10.8K$")
+        volume_scale_label(1_600.0, "USDC", 200.0, |_| 48.0).as_deref(),
+        Some("1.6 k$")
     );
     assert_eq!(
-        volume_scale_label(10_800.0, "USD", 200.0, |_| 48.0).as_deref(),
-        Some("10.8K$")
+        volume_scale_label(1_600.0, "USD", 200.0, |_| 48.0).as_deref(),
+        Some("1.6 k$")
     );
 }
 
-/// Hard-coding dollars would mislabel BTC and EUR markets, including small BTC turnover.
+/// Hard-coding dollars would mislabel BTC and EUR markets, including small BTC turnover — which
+/// prints bare: under five units the scale format would have rounded the `k` figure to `0.00`.
 #[test]
 fn volume_scale_label_preserves_the_markets_non_dollar_unit() {
     assert_eq!(
@@ -30,7 +33,7 @@ fn volume_scale_label_preserves_the_markets_non_dollar_unit() {
     );
     assert_eq!(
         volume_scale_label(93_200.0, "EUR", 200.0, |_| 72.0).as_deref(),
-        Some("93.2K EUR")
+        Some("93 k EUR")
     );
 }
 
@@ -38,15 +41,15 @@ fn volume_scale_label_preserves_the_markets_non_dollar_unit() {
 #[test]
 fn volume_scale_label_requires_room_for_the_complete_currency() {
     let measure = |text: &str| {
-        assert_eq!(text, "10.8K LONGQUOTE");
+        assert_eq!(text, "1.8 k LONGQUOTE");
         112.0
     };
     assert_eq!(
-        volume_scale_label(10_800.0, "LONGQUOTE", 112.0, measure).as_deref(),
-        Some("10.8K LONGQUOTE")
+        volume_scale_label(1_800.0, "LONGQUOTE", 112.0, measure).as_deref(),
+        Some("1.8 k LONGQUOTE")
     );
-    assert!(volume_scale_label(10_800.0, "LONGQUOTE", 111.0, measure).is_none());
-    assert!(volume_scale_label(10_800.0, "", 200.0, |_| 0.0).is_none());
+    assert!(volume_scale_label(1_800.0, "LONGQUOTE", 111.0, measure).is_none());
+    assert!(volume_scale_label(1_800.0, "", 200.0, |_| 0.0).is_none());
 }
 
 const LAST: f32 = 100.0;
