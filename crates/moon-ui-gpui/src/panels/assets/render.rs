@@ -197,6 +197,7 @@ impl Render for AssetsView {
         if windowed {
             root = root.child(
                 MoonWindowFrame::tool("assets-window-frame-hit", chrome_width)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(ASSETS_HEADER_H)
                     .leading_inset(design::titlebar_leading_inset())
                     .show_controls(design::show_custom_window_controls())

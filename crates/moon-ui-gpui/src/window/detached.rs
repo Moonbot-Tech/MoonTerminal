@@ -601,6 +601,7 @@ impl Render for DetachedWindow {
                     .when(crate::design::show_custom_window_controls(), |this| {
                         this.child(
                             MoonWindowFrame::detached_panel("detached-panel-window-controls", 0.0)
+                                .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                                 .header_height(34.0)
                                 .show_controls(true)
                                 .visual_controls(cx),

@@ -58,7 +58,7 @@ pub(crate) struct DetachedChartHost {
     ///
     /// GPUI creates the window on the primary display, and `WM_DPICHANGED` rescales its SIZE while
     /// moving to a display with another DPI even though position is already correct. Force the saved
-    /// logical size once. Newly detached windows use `None`.
+    /// logical size once. Newly detached, maximized, and fullscreen windows use `None`.
     restore_size: Option<Size<Pixels>>,
     /// The ONE overlay this window is showing: ⚙ layout, candles, graphics, labels, or the
     /// market-match list.
@@ -745,25 +745,22 @@ impl DetachedChartHost {
         )
     }
 
+    /// Save restore bounds and native state through the existing debounced chart-spec writer.
     fn persist_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
         // A restored window defers saving until `persist_armed`, preventing initial GPUI/Win32
         // auto-placement from replacing the saved position with DPI-shifted values.
         if !self.persist_armed {
             return;
         }
-        let Some((x, y, w, h)) = crate::window::windowing::window_geom(window) else {
-            moon_core::detect_diag::line(&format!(
-                "[geom] n={} НЕ Windowed → геометрия не сохранена",
-                self.num
-            ));
-            return;
-        };
+        let saved = crate::window::windowing::window_geom_rect(window, cx);
         let mut geom = chart_persist::WinGeom {
-            x,
-            y,
-            w,
-            h,
-            display_uuid: crate::window::windowing::window_display_uuid(window, cx),
+            x: saved.x,
+            y: saved.y,
+            w: saved.w,
+            h: saved.h,
+            maximized: saved.maximized,
+            fullscreen: saved.fullscreen,
+            display_uuid: saved.display_uuid,
         };
         let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
         let found = self.backend.update(cx, |bk, _| {
@@ -783,7 +780,7 @@ impl DetachedChartHost {
             }
         });
         moon_core::detect_diag::line(&format!(
-            "[geom] n={num} bucket={bucket:?} → x={} y={} w={} h={} (spec_found={found})",
+            "[geom] n={num} bucket={bucket:?} -> x={} y={} w={} h={} (spec_found={found})",
             geom.x, geom.y, geom.w, geom.h
         ));
     }

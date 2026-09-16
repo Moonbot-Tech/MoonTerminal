@@ -252,6 +252,7 @@ impl Render for SettingsView {
             .children(self.import_overlay(cx))
             .child(
                 MoonWindowFrame::tool("settings-window-frame-hit", chrome_width)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(SETTINGS_HEADER_H)
                     .leading_inset(design::titlebar_leading_inset())
                     .show_controls(design::show_custom_window_controls())
@@ -315,6 +316,7 @@ impl SettingsView {
     }
 }
 
+/// Build the window header with native minimize, maximize, and close controls.
 fn settings_header(p: MoonPalette, cx: &App) -> impl IntoElement {
     h_flex()
         .id("settings-window-header")
@@ -338,6 +340,7 @@ fn settings_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .when(design::show_custom_window_controls(), |this| {
             this.child(
                 MoonWindowFrame::tool("settings-window-frame-visual", 0.0)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(SETTINGS_HEADER_H)
                     .show_controls(true)
                     .visual_controls(cx),

@@ -139,6 +139,7 @@ pub(super) fn report_header(
         .when(design::show_custom_window_controls(), |this| {
             this.child(
                 MoonWindowFrame::tool("report-window-frame-visual", 0.0)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(REPORT_HEADER_H)
                     .show_controls(true)
                     .visual_controls(cx),

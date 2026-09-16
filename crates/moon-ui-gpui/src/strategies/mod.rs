@@ -476,6 +476,7 @@ impl Render for StrategiesView {
             );
         root = root.child(
             MoonWindowFrame::tool("strategies-window-frame-hit", chrome_width)
+                .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                 .header_height(STRATEGIES_HEADER_H)
                 .leading_inset(design::titlebar_leading_inset())
                 .show_controls(design::show_custom_window_controls())

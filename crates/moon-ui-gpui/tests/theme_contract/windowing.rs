@@ -1042,3 +1042,82 @@ fn a_trade_window_caption_edit_stores_without_separating_the_kinds() {
         "storing one window's captions must not perform the ⧉ press's kind separation"
     );
 }
+
+/// Removing a controls override from either a visual frame or its hit overlay hides maximize
+/// or lets the caption cover its button. Login deliberately retains the upstream small set.
+#[test]
+fn secondary_window_frames_expose_maximize_without_changing_login() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for path in [
+        "settings/render.rs",
+        "strategies/mod.rs",
+        "strategies/window.rs",
+        "panels/report/render.rs",
+        "panels/report/window.rs",
+        "panels/assets/render.rs",
+        "panels/assets/window.rs",
+        "analytics/render.rs",
+        "analytics/profit_monitor/mod.rs",
+        "screener/view.rs",
+        "core_expert/render.rs",
+        "diagnostics/debug_window.rs",
+        "window/detached.rs",
+    ] {
+        let source = code_only(&fs::read_to_string(root.join(path)).unwrap());
+        let mut checked = 0;
+        for tail in source.split("MoonWindowFrame::").skip(1) {
+            let chain = tail.split(';').next().unwrap();
+            let visual = chain.find(".visual_controls(");
+            let overlay = chain.find(".hit_overlay(");
+            let configured_frame = chain.find(".show_controls(");
+            if visual.is_none() && overlay.is_none() && configured_frame.is_none() {
+                continue;
+            }
+            let end = visual.or(overlay).or(configured_frame).unwrap();
+            assert!(
+                chain[..end].contains("MoonWindowFrameControls::MinimizeMaximizeClose"),
+                "{path}: each visual/overlay frame must include native maximize"
+            );
+            checked += 1;
+        }
+        assert!(
+            checked > 0,
+            "{path}: expected at least one native-controls frame"
+        );
+    }
+    let login = code_only(&fs::read_to_string(root.join("window/login.rs")).unwrap());
+    assert!(!login.contains("MinimizeMaximizeClose"));
+    // The pinned MoonUI cannot request maximize without minimize. A taskbar-hidden chart/trade
+    // window must stay Close-only until the upstream frame exposes a maximize-and-close set.
+    for path in [
+        "chart_tabs/detached_host/render.rs",
+        "trade_window/render.rs",
+    ] {
+        let source = code_only(&fs::read_to_string(root.join(path)).unwrap());
+        assert!(source.contains(".controls(MoonWindowFrameControls::Close)"));
+        assert!(!source.contains("MinimizeMaximizeClose"));
+    }
+}
+
+/// Restoring the old windowed-only reader or constant-false restore flags loses maximized charts;
+/// applying the DPI size correction to a maximized window overwrites its native placement.
+#[test]
+fn detached_chart_state_uses_the_existing_geometry_and_flush_paths() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let host = fs::read_to_string(root.join("chart_tabs/detached_host/mod.rs")).unwrap();
+    let persist = code_only(braced_body(&host, "fn persist_geometry("));
+    assert!(persist.contains("window_geom_rect(window, cx)"));
+    assert!(persist.contains("maximized: saved.maximized"));
+    assert!(persist.contains("fullscreen: saved.fullscreen"));
+    assert!(persist.contains("bk.chart_specs_dirty = true"));
+    assert!(!persist.contains("::window_geom(window)"));
+
+    let windows = code_only(&fs::read_to_string(root.join("chart_tabs/windows.rs")).unwrap());
+    assert!(windows.contains("window_bounds_for(geom.maximized, geom.fullscreen, bounds)"));
+    assert!(windows.contains("restored && !geom.maximized && !geom.fullscreen"));
+
+    let startup = fs::read_to_string(root.join("startup/boot.rs")).unwrap();
+    let quit = code_only(braced_body(&startup, "cx.on_app_quit(move |cx|"));
+    assert!(quit.contains("chart_persist::save_all(&b.chart_specs)"));
+    assert!(startup.contains("if b.chart_specs_dirty {"));
+}

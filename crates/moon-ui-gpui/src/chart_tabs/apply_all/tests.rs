@@ -120,6 +120,8 @@ fn a_stored_tab_names_its_kind() {
 
     let mut detached = spec();
     detached.detached = Some(WinGeom {
+        maximized: false,
+        fullscreen: false,
         x: 0,
         y: 0,
         w: 800,
