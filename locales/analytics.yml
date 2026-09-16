@@ -1237,9 +1237,17 @@ analytics.strat.search_ph:
   en: "search by name"
   es: "buscar por nombre"
 analytics.strat.active_only:
-  ru: "активные"
-  en: "active"
-  es: "activas"
+  ru: "Только включённые"
+  en: "Enabled only"
+  es: "Solo habilitadas"
+analytics.strat.active_only_tip:
+  ru: "Показывать только стратегии, у которых стоит галка на ядре."
+  en: "Show only strategies whose checkbox is selected on the core."
+  es: "Mostrar solo las estrategias cuya casilla está marcada en el núcleo."
+analytics.strat.active_only_unavailable:
+  ru: "Реплика стратегий выбранных ядер ещё не получена: нельзя определить, какие стратегии включены. Фильтр временно не применяется."
+  en: "The strategies replica for the selected cores has not arrived yet: enabled strategies cannot be identified. The filter is temporarily bypassed."
+  es: "Aún no se ha recibido la réplica de estrategias de los núcleos seleccionados: no se puede determinar cuáles están habilitadas. El filtro no se aplica temporalmente."
 analytics.strat.no_match:
   ru: "нет совпадений — измените фильтр/поиск"
   en: "no matches — adjust the filter/search"

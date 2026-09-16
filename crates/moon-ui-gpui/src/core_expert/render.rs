@@ -22,6 +22,7 @@ use super::{CoreExpertView, ExpertTab, PageState, TabSource, mixed, pages, widge
 const HEADER_H: f32 = 32.0;
 
 impl Render for CoreExpertView {
+    /// Render this window with native minimize, maximize, and close controls.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // A control that held focus was dropped since the last frame; take the keyboard off it before
         // drawing, exactly as `Shell::render` does when the gear's popover goes away.
@@ -88,6 +89,7 @@ impl Render for CoreExpertView {
             .child(footer)
             .child(
                 MoonWindowFrame::tool("core-expert-frame-hit", chrome_width)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(HEADER_H)
                     .leading_inset(design::titlebar_leading_inset())
                     .show_controls(design::show_custom_window_controls())
@@ -120,6 +122,7 @@ fn title_bar(p: MoonPalette, cx: &App) -> impl IntoElement {
         .when(design::show_custom_window_controls(), |this| {
             this.child(
                 MoonWindowFrame::tool("core-expert-frame-visual", 0.0)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(HEADER_H)
                     .show_controls(true)
                     .visual_controls(cx),

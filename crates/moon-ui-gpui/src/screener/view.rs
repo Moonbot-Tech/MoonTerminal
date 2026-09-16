@@ -680,6 +680,7 @@ impl Focusable for ScreenerView {
 }
 
 impl Render for ScreenerView {
+    /// Render this window with native minimize, maximize, and close controls.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let chrome_width = crate::window::windowing::responsive_width(window);
@@ -697,6 +698,7 @@ impl Render for ScreenerView {
             .child(self.bottom_bar(p, cx))
             .child(
                 MoonWindowFrame::tool("screener-window-frame-hit", chrome_width)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(SCREENER_HEADER_H)
                     .leading_inset(design::titlebar_leading_inset())
                     .show_controls(design::show_custom_window_controls())
@@ -724,6 +726,7 @@ fn distinct_markets(entries: &[Entry]) -> usize {
         .len()
 }
 
+/// Build the window header with native minimize, maximize, and close controls.
 fn screener_header(p: MoonPalette, cx: &App) -> impl IntoElement {
     h_flex()
         .id("screener-window-header")
@@ -747,6 +750,7 @@ fn screener_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .when(design::show_custom_window_controls(), |this| {
             this.child(
                 MoonWindowFrame::tool("screener-window-frame-visual", 0.0)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(SCREENER_HEADER_H)
                     .show_controls(true)
                     .visual_controls(cx),

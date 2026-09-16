@@ -32,9 +32,19 @@ const FIRST_DETACH_GEOM: chart_persist::WinGeom = chart_persist::WinGeom {
     y: 160,
     w: 900,
     h: 620,
+    maximized: false,
+    fullscreen: false,
     // A window nobody has opened yet belongs to no display; the owner's is chosen instead.
     display_uuid: None,
 };
+
+/// Return the first-render DPI correction only for restored, normally sized chart windows.
+///
+/// Resizing a maximized or fullscreen window to its restore rectangle would undo native placement.
+fn restored_chart_size(restored: bool, geom: chart_persist::WinGeom) -> Option<Size<Pixels>> {
+    (restored && !geom.maximized && !geom.fullscreen)
+        .then(|| size(px(geom.w as f32), px(geom.h as f32)))
+}
 
 /// Where and how one detached chart window should be created.
 ///
@@ -241,6 +251,8 @@ impl ChartTabs {
         let geom = chart_persist::WinGeom {
             x: f32::from(origin.x) as i32,
             y: f32::from(origin.y) as i32,
+            maximized: geom.maximized,
+            fullscreen: geom.fullscreen,
             w: f32::from(bounds.size.width) as u32,
             h: f32::from(bounds.size.height) as u32,
             // The display actually chosen, falling back to what was remembered — the one rule the
@@ -255,7 +267,7 @@ impl ChartTabs {
                 "MoonTerminal — {}",
                 chart_pane_label(&self.backend, &self.group, n, &bucket, cx)
             ),
-            crate::window::windowing::window_bounds_for(false, false, bounds),
+            crate::window::windowing::window_bounds_for(geom.maximized, geom.fullscreen, bounds),
             display_id,
         );
         // Clear with the themed chart background. The transparent window body must not cover the
@@ -266,8 +278,9 @@ impl ChartTabs {
         ));
         let backend = self.backend.clone();
         let group = self.group.clone();
-        // Give restored windows their saved logical size so first render can correct DPI-change shrinkage.
-        let restore_size = restored.then(|| size(px(geom.w as f32), px(geom.h as f32)));
+        // Correct DPI shrinkage only for a normal window; resizing a maximized/fullscreen window
+        // would overwrite its native placement with the smaller restore rectangle.
+        let restore_size = restored_chart_size(restored, geom);
         let host_bucket = bucket.clone();
         let opened = cx.open_window(opts, move |window, cx| {
             crate::window::windowing::configure_chart_clear_color(window, cx);
@@ -616,3 +629,6 @@ impl ChartTabs {
         });
     }
 }
+
+#[cfg(test)]
+mod tests;

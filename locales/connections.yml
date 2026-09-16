@@ -163,6 +163,18 @@ conn.col.key:
   ru: "Ключ"
   en: "Key"
   es: "Clave"
+conn.col.endpoint:
+  ru: "Адрес:порт"
+  en: "Address:port"
+  es: "Dirección:puerto"
+conn.tip.endpoint:
+  ru: "Адрес и порт ядра из вставленного ключа, до подключения"
+  en: "Core address and port from the pasted key, before connecting"
+  es: "Dirección y puerto del núcleo de la clave pegada, antes de conectar"
+conn.endpoint_duplicate:
+  ru: "Этот адрес и порт уже есть у ядра %{name}"
+  en: "This address and port are already used by core %{name}"
+  es: "El núcleo %{name} ya usa esta dirección y puerto"
 conn.col.proto:
   ru: "Прото"
   en: "Proto"

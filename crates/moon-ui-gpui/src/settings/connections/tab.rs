@@ -583,7 +583,8 @@ impl SettingsView {
     ///     cx: Settings context used to read the draft, live status, and active theme.
     ///
     /// Returns:
-    ///     The complete Connections tab: fixed selectors and headers above a virtualized core list
+    ///     The complete Connections tab, with endpoints and duplicate peers from all draft rows:
+    ///     fixed selectors and headers above a virtualized core list
     ///     that owns the tab's only scroll (`settings/render.rs` gives Connections a non-scrolling
     ///     bounded body for exactly this reason).
     pub(in crate::settings) fn connections_tab(
@@ -599,7 +600,7 @@ impl SettingsView {
         let status = self.backend.read(cx).session.status_map();
         // Snapshot server row metadata and groups as (name, active, icon).
         // Rank from the draft so a pending sort-mode change is visible before it is applied.
-        let (order, servers, mut groups) = {
+        let (order, servers, mut groups, endpoints) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
             let venues = b.session.core_venues();
@@ -617,7 +618,12 @@ impl SettingsView {
                 })
                 .collect::<Vec<_>>();
             let groups = visible_group_rows(&servers, &d.groups);
-            (crate::core_order::CoreOrder::new(d), servers, groups)
+            (
+                crate::core_order::CoreOrder::new(d),
+                servers,
+                groups,
+                super::endpoints::endpoint_cells(&d.servers),
+            )
         };
         // Keep group branches in stable name order.
         groups.sort_by(|a, b| a.0.cmp(&b.0));
@@ -788,6 +794,7 @@ impl SettingsView {
                                 *core_id,
                                 *active,
                                 st,
+                                &endpoints[*draft_index],
                                 app,
                             );
                             // EVERY core row starts at `CONN_TABLE_INSET`, indented or not, so

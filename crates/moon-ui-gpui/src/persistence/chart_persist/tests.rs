@@ -82,3 +82,42 @@ fn an_empty_charts_array_is_not_unreadable() {
         "garbage with a non-zero length is unreadable"
     );
 }
+
+/// Dropping either state field loses a detached chart's native state on restart;
+/// losing serde defaults rejects legacy files and drops their detached tabs.
+#[test]
+fn detached_chart_native_state_survives_json_with_legacy_defaults() {
+    use gpui::{Bounds, WindowBounds, point, px, size};
+
+    for (fields, expected) in [
+        ("", "windowed"),
+        (r#","maximized":true"#, "maximized"),
+        (r#","fullscreen":true"#, "fullscreen"),
+        (r#","maximized":true,"fullscreen":true"#, "fullscreen"),
+        (r#","maximized":"invalid","fullscreen":null"#, "windowed"),
+    ] {
+        let json = format!(
+            r#"{{"group":"main","num":2,"bucket":"Shared","detached":{{"x":400,"y":260,"w":900,"h":620{fields}}}}}"#
+        );
+        let spec: ChartTabSpec = serde_json::from_str(&json).unwrap();
+        let back: ChartTabSpec =
+            serde_json::from_str(&serde_json::to_string(&spec).unwrap()).unwrap();
+        let geom = back.detached.expect("the chart must remain detached");
+        let rect = Bounds {
+            origin: point(px(geom.x as f32), px(geom.y as f32)),
+            size: size(px(geom.w as f32), px(geom.h as f32)),
+        };
+        let (state, restored) = match crate::window::windowing::window_bounds_for(
+            geom.maximized,
+            geom.fullscreen,
+            rect,
+        ) {
+            WindowBounds::Windowed(bounds) => ("windowed", bounds),
+            WindowBounds::Maximized(bounds) => ("maximized", bounds),
+            WindowBounds::Fullscreen(bounds) => ("fullscreen", bounds),
+        };
+        assert_eq!(state, expected);
+        assert_eq!(restored.origin, point(px(400.0), px(260.0)));
+        assert_eq!(restored.size, size(px(900.0), px(620.0)));
+    }
+}

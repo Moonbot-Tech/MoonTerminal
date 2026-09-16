@@ -1302,6 +1302,7 @@ impl Render for ProfitMonitorView {
             )
             .child(
                 MoonWindowFrame::tool("profit-monitor-window-hit", width)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(HEADER_HEIGHT)
                     .leading_inset(design::titlebar_leading_inset())
                     .show_controls(design::show_custom_window_controls())
@@ -1570,6 +1571,7 @@ fn window_header(palette: MoonPalette, cx: &App) -> impl IntoElement {
         .when(design::show_custom_window_controls(), |element| {
             element.child(
                 MoonWindowFrame::tool("profit-monitor-controls", 0.0)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(HEADER_HEIGHT)
                     .show_controls(true)
                     .visual_controls(cx),

@@ -629,6 +629,7 @@ impl Render for ReportPanel {
         if self.standalone {
             root.child(
                 MoonWindowFrame::tool("report-window-frame-hit", 0.0)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(window::REPORT_HEADER_H)
                     .leading_inset(design::titlebar_leading_inset())
                     .show_controls(design::show_custom_window_controls())

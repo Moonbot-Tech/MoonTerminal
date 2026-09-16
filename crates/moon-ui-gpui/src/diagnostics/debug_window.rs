@@ -57,6 +57,7 @@ impl Focusable for DebugChartHost {
 
 #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
 impl Render for DebugChartHost {
+    /// Render this window with native minimize, maximize, and close controls.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let title = self.title.clone();
@@ -85,6 +86,7 @@ impl Render for DebugChartHost {
                     .when(design::show_custom_window_controls(), |this| {
                         this.child(
                             MoonWindowFrame::debug("debug-chart-window-frame-visual", 0.0)
+                                .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                                 .header_height(34.0)
                                 .show_controls(true)
                                 .visual_controls(cx),
@@ -194,6 +196,7 @@ impl Focusable for DebugPerfWindow {
 
 #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
 impl Render for DebugPerfWindow {
+    /// Render this window with native minimize, maximize, and close controls.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let (
@@ -268,6 +271,7 @@ impl Render for DebugPerfWindow {
                     .when(design::show_custom_window_controls(), |this| {
                         this.child(
                             MoonWindowFrame::debug("debug-perf-window-frame-visual", 0.0)
+                                .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                                 .header_height(34.0)
                                 .show_controls(true)
                                 .visual_controls(cx),

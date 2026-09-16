@@ -667,8 +667,8 @@ fn settings_sig(b: &Backend) -> u64 {
         s.feed.log.hash(&mut h);
         s.feed.alerts.hash(&mut h);
         s.feed.arb.hash(&mut h);
-        // The key input owns its local repaint while typing; only empty/non-empty
-        // affects surrounding settings layout.
+        // Key input and Paste callbacks explicitly refresh draft endpoint cells.
+        // Keep secret contents out of this broader settings signature.
         s.key.is_empty().hash(&mut h);
         s.group.hash(&mut h);
         s.market.hash(&mut h);

@@ -12,7 +12,7 @@ use moon_core::config::{ChartBucket, ServerConfig, paths};
 use moon_core::session::CoreId;
 use serde::{Deserialize, Serialize};
 
-/// Geometry of a detached chart-tab window.
+/// Restore geometry and native state of a detached chart-tab window.
 ///
 /// Compared as a whole where "did this window move?" is asked: the display is part of the placement,
 /// and on macOS the same x/y on another monitor is a real move (coordinates there are relative to
@@ -23,6 +23,20 @@ pub struct WinGeom {
     pub y: i32,
     pub w: u32,
     pub h: u32,
+    /// Reopen maximized while retaining the normal restore rectangle.
+    #[serde(
+        default,
+        deserialize_with = "moon_core::config::layout::de_lenient_bool",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub maximized: bool,
+    /// Fullscreen counterpart, restored before maximized when both flags are present.
+    #[serde(
+        default,
+        deserialize_with = "moon_core::config::layout::de_lenient_bool",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub fullscreen: bool,
     /// Display this window was last seen on, when the platform could name one.
     ///
     /// Without it a restored chart lands on whichever display its group window occupies, because

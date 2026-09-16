@@ -14,7 +14,7 @@ use super::{
 /// server-row control.
 #[test]
 fn column_ids_are_the_complete_spec_indices() {
-    assert_eq!(ConnColId::ALL.len(), 13);
+    assert_eq!(ConnColId::ALL.len(), 14);
 
     for (index, column) in ConnColId::ALL.into_iter().enumerate() {
         assert_eq!(column as usize, index, "{column:?} must index its own spec");
@@ -53,7 +53,12 @@ fn indent_parts_match_the_header_inset() {
 #[test]
 fn widths_follow_the_frozen_per_column_policy() {
     const MICRO_COLUMNS: [ConnColId; 3] = [ConnColId::Proto, ConnColId::Preset, ConnColId::Data];
-    const TEXT_SCALED_COLUMNS: [ConnColId; 3] = [ConnColId::Name, ConnColId::Key, ConnColId::Group];
+    const TEXT_SCALED_COLUMNS: [ConnColId; 4] = [
+        ConnColId::Name,
+        ConnColId::Key,
+        ConnColId::Endpoint,
+        ConnColId::Group,
+    ];
     const SCALES: [f32; 3] = [0.75, 1.0, 1.3];
 
     for column in ConnColId::ALL {
@@ -90,7 +95,7 @@ fn widths_follow_the_frozen_per_column_policy() {
     }
 }
 
-/// `columns.rs:CONN_COLS` must let Name, Key and Group absorb spare width without making any of
+/// `columns.rs:CONN_COLS` must let Name, Key, Endpoint and Group absorb spare width without making any of
 /// them rigid at the default window size. Removing growth from one truncates user-entered text;
 /// every visible header label also needs help text.
 #[test]
@@ -99,7 +104,15 @@ fn growth_and_tooltips_match_the_text_column_contract() {
         .into_iter()
         .filter(|column| column.spec().grow)
         .collect();
-    assert_eq!(growing, [ConnColId::Name, ConnColId::Key, ConnColId::Group]);
+    assert_eq!(
+        growing,
+        [
+            ConnColId::Name,
+            ConnColId::Key,
+            ConnColId::Endpoint,
+            ConnColId::Group
+        ]
+    );
 
     for column in ConnColId::ALL {
         let spec = column.spec();
@@ -112,18 +125,24 @@ fn growth_and_tooltips_match_the_text_column_contract() {
     }
 }
 
-/// `columns.rs:CONN_COLS` must cap only Key and Group through their own policies. Removing either
-/// cap lets that column consume wide-window space, while resolving either cap as raw pixels makes
+/// `columns.rs:CONN_COLS` must cap Key, Endpoint and Group through their own policies. Removing a
+/// cap lets that column consume wide-window space, while resolving a cap as raw pixels makes
 /// its readable character count shrink when the user raises the Font setting.
 #[test]
 fn caps_match_the_text_column_contract_at_each_font_scale() {
     const MICRO_COLUMNS: [ConnColId; 3] = [ConnColId::Proto, ConnColId::Preset, ConnColId::Data];
-    const TEXT_SCALED_COLUMNS: [ConnColId; 3] = [ConnColId::Name, ConnColId::Key, ConnColId::Group];
+    const TEXT_SCALED_COLUMNS: [ConnColId; 4] = [
+        ConnColId::Name,
+        ConnColId::Key,
+        ConnColId::Endpoint,
+        ConnColId::Group,
+    ];
     const SCALES: [f32; 3] = [0.75, 1.0, 1.3];
 
     for column in ConnColId::ALL {
         let expected_cap = match column {
             ConnColId::Key => Some(260.0),
+            ConnColId::Endpoint => Some(220.0),
             ConnColId::Group => Some(140.0),
             _ => None,
         };

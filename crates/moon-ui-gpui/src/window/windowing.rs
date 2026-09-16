@@ -830,29 +830,9 @@ pub(crate) fn activate_new_window(handle: AnyWindowHandle, cx: &mut App) {
     }
 }
 
-/// Read windowed geometry as logical pixels `(x, y, width, height)`.
-///
-/// This centralizes the float-to-integer conversion used to persist detached CHART geometry, which
-/// is its one remaining caller. [`window_geom_rect`] deliberately no longer shares it: a tool
-/// window must remember a maximized state rather than decline to persist anything.
-///
-/// # Arguments
-///
-/// * `window` - Window whose current bounds should be inspected.
-///
-/// # Returns
-///
-/// Integer geometry for a `Windowed` window, or `None` for fullscreen or maximized bounds.
-pub(crate) fn window_geom(window: &Window) -> Option<(i32, i32, u32, u32)> {
-    let WindowBounds::Windowed(b) = window.window_bounds() else {
-        return None;
-    };
-    Some(int_rect(b))
-}
-
 /// One rectangle of logical pixels, truncated to integers.
 ///
-/// The SINGLE conversion behind both [`window_geom`] and [`display_rects`], and it exists because
+/// The SINGLE conversion behind both [`window_geom_rect`] and [`display_rects`], and it exists because
 /// those two results are COMPARED: a saved window rectangle is tested for overlap against the
 /// attached displays. Two hand-written copies of this arithmetic would agree today and drift on the
 /// first edit, and a comparison between two coordinate spaces agrees or disagrees by accident.
@@ -875,7 +855,7 @@ fn int_rect(bounds: Bounds<Pixels>) -> (i32, i32, u32, u32) {
 
 /// The attached displays as integer rectangles `(x, y, width, height)`.
 ///
-/// Read against a rectangle produced by [`window_geom`], and converted by the SAME [`int_rect`]
+/// Read against a rectangle produced by [`window_geom_rect`], and converted by the SAME [`int_rect`]
 /// both of them call — the two results are compared, so sharing the conversion is what makes them
 /// comparable by construction rather than by two copies happening to match.
 ///

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use gpui::*;
 use moon_ui::MoonVirtualListScrollHandle;
 
+mod arrival_color;
 pub(in crate::chart_tabs) mod detect_cap;
 
 use super::stack::grid;
@@ -83,7 +84,7 @@ pub(crate) struct AddChartStack {
     /// stack state because paint cannot mutate the stack; `with_size_probe` writes it and asks for
     /// ONE repaint when the number actually moved.
     measured: Rc<Cell<Size<Pixels>>>,
-    /// Whether an arriving chart flashes its accent border (per window). `None` = enabled.
+    /// Whether an arriving chart flashes its border (per window). `None` = enabled.
     arrival_flash: Option<bool>,
     /// Cap on charts a DETECT may open here (per window). `None` = the built-in default cap;
     /// `Some(0)` = uncapped. Resolved through `detect_cap::resolved_max_charts`.
@@ -208,7 +209,7 @@ impl AddChartStack {
         self.last_count_change = Instant::now();
     }
 
-    /// Hand the arrival stamp to slot `i`'s chart so its OWN PASS draws and paces the border flash.
+    /// Hand the arrival stamp and readable core colour to slot `i`'s chart for its own-pass flash.
     ///
     /// Nothing here notifies or schedules a timer. The earlier version repainted the stack at
     /// 10 Hz for 2.6 s (and before that, every vblank), and each repaint re-rendered every
@@ -233,11 +234,17 @@ impl AddChartStack {
             return;
         };
         let at = entry.arrived_at;
-        let accent = moon_ui::MoonPalette::active(cx).accent;
+        let palette = moon_ui::MoonPalette::active(cx);
+        let backend = self.backend.read(cx);
+        let core_color = crate::core_color::core_color(&backend.config.servers, entry.core);
+        // Match the chart renderer, including a Settings preview and the shared dark/graphite set.
+        let effective = backend.preview.as_ref().unwrap_or(&backend.config);
+        let background = effective.theme.get(palette.is_light()).bg;
+        let color = arrival_color::arrival_color(core_color, background, palette.accent);
         entry
             .panel
             .clone()
-            .update(cx, |p, _| p.set_arrival_pulse(Some(at), accent));
+            .update(cx, |p, _| p.set_arrival_pulse(Some(at), color));
     }
 
     /// Whether an arriving chart on this tab flashes its border. Unset means it does, which is what

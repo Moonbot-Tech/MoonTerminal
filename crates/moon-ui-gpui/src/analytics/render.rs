@@ -176,6 +176,7 @@ impl Render for AnalyticsView {
             })
             .child(
                 MoonWindowFrame::tool("analytics-window-frame-hit", chrome_width)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(ANALYTICS_HEADER_H)
                     .leading_inset(design::titlebar_leading_inset())
                     .show_controls(design::show_custom_window_controls())
@@ -337,6 +338,7 @@ fn analytics_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .when(design::show_custom_window_controls(), |this| {
             this.child(
                 MoonWindowFrame::tool("analytics-window-frame-visual", 0.0)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(ANALYTICS_HEADER_H)
                     .show_controls(true)
                     .visual_controls(cx),

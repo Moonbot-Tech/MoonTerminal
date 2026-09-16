@@ -1,4 +1,4 @@
-//! Core table for the Connections tab: server rows with active/window toggles, name, key, group,
+//! Core table for the Connections tab: server rows with active/window toggles, name, key, endpoint, group,
 //! chart bundle, feed count, color, delete, reconnect, and status controls; shared column layout
 //! and headers; feed-flag dropdown; and server add/delete actions.
 //!
@@ -346,6 +346,8 @@ fn paste_key_affix(
                         }
                     }
                 });
+                // A nonempty-to-nonempty paste must refresh every duplicate marker.
+                ctx.notify();
             });
         })
 }
@@ -877,7 +879,7 @@ fn preset_label(m: WorkspaceMembership) -> String {
 /// SettingsView` and leak the window -- the same cycle `strategies/tree/moon.rs::moon_tree_el`
 /// guards for `MoonTree`. Every interactive child below reaches `SettingsView` only through `weak`.
 ///
-/// Columns contain active and window toggles, name, key, transport mode, group, chart bundle,
+/// Columns contain active and window toggles, name, key, draft endpoint, transport mode, group, chart bundle,
 /// feed flags, color, delete, reconnect, and status controls.
 ///
 /// Args:
@@ -888,11 +890,11 @@ fn preset_label(m: WorkspaceMembership) -> String {
 ///     core_id: The server's live core identity.
 ///     active: Whether the draft server is enabled.
 ///     status: Latest live connection status, if known.
+///     endpoint: Endpoint and duplicate peer derived from the current draft.
 ///     cx: Application context used for rendering.
 ///
 /// Returns:
-///     One core row. Performs zero `format!` calls of its own -- see [`ConnRowIds`] -- except
-///     inside the feed dropdown's items, which are built only for the one row whose menu is open.
+///     One core row with stable element IDs and draft-derived endpoint warnings.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn server_row(
     view: &SettingsView,
@@ -902,6 +904,7 @@ pub(super) fn server_row(
     core_id: CoreId,
     active: bool,
     status: Option<ConnStatus>,
+    endpoint: &super::endpoints::EndpointCell,
     cx: &App,
 ) -> AnyElement {
     crate::diag::bump(&crate::diag::SETTINGS_CONN_ROW_BUILD);
@@ -1017,6 +1020,33 @@ pub(super) fn server_row(
                     })),
             )
             .child(paste_key_affix(weak, i, row_key, row.key.clone(), p, cx))
+            .into_any_element(),
+        div()
+            .id(("conn-endpoint", row_key))
+            .w_full()
+            .overflow_hidden()
+            .font_family(design::mono())
+            .text_size(design::t_body(cx))
+            .text_color(rgb(if endpoint.duplicate_name.is_some() {
+                p.amber
+            } else {
+                p.text
+            }))
+            .child(div().truncate().child(endpoint.text.clone()))
+            .when(!endpoint.text.is_empty(), |cell| {
+                let tip = match &endpoint.duplicate_name {
+                    Some(name) => format!(
+                        "{}\n{}",
+                        endpoint.text,
+                        t!("conn.endpoint_duplicate", name = name)
+                    ),
+                    None => endpoint.text.clone(),
+                };
+                cell.tooltip(move |_window, cx| {
+                    cx.new(|_| MoonTooltipView::new(tip.clone()).max_width(360.0))
+                        .into()
+                })
+            })
             .into_any_element(),
         proto_dropdown(view, weak, i, row_key, ids, cx).into_any_element(),
         preset_dropdown(view, weak, i, row_key, ids, cx).into_any_element(),

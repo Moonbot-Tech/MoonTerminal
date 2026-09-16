@@ -7,6 +7,7 @@ mod tests;
 
 pub(super) const STRATEGIES_HEADER_H: f32 = 32.0;
 
+/// Build the window header with native minimize, maximize, and close controls.
 pub(super) fn strategies_header(p: MoonPalette, cx: &App) -> impl IntoElement {
     h_flex()
         .id("strategies-window-header")
@@ -30,6 +31,7 @@ pub(super) fn strategies_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .when(design::show_custom_window_controls(), |this| {
             this.child(
                 MoonWindowFrame::tool("strategies-window-frame-visual", 0.0)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(STRATEGIES_HEADER_H)
                     .show_controls(true)
                     .visual_controls(cx),

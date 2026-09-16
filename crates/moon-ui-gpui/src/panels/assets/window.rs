@@ -32,6 +32,7 @@ pub(super) fn assets_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .when(design::show_custom_window_controls(), |this| {
             this.child(
                 MoonWindowFrame::tool("assets-window-frame-visual", 0.0)
+                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
                     .header_height(ASSETS_HEADER_H)
                     .show_controls(true)
                     .visual_controls(cx),
