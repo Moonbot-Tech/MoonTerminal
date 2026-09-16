@@ -142,7 +142,7 @@ pub(in crate::analytics::tuner) fn partial_sort<T>(
     items[..head].sort_by(cmp);
 }
 
-/// Filter and sort the whole group set, returning INDICES into it.
+/// Filter the whole group set and order its drawable head, returning indices into it.
 ///
 /// Indices rather than references so the result can be cached on the view: a `Vec<&GroupStat>`
 /// would borrow from `strategy_data` and make the cache self-referential.
@@ -155,7 +155,8 @@ pub(in crate::analytics::tuner) fn partial_sort<T>(
 ///     key: Search, filters, sort, and visible-head limit.
 ///
 /// Returns:
-///     Stable display-order indices into `all` and whether replica status is available.
+///     Stable display-order indices through [`MAX_ROWS`], an unordered undisplayed tail, and
+///     whether replica status is available.
 pub(in crate::analytics) fn filter_sort_indices(
     all: &[GroupStat],
     key: &VisibleKey,
