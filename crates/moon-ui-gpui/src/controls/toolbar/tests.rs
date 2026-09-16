@@ -1,6 +1,11 @@
 //! Adaptive-fit and manual-strategy target regressions for the trading toolbar.
 
-use super::{LabelLadder, LabelWidths, label_ladder, manual_strategy_core};
+use super::{
+    ICON_BTN_W, LabelLadder, LabelWidths, TOOLBAR_LAUNCHER_BORDER_W, TOOLBAR_LAUNCHER_PAD_X,
+    label_ladder, launcher_label_width, manual_strategy_core,
+};
+use moon_core::config::{UiDensity, UiThemeMode};
+use moon_ui::MoonButtonSize;
 
 #[test]
 /// Regression target: `controls/toolbar.rs:label_ladder` changing an inclusive boundary to a
@@ -55,4 +60,43 @@ fn hovered_chart_core_controls_manual_strategy_applicability() {
     assert_eq!(manual_strategy_core(Some(1), Some(2), true), Some(2));
     assert_eq!(manual_strategy_core(Some(1), Some(2), false), Some(1));
     assert_eq!(manual_strategy_core(None, Some(2), true), Some(2));
+}
+
+/// `controls/toolbar.rs:launcher_label_width` must budget the same tier font and gap it draws.
+///
+/// Breakage: measuring launcher text with the old font channel or a stale icon gap makes the
+/// Compact window buttons overlap their labels before row-fit can shed a caption.
+#[gpui::test]
+fn launcher_label_width_matches_the_drawn_tier_geometry(cx: &mut gpui::TestAppContext) {
+    for density in [UiDensity::Compact, UiDensity::Standard, UiDensity::Large] {
+        cx.update(|cx| {
+            moon_ui::MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, density, 1.0),
+                cx,
+            );
+        });
+        let (actual, expected) = cx.update(|cx| {
+            let tier = crate::design::button_tier(cx);
+            let metrics = tier.control_metrics();
+            let text = crate::design::ui_text_width_zoomed(
+                cx,
+                "Settings",
+                metrics.font_size,
+                500.0,
+                false,
+            );
+            let chrome =
+                crate::design::ui_value(cx, MoonButtonSize::tier_icon_size(tier) + metrics.gap)
+                    + crate::design::ui_value(cx, TOOLBAR_LAUNCHER_PAD_X) * 2.0
+                    + TOOLBAR_LAUNCHER_BORDER_W;
+            (
+                launcher_label_width(cx, "Settings"),
+                (text + chrome).max(ICON_BTN_W),
+            )
+        });
+        assert_eq!(
+            actual, expected,
+            "{density:?}: launcher budget must equal drawn geometry"
+        );
+    }
 }

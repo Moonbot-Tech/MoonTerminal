@@ -18,6 +18,7 @@ mod analytics;
 mod chart;
 mod core_pick;
 mod core_status;
+mod density;
 mod detects;
 mod dock_chrome;
 mod fonts;

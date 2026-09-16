@@ -348,7 +348,7 @@ fn width_measurements_agree_with_their_rendered_family_and_cache_key() {
     let wrap_fit = read_src("controls/wrap_fit.rs");
     let signature = code_only(braced_body(&wrap_fit, "pub(crate) fn signature("));
     assert!(
-        signature.contains("design::text_metrics_key(")
+        signature.contains("design::text_metrics_key_zoomed(")
             && signature.contains("design::button_tier(cx).control_metrics().font_size,")
             && signature.contains("400.0,")
             && signature.contains("true,"),

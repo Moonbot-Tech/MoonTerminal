@@ -207,7 +207,7 @@ pub(crate) fn signature(cx: &App, composition: impl Hash) -> u64 {
     // The RESOLVED font, not the requested size: a fallback or an availability change moves every
     // measured width without moving the slider. Keyed on the density-tier control font the
     // compact trigger actually draws, not a hand-kept legacy font-size constant.
-    design::text_metrics_key(
+    design::text_metrics_key_zoomed(
         cx,
         design::button_tier(cx).control_metrics().font_size,
         400.0,

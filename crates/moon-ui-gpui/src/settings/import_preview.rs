@@ -274,7 +274,6 @@ impl SettingsView {
                     .child(
                         MoonButton::new("import-close")
                             .outline()
-                            .small()
                             .width(110.0)
                             .label(t!("import.cancel").to_string())
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -429,7 +428,6 @@ impl SettingsView {
                 .child(
                     MoonButton::new("import-apply")
                         .primary()
-                        .small()
                         .width(130.0)
                         .label(t!("import.apply").to_string())
                         .on_click(cx.listener(|this, _, w, cx| this.apply_moonbot_import(w, cx)))
@@ -438,7 +436,6 @@ impl SettingsView {
                 .child(
                     MoonButton::new("import-cancel")
                         .outline()
-                        .small()
                         .width(110.0)
                         .label(t!("import.cancel").to_string())
                         .on_click(cx.listener(|this, _, _, cx| {

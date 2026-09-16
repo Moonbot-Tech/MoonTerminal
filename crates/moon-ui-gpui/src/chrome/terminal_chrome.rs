@@ -7,8 +7,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonPalette,
-    MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect, MoonSelectorPill,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect, MoonSelectorPill,
     MoonSelectorSegment, MoonSize, MoonTag, MoonWindowFrame, h_flex,
 };
 use rust_i18n::t;
@@ -31,7 +31,6 @@ use crate::{Backend, design};
 fn gear_trigger() -> MoonButton {
     MoonButton::new("core-gear")
         .leading_icon(MoonButtonIconSlot::new("icons/settings-2.svg"))
-        .size(MoonSize::Sm)
         .variant(MoonButtonVariant::Panel)
         .tooltip(t!("core_settings.title").to_string())
 }
@@ -336,7 +335,6 @@ pub fn header(
                         .child(
                             MoonButton::new("terminal-update")
                                 .label(label)
-                                .size(MoonSize::Xs)
                                 .variant(variant)
                                 .loading(busy)
                                 .on_click(move |_, _window, cx| {
@@ -529,7 +527,7 @@ fn workspace_mode_selector(group: &str, backend: &Entity<Backend>, cx: &App) -> 
                 .label(label)
                 .trigger_caret(true)
                 .trigger_variant(MoonButtonVariant::Soft)
-                .trigger_size(MoonSize::Sm.into())
+                .trigger_size(MoonButtonSize::density(cx))
                 .trigger_width_scaled(MODE_TRIGGER_W)
                 .menu_width_scaled(MODE_MENU_W)
                 .menu_size(MoonSize::Xs)
@@ -738,11 +736,9 @@ fn core_selector(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    // The pill now follows the same Small `fit_h_value` triple as its neighbouring chips, so it
-    // shares one top/bottom edge with them at every font delta; its content width is still capped
-    // below so a long user-defined name cannot displace the header's right-hand readouts.
-    const SEL_H: f32 = 26.0;
-
+    // The pill follows the density-tier ordinary-control height so it shares one top/bottom edge
+    // with the neighbouring buttons; its content width is still capped below so a long
+    // user-defined name cannot displace the header's right-hand readouts.
     let b = backend.read(cx);
     // Filtered here rather than at `Backend::group_cores`, whose other callers include the
     // membership-authority functions themselves: dropping non-members here also keeps
@@ -800,9 +796,9 @@ fn core_selector(
         &raw_active_name,
         design::font_w(cx, design::HEADER_LABEL_MAX_W),
         design::ui_value(cx, 44.0),
-        |text| design::ui_text_width(cx, text, 10.5, 500.0, true),
+        |text| design::ui_text_width_zoomed(cx, text, design::tier_font_size(cx), 500.0, true),
     );
-    let trigger_h = design::fit_h_value(cx, SEL_H, 14.0, 6.0);
+    let trigger_h = design::action_control_h_value(cx);
     // `MoonSelectorPill` takes `height` and `radius` in DESIGN units and scales them by
     // `tokens.ui()` itself, while `bounds` takes final pixels. `trigger_h` is already scaled, so
     // undo that once here and feed the design-unit value to the two that will be scaled again —
@@ -872,7 +868,8 @@ fn core_selector(
                 .segment(
                     MoonSelectorSegment::new(active_name)
                         .color(p.text)
-                        .weight(500.0),
+                        .weight(500.0)
+                        .font_size(design::tier_font_base(cx, 0.0)),
                 )
                 .render(),
         );

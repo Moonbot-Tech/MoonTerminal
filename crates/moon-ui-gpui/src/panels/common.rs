@@ -915,7 +915,6 @@ pub fn detach_button(
     }
     MoonButton::new(SharedString::from(format!("detach-{name}")))
         .ghost()
-        .size(MoonSize::Sm)
         .label("⧉")
         .tooltip(rust_i18n::t!("dock.detach_hint").to_string())
         .on_click(move |_, window, app| {

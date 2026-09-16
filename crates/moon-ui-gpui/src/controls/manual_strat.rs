@@ -35,8 +35,6 @@ mod fit;
 mod settings;
 use fit::{LabelMode, SlotWidths, resolve_strat_fit};
 
-/// Pill height shared with the header's core selector; label width is capped separately.
-const PILL_H: f32 = 26.0;
 /// Gap between two adjacent quick-strategy buttons in the header cluster.
 const BTN_GAP: f32 = 4.0;
 /// Estimated non-text chrome (padding, border) of one `Sm`-tier button carrying one
@@ -85,7 +83,6 @@ const SLOT_SETTINGS_W: f32 = 540.0;
 /// Estimated rendered width of the settings gear, at design-reference scale, for the fit ladder —
 /// same reason as [`BTN_CHROME_W`]: `MoonButton` sizes its icon-only form itself.
 const SLOT_GEAR_W: f32 = 26.0;
-const BTN_NAME_TEXT_SIZE: f32 = 11.0;
 const BTN_TEXT_WEIGHT: f32 = 500.0;
 /// Estimated non-text chrome of the picker pill at design-reference scale: leading dot, padding,
 /// and border.
@@ -222,17 +219,17 @@ pub fn manual_strategy_controls(
         let widths: Vec<SlotWidths> = slots
             .iter()
             .map(|(_, _, _, name_label, numeric_label)| {
-                let name_w = design::ui_text_width(
+                let name_w = design::ui_text_width_zoomed(
                     cx,
                     name_label,
-                    BTN_NAME_TEXT_SIZE,
+                    design::tier_font_size(cx),
                     BTN_TEXT_WEIGHT,
                     true,
                 );
-                let numeric_w = design::ui_text_width(
+                let numeric_w = design::ui_text_width_zoomed(
                     cx,
                     numeric_label,
-                    BTN_NAME_TEXT_SIZE,
+                    design::tier_font_size(cx),
                     BTN_TEXT_WEIGHT,
                     true,
                 );
@@ -243,17 +240,12 @@ pub fn manual_strategy_controls(
             })
             .collect();
         let pill_w_full = pill_chrome_w
-            + design::ui_text_width(
-                cx,
-                &design::fit_label(
-                    cx,
-                    &full_pill_text,
-                    design::font_w(cx, design::HEADER_LABEL_MAX_W),
-                ),
-                10.5,
-                500.0,
-                true,
-            );
+            + design::fit_text(
+                &full_pill_text,
+                design::font_w(cx, design::HEADER_LABEL_MAX_W),
+                |s| design::ui_text_width_zoomed(cx, s, design::tier_font_size(cx), 500.0, true),
+            )
+            .1;
         // The parameter summary sits at the END of this cluster and is measured like the buttons
         // are: it is real width the header spends, and leaving it out of the base is what let it
         // run under the readouts to its right instead of making the buttons yield first.
@@ -261,7 +253,7 @@ pub fn manual_strategy_controls(
             .as_deref()
             .map(|text| {
                 design::ui_value(cx, design::CHROME_GAP)
-                    + design::ui_text_width(cx, text, design::base_text(cx) - 2.0, 400.0, true)
+                    + design::mono_caption_text_width(cx, text, 400.0)
             })
             .unwrap_or(0.0);
         // The gear is permanent chrome in this cluster, so it belongs in the base like the toggle
@@ -321,7 +313,10 @@ pub fn manual_strategy_controls(
     } else {
         design::font_w(cx, design::HEADER_LABEL_MAX_W)
     };
-    let display = design::fit_label(cx, &full_pill_text, pill_cap);
+    let display = design::fit_text(&full_pill_text, pill_cap, |s| {
+        design::ui_text_width_zoomed(cx, s, design::tier_font_size(cx), 500.0, true)
+    })
+    .0;
     let dot_color = if on && sel_row.is_some() {
         design::positive_color(p)
     } else if on && b.selected_manual_strategy_name(core).is_some() {
@@ -390,7 +385,6 @@ pub fn manual_strategy_controls(
                 slots_open,
                 content,
                 MoonButton::new("ms-slots-gear")
-                    .size(MoonSize::Sm)
                     .variant(MoonButtonVariant::Ghost)
                     .icon("icons/settings.svg")
                     .tooltip(t!("header.ms_slots_gear").to_string())
@@ -412,18 +406,24 @@ pub fn manual_strategy_controls(
                 .placement(MoonPopoverPlacement::BottomStart)
                 .fit_content()
                 .close_on_content_click(true)
-                .trigger(
+                .trigger({
+                    // MoonSelectorPill.height/radius take design units and scale them with
+                    // `tokens.ui()`; `action_control_h_value` is already scaled, so undo that
+                    // once (same conversion as the header core pill).
+                    let pill_h_units =
+                        design::action_control_h_value(cx) / design::ui_value(cx, 1.0);
                     MoonSelectorPill::new("header-ms-pill")
-                        .height(PILL_H)
-                        .radius(PILL_H / 2.0)
+                        .height(pill_h_units)
+                        .radius(pill_h_units / 2.0)
                         .leading_dot(dot_color)
                         .segment(
                             MoonSelectorSegment::new(display)
                                 .color(if on { p.text } else { p.text_soft })
-                                .weight(500.0),
+                                .weight(500.0)
+                                .font_size(design::tier_font_base(cx, 0.0)),
                         )
-                        .render(),
-                )
+                        .render()
+                })
                 .content(
                     MoonPopupMenu::new("header-ms-menu")
                         .fit_width(200.0, 560.0)
@@ -466,12 +466,16 @@ pub fn manual_strategy_controls(
             // An explicit width, so the caption sits inside the button's own padding instead of
             // against its border. Measured through the same helper the fit ladder used, so the
             // budget and the rendered button cannot disagree.
-            let label_w =
-                design::ui_text_width(cx, &label, BTN_NAME_TEXT_SIZE, BTN_TEXT_WEIGHT, true);
+            let label_w = design::ui_text_width_zoomed(
+                cx,
+                &label,
+                design::tier_font_size(cx),
+                BTN_TEXT_WEIGHT,
+                true,
+            );
             let btn_w = design::ui_value(cx, BTN_CHROME_W) + label_w;
 
             let mut btn = MoonButton::new(SharedString::from(format!("ms-btn-{i}")))
-                .size(MoonSize::Sm)
                 // The active slot carries the accent variant rather than only `selected`: on a
                 // Panel button the selected state is a few percent of background and reads as
                 // nothing on a row of ten. Fill is therefore the SELECTION and nothing else — the

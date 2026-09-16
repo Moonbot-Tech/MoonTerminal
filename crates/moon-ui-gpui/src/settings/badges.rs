@@ -464,7 +464,6 @@ impl SettingsView {
         col.child(separator(p, cx)).child(
             div().mt_1().child(
                 MoonButton::new("badge-add")
-                    .small()
                     .width(150.0)
                     .label(t!("badges.add").to_string())
                     .on_click(cx.listener(|this, _, w, cx| this.add_badge(w, cx)))

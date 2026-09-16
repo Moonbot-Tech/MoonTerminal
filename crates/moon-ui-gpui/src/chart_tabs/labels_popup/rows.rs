@@ -15,8 +15,8 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::{
-    FIELD_W, GAP_STEPS, GAP_W, LabelsPopupHost, MICRO_W, NAME_TEXT, NAME_W, ROW_GAP, ZONE_W,
-    fit_row_name, name_budget, write_cfg,
+    FIELD_W, GAP_STEPS, GAP_W, LabelsPopupHost, MICRO_W, NAME_W, ROW_GAP, ZONE_W, fit_row_name,
+    name_budget, write_cfg,
 };
 use crate::controls::row_display_name;
 use crate::design;
@@ -116,7 +116,7 @@ fn row_line<T: LabelsPopupHost>(
             &row_display_name(row),
             &format!("  ·{}", row.used_parts()),
             name_budget(cx),
-            |text| design::ui_text_width(cx, text, NAME_TEXT, 400.0, true),
+            |text| design::ui_text_width_zoomed(cx, text, design::tier_font_size(cx), 400.0, true),
         );
         MoonButton::new(SharedString::from(format!("cl-open-{ix}")))
             .label(label)

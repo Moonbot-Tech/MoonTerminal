@@ -116,15 +116,14 @@ fn empty_cell(width: f32, cx: &App) -> gpui::Div {
 }
 
 /// One line of muted body text, the style this tab's descriptions, hints and marks all share.
-fn muted_line(text: String, p: &MoonPalette) -> impl IntoElement {
+fn muted_line(text: String, p: &MoonPalette, cx: &App) -> impl IntoElement {
     MoonText::new(text)
         .uppercase(false)
         .mono(false)
         .wrap()
         // The one size the whole tab uses: titles, surfaces, captions and the header alike. A
         // caption one step smaller was tried and read as a different font.
-        .font_size(11.0)
-        .line_height(14.0)
+        .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
         .color(p.text_muted)
         .render()
 }
@@ -138,8 +137,9 @@ fn muted_line(text: String, p: &MoonPalette) -> impl IntoElement {
 /// move the column. Per-glyph cached in `design::ui_text_width`, so one Settings render costs a
 /// hash lookup per character, not a shaping call.
 fn scope_column_px(cx: &App) -> Pixels {
-    let base = 11.0; // The one size the tab uses — `muted_line`.
-    let width = |text: &str| design::ui_text_width(cx, text, base, 400.0, false);
+    let width = |text: &str| {
+        design::ui_text_width_zoomed(cx, text, design::tier_font_size(cx), 400.0, false)
+    };
     let widest = registry::rows()
         .iter()
         .filter_map(|row| match row {
@@ -216,12 +216,15 @@ impl SettingsView {
                 MoonText::new(t!("hotkeys.group.builtin").to_string())
                     .uppercase(false)
                     .mono(false)
-                    .font_size(11.0)
-                    .line_height(14.0)
+                    .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
                     .color(p.text)
                     .render(),
             )
-            .child(muted_line(t!("hotkeys.group.builtin_hint").to_string(), &p))
+            .child(muted_line(
+                t!("hotkeys.group.builtin_hint").to_string(),
+                &p,
+                cx,
+            ))
             .children([
                 self.builtin_row(t!("hotkeys.builtin.wheel_zoom").to_string(), cx),
                 self.builtin_row(t!("hotkeys.builtin.wheel_pan").to_string(), cx),
@@ -268,7 +271,7 @@ impl SettingsView {
         let body = v_flex()
             .w_full()
             .gap(design::ui_px(cx, 3.0))
-            .child(muted_line(self.hotkeys_group.hint(), &p))
+            .child(muted_line(self.hotkeys_group.hint(), &p, cx))
             .children(
                 self.hotkeys_group
                     .is_table()
@@ -323,8 +326,7 @@ impl SettingsView {
                     .uppercase(false)
                     .mono(false)
                     .wrap()
-                    .font_size(11.0)
-                    .line_height(14.0)
+                    .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
                     .color(p.text_muted)
                     .render(),
             )
@@ -336,7 +338,7 @@ impl SettingsView {
     /// In the row's middle column rather than beside the editor: it is a sentence, it names other
     /// rows, and it has to be able to wrap. Red when one of the two never fires, amber when both do
     /// and the user simply ought to know.
-    fn clash_line(&self, clash: &Clash, p: &MoonPalette) -> AnyElement {
+    fn clash_line(&self, clash: &Clash, p: &MoonPalette, cx: &App) -> AnyElement {
         let color = match clash.severity {
             Severity::Shadowed => p.red_text,
             Severity::Shares | Severity::Bare => p.amber,
@@ -345,8 +347,7 @@ impl SettingsView {
             .uppercase(false)
             .mono(false)
             .wrap()
-            .font_size(11.0)
-            .line_height(14.0)
+            .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
             .color(color)
             .render()
             .into_any_element()
@@ -356,7 +357,7 @@ impl SettingsView {
     /// widths — the title's caption over the growing cell.
     fn columns_header(&self, scope_w: Pixels, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
-        let caption = |key: &str| muted_line(t!(key).to_string(), &p);
+        let caption = |key: &str| muted_line(t!(key).to_string(), &p, cx);
         let fixed = |key: &str, width: f32| {
             h_flex()
                 .flex_none()
@@ -481,8 +482,7 @@ impl SettingsView {
                                     .uppercase(false)
                                     .mono(row.mono_title)
                                     .wrap()
-                                    .font_size(11.0)
-                                    .line_height(14.0)
+                                    .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
                                     .color(if row.muted { p.text_muted } else { p.text })
                                     .render(),
                             )
@@ -494,10 +494,11 @@ impl SettingsView {
                     ),
             )
             .child(match row.meta {
-                Some(m) => div()
-                    .flex_none()
-                    .w(scope_w)
-                    .child(muted_line(m.scope.resolved(separate_zones).label(), &p)),
+                Some(m) => div().flex_none().w(scope_w).child(muted_line(
+                    m.scope.resolved(separate_zones).label(),
+                    &p,
+                    cx,
+                )),
                 None => div().flex_none().w(scope_w),
             })
             .child(
@@ -507,7 +508,7 @@ impl SettingsView {
                     .children((!row.notes.is_empty()).then(|| {
                         v_flex()
                             .gap(design::ui_px(cx, 2.0))
-                            .children(row.notes.iter().map(|note| self.clash_line(note, &p)))
+                            .children(row.notes.iter().map(|note| self.clash_line(note, &p, cx)))
                     })),
             )
             .child(cell(row.key, ROW_KEY_WIDTH))
@@ -523,7 +524,7 @@ impl SettingsView {
                     .children(
                         row.meta
                             .filter(|m| m.origin == Origin::Shared)
-                            .map(|_| muted_line("+".to_string(), &p)),
+                            .map(|_| muted_line("+".to_string(), &p, cx)),
                     ),
             )
             .into_any_element()
@@ -712,8 +713,7 @@ impl SettingsView {
             MoonText::new(t!("hotkeys.move_kind.title").to_string())
                 .uppercase(false)
                 .mono(false)
-                .font_size(9.0)
-                .line_height(12.0)
+                .rendered_metrics(design::tier_text_metrics(cx, -2.0, 12.0))
                 .color(p.text_muted)
                 .render()
                 .into_any_element()
@@ -1071,8 +1071,7 @@ impl SettingsView {
                 MoonText::new("->")
                     .uppercase(false)
                     .mono(true)
-                    .font_size(11.0)
-                    .line_height(14.0)
+                    .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
                     .color(p.text_muted)
                     .render(),
             )
@@ -1149,8 +1148,7 @@ impl SettingsView {
                 MoonText::new("->")
                     .uppercase(false)
                     .mono(true)
-                    .font_size(11.0)
-                    .line_height(14.0)
+                    .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
                     .color(p.text_muted)
                     .render(),
             )
@@ -1224,7 +1222,6 @@ impl SettingsView {
             .child(
                 MoonButton::new("hotkeys-pull-request")
                     .outline()
-                    .small()
                     .width(180.0)
                     .loading(pending)
                     .label(t!("hotkeys.pull.button").to_string())
@@ -1264,8 +1261,7 @@ impl SettingsView {
             MoonText::new(t!("hotkeys.pull.gestures").to_string())
                 .uppercase(false)
                 .mono(false)
-                .font_size(11.0)
-                .line_height(14.0)
+                .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
                 .color(p.text)
                 .render()
                 .into_any_element(),
@@ -1280,7 +1276,6 @@ impl SettingsView {
                 .child(
                     MoonButton::new("hotkeys-pull-confirm")
                         .primary()
-                        .small()
                         .width(130.0)
                         .disabled(!any_will_apply)
                         .label(t!("hotkeys.pull.confirm").to_string())
@@ -1291,7 +1286,6 @@ impl SettingsView {
                 .child(
                     MoonButton::new("hotkeys-pull-cancel")
                         .outline()
-                        .small()
                         .width(110.0)
                         .label(t!("hotkeys.pull.cancel").to_string())
                         .on_click(cx.listener(|this, _, _, cx| {

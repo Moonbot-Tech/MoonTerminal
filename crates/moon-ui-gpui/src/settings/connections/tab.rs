@@ -847,7 +847,6 @@ impl SettingsView {
                             .child(
                                 MoonButton::new("add-srv")
                                     .outline()
-                                    .small()
                                     // Keep the localized label semantic; MoonButton owns the
                                     // scaled inset.
                                     .label(format!("+ {}", t!("conn.add_core")))

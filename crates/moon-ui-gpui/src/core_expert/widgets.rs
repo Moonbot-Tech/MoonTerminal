@@ -146,7 +146,7 @@ pub(super) fn caption(text: String, enabled: bool, p: MoonPalette, cx: &App) -> 
     text_at(
         text,
         if enabled { p.text } else { p.text_muted },
-        design::t_body(cx),
+        0.0,
         false,
         cx,
     )
@@ -154,7 +154,7 @@ pub(super) fn caption(text: String, enabled: bool, p: MoonPalette, cx: &App) -> 
 
 /// A smaller, quieter caption — Moonbot's explanatory lines under a group's title.
 pub(super) fn hint(text: impl Into<SharedString>, p: MoonPalette, cx: &App) -> impl IntoElement {
-    text_at(text, p.text_soft, design::t_caption(cx), false, cx)
+    text_at(text, p.text_soft, -2.0, false, cx)
 }
 
 /// One label's worth of text, at one of the theme's steps.
@@ -164,15 +164,14 @@ pub(super) fn hint(text: impl Into<SharedString>, p: MoonPalette, cx: &App) -> i
 fn text_at(
     text: impl Into<SharedString>,
     color: u32,
-    size: Pixels,
+    step: f32,
     bold: bool,
     cx: &App,
 ) -> impl IntoElement {
     div().flex_none().child(
         MoonText::new(text)
             .color(color)
-            .font_size(f32::from(size))
-            .line_height(f32::from(design::line_px(cx, 15.0)))
+            .rendered_metrics(design::tier_text_metrics(cx, step, 15.0))
             .weight(if bold { 600.0 } else { 400.0 })
             .uppercase(false)
             .render(),
@@ -190,8 +189,7 @@ pub(super) fn text_block(
     div().w_full().min_w_0().child(
         MoonText::new(text)
             .color(color)
-            .font_size(f32::from(design::t_body(cx)))
-            .line_height(f32::from(design::line_px(cx, 15.0)))
+            .rendered_metrics(design::tier_text_metrics(cx, 0.0, 15.0))
             .weight(if bold { 600.0 } else { 400.0 })
             .uppercase(false)
             .wrap()
@@ -332,7 +330,7 @@ pub(super) fn text_line(
     bold: bool,
     cx: &App,
 ) -> impl IntoElement {
-    text_at(text, color, design::t_body(cx), bold, cx)
+    text_at(text, color, 0.0, bold, cx)
 }
 
 /// One of Moonbot's links. Dead like the rest of a mirrored page: the destination belongs to that

@@ -1170,8 +1170,8 @@ fn leverage_presets_only_stage_values_until_apply() {
     );
 }
 
-/// `controls/toolbar.rs:row_fit` must budget the Profit Monitor launcher; changing its fixed icon
-/// multiplier back to four makes this assertion red and lets the trailing launcher clip at narrow
+/// `controls/toolbar.rs:row_fit` must budget the Profit Monitor launcher; changing its density-tier
+/// glyph multiplier back to four makes this assertion red and lets the trailing launcher clip at narrow
 /// Main-window widths.
 #[test]
 fn toolbar_budget_includes_every_singleton_launcher() {
@@ -1184,7 +1184,7 @@ fn toolbar_budget_includes_every_singleton_launcher() {
         "row_fit must budget every open_window_button rendered by toolbar"
     );
     assert!(
-        budget.contains("ICON_BTN_W * 5.0"),
+        budget.contains("design::glyph_btn_w(cx) * 5.0"),
         "row_fit must reserve icon width for every open_window_button rendered by toolbar"
     );
     assert!(toolbar.contains("\"toolbar-profit-monitor\""));
@@ -1252,8 +1252,8 @@ fn toolbar_launcher_labels_are_measured_and_all_or_none() {
     let toolbar = fn_body(&text, "pub fn toolbar(");
     let button = fn_body(&text, "fn open_window_button(");
 
-    assert!(measure.contains("design::ui_text_width("));
-    assert!(measure.contains("TOOLBAR_LAUNCHER_TEXT_SIZE"));
+    assert!(measure.contains("design::ui_text_width_zoomed("));
+    assert!(measure.contains("design::tier_font_size(cx)"));
     assert!(measure.contains("TOOLBAR_LAUNCHER_TEXT_WEIGHT"));
     assert!(
         measure.contains("false,"),
@@ -1272,7 +1272,7 @@ fn toolbar_launcher_labels_are_measured_and_all_or_none() {
         2,
         "the Strategies/Analytics section and Settings hosting div must both render control captions in the UI family measured by launcher_label_width"
     );
-    assert!(measure.contains(".max(ICON_BTN_W)"));
+    assert!(measure.contains(".max(design::glyph_btn_w(cx))"));
     for (label, width) in [
         ("launchers.analytics", "fit.analytics_width"),
         ("launchers.strategies", "fit.strategies_width"),

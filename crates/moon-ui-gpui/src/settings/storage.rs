@@ -201,7 +201,6 @@ impl SettingsView {
             // otherwise places text against the outline.
             MoonButton::new(id)
                 .outline()
-                .small()
                 .label(format!("  {label}  "))
                 .disabled(disabled)
         };

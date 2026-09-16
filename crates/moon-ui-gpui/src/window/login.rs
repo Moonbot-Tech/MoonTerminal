@@ -318,7 +318,6 @@ impl LoginView {
                 this.child(
                     MoonButton::new("login-submit")
                         .primary()
-                        .small()
                         .width(120.0)
                         .disabled(busy)
                         .label(t!("login.enter").to_string())
@@ -330,7 +329,6 @@ impl LoginView {
                 this.child(
                     MoonButton::new("login-reset")
                         .outline()
-                        .small()
                         .label(format!("  {}  ", t!("login.start_over")))
                         .on_click(cx.listener(|this, _, _window, cx| this.start_over(cx)))
                         .render(),
@@ -339,7 +337,6 @@ impl LoginView {
             .child(
                 MoonButton::new("login-exit")
                     .ghost()
-                    .small()
                     .label(t!("login.exit").to_string())
                     .on_click(cx.listener(|this, _, _window, cx| this.dismiss(cx)))
                     .render(),

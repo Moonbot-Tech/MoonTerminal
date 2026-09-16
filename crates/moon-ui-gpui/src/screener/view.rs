@@ -11,7 +11,7 @@ use gpui::*;
 use moon_ui::{
     MoonBackgroundPolicy, MoonButtonVariant, MoonDataTable, MoonDataTableColumn,
     MoonDataTableState, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
-    MoonPalette, MoonSize, MoonWindowFrame, Root, h_flex, v_flex,
+    MoonPalette, MoonWindowFrame, Root, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -544,7 +544,6 @@ impl ScreenerView {
             .label(cur)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonSize::Sm.into())
             // Same lower bound as every other core selector; it grows past it for a long core name.
             .fit_trigger_width(crate::controls::CORE_COMBO_TRIGGER_W, 260.0)
             .fit_menu_width(160.0, 560.0)
@@ -564,7 +563,6 @@ impl ScreenerView {
             // and the childless trigger are `design::COLUMN_SELECTOR_ICON`'s contract.
             .trigger_icon(design::COLUMN_SELECTOR_ICON)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonSize::Sm.into())
             .trigger_width(design::glyph_btn_w(cx))
             .menu_width_scaled(170.0)
             .close_on_select(false);

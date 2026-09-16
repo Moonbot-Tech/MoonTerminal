@@ -305,29 +305,30 @@ fn core_badge(it: &DetectItem, color: u32) -> MoonBadge {
         .mono(true)
 }
 
-/// Build the coin token as a prominent monospace label.
-fn coin_text(it: &DetectItem, p: MoonPalette, size: f32) -> MoonText {
+/// Build the coin token as a prominent monospace label at the density-tier body size.
+fn coin_text(it: &DetectItem, p: MoonPalette, cx: &App) -> MoonText {
     MoonText::new(it.base.clone())
         .color(p.text)
-        .font_size(size)
-        .line_height(size + 3.0)
+        .rendered_metrics(design::tier_text_metrics(cx, 0.0, 15.0))
         .weight(600.0)
         .mono(true)
         .uppercase(false)
 }
 
-/// Build a small muted label, used for time, at MoonText's default 9px size.
-fn muted(text: String, p: MoonPalette) -> MoonText {
+/// Build a small muted label, used for time, at the density-tier caption size.
+fn muted(text: String, p: MoonPalette, cx: &App) -> MoonText {
     MoonText::new(text)
         .color(p.text_muted)
+        .rendered_metrics(design::tier_text_metrics(cx, -2.0, 11.0))
         .mono(true)
         .uppercase(false)
 }
 
-/// Build an exchange or exchange-kind label in the soft text tone.
-fn soft(text: String, p: MoonPalette) -> MoonText {
+/// Build an exchange or exchange-kind label in the soft text tone, at caption size.
+fn soft(text: String, p: MoonPalette, cx: &App) -> MoonText {
     MoonText::new(text)
         .color(p.text_soft)
+        .rendered_metrics(design::tier_text_metrics(cx, -2.0, 11.0))
         .mono(true)
         .uppercase(false)
 }
@@ -348,6 +349,7 @@ fn delta_chip(val: f32, over: bool, decimals: usize, p: MoonPalette, cx: &App) -
     };
     let text = MoonText::new(label)
         .color(col)
+        .rendered_metrics(design::tier_text_metrics(cx, -2.0, 11.0))
         .weight(700.0)
         .mono(true)
         .uppercase(false);
@@ -455,7 +457,6 @@ fn strategy_chip(it: &DetectItem, name_w: f32, p: MoonPalette, cx: &App) -> Opti
 ///     over: Whether the field is drawn over a chart.
 ///     it: Detection snapshot supplying field values.
 ///     secs: Rounded detection age in seconds.
-///     coin_px: Available coin-label width.
 ///     name_w: Unscaled width a free-text field may take in the area this chip is laid out in.
 ///     decimals: Percentage precision selected for the card.
 ///     badges: Detection-type badge configuration.
@@ -472,7 +473,6 @@ fn chip(
     over: bool,
     it: &DetectItem,
     secs: u32,
-    coin_px: f32,
     name_w: f32,
     decimals: usize,
     badges: &BadgesConfig,
@@ -485,8 +485,8 @@ fn chip(
     }
     let el: AnyElement = match field {
         DetectField::None => return None,
-        DetectField::Coin => coin_text(it, p, coin_px).render().into_any_element(),
-        DetectField::Time => muted(format!("{secs}s"), p).render().into_any_element(),
+        DetectField::Coin => coin_text(it, p, cx).render().into_any_element(),
+        DetectField::Time => muted(format!("{secs}s"), p, cx).render().into_any_element(),
         DetectField::Badge => type_badge(it, badges, is_light)?
             .render()
             .into_any_element(),
@@ -499,7 +499,7 @@ fn chip(
             // Captioned through the same directory as every other core list, from the venue frozen
             // with the card. A detection has no chip when its provider reported no nameable venue.
             let venue = it.venue.as_ref()?;
-            soft(crate::controls::venue_label(venue), p)
+            soft(crate::controls::venue_label(venue), p, cx)
                 .render()
                 .into_any_element()
         }
@@ -507,7 +507,7 @@ fn chip(
             if it.exchange_kind.is_empty() {
                 return None;
             }
-            soft(it.exchange_kind.clone(), p)
+            soft(it.exchange_kind.clone(), p, cx)
                 .render()
                 .into_any_element()
         }
@@ -536,7 +536,6 @@ fn cluster<'a>(
     over: bool,
     it: &DetectItem,
     secs: u32,
-    coin_px: f32,
     name_w: f32,
     decimals: usize,
     badges: &BadgesConfig,
@@ -554,7 +553,7 @@ fn cluster<'a>(
     let chips: Vec<AnyElement> = slots
         .filter_map(|s| {
             chip(
-                s.field, over, it, secs, coin_px, share, decimals, badges, p, is_light, cx,
+                s.field, over, it, secs, share, decimals, badges, p, is_light, cx,
             )
         })
         .collect();
@@ -779,7 +778,6 @@ fn mini_layout(
             false,
             it,
             secs,
-            12.0,
             l_name_w,
             decimals,
             badges,
@@ -792,7 +790,6 @@ fn mini_layout(
             false,
             it,
             secs,
-            12.0,
             r_name_w,
             decimals,
             badges,
@@ -850,7 +847,6 @@ fn medium_layout(
             false,
             it,
             secs,
-            13.0,
             col_name_w,
             decimals,
             badges,
@@ -865,7 +861,6 @@ fn medium_layout(
             false,
             it,
             secs,
-            13.0,
             col_name_w,
             decimals,
             badges,
@@ -898,7 +893,6 @@ fn medium_layout(
             true,
             it,
             secs,
-            13.0,
             over_name_w,
             decimals,
             badges,
@@ -998,7 +992,6 @@ fn large_layout(
             false,
             it,
             secs,
-            14.0,
             l_name_w,
             decimals,
             badges,
@@ -1013,7 +1006,6 @@ fn large_layout(
             false,
             it,
             secs,
-            14.0,
             r_name_w,
             decimals,
             badges,
@@ -1041,7 +1033,6 @@ fn large_layout(
             true,
             it,
             secs,
-            14.0,
             name_w,
             decimals,
             badges,

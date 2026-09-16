@@ -28,10 +28,7 @@ impl SettingsView {
         let tool_btn = |id: &'static str, label: String| {
             // Spaces around the label work around the fork's `MoonButton` `pad_x=0` bug, which
             // otherwise places text against the outline.
-            MoonButton::new(id)
-                .outline()
-                .small()
-                .label(format!("  {label}  "))
+            MoonButton::new(id).outline().label(format!("  {label}  "))
         };
         let open_dir = dir.clone();
         let mut block = v_flex()

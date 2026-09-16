@@ -169,7 +169,6 @@ impl Render for SettingsView {
                     } else {
                         MoonButtonVariant::Neutral
                     })
-                    .small()
                     .width(110.0)
                     .label(t!("settings.save").to_string())
                     .on_click(cx.listener(|this, _, window, cx| this.save(window, cx)))
@@ -216,7 +215,6 @@ impl Render for SettingsView {
                         .child(
                             MoonButton::new("moonbot-import")
                                 .outline()
-                                .small()
                                 .label(format!("  {}  ", t!("import.button")))
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.start_moonbot_import(cx)),
@@ -233,7 +231,6 @@ impl Render for SettingsView {
                 f.child(
                     MoonButton::new("share-copy")
                         .outline()
-                        .small()
                         .label(format!("  {}  ", t!("settings.copy")))
                         .on_click(cx.listener(|this, _, _, cx| this.copy_tab(cx)))
                         .render(),
@@ -241,7 +238,6 @@ impl Render for SettingsView {
                 .child(
                     MoonButton::new("share-paste")
                         .outline()
-                        .small()
                         .label(format!("  {}  ", t!("settings.paste")))
                         .on_click(cx.listener(|this, _, window, cx| this.paste_tab(window, cx)))
                         .render(),
@@ -306,13 +302,7 @@ impl SettingsView {
                     } else {
                         MoonButtonVariant::Ghost
                     })
-                    .size(MoonButtonSize::Custom {
-                        height: 24.0,
-                        radius: design::R_BUTTON_BASE,
-                        font_size: 10.5,
-                        line_height: 13.0,
-                        gap: 5.0,
-                    })
+                    .size(MoonButtonSize::density(cx))
                     .width(tab_w)
                     .selected(on)
                     .label(t.title())
