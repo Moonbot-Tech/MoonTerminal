@@ -28,13 +28,21 @@ use rust_i18n::t;
 use super::ChartPanel;
 use crate::Backend;
 
-/// Line box a button's label draws in, as a share of its own size.
+/// Convert the chart's measured caption size and line box to MoonUI tier-segment inputs.
 ///
-/// The caption pass reserves `line_h = size + 4` around the text — see `Item::line_h` — and this is
-/// that rule stated as a ratio, because the component takes a multiple rather than a sum. Close
-/// enough at every size the caption clamp allows, and it is the label's box inside a rectangle that
-/// was already sized for it.
-const BUTTON_LINE_RATIO: f32 = 1.3;
+/// Tier segments use only UI zoom, so the legacy font delta must never enter the calculation.
+/// The line box matches the caption layout's measured size plus four logical pixels.
+///
+/// Args:
+///     cx: Application context providing the active UI zoom.
+///     size: Caption font size already measured in logical pixels.
+///
+/// Returns:
+///     Unscaled font size and line height for a tier-sized button segment.
+fn action_label_metrics(cx: &App, size: f32) -> (f32, f32) {
+    let zoom = crate::design::ui_value(cx, 1.0);
+    (size / zoom, (size + 4.0) / zoom)
+}
 
 impl ChartPanel {
     /// Hand every pane the state its buttons print.
@@ -132,6 +140,7 @@ impl ChartPanel {
                 if button.w <= 0.0 || button.h <= 0.0 {
                     continue;
                 }
+                let (font_size, line_height) = action_label_metrics(cx, button.size);
                 let (variant, selected) = match (button.action, button.active) {
                     // An armed panic and a running ban are the same statement — this control is ON
                     // — and `selected` is how every other button in the application says it.
@@ -173,19 +182,13 @@ impl ChartPanel {
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             MoonButton::new(id)
-                                // The label as a SEGMENT rather than a plain one, for its size: the
-                                // rectangle was measured at the caption's own font, so the words in
-                                // it draw at that same number and the reader's size step moves both
-                                // together. Base value, because the component scales what it is
-                                // given — see `design::font_base_for`. Mono for the same reason: it
-                                // is the face the width was measured in.
+                                // The chart owns the rectangle, including its inset. Tier padding
+                                // would consume that room again and clip the measured caption.
+                                .padding_x(0.0)
                                 .segment(
                                     MoonButtonSegment::new(button.label)
-                                        .font_size(crate::design::font_base_for(cx, button.size))
-                                        .line_height(crate::design::font_base_for(
-                                            cx,
-                                            button.size * BUTTON_LINE_RATIO,
-                                        ))
+                                        .font_size(font_size)
+                                        .line_height(line_height)
                                         .mono(true),
                                 )
                                 .variant(variant)
@@ -362,3 +365,6 @@ fn open_ban_menu(
 /// Width bounds for that menu, in design pixels: enough for the longest localized span.
 const BAN_MENU_MIN_W: f32 = 120.0;
 const BAN_MENU_MAX_W: f32 = 240.0;
+
+#[cfg(test)]
+mod tests;

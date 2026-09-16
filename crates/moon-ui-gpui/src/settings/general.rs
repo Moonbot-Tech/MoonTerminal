@@ -175,6 +175,7 @@ impl SettingsView {
         }
     }
 
+    /// Keep equal-width arrows large enough for the active density and zoom.
     /// Build a `<<  <  value  >  >>` stepper row with small and large adjustments.
     /// Shared by second/day counters and the Storage version limit; `adjust` owns clamping.
     pub(super) fn stepper_controls(
@@ -193,16 +194,26 @@ impl SettingsView {
         } else {
             rgba_from(p.text_muted, 1.0)
         };
+        // All four controls reserve the widest double-arrow label at the active tier.
+        let font = design::tier_font_size(cx);
+        let label_w = ["<<", ">>"]
+            .into_iter()
+            .map(|label| design::ui_text_width_zoomed(cx, label, font, 400.0, false))
+            .fold(0.0_f32, f32::max);
+        let button_w = label_w
+            + 2.0 * design::ui_value(cx, design::button_tier(cx).control_metrics().pad_x)
+            + 2.0; // MoonUI draws a one-pixel border on each side, independent of zoom.
         let btn = |suffix: &'static str, label: &'static str, delta: i32| {
             MoonButton::new(SharedString::from(format!("{id}{suffix}")))
                 .ghost()
-                .width(28.0)
+                .width(button_w)
                 .label(label)
                 .disabled(!enabled)
                 .on_click(cx.listener(move |this, _, _, cx| adjust(this, delta, cx)))
                 .render()
         };
         h_flex()
+            .flex_none()
             .gap(design::ui_px(cx, 4.0))
             .items_center()
             .child(btn("-large", "<<", -large))
@@ -408,6 +419,7 @@ impl SettingsView {
             ))
             .child(
                 h_flex()
+                    .flex_wrap()
                     .gap(design::ui_px(cx, 8.0))
                     .items_center()
                     .child(
@@ -449,6 +461,7 @@ impl SettingsView {
             // buttons are disabled and the value and labels are muted.
             .child(
                 h_flex()
+                    .flex_wrap()
                     .gap(design::ui_px(cx, 8.0))
                     .items_center()
                     .child(

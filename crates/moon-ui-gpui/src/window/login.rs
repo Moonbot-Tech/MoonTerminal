@@ -318,7 +318,6 @@ impl LoginView {
                 this.child(
                     MoonButton::new("login-submit")
                         .primary()
-                        .width(120.0)
                         .disabled(busy)
                         .label(t!("login.enter").to_string())
                         .on_click(cx.listener(|this, _, _window, cx| this.submit(cx)))

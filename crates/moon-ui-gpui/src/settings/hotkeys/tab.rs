@@ -12,6 +12,7 @@
 //! preview is a page of its own — what a pull would change, with its own columns — not rows of
 //! this table.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::config::moonbot_import::shortcut;
 use moon_core::config::{
@@ -21,9 +22,9 @@ use moon_core::config::{
 use moon_core::feed::CoreConfigState;
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonHotkeyInput,
-    MoonKbd, MoonMenuItem, MoonPalette, MoonTabItem, MoonTabStrip, MoonText, MoonTooltip,
-    MoonTooltipView, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown,
+    MoonHotkeyInput, MoonKbd, MoonMenuItem, MoonPalette, MoonTabItem, MoonTabStrip, MoonText,
+    MoonTooltip, MoonTooltipView, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -1172,6 +1173,7 @@ impl SettingsView {
     }
 
     /// The "pull layout from core" button and, once a layout has arrived, its preview diff.
+    /// The content-sized request and its status wrap at narrow widths.
     /// The whole of its own sub-tab and gated on nothing else: it is always visible there, which
     /// is what lets a resolved core's Live/Stale/Awaiting state stay legible
     /// without the user having to click anything first.
@@ -1217,13 +1219,16 @@ impl SettingsView {
 
         let mut header = h_flex()
             .w_full()
+            .flex_wrap()
             .items_center()
             .gap(design::ui_px(cx, 10.0))
             .child(
                 MoonButton::new("hotkeys-pull-request")
                     .outline()
-                    .width(180.0)
                     .loading(pending)
+                    .when(pending, |button| {
+                        button.leading_icon(MoonButtonIconSlot::new("icons/loader.svg"))
+                    })
                     .label(t!("hotkeys.pull.button").to_string())
                     .on_click(cx.listener(move |this, _, _, cx| this.request_core_pull(core, cx))),
             );
@@ -1276,7 +1281,6 @@ impl SettingsView {
                 .child(
                     MoonButton::new("hotkeys-pull-confirm")
                         .primary()
-                        .width(130.0)
                         .disabled(!any_will_apply)
                         .label(t!("hotkeys.pull.confirm").to_string())
                         .on_click(
@@ -1286,7 +1290,6 @@ impl SettingsView {
                 .child(
                     MoonButton::new("hotkeys-pull-cancel")
                         .outline()
-                        .width(110.0)
                         .label(t!("hotkeys.pull.cancel").to_string())
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.core_pull = None;

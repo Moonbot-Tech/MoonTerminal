@@ -61,7 +61,9 @@ pub(super) fn hsla_u8(h: Hsla) -> [u8; 3] {
 ///
 /// The full-width label avoids clipping at large font sizes. The caller supplies the slider range
 /// because pinned MoonUI keeps it private, plus one formatter so both endpoints and the current
-/// value use the field's unit and rounding contract.
+/// value use the field's unit and rounding contract. The track yields width to the value column
+/// at narrow window sizes, including when a colour picker shares its parent row. Its minimum
+/// reserves only the two endpoint captions and their gap, not a fixed track length.
 ///
 /// Args:
 ///     label: Localized caption displayed above the slider.
@@ -85,8 +87,13 @@ pub(super) fn slider_row(
     let min = format(*range.start());
     let max = format(*range.end());
     let val = format(val);
+    let endpoint_font = design::tier_font_size(cx) - 2.0;
+    let scale_w = design::ui_text_width_zoomed(cx, &min, endpoint_font, 400.0, true)
+        + design::ui_text_width_zoomed(cx, &max, endpoint_font, 400.0, true)
+        + design::ui_value(cx, 10.0);
     v_flex()
         .w_full()
+        .min_w_0()
         .child(
             div()
                 .text_color(rgba_from(p.text_soft, 1.0))
@@ -100,8 +107,8 @@ pub(super) fn slider_row(
                 .items_center()
                 .child(
                     v_flex()
-                        .w(design::ui_px(cx, 360.0))
-                        .flex_none()
+                        .flex_1()
+                        .min_w(px(scale_w))
                         .child(MoonSlider::new(st).height(design::ui_value(cx, 22.0)))
                         .child(
                             h_flex()
