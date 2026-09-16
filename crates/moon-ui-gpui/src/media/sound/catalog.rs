@@ -182,12 +182,13 @@ impl Catalog {
         &self.stats
     }
 
-    /// The entry a stored name refers to: trimmed, ASCII case-insensitive, `.wav` tolerated, so
-    /// `BABYTOY`, `babytoy` and `BABYTOY.wav` all reach the same file.
+    /// Finds the flat catalog entry using the shared path-independent sound key.
+    /// Empty tails match nothing; the stored name itself is never rewritten.
     pub(crate) fn find(&self, name: &str) -> Option<&Entry> {
-        let low = name.trim().to_ascii_lowercase();
-        let stem = low.strip_suffix(".wav").unwrap_or(&low);
-        self.entries.iter().find(|e| e.stem == stem)
+        let stem = moon_core::util::sound::sound_stem(name);
+        self.entries
+            .iter()
+            .find(|e| !stem.is_empty() && e.stem == stem)
     }
 
     /// The entry Moonbot's 1-based sound number refers to, or `None` when no sound holds that
@@ -213,3 +214,6 @@ impl Catalog {
             .filter_map(|entry| Some((entry.ordinal?, entry)))
     }
 }
+
+#[cfg(test)]
+mod tests;

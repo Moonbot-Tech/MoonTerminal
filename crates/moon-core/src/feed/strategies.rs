@@ -20,7 +20,7 @@ pub(super) struct AlertParams {
     pub keep_in_chart_secs: u32,
     /// The sound the strategy names, as a lowercase WAV stem (`babytoy`, `ding1`, or a user's own
     /// file), or `None` for silence. Taken from the `SoundKind` field, which is what Moonbot calls
-    /// it in every snapshot on record; the value is a bare name or `NAME.wav`, and the player, not
+    /// it in every snapshot on record; folder prefixes are ignored for playback, and the player, not
     /// this layer, decides whether a file answers to it.
     pub sound_name: Option<String>,
 }
@@ -32,16 +32,15 @@ const SOUND_KIND_FIELD: &str = "SoundKind";
 /// Moonbot's spelling of "no sound" in `SoundKind`.
 const SOUND_NONE: &str = "NONE";
 
-/// Normalizes a `SoundKind` value to a lowercase stem: trimmed, lowercased, `.wav` stripped.
+/// Resolves a `SoundKind` to the shared path-independent sound key for alert playback.
 /// Moonbot stores `BABYTOY` and `BABYTOY.wav` for the same file. No list is consulted here —
 /// which names exist is the player's knowledge, and a name it lacks is reported there rather than
 /// silently dropped on the way.
 ///
 /// Returns `None` for an empty value or the explicit `NONE`.
 fn sound_stem(val: &str) -> Option<String> {
-    let low = val.trim().to_ascii_lowercase();
-    let stem = low.strip_suffix(".wav").unwrap_or(&low);
-    (!stem.is_empty() && !stem.eq_ignore_ascii_case(SOUND_NONE)).then(|| stem.to_string())
+    let stem = crate::util::sound::sound_stem(val);
+    (!stem.is_empty() && !stem.eq_ignore_ascii_case(SOUND_NONE)).then_some(stem)
 }
 
 /// The `SoundKind` value a snapshot carries, if any: `Some(Some(stem))` for a named sound,

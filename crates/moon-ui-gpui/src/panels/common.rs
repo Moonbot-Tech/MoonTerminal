@@ -277,7 +277,7 @@ pub(crate) struct SoundChoices {
 }
 
 impl SoundChoices {
-    /// Rows for `current`, which may be empty (nothing selected) or a name the catalog lacks.
+    /// Rows for `current`, matched by the shared path-independent key while preserving missing names.
     pub(crate) fn for_current(current: &str) -> Self {
         let current = current.trim();
         let mut stems = crate::media::sound::stems();
@@ -289,9 +289,10 @@ impl SoundChoices {
                 )
             })
             .collect();
-        let current_low = current.to_ascii_lowercase();
-        let current_stem = current_low.strip_suffix(".wav").unwrap_or(&current_low);
-        let mut selected = stems.iter().position(|stem| stem == current_stem);
+        let current_stem = moon_core::util::sound::sound_stem(current);
+        let mut selected = stems
+            .iter()
+            .position(|stem| !current_stem.is_empty() && *stem == current_stem);
         if selected.is_none() && !current.is_empty() {
             stems.push(current.to_string());
             labels.push(SharedString::from(format!(
