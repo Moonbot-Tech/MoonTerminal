@@ -9,9 +9,10 @@
 //! synchronization from servers. [`columns`] owns the ONE column specification the header and the
 //! core rows are both built from; [`table`] owns core rows, headers, feed controls, and add/delete
 //! actions; [`tab`] owns pending/group/exchange branches, icon picking, selectors, and tab
-//! assembly.
+//! assembly. [`endpoints`] derives endpoint text and duplicate peers from every draft key.
 
 mod columns;
+mod endpoints;
 mod entries;
 mod tab;
 mod table;
@@ -211,6 +212,8 @@ fn conn_input(
             // This keystroke may have re-ranked the list under the field being typed into; the
             // next frame scrolls this row back into view before anything can evict it.
             this.conn_edit_pending = Some(row_key);
+            // Key replacements can leave settings_sig unchanged; refresh endpoint cells anyway.
+            cx.notify();
         } else if matches!(ev, MoonInputEvent::Focus) {
             this.focused_conn_row = Some(row_key);
             this.scroll_conn_row_into_view(row_key);

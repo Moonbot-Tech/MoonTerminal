@@ -22,7 +22,6 @@ mod temp_blacklist;
 #[cfg(test)]
 mod tests;
 
-use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, sync_channel};
 use std::time::{Duration, Instant, SystemTime};
@@ -388,19 +387,13 @@ fn connection_target(
     network: Option<&moonproto::ImportedNetworkConfig>,
     transport: Option<TransportVersion>,
 ) -> (CoreEndpoint, TransportMode) {
-    let address = network
-        .and_then(|network| network.address)
-        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
-    let port = network
-        .map(|network| network.port)
-        .filter(|port| *port != 0)
-        .unwrap_or(3000);
+    let endpoint = crate::config::endpoint_from_network(network);
     let transport = transport.map(TransportMode::from).unwrap_or_else(|| {
         network
             .map(|network| network.transport_mode)
             .unwrap_or(TransportMode::V0)
     });
-    (CoreEndpoint { address, port }, transport)
+    (endpoint, transport)
 }
 
 /// Which run-state halves the MoonBot instance currently on the other end has reported.

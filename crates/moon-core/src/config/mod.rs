@@ -15,7 +15,8 @@
 //! - `reconcile` merges file data into runtime state and assigns stable uids;
 //! - `migrate` performs one-time migrations from legacy formats;
 //! - `backup` creates daily snapshots in `backups/settings/` and protects schema migrations;
-//! - `uid_counter` requires every counter construction path to name the optional store floor.
+//! - `uid_counter` requires every counter construction path to name the optional store floor;
+//! - `key_endpoint` resolves exported endpoints for draft display and live connections.
 
 pub mod arb_view;
 pub mod badges;
@@ -45,6 +46,7 @@ pub mod theme_legacy;
 pub mod trade_sounds;
 
 mod backup;
+mod key_endpoint;
 mod migrate;
 mod reconcile;
 mod schema;
@@ -86,6 +88,8 @@ pub use hotkeys::{
     MoveGestureCommand, MoveHalf, MoveKind, MoveKindSlot, MoveSide, ORDER_SIZE_KEYS, Placement,
     SELL_PRESET_KEYS, SHIFT_PERCENT, SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
 };
+pub use key_endpoint::endpoint_from_key;
+pub(crate) use key_endpoint::endpoint_from_network;
 pub use lang::Language;
 pub use layout::{
     AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT, AUTO_WORKSPACE_RAIL_WIDTH_MAX,

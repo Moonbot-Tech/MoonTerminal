@@ -16,18 +16,10 @@
 //! the two kinds genuinely coexist in one row, and scaling all of them would be as wrong as
 //! scaling none.
 //!
-//! The three columns holding user-typed text -- name, key, group -- all GROW, and two of them
-//! carry a [`ConnCol::max`]. That is the second thing stated exactly once here, and it is a
-//! response to the row having TWO regimes rather than one. `table.rs::cell` gives a non-growing
-//! column `flex_shrink_0` as well, so `grow: false` means rigid in both directions; the rigid
-//! columns plus the inset, the scrollbar gutter and the twelve gaps come to about 661px of the
-//! 824px body the DEFAULT 860px Settings window leaves, against about 487px of text-column bases.
-//! So the default window is a SHRINK regime -- the caps are inert there and the BASES decide who
-//! keeps what -- while a wide window is a GROW regime, where the caps are what stop the key and
-//! the group from spending width they have nothing readable to put in it. Both dials are needed,
-//! and neither is the other's fallback. All three carry ONE width policy, which is what makes
-//! their 150 > 140 > 85 ordering a property of the literals rather than of the legacy font-delta
-//! channel.
+//! Name, key, endpoint and group share the text-scaled width policy and can shrink at narrow
+//! window sizes. Only name grows without a cap; the other values keep bounded widths and the
+//! endpoint exposes its full value in a tooltip when truncated. Fixed controls retain their
+//! existing widths, so adding endpoint must not reserve another rigid slice of the narrow row.
 //!
 //! Pure and GPUI-free on purpose -- its sibling test file can assert the header and the rows agree
 //! without a window.
@@ -73,9 +65,8 @@ pub(super) enum ConnColWidth {
     Raw,
     /// A design reference the Micro dropdown trigger scales by `tokens.font(10) / 10`.
     MicroTrigger,
-    /// A design reference stated in CHARACTERS of a `MoonInput::small()`, scaled by the same
-    /// `tokens.font(10) / 10` ratio. Carried by all three text columns -- `h-name`, `h-key` and
-    /// `h-group`.
+    /// A text-width reference scaled by `tokens.font(10) / 10`, shared by the name, key,
+    /// endpoint and group columns.
     ///
     /// The small input renders its text at `tokens.font(10)` (MoonUI
     /// `MoonInputMetrics::base_for_size(Size::Small)`), so a width that means "this many readable
@@ -85,7 +76,7 @@ pub(super) enum ConnColWidth {
     /// deliberately NOT the floor beside it: `min_width` is the dropdown TRIGGER's own minimum and
     /// means nothing to an input.
     ///
-    /// The three text columns share it for a second reason: their shrink order at a narrow window
+    /// The text columns share it for a second reason: their shrink order at a narrow window
     /// is decided by their RESOLVED bases, so a mixed policy would let one Font setting overtake
     /// another column. Density now selects the text adjustment, while MoonUI still permits
     /// custom finite font deltas. A scale-free comparison keeps that ordering independent
@@ -105,32 +96,18 @@ pub(super) struct ConnCol {
     /// Flex basis in rendered pixels. Authoritative: every cell also carries `min_w_0()`, so a
     /// wider child paints over its neighbour instead of pushing it.
     pub(super) basis: f32,
-    /// Whether the column absorbs free space. The three columns carrying user-typed text do --
-    /// `h-name`, `h-key` and `h-group` -- and only `h-name` does so without a [`ConnCol::max`].
+    /// Whether the column absorbs free space. Name, key, endpoint and group do;
+    /// only name grows without a [`ConnCol::max`].
     ///
     /// It is also what decides whether the column can SHRINK: `table.rs::cell` gives a
     /// non-growing column `flex_shrink_0`, so `grow: false` means "this width is rigid in BOTH
     /// directions". The default 860px Settings window does not fit this row, so every column that
-    /// can afford to give way there has to be ABLE to -- see [`ConnCol::max`] for the arithmetic.
+    /// can afford to give way there has to be ABLE to -- see [`ConnCol::max`] for the growth policy.
     pub(super) grow: bool,
-    /// Upper bound on a GROWING column, in the same units as [`ConnCol::basis`] and resolved by
-    /// the same [`ConnCol::width`] policy. `None` means "grow without limit"; only `h-name` has it.
-    ///
-    /// GROW-WITH-A-CAP rather than `grow: false` is the load-bearing choice here, and the 860px
-    /// window is why. `settings/render.rs` leaves an 824px body inside its 18px padding there; the
-    /// rigid columns -- two checkboxes, the bundle field, the colour picker, the three Micro
-    /// dropdowns, the delete, reconnect and status glyphs -- plus the table inset, the scrollbar
-    /// gutter and twelve gaps take about 661px of it at the SHIPPED Font delta of +3, leaving
-    /// roughly 163px for three text columns whose bases resolve to about 487px. The default window
-    /// is therefore a SHRINK regime, and anything pinned `flex_shrink_0` in it is width the text
-    /// columns can never get back: a fixed 260px key would simply BE the widest column on a
-    /// default install while the name column collapsed to nothing. Growable, all three give way in
-    /// proportion to their RESOLVED bases instead -- which is why those bases are ordered, and why
-    /// all three carry the same [`ConnColWidth::TextScaled`] policy so that the ordering cannot
-    /// depend on the Font setting.
-    ///
-    /// The cap governs the other regime. Widen the window and Taffy freezes each capped item at
-    /// its cap, then hands the remaining free space to the only uncapped one -- `h-name`.
+    /// Upper bound on a growing column in the same units and width policy as its basis.
+    /// Key, endpoint and group stop growing at their caps, leaving name the remaining space.
+    /// Caps do not prevent shrinkage: the default Settings window needs all four text columns
+    /// to give way around the rigid controls. Only name is both growing and uncapped.
     pub(super) max: Option<f32>,
     /// How [`ConnCol::basis`] becomes a rendered width.
     pub(super) width: ConnColWidth,
@@ -144,7 +121,7 @@ pub(super) struct ConnCol {
 /// Every column of the core table, left to right.
 ///
 /// Indexed by [`ConnColId`]; `tests` proves the two stay in step.
-const CONN_COLS: [ConnCol; 13] = [
+const CONN_COLS: [ConnCol; 14] = [
     // 34, matching `h-win`: both hold a three-letter label, and at the supported +6 Font
     // setting the English/Spanish "Act" measures about 30.6px in Geist Mono -- at 28 the
     // HEADING itself ellipsised, which is the complaint this change exists to answer.
@@ -213,6 +190,18 @@ const CONN_COLS: [ConnCol; 13] = [
         width: ConnColWidth::TextScaled,
         align: ConnColAlign::Left,
         head_pad: 8.0,
+    },
+    // Shrinks with the editable text at narrow widths; the full endpoint stays in its tooltip.
+    ConnCol {
+        id: "h-endpoint",
+        label: Some("conn.col.endpoint"),
+        tip: Some("conn.tip.endpoint"),
+        basis: 140.0,
+        grow: true,
+        max: Some(220.0),
+        width: ConnColWidth::TextScaled,
+        align: ConnColAlign::Left,
+        head_pad: 0.0,
     },
     // The three Micro dropdowns keep their design reference and are scaled with it; a raw basis
     // here is what let the trigger render ~1.3x wider than its own column at the shipped font
@@ -360,6 +349,7 @@ pub(super) enum ConnColId {
     Win,
     Name,
     Key,
+    Endpoint,
     Proto,
     Preset,
     Group,
@@ -373,11 +363,12 @@ pub(super) enum ConnColId {
 
 impl ConnColId {
     /// Every column, left to right, in the order both builders emit them.
-    pub(super) const ALL: [ConnColId; 13] = [
+    pub(super) const ALL: [ConnColId; 14] = [
         ConnColId::Act,
         ConnColId::Win,
         ConnColId::Name,
         ConnColId::Key,
+        ConnColId::Endpoint,
         ConnColId::Proto,
         ConnColId::Preset,
         ConnColId::Group,

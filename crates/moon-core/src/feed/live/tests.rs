@@ -2,6 +2,7 @@ use super::*;
 use crate::feed::{CoreCmdTx, CoreStartupState, LatestMarketRole};
 use moonproto::state::BalanceEvent;
 use moonproto::{ImportedIpVersion, ImportedNetworkConfig};
+use std::net::{IpAddr, Ipv4Addr};
 
 /// `feed/mod.rs:CoreCmdTx::send` publishing market roles only through the bounded FIFO would let a
 /// stale provider marker resubscribe a replacement client before a queued account-only assignment.
