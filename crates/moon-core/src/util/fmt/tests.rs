@@ -45,6 +45,71 @@ fn compact_order_size_uses_lowercase_suffixes_without_forced_zeroes() {
     assert_eq!(compact_order_size(2_300_000_000.0), "2.3b");
 }
 
+/// The scale format is TIERED (issue #579): the `k` tier changes its places with the mantissa,
+/// every higher tier keeps one, and a zero fraction goes. Replacing it with `compact_si` (five
+/// significant digits below a thousand, uppercase, no space) breaks every line here.
+#[test]
+fn compact_scale_prints_one_density_per_tier() {
+    // Below a thousand: two places and the `k` still there.
+    assert_eq!(compact_scale(860.0), "0.86 k");
+    assert_eq!(compact_scale(30.0), "0.03 k");
+    assert_eq!(compact_scale(500.0), "0.50 k");
+    // 1–9.99 k: one place.
+    assert_eq!(compact_scale(1_600.0), "1.6 k");
+    assert_eq!(compact_scale(8_100.0), "8.1 k");
+    // 10–999 k: none.
+    assert_eq!(compact_scale(16_000.0), "16 k");
+    assert_eq!(compact_scale(163_000.0), "163 k");
+    assert_eq!(compact_scale(999_000.0), "999 k");
+    // Millions and up: one place at any mantissa.
+    assert_eq!(compact_scale(1_240_000.0), "1.2 m");
+    assert_eq!(compact_scale(54_700_000.0), "54.7 m");
+    assert_eq!(compact_scale(875_300_000.0), "875.3 m");
+    assert_eq!(compact_scale(15_400_000_000.0), "15.4 b");
+    assert_eq!(compact_scale(2_500_000_000_000.0), "2.5 t");
+}
+
+/// A fraction of nothing but zeros is dropped; a zero in the last place of a real fraction stays.
+///
+/// Breakage: trimming through `compact` turns `0.50 k` into `0.5 k` and breaks the tier's
+/// density; not trimming at all prints `1.0 b`.
+#[test]
+fn compact_scale_drops_only_an_all_zero_fraction() {
+    assert_eq!(compact_scale(1_000_000_000.0), "1 b");
+    assert_eq!(compact_scale(1_000.0), "1 k");
+    assert_eq!(compact_scale(2_000_000.0), "2 m");
+    assert_eq!(compact_scale(100.0), "0.10 k");
+}
+
+/// Rounding chooses the tier: a mantissa that rounds to a thousand prints in the next unit.
+///
+/// Breakage: picking the unit from the raw magnitude alone prints `1000 k` and `1000.0 m`.
+#[test]
+fn compact_scale_carries_a_rounded_mantissa_into_the_next_unit() {
+    assert_eq!(compact_scale(999_600.0), "1 m");
+    assert_eq!(compact_scale(999_950_000.0), "1 b");
+    assert_eq!(compact_scale(9_960.0), "10 k");
+    assert_eq!(compact_scale(999.6), "1 k");
+    // Below the carry: still the lower tier.
+    assert_eq!(compact_scale(999_400.0), "999 k");
+}
+
+/// Under five units the two-place `k` figure would read `0.00`: the bare number goes out
+/// instead, so a BTC-quoted band does not label its turnover as nothing.
+///
+/// Breakage: dropping the floor prints `0.00 k` for `0.125` and for `4.9`.
+#[test]
+fn compact_scale_prints_a_figure_too_small_for_k_bare() {
+    assert_eq!(compact_scale(0.125), "0.125");
+    assert_eq!(compact_scale(4.9), "4.9");
+    assert_eq!(compact_scale(0.0), "0");
+    // The first value that carries a digit in the `k` figure.
+    assert_eq!(compact_scale(5.0), "0.01 k");
+    // No tier for what is not a number: never a suffix glued to `inf`.
+    assert!(!compact_scale(f64::INFINITY).contains(' '));
+    assert!(!compact_scale(f64::NAN).contains(' '));
+}
+
 #[test]
 fn adaptive_thousands_intact() {
     assert_eq!(adaptive(25000.0), "25000");
