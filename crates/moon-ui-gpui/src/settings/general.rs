@@ -483,8 +483,9 @@ fn zoom_text(value: f32) -> String {
     format!("{:.0}%", value * 100.0)
 }
 
-/// Build the zoom slider with a 5% step and live draft preview.
+/// Build the zoom slider with a 5% step and a draft theme preview applied only on release.
 ///
+/// During drag, the slider state supplies the live percentage caption without rescaling the app.
 /// Initializing the thumb does not rewrite an existing hand-edited scale outside the UI range.
 pub(super) fn build_zoom(
     backend: &Entity<Backend>,
@@ -494,12 +495,13 @@ pub(super) fn build_zoom(
         let b = backend.read(cx);
         b.preview.as_ref().unwrap_or(&b.config).ui_scale
     };
-    super::draft_slider(
+    super::common::draft_slider_on(
         cx,
         *UI_ZOOM_RANGE.start(),
         *UI_ZOOM_RANGE.end(),
         0.05,
         cur,
+        super::common::DraftSliderApplyOn::Release,
         |p, value, bcx| {
             if p.ui_scale == value {
                 return false;

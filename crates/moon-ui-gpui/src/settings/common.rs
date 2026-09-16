@@ -1,5 +1,5 @@
 //! Shared Settings-window UI helpers (`slider_row`, `section`, `color_row`, and `separator`) and
-//! draft binders (`draft_color` and `draft_slider`).
+//! draft binders (`draft_color`, `draft_slider`, and `draft_slider_on`).
 //!
 //! Interface, Lines, and Connections reuse these helpers through re-exports in `settings/mod.rs`.
 
@@ -216,6 +216,29 @@ pub(super) fn draft_slider(
     init: f32,
     apply: impl Fn(&mut AppConfig, f32, &mut Context<Backend>) -> bool + 'static,
 ) -> Entity<MoonSliderState> {
+    draft_slider_on(cx, min, max, step, init, DraftSliderApplyOn::Change, apply)
+}
+
+/// Choose when a slider writes its draft, keeping expensive previews out of drag ticks.
+pub(super) enum DraftSliderApplyOn {
+    Change,
+    Release,
+}
+
+/// Bind a slider to the draft on the selected event, sharing initialization and normalization.
+///
+/// Release-driven sliders repaint Settings on `Change` so captions read the live slider value
+/// without notifying the backend or applying the draft. `apply` notifies the backend only when
+/// it returns true, just as it does for change-driven sliders.
+pub(super) fn draft_slider_on(
+    cx: &mut Context<SettingsView>,
+    min: f32,
+    max: f32,
+    step: f32,
+    init: f32,
+    apply_on: DraftSliderApplyOn,
+    apply: impl Fn(&mut AppConfig, f32, &mut Context<Backend>) -> bool + 'static,
+) -> Entity<MoonSliderState> {
     let st = cx.new(|_| {
         MoonSliderState::new()
             .min(min)
@@ -224,8 +247,14 @@ pub(super) fn draft_slider(
             .default_value(init)
     });
     cx.subscribe(&st, move |this, _emitter, ev: &MoonSliderEvent, cx| {
-        let MoonSliderEvent::Change(f) = ev else {
-            return;
+        let f = match (&apply_on, ev) {
+            (DraftSliderApplyOn::Change, MoonSliderEvent::Change(f))
+            | (DraftSliderApplyOn::Release, MoonSliderEvent::Release(f)) => f,
+            (DraftSliderApplyOn::Release, MoonSliderEvent::Change(_)) => {
+                cx.notify();
+                return;
+            }
+            (DraftSliderApplyOn::Change, MoonSliderEvent::Release(_)) => return,
         };
         // Slider quantization over a negative subrange can produce IEEE -0.0. Normalize it before it
         // reaches the draft or disk.
