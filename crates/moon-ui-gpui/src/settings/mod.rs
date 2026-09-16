@@ -968,7 +968,10 @@ pub fn open_on_tab(
     );
     let mut opts = crate::window::windowing::tool_window_options(
         t!("settings.window_title").to_string(),
-        crate::window::windowing::restored_window_bounds(saved, bounds),
+        crate::window::windowing::restored_window_bounds(
+            saved,
+            crate::window::windowing::reachable_window_bounds(bounds, display_id, None, cx),
+        ),
         Some(size(px(620.0), px(420.0))),
         owner,
     );

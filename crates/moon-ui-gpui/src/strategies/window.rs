@@ -241,7 +241,10 @@ pub fn open(
     );
     let mut opts = crate::window::windowing::tool_window_options(
         t!("strat.window_title").to_string(),
-        crate::window::windowing::restored_window_bounds(saved, bounds),
+        crate::window::windowing::restored_window_bounds(
+            saved,
+            crate::window::windowing::reachable_window_bounds(bounds, display_id, None, cx),
+        ),
         Some(size(px(920.0), px(560.0))),
         owner,
     );

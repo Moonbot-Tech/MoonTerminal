@@ -25,19 +25,6 @@ const FIRST_ORIGIN: (f32, f32) = (160.0, 120.0);
 /// How far each further window is offset from the previous one.
 const CASCADE_STEP: f32 = 34.0;
 
-/// Smallest visible area, in square logical pixels, that still makes a restored window reachable.
-///
-/// A remembered geometry outlives the monitors it was saved on — a laptop undocked, a display
-/// rearranged, a resolution changed — and this window hides its taskbar button, so one restored
-/// onto a screen that no longer exists is invisible AND unfocusable, which makes even its Escape
-/// key unreachable. Below this much overlap with some attached display, the saved rectangle is
-/// dropped and the default placement is used instead.
-///
-/// The number is "enough of the title bar to grab": roughly 200 logical pixels of width across the
-/// ~30-pixel header. It is deliberately small — a window the user deliberately parked mostly
-/// off-screen is a placement they chose, and this must not move it back on every reopen.
-const MIN_VISIBLE_PX: u64 = 200 * 30;
-
 /// How many trade windows may be open at once.
 ///
 /// The goal asks for a second trade beside the first; it does not ask for a wall of them, and each
@@ -49,6 +36,7 @@ const MAX_WINDOWS: usize = 2;
 ///
 /// Re-clicking a trade focuses its existing window and refreshes its Report-period neighbours.
 /// Its replay and viewport stay intact rather than fetching an identical picture again.
+/// New windows check the cascaded rectangle for reachability and fit it into the display work area.
 ///
 /// Args:
 ///     backend: Shared application state.
@@ -89,35 +77,9 @@ pub(crate) fn open_trade_window(
         }
     }
     let step = (backend.read(cx).trade_windows.len() as f32) * CASCADE_STEP;
-    // ONE remembered rectangle for every trade window, not one per trade: the user adjusts this
-    // window once and expects that shape back, and a per-trade key would mean the first open of
-    // every new coin ignored every adjustment ever made.
-    //
-    // A rectangle that no attached display still covers is DROPPED rather than restored: this
-    // window hides its taskbar button, so one opened onto a monitor that is gone can be neither
-    // seen nor focused, which takes its Escape key away too.
-    //
-    // The test runs on the rectangle this window will ACTUALLY occupy — the remembered one plus
-    // this open's cascade — not on the remembered one alone. A rectangle sitting just barely on the
-    // edge of a screen passes on its own and is then pushed off it by the offset, which is exactly
-    // the second window of the pair and exactly the case the check exists for.
-    // The remembered STATE is read before the reachability filter below, which throws the whole
-    // rectangle away when it lands off every monitor. A maximized window covers a screen by
-    // construction, so its state survives even when its restore coordinates do not.
-    let saved_state = backend
-        .read(cx)
-        .layout
-        .trade_window
-        .map_or((false, false), |geom| (geom.maximized, geom.fullscreen));
-    let saved = backend.read(cx).layout.trade_window.filter(|geom| {
-        let step = step as i32;
-        let candidate = moon_core::config::layout::GeomRect {
-            x: geom.x.saturating_add(step),
-            y: geom.y.saturating_add(step),
-            ..*geom
-        };
-        candidate.is_reachable_on(&crate::window::windowing::display_rects(cx), MIN_VISIBLE_PX)
-    });
+    // Keep state and display identity even when the cascaded restore rectangle is unreachable.
+    let saved = backend.read(cx).layout.trade_window;
+    let saved_state = saved.map_or((false, false), |geom| (geom.maximized, geom.fullscreen));
     // The display is resolved before the origin is adjusted, because the adjustment is expressed
     // relative to the display finally chosen. The saved identity outranks the saved coordinates,
     // which is what makes a restore survive the monitors being rearranged.
@@ -128,27 +90,27 @@ pub(crate) fn open_trade_window(
         None,
         cx,
     );
-    let (origin, window_size) = match saved {
-        // A SAVED origin is already absolute, so it takes the cascade and nothing else. Putting it
-        // through `cascade_origin_on` would add the display's own origin on top and throw the
-        // window off the very monitor it was remembered on.
-        Some(geom) => (
-            point(px(geom.x as f32 + step), px(geom.y as f32 + step)),
-            size(px(geom.w as f32), px(geom.h as f32)),
+    // A new or unreachable trade window retains its existing display-relative cascade.
+    let fallback = Bounds {
+        origin: crate::window::windowing::cascade_origin_on(
+            point(px(FIRST_ORIGIN.0 + step), px(FIRST_ORIGIN.1 + step)),
+            display_id,
+            cx,
         ),
-        // The DEFAULT placement is a display-relative point, and Windows reads window coordinates
-        // as GLOBAL: left as-is against a non-primary display it falls outside it, and the platform
-        // layer silently replaces the whole rectangle with default bounds. Unchanged from before
-        // this window remembered anything.
-        None => (
-            crate::window::windowing::cascade_origin_on(
-                point(px(FIRST_ORIGIN.0 + step), px(FIRST_ORIGIN.1 + step)),
-                display_id,
-                cx,
-            ),
-            size(px(WIN_W), px(WIN_H)),
-        ),
+        size: size(px(WIN_W), px(WIN_H)),
     };
+    // Saved coordinates are already in the display's coordinate space: only add the cascade,
+    // then test that final candidate so the second window cannot be pushed off-screen unchecked.
+    let candidate = saved.map_or(fallback, |geom| Bounds {
+        origin: point(px(geom.x as f32 + step), px(geom.y as f32 + step)),
+        size: size(px(geom.w as f32), px(geom.h as f32)),
+    });
+    let bounds = crate::window::windowing::reachable_window_bounds(
+        candidate,
+        display_id,
+        Some(fallback),
+        cx,
+    );
     let theme = backend.read(cx).config.chart_theme().clone();
     // ONE remembered scale for every trade window, not one per trade: same policy as the
     // rectangle above. `None` is Auto — a layout written before this field existed, and an
@@ -161,14 +123,7 @@ pub(crate) fn open_trade_window(
         // The cascade offset is inert while maximized: every trade window then covers the same
         // screen, which is exactly what maximizing asked for, and the offset returns with the
         // restore rectangle underneath it.
-        crate::window::windowing::window_bounds_for(
-            saved_state.0,
-            saved_state.1,
-            Bounds {
-                origin,
-                size: window_size,
-            },
-        ),
+        crate::window::windowing::window_bounds_for(saved_state.0, saved_state.1, bounds),
         display_id,
         size(px(MIN_W), px(MIN_H)),
     );

@@ -118,6 +118,12 @@ pub(crate) fn window_hwnd(_window: &Window) -> Option<isize> {
     None
 }
 
+/// Build shared native options without letting a minimum-size hint undo repaired geometry.
+///
+/// The restore rectangle is already fitted by restored-window callers. Cap each supplied minimum
+/// to that rectangle so native size validation cannot enlarge it past a small display's work area,
+/// including when the window initially opens maximized or fullscreen. Other option values pass
+/// through unchanged, and a window without a minimum keeps that policy.
 fn app_window_options(
     title: impl Into<SharedString>,
     window_bounds: WindowBounds,
@@ -127,6 +133,17 @@ fn app_window_options(
     icon: Option<Arc<image::RgbaImage>>,
     transparent_titlebar: bool,
 ) -> WindowOptions {
+    let restore_size = match &window_bounds {
+        WindowBounds::Windowed(bounds)
+        | WindowBounds::Maximized(bounds)
+        | WindowBounds::Fullscreen(bounds) => bounds.size,
+    };
+    let min_size = min_size.map(|minimum| {
+        size(
+            minimum.width.min(restore_size.width),
+            minimum.height.min(restore_size.height),
+        )
+    });
     WindowOptions {
         window_bounds: Some(window_bounds),
         display_id,
@@ -491,7 +508,8 @@ pub(crate) fn owner_display_id(owner: Option<AnyWindowHandle>, cx: &mut App) -> 
 ///
 /// # Returns
 ///
-/// The display selected from saved geometry or owner state, or `None` when neither resolves.
+/// The display selected from saved geometry, owner state, or the primary display as a last resort.
+/// Returns `None` only when the platform cannot resolve any of those displays.
 pub(crate) fn saved_or_owner_display_id(
     saved_uuid: Option<uuid::Uuid>,
     saved_origin: Option<Point<Pixels>>,
@@ -518,7 +536,90 @@ pub(crate) fn saved_or_owner_display_id(
             }
         }
     }
-    owner_display.or_else(|| owner_display_id(owner, cx))
+    let owner_id = owner_display.or_else(|| owner_display_id(owner, cx));
+    owner_id.or_else(|| cx.primary_display().map(|display| display.id()))
+}
+
+/// Check a restored rectangle against attached displays, then fit it into the chosen work area.
+///
+/// `fallback` supplies an owner cascade for detached windows; other windows use first-run
+/// placement. Display selection is already final, so a matching saved UUID is never overridden.
+/// If the platform cannot describe a usable display, retain the candidate rather than inventing
+/// monitor coordinates. Returns only geometry; callers retain state via [`window_bounds_for`].
+pub(crate) fn reachable_window_bounds(
+    bounds: Bounds<Pixels>,
+    display_id: Option<DisplayId>,
+    fallback: Option<Bounds<Pixels>>,
+    cx: &App,
+) -> Bounds<Pixels> {
+    use moon_core::config::layout::{GeomRect, first_run_window_rect};
+
+    let Some(display) = display_id
+        .and_then(|id| cx.find_display(id))
+        .or_else(|| cx.primary_display())
+    else {
+        return bounds;
+    };
+    let work = screen_rect(display.visible_bounds());
+    if ![work.x, work.y, work.w, work.h]
+        .iter()
+        .all(|v| v.is_finite())
+        || work.w <= 0.0
+        || work.h <= 0.0
+    {
+        return bounds;
+    }
+    let (x, y, w, h) = int_rect(bounds);
+    let geom = GeomRect {
+        x,
+        y,
+        w,
+        h,
+        maximized: false,
+        fullscreen: false,
+        display_uuid: None,
+    }
+    .restored_on(
+        &display_rects(cx),
+        work,
+        fallback
+            .map(screen_rect)
+            .unwrap_or_else(|| first_run_window_rect(work, 0.0, 0.0)),
+    );
+    Bounds {
+        origin: point(px(geom.x as f32), px(geom.y as f32)),
+        size: size(px(geom.w as f32), px(geom.h as f32)),
+    }
+}
+
+/// Convert toolkit bounds to the core geometry used by pure placement rules.
+fn screen_rect(bounds: Bounds<Pixels>) -> moon_core::config::layout::ScreenRect {
+    moon_core::config::layout::ScreenRect {
+        x: f32::from(bounds.origin.x),
+        y: f32::from(bounds.origin.y),
+        w: f32::from(bounds.size.width),
+        h: f32::from(bounds.size.height),
+    }
+}
+
+/// Build a detached window's fallback one header below its owner, or on the owner's display.
+///
+/// An owner currently borrowed by an event callback cannot be read by handle; in that case the
+/// already captured target display anchors the cascade. The caller subsequently clamps it.
+pub(crate) fn detached_fallback_bounds(
+    owner: Option<AnyWindowHandle>,
+    display_id: Option<DisplayId>,
+    window_size: Size<Pixels>,
+    cx: &mut App,
+) -> Bounds<Pixels> {
+    let origin = owner
+        .and_then(|owner| owner.update(cx, |_, window, _| window.bounds().origin).ok())
+        .map(|origin| origin + point(px(34.0), px(34.0)))
+        .unwrap_or_else(|| cascade_origin_on(point(px(200.0), px(160.0)), display_id, cx));
+    Bounds {
+        origin,
+        size: window_size,
+    }
 }
 
 /// Resolve a saved display identity against the monitors attached right now.

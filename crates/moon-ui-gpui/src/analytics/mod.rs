@@ -2338,7 +2338,10 @@ pub fn open(
     );
     let mut opts = crate::window::windowing::tool_window_options(
         t!("analytics.window_title").to_string(),
-        crate::window::windowing::restored_window_bounds(saved, bounds),
+        crate::window::windowing::restored_window_bounds(
+            saved,
+            crate::window::windowing::reachable_window_bounds(bounds, display_id, None, cx),
+        ),
         Some(size(px(860.0), px(520.0))),
         owner,
     );
