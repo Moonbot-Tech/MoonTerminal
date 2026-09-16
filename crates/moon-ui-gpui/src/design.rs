@@ -1489,15 +1489,6 @@ pub fn wrap_text(
     out
 }
 
-/// [`fit_text`] at the size a selector pill draws its label.
-///
-/// The literal is deliberately NOT the button tier's font size: a pill is not an Action-size
-/// button, and tying its truncation budget to the tier metrics would move this text the day MoonUI
-/// moves the button metric.
-pub fn fit_label(cx: &App, text: &str, max_w: f32) -> String {
-    fit_text(text, max_w, |s| ui_text_width(cx, s, 10.5, 400.0, true)).0
-}
-
 /// Return the effective font-scaled `MoonDataTable` row height.
 ///
 /// This mirrors the component's `fit_height(row_h, 14.0, 5.5)` call so wrappers computing natural
