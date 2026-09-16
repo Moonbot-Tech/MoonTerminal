@@ -144,6 +144,10 @@ fn fmt_amount(v: f32) -> String {
 /// Uses the pane's market quote, as the cursor tooltip does. Unknown units and labels wider
 /// than `available_width` are omitted whole: truncating a currency could misidentify the scale.
 /// `measure_width` must use the volume-scale face and size used to draw the returned text.
+///
+/// The figure is the scale's own format (`compact_scale`: `1.6 k$`, `875.3 m BTC`), not the
+/// caption/cursor `compact_si` — the two labels on one bracket are compared by eye, so they print
+/// at one density (issue #579). The cursor readout in the band stays exact and is untouched.
 fn volume_scale_label(
     value: f32,
     quote: &str,
@@ -153,7 +157,7 @@ fn volume_scale_label(
     if quote.is_empty() {
         return None;
     }
-    let amount = fmt_amount(value);
+    let amount = moon_core::util::fmt::compact_scale(f64::from(value));
     let label = if moon_core::symbol::is_usd_stable(quote) {
         format!("{amount}$")
     } else {
