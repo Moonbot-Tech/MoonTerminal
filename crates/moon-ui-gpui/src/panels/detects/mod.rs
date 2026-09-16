@@ -360,12 +360,7 @@ impl DetectsPanel {
             .iter()
             .filter(|s| s.group == self.group)
             .map(|s| {
-                let color = b
-                    .config
-                    .servers
-                    .iter()
-                    .find(|sv| sv.id == s.id)
-                    .map(|sv| sv.color)
+                let color = crate::core_color::core_color(&b.config.servers, s.id)
                     .unwrap_or(DEFAULT_SERVER_COLOR);
                 (s.id, s.name.clone(), color)
             })

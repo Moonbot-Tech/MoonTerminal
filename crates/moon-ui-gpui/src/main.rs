@@ -23,6 +23,7 @@ mod chartdx;
 mod chrome;
 mod conn_diag;
 mod controls;
+mod core_color;
 mod core_expert;
 mod core_order;
 mod crowd;
