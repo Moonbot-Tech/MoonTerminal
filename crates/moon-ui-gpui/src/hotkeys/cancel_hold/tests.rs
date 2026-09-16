@@ -133,6 +133,20 @@ fn a_repeat_on_a_different_window_starts_a_new_hold() {
     assert!(hold.address((11, 42)));
 }
 
+/// `hotkeys/cancel_hold.rs:CancelHold::press` must retain an OS repeat after its arm was cleared;
+/// returning `Fresh { explicit: true }` for that queued repeat would cancel an entry after the
+/// physical key was released.
+#[test]
+fn a_repeat_after_its_arm_was_cleared_is_not_a_fresh_press() {
+    let (mut hold, now) = armed_hold();
+    hold.clear();
+
+    assert_eq!(
+        hold.press(Some(HoldKey::Tab), 7, true, now),
+        PressKind::Repeat
+    );
+}
+
 /// `hotkeys/cancel_hold.rs:is_cancellable_status` must allow only None and BuySet; accepting
 /// BuyDone would send a command MoonProto drops silently while the user sees no cancellation.
 #[test]

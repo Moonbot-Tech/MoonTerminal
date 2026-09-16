@@ -305,7 +305,8 @@ fn core_badge(it: &DetectItem, color: u32) -> MoonBadge {
         .mono(true)
 }
 
-/// Build the coin token as a prominent monospace label at the density-tier body size.
+/// Build the coin token with its own prominent density-tier body metrics, preventing callers from
+/// supplying a size that disagrees with the card's text channel.
 fn coin_text(it: &DetectItem, p: MoonPalette, cx: &App) -> MoonText {
     MoonText::new(it.base.clone())
         .color(p.text)

@@ -652,11 +652,12 @@ pub fn font_value(cx: &App, value: f32) -> f32 {
     MoonTheme::active_tokens(cx).font(value)
 }
 
-/// The terminal's own text channel: [`ui_value`] of `value` plus [`tier_text_step`].
+/// The terminal's own text channel: `tokens.ui(value + tier_text_step)`.
 ///
 /// Compact / Standard / Large add 1 / 3 / 5 to the design-reference size at the default
-/// `mono_font_size` of 11, then multiply by the UI zoom. Standard matches the old `font()`
-/// result; Compact and Large land on the density-tier control font.
+/// `mono_font_size` of 11, then `tokens.ui` applies the UI zoom. At Standard density and 100%
+/// zoom, this preserves the former `tokens.font(base_text)` result; Compact and Large instead
+/// follow the density-tier control font.
 ///
 /// Args:
 ///     cx: Application context used to read the active tokens.
@@ -822,7 +823,7 @@ pub fn t_title(cx: &App) -> Pixels {
 }
 
 /// Already-scaled [`MoonTextMetrics`] for `MoonText::rendered_metrics`, which bypasses MoonUI's
-/// font scaling.
+/// font scaling and therefore uses the terminal's `tokens.ui` text channel directly.
 ///
 /// `step` is 0 for body/control text, -2 for a caption, +1 for `body_lg`, +3 for a title.
 /// `line_base` is the caller's own unscaled design line-height (the value previously passed to
@@ -844,7 +845,10 @@ pub fn tier_text_metrics(cx: &App, step: f32, line_base: f32) -> MoonTextMetrics
     }
 }
 
-/// [`t_body`] plus a local design-px `step`, already scaled, for raw-GPUI `.text_size(...)`.
+/// [`t_body`] plus a local design-px `step`, already scaled through `tokens.ui`, for raw-GPUI
+/// `.text_size(...)`.
+///
+/// At Standard density, `step = 0` and 100% zoom preserve the former body-text size.
 ///
 /// Args:
 ///     cx: Application context used to read the active Moon scale.
@@ -856,8 +860,8 @@ pub fn t_body_step_px(cx: &App, step: f32) -> Pixels {
     ui_px(cx, tier_font_size(cx) + step)
 }
 
-/// The BASE a font-channel MoonUI prop must be handed so it renders at the density-tier size plus
-/// `step`.
+/// The BASE a font-channel MoonUI prop must be handed so it renders at the density-tier
+/// `tokens.ui` size plus `step`.
 ///
 /// Inverse of [`font_value`], via [`font_base_for`]. For `MoonSelectorSegment::font_size` and
 /// `MoonBadgeSize::Custom`.
@@ -889,7 +893,8 @@ pub fn button_tier(cx: &App) -> MoonSize {
         .nearest(MoonButtonSize::SUPPORTED)
 }
 
-/// Unscaled density-tier control font size, from [`button_tier`]'s `control_metrics().font_size`.
+/// Unscaled density-tier control font size, from [`button_tier`]'s `control_metrics().font_size`,
+/// for the terminal's `tokens.ui` text channel.
 ///
 /// Compact 12 / Standard 14 / Large 16. The terminal's own text channel is this number plus a
 /// local step, scaled through [`ui_value`] — see [`tier_text_value`].
@@ -904,7 +909,7 @@ pub fn tier_font_size(cx: &App) -> f32 {
 }
 
 /// Unscaled density-tier control line height, from [`button_tier`]'s
-/// `control_metrics().line_height`.
+/// `control_metrics().line_height`, for a line box rendered through `tokens.ui`.
 ///
 /// Compact 16 / Standard 20 / Large 24.
 ///
@@ -917,10 +922,11 @@ pub fn tier_line_height(cx: &App) -> f32 {
     button_tier(cx).control_metrics().line_height
 }
 
-/// Offset from [`base_text`] to [`tier_font_size`]: Compact 1 / Standard 3 / Large 5 at the default
-/// `mono_font_size` of 11.
+/// Offset from [`base_text`] to [`tier_font_size`] before the terminal passes text through
+/// `tokens.ui`: Compact 1 / Standard 3 / Large 5 at the default `mono_font_size` of 11.
 ///
-/// Replaces `font_delta` (0/3/6) for the terminal's own text. Standard therefore does not move.
+/// Replaces `font_delta` (0/3/6) for the terminal's own text. At Standard density and 100% zoom,
+/// the resulting rendered size therefore preserves the former value.
 ///
 /// Args:
 ///     cx: Application context used to read the active Moon scale.
@@ -1227,7 +1233,7 @@ pub fn text_metrics_key(cx: &App, base_font_size: f32, weight: f32, mono: bool) 
     (font_id.0 as u64) << 32 | u64::from(size.as_f32().to_bits())
 }
 
-/// Identity of the typography a zoomed (UI-channel) text measurement was taken under.
+/// Identity of the typography a `tokens.ui`-channel text measurement was taken under.
 ///
 /// The [`ui_text_width_zoomed`] partner of [`text_metrics_key`]: for text that follows only the UI
 /// zoom, not the legacy font-delta channel — density-tier control labels, and the terminal's own
