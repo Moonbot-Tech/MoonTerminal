@@ -347,10 +347,10 @@ pub struct MarketActionState {
 
 pub(super) const ORDER_LABEL_NEUTRAL: u32 = u32::MAX;
 
-// STATIC grid density uses fixed width and height divisions. Like Moonbot, the grid stays still and
-// only labels move; both time verticals and price horizontals use fixed screen fractions.
+// STATIC grid matches Moonbot's 60x10 divisions: it stays fixed while labels move.
+// Ten horizontal bands make a percent ruler: a 20% scale gives 2% per band.
 pub(super) const GRID_N_VERT: f32 = 60.0;
-pub(super) const GRID_N_HORIZ: f32 = 6.0;
+pub(super) const GRID_N_HORIZ: f32 = 10.0;
 
 // Order-line label overlap priorities: higher values place first and win overlaps. SELL and STOP,
 // which show current position PnL or stop percentages, take precedence over BUY entry and size.
