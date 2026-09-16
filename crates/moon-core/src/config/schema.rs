@@ -114,8 +114,6 @@ pub enum UiThemeMode {
     Light,
     /// Mid-tone neutral surfaces with light text; draws the DARK colour set.
     Graphite,
-    #[default]
-    Dark,
     /// MoonUI's light colour mode, built from its colour roles; draws the LIGHT colour set.
     ///
     /// Experimental: the roles are still being adopted, so components not yet migrated take the
@@ -127,6 +125,14 @@ pub enum UiThemeMode {
     /// Experimental for the same reason as [`Self::LightExperimental`].
     #[serde(rename = "dark-experimental")]
     DarkExperimental,
+    /// Also the catch-all for a value this build does not know, which is why it is declared
+    /// LAST (`serde(other)` demands it). A newer build persists modes this one has no variant
+    /// for; without the catch-all that one string fails the WHOLE `SettingsFile`, which the
+    /// loader quarantines to `.bak` and replaces with defaults — a downgrade then loses every
+    /// setting, not just the theme.
+    #[default]
+    #[serde(other)]
+    Dark,
 }
 
 impl UiThemeMode {

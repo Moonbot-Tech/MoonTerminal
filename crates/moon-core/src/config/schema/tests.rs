@@ -120,6 +120,17 @@ fn a_core_issued_strategy_id_cannot_break_the_whole_settings_file() {
     }
 }
 
+/// Catches dropping `serde(other)` from `config/schema.rs:UiThemeMode::Dark`. A theme value only
+/// a newer build knows must load as Dark with every other setting intact, not fail the whole
+/// file — the loader quarantines a failed file to `.bak` and the downgrade loses all settings.
+#[test]
+fn unknown_theme_mode_loads_as_dark_without_failing_the_settings_file() {
+    let reread: SettingsFile = toml::from_str("ui_theme_mode = \"neon-future\"\nui_scale = 1.25\n")
+        .expect("an unknown theme value must not fail the settings file");
+    assert_eq!(reread.ui_theme_mode, UiThemeMode::Dark);
+    assert_eq!(reread.ui_scale, 1.25);
+}
+
 /// Catches dropping `config/schema.rs:UiThemeMode`'s `serde(rename_all = "lowercase")`.
 /// Without it, Graphite persists as `"Graphite"`, which the same build cannot read from settings.
 #[test]
