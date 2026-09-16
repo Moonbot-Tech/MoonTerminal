@@ -112,6 +112,7 @@ fn the_memo_is_reused_only_while_nothing_changed() {
     let cached = Some(VisibleRows {
         key: key(),
         idx: vec![0, 1, 2],
+        enabled_filter_available: true,
     });
     assert!(
         memo_is_fresh(cached.as_ref(), &key()),
@@ -155,14 +156,14 @@ fn active_only_falls_back_when_aliveness_is_unknown() {
     let mut k = key();
     k.active_only = true;
     assert_eq!(
-        filter_sort_indices(&all, &k),
+        filter_sort_indices(&all, &k).0,
         vec![0, 1],
         "aliveness is unknown for every row, so the filter has nothing to go on"
     );
 
     let known = vec![g("a", "K", Some(0), 0, 1.0), g("b", "K", Some(2), 0, 2.0)];
     assert_eq!(
-        filter_sort_indices(&known, &k),
+        filter_sort_indices(&known, &k).0,
         vec![1],
         "once aliveness IS known, a deleted strategy is filtered out"
     );
@@ -175,14 +176,14 @@ fn the_coin_list_filter_falls_back_when_no_list_is_visible() {
     let mut k = key();
     k.lists = StratListFilter::Black;
     assert_eq!(
-        filter_sort_indices(&blind, &k),
+        filter_sort_indices(&blind, &k).0,
         vec![0, 1],
         "no row carries a list count, so the filter cannot claim none has one"
     );
 
     let seen = vec![g("a", "K", Some(2), 0, 1.0), g("b", "K", Some(2), 4, 2.0)];
     assert_eq!(
-        filter_sort_indices(&seen, &k),
+        filter_sort_indices(&seen, &k).0,
         vec![1],
         "with counts visible the filter applies normally"
     );
@@ -198,9 +199,9 @@ fn search_and_kind_select_by_index() {
     ];
     let mut k = key();
     k.search_lower = "btc".into();
-    assert_eq!(filter_sort_indices(&all, &k), vec![0, 2]);
+    assert_eq!(filter_sort_indices(&all, &k).0, vec![0, 2]);
     k.kind = Some("MoonHook".into());
-    assert_eq!(filter_sort_indices(&all, &k), vec![2]);
+    assert_eq!(filter_sort_indices(&all, &k).0, vec![2]);
 }
 
 /// Saved sort state must restore a real column and reject a removed or mistyped key.
@@ -222,7 +223,7 @@ fn saved_strategy_sort_restores_only_real_columns() {
     let mut invalid = key();
     invalid.sort = restore_strat_sort(Some(("removed.column".to_string(), false)));
     assert_eq!(
-        filter_sort_indices(&all, &invalid),
+        filter_sort_indices(&all, &invalid).0,
         vec![1, 0],
         "an unknown key must restore profit descending, not fall through to name ascending"
     );
@@ -230,7 +231,7 @@ fn saved_strategy_sort_restores_only_real_columns() {
     let mut valid = key();
     valid.sort = restore_strat_sort(Some((SORT_NAME.to_string(), false)));
     assert_eq!(
-        filter_sort_indices(&all, &valid),
+        filter_sort_indices(&all, &valid).0,
         vec![0, 1],
         "a valid saved key and its ascending direction must survive"
     );
@@ -252,9 +253,47 @@ fn unavailable_money_sorts_after_comparable_values() {
 
     let mut descending = key();
     descending.sort = Some(("analytics.col.avg_order".to_string(), true));
-    assert_eq!(filter_sort_indices(&all, &descending), vec![2, 1, 0]);
+    assert_eq!(filter_sort_indices(&all, &descending).0, vec![2, 1, 0]);
 
     let mut ascending = key();
     ascending.sort = Some(("analytics.col.avg_order".to_string(), false));
-    assert_eq!(filter_sort_indices(&all, &ascending), vec![1, 2, 0]);
+    assert_eq!(filter_sort_indices(&all, &ascending).0, vec![1, 2, 0]);
+}
+
+/// Reverting to alive >= 1 keeps unchecked strategies visible with enabled-only selected.
+#[test]
+fn enabled_only_hides_unchecked_deleted_and_unknown_strategies() {
+    let all = vec![
+        g("deleted", "K", Some(0), 0, 1.0),
+        g("unchecked", "K", Some(1), 0, 2.0),
+        g("enabled", "K", Some(2), 0, 3.0),
+        g("unknown", "K", None, 0, 4.0),
+    ];
+    let mut k = key();
+    assert_eq!(filter_sort_indices(&all, &k), (vec![0, 1, 2, 3], true));
+    k.active_only = true;
+    assert_eq!(filter_sort_indices(&all, &k), (vec![2], true));
+    assert_eq!(filter_sort_indices(&all[..2], &k), (vec![], true));
+}
+
+/// Checking availability before other filters leaves an enabled checkbox silently bypassed
+/// when search, type or coin-list filtering leaves only unknown replica statuses.
+#[test]
+fn enabled_availability_matches_the_filtered_candidates() {
+    let all = vec![
+        g("known", "Known", Some(2), 0, 1.0),
+        g("unknown", "Unknown", None, 1, 2.0),
+    ];
+    let mut k = key();
+    k.active_only = true;
+    assert_eq!(filter_sort_indices(&all, &k), (vec![0], true));
+    k.search_lower = "unknown".into();
+    assert_eq!(filter_sort_indices(&all, &k), (vec![1], false));
+    k.search_lower.clear();
+    k.kind = Some("Unknown".into());
+    assert_eq!(filter_sort_indices(&all, &k), (vec![1], false));
+    k.kind = None;
+    k.lists = StratListFilter::Black;
+    assert_eq!(filter_sort_indices(&all, &k), (vec![1], false));
+    assert_eq!(filter_sort_indices(&[], &k), (vec![], false));
 }

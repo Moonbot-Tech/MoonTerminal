@@ -1,5 +1,5 @@
 //! Strategy-list controls for the hand-built comparison table: the filter bar (name search,
-//! strategy-type dropdown, "active only" toggle), the click-to-sort helpers, and the visible-
+//! strategy-type dropdown, "enabled only" toggle), the click-to-sort helpers, and the visible-
 //! column selector (mirrors the Orders `columns_menu` bitmask pattern). All view-only — the
 //! filters/sort/columns never change what is written, only what the list shows.
 //! The table itself (card, rows, sortable header) renders in `table`.
@@ -119,10 +119,11 @@ pub(in crate::analytics) struct VisibleKey {
     sort: Option<(String, bool)>,
 }
 
-/// The memoized row-index order and the complete set of inputs that produced it.
+/// The memoized row order, enabled-filter availability and inputs that produced them.
 pub(in crate::analytics) struct VisibleRows {
     key: VisibleKey,
     idx: Vec<usize>,
+    enabled_filter_available: bool,
 }
 
 /// Sort only as deep as the list can draw.
@@ -154,8 +155,11 @@ pub(in crate::analytics::tuner) fn partial_sort<T>(
 ///     key: Search, filters, sort, and visible-head limit.
 ///
 /// Returns:
-///     Stable display-order indices into `all`.
-pub(in crate::analytics) fn filter_sort_indices(all: &[GroupStat], key: &VisibleKey) -> Vec<usize> {
+///     Stable display-order indices into `all` and whether replica status is available.
+pub(in crate::analytics) fn filter_sort_indices(
+    all: &[GroupStat],
+    key: &VisibleKey,
+) -> (Vec<usize>, bool) {
     let q = key.search_lower.as_str();
     // Type and name are always known from the report groups, so apply them before filters that
     // depend on the optional strategies replica.
@@ -178,13 +182,14 @@ pub(in crate::analytics) fn filter_sort_indices(all: &[GroupStat], key: &Visible
     } else {
         base
     };
-    // Apply active-only ONLY when aliveness is actually known (at least one row has it). If
+    // Apply enabled-only ONLY when aliveness is actually known (at least one row has it). If
     // every row is alive = None (strategies replica absent), the filter has nothing to go on
     // and would blank the list — so skip it. When alive IS known, filter normally; a genuinely
-    // all-deleted set then empties and the caller shows a "no matches" note.
-    let mut out: Vec<usize> = if key.active_only && base.iter().any(|i| all[*i].alive.is_some()) {
+    // all-disabled or all-deleted set then empties and the caller shows a "no matches" note.
+    let enabled_filter_available = base.iter().any(|i| all[*i].alive.is_some());
+    let mut out: Vec<usize> = if key.active_only && enabled_filter_available {
         base.into_iter()
-            .filter(|i| all[*i].alive.is_some_and(|a| a >= 1))
+            .filter(|i| all[*i].alive == Some(2))
             .collect()
     } else {
         base
@@ -234,7 +239,7 @@ pub(in crate::analytics) fn filter_sort_indices(all: &[GroupStat], key: &Visible
             });
         }
     }
-    out
+    (out, enabled_filter_available)
 }
 
 /// Whether a cached result still describes the current inputs.
@@ -304,8 +309,12 @@ impl AnalyticsView {
             sort: self.strat_sort.clone(),
         };
         if !memo_is_fresh(self.strat_visible.as_ref(), &key) {
-            let idx = filter_sort_indices(all, &key);
-            self.strat_visible = Some(VisibleRows { key, idx });
+            let (idx, enabled_filter_available) = filter_sort_indices(all, &key);
+            self.strat_visible = Some(VisibleRows {
+                key,
+                idx,
+                enabled_filter_available,
+            });
         }
         self.visible_indices()
     }
@@ -413,7 +422,8 @@ impl AnalyticsView {
         state
     }
 
-    /// The list filter bar row: name search · type · "active only" · column selector.
+    /// The list filter bar row: name search, type, enabled-only and column selector.
+    /// Missing replica data disables enabled-only without changing the toggle state.
     pub(super) fn strat_filter_bar(
         &mut self,
         p: MoonPalette,
@@ -421,6 +431,13 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let search = self.strat_search_state(window, cx);
+        let data = self.strategy_data.data().cloned();
+        let enabled_available = data.is_some_and(|data| {
+            self.ensure_visible(&data.strategies);
+            self.strat_visible
+                .as_ref()
+                .is_some_and(|rows| rows.enabled_filter_available)
+        });
         h_flex()
             .w_full()
             .flex_none()
@@ -438,21 +455,34 @@ impl AnalyticsView {
             .child(self.strat_type_menu(cx))
             .child(self.strat_lists_menu(cx))
             .child(
-                div().font_family(design::ui_font()).child(
-                    MoonCheckbox::new("an-strat-active")
-                        .checked(self.strat_active_only)
-                        .label(t!("analytics.strat.active_only").to_string())
-                        .on_change({
-                            let view = cx.entity();
-                            move |ch: &bool, _w, app| {
-                                let on = *ch;
-                                view.update(app, |this, cx| {
-                                    this.strat_active_only = on;
-                                    cx.notify();
-                                });
-                            }
-                        }),
-                ),
+                div()
+                    .id("an-strat-active-tip")
+                    .font_family(design::ui_font())
+                    .tooltip(move |_window, cx| {
+                        let text = if enabled_available {
+                            t!("analytics.strat.active_only_tip")
+                        } else {
+                            t!("analytics.strat.active_only_unavailable")
+                        };
+                        cx.new(|_| moon_ui::MoonTooltipView::new(text.to_string()))
+                            .into()
+                    })
+                    .child(
+                        MoonCheckbox::new("an-strat-active")
+                            .checked(self.strat_active_only)
+                            .disabled(!enabled_available)
+                            .label(t!("analytics.strat.active_only").to_string())
+                            .on_change({
+                                let view = cx.entity();
+                                move |ch: &bool, _w, app| {
+                                    let on = *ch;
+                                    view.update(app, |this, cx| {
+                                        this.strat_active_only = on;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    ),
             )
             .child(self.strat_column_menu(cx))
             .into_any_element()
@@ -503,7 +533,7 @@ impl AnalyticsView {
     }
 
     /// Coin-list dropdown ("All" / has a blacklist / has a whitelist), between the type
-    /// selector and the "active only" toggle.
+    /// selector and the "enabled only" toggle.
     fn strat_lists_menu(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         let cur = self.strat_lists;
         let view = cx.entity();
