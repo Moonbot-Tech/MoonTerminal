@@ -17,6 +17,7 @@ use super::super::common::LayoutPopupHost as _;
 use super::super::graphics_popup;
 use super::super::labels_popup;
 use super::super::popup_slot::ChartPopup;
+use super::super::volumes_popup;
 use super::super::{chart_pane_label, coin_search};
 use super::DetachedChartHost;
 use crate::design;
@@ -75,6 +76,7 @@ impl Render for DetachedChartHost {
         let candle_popup_open = self.popup_shows(ChartPopup::Candle);
         let graphics_popup_open = self.popup_shows(ChartPopup::Graphics);
         let labels_popup_open = self.popup_shows(ChartPopup::Labels);
+        let volumes_popup_open = self.popup_shows(ChartPopup::Volumes);
         // Header market-search input and matches. Render the list at the `v_flex` level after the
         // body; otherwise the later-painted window body covers the header dropdown.
         let coin_search_el = div()
@@ -292,6 +294,23 @@ impl Render for DetachedChartHost {
                                         MoonButtonVariant::Ghost
                                     })
                                     .selected(labels_popup_open)
+                                    .render(),
+                                cx,
+                            ))
+                            // The volumes button edits THIS window's volume indicators.
+                            .child(volumes_popup::volumes_popup_host(
+                                self,
+                                "detached-chart-volumes",
+                                MoonButton::new("detached-volumes-settings")
+                                    .leading_icon(MoonButtonIconSlot::new("icons/panel-left.svg"))
+                                    .tooltip(t!("chart.volumes.tip").to_string())
+                                    .size(MoonSize::Xs)
+                                    .variant(if volumes_popup_open {
+                                        MoonButtonVariant::Blue
+                                    } else {
+                                        MoonButtonVariant::Ghost
+                                    })
+                                    .selected(volumes_popup_open)
                                     .render(),
                                 cx,
                             ))

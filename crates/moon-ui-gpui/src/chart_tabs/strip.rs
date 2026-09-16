@@ -18,6 +18,7 @@ use super::common::LayoutPopupHost as _;
 use super::graphics_popup;
 use super::labels_popup;
 use super::popup_slot::ChartPopup;
+use super::volumes_popup;
 use super::{ChartTabs, Tab, chart_tab_strip_h, coin_search};
 use crate::design;
 
@@ -284,6 +285,25 @@ impl Render for ChartTabs {
                 .render(),
             cx,
         );
+        // The volumes button beside the labels one edits the ACTIVE TAB's volume indicators.
+        // TEMPORARY icon from the shipped set, until MoonUI carries a volumes glyph of its own.
+        let volumes_popup_open = self.popup_shows(ChartPopup::Volumes);
+        let volumes_btn = volumes_popup::volumes_popup_host(
+            self,
+            "chart-volumes",
+            MoonButton::new("chart-volumes-settings")
+                .leading_icon(MoonButtonIconSlot::new("icons/panel-left.svg"))
+                .tooltip(t!("chart.volumes.tip").to_string())
+                .size(MoonSize::Xs)
+                .variant(if volumes_popup_open {
+                    MoonButtonVariant::Blue
+                } else {
+                    MoonButtonVariant::Ghost
+                })
+                .selected(volumes_popup_open)
+                .render(),
+            cx,
+        );
         // The per-window market search sits left of scale and queries the active tab's cores.
         // The result list is lifted out of this field so it paints after the chart-body dismiss.
         let coin_popup = self.popup_shows(ChartPopup::Coin).then(|| {
@@ -446,6 +466,7 @@ impl Render for ChartTabs {
                     .child(candle_btn)
                     .child(graphics_btn)
                     .child(labels_btn)
+                    .child(volumes_btn)
                     .child(settings_btn),
             );
         v_flex()

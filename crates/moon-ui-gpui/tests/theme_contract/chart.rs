@@ -1522,3 +1522,159 @@ fn the_volume_scale_is_one_bracket_and_the_sides_stand_alone() {
         "prepare.rs: the labels must place from the shared bracket rule"
     );
 }
+
+/// The horizontal volumes (Moonbot's `HVol`) are one layer on every backend: a zone-gated row
+/// pass drawn the way the bottom band's sides layer draws its columns — the bought length, then
+/// the sold one over it, the stacked kind continuing the sold length from where the bought one
+/// ends — plus a backdrop pass drawn with the shared instance count, and both drawn in the base
+/// pass after the plot's layers and before the book. The zone's width comes from the one pane
+/// layout every hit test reads, so a click on the zone can never pan a plot that was drawn
+/// narrower.
+#[test]
+fn every_backend_draws_the_horizontal_volumes_the_same_way() {
+    const SHADERS: &[(&str, &str, &str)] = &[
+        (
+            "chartdx/shaders/hvol.hlsl",
+            "hs_zone.z < 1.0",
+            "hs_m.y >= 0.5",
+        ),
+        (
+            "chartdx/shaders/native_hvol.wgsl",
+            "hs.zone.z < 1.0",
+            "hs.m.y >= 0.5",
+        ),
+        (
+            "chartdx/shaders/chart_native.metal",
+            "hs.zone.z < 1.0",
+            "hs.m.y >= 0.5",
+        ),
+    ];
+    for (path, zone_gate, stacked_gate) in SHADERS {
+        let source = code_only(&read_src(path));
+        let rows = braced_body(&source, "hvol_row_vertex(");
+        assert!(
+            rows.contains(zone_gate),
+            "{path}: the rows must draw only with a zone (`{zone_gate}`)"
+        );
+        assert!(
+            rows.contains(stacked_gate),
+            "{path}: the stacked kind must be the switch (`{stacked_gate}`)"
+        );
+        assert!(
+            rows.contains("vid >= 6u"),
+            "{path}: the sold length is the second six vertices, over the bought one"
+        );
+        assert!(
+            !rows.contains("sqrt"),
+            "{path}: row length is linear; a square root breaks the max label"
+        );
+        let bg = braced_body(&source, "hvol_bg_vertex(");
+        assert!(
+            bg.contains(zone_gate) && bg.contains("iid == 4u"),
+            "{path}: the backdrop pass draws the fill and four border edges, zone-gated"
+        );
+    }
+
+    const DRAWS: &[(&str, &str, &str, &str)] = &[
+        (
+            "chartdx/backend.rs",
+            "self.side_volume.render(view, context, rtv, gpu, panel_clip);",
+            "self.hvol.render(view, context, rtv, gpu, panel_clip);",
+            "self.orderbook\n            .render(orderbook_view, context, rtv, gpu, panel_clip);",
+        ),
+        (
+            "chartdx/wgpu_backend/render.rs",
+            "&pipelines.side_volume",
+            "&pipelines.hvol_rows",
+            "&pipelines.book_bg",
+        ),
+        (
+            "chartdx/metal_backend.rs",
+            "&pipelines.side_volume",
+            "&pipelines.hvol_rows",
+            "&pipelines.book_bg",
+        ),
+    ];
+    for (path, before, hvol_draw, after) in DRAWS {
+        let source = code_only(&read_src(path));
+        let before_at = source
+            .find(before)
+            .unwrap_or_else(|| panic!("{path}: missing the sides band draw"));
+        let hvol_at = source
+            .find(hvol_draw)
+            .unwrap_or_else(|| panic!("{path}: missing the horizontal volumes draw"));
+        let after_at = source
+            .find(after)
+            .unwrap_or_else(|| panic!("{path}: missing the book draw"));
+        assert!(
+            before_at < hvol_at && hvol_at < after_at,
+            "{path}: the horizontal volumes draw after the plot's layers and before the book"
+        );
+    }
+    for path in [
+        "chartdx/hvol.rs",
+        "chartdx/wgpu_backend/render.rs",
+        "chartdx/metal_backend.rs",
+    ] {
+        let source = code_only(&read_src(path));
+        assert!(
+            source.contains("HVOL_BG_INSTANCES"),
+            "{path}: the backdrop draw must take its instance count from the shared constant"
+        );
+    }
+
+    // One style struct on the Rust side and three shader-side mirrors: the same number of
+    // 16-byte members in each, or an upload lands a field in the wrong slot with no compiler to
+    // say so. Counted rather than named, so a renamed member still passes and a dropped one fails.
+    let rust = code_only(&read_src("chartdx/types.rs"));
+    let rust_body = braced_body(&rust, "pub struct HvolStyleGpu ");
+    let rust_members = rust_body.matches("[f32; 4]").count();
+    assert_eq!(
+        rust_members, 6,
+        "chartdx/types.rs: HvolStyleGpu is six vec4s"
+    );
+    for (path, header, member) in [
+        ("chartdx/shaders/hvol.hlsl", "cbuffer HvolStyle ", "float4 "),
+        (
+            "chartdx/shaders/native_hvol.wgsl",
+            "struct HvolStyle ",
+            "vec4<f32>",
+        ),
+        (
+            "chartdx/shaders/chart_native.metal",
+            "struct HvolStyle ",
+            "float4 ",
+        ),
+    ] {
+        let source = code_only(&read_src(path));
+        let body = braced_body(&source, header);
+        assert_eq!(
+            body.matches(member).count(),
+            rust_members,
+            "{path}: HvolStyle must carry as many members as HvolStyleGpu"
+        );
+    }
+
+    // The zone is part of the one layout, and every reader passes the tab's own spec into it.
+    let layout = code_only(&read_src("chartdx/mod.rs"));
+    let body = braced_body(&layout, "fn pane_layout(");
+    assert!(
+        body.contains("hvol_w") && body.contains("ZONE_MIN_PX"),
+        "chartdx/mod.rs: pane_layout must carve the zone and floor it at ZONE_MIN_PX"
+    );
+    for (file, signature) in [
+        ("chartdx/data_state/market.rs", "pane_layout("),
+        ("chartdx/input.rs", "fn areas_of("),
+        ("panels/chart/geom.rs", "fn local_pane_areas("),
+    ] {
+        let source = code_only(&read_src(file));
+        let at = source
+            .find(signature)
+            .unwrap_or_else(|| panic!("{file}: missing `{signature}`"));
+        let window = &source[at..source.len().min(at + 600)];
+        assert!(
+            window.contains("zone_spec(") || window.contains("self.hvol"),
+            "{file}: `{signature}` must hand the layout the tab's horizontal-volume zone"
+        );
+    }
+}

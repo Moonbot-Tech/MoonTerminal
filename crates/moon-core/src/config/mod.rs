@@ -90,7 +90,7 @@ pub use lang::Language;
 pub use layout::{
     AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT, AUTO_WORKSPACE_RAIL_WIDTH_MAX,
     AUTO_WORKSPACE_RAIL_WIDTH_MIN, ChartGraphicsCfg, DetachedLayout, GeomRect, GroupLayout,
-    ReportFilterPrefs, TableSortPreference, WindowLayout, WorkspaceMode,
+    HVOL_TF_MAX_S, HvolSide, ReportFilterPrefs, TableSortPreference, WindowLayout, WorkspaceMode,
     clamp_auto_workspace_rail_width,
 };
 pub use news_tags::NewsTagSettings;

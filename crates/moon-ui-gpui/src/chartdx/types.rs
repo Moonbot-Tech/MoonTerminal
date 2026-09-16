@@ -173,6 +173,86 @@ pub fn fill_side_volume_upload(
     }));
 }
 
+/// One row in the horizontal-volume GPU buffer, matching `HvolRow` in hvol.hlsl: a price band
+/// and what was bought and sold inside it over the profile's window, QUOTE turnover.
+///
+/// Prices are absolute, like the order book's levels: the row is placed against the pane view's
+/// price mapping, and nothing about it is relative to the chart epoch.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct HvolRowGpu {
+    pub price_lo: f32,
+    pub price_hi: f32,
+    pub buy: f32,
+    pub sell: f32,
+}
+
+/// Most rows the horizontal volumes upload: 256 KB of VRAM at 16 bytes per instance.
+///
+/// What is uploaded is the zone's SAMPLES — one per device pixel of its height, so a few
+/// thousand at the very most on a tall display. The cut is made HERE, before any backend sees the
+/// buffer, so every platform draws the same rows. On overflow the rows farthest from the middle
+/// are dropped and `hvol_dropped` counts them.
+pub const HVOL_CAPACITY: usize = 16_384;
+
+/// Fill the horizontal-volume GPU buffer from a profile.
+///
+/// Args:
+///     rows: Profile rows, sorted by price.
+///     out: Reused buffer; cleared first.
+pub fn fill_hvol_upload(rows: &[moon_core::market::PriceProfileRow], out: &mut Vec<HvolRowGpu>) {
+    out.clear();
+    let rows = if rows.len() > HVOL_CAPACITY {
+        crate::diag::bump_by(
+            &crate::diag::CHART_HVOL_DROPPED,
+            (rows.len() - HVOL_CAPACITY) as u64,
+        );
+        let start = (rows.len() - HVOL_CAPACITY) / 2;
+        &rows[start..start + HVOL_CAPACITY]
+    } else {
+        rows
+    };
+    out.reserve(rows.len());
+    out.extend(rows.iter().map(|r| HvolRowGpu {
+        price_lo: r.price_lo,
+        price_hi: r.price_hi,
+        buy: r.buy_quote.max(0.0),
+        sell: r.sell_quote.max(0.0),
+    }));
+}
+
+/// Instances of the horizontal volumes' backdrop pass: the zone's fill and its four border edges.
+/// Every backend draws the same five; a backend drawing fewer leaves an edge unpainted.
+pub const HVOL_BG_INSTANCES: u32 = 5;
+
+/// Horizontal-volume style constants: cbuffer `HvolStyle` at b1 in hvol.hlsl,
+/// `@group(0) @binding(1)` in native_hvol.wgsl, and `[[buffer(3)]]` in chart_native.metal.
+///
+/// Every member is a `[f32; 4]` for the reason [`PriceStyleGpu`] gives. Six of them: the member
+/// count is pinned by `theme_contract` against the three shader structs. The zone travels HERE
+/// rather than as a third `ChartViewGpu`: the rows are placed against the PANE view's price
+/// mapping (the zone shares the plot's top and height), and only their horizontal extent is the
+/// zone's own.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct HvolStyleGpu {
+    /// The zone in physical pixels: `x`, `y`, `w`, `h`. A zero width draws nothing.
+    pub zone: [f32; 4],
+    /// Bought rgb + opacity — the bottom band's own colour and opacity.
+    pub buy: [f32; 4],
+    /// Sold rgb + opacity — likewise.
+    pub sell: [f32; 4],
+    /// Zone backdrop rgb + opacity, drawn under the rows in every mode (Moonbot's `transparent`
+    /// is about the captions' plates, not the zone).
+    pub bg: [f32; 4],
+    /// Zone frame rgb + opacity, drawn with the backdrop.
+    pub border: [f32; 4],
+    /// `x` unused (the rows always grow from the zone's RIGHT edge, the plot side, leftward) -
+    /// `y` 1 stacked (sold after bought), 0 overlaid - `z` 1/visible_max, quantized -
+    /// `w` border thickness in physical px.
+    pub m: [f32; 4],
+}
+
 /// Price-line style constants: cbuffer `PriceStyle` at b1 in crosses.hlsl,
 /// `@group(0) @binding(2)` in native_price.wgsl, and `[[buffer(2)]]` in chart_native.metal.
 ///

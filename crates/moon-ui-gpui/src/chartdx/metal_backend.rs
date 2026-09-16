@@ -18,8 +18,8 @@ use std::ffi::c_void;
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, HLineGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu, SideVolumeGpu,
-    TickStyleGpu, VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_volume_max,
+    GridParams, HLineGpu, HvolRowGpu, HvolStyleGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu,
+    SideVolumeGpu, TickStyleGpu, VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_volume_max,
     evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring, ranges_touch_volume_max,
     reset_cross_ring, seg_of, update_cross_volume_max, zone_of,
 };
@@ -148,6 +148,8 @@ struct Pipelines {
     volume_scale: RenderPipelineState,
     side_volume: RenderPipelineState,
     side_scale: RenderPipelineState,
+    hvol_rows: RenderPipelineState,
+    hvol_bg: RenderPipelineState,
     crosses: RenderPipelineState,
     volume: RenderPipelineState,
     price_last: RenderPipelineState,
@@ -268,9 +270,11 @@ impl BaseCache {
         device: &DeviceRef,
         view: &ChartViewGpu,
         orderbook_view: &ChartViewGpu,
+        hvol_zone: [f32; 4],
         gpu: &RawGpuAccess,
     ) {
-        let dst = panel_dst(view, orderbook_view, gpu.width(), gpu.height());
+        let sc = blit_scissor(view, orderbook_view, hvol_zone, gpu.width(), gpu.height());
+        let dst = [sc.x as f32, sc.y as f32, sc.width as f32, sc.height as f32];
         let w = gpu.width().max(1) as f32;
         let h = gpu.height().max(1) as f32;
         let params = BackgroundParams {
@@ -308,6 +312,9 @@ pub struct MetalLayers {
     candle_style: CandleStyleGpu,
     /// The sides band's buckets, replaced as a unit when its series is re-read.
     sides: Vec<SideVolumeGpu>,
+    /// The horizontal volumes' per-pixel samples, replaced as a unit when they are retaken.
+    hvol: Vec<HvolRowGpu>,
+    hvol_style: HvolStyleGpu,
     levels: Vec<LevelInstance>,
     zones: Vec<ZoneGpu>,
     hlines: Vec<HLineGpu>,
@@ -339,12 +346,15 @@ pub struct MetalLayers {
     candle_buffer: BufferSlot,
     candle_style_uniform: BufferSlot,
     side_buffer: BufferSlot,
+    hvol_buffer: BufferSlot,
+    hvol_style_uniform: BufferSlot,
     combo_buffers_dirty: bool,
     price_line_buffers_dirty: bool,
     book_buffer_dirty: bool,
     userdata_buffers_dirty: bool,
     candle_buffers_dirty: bool,
     side_buffer_dirty: bool,
+    hvol_buffers_dirty: bool,
 }
 
 impl MetalLayers {
@@ -368,6 +378,8 @@ impl MetalLayers {
             candles: Vec::new(),
             candle_style: CandleStyleGpu::default(),
             sides: Vec::new(),
+            hvol: Vec::new(),
+            hvol_style: HvolStyleGpu::default(),
             levels: Vec::new(),
             zones: Vec::new(),
             hlines: Vec::new(),
@@ -398,12 +410,33 @@ impl MetalLayers {
             candle_buffer: BufferSlot::default(),
             candle_style_uniform: BufferSlot::default(),
             side_buffer: BufferSlot::default(),
+            hvol_buffer: BufferSlot::default(),
+            hvol_style_uniform: BufferSlot::default(),
             combo_buffers_dirty: true,
             price_line_buffers_dirty: true,
             book_buffer_dirty: true,
             userdata_buffers_dirty: true,
             candle_buffers_dirty: true,
             side_buffer_dirty: true,
+            hvol_buffers_dirty: true,
+        }
+    }
+
+    /// Replace the horizontal volumes' samples when they are retaken.
+    ///
+    /// The zone resides in the base cache, so this invalidates it for rebaking.
+    pub fn set_hvol(&mut self, data: Vec<HvolRowGpu>) {
+        self.hvol = data;
+        self.hvol_buffers_dirty = true;
+        self.base_cache.valid = false;
+    }
+
+    /// Idempotently set the horizontal volumes' zone, colours, kind and normalisation.
+    pub fn set_hvol_style(&mut self, style: HvolStyleGpu) {
+        if self.hvol_style != style {
+            self.hvol_style = style;
+            self.hvol_buffers_dirty = true;
+            self.base_cache.valid = false;
         }
     }
 
@@ -623,12 +656,15 @@ impl MetalLayers {
         self.candle_buffer = BufferSlot::default();
         self.candle_style_uniform = BufferSlot::default();
         self.side_buffer = BufferSlot::default();
+        self.hvol_buffer = BufferSlot::default();
+        self.hvol_style_uniform = BufferSlot::default();
         self.combo_buffers_dirty = true;
         self.price_line_buffers_dirty = true;
         self.book_buffer_dirty = true;
         self.userdata_buffers_dirty = true;
         self.candle_buffers_dirty = true;
         self.side_buffer_dirty = true;
+        self.hvol_buffers_dirty = true;
     }
 
     pub fn render(
@@ -664,17 +700,23 @@ impl MetalLayers {
         if self.base_cache.is_valid_for(gpu, pixel_format) {
             self.draw_cached_base(device, encoder, view, orderbook_view, gpu);
         } else {
-            self.draw_base_layers(encoder);
+            self.draw_base_layers(encoder, sc);
             self.draw_cached_combo(device, encoder, view);
         }
         self.draw_price_lines_layer(encoder);
-        encoder.set_scissor_rect(bounds_scissor(pane_bounds, gpu.width(), gpu.height()));
+        // Order lines and trade marks stop at the horizontal-volume zone; the cursor pass keeps
+        // the whole pane, as the crosshair and the volume readout live in the zone.
+        let pane_sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
+        encoder.set_scissor_rect(userdata_scissor(pane_sc, self.hvol_style.zone));
         self.draw_user_layers(encoder);
+        encoder.set_scissor_rect(pane_sc);
         self.draw_cursor_layer(encoder, cursor_params, readout_rects);
         Ok(())
     }
 
-    fn draw_base_layers(&self, encoder: &RenderCommandEncoderRef) {
+    /// `base_sc` is the pass's own scissor, restored after the horizontal volumes draw under the
+    /// scissor of their zone alone; see the wgpu backend's `draw_base_layers` for why.
+    fn draw_base_layers(&self, encoder: &RenderCommandEncoderRef, base_sc: MTLScissorRect) {
         let pipelines = self.pipelines.as_ref().unwrap();
         let bg = self.background_texture.as_ref().unwrap();
 
@@ -748,6 +790,30 @@ impl MetalLayers {
                 6,
                 moon_chart::volume_bars::VOLUME_SCALE_INSTANCES as u64,
             );
+        }
+
+        // The horizontal volumes live in their own zone beside the plot: after the plot's layers,
+        // before the book. HvolStyle rides slot 3, the style slot the band pipelines use too.
+        if self.hvol_style.zone[2] >= 1.0 {
+            crate::diag::bump(&crate::diag::CHART_HVOL_DRAW);
+            encoder.set_scissor_rect(bounds_scissor(
+                self.hvol_style.zone,
+                (base_sc.x + base_sc.width) as u32,
+                (base_sc.y + base_sc.height) as u32,
+            ));
+            set_uniform(encoder, 0, self.view_uniform.buffer());
+            set_storage(encoder, 2, self.hvol_buffer.buffer());
+            set_uniform(encoder, 3, self.hvol_style_uniform.buffer());
+            draw(
+                encoder,
+                &pipelines.hvol_bg,
+                6,
+                u64::from(crate::chartdx::types::HVOL_BG_INSTANCES),
+            );
+            if !self.hvol.is_empty() {
+                draw(encoder, &pipelines.hvol_rows, 12, self.hvol.len() as u64);
+            }
+            encoder.set_scissor_rect(base_sc);
         }
 
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
@@ -1074,14 +1140,29 @@ impl MetalLayers {
         gpu: &RawGpuAccess,
     ) {
         self.base_cache
-            .write_blit_uniform(device, view, orderbook_view, gpu);
+            .write_blit_uniform(device, view, orderbook_view, self.hvol_style.zone, gpu);
         let pipelines = self.pipelines.as_ref().unwrap();
         let texture = self.base_cache.texture.as_ref().unwrap().texture.as_ref();
         crate::diag::bump(&crate::diag::CHART_BASE_BLIT);
+        // The blit alone reaches across the horizontal-volume zone; see the wgpu backend's
+        // `draw_cached_base` for why the pass's own clip stays plot-to-book.
+        encoder.set_scissor_rect(blit_scissor(
+            view,
+            orderbook_view,
+            self.hvol_style.zone,
+            gpu.width(),
+            gpu.height(),
+        ));
         set_uniform(encoder, 0, self.base_cache.blit_uniform.buffer());
         encoder.set_fragment_texture(0, Some(texture));
         encoder.set_fragment_sampler_state(0, Some(pipelines.sampler.as_ref()));
         draw(encoder, &pipelines.background, 6, 1);
+        encoder.set_scissor_rect(scissor_rect(
+            view,
+            orderbook_view,
+            gpu.width(),
+            gpu.height(),
+        ));
     }
 
     pub fn prepare(
@@ -1152,13 +1233,9 @@ impl MetalLayers {
         color.set_store_action(MTLStoreAction::Store);
         color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
         let encoder = command_buffer.new_render_command_encoder(pass);
-        encoder.set_scissor_rect(scissor_rect(
-            view,
-            orderbook_view,
-            gpu.width(),
-            gpu.height(),
-        ));
-        self.draw_base_layers(encoder);
+        let sc = scissor_rect(view, orderbook_view, gpu.width(), gpu.height());
+        encoder.set_scissor_rect(sc);
+        self.draw_base_layers(encoder, sc);
         self.draw_cached_combo(device, encoder, view);
         encoder.end_encoding();
         self.base_cache.valid = true;
@@ -1276,6 +1353,16 @@ impl MetalLayers {
             self.side_buffer
                 .write(device, "moon_chart_side_volume", &self.sides);
             self.side_buffer_dirty = false;
+        }
+        if self.hvol_buffers_dirty
+            || self.hvol_buffer.buffer.is_none()
+            || self.hvol_style_uniform.buffer.is_none()
+        {
+            self.hvol_buffer
+                .write(device, "moon_chart_hvol", &self.hvol);
+            self.hvol_style_uniform
+                .write(device, "moon_chart_hvol_style", &[self.hvol_style]);
+            self.hvol_buffers_dirty = false;
         }
     }
 
@@ -1402,6 +1489,8 @@ fn attach_gpu_frame_timing(command_buffer: &CommandBufferRef) {
     command_buffer.add_completed_handler(&block);
 }
 
+/// The base pass's clip, plot-to-book and deliberately not widened to the horizontal-volume
+/// zone; see the wgpu backend's `scissor_rect` for why, and [`blit_scissor`] for the blit.
 fn scissor_rect(
     view: &ChartViewGpu,
     orderbook_view: &ChartViewGpu,
@@ -1424,6 +1513,21 @@ fn scissor_rect(
     }
 }
 
+/// The pane scissor less the horizontal-volume zone at its left edge, for the user layers.
+fn userdata_scissor(pane: MTLScissorRect, hvol_zone: [f32; 4]) -> MTLScissorRect {
+    if hvol_zone[2] < 1.0 {
+        return pane;
+    }
+    let right = pane.x + pane.width;
+    let left = ((hvol_zone[0] + hvol_zone[2]).ceil().max(0.0) as u64).clamp(pane.x, right - 1);
+    MTLScissorRect {
+        x: left,
+        y: pane.y,
+        width: right - left,
+        height: pane.height,
+    }
+}
+
 fn bounds_scissor(bounds: [f32; 4], width: u32, height: u32) -> MTLScissorRect {
     let x = bounds[0].floor().max(0.0) as u64;
     let y = bounds[1].floor().max(0.0) as u64;
@@ -1441,14 +1545,31 @@ fn bounds_scissor(bounds: [f32; 4], width: u32, height: u32) -> MTLScissorRect {
     }
 }
 
-fn panel_dst(
+/// The cached base's blit clip: [`scissor_rect`] widened to take in the horizontal-volume zone;
+/// see the wgpu backend's `blit_scissor`.
+fn blit_scissor(
     view: &ChartViewGpu,
     orderbook_view: &ChartViewGpu,
+    hvol_zone: [f32; 4],
     width: u32,
     height: u32,
-) -> [f32; 4] {
+) -> MTLScissorRect {
     let sc = scissor_rect(view, orderbook_view, width, height);
-    [sc.x as f32, sc.y as f32, sc.width as f32, sc.height as f32]
+    if hvol_zone[2] < 1.0 {
+        return sc;
+    }
+    let zone_l = hvol_zone[0].floor().max(0.0) as u64;
+    let zone_r = (hvol_zone[0] + hvol_zone[2])
+        .ceil()
+        .clamp(0.0, width.max(1) as f32) as u64;
+    let x = sc.x.min(zone_l);
+    let r = (sc.x + sc.width).max(zone_r).max(x + 1);
+    MTLScissorRect {
+        x,
+        y: sc.y,
+        width: r - x,
+        height: sc.height,
+    }
 }
 
 fn create_pipelines(device: &DeviceRef, pixel_format: MTLPixelFormat) -> Pipelines {
@@ -1533,6 +1654,20 @@ fn create_pipelines(device: &DeviceRef, pixel_format: MTLPixelFormat) -> Pipelin
             pixel_format,
             "side_scale_vertex",
             "side_scale_fragment",
+        ),
+        hvol_rows: pipeline(
+            device,
+            &library,
+            pixel_format,
+            "hvol_row_vertex",
+            "hvol_row_fragment",
+        ),
+        hvol_bg: pipeline(
+            device,
+            &library,
+            pixel_format,
+            "hvol_bg_vertex",
+            "hvol_bg_fragment",
         ),
         crosses: pipeline(
             device,

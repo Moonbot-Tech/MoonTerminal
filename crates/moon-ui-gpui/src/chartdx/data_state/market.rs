@@ -30,6 +30,13 @@ fn candles_disabled() -> bool {
 /// reference terminal repaints the same column and far slower than a busy coin's revisions.
 const ARB_READ_PERIOD_MS: i64 = 250;
 
+/// How often a pane asks the source for its horizontal-volume profile when nothing else moved.
+///
+/// The profile's window ends NOW, so on a quiet market rows slide out of it with no trade to
+/// announce the change. Matched to the source's own slowest rebuild clock: asking faster costs a
+/// lock and a compare for an answer that cannot differ.
+const HVOL_RECHECK_MS: i64 = 5_000;
+
 /// Wall-clock span an opened chart asks back for, before the bar band clamps it.
 const HISTORY_FLOOR_SPAN_MS: f64 = 2.0 * 86_400_000.0;
 /// Fewest base candles the floor may resolve to. Keeps the coarse timeframes honest: two days is
@@ -317,9 +324,10 @@ impl ChartDataState {
                 self.orderbook_enabled,
                 self.time_axis_visible,
                 self.price_axis_pos,
+                self.hvol_zone_spec(),
                 self.last_ppp,
             );
-            let (chart_area, glass_area) = (areas.plot, areas.glass);
+            let (chart_area, glass_area, hvol_area) = (areas.plot, areas.glass, areas.hvol);
             let plot_h = chart_area.h;
             pane.view
                 .ensure_default_window(chart_area.w, self.present_rate_hz, self.default_x_ppm);
@@ -1127,6 +1135,203 @@ impl ChartDataState {
                 view::view_gpu(&pane.view, glass_win, res, self.last_ppp, view_style);
             if pr.orderbook_view != next_orderbook_view {
                 pr.orderbook_view = next_orderbook_view;
+                pr.gpu_prepare_dirty = true;
+                pixels_changed = true;
+            }
+            // Horizontal volumes: turnover by price over a trailing window, in the zone the layout
+            // reserved. The profile lives on the source's own slow clock (one to five seconds), so
+            // a call here is a lock and a revision compare unless something moved: the retained
+            // history (a trade batch), the request (window, row width), or the clock — the window
+            // ends NOW, so a quiet market's rows still slide out of it. NOT per frame: the base
+            // texture holds the zone, and a re-upload is a rebake.
+            let hvol_on = self.hvol_zone_spec().is_some()
+                && hvol_area.w >= 1.0
+                && self.trade_replay.is_none();
+            let hvol_window = hvol_on.then(|| {
+                moon_chart::hvol::effective_window(
+                    self.chart_graphics.hvol_tf_s,
+                    f64::from(window_ms),
+                )
+            });
+            if hvol_on {
+                // Moonbot's `PriceFrame` is a ROLLING window over price, the horizontal twin of the
+                // vertical band's `TimeFrame`: a percentage of a reference price that follows the
+                // market only past a band — re-binning the whole profile on every print is what
+                // the band prevents. The tick is read with it: one snapshot read per move. The
+                // bins the profile is kept at are the tick or a sixteenth of the window, and the
+                // zone draws the rolling sums over those bins, one per pixel of its height.
+                let last = pr
+                    .cached_last_price
+                    .map(f64::from)
+                    .filter(|p| p.is_finite() && *p > 0.0)
+                    .unwrap_or(0.0);
+                if moon_chart::hvol::ref_price_moved(pr.hvol_ref_price, last) {
+                    pr.hvol_ref_price = last;
+                    pr.hvol_price_step = source.price_step(pane.core, &pane.market);
+                }
+                let price_window = moon_chart::hvol::window_width(
+                    self.chart_graphics.hvol_price_frame_pct,
+                    pr.hvol_ref_price,
+                    pr.hvol_price_step,
+                )
+                .unwrap_or(0.0);
+                let row_width = if price_window > 0.0 {
+                    moon_chart::hvol::bin_width(price_window, pr.hvol_price_step)
+                } else {
+                    0.0
+                };
+                let key_moved = pr.hvol_window != hvol_window || pr.hvol_row_width != row_width;
+                let data_moved = history_source_changed || force_history_reset;
+                let clock_due = (now as i64).saturating_sub(pr.hvol_read_ms) >= HVOL_RECHECK_MS;
+                // Whether the resident bins changed this sync, so the samples must be retaken.
+                let mut bins_moved = false;
+                if row_width > 0.0 && (key_moved || data_moved || clock_due) {
+                    let hvol_timer = crate::diag::timer();
+                    let seen = if key_moved { 0 } else { pr.hvol_rev };
+                    let mut fresh = std::mem::take(&mut pr.hvol_rows);
+                    // The clock AND the key are stamped on the ASK, not on the answer: a market
+                    // whose provider, client or history is not there yet answers `None`, and
+                    // stamping only a success would leave both moved and put that pane on the
+                    // per-frame clock until the core showed up.
+                    pr.hvol_read_ms = now as i64;
+                    pr.hvol_window = hvol_window;
+                    pr.hvol_row_width = row_width;
+                    if let Some(window) = hvol_window {
+                        match source.price_profile(
+                            pane.core,
+                            &pane.market,
+                            window,
+                            row_width,
+                            seen,
+                            &mut fresh,
+                        ) {
+                            // No provider, client or history yet: keep what is resident and ask
+                            // again on the clock rather than blank the zone — and forget the
+                            // resident revision, so the answer that does come is copied whatever
+                            // number the new entry happens to stamp it with.
+                            None => pr.hvol_rev = 0,
+                            Some(rev) if rev != seen => {
+                                pr.hvol_rev = rev;
+                                bins_moved = true;
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                    pr.hvol_rows = fresh;
+                    crate::diag::record_us(&crate::diag::CHART_HVOL_READ_US, hvol_timer);
+                }
+                // The samples: retaken when the bins, the window or the Y camera moved — a price
+                // zoom or a pan is a new grid, and in follow mode the auto-fit moves the grid
+                // with the price. That is a pass over the zone's height plus the bins, and an
+                // upload of at most the zone's height in rows; the base is rebaked on a camera
+                // move regardless, so this adds no bake of its own.
+                let grid = moon_chart::hvol::SampleGrid {
+                    price_top: f64::from(pr.view.view_price0)
+                        + f64::from(pr.view.bounds[3]) / f64::from(pr.view.price_to_px.max(1e-9)),
+                    px_per_price: f64::from(pr.view.price_to_px),
+                    // Rounded UP, like every layer's scissor: a fractional last pixel gets a
+                    // sample rather than a gap at the zone's floor.
+                    height_px: hvol_area.h.max(0.0).ceil() as u32,
+                };
+                let window_moved = pr.hvol_price_window != price_window;
+                if bins_moved || window_moved || pr.hvol_grid != Some(grid) {
+                    pr.hvol_price_window = price_window;
+                    pr.hvol_grid = Some(grid);
+                    moon_chart::hvol::rolling_samples(
+                        &pr.hvol_rows,
+                        price_window,
+                        grid,
+                        &mut pr.hvol_samples,
+                    );
+                    fill_hvol_upload(&pr.hvol_samples, &mut pr.hvol_upload);
+                    crate::diag::bump_by(
+                        &crate::diag::CHART_HVOL_UPLOAD_LEN,
+                        pr.hvol_upload.len() as u64,
+                    );
+                    pr.layers.set_hvol(std::mem::take(&mut pr.hvol_upload));
+                    pr.gpu_prepare_dirty = true;
+                    pixels_changed = true;
+                }
+                // Withheld until the window is known, as the read itself is: a caption naming
+                // `0.00%` on the first sync would print a window nothing is summed over.
+                pr.hvol_caption = hvol_window.filter(|_| price_window > 0.0).map(|w| {
+                    (
+                        moon_chart::hvol::window_seconds(w),
+                        moon_chart::hvol::price_frame_pct_of(price_window, pr.hvol_ref_price),
+                    )
+                });
+            } else if pr.hvol_window.is_some() || !pr.hvol_rows.is_empty() {
+                // Off, or nowhere to draw: drop the resident bins and samples once and empty the
+                // layer, so the next switch-on starts from nothing rather than a stale profile.
+                pr.hvol_rows.clear();
+                pr.hvol_samples.clear();
+                pr.hvol_grid = None;
+                pr.hvol_rev = 0;
+                pr.hvol_window = None;
+                pr.hvol_row_width = 0.0;
+                pr.hvol_price_window = 0.0;
+                pr.hvol_caption = None;
+                pr.layers.set_hvol(Vec::new());
+                pr.gpu_prepare_dirty = true;
+                pixels_changed = true;
+            }
+            // The samples are scaled against the longest one on screen — every sample is on
+            // screen by construction, one per pixel of the zone (the fractional last one at most
+            // a pixel past its floor).
+            pr.hvol_stats = hvol_on
+                .then(|| {
+                    moon_chart::hvol::visible_row_max(
+                        &pr.hvol_samples,
+                        f32::NEG_INFINITY,
+                        f32::INFINITY,
+                        self.chart_graphics.hvol_stacked,
+                    )
+                })
+                .flatten();
+            let next_hvol_style = if hvol_on {
+                // The bottom band's own colours AND opacity: the reference draws its two volume
+                // indicators alike, and the reader sets one opacity for both.
+                let alpha = self.chart_graphics.candle_volume_alpha;
+                HvolStyleGpu {
+                    zone: [
+                        self.origin.0 + hvol_area.x,
+                        self.origin.1 + hvol_area.y,
+                        hvol_area.w,
+                        hvol_area.h,
+                    ],
+                    buy: rgba3(self.theme.candle_up, alpha),
+                    sell: rgba3(self.theme.candle_down, alpha),
+                    // The zone keeps its fill and frame in both modes, as the reference draws
+                    // them; `transparent` is about the captions' plates, below.
+                    bg: rgba3(self.theme.book_bg, 1.0),
+                    border: rgba3(self.theme.grid, self.theme.grid_alpha),
+                    m: [
+                        0.0,
+                        f32::from(u8::from(self.chart_graphics.hvol_stacked)),
+                        // Quantized for the reason the band's is: the live row grows with every
+                        // print, and this struct is the diff gate on a cached texture.
+                        pr.hvol_stats
+                            .map(|max| moon_chart::volume_bars::quantize_inv_max(1.0 / max))
+                            .unwrap_or(0.0),
+                        self.last_ppp.max(1.0),
+                    ],
+                }
+            } else {
+                HvolStyleGpu::default()
+            };
+            // Both are read by the text pass alone, so a change is a present without a base
+            // rebake — `text_changed`, not `pixels_changed`. Diffed: an unconditional store would
+            // leave a popup press on either invisible until something else repainted.
+            let readout_left = self.chart_graphics.hvol_side.is_left();
+            let plates = !self.chart_graphics.hvol_side.is_transparent();
+            if pr.hvol_readout_left != readout_left || pr.hvol_plates != plates {
+                pr.hvol_readout_left = readout_left;
+                pr.hvol_plates = plates;
+                text_changed = true;
+            }
+            if pr.hvol_style != next_hvol_style {
+                pr.hvol_style = next_hvol_style;
+                pr.layers.set_hvol_style(next_hvol_style);
                 pr.gpu_prepare_dirty = true;
                 pixels_changed = true;
             }

@@ -174,6 +174,10 @@ pub fn normalize_chart_graphics(cfg: ChartGraphicsCfg) -> ChartGraphicsCfg {
         candle_volume_alpha: clamp_volume_alpha(cfg.candle_volume_alpha, def.candle_volume_alpha),
         // The sides band's interval snaps onto its own list, in the module that owns the list.
         candle_volume_tf_s: crate::side_volume::snap_tf_s(cfg.candle_volume_tf_s),
+        // The horizontal volumes' clamps and snap belong to `hvol`, which owns their ranges.
+        hvol_tf_s: crate::hvol::snap_tf_s(cfg.hvol_tf_s),
+        hvol_price_frame_pct: crate::hvol::clamp_price_frame_pct(cfg.hvol_price_frame_pct),
+        hvol_width: crate::hvol::clamp_width(cfg.hvol_width),
         ..cfg
     }
 }

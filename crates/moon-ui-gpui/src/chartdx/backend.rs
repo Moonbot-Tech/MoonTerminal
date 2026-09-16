@@ -7,7 +7,8 @@ use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, PriceStyleGpu, ReadoutRect, SideVolumeGpu, TickStyleGpu, VolumeStyleGpu,
+    GridParams, HvolRowGpu, HvolStyleGpu, PriceStyleGpu, ReadoutRect, SideVolumeGpu, TickStyleGpu,
+    VolumeStyleGpu,
 };
 
 #[cfg(target_os = "macos")]
@@ -22,6 +23,7 @@ use super::{
     combo::ComboLayer,
     cursor::CursorLayer,
     grid::GridLayer,
+    hvol::HvolLayer,
     orderbook::OrderBookLayer,
     readout::ReadoutLayer,
     side_volume::SideVolumeLayer,
@@ -40,6 +42,8 @@ pub struct PlatformLayers {
     candles: CandleLayer,
     #[cfg(windows)]
     side_volume: SideVolumeLayer,
+    #[cfg(windows)]
+    hvol: HvolLayer,
     #[cfg(windows)]
     combo: ComboLayer,
     #[cfg(windows)]
@@ -107,6 +111,8 @@ impl PlatformLayers {
             candles: CandleLayer::new(),
             #[cfg(windows)]
             side_volume: SideVolumeLayer::new(),
+            #[cfg(windows)]
+            hvol: HvolLayer::new(),
             #[cfg(windows)]
             combo: ComboLayer::new(),
             #[cfg(windows)]
@@ -218,6 +224,34 @@ impl PlatformLayers {
         }
     }
 
+    /// Fully replaces the horizontal volumes' row set when the profile moved.
+    pub fn set_hvol(&mut self, data: Vec<HvolRowGpu>) {
+        #[cfg(windows)]
+        self.hvol.set(data);
+        #[cfg(target_os = "linux")]
+        self.wgpu.set_hvol(data);
+        #[cfg(target_os = "macos")]
+        self.metal.set_hvol(data);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            let _ = data;
+        }
+    }
+
+    /// Idempotently sets the horizontal volumes' zone, colours, kind and normalisation.
+    pub fn set_hvol_style(&mut self, style: HvolStyleGpu) {
+        #[cfg(windows)]
+        self.hvol.set_style(style);
+        #[cfg(target_os = "linux")]
+        self.wgpu.set_hvol_style(style);
+        #[cfg(target_os = "macos")]
+        self.metal.set_hvol_style(style);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            let _ = style;
+        }
+    }
+
     /// Idempotently sets the bottom-volume band style, height, opacity and normalisation.
     ///
     /// One struct for both band layers: the style id in it decides whether the candle layer or the
@@ -322,6 +356,7 @@ impl PlatformLayers {
     ) {
         self.candles.prepare(device, context, gpu);
         self.side_volume.prepare(device, context, gpu);
+        self.hvol.prepare(device, context, gpu);
         self.combo.prepare(view, device, context, gpu);
         self.orderbook
             .prepare(orderbook_view, book_style, device, context, gpu);
@@ -422,6 +457,9 @@ impl PlatformLayers {
         self.side_volume.render(view, context, rtv, gpu, panel_clip);
         crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
         self.combo.render(view, context, rtv, gpu, panel_clip);
+        // The horizontal volumes live in their own zone beside the plot, so their place in the
+        // order is about the base, not the candles: after the plot's layers, before the book.
+        self.hvol.render(view, context, rtv, gpu, panel_clip);
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
         self.orderbook
             .render(orderbook_view, context, rtv, gpu, panel_clip);

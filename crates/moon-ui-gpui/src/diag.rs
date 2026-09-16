@@ -293,6 +293,17 @@ diag_counters!(
     // keep, because the band's upload is a few thousand 16-byte rows and not worth its own line;
     // `side_volume_upload_len` says how many. Sits on the frame thread like `history_read_us`.
     CHART_SIDE_VOLUME_READ_US => "side_volume_read_us",
+    // The horizontal volumes (turnover by price beside the plot) are their own layer too:
+    // `HVOL_DRAW` counts its base-pass draws, `HVOL_UPLOAD_LEN` the rows re-shipped — which
+    // happens only when the profile's revision moved, on the source's own slow clock (one to
+    // five seconds), never per frame — and `HVOL_READ_US` the microseconds per second the read
+    // costs a sync, revision compare included. `hvol_upload_len` moving every frame while the
+    // chart sits still is the defect this counter exists to show.
+    CHART_HVOL_DRAW => "hvol_draw",
+    CHART_HVOL_UPLOAD_LEN => "hvol_upload_len",
+    // Rows past the profile buffer's capacity, dropped from both ends of the price range.
+    CHART_HVOL_DROPPED => "hvol_dropped",
+    CHART_HVOL_READ_US => "hvol_read_us",
     CHART_HISTORY_RESET_ROWS => "history_reset_rows",
     CHART_HISTORY_RESET_MS => "history_reset_ms",
     // Microseconds per second inside `read_chart_history_into`, over EVERY call — the reset pair

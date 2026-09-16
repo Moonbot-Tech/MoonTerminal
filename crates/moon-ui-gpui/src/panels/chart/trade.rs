@@ -634,6 +634,14 @@ impl ChartPanel {
         let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
             return None;
         };
+        // No line lives in the horizontal-volume zone — lines run from their start to the plot's
+        // right edge and on into the book, never left of the plot — so nothing there is a hit. Said
+        // HERE rather than at each caller: a press in the zone is neither a grab nor a cancel,
+        // whatever the caller's zone mode, and without this a line whose start scrolled off
+        // screen would answer to a press well left of the plot.
+        if self.hvol_pane_at(pos).is_some() {
+            return None;
+        }
         let Some((core, market)) = self
             .chart
             .with_container(|container| container.target(pane))

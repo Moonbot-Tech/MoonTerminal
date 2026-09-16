@@ -212,6 +212,60 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
     );
 }
 
+/// The horizontal-volume fields load from a file written before them, round-trip their side
+/// spelling, and salvage a malformed one without dropping the rest of the block.
+///
+/// Breakage: a file from an older build has none of these keys, and a stricter reader would
+/// reset the user's whole chart-graphics block to defaults; an unknown side spelling from a newer
+/// build would do the same to a file that is otherwise fine.
+#[test]
+fn hvol_fields_default_round_trip_and_read_leniently() {
+    let empty: WindowLayout = toml::from_str("").expect("an empty layout must load");
+    assert!(!empty.chart_graphics.hvol_enabled);
+    assert_eq!(empty.chart_graphics.hvol_tf_s, 0, "Auto");
+    assert_eq!(empty.chart_graphics.hvol_side, HvolSide::Right);
+    assert!(!empty.chart_graphics.hvol_stacked);
+
+    let doc = "[chart_graphics]
+               hvol_enabled = true
+               hvol_tf_s = 3600
+               hvol_side = \"left-transparent\"
+               hvol_width = 0.3
+               hvol_stacked = true
+";
+    let decoded: WindowLayout = toml::from_str(doc).expect("the hvol block must load");
+    assert!(decoded.chart_graphics.hvol_enabled);
+    assert_eq!(decoded.chart_graphics.hvol_tf_s, 3600);
+    assert_eq!(decoded.chart_graphics.hvol_side, HvolSide::LeftTransparent);
+    assert!(decoded.chart_graphics.hvol_side.is_left());
+    assert!(decoded.chart_graphics.hvol_side.is_transparent());
+    assert_eq!(decoded.chart_graphics.hvol_width, 0.3);
+    assert!(decoded.chart_graphics.hvol_stacked);
+    let written = toml::to_string(&decoded.chart_graphics).expect("serializes");
+    assert!(
+        written.contains("hvol_side = \"left-transparent\""),
+        "kebab-case spelling on disk: {written}"
+    );
+
+    let doc = "[chart_graphics]
+               hvol_enabled = \"maybe\"
+               hvol_tf_s = \"soon\"
+               hvol_side = \"upside-down\"
+               hvol_price_frame_pct = \"wide\"
+               hvol_stacked = true
+";
+    let decoded: WindowLayout =
+        toml::from_str(doc).expect("malformed hvol fields must not reject the layout document");
+    assert!(!decoded.chart_graphics.hvol_enabled);
+    assert_eq!(decoded.chart_graphics.hvol_tf_s, 0);
+    assert_eq!(decoded.chart_graphics.hvol_side, HvolSide::Right);
+    assert_eq!(decoded.chart_graphics.hvol_price_frame_pct, 0.1);
+    assert!(
+        decoded.chart_graphics.hvol_stacked,
+        "the well-formed neighbour of a malformed field survives"
+    );
+}
+
 /// Protects all workspace maps as a restart-stable, backwards-compatible layout contract.
 ///
 /// Plausible breakage: marking a map as skipped/default-only makes a saved Auto workspace silently

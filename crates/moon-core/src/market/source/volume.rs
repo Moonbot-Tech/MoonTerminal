@@ -50,10 +50,12 @@ use crate::util::time::now_unix_ms_i64;
 use super::MarketDataSource;
 
 mod liq;
+mod profile;
 mod series;
 mod track;
 
 pub use liq::LiqSpanReadout;
+pub use profile::{PriceProfileRow, ProfileWindow, synthetic_profile};
 pub use series::{SIDE_BUCKET_MS, SideVolumeBucket, synthetic_sides};
 
 use track::{MarketTrack, TRACK_SPAN_MS};
@@ -289,6 +291,11 @@ fn span_ttl(span: VolumeSpan, at: VolumeAt) -> i64 {
     }
 }
 
+/// What one horizontal-volume profile is built for: the provider, the market, the window and
+/// the row width (as bits, so the key can be hashed; the chart holds the width still, see
+/// `moon_chart::hvol::ref_price_moved`).
+type ProfileKey = (CoreId, String, ProfileWindow, u64);
+
 /// One market's liquidation figures for one span, and when they were read.
 struct LiqEntry {
     read_ms: i64,
@@ -320,6 +327,12 @@ pub(super) struct VolumeBook {
     /// Ordered five-second buckets per market, as deep as the retained history, for the chart's
     /// sides band. Its own map beside `tracks`: a track is an hour's ring, this is the whole tail.
     series: HashMap<(CoreId, String), series::SideSeries>,
+    /// Turnover by PRICE over a trailing window, for the chart's horizontal volumes. Keyed by the
+    /// REQUEST as well as the market: two panes on one coin with different windows or row widths
+    /// (a tab and a torn-off window, each with its own settings) each keep a profile, rather
+    /// than rebuilding one shared entry on every alternate ask. Rebuilt on its own slow clock;
+    /// see [`profile`].
+    profiles: HashMap<ProfileKey, profile::PriceProfile>,
 }
 
 impl VolumeBook {
@@ -340,6 +353,8 @@ impl VolumeBook {
             .retain(|_, track| now.saturating_sub(track.used_ms) < SPAN_KEEP_MS);
         self.series
             .retain(|_, series| now.saturating_sub(series.used_ms) < SERIES_KEEP_MS);
+        self.profiles
+            .retain(|_, profile| now.saturating_sub(profile.used_ms) < SERIES_KEEP_MS);
     }
 
     /// Forget everything a core answered.
@@ -353,6 +368,8 @@ impl VolumeBook {
         // its sequence again, and a stale cursor would fold the wrong rows in.
         self.tracks.retain(|(provider, _), _| *provider != core);
         self.series.retain(|(provider, _), _| *provider != core);
+        self.profiles
+            .retain(|(provider, _, _, _), _| *provider != core);
     }
 }
 
@@ -523,6 +540,93 @@ impl MarketDataSource {
         Some(())
     }
 
+    /// Fill `out` with one market's bought/sold turnover by PRICE over a trailing window, for the
+    /// chart's horizontal volumes — but only when the profile moved since `seen`.
+    ///
+    /// The profile behind it is rebuilt from the retained history on its own slow clock (see
+    /// [`profile`]); a call inside that clock is a lock and a revision compare. The rows are copied
+    /// only when the revision differs from `seen`, so a chart that holds the last one pays nothing
+    /// for an unchanged profile — not even the copy.
+    ///
+    /// Args:
+    ///     core: Consumer core whose pane is drawn; its PROVIDER owns the history.
+    ///     market: Data-key market name on that core.
+    ///     window: The trailing window, ending now.
+    ///     row_width: Row width in price units, already floored at the market's tick by the caller.
+    ///     seen: The revision the caller holds, `0` for none.
+    ///     out: Filled with the rows when the revision moved; untouched otherwise.
+    ///
+    /// Returns:
+    ///     The current revision, or `None` when the provider, its client, its snapshot or this
+    ///     market's retained history is unavailable — which is NOT the same as a market that did
+    ///     not trade, and leaves `out` untouched.
+    pub fn price_profile(
+        &self,
+        core: CoreId,
+        market: &str,
+        window: ProfileWindow,
+        row_width: f64,
+        seen: u64,
+        out: &mut Vec<PriceProfileRow>,
+    ) -> Option<u64> {
+        // Bench first, as `side_volume_buckets` does: a bench process has no client, and the
+        // profile it draws is the synthetic one — see `synthetic_profile`. The revision is the
+        // window and width folded together, so a bench chart re-copies only when its request
+        // changes; the candles behind it never move.
+        if let Some(fixture) = crate::fixture::active() {
+            if fixture.covers(market) {
+                let cache = {
+                    let inner = self.inner.read().expect("market source poisoned");
+                    inner.kline_cache.clone()
+                };
+                let cache = cache?;
+                let now = now_unix_ms_i64();
+                let from = match window {
+                    ProfileWindow::Millis(ms) => now.saturating_sub(ms),
+                    ProfileWindow::All => 0,
+                };
+                let revision = synthetic_profile_revision(window, row_width);
+                if revision != seen {
+                    let candles = fixture.candles(&cache, 60_000, from, now);
+                    *out = synthetic_profile(&candles, row_width);
+                }
+                return Some(revision);
+            }
+        }
+        let provider = self.provider_of(core)?;
+        // The archive revision, read BEFORE the snapshot, for the reason `side_volume_buckets`
+        // gives.
+        let archive_rev = self.market_revisions(core, market)?.archive;
+        let now = now_unix_ms_i64();
+        let snapshot = self.core_client(provider)?.snapshot_versioned()?;
+        let readers = snapshot.market_history_readers(market)?;
+        let trades = readers.futures_trades.or(readers.spot_trades);
+        let handle = self.volume_book();
+        let mut book = handle.lock().ok()?;
+        // Pruned HERE as well as on the caption path: every row width the chart asks for is an
+        // entry of its own (each five-percent move of the reference price, each slider step),
+        // and a chart with no volume caption configured never reaches the other prune.
+        book.prune(now);
+        let profile = book
+            .profiles
+            .entry((provider, market.to_string(), window, row_width.to_bits()))
+            .or_insert_with(|| profile::PriceProfile::new(now));
+        profile.refresh(
+            trades.as_ref(),
+            readers.mini_candles.as_ref(),
+            window,
+            row_width,
+            archive_rev,
+            now,
+        );
+        let revision = profile.revision();
+        if revision != seen {
+            out.clear();
+            out.extend_from_slice(profile.rows());
+        }
+        Some(revision)
+    }
+
     /// A cached entry still inside its TTL.
     fn volume_cached(
         &self,
@@ -637,6 +741,16 @@ impl MarketDataSource {
             .volume_book
             .clone()
     }
+}
+
+/// The bench profile's revision: never zero, and different for every `(window, width)` pair a
+/// chart can ask for, so the copy happens exactly when the request changes.
+fn synthetic_profile_revision(window: ProfileWindow, row_width: f64) -> u64 {
+    let w = match window {
+        ProfileWindow::Millis(ms) => ms as u64,
+        ProfileWindow::All => u64::MAX,
+    };
+    (w ^ row_width.to_bits().rotate_left(17)).max(1)
 }
 
 /// Copy exactly the rows of `[from, to)` out of a retained ring.
