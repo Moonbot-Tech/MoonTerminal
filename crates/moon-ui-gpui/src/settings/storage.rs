@@ -165,6 +165,7 @@ impl SettingsView {
         }
     }
 
+    /// Render storage controls with the version-limit stepper wrapping below its label when needed.
     pub(super) fn storage_tab(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         // Start background snapshot collection when the tab is first shown.
         if self.storage.info.is_none() && !self.storage.inflight {
@@ -201,7 +202,6 @@ impl SettingsView {
             // otherwise places text against the outline.
             MoonButton::new(id)
                 .outline()
-                .small()
                 .label(format!("  {label}  "))
                 .disabled(disabled)
         };
@@ -307,6 +307,7 @@ impl SettingsView {
             )
             .child(
                 h_flex()
+                    .flex_wrap()
                     .gap(design::ui_px(cx, 8.0))
                     .items_center()
                     .child(

@@ -620,7 +620,8 @@ impl Render for DetachedWindow {
 }
 
 /// Opens a detached window from a specification, either while restoring each saved specification at
-/// startup or after a new detach action. The content is a fresh panel and geometry comes from `spec`.
+/// startup or after a new detach action. Saved geometry is fitted to the chosen display; an
+/// unreachable rectangle falls back to an owner cascade. The content is a fresh panel.
 ///
 /// `owner_display` is the owner's display captured at the call site with `window.display(cx)`. A
 /// detach action runs INSIDE the owner window's update, where its slot in `cx.windows` is taken and
@@ -674,6 +675,18 @@ pub fn spawn(
             Bounds { origin, ..bounds }
         }
     };
+    let fallback = crate::window::windowing::detached_fallback_bounds(
+        owner,
+        display_id,
+        size(px(1100.0), px(520.0)),
+        app,
+    );
+    let bounds =
+        crate::window::windowing::reachable_window_bounds(bounds, display_id, Some(fallback), app);
+    spec.x = f32::from(bounds.origin.x) as i32;
+    spec.y = f32::from(bounds.origin.y) as i32;
+    spec.w = f32::from(bounds.size.width) as u32;
+    spec.h = f32::from(bounds.size.height) as u32;
     // Record the display this window is opening on, so a panel detached and left alone until quit
     // still knows its monitor. A known identity is never replaced by an unknown one — off macOS the
     // lookup always answers `None`, and a spec carried over from a Mac must survive that.

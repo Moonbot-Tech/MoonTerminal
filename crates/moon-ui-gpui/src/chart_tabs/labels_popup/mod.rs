@@ -44,19 +44,6 @@ const MICRO_COUNT: f32 = 9.0;
 /// a zero Font delta, and the eighteen pixels reach the popup by themselves through
 /// [`content_width`]; nothing else needs touching, which is the property that derivation buys.
 pub(super) const NAME_W: f32 = 150.0;
-/// Unscaled size the name button draws its label at.
-///
-/// [`NAME_TEXT`] is the size the FIT below measures against: measuring a string at a narrower
-/// font underestimates its width and the label overflows the box anyway, which is exactly the bug
-/// this module is fixing. The SIZE is only half of that — the family matters just as much, and it
-/// is the MONOSPACED one the shell root imposes on the whole tree, not the theme's UI family.
-pub(super) const NAME_TEXT: f32 = 9.0;
-/// Unscaled padding a `Micro` button keeps on EACH side of its label.
-///
-/// `Size::XSmall` again. It is UI-scaled while the label is font-scaled, so the two terms of
-/// [`name_budget`] cannot share one scaler — at a raised Font delta with the UI slider left alone
-/// they move apart, and a budget built from a single scaler is wrong at every setting but one.
-pub(super) const NAME_PAD_X: f32 = 7.0;
 /// Width the "add" trigger borrows from the caption catalogue's own column.
 pub(super) const FIELD_W: f32 = 104.0;
 /// Width of the band dropdown's trigger. Sized on the longest localized band name.
@@ -105,7 +92,9 @@ pub(super) fn content_width(cx: &App) -> Pixels {
 /// Returns:
 ///     The rendered pixels available to the label, never negative.
 pub(super) fn name_budget(cx: &App) -> f32 {
-    (design::font_w(cx, NAME_W) - 2.0 * design::ui_value(cx, NAME_PAD_X)).max(0.0)
+    (design::font_w(cx, NAME_W)
+        - 2.0 * design::ui_value(cx, design::button_tier(cx).control_metrics().pad_x))
+    .max(0.0)
 }
 
 /// Fit a module's name into `budget` while keeping `suffix` whole.

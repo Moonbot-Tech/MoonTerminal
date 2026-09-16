@@ -47,6 +47,34 @@ fn trade_hover_profit_text_never_prints_an_amount_outside_a_resolved_quote() {
     );
 }
 
+/// `panels/chart/trade.rs:ChartPanel::evaluate_cancel_hold` must reject a repeat before target
+/// lookup when its armed window does not own the hovered chart; deleting that gate lets holding
+/// Tab in one window cancel an entry in another.
+#[test]
+fn repeated_cancel_requires_the_armed_window_to_own_the_hovered_chart() {
+    let source = code_only(&read_src("panels/chart/trade.rs"));
+    let body = braced_body(&source, "fn evaluate_cancel_hold(");
+    let repeat_condition = body
+        .find("press == PressKind::Repeat")
+        .expect("evaluate_cancel_hold must distinguish repeats");
+    let ownership_condition = body
+        .find("!self.backend.read(cx).cancel_hold_owns_hovered_chart(cx)")
+        .expect("a repeat must reject a hovered chart owned by another window");
+    let target_lookup = body
+        .find("let target = self")
+        .expect("evaluate_cancel_hold must look up the hovered target after its guards");
+    let ownership_gate = &body[repeat_condition..target_lookup];
+
+    assert!(
+        repeat_condition < ownership_condition,
+        "the repeat condition must govern the hovered-chart ownership check"
+    );
+    assert!(
+        ownership_gate.contains("return false;"),
+        "an unowned hovered chart must return before any target lookup"
+    );
+}
+
 /// All three shader copies of closed-trade-history geometry must bound the arrow branch
 /// (`3.5 < shape < 5.5`) strictly BEFORE the open-ended warning-badge branch (`shape > 2.5`).
 ///
@@ -1088,15 +1116,15 @@ fn report_coin_history_load_does_not_change_the_viewport() {
     }
 }
 
-/// `labels_popup/mod.rs:name_budget` must subtract UI-scaled `Micro` button padding, not
-/// Font-scaled padding: replacing `design::ui_value(cx, NAME_PAD_X)` with `design::font_w` makes
+/// `labels_popup/mod.rs:name_budget` must subtract UI-scaled density-tier button padding, not
+/// Font-scaled padding: replacing the tier's `pad_x` with `design::font_w` makes
 /// a raised UI delta overflow the chart-label name button while Font remains at its default.
 #[test]
 fn chart_label_name_budget_uses_the_button_s_ui_scale() {
     let source = code_only(&read_src("chart_tabs/labels_popup/mod.rs"));
     let budget = braced_body(&source, "pub(super) fn name_budget(");
     assert!(
-        budget.contains("design::ui_value(cx, NAME_PAD_X)"),
+        budget.contains("design::button_tier(cx).control_metrics().pad_x"),
         "name_budget must subtract MoonButton padding with the UI scale"
     );
 }

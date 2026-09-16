@@ -450,10 +450,16 @@ impl AnalyticsView {
             if t == Tab::Calendar {
                 row = row.child(design::chrome_divider(cx, p));
             }
-            // MoonButton's custom size has no horizontal padding, so give each localized title
-            // measured breathing room while retaining a useful click target for short labels.
-            let tab_width = (design::ui_text_width(cx, &title, 10.5, 400.0, false)
-                + design::ui_value(cx, 20.0))
+            // Title width plus the density-tier button's own pad_x on both sides, with a floor so
+            // a short label still has a useful click target.
+            let tab_width = (design::ui_text_width_zoomed(
+                cx,
+                &title,
+                design::tier_font_size(cx),
+                400.0,
+                false,
+            ) + 2.0
+                * design::ui_value(cx, design::button_tier(cx).control_metrics().pad_x))
             .max(design::ui_value(cx, 72.0));
             // Wrapped in its own font_family: the tab title is a label, while the toolbar row it
             // sits in (the analytics root stays mono) later carries the core NAME, which is data.
@@ -465,13 +471,7 @@ impl AnalyticsView {
                         } else {
                             MoonButtonVariant::Ghost
                         })
-                        .size(MoonButtonSize::Custom {
-                            height: 24.0,
-                            radius: design::R_BUTTON_BASE,
-                            font_size: 10.5,
-                            line_height: 13.0,
-                            gap: 5.0,
-                        })
+                        .size(MoonButtonSize::density(cx))
                         .width(tab_width)
                         .selected(on)
                         .label(title)
@@ -1245,19 +1245,23 @@ impl AnalyticsView {
         let to_lbl = t!("analytics.period.to_lbl").to_string();
         // Each `date_field` draws its caption at `design::t_body(cx)`, so measure at the same
         // unscaled base rather than a second guessed size.
-        let date_captions_w =
-            design::ui_text_width(cx, &from_lbl, design::base_text(cx), 400.0, false)
-                + design::ui_text_width(cx, &to_lbl, design::base_text(cx), 400.0, false);
+        let date_captions_w = design::ui_body_text_width(cx, &from_lbl, 400.0)
+            + design::ui_body_text_width(cx, &to_lbl, 400.0);
         // `date_field`'s own `h_flex().gap_1()` between its caption and picker — GPUI's
         // `rems(0.25)`, at the window's rem size, which this app never overrides from GPUI's
         // default `px(16.)`. One gap per field, not scaled by the legacy font-delta channel.
         let date_field_gaps_w = f32::from(rems(0.25).to_pixels(px(16.0))) * 2.0;
-        let custom_group_w = 1.0
-            + design::ui_text_width(cx, &custom_label, 10.5, 400.0, false)
-            + field_w * 2.0
-            + date_captions_w
-            + date_field_gaps_w
-            + design::ui_value(cx, design::CHROME_GAP) * 3.0;
+        let custom_group_w =
+            1.0 + design::ui_text_width_zoomed(
+                cx,
+                &custom_label,
+                design::tier_font_size(cx) - 2.0,
+                400.0,
+                false,
+            ) + field_w * 2.0
+                + date_captions_w
+                + date_field_gaps_w
+                + design::ui_value(cx, design::CHROME_GAP) * 3.0;
         // The undated-close note lives in this bar's tail, so its reserved width is part of what
         // the presets must fit around — same budget, one more atom.
         let note = match undated_banner_state(

@@ -136,6 +136,20 @@ impl Render for Shell {
         let prelude_us = crate::diag::timer();
         crate::hotkeys::restore_root_focus(&self.focus, window, cx);
 
+        // A language save reaches this Shell only as a plain repaint (`cx.refresh_windows()`);
+        // every other label re-translates because it calls `t!()` inline right here, but the dock
+        // header tooltips are resolved once and stored, so they need this explicit re-push.
+        // Compared field by field for the same reason `pane_cache` compares locale on a hit: owning
+        // it means allocating it, and a miss is the rare case.
+        let locale = rust_i18n::locale();
+        let locale: &str = &locale;
+        if self.dock_control_tooltips_locale.as_ref() != locale {
+            self.dock_control_tooltips_locale = SharedString::from(locale.to_string());
+            self.dock.update(cx, |dock, dock_cx| {
+                dock.set_panel_control_tooltips(Self::resolved_dock_control_tooltips(), dock_cx);
+            });
+        }
+
         // Collect frame and status diagnostics here; chart data, input, and axes stay in ChartPanel.
         // Smoothed render FPS is shown in the status bar, matching the egui host.
         let now_inst = Instant::now();
@@ -348,6 +362,11 @@ impl Render for Shell {
             .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, _cx| {
                 crate::hotkeys::trace_key_arrived(ev);
                 this.modifier_watch.interrupt();
+            }))
+            // Capture phase, like the key-down trace below it: a key-up consumed by a focused field never
+            // bubbles, and a release the root never hears would leave the cancel hold armed.
+            .capture_key_up(cx.listener(|this, ev: &KeyUpEvent, _window, cx| {
+                crate::hotkeys::release_cancel_key(&this.backend, &ev.keystroke, cx);
             }))
             // ── Header ──────────────────────────────────────────────
             .children(chrome_stubbed().then(|| div().w_full().h(px(design::header_height(cx)))))

@@ -639,3 +639,31 @@ fn an_empty_folder_is_appended_without_duplicating_a_live_one() {
     super::ensure_folder(&mut node, &["zz".to_string()]);
     assert_eq!(folder_order(&node, ""), vec!["b", "a", "a/ghost", "zz"]);
 }
+
+/// Removing shared stem matching duplicates a core archive name and loses its selection.
+/// The core spelling must remain the row value sent by the existing click handler.
+#[test]
+fn sound_archive_picklist_preserves_the_core_name_and_selection() {
+    let field = moon_core::feed::SchemaField {
+        name: "SoundKind".into(),
+        type_name: "String".into(),
+        ui: moon_core::feed::SchemaFieldUi::Combo,
+        picklist: vec!["NONE".into(), "sounds/babytoy".into()],
+        default: None,
+    };
+    let rows = super::effective_picklist(&field, "sounds/babytoy");
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.as_str() == "sounds/babytoy")
+            .count(),
+        1
+    );
+    assert!(!rows.iter().any(|row| row.eq_ignore_ascii_case("babytoy")));
+    assert_eq!(
+        rows.iter()
+            .filter(|row| super::picklist_row_is(&field, row, "sounds/babytoy"))
+            .count(),
+        1
+    );
+    assert!(!super::picklist_row_is(&field, "sounds/", "sounds/"));
+}

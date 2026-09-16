@@ -144,37 +144,7 @@ fn goal_c_locale_keys_carry_all_three_languages() {
         ("assets.yml", "assets.refresh_hint"),
     ];
     for (file, key) in cases {
-        let locales = fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("..")
-                .join("locales")
-                .join(file),
-        )
-        .unwrap_or_else(|err| panic!("failed to read locales/{file}: {err}"))
-        .replace("\r\n", "\n");
-        let after = locales
-            .split_once(&format!("{key}:\n"))
-            .unwrap_or_else(|| panic!("locales/{file} does not define {key}"))
-            .1;
-        let members: Vec<&str> = after
-            .lines()
-            .take_while(|line| line.starts_with("  "))
-            .collect();
-        assert_eq!(
-            members.len(),
-            3,
-            "{key} in locales/{file} must define exactly ru, en, and es"
-        );
-        for locale in ["ru", "en", "es"] {
-            assert!(
-                members
-                    .iter()
-                    .any(|line| line.starts_with(&format!("  {locale}: "))),
-                "{key} in locales/{file} must carry {locale}, or that language shows the raw \
-                 key instead"
-            );
-        }
+        assert_locale_key_in_three_languages(file, key);
     }
 }
 
@@ -318,4 +288,97 @@ fn chrome_label_helpers_keep_the_single_contrast_lift() {
         !table_style.contains(".themed("),
         "table_style must leave runtime palette resolution to MoonDataTable"
     );
+}
+
+/// Broadening `shell/workspace.rs:drain_dock_layout_reset` into a config or detached-window clear
+/// must fail: Reset panel layout would silently erase table preferences, saved servers, or a
+/// detached window instead of only rebuilding the current workspace layout.
+#[test]
+fn dock_layout_reset_changes_only_layout_authorities() {
+    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let docks = code_only(&read_src("shell/docks.rs"));
+    let drain = braced_body(&workspace, "fn drain_dock_layout_reset(");
+    let classic = braced_body(&docks, "fn reset_classic_dock_layout(");
+    let classic_compact = classic.split_whitespace().collect::<String>();
+
+    assert!(
+        drain.contains("default_auto_workspace_topology()")
+            && drain.contains("self.reset_classic_dock_layout(window, cx)"),
+        "reset must select the existing default builder for Auto and the scoped Classic reset"
+    );
+    assert!(
+        classic.contains("dock_states.remove(&group)")
+            && classic_compact.contains("dock_split_slot.retain")
+            && classic.contains("dock_placement_key_belongs_to(key, &group)")
+            && classic.contains("default_classic_center(")
+            && classic.contains("set_center("),
+        "Classic reset must discard only its saved dock state, filter only its group's placements, and rebuild one default center"
+    );
+    for forbidden in [
+        "table_sorts",
+        "chart_specs",
+        "config.save",
+        "servers",
+        "detached.retain",
+        "detached.push",
+        "settings_window",
+    ] {
+        assert!(
+            !drain.contains(forbidden) && !classic.contains(forbidden),
+            "reset must not touch {forbidden}; that state is outside panel-layout recovery"
+        );
+    }
+}
+
+/// Removing a tooltip field, either shared-resolver call, or a locale sibling must fail: an Auto
+/// user would again see an unlabeled zoom-only dock control with no recovery hint after opening or
+/// after changing language.
+#[test]
+fn dock_header_controls_and_reset_labels_keep_localized_tooltips() {
+    let init = code_only(&read_src("shell/init.rs"));
+    let render = code_only(&read_src("shell/render.rs"));
+    let tooltips = braced_body(&init, "pub(super) fn resolved_dock_control_tooltips()");
+    let construction = braced_body(&init, "let dock = cx.new(|cx|");
+    let locale_refresh = braced_body(&render, "fn render(");
+
+    for key in [
+        "dock.detach_hint",
+        "dock.ctl.zoom_in",
+        "dock.ctl.zoom_out",
+        "dock.ctl.close",
+        "dock.ctl.overflow",
+    ] {
+        assert!(
+            tooltips.contains(key),
+            "dock control tooltip must name {key}"
+        );
+    }
+    assert!(
+        !tooltips.contains("None"),
+        "every dock header control must receive a non-empty tooltip"
+    );
+    assert!(
+        construction.contains(
+            "area.set_panel_control_tooltips(Self::resolved_dock_control_tooltips(), cx)"
+        ) && locale_refresh.contains(
+            "dock.set_panel_control_tooltips(Self::resolved_dock_control_tooltips(), dock_cx)"
+        ),
+        "construction and locale refresh must both install the complete shared tooltip bundle"
+    );
+    for key in [
+        "dock.detach_hint",
+        "dock.ctl.zoom_in",
+        "dock.ctl.zoom_out",
+        "dock.ctl.close",
+        "dock.ctl.overflow",
+    ] {
+        assert_locale_key_in_three_languages("dock.yml", key);
+    }
+    for key in [
+        "iface.dock_reset",
+        "iface.dock_reset_btn",
+        "iface.dock_reset_tip",
+    ] {
+        assert_locale_key_in_three_languages("interface.yml", key);
+    }
 }

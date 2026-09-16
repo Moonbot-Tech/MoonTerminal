@@ -9,7 +9,7 @@ use rust_i18n::t;
 
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonVariant, MoonInputState,
-    MoonLabel, MoonPalette, MoonSize, MoonTheme, MoonToggle, MoonToggleSize, h_flex,
+    MoonPalette, MoonText, MoonTheme, MoonToggle, MoonToggleSize, h_flex,
 };
 
 use super::DASH;
@@ -25,27 +25,23 @@ use moon_core::util::fmt;
 #[cfg(test)]
 mod tests;
 
-/// Caption size for a preset group — one step below the strip's own cells, which render their
-/// labels at 11, so 10 reads as a label NAMING the group rather than as another value in it.
-const CAPTION_SIZE: f32 = 10.0;
 /// Base gap between the Sell caption and its first percentage cell.
 const SELL_CAPTION_GAP: f32 = 8.0;
 
-/// Caption for a preset group, muted and one step below the strip's own cells.
+/// Caption for a preset group, muted, sharing the density-tier body size with the chips beside it.
 ///
-/// `MoonLabel` rather than a hand-rolled text div: it applies the theme's mono family and runs the
-/// size through `tokens.font()` itself, so the caption follows the legacy font-delta channel like
-/// every other MoonUI text. Pass the BASE size — a pre-scaled `design::t_*` value would be scaled
-/// twice.
+/// `MoonText` with [`design::tier_text_metrics`] rather than a hand-rolled text div: it applies
+/// the theme's mono family and already-scaled metrics, so the caption lands on the same size and
+/// baseline as the neighbouring density-tier controls. Colour is the remaining caption cue.
 ///
 /// The text is a literal, not `t!`: `Size`/`Sell` are on the deliberately-untranslated list
 /// (`locales/README.md`), as are the neighbouring `Lev`/`SL`/`TP`. The tooltip is translated, the
 /// caption is not. The appended `USDT eq.` is a deliberately-untranslated technical unit.
-fn strip_caption(text: impl Into<SharedString>, p: MoonPalette) -> impl IntoElement {
-    strip_text(text, p.text_muted)
+fn strip_caption(text: impl Into<SharedString>, p: MoonPalette, cx: &App) -> impl IntoElement {
+    strip_text(text, p.text_muted, cx)
 }
 
-/// The row's caption-scale text recipe, shared by every label and readout on it.
+/// The row's shared text recipe, used by every label and readout on it.
 ///
 /// One home for the MoonUI call so a second text cell cannot drift to a different family, size or
 /// casing while looking the same in the source. `color` is the only thing that legitimately varies:
@@ -54,16 +50,17 @@ fn strip_caption(text: impl Into<SharedString>, p: MoonPalette) -> impl IntoElem
 /// Args:
 ///     text: Caption or readout text rendered at the toolbar's shared text scale.
 ///     color: Active palette color for the text's semantic role.
+///     cx: Application context used to resolve density-tier text metrics.
 ///
 /// Returns:
 ///     A non-shrinking monospaced toolbar text element.
-fn strip_text(text: impl Into<SharedString>, color: u32) -> impl IntoElement {
+fn strip_text(text: impl Into<SharedString>, color: u32, cx: &App) -> impl IntoElement {
     div().flex_none().child(
-        MoonLabel::new(text)
+        MoonText::new(text)
             .mono(true)
             .color(color)
-            .font_size(CAPTION_SIZE)
             .uppercase(false)
+            .rendered_metrics(design::tier_text_metrics(cx, 0.0, 11.0))
             .render(),
     )
 }
@@ -92,7 +89,7 @@ fn captioned_strip(
         .id(id)
         .flex_none()
         .gap(design::ui_px(cx, caption_gap))
-        .children(caption.map(|text| strip_caption(text, p)))
+        .children(caption.map(|text| strip_caption(text, p, cx)))
         .child(strip)
         .when_some(tip, |el, tip| el.tooltip(text_tooltip(tip)))
 }
@@ -103,10 +100,8 @@ fn captioned_strip(
 /// (`MoonButton::width`) puts the value into `px(..)` verbatim, so a raw width would squeeze a
 /// label that grows with the legacy font-delta channel — the same ailment the preset cells had.
 ///
-/// [`ICON_BTN_W`] is the exception and stays RAW. An icon-only button holds no text: its glyph is
-/// capped at `clamp(font_size + 1, 10, 14)` while its height comes from a fit formula, so a
-/// linearly scaled width makes the button LESS square the larger the font — and spends row width on
-/// nothing, in the one place on this row where nothing needs the room.
+/// Icon-only launchers use [`design::glyph_btn_w`], which follows the density tier. The
+/// [`ICON_BTN_W`] constant is retained only because a contract test pins its name.
 const LEV_W: f32 = 61.6;
 /// Base width of the stop-loss metric button.
 const SL_W: f32 = 58.0;
@@ -114,17 +109,12 @@ const SL_W: f32 = 58.0;
 const TP_W: f32 = 74.6;
 /// Base width of the Live/Pause button.
 const LIVE_W: f32 = 62.0;
-/// Raw width of each icon-only singleton-window button. Shared so the Report panel's trash
-/// button (`panels::report::controls`) matches the toolbar launchers from one source.
+/// Unused width constant kept because a theme-contract test pins this name. Live icon-only
+/// buttons use [`design::glyph_btn_w`].
+#[allow(dead_code)]
 pub(crate) const ICON_BTN_W: f32 = 30.0;
-/// Base font size of a Sm-tier text segment in MoonUI.
-const TOOLBAR_LAUNCHER_TEXT_SIZE: f32 = 10.0;
 /// Font weight used by the toolbar launchers' localized text segments.
 const TOOLBAR_LAUNCHER_TEXT_WEIGHT: f32 = 500.0;
-/// Base font size from which MoonUI derives a Sm-tier leading-icon size.
-const TOOLBAR_LAUNCHER_ICON_FONT_SIZE: f32 = 10.5;
-/// UI-scaled gap between a Sm-tier leading icon and its label.
-const TOOLBAR_LAUNCHER_ICON_GAP: f32 = 6.0;
 /// Two raw one-pixel borders enclosing a labeled Soft button's horizontal content.
 const TOOLBAR_LAUNCHER_BORDER_W: f32 = 2.0;
 /// Horizontal inset on each side of a labeled launcher. Action/Sm ship with
@@ -136,7 +126,7 @@ const SELL_CAPTION: &str = "Sell";
 /// Stable unit for group-local manual order-size equivalents.
 const SIZE_UNIT: &str = "USDT eq.";
 
-/// Measure one complete localized launcher button at Sm-tier geometry.
+/// Measure one complete localized launcher button at density-tier geometry.
 ///
 /// The label is measured AND rendered in [`design::ui_font`]: it is a control caption, and the two
 /// sections that host labeled launchers set that family so `MoonButton`'s text segment inherits it
@@ -144,8 +134,9 @@ const SIZE_UNIT: &str = "USDT eq.";
 /// would budget the whole trailing cluster wrongly at every `row_fit` shedding threshold. MoonUI
 /// gives this size zero native padding so icon-only targets stay square; labeled launchers add
 /// [`TOOLBAR_LAUNCHER_PAD_X`] on each side via `MoonButton::padding_x`. The reserved width is the
-/// leading icon, its UI-scaled gap, both insets, and the two border pixels. The button is never
-/// allowed to become narrower than its stable icon-only target.
+/// leading icon plus its density-tier gap ([`design::action_icon_reservation`]), both insets, and
+/// the two border pixels. The button is never allowed to become narrower than
+/// [`design::glyph_btn_w`].
 ///
 /// Args:
 ///     cx: Application context supplying active font and UI scales.
@@ -158,19 +149,17 @@ fn launcher_label_width(cx: &App, label: &str) -> f32 {
     // buttons render it in `design::ui_font()` (the two sections that host them set it). This
     // measurement sizes the button the label is drawn in, so the two must name the same family --
     // measure mono, draw proportional, and the whole trailing cluster is budgeted too wide.
-    let text = design::ui_text_width(
+    let text = design::ui_text_width_zoomed(
         cx,
         label,
-        TOOLBAR_LAUNCHER_TEXT_SIZE,
+        design::tier_font_size(cx),
         TOOLBAR_LAUNCHER_TEXT_WEIGHT,
         false,
     );
-    let icon = (design::font_value(cx, TOOLBAR_LAUNCHER_ICON_FONT_SIZE) + 1.0).clamp(10.0, 14.0);
-    let chrome = icon
-        + design::ui_value(cx, TOOLBAR_LAUNCHER_ICON_GAP)
+    let chrome = design::action_icon_reservation(cx)
         + design::ui_value(cx, TOOLBAR_LAUNCHER_PAD_X) * 2.0
         + TOOLBAR_LAUNCHER_BORDER_W;
-    (text + chrome).max(ICON_BTN_W)
+    (text + chrome).max(design::glyph_btn_w(cx))
 }
 
 /// Width of the SL toggle (track + gap + "SL" label) at the density-default tier.
@@ -334,11 +323,11 @@ fn row_fit(
         // chart is addressed, and re-widen only after the clipping had already happened.
         + own_trade_toggle_width(cx)
         + fw(LIVE_W)
-        + ICON_BTN_W * 5.0
+        + design::glyph_btn_w(cx) * 5.0
         // The exchange max-order VALUE is permanent — outcome 4 asks for a readout that is always
         // on the row — so it belongs in the unsheddable budget rather than on the ladder. Measured
         // from the REAL rendered string: a coin's cap runs from three digits to nine.
-        + design::ui_text_width(cx, max_order_value, CAPTION_SIZE, 400.0, true);
+        + design::ui_text_width_zoomed(cx, max_order_value, design::tier_font_size(cx), 400.0, true);
     // Seven 1px rules — the hairline is deliberately NOT font-scaled (see `design::vline`). Pinned
     // against the row itself by `toolbar_row_budget_counts_every_rule_it_draws` in
     // `tests/theme_contract/shell.rs`: adding a section here without updating this count is invisible
@@ -358,7 +347,9 @@ fn row_fit(
     let gaps = gap * 21.0;
     let base = design::ui_value(cx, design::HEADER_PAD_X) * 2.0 + controls + rules + gaps;
     // A caption costs its own width plus the gap separating it from its strip.
-    let caption_w = |text: &str| design::ui_text_width(cx, text, CAPTION_SIZE, 400.0, true) + gap;
+    let caption_w = |text: &str| {
+        design::ui_text_width_zoomed(cx, text, design::tier_font_size(cx), 400.0, true) + gap
+    };
     let full_caption = size_caption_text();
     let unit_caption_width = caption_w(SIZE_UNIT);
     let full_caption_width = caption_w(&full_caption);
@@ -371,9 +362,9 @@ fn row_fit(
             icon_only: base,
             size_unit: unit_caption_width,
             size_noun: (full_caption_width - unit_caption_width).max(0.0),
-            settings: settings_width - ICON_BTN_W,
-            strategies: strategies_width - ICON_BTN_W,
-            analytics: analytics_width - ICON_BTN_W,
+            settings: settings_width - design::glyph_btn_w(cx),
+            strategies: strategies_width - design::glyph_btn_w(cx),
+            analytics: analytics_width - design::glyph_btn_w(cx),
             sell: caption_w(SELL_CAPTION),
             // Measured from the REAL rendered strings, not a constant: the digit count of a max
             // order differs by orders of magnitude between coins, and the caption is localized.
@@ -1011,7 +1002,7 @@ pub fn toolbar(
                 // owns, and a section of its own would need a rule plus a root gap — the rule is
                 // pinned by `toolbar_row_budget_counts_every_rule_it_draws` and the gap count is
                 // guarded by nothing at all.
-                .children(fit.max_order_caption.map(|text| strip_caption(text, p)))
+                .children(fit.max_order_caption.map(|text| strip_caption(text, p, cx)))
                 // The VALUE is unconditional: this readout exists so the exchange's cap is on
                 // screen while an order is being sized, and a figure that disappears on a narrow
                 // window is not that. Only its caption yields to width — the tooltip below still
@@ -1023,6 +1014,7 @@ pub fn toolbar(
                         .child(strip_text(
                             max_order_value,
                             design::readout_color(p, max_order.value().is_some()),
+                            cx,
                         ))
                         .tooltip(crate::panels::common::text_tooltip(max_order_tip)),
                 ),
@@ -1124,7 +1116,6 @@ pub fn toolbar(
             MoonButton::new("live")
                 .width(design::font_w(cx, LIVE_W))
                 .variant(MoonButtonVariant::Soft)
-                .size(MoonSize::Sm)
                 // Keep the localized interaction hint reachable without adding another row label.
                 .tooltip(t!("toolbar.live_tip").to_string())
                 .segment(
@@ -1164,6 +1155,7 @@ pub fn toolbar(
                     backend.clone(),
                     crate::analytics::profit_monitor::open,
                     p,
+                    cx,
                 ))
                 .child(open_window_button(
                     "toolbar-screener",
@@ -1174,6 +1166,7 @@ pub fn toolbar(
                     backend.clone(),
                     crate::screener::open,
                     p,
+                    cx,
                 )),
         )
         .child(design::chrome_divider(cx, p))
@@ -1193,6 +1186,7 @@ pub fn toolbar(
                     backend.clone(),
                     crate::strategies::open,
                     p,
+                    cx,
                 ))
                 .child(open_window_button(
                     "toolbar-analytics",
@@ -1203,6 +1197,7 @@ pub fn toolbar(
                     backend.clone(),
                     crate::analytics::open,
                     p,
+                    cx,
                 )),
         )
         .child(design::chrome_divider(cx, p))
@@ -1226,6 +1221,7 @@ pub fn toolbar(
                         backend.clone(),
                         crate::settings::open,
                         p,
+                        cx,
                     ))
                     // Declared AFTER the button so the ring paints on top of its chrome; it is a
                     // pointer-transparent overlay and takes no clicks from the control beneath.
@@ -1254,6 +1250,7 @@ pub fn toolbar(
 ///     backend: Shared terminal state passed to the destination.
 ///     open: Singleton-window entry point invoked by the click.
 ///     p: Active palette used for icon and text colors.
+///     cx: Application context used to resolve the density-tier icon-only width.
 ///
 /// Returns:
 ///     One rendered compact launcher button.
@@ -1267,12 +1264,11 @@ fn open_window_button(
     backend: Entity<Backend>,
     open: fn(Entity<Backend>, Option<AnyWindowHandle>, Option<DisplayId>, &mut App),
     p: MoonPalette,
+    cx: &App,
 ) -> impl IntoElement {
     let mut btn = MoonButton::new(id)
-        // The icon-only width stays raw — see [`ICON_BTN_W`].
-        .width(labeled_width.unwrap_or(ICON_BTN_W))
+        .width(labeled_width.unwrap_or_else(|| design::glyph_btn_w(cx)))
         .variant(MoonButtonVariant::Soft)
-        .size(MoonSize::Sm)
         .leading_icon(MoonButtonIconSlot::new(icon).color(p.text_soft));
     btn = if labeled_width.is_some() {
         btn.padding_x(TOOLBAR_LAUNCHER_PAD_X)

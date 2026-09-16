@@ -41,6 +41,47 @@ pub fn read_src(rel: &str) -> String {
     text.replace("\r\n", "\n")
 }
 
+/// Assert that one localization key defines exactly the three shipped language values.
+///
+/// Args:
+///     file: Locale file name below the repository `locales` directory.
+///     key: Fully-qualified localization key to inspect.
+///
+/// Returns:
+///     Nothing; a missing or partial locale entry panics with its file and key.
+pub fn assert_locale_key_in_three_languages(file: &str, key: &str) {
+    let locales = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("locales")
+            .join(file),
+    )
+    .unwrap_or_else(|err| panic!("failed to read locales/{file}: {err}"))
+    .replace("\r\n", "\n");
+    let after = locales
+        .split_once(&format!("{key}:\n"))
+        .unwrap_or_else(|| panic!("locales/{file} does not define {key}"))
+        .1;
+    let members: Vec<&str> = after
+        .lines()
+        .take_while(|line| line.starts_with("  "))
+        .collect();
+    assert_eq!(
+        members.len(),
+        3,
+        "{key} in locales/{file} must define exactly ru, en, and es"
+    );
+    for locale in ["ru", "en", "es"] {
+        assert!(
+            members
+                .iter()
+                .any(|line| line.starts_with(&format!("  {locale}: "))),
+            "{key} in locales/{file} must carry {locale}, or that language shows the raw key instead"
+        );
+    }
+}
+
 /// Read one `moon-core` source file for a cross-crate static contract, normalizing line endings.
 ///
 /// `moon-ui-gpui` has no library target, so this integration target owns static contracts that

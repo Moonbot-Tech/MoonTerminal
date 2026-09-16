@@ -1,11 +1,17 @@
 //! Group-window dock mechanics: detach a panel into its own window; repin it by preferring
 //! remembered split placement, then remembered tab placement, with canonical home-strip fallback;
-//! reset a closed docked panel to its home tabs; and persist OS-window geometry. Factored out of
-//! `shell.rs`; methods called from sibling shell modules are exposed as `pub(super)`.
+//! reset a closed docked panel to its home tabs; rebuild the default Classic centre; and persist
+//! OS-window geometry. Factored out of `shell.rs`; methods called from sibling shell modules are
+//! exposed as `pub(super)`.
+
+use std::rc::Rc;
 
 use gpui::*;
 
-use moon_ui::{DockArea, DockPlacement, DockSplitPlacement, PanelInfo, PanelState};
+use moon_ui::{
+    DockArea, DockAreaState, DockItem, DockPlacement, DockSplitPlacement, PanelInfo, PanelState,
+    PanelView,
+};
 
 use moon_core::config::GroupLayout;
 use moon_core::config::layout::DockSplitSlot;
@@ -24,16 +30,110 @@ use super::Shell;
 /// still preserves the
 /// `Orders < Assets < Report < Alerts < News < CoreStatus < Log` relative order.
 ///
-/// The order mirrors the default-layout push order in `shell/init.rs` because both derive from the
-/// registry. A saved layout whose `DOCK_VERSION` still matches is restored verbatim. After a
-/// version reset the default strip uses this canonical order, while an intentionally remembered
-/// detached-panel placement still takes priority when that panel is repinned.
+/// The order mirrors [`Shell::default_classic_center`] because both derive from the registry. A
+/// saved layout whose `DOCK_VERSION` still matches is restored verbatim. After a version reset the
+/// default strip uses this canonical order, while an intentionally remembered detached-panel
+/// placement still takes priority when that panel is repinned.
 fn dock_home_priority(name: &str) -> usize {
     let order = home_ordered_names();
     order.iter().position(|n| *n == name).unwrap_or(order.len())
 }
 
+/// Return whether a `{group}:{panel}` placement key belongs to `group` exactly.
+///
+/// Group names are free text and may themselves contain `:`, so a prefix test would treat
+/// `g:sub:Report` as belonging to `g`. Split at the final separator and compare the group half.
+fn dock_placement_key_belongs_to(key: &str, group: &str) -> bool {
+    key.rsplit_once(':').is_some_and(|(g, _)| g == group)
+}
+
+/// Return whether `name` is a live panel anywhere in a dumped dock state.
+///
+/// A dump is a read: walking it decides resolvability without removing anything, so a caller can
+/// confirm a panel will resolve before ever calling `take_panel_by_name` on it.
+fn dump_has_panel(state: &DockAreaState, name: &str) -> bool {
+    fn walk(node: &PanelState, name: &str) -> bool {
+        if matches!(node.info, PanelInfo::Panel(_)) && node.panel_name == name {
+            return true;
+        }
+        node.children.iter().any(|c| walk(c, name))
+    }
+    walk(&state.center, name)
+        || state
+            .left_dock
+            .as_ref()
+            .is_some_and(|d| walk(&d.panel, name))
+        || state
+            .right_dock
+            .as_ref()
+            .is_some_and(|d| walk(&d.panel, name))
+        || state
+            .bottom_dock
+            .as_ref()
+            .is_some_and(|d| walk(&d.panel, name))
+}
+
+/// Rebuild a docked-only Classic panel through the same registry factory `DockArea::load` uses.
+fn rebuild_classic_named_panel(
+    name: &str,
+    group: &str,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Rc<dyn PanelView>> {
+    log::warn!("classic dock reset: {name} missing from dock, rebuilding");
+    match crate::persistence::dock_persist::panel_state_with_group(name, group).to_item(window, cx)
+    {
+        DockItem::Panel(panel) => Some(panel),
+        _ => None,
+    }
+}
+
 impl Shell {
+    /// Build the first-run Classic centre: Charts left, Detects ~220px right, utility tabs ~220px below.
+    ///
+    /// `Shell::new` and Classic layout reset share this function so they cannot diverge.
+    ///
+    /// Args:
+    ///     charts: Live or freshly built ChartTabs instance.
+    ///     detects: Live or freshly built Detects instance.
+    ///     bottom_tabs: Home-strip panels in [`home_ordered_names`] order, omitting detached ones.
+    ///     weak: Owning DockArea, used to attach panels.
+    ///     window: Group window required by MoonUI dock construction.
+    ///     cx: App context used to attach panels.
+    ///
+    /// Returns:
+    ///     The default Classic centre tree.
+    pub(super) fn default_classic_center(
+        charts: Rc<dyn PanelView>,
+        detects: Rc<dyn PanelView>,
+        bottom_tabs: Vec<Rc<dyn PanelView>>,
+        weak: &WeakEntity<DockArea>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> DockItem {
+        charts.on_added_to(weak.clone(), window, cx);
+        detects.on_added_to(weak.clone(), window, cx);
+        let chart_item = DockItem::panel(charts);
+        let right = DockItem::panel(detects);
+        let top = DockItem::split_with_sizes(
+            Axis::Horizontal,
+            vec![chart_item, right],
+            vec![None, Some(px(220.0))],
+            weak,
+            window,
+            cx,
+        );
+        let bottom = DockItem::tabs(bottom_tabs, weak, window, cx);
+        DockItem::split_with_sizes(
+            Axis::Vertical,
+            vec![top, bottom],
+            vec![None, Some(px(220.0))],
+            weak,
+            window,
+            cx,
+        )
+    }
+
     /// Detach the panels queued on `Backend`, through the same path the tab's double-click uses.
     ///
     /// Exists so something holding only a `Backend` can drive a detach — the UI event is otherwise
@@ -328,6 +428,101 @@ impl Shell {
                 backend.detached_dirty = true;
             });
         }
+    }
+
+    /// Rebuild this group's Classic dock as a first-run centre, reusing live panel instances.
+    ///
+    /// Saved `docks.json` state is discarded the same way a `DOCK_VERSION` mismatch is. ChartTabs
+    /// is taken rather than rebuilt so open chart tabs survive. Detached panels stay detached.
+    ///
+    /// Args:
+    ///     window: Owning group window required by DockArea mutation APIs.
+    ///     cx: Shell context used to update dock and persistence state.
+    ///
+    /// Returns:
+    ///     Nothing; a missing ChartTabs or Detects factory is confirmed BEFORE any panel leaves
+    ///     the live dock and before the persisted layout is touched, so the reset simply does not
+    ///     happen and both are left exactly as they were.
+    pub(super) fn reset_classic_dock_layout(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let group = self.group.clone();
+
+        // Confirm ChartTabs and Detects resolve — live in the dock, or via the registry factory —
+        // before taking anything. `dump` is a read, so a resolution failure here leaves the live
+        // dock and `Backend`'s persisted layout untouched.
+        let state = self.dock.update(cx, |dock, dock_cx| dock.dump(dock_cx));
+        let charts_rebuilt = if dump_has_panel(&state, "ChartTabs") {
+            None
+        } else {
+            let Some(panel) = rebuild_classic_named_panel("ChartTabs", &group, window, cx) else {
+                return;
+            };
+            Some(panel)
+        };
+        let detects_rebuilt = if dump_has_panel(&state, "Detects") {
+            None
+        } else {
+            let Some(panel) = rebuild_classic_named_panel("Detects", &group, window, cx) else {
+                return;
+            };
+            Some(panel)
+        };
+
+        // Both resolved: the destructive part can begin.
+        self.backend.update(cx, |backend, _| {
+            backend.dock_states.remove(&group);
+            backend.dock_dirty = true;
+            let before = backend.layout.dock_split_slot.len();
+            backend
+                .layout
+                .dock_split_slot
+                .retain(|key, _| !dock_placement_key_belongs_to(key, &group));
+            if backend.layout.dock_split_slot.len() != before {
+                backend.layout_dirty = true;
+            }
+        });
+
+        let mut home = Vec::new();
+        let (charts, detects) = self.dock.update(cx, |dock, dock_cx| {
+            dock.clear_zoom(window, dock_cx);
+            let charts =
+                charts_rebuilt.or_else(|| dock.take_panel_by_name("ChartTabs", window, dock_cx));
+            let detects =
+                detects_rebuilt.or_else(|| dock.take_panel_by_name("Detects", window, dock_cx));
+            for name in home_ordered_names() {
+                home.push((*name, dock.take_panel_by_name(name, window, dock_cx)));
+            }
+            (charts, detects)
+        });
+        // Both were already confirmed resolvable above (live per the earlier `dump`, or already
+        // rebuilt), and nothing that runs between that confirmation and this take can change the
+        // dock, so this is unreachable in practice — kept as a typed fallback, not a real path.
+        let (Some(charts), Some(detects)) = (charts, detects) else {
+            return;
+        };
+
+        let backend = self.backend.clone();
+        let mut bottom_tabs = Vec::new();
+        for (name, taken) in home {
+            if let Some(panel) = taken {
+                bottom_tabs.push(panel);
+                continue;
+            }
+            if backend.read(cx).is_detached(&group, name) {
+                continue;
+            }
+            if let Some(kind) = crate::panels::registry::find(name) {
+                bottom_tabs.push(kind.build_docked(&backend, &group, None, window, cx));
+            }
+        }
+
+        let weak = self.dock.downgrade();
+        let center = Self::default_classic_center(charts, detects, bottom_tabs, &weak, window, cx);
+        self.dock
+            .update(cx, |area, cx| area.set_center(center, window, cx));
     }
 
     pub(super) fn persist_group_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {

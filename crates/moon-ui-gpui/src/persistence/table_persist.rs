@@ -23,7 +23,7 @@ use std::collections::HashMap;
 
 use gpui::{AnyElement, App, Entity, IntoElement, SharedString};
 use moon_core::config::{ReportFilterPrefs, TableSortPreference};
-use moon_ui::{MoonButton, MoonDataTableState, MoonSize};
+use moon_ui::{MoonButton, MoonDataTableState};
 
 use crate::Backend;
 
@@ -58,7 +58,6 @@ pub fn reset_button(id: &'static str, state: &Entity<MoonDataTableState>) -> Any
     let state = state.clone();
     MoonButton::new(SharedString::from(id))
         .ghost()
-        .size(MoonSize::Sm)
         .label("⤢")
         .tooltip(rust_i18n::t!("tables.reset_widths").to_string())
         .on_click(move |_, _window, app| reset(&state, app))

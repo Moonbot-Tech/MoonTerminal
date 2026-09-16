@@ -81,8 +81,9 @@ const ROW_LINE_BASE: f32 = 14.0;
 const ROW_PAD_BASE: f32 = 4.5;
 
 /// Historical custom badge metrics used only when the local tree-text step is positive.
-/// The zero-step branch uses the shared Xs tier; these explicit custom values retain the
-/// existing local adjustment contract and its legacy font scaling.
+/// The zero-step branch uses the shared Xs tier. The Custom box stays on the legacy-tuned
+/// constants — including font_size — because migrating the font alone would put text on the
+/// density tier inside a box that never moved (this task's exception for that split).
 const BADGE_TINY_H: f32 = 13.0;
 const BADGE_TINY_RADIUS: f32 = 4.0;
 const BADGE_TINY_FONT: f32 = 8.5;
@@ -1408,7 +1409,7 @@ fn exchange_row(
                     .uppercase(false)
                     .color(p.text_soft)
                     .weight(600.0)
-                    .font_size(design::moon_text_base(app, step))
+                    .font_size(design::tier_font_base(app, step))
                     .line_height(ROW_LINE_BASE + step)
                     .render(),
             ),
@@ -1521,7 +1522,7 @@ fn counts_slot(text: String, width: f32, color: u32, step: f32, app: &App) -> im
                 .mono(true)
                 .uppercase(false)
                 .color(color)
-                .font_size(design::moon_text_base(app, step))
+                .font_size(design::tier_font_base(app, step))
                 .line_height(ROW_LINE_BASE + step)
                 .render(),
         )
@@ -1725,7 +1726,7 @@ fn core_folder_row(
                     .uppercase(false)
                     .color(color)
                     .weight(weight)
-                    .font_size(design::moon_text_base(app, step))
+                    .font_size(design::tier_font_base(app, step))
                     .line_height(ROW_LINE_BASE + step)
                     .render(),
             ),
@@ -1739,7 +1740,7 @@ fn core_folder_row(
                             .mono(false)
                             .uppercase(false)
                             .color(p.amber)
-                            .font_size(design::moon_text_base(app, step))
+                            .font_size(design::tier_font_base(app, step))
                             .line_height(ROW_LINE_BASE + step)
                             .render(),
                     ),
@@ -1901,7 +1902,7 @@ fn deleted_strategy_row(
                     .mono(true)
                     .uppercase(false)
                     .color(p.text_muted)
-                    .font_size(design::moon_text_base(app, step))
+                    .font_size(design::tier_font_base(app, step))
                     .line_height(ROW_LINE_BASE + step)
                     .render(),
             ),
@@ -1959,7 +1960,7 @@ fn deleted_strategy_row(
                 .mono(true)
                 .uppercase(false)
                 .color(p.text_muted)
-                .font_size(design::moon_text_base(app, step))
+                .font_size(design::tier_font_base(app, step))
                 .line_height(ROW_LINE_BASE + step)
                 .render(),
         )
@@ -2042,7 +2043,7 @@ fn strategy_row(
                     // replaces them. A tone change rather than a badge: the row keeps its shape,
                     // and the tree stays scannable while several rows are marked.
                     .color(if cut { p.text_muted } else { p.text })
-                    .font_size(design::moon_text_base(app, step))
+                    .font_size(design::tier_font_base(app, step))
                     .line_height(ROW_LINE_BASE + step)
                     .render(),
             ),
@@ -2134,7 +2135,7 @@ fn strategy_row(
                 .mono(true)
                 .uppercase(false)
                 .color(dot)
-                .font_size(design::moon_text_base(app, step))
+                .font_size(design::tier_font_base(app, step))
                 .line_height(ROW_LINE_BASE + step)
                 .render(),
         )

@@ -431,6 +431,7 @@ fn op_dialog_body(
                     .mono(false)
                     .uppercase(false)
                     .color(p.text_soft)
+                    .rendered_metrics(design::tier_text_metrics(cx, -2.0, 11.0))
                     .render(),
             );
             let mut list = v_flex()
@@ -466,6 +467,7 @@ fn op_dialog_body(
                                     .mono(true)
                                     .uppercase(false)
                                     .color(p.text)
+                                    .rendered_metrics(design::tier_text_metrics(cx, 0.0, 11.0))
                                     .render(),
                             ),
                     ),

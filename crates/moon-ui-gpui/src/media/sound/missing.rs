@@ -19,14 +19,12 @@ pub(crate) enum MissingSound {
 }
 
 impl MissingSound {
-    /// The dedupe key: one notice per distinct SOUND for the session. A name is keyed by its stem
-    /// — trimmed, lowercase, `.wav` stripped — the way the catalog looks it up, so a strategy's
-    /// `MYSOUND` and a trade-sound setting's `mysound.wav` are one missing sound, not two toasts.
+    /// Returns one notice key per sound using the shared path-independent catalog key.
+    /// The original name remains in the notice so the toast can identify the request.
     fn key(&self) -> String {
         match self {
             Self::Name(name) => {
-                let low = name.trim().to_ascii_lowercase();
-                format!("name:{}", low.strip_suffix(".wav").unwrap_or(&low))
+                format!("name:{}", moon_core::util::sound::sound_stem(name))
             }
             Self::Ordinal(n) => format!("ordinal:{n}"),
         }
@@ -92,3 +90,6 @@ pub(crate) fn take() -> Vec<MissingSound> {
 pub(super) fn reset_seen() {
     STATE.with(|state| state.borrow_mut().seen.clear());
 }
+
+#[cfg(test)]
+mod tests;

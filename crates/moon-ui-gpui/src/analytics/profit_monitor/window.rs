@@ -160,9 +160,8 @@ fn open_window(
                 }
             }
 
-            // Saved geometry is restored as-is. The platform rescues a rectangle whose centre no
-            // longer belongs to a display; a second origin-based guard incorrectly moved valid
-            // negative-x windows and overwrote their saved position.
+            // Saved geometry is checked by overlap, so valid negative-x monitors remain usable;
+            // the shared clamp also keeps the title bar inside the selected work area.
             let saved = backend.read(cx).layout.profit_monitor_window;
             let bounds = saved.map_or(
                 Bounds {
@@ -183,7 +182,10 @@ fn open_window(
             );
             let options = crate::window::windowing::profit_monitor_window_options(
                 t!("profit_monitor.window_title").to_string(),
-                crate::window::windowing::restored_window_bounds(saved, bounds),
+                crate::window::windowing::restored_window_bounds(
+                    saved,
+                    crate::window::windowing::reachable_window_bounds(bounds, display_id, None, cx),
+                ),
                 display_id,
                 Some(size(
                     design::ui_px(cx, MIN_WINDOW_WIDTH),

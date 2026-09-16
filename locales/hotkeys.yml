@@ -98,9 +98,9 @@ hotkeys.clash.builtin.reset_windows:
   en: "the built-in window reset (Ctrl+Shift+F10)"
   es: "el restablecimiento de ventanas integrado (Ctrl+Shift+F10)"
 hotkeys.clash.builtin.cancel_hover:
-  ru: "встроенная отмена ордера под курсором (Tab/Delete)"
-  en: "the built-in cancel order under cursor (Tab/Delete)"
-  es: "la cancelación integrada de la orden bajo el cursor (Tab/Delete)"
+  ru: "встроенная отмена ордера на вход под курсором (Tab/Delete)"
+  en: "the built-in cancel entry order under cursor (Tab/Delete)"
+  es: "la cancelación integrada de la orden de entrada bajo el cursor (Tab/Delete)"
 hotkeys.clash.layer.order_menu:
   ru: "встроенное меню ордера (ПКМ по линии ордера)"
   en: "the built-in order menu (right click on an order line)"
@@ -154,9 +154,9 @@ hotkeys.builtin.x_sync:
   en: "[Shift+Middle click] on the chart — sync the time scale across every chart in the window"
   es: "[Shift+Clic central] en el gráfico — sincroniza la escala de tiempo en todos los gráficos de la ventana"
 hotkeys.builtin.cancel_hover:
-  ru: "[Tab или Del] навести на линию ордера — отменить этот ордер (Del при выделенной фигуре удаляет фигуру)"
-  en: "[Tab or Del] hover an order line — cancel that order (Del deletes the figure when one is selected)"
-  es: "[Tab o Del] sobre una línea de orden — cancelar esa orden (Del elimina la figura si hay una seleccionada)"
+  ru: "[Tab или Del] навести на линию ордера на вход — отменить этот ордер; зажать и провести мышью — снять каждый ордер на вход под курсором (Del при выделенной фигуре удаляет фигуру)"
+  en: "[Tab or Del] hover an entry order line — cancel that entry order; hold and sweep the pointer to cancel every entry order it crosses (Del deletes the figure when one is selected)"
+  es: "[Tab o Del] sobre la línea de una orden de entrada — cancelar esa orden; mantener pulsado y barrer con el ratón cancela cada orden de entrada bajo el cursor (Del elimina la figura si hay una seleccionada)"
 hotkeys.builtin.draw_click:
   ru: "[Ctrl+ЛКМ] на графике, пока выбран инструмент рисования — начать фигуру или захватить существующую"
   en: "[Ctrl+Left click] on the chart while a drawing tool is selected — start a figure or grab an existing one"

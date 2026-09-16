@@ -254,6 +254,8 @@ struct Backend {
     /// `docks.json` after `DockEvent::LayoutChanged` through the same debounce loop.
     dock_states: HashMap<String, DockAreaState>,
     dock_dirty: bool,
+    /// Runtime generation for an in-app dock-layout reset. Not persisted: a restart must not replay it.
+    dock_layout_reset_generation: u64,
     /// Process-wide topology-only Auto dock authority loaded from `auto_dock.json`.
     auto_dock_topology: Option<DockTopologyByName>,
     /// Whether programmatic Auto seed and repair transitions may persist the current topology.
@@ -604,6 +606,13 @@ struct Backend {
     /// window the user is not looking at, so each dispatcher looks up its OWN window and finds
     /// nothing rather than something wrong.
     last_chart: HashMap<gpui::AnyWindowHandle, WeakEntity<crate::panels::ChartPanel>>,
+    /// "The cancel key is held right now", for the Tab/Del hover-sweep.
+    ///
+    /// On `Backend` rather than on a `ChartPanel` because the sweep crosses panels and windows: the
+    /// pointer can leave one chart and enter another mid-hold, and every chart, both window roots
+    /// and the app-wide keystroke interceptor already reach this entity. Keyed on
+    /// `AnyWindowHandle` so the hold knows which window armed it.
+    cancel_hold: crate::hotkeys::cancel_hold::CancelHold<gpui::AnyWindowHandle>,
     /// Last observed aggregate revision of server-side chart alerts, gating remote-figure
     /// reconciliation in the feed-drain path.
     last_chart_alerts_activity: u64,

@@ -22,7 +22,7 @@ use moon_core::config::MANUAL_STRAT_SLOTS;
 use moon_core::session::CoreId;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonMenuItem,
-    MoonPalette, MoonSize, h_flex, v_flex,
+    MoonPalette, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -251,7 +251,6 @@ pub(super) fn slot_settings_content(
                 .justify_between()
                 .child(
                     MoonButton::new("ms-slots-hotkeys")
-                        .size(MoonSize::Sm)
                         .variant(MoonButtonVariant::Ghost)
                         .label(t!("header.ms_slots_hotkeys").to_string())
                         .tooltip(t!("header.ms_slots_hotkeys_tip").to_string())
@@ -271,7 +270,6 @@ pub(super) fn slot_settings_content(
                 )
                 .child(
                     MoonButton::new("ms-slots-pull")
-                        .size(MoonSize::Sm)
                         .variant(MoonButtonVariant::Soft)
                         .label(t!("header.ms_slots_pull").to_string())
                         .disabled(!core_known)
@@ -344,8 +342,7 @@ fn goto_button(
     // windows.
     MoonButton::new(id)
         .variant(MoonButtonVariant::Soft)
-        .width(design::micro_control_h_value(cx))
-        .size(MoonSize::Xs)
+        .width(design::glyph_btn_w(cx))
         // No explicit icon colour: the button's own foreground already answers to the variant and
         // to the disabled state, and an explicit one would override the dimming a disabled robot
         // needs. Which strategy each button opens is said by where it sits, not by a colour.
@@ -440,7 +437,6 @@ fn strategy_picker(
         })
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonSize::Sm.into())
         .trigger_width_scaled(STRATEGY_COL_W)
         .menu_width_scaled(MENU_W)
         .menu_max_height_ui(MENU_MAX_H)
@@ -518,7 +514,6 @@ fn hook_picker(
         } else {
             MoonButtonVariant::Amber
         })
-        .trigger_size(MoonSize::Sm.into())
         .trigger_width_scaled(HOOK_COL_W)
         .menu_width_scaled(MENU_W)
         .menu_max_height_ui(MENU_MAX_H)

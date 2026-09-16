@@ -93,6 +93,8 @@ pub(crate) struct Shell {
     applied_auto_rail_width: f32,
     /// Workspace mode currently applied to `dock`, kept separate from persisted desired state.
     applied_workspace_mode: WorkspaceMode,
+    /// Latest dock-layout reset generation this Shell has already served.
+    served_dock_layout_reset: u64,
     /// Latest ordered Auto surface revision observed for this exact group.
     last_auto_surface_revision: u64,
     /// Coalesces backend and workspace-revision notifications into one window-aware dock update.
@@ -117,6 +119,12 @@ pub(crate) struct Shell {
     /// slot changes, and fixed-sell percentage edits. Every such change bypasses the 250 ms
     /// throttle so the affected controls update immediately.
     last_order_size_rev: u64,
+    /// Locale the dock header control tooltips were last resolved against.
+    ///
+    /// A language save reaches every open Shell only as a plain repaint (`cx.refresh_windows()`):
+    /// MoonUI stores these five strings once and clones them into controls on render, so unlike
+    /// every other label here, nothing re-resolves them without this compare.
+    dock_control_tooltips_locale: SharedString,
     /// Handle for this Shell's OS window, used by callbacks that lack `&mut Window`.
     /// Window-bound operations are deferred through this handle instead of moving into `render`.
     window_handle: AnyWindowHandle,

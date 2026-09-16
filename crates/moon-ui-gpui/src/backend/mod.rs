@@ -31,7 +31,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-use gpui::{Context, WindowId};
+use gpui::{App, Context, WindowId};
 
 use crate::Backend;
 use crate::backend::core_warn::axis_has_series;
@@ -1037,6 +1037,34 @@ impl Backend {
                     .contains(core))
     }
 
+    /// Whether the window that armed the cancel hold is the platform's active window.
+    ///
+    /// The hold's first fail-safe: a hold armed in one window is inert the moment focus moves
+    /// anywhere else — another window of ours, the Settings window, or another application.
+    pub(crate) fn cancel_hold_window_active(&self, cx: &App) -> bool {
+        match (self.cancel_hold.armed_window(), cx.active_window()) {
+            (Some(armed), Some(active)) => armed == active,
+            _ => false,
+        }
+    }
+
+    /// Whether the chart under the pointer belongs to the window that armed the cancel hold.
+    ///
+    /// The SWEEP's gate and only the sweep's (see AM-2): `hovered_chart` is application-global while
+    /// a keystroke is not, so without this a hold taken in one window would sweep a chart in
+    /// another. A fresh single press is deliberately NOT gated on this — it keeps today's behaviour.
+    pub(crate) fn cancel_hold_owns_hovered_chart(&self, _cx: &App) -> bool {
+        let Some(armed) = self.cancel_hold.armed_window() else {
+            return false;
+        };
+        let (Some(hovered), Some(last)) =
+            (self.hovered_chart.as_ref(), self.last_chart.get(&armed))
+        else {
+            return false;
+        };
+        hovered.entity_id() == last.entity_id()
+    }
+
     /// Queue one Main-chart navigation only while its captured core remains workspace-visible.
     ///
     /// Args:
@@ -1332,6 +1360,28 @@ impl Backend {
         true
     }
 
+    /// Force the shared Auto topology back to `topology` and unlock persistence even on equality.
+    ///
+    /// [`Self::set_auto_dock_topology`] returns before unlocking when the in-memory tree already
+    /// matches, which is exactly the locked-invalid-file case a user reset has to repair.
+    ///
+    /// Args:
+    ///     topology: First-run Auto topology to install as the shared authority.
+    ///     cx: Backend context used to notify every open Auto Shell.
+    ///
+    /// Returns:
+    ///     Nothing; persistence is unlocked and dirtied regardless of equality.
+    pub(crate) fn reset_auto_dock_topology(
+        &mut self,
+        topology: DockTopologyByName,
+        cx: &mut Context<Self>,
+    ) {
+        self.auto_dock_topology = Some(topology.normalized());
+        self.auto_dock_automatic_persistence_allowed = true;
+        self.auto_dock_dirty = true;
+        self.publish_auto_workspace_layout_revision(cx);
+    }
+
     /// Store a live dock dump only while the group is in Classic mode.
     ///
     /// Args:
@@ -1467,6 +1517,30 @@ impl Backend {
         }
         self.publish_workspace_revision(cx);
         true
+    }
+
+    /// Ask every open group window to reset the current workspace mode's dock layout once.
+    ///
+    /// Settings has no handle on those windows, so the request rides the existing workspace
+    /// revision channel. A generation (not a bool) is what lets each Shell compare-and-serve
+    /// exactly once, including when several group windows are open.
+    ///
+    /// Args:
+    ///     cx: Backend context used to publish the dedicated revision.
+    ///
+    /// Returns:
+    ///     Nothing; each Shell that existed at the request serves it on its next reconcile.
+    pub(crate) fn request_dock_layout_reset(&mut self, cx: &mut Context<Self>) {
+        self.dock_layout_reset_generation = self.dock_layout_reset_generation.wrapping_add(1);
+        self.publish_workspace_revision(cx);
+    }
+
+    /// Return the runtime dock-layout reset generation.
+    ///
+    /// Returns:
+    ///     The current generation, including `0` when no reset has been requested this process.
+    pub(crate) fn dock_layout_reset_generation(&self) -> u64 {
+        self.dock_layout_reset_generation
     }
 
     /// Select one live core or Overview for an already active Auto workspace.

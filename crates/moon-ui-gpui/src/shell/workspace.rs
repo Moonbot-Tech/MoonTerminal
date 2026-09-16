@@ -232,6 +232,156 @@ fn default_auto_workspace_topology() -> DockTopologyByName {
     .normalized()
 }
 
+/// Strip every occurrence of `panel_name` from a topology node.
+///
+/// Matching `Panel` leaves become `Empty`; `Tabs` / `Tiles` keep the other names; `Split`
+/// children are walked in place. Collapse of emptied branches is left to [`DockTopologyByName::normalized`].
+fn remove_panel_name(node: &mut DockTopologyNode, panel_name: &str) {
+    match node {
+        DockTopologyNode::Empty => {}
+        DockTopologyNode::Panel { name } => {
+            if name == panel_name {
+                *node = DockTopologyNode::Empty;
+            }
+        }
+        DockTopologyNode::Tabs { names } => {
+            names.retain(|name| name != panel_name);
+        }
+        DockTopologyNode::Tiles { names, metas } => {
+            let mut ix = 0;
+            while ix < names.len() {
+                if names[ix] == panel_name {
+                    names.remove(ix);
+                    if ix < metas.len() {
+                        metas.remove(ix);
+                    }
+                } else {
+                    ix += 1;
+                }
+            }
+        }
+        DockTopologyNode::Split { items, .. } => {
+            for item in items.iter_mut() {
+                remove_panel_name(item, panel_name);
+            }
+        }
+    }
+}
+
+/// Insert `panel_name` into the Tabs or Panel node that already holds pinned `"ChartTabs"`.
+///
+/// [`insert_auto_panel_name`] walks a Split in order and returns on the first accepting child,
+/// and a stray `Panel` leaf accepts by becoming `Tabs`. The topology being re-homed is by
+/// definition not the default, so that first child is often the dragged-out leaf rather than
+/// the home strip. `"ChartTabs"` is the pinned leading panel and the reliable marker of the
+/// strip the close control must restore onto.
+fn insert_auto_panel_into_chart_tabs_strip(node: &mut DockTopologyNode, panel_name: &str) -> bool {
+    match node {
+        DockTopologyNode::Empty => false,
+        DockTopologyNode::Panel { name } if name == "ChartTabs" => {
+            let existing = name.clone();
+            let mut names = vec![existing];
+            let at = auto_panel_insert_index(&names, panel_name);
+            names.insert(at, panel_name.to_string());
+            *node = DockTopologyNode::Tabs { names };
+            true
+        }
+        DockTopologyNode::Panel { .. } => false,
+        DockTopologyNode::Tabs { names } if names.iter().any(|name| name == "ChartTabs") => {
+            let at = auto_panel_insert_index(names, panel_name);
+            names.insert(at, panel_name.to_string());
+            true
+        }
+        DockTopologyNode::Tabs { .. } => false,
+        DockTopologyNode::Tiles { .. } => false,
+        DockTopologyNode::Split { items, .. } => items
+            .iter_mut()
+            .any(|item| insert_auto_panel_into_chart_tabs_strip(item, panel_name)),
+    }
+}
+
+/// Return `topology` with `panel_name` moved back to its Auto home (the ChartTabs strip, or
+/// the Orders slot below it).
+///
+/// Auto's persisted authority is a name-only tree with no version gate, so rewriting that
+/// tree is the only in-app recovery from a dragged-out panel. Pinned Charts and names
+/// outside [`AUTO_PANEL_ORDER`] are returned unchanged.
+///
+/// Args:
+///     topology: Shared Auto name-topology to rewrite.
+///     panel_name: Stable panel name the user asked to close.
+///
+/// Returns:
+///     A normalized topology with `panel_name` at its first-run home, or the input when the
+///     name is not eligible to re-home.
+pub(super) fn rehome_auto_panel(
+    topology: DockTopologyByName,
+    panel_name: &str,
+) -> DockTopologyByName {
+    if panel_name == "ChartTabs" || !AUTO_PANEL_ORDER.contains(&panel_name) {
+        return topology;
+    }
+    let mut next = topology;
+    remove_panel_name(&mut next.center, panel_name);
+    for side in [&mut next.left, &mut next.right, &mut next.bottom]
+        .into_iter()
+        .flatten()
+    {
+        remove_panel_name(&mut side.item, panel_name);
+    }
+    let mut next = next.normalized();
+    if panel_name == "Orders" {
+        let orders_size = match default_auto_workspace_topology().center {
+            DockTopologyNode::Split { sizes, .. } => sizes.get(1).copied().flatten(),
+            _ => None,
+        };
+        let surviving = std::mem::replace(&mut next.center, DockTopologyNode::Empty);
+        next.center = match surviving {
+            DockTopologyNode::Split {
+                horizontal: false,
+                mut items,
+                mut sizes,
+            } => {
+                items.push(DockTopologyNode::Panel {
+                    name: "Orders".to_string(),
+                });
+                sizes.push(orders_size);
+                DockTopologyNode::Split {
+                    horizontal: false,
+                    items,
+                    sizes,
+                }
+            }
+            surviving => DockTopologyNode::Split {
+                horizontal: false,
+                items: vec![
+                    surviving,
+                    DockTopologyNode::Panel {
+                        name: "Orders".to_string(),
+                    },
+                ],
+                sizes: vec![None, orders_size],
+            },
+        };
+    } else if !insert_auto_panel_into_chart_tabs_strip(&mut next.center, panel_name) {
+        let mut inserted = false;
+        for side in [&mut next.left, &mut next.right, &mut next.bottom]
+            .into_iter()
+            .flatten()
+        {
+            if insert_auto_panel_into_chart_tabs_strip(&mut side.item, panel_name) {
+                inserted = true;
+                break;
+            }
+        }
+        if !inserted {
+            // Degenerate: the pinned Charts node is gone, so first-non-empty is the only remaining home.
+            ensure_auto_topology_contains_panel(&mut next, panel_name);
+        }
+    }
+    next.normalized()
+}
+
 /// Return detached panel names that need temporary Auto-only instances.
 ///
 /// The live Classic dock is the name authority. A stale `detached.json` record for a panel already
@@ -512,6 +662,7 @@ impl Shell {
             surface_request,
         );
         self.apply_workspace_mode(mode, window, cx);
+        self.drain_dock_layout_reset(window, cx);
         self.sync_auto_dock_topology(surface.map(|s| s.panel_name()), window, cx);
         self.sync_auto_rail_width(window, cx);
 
@@ -519,6 +670,36 @@ impl Shell {
             self.dock.update(cx, |dock, cx| {
                 dock.activate_panel_by_name(surface.panel_name(), window, cx);
             });
+        }
+    }
+
+    /// Serve one in-app dock-layout reset for this Shell's currently applied workspace mode.
+    ///
+    /// Auto only rewrites the shared topology authority; [`Self::sync_auto_dock_topology`] then
+    /// applies it. Classic rebuilds the default centre from live instances. A Classic layout
+    /// retained while Auto is showing is left alone.
+    ///
+    /// Args:
+    ///     window: Owning group window required by Classic dock reconstruction.
+    ///     cx: Shell context used to read the generation and update dock or Backend.
+    ///
+    /// Returns:
+    ///     Nothing; an already-served generation is a no-op.
+    fn drain_dock_layout_reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let generation = self.backend.read(cx).dock_layout_reset_generation();
+        if self.served_dock_layout_reset == generation {
+            return;
+        }
+        self.served_dock_layout_reset = generation;
+        self.dock.update(cx, |dock, dock_cx| {
+            dock.clear_zoom(window, dock_cx);
+        });
+        if self.applied_workspace_mode == WorkspaceMode::AutoTrading {
+            self.backend.update(cx, |backend, backend_cx| {
+                backend.reset_auto_dock_topology(default_auto_workspace_topology(), backend_cx);
+            });
+        } else {
+            self.reset_classic_dock_layout(window, cx);
         }
     }
 
@@ -630,7 +811,7 @@ impl Shell {
                         .collect::<Vec<_>>();
                     dock.set_layout_editable(true, dock_cx);
                     dock.set_detach_allowed(false, dock_cx);
-                    dock.set_close_allowed(false, dock_cx);
+                    dock.set_close_allowed(true, dock_cx);
                     dock.apply_topology_by_name(
                         &topology,
                         auto_only_panels.clone(),
@@ -683,6 +864,36 @@ impl Shell {
             }
         }
         cx.notify();
+    }
+
+    /// Re-home a user-closed Auto panel through the user-driven topology setter.
+    ///
+    /// `set_auto_dock_topology` unlocks an authority locked by an unreadable `auto_dock.json`
+    /// as well as marking it dirty; a close click is a user edit, so it must not go through
+    /// `reconcile_auto_dock_topology`.
+    ///
+    /// Args:
+    ///     panel_name: Stable panel name carried by `DockEvent::PanelCloseRequested`.
+    ///     cx: Shell context used to read and write the shared Auto topology authority.
+    ///
+    /// Returns:
+    ///     Nothing; Classic mode, ineligible names, and an already-home panel are no-ops.
+    pub(super) fn rehome_auto_panel_from_user(&mut self, panel_name: &str, cx: &mut Context<Self>) {
+        if self.applied_workspace_mode != WorkspaceMode::AutoTrading {
+            return;
+        }
+        let topology = self
+            .backend
+            .read(cx)
+            .auto_dock_topology()
+            .cloned()
+            .unwrap_or_else(default_auto_workspace_topology);
+        let next = rehome_auto_panel(topology.clone(), panel_name);
+        if next != topology {
+            self.backend.update(cx, |backend, backend_cx| {
+                backend.set_auto_dock_topology(next, backend_cx);
+            });
+        }
     }
 
     /// Apply the latest shared Auto topology to this Shell's local panel instances.

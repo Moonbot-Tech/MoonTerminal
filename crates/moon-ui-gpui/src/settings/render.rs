@@ -145,6 +145,8 @@ impl Render for SettingsView {
                     super::StatusMsg::Text(s) => s.clone(),
                 };
                 div()
+                    .min_w_0()
+                    .truncate()
                     .text_color(rgba_from(if *err { p.red } else { p.green }, 1.0))
                     .child(text)
             }
@@ -169,22 +171,12 @@ impl Render for SettingsView {
                     } else {
                         MoonButtonVariant::Neutral
                     })
-                    .small()
-                    .width(110.0)
                     .label(t!("settings.save").to_string())
                     .on_click(cx.listener(|this, _, window, cx| this.save(window, cx)))
                     .render(),
             )
             .child(
-                // Shrinkable and truncating, because the status beside it is not: `StatusMsg::Text`
-                // carries arbitrary save and storage error text, and at a narrow Settings width
-                // this caption's intrinsic minimum would otherwise push that error out of the
-                // footer. The caption is the half that can afford to clip -- it says one of two
-                // known things, while the error says something only it knows. `min_w_0` sits on
-                // the truncating element itself, never on a wrapper around it.
-                // Shrinking is the flex default here -- `table.rs::cell` has to opt OUT of it with
-                // `flex_shrink_0` -- so `min_w_0` is the whole mechanism: it is what lets the item
-                // go below its content width, which is what `truncate` then acts on.
+                // Both status captions yield to the content-sized action buttons at narrow widths.
                 div()
                     .min_w_0()
                     .truncate()
@@ -216,8 +208,7 @@ impl Render for SettingsView {
                         .child(
                             MoonButton::new("moonbot-import")
                                 .outline()
-                                .small()
-                                .label(format!("  {}  ", t!("import.button")))
+                                .label(t!("import.button").to_string())
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.start_moonbot_import(cx)),
                                 )
@@ -228,21 +219,18 @@ impl Render for SettingsView {
             // Offer Copy/Paste only on tabs with portable files: Interface, Lines, Badges, and
             // Hotkeys. See `share.rs`.
             .when(self.shareable(), |f| {
-                // Use outlined buttons for a visible boundary. Label spaces work around the fork's
-                // `MoonButton` `pad_x=0` bug, which otherwise places text against the outline.
+                // Tier padding supplies the inset without extra label spaces consuming footer width.
                 f.child(
                     MoonButton::new("share-copy")
                         .outline()
-                        .small()
-                        .label(format!("  {}  ", t!("settings.copy")))
+                        .label(t!("settings.copy").to_string())
                         .on_click(cx.listener(|this, _, _, cx| this.copy_tab(cx)))
                         .render(),
                 )
                 .child(
                     MoonButton::new("share-paste")
                         .outline()
-                        .small()
-                        .label(format!("  {}  ", t!("settings.paste")))
+                        .label(t!("settings.paste").to_string())
                         .on_click(cx.listener(|this, _, window, cx| this.paste_tab(window, cx)))
                         .render(),
                 )
@@ -306,13 +294,7 @@ impl SettingsView {
                     } else {
                         MoonButtonVariant::Ghost
                     })
-                    .size(MoonButtonSize::Custom {
-                        height: 24.0,
-                        radius: design::R_BUTTON_BASE,
-                        font_size: 10.5,
-                        line_height: 13.0,
-                        gap: 5.0,
-                    })
+                    .size(MoonButtonSize::density(cx))
                     .width(tab_w)
                     .selected(on)
                     .label(t.title())

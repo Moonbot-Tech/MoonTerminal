@@ -517,16 +517,13 @@ pub(super) fn effective_picklist(f: &SchemaField, value: &str) -> Vec<String> {
 
 /// Whether a picklist row IS the stored value. Exact for a core-supplied list; for the sound
 /// field, by stem — `BABYTOY`, `babytoy` and `BABYTOY.wav` are one sound, in the spellings
-/// Moonbot itself stores, and the row must light up for all of them.
+/// Moonbot itself stores. Folder prefixes are ignored; an empty tail matches no row.
 pub(super) fn picklist_row_is(f: &SchemaField, row: &str, value: &str) -> bool {
     if f.name != SOUND_KIND_FIELD {
         return row == value;
     }
-    let stem = |s: &str| {
-        let low = s.trim().to_ascii_lowercase();
-        low.strip_suffix(".wav").unwrap_or(&low).to_string()
-    };
-    stem(row) == stem(value)
+    let stem = moon_core::util::sound::sound_stem(value);
+    !stem.is_empty() && moon_core::util::sound::sound_stem(row) == stem
 }
 
 /// Whether the text a field currently shows is one the core would refuse to store.

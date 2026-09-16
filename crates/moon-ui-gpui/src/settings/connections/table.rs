@@ -297,6 +297,7 @@ fn paste_key_affix(
     row_key: u64,
     key_state: Entity<MoonInputState>,
     p: MoonPalette,
+    cx: &App,
 ) -> impl IntoElement {
     let weak = weak.clone();
     div()
@@ -313,7 +314,7 @@ fn paste_key_affix(
         .child(
             MoonText::new("⧉")
                 .color(p.text_muted)
-                .font_size(11.0)
+                .rendered_metrics(design::tier_text_metrics(cx, 0.0, 11.0))
                 .mono(true)
                 .uppercase(false)
                 .render(),
@@ -1015,7 +1016,7 @@ pub(super) fn server_row(
                         crate::pulse::attention_ring(MoonPalette::active(cx).accent, at)
                     })),
             )
-            .child(paste_key_affix(weak, i, row_key, row.key.clone(), p))
+            .child(paste_key_affix(weak, i, row_key, row.key.clone(), p, cx))
             .into_any_element(),
         proto_dropdown(view, weak, i, row_key, ids, cx).into_any_element(),
         preset_dropdown(view, weak, i, row_key, ids, cx).into_any_element(),

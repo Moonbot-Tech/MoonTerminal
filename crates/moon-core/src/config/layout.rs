@@ -92,17 +92,37 @@ pub struct ScreenRect {
     pub h: f32,
 }
 
+/// Minimum overlap with an attached display, in square logical pixels, for window restoration.
+pub const MIN_VISIBLE_PX: u64 = 200 * 30;
+
+impl ScreenRect {
+    /// Fit size and origin inside `work`, keeping an already contained rectangle unchanged.
+    ///
+    /// The work area wins over any window minimum so title bars remain reachable on small screens.
+    #[must_use]
+    fn clamped_to(self, work: Self) -> Self {
+        let w = self.w.min(work.w).max(0.0);
+        let h = self.h.min(work.h).max(0.0);
+        Self {
+            x: self.x.clamp(work.x, work.x + (work.w - w).max(0.0)),
+            y: self.y.clamp(work.y, work.y + (work.h - h).max(0.0)),
+            w,
+            h,
+        }
+    }
+}
+
 /// Place the first window of a brand-new profile: [`FIRST_RUN_WINDOW_FRACTION`] of the work area,
 /// centred on it.
 ///
-/// The minimum is enforced HERE rather than left to the window's min-size hint, because that hint
-/// governs live resizing and does not clamp the initial bounds a window is created with.
+/// The preferred minimum is applied here before fitting to the work area. Callers must also cap
+/// the native min-size hint to the resulting rectangle, or native size validation can undo that
+/// fit on a display smaller than the preferred minimum.
 ///
 /// Ordering note, and it is the only real trade-off in this function: the minimum is applied
 /// first and the work-area clamp SECOND, so on a display too small to hold the minimum the clamp
 /// WINS. A window wider than the screen puts its title bar and controls out of reach, which the
-/// user cannot recover from; a window narrower than the minimum is merely cramped, and the OS
-/// min-size hint re-grows it as soon as there is room.
+/// user cannot recover from; a window narrower than the preferred minimum is merely cramped.
 ///
 /// Args:
 ///     work: The display's work area — the monitor minus its taskbar or dock.
@@ -338,7 +358,7 @@ impl Default for StratColsByMode {
     }
 }
 
-/// Window rectangle (outer position + inner size, physical pixels).
+/// Window rectangle (outer position + inner size, logical pixels).
 ///
 /// Compared as a whole when deciding whether a move is worth persisting: the display is part of the
 /// placement, and on macOS — where coordinates are relative to the window's own screen — the same
@@ -395,6 +415,38 @@ pub struct GeomRect {
 }
 
 impl GeomRect {
+    /// Restore onto the chosen work area, replacing unreachable geometry with `fallback`.
+    ///
+    /// `displays` uses the same logical coordinate space as this rectangle. Reachability and
+    /// containment are separate: even a reachable oversized window must shrink and move inward.
+    /// Window state and display identity survive replacement of the rectangle.
+    #[must_use]
+    pub fn restored_on(
+        self,
+        displays: &[(i32, i32, u32, u32)],
+        work: ScreenRect,
+        fallback: ScreenRect,
+    ) -> Self {
+        let candidate = if self.is_reachable_on(displays, MIN_VISIBLE_PX) {
+            ScreenRect {
+                x: self.x as f32,
+                y: self.y as f32,
+                w: self.w as f32,
+                h: self.h as f32,
+            }
+        } else {
+            fallback
+        };
+        let rect = candidate.clamped_to(work);
+        Self {
+            x: rect.x as i32,
+            y: rect.y as i32,
+            w: rect.w as u32,
+            h: rect.h as u32,
+            ..self
+        }
+    }
+
     /// Keep a previously known display when the platform cannot name one right now.
     ///
     /// `None` from the platform means "unknown", not "moved to nowhere": off macOS it is the normal

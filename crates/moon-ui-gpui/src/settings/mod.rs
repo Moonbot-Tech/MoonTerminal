@@ -345,7 +345,7 @@ impl SettingsView {
         let security_ed = security::build(&backend, window, cx);
         let telegram_ed = telegram::build(&backend, window, cx);
 
-        // The zoom slider reinstalls the draft theme for immediate preview.
+        // The zoom slider reinstalls the draft theme only on release; dragging keeps its percentage caption live.
         let ui_zoom = general::build_zoom(&backend, cx);
 
         // Persist the Settings window position and size in layout so it reopens in the same place.
@@ -968,7 +968,10 @@ pub fn open_on_tab(
     );
     let mut opts = crate::window::windowing::tool_window_options(
         t!("settings.window_title").to_string(),
-        crate::window::windowing::restored_window_bounds(saved, bounds),
+        crate::window::windowing::restored_window_bounds(
+            saved,
+            crate::window::windowing::reachable_window_bounds(bounds, display_id, None, cx),
+        ),
         Some(size(px(620.0), px(420.0))),
         owner,
     );

@@ -14,10 +14,9 @@ use crate::window::windowing;
 
 /// Narrowest a group window may be created or resized to, in logical pixels.
 ///
-/// Shared by the min-size hint and by first-run placement ON PURPOSE. The hint governs live
-/// resizing only — it does NOT clamp the bounds a window is created with — so the two would
-/// silently disagree if placement carried its own copy, and a window created below the hint is
-/// resized out from under the user on its first frame.
+/// Shared by the native min-size hint and first-run placement. The window options factory caps
+/// the hint to the fitted restore rectangle when the display is smaller than this preferred
+/// minimum, so native size validation cannot undo the work-area clamp during creation.
 const GROUP_WINDOW_MIN_W: f32 = 520.0;
 /// Shortest a group window may be created or resized to. See [`GROUP_WINDOW_MIN_W`].
 const GROUP_WINDOW_MIN_H: f32 = 340.0;
@@ -102,7 +101,7 @@ pub(crate) fn spawn_group_window_deferred(
     spawn_group_window_inner(cx, backend, cfg, group, epoch, layout, offset, false);
 }
 
-/// Implement immediate and settings-batched group-window creation through one lifecycle path.
+/// Implement immediate and settings-batched group-window creation with reachable, fitted geometry.
 ///
 /// Args:
 ///     cx: Application context used to create or focus the native window.
@@ -225,6 +224,8 @@ fn spawn_group_window_inner(
             })
             .map(|d| d.id())
     });
+    let display_id = display_id.or_else(|| cx.primary_display().map(|display| display.id()));
+    let win_bounds = windowing::reachable_window_bounds(win_bounds, display_id, None, cx);
     let window_bounds = windowing::window_bounds_for(
         saved.map(|g| g.maximized).unwrap_or(false),
         saved.map(|g| g.fullscreen).unwrap_or(false),

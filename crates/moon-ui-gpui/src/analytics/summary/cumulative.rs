@@ -88,7 +88,7 @@ pub(super) fn core_legend(
     }
     let dot = design::ui_value(cx, 6.0);
     let gap = design::ui_value(cx, 8.0);
-    let text_w = |s: &str| design::ui_text_width(cx, s, design::base_text(cx) - 2.0, 400.0, true);
+    let text_w = |s: &str| design::mono_caption_text_width(cx, s, 400.0);
     // Always keep room for the tail: a row that packs to the last pixel and then discovers it
     // must say "+3 more" has nowhere to put it.
     let tail_w = text_w(&t!("analytics.popup_more", n = order.len()).to_string()) + gap;

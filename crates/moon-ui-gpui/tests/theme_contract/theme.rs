@@ -468,14 +468,11 @@ fn header_ticker_deltas_take_their_tone_from_the_shared_delta_mapping() {
 }
 
 /// The header's core pill must size its in-flow trigger height with the same fit triple as the
-/// Small buttons beside it — `design::fit_h_value(cx, SEL_H, 14.0, 6.0)` — never a flat
-/// `design::ui_value(cx, SEL_H)`.
+/// Small buttons beside it — `design::action_control_h_value(cx)` — never a flat copied height.
 ///
-/// The future edit this pins against: reverting to `design::ui_value(cx, SEL_H)`, which looks
-/// equivalent and is the more obvious of the two calls, and is what the tree ships today.
-/// MoonUI's `ToolbarCompact`/`Action` buttons resolve through `fit_height(26,14,6)` and land at 29
-/// at the default +3 font delta and 32 at +6, while a flat `ui_value(26)` stays 26 — the pill
-/// would then sit 3-6px shorter than every neighbour in the same band.
+/// The future edit this pins against: returning to a copied `SEL_H` constant, which stops following
+/// the density tier. The pill would then sit shorter than neighbouring action controls at Compact
+/// or Large density.
 #[test]
 fn header_core_pill_shares_the_toolbar_buttons_fit_rule() {
     let source = read_src("chrome/terminal_chrome.rs");
@@ -488,12 +485,12 @@ fn header_core_pill_shares_the_toolbar_buttons_fit_rule() {
     let body = code_only(braced_body(&source, signature));
 
     assert!(
-        body.contains("design::fit_h_value(cx, SEL_H, 14.0, 6.0)"),
-        "chrome/terminal_chrome.rs:{signature} must size the pill trigger with fit_h_value(cx, SEL_H, 14.0, 6.0)"
+        body.contains("let trigger_h = design::action_control_h_value(cx);"),
+        "chrome/terminal_chrome.rs:{signature} must size the pill trigger from the density-tier action control"
     );
     assert!(
-        !body.contains("design::ui_value(cx, SEL_H)"),
-        "chrome/terminal_chrome.rs:{signature} must not fall back to a flat ui_value(cx, SEL_H)"
+        !body.contains("SEL_H"),
+        "chrome/terminal_chrome.rs:{signature} must not fall back to a copied fixed selector height"
     );
 }
 

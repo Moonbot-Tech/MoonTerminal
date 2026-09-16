@@ -198,3 +198,15 @@ iface.hint:
   ru: "Меняется вживую. «Сохранить» пишет theme.toml рядом с программой — им можно делиться."
   en: "Changes live. “Save” writes theme.toml next to the app — you can share it."
   es: "Cambia en vivo. «Guardar» escribe theme.toml junto a la app — puedes compartirlo."
+iface.dock_reset:
+  ru: "Расположение панелей"
+  en: "Panel layout"
+  es: "Disposición de paneles"
+iface.dock_reset_btn:
+  ru: "Сбросить расположение панелей"
+  en: "Reset panel layout"
+  es: "Restablecer la disposición de paneles"
+iface.dock_reset_tip:
+  ru: "Вернуть панели текущего режима на места по умолчанию во всех окнах групп. Настройки, таблицы и открепленные окна не меняются."
+  en: "Put the panels of the current mode back to their default places in every group window. Settings, tables and detached windows are left alone."
+  es: "Devolver los paneles del modo actual a sus lugares por defecto en todas las ventanas de grupo. Ajustes, tablas y ventanas separadas no cambian."

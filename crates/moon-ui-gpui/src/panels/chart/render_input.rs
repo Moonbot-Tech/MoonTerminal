@@ -242,6 +242,7 @@ pub(super) fn scroll_wheel(
         crate::diag::bump(&crate::diag::CHART_INPUT_NOTIFY);
         cx.notify();
     }
+    this.sweep_cancel_hold(cx);
     // Stop propagation in the chart zoom zone so the wheel does not also scroll the stack.
     cx.stop_propagation();
 }
@@ -834,7 +835,9 @@ pub(super) fn mouse_move(
             cx.notify();
         }
         let order_hover_changed = if within {
-            this.sync_order_hover(pos, cx)
+            let changed = this.sync_order_hover(pos, cx);
+            this.sweep_cancel_hold(cx);
+            changed
         } else {
             // On leaving the chart, clear the threshold probe so returning within the same <1 px
             // neighborhood still recomputes hover instead of getting stuck.
@@ -990,7 +993,6 @@ pub(super) fn hover(
         settle_paced_drag(this, cx);
         let had_order_drag = this.order_drag.take().is_some();
         let had_order_hover = this.order_hover.take().is_some();
-        this.hotkey_cancelled = None;
         if had_order_drag || had_order_hover {
             this.apply_order_visual(cx);
             cx.notify();

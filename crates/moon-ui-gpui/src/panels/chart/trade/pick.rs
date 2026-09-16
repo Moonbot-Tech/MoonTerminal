@@ -55,5 +55,63 @@ impl OrderCandidate {
     }
 }
 
+/// How a hit-test decides which order lines are legal targets.
+///
+/// The pointer's drag/click path and the Tab/Del cancel path share the same geometry and ranking
+/// but ask different target questions: which kinds, which fills, and whether the grab is limited
+/// to the start-cross X band. Naming those questions as a mode keeps the keyboard from inheriting
+/// the mouse's `bool` and makes "never cancel a sell line" a scan of `[Buy]` rather than a later
+/// filter.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum OrderHitMode {
+    /// The pointer's own grab: `cross_only` is separate-zone chart space, where the only target
+    /// is an unfilled entry's start cross.
+    Drag { cross_only: bool },
+    /// The Tab/Del route: the whole ENTRY line, in any zone, at any fill.
+    EntryCancel,
+}
+
+impl OrderHitMode {
+    /// Which line kinds this mode scans, in ranking order.
+    ///
+    /// Drag Buy/Sell through `move_order` and SL/Trailing/TakeProfit through absolute
+    /// `move_order_stop_price` updates. VStop and pending-condition lines have no price
+    /// level set by dragging and are therefore excluded.
+    pub(super) fn kinds(self) -> &'static [LineKind] {
+        match self {
+            Self::Drag { cross_only: false } => &[
+                LineKind::Buy,
+                LineKind::Sell,
+                LineKind::Stop,
+                LineKind::Trailing,
+                LineKind::TakeProfit,
+            ],
+            Self::Drag { cross_only: true } => &[LineKind::Buy],
+            Self::EntryCancel => &[LineKind::Buy],
+        }
+    }
+
+    /// Whether a line of this kind, at this fill, is a legal target for this mode.
+    ///
+    /// Drag admits a Buy only while `fill_pct <= 0.0` — the same strict `>` / non-strict `<=`
+    /// boundary as the old skip — because a filled entry's live limit is historical and the
+    /// position is managed through its Sell exit and stops. EntryCancel admits a Buy at any fill:
+    /// a partially filled entry is still live on the exchange and still cancellable.
+    pub(super) fn admits(self, kind: LineKind, fill_pct: f32) -> bool {
+        if !self.kinds().contains(&kind) {
+            return false;
+        }
+        match self {
+            Self::Drag { .. } if kind == LineKind::Buy => fill_pct <= 0.0,
+            Self::Drag { .. } | Self::EntryCancel => true,
+        }
+    }
+
+    /// Whether the hit is limited to the X band around the line's start cross.
+    pub(super) fn cross_band_only(self) -> bool {
+        matches!(self, Self::Drag { cross_only: true })
+    }
+}
+
 #[cfg(test)]
 mod tests;

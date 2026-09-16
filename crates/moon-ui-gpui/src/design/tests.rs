@@ -321,3 +321,123 @@ fn micro_control_h_value_stays_pinned_while_action_follows_density(cx: &mut gpui
         );
     }
 }
+
+// --- Compact density: one size system -------------------------------------
+
+use super::{font_w, line_px, t_body, t_body_lg, t_caption, t_title, tier_font_base, ui_px};
+use gpui::px;
+
+/// `design.rs:text_px` must preserve Standard's legacy results after the tier rebase.
+///
+/// Breakage: restoring `font_delta` as the tier step, or changing the caption/body/title steps,
+/// shifts roughly 400 Standard text call sites even though Standard was promised unchanged.
+#[gpui::test]
+fn standard_text_is_unchanged_by_the_rebase(cx: &mut gpui::TestAppContext) {
+    for zoom in [0.75, 1.0, 1.25, 1.5] {
+        cx.update(|cx| {
+            moon_ui::MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(
+                    UiThemeMode::Dark,
+                    UiDensity::Standard,
+                    zoom,
+                ),
+                cx,
+            );
+        });
+        let (body, caption, body_lg, title, line, legacy) = cx.update(|cx| {
+            let tokens = moon_ui::MoonTheme::active_tokens(cx);
+            (
+                t_body(cx),
+                t_caption(cx),
+                t_body_lg(cx),
+                t_title(cx),
+                line_px(cx, 14.0),
+                (
+                    px(tokens.font(11.0)),
+                    px(tokens.font(9.0)),
+                    px(tokens.font(12.0)),
+                    px(tokens.font(14.0)),
+                    px(tokens.line_height(14.0)),
+                ),
+            )
+        });
+        assert_eq!(
+            (body, caption, body_lg, title, line),
+            legacy,
+            "Standard zoom {zoom}"
+        );
+    }
+}
+
+/// `design.rs:t_body` and its sibling tiers must render from MoonUI's density control metric.
+///
+/// Breakage: pinning a `t_*` helper to a literal or leaving `font_w` on the legacy width scale
+/// makes Compact text disagree with the controls it sits beside.
+#[gpui::test]
+fn t_body_is_the_tier_font_at_every_density(cx: &mut gpui::TestAppContext) {
+    for (density, expected_font) in [
+        (UiDensity::Compact, 12.0),
+        (UiDensity::Standard, 14.0),
+        (UiDensity::Large, 16.0),
+    ] {
+        for zoom in [0.75, 1.0, 1.5] {
+            cx.update(|cx| {
+                moon_ui::MoonTheme::install_config(
+                    crate::startup::moon_theme_config_for_presentation(
+                        UiThemeMode::Dark,
+                        density,
+                        zoom,
+                    ),
+                    cx,
+                );
+            });
+            let (body, caption, title, width, expected) = cx.update(|cx| {
+                (
+                    t_body(cx),
+                    t_caption(cx),
+                    t_title(cx),
+                    font_w(cx, 11.0),
+                    (
+                        ui_px(cx, expected_font),
+                        ui_px(cx, expected_font - 2.0),
+                        ui_px(cx, expected_font + 3.0),
+                    ),
+                )
+            });
+            assert_eq!(body, expected.0, "{density:?} zoom {zoom}: body");
+            assert_eq!(caption, expected.1, "{density:?} zoom {zoom}: caption");
+            assert_eq!(title, expected.2, "{density:?} zoom {zoom}: title");
+            assert_eq!(
+                width,
+                f32::from(body),
+                "{density:?} zoom {zoom}: body width"
+            );
+        }
+    }
+}
+
+/// `design.rs:tier_font_base` must invert MoonUI's font channel at each supported density.
+///
+/// Breakage: clamping MoonUI's font transform or dropping the helper's UI-value wrapping puts
+/// table cells and header pills back off-tier without changing their call sites.
+#[gpui::test]
+fn tier_font_base_round_trips_through_the_font_channel(cx: &mut gpui::TestAppContext) {
+    for density in [UiDensity::Compact, UiDensity::Standard, UiDensity::Large] {
+        cx.update(|cx| {
+            moon_ui::MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, density, 1.0),
+                cx,
+            );
+        });
+        let (rendered, body) = cx.update(|cx| {
+            (
+                moon_ui::MoonTheme::active_tokens(cx).font(tier_font_base(cx, 0.0)),
+                f32::from(t_body(cx)),
+            )
+        });
+        assert!(
+            (rendered - body).abs() < 0.01,
+            "{density:?}: {rendered} != {body}"
+        );
+    }
+}

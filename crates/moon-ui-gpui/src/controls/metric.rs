@@ -7,8 +7,8 @@ use rust_i18n::t;
 
 use moon_ui::{
     MoonButton, MoonButtonSegment, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputState,
-    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize, MoonSlider, MoonSliderState,
-    MoonToggle, MoonToggleLabelSide, h_flex, v_flex,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSlider, MoonSliderState, MoonToggle,
+    MoonToggleLabelSide, h_flex, v_flex,
 };
 
 use moon_core::feed::ClientSettingsEdit;
@@ -446,7 +446,6 @@ pub(super) fn metric_button(
         } else {
             MoonButtonVariant::Neutral
         })
-        .size(MoonSize::Sm)
         .selected(lit)
         .disabled(!enabled);
     if metric.shows_label() {
@@ -672,7 +671,6 @@ pub fn metric_popup_content(
                 MoonButton::new(SharedString::from(format!("toolbar-lev-x{preset}")))
                     .label(format!("×{preset}"))
                     .variant(MoonButtonVariant::Neutral)
-                    .size(MoonSize::Sm)
                     .disabled(!available)
                     .tooltip(tip)
                     .on_click(move |_, window, app| {
@@ -845,7 +843,6 @@ pub fn metric_popup_content(
             MoonButton::new("toolbar-lev-apply")
                 .label(t!("toolbar.apply").to_string())
                 .variant(MoonButtonVariant::Blue)
-                .size(MoonSize::Sm)
                 .full_width()
                 .on_click(move |_, _w, app| {
                     // Leverage is whole: a fraction is refused rather than truncated, the same

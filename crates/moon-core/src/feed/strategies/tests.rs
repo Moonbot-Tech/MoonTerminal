@@ -204,3 +204,11 @@ fn none_and_empty_mean_silence() {
         "an extension with no stem names nothing"
     );
 }
+
+/// Bypassing shared normalization makes archive-prefixed strategy alerts miss the catalog.
+#[test]
+fn strategy_sound_ignores_archive_folders() {
+    assert_eq!(sound_stem("sounds/hook"), Some("hook".into()));
+    assert_eq!(sound_stem(r"sounds\hook"), Some("hook".into()));
+    assert_eq!(sound_stem("sounds/"), None);
+}

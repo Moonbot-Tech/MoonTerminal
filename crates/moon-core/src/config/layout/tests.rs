@@ -4,6 +4,147 @@ use crate::config::ProfileAge;
 
 use super::*;
 
+/// Construct saved placement without involving platform window state.
+fn restore_fixture(x: i32, y: i32, w: u32, h: u32) -> GeomRect {
+    GeomRect {
+        x,
+        y,
+        w,
+        h,
+        maximized: false,
+        fullscreen: false,
+        display_uuid: None,
+    }
+}
+
+/// Removing the reachability branch pins migrated windows to an edge instead of their fallback.
+#[test]
+fn restored_window_off_every_display_uses_fallback() {
+    let work = ScreenRect {
+        x: 0.0,
+        y: 40.0,
+        w: 1920.0,
+        h: 1040.0,
+    };
+    let fallback = first_run_window_rect(work, 520.0, 340.0);
+    let actual =
+        restore_fixture(4000, 100, 2560, 1440).restored_on(&[(0, 0, 1920, 1080)], work, fallback);
+    assert_eq!(
+        (actual.x, actual.y, actual.w, actual.h),
+        (240, 170, 1440, 780)
+    );
+}
+
+/// Removing origin clamping leaves a title bar off-screen when only the right half is visible.
+#[test]
+fn restored_window_partial_overlap_fits_work_area() {
+    let work = ScreenRect {
+        x: -1920.0,
+        y: 40.0,
+        w: 1920.0,
+        h: 1040.0,
+    };
+    let actual =
+        restore_fixture(-2320, -100, 800, 600).restored_on(&[(-1920, 0, 1920, 1080)], work, work);
+    assert_eq!(
+        (actual.x, actual.y, actual.w, actual.h),
+        (-1920, 40, 800, 600)
+    );
+}
+
+/// Removing size clamping leaves controls outside a smaller screen despite ample overlap.
+#[test]
+fn restored_window_oversized_but_reachable_shrinks() {
+    let work = ScreenRect {
+        x: 0.0,
+        y: 40.0,
+        w: 1920.0,
+        h: 1040.0,
+    };
+    let actual =
+        restore_fixture(100, 100, 2560, 1440).restored_on(&[(0, 0, 1920, 1080)], work, work);
+    assert_eq!(
+        (actual.x, actual.y, actual.w, actual.h),
+        (0, 40, 1920, 1040)
+    );
+}
+
+/// Always using fallback or rejecting negative origins would lose valid saved monitor placement.
+#[test]
+fn restored_window_reachable_and_contained_is_unchanged() {
+    let work = ScreenRect {
+        x: -1920.0,
+        y: 40.0,
+        w: 1920.0,
+        h: 1040.0,
+    };
+    let saved = restore_fixture(-1700, 100, 800, 600);
+    let actual = saved.restored_on(&[(-1920, 0, 1920, 1080)], work, work);
+    assert!(actual == saved);
+}
+
+/// Rebuilding fallback geometry with default flags silently unmaximizes migrated windows.
+#[test]
+fn restored_window_fallback_preserves_state_and_display_identity() {
+    let work = ScreenRect {
+        x: 0.0,
+        y: 0.0,
+        w: 1000.0,
+        h: 800.0,
+    };
+    let fallback = ScreenRect {
+        x: 100.0,
+        y: 80.0,
+        w: 700.0,
+        h: 500.0,
+    };
+    for (maximized, fullscreen) in [(true, false), (false, true), (true, true)] {
+        let saved = GeomRect {
+            maximized,
+            fullscreen,
+            display_uuid: Some(uuid::Uuid::nil()),
+            ..restore_fixture(5000, 5000, 1200, 900)
+        };
+        let actual = saved.restored_on(&[(0, 0, 1000, 800)], work, fallback);
+        assert_eq!(
+            (actual.x, actual.y, actual.w, actual.h),
+            (100, 80, 700, 500)
+        );
+        assert_eq!(
+            (actual.maximized, actual.fullscreen, actual.display_uuid),
+            (maximized, fullscreen, Some(uuid::Uuid::nil()))
+        );
+    }
+}
+
+/// Changing the overlap threshold admits an ungrabbable sliver; clamping must honor UUID selection.
+#[test]
+fn restored_window_overlap_threshold_and_chosen_monitor_are_respected() {
+    let work = ScreenRect {
+        x: 0.0,
+        y: 0.0,
+        w: 1000.0,
+        h: 800.0,
+    };
+    let fallback = ScreenRect {
+        x: 100.0,
+        y: 80.0,
+        w: 700.0,
+        h: 500.0,
+    };
+    for (y, expected_y) in [(770, 770), (771, 80)] {
+        let actual =
+            restore_fixture(800, y, 200, 30).restored_on(&[(0, 0, 1000, 800)], work, fallback);
+        assert_eq!(actual.y, expected_y);
+    }
+    let actual = restore_fixture(-800, 100, 600, 400).restored_on(
+        &[(-1000, 0, 1000, 800), (0, 0, 1000, 800)],
+        work,
+        fallback,
+    );
+    assert_eq!((actual.x, actual.y, actual.w, actual.h), (0, 100, 600, 400));
+}
+
 /// `config/layout.rs:first_run_workspace_mode` must not collapse to
 /// `stored.or(Some(WorkspaceMode::AutoTrading))`; otherwise an established profile with no
 /// workspace entry is silently moved from Classic to Auto on its next launch.

@@ -168,8 +168,8 @@ impl ChartTabs {
     /// it with the group window.
     ///
     /// Returns the geometry the window was created with — which differs from the requested one when
-    /// a first-detach cascade point had to be resolved onto the chosen display — together with its
-    /// handle, or `None` when the window could not be created. The handle goes back to the caller
+    /// a cascade point was resolved or saved bounds were fitted onto the chosen display — together
+    /// with its handle, or `None` when the window could not be created. The handle goes back to the caller
     /// rather than being raised here, because only the caller knows whether a gesture asked for this
     /// window and whether the move it belongs to has finished.
     fn open_chart_window(
@@ -217,28 +217,45 @@ impl ChartTabs {
         } else {
             crate::window::windowing::cascade_origin_on(origin, display_id, cx)
         };
+        let fallback = crate::window::windowing::detached_fallback_bounds(
+            owner,
+            display_id,
+            size(
+                px(FIRST_DETACH_GEOM.w as f32),
+                px(FIRST_DETACH_GEOM.h as f32),
+            ),
+            cx,
+        );
+        let bounds = crate::window::windowing::reachable_window_bounds(
+            Bounds {
+                origin,
+                size: size(px(geom.w as f32), px(geom.h as f32)),
+            },
+            display_id,
+            Some(fallback),
+            cx,
+        );
+        let origin = bounds.origin;
         // The identity of the display finally chosen, so what gets persisted names the monitor the
         // window is on rather than the one it was last remembered on.
         let geom = chart_persist::WinGeom {
             x: f32::from(origin.x) as i32,
             y: f32::from(origin.y) as i32,
+            w: f32::from(bounds.size.width) as u32,
+            h: f32::from(bounds.size.height) as u32,
             // The display actually chosen, falling back to what was remembered — the one rule the
             // panel and tool windows carry as `keeping_display_of`. An unknown identity is not
             // evidence the window moved: off macOS it is the ordinary answer, so overwriting here
             // would wipe a `charts.json` carried over from a Mac on the first detach.
             display_uuid: crate::window::windowing::display_identity(display_id, cx)
                 .or(geom.display_uuid),
-            ..geom
         };
         let mut opts = crate::window::windowing::detached_chart_window_options(
             format!(
                 "MoonTerminal — {}",
                 chart_pane_label(&self.backend, &self.group, n, &bucket, cx)
             ),
-            WindowBounds::Windowed(Bounds {
-                origin,
-                size: size(px(geom.w as f32), px(geom.h as f32)),
-            }),
+            crate::window::windowing::window_bounds_for(false, false, bounds),
             display_id,
         );
         // Clear with the themed chart background. The transparent window body must not cover the

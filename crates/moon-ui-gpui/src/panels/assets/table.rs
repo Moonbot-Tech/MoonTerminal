@@ -984,13 +984,13 @@ pub(super) fn assets_table(
         empty_msg,
         p,
         cx,
-        MoonDataTable::new(id, row_count, move |ix, _window, _app| {
+        MoonDataTable::new(id, row_count, move |ix, _window, app| {
             let e = &table_rows[ix];
             // Hyperliquid orders and catalog markets use indexed names such as `@151`, while
             // transfer-wallet rows expose canonical token names. Coin matching bridges the two
             // representations when marking a row as being sold.
             let on_sale = sell_marked.contains(&(e.core, e.row.coin.to_ascii_uppercase()));
-            assets_row(e, &row_cols, &view, p, on_sale)
+            assets_row(e, &row_cols, &view, p, on_sale, app)
         })
         .columns(assets_columns(&visible))
         .state(state)
@@ -1015,6 +1015,7 @@ fn assets_row(
     view: &Entity<AssetsView>,
     p: MoonPalette,
     on_sale: bool,
+    cx: &App,
 ) -> MoonDataRow {
     let is_position = e.row.pos_size != 0.0;
     let cells: Vec<MoonDataCell> = visible
@@ -1025,7 +1026,7 @@ fn assets_row(
             AssetCol::Core => MoonDataCell::element(core_cell(e, view, p)),
             // Clicking the ticker opens its market on Main using the row's core, as in Orders and
             // Report.
-            AssetCol::Coin => MoonDataCell::element(coin_cell(e, view, p, on_sale)),
+            AssetCol::Coin => MoonDataCell::element(coin_cell(e, view, p, on_sale, cx)),
             // For spot, show the full held balance: free plus the amount locked in open sell orders.
             // Like Moonbot, this keeps a holding with TP orders visible instead of showing its
             // near-zero free amount. For futures, show the remaining position and its notional at
@@ -1131,6 +1132,7 @@ fn coin_cell(
     view: &Entity<AssetsView>,
     p: MoonPalette,
     on_sale: bool,
+    cx: &App,
 ) -> impl IntoElement + 'static {
     let coin = e.row.coin.clone();
     let core = e.core;
@@ -1161,11 +1163,11 @@ fn coin_cell(
         .font_weight(FontWeight::MEDIUM)
         .child(coin)
         .when(on_sale, |el| {
-            // Keep the `SELL` badge smaller than the ticker with MoonText's default size of 9.
+            // Caption-sized so it stays smaller than the ticker cell's inherited body text.
             el.child(
                 MoonText::new("SELL")
                     .color(MoonTone::Info.color(p))
-                    .line_height(14.0)
+                    .rendered_metrics(design::tier_text_metrics(cx, -2.0, 14.0))
                     .weight(600.0)
                     .mono(true)
                     .uppercase(false)

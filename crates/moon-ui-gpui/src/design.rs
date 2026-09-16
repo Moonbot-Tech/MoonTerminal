@@ -8,7 +8,7 @@ use gpui::*;
 use moon_core::util::fmt::DeltaSign;
 use moon_ui::{
     MoonButtonSize, MoonButtonVariant, MoonMetrics, MoonPalette, MoonSize, MoonTableStyle,
-    MoonTheme, MoonTone, rgba_from,
+    MoonTextMetrics, MoonTheme, MoonTone, rgba_from,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -69,8 +69,8 @@ pub const MOON_SCROLLBAR_OVERLAY_W: f32 = 8.0;
 ///
 /// Pass this value directly to `MoonDisclosure`: its `caret_box` applies `tokens.ui(...)`, so
 /// passing [`ui_px`] would apply the UI scale twice. The caret therefore follows the UI slider,
-/// while raw text sized through [`t_body`] follows the legacy font-delta channel. This matches
-/// chrome such as [`vline`].
+/// matching raw text sized through [`t_body`] (the density-tier channel) and chrome such as
+/// [`vline`].
 pub const DISCLOSURE_GLYPH: f32 = 11.0;
 
 /// The cross that drops one row: THE spelling for a new control that needs one.
@@ -84,7 +84,7 @@ pub const GLYPH_CLOSE: &str = "✕";
 /// Base (unscaled) glyph edge for a passive disclosure caret whose enclosing row owns the click.
 ///
 /// Pass this value directly to `MoonDisclosure`; its `caret_box` applies the UI scale. This keeps
-/// the marker on the UI slider rather than the legacy font-delta channel used by [`t_body`].
+/// the marker on the UI slider, matching [`t_body`]'s density-tier channel.
 pub const DISCLOSURE_GLYPH_MARKER: f32 = 9.0;
 
 /// Base (unscaled) square box around either disclosure caret.
@@ -132,8 +132,8 @@ pub fn chrome_section(cx: &App) -> Div {
 ///
 /// A 26px-tall chip made a 16px rule read as decoration rather than a seam; 20 of that 26 draws a
 /// rule that visibly interrupts the row instead of floating inside it. Goes through [`ui_px`], like
-/// every other chrome-strip dimension — it follows the UI slider, not the legacy font-delta
-/// channel, matching [`vline`]'s own scaling rule.
+/// every other chrome-strip dimension — it follows the UI slider, matching [`vline`]'s own scaling
+/// rule.
 pub const CHROME_RULE_H: f32 = 20.0;
 
 /// Colour for a readout that may be empty: full `p.text` when a value is present, `p.text_muted`
@@ -338,7 +338,7 @@ pub fn table_style(p: MoonPalette) -> MoonTableStyle {
 ///
 /// The trigger is left CHILDLESS at every site so `MoonButton` takes its square icon-only layout;
 /// [`glyph_btn_w`] then keeps the cell square on the UI slider while `MoonButton::render` sizes
-/// the icon from the size preset's own font metrics, on the legacy font-delta channel.
+/// the icon from the size preset's own font metrics.
 pub const COLUMN_SELECTOR_ICON: &str = "icons/layout-dashboard.svg";
 
 /// Rendered width that makes a SQUARE one-symbol button — the report export (`⇩`) and the
@@ -635,12 +635,52 @@ pub fn ui_value(cx: &App, value: f32) -> f32 {
     MoonTheme::active_tokens(cx).ui(value)
 }
 
+/// MoonUI-INTERNAL legacy font channel: `value * ui_scale + font_delta`.
+///
+/// This is NOT the terminal's text channel any more — that is [`tier_text_value`]. The only
+/// legitimate remaining use is mirroring a formula MoonUI itself computes; its one such caller is
+/// `settings/connections/table.rs` / `columns.rs`, which reproduces MoonUI's own `Scaled`
+/// dropdown-trigger width.
+///
+/// Args:
+///     cx: Application context used to read the active tokens.
+///     value: Design-reference size MoonUI would pass through `tokens.font()`.
+///
+/// Returns:
+///     The MoonUI font-channel size, in logical pixels.
 pub fn font_value(cx: &App, value: f32) -> f32 {
     MoonTheme::active_tokens(cx).font(value)
 }
 
+/// The terminal's own text channel: `tokens.ui(value + tier_text_step)`.
+///
+/// Compact / Standard / Large add 1 / 3 / 5 to the design-reference size at the default
+/// `mono_font_size` of 11, then `tokens.ui` applies the UI zoom. At Standard density and 100%
+/// zoom, this preserves the former `tokens.font(base_text)` result; Compact and Large instead
+/// follow the density-tier control font.
+///
+/// Args:
+///     cx: Application context used to read the active tokens.
+///     value: Unscaled design-reference size, the same kind [`base_text`] returns.
+///
+/// Returns:
+///     The rendered size in logical pixels.
+pub fn tier_text_value(cx: &App, value: f32) -> f32 {
+    ui_value(cx, value + tier_text_step(cx))
+}
+
+/// Line-box height on the terminal's text channel: [`ui_value`] of `value` plus [`tier_text_step`].
+///
+/// Moves with [`text_px`] so a line box matches the text in it.
+///
+/// Args:
+///     cx: Application context used to read the active tokens.
+///     value: Unscaled design-reference line height.
+///
+/// Returns:
+///     The rendered line height in logical pixels.
 pub fn line_value(cx: &App, value: f32) -> f32 {
-    MoonTheme::active_tokens(cx).line_height(value)
+    ui_value(cx, value + tier_text_step(cx))
 }
 
 /// The BASE size a MoonUI component must be handed so its text RENDERS at `target` logical pixels.
@@ -703,10 +743,12 @@ pub fn ui_px(cx: &App, value: f32) -> Pixels {
     px(ui_value(cx, value))
 }
 
+/// [`tier_text_value`] as `Pixels`.
 pub fn text_px(cx: &App, value: f32) -> Pixels {
-    px(font_value(cx, value))
+    px(tier_text_value(cx, value))
 }
 
+/// [`line_value`] as `Pixels`.
 pub fn line_px(cx: &App, value: f32) -> Pixels {
     px(line_value(cx, value))
 }
@@ -727,19 +769,19 @@ pub fn base_text(cx: &App) -> f32 {
 
 /// Return the caption text size for raw GPUI elements such as `div().text_size(...)`.
 ///
-/// The raw-GPUI tiers derive from MoonUI's base and pass through `font()`, so they respond to the
-/// Settings density choice. MoonUI components such as `MoonText`, `MoonButtonSegment`, and
-/// `MoonDataCell` already scale their own default or supplied base size. Do not pass a `t_*` result
-/// or `font_value(...)` into them, because that applies font scaling twice.
+/// The raw-GPUI tiers derive from the density-tier font via [`text_px`]. MoonUI components such as
+/// `MoonText`, `MoonButtonSegment`, and `MoonDataCell` already scale their own default or supplied
+/// base size. Do not pass a `t_*` result or [`font_value`] into them, because that applies scaling
+/// twice.
 ///
 /// Args:
 ///     cx: Application context used to read active theme tokens.
 ///
 /// Returns:
-///     Approximately 9px at the default theme base with zero font delta (Compact density), for badges, small
-///     labels, and counters. The application's default +3 delta makes it approximately 12px.
+///     10 / 12 / 14 design px at zoom 1.0 at Compact / Standard / Large, for badges, small labels,
+///     and counters.
 pub fn t_caption(cx: &App) -> Pixels {
-    text_px(cx, base_text(cx) - 2.0)
+    t_body_step_px(cx, -2.0)
 }
 
 /// Return the theme-base body size for raw GPUI text, tables, and monospaced values.
@@ -748,10 +790,9 @@ pub fn t_caption(cx: &App) -> Pixels {
 ///     cx: Application context used to read active theme tokens.
 ///
 /// Returns:
-///     Approximately 11px at the default theme base with zero font delta (Compact density). The application's
-///     default +3 delta makes it approximately 14px.
+///     12 / 14 / 16 design px at zoom 1.0 at Compact / Standard / Large.
 pub fn t_body(cx: &App) -> Pixels {
-    text_px(cx, base_text(cx))
+    t_body_step_px(cx, 0.0)
 }
 
 /// Return the one-step-up body size for a row that must read above its neighbours in place.
@@ -765,10 +806,9 @@ pub fn t_body(cx: &App) -> Pixels {
 ///     cx: Application context used to read active theme tokens.
 ///
 /// Returns:
-///     Approximately 12px at the default theme base with zero font delta (Compact density). The application's
-///     default +3 delta makes it approximately 15px.
+///     13 / 15 / 17 design px at zoom 1.0 at Compact / Standard / Large.
 pub fn t_body_lg(cx: &App) -> Pixels {
-    text_px(cx, base_text(cx) + 1.0)
+    t_body_step_px(cx, 1.0)
 }
 
 /// Return the title size for raw GPUI headings and large accents.
@@ -777,30 +817,63 @@ pub fn t_body_lg(cx: &App) -> Pixels {
 ///     cx: Application context used to read active theme tokens.
 ///
 /// Returns:
-///     Approximately 14px at the default theme base with zero font delta (Compact density). The application's
-///     default +3 delta makes it approximately 17px.
+///     15 / 17 / 19 design px at zoom 1.0 at Compact / Standard / Large.
 pub fn t_title(cx: &App) -> Pixels {
-    text_px(cx, base_text(cx) + 3.0)
+    t_body_step_px(cx, 3.0)
 }
 
-/// Return an UNSCALED base for a MoonUI component's own size field — `MoonText::font_size`,
-/// `MoonBadgeSize::Custom`'s `font_size` — never for a raw-GPUI `.text_size(...)`.
+/// Already-scaled [`MoonTextMetrics`] for `MoonText::rendered_metrics`, which bypasses MoonUI's
+/// font scaling and therefore uses the terminal's `tokens.ui` text channel directly.
 ///
-/// MoonUI components apply `tokens.font()` to whatever base they are given, so passing a `t_*`
-/// result or [`font_value`] here would scale the legacy font delta twice: invisible at delta 0,
-/// producing roughly 30px text at the shipped range's top end. `step` is a caller-supplied LOCAL
-/// unscaled addition, for a surface the user has been given its own size control over on top of
-/// the global legacy font-delta channel; zero means exactly the theme base, matching every other
-/// caller of `base_text`. Use [`text_px`] instead when the destination is `div().text_size(...)`.
+/// `step` is 0 for body/control text, -2 for a caption, +1 for `body_lg`, +3 for a title.
+/// `line_base` is the caller's own unscaled design line-height (the value previously passed to
+/// `.line_height(...)`, or `MoonTextStyle`'s default 11). Font size is `ui(tier_font + step)`;
+/// line height is [`line_value`] of `line_base`, which stays Standard-safe the way [`line_px`]
+/// does.
 ///
 /// Args:
-///     cx: Application context used to read active theme tokens.
-///     step: Local unscaled addition on top of the theme base; `0.0` for no local adjustment.
+///     cx: Application context used to read the active Moon scale.
+///     step: Local unscaled addition on top of the density-tier font size.
+///     line_base: Unscaled design-reference line height the caller used before migration.
 ///
 /// Returns:
-///     The unscaled base size, in the same units MoonUI's own component defaults use.
-pub fn moon_text_base(cx: &App, step: f32) -> f32 {
-    base_text(cx) + step
+///     Rendered font size and line height, ready for `MoonText::rendered_metrics`.
+pub fn tier_text_metrics(cx: &App, step: f32, line_base: f32) -> MoonTextMetrics {
+    MoonTextMetrics {
+        font_size: ui_value(cx, tier_font_size(cx) + step),
+        line_height: line_value(cx, line_base),
+    }
+}
+
+/// [`t_body`] plus a local design-px `step`, already scaled through `tokens.ui`, for raw-GPUI
+/// `.text_size(...)`.
+///
+/// At Standard density, `step = 0` and 100% zoom preserve the former body-text size.
+///
+/// Args:
+///     cx: Application context used to read the active Moon scale.
+///     step: Local unscaled addition on top of [`tier_font_size`].
+///
+/// Returns:
+///     The rendered size as `Pixels`.
+pub fn t_body_step_px(cx: &App, step: f32) -> Pixels {
+    ui_px(cx, tier_font_size(cx) + step)
+}
+
+/// The BASE a font-channel MoonUI prop must be handed so it renders at the density-tier
+/// `tokens.ui` size plus `step`.
+///
+/// Inverse of [`font_value`], via [`font_base_for`]. For `MoonSelectorSegment::font_size` and
+/// `MoonBadgeSize::Custom`.
+///
+/// Args:
+///     cx: Application context used to read the active tokens.
+///     step: Local unscaled addition on top of [`tier_font_size`].
+///
+/// Returns:
+///     An unscaled base for a MoonUI component's own size field.
+pub fn tier_font_base(cx: &App, step: f32) -> f32 {
+    font_base_for(cx, ui_value(cx, tier_font_size(cx) + step))
 }
 
 pub fn fit_h_px(cx: &App, base_height: f32, base_line_height: f32, base_pad_y: f32) -> Pixels {
@@ -818,6 +891,50 @@ pub fn button_tier(cx: &App) -> MoonSize {
     MoonTheme::active_tokens(cx)
         .tier()
         .nearest(MoonButtonSize::SUPPORTED)
+}
+
+/// Unscaled density-tier control font size, from [`button_tier`]'s `control_metrics().font_size`,
+/// for the terminal's `tokens.ui` text channel.
+///
+/// Compact 12 / Standard 14 / Large 16. The terminal's own text channel is this number plus a
+/// local step, scaled through [`ui_value`] — see [`tier_text_value`].
+///
+/// Args:
+///     cx: Application context used to read the active Moon scale.
+///
+/// Returns:
+///     Design-reference font size, unscaled, like [`base_text`].
+pub fn tier_font_size(cx: &App) -> f32 {
+    button_tier(cx).control_metrics().font_size
+}
+
+/// Unscaled density-tier control line height, from [`button_tier`]'s
+/// `control_metrics().line_height`, for a line box rendered through `tokens.ui`.
+///
+/// Compact 16 / Standard 20 / Large 24.
+///
+/// Args:
+///     cx: Application context used to read the active Moon scale.
+///
+/// Returns:
+///     Design-reference line height, unscaled, like [`base_text`].
+pub fn tier_line_height(cx: &App) -> f32 {
+    button_tier(cx).control_metrics().line_height
+}
+
+/// Offset from [`base_text`] to [`tier_font_size`] before the terminal passes text through
+/// `tokens.ui`: Compact 1 / Standard 3 / Large 5 at the default `mono_font_size` of 11.
+///
+/// Replaces `font_delta` (0/3/6) for the terminal's own text. At Standard density and 100% zoom,
+/// the resulting rendered size therefore preserves the former value.
+///
+/// Args:
+///     cx: Application context used to read the active Moon scale.
+///
+/// Returns:
+///     Unscaled design-reference step.
+pub fn tier_text_step(cx: &App) -> f32 {
+    tier_font_size(cx) - base_text(cx)
 }
 
 /// Return the drawn height of a dense-strip button, in base px.
@@ -886,28 +1003,31 @@ pub fn footer_tone_color(p: MoonPalette, tone: MoonTone) -> u32 {
     }
 }
 
-/// Width of mono text drawn at the terminal's body size — [`ui_text_width`] with the theme's body
-/// base filled in.
+/// Width of mono text drawn at the terminal's body size — [`ui_text_width_zoomed`] at
+/// [`tier_font_size`].
 ///
 /// Exists so a caller measuring text it drew with `t_body()` + [`mono`] cannot reach for
-/// `t_body(cx)` as the size argument: that value is ALREADY scaled, and `ui_text_width` scales its
-/// input again, so the estimate would come out font-scaled twice. Keeps the base itself private.
+/// `t_body(cx)` as the size argument: that value is ALREADY scaled, and passing it in would scale
+/// twice. These five helpers measure TERMINAL text, which now follows the density tier; plain
+/// [`ui_text_width`] stays on the legacy font channel for mirroring MoonUI-internal text.
 pub fn mono_body_text_width(cx: &App, text: &str, weight: f32) -> f32 {
-    ui_text_width(cx, text, base_text(cx), weight, true)
+    ui_text_width_zoomed(cx, text, tier_font_size(cx), weight, true)
 }
 
 /// Width of mono text drawn at the terminal's caption size — the [`t_caption`] partner of
 /// [`mono_body_text_width`], and it exists for the same reason: `t_caption(cx)` is already scaled,
-/// so passing it to [`ui_text_width`] would scale it twice.
+/// so passing it in would scale twice. Measures TERMINAL text on the density tier; plain
+/// [`ui_text_width`] stays on the legacy font channel for mirroring MoonUI-internal text.
 pub fn mono_caption_text_width(cx: &App, text: &str, weight: f32) -> f32 {
-    ui_text_width(cx, text, base_text(cx) - 2.0, weight, true)
+    ui_text_width_zoomed(cx, text, tier_font_size(cx) - 2.0, weight, true)
 }
 
 /// Width of mono text drawn at the terminal's title size — the [`t_title`] partner of
 /// [`mono_body_text_width`], and it exists for the same reason: `t_title(cx)` is already scaled,
-/// so passing it to [`ui_text_width`] would scale it twice.
+/// so passing it in would scale twice. Measures TERMINAL text on the density tier; plain
+/// [`ui_text_width`] stays on the legacy font channel for mirroring MoonUI-internal text.
 pub fn mono_title_text_width(cx: &App, text: &str, weight: f32) -> f32 {
-    ui_text_width(cx, text, base_text(cx) + 3.0, weight, true)
+    ui_text_width_zoomed(cx, text, tier_font_size(cx) + 3.0, weight, true)
 }
 
 /// Width of UI-face text drawn at the terminal's body size — the [`ui_font`] partner of
@@ -915,15 +1035,19 @@ pub fn mono_title_text_width(cx: &App, text: &str, weight: f32) -> f32 {
 ///
 /// A layout that sizes itself from a measured label must measure in the family that label is
 /// RENDERED in: prose reads in [`ui_font`], so measuring it with the mono trio above overstates
-/// every proportional string and drifts the column it sizes.
+/// every proportional string and drifts the column it sizes. Measures TERMINAL text on the density
+/// tier; plain [`ui_text_width`] stays on the legacy font channel for mirroring MoonUI-internal
+/// text.
 pub fn ui_body_text_width(cx: &App, text: &str, weight: f32) -> f32 {
-    ui_text_width(cx, text, base_text(cx), weight, false)
+    ui_text_width_zoomed(cx, text, tier_font_size(cx), weight, false)
 }
 
 /// Width of UI-face text drawn at the terminal's caption size — the [`t_caption`] partner of
-/// [`ui_body_text_width`], and the [`ui_font`] partner of [`mono_caption_text_width`].
+/// [`ui_body_text_width`], and the [`ui_font`] partner of [`mono_caption_text_width`]. Measures
+/// TERMINAL text on the density tier; plain [`ui_text_width`] stays on the legacy font channel for
+/// mirroring MoonUI-internal text.
 pub fn ui_caption_text_width(cx: &App, text: &str, weight: f32) -> f32 {
-    ui_text_width(cx, text, base_text(cx) - 2.0, weight, false)
+    ui_text_width_zoomed(cx, text, tier_font_size(cx) - 2.0, weight, false)
 }
 
 /// Cache key for one glyph advance under an exact resolved font and requested weight.
@@ -1106,6 +1230,26 @@ fn measure_font_at(cx: &App, size: Pixels, weight: f32, mono: bool) -> (FontId, 
 ///     A digest that changes whenever a width measured under it would.
 pub fn text_metrics_key(cx: &App, base_font_size: f32, weight: f32, mono: bool) -> u64 {
     let (font_id, size) = measure_font(cx, base_font_size, weight, mono);
+    (font_id.0 as u64) << 32 | u64::from(size.as_f32().to_bits())
+}
+
+/// Identity of the typography a `tokens.ui`-channel text measurement was taken under.
+///
+/// The [`ui_text_width_zoomed`] partner of [`text_metrics_key`]: for text that follows only the UI
+/// zoom, not the legacy font-delta channel — density-tier control labels, and the terminal's own
+/// `t_*` text after it moved onto the tier. Resolves through [`measure_font_at`] at
+/// [`ui_px`]`(size)` instead of [`measure_font`].
+///
+/// Args:
+///     cx: Application context providing theme tokens and the text system.
+///     size: Design size before UI zoom.
+///     weight: Numeric GPUI weight the measurement was taken at.
+///     mono: Whether the measurement used the monospaced family.
+///
+/// Returns:
+///     A digest that changes whenever a width measured under it would.
+pub fn text_metrics_key_zoomed(cx: &App, size: f32, weight: f32, mono: bool) -> u64 {
+    let (font_id, size) = measure_font_at(cx, ui_px(cx, size), weight, mono);
     (font_id.0 as u64) << 32 | u64::from(size.as_f32().to_bits())
 }
 
@@ -1345,15 +1489,6 @@ pub fn wrap_text(
     out
 }
 
-/// [`fit_text`] at the size a selector pill draws its label.
-///
-/// The literal is deliberately NOT the button tier's font size: a pill is not an Action-size
-/// button, and tying its truncation budget to the tier metrics would move this text the day MoonUI
-/// moves the button metric.
-pub fn fit_label(cx: &App, text: &str, max_w: f32) -> String {
-    fit_text(text, max_w, |s| ui_text_width(cx, s, 10.5, 400.0, true)).0
-}
-
 /// Return the effective font-scaled `MoonDataTable` row height.
 ///
 /// This mirrors the component's `fit_height(row_h, 14.0, 5.5)` call so wrappers computing natural
@@ -1381,10 +1516,11 @@ pub fn table_head_h(cx: &App) -> f32 {
     fit_h_value(cx, TABLE_HEAD_H, 11.0, 7.5)
 }
 
-/// Return the current font-size scale relative to the theme base.
+/// Return the current text-container width scale relative to the theme base.
 ///
-/// Delegates to MoonUI so the Settings density choice and fixed-width text containers share one width
-/// scale definition.
+/// [`tier_text_value`] of [`base_text`], divided by [`base_text`]. At zoom 1.0 this is 1.091 /
+/// 1.273 / 1.455 at Compact / Standard / Large. Identical to MoonUI's `font_width_scale` at
+/// Standard; Compact and Large follow the density tier, not `font_delta`.
 ///
 /// Args:
 ///     cx: Application context used to read active theme tokens.
@@ -1392,14 +1528,15 @@ pub fn table_head_h(cx: &App) -> f32 {
 /// Returns:
 ///     The active scaled base font size divided by the unscaled base.
 pub fn font_scale(cx: &App) -> f32 {
-    MoonTheme::active_tokens(cx).font_width_scale()
+    tier_text_value(cx, base_text(cx)) / base_text(cx)
 }
 
-/// Scale a fixed text-container width with the font and return `Pixels`.
+/// Scale a fixed text-container width with the terminal's text channel and return `Pixels`.
 ///
 /// Args:
 ///     cx: Application context used to calculate [`font_scale`].
-///     base: Width at zero font delta (Compact density).
+///     base: Design-reference width; the scale is 1.091 / 1.273 / 1.455 at Compact / Standard /
+///         Large at zoom 1.0.
 ///
 /// Returns:
 ///     The font-scaled width as `Pixels`.
@@ -1407,19 +1544,21 @@ pub fn font_w_px(cx: &App, base: f32) -> Pixels {
     px(font_w(cx, base))
 }
 
-/// Scale a fixed text-container width with the font and return raw pixels as `f32`.
+/// Scale a fixed text-container width with the terminal's text channel and return raw pixels as
+/// `f32`.
 ///
 /// Use this for MoonUI builders that apply raw `px(...)` without their own scaling, including
 /// `menu_width`, `trigger_width`, and `MoonButton::width`.
 ///
 /// Args:
 ///     cx: Application context used to calculate [`font_scale`].
-///     base: Width at zero font delta (Compact density).
+///     base: Design-reference width; the scale is 1.091 / 1.273 / 1.455 at Compact / Standard /
+///         Large at zoom 1.0.
 ///
 /// Returns:
 ///     The font-scaled raw pixel width.
 pub fn font_w(cx: &App, base: f32) -> f32 {
-    MoonTheme::active_tokens(cx).font_width(base)
+    base * font_scale(cx)
 }
 
 // Radius tokens come from `MoonMetrics::TERMINAL`, rather than local numeric values. Avoid raw
@@ -1592,8 +1731,8 @@ pub fn logo_glow_sized(cx: &App, width: f32) -> impl IntoElement {
 /// actually occupies, which is what a layout reserving room for it has to ask.
 ///
 /// Args:
-///     cx: Application context, for parity with the drawing side; the frame does not follow the
-///         legacy font-delta channel.
+///     cx: Application context, for parity with the drawing side; the frame is a lockup-width
+///         multiple, not a font-scaled size.
 ///     width: Lockup width, as handed to [`logo_glow_sized`].
 pub fn logo_glow_frame_w(_cx: &App, width: f32) -> Pixels {
     px(width * LOGO_GLOW_SCALE)
@@ -1601,12 +1740,11 @@ pub fn logo_glow_frame_w(_cx: &App, width: f32) -> Pixels {
 
 /// Vertical 1px group separator.
 ///
-/// The height goes through `ui()`, which tracks the UI SCALE but NOT the legacy font-delta
-/// channel — matching MoonUI, which draws its own separators the same way (the brand cluster in
-/// `MoonWindowFrame` is one). So the rule keeps its height while a larger font grows the row
-/// around it; standing beside a MoonUI separator that did move is the worse of the two
-/// mismatches. The 1px width stays raw,
-/// also matching MoonUI, since a hairline must not thicken with the font.
+/// The height goes through `ui()`, matching MoonUI, which draws its own separators the same way
+/// (the brand cluster in `MoonWindowFrame` is one). Density-tier terminal text also tracks `ui()`
+/// via [`tier_text_value`]; MoonUI-internal font-channel text still tracks `font_delta`, so the
+/// rule can sit beside a MoonUI row that grew on that channel. The 1px width stays raw, also
+/// matching MoonUI, since a hairline must not thicken with the font.
 pub fn vline(cx: &App, height: f32, color: u32) -> impl IntoElement {
     // flex_none: a 1px rule inside a shrinking row would otherwise be the first thing squeezed
     // to nothing, silently dropping the group boundary it draws.
@@ -1679,8 +1817,7 @@ pub fn status_dot_stale(color: u32, cx: &App) -> impl IntoElement {
 // ---- goal B: Auto workspace rail ----
 
 /// Top gap paid out of the rail's fixed 30-unit cell before an exchange heading, so the section
-/// separates from the row above it without a taller cell the legacy font-delta channel cannot
-/// size.
+/// separates from the row above it without a taller cell.
 pub const RAIL_SECTION_GAP: f32 = 6.0;
 
 /// Amount added to a core row's status-dot size for `Problem` and `Unavailable` — the two

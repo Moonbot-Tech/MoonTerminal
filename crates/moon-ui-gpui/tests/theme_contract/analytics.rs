@@ -1074,7 +1074,7 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
     let body = braced_body(&toolbar, "pub(super) fn tabs_bar(");
     for needle in [
         "let title = t.title();",
-        "design::ui_value(cx, 20.0)",
+        "design::button_tier(cx).control_metrics().pad_x",
         ".max(design::ui_value(cx, 72.0))",
         ".width(tab_width)",
         ".label(title)",
@@ -1085,7 +1085,8 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
         );
     }
     assert!(
-        body.contains("design::ui_text_width(cx, &title, 10.5, 400.0, false)")
+        body.contains("design::ui_text_width_zoomed(")
+            && body.contains("design::tier_font_size(cx)")
             && body.contains("div().font_family(design::ui_font()).child("),
         "Analytics tab widths must measure UI-family captions and host each tab button in that same UI family"
     );

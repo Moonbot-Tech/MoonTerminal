@@ -1170,8 +1170,8 @@ fn leverage_presets_only_stage_values_until_apply() {
     );
 }
 
-/// `controls/toolbar.rs:row_fit` must budget the Profit Monitor launcher; changing its fixed icon
-/// multiplier back to four makes this assertion red and lets the trailing launcher clip at narrow
+/// `controls/toolbar.rs:row_fit` must budget the Profit Monitor launcher; changing its density-tier
+/// glyph multiplier back to four makes this assertion red and lets the trailing launcher clip at narrow
 /// Main-window widths.
 #[test]
 fn toolbar_budget_includes_every_singleton_launcher() {
@@ -1184,7 +1184,7 @@ fn toolbar_budget_includes_every_singleton_launcher() {
         "row_fit must budget every open_window_button rendered by toolbar"
     );
     assert!(
-        budget.contains("ICON_BTN_W * 5.0"),
+        budget.contains("design::glyph_btn_w(cx) * 5.0"),
         "row_fit must reserve icon width for every open_window_button rendered by toolbar"
     );
     assert!(toolbar.contains("\"toolbar-profit-monitor\""));
@@ -1252,8 +1252,8 @@ fn toolbar_launcher_labels_are_measured_and_all_or_none() {
     let toolbar = fn_body(&text, "pub fn toolbar(");
     let button = fn_body(&text, "fn open_window_button(");
 
-    assert!(measure.contains("design::ui_text_width("));
-    assert!(measure.contains("TOOLBAR_LAUNCHER_TEXT_SIZE"));
+    assert!(measure.contains("design::ui_text_width_zoomed("));
+    assert!(measure.contains("design::tier_font_size(cx)"));
     assert!(measure.contains("TOOLBAR_LAUNCHER_TEXT_WEIGHT"));
     assert!(
         measure.contains("false,"),
@@ -1272,7 +1272,7 @@ fn toolbar_launcher_labels_are_measured_and_all_or_none() {
         2,
         "the Strategies/Analytics section and Settings hosting div must both render control captions in the UI family measured by launcher_label_width"
     );
-    assert!(measure.contains(".max(ICON_BTN_W)"));
+    assert!(measure.contains(".max(design::glyph_btn_w(cx))"));
     for (label, width) in [
         ("launchers.analytics", "fit.analytics_width"),
         ("launchers.strategies", "fit.strategies_width"),
@@ -2229,18 +2229,26 @@ fn a_held_tab_is_spent_before_focus_navigation() {
         .find("cx.intercept_keystrokes(")
         .expect("boot.rs installs the Tab interceptor");
     let body = &boot[at..];
-    // The stop must be THIS branch's: `code_only` keeps indentation, so the two lines are matched
-    // together rather than any `stop_propagation` later in the file.
+    let body_flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    // The stop must be THIS branch's. Whitespace is intentionally flattened because rustfmt may
+    // re-indent this call without changing the interceptor contract.
     assert!(
-        body.contains(
-            "if cancelled || repeat_over_chart {
-                cx.stop_propagation();"
+        body_flat.contains(
+            &"if cancelled || repeat_over_chart { cx.stop_propagation();"
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
         ),
         "a Tab repeat over a chart must be stopped whether or not it cancelled an order"
     );
     assert!(
-        body.contains("cancel_hovered_order(&tab_backend, ev.is_held, cx)"),
-        "the Tab route must hand the repeat flag to the cancel route"
+        body_flat.contains(
+            &"cancel_hovered_order( &tab_backend, &crate::hotkeys::HotkeyPress::key(&ev.keystroke, ev.is_held), window, cx, )"
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        "the Tab route must hand its HotkeyPress and window to the cancel route"
     );
     // Scoped to the chart under the pointer — away from one, a held Tab keeps the ordinary
     // auto-repeat walk every other application has — and covering Shift+Tab, which walks backwards
@@ -2257,20 +2265,27 @@ fn a_held_tab_is_spent_before_focus_navigation() {
         let source = code_only(&read_src(path));
         let calls = source.matches("hotkeys::cancel_hovered_order(").count();
         let flagged = source
-            .matches("hotkeys::cancel_hovered_order(&self.backend, repeat, cx)")
+            .matches("hotkeys::cancel_hovered_order(&self.backend, &press, window, cx)")
             .count();
         assert!(
             calls >= 1 && calls == flagged,
             "{path}: {flagged} of {calls} cancel_hovered_order calls pass the repeat flag"
         );
         assert!(
-            source.contains("self.dispatch_hotkey(action, ev.is_held, window, cx)"),
-            "{path}: on_hotkey must hand the event's is_held to dispatch_hotkey"
+            source.contains(
+                "self.dispatch_hotkey(
+            action,
+            crate::hotkeys::HotkeyPress::key(&ev.keystroke, ev.is_held),
+            window,
+            cx,
+        )"
+            ),
+            "{path}: on_hotkey must construct HotkeyPress from the event keystroke and held status"
         );
     }
     let trade = code_only(&read_src("panels/chart/trade.rs"));
     assert!(
-        trade.contains("if repeat && self.hotkey_cancelled == Some((core, uid)) {"),
+        trade.contains("b.cancel_hold.address((core, uid))"),
         "the panel must spend a repeat over the order it already cancelled without resending"
     );
 }

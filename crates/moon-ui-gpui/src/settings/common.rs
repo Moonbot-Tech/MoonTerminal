@@ -1,5 +1,5 @@
 //! Shared Settings-window UI helpers (`slider_row`, `section`, `color_row`, and `separator`) and
-//! draft binders (`draft_color` and `draft_slider`).
+//! draft binders (`draft_color`, `draft_slider`, and `draft_slider_on`).
 //!
 //! Interface, Lines, and Connections reuse these helpers through re-exports in `settings/mod.rs`.
 
@@ -61,7 +61,9 @@ pub(super) fn hsla_u8(h: Hsla) -> [u8; 3] {
 ///
 /// The full-width label avoids clipping at large font sizes. The caller supplies the slider range
 /// because pinned MoonUI keeps it private, plus one formatter so both endpoints and the current
-/// value use the field's unit and rounding contract.
+/// value use the field's unit and rounding contract. The track yields width to the value column
+/// at narrow window sizes, including when a colour picker shares its parent row. Its minimum
+/// reserves only the two endpoint captions and their gap, not a fixed track length.
 ///
 /// Args:
 ///     label: Localized caption displayed above the slider.
@@ -85,8 +87,13 @@ pub(super) fn slider_row(
     let min = format(*range.start());
     let max = format(*range.end());
     let val = format(val);
+    let endpoint_font = design::tier_font_size(cx) - 2.0;
+    let scale_w = design::ui_text_width_zoomed(cx, &min, endpoint_font, 400.0, true)
+        + design::ui_text_width_zoomed(cx, &max, endpoint_font, 400.0, true)
+        + design::ui_value(cx, 10.0);
     v_flex()
         .w_full()
+        .min_w_0()
         .child(
             div()
                 .text_color(rgba_from(p.text_soft, 1.0))
@@ -100,8 +107,8 @@ pub(super) fn slider_row(
                 .items_center()
                 .child(
                     v_flex()
-                        .w(design::ui_px(cx, 360.0))
-                        .flex_none()
+                        .flex_1()
+                        .min_w(px(scale_w))
                         .child(MoonSlider::new(st).height(design::ui_value(cx, 22.0)))
                         .child(
                             h_flex()
@@ -216,6 +223,29 @@ pub(super) fn draft_slider(
     init: f32,
     apply: impl Fn(&mut AppConfig, f32, &mut Context<Backend>) -> bool + 'static,
 ) -> Entity<MoonSliderState> {
+    draft_slider_on(cx, min, max, step, init, DraftSliderApplyOn::Change, apply)
+}
+
+/// Choose when a slider writes its draft, keeping expensive previews out of drag ticks.
+pub(super) enum DraftSliderApplyOn {
+    Change,
+    Release,
+}
+
+/// Bind a slider to the draft on the selected event, sharing initialization and normalization.
+///
+/// Release-driven sliders repaint Settings on `Change` so captions read the live slider value
+/// without notifying the backend or applying the draft. `apply` notifies the backend only when
+/// it returns true, just as it does for change-driven sliders.
+pub(super) fn draft_slider_on(
+    cx: &mut Context<SettingsView>,
+    min: f32,
+    max: f32,
+    step: f32,
+    init: f32,
+    apply_on: DraftSliderApplyOn,
+    apply: impl Fn(&mut AppConfig, f32, &mut Context<Backend>) -> bool + 'static,
+) -> Entity<MoonSliderState> {
     let st = cx.new(|_| {
         MoonSliderState::new()
             .min(min)
@@ -224,8 +254,14 @@ pub(super) fn draft_slider(
             .default_value(init)
     });
     cx.subscribe(&st, move |this, _emitter, ev: &MoonSliderEvent, cx| {
-        let MoonSliderEvent::Change(f) = ev else {
-            return;
+        let f = match (&apply_on, ev) {
+            (DraftSliderApplyOn::Change, MoonSliderEvent::Change(f))
+            | (DraftSliderApplyOn::Release, MoonSliderEvent::Release(f)) => f,
+            (DraftSliderApplyOn::Release, MoonSliderEvent::Change(_)) => {
+                cx.notify();
+                return;
+            }
+            (DraftSliderApplyOn::Change, MoonSliderEvent::Release(_)) => return,
         };
         // Slider quantization over a negative subrange can produce IEEE -0.0. Normalize it before it
         // reaches the draft or disk.

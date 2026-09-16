@@ -178,9 +178,9 @@ fn auto_and_classic_persist_to_separate_layout_authorities() {
     );
 }
 
-/// Catches relocking the Auto dock, allowing detach/close, or moving Charts back among the
-/// operational tabs in `shell/workspace.rs`; Auto must keep both Classic-only surfaces out while
-/// preserving their exact instances and pinning Charts first.
+/// Catches relocking the Auto dock, allowing detach, or moving Charts back among the operational
+/// tabs in `shell/workspace.rs`; Auto must keep both Classic-only surfaces out while preserving
+/// their exact instances, pinning Charts first, and allowing close to re-home a stray surface.
 #[test]
 fn auto_dock_is_modular_attached_and_charts_first() {
     let workspace = code_only(&read_src("shell/workspace.rs"));
@@ -188,13 +188,18 @@ fn auto_dock_is_modular_attached_and_charts_first() {
         &workspace,
         "pub(super) fn apply_workspace_mode(",
     ));
+    let auto_branch = mode
+        .split("WorkspaceMode::AutoTrading => {")
+        .nth(1)
+        .and_then(|tail| tail.split("WorkspaceMode::Classic =>").next())
+        .expect("workspace mode application must retain its Auto branch");
     assert!(
-        mode.contains("dock.set_layout_editable(true, dock_cx)")
-            && mode.contains("dock.set_detach_allowed(false, dock_cx)")
-            && mode.contains("dock.set_close_allowed(false, dock_cx)")
-            && mode
+        auto_branch.contains("dock.set_layout_editable(true, dock_cx)")
+            && auto_branch.contains("dock.set_detach_allowed(false, dock_cx)")
+            && auto_branch.contains("dock.set_close_allowed(true, dock_cx)")
+            && auto_branch
                 .contains("dock.set_pinned_leading_panels(vec![\"ChartTabs\".into()], dock_cx)",),
-        "Auto must allow in-window dock edits while disabling detach/close and pinning Charts"
+        "Auto must allow in-window dock edits and re-home close while disabling detach and pinning Charts"
     );
     assert!(
         mode.contains("dock.set_detach_allowed(true, dock_cx)")
@@ -1149,5 +1154,30 @@ fn rail_hover_alpha_sits_strictly_between_zero_and_selected_and_stays_selectable
     assert!(
         guard < hover_call && hover_call < guard_close,
         ".hover( must remain inside the .when(selectable, ..) closure, not applied unconditionally"
+    );
+}
+
+/// Reverting Auto close permission or dropping `rehome_auto_panel_from_user` from
+/// `shell/init.rs:PanelCloseRequested` must fail: a stale Auto split would persist outside the
+/// tab strip and leave the user back at deleting cfg files to recover it.
+#[test]
+fn auto_close_routes_a_split_panel_back_to_its_home_strip() {
+    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let init = code_only(&read_src("shell/init.rs"));
+    let auto_branch = workspace
+        .split("WorkspaceMode::AutoTrading =>")
+        .nth(1)
+        .and_then(|tail| tail.split("WorkspaceMode::Classic =>").next())
+        .expect("workspace mode application must retain its Auto branch");
+    let close_arm = init
+        .split("DockEvent::PanelCloseRequested")
+        .nth(1)
+        .and_then(|tail| tail.split("DockEvent::PanelActivated").next())
+        .expect("dock event routing must retain the panel-close arm");
+
+    assert!(
+        auto_branch.contains("dock.set_close_allowed(true, dock_cx)")
+            && close_arm.contains("this.rehome_auto_panel_from_user(panel_name, cx)"),
+        "Auto close must remain enabled and route through topology-level re-homing"
     );
 }
