@@ -817,9 +817,9 @@ strat.version_no_trades:
   en: "no trades"
   es: "sin operaciones"
 strat.version_profit_tip:
-  ru: "Прибыль сделок, закрытых пока действовала эта версия"
-  en: "Profit of trades closed while this version was in effect"
-  es: "Beneficio de las operaciones cerradas mientras esta versión estuvo en vigor"
+  ru: "Прибыль сделок, открытых при этой версии, с учётом только уже закрытых"
+  en: "Profit of trades opened while this version was in effect, counting only those already closed"
+  es: "Beneficio de las operaciones abiertas durante esta versión, contando solo las ya cerradas"
 strat.version_age_now:
   ru: "только что"
   en: "just now"
