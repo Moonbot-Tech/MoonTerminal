@@ -120,6 +120,9 @@ pub struct ChartInput {
     /// Whether the time axis reserves its gutter, published during render. Navigation reads only
     /// horizontal extents, but the layout it shares with the engine answers for both.
     pub time_axis_visible: bool,
+    /// The horizontal volumes' zone, published during render: it takes width from the plot, so
+    /// navigation must subtract it exactly as the engine does.
+    pub hvol: Option<moon_chart::hvol::HvolZoneSpec>,
     /// Market queued by an eligible chart double-click for the caller to take and open on Main.
     pub pending_to_main: Option<(CoreId, String)>,
 
@@ -153,6 +156,7 @@ impl ChartInput {
             self.orderbook_enabled,
             self.time_axis_visible,
             self.price_axis_pos,
+            self.hvol,
             ppp,
         )
     }

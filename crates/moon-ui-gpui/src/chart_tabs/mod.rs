@@ -13,6 +13,7 @@ pub(crate) mod apply_all;
 pub(crate) mod apply_row;
 mod candle_popup;
 mod graphics_popup;
+mod volumes_popup;
 // `pub(crate)` because the header price ticker reuses `search` and `render_popup`.
 pub(crate) mod coin_search;
 mod common;

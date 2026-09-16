@@ -4,6 +4,7 @@ use moon_chart::axes::price_decimals;
 use moon_chart::figures::LabelValue as FigLabelValue;
 use moon_chart::order_geometry::PlotEdge;
 use moon_core::figures::LabelPlace as FigLabelPlace;
+use rust_i18n::t;
 
 use super::*;
 
@@ -163,6 +164,46 @@ impl RenderState {
                         };
                         let y = plot_bottom - band * frac;
                         self.draw_volume_scale_text(ctx, &label, label_x, y, label_ax, 0.5, ink)?;
+                    }
+                }
+            }
+            // Horizontal volumes: the zone's corner caption names the time window and the price
+            // window it sums over — the reference prints `TimeFrame` and `PriceFrame` there, and it
+            // is how a reader checks what `Auto` picked. The volume under the crosshair is printed
+            // further down, with the cursor's other readouts.
+            let hvol_zone = self.panes[idx].hvol_style.zone;
+            // With plates (Moonbot's non-`transparent` side) the zone's captions print in the
+            // readout ink on the dense readout plate — light on dark in every theme; without,
+            // in the theme's plain caption ink over the rows.
+            let hvol_plates = self.panes[idx].hvol_plates;
+            let hvol_ink = if hvol_plates { readout } else { caption_fg };
+            if hvol_zone[2] >= 1.0 {
+                let zone_left = hvol_zone[0] / sf;
+                let zone_top = hvol_zone[1] / sf;
+                if let Some((tf_s, pf_pct)) = self.panes[idx].hvol_caption {
+                    let tf = match tf_s {
+                        Some(s) => moon_chart::hvol::tf_label(s).unwrap_or_else(|| format!("{s}s")),
+                        None => t!("chart.hvol.caption_max").to_string(),
+                    };
+                    let lines = [
+                        t!("chart.hvol.caption_tf", tf = tf).to_string(),
+                        t!("chart.hvol.caption_pf", pf = format!("{pf_pct:.2}")).to_string(),
+                    ];
+                    for (n, line) in lines.iter().enumerate() {
+                        let x = zone_left + HVOL_CAPTION_PAD;
+                        let y = zone_top + HVOL_CAPTION_PAD + LINE_H * n as f32;
+                        let metrics = self.draw_text(ctx, line, x, y, 0.0, 0.0, hvol_ink)?;
+                        if hvol_plates {
+                            placed.push(PlacedLabel {
+                                x,
+                                y,
+                                ax: 0.0,
+                                ay: 0.0,
+                                w: metrics.width.as_f32(),
+                                h: metrics.line_height.as_f32(),
+                                solid: true,
+                            });
+                        }
                     }
                 }
             }
@@ -717,6 +758,60 @@ impl RenderState {
                     let dst = readout_rect_dst(x, cy_log, metrics, 1.0, 0.5, sf);
                     self.draw_label_text(ctx, &label, x, cy_log, 1.0, 0.5, readout)?;
                     skip_price_label_y = Some(rect_y_range_log(dst, sf));
+                }
+
+                // The horizontal volumes under the crosshair: the rolling sum at the cursor's
+                // price, both sides together, printed at the zone's edge the reader chose (Moonbot's
+                // `Disp. vol`) on the crosshair's own line — the cursor layer draws that line
+                // across the zone. Zero when the row is empty: the reference prints `0.00 k`
+                // there rather than nothing, so an empty row reads as empty, not as no readout.
+                if hvol_zone[2] >= 1.0 && cy_log >= plot_top && cy_log <= plot_bottom {
+                    let price = y_min + (plot_bottom - cy_log) / price_to_px.max(1e-6);
+                    let total = moon_chart::hvol::row_at(&self.panes[idx].hvol_samples, price)
+                        .map_or(0.0, |r| r.buy_quote.max(0.0) + r.sell_quote.max(0.0));
+                    let zone_left = hvol_zone[0] / sf;
+                    let zone_right = (hvol_zone[0] + hvol_zone[2]) / sf;
+                    let (x, ax) = if self.panes[idx].hvol_readout_left {
+                        (zone_left + HVOL_CAPTION_PAD, 0.0)
+                    } else {
+                        (zone_right - HVOL_CAPTION_PAD, 1.0)
+                    };
+                    // Half the zone: a label wider than that would cover the rows it describes.
+                    let available = (zone_right - zone_left) * 0.5;
+                    if let Some(label) = super::volume_scale_label(
+                        total,
+                        &self.panes[idx].quote,
+                        available,
+                        |text| {
+                            super::measure_sized_text_run(
+                                &mut self.text_runs,
+                                self.text_run_cursor,
+                                ctx,
+                                text,
+                                VOLUME_SCALE_FONT_SIZE,
+                                VOLUME_SCALE_LINE_H,
+                                VOLUME_SCALE_WEIGHT,
+                            )
+                            .width
+                            .as_f32()
+                        },
+                    ) {
+                        // Sits ON the crosshair line, above it, as the book's readout does.
+                        let y = cy_log - 1.0;
+                        let metrics =
+                            self.draw_volume_scale_text(ctx, &label, x, y, ax, 1.0, hvol_ink)?;
+                        if hvol_plates {
+                            placed.push(PlacedLabel {
+                                x,
+                                y,
+                                ax,
+                                ay: 1.0,
+                                w: metrics.width.as_f32(),
+                                h: metrics.line_height.as_f32(),
+                                solid: true,
+                            });
+                        }
+                    }
                 }
 
                 // Crosshair labels: order size ($) sits LEFT of the separator on the chart side,

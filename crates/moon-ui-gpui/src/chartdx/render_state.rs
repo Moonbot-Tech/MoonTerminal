@@ -11,6 +11,18 @@ const READOUT_PAD_Y: f32 = 2.5;
 const READOUT_INSET: f32 = 2.0;
 
 #[cfg(windows)]
+/// The clip for the order-line and trade-mark pass: the pane, less the horizontal-volume zone
+/// when there is one. The zone sits at the pane's left edge, so this only moves the left side.
+fn userdata_clip(pane_clip: [f32; 4], hvol_zone: [f32; 4]) -> [f32; 4] {
+    if hvol_zone[2] < 1.0 {
+        return pane_clip;
+    }
+    let left = (hvol_zone[0] + hvol_zone[2])
+        .ceil()
+        .clamp(pane_clip[0], pane_clip[2] - 1.0);
+    [left, pane_clip[1], pane_clip[2], pane_clip[3]]
+}
+
 fn bounds_clip(bounds: [f32; 4], res: [f32; 2]) -> [f32; 4] {
     // IMPORTANT: `clamp(min, max)` panics when min exceeds max. With degenerate panel bounds such as
     // zero width or a panel touching the right or bottom edge, `l` can equal the resolution. Then
@@ -424,10 +436,18 @@ impl RenderState {
         for (idx, pr) in self.panes.iter_mut().enumerate() {
             let right = (pr.orderbook_view.bounds[0] + pr.orderbook_view.bounds[2])
                 .max(pr.view.bounds[0] + pr.view.bounds[2]);
+            // The crosshair reaches across the horizontal-volume zone as it does across the book:
+            // the volume readout prints on its line there.
+            let zone = pr.hvol_style.zone;
+            let left = if zone[2] >= 1.0 {
+                pr.view.bounds[0].min(zone[0])
+            } else {
+                pr.view.bounds[0]
+            };
             let bounds = [
-                pr.view.bounds[0],
+                left,
                 pr.view.bounds[1],
-                (right - pr.view.bounds[0]).max(1.0),
+                (right - left).max(1.0),
                 pr.view.bounds[3].max(1.0),
             ];
             let mut params = CursorParams {
@@ -1007,6 +1027,21 @@ impl RenderState {
                     cursor_params.resolution = res;
                     sync_readout_resolution(&mut pr.readout_rects, res);
                     let pane_clip = bounds_clip(pr.pane_bounds, res);
+                    // Order lines and trade marks stop at the horizontal-volume zone: a mark whose
+                    // time scrolled off the plot's left edge would otherwise draw over the zone's
+                    // rows. The cursor pass below keeps the whole pane — the crosshair and the
+                    // volume readout live in the zone.
+                    let user_clip = userdata_clip(pane_clip, pr.hvol_style.zone);
+                    gpu::set_scissor(
+                        &context,
+                        &scissor_rs,
+                        user_clip[0],
+                        user_clip[1],
+                        user_clip[2],
+                        user_clip[3],
+                    );
+                    pr.layers
+                        .render_userdata_lines_d3d(&view, &context, &rtv, gpu);
                     gpu::set_scissor(
                         &context,
                         &scissor_rs,
@@ -1015,8 +1050,6 @@ impl RenderState {
                         pane_clip[2],
                         pane_clip[3],
                     );
-                    pr.layers
-                        .render_userdata_lines_d3d(&view, &context, &rtv, gpu);
                     pr.layers.render_cursor_d3d(
                         &cursor_params,
                         &pr.readout_rects,

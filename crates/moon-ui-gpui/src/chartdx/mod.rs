@@ -38,6 +38,8 @@ pub(crate) use figures_sync::FigureVisual;
 pub mod gpu;
 #[cfg(windows)]
 pub mod grid;
+#[cfg(windows)]
+pub mod hvol;
 #[cfg(target_os = "macos")]
 mod metal_backend;
 #[cfg(windows)]
@@ -91,9 +93,9 @@ use backend::PlatformLayers;
 use pane::{Container, ContainerKind};
 use types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, PriceStyleGpu, ReadoutRect, SideVolumeGpu, TickStyleGpu, VolumeStyleGpu, cover_uv,
-    fill_candle_upload, fill_cross_upload, fill_liq_upload, fill_price_upload,
-    fill_side_volume_upload, rgb4, rgba3,
+    GridParams, HvolRowGpu, HvolStyleGpu, PriceStyleGpu, ReadoutRect, SideVolumeGpu, TickStyleGpu,
+    VolumeStyleGpu, cover_uv, fill_candle_upload, fill_cross_upload, fill_hvol_upload,
+    fill_liq_upload, fill_price_upload, fill_side_volume_upload, rgb4, rgba3,
 };
 
 const CHART_PHOTO_BACKGROUND_ENABLED: bool = false;
@@ -653,6 +655,53 @@ struct PaneRender {
     /// visible window leaving it is a re-read; `(MAX, MIN)` — nothing resident — makes the first
     /// visible window leave it at once.
     side_range: (i64, i64),
+    /// Retained horizontal-volume BINS (turnover by price over the profile's window, at the tick
+    /// or finer), the source of the samples below; empty while the zone is off.
+    ///
+    /// Retained for the reason `side_samples` is: the profile is re-read on the source's slow
+    /// clock, while a pan or a price zoom must still resample from what is resident.
+    hvol_rows: Vec<moon_core::market::PriceProfileRow>,
+    /// The rolling sums the zone draws — one per device pixel of its height, over
+    /// `hvol_price_window` of price around that pixel — resampled from `hvol_rows` whenever the
+    /// bins, the window or the Y camera moved. What the readout and the maximum read.
+    hvol_samples: Vec<moon_core::market::PriceProfileRow>,
+    /// The grid the resident samples were taken on; a different one is a resample.
+    hvol_grid: Option<moon_chart::hvol::SampleGrid>,
+    /// Reusable horizontal-volume upload buffer.
+    hvol_upload: Vec<HvolRowGpu>,
+    /// Revision of the resident profile as the source stamped it; `0` while nothing is resident.
+    /// Handed back on the next read so an unchanged profile is not even copied.
+    hvol_rev: u64,
+    /// The price the resident rows' width was taken as a percentage of; `0` for none yet. Moves
+    /// only past `moon_chart::hvol::REF_PRICE_BAND`, so the rows are not re-binned per tick.
+    hvol_ref_price: f64,
+    /// The market's tick as read with `hvol_ref_price`, `None` when the source does not know it.
+    hvol_price_step: Option<f64>,
+    /// Bin width in price units the resident bins were built at; `0` while off.
+    hvol_row_width: f64,
+    /// The rolling window in price units the samples are summed over; `0` while off.
+    hvol_price_window: f64,
+    /// Window the resident rows cover, `None` while off.
+    hvol_window: Option<moon_core::market::ProfileWindow>,
+    /// When the profile was last asked for, unix milliseconds: the window ends NOW, so a quiet
+    /// market still needs a re-read as rows slide out of it.
+    hvol_read_ms: i64,
+    /// Last horizontal-volume style sent to the layer, compared before `set_hvol_style`. Its
+    /// `zone` is what the text pass places the zone's captions in.
+    hvol_style: HvolStyleGpu,
+    /// Visible-range maximum behind the zone's rows, kept as a SEMANTIC value the way
+    /// `volume_stats` is for the band's.
+    hvol_stats: Option<f32>,
+    /// What the zone's corner caption names: the window in seconds (`None` for `Max`) and the
+    /// effective price window as a percentage of the reference price.
+    hvol_caption: Option<(Option<u32>, f32)>,
+    /// Whether the volume readout under the crosshair prints at the zone's LEFT edge (else its
+    /// right one); read by the text pass. Moonbot's `Disp. vol`.
+    hvol_readout_left: bool,
+    /// Whether the zone's captions get backing plates — light text on the dense readout plate in
+    /// every theme — rather than the theme's plain caption ink. The non-`transparent` half of
+    /// Moonbot's `Disp. vol`; read by the text pass.
+    hvol_plates: bool,
     /// Whether the band's scale labels sit at the plot's right edge; read by the text pass.
     volume_scale_right: bool,
     /// Whether the bottom band's captions print over the volume bars rather than above them;
@@ -881,6 +930,22 @@ impl PaneRender {
             side_tf_ms: 0,
             side_step_ms: 0,
             side_range: (i64::MAX, i64::MIN),
+            hvol_rows: Vec::new(),
+            hvol_samples: Vec::new(),
+            hvol_grid: None,
+            hvol_upload: Vec::new(),
+            hvol_rev: 0,
+            hvol_ref_price: 0.0,
+            hvol_price_step: None,
+            hvol_row_width: 0.0,
+            hvol_price_window: 0.0,
+            hvol_window: None,
+            hvol_read_ms: i64::MIN,
+            hvol_style: HvolStyleGpu::default(),
+            hvol_stats: None,
+            hvol_caption: None,
+            hvol_readout_left: false,
+            hvol_plates: true,
             volume_scale_right: false,
             labels_over_volume: false,
             combo_cross_capacity: 0,
@@ -1272,13 +1337,11 @@ impl ChartDataHandle {
     }
 }
 
-/// Where a pane's plot and order book sit, in device pixels.
+/// A pane's areas as ONE layout decides them.
 ///
-/// Both rectangles together, because they answer one question: a caller handed only widths has to
-/// place them itself, which is how three copies of the placement came to exist. The engine draws
-/// these rectangles and the panel hit-tests them, so what is DRAWN and what is CLICKABLE are the
-/// same arithmetic or they drift — book-only broom mode, where the book takes the whole pane, is
-/// the case that punished the drift hardest.
+/// `prepare` draws with these, and the input and geometry paths hit-test against the same call so
+/// they cannot answer for a layout that was never drawn; the book-only broom mode, where the book
+/// takes the whole pane, is the case that punished a second copy of the arithmetic hardest.
 #[derive(Clone, Copy)]
 pub(crate) struct PaneAreas {
     /// Effective axis position: broom mode hides the price axis whatever the tab configured.
@@ -1288,16 +1351,24 @@ pub(crate) struct PaneAreas {
     pub plot: Rect,
     /// The order book's area, `w == 0.0` when no book is drawn.
     pub glass: Rect,
+    /// The horizontal volumes' zone, `w == 0.0` when none is drawn: the tab has them off, the
+    /// pane is too narrow to hold one, or the broom took the pane.
+    pub hvol: Rect,
 }
 
-/// Lay one pane out into its plot and order-book areas.
+/// Lay one pane out into its horizontal-volume, plot and order-book areas.
+///
+/// Left to right: `[hvol]` `[axis]` plot `[book]` `[axis]` — the horizontal-volume zone sits at
+/// the pane's LEFT edge, outboard of a left axis gutter, as the reference draws it; with a RIGHT
+/// axis the book follows the plot and the axis gutter stays outboard of it.
 ///
 /// Args:
 ///     rect: The pane's full rectangle in device pixels.
 ///     orderbook_only: Whether the plot collapses behind the order book (broom mode).
 ///     orderbook_enabled: Whether the ordinary order-book zone is drawn.
-///     time_axis_visible: Whether the time axis reserves its gutter under both areas.
+///     time_axis_visible: Whether the time axis reserves its gutter under every area.
 ///     price_axis_pos: Configured per-tab price-axis position.
+///     hvol: The horizontal volumes' width, `None` when they are off.
 ///     pixel_scale: Device pixels per logical pixel.
 ///
 /// Returns:
@@ -1308,6 +1379,7 @@ pub(crate) fn pane_layout(
     orderbook_enabled: bool,
     time_axis_visible: bool,
     price_axis_pos: crate::persistence::chart_persist::PriceAxisPos,
+    hvol: Option<moon_chart::hvol::HvolZoneSpec>,
     pixel_scale: f32,
 ) -> PaneAreas {
     use crate::persistence::chart_persist::PriceAxisPos;
@@ -1333,21 +1405,37 @@ pub(crate) fn pane_layout(
     } else {
         glass_base
     };
-    let chart_w = (rect.w - price_axis_w - glass_w).max(1.0);
-    // Left puts the axis gutter on the left and shifts the plot right; Right and Hide start the
-    // plot at the pane's edge. The book follows the plot only for a right-side axis, which leaves
-    // that gutter outboard of it; otherwise it sits against the pane's right edge.
-    let chart_x = if matches!(axis_pos, PriceAxisPos::Left) {
-        rect.x + price_axis_w
-    } else {
-        rect.x
+    // The zone takes its share of the PANE, not of what the book leaves: the reader sized it
+    // against the pane, and a book toggle must not resize it. Too narrow to show a row — a
+    // cramped slot in a stack — and it is left out rather than drawn as a sliver; the broom
+    // owns the whole pane.
+    let hvol_w = match hvol {
+        Some(spec) if !orderbook_only => {
+            let w = (rect.w * spec.width_frac).round();
+            if w >= moon_chart::hvol::ZONE_MIN_PX * pixel_scale {
+                w
+            } else {
+                0.0
+            }
+        }
+        _ => 0.0,
     };
+    let chart_w = (rect.w - price_axis_w - glass_w - hvol_w).max(1.0);
+    // Left puts the axis gutter on the left and shifts the plot right; Right and Hide start the
+    // plot at the zone's edge. The zone sits outboard of the axis gutter.
+    let chart_x = if matches!(axis_pos, PriceAxisPos::Left) {
+        rect.x + hvol_w + price_axis_w
+    } else {
+        rect.x + hvol_w
+    };
+    // The book follows the plot only for a right-side axis, which leaves that gutter outboard of
+    // it; otherwise it sits against the pane's right edge.
     let glass_x = if matches!(axis_pos, PriceAxisPos::Right) {
         chart_x + chart_w
     } else {
         rect.x + (rect.w - glass_w).max(0.0)
     };
-    // A hidden time axis reserves no label gutter, letting both areas use the full height.
+    // A hidden time axis reserves no label gutter, letting every area use the full height.
     let time_axis_h = if time_axis_visible {
         moon_chart::TIME_AXIS_H * pixel_scale
     } else {
@@ -1366,6 +1454,12 @@ pub(crate) fn pane_layout(
             x: glass_x,
             y: rect.y,
             w: glass_w,
+            h,
+        },
+        hvol: Rect {
+            x: rect.x,
+            y: rect.y,
+            w: hvol_w,
             h,
         },
     }
@@ -1397,6 +1491,10 @@ struct ChartDataState {
     /// Whether the per-window time axis, bottom labels, and gutter are visible. Disabled lets the
     /// plot fill the full height. Enabled by default.
     time_axis_visible: bool,
+    /// Whether this engine's panes may show the horizontal-volume zone at all, whatever the tab
+    /// configured: a follower of an active comparison lock does not, and the panel decides that
+    /// from its role. On by default.
+    hvol_allowed: bool,
     /// Effective candle and trade rendering settings for time frame, mode, and zone, applied to all
     /// engine panels. They may be a per-tab override or the `layout.candle_view` fallback.
     candle_view: moon_core::market::CandleViewCfg,

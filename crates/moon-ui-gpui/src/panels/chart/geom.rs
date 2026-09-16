@@ -136,9 +136,12 @@ impl ChartPanel {
         // On no pane at all — an empty stack slot, the gap between panes — the answer is no. Chart
         // gestures have nothing to act on there either, but claiming the point would swallow the
         // press instead of leaving it to whoever owns that space.
+        // The horizontal-volume zone is not chart space, but it is not trading either: a press
+        // there pans and zooms as one in the axis gutter does, in every zone mode alike.
         within
             && self.pane_at_with_fallback(local).is_some()
             && self.chart_gesture_pane_at(local).is_none()
+            && self.hvol_pane_at(local).is_none()
     }
 
     /// The pane holding a local point, from the render's published rectangles or, before the first
@@ -153,17 +156,55 @@ impl ChartPanel {
     }
 
     /// The pane whose CHART SPACE holds this point, or `None` when the point belongs to trading —
-    /// the order book, the strip reserved for it, or anywhere on a book-only broom pane.
+    /// the order book, the strip reserved for it, or anywhere on a book-only broom pane — or to
+    /// the horizontal-volume zone, which is neither chart nor book.
     ///
     /// The one statement of "this is chart, not book", so a gesture added later cannot get the
     /// question half right: figure drawing, figure hit testing and the chart-space order-cross gate
     /// all ask it, and each of them used to spell it out again.
     pub(super) fn chart_gesture_pane_at(&self, pos: (f32, f32)) -> Option<usize> {
         let pane = self.pane_at_with_fallback(pos)?;
-        if self.orderbook_only || self.glass_pane_at(pos).is_some() {
+        if self.orderbook_only
+            || self.glass_pane_at(pos).is_some()
+            || self.hvol_pane_at(pos).is_some()
+        {
             return None;
         }
         Some(pane)
+    }
+
+    /// Whether this panel may show the horizontal-volume zone at all: every pane may, except a
+    /// FOLLOWER of an active comparison lock — it mirrors the anchor's window and would only
+    /// repeat the picture beside a narrower plot, or hold no plot at all under the broom. The
+    /// follower role is read off the lock itself (`locked_y`), not off the tab's kind: a
+    /// comparison tab whose lock is inactive — a vertical layout, or an anchor whose chart was
+    /// closed — has no anchor to keep the zone on, and hiding it everywhere would leave a tab
+    /// with the switch on and nothing shown.
+    pub(super) fn hvol_allowed(&self) -> bool {
+        self.is_compare_anchor || self.locked_y.is_none()
+    }
+
+    /// The horizontal-volume zone this panel lays out: the tab's effective setting (off the
+    /// settings signature, already normalized) gated by [`Self::hvol_allowed`] — the one answer
+    /// the engine, the input and the geometry all take.
+    pub(super) fn hvol_zone_spec(&self) -> Option<moon_chart::hvol::HvolZoneSpec> {
+        moon_chart::hvol::zone_spec(&self.settings_sig.chart_graphics)
+            .filter(|_| self.hvol_allowed())
+    }
+
+    /// The pane whose horizontal-volume zone holds this point, or `None` when the point is not on
+    /// one. A gesture there has nothing to act on: the zone is a readout, and projecting the point
+    /// through the plot's time mapping would place a figure at an extrapolated off-screen time.
+    pub(super) fn hvol_pane_at(&self, pos: (f32, f32)) -> Option<usize> {
+        let pane = self.pane_at_with_fallback(pos)?;
+        let rect = self.local_pane_rect(pane)?;
+        let zone = self.local_pane_areas(rect).hvol;
+        (zone.w > 0.0
+            && pos.0 >= zone.x
+            && pos.0 <= zone.x + zone.w
+            && pos.1 >= zone.y
+            && pos.1 <= zone.y + zone.h)
+            .then_some(pane)
     }
 
     /// Returns whether a position is inside any pane rectangle, including its glass/order-book zone.
@@ -224,6 +265,8 @@ impl ChartPanel {
             self.orderbook_enabled,
             self.time_axis_visible,
             self.price_axis_pos,
+            // The same zone the engine lays out, gated by this panel's role.
+            self.hvol_zone_spec(),
             self.last_ppp,
         )
     }

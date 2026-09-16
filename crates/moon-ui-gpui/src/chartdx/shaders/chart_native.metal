@@ -546,6 +546,113 @@ fragment float4 side_scale_fragment(constant VolumeStyle& vs [[buffer(3)]]) {
     return vs.scale;
 }
 
+// ---- Horizontal volumes (mirrors hvol.hlsl) ---------------------------------
+// One instance = one row, twelve vertices: the bought length (0-5), then the sold one (6-11)
+// over it, as the sides band draws its columns. Kinds: hs.m.y 0 overlaid / 1 stacked (sold
+// continues from where bought ends). Rows are placed against the PANE view's price mapping and
+// grow from the zone's right edge, the plot side, leftward. Binds ChartView at 0, HvolStyle at 3
+// and the row storage at 2. A backdrop pass draws the zone's fill and frame before the rows.
+struct HvolStyle {
+    float4 zone;
+    float4 buy;
+    float4 sell;
+    float4 bg;
+    float4 border;
+    float4 m; // x unused, y stacked (1) / overlaid (0), z 1/max, w border px
+};
+
+struct HvolRow {
+    float price_lo;
+    float price_hi;
+    float buy;
+    float sell;
+};
+
+struct HvolOut {
+    float4 position [[position]];
+    uint sell [[flat]];
+};
+
+static inline float hvol_len_px(constant HvolStyle& hs, float value) {
+    return saturate(value * hs.m.z) * hs.zone.z;
+}
+
+vertex HvolOut hvol_row_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
+                               constant ChartView& cv [[buffer(0)]],
+                               const device HvolRow* rows [[buffer(2)]],
+                               constant HvolStyle& hs [[buffer(3)]]) {
+    if (hs.zone.z < 1.0) {
+        return { float4(2.0, 2.0, 0.0, 1.0), 0u };
+    }
+    HvolRow r = rows[iid];
+    uint sell = (vid >= 6u) ? 1u : 0u;
+    float len = hvol_len_px(hs, (sell == 1u) ? r.sell : r.buy);
+    // Stacked: the sold length starts where the bought one ends.
+    float start = (sell == 1u && hs.m.y >= 0.5) ? hvol_len_px(hs, r.buy) : 0.0;
+    if (len <= 0.0) {
+        return { float4(2.0, 2.0, 0.0, 1.0), 0u };
+    }
+    // Whole pixels along the price axis, each edge rounded — never expanded outward, which
+    // would blend the translucent fills twice at every seam; see hvol.hlsl.
+    float base = cv.bounds.y + cv.bounds.w;
+    float y_top = base - (r.price_hi - cv.view_price0) * cv.price_to_px;
+    float y_bot = base - (r.price_lo - cv.view_price0) * cv.price_to_px;
+    float top = round(min(y_top, y_bot));
+    float bot = max(round(max(y_top, y_bot)), top + 1.0);
+    if (bot < hs.zone.y || top > hs.zone.y + hs.zone.w) {
+        return { float4(2.0, 2.0, 0.0, 1.0), 0u };
+    }
+    // From the zone's right edge, the plot side, leftward; at least one pixel of colour.
+    float right = hs.zone.x + hs.zone.z;
+    float x1 = round(right - start);
+    float x0 = min(round(x1 - len), x1 - 1.0);
+    float2 corner = CORNERS_01[vid % 6u];
+    float2 px = float2(x0, top) + corner * float2(x1 - x0, bot - top);
+    px.x = clamp(px.x, hs.zone.x, hs.zone.x + hs.zone.z);
+    return { to_clip(px, cv.resolution), sell };
+}
+
+fragment float4 hvol_row_fragment(HvolOut in [[stage_in]],
+                                  constant HvolStyle& hs [[buffer(3)]]) {
+    return (in.sell == 1u) ? hs.sell : hs.buy;
+}
+
+// The zone's backdrop (instance 0) and its border (instances 1..4: top, bottom, left, right).
+struct HvolBgOut {
+    float4 position [[position]];
+    uint border [[flat]];
+};
+
+vertex HvolBgOut hvol_bg_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
+                                constant ChartView& cv [[buffer(0)]],
+                                constant HvolStyle& hs [[buffer(3)]]) {
+    if (hs.zone.z < 1.0) {
+        return { float4(2.0, 2.0, 0.0, 1.0), 0u };
+    }
+    float th = max(hs.m.w, 1.0);
+    float2 origin = hs.zone.xy;
+    float2 size = hs.zone.zw;
+    if (iid == 1u) {
+        size = float2(hs.zone.z, th);
+    } else if (iid == 2u) {
+        origin = float2(hs.zone.x, hs.zone.y + hs.zone.w - th);
+        size = float2(hs.zone.z, th);
+    } else if (iid == 3u) {
+        size = float2(th, hs.zone.w);
+    } else if (iid == 4u) {
+        origin = float2(hs.zone.x + hs.zone.z - th, hs.zone.y);
+        size = float2(th, hs.zone.w);
+    }
+    float2 corner = CORNERS_01[vid % 6u];
+    float2 px = origin + corner * size;
+    return { to_clip(px, cv.resolution), (iid == 0u) ? 0u : 1u };
+}
+
+fragment float4 hvol_bg_fragment(HvolBgOut in [[stage_in]],
+                                 constant HvolStyle& hs [[buffer(3)]]) {
+    return (in.border == 1u) ? hs.border : hs.bg;
+}
+
 fragment float4 candles_fragment(CandleOut in [[stage_in]],
                                  constant CandleStyle& cs [[buffer(1)]]) {
     if (in.outline > 0.5) {

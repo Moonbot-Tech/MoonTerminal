@@ -10,6 +10,14 @@ use super::*;
 const COUNTDOWN_CHECK: Duration = Duration::from_millis(250);
 
 impl ChartDataState {
+    /// The horizontal-volume zone this engine lays out, or `None`: the tab's own switch and width
+    /// gated by [`Self::hvol_allowed`], in one place so the layout and the read cannot disagree.
+    /// The panel publishes the same answer to its input hit test from its own copy of the
+    /// settings (`ChartPanel::hvol_zone_spec`).
+    pub(super) fn hvol_zone_spec(&self) -> Option<moon_chart::hvol::HvolZoneSpec> {
+        moon_chart::hvol::zone_spec(&self.chart_graphics).filter(|_| self.hvol_allowed)
+    }
+
     /// Create chart state with a core-local identity report axis until the backend supplies measurements.
     ///
     /// Args:
@@ -40,6 +48,7 @@ impl ChartDataState {
             orderbook_only: false,
             price_axis_pos: crate::persistence::chart_persist::PriceAxisPos::Left,
             time_axis_visible: true,
+            hvol_allowed: true,
             candle_view: moon_core::market::CandleViewCfg::default(),
             chart_graphics: moon_core::config::ChartGraphicsCfg::default(),
             chart_labels: std::rc::Rc::new(moon_core::config::ChartLabelsCfg::default()),

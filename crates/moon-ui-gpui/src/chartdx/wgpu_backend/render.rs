@@ -36,18 +36,26 @@ impl WgpuLayers {
         if self.base_cache.is_valid_for(gpu) {
             self.draw_cached_base(device, queue, pass, view, orderbook_view, gpu);
         } else {
-            self.draw_base_layers(pass);
+            self.draw_base_layers(pass, sc);
             self.draw_cached_combo(device, queue, pass, view);
         }
         self.draw_price_lines_layer(pass);
+        // Order lines and trade marks stop at the horizontal-volume zone; the cursor pass keeps
+        // the whole pane, as the crosshair and the volume readout live in the zone.
         let sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
-        pass.set_scissor_rect(sc.0, sc.1, sc.2, sc.3);
+        let user_sc = userdata_scissor(sc, self.hvol_style.zone);
+        pass.set_scissor_rect(user_sc.0, user_sc.1, user_sc.2, user_sc.3);
         self.draw_user_layers(pass);
+        pass.set_scissor_rect(sc.0, sc.1, sc.2, sc.3);
         self.draw_cursor_layer(pass, cursor_params, readout_rects);
         Ok(())
     }
 
-    fn draw_base_layers(&self, pass: &mut wgpu::RenderPass<'_>) {
+    /// `base_sc` is the pass's own scissor, restored after the horizontal volumes draw under the
+    /// scissor of their zone alone: the zone can sit LEFT of the plot, outside the plot-to-book
+    /// span the other layers are clipped to, and widening that span for every layer would let a
+    /// candle or a cross at the plot's edge spill into the axis gutter beside it.
+    fn draw_base_layers(&self, pass: &mut wgpu::RenderPass<'_>, base_sc: (u32, u32, u32, u32)) {
         let pipelines = self.pipelines.as_ref().unwrap();
         let binds = self.prepared_binds.as_ref().unwrap();
         crate::diag::bump(&crate::diag::CHART_BG_DRAW);
@@ -124,6 +132,31 @@ impl WgpuLayers {
                 6,
                 moon_chart::volume_bars::VOLUME_SCALE_INSTANCES,
             );
+        }
+        // The horizontal volumes live in their own zone beside the plot: after the plot's layers,
+        // before the book.
+        if self.hvol_style.zone[2] >= 1.0 {
+            crate::diag::bump(&crate::diag::CHART_HVOL_DRAW);
+            let (l, t, w, h) = base_sc;
+            let zone_sc = bounds_scissor(self.hvol_style.zone, l + w, t + h);
+            pass.set_scissor_rect(zone_sc.0, zone_sc.1, zone_sc.2, zone_sc.3);
+            draw_pipeline(
+                pass,
+                &pipelines.hvol_bg,
+                &binds.hvol,
+                6,
+                crate::chartdx::types::HVOL_BG_INSTANCES,
+            );
+            if !self.hvol.is_empty() {
+                draw_pipeline(
+                    pass,
+                    &pipelines.hvol_rows,
+                    &binds.hvol,
+                    12,
+                    self.hvol.len() as u32,
+                );
+            }
+            pass.set_scissor_rect(l, t, w, h);
         }
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
         draw_pipeline(pass, &pipelines.book_bg, &binds.book, 6, 1);
@@ -449,7 +482,23 @@ impl WgpuLayers {
         gpu: &RawGpuAccess,
     ) {
         let pipelines = self.pipelines.as_ref().unwrap();
-        let dst = panel_dst(view, orderbook_view, gpu.width(), gpu.height());
+        // The blit alone reaches across the horizontal-volume zone: the base pass's own clip stays
+        // plot-to-book, so a candle or a price line at the plot's edge cannot spill into a zone or
+        // the axis gutter beside it — the zone's rows are drawn under their own scissor.
+        let blit_sc = blit_scissor(
+            view,
+            orderbook_view,
+            self.hvol_style.zone,
+            gpu.width(),
+            gpu.height(),
+        );
+        pass.set_scissor_rect(blit_sc.0, blit_sc.1, blit_sc.2, blit_sc.3);
+        let dst = [
+            blit_sc.0 as f32,
+            blit_sc.1 as f32,
+            blit_sc.2 as f32,
+            blit_sc.3 as f32,
+        ];
         let w = gpu.width().max(1) as f32;
         let h = gpu.height().max(1) as f32;
         let params = BackgroundParams {
@@ -470,6 +519,8 @@ impl WgpuLayers {
         );
         crate::diag::bump(&crate::diag::CHART_BASE_BLIT);
         draw_pipeline(pass, &pipelines.background, bind, 6, 1);
+        let sc = scissor_rect(view, orderbook_view, gpu.width(), gpu.height());
+        pass.set_scissor_rect(sc.0, sc.1, sc.2, sc.3);
     }
 
     pub fn prepare(
@@ -539,7 +590,7 @@ impl WgpuLayers {
                 ..Default::default()
             });
             pass.set_scissor_rect(sc.0, sc.1, sc.2, sc.3);
-            self.draw_base_layers(&mut pass);
+            self.draw_base_layers(&mut pass, sc);
             self.draw_cached_combo(device, queue, &mut pass, view);
         }
         self.base_cache.valid = true;
@@ -614,6 +665,11 @@ unsafe fn borrow_wgpu_draw<'a>(
     ))
 }
 
+/// The base pass's clip: from the plot's left edge to the book's right one. Deliberately NOT
+/// widened to the horizontal-volume zone: the layers under it cull only loosely at the plot's
+/// edges, and a wider clip would let a candle or a price line spill into the zone or the axis
+/// gutter. The zone's own rows draw under their own scissor, and the cached base is blitted
+/// under [`blit_scissor`], which does take the zone in.
 fn scissor_rect(
     view: &ChartViewGpu,
     orderbook_view: &ChartViewGpu,
@@ -631,6 +687,17 @@ fn scissor_rect(
     (l, t, (r - l).max(1), (b - t).max(1))
 }
 
+/// The pane scissor less the horizontal-volume zone at its left edge, for the user layers.
+fn userdata_scissor(pane: (u32, u32, u32, u32), hvol_zone: [f32; 4]) -> (u32, u32, u32, u32) {
+    if hvol_zone[2] < 1.0 {
+        return pane;
+    }
+    let (l, t, w, h) = pane;
+    let right = l + w;
+    let left = ((hvol_zone[0] + hvol_zone[2]).ceil().max(0.0) as u32).clamp(l, right - 1);
+    (left, t, right - left, h)
+}
+
 fn bounds_scissor(bounds: [f32; 4], width: u32, height: u32) -> (u32, u32, u32, u32) {
     let l = bounds[0].floor().max(0.0) as u32;
     let t = bounds[1].floor().max(0.0) as u32;
@@ -643,12 +710,25 @@ fn bounds_scissor(bounds: [f32; 4], width: u32, height: u32) -> (u32, u32, u32, 
     (l, t, (r - l).max(1), (b - t).max(1))
 }
 
-fn panel_dst(
+/// The cached base's blit clip: [`scissor_rect`] widened to take in the horizontal-volume zone
+/// where it sits outboard of the plot or the book — the zone bakes into the same texture, and a
+/// blit clipped to the plot-to-book span would leave it baked and never shown.
+fn blit_scissor(
     view: &ChartViewGpu,
     orderbook_view: &ChartViewGpu,
+    hvol_zone: [f32; 4],
     width: u32,
     height: u32,
-) -> [f32; 4] {
-    let (x, y, w, h) = scissor_rect(view, orderbook_view, width, height);
-    [x as f32, y as f32, w as f32, h as f32]
+) -> (u32, u32, u32, u32) {
+    let (l, t, w, h) = scissor_rect(view, orderbook_view, width, height);
+    if hvol_zone[2] < 1.0 {
+        return (l, t, w, h);
+    }
+    let zone_l = hvol_zone[0].floor().max(0.0) as u32;
+    let zone_r = (hvol_zone[0] + hvol_zone[2])
+        .ceil()
+        .clamp(0.0, width.max(1) as f32) as u32;
+    let l2 = l.min(zone_l);
+    let r2 = (l + w).max(zone_r).max(l2 + 1);
+    (l2, t, r2 - l2, h)
 }

@@ -137,6 +137,7 @@ impl Render for ChartPanel {
                 .chart
                 .set_liquidations_enabled(self.liquidations_enabled)
             | self.chart.set_orderbook_only(self.orderbook_only)
+            | self.chart.set_hvol_allowed(self.hvol_allowed())
             | self.chart.set_candle_view(candle_view)
             | self.chart.set_chart_graphics(chart_graphics)
             | self.chart.set_report_axis(report_axis)
@@ -179,6 +180,8 @@ impl Render for ChartPanel {
         self.input.orderbook_only = self.orderbook_only;
         self.input.orderbook_enabled = self.orderbook_enabled;
         self.input.time_axis_visible = self.time_axis_visible;
+        // The same zone the engine lays out: the tab's setting gated by this panel's role.
+        self.input.hvol = self.hvol_zone_spec();
         // Place each corner close button on its graph pane in Main and AddToChart. Closing Main's
         // coin returns it to the logo. Convert pane-layout device pixels to slot logical pixels,
         // and collect these positions once for the overlay list.

@@ -2848,3 +2848,63 @@ chart.layout.min_slot_hint_width:
   ru: "с какой ширины добавлять ряд"
   en: "the width at which a row is added"
   es: "ancho al que se añade una fila"
+# The horizontal-volume zone's corner captions: Moonbot prints `TimeFrame: 6 hours` and
+# `PriceFrame: 0.45%` there, and it is how a reader checks what `Auto` picked.
+chart.hvol.caption_tf:
+  ru: "Окно: %{tf}"
+  en: "TimeFrame: %{tf}"
+  es: "Ventana: %{tf}"
+chart.hvol.caption_pf:
+  ru: "Окно цены: %{pf}%"
+  en: "PriceFrame: %{pf}%"
+  es: "Ventana de precio: %{pf}%"
+chart.hvol.caption_max:
+  ru: "Макс"
+  en: "Max"
+  es: "Máx"
+# The "Volumes" popup (the V button): the chart's volume indicators. Today the horizontal
+# volumes — Moonbot's `HVol`; the bottom band's rows are to move here from the graphics popup.
+chart.volumes.tip:
+  ru: "Объёмы"
+  en: "Volumes"
+  es: "Volúmenes"
+chart.volumes.title:
+  ru: "Объёмы"
+  en: "Volumes"
+  es: "Volúmenes"
+chart.volumes.frame_hvol:
+  ru: "Горизонтальные объёмы"
+  en: "Horizontal volumes"
+  es: "Volúmenes horizontales"
+chart.volumes.hvol_enabled:
+  ru: "Показывать профиль объёма по цене"
+  en: "Show the volume-by-price profile"
+  es: "Mostrar el perfil de volumen por precio"
+chart.volumes.hvol_window:
+  ru: "Окно"
+  en: "Window"
+  es: "Ventana"
+chart.volumes.hvol_price_frame:
+  ru: "Окно цены"
+  en: "Price window"
+  es: "Ventana de precio"
+chart.volumes.hvol_width:
+  ru: "Ширина зоны"
+  en: "Zone width"
+  es: "Ancho de la zona"
+chart.volumes.hvol_side:
+  ru: "Подпись объёма"
+  en: "Volume readout"
+  es: "Lectura del volumen"
+chart.volumes.hvol_backdrop:
+  ru: "Подложка подписей"
+  en: "Caption plates"
+  es: "Fondo de etiquetas"
+chart.volumes.hvol_backdrop_on:
+  ru: "Есть"
+  en: "On"
+  es: "Sí"
+chart.volumes.hvol_backdrop_off:
+  ru: "Нет"
+  en: "Off"
+  es: "No"

@@ -10,8 +10,8 @@ use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, HLineGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu, SideVolumeGpu,
-    TickStyleGpu, VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_append_ranges,
+    GridParams, HLineGpu, HvolRowGpu, HvolStyleGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu,
+    SideVolumeGpu, TickStyleGpu, VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_append_ranges,
     cross_volume_max, evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring, ranges_have_entries,
     ranges_touch_volume_max, reset_cross_ring, seg_of, update_cross_volume_max, zone_of,
 };
@@ -29,6 +29,7 @@ const MARKER_SHADER: &str = include_str!("shaders/native_marker.wgsl");
 const READOUT_SHADER: &str = include_str!("shaders/native_readout.wgsl");
 const CANDLES_SHADER: &str = include_str!("shaders/native_candles.wgsl");
 const SIDE_VOLUME_SHADER: &str = include_str!("shaders/native_side_volume.wgsl");
+const HVOL_SHADER: &str = include_str!("shaders/native_hvol.wgsl");
 const BACKGROUND_PNG: &[u8] = include_bytes!("../../../../assets/img/3Dlogo_s01.png");
 const MIN_COMBO_CAPACITY: usize = 1;
 
@@ -126,6 +127,8 @@ struct Pipelines {
     /// The sides band: view, VolumeStyle and its own bucket storage. Its own layout because the
     /// candle layout carries CandleStyle and the candle buffer, neither of which it reads.
     side_layout: wgpu::BindGroupLayout,
+    /// The horizontal volumes: view, HvolStyle and their row storage.
+    hvol_layout: wgpu::BindGroupLayout,
     background: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
     grid: wgpu::RenderPipeline,
@@ -142,6 +145,8 @@ struct Pipelines {
     volume_scale: wgpu::RenderPipeline,
     side_volume: wgpu::RenderPipeline,
     side_scale: wgpu::RenderPipeline,
+    hvol_rows: wgpu::RenderPipeline,
+    hvol_bg: wgpu::RenderPipeline,
     zone: wgpu::RenderPipeline,
     hline: wgpu::RenderPipeline,
     seg: wgpu::RenderPipeline,
@@ -350,6 +355,7 @@ struct PreparedBindGroups {
     book: wgpu::BindGroup,
     candle: wgpu::BindGroup,
     side: wgpu::BindGroup,
+    hvol: wgpu::BindGroup,
     zone: wgpu::BindGroup,
     hline: wgpu::BindGroup,
     seg: wgpu::BindGroup,
@@ -378,6 +384,9 @@ pub struct WgpuLayers {
     candle_style: CandleStyleGpu,
     /// The sides band's buckets, replaced as a unit when its series is re-read.
     sides: Vec<SideVolumeGpu>,
+    /// The horizontal volumes' per-pixel samples, replaced as a unit when they are retaken.
+    hvol: Vec<HvolRowGpu>,
+    hvol_style: HvolStyleGpu,
     levels: Vec<LevelInstance>,
     zones: Vec<ZoneGpu>,
     hlines: Vec<HLineGpu>,
@@ -412,12 +421,15 @@ pub struct WgpuLayers {
     volume_style_uniform: BufferSlot,
     volume_style: VolumeStyleGpu,
     side_buffer: BufferSlot,
+    hvol_buffer: BufferSlot,
+    hvol_style_uniform: BufferSlot,
     combo_buffers_dirty: bool,
     price_line_buffers_dirty: bool,
     book_buffer_dirty: bool,
     userdata_buffers_dirty: bool,
     candle_buffers_dirty: bool,
     side_buffer_dirty: bool,
+    hvol_buffers_dirty: bool,
 }
 
 // Split by responsibility: layers manages data, capacities, and volume scale; render handles

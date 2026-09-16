@@ -17,8 +17,9 @@ pub use empty::{EmptyBlock, EmptyPlaces, EmptySlot};
 use serde_compat::{
     de_arrow_scale, de_auto_workspace_rail_width, de_candle_volume_alpha, de_candle_volume_height,
     de_candle_volume_scale, de_candle_volume_style, de_candle_volume_tf_s, de_clock_zone,
-    de_connector_thickness, de_lenient_chart_labels, de_lenient_false, de_lenient_graphics,
-    de_lenient_map, de_lenient_seed, de_lenient_true, de_lenient_u32, de_marker_scale,
+    de_connector_thickness, de_hvol_price_frame_pct, de_hvol_side, de_hvol_tf_s, de_hvol_width,
+    de_lenient_chart_labels, de_lenient_false, de_lenient_graphics, de_lenient_map,
+    de_lenient_seed, de_lenient_true, de_lenient_u32, de_marker_scale,
     de_strategies_tree_text_step, de_table_sort_map, de_trade_volume_alpha,
 };
 pub use serde_compat::{de_lenient, de_lenient_bool};
@@ -1386,6 +1387,46 @@ fn def_candle_volume_scale() -> [u8; 3] {
     [110, 110, 110]
 }
 
+/// Default horizontal-volume price window, percent of price — Moonbot's `PriceFrame` at its
+/// shipped `0.1%`. The chart floors it at the market's own tick.
+fn def_hvol_price_frame_pct() -> f32 {
+    0.1
+}
+
+/// Default horizontal-volume zone width, as a fraction of the pane width.
+fn def_hvol_width() -> f32 {
+    0.2
+}
+
+/// Where the horizontal volumes' cursor readout prints, and whether the zone's captions get their
+/// backing plates — Moonbot's `Disp. vol`.
+///
+/// The zone itself always sits at the pane's LEFT edge with its rows growing from the plot side
+/// outward, as the reference draws it; the side here is the side of the zone the VOLUME READOUT
+/// under the crosshair prints at. The `Transparent` pair prints the zone's captions without
+/// their backing plates — the theme's plain ink over the rows instead of light on dark.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HvolSide {
+    #[default]
+    Right,
+    Left,
+    RightTransparent,
+    LeftTransparent,
+}
+
+impl HvolSide {
+    /// Whether the cursor readout prints at the zone's LEFT edge (else its right edge).
+    pub fn is_left(self) -> bool {
+        matches!(self, HvolSide::Left | HvolSide::LeftTransparent)
+    }
+
+    /// Whether the zone's captions print WITHOUT their backing plates.
+    pub fn is_transparent(self) -> bool {
+        matches!(self, HvolSide::RightTransparent | HvolSide::LeftTransparent)
+    }
+}
+
 /// Chart drawing settings edited from the toolbar's palette popup.
 ///
 /// Stored here as the GLOBAL DEFAULT: each chart tab may hold its own set in `charts.json`, and a
@@ -1519,7 +1560,43 @@ pub struct ChartGraphicsCfg {
     /// against the bars. Applies to every bottom-volume style.
     #[serde(default, deserialize_with = "de_lenient_false")]
     pub candle_volume_labels_over: bool,
+
+    // --- Horizontal volumes: Moonbot's `HVol`, turnover by price beside the plot. ---
+    /// Whether the horizontal-volume zone is drawn at all. Moonbot's `HvShow`.
+    #[serde(default, deserialize_with = "de_lenient_false")]
+    pub hvol_enabled: bool,
+    /// The trailing window the profile covers, in seconds: one of
+    /// `moon_chart::hvol::HVOL_TF_CHOICES_S`, `0` for `Auto` (picked from the visible span), or
+    /// [`HVOL_TF_MAX_S`] for everything retained. Moonbot's `TimeFrame` on its `HVol` popup.
+    #[serde(default, deserialize_with = "de_hvol_tf_s")]
+    pub hvol_tf_s: u32,
+    /// The ROLLING window over price as a percentage of the price, `0.01..=5` — Moonbot's
+    /// `PriceFrame`, the horizontal twin of the vertical band's interval: at every pixel of the
+    /// zone's height the profile shows what traded within this much price around it. The chart
+    /// floors the window at the market's tick, which is why Moonbot prints `PriceFrame: 0.40%`
+    /// under a `0.12%` slider on a coin whose tick is that wide.
+    #[serde(
+        default = "def_hvol_price_frame_pct",
+        deserialize_with = "de_hvol_price_frame_pct"
+    )]
+    pub hvol_price_frame_pct: f32,
+    /// Zone width as a fraction of the pane width, `0.05..=0.5`.
+    #[serde(default = "def_hvol_width", deserialize_with = "de_hvol_width")]
+    pub hvol_width: f32,
+    /// Which edge of the zone the cursor readout prints at, and whether its captions get backing
+    /// plates. The rows' colours and opacity are the bottom band's ([`Self::candle_volume_alpha`]): the
+    /// reference draws its two volume indicators alike, and one opacity serves both here.
+    #[serde(default, deserialize_with = "de_hvol_side")]
+    pub hvol_side: HvolSide,
+    /// Moonbot's `Kind`: `Stacked graph` draws SOLD after BOUGHT so a row's length is their sum;
+    /// off (`Smooth graph`) both grow from the same edge and the longer side shows past the other,
+    /// exactly as [`Self::candle_volume_stacked`] draws the bottom band.
+    #[serde(default, deserialize_with = "de_lenient_false")]
+    pub hvol_stacked: bool,
 }
+
+/// The `hvol_tf_s` value that means "everything retained" — Moonbot's `Max`.
+pub const HVOL_TF_MAX_S: u32 = u32::MAX;
 
 impl Default for ChartGraphicsCfg {
     /// The shipped sizes with every trade kind visible, the closed sell line hidden, and the
@@ -1543,6 +1620,12 @@ impl Default for ChartGraphicsCfg {
             candle_volume_tf_s: 0,
             candle_volume_scale_right: false,
             candle_volume_labels_over: false,
+            hvol_enabled: false,
+            hvol_tf_s: 0,
+            hvol_price_frame_pct: def_hvol_price_frame_pct(),
+            hvol_width: def_hvol_width(),
+            hvol_side: HvolSide::Right,
+            hvol_stacked: false,
         }
     }
 }

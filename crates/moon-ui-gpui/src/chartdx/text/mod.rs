@@ -17,6 +17,8 @@ pub(super) const LINE_H: f32 = FONT_SIZE + 4.0;
 const VOLUME_SCALE_FONT_SIZE: f32 = FONT_SIZE + 1.5;
 const VOLUME_SCALE_LINE_H: f32 = VOLUME_SCALE_FONT_SIZE + 4.0;
 const VOLUME_SCALE_WEIGHT: FontWeight = FontWeight::SEMIBOLD;
+/// Inset of the horizontal-volume zone's captions from its edges, logical px.
+const HVOL_CAPTION_PAD: f32 = 4.0;
 /// How much larger the cursor's volume readout is than an order-line label.
 ///
 /// It is read while the pointer moves, against candles rather than against a gutter, and it carries

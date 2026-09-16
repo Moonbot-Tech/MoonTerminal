@@ -234,6 +234,26 @@ impl WgpuLayers {
             );
             self.side_buffer_dirty = false;
         }
+        if self.hvol_buffers_dirty
+            || self.hvol_buffer.buffer.is_none()
+            || self.hvol_style_uniform.buffer.is_none()
+        {
+            binds_dirty |= self.hvol_buffer.write(
+                device,
+                queue,
+                "moon_chart_hvol",
+                wgpu::BufferUsages::STORAGE,
+                &self.hvol,
+            );
+            binds_dirty |= self.hvol_style_uniform.write(
+                device,
+                queue,
+                "moon_chart_hvol_style",
+                wgpu::BufferUsages::UNIFORM,
+                &[self.hvol_style],
+            );
+            self.hvol_buffers_dirty = false;
+        }
         if binds_dirty {
             self.prepared_binds = None;
         }
@@ -503,6 +523,25 @@ impl WgpuLayers {
                 },
             ],
         });
+        // Paired with `hvol_layout`: the pane view, the HvolStyle uniform and the row storage.
+        let hvol_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("moon_chart_hvol_bind"),
+            layout: &pipelines.hvol_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.view_uniform.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.hvol_style_uniform.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.hvol_buffer.binding(),
+                },
+            ],
+        });
         let zone_bind = self.bind_view_storage(
             device,
             &pipelines.view_storage_layout,
@@ -538,6 +577,7 @@ impl WgpuLayers {
             book: book_bind,
             candle: candle_bind,
             side: side_bind,
+            hvol: hvol_bind,
             zone: zone_bind,
             hline: hline_bind,
             seg: seg_bind,

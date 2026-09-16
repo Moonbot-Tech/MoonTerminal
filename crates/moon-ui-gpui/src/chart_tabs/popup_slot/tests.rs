@@ -8,6 +8,7 @@ fn a_fresh_slot_shows_nothing() {
         ChartPopup::Candle,
         ChartPopup::Graphics,
         ChartPopup::Labels,
+        ChartPopup::Volumes,
         ChartPopup::FigStyle,
         ChartPopup::Coin,
     ] {

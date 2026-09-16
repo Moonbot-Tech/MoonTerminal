@@ -1111,6 +1111,18 @@ impl ChartEngine {
         true
     }
 
+    /// Allows or forbids the horizontal-volume zone on every engine pane, whatever the tab
+    /// configured; a follower of an active comparison lock forbids it. Returns true on change.
+    pub fn set_hvol_allowed(&mut self, allowed: bool) -> bool {
+        let mut data = self.data.borrow_mut();
+        if data.hvol_allowed == allowed {
+            return false;
+        }
+        data.hvol_allowed = allowed;
+        data.mark_view_dirty();
+        true
+    }
+
     /// Sets the per-window price-axis position for every engine pane. Returns true on change.
     pub fn set_price_axis_pos(
         &mut self,

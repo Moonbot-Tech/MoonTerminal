@@ -24,6 +24,8 @@ impl WgpuLayers {
             candles: Vec::new(),
             candle_style: CandleStyleGpu::default(),
             sides: Vec::new(),
+            hvol: Vec::new(),
+            hvol_style: HvolStyleGpu::default(),
             levels: Vec::new(),
             zones: Vec::new(),
             hlines: Vec::new(),
@@ -56,12 +58,33 @@ impl WgpuLayers {
             volume_style_uniform: BufferSlot::default(),
             volume_style: VolumeStyleGpu::default(),
             side_buffer: BufferSlot::default(),
+            hvol_buffer: BufferSlot::default(),
+            hvol_style_uniform: BufferSlot::default(),
             combo_buffers_dirty: true,
             price_line_buffers_dirty: true,
             book_buffer_dirty: true,
             userdata_buffers_dirty: true,
             candle_buffers_dirty: true,
             side_buffer_dirty: true,
+            hvol_buffers_dirty: true,
+        }
+    }
+
+    /// Replaces the horizontal volumes' samples when they are retaken.
+    ///
+    /// The zone resides in the base cache, so this invalidates it for rebaking.
+    pub fn set_hvol(&mut self, data: Vec<HvolRowGpu>) {
+        self.hvol = data;
+        self.hvol_buffers_dirty = true;
+        self.base_cache.valid = false;
+    }
+
+    /// Idempotently sets the horizontal volumes' zone, colours, kind and normalisation.
+    pub fn set_hvol_style(&mut self, style: HvolStyleGpu) {
+        if self.hvol_style != style {
+            self.hvol_style = style;
+            self.hvol_buffers_dirty = true;
+            self.base_cache.valid = false;
         }
     }
 
@@ -284,6 +307,8 @@ impl WgpuLayers {
         self.candle_style_uniform = BufferSlot::default();
         self.volume_style_uniform = BufferSlot::default();
         self.side_buffer = BufferSlot::default();
+        self.hvol_buffer = BufferSlot::default();
+        self.hvol_style_uniform = BufferSlot::default();
         self.price_style_uniform = BufferSlot::default();
         self.tick_style_uniform = BufferSlot::default();
         self.combo_buffers_dirty = true;
@@ -292,6 +317,7 @@ impl WgpuLayers {
         self.userdata_buffers_dirty = true;
         self.candle_buffers_dirty = true;
         self.side_buffer_dirty = true;
+        self.hvol_buffers_dirty = true;
     }
 
     /// Borrow the retained wgpu tick ring without a per-cursor copy.
