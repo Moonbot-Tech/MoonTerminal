@@ -545,6 +545,7 @@ pub(super) fn layout_values(
         StackSetting::LineLabels(snap.line_labels),
         StackSetting::CursorLabels(snap.cursor_labels),
         StackSetting::ArrivalFlash(snap.arrival_flash),
+        StackSetting::ArrivalFrame(snap.arrival_core_color, snap.arrival_hold),
         StackSetting::MaxCharts(max_charts, snap.max_charts_evict),
         StackSetting::Grid(grid.0, grid.1, grid.2),
     ]

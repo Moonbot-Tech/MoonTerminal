@@ -204,6 +204,13 @@ pub struct ChartTabSpec {
     /// enabled, which is what every file written before this field existed says.
     #[serde(default)]
     pub arrival_flash: Option<bool>,
+    /// Whether the arrival border takes the core's Settings colour. None defaults to the theme
+    /// accent, so a file written before this field existed keeps the accent stroke.
+    #[serde(default)]
+    pub arrival_core_color: Option<bool>,
+    /// Whether the arrival border stays on after its pulses. None defaults to ending with them.
+    #[serde(default)]
+    pub arrival_hold: Option<bool>,
     /// Cap on how many detect charts this tab's stack shows at once. None means the tab named no
     /// cap of its own and takes the built-in default, so a file written before this field existed
     /// is capped rather than unbounded. ZERO alone means no cap, and is what a reader writes — or
@@ -304,6 +311,8 @@ impl ChartTabSpec {
             layout_columns_exact: None,
             layout_min_slot: None,
             arrival_flash: None,
+            arrival_core_color: None,
+            arrival_hold: None,
             max_charts: None,
             max_charts_evict: None,
             cancel_buy_pos: None,

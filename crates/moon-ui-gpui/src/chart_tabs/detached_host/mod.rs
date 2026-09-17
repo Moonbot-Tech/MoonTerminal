@@ -235,6 +235,7 @@ impl DetachedChartHost {
                     s.chart_graphics,
                     s.x_ppm,
                     s.arrival_flash,
+                    (s.arrival_core_color, s.arrival_hold),
                     (s.max_charts, s.max_charts_evict),
                     (s.layout_columns, s.layout_columns_exact, s.layout_min_slot),
                 )
@@ -256,6 +257,7 @@ impl DetachedChartHost {
             chart_graphics,
             saved_x_ppm,
             saved_arrival_flash,
+            saved_arrival_frame,
             saved_max_charts,
             saved_grid,
         )) = saved
@@ -307,6 +309,11 @@ impl DetachedChartHost {
             }
             if saved_arrival_flash.is_some() {
                 panel.update(cx, |p, pcx| p.set_arrival_flash(saved_arrival_flash, pcx));
+            }
+            if saved_arrival_frame.0.is_some() || saved_arrival_frame.1.is_some() {
+                panel.update(cx, |p, pcx| {
+                    p.set_arrival_frame(saved_arrival_frame.0, saved_arrival_frame.1, pcx)
+                });
             }
             // A detached AddToChart window keeps receiving its tab's detects, so its cap has to be
             // back BEFORE the first of them arrives — otherwise the window reopens on the built-in
@@ -885,6 +892,8 @@ impl LayoutPopupHost for DetachedChartHost {
             line_labels: p.line_labels().unwrap_or(true),
             cursor_labels: p.cursor_labels().unwrap_or(true),
             arrival_flash: p.arrival_flash().unwrap_or(true),
+            arrival_core_color: p.arrival_frame().0.unwrap_or(false),
+            arrival_hold: p.arrival_frame().1.unwrap_or(false),
             max_charts_evict: resolved_max_charts_evict(p.max_charts_evict()),
         }
     }

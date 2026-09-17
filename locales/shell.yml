@@ -2819,6 +2819,14 @@ chart.layout.no_arrival_flash:
   ru: "Не мигать рамкой"
   en: "No arrival flash"
   es: "Sin parpadeo al llegar"
+chart.layout.arrival_core_color:
+  ru: "Рамка в цвет ядра"
+  en: "Frame in the core's colour"
+  es: "Marco del color del núcleo"
+chart.layout.arrival_hold:
+  ru: "Рамка остаётся видимой"
+  en: "Frame stays visible"
+  es: "El marco permanece visible"
 # --- Screen divider: how many columns (or rows) a chart stack lays its charts out in ---
 chart.layout.divider_columns:
   ru: "Колонок"

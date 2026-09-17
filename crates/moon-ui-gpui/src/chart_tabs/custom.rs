@@ -705,6 +705,7 @@ impl ChartTabs {
             Option<moon_core::config::ChartGraphicsCfg>,
             Option<moon_core::config::ChartLabelsCfg>,
             Option<bool>,
+            (Option<bool>, Option<bool>),
             (Option<u8>, Option<bool>, Option<u16>),
         )> = {
             let all = &self.backend.read(cx).chart_specs;
@@ -734,6 +735,7 @@ impl ChartTabs {
                             s.chart_graphics,
                             s.chart_labels.clone(),
                             s.arrival_flash,
+                            (s.arrival_core_color, s.arrival_hold),
                             (s.layout_columns, s.layout_columns_exact, s.layout_min_slot),
                         )
                     })
@@ -762,6 +764,7 @@ impl ChartTabs {
             chart_graphics,
             chart_labels,
             arrival_flash,
+            arrival_frame,
             grid,
         ) in specs
         {
@@ -818,6 +821,9 @@ impl ChartTabs {
                 // Before the coins go in: each of them arrives, and an arrival is what flashes.
                 if arrival_flash.is_some() {
                     s.set_arrival_flash(arrival_flash, c);
+                }
+                if arrival_frame.0.is_some() || arrival_frame.1.is_some() {
+                    s.set_arrival_frame(arrival_frame.0, arrival_frame.1, c);
                 }
                 if grid.0.is_some() || grid.1.is_some() || grid.2.is_some() {
                     s.set_layout_columns(grid.0, grid.1, grid.2, c);

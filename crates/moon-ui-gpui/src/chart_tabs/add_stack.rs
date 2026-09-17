@@ -86,6 +86,12 @@ pub(crate) struct AddChartStack {
     measured: Rc<Cell<Size<Pixels>>>,
     /// Whether an arriving chart flashes its border (per window). `None` = enabled.
     arrival_flash: Option<bool>,
+    /// Whether the arrival border takes the core's Settings colour instead of the theme accent
+    /// (per window). `None` = accent.
+    arrival_core_color: Option<bool>,
+    /// Whether the arrival border stays on as a steady stroke after its pulses (per window).
+    /// `None` = it ends with them.
+    arrival_hold: Option<bool>,
     /// Cap on charts a DETECT may open here (per window). `None` = the built-in default cap;
     /// `Some(0)` = uncapped. Resolved through `detect_cap::resolved_max_charts`.
     max_charts: Option<u16>,
@@ -183,6 +189,8 @@ impl AddChartStack {
             layout_min_slot: None,
             measured: Rc::new(Cell::new(Size::default())),
             arrival_flash: None,
+            arrival_core_color: None,
+            arrival_hold: None,
             max_charts: None,
             max_charts_evict: None,
             price_axis_pos: None,
@@ -209,7 +217,8 @@ impl AddChartStack {
         self.last_count_change = Instant::now();
     }
 
-    /// Hand the arrival stamp and readable core colour to slot `i`'s chart for its own-pass flash.
+    /// Hand the arrival stamp and the tab's chosen border look to slot `i`'s chart for its own-pass
+    /// flash: the core's colour where readable when the tab asks for it, the accent otherwise.
     ///
     /// Nothing here notifies or schedules a timer. The earlier version repainted the stack at
     /// 10 Hz for 2.6 s (and before that, every vblank), and each repaint re-rendered every
@@ -235,16 +244,22 @@ impl AddChartStack {
         };
         let at = entry.arrived_at;
         let palette = moon_ui::MoonPalette::active(cx);
-        let backend = self.backend.read(cx);
-        let core_color = crate::core_color::core_color(&backend.config.servers, entry.core);
-        // Match the chart renderer, including a Settings preview and the shared dark/graphite set.
-        let effective = backend.preview.as_ref().unwrap_or(&backend.config);
-        let background = effective.theme.get(palette.is_light()).bg;
-        let color = arrival_color::arrival_color(core_color, background, palette.accent);
+        let color = if self.arrival_core_color.unwrap_or(false) {
+            let backend = self.backend.read(cx);
+            let core_color = crate::core_color::core_color(&backend.config.servers, entry.core);
+            // Match the chart renderer, including a Settings preview and the shared dark/graphite
+            // set.
+            let effective = backend.preview.as_ref().unwrap_or(&backend.config);
+            let background = effective.theme.get(palette.is_light()).bg;
+            arrival_color::arrival_color(core_color, background, palette.accent)
+        } else {
+            palette.accent
+        };
+        let hold = self.arrival_hold.unwrap_or(false);
         entry
             .panel
             .clone()
-            .update(cx, |p, _| p.set_arrival_pulse(Some(at), color));
+            .update(cx, |p, _| p.set_arrival_pulse(Some(at), color, hold));
     }
 
     /// Whether an arriving chart on this tab flashes its border. Unset means it does, which is what
@@ -257,10 +272,45 @@ impl AddChartStack {
         self.arrival_flash
     }
 
+    /// The arrival border's two looks as stored: `(core colour, stays visible)`. Unset means off.
+    pub(crate) fn arrival_frame(&self) -> (Option<bool>, Option<bool>) {
+        (self.arrival_core_color, self.arrival_hold)
+    }
+
+    /// Set how the arrival border looks: in the core's colour, and staying on after the pulses.
+    ///
+    /// Re-applied to every chart already here, from each one's own arrival stamp: a held stroke the
+    /// reader just switched off must leave now, not on the next detect, and one switched on must
+    /// appear on the charts that are already there. The panel treats a re-armed old stamp as one
+    /// settling present when the hold is on, and as nothing at all when it is off, so this costs
+    /// at most one overlay frame per chart, once per click.
+    pub(crate) fn set_arrival_frame(
+        &mut self,
+        core_color: Option<bool>,
+        hold: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.arrival_core_color == core_color && self.arrival_hold == hold {
+            return;
+        }
+        self.arrival_core_color = core_color;
+        self.arrival_hold = hold;
+        for i in 0..self.charts.len() {
+            if !self.charts[i].vacated {
+                self.flash_arrival(i, cx);
+            }
+        }
+        // Notifies for the reason `set_arrival_flash` does: a detached window's open ⚙ repaints
+        // only when its stack says so.
+        cx.notify();
+    }
+
     /// Set whether arriving charts flash, clearing pulsing and steady borders when switched off.
     ///
-    /// The clear is load-bearing: arrival state survives the pulse window to retain the core
-    /// colour, so disabling the setting must also remove borders on charts that already settled.
+    /// The clear is load-bearing: with the hold on, arrival state survives the pulse window, so
+    /// disabling the setting must also remove borders on charts that already settled. Switching it
+    /// back on with the hold set brings those borders back the same way — a held stroke is a look
+    /// of the charts that are here, not only of the next arrival.
     pub(crate) fn set_arrival_flash(&mut self, on: Option<bool>, cx: &mut Context<Self>) {
         if self.arrival_flash == on {
             return;
@@ -272,7 +322,13 @@ impl AddChartStack {
                 entry
                     .panel
                     .clone()
-                    .update(cx, |p, _| p.set_arrival_pulse(None, accent));
+                    .update(cx, |p, _| p.set_arrival_pulse(None, accent, false));
+            }
+        } else if self.arrival_hold.unwrap_or(false) {
+            for i in 0..self.charts.len() {
+                if !self.charts[i].vacated {
+                    self.flash_arrival(i, cx);
+                }
             }
         }
         // Notifies although `render` reads nothing of this: a ⧉ press from the tab strip writes
@@ -722,7 +778,7 @@ impl AddChartStack {
                 if empty {
                     let accent = moon_ui::MoonPalette::active(cx).accent;
                     e.panel
-                        .update(cx, |panel, _| panel.set_arrival_pulse(None, accent));
+                        .update(cx, |panel, _| panel.set_arrival_pulse(None, accent, false));
                 }
                 changed = true;
             }

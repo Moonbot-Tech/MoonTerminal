@@ -122,6 +122,13 @@ pub(super) struct DetectFlow<'a> {
     /// flash" is the thing a reader goes looking for — and inverts on the way in and out.
     pub flash: bool,
     pub on_toggle_flash: DetectFlowToggle,
+    /// Whether the border takes the core's colour rather than the accent. Stated as the positive:
+    /// off is the accent every tab had before the choice existed.
+    pub core_color: bool,
+    pub on_toggle_core_color: DetectFlowToggle,
+    /// Whether the border stays on after its pulses. Off, it ends with them.
+    pub hold: bool,
+    pub on_toggle_hold: DetectFlowToggle,
 }
 
 /// The detect cap and what happens at it, shown only where detects arrive.
@@ -439,11 +446,27 @@ where
             .label(t!("chart.layout.no_arrival_flash").to_string())
             .checked(!flow.flash)
             .on_change(move |ch: &bool, _w, app| (flow.on_toggle_flash)(!*ch, app));
+        // The two looks of the border mean nothing while it does not flash at all, so they go grey
+        // with it rather than promising a colour or a hold that nothing will draw. Their values are
+        // kept: unticking "no flash" brings back what the reader chose.
+        let core_color_cb =
+            MoonCheckbox::new(SharedString::from(format!("{id}-arrival-core-color")))
+                .label(t!("chart.layout.arrival_core_color").to_string())
+                .checked(flow.core_color)
+                .disabled(!flow.flash)
+                .on_change(move |ch: &bool, _w, app| (flow.on_toggle_core_color)(*ch, app));
+        let hold_cb = MoonCheckbox::new(SharedString::from(format!("{id}-arrival-hold")))
+            .label(t!("chart.layout.arrival_hold").to_string())
+            .checked(flow.hold)
+            .disabled(!flow.flash)
+            .on_change(move |ch: &bool, _w, app| (flow.on_toggle_hold)(*ch, app));
         popup_group("frame-detect-flow", t!("chart.layout.frame_detect_flow")).child(
             v_flex()
                 .gap(design::ui_px(cx, 6.0))
                 .children(cap_rows)
-                .child(flash_cb),
+                .child(flash_cb)
+                .child(core_color_cb)
+                .child(hold_cb),
         )
     });
 

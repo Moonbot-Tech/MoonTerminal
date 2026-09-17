@@ -1105,11 +1105,11 @@ impl MainChartStack {
         )
     }
 
-    // --- The two settings Main does not have ---
+    // --- The three settings Main does not have ---
     //
     // Main draws no arrival flash — it has no `flash_arrival` — and detects never reach it: ingest
     // routes them to numbered AddToChart stacks only. `StackSetting::applies_to` keeps both values
-    // away from Main, so these four exist purely to satisfy the one macro that dispatches every
+    // away from Main, so these six exist purely to satisfy the one macro that dispatches every
     // setting to either stack type. They report "not set" and store nothing: holding a value that
     // nothing can read would be worse than not holding it.
 
@@ -1118,6 +1118,18 @@ impl MainChartStack {
     }
 
     pub(crate) fn set_arrival_flash(&mut self, _on: Option<bool>, _cx: &mut Context<Self>) {}
+
+    pub(crate) fn arrival_frame(&self) -> (Option<bool>, Option<bool>) {
+        (None, None)
+    }
+
+    pub(crate) fn set_arrival_frame(
+        &mut self,
+        _core_color: Option<bool>,
+        _hold: Option<bool>,
+        _cx: &mut Context<Self>,
+    ) {
+    }
 
     pub(crate) fn max_charts(&self) -> Option<u16> {
         None
