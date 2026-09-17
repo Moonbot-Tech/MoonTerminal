@@ -41,18 +41,23 @@ pub const WIDTH_MAX: f32 = 0.5;
 /// zone rather than a sliver.
 pub const ZONE_MIN_PX: f32 = 40.0;
 
-/// How wide the zone is — what the pane layout needs from the configuration. The zone always
-/// sits at the pane's left edge, as the reference draws it, so its side is not a parameter.
+/// How wide the zone is and whether it takes that width from the plot — what the pane layout
+/// needs from the configuration. The zone always sits at the LEFT, as the reference draws it, so
+/// its side is not a parameter.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HvolZoneSpec {
     /// Zone width as a fraction of the pane width, already clamped.
     pub width_frac: f32,
+    /// Laid over the plot's left edge (the plot keeps its full width) rather than carved out of
+    /// the pane beside it. See `ChartGraphicsCfg::hvol_overlay`.
+    pub overlay: bool,
 }
 
 /// The zone the tab asks for, or `None` when the horizontal volumes are off.
 pub fn zone_spec(cfg: &ChartGraphicsCfg) -> Option<HvolZoneSpec> {
     cfg.hvol_enabled.then(|| HvolZoneSpec {
         width_frac: clamp_width(cfg.hvol_width),
+        overlay: cfg.hvol_overlay,
     })
 }
 

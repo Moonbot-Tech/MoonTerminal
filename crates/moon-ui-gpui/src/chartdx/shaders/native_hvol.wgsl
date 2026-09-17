@@ -2,7 +2,8 @@
 // bought length (0-5), then the sold one (6-11) over it, as the sides band draws its columns.
 // Kinds: hs.m.y 0 overlaid / 1 stacked (sold continues from where bought ends). Rows are placed
 // against the PANE view's price mapping and grow from the zone's right edge, the plot side,
-// leftward. A backdrop pass draws the zone's fill and frame before the rows.
+// leftward — or, laid over the plot (hs.m.x >= 0.5), from its left edge rightward, with no
+// backdrop. A backdrop pass draws the zone's fill and frame before the rows.
 
 struct ChartView {
     bounds: vec4<f32>,
@@ -25,7 +26,7 @@ struct HvolStyle {
     sell: vec4<f32>,    // sold rgb + opacity
     bg: vec4<f32>,      // backdrop rgb + opacity
     border: vec4<f32>,  // border rgb + opacity
-    m: vec4<f32>,       // x unused, y stacked (1) / overlaid (0), z 1/max, w border px
+    m: vec4<f32>,       // x over the plot (1) / carved out (0), y stacked (1) / overlaid (0), z 1/max, w border px
 };
 
 struct HvolRow {
@@ -98,10 +99,19 @@ fn hvol_row_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid
     if bot < hs.zone.y || top > hs.zone.y + hs.zone.w {
         return hvol_cull();
     }
-    // From the zone's right edge, the plot side, leftward; at least one pixel of colour.
-    let right = hs.zone.x + hs.zone.z;
-    let x1 = round(right - start);
-    let x0 = min(round(x1 - len), x1 - 1.0);
+    // Carved out: from the zone's right edge, the plot side, leftward. Over the plot: from its
+    // left edge rightward. At least one pixel of colour either way.
+    var x0: f32;
+    var x1: f32;
+    if hs.m.x >= 0.5 {
+        let left = hs.zone.x;
+        x0 = round(left + start);
+        x1 = max(round(x0 + len), x0 + 1.0);
+    } else {
+        let right = hs.zone.x + hs.zone.z;
+        x1 = round(right - start);
+        x0 = min(round(x1 - len), x1 - 1.0);
+    }
     let corner = CORNERS_01[vid % 6u];
     var px = vec2<f32>(x0, top) + corner * vec2<f32>(x1 - x0, bot - top);
     px.x = clamp(px.x, hs.zone.x, hs.zone.x + hs.zone.z);
@@ -128,7 +138,8 @@ struct HvolBgOut {
 @vertex
 fn hvol_bg_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> HvolBgOut {
     var o: HvolBgOut;
-    if hs.zone.z < 1.0 {
+    // No zone, or a zone laid over the plot, which has no backdrop or frame of its own.
+    if hs.zone.z < 1.0 || hs.m.x >= 0.5 {
         o.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
         o.border = 0u;
         return o;

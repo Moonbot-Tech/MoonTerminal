@@ -1,8 +1,10 @@
 //! D3D11 own-pass layer for the horizontal volumes (Moonbot's `HVol`): turnover by price over a
-//! trailing window, drawn as rows in a zone of their own beside the plot. Drawn in the base pass
-//! after the plot's layers — the zone is outside the plot, so order against the candles does not
-//! matter, but the base is what the zone's backdrop belongs in — and before the order book, which
-//! sits outboard of it.
+//! trailing window, drawn as rows in a zone of their own beside the plot — or, with the tab's
+//! `hvol_overlay` on, over the plot's own left strip. Drawn in the base pass after the order
+//! zones and BEFORE the candles: laid over the plot the rows must sit under the bodies and the
+//! crosses like the bottom band, and carved out beside it nothing else draws in their zone, so
+//! one order serves both. The base is where a carved zone's backdrop belongs, and the overlaid
+//! zone has none: the shaders skip that pass on the flag.
 //!
 //! The base is redrawn only on data changes or camera movement, so this layer adds no work to
 //! the presentation path. The buffer holds the zone's per-pixel rolling samples and is reuploaded
@@ -129,8 +131,9 @@ impl HvolLayer {
         crate::diag::bump(&crate::diag::CHART_HVOL_DRAW);
         update_dynamic(context, &pipe.view_cb, std::slice::from_ref(view));
         let vp = full_viewport(gpu);
-        // Clipped to the ZONE, not to the pane's plot-to-book span the other layers use: the zone
-        // sits left of the plot, outside that span. Its vertical extent stays the pane's.
+        // Clipped to the ZONE, not to the pane's plot-to-book span the other layers use: carved
+        // out, the zone sits left of the plot, outside that span; laid over the plot, the clip
+        // keeps the rows inside their strip. Its vertical extent stays the pane's.
         let zone = self.style.zone;
         unsafe {
             context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);

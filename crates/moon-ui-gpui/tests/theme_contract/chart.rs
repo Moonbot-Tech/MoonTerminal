@@ -1527,9 +1527,11 @@ fn the_volume_scale_is_one_bracket_and_the_sides_stand_alone() {
 /// pass drawn the way the bottom band's sides layer draws its columns — the bought length, then
 /// the sold one over it, the stacked kind continuing the sold length from where the bought one
 /// ends — plus a backdrop pass drawn with the shared instance count, and both drawn in the base
-/// pass after the plot's layers and before the book. The zone's width comes from the one pane
-/// layout every hit test reads, so a click on the zone can never pan a plot that was drawn
-/// narrower.
+/// pass after the order zones and BEFORE the candles: laid over the plot (`hvol_overlay`) the
+/// rows must sit under the bodies and the crosses like the bottom band, and carved out beside it
+/// nothing else draws in their zone, so one order serves both. The zone's width comes from the
+/// one pane layout every hit test reads, so a click on the zone can never pan a plot that was
+/// drawn narrower.
 #[test]
 fn every_backend_draws_the_horizontal_volumes_the_same_way() {
     const SHADERS: &[(&str, &str, &str)] = &[
@@ -1578,37 +1580,37 @@ fn every_backend_draws_the_horizontal_volumes_the_same_way() {
     const DRAWS: &[(&str, &str, &str, &str)] = &[
         (
             "chartdx/backend.rs",
-            "self.side_volume.render(view, context, rtv, gpu, panel_clip);",
+            "self.userdata.render_zones(view, context, rtv, gpu);",
             "self.hvol.render(view, context, rtv, gpu, panel_clip);",
-            "self.orderbook\n            .render(orderbook_view, context, rtv, gpu, panel_clip);",
+            "self.candles.render(view, context, rtv, gpu, panel_clip);",
         ),
         (
             "chartdx/wgpu_backend/render.rs",
-            "&pipelines.side_volume",
+            "&pipelines.zone,",
             "&pipelines.hvol_rows",
-            "&pipelines.book_bg",
+            "&pipelines.candles,",
         ),
         (
             "chartdx/metal_backend.rs",
-            "&pipelines.side_volume",
+            "&pipelines.zone,",
             "&pipelines.hvol_rows",
-            "&pipelines.book_bg",
+            "&pipelines.candles,",
         ),
     ];
     for (path, before, hvol_draw, after) in DRAWS {
         let source = code_only(&read_src(path));
         let before_at = source
             .find(before)
-            .unwrap_or_else(|| panic!("{path}: missing the sides band draw"));
+            .unwrap_or_else(|| panic!("{path}: missing the order-zones draw"));
         let hvol_at = source
             .find(hvol_draw)
             .unwrap_or_else(|| panic!("{path}: missing the horizontal volumes draw"));
         let after_at = source
             .find(after)
-            .unwrap_or_else(|| panic!("{path}: missing the book draw"));
+            .unwrap_or_else(|| panic!("{path}: missing the candles draw"));
         assert!(
             before_at < hvol_at && hvol_at < after_at,
-            "{path}: the horizontal volumes draw after the plot's layers and before the book"
+            "{path}: the horizontal volumes draw after the order zones and before the candles"
         );
     }
     for path in [
@@ -1659,8 +1661,14 @@ fn every_backend_draws_the_horizontal_volumes_the_same_way() {
     let layout = code_only(&read_src("chartdx/mod.rs"));
     let body = braced_body(&layout, "fn pane_layout(");
     assert!(
-        body.contains("hvol_w") && body.contains("ZONE_MIN_PX"),
+        body.contains("hvol_carved_w") && body.contains("ZONE_MIN_PX"),
         "chartdx/mod.rs: pane_layout must carve the zone and floor it at ZONE_MIN_PX"
+    );
+    // Laid over the plot, the zone is floored AFTER it is clamped to the plot: the pane-relative
+    // width can pass the floor while the strip a cramped plot leaves for it cannot.
+    assert!(
+        body.contains("w.min(chart_w)") && body.contains("hvol_floor"),
+        "chartdx/mod.rs: the overlaid zone must be clamped to the plot and floored after that"
     );
     for (file, signature) in [
         ("chartdx/data_state/market.rs", "pane_layout("),

@@ -448,6 +448,10 @@ impl PlatformLayers {
         // Unconditional on purpose — with a backdrop the grid draws lines only, and a fill over
         // them is what every charting package does. Still below the candles, where a band belongs.
         self.userdata.render_zones(view, context, rtv, gpu);
+        // The horizontal volumes BEFORE the candles, like the bottom band: laid over the plot they
+        // must sit under the bodies and the crosses; carved out beside it the order is moot, as
+        // nothing else draws in their zone.
+        self.hvol.render(view, context, rtv, gpu, panel_clip);
         // Draw candles below trade crosses; the combo layer is blitted on top.
         crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
         self.candles.render(view, context, rtv, gpu, panel_clip);
@@ -457,9 +461,6 @@ impl PlatformLayers {
         self.side_volume.render(view, context, rtv, gpu, panel_clip);
         crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
         self.combo.render(view, context, rtv, gpu, panel_clip);
-        // The horizontal volumes live in their own zone beside the plot, so their place in the
-        // order is about the base, not the candles: after the plot's layers, before the book.
-        self.hvol.render(view, context, rtv, gpu, panel_clip);
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
         self.orderbook
             .render(orderbook_view, context, rtv, gpu, panel_clip);

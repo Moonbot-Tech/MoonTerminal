@@ -120,8 +120,9 @@ pub struct ChartInput {
     /// Whether the time axis reserves its gutter, published during render. Navigation reads only
     /// horizontal extents, but the layout it shares with the engine answers for both.
     pub time_axis_visible: bool,
-    /// The horizontal volumes' zone, published during render: it takes width from the plot, so
-    /// navigation must subtract it exactly as the engine does.
+    /// The horizontal volumes' zone, published during render: carved out beside the plot it takes
+    /// width from it, so navigation must subtract it exactly as the engine does — through the same
+    /// `pane_layout`, which also knows when the zone is laid over the plot and takes nothing.
     pub hvol: Option<moon_chart::hvol::HvolZoneSpec>,
     /// Market queued by an eligible chart double-click for the caller to take and open on Main.
     pub pending_to_main: Option<(CoreId, String)>,

@@ -12,14 +12,13 @@ const READOUT_INSET: f32 = 2.0;
 
 #[cfg(windows)]
 /// The clip for the order-line and trade-mark pass: the pane, less the horizontal-volume zone
-/// when there is one. The zone sits at the pane's left edge, so this only moves the left side.
-fn userdata_clip(pane_clip: [f32; 4], hvol_zone: [f32; 4]) -> [f32; 4] {
-    if hvol_zone[2] < 1.0 {
+/// when one is carved out beside the plot (`HvolStyleGpu::user_clip_left`). The zone sits at the
+/// pane's left edge, so this only moves the left side.
+fn userdata_clip(pane_clip: [f32; 4], hvol: &super::HvolStyleGpu) -> [f32; 4] {
+    let Some(edge) = hvol.user_clip_left() else {
         return pane_clip;
-    }
-    let left = (hvol_zone[0] + hvol_zone[2])
-        .ceil()
-        .clamp(pane_clip[0], pane_clip[2] - 1.0);
+    };
+    let left = edge.ceil().clamp(pane_clip[0], pane_clip[2] - 1.0);
     [left, pane_clip[1], pane_clip[2], pane_clip[3]]
 }
 
@@ -1048,7 +1047,7 @@ impl RenderState {
                     // time scrolled off the plot's left edge would otherwise draw over the zone's
                     // rows. The cursor pass below keeps the whole pane — the crosshair and the
                     // volume readout live in the zone.
-                    let user_clip = userdata_clip(pane_clip, pr.hvol_style.zone);
+                    let user_clip = userdata_clip(pane_clip, &pr.hvol_style);
                     gpu::set_scissor(
                         &context,
                         &scissor_rs,

@@ -118,6 +118,14 @@ iface.candle_fill_alpha:
   ru: "Непрозрачность тела свечи"
   en: "Candle body opacity"
   es: "Opacidad del cuerpo de vela"
+iface.sec_volumes:
+  ru: "Объёмы"
+  en: "Volumes"
+  es: "Volúmenes"
+iface.hvol_bg:
+  ru: "Фон горизонтальных объёмов"
+  en: "Horizontal volumes background"
+  es: "Fondo de los volúmenes horizontales"
 iface.sec_price_lines:
   ru: "Линии цены"
   en: "Price lines"
