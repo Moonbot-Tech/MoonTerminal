@@ -1246,7 +1246,7 @@ impl Render for NewsView {
                 div().w(design::font_w_px(cx, 150.0)).flex_none().child(
                     MoonInput::new("news-search")
                         .state(&self.query)
-                        .small()
+                        .size(design::input_tier(cx))
                         .cleanable(true),
                 ),
             )

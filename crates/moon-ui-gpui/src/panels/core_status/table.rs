@@ -269,8 +269,6 @@ pub(super) fn core_status_table(
         })
         .columns(table_columns)
         .state(state)
-        .header_height(design::TABLE_HEAD_H)
-        .row_height(design::TABLE_ROW_H)
         .style(design::table_style(p))
         // Controlled: the highlight is whatever the rendered rows say it is, so the panel's
         // own `CoreId`-keyed selection is the single source of truth and the widget's internal

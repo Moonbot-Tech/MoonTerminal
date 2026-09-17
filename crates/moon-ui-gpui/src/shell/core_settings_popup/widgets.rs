@@ -335,7 +335,7 @@ pub(super) fn num(widgets: &SettingsWidgets, id: &'static str, cx: &App) -> Opti
             .child(
                 MoonInput::new(SharedString::from(id))
                     .state(&f.state)
-                    .small(),
+                    .size(design::input_tier(cx)),
             )
             .into_any_element(),
     )
@@ -355,7 +355,19 @@ pub(super) fn slider(widgets: &SettingsWidgets, id: &'static str) -> Option<AnyE
 /// Render one editor that fills the row instead of taking a fixed width.
 ///
 /// Used by the leverage "Config" line, whose rules text is long and has no natural column width.
-pub(super) fn stretch_field(widgets: &SettingsWidgets, id: &'static str) -> Option<AnyElement> {
+///
+/// Args:
+///     widgets: Prepared popup field states.
+///     id: Field identity whose input state should fill the row.
+///     cx: Application context used to select the input's density tier.
+///
+/// Returns:
+///     The full-width editor when the prepared field state exists.
+pub(super) fn stretch_field(
+    widgets: &SettingsWidgets,
+    id: &'static str,
+    cx: &App,
+) -> Option<AnyElement> {
     let f = widgets.field(id)?;
     Some(
         div()
@@ -363,7 +375,7 @@ pub(super) fn stretch_field(widgets: &SettingsWidgets, id: &'static str) -> Opti
             .child(
                 MoonInput::new(SharedString::from(id))
                     .state(&f.state)
-                    .small(),
+                    .size(design::input_tier(cx)),
             )
             .into_any_element(),
     )

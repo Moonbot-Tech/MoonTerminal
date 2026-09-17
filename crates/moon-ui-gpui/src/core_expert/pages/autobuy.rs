@@ -375,7 +375,7 @@ pub(super) fn body(
             view,
             |d, on| d.auto_buy.use_keywords = on,
         ))
-        .children(field(store, "exp-buy-long-words", true))
+        .children(field(store, "exp-buy-long-words", true, cx))
         .child(caption(
             t!("core_expert.buy_word_gap", v = b.buy_key_dist.to_string()).to_string(),
             true,
@@ -391,7 +391,7 @@ pub(super) fn body(
             view,
             |d, on| d.auto_buy.use_black_words = on,
         ))
-        .children(field(store, "exp-buy-black-words", true))
+        .children(field(store, "exp-buy-black-words", true, cx))
         .child(
             h_flex()
                 .w_full()
@@ -422,7 +422,7 @@ pub(super) fn body(
             view,
             |d, on| d.auto_buy.use_lower_price_words = on,
         ))
-        .children(field(store, "exp-buy-dip-words", true))
+        .children(field(store, "exp-buy-dip-words", true, cx))
         .child(caption(
             t!(
                 "core_expert.buy_market_price",
@@ -454,7 +454,7 @@ pub(super) fn body(
             p,
             cx,
         ))
-        .children(field(store, "exp-buy-short-words", true))
+        .children(field(store, "exp-buy-short-words", true, cx))
         .child(flag(
             "exp-buy-tags-on",
             t!("core_expert.buy_tags").to_string(),
@@ -463,7 +463,7 @@ pub(super) fn body(
             view,
             |d, on| d.auto_buy.use_token_tags = on,
         ))
-        .children(field(store, "exp-buy-tags", true))
+        .children(field(store, "exp-buy-tags", true, cx))
         .child(
             h_flex()
                 .w_full()

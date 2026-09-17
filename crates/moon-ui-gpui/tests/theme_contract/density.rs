@@ -80,3 +80,26 @@ fn toolbar_strip_text_uses_rendered_tier_metrics() {
         "controls/toolbar.rs:strip_text must use rendered tier metrics"
     );
 }
+
+/// Catches `design.rs:toolbar_height` reverting to `fit_h_value`, which leaves Compact chrome at
+/// 32px instead of 28px while Standard and Large deceptively remain unchanged.
+#[test]
+fn toolbar_adapter_uses_the_compact_tier_band() {
+    let design = read_src("design.rs");
+    let toolbar = code_only(braced_body(&design, "pub fn toolbar_height("));
+    assert!(
+        toolbar.contains("t.fit_band(t.tier_band_base(TOOLBAR_H, |m| m.height), 13.0)"),
+        "toolbar_height must use the compact-aware tier band rather than the legacy fit_h_value"
+    );
+}
+
+/// Catches retaining an explicit Orders row-height pin, which makes Compact Orders rows 25px
+/// instead of the 21px density default while Standard and Large mask the regression.
+#[test]
+fn orders_table_uses_the_density_aware_row_default() {
+    let orders = code_only(&read_src("panels/orders/table.rs"));
+    assert!(
+        !orders.contains(".row_height(design::TABLE_ROW_H)"),
+        "Orders must omit the legacy row-height pin so MoonDataTable resolves the active tier"
+    );
+}

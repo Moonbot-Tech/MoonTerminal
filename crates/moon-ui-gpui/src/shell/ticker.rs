@@ -158,6 +158,8 @@ impl Shell {
             + cluster_gap
             + 1.0
             + cluster_gap;
+        // Start below the same drawn header at Compact, Standard, and Large so the popup never
+        // overlaps chrome when the density tier changes.
         let top = design::header_height(cx);
         let overlay = div()
             .id("header-ticker-popup-box")
@@ -205,7 +207,7 @@ impl Shell {
                     .child(
                         MoonInput::new("header-ticker-query")
                             .state(&self.ticker_input)
-                            .small(),
+                            .size(design::input_tier(cx)),
                     )
                     .child(list),
             )

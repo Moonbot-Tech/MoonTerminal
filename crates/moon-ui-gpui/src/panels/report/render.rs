@@ -87,8 +87,6 @@ impl ReportPanel {
             .width_policy(MoonDataTableWidthPolicy::Preserve)
             .horizontal_scrollbar_visibility(MoonScrollbarVisibility::Always)
             .controlled_row_selection(true)
-            .header_height(design::TABLE_HEAD_H)
-            .row_height(design::TABLE_ROW_H)
             .style(design::table_style(p))
             .on_select_row(move |row, window, app| {
                 let modifiers = window.modifiers();
@@ -322,7 +320,7 @@ impl Render for ReportPanel {
                 div().w(design::ui_px(cx, 90.0)).child(
                     MoonInput::new("rep-coin")
                         .state(&self.coin)
-                        .small()
+                        .size(design::input_tier(cx))
                         .cleanable(true),
                 ),
             )

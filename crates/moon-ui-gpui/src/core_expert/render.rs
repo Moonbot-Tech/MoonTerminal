@@ -250,7 +250,7 @@ impl CoreExpertView {
             .iter()
             .map(|sub| MoonTabItem::new(sub.title()).selected(*sub == selected))
             .collect();
-        let strip_h = design::fit_h_px(cx, 26.0, 13.0, 7.5);
+        let strip_h = design::tab_strip_h(cx);
         let p = MoonPalette::active(cx);
         let strip = MoonTabStrip::new("core-expert-hotkeys-tabs")
             .gap(4.0)

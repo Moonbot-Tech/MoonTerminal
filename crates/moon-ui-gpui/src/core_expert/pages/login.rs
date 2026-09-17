@@ -94,10 +94,10 @@ pub(super) fn body(
                 .child(link("exp-log-hmac", "HMAC".to_string(), false))
                 .child(link("exp-log-rsa", "RSA".to_string(), false)),
         )
-        .children(field(store, "exp-log-api-key", false))
+        .children(field(store, "exp-log-api-key", false, cx))
         .child(labeled(
             t!("core_expert.log_api_secret").to_string(),
-            field(store, "exp-log-api-secret", false),
+            field(store, "exp-log-api-secret", false, cx),
             false,
             p,
             cx,
@@ -109,14 +109,14 @@ pub(super) fn body(
                 .gap(design::ui_px(cx, 10.0))
                 .child(div().flex_1().min_w_0().child(labeled(
                     t!("core_expert.log_your_name").to_string(),
-                    field(store, "exp-log-name", false),
+                    field(store, "exp-log-name", false, cx),
                     false,
                     p,
                     cx,
                 )))
                 .child(div().flex_1().min_w_0().child(labeled(
                     t!("core_expert.log_telegram").to_string(),
-                    field(store, "exp-log-telegram", false),
+                    field(store, "exp-log-telegram", false, cx),
                     false,
                     p,
                     cx,
@@ -135,14 +135,14 @@ pub(super) fn body(
         ))
         .child(labeled(
             t!("core_expert.log_password").to_string(),
-            field_masked(store, "exp-log-password", false, true),
+            field_masked(store, "exp-log-password", false, true, cx),
             false,
             p,
             cx,
         ))
         .child(labeled(
             t!("core_expert.log_password_again").to_string(),
-            field_masked(store, "exp-log-password2", false, true),
+            field_masked(store, "exp-log-password2", false, true, cx),
             false,
             p,
             cx,

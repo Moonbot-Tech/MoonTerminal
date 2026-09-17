@@ -12,7 +12,10 @@
 //! Both boxes are built here so their tone, size and id convention cannot drift apart, and both
 //! stage through [`stage_value`], the one rule deciding what a click leaves in `staged`.
 
-use moon_ui::{MoonCheckbox, MoonSize, MoonTone};
+use gpui::App;
+use moon_ui::{MoonCheckbox, MoonTone};
+
+use crate::design;
 
 use super::super::logic::{
     strategy_core_is_visible, subtree_check_targets, subtree_displayed_all_checked,
@@ -30,15 +33,16 @@ mod tests;
 /// Args:
 ///     id: Element id, derived by the caller from the row's own stable node id.
 ///     checked: Value to display; both callers are controlled, so the widget stores nothing.
+///     cx: Application context used to read the active density tier.
 ///
 /// Returns:
 ///     The configured checkbox, still needing its `on_change`.
-pub(super) fn row_checkbox(id: SharedString, checked: bool) -> MoonCheckbox {
+pub(super) fn row_checkbox(id: SharedString, checked: bool, cx: &App) -> MoonCheckbox {
     MoonCheckbox::new(id)
         .checked(checked)
         .tone(MoonTone::Positive)
-        // Fixed tree rows and invisible bulk slots share this same Sm column.
-        .size(MoonSize::Sm)
+        // Fixed tree rows and invisible bulk slots share this same tier-following column.
+        .size(design::choice_tier(cx))
 }
 
 /// Decide what one checkbox click leaves in [`StrategiesView::staged`] for a single strategy.
@@ -63,6 +67,7 @@ pub(super) fn stage_value(clicked: bool, server: bool) -> Option<bool> {
 ///     core: Core owning the row.
 ///     path: Folder segments, empty for the core root.
 ///     checked: The row's current switch.
+///     cx: Application context used to read the active density tier.
 ///
 /// Returns:
 ///     The checkbox wrapped in the press-swallowing container the surrounding row needs.
@@ -72,6 +77,7 @@ pub(super) fn bulk_check(
     core: CoreId,
     path: Vec<String>,
     checked: bool,
+    cx: &App,
 ) -> AnyElement {
     let view = view.clone();
     div()
@@ -86,7 +92,7 @@ pub(super) fn bulk_check(
             app.stop_propagation();
         })
         .child(
-            row_checkbox(SharedString::from(format!("chk:{row_id}")), checked)
+            row_checkbox(SharedString::from(format!("chk:{row_id}")), checked, cx)
                 // The reported value is ignored on purpose: the painted box is derived from child
                 // strategy checkboxes, so the view recomputes the next bulk value itself and cannot
                 // follow a stale widget value.
@@ -105,16 +111,24 @@ pub(super) fn bulk_check(
 /// depth, which reads as a different indentation level rather than as a missing control.
 ///
 /// The reservation is a real checkbox made invisible rather than a width taken from a mirrored
-/// metric: both visible and hidden boxes use row_checkbox and its fixed Sm tier, so their
+/// metric: both visible and hidden boxes use row_checkbox and its tier-following size, so their
 /// widths stay identical at every density and UI zoom. Hidden costs nothing beyond layout — GPUI returns before painting the subtree or
 /// registering its mouse listeners (`div.rs`), so the reserved column has no hitbox of its own.
-pub(super) fn bulk_check_slot(row_id: &SharedString) -> AnyElement {
+///
+/// Args:
+///     row_id: The row's own tree id, reused so the widget keeps this node's identity.
+///     cx: Application context used to read the active density tier.
+///
+/// Returns:
+///     The invisible checkbox that reserves the column's width.
+pub(super) fn bulk_check_slot(row_id: &SharedString, cx: &App) -> AnyElement {
     div()
         .flex_none()
         .invisible()
         .child(row_checkbox(
             SharedString::from(format!("chk:{row_id}")),
             false,
+            cx,
         ))
         .into_any_element()
 }

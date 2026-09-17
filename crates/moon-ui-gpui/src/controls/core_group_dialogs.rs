@@ -126,7 +126,11 @@ impl Render for SaveCoreGroup {
                     .text_color(moon(p.text_muted))
                     .child(t!("common.core_pick.group_cores_n", n = self.cores.len()).to_string()),
             )
-            .child(MoonInput::new("core-group-name").state(&self.name).small())
+            .child(
+                MoonInput::new("core-group-name")
+                    .state(&self.name)
+                    .size(design::input_tier(cx)),
+            )
     }
 }
 
@@ -478,7 +482,7 @@ impl Render for ManageCoreGroups {
                         div().w(px(220.0)).child(
                             MoonInput::new(format!("core-group-row-{index}"))
                                 .state(&row.input)
-                                .small(),
+                                .size(design::input_tier(cx)),
                         ),
                     )
                     .child(div().flex_1().text_color(moon(p.text_muted)).child(facts))

@@ -260,7 +260,7 @@ where
             div().w(px(64.0)).child(
                 MoonInput::new(SharedString::from(format!("{id}-input")))
                     .state(input)
-                    .small(),
+                    .size(design::input_tier(cx)),
             ),
         )
         .child(div().text_color(rgb(p.text_muted)).child("px"));
@@ -338,7 +338,7 @@ where
                         div().w(px(64.0)).child(
                             MoonInput::new(SharedString::from(format!("{id}-min-slot")))
                                 .state(input)
-                                .small(),
+                                .size(design::input_tier(cx)),
                         ),
                     )
                     .child(div().text_color(rgb(p.text_muted)).child("px")),
@@ -413,7 +413,7 @@ where
                     div().w(px(64.0)).child(
                         MoonInput::new(SharedString::from(format!("{id}-max-charts")))
                             .state(cap.max_input)
-                            .small(),
+                            .size(design::input_tier(cx)),
                     ),
                 );
             let cap_hint = div()
@@ -492,7 +492,7 @@ where
                 div().flex_1().child(
                     MoonInput::new(SharedString::from(format!("{id}-name")))
                         .state(input)
-                        .small(),
+                        .size(design::input_tier(cx)),
                 ),
             )
     });

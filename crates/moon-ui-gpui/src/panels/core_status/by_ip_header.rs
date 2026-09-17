@@ -219,7 +219,7 @@ pub(super) fn server_header(
         // their values at every font setting rather than at exactly one of them.
         .pl(rems(ROW_INSET_REMS))
         .pr(rems(ROW_INSET_REMS))
-        .h(px(crate::design::TABLE_HEAD_H))
+        .h(crate::design::table_head_base_px(cx))
         // Clip like the rows do: without this the captions spill past the panel edge while the
         // values under them are already clipped.
         .overflow_hidden()

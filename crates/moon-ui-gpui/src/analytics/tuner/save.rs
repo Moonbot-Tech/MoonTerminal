@@ -825,10 +825,11 @@ impl AnalyticsView {
                                 .child(t!("analytics.tuner.copy_name_lbl").to_string()),
                         )
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .child(MoonInput::new("tun-copy-name").state(input).small()),
+                            div().flex_1().min_w_0().child(
+                                MoonInput::new("tun-copy-name")
+                                    .state(input)
+                                    .size(design::input_tier(cx)),
+                            ),
                         ),
                 );
             }

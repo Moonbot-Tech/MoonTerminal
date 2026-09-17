@@ -240,17 +240,19 @@ fn tree_op_dialog_width(window: &Window, cx: &App) -> f32 {
 /// Args:
 ///     id: Element id for the name field (`create-name`, `folder-name`, or `rename-name`).
 ///     input: Shared input state already constructed for this dialog opening.
+///     cx: Application context used to select the input's density tier.
 ///
 /// Returns:
-///     A full-width, shrinkable slot containing the small name field.
+///     A full-width, shrinkable slot containing the density-tier name field.
 fn tree_op_name_input(
     id: impl Into<SharedString>,
     input: &Entity<MoonInputState>,
+    cx: &App,
 ) -> impl IntoElement {
     div()
         .w_full()
         .min_w_0()
-        .child(MoonInput::new(id).state(input).small())
+        .child(MoonInput::new(id).state(input).size(design::input_tier(cx)))
 }
 
 /// Build the tree-op dialog body for the current `TreeOp`.
@@ -357,7 +359,7 @@ fn op_dialog_body(
                     ),
                 );
             if let Some(input) = input {
-                body = body.child(tree_op_name_input("create-name", &input));
+                body = body.child(tree_op_name_input("create-name", &input, cx));
             }
             Some(body.into_any_element())
         }
@@ -373,14 +375,14 @@ fn op_dialog_body(
                     .child(t!("dialogs.into_prefix", path = target_label).to_string()),
             );
             if let Some(input) = input {
-                body = body.child(tree_op_name_input("folder-name", &input));
+                body = body.child(tree_op_name_input("folder-name", &input, cx));
             }
             Some(body.into_any_element())
         }
         TreeOp::RenameFolder { .. } | TreeOp::RenameStrategy { .. } => {
             let mut body = v_flex().w_full().min_w_0().gap_2();
             if let Some(input) = input {
-                body = body.child(tree_op_name_input("rename-name", &input));
+                body = body.child(tree_op_name_input("rename-name", &input, cx));
             }
             Some(body.into_any_element())
         }

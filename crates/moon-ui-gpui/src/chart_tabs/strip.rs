@@ -390,7 +390,7 @@ impl Render for ChartTabs {
                 MoonInput::new("tabs-coin-search")
                     .state(&self.coin_input)
                     .cleanable(true)
-                    .small(),
+                    .size(design::input_tier(cx)),
             );
         let fig_style_panel = self.render_fig_style_panel(cx).map(|panel| {
             div()

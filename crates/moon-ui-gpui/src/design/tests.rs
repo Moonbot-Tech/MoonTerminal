@@ -204,13 +204,12 @@ fn readout_color_is_muted_when_absent_and_full_strength_when_present() {
 /// once.
 ///
 /// Breakage this pins: raising `CHROME_RULE_H` to make the seam more visible without checking the
-/// narrowest band (at Compact density both bands are 32px; the token is 20).
+/// narrowest band (at Compact density both bands are 28px; the token is 20).
 ///
-/// Computed directly against `MoonThemeTokens::fit_height` rather than through
+/// Computed directly against `MoonThemeTokens::fit_band` and `tier_band_base` rather than through
 /// `design::header_height`/`design::toolbar_height`, because those two need a live `App` this
-/// unit test does not have — `fit_height` is the pure formula both delegate to, so mirroring their
-/// exact base-height/base-line-height/base-pad-y triples here is genuinely equivalent, not an
-/// approximation.
+/// unit test does not have. Those are the exact pure token calls both adapters delegate to, so the
+/// test measures their rendered band values rather than the superseded legacy fit-height triples.
 #[test]
 fn chrome_rule_h_stays_under_both_chrome_bands_at_every_font_delta() {
     for density in [UiDensity::Compact, UiDensity::Standard, UiDensity::Large] {
@@ -218,13 +217,46 @@ fn chrome_rule_h_stays_under_both_chrome_bands_at_every_font_delta() {
             crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, density, 1.0)
                 .dark;
         let delta = tokens.scale.font_delta;
-        let header = tokens.fit_height(HEADER_TOP_H, 14.0, 9.0);
-        let toolbar = tokens.fit_height(TOOLBAR_H, 13.0, 9.5);
+        let header = tokens.fit_band(tokens.tier_band_base(HEADER_TOP_H, |m| m.height), 14.0);
+        let toolbar = tokens.fit_band(tokens.tier_band_base(TOOLBAR_H, |m| m.height), 13.0);
         assert!(
             CHROME_RULE_H < header.min(toolbar),
             "font delta {delta}: CHROME_RULE_H {CHROME_RULE_H} must stay under header {header} \
              and toolbar {toolbar}"
         );
+    }
+}
+
+/// Catches the compact-band rebase moving the frozen Standard or Large rendered dimensions,
+/// which would change table and chrome geometry outside the user-selected Compact density.
+#[test]
+fn density_band_tokens_keep_standard_and_large_rendered_values() {
+    let values = [
+        (UiDensity::Compact, (21.0, 22.0, 28.0, 28.0)),
+        (UiDensity::Standard, (28.0, 29.0, 35.0, 35.0)),
+        (UiDensity::Large, (31.0, 32.0, 38.0, 38.0)),
+    ];
+    let mut previous: Option<(f32, f32, f32, f32)> = None;
+    for (density, expected) in values {
+        let tokens =
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, density, 1.0)
+                .dark;
+        let actual = (
+            tokens.table_row_height(),
+            tokens.table_header_height(),
+            tokens.fit_band(tokens.tier_band_base(HEADER_TOP_H, |m| m.height), 14.0),
+            tokens.fit_band(tokens.tier_band_base(TOOLBAR_H, |m| m.height), 13.0),
+        );
+        assert_eq!(actual, expected);
+        if let Some(before) = previous {
+            assert!(
+                before.0 < actual.0
+                    && before.1 < actual.1
+                    && before.2 < actual.2
+                    && before.3 < actual.3
+            );
+        }
+        previous = Some(actual);
     }
 }
 

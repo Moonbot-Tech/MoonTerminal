@@ -354,7 +354,7 @@ impl SettingsView {
                 .child(
                     MoonInput::new(SharedString::from(format!("badge-ord-{idx}")))
                         .state(&row.ordinal)
-                        .small()
+                        .size(design::input_tier(cx))
                         .mono(true),
                 ),
             )
@@ -362,7 +362,7 @@ impl SettingsView {
                 div().flex_none().w(px(120.0)).child(
                     MoonInput::new(SharedString::from(format!("badge-name-{idx}")))
                         .state(&row.name)
-                        .small()
+                        .size(design::input_tier(cx))
                         .mono(true),
                 ),
             )
@@ -376,7 +376,7 @@ impl SettingsView {
                 .child(
                     MoonInput::new(SharedString::from(format!("badge-code-{idx}")))
                         .state(&row.code)
-                        .small()
+                        .size(design::input_tier(cx))
                         .mono(true),
                 ),
             )
@@ -391,7 +391,7 @@ impl SettingsView {
                     .child(
                         MoonInput::new(SharedString::from(format!("badge-codeshort-{idx}")))
                             .state(&row.code_short)
-                            .small()
+                            .size(design::input_tier(cx))
                             .mono(true),
                     ),
                 )

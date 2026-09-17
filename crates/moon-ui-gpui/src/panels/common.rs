@@ -343,7 +343,7 @@ pub(crate) const POPUP_GROUP_INSET: f32 = 2.0 * (POPUP_GROUP_PAD + 1.0);
 
 /// Design-unit checkbox metrics mirrored for popup measurement and neighbouring captions.
 ///
-/// The base checkbox supports Sm and Md only; geometry and text follow UI zoom at the caller.
+/// The base checkbox supports Xs, Sm and Md; geometry and text follow UI zoom at the caller.
 pub(crate) struct CheckboxMetrics {
     pub(crate) mark: f32,
     pub(crate) gap: f32,
@@ -359,15 +359,17 @@ pub(crate) struct CheckboxMetrics {
 ///     Unscaled metrics for use with [`design::ui_px`] and [`design::ui_text_width_zoomed`].
 pub(crate) fn checkbox_metrics(cx: &App) -> CheckboxMetrics {
     let tokens = moon_ui::MoonTheme::active_tokens(cx);
-    let tier = tokens
-        .tier()
-        .nearest(&[moon_ui::MoonSize::Sm, moon_ui::MoonSize::Md]);
+    let tier = tokens.tier().nearest(&[
+        moon_ui::MoonSize::Xs,
+        moon_ui::MoonSize::Sm,
+        moon_ui::MoonSize::Md,
+    ]);
     let control = tier.control_metrics();
     CheckboxMetrics {
-        mark: if tier == moon_ui::MoonSize::Sm {
-            16.0
-        } else {
-            20.0
+        mark: match tier {
+            moon_ui::MoonSize::Xs => 12.0,
+            moon_ui::MoonSize::Sm => 16.0,
+            _ => 20.0,
         },
         gap: control.gap,
         font: control.font_size,

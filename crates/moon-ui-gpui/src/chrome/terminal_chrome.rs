@@ -144,6 +144,8 @@ pub fn header(
     let update_state = updater.read(cx).state();
     h_flex()
         .w_full()
+        // Keep the drawn chrome on the same tier-derived height as the window drag overlay at all
+        // three densities; the old agreement existed only at Compact.
         .h(design::header_height_px(cx))
         .flex_none()
         .pl(design::ui_px(cx, design::titlebar_leading_inset()))
