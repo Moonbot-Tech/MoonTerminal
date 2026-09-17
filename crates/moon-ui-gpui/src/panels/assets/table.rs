@@ -21,7 +21,7 @@ use rust_i18n::t;
 ///
 /// Balance rows carry no strategy or order data, so the menu contains navigation and core
 /// blacklist actions. Its selected-core set comes from `query_cores()`: retained Classic scope,
-/// effective Auto scope for a group panel, or every core for the global window.
+/// effective Auto scope for a group panel, or the global window's local selection.
 ///
 /// Args:
 ///     core: Core that owns the clicked balance row.

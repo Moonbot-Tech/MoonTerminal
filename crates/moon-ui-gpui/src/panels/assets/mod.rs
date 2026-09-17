@@ -516,18 +516,18 @@ impl AssetsView {
     ///     b: Backend snapshot containing configured cores and workspace authority.
     ///
     /// Returns:
-    ///     Canonically ordered effective core/name pairs, or every core for global Assets.
+    ///     Canonically ordered effective group pairs, or locally selected global core/name pairs.
     pub(super) fn query_cores(&self, b: &Backend) -> Vec<(CoreId, String)> {
         let all: Vec<(CoreId, String)> = self.scope_cores(b).into_iter().collect();
         let Some(scope) = self.effective_scope(b) else {
-            return all;
+            return global_query_cores(all, &self.sel_cores);
         };
         all.into_iter()
             .filter(|(core, _)| scope.contains(*core))
             .collect()
     }
 
-    /// Return the wallet-detail core visible under the effective workspace scope.
+    /// Return the wallet-detail core visible under the workspace or standalone local scope.
     ///
     /// Auto Overview still needs a concrete transfer host so the window-form wallets stay usable.
     /// That host is the Overview list pick when it remains in scope, otherwise the first in-scope
@@ -538,8 +538,12 @@ impl AssetsView {
     ///     b: Backend snapshot containing workspace authority.
     ///
     /// Returns:
-    ///     Auto's selected core, Auto Overview's local host, or the retained Classic core.
+    ///     Auto's selected core, Auto Overview's local host, the retained Classic core, or a
+    ///     standalone host within the locally filtered query.
     pub(super) fn effective_wallet_core(&self, b: &Backend) -> Option<CoreId> {
+        if matches!(self.scope, AssetsScope::All) {
+            return global_wallet_core(&self.query_cores(b), self.selected_core);
+        }
         let scope = self.effective_scope(b);
         let workspace_owned = scope
             .as_ref()
@@ -735,6 +739,38 @@ impl AssetsView {
         self.rebuild_cache(backend.read(cx));
         cx.notify();
     }
+}
+
+/// Apply the standalone window's local selection without introducing workspace ownership.
+///
+/// Args:
+///     cores: All connected cores in canonical display order.
+///     selected: Local core selection; an empty set means All.
+///
+/// Returns:
+///     Selected core/name pairs in their original order, shared by requests, rows and balances.
+fn global_query_cores(
+    cores: Vec<(CoreId, String)>,
+    selected: &HashSet<CoreId>,
+) -> Vec<(CoreId, String)> {
+    cores
+        .into_iter()
+        .filter(|(core, _)| balances::in_scope(selected, *core))
+        .collect()
+}
+
+/// Keep standalone wallet labels, cached balances and transfer authority on the same visible core.
+///
+/// Args:
+///     cores: Locally filtered query cores in canonical order.
+///     retained: Last wallet pick, preserved so clearing the filter can restore it.
+///
+/// Returns:
+///     The retained core when visible, otherwise the first visible core, or no host for no cores.
+fn global_wallet_core(cores: &[(CoreId, String)], retained: Option<CoreId>) -> Option<CoreId> {
+    retained
+        .filter(|core| cores.iter().any(|(id, _)| id == core))
+        .or_else(|| cores.first().map(|(id, _)| *id))
 }
 
 /// Reconcile retained Classic Assets state only against the full configured/live scope.
