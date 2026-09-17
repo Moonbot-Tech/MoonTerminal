@@ -270,10 +270,35 @@ fn density_band_tokens_keep_standard_and_large_rendered_values() {
 fn chrome_toggle_tone_is_warning_only_when_on_and_caution() {
     use moon_ui::MoonTone;
 
-    assert_eq!(chrome_toggle_tone(true, true), MoonTone::Warning);
-    assert_eq!(chrome_toggle_tone(true, false), MoonTone::Info);
-    assert_eq!(chrome_toggle_tone(false, true), MoonTone::Info);
-    assert_eq!(chrome_toggle_tone(false, false), MoonTone::Info);
+    for roles in [false, true] {
+        assert_eq!(
+            chrome_toggle_tone(true, true, roles),
+            Some(MoonTone::Warning)
+        );
+    }
+}
+
+/// Under colour roles a non-caution chrome toggle must pin NO tone, because MoonUI gives a hover
+/// fill to the toggle's own `bg_brand_solid` and none to an explicit tone — pinning `Info` is what
+/// left the terminal's toggles unresponsive to the pointer while the gallery's answered it.
+///
+/// A legacy palette keeps `Info`: its default fill is the theme accent, so dropping the tone there
+/// would repaint the toggle amber rather than win it a hover it has no fill to step to.
+///
+/// Breakage this pins: "simplifying" the helper back to one tone for both theme families, either
+/// way round.
+#[test]
+fn a_non_caution_chrome_toggle_takes_its_own_fill_only_under_colour_roles() {
+    use moon_ui::MoonTone;
+
+    for on in [false, true] {
+        assert_eq!(chrome_toggle_tone(on, false, true), None);
+        assert_eq!(chrome_toggle_tone(on, false, false), Some(MoonTone::Info));
+    }
+    // An awake sleep toggle is a caution toggle in its non-caution state, so it follows the same
+    // rule as the other two rather than the `Warning` arm above.
+    assert_eq!(chrome_toggle_tone(false, true, true), None);
+    assert_eq!(chrome_toggle_tone(false, true, false), Some(MoonTone::Info));
 }
 
 /// A control placed in the room a chart caption reserved has to draw at the caption's OWN size, and

@@ -2,6 +2,7 @@
 //! target identities that keep group exits local while leverage, when the scope names one core,
 //! stays bound to that core and market.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use rust_i18n::t;
 
@@ -502,13 +503,16 @@ pub(super) fn sl_toggle(
     disabled: bool,
     backend: Entity<Backend>,
     group: String,
+    roles: bool,
 ) -> impl IntoElement {
     MoonToggle::new("toolbar-sl-toggle")
         .label("SL")
         .label_side(MoonToggleLabelSide::Left)
         .checked(on)
         .disabled(disabled)
-        .tone(design::chrome_toggle_tone(on, false))
+        .when_some(design::chrome_toggle_tone(on, false, roles), |t, tone| {
+            t.tone(tone)
+        })
         .on_change(move |ch: &bool, _w, app| {
             let v = *ch;
             backend.update(app, |b, _| {

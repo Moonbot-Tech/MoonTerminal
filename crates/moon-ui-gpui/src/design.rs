@@ -180,17 +180,42 @@ pub fn mixed_trigger_variant(mixed: bool) -> MoonButtonVariant {
 /// Mirrors `chrome/quiet.rs`'s own toggle exactly, so the sleep toggle, the own-trade toggle and
 /// the SL toggle resolve their tone from one place and cannot drift apart.
 ///
-/// Two of those three pass `caution: false` and therefore land on `Info`, which is also
-/// `MoonToggle`'s own default — so those calls render identically with or without this helper
-/// today. That is the point rather than dead weight: the call is what pins the tone at the site,
-/// so a later change to the default, or to one toggle's meaning, moves all three together instead
-/// of silently splitting them.
-pub fn chrome_toggle_tone(on: bool, caution: bool) -> MoonTone {
+/// `None` is the toggle's OWN fill rather than the absence of a decision, and under colour roles it
+/// is the right one: MoonUI fills a default track with `bg_brand_solid` and steps it to
+/// `bg_brand_solid_hover` under the pointer, while an explicit tone paints one flat colour in both
+/// states. Pinning `Info` therefore cost these three toggles their hover — the gallery's toggles set
+/// no tone, which is why they answer the pointer and the terminal's did not.
+///
+/// A legacy palette keeps the explicit `Info`. Its default fill is `accent` — amber on the terminal
+/// theme — so dropping the tone there would repaint a blue toggle in the accent colour rather than
+/// restore a hover it never had: `from_palette` gives that theme no distinct hover fill to step to.
+///
+/// Args:
+///     on: Whether the toggle is checked.
+///     caution: Whether this toggle's ON state reads as a caution.
+///     roles: Whether the active theme installs colour roles, from [`theme_installs_roles`].
+///
+/// Returns:
+///     The tone to pin, or `None` to take the toggle's own fill.
+pub fn chrome_toggle_tone(on: bool, caution: bool, roles: bool) -> Option<MoonTone> {
     if on && caution {
-        MoonTone::Warning
+        Some(MoonTone::Warning)
+    } else if roles {
+        None
     } else {
-        MoonTone::Info
+        Some(MoonTone::Info)
     }
+}
+
+/// Whether the active theme installs MoonUI's colour roles rather than deriving them from a legacy
+/// palette.
+///
+/// The experimental Dark and Light modes install `MoonThemeConfig::moon_color_modes`, which is what
+/// carries the roles; every other theme leaves `colors` unset and resolves roles from its palette.
+/// Components ask this where the two want different treatment rather than naming the modes, so a
+/// fourth role-carrying theme needs no change here.
+pub fn theme_installs_roles(cx: &App) -> bool {
+    MoonTheme::active_tokens(cx).colors.is_some()
 }
 
 /// Label colour for a chrome toggle whose ON state should read as a caution rather than an
