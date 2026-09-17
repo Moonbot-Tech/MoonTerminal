@@ -207,6 +207,8 @@ pub(crate) enum NodeData {
         open_orders: usize,
         server_checked: bool,
         staged: Option<bool>,
+        /// Same confirmed engine state used by the core heading; unknown is not running.
+        engine: Option<bool>,
         highlighted: bool,
         is_short: bool,
         /// Marked by Cut and waiting for the paste that moves it, so the row draws dimmed.
@@ -859,7 +861,8 @@ fn ordered_siblings<'node, 'row>(
 /// Folders and loose strategies share wire order, including a pending folder move.
 /// Every node reached here is visible, so recursion stops at a closed folder because
 /// `MoonTreeState` cannot render its descendants. `engine` is the owning core's confirmed
-/// global-engine flag, copied onto every folder heading so its counters match the core row.
+/// global-engine flag, copied onto folder headings and strategies so their activity matches
+/// the core row.
 /// `row_ranks` lets direct strategies join folder siblings at their pending displayed positions.
 ///
 /// Args:
@@ -1006,6 +1009,7 @@ fn convert_node(
                         open_orders: order_counts.get(&r.id).copied().unwrap_or(0),
                         server_checked: r.checked,
                         staged,
+                        engine,
                         highlighted,
                         is_short: r.is_short,
                         cut,
@@ -1300,6 +1304,7 @@ fn render_row(
             open_orders,
             server_checked,
             staged,
+            engine,
             highlighted,
             is_short,
             cut,
@@ -1313,6 +1318,7 @@ fn render_row(
             *open_orders,
             *server_checked,
             *staged,
+            *engine,
             *highlighted,
             *is_short,
             *cut,
@@ -1980,8 +1986,10 @@ fn deleted_strategy_row(
 ///     open_orders: Current open-order count.
 ///     server_checked: Checkbox state acknowledged by the core.
 ///     staged: Visible retained checkbox override, when one exists for this row.
+///     engine: Confirmed core-engine state; stopped or unknown rows cannot look running.
 ///     highlighted: Whether filtering should emphasize the row.
 ///     is_short: Whether the strategy trades the short side.
+///     cut: Whether a pending Cut dims the strategy caption.
 ///     indent: Tree indentation for the row.
 ///     step: Local unscaled text-size step read from the tree's own preference.
 ///     app: Application context used for theme and design tokens.
@@ -1997,6 +2005,7 @@ fn strategy_row(
     open_orders: usize,
     server_checked: bool,
     staged: Option<bool>,
+    engine: Option<bool>,
     highlighted: bool,
     _is_short: bool,
     cut: bool,
@@ -2007,11 +2016,8 @@ fn strategy_row(
     let p = MoonPalette::active(app);
     let key: Key = (core, id);
     let val = staged.unwrap_or(server_checked);
-    let dot = if server_checked {
-        p.green
-    } else {
-        p.text_muted
-    };
+    let (tone, active) = checks::strategy_state_style(server_checked, staged, engine == Some(true));
+    let dot = if active { p.green } else { p.text_muted };
     let kind_txt = if open_orders > 0 {
         format!("{kind}({open_orders})")
     } else {
@@ -2117,6 +2123,7 @@ fn strategy_row(
                 val,
                 app,
             )
+            .tone(tone)
             .on_change(move |ch: &bool, _window, app| {
                 let v = *ch;
                 view_chk.update(app, |this, cx| {
@@ -2132,13 +2139,8 @@ fn strategy_row(
             }),
         )
         .child(
-            MoonText::new("●")
-                .mono(true)
-                .uppercase(false)
-                .color(dot)
-                .font_size(design::tier_font_base(app, step))
-                .line_height(ROW_LINE_BASE + step)
-                .render(),
+            // A solid nine-unit disc stays legible without depending on a font's tiny bullet.
+            design::status_dot_sized(dot, 9.0 + step, app),
         )
         .child(name_row)
         .into_any_element()

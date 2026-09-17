@@ -4,7 +4,44 @@
 //! Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`
 //! shadows the built-in attribute and makes `#[test]` expand recursively.
 
-use super::stage_value;
+use super::{stage_value, strategy_state_style};
+use moon_ui::MoonTone;
+
+/// Using the staged wish as activity makes unapplied ticks look running; ignoring the engine
+/// makes stopped cores green. A staged stop must leave the confirmed dot on until acknowledged.
+#[test]
+fn strategy_paint_separates_wanted_state_from_confirmed_activity() {
+    assert_eq!(
+        strategy_state_style(false, Some(true), true),
+        (MoonTone::Muted, false)
+    );
+    assert_eq!(
+        strategy_state_style(true, None, true),
+        (MoonTone::Positive, true)
+    );
+    assert_eq!(
+        strategy_state_style(true, Some(false), true),
+        (MoonTone::Default, true)
+    );
+    assert_eq!(
+        strategy_state_style(false, None, true),
+        (MoonTone::Default, false)
+    );
+    for server in [false, true] {
+        for staged in [None, Some(false), Some(true)] {
+            let (tone, active) = strategy_state_style(server, staged, false);
+            assert_ne!(
+                tone,
+                MoonTone::Positive,
+                "a stopped engine must never paint green"
+            );
+            assert!(
+                !active,
+                "a stopped engine must never light the core-state dot"
+            );
+        }
+    }
+}
 
 /// Source of the module under test, for the guards a unit test cannot reach through `Context`.
 const SRC: &str = include_str!("../checks.rs");

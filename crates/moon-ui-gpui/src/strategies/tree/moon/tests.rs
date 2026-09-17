@@ -181,6 +181,7 @@ fn strategy_node(core: CoreId) -> NodeData {
         open_orders: 0,
         server_checked: false,
         staged: None,
+        engine: None,
         highlighted: false,
         is_short: false,
         cut: false,
