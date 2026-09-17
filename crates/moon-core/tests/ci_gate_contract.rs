@@ -11,9 +11,10 @@
 //! - **Deleting the job.** These assertions only run because CI runs the suite. Remove the job
 //!   and they stop running in CI too — they would redden only for someone running `cargo test`
 //!   locally. The same goes for any narrowing that drops `moon-core` from the run.
-//! - **Merging past a red check.** The ruleset on `main` requires a pull request but no status
-//!   check, so nothing mechanically stops a red merge. Closing both holes needs a required status
-//!   check, which is a repository admin setting and cannot be expressed in this file.
+//! - **Merging past a red check.** The ruleset on `main` requires a pull request and the
+//!   `alena-review` mark but none of the CI checks, so nothing mechanically stops a red merge.
+//!   Closing both holes needs these checks to be required, which is a repository admin setting
+//!   and cannot be expressed in this file.
 //! - **A deliberately defeated command.** The command shape is checked, not its runtime
 //!   behaviour; someone determined to neuter the gate can. The target is the plausible
 //!   accident — shaving CI minutes, silencing a red job to land something else — not sabotage.
@@ -1086,6 +1087,34 @@ fn publication_waits_in_the_release_environment() {
             .iter()
             .any(|line| line.trim_end() == "    environment: release"),
         "the publish job must run in the `release` environment that gates publication"
+    );
+}
+
+/// Breakage guarded: `alena-gate.yml` starts checking out or running the pull request's code, or
+/// leaves its environment. It runs on `pull_request_target` holding the App key that signs the
+/// `alena-review` mark `main` requires, so code from a pull request executed there could mint its
+/// own green mark, and outside the `main`-only environment a side branch could reach the key.
+#[test]
+fn the_alena_gate_never_runs_pull_request_code() {
+    let path = workspace_dir().join(".github/workflows/alena-gate.yml");
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let code: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect();
+    assert!(
+        !code.iter().any(|line| line.contains("actions/checkout")),
+        "alena-gate.yml must not check anything out: it decides from the API alone"
+    );
+    let mark = job_body(&text, "mark").expect("alena-gate.yml must keep the mark job");
+    let environment = mark
+        .iter()
+        .position(|line| line.trim_end() == "    environment:")
+        .expect("the mark job must run in an environment");
+    assert!(
+        mark[environment + 1].trim_end() == "      name: alena-gate",
+        "the mark job must take the App key from the `alena-gate` environment"
     );
 }
 

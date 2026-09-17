@@ -1,0 +1,127 @@
+name: alena-gate
+
+# Merging into `main` requires the `alena-review` commit status, and the ruleset accepts it only
+# from the `moonbot-alena-review` GitHub App. Pull requests from people the team does not know
+# yet are read by Alena on her own server, which then posts that status. This workflow is the
+# other half: it keeps trusted authors independent of that server.
+#
+#   - A pull request whose author AND every commit author are in TRUSTED gets a green
+#     `alena-review` within seconds, unread.
+#   - `/override`, written in a pull request by someone in TRUSTED, turns the mark green: for
+#     when Alena is wrong or her server is down.
+#
+# Anyone else's pull request is left alone here; Alena's server marks it.
+#
+# SECURITY. The App's private key lives in the `alena-gate` environment, which admits only
+# `main`. `pull_request_target` and `issue_comment` both run the workflow file from `main` with
+# GITHUB_REF = `main`, so a workflow edited on a side branch can neither change this logic nor
+# reach the key (probed: such a job is refused before it gets a runner). For the same reason
+# this workflow NEVER checks out or runs anything from the pull request: it only asks the API
+# who wrote it. Text from the event (logins, comment bodies) reaches the script through `env`,
+# never through an expression inside `run:`.
+#
+# `deployment: false` takes the environment's secret without recording a deployment, so pull
+# requests do not collect "deployed to alena-gate" entries.
+#
+# TRUSTED is duplicated in `/etc/pr-review/config.json` on Alena's server, which marks trusted
+# authors too, as a fallback. Change both together.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  pull-requests: read # list a pull request's commits; the only write goes through the App token
+
+jobs:
+  mark:
+    name: Trusted authors and /override
+    # Comments are frequent and almost never a command: skip them before the environment is asked.
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request && contains(github.event.comment.body, '/override'))
+    runs-on: ubuntu-latest
+    environment:
+      name: alena-gate
+      deployment: false
+    env:
+      TRUSTED: "kirillDevPro guyverino Moonbot-Tech"
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: Iv23liASBWZgHKa3UDWT
+          private-key: ${{ secrets.ALENA_APP_KEY }}
+      - name: Mark the pull request when its people are trusted
+        shell: bash
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          READ_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+        run: |
+          set -euo pipefail
+
+          is_trusted() {
+            case " $TRUSTED " in *" $1 "*) return 0 ;; esac
+            return 1
+          }
+
+          # mark <sha> <description> [target url]
+          mark() {
+            GH_TOKEN="$APP_TOKEN" gh api -X POST "repos/$REPO/statuses/$1" \
+              -f state=success -f context=alena-review -f description="$2" \
+              ${3:+-f target_url="$3"} >/dev/null
+            echo "alena-review: success on $1 ($2)"
+          }
+
+          if [[ "$EVENT" == "pull_request_target" ]]; then
+            if [[ "$PR_DRAFT" == "true" ]]; then
+              echo "draft: left unmarked"
+              exit 0
+            fi
+            if ! is_trusted "$PR_AUTHOR"; then
+              echo "author $PR_AUTHOR is not in TRUSTED: Alena reads this pull request"
+              exit 0
+            fi
+            # A commit from someone else inside a trusted author's branch is still someone
+            # else's code.
+            authors="$(GH_TOKEN="$READ_TOKEN" gh api \
+              "repos/$REPO/pulls/$PR_NUMBER/commits?per_page=100" \
+              --jq '.[] | (.author.login // "?")')"
+            if [[ "$(wc -l <<<"$authors")" -ge 100 ]]; then
+              echo "100 or more commits: Alena reads this pull request"
+              exit 0
+            fi
+            while IFS= read -r login; do
+              if ! is_trusted "$login"; then
+                echo "commit author $login is not in TRUSTED: Alena reads this pull request"
+                exit 0
+              fi
+            done <<<"$authors"
+            mark "$PR_HEAD" "trusted author: not read"
+          else
+            if ! grep -Eq '^[[:space:]]*/override([[:space:]]|$)' <<<"$COMMENT_BODY"; then
+              echo "no /override command in this comment"
+              exit 0
+            fi
+            if ! is_trusted "$COMMENTER"; then
+              echo "$COMMENTER is not in TRUSTED: /override ignored"
+              exit 0
+            fi
+            read -r state sha < <(GH_TOKEN="$READ_TOKEN" gh api "repos/$REPO/pulls/$PR_NUMBER" \
+              --jq '"\(.state) \(.head.sha)"')
+            if [[ "$state" != "open" ]]; then
+              echo "pull request is $state: nothing to mark"
+              exit 0
+            fi
+            mark "$sha" "override by $COMMENTER" "$COMMENT_URL"
+          fi
