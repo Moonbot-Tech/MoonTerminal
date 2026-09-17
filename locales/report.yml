@@ -658,3 +658,8 @@ report.trade_log.empty:
   ru: "Лог не найден: файл за эти сутки удалён по сроку хранения, или у ядра был выключен приём лога"
   en: "No log found: the day's file is past its retention, or log relaying was off for this core"
   es: "Sin registro: el archivo del día ya expiró, o la retransmisión del registro estaba apagada para este núcleo"
+
+report.access_denied:
+  ru: "Доступ к реплике отчётов закрыт."
+  en: "Access to the reports replica is unavailable."
+  es: "El acceso a la réplica de informes no está disponible."

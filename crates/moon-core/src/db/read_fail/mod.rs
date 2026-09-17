@@ -21,6 +21,8 @@ use rusqlite::ErrorCode;
 /// Why a read failed, at the granularity the UI actually branches on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FailKind {
+    /// This process has no permission to access the replica after lease/recovery preflight.
+    ReplicaAccessDenied,
     /// Lock contention past `busy_timeout`; retrying may succeed.
     Busy,
     /// The database image is malformed / not a database. Never self-heals.

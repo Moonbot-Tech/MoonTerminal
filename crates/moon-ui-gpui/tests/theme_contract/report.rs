@@ -8,6 +8,36 @@
 
 use super::support::*;
 
+/// Bypassing the shared composer in either surface brings back raw lease errors or divergent
+/// recording warnings. This pins the UI wiring while the composer's unit tests check its text.
+#[test]
+fn report_and_analytics_share_the_recovery_notice_composer() {
+    let load = read_src("load_state.rs");
+    let note = code_only(braced_body(&load, "pub(crate) fn note_el("));
+    let denial = braced_body(&note, "FailKind::ReplicaAccessDenied =>");
+    assert!(denial.contains("crate::report_notice::recovery_notice_text("));
+    assert!(denial.contains("MoonAlert::error(id, detail).title(title)"));
+    assert!(!denial.contains("msg"));
+    let toolbar = read_src("analytics/toolbar.rs");
+    let integrity = code_only(braced_body(&toolbar, "pub(super) fn integrity_note("));
+    assert!(integrity.contains("crate::report_notice::recovery_notice_text(Some(notice))"));
+    let report = read_src("panels/report/render.rs");
+    assert!(report.contains("Err(note) => note_el(\"rep-table-note\", note, 12.0, p, cx)"));
+}
+
+/// A recovered replica permits reads, so routing its notice only through access denial hides
+/// the saved-copy location forever. Keep the notice alongside content and behind failure priority.
+#[test]
+fn report_successful_recovery_notice_coexists_with_content() {
+    let report = read_src("panels/report/render.rs");
+    let recovered = code_only(braced_body(&report, "let recovered_notice = match"));
+    assert!(recovered.contains("RecoveryNotice::Recovered"));
+    assert!(recovered.contains("!matches!(self.data, LoadState::Failed(_))"));
+    assert!(recovered.contains("crate::report_notice::recovery_notice_text(Some(notice))"));
+    assert!(recovered.contains("MoonAlert::info(\"rep-recovered-note\", detail).title(title)"));
+    assert!(report.contains(".children(recovered_notice)\n            .child(table_el)"));
+}
+
 /// Breakage: someone "helpfully" points `export.rs` (CSV, XLSX) or `selection.rs` (clipboard TSV)
 /// at the pretty `columns::header_label` instead of the raw `columns::header_for`. Every exported
 /// file and every clipboard paste is a machine-readable extract consumed outside this repo; a

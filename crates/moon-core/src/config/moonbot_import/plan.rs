@@ -457,14 +457,17 @@ fn map_colors(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPla
                         orders.liq.color,
                     ),
                     "BookLevelGreen" | "BookLevelRed" => {
-                        plan.unsupported.push(Unsupported {
-                            name: PreviewCaption::ColorField {
-                                key: key.clone(),
-                                light,
+                        let bid = key == "BookLevelGreen";
+                        let rgba = theme.resolved_book_level(bid);
+                        (
+                            if bid {
+                                "theme.book_level_bid"
+                            } else {
+                                "theme.book_level_ask"
                             },
-                            reason: ImportReason::NoBookLevelColor,
-                        });
-                        continue;
+                            PreviewCaption::ConfigField(key.clone()),
+                            [rgba[0], rgba[1], rgba[2]].map(|v| (v * 255.0).round() as u8),
+                        )
                     }
                     "BuyOrderDone" => {
                         plan.unsupported.push(Unsupported {
@@ -506,7 +509,12 @@ fn map_colors(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPla
                 current: PreviewValue::Data(rgb_hex(current_rgb)),
                 new: PreviewValue::Data(rgb_hex(rgb)),
                 value: PlannedValue::Rgb(rgb),
-                same: current_rgb == rgb,
+                // An automatic colour is not a stored override, even if its rounded swatch matches.
+                same: match key.as_str() {
+                    "BookLevelGreen" => theme.book_level_bid == Some(rgb),
+                    "BookLevelRed" => theme.book_level_ask == Some(rgb),
+                    _ => current_rgb == rgb,
+                },
             });
         }
     }

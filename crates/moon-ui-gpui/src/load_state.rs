@@ -164,7 +164,8 @@ pub(crate) enum Note {
 ///     cx: Application context used for typography scaling.
 ///
 /// Returns:
-///     Muted placeholder or classified database-error alert.
+///     Muted placeholder or classified database-error alert. Replica access denial uses the
+///     shared recovery wording instead of displaying the internal coordination error.
 pub(crate) fn note_el(
     id: &'static str,
     note: Note,
@@ -176,8 +177,8 @@ pub(crate) fn note_el(
     // from a second match on `FailKind` alone and the title being fixed: `PeriodOutOfRange` needs
     // a hint but carries no `FailKind` at all, and it is NOT a database read failure — titling it
     // "failed to read the reports database" would send the user to repair a database over a
-    // period this build simply refuses to read. Picking all three here keeps the single
-    // `MoonAlert::error` construction below.
+    // period this build simply refuses to read. Access denial has its own shared recovery alert;
+    // the remaining failures use the title/body/hint construction below.
     let (title, body, hint): (String, SharedString, String) = match note {
         Note::Loading => return muted(t!("common.loading").to_string(), pad, p, cx),
         Note::Empty => return muted(t!("common.empty_period").to_string(), pad, p, cx),
@@ -194,6 +195,15 @@ pub(crate) fn note_el(
         // contention may clear on retry, and I/O errors or misuse promise neither.
         Note::Failed { msg, kind } => {
             let hint = match kind {
+                FailKind::ReplicaAccessDenied => {
+                    let (title, detail) = crate::report_notice::recovery_notice_text(
+                        moon_core::db::report_recovery::status(),
+                    );
+                    return div()
+                        .p(design::ui_px(cx, pad))
+                        .child(MoonAlert::error(id, detail).title(title).render())
+                        .into_any_element();
+                }
                 FailKind::Corrupt => t!("common.db_read_failed_corrupt"),
                 FailKind::Busy => t!("common.db_read_failed_retry"),
                 FailKind::Other => t!("common.db_read_failed_other"),

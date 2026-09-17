@@ -885,8 +885,8 @@ impl AnalyticsView {
 
     /// Return the startup-recovery or background-integrity note as `(title, detail)`.
     ///
-    /// Blocked/failed recovery is more actionable than the expected damage verdict and therefore
-    /// has priority. A successful recovery remains visible for this process without claiming to
+    /// Lease denial or blocked/failed recovery is more actionable than the expected damage verdict
+    /// and therefore has priority. Successful recovery remains visible without claiming to
     /// know when every core has completed its independent catch-up.
     ///
     /// Args:
@@ -896,48 +896,12 @@ impl AnalyticsView {
     ///     Localized title/detail pair, or `None` when no notice is required.
     pub(super) fn integrity_note(&mut self, cx: &mut Context<Self>) -> Option<(String, String)> {
         let recovery_note = moon_core::db::report_recovery::status();
-        match recovery_note {
-            Some(RecoveryNotice::Blocked {
-                detail: _,
-                snapshot_dir: Some(snapshot),
-            }) => {
-                return Some((
-                    t!("analytics.recovery_blocked").to_string(),
-                    t!(
-                        "analytics.recovery_blocked_snapshot",
-                        path = snapshot.display().to_string()
-                    )
-                    .to_string(),
-                ));
-            }
-            Some(RecoveryNotice::Blocked {
-                detail: _,
-                snapshot_dir: None,
-            }) => {
-                return Some((
-                    t!("analytics.recovery_blocked").to_string(),
-                    t!("analytics.recovery_blocked_detail").to_string(),
-                ));
-            }
-            Some(RecoveryNotice::Failed { detail: _ }) => {
-                return Some((
-                    t!("analytics.recovery_failed").to_string(),
-                    t!("analytics.recovery_failed_detail").to_string(),
-                ));
-            }
-            Some(RecoveryNotice::Recovered { .. }) | None => {}
+        let recovered =
+            recovery_note.map(|notice| crate::report_notice::recovery_notice_text(Some(notice)));
+        if matches!(recovery_note, Some(notice) if !matches!(notice, RecoveryNotice::Recovered { .. }))
+        {
+            return recovered;
         }
-        let recovered = match recovery_note {
-            Some(RecoveryNotice::Recovered { snapshot_dir }) => Some((
-                t!("analytics.recovery_done").to_string(),
-                t!(
-                    "analytics.recovery_done_detail",
-                    path = snapshot_dir.display().to_string()
-                )
-                .to_string(),
-            )),
-            _ => None,
-        };
 
         let Some(verdict) = moon_core::db::integrity::status() else {
             // Still running. Re-poll once per armed timer; the check cannot

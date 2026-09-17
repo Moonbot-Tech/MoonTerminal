@@ -3391,3 +3391,32 @@ strat.note_split_folders:
   ru: 'В именах папок есть слеш: %{names}. Ядро разделит их по слешам на вложенные папки. Стратегии отправлены без изменений.'
   en: 'Folder names contain a slash: %{names}. The core will split them at the slashes into nested folders. Strategies were sent unchanged.'
   es: 'Los nombres de carpetas contienen barras: %{names}. El núcleo los dividirá por las barras en carpetas anidadas. Las estrategias se enviaron sin cambios.'
+
+strat.list_append:
+  ru: "Дописать ключи"
+  en: "Append keys"
+  es: "Añadir claves"
+strat.list_remove:
+  ru: "Убрать ключи"
+  en: "Remove keys"
+  es: "Quitar claves"
+strat.list_append_hint:
+  ru: "Введите ключи через пробел. Они будут добавлены к собственному списку каждой стратегии; введённое время заменит прежнее время того же ключа. Затем нажмите «Применить» в панели параметров."
+  en: "Enter keys separated by spaces. They will be added to each strategy's own list; entered times replace existing times for the same key. Then use Apply in the parameter panel."
+  es: "Introduzca claves separadas por espacios. Se añadirán a la lista propia de cada estrategia; los tiempos introducidos sustituyen a los anteriores de la misma clave. Después pulse Aplicar en el panel de parámetros."
+strat.list_remove_hint:
+  ru: "Введите ключи через пробел. Они будут удалены из собственного списка каждой стратегии независимо от времени после знака равенства. Затем нажмите «Применить» в панели параметров."
+  en: "Enter keys separated by spaces. They will be removed from each strategy's own list regardless of any time after the equals sign. Then use Apply in the parameter panel."
+  es: "Introduzca claves separadas por espacios. Se quitarán de la lista propia de cada estrategia, independientemente del tiempo tras el signo igual. Después pulse Aplicar en el panel de parámetros."
+strat.list_tokens_placeholder:
+  ru: "Например: 1=300 5 7=900"
+  en: "For example: 1=300 5 7=900"
+  es: "Por ejemplo: 1=300 5 7=900"
+strat.list_changed:
+  ru: "Изменится стратегий: %{n}"
+  en: "%{n} strategies will change"
+  es: "Se modificarán %{n} estrategias"
+strat.list_stale:
+  ru: "Выбор стратегий или доступность поля изменились. Закройте окно и откройте действие заново."
+  en: "The strategy selection or field availability changed. Close this dialog and open the action again."
+  es: "La selección de estrategias o la disponibilidad del campo han cambiado. Cierre este diálogo y vuelva a abrir la acción."

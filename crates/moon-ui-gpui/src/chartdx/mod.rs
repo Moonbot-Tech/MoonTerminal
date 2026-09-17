@@ -1142,15 +1142,16 @@ struct RenderState {
     /// supplies it through `apply_compare` on each observation. `None` means no comparison or this
     /// chart is the anchor.
     compare_ref_price: Option<f32>,
-    /// When this chart arrived in a stack slot, driving the accent border flash. `None` once the
-    /// flash is over — clearing it is what STOPS the extra presents, so it is the load-bearing
-    /// half of this feature, not bookkeeping.
+    /// When this chart arrived in a stack slot, driving the accent border flash and steady stroke.
+    /// Retained after the flash; the final arrival-present stamp stops extra presents once the
+    /// stroke settles. `None` means the arrival decoration has been explicitly cleared.
     arrival_pulse: Option<Instant>,
     /// Accent colour for the arrival flash, handed over with the stamp so the palette stays the
     /// single source of truth and this layer never guesses a colour.
     arrival_pulse_color: [f32; 4],
-    /// When the last arrival-flash frame was presented, pacing it to `ARRIVAL_PULSE_TICK`
-    /// independently of the 60 Hz present cap.
+    /// When the last arrival frame was presented, pacing the flash to `ARRIVAL_PULSE_TICK`
+    /// independently of the 60 Hz present cap. A stamp past expiry stops arrival presents after
+    /// the final steady stroke has been scheduled.
     last_arrival_present_at: Option<Instant>,
     /// Deadline until which every pane's core-name caption names the EXCHANGE instead, for a shot.
     ///
@@ -1163,8 +1164,8 @@ struct RenderState {
     /// It carries a DEADLINE rather than a plain `bool` because the value is a privacy control. The
     /// screen must not be left naming the exchange if the shot's callback chain never completes — a
     /// closed window, a panel re-parented between windows, a stalled machine. `frame` expires it
-    /// from wall clock exactly as it does [`Self::arrival_pulse`], so nothing has to be trusted to
-    /// call the clear.
+    /// from wall clock, just as it settles [`Self::arrival_pulse`] into a steady stroke, so nothing
+    /// has to be trusted to call the caption clear.
     shot_caption_until: Option<Instant>,
     /// How many completed text passes have drawn substituted captions since it was armed.
     ///

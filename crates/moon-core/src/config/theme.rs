@@ -85,6 +85,10 @@ pub struct ChartTheme {
     pub book_bid: [u8; 3],
     /// Ask-side (sell) color, sRGB.
     pub book_ask: [u8; 3],
+    /// Bid level-line colour, sRGB; absent follows the wall at 1.25 brightness.
+    pub book_level_bid: Option<[u8; 3]>,
+    /// Ask level-line colour, sRGB; absent follows the wall at 1.25 brightness.
+    pub book_level_ask: Option<[u8; 3]>,
     /// Brightness/opacity of individual order-book level lines, 0..1.
     pub book_level_alpha: f32,
     /// Thickness of individual order-book level lines, in physical pixels.
@@ -165,6 +169,8 @@ impl Default for ChartTheme {
             // `book_bg`, strong enough to read as depth without out-shouting the candles.
             book_bid: [28, 100, 64],
             book_ask: [140, 46, 46],
+            book_level_bid: None,
+            book_level_ask: None,
             book_level_alpha: 0.5,
             book_level_width: 1.5,
             label_positive: palette::GREEN,
@@ -184,6 +190,23 @@ impl Default for ChartTheme {
 }
 
 impl ChartTheme {
+    /// Resolve a side's level colour to normalized sRGB RGBA for GPU upload.
+    ///
+    /// `bid` selects the buy side. Automatic colours retain the former shader's floating-point
+    /// operation order, without rounding through RGB bytes; alpha remains in `book_level_alpha`.
+    pub fn resolved_book_level(&self, bid: bool) -> [f32; 4] {
+        let (explicit, wall) = if bid {
+            (self.book_level_bid, self.book_bid)
+        } else {
+            (self.book_level_ask, self.book_ask)
+        };
+        let rgb = match explicit {
+            Some(rgb) => rgb.map(|v| v as f32 / 255.0),
+            None => wall.map(|v| (v as f32 / 255.0 * 1.25).min(1.0)),
+        };
+        [rgb[0], rgb[1], rgb[2], 1.0]
+    }
+
     /// Default light set: dark default plus Moonbot light overrides.
     fn default_light() -> Self {
         let mut t = Self::default();
@@ -226,11 +249,13 @@ impl ChartTheme {
         self.book_bg = [255, 255, 255];
         self.book_bg_ask = [255, 244, 242];
         self.book_bg_bid = [243, 250, 242];
-        // Each candle tone composited at ~60% over white. Not paler: the book shaders brighten a
+        // Each candle tone composited at ~60% over white. Not paler: automatic colours brighten a
         // level line to `min(rgb * 1.25, 1)`, and a paler wall clamps those stripes into the
         // background until the individual levels stop reading at all.
         self.book_bid = [118, 197, 157];
         self.book_ask = [240, 137, 137];
+        self.book_level_bid = None;
+        self.book_level_ask = None;
         self.book_level_alpha = 0.5;
         self.book_level_width = 1.5;
         self.label_positive = [0, 128, 0];

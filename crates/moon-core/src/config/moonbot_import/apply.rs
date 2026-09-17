@@ -105,7 +105,7 @@ fn apply_hotkey(cfg: &mut AppConfig, id: &str, ks: &str) -> bool {
     true
 }
 
-/// Applies a color item: `{target}.{side}`, where side = light|dark.
+/// Applies a color item, including explicit level overrides: `{target}.{side}`, side = light|dark.
 fn apply_color(cfg: &mut AppConfig, id: &str, rgb: [u8; 3]) -> bool {
     let (target, side) = match id.rsplit_once('.') {
         Some(pair) => pair,
@@ -134,6 +134,8 @@ fn apply_color(cfg: &mut AppConfig, id: &str, rgb: [u8; 3]) -> bool {
         "theme.candle_neutral" => theme.candle_neutral = rgb,
         "theme.book_bid" => theme.book_bid = rgb,
         "theme.book_ask" => theme.book_ask = rgb,
+        "theme.book_level_bid" => theme.book_level_bid = Some(rgb),
+        "theme.book_level_ask" => theme.book_level_ask = Some(rgb),
         "orders.buy.color" => orders.buy.color = rgb,
         "orders.buy.pending_color" => orders.buy.pending_color = Some(rgb),
         "orders.sell.color" => orders.sell.color = rgb,

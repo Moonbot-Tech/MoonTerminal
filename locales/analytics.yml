@@ -1673,3 +1673,16 @@ profit_monitor.split_pending:
   ru: "Пересчёт не завершён. Итоги показаны отдельно по валютам."
   en: "Conversion incomplete. Totals are shown separately by currency."
   es: "Conversión incompleta. Totales separados por moneda."
+
+analytics.recovery_lease_unavailable:
+  ru: "Не удалось получить исключительный доступ к реплике отчётов."
+  en: "Could not lock the reports replica."
+  es: "No se pudo bloquear la réplica de informes."
+analytics.recovery_lease_detail:
+  ru: "Проверьте, не запущена ли вторая копия терминала с той же папкой данных. Используйте локальный диск вместо сетевого диска или папки с облачной синхронизацией; проверьте права доступа, свободное место и не удерживает ли файл антивирус. Подробности — во вкладке «Лог»."
+  en: "Check for a second terminal using the same data folder. Use a local disk instead of a network drive or cloud-synced folder; check permissions, free space, and whether antivirus is holding the file. See the Log tab for details."
+  es: "Compruebe si hay otro terminal usando la misma carpeta de datos. Use un disco local en lugar de una unidad de red o carpeta sincronizada en la nube; revise los permisos, el espacio libre y si el antivirus está reteniendo el archivo. Consulte la pestaña Registro para obtener detalles."
+analytics.recovery_recording_off_detail:
+  ru: "Новые сделки сейчас не сохраняются в этой реплике отчётов. После устранения причины и перезапуска терминала пропуск будет загружен из ядра: метка синхронизации хранится в самой реплике. Не удастся вернуть только сделки, которые ядро уже не хранит."
+  en: "New trades are not being recorded in this reports replica. After fixing the cause and restarting the terminal, the gap will be refilled from the core: the sync checkpoint is stored in the replica itself. Only trades the core no longer retains cannot be recovered."
+  es: "Las nuevas operaciones no se están guardando en esta réplica de informes. Tras corregir la causa y reiniciar el terminal, el historial faltante se descargará del núcleo: el punto de sincronización se guarda en la propia réplica. Solo las operaciones que el núcleo ya no conserva no podrán recuperarse."

@@ -3,9 +3,102 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    reconcile_retained_assets_state, resolve_workspace_wallet_core, roster_width,
-    wallets::wallet_count_label,
+    global_query_cores, global_wallet_core, reconcile_retained_assets_state,
+    resolve_workspace_wallet_core, roster_width, wallets::wallet_count_label,
 };
+
+/// Removing the selection predicate from `global_query_cores` keeps unticked cores in requests,
+/// rows and balances. Exercise the same toggle helper as the picker and retain canonical order.
+#[test]
+fn global_assets_query_tracks_untick_retick_and_all() {
+    let cores = vec![(3, "Alpha".into()), (1, "Beta".into()), (2, "Gamma".into())];
+    let mut selected = HashSet::from([1, 2, 3]);
+
+    crate::controls::toggle_core_selection(&mut selected, Some(1));
+    assert_eq!(
+        global_query_cores(cores.clone(), &selected),
+        vec![(3, "Alpha".into()), (2, "Gamma".into())]
+    );
+    crate::controls::toggle_core_selection(&mut selected, Some(1));
+    assert_eq!(global_query_cores(cores.clone(), &selected), cores);
+
+    crate::controls::toggle_core_selection(&mut selected, Some(3));
+    crate::controls::toggle_core_selection(&mut selected, Some(2));
+    assert_eq!(
+        global_query_cores(cores.clone(), &selected),
+        vec![(1, "Beta".into())]
+    );
+    crate::controls::toggle_core_selection(&mut selected, None);
+    assert_eq!(global_query_cores(cores.clone(), &selected), cores);
+}
+
+/// Returning the retained wallet core unconditionally shows a hidden core's balances beneath
+/// another core's label and rejects its transfers. Re-ticking must restore the retained pick.
+#[test]
+fn global_assets_wallet_target_follows_filtered_query() {
+    let cores = vec![(3, "Alpha".into()), (1, "Beta".into()), (2, "Gamma".into())];
+    let retained = Some(1);
+    let mut selected = HashSet::from([1, 2, 3]);
+
+    crate::controls::toggle_core_selection(&mut selected, Some(1));
+    let filtered = global_query_cores(cores.clone(), &selected);
+    assert_eq!(global_wallet_core(&filtered, retained), Some(3));
+    assert_eq!(global_wallet_core(&filtered, Some(2)), Some(2));
+    crate::controls::toggle_core_selection(&mut selected, Some(1));
+    let restored = global_query_cores(cores.clone(), &selected);
+    assert_eq!(global_wallet_core(&restored, retained), Some(1));
+    crate::controls::toggle_core_selection(&mut selected, None);
+    let all = global_query_cores(cores, &selected);
+    assert_eq!(global_wallet_core(&all, retained), Some(1));
+    assert_eq!(global_wallet_core(&[], retained), None);
+}
+
+/// Removing the standalone wallet resolver call leaves the pure decision green but disconnects
+/// it from wallet snapshots and pending-transfer validation in the view.
+#[test]
+fn global_assets_wallet_scope_reaches_cache_and_transfer_authority() {
+    let panel = strip_rust_comments(include_str!("mod.rs"));
+    let wallet: String = function_source(&panel, "fn effective_wallet_core(")
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    assert!(wallet.starts_with(
+        "fneffective_wallet_core(&self,b:&Backend)->Option<CoreId>{ifmatches!(self.scope,AssetsScope::All){returnglobal_wallet_core(&self.query_cores(b),self.selected_core);}"
+    ));
+    let cache = strip_rust_comments(include_str!("cache.rs"));
+    assert!(
+        function_source(&cache, "fn wallet_cache_key(").contains("self.effective_wallet_core(b)")
+    );
+    let wallets = strip_rust_comments(include_str!("wallets.rs"));
+    assert!(
+        function_source(&wallets, "fn confirm_transfer(").contains("self.effective_wallet_core(")
+    );
+}
+
+/// Restoring `query_cores`' global `return all` bypasses the tested predicate and leaves the
+/// standalone picker cosmetic. Pin that edge and the row/balance/request consumers without GPUI.
+#[test]
+fn global_assets_selection_reaches_query_consumers() {
+    let panel = strip_rust_comments(include_str!("mod.rs"));
+    let query: String = function_source(&panel, "fn query_cores(")
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    assert!(query.contains(
+        "letSome(scope)=self.effective_scope(b)else{returnglobal_query_cores(all,&self.sel_cores);};"
+    ));
+    let collect = strip_rust_comments(include_str!("collect.rs"));
+    for method in ["fn collect(", "fn per_core("] {
+        assert!(function_source(&collect, method).contains("self.query_cores(b)"));
+    }
+    let cache = strip_rust_comments(include_str!("cache.rs"));
+    let rebuild = function_source(&cache, "fn rebuild_cache(");
+    assert!(rebuild.contains("let query_cores = self.query_cores(b)"));
+    assert!(rebuild.contains("self.cached_cores = query_cores"));
+    assert!(
+        function_source(&cache, "fn request_missing_transfers(").contains("&self.cached_cores")
+    );
+}
 
 /// `cache.rs:AssetsView::rebuild_cache` must validate retained filters and wallet detail against
 /// every live group core, not the effective one-core Auto query. Replacing the full validity set

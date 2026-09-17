@@ -1607,6 +1607,8 @@ impl ChartDataState {
                 book_bg: rgb4(self.theme.book_bg),
                 bid: rgb4(self.theme.book_bid),
                 ask: rgb4(self.theme.book_ask),
+                level_bid: self.theme.resolved_book_level(true),
+                level_ask: self.theme.resolved_book_level(false),
                 level: [
                     self.theme.book_level_alpha.clamp(0.0, 1.0),
                     self.theme.book_level_width.max(0.0),

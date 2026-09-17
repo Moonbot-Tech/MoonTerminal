@@ -70,12 +70,35 @@ fn clamp_anchor(value: f32, min: f32, max: f32) -> f32 {
     }
 }
 
-/// How long a newly arrived chart carries its accent border flash.
+/// How long a newly arrived chart pulses before retaining a steady border.
 ///
-/// Lives here, next to the code that draws and expires it, rather than in `chart_tabs`: the flash
+/// Lives here, next to the code that draws and paces it, rather than in `chart_tabs`: the flash
 /// is an own-pass decoration now, and a duration split across two modules is exactly the drift this
 /// change exists to remove.
 const ARRIVAL_HIGHLIGHT: Duration = Duration::from_millis(2600);
+
+/// Returns the three-pulse opacity, then a calmer persistent core-colour stroke.
+/// `None` means no arrival is armed; elapsed time never removes an armed border.
+fn arrival_alpha(elapsed: Option<Duration>) -> Option<f32> {
+    elapsed.map(|elapsed| {
+        if elapsed < ARRIVAL_HIGHLIGHT {
+            let delta = elapsed.as_secs_f32() / ARRIVAL_HIGHLIGHT.as_secs_f32();
+            (delta * std::f32::consts::PI * 3.0).sin().abs()
+        } else {
+            0.6
+        }
+    })
+}
+
+/// Requests paced pulse frames and exactly one settling frame, even after a hidden interval.
+/// A last present at or beyond the pulse deadline means the steady stroke is already scheduled.
+fn arrival_present_due(at: Instant, last: Option<Instant>, now: Instant) -> bool {
+    if now.saturating_duration_since(at) >= ARRIVAL_HIGHLIGHT {
+        last.is_none_or(|last| last.saturating_duration_since(at) < ARRIVAL_HIGHLIGHT)
+    } else {
+        last.is_none_or(|last| now.saturating_duration_since(last) >= ARRIVAL_PULSE_TICK)
+    }
+}
 
 /// Present interval while the arrival flash runs.
 ///
@@ -282,11 +305,6 @@ impl RenderState {
         true
     }
 
-    /// Start (or clear) the arrival border flash for this chart.
-    ///
-    /// The stamp is all the own-pass needs: `frame` paces the flash and expires it from wall clock,
-    /// so the caller neither notifies nor keeps a timer. That is the whole point — a GPUI repaint
-    /// of the owning stack re-renders every chart panel in the tab.
     /// Arm or clear the shot's caption substitution.
     ///
     /// Arming zeroes the drawn-frame count first, so a shot can never read a stale proof left by an
@@ -364,21 +382,30 @@ impl RenderState {
         self.shot_caption_frames = self.shot_caption_frames.saturating_add(1);
     }
 
+    /// Starts or clears the arrival's pulsing and steady border, returning whether it changed.
+    /// The own-pass frame callback handles pacing without a timer or per-frame view notification.
     pub(super) fn set_arrival_pulse(&mut self, at: Option<Instant>, accent: [f32; 4]) -> bool {
         // Switched off: every start becomes a clear, so a run with the flash disabled cannot be
         // left with one already in flight from before the call.
         let at = if arrival_flash_enabled() { at } else { None };
-        // The colour is refreshed even when the stamp is unchanged: a theme switch mid-flash must
-        // not leave the border in the old accent for the rest of its 2.6 s.
+        // Refresh a changed colour even after the pulse has stopped scheduling frames.
         let recolored = self.arrival_pulse_color != accent;
         self.arrival_pulse_color = accent;
         if self.arrival_pulse == at {
+            if recolored {
+                self.sync_readout_params();
+                self.needs_present = true;
+            }
             return recolored;
         }
         self.arrival_pulse = at;
         self.last_arrival_present_at = None;
         self.sync_readout_params();
-        self.needs_present = true;
+        // Arming already schedules an overlay-only present through `arrival_present_due`.
+        // Only clearing needs a generic present; preserve any independent dirty reason on arm.
+        if at.is_none() {
+            self.needs_present = true;
+        }
         true
     }
 
@@ -511,15 +538,8 @@ impl RenderState {
         let m = [border_px, 1.0, 1.0, 0.0];
         let cursor = self.cursor;
         let slot_origin = self.slot_origin;
-        // Arrival flash phase, sampled once for every pane. Three flashes over `ARRIVAL_HIGHLIGHT`,
-        // the same curve the GPUI element used before this moved into the own-pass.
-        let arrival_alpha = self.arrival_pulse.and_then(|at| {
-            let elapsed = at.elapsed();
-            (elapsed < ARRIVAL_HIGHLIGHT).then(|| {
-                let delta = elapsed.as_secs_f32() / ARRIVAL_HIGHLIGHT.as_secs_f32();
-                (delta * std::f32::consts::PI * 3.0).sin().abs()
-            })
-        });
+        // Sample once for every pane: three pulses, then a steady core-colour stroke.
+        let arrival_alpha = arrival_alpha(self.arrival_pulse.map(|at| at.elapsed()));
         let arrival_color = self.arrival_pulse_color;
 
         for (idx, pr) in self.panes.iter_mut().enumerate() {
@@ -692,6 +712,7 @@ impl RenderState {
         }
     }
 
+    /// Requests presents for changed chart state and bounded decorations; a steady border is idle.
     pub(super) fn frame(&mut self, info: GpuFrameInfo) -> GpuFrameDecision {
         crate::diag::bump(&crate::diag::CHART_FRAME);
         if !info.presentable || info.bounds.is_empty() {
@@ -705,13 +726,7 @@ impl RenderState {
         if self.firetest_force_present {
             wants_present = true;
         }
-        // Arrival flash: paced and ENDED here, from wall clock, with no timer and no notify.
-        //
-        // Clearing `arrival_pulse` on expiry is the load-bearing line: leave it set and this canvas
-        // asks for a present ten times a second forever, which reads as a mysterious idle floor and
-        // no test would catch it. The final tick after expiry still rebuilds the rects, and that is
-        // the frame which erases the border.
-        // Shot caption: ENDED here, from wall clock, for the same reason the arrival flash is —
+        // Shot caption: ENDED here, from wall clock, with
         // no timer, no notify, and nobody to trust with the clear. This is the WATCHDOG, not the
         // normal path: the shot restores the caption itself as soon as it has its picture, and this
         // only fires when that chain never completed. Leaving it armed would keep the EXCHANGE on
@@ -723,19 +738,16 @@ impl RenderState {
                 wants_present = true;
             }
         }
+        // Preserve independent reasons to update the camera before adding an overlay-only present.
+        let camera_present = wants_present;
+        let mut arrival_present = false;
         if let Some(at) = self.arrival_pulse {
-            if at.elapsed() >= ARRIVAL_HIGHLIGHT {
-                self.arrival_pulse = None;
-                self.last_arrival_present_at = None;
-                self.sync_readout_params();
-                wants_present = true;
-            } else if self
-                .last_arrival_present_at
-                .is_none_or(|last| now.duration_since(last) >= ARRIVAL_PULSE_TICK)
-            {
+            // Keep the colour armed, but stop requesting frames after the final steady stroke.
+            if arrival_present_due(at, self.last_arrival_present_at, now) {
                 self.last_arrival_present_at = Some(now);
                 self.sync_readout_params();
                 crate::diag::bump(&crate::diag::CHART_ARRIVAL_PULSE);
+                arrival_present = true;
                 wants_present = true;
             }
         }
@@ -745,7 +757,12 @@ impl RenderState {
             .is_none_or(|last| now.duration_since(last) >= self.target_present_interval);
         let mut camera_moved = false;
         for pr in &mut self.panes {
-            if pr.active && (wants_present || cap_due) && pr.advance_camera(now_ms) {
+            // A pulse-only tick reuses the base even when the camera cap is due. Normal platform
+            // ticks still advance live scrolling, and real data/cursor dirtiness keeps its priority.
+            if pr.active
+                && (camera_present || (!arrival_present && cap_due))
+                && pr.advance_camera(now_ms)
+            {
                 crate::diag::bump(&crate::diag::CHART_CAM_STEP);
                 camera_moved = true;
                 self.base_dirty = true;
@@ -1131,3 +1148,6 @@ impl RenderState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

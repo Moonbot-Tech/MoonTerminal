@@ -17,6 +17,8 @@ struct BookStyle {
     book_bg: vec4<f32>,
     bid: vec4<f32>,
     ask: vec4<f32>,
+    level_bid: vec4<f32>,
+    level_ask: vec4<f32>,
     level: vec4<f32>,
     bg_ask: vec4<f32>,
     bg_bid: vec4<f32>,
@@ -90,9 +92,9 @@ fn book_bars_fragment(in: BookOut) -> @location(0) vec4<f32> {
     } else if in.kind < 1.5 {
         return vec4<f32>(bs.ask.rgb, 1.0);
     } else if in.kind < 2.5 {
-        return vec4<f32>(min(bs.bid.rgb * 1.25, vec3<f32>(1.0)), bs.level.x);
+        return vec4<f32>(bs.level_bid.rgb, bs.level.x);
     }
-    return vec4<f32>(min(bs.ask.rgb * 1.25, vec3<f32>(1.0)), bs.level.x);
+    return vec4<f32>(bs.level_ask.rgb, bs.level.x);
 }
 
 struct PlainOut {

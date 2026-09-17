@@ -481,3 +481,58 @@ fn xtmode_adds_a_typed_mode_row_before_fixed_sell_prices() {
     let unfilled = build_plan(&mb, &ctx(&h, &t, &o));
     assert_eq!(unfilled.group_items, vec![mode]);
 }
+
+/// Dropping either level mapping/setter loses imported colours; treating auto as equal hides
+/// a requested override. Both theme sides must remain independent of their wall colours.
+#[test]
+fn book_level_theme_import_plans_and_applies_explicit_colours() {
+    let (h, mut t, o) = (
+        HotkeysConfig::default(),
+        ChartThemeSet::default(),
+        OrdersStyleSet::default(),
+    );
+    t.dark.book_bid = [0, 0, 0];
+    let mut mb = mb_config();
+    mb.theme.sections = vec![
+        IniSection {
+            name: "ColorsDark".into(),
+            entries: vec![
+                ("BookLevelGreen".into(), "00000000".into()),
+                ("BookLevelRed".into(), "00FF3300".into()),
+            ],
+        },
+        IniSection {
+            name: "ColorsLight".into(),
+            entries: vec![
+                ("BookLevelGreen".into(), "000066FF".into()),
+                ("BookLevelRed".into(), "00330066".into()),
+            ],
+        },
+    ];
+    let plan = build_plan(&mb, &ctx(&h, &t, &o));
+    let selected: std::collections::HashSet<String> =
+        plan.chart.iter().map(|v| v.id.clone()).collect();
+    assert_eq!(selected.len(), 4);
+    assert!(plan.chart.iter().all(|v| !v.same));
+    let mut cfg = crate::config::AppConfig::blank(None);
+    cfg.theme = t;
+    let before_dark = (cfg.theme.dark.book_bid, cfg.theme.dark.book_ask);
+    let before_light = (cfg.theme.light.book_bid, cfg.theme.light.book_ask);
+    let result = super::super::apply::apply_local(&mut cfg, &plan, &selected, &[]);
+    assert_eq!(result.applied, 4);
+    assert!(result.unknown_ids.is_empty());
+    assert_eq!(cfg.theme.dark.book_level_bid, Some([0, 0, 0]));
+    assert_eq!(cfg.theme.dark.book_level_ask, Some([255, 51, 0]));
+    assert_eq!(cfg.theme.light.book_level_bid, Some([0, 102, 255]));
+    assert_eq!(cfg.theme.light.book_level_ask, Some([51, 0, 102]));
+    assert_eq!(
+        (cfg.theme.dark.book_bid, cfg.theme.dark.book_ask),
+        before_dark
+    );
+    assert_eq!(
+        (cfg.theme.light.book_bid, cfg.theme.light.book_ask),
+        before_light
+    );
+    let repeated = build_plan(&mb, &ctx(&h, &cfg.theme, &o));
+    assert!(repeated.chart.iter().all(|v| v.same));
+}

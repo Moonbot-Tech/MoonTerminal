@@ -21,6 +21,8 @@ cbuffer BookStyle : register(b1) {
     float4 bs_book_bg; // SPREAD GAP background (between best bid/ask); whole zone when book is empty
     float4 bs_bid;     // bid rgb
     float4 bs_ask;     // ask rgb
+    float4 bs_level_bid; // resolved bid level-line rgb
+    float4 bs_level_ask; // resolved ask level-line rgb
     float4 bs_level;   // x = level-line opacity, y = level-line height in px
     float4 bs_bg_ask;  // ask-half background (above best ask)
     float4 bs_bg_bid;  // bid-half background (below best bid)
@@ -93,9 +95,9 @@ float4 bars_fragment(BarOut i) : SV_Target {
     } else if (i.kind < 1.5) {
         return float4(bs_ask.rgb, 1.0);
     } else if (i.kind < 2.5) {
-        return float4(min(bs_bid.rgb * 1.25, 1.0.xxx), bs_level.x);
+        return float4(bs_level_bid.rgb, bs_level.x);
     }
-    return float4(min(bs_ask.rgb * 1.25, 1.0.xxx), bs_level.x);
+    return float4(bs_level_ask.rgb, bs_level.x);
 }
 
 // ── Order-book zone background (fullscreen quad over the zone) ──────────────

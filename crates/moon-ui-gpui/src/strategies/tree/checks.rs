@@ -9,7 +9,7 @@
 //! The next click is a fresh bulk action over whatever the row covers then — coverage is the live
 //! filter, not an undo of the last click, and the painted box is derived from the same set.
 //!
-//! Both boxes are built here so their tone, size and id convention cannot drift apart, and both
+//! Both boxes are built here so their size and id convention cannot drift apart, and both
 //! stage through [`stage_value`], the one rule deciding what a click leaves in `staged`.
 
 use gpui::App;
@@ -27,8 +27,8 @@ mod tests;
 
 /// Build a tree-row checkbox in the tree's shared style.
 ///
-/// Green for on rather than the default Info tone, which produced a pale blue box indistinguishable
-/// from empty on the light theme; Positive also makes the checkmark glyph green.
+/// Bulk controls retain their green summary tone. Strategy rows override it with
+/// [`strategy_state_style`] so a staged wish cannot look confirmed by the core.
 ///
 /// Args:
 ///     id: Element id, derived by the caller from the row's own stable node id.
@@ -43,6 +43,32 @@ pub(super) fn row_checkbox(id: SharedString, checked: bool, cx: &App) -> MoonChe
         .tone(MoonTone::Positive)
         // Fixed tree rows and invisible bulk slots share this same tier-following column.
         .size(design::choice_tier(cx))
+}
+
+/// Choose checkbox tone and whether the core-state dot is green, without changing staging.
+///
+/// Args:
+///     server_checked: Strategy flag acknowledged by the core.
+///     staged: Wanted checkbox state, which never changes the dot's confirmed state.
+///     engine_running: Whether the current connection confirmed a running engine.
+///
+/// Returns:
+///     Checkbox tone and dot activity. An unchecked box keeps its default appearance;
+///     a checked but inactive box uses Muted's solid neutral fill and contrasting mark.
+pub(super) fn strategy_state_style(
+    server_checked: bool,
+    staged: Option<bool>,
+    engine_running: bool,
+) -> (MoonTone, bool) {
+    let active = server_checked && engine_running;
+    let tone = if !staged.unwrap_or(server_checked) {
+        MoonTone::Default
+    } else if active {
+        MoonTone::Positive
+    } else {
+        MoonTone::Muted
+    };
+    (tone, active)
 }
 
 /// Decide what one checkbox click leaves in [`StrategiesView::staged`] for a single strategy.

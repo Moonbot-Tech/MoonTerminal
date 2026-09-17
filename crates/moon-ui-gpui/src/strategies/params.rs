@@ -5,6 +5,8 @@
 
 use std::rc::Rc;
 
+use super::actions::ListEditTarget;
+use super::actions::list_edit::{ListEdit, is_list_field};
 use super::param_entries::{self, FlatParams};
 use super::versions::StagedOutcome;
 use super::*;
@@ -1072,6 +1074,111 @@ pub(super) enum ParamsPanelModel {
 }
 
 impl StrategiesView {
+    /// Open a token-only editor without changing the ordinary input's replacement semantics.
+    ///
+    /// The dialog owns its input; typing here never stages replacements. Confirm resolves each
+    /// captured strategy's current value and stages the operation, while Cancel changes nothing.
+    fn open_list_field_dialog(
+        &mut self,
+        keys: Vec<Key>,
+        field: String,
+        operation: ListEdit,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if list_field_values(self, self.backend.read(cx).session.store(), &keys, &field).is_none() {
+            return;
+        }
+        let target = Rc::new(ListEditTarget {
+            workspace_generation: self.action_workspace_generation(cx),
+            keys,
+            field,
+        });
+        let input = cx.new(|cx| {
+            MoonInputState::new(window, cx)
+                .placeholder(t!("strat.list_tokens_placeholder").to_string())
+        });
+        input.update(cx, |input, cx| input.focus(window, cx));
+        let view = cx.entity();
+        window.open_unique_moon_dialog("strat-list-edit", cx, move |dialog, _window, cx| {
+            let (label, hint) = match operation {
+                ListEdit::Append => (t!("strat.list_append"), t!("strat.list_append_hint")),
+                ListEdit::Remove => (t!("strat.list_remove"), t!("strat.list_remove_hint")),
+            };
+            let p = MoonPalette::active(cx);
+            let content_input = input.clone();
+            let confirm_input = input.clone();
+            let confirm_target = target.clone();
+            let confirm_view = view.clone();
+            let hint = hint.to_string();
+            let selection = t!("strat.selected_count", n = target.keys.len()).to_string();
+            dialog
+                .w(design::font_w_px(cx, 420.0))
+                .max_w(relative(0.9))
+                .close_button(true)
+                .overlay(true)
+                .overlay_closable(true)
+                .bg(moon(p.shell_high))
+                .border_color(moon(p.border))
+                .text_color(moon(p.text))
+                .title(format!("{label}: {}", target.field))
+                .content(move |content, _, cx| {
+                    content.child(
+                        v_flex()
+                            .w_full()
+                            .gap(design::ui_px(cx, 8.0))
+                            .child(div().child(selection.clone()))
+                            .child(div().text_color(moon(p.text_soft)).child(hint.clone()))
+                            .child(
+                                MoonInput::new("strat-list-tokens")
+                                    .state(&content_input)
+                                    .size(design::input_tier(cx)),
+                            ),
+                    )
+                })
+                .footer(
+                    h_flex()
+                        .w_full()
+                        .justify_end()
+                        .gap(design::ui_px(cx, 8.0))
+                        .child(
+                            MoonButton::new("strat-list-cancel")
+                                .ghost()
+                                .label(t!("dialogs.cancel"))
+                                .on_click(|_, window, cx| window.close_dialog(cx))
+                                .render(),
+                        )
+                        .child(
+                            MoonButton::new("strat-list-confirm")
+                                .primary()
+                                .label(label)
+                                .on_click(move |_, window, cx| {
+                                    let entered = confirm_input.read(cx).value().to_string();
+                                    let staged = confirm_view.update(cx, |this, cx| {
+                                        this.stage_list_field_value(
+                                            &confirm_target,
+                                            &entered,
+                                            operation,
+                                            cx,
+                                        )
+                                    });
+                                    if staged {
+                                        window.close_dialog(cx);
+                                    } else {
+                                        window.push_notification(
+                                            moon_ui::MoonNotification::warning(t!(
+                                                "strat.list_stale"
+                                            )),
+                                            cx,
+                                        );
+                                    }
+                                })
+                                .render(),
+                        ),
+                )
+        });
+    }
+
     /// A version's `valid_from` as the pane states it: bare `HH:MM` when the version is from
     /// today, `DD.MM HH:MM` otherwise.
     ///
@@ -1669,6 +1776,8 @@ impl StrategiesView {
     /// `compact` is `None` in per-section mode (identical behaviour to before full mode existed);
     /// `Some(section)` marks a full-mode compact row, carrying the owning section index (`None`
     /// inside for a version-diff orphan row absent from any section).
+    /// Known list fields in live multi-selection also offer append/remove dialogs; their tooltips
+    /// report how many selected strategies have changed drafts, without replacing plain typing.
     ///
     /// Args:
     ///     f: Schema field whose label, control kind, and rules define the row.
@@ -1746,6 +1855,7 @@ impl StrategiesView {
         // reports a `NaN` would otherwise paint an untouched row red for good. A mixed selection's
         // empty control is not a draft either.
         let rejected = dirty && !differ && draft_rejected(f, &value);
+        let list_actions = keys.len() > 1 && !frozen && is_list_field(f);
         // ONE control table, shared with `draft_rejected` through `field_control`: the marker has
         // to know which rows are free text, and a second copy of this decision would drift.
         let control: AnyElement = match field_control(f) {
@@ -1860,7 +1970,7 @@ impl StrategiesView {
                 let keys_arc = Arc::new(keys.to_vec());
                 // Render differing values as an EMPTY input with a placeholder, never as a memo;
                 // entered text applies to all selected strategies at once.
-                if compact.is_none() && !differ && stacked {
+                if compact.is_none() && !differ && stacked && !list_actions {
                     let state = self.field_memo_state(
                         row_id.clone(),
                         value,
@@ -1876,7 +1986,8 @@ impl StrategiesView {
                         .selected(dirty)
                         .disabled(!active)
                         .into_any_element()
-                } else if compact.is_some() && !differ && is_memo_field(f, &value) {
+                } else if compact.is_some() && !differ && is_memo_field(f, &value) && !list_actions
+                {
                     // A disabled `MoonInput` here would need a retained state entity and a
                     // synchronization path to stay honest as drafts and version selection move
                     // underneath it. A static element carries the same look, is rebuilt from
@@ -1956,6 +2067,71 @@ impl StrategiesView {
                     input.into_any_element()
                 }
             }
+        };
+        // Separate token entry is essential: typing into the ordinary input has already staged
+        // a replacement for every target, so using that input as an operand would lose originals.
+        let control = if list_actions {
+            let store = self.backend.read(cx).session.store();
+            let editable = active && list_field_values(self, store, keys, &field_name).is_some();
+            let changed = keys
+                .iter()
+                .filter(|&&(core, id)| {
+                    let Some(draft) = self.field_edits.get(&(core, id, field_name.clone())) else {
+                        return false;
+                    };
+                    let Some(strategy) = row(store, core, id) else {
+                        return false;
+                    };
+                    let Some(schema) =
+                        schema_field_in_kind(store, core, strategy.kind_ordinal, &field_name)
+                    else {
+                        return false;
+                    };
+                    let pending = store.core(core).and_then(|cd| cd.strategy_edit(id));
+                    *draft
+                        != pending_field_value(pending, strategy, schema)
+                            .unwrap_or_else(|| field_value(strategy, schema))
+                })
+                .count();
+            let mut controls = h_flex()
+                .w_full()
+                .min_w_0()
+                .items_start()
+                .gap(design::ui_px(cx, 4.0))
+                .child(div().flex_1().min_w_0().child(control));
+            for (operation, icon, label) in [
+                (ListEdit::Append, "icons/plus.svg", t!("strat.list_append")),
+                (ListEdit::Remove, "icons/minus.svg", t!("strat.list_remove")),
+            ] {
+                let keys = keys.to_vec();
+                let field = field_name.clone();
+                controls = controls.child(
+                    MoonButton::new(SharedString::from(format!(
+                        "field-list-{operation:?}-{row_id}"
+                    )))
+                    .ghost()
+                    .icon(icon)
+                    .size(MoonButtonSize::density(cx))
+                    .tooltip(format!(
+                        "{label}\n{}",
+                        t!("strat.list_changed", n = changed)
+                    ))
+                    .disabled(!editable)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_list_field_dialog(
+                            keys.clone(),
+                            field.clone(),
+                            operation,
+                            window,
+                            cx,
+                        );
+                    }))
+                    .render(),
+                );
+            }
+            controls.into_any_element()
+        } else {
+            control
         };
         // In persisted-snapshot view, show "was: X" (the value before this snapshot) before the
         // snapshot control and "current: Y" (the live value now, when available) after it. The
@@ -2137,6 +2313,9 @@ impl StrategiesView {
                 v_flex()
                     .id(SharedString::from(format!("field-label-{row_id}")))
                     .w(design::font_w_px(cx, 180.0))
+                    // Reserve room for the input and both list actions at narrow widths and
+                    // larger densities. Wide rows retain the normal label-column width.
+                    .when(list_actions, |cell| cell.max_w(relative(0.4)))
                     .flex_none()
                     .min_w_0()
                     .pt(px(5.0))
