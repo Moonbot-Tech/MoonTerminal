@@ -223,6 +223,12 @@ jobs:
     name: Publish GitHub Release
     needs: [validate, windows, macos]
     runs-on: ubuntu-latest
+    # The human gate on shipping. The `release` environment has required reviewers, so this whole
+    # job - draft upload, digest verification, publication - waits until one of them approves the
+    # run. `RELEASE_ADMIN_TOKEN` must be a secret of this environment, not of the repository: a job
+    # outside the environment cannot read it, and the environment admits only `v*` tags and `main`,
+    # so a workflow edited on a side branch reaches neither the token nor the gate.
+    environment: release
     steps:
       - uses: actions/checkout@v7
         with:

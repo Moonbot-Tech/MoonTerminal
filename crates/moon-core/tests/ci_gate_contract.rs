@@ -1074,6 +1074,21 @@ fn releases_verify_the_published_windows_digest() {
     );
 }
 
+/// Breakage guarded: the publish job leaves the `release` environment. Publication then stops
+/// waiting for a required reviewer, and the admin token has to move back to repository secrets,
+/// where a workflow run from any branch can read it.
+#[test]
+fn publication_waits_in_the_release_environment() {
+    let text = release_workflow_text();
+    let publish = job_body(&text, "publish").expect("release.yml must keep the publish job");
+    assert!(
+        publish
+            .iter()
+            .any(|line| line.trim_end() == "    environment: release"),
+        "the publish job must run in the `release` environment that gates publication"
+    );
+}
+
 /// Collect every shell script at or below one directory, so moving one into a subdirectory cannot
 /// quietly take it out of the portability gate.
 fn shell_scripts_below(directory: &Path) -> Vec<PathBuf> {
