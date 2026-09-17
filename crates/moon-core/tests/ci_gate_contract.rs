@@ -11,9 +11,9 @@
 //! - **Deleting the job.** These assertions only run because CI runs the suite. Remove the job
 //!   and they stop running in CI too — they would redden only for someone running `cargo test`
 //!   locally. The same goes for any narrowing that drops `moon-core` from the run.
-//! - **Merging past a red check.** `main` has no branch protection, so nothing mechanically
-//!   stops a red merge. Closing both holes needs a required status check, which is a repository
-//!   admin setting and cannot be expressed in this file.
+//! - **Merging past a red check.** The ruleset on `main` requires a pull request but no status
+//!   check, so nothing mechanically stops a red merge. Closing both holes needs a required status
+//!   check, which is a repository admin setting and cannot be expressed in this file.
 //! - **A deliberately defeated command.** The command shape is checked, not its runtime
 //!   behaviour; someone determined to neuter the gate can. The target is the plausible
 //!   accident — shaving CI minutes, silencing a red job to land something else — not sabotage.
