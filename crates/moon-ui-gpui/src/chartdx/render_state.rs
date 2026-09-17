@@ -69,24 +69,23 @@ fn clamp_anchor(value: f32, min: f32, max: f32) -> f32 {
     }
 }
 
-/// How long a newly arrived chart pulses before retaining a steady border.
+/// How long a newly arrived chart pulses before its border ends or, with the hold, settles.
 ///
 /// Lives here, next to the code that draws and paces it, rather than in `chart_tabs`: the flash
 /// is an own-pass decoration now, and a duration split across two modules is exactly the drift this
 /// change exists to remove.
 const ARRIVAL_HIGHLIGHT: Duration = Duration::from_millis(2600);
 
-/// Returns the three-pulse opacity, then a calmer persistent core-colour stroke.
-/// `None` means no arrival is armed; elapsed time never removes an armed border.
-fn arrival_alpha(elapsed: Option<Duration>) -> Option<f32> {
-    elapsed.map(|elapsed| {
-        if elapsed < ARRIVAL_HIGHLIGHT {
-            let delta = elapsed.as_secs_f32() / ARRIVAL_HIGHLIGHT.as_secs_f32();
-            (delta * std::f32::consts::PI * 3.0).sin().abs()
-        } else {
-            0.6
-        }
-    })
+/// Returns the three-pulse opacity, then — with `hold` — a calmer persistent stroke.
+/// `None` means no arrival is armed, or the pulses ended and nothing asked the border to stay.
+fn arrival_alpha(elapsed: Option<Duration>, hold: bool) -> Option<f32> {
+    let elapsed = elapsed?;
+    if elapsed < ARRIVAL_HIGHLIGHT {
+        let delta = elapsed.as_secs_f32() / ARRIVAL_HIGHLIGHT.as_secs_f32();
+        Some((delta * std::f32::consts::PI * 3.0).sin().abs())
+    } else {
+        hold.then_some(0.6)
+    }
 }
 
 /// Requests paced pulse frames and exactly one settling frame, even after a hidden interval.
@@ -383,19 +382,34 @@ impl RenderState {
 
     /// Starts or clears the arrival's pulsing and steady border, returning whether it changed.
     /// The own-pass frame callback handles pacing without a timer or per-frame view notification.
-    pub(super) fn set_arrival_pulse(&mut self, at: Option<Instant>, accent: [f32; 4]) -> bool {
+    ///
+    /// `hold` says whether the border outlives the pulses. Re-arming an old stamp with the hold on
+    /// is one settling present: the stroke appears at once when the hold is switched on for charts
+    /// that are already there. Without the hold an old stamp has nothing left to draw, so it arms
+    /// nothing — the stack re-runs every chart's arrival on a look change, and a present that
+    /// changes no pixel would be paid by every sibling canvas in the window.
+    pub(super) fn set_arrival_pulse(
+        &mut self,
+        at: Option<Instant>,
+        accent: [f32; 4],
+        hold: bool,
+    ) -> bool {
         // Switched off: every start becomes a clear, so a run with the flash disabled cannot be
         // left with one already in flight from before the call.
         let at = if arrival_flash_enabled() { at } else { None };
-        // Refresh a changed colour even after the pulse has stopped scheduling frames.
-        let recolored = self.arrival_pulse_color != accent;
+        let at = at.filter(|at| hold || at.elapsed() < ARRIVAL_HIGHLIGHT);
+        // Refresh a changed colour or hold even after the pulse has stopped scheduling frames —
+        // when something is armed to show it.
+        let restyled = self.arrival_pulse_color != accent || self.arrival_hold != hold;
         self.arrival_pulse_color = accent;
+        self.arrival_hold = hold;
         if self.arrival_pulse == at {
-            if recolored {
+            let visible = restyled && at.is_some();
+            if visible {
                 self.sync_readout_params();
                 self.needs_present = true;
             }
-            return recolored;
+            return visible;
         }
         self.arrival_pulse = at;
         self.last_arrival_present_at = None;
@@ -537,8 +551,9 @@ impl RenderState {
         let m = [border_px, 1.0, 1.0, 0.0];
         let cursor = self.cursor;
         let slot_origin = self.slot_origin;
-        // Sample once for every pane: three pulses, then a steady core-colour stroke.
-        let arrival_alpha = arrival_alpha(self.arrival_pulse.map(|at| at.elapsed()));
+        // Sample once for every pane: three pulses, then a steady stroke when the hold is on.
+        let arrival_alpha =
+            arrival_alpha(self.arrival_pulse.map(|at| at.elapsed()), self.arrival_hold);
         let arrival_color = self.arrival_pulse_color;
 
         for (idx, pr) in self.panes.iter_mut().enumerate() {
@@ -741,8 +756,17 @@ impl RenderState {
         let camera_present = wants_present;
         let mut arrival_present = false;
         if let Some(at) = self.arrival_pulse {
-            // Keep the colour armed, but stop requesting frames after the final steady stroke.
-            if arrival_present_due(at, self.last_arrival_present_at, now) {
+            if !self.arrival_hold && now.saturating_duration_since(at) >= ARRIVAL_HIGHLIGHT {
+                // No hold: the pulses are over, so forget the arrival and present once without
+                // the stroke. Clearing here is the load-bearing line — armed, this canvas would
+                // keep answering `arrival_present_due` with one settling frame per reveal.
+                self.arrival_pulse = None;
+                self.last_arrival_present_at = None;
+                self.sync_readout_params();
+                arrival_present = true;
+                wants_present = true;
+            } else if arrival_present_due(at, self.last_arrival_present_at, now) {
+                // Keep the colour armed, but stop requesting frames after the final steady stroke.
                 self.last_arrival_present_at = Some(now);
                 self.sync_readout_params();
                 crate::diag::bump(&crate::diag::CHART_ARRIVAL_PULSE);

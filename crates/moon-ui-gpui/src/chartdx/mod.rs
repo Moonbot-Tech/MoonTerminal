@@ -1143,12 +1143,16 @@ struct RenderState {
     /// chart is the anchor.
     compare_ref_price: Option<f32>,
     /// When this chart arrived in a stack slot, driving the accent border flash and steady stroke.
-    /// Retained after the flash; the final arrival-present stamp stops extra presents once the
-    /// stroke settles. `None` means the arrival decoration has been explicitly cleared.
+    /// Retained after the flash while `arrival_hold` is set; the final arrival-present stamp stops
+    /// extra presents once the stroke settles. Without the hold the frame loop clears it at the
+    /// pulse deadline. `None` means the arrival decoration is not armed.
     arrival_pulse: Option<Instant>,
     /// Accent colour for the arrival flash, handed over with the stamp so the palette stays the
     /// single source of truth and this layer never guesses a colour.
     arrival_pulse_color: [f32; 4],
+    /// Whether the border stays on as a steady stroke after the three pulses. Off, the pulses end
+    /// with a clear present and the arrival is forgotten; the tab's popup decides, not this layer.
+    arrival_hold: bool,
     /// When the last arrival frame was presented, pacing the flash to `ARRIVAL_PULSE_TICK`
     /// independently of the 60 Hz present cap. A stamp past expiry stops arrival presents after
     /// the final steady stroke has been scheduled.
@@ -1164,8 +1168,8 @@ struct RenderState {
     /// It carries a DEADLINE rather than a plain `bool` because the value is a privacy control. The
     /// screen must not be left naming the exchange if the shot's callback chain never completes — a
     /// closed window, a panel re-parented between windows, a stalled machine. `frame` expires it
-    /// from wall clock, just as it settles [`Self::arrival_pulse`] into a steady stroke, so nothing
-    /// has to be trusted to call the caption clear.
+    /// from wall clock, just as it ends or settles [`Self::arrival_pulse`] at its deadline, so
+    /// nothing has to be trusted to call the caption clear.
     shot_caption_until: Option<Instant>,
     /// How many completed text passes have drawn substituted captions since it was armed.
     ///
@@ -1306,9 +1310,10 @@ impl ChartDataHandle {
             return false;
         };
         let render = inner.borrow().render.clone();
+        // The measured flash is the pulsing one: a held stroke costs nothing after it settles.
         render
             .borrow_mut()
-            .set_arrival_pulse(at, types::accent_rgb4(accent));
+            .set_arrival_pulse(at, types::accent_rgb4(accent), false);
         true
     }
 

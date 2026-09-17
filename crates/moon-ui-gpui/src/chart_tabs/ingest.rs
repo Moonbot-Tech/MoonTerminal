@@ -139,6 +139,7 @@ impl ChartTabs {
                     saved_auto_pin,
                     saved_orientation,
                     saved_arrival_flash,
+                    saved_arrival_frame,
                     saved_grid,
                     saved_max_charts,
                     saved_axis_pos,
@@ -163,6 +164,7 @@ impl ChartTabs {
                         spec.and_then(|s| s.auto_pin),
                         spec.and_then(|s| s.layout_orientation),
                         spec.and_then(|s| s.arrival_flash),
+                        spec.map_or((None, None), |s| (s.arrival_core_color, s.arrival_hold)),
                         spec.map_or((None, None, None), |s| {
                             (s.layout_columns, s.layout_columns_exact, s.layout_min_slot)
                         }),
@@ -207,6 +209,11 @@ impl ChartTabs {
                 }
                 if saved_arrival_flash.is_some() {
                     panel.update(cx, |p, pcx| p.set_arrival_flash(saved_arrival_flash, pcx));
+                }
+                if saved_arrival_frame.0.is_some() || saved_arrival_frame.1.is_some() {
+                    panel.update(cx, |p, pcx| {
+                        p.set_arrival_frame(saved_arrival_frame.0, saved_arrival_frame.1, pcx)
+                    });
                 }
                 if saved_grid.0.is_some() || saved_grid.1.is_some() || saved_grid.2.is_some() {
                     panel.update(cx, |p, pcx| {

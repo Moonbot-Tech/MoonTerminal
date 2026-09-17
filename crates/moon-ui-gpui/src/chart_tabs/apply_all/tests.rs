@@ -44,6 +44,8 @@ fn loud_snapshot() -> LayoutPopupSnapshot {
         line_labels: false,
         cursor_labels: false,
         arrival_flash: false,
+        arrival_core_color: true,
+        arrival_hold: true,
         max_charts_evict: true,
     }
 }
@@ -187,6 +189,8 @@ fn the_layout_press_carries_every_layout_value() {
     assert_eq!(s.line_labels, Some(false));
     assert_eq!(s.cursor_labels, Some(false));
     assert_eq!(s.arrival_flash, Some(false));
+    assert_eq!(s.arrival_core_color, Some(true));
+    assert_eq!(s.arrival_hold, Some(true));
     assert_eq!(s.max_charts, Some(6));
     assert_eq!(s.max_charts_evict, Some(true));
     assert_eq!(s.layout_columns, Some(3));
@@ -207,15 +211,19 @@ fn the_layout_press_carries_every_layout_value() {
 #[test]
 fn a_press_that_never_showed_the_detect_controls_leaves_them_alone() {
     let flash = StackSetting::ArrivalFlash(true);
+    let frame = StackSetting::ArrivalFrame(true, true);
     let cap = StackSetting::MaxCharts(Some(6), true);
-    // Main: neither control is drawn there, and neither may travel from or into it.
+    // Main: none of the controls is drawn there, and none may travel from or into it.
     assert!(!flash.applies_to(true, false));
+    assert!(!frame.applies_to(true, false));
     assert!(!cap.applies_to(true, false));
-    // A custom tab flashes arrivals but receives no detects, so exactly half applies.
+    // A custom tab flashes arrivals but receives no detects, so the cap alone stays away.
     assert!(flash.applies_to(false, true));
+    assert!(frame.applies_to(false, true));
     assert!(!cap.applies_to(false, true));
-    // An ordinary AddToChart tab has both.
+    // An ordinary AddToChart tab has all of them.
     assert!(flash.applies_to(false, false));
+    assert!(frame.applies_to(false, false));
     assert!(cap.applies_to(false, false));
     // Everything else is unaffected by either fact.
     for v in layout_values(
@@ -229,7 +237,9 @@ fn a_press_that_never_showed_the_detect_controls_leaves_them_alone() {
     ) {
         if matches!(
             v,
-            StackSetting::ArrivalFlash(_) | StackSetting::MaxCharts(..)
+            StackSetting::ArrivalFlash(_)
+                | StackSetting::ArrivalFrame(..)
+                | StackSetting::MaxCharts(..)
         ) {
             continue;
         }
@@ -268,6 +278,8 @@ fn a_cap_never_reaches_a_custom_tab() {
         Some(false),
         "the flash still travels: a custom tab draws one"
     );
+    assert_eq!(custom.arrival_core_color, Some(true), "and so do its looks");
+    assert_eq!(custom.arrival_hold, Some(true));
 }
 
 /// A source that never named an orientation copies "none named" rather than the resolved default.

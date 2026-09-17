@@ -130,6 +130,7 @@ impl ChartEngine {
             compare_ref_price: None,
             arrival_pulse: None,
             arrival_pulse_color: [0.0; 4],
+            arrival_hold: false,
             last_arrival_present_at: None,
             shot_caption_until: None,
             shot_caption_frames: 0,
@@ -305,12 +306,13 @@ impl ChartEngine {
 
     /// Starts the accent border flash for a chart that just appeared in a stack slot, or clears it.
     ///
-    /// `accent` is the palette token; the flash never picks its own colour. The own-pass paces and
+    /// `accent` is the palette token; the flash never picks its own colour. `hold` keeps the border
+    /// on as a steady stroke after the pulses instead of letting it expire. The own-pass paces and
     /// expires the flash from the stamp, so this schedules no timer and requests no GPUI render.
-    pub fn set_arrival_pulse(&mut self, at: Option<Instant>, accent: u32) -> bool {
+    pub fn set_arrival_pulse(&mut self, at: Option<Instant>, accent: u32, hold: bool) -> bool {
         self.state
             .borrow_mut()
-            .set_arrival_pulse(at, types::accent_rgb4(accent))
+            .set_arrival_pulse(at, types::accent_rgb4(accent), hold)
     }
 
     /// Sets the comparison tab anchor's last price, used for the large delta beneath the corner

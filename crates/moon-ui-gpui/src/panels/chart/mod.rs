@@ -1615,8 +1615,8 @@ impl ChartPanel {
     /// Deliberately takes no `cx` and issues no notify: the flash is drawn and paced by the chart's
     /// own pass. Repainting the owning stack instead would re-render every chart panel in the tab
     /// ten times a second, which is the cost this exists to avoid.
-    pub fn set_arrival_pulse(&mut self, at: Option<std::time::Instant>, accent: u32) {
-        self.chart.set_arrival_pulse(at, accent);
+    pub fn set_arrival_pulse(&mut self, at: Option<std::time::Instant>, accent: u32, hold: bool) {
+        self.chart.set_arrival_pulse(at, accent, hold);
     }
 
     /// Supplies the comparison anchor's latest price for the large broom-mode delta below a peer's

@@ -122,6 +122,10 @@ pub(crate) enum StackSetting {
     Scale(Option<f32>),
     /// Whether an arriving chart flashes its accent border.
     ArrivalFlash(bool),
+    /// How the arrival border looks: `(in the core's colour, stays visible after the pulses)`. The
+    /// two travel together the way the detect cap does: both are looks of the one stroke, and a
+    /// press that copied one of them would leave the other saying something the reader never chose.
+    ArrivalFrame(bool, bool),
     /// Screen divider: `(columns, exact, minimum slot)`. The three travel together because none of
     /// them lays anything out alone — a divider with no policy has no layout, and a minimum with no
     /// divider has nothing to divide.
@@ -261,7 +265,7 @@ impl StackSetting {
     pub(crate) fn applies_to(&self, is_main: bool, is_custom: bool) -> bool {
         match self {
             // Main draws no arrival flash at all.
-            StackSetting::ArrivalFlash(_) => !is_main,
+            StackSetting::ArrivalFlash(_) | StackSetting::ArrivalFrame(..) => !is_main,
             // Ingest routes detects to numbered AddToChart tabs only: Main is opened by hand, and a
             // custom tab holds the markets its owner picked.
             StackSetting::MaxCharts(..) => !is_main && !is_custom,
@@ -299,6 +303,10 @@ impl StackSetting {
             StackSetting::Labels(v) => s.chart_labels = Some(v),
             StackSetting::Scale(v) => s.scale = v,
             StackSetting::ArrivalFlash(v) => s.arrival_flash = Some(v),
+            StackSetting::ArrivalFrame(core_color, hold) => {
+                s.arrival_core_color = Some(core_color);
+                s.arrival_hold = Some(hold);
+            }
             StackSetting::Grid(columns, exact, min_slot) => {
                 s.layout_columns = columns;
                 s.layout_columns_exact = exact;
@@ -353,6 +361,9 @@ macro_rules! set_stack_setting {
             crate::chart_tabs::common::StackSetting::ArrivalFlash(v) => {
                 $s.set_arrival_flash(Some(v), $c)
             }
+            crate::chart_tabs::common::StackSetting::ArrivalFrame(core_color, hold) => {
+                $s.set_arrival_frame(Some(core_color), Some(hold), $c)
+            }
             crate::chart_tabs::common::StackSetting::Grid(columns, exact, min_slot) => {
                 $s.set_layout_columns(columns, exact, min_slot, $c)
             }
@@ -395,6 +406,10 @@ pub(super) struct LayoutPopupSnapshot {
     pub line_labels: bool,
     pub cursor_labels: bool,
     pub arrival_flash: bool,
+    /// Whether the arrival border takes the core's colour rather than the accent.
+    pub arrival_core_color: bool,
+    /// Whether the arrival border stays on after its pulses.
+    pub arrival_hold: bool,
     /// Whether a detect at the cap replaces the stalest chart instead of going unshown. The cap
     /// ITSELF is not here: it lives in the popup's field like the two heights, and is read from
     /// there so a number typed but not yet committed is the one that travels.
@@ -977,6 +992,8 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
     let dv_entity = entity.clone();
     let ex_entity = entity.clone();
     let fl_entity = entity.clone();
+    let cc_entity = entity.clone();
+    let hd_entity = entity.clone();
     let cl_entity = entity;
     let row = super::apply_row::render_apply_row(
         this,
@@ -1035,6 +1052,23 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
                 on_toggle_flash: Box::new(move |on, app| {
                     fl_entity.update(app, |this, cx| {
                         this.apply_tab_setting(StackSetting::ArrivalFlash(on), cx)
+                    });
+                }),
+                // Each toggle reads the other half from the target at click time, the way the
+                // cap's evict toggle reads the cap: a value captured at draw time would write the
+                // popup's last picture over a change that landed in between.
+                core_color: snap.arrival_core_color,
+                on_toggle_core_color: Box::new(move |on, app| {
+                    cc_entity.update(app, |this, cx| {
+                        let hold = this.layout_popup_snapshot(cx).arrival_hold;
+                        this.apply_tab_setting(StackSetting::ArrivalFrame(on, hold), cx)
+                    });
+                }),
+                hold: snap.arrival_hold,
+                on_toggle_hold: Box::new(move |on, app| {
+                    hd_entity.update(app, |this, cx| {
+                        let core_color = this.layout_popup_snapshot(cx).arrival_core_color;
+                        this.apply_tab_setting(StackSetting::ArrivalFrame(core_color, on), cx)
                     });
                 }),
             }),

@@ -127,6 +127,18 @@ impl ChartTabs {
         v.unwrap_or(true)
     }
 
+    /// The active tab's arrival-border looks, resolved: `(core colour, stays visible)`. Unset means
+    /// off for both — the accent stroke that ends with its pulses.
+    pub(super) fn active_arrival_frame(&self, cx: &App) -> (bool, bool) {
+        let v = match &self.active {
+            Tab::Main => self.main.read(cx).arrival_frame(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .map_or((None, None), |p| p.read(cx).arrival_frame()),
+        };
+        (v.0.unwrap_or(false), v.1.unwrap_or(false))
+    }
+
     /// The active tab's detect cap as raw `Option`s: `(cap, replace the stalest)`.
     pub(super) fn active_max_charts(&self, cx: &App) -> (Option<u16>, Option<bool>) {
         match &self.active {
@@ -427,6 +439,8 @@ impl LayoutPopupHost for ChartTabs {
             line_labels: self.active_line_labels(cx),
             cursor_labels: self.active_cursor_labels(cx),
             arrival_flash: self.active_arrival_flash(cx),
+            arrival_core_color: self.active_arrival_frame(cx).0,
+            arrival_hold: self.active_arrival_frame(cx).1,
             max_charts_evict: resolved_max_charts_evict(self.active_max_charts(cx).1),
         }
     }

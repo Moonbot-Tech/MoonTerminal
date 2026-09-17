@@ -306,7 +306,9 @@ fn decorative_animation_goes_through_the_pulse_timer() {
 
         // The chart's arrival flash: same two halves, different mechanism. It is drawn by the own
         // pass and paced there. Removing the settling deadline guard would keep requesting
-        // presents ten times a second after the border becomes steady, causing an idle load.
+        // presents ten times a second after the border becomes steady, causing an idle load; and
+        // the stamp may only be forgotten on the no-hold exit — clearing it under a hold would
+        // re-arm a settling present on every reveal.
         let render_state = code("chartdx/render_state.rs");
         let frame = braced_body(&render_state, "fn frame(&mut self, info: GpuFrameInfo)");
         let arrival_due = braced_body(&render_state, "fn arrival_present_due(");
@@ -314,14 +316,18 @@ fn decorative_animation_goes_through_the_pulse_timer() {
             frame.contains("if arrival_present_due(at, self.last_arrival_present_at, now)")
                 && frame.contains("self.last_arrival_present_at = Some(now)")
                 && frame.contains("self.sync_readout_params()")
-                && !frame.contains("self.arrival_pulse = None")
+                && frame.contains(
+                    "if !self.arrival_hold && now.saturating_duration_since(at) >= ARRIVAL_HIGHLIGHT"
+                )
+                && frame.matches("self.arrival_pulse = None").count() == 1
                 && arrival_due.contains("now.saturating_duration_since(at) >= ARRIVAL_HIGHLIGHT")
                 && arrival_due.contains("last.is_none_or(")
                 && arrival_due.contains("last.saturating_duration_since(at) < ARRIVAL_HIGHLIGHT")
                 && frame.contains("if wants_present")
                 && frame.contains("GpuFrameDecision::Skip"),
-            "the arrival flash must settle into a retained stroke once, then stop requesting \
-             presents so an otherwise idle canvas can skip"
+            "the arrival flash must settle into a retained stroke once (hold) or clear its stamp \
+             once at the deadline (no hold), then stop requesting presents so an otherwise idle \
+             canvas can skip"
         );
         assert!(
             frame.contains("CHART_ARRIVAL_PULSE"),

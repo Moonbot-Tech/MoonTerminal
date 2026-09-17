@@ -64,6 +64,27 @@ fn a_spec_without_chart_graphics_loads_as_inheriting_the_global_default() {
     assert_eq!(back.chart_graphics, saved.chart_graphics);
 }
 
+/// A file written before the arrival-border looks existed decodes with both unset, which the stack
+/// resolves to the accent stroke that ends with its pulses; a chosen pair round-trips.
+#[test]
+fn a_spec_without_arrival_frame_looks_loads_as_unset_and_a_chosen_pair_round_trips() {
+    let legacy = r#"{"group":"main","num":3,"bucket":"Shared","arrival_flash":false}"#;
+    let spec: ChartTabSpec = serde_json::from_str(legacy).expect("a pre-looks spec must decode");
+    assert_eq!(spec.arrival_flash, Some(false));
+    assert_eq!(spec.arrival_core_color, None);
+    assert_eq!(spec.arrival_hold, None);
+
+    let saved = ChartTabSpec {
+        arrival_core_color: Some(true),
+        arrival_hold: Some(false),
+        ..ChartTabSpec::new("main".to_string(), 3, ChartBucket::Shared)
+    };
+    let back: ChartTabSpec = serde_json::from_str(&serde_json::to_string(&saved).unwrap())
+        .expect("a spec with the looks set must round-trip");
+    assert_eq!(back.arrival_core_color, Some(true));
+    assert_eq!(back.arrival_hold, Some(false));
+}
+
 /// A genuine empty `charts.json` (`[]`) must not look unreadable: a one-shot migration that
 /// treats it as a parse failure never commits its marker.
 #[test]
