@@ -17,6 +17,7 @@
 //! density tier's and therefore follows UI zoom only, so it is measured with
 //! [`design::ui_text_width_zoomed`], not the font-scaled caption steps.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonPopoverPlacement, MoonTheme, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex,
@@ -101,7 +102,15 @@ pub(crate) fn header_quiet_cluster(
                         .checked(sleeping)
                         // Amber while asleep, matching the label: the switch is the larger target
                         // for the eye, so both have to carry the state or it reads as decoration.
-                        .tone(design::chrome_toggle_tone(sleeping, true))
+                        // Awake it takes the toggle's own fill, which is the one that hovers.
+                        .when_some(
+                            design::chrome_toggle_tone(
+                                sleeping,
+                                true,
+                                design::theme_installs_roles(cx),
+                            ),
+                            |t, tone| t.tone(tone),
+                        )
                         // The click carries `checked`, but the authority is the backend: a schedule
                         // can have the terminal asleep with nothing switched on by hand, and only
                         // `toggle_quiet` knows whether that means "sleep now" or "wake this window".

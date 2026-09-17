@@ -100,7 +100,15 @@ const REDUCED_PILL_MAX_W: f32 = 120.0;
 /// (`chrome/terminal_chrome.rs::workspace_mode_selector`, fixed trigger); this reservation moved
 /// with it, because a budget that under-reserves lets THIS cluster claim room the header has
 /// already spent.
-const HEADER_OTHER_SECTIONS_W: f32 = 778.0;
+///
+/// The quiet cluster grew with MoonUI's reviewed toggle scale: every tier moved up a step (`Sm`
+/// 28x16 -> 36x20, `Md` 36x20 -> 44x24) and the `Xs` tier went away, so Compact's toggle now snaps
+/// up to `Sm`. Compact is the worst of the three densities at +20 reference px of track and gap,
+/// and its label steps with the tier besides, from the old `Xs` 12px to `Sm`'s 14px — about 7px
+/// more on the widest locale ("Reposo"). One flat number covers all three densities, so it carries
+/// Compact's figure. The cluster itself needs no change: it renders at the live
+/// `chrome::quiet::header_quiet_width`, which reads the new metrics on its own.
+const HEADER_OTHER_SECTIONS_W: f32 = 806.0;
 
 /// Width of the "MS" toggle (track, gap and label) at the density-default tier.
 ///

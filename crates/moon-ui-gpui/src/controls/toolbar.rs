@@ -499,6 +499,7 @@ fn own_trade_toggle(
     core: Option<CoreId>,
     on: bool,
     backend: &Entity<Backend>,
+    roles: bool,
 ) -> Option<AnyElement> {
     let core = core?;
     let toggle_backend = backend.clone();
@@ -515,7 +516,9 @@ fn own_trade_toggle(
             .child(
                 MoonToggle::new("toolbar-own-trade-toggle")
                     .checked(on)
-                    .tone(design::chrome_toggle_tone(on, false))
+                    .when_some(design::chrome_toggle_tone(on, false, roles), |t, tone| {
+                        t.tone(tone)
+                    })
                     .on_change(move |checked: &bool, _w, app| {
                         let on = *checked;
                         toggle_backend.update(app, |b, cx| {
@@ -948,6 +951,7 @@ pub fn toolbar(
             display_core,
             size_source == ManualSource::CoreOwn,
             backend,
+            design::theme_installs_roles(cx),
         ))
         // §1 ORDER SIZE. Follows the switch: it is the quantity the other three sections modify —
         // leverage scales it, the stop bounds it, and TP/S define its target exit.
@@ -1032,6 +1036,7 @@ pub fn toolbar(
                     sl_locked,
                     backend.clone(),
                     group.to_string(),
+                    design::theme_installs_roles(cx),
                 ))
                 .child(metric_button(
                     TradeMetric::Sl,
