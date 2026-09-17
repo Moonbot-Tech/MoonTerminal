@@ -1,7 +1,9 @@
 // NOT `use super::*`: the parent imports `gpui::*`, whose `test` macro shadows `#[test]`.
 use moon_core::config::{HVOL_TF_MAX_S, HvolSide};
 
-use super::{PRICE_FRAME_PCTS, WINDOW_SEGMENTS, nearest, price_frame_label, side_of};
+use super::{
+    PRICE_FRAME_PCTS, WIDTHS, WINDOW_SEGMENTS, nearest, percent_label, price_frame_label, side_of,
+};
 
 /// The window row's index arithmetic covers `Auto`, every listed window and `Max`, in that order.
 ///
@@ -47,4 +49,18 @@ fn price_frame_labels_are_trimmed_percentages() {
     assert_eq!(price_frame_label(1.0), "1%");
     assert_eq!(nearest(&PRICE_FRAME_PCTS, 0.12), 1);
     assert_eq!(nearest(&PRICE_FRAME_PCTS, f32::NAN), 0);
+}
+
+/// The width row starts at the drawable minimum and keeps every step a stored value may hold.
+///
+/// Breakage: a list that starts above `WIDTH_MIN` cannot show the narrowest zone; a stored `0.1`
+/// landing on a neighbour would move an existing user's zone on the first press of another row.
+#[test]
+fn the_width_row_starts_at_the_minimum_and_keeps_the_stored_steps() {
+    assert_eq!(WIDTHS[0], moon_chart::hvol::WIDTH_MIN);
+    assert_eq!(percent_label(WIDTHS[0]), "5%");
+    assert_eq!(nearest(&WIDTHS, 0.05), 0);
+    assert_eq!(nearest(&WIDTHS, 0.1), 1);
+    assert_eq!(nearest(&WIDTHS, 0.2), 3);
+    assert!(WIDTHS.windows(2).all(|w| w[0] < w[1]));
 }

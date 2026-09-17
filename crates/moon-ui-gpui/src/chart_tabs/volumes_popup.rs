@@ -29,8 +29,10 @@ use crate::panels::{
 /// Selectable price windows, percent of price. `0.1` is Moonbot's shipped `PriceFrame`.
 const PRICE_FRAME_PCTS: [f32; 6] = [0.05, 0.1, 0.2, 0.3, 0.5, 1.0];
 
-/// Selectable zone widths, as a fraction of the pane width. `0.2` is the shipped default.
-const WIDTHS: [f32; 6] = [0.1, 0.15, 0.2, 0.25, 0.3, 0.4];
+/// Selectable zone widths, as a fraction of the pane width. `0.2` is the shipped default; `0.05`
+/// is `moon_chart::hvol::WIDTH_MIN`, and on a pane narrower than `ZONE_MIN_PX / 0.05` it asks for
+/// a zone the layout leaves out rather than draws as a sliver.
+const WIDTHS: [f32; 7] = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4];
 
 /// Segment widths, in rendered pixels. The window row is the widest — `Auto`, nine windows and
 /// `Max` — so the content width is that row's, and every other row divides it among its own
@@ -40,6 +42,7 @@ const SEG_W_WINDOW: f32 = 34.0;
 const ROW_W: f32 = WINDOW_SEGMENTS * SEG_W_WINDOW;
 const SEG_W2: f32 = ROW_W / 2.0;
 const SEG_W6: f32 = ROW_W / 6.0;
+const SEG_W7: f32 = ROW_W / 7.0;
 
 /// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
 pub(super) fn content_width(cx: &App) -> Pixels {
@@ -191,7 +194,7 @@ fn render_volumes_popup<T: VolumesPopupHost>(
                 .enumerate()
                 .map(|(index, v)| (percent_label(*v), index == current))
                 .collect(),
-            SEG_W6,
+            SEG_W7,
             p,
             cx,
             move |ix, app| {
