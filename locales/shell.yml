@@ -1316,9 +1316,9 @@ chart.layout.liquidations:
   en: "Liquidations"
   es: "Liquidaciones"
 chart.layout.show_zone:
-  ru: "Отображать зону разделения"
-  en: "Show split zone"
-  es: "Mostrar zona de división"
+  ru: "Зона ордеров при скрытом стакане"
+  en: "Order zone with the book hidden"
+  es: "Zona de órdenes con el libro oculto"
 chart.layout.line_labels:
   ru: "Подписи у линий"
   en: "Line labels"

@@ -848,6 +848,58 @@ fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
     );
 }
 
+/// #557: a pane with NO order zone — separate zones, book hidden, "Order zone with the book hidden"
+/// off — takes no order gesture of any kind, so a double click there can only open the coin on Main.
+/// Two anchors keep that true. Every line interaction (drag, cancel cross, hover cursor, order menu,
+/// Tab/Del cancel) resolves through `hit_order_line`, whose FIRST statement is the gate; and both
+/// click placements pick their pane through `glass_pane_at` under separate zones, which finds
+/// nothing inside the zero-width zone `order_zone_in` returns there. A placement that picked its
+/// pane another way, or a line hit test added beside `hit_order_line`, would trade again on a pane
+/// the user declared order-free.
+#[test]
+fn order_free_pane_takes_no_order_gesture() {
+    let trade = read_src("panels/chart/trade.rs");
+    let hit = code_only(braced_body(&trade, "fn hit_order_line("));
+    assert!(
+        hit.split_once('{')
+            .expect("hit_order_line must have a body")
+            .1
+            .trim_start()
+            .starts_with("if !self.order_gestures_allowed(cx) {"),
+        "hit_order_line must refuse an order-free pane before its first executable statement"
+    );
+    for (name, signature) in [
+        ("place-order", "fn place_order_at_pos("),
+        ("move-orders click", "pub(super) fn try_move_orders_click("),
+    ] {
+        let body = code_only(braced_body(&trade, signature));
+        assert!(
+            body.contains("self.separate_zones(cx)") && body.contains("self.glass_pane_at(pos)"),
+            "{name} must pick its pane through glass_pane_at under separate zones"
+        );
+    }
+    let geom = code_only(&read_src("panels/chart/geom.rs"));
+    let allowed = braced_body(&geom, "pub(super) fn order_gestures_allowed(");
+    for term in [
+        "self.separate_zones(cx)",
+        "self.orderbook_drawn()",
+        "self.show_zone",
+    ] {
+        assert!(
+            allowed.contains(term),
+            "order_gestures_allowed must read {term}: the zone exists iff separate && (book || toggle)"
+        );
+    }
+    // The strip's width is decided by the toggle alone; that the other branch is zero width is the
+    // unit test's claim (`panels/chart/geom/tests.rs`), which measures the rectangle rather than
+    // grepping for a literal that `.max(0.0)` would satisfy as well.
+    let zone = braced_body(&geom, "pub(super) fn order_zone_in(");
+    assert!(
+        zone.contains("if reserve_strip {"),
+        "order_zone_in must reserve the strip only while the toggle is on"
+    );
+}
+
 /// Every window root must repair an empty focus on the way into its own frame.
 ///
 /// GPUI dispatches a key event down the path of the FOCUSED node, and with the window blurred it

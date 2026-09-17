@@ -179,7 +179,8 @@ pub struct ChartTabSpec {
     /// Whether this tab's charts render liquidation trades. None defaults to enabled per window/tab.
     #[serde(default)]
     pub liquidations_enabled: Option<bool>,
-    /// Whether to fill the management zone when zones are separate and the order book is hidden.
+    /// Whether a hidden order book still leaves an order zone — the marked strip on the right —
+    /// when zones are separate; off together with the book, the tab takes no order gesture at all.
     /// None defaults to enabled per window/tab, like `orderbook_enabled`.
     #[serde(default)]
     pub show_zone: Option<bool>,

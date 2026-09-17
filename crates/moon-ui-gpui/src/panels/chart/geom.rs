@@ -317,29 +317,29 @@ impl ChartPanel {
         self.orderbook_enabled || self.orderbook_only
     }
 
+    /// Whether ANY order gesture may act on this panel: click placement, the bulk move clicks,
+    /// the cursor hotkeys, line dragging, the cancel cross, the order menu and the Tab/Del cancel.
+    ///
+    /// Under unified zones the whole pane trades. Under separate zones trading lives in the order
+    /// zone, so it exists exactly when that zone does: a drawn book, or the strip reserved for a
+    /// hidden one while the zone toggle is on. With the book hidden AND the toggle off there is no
+    /// zone anywhere on the pane, and the pane is chart from edge to edge — the state a user picks
+    /// on a detect preview so that a double click can only ever open the coin on Main, never send
+    /// an order (#557). Every order route reads this one answer or the zero-width zone it implies,
+    /// so a gesture added later cannot keep trading on a pane the user declared order-free.
+    pub(super) fn order_gestures_allowed(&self, cx: &App) -> bool {
+        !self.separate_zones(cx) || self.orderbook_drawn() || self.show_zone
+    }
+
     pub(super) fn control_zone_rect(&self, pane: usize) -> Option<moon_chart::view::Rect> {
         Some(self.control_zone_of(self.local_pane_rect(pane)?))
     }
 
     /// A pane's order-control zone in device pixels, taken from the pane rectangle the caller
-    /// already holds.
-    ///
-    /// The book's OWN area whenever one is drawn, so a cramped pane's narrowed book and a book-only
-    /// broom pane's full-width one are each exactly the zone they look like. With no book at all it
-    /// reserves `GLASS_ZONE_PX.min(rect.w * 0.5)` over the chart's right edge instead, so order
-    /// interaction and the boundary marker still have somewhere to live.
+    /// already holds; see [`order_zone_in`] for the three answers it gives.
     pub(super) fn control_zone_of(&self, rect: moon_chart::view::Rect) -> moon_chart::view::Rect {
         let areas = self.local_pane_areas(rect);
-        if self.orderbook_drawn() {
-            return areas.glass;
-        }
-        let w = moon_chart::GLASS_ZONE_PX.min(rect.w * 0.5);
-        moon_chart::view::Rect {
-            x: rect.x + (rect.w - w).max(0.0),
-            y: rect.y,
-            w,
-            h: areas.plot.h,
-        }
+        order_zone_in(rect, &areas, self.orderbook_drawn(), self.show_zone)
     }
 
     pub(super) fn glass_pane_at(&self, pos: (f32, f32)) -> Option<usize> {
@@ -388,3 +388,37 @@ fn local_pane_rect_at(
         .find(|(_, r)| x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h)
         .copied()
 }
+
+/// The order-control zone of a pane laid out as `areas`.
+///
+/// Three answers. The book's OWN area whenever one is drawn, so a cramped pane's narrowed book and
+/// a book-only broom pane's full-width one are each exactly the zone they look like. With no book
+/// but the zone toggle on, `GLASS_ZONE_PX.min(rect.w * 0.5)` reserved over the chart's right edge,
+/// so order interaction and the boundary marker still have somewhere to live. With no book and the
+/// toggle off, a ZERO-WIDTH rectangle at the right edge: no strip is reserved, and every hit test
+/// that reads the zone — `glass_pane_at` first — finds nothing to be inside, which hands the whole
+/// width back to chart gestures (`ChartPanel::order_gestures_allowed`).
+pub(super) fn order_zone_in(
+    rect: moon_chart::view::Rect,
+    areas: &crate::chartdx::PaneAreas,
+    book_drawn: bool,
+    reserve_strip: bool,
+) -> moon_chart::view::Rect {
+    if book_drawn {
+        return areas.glass;
+    }
+    let w = if reserve_strip {
+        moon_chart::GLASS_ZONE_PX.min(rect.w * 0.5)
+    } else {
+        0.0
+    };
+    moon_chart::view::Rect {
+        x: rect.x + (rect.w - w).max(0.0),
+        y: rect.y,
+        w,
+        h: areas.plot.h,
+    }
+}
+
+#[cfg(test)]
+mod tests;
