@@ -312,3 +312,21 @@ fn super_zoom_rows_are_local_unbound_chart_actions() {
         assert!(!slots_the_pull_writes().contains(&slot));
     }
 }
+
+/// Center chart is Moonbot's BUILT-IN key, not a row on its Hotkeys page: reading it as imported
+/// would let the pull overwrite the user's binding with nothing, and a window scope would hide
+/// that one press moves every chart in the application.
+#[test]
+fn center_chart_is_a_local_application_wide_chart_row() {
+    let row = slots()
+        .find(|row| row.key() == Some(KeySlot::CenterChart))
+        .expect("center chart row");
+    assert_eq!(row.group, HotkeyGroup::Chart);
+    assert_eq!(row.meta().origin, Origin::Local);
+    assert_eq!(row.meta().scope, Scope::APP);
+    assert_eq!(
+        HotkeysConfig::default().key(KeySlot::CenterChart),
+        "ctrl-right"
+    );
+    assert!(!slots_the_pull_writes().contains(&KeySlot::CenterChart));
+}

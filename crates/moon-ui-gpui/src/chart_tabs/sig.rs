@@ -37,6 +37,8 @@ pub(super) fn chart_tabs_sig(b: &Backend, group: &str) -> u64 {
         .wrapping_add(u64::from(b.sells_zone_armed()));
     // This revision is global rather than group-addressed because Shift+Esc closes every Main stack.
     sig = sig.wrapping_mul(31).wrapping_add(b.close_all_charts_rev);
+    // Global as well: Center chart reaches every chart of every group.
+    sig = sig.wrapping_mul(31).wrapping_add(b.center_chart_rev);
     if b.close_active_chart_group.as_deref() == Some(group) {
         sig = sig.wrapping_mul(31).wrapping_add(b.close_active_chart_rev);
     }

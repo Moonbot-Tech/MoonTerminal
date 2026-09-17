@@ -298,6 +298,12 @@ pub struct ChartView {
     manual_persistent: bool,
     /// Interval this view has been asked to frame, retained until a user gesture overrides it.
     frame_request: Option<FrameRequest>,
+    /// Put the NEXT known price at the centre outright instead of easing toward it.
+    ///
+    /// Set by [`Self::center_on_price`] and consumed by the first `update_y` that has a price: the
+    /// live centre otherwise chases its target with `TICK_LERP`, which after a long vertical drag
+    /// is a visible slide back rather than the jump Moonbot's Ctrl+Right makes.
+    center_snap_pending: bool,
 }
 
 impl ChartView {
@@ -335,6 +341,7 @@ impl ChartView {
             manual_until: 0.0,
             manual_persistent: false,
             frame_request: None,
+            center_snap_pending: false,
         }
     }
 
@@ -725,6 +732,23 @@ impl ChartView {
         self.manual_price = false;
     }
 
+    /// Moonbot's Ctrl+Right, "Center chart": leave the manual Y view, put the last price at the
+    /// centre, and return to the live edge — including out of an explicit Pause.
+    ///
+    /// Neither scale is touched: the chosen Auto/percent (`auto_price`, `scale_percent`) is what a
+    /// drag or a right-button zoom PARKED rather than changed, so dropping `manual_price` restores
+    /// it, and the X zoom is `resume_live`'s to keep. The centre itself is not written here — the
+    /// view does not hold the last price; the next `update_y` does, and the pending snap makes it
+    /// jump there rather than ease.
+    ///
+    /// Args:
+    ///     now_ms: Current Unix time in milliseconds, the live anchor to return to.
+    pub fn center_on_price(&mut self, now_ms: f64) {
+        self.manual_price = false;
+        self.center_snap_pending = true;
+        self.resume_live(now_ms);
+    }
+
     /// Current visible Y window `(center, range)` for comparison mode (anchor lock).
     pub fn y_window(&self) -> (f32, f32) {
         (self.render_center, self.render_range)
@@ -752,6 +776,10 @@ impl ChartView {
         }
         self.auto_price = false;
         self.manual_price = true;
+        // The lock outranks a centre request the same way a gesture does: the anchor's window is
+        // what this pane shows, and the anchor recentres for both of them. Left pending, the snap
+        // would fire on the frame the lock is released, when nothing asked for a jump.
+        self.center_snap_pending = false;
         self.center_price = center;
         self.price_range = range;
         self.render_center = center;
@@ -838,10 +866,15 @@ impl ChartView {
     }
 
     /// Pans Y by dy pixels (LMB drag).
+    ///
+    /// A user gesture outranks a pending centre request, as it outranks a frame request: a Center
+    /// chart pressed mid-drag is overridden by the very next drag delta, and the snap must go with
+    /// it rather than fire later on whatever next leaves the manual view.
     pub fn pan_y_px(&mut self, dy: f32, now_ms: f64) {
         let _ = now_ms;
         self.center_price += dy / self.px_per_price.max(1e-6);
         self.manual_price = true;
+        self.center_snap_pending = false;
         self.render_center = self.center_price;
     }
 
@@ -926,6 +959,8 @@ impl ChartView {
         self.center_price = start_center;
         self.price_range = r.max(Self::min_range(start_center));
         self.manual_price = true;
+        // Same rule as `pan_y_px`: the gesture cancels a pending centre request.
+        self.center_snap_pending = false;
         self.render_center = self.center_price;
         self.render_range = self.price_range;
         let _ = now_ms;
@@ -1013,8 +1048,16 @@ impl ChartView {
             }
 
             if let Some(c) = target_center {
-                if self.center_price == 0.0 || !live {
+                // The snap is consumed only once a price exists to snap to: a pane still waiting for
+                // its first tick keeps the request for the frame that can honour it.
+                let snap = std::mem::take(&mut self.center_snap_pending);
+                if self.center_price == 0.0 || !live || snap {
                     self.center_price = c;
+                    if snap {
+                        // Bypass the whole-pixel centre hysteresis as well: a drag shorter than
+                        // `CENTER_SNAP_PX` would otherwise leave the rendered centre where it was.
+                        self.render_center = c;
+                    }
                 } else if self.price_range > Self::min_range(self.center_price) {
                     let drift = (c - self.center_price).abs() / self.price_range;
                     if drift > CENTER_BUFFER {

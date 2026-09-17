@@ -221,6 +221,9 @@ pub fn key_slot_meta(slot: KeySlot) -> SlotMeta {
         S::SwitchCharts | S::ScalePlus | S::ScaleMinus => meta(Shared, Scope::WINDOW),
         // The Moonbot schema has no super-zoom key slots to import.
         S::SuperZoomIn | S::SuperZoomOut => meta(Local, Scope::WINDOW),
+        // Moonbot's Ctrl+Right is built in there, not on its Hotkeys page, so nothing imports it;
+        // and it hits every chart of every window, which is the application.
+        S::CenterChart => meta(Local, Scope::APP),
         // Shoots the last chart the pointer visited IN THIS WINDOW (`panels::chart::shot`), so it is
         // window-bounded and pointer-chosen at once.
         S::ChartShot => meta(Shared, AIMED),

@@ -94,6 +94,44 @@ fn generation_3_keeps_fig_undo_on_a_file_that_never_used_it() {
     assert_eq!(existing_file.fig_undo, "ctrl-z");
 }
 
+/// Pins `hotkeys.rs::clear_generation_6_collisions`: the arriving Ctrl+Right default must yield to
+/// a user who had already given that keystroke away.
+///
+/// Plausible breakage: the chart keys resolve ABOVE the trading actions, so a duplicated Ctrl+Right
+/// would silently turn an order-sending key into "centre every chart" — and the file's own
+/// generation gate would never look at it again.
+#[test]
+fn generation_6_yields_center_chart_to_an_existing_binding() {
+    let mut existing_file = HotkeysConfig {
+        schema: 5,
+        new_short: "ctrl-right".into(),
+        ..HotkeysConfig::default()
+    };
+
+    existing_file.fill_unbound_slots();
+
+    assert_eq!(existing_file.new_short, "ctrl-right");
+    assert!(
+        existing_file.center_chart.is_empty(),
+        "the new centre-chart default must yield to the user's existing binding"
+    );
+    assert_eq!(existing_file.schema, SCHEMA);
+}
+
+/// A file that has NOT given Ctrl+Right away keeps the shipped default, so Moonbot's key is not
+/// switched off for everybody by the collision check that exists for the few.
+#[test]
+fn generation_6_keeps_center_chart_on_a_file_that_never_used_it() {
+    let mut existing_file = HotkeysConfig {
+        schema: 5,
+        ..HotkeysConfig::default()
+    };
+
+    existing_file.fill_unbound_slots();
+
+    assert_eq!(existing_file.center_chart, "ctrl-right");
+}
+
 /// Every tool takes part in the switch-figure cycle until one is switched off, including in a file
 /// written before the exclusion list existed.
 ///
@@ -158,6 +196,7 @@ fn keyboard_defaults_match_moonbot() {
         (&h.shift_sell_down, "alt-down", "Shift sells -1%"),
         (&h.scale_plus, "ctrl-q", "Scale +"),
         (&h.scale_minus, "ctrl-w", "Scale -"),
+        (&h.center_chart, "ctrl-right", "Center chart"),
     ] {
         assert_eq!(actual, expected, "{name} must ship Moonbot's key");
     }

@@ -327,6 +327,8 @@ pub struct ChartTabs {
     last_switch_charts_rev: u64,
     /// Last observed `close_all_charts_rev`; a larger revision closes the Main stack.
     last_close_all_charts_rev: u64,
+    /// Last observed `center_chart_rev`; a larger revision centres every chart this group holds.
+    last_center_chart_rev: u64,
     /// Last observed `close_active_chart_rev`; a larger revision closes Main's active chart.
     last_close_active_chart_rev: u64,
     /// Last observed `chart_x_sync_rev`; Shift+middle-click in this window applies the scale to all
@@ -408,6 +410,12 @@ impl ChartTabs {
         let initial_x_sync_rev = backend.read(cx).chart_x_sync_rev;
         // A new tab controller must not replay a zoom key pressed before it existed.
         let initial_super_zoom_rev = backend.read(cx).super_zoom_rev;
+        // Nor a Center chart press: replaying one would resume live on the new window's charts and
+        // republish that into the application-wide Live flag, clearing a Pause set before it opened.
+        let initial_center_chart_rev = backend.read(cx).center_chart_rev;
+        // Nor a scale pick addressed to a group of the same name: the consumer now FORCES the
+        // scale, so a replay would drop the manual Y view of every fresh panel on creation.
+        let initial_scale_rev = backend.read(cx).price_scale_rev;
         #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
         {
             if let Some(main_handle) = main.read(cx).debug_data_handle(cx) {
@@ -609,6 +617,7 @@ impl ChartTabs {
             this.sync_super_zoom(cx);
             this.sync_switch_charts(cx);
             this.sync_close_all_charts(cx);
+            this.sync_center_chart(cx);
             this.sync_close_active_chart(cx);
             this.sync_main_chart_target(cx);
             this.sync_seen_for_active(cx);
@@ -740,10 +749,11 @@ impl ChartTabs {
                 initial_auto_workspace_core,
                 initial_main_target,
             ),
-            last_scale_rev: 0,
+            last_scale_rev: initial_scale_rev,
             last_super_zoom_rev: initial_super_zoom_rev,
             last_switch_charts_rev: 0,
             last_close_all_charts_rev: 0,
+            last_center_chart_rev: initial_center_chart_rev,
             last_close_active_chart_rev: 0,
             last_x_sync_rev: initial_x_sync_rev,
             restore_pending,
@@ -1108,12 +1118,17 @@ impl ChartTabs {
         }
     }
 
+    /// Apply a scale COMMAND — the dropdown pick or a Scale hotkey step — to the active tab.
+    ///
+    /// Forced rather than set: both callers are the user asking for this scale now, and a value
+    /// equal to the stored one is not "nothing to do" — it is the one way out of the manual Y view a
+    /// vertical drag leaves behind (`stack::force_panels_scale`). Restores use `set_scale`.
     fn set_active_scale(&self, pct: Option<f32>, cx: &mut Context<Self>) {
         match &self.active {
-            Tab::Main => self.main.update(cx, |p, pcx| p.set_scale(pct, pcx)),
+            Tab::Main => self.main.update(cx, |p, pcx| p.force_scale(pct, pcx)),
             Tab::Add(n, bucket) | Tab::Custom(n, bucket) => {
                 if let Some(stack) = self.add_stack(*n, bucket) {
-                    stack.update(cx, |p, pcx| p.set_scale(pct, pcx));
+                    stack.update(cx, |p, pcx| p.force_scale(pct, pcx));
                 }
             }
         }
@@ -1254,6 +1269,27 @@ impl ChartTabs {
         self.main.update(cx, |s, scx| {
             s.close_all(scx);
         });
+    }
+
+    /// Moonbot's "Center chart" on a larger global `center_chart_rev`: EVERY chart this group holds
+    /// — Main, AddToChart, custom and detached stacks alike — as Moonbot's Ctrl+Right does, and as
+    /// the toolbar's Live flag already behaves. Unaddressed for the same reason `close_all_charts_rev`
+    /// is: the press means the whole application, not the window it landed in.
+    fn sync_center_chart(&mut self, cx: &mut Context<Self>) {
+        let rev = self.backend.read(cx).center_chart_rev;
+        if rev == self.last_center_chart_rev {
+            return;
+        }
+        self.last_center_chart_rev = rev;
+        self.main.update(cx, |s, scx| s.center_on_price(scx));
+        for (_, _, stack) in self
+            .add
+            .iter()
+            .chain(self.custom.iter())
+            .chain(self.detached.iter())
+        {
+            stack.update(cx, |s, scx| s.center_on_price(scx));
+        }
     }
 
     /// Close Main's active chart on a larger `close_active_chart_rev` for this group.

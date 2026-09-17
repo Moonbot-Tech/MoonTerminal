@@ -16,11 +16,11 @@ pub(in crate::chart_tabs) mod detect_cap;
 use super::stack::grid;
 use super::stack::{
     COMPACT_STABLE, ChartStackEntry, SlotOwner, apply_setting, chart_stack_card, compare_role,
-    render_chart_stack, resolve_layout, set_panels_auto_pin, set_panels_candle_view,
-    set_panels_chart_graphics, set_panels_chart_labels, set_panels_cursor_labels,
-    set_panels_line_labels, set_panels_liquidations, set_panels_orderbook_enabled,
-    set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone,
-    set_panels_time_axis_visible, sync_compare, tile_gutter,
+    force_panels_scale, render_chart_stack, resolve_layout, set_panels_auto_pin,
+    set_panels_candle_view, set_panels_chart_graphics, set_panels_chart_labels,
+    set_panels_cursor_labels, set_panels_line_labels, set_panels_liquidations,
+    set_panels_orderbook_enabled, set_panels_price_axis_pos, set_panels_scale,
+    set_panels_show_zone, set_panels_time_axis_visible, sync_compare, tile_gutter,
 };
 use crate::Backend;
 use crate::panels::ChartPanel;
@@ -817,6 +817,22 @@ impl AddChartStack {
         apply_setting(&mut self.scale, pct, &self.charts, cx, |c, cx| {
             set_panels_scale(c, pct, cx)
         });
+    }
+
+    /// Apply a price scale as a COMMAND: reaches every panel even when the stored choice is what
+    /// it already was. The dropdown and the Scale hotkeys go through here; `set_scale` stays the
+    /// setter for restores, where an unchanged value really is nothing to do.
+    pub(crate) fn force_scale(&mut self, pct: Option<f32>, cx: &mut Context<Self>) {
+        self.scale = pct;
+        force_panels_scale(&self.charts, pct, cx);
+        cx.notify();
+    }
+
+    /// Moonbot's "Center chart" on every chart in this stack.
+    pub(crate) fn center_on_price(&mut self, cx: &mut Context<Self>) {
+        for entry in &self.charts {
+            entry.panel.update(cx, |p, pcx| p.center_on_price(pcx));
+        }
     }
 
     pub(crate) fn orderbook_enabled(&self) -> Option<bool> {

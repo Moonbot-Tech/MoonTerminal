@@ -229,7 +229,9 @@ pub(crate) fn scale_dropdown_for_add_stack(
         MoonSize::Xs.into(),
         p,
         move |pct, cx| {
-            stack.update(cx, |st, scx| st.set_scale(pct, scx));
+            // A pick is a command: it must reach the panels even when it names the step already
+            // shown, which is how a vertical drag is undone (`stack::force_panels_scale`).
+            stack.update(cx, |st, scx| st.force_scale(pct, scx));
         },
     )
     .into_any_element()
