@@ -257,11 +257,10 @@ impl AddChartStack {
         self.arrival_flash
     }
 
-    /// Set whether arriving charts flash, clearing any flash already in flight when switched off.
+    /// Set whether arriving charts flash, clearing pulsing and steady borders when switched off.
     ///
-    /// The clear is load-bearing: the pulse is own-pass state with 2.6 s of life of its own, so a
-    /// chart that arrived a moment before the box was ticked would keep pulsing to the end of its
-    /// window — and the setting would read as not having taken.
+    /// The clear is load-bearing: arrival state survives the pulse window to retain the core
+    /// colour, so disabling the setting must also remove borders on charts that already settled.
     pub(crate) fn set_arrival_flash(&mut self, on: Option<bool>, cx: &mut Context<Self>) {
         if self.arrival_flash == on {
             return;
@@ -699,8 +698,9 @@ impl AddChartStack {
     /// - **FIT-stretch / Scroll**: remove empty panels immediately; pinning and render-time sorting
     ///   provide stability.
     /// - **COMPRESS (Fit + pixels)**: retain the slot as `vacated`, preserving neighbor positions
-    ///   and sizes. Clear ALL slots only when every slot is empty, restoring the default height.
-    fn prune_or_hold(&mut self, cx: &App) -> bool {
+    ///   and sizes but clearing its arrival border. Clear ALL slots only when every slot is empty,
+    ///   restoring the default height.
+    fn prune_or_hold(&mut self, cx: &mut Context<Self>) -> bool {
         let (_, compress, _) = resolve_layout(
             self.layout_mode,
             self.layout_height_fit,
@@ -719,6 +719,11 @@ impl AddChartStack {
             let empty = e.panel.read(cx).pane_count() == 0;
             if empty != e.vacated {
                 e.vacated = empty;
+                if empty {
+                    let accent = moon_ui::MoonPalette::active(cx).accent;
+                    e.panel
+                        .update(cx, |panel, _| panel.set_arrival_pulse(None, accent));
+                }
                 changed = true;
             }
         }
