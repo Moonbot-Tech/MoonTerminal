@@ -366,7 +366,10 @@ where
         .checked(liquidations_enabled)
         .on_change(move |ch: &bool, _w, app| on_toggle_liquidations(*ch, app));
 
-    // "Show control zone" toggles the dim order-zone fill while the order book is hidden.
+    // "Order zone with the book hidden": whether a hidden order book still leaves the marked order
+    // strip on the right under separate zones. Off together with the book, such a tab is chart edge
+    // to edge and takes no order gesture — click placement, drag, cancel, menu, keyboard cancel
+    // (#557). Main under unified zones trades everywhere and reads neither.
     let show_zone_cb = MoonCheckbox::new(SharedString::from(format!("{id}-show-zone")))
         .label(t!("chart.layout.show_zone").to_string())
         .checked(show_zone)

@@ -209,8 +209,10 @@ pub struct ChartPanel {
     /// The panel has already applied them to itself; this is the copy its stack hands to the host
     /// that owns the tab spec. See `volume_menu` for why the write cannot happen here.
     pending_labels: Option<moon_core::config::ChartLabelsCfg>,
-    /// Whether to dim-fill the reserved control zone when zones are separate and the order book is
-    /// hidden. This is per window/tab, applied during rendering, and enabled by default.
+    /// Whether a hidden order book still leaves an order zone — the reserved strip along the right
+    /// edge, dim-filled as a marker — when zones are separate. Off, together with a hidden book, the
+    /// pane has no order zone at all and no order gesture acts on it (`order_gestures_allowed`).
+    /// Per window/tab, enabled by default.
     show_zone: bool,
     /// Whether a successful long or short order automatically pins its chart. Per window/tab and
     /// disabled by default.
@@ -1277,6 +1279,7 @@ impl ChartPanel {
             self.orderbook_enabled = enabled;
             self.view_dirty = true;
             self.sync_orderbook_refs(cx);
+            self.drop_order_hover_if_disallowed(cx);
             cx.notify();
         }
     }
@@ -1445,12 +1448,29 @@ impl ChartPanel {
         }
     }
 
-    /// Controls the per-window/tab fill over the reserved control zone when the book is hidden.
-    /// This affects only the UI overlay, not the engine.
+    /// Controls whether a hidden book leaves the reserved order zone on this window/tab — the strip
+    /// itself, not only its marker fill: off, together with a hidden book, the pane trades nothing
+    /// (`order_gestures_allowed`). The engine is not involved; the zone is a hit-test concern.
     pub fn set_show_zone(&mut self, show: bool, cx: &mut Context<Self>) {
         if self.show_zone != show {
             self.show_zone = show;
+            self.drop_order_hover_if_disallowed(cx);
             cx.notify();
+        }
+    }
+
+    /// Forget a line the pointer was resting on once the pane stops taking order gestures.
+    ///
+    /// `order_hover` is recomputed only when the pointer moves, and the presses read
+    /// `hit_order_line`, which already answers nothing here — but the cursor shape and the line
+    /// highlight are drawn from the stale field. A click on the layout popup has already taken the
+    /// pointer off the canvas, and hover-out clears the field on its own; the flips that reach a
+    /// RESTING pointer are the pointer-less ones — ⧉ apply-all, a tab spec restored on ingest, the
+    /// book suspended when its window loses focus, the comparison broom lifted. Cleared here so the
+    /// frame after any of them stops promising a grab.
+    fn drop_order_hover_if_disallowed(&mut self, cx: &mut Context<Self>) {
+        if !self.order_gestures_allowed(cx) {
+            self.set_order_interaction(None, cx);
         }
     }
 
@@ -1508,6 +1528,7 @@ impl ChartPanel {
             self.orderbook_only = only;
             self.view_dirty = true;
             self.sync_orderbook_refs(cx);
+            self.drop_order_hover_if_disallowed(cx);
             cx.notify();
         }
     }

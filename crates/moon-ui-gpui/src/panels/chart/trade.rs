@@ -463,6 +463,12 @@ impl ChartPanel {
                 pos.0,
                 pos.1,
                 match (separate, zone) {
+                    // The zone `order_zone_in` parks at the right edge with no width: the book is
+                    // hidden and the zone toggle is off, so this pane takes no order at all.
+                    (true, Some(z)) if z.w <= 0.0 =>
+                        "any order zone: the book is hidden and the zone toggle is off, so this \
+                         pane is chart edge to edge"
+                            .to_string(),
                     (true, Some(z)) => format!(
                         "the order-book zone x={:.0}..{:.0}, y={:.0}..{:.0} (separate control \
                          zones are on)",
@@ -625,12 +631,20 @@ impl ChartPanel {
     /// before computing unnecessary distances for all draggable kinds, as in Delphi. Without
     /// `cross_only` it scans every draggable kind. `OrderHitMode::EntryCancel` is the Tab/Del
     /// route: the whole ENTRY line, in any zone, at any fill.
+    ///
+    /// On a pane with NO order zone — separate zones, book hidden, zone toggle off — nothing is a
+    /// hit in any mode: the pane is chart edge to edge, and a line drawn across it is a picture,
+    /// not a control. Every line interaction reaches this one function, so the gate here retires
+    /// the drag, the cancel cross, the hover cursor, the order menu and the keyboard cancel at once.
     fn hit_order_line(
         &self,
         pos: (f32, f32),
         mode: OrderHitMode,
         cx: &mut Context<Self>,
     ) -> Option<OrderHit> {
+        if !self.order_gestures_allowed(cx) {
+            return None;
+        }
         let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
             return None;
         };
@@ -808,7 +822,8 @@ impl ChartPanel {
     /// Cancel an unfilled entry by left-clicking its start cross, matching Moonbot.
     ///
     /// The precise cross target remains active in the chart area under separate-zone mode, unlike
-    /// dragging, which is restricted to the order book. Returns whether the click was consumed.
+    /// dragging, which is restricted to the order book — as long as the pane HAS an order zone;
+    /// `hit_order_line` answers nothing on one that has none. Returns whether the click was consumed.
     pub(super) fn try_cancel_order_click(
         &mut self,
         pos: (f32, f32),
