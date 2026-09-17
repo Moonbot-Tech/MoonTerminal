@@ -4,7 +4,7 @@ use moonproto::StrategySnapshot;
 
 use super::{
     ChartTextWanted, StrategyPlacementGuard, anchor_on_core, plan_insert_positions, regroup_moved,
-    strategy_placements_unchanged,
+    revision_stamp, strategy_placements_unchanged,
 };
 
 /// `live::run` resetting the wanted market on each client would clear a still-requested overlay,
@@ -359,6 +359,42 @@ fn the_cores_own_published_order_retires_the_queued_one() {
     assert_eq!(guard.pending_order(9), None);
     // ... and it stays retired, including for a later call that repeats the old version.
     assert_eq!(guard.pending_order(7), None);
+}
+
+/// A created or restored strategy travels with the revision the core stamps on the ones it holds,
+/// so its echo resolves on the fields; an empty core keeps the `0` it always got.
+#[test]
+fn a_new_strategy_carries_the_cores_revision_stamp() {
+    let mut full = vec![placed(1, ""), placed(2, "a")];
+    assert_eq!(revision_stamp(&full), 1);
+    full[0].strategy_ver = 12;
+    full[1].strategy_ver = 12;
+    assert_eq!(revision_stamp(&full), 12);
+    full[1].strategy_ver = 17;
+    assert_eq!(revision_stamp(&full), 17);
+    assert_eq!(revision_stamp(&[]), 0);
+}
+
+/// Neither creation site sends the literal `0` any more — the stamp reaches both the paste/create
+/// batch and the restore of a deleted strategy.
+#[test]
+fn both_creation_sites_send_the_revision_stamp() {
+    let create = command_arm(
+        SRC,
+        "Ok(CoreCmd::CreateStrategies",
+        "Ok(CoreCmd::RestoreStrategy",
+    );
+    let restore = command_arm(
+        SRC,
+        "Ok(CoreCmd::RestoreStrategy",
+        "Ok(CoreCmd::MoveStrategies",
+    );
+    for (name, arm) in [("create", create), ("restore", restore)] {
+        assert!(
+            arm.contains("revision_stamp(full)"),
+            "{name} arm lost the stamp"
+        );
+    }
 }
 
 /// Builds a snapshot carrying only what [`regroup_moved`] reads: its id and its folder path.
