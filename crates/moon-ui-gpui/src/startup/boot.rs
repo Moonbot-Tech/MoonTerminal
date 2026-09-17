@@ -232,6 +232,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         switch_charts_group: None,
         switch_charts_rev: 0,
         close_all_charts_rev: 0,
+        center_chart_rev: 0,
         close_active_chart_group: None,
         close_active_chart_rev: 0,
         last_chart_close: None,

@@ -357,7 +357,9 @@ macro_rules! set_stack_setting {
                 $s.set_chart_graphics(Some(v), $c)
             }
             crate::chart_tabs::common::StackSetting::Labels(v) => $s.set_chart_labels(Some(v), $c),
-            crate::chart_tabs::common::StackSetting::Scale(v) => $s.set_scale(v, $c),
+            // Forced like the dropdown pick: ⧉ is the user applying the scale NOW, and a target
+            // stack parked in a manual Y view must leave it even when the value already matches.
+            crate::chart_tabs::common::StackSetting::Scale(v) => $s.force_scale(v, $c),
             crate::chart_tabs::common::StackSetting::ArrivalFlash(v) => {
                 $s.set_arrival_flash(Some(v), $c)
             }

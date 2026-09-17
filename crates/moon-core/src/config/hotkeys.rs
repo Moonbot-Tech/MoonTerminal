@@ -23,8 +23,9 @@ pub const MANUAL_STRATEGY_KEYS: usize = 10;
 /// 1: backfilled the slots that shipped unbound. 2: cleared `chart_shot` where the user had
 /// already given Ctrl+F10 to something else. 3: the same for `fig_undo` on Ctrl+Z. 4: cleared the
 /// two pending-order GESTURES, which stopped being inert and started placing live orders. 5: the
-/// figure-delete gesture yields its Middle default to a trading gesture already on Middle.
-const SCHEMA: u8 = 5;
+/// figure-delete gesture yields its Middle default to a trading gesture already on Middle. 6: the
+/// same as 2 and 3 for `center_chart` on Ctrl+Right.
+const SCHEMA: u8 = 6;
 
 /// Parts produced by the plain Split Order action, matching Moonbot, where that action always
 /// splits a sell order into three. The configurable count belongs to `Split N` instead.
@@ -316,6 +317,8 @@ pub enum KeySlot {
     SuperZoomIn,
     /// Zoom the time axis out while respecting the three-second floor.
     SuperZoomOut,
+    /// Moonbot's built-in Ctrl+Right, "Center chart": back to the price and the live edge.
+    CenterChart,
     SwitchFigure,
     ChartShot,
     DrawHline,
@@ -336,7 +339,7 @@ impl KeySlot {
     /// unenumerated. What checks it is a test that serializes the config with every slot written a
     /// marker and looks for a stored keystroke that kept its own value: the STRUCT is the reference,
     /// never this list, because a test that walks this list to verify this list proves nothing.
-    pub const NAMED: [Self; 29] = [
+    pub const NAMED: [Self; 30] = [
         Self::CancelBuy,
         Self::PanicSell,
         Self::PanicSellOne,
@@ -356,6 +359,7 @@ impl KeySlot {
         Self::ScaleMinus,
         Self::SuperZoomIn,
         Self::SuperZoomOut,
+        Self::CenterChart,
         Self::SwitchFigure,
         Self::ChartShot,
         Self::DrawHline,
@@ -413,6 +417,7 @@ impl KeySlot {
             Self::ScaleMinus => "scale_minus",
             Self::SuperZoomIn => "super_zoom_in",
             Self::SuperZoomOut => "super_zoom_out",
+            Self::CenterChart => "center_chart",
             Self::SwitchFigure => "switch_figure",
             Self::ChartShot => "chart_shot",
             Self::DrawHline => "draw_hline",
@@ -719,6 +724,7 @@ impl HotkeysConfig {
             KeySlot::ScaleMinus => &self.scale_minus,
             KeySlot::SuperZoomIn => &self.super_zoom_in,
             KeySlot::SuperZoomOut => &self.super_zoom_out,
+            KeySlot::CenterChart => &self.center_chart,
             KeySlot::SwitchFigure => &self.switch_figure,
             KeySlot::ChartShot => &self.chart_shot,
             KeySlot::DrawHline => &self.draw_hline,
@@ -769,6 +775,7 @@ impl HotkeysConfig {
             KeySlot::ScaleMinus => &mut self.scale_minus,
             KeySlot::SuperZoomIn => &mut self.super_zoom_in,
             KeySlot::SuperZoomOut => &mut self.super_zoom_out,
+            KeySlot::CenterChart => &mut self.center_chart,
             KeySlot::SwitchFigure => &mut self.switch_figure,
             KeySlot::ChartShot => &mut self.chart_shot,
             KeySlot::DrawHline => &mut self.draw_hline,
@@ -1019,6 +1026,14 @@ pub struct HotkeysConfig {
     /// Local time-axis zoom out; no Moonbot import slot or default binding.
     #[serde(default)]
     pub super_zoom_out: String,
+    /// Moonbot's "Center chart" (its built-in Ctrl+Right, hence no import slot): every chart drops
+    /// its manual Y view, puts the last price at the centre and returns to the live edge — out of
+    /// an explicit Pause too — with neither scale touched.
+    ///
+    /// Arrives pre-filled through its serde default like `chart_shot`, so it needs the same
+    /// collision check and no backfill: generation 6 of [`HotkeysConfig::fill_unbound_slots`].
+    #[serde(default = "default_center_chart")]
+    pub center_chart: String,
     #[serde(default = "default_switch_figure")]
     pub switch_figure: String,
 
@@ -1181,6 +1196,7 @@ impl Default for HotkeysConfig {
             scale_minus: default_scale_minus(),
             super_zoom_in: String::new(),
             super_zoom_out: String::new(),
+            center_chart: default_center_chart(),
             switch_figure: default_switch_figure(),
             chart_shot: default_chart_shot(),
             draw_hline: default_draw_hline(),
@@ -1332,6 +1348,8 @@ impl HotkeysConfig {
     /// an arriving gesture — `fig_delete_click` yields its Middle default where Middle already
     /// trades. Its own generation rather than a widening of 4, because files stamped 4 exist.
     ///
+    /// Generation 5 → 6: the key check once more, for `center_chart` arriving on Ctrl+Right.
+    ///
     /// Returns whether anything changed, so the caller can persist the stamp.
     pub(super) fn fill_unbound_slots(&mut self) -> bool {
         if self.schema >= SCHEMA {
@@ -1354,6 +1372,9 @@ impl HotkeysConfig {
         }
         if self.schema < 5 {
             self.clear_generation_5_figure_gesture();
+        }
+        if self.schema < 6 {
+            self.clear_generation_6_collisions();
         }
         self.schema = SCHEMA;
         true
@@ -1480,6 +1501,21 @@ impl HotkeysConfig {
             );
             self.fig_delete_click = MouseGestureBinding::None;
         }
+    }
+
+    /// Generation 5 -> 6: `center_chart` ships on Ctrl+Right through its serde default, so it
+    /// reaches an existing file already filled, exactly as `chart_shot` and `fig_undo` did.
+    ///
+    /// Ctrl+Right is free on every default we and Moonbot ship, and the slot resolves among the
+    /// chart keys ABOVE the trading actions — so a user who had given it to an order action would
+    /// find that order replaced by a recentred chart. The NEW slot yields, as in generations 2 and 3.
+    ///
+    /// Returns:
+    ///     Nothing; clears only the new centre-chart slot when its default collides.
+    fn clear_generation_6_collisions(&mut self) {
+        // Recomputed rather than reused: the generations above may have just changed slots.
+        let taken = self.bound_keys();
+        clear_if_duplicate(&taken, &mut self.center_chart, "Center chart");
     }
 
     /// The gesture one slot actually FIRES on, or `None` for a slot that dispatches nothing.
@@ -1672,6 +1708,17 @@ fn default_scale_minus() -> String {
 
 fn default_switch_figure() -> String {
     "alt-d".into()
+}
+
+/// Moonbot's own key for "Center chart" — built in there rather than on its Hotkeys page, which is
+/// why the import never carries it. Free on every shipped default; MoonUI's text fields bind
+/// Ctrl+Right to a word jump, but a modified press reaches the bindings before the field on
+/// purpose (`hotkeys::belongs_to_the_field`), the same trade Ctrl+Z and Ctrl+H already make.
+///
+/// Returns:
+///     The default GPUI keystroke for centring every chart on its price.
+fn default_center_chart() -> String {
+    "ctrl-right".into()
 }
 
 /// Ctrl+F10, next to the built-in Ctrl+Shift+F10 that resets window positions but never colliding

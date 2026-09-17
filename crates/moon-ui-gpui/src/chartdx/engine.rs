@@ -1283,6 +1283,31 @@ impl ChartEngine {
         self.follow
     }
 
+    /// Moonbot's "Center chart" on every pane: the manual Y view is dropped, the last price snaps
+    /// to the centre, and the live edge is resumed — out of an explicit Pause as well.
+    ///
+    /// A HISTORICAL engine refuses it for the same reason it refuses `set_follow`: its subject is
+    /// a closed interval, and re-anchoring to `now` would take the trade off screen.
+    ///
+    /// Args:
+    ///     now_ms: Current Unix time in milliseconds.
+    ///
+    /// Returns:
+    ///     Whether the engine acted; `false` for a historical viewer.
+    pub fn center_on_price(&mut self, now_ms: f64) -> bool {
+        if self.data.borrow().historical {
+            return false;
+        }
+        for p in self.container.borrow_mut().panes_mut() {
+            p.view.center_on_price(now_ms);
+        }
+        self.follow = true;
+        let mut data = self.data.borrow_mut();
+        data.follow = true;
+        data.mark_view_dirty();
+        true
+    }
+
     /// Request framing of the first pane on an interval and persist manual X navigation.
     ///
     /// The interval is REQUESTED rather than applied: the plot width is knowable only inside a

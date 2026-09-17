@@ -903,3 +903,82 @@ fn super_zoom_preserves_manual_cursor_time() {
     assert!((after - before).abs() < 1.0);
     assert!(!view.is_live(now));
 }
+
+/// Moonbot's Ctrl+Right: a dragged, paused chart comes back to the price in ONE frame, on the scale
+/// it had picked, rather than easing there over dozens of ticks or keeping the percent parked.
+///
+/// Plausible breakage: dropping only `manual_price` and letting `update_y` catch up — after a
+/// 500-unit drag the `TICK_LERP` slide takes seconds and reads as the chart wandering on its own.
+#[test]
+fn center_on_price_snaps_a_dragged_paused_chart_back_in_one_frame() {
+    let now = 100_000.0;
+    let mut view = settled_view(1000.0, 0.01, now);
+    let dy = 500.0 * view.px_per_price;
+    view.pan_y_px(dy, now);
+    view.set_manual_persistent();
+    assert!(view.manual_price && !view.follow);
+
+    view.center_on_price(now + 300.0);
+    view.update_y(now + 316.0, 400.0, Some((1000.0, 1000.0)), Some(1000.0));
+
+    assert!(!view.manual_price, "the manual Y view survived the return");
+    assert!(view.follow, "the explicit pause survived the return");
+    assert!(view.auto_live_deadline_ms().is_none());
+    assert!(
+        (view.render_center - 1000.0).abs() < 1e-3,
+        "the centre eased instead of jumping: {}",
+        view.render_center
+    );
+    assert!(!view.auto_price, "the picked percent turned into Auto");
+    assert!(
+        (view.scale_percent - 0.01).abs() < 1e-6,
+        "the picked percent changed: {}",
+        view.scale_percent
+    );
+}
+
+/// A gesture that lands after the request — the drag still in progress when Ctrl+Right was pressed,
+/// or the comparison lock re-asserting the anchor's window — cancels the pending snap, so it cannot
+/// fire later on an Auto pick that asked for no jump.
+#[test]
+fn a_gesture_or_a_lock_after_center_on_price_cancels_the_pending_snap() {
+    let now = 100_000.0;
+    let mut view = settled_view(1000.0, 0.01, now);
+    view.center_on_price(now + 300.0);
+    view.pan_y_px(1.0, now + 300.0);
+    assert!(view.manual_price && !view.center_snap_pending);
+
+    view.center_on_price(now + 400.0);
+    view.rmb_zoom(1000.0, 10.0, 20.0, now + 400.0);
+    assert!(view.manual_price && !view.center_snap_pending);
+
+    view.center_on_price(now + 500.0);
+    assert!(view.set_y_window(1200.0, 12.0));
+    assert!(view.manual_price && !view.center_snap_pending);
+}
+
+/// A pane that has no price yet holds the snap for the frame that can honour it, and an ordinary
+/// live tick afterwards eases as before — the snap is one-shot, not a mode.
+#[test]
+fn center_on_price_waits_for_a_price_and_then_snaps_once() {
+    let now = 100_000.0;
+    let mut view = settled_view(1000.0, 0.01, now);
+    view.pan_y_px(500.0 * view.px_per_price, now);
+    view.center_on_price(now + 300.0);
+
+    // Nothing to fit yet: the request must survive this frame.
+    view.update_y(now + 316.0, 400.0, None, None);
+    assert!(view.center_snap_pending);
+
+    view.update_y(now + 332.0, 400.0, Some((1000.0, 1000.0)), Some(1000.0));
+    assert!(!view.center_snap_pending);
+    assert!((view.center_price - 1000.0).abs() < 1e-3);
+
+    // A later tick far outside the centre buffer eases rather than jumping.
+    view.update_y(now + 348.0, 400.0, Some((1100.0, 1100.0)), Some(1100.0));
+    assert!(
+        view.center_price > 1000.0 && view.center_price < 1100.0,
+        "a plain tick snapped instead of easing: {}",
+        view.center_price
+    );
+}

@@ -394,3 +394,21 @@ fn super_zoom_bindings_resolve_to_their_time_actions() {
         );
     }
 }
+
+/// The shipped Ctrl+Right must reach `CenterChart` out of the box, and a modified arrow must not
+/// be read as the focused field's own press — that is the trade `belongs_to_the_field` makes for
+/// every Ctrl binding, and the one a text field's word jump loses to.
+#[test]
+fn the_default_center_chart_binding_resolves_even_while_typing() {
+    use super::{HotkeyAction, resolve};
+    let config = HotkeysConfig::default();
+    let event = gpui::KeyDownEvent {
+        keystroke: Keystroke::parse("ctrl-right").unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    };
+    assert_eq!(
+        resolve(&event, &config, true),
+        Some(HotkeyAction::CenterChart)
+    );
+}

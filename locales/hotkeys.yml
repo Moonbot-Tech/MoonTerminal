@@ -728,6 +728,14 @@ hotkeys.super_zoom_out_hint:
   ru: "Отдалить шкалу времени с минимальным окном в 3 секунды. По умолчанию не назначено."
   en: "Zoom the time axis out with a 3-second minimum window. Unbound by default."
   es: "Alejar el eje temporal con una ventana mínima de 3 segundos. Sin asignar por defecto."
+hotkeys.center_chart:
+  ru: "Центрировать график"
+  en: "Center chart"
+  es: "Centrar el gráfico"
+hotkeys.center_chart_hint:
+  ru: "Вернуть ВСЕ графики к текущей цене и живому краю: снимает ручной сдвиг/зум по цене (вертикальная протяжка, ПКМ-зум) и Паузу, масштабы не меняет. В поле ввода перебивает переход по слову. Moonbot-дефолт: Ctrl+→."
+  en: "Bring EVERY chart back to the current price and the live edge: clears the manual price pan/zoom (vertical drag, right-button zoom) and Pause, leaves both scales alone. Overrides the word jump inside a text field. Moonbot default: Ctrl+Right."
+  es: "Devuelve TODOS los gráficos al precio actual y al borde en vivo: quita el desplazamiento/zoom manual de precio (arrastre vertical, zoom con botón derecho) y la Pausa, sin tocar las escalas. Dentro de un campo de texto anula el salto por palabra. Valor por defecto de Moonbot: Ctrl+Derecha."
 hotkeys.builtin.wheel_super_zoom:
   ru: "[Ctrl+Shift + Колёсико] супер-зум по времени до 3 секунд"
   en: "[Ctrl+Shift + Wheel] super zooms time down to 3 seconds"

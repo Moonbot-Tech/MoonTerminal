@@ -600,8 +600,17 @@ impl DetachedChartHost {
                 // "+" is the scale NUMBER growing, not the zoom: Moonbot's Scale + widens the band.
                 let scale_up = matches!(action, HotkeyAction::ScalePlus);
                 let next = crate::controls::step_scale(self.panel.read(cx).scale(), scale_up);
-                self.panel.update(cx, |st, scx| st.set_scale(next, scx));
+                // Forced: at the end of the list the step returns the value already held, and
+                // that press must still leave the manual Y view (`stack::force_panels_scale`).
+                self.panel.update(cx, |st, scx| st.force_scale(next, scx));
                 cx.notify();
+                true
+            }
+            // Application-global, like Shift+Esc: bump the revision every `ChartTabs` consumes.
+            HotkeyAction::CenterChart => {
+                self.backend.update(cx, |b, _| {
+                    b.center_chart_rev = b.center_chart_rev.wrapping_add(1);
+                });
                 true
             }
             // Place a manual order at the cursor price through the hovered chart.

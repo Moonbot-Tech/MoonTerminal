@@ -352,6 +352,14 @@ impl Shell {
                 });
                 true
             }
+            // Moonbot's Ctrl+Right hits every chart, so the revision is global and unaddressed:
+            // each `ChartTabs` centres every stack it holds, detached windows included.
+            HotkeyAction::CenterChart => {
+                self.backend.update(cx, |b, _| {
+                    b.center_chart_rev = b.center_chart_rev.wrapping_add(1);
+                });
+                true
+            }
             // Advance this group's active fullscreen Main chart through a dedicated group revision.
             // Keeping it separate from the scale revision prevents switching and zooming from
             // consuming each other's signals.

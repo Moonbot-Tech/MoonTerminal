@@ -84,6 +84,10 @@ groups:
     action:
       ru: Масштаб + / −
       en: Scale + / −
+  - combo: Ctrl+→
+    action:
+      ru: Центрировать все графики по цене и вернуть Live
+      en: Center every chart on the price and return to Live
   - combo: Ctrl+H
     action:
       ru: Горизонтальная линия

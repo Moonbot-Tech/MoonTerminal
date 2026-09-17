@@ -164,6 +164,13 @@ pub enum HotkeyAction {
     SuperZoomIn,
     /// Step the calling window's time axis outward with the three-second floor.
     SuperZoomOut,
+    /// Moonbot's Ctrl+Right, "Center chart", on EVERY chart: drop the manual Y view, put the last
+    /// price at the centre and return to the live edge, scales untouched.
+    ///
+    /// The caller increments a global revision observed by every `ChartTabs` instance — global
+    /// because Moonbot's key hits all charts, and because the toolbar's Live flag the return
+    /// re-raises is application-wide already.
+    CenterChart,
     /// Copy an image of the active chart to the system clipboard - Moonbot's "make shot".
     ///
     /// The caller executes this because it needs the OS window behind the chart and the
@@ -625,6 +632,7 @@ pub const DISPATCH: &[Step] = &[
     Step::Slot(KeySlot::ScaleMinus),
     Step::Slot(KeySlot::SuperZoomIn),
     Step::Slot(KeySlot::SuperZoomOut),
+    Step::Slot(KeySlot::CenterChart),
     Step::Slot(KeySlot::ChartShot),
     Step::Slot(KeySlot::OrderSize(0)),
     Step::Slot(KeySlot::OrderSize(1)),
@@ -723,6 +731,7 @@ pub fn action_of(slot: KeySlot, hk: &HotkeysConfig) -> HotkeyAction {
         KeySlot::ScaleMinus => A::ScaleMinus,
         KeySlot::SuperZoomIn => A::SuperZoomIn,
         KeySlot::SuperZoomOut => A::SuperZoomOut,
+        KeySlot::CenterChart => A::CenterChart,
         KeySlot::SwitchFigure => A::SwitchFigure,
         KeySlot::ChartShot => A::ChartShot,
         KeySlot::DrawHline => A::FigTool(FigureTool::HLine),
@@ -1178,6 +1187,7 @@ pub fn apply(
         | A::ScaleMinus
         | A::SuperZoomIn
         | A::SuperZoomOut
+        | A::CenterChart
         | A::NewLong
         | A::NewShort
         | A::FigUndo

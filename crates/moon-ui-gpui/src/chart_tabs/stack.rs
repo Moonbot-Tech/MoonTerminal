@@ -299,6 +299,23 @@ pub(super) fn set_panels_scale<S: 'static>(
     }
 }
 
+/// Apply price scale to every panel in the stack even when nothing changed.
+///
+/// The value-equality guards along the setter path (`apply_setting`, `ChartPanel::set_scale`, the
+/// engine's cache) are right for a restore and wrong for a click: a vertical drag or a right-button
+/// zoom parks the pane in a manual Y view WITHOUT changing the stored choice, and re-picking the
+/// step already shown is then the one gesture that must reach the pane — the trade window learned
+/// this first (`ChartPanel::force_scale`); the tabs swallowed the same click until 2026-09-17.
+pub(super) fn force_panels_scale<S: 'static>(
+    entries: &[ChartStackEntry],
+    pct: Option<f32>,
+    cx: &mut Context<S>,
+) {
+    for e in entries {
+        e.panel.update(cx, |p, pcx| p.force_scale(pct, pcx));
+    }
+}
+
 /// Apply the order-book toggle to every panel in the stack.
 pub(super) fn set_panels_orderbook_enabled<S: 'static>(
     entries: &[ChartStackEntry],

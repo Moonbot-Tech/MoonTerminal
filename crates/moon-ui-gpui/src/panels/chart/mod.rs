@@ -1223,6 +1223,25 @@ impl ChartPanel {
         }
     }
 
+    /// Moonbot's Ctrl+Right for every pane of this panel: back to the price and the live edge on
+    /// the scale already chosen — see `ChartView::center_on_price` for what is and is not touched.
+    ///
+    /// Goes through `mark_input_changed` like a gesture would, so the resumed follow reaches the
+    /// toolbar's Live flag the same way a pan's pull-back does.
+    ///
+    /// A comparison-locked FOLLOWER keeps its Y: `render` re-imposes the anchor's window next frame
+    /// (`set_locked_y`), which is the lock doing its job — the anchor recentres, and the follower
+    /// tracks it. Only the return to the live edge is this pane's own there.
+    ///
+    /// Args:
+    ///     cx: Panel context.
+    pub(crate) fn center_on_price(&mut self, cx: &mut Context<Self>) {
+        if self.chart.center_on_price(now_unix_ms()) {
+            self.mark_input_changed(cx);
+            cx.notify();
+        }
+    }
+
     /// Sets this panel's price scale, where `None` means Auto. Rendering applies it through the
     /// engine's `set_scale`.
     pub fn set_scale(&mut self, pct: Option<f32>, cx: &mut Context<Self>) {
