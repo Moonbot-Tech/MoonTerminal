@@ -805,7 +805,7 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
         // that ignores the Font slider's delta. Standing in a row of MoonDropdown filters it must
         // ask MoonUI for the button look instead of re-deriving it here.
         ".trigger_variant(MoonButtonVariant::Soft)",
-        ".trigger_size(MoonButtonSize::density(cx))",
+        ".trigger_button_size(MoonButtonSize::density(cx))",
         ".menu_chrome(MoonComboboxMenuChrome::Menu)",
         ".font_family(design::mono())",
         ".cleanable(false)",

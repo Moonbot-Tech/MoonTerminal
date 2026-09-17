@@ -518,7 +518,7 @@ fn field_row(
             div().w(design::ui_px(cx, FIELD_WIDTH)).child(
                 MoonInput::new(id)
                     .state(input)
-                    .small()
+                    .size(design::input_tier(cx))
                     .mono(true)
                     .disabled(!enabled),
             ),

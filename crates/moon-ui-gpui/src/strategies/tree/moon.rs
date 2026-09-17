@@ -1713,11 +1713,11 @@ fn core_folder_row(
         })
         .child(match check_target.filter(|_| fill.has_contents()) {
             Some((core, path, checked)) => {
-                checks::bulk_check(view, &check_row_id, core, path, checked)
+                checks::bulk_check(view, &check_row_id, core, path, checked, app)
             }
             // Reserved rather than omitted, so this row's caption stays on the same control column
             // as every sibling at its depth.
-            None => checks::bulk_check_slot(&check_row_id),
+            None => checks::bulk_check_slot(&check_row_id, app),
         })
         .child(
             div().flex_1().min_w_0().truncate().child(
@@ -2115,6 +2115,7 @@ fn strategy_row(
             checks::row_checkbox(
                 SharedString::from(format!("chk:{}", id_strat(core, id))),
                 val,
+                app,
             )
             .on_change(move |ch: &bool, _window, app| {
                 let v = *ch;

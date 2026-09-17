@@ -349,7 +349,7 @@ pub(super) fn body(
                         |d, on| d.general.exclude_blacklisted_from_deltas = on,
                     )),
             )
-            .children(field(store, "exp-gen-bl-text", true))
+            .children(field(store, "exp-gen-bl-text", true, cx))
             .child(caption(
                 t!(
                     "core_expert.gen_bl_fresh",

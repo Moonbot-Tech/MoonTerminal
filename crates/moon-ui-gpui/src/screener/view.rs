@@ -459,8 +459,6 @@ impl ScreenerView {
                     .collect::<Vec<_>>(),
             )
             .state(&self.table_state)
-            .header_height(design::TABLE_HEAD_H)
-            .row_height(design::TABLE_ROW_H)
             .style(design::table_style(p))
             .on_sort(move |key, ascending, _window, app| {
                 let key = key.to_string();
@@ -640,7 +638,7 @@ impl ScreenerView {
                 div().w(px(90.0)).child(
                     MoonInput::new("scr-coin")
                         .state(&self.coin_input)
-                        .small()
+                        .size(design::input_tier(cx))
                         .cleanable(true),
                 ),
             )
@@ -649,7 +647,7 @@ impl ScreenerView {
                 div().w(px(90.0)).child(
                     MoonInput::new("scr-dvol")
                         .state(&self.dvol_input)
-                        .small()
+                        .size(design::input_tier(cx))
                         .cleanable(true),
                 ),
             )

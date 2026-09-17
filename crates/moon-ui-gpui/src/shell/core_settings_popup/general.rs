@@ -240,7 +240,7 @@ pub(super) fn general_tab(
     } else {
         MoonInput::new("core-bl-text")
             .state(editors.input)
-            .small()
+            .size(design::input_tier(cx))
             .into_any_element()
     };
     let risks = popup_group(
@@ -382,7 +382,7 @@ pub(super) fn general_tab(
                     .items_center()
                     .gap(design::ui_px(cx, 6.0))
                     .child(caption(t!("core_settings.lev_config").to_string(), p, cx))
-                    .children(stretch_field(widgets, "gen-lev-config")),
+                    .children(stretch_field(widgets, "gen-lev-config", cx)),
             ),
     );
 

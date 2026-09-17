@@ -970,6 +970,7 @@ pub fn toolbar(
                     // than the one this row just showed.
                     write_matches_display.then(|| group.to_string()),
                     SIZE_UNIT,
+                    cx,
                 ),
                 manual_block_tip.clone(),
                 design::CHROME_GAP,
@@ -1068,6 +1069,7 @@ pub fn toolbar(
                 // sell price. A displayed core disagreeing with the write target disables it too
                 // (goal A2 FIX-3).
                 (!manual_on && write_matches_display).then(|| group.to_string()),
+                cx,
             );
             let sell_block = captioned_strip(
                 "toolbar-sell-caption",

@@ -303,7 +303,7 @@ impl AnalyticsView {
                     .child(
                         MoonInput::new(SharedString::from("tun-cfg-it-f"))
                             .state(&it_input)
-                            .small(),
+                            .size(design::input_tier(cx)),
                     ),
             )
             .child(settings)
@@ -654,7 +654,7 @@ impl AnalyticsView {
                     .child(
                         MoonInput::new(SharedString::from("tun-cfg-mn-f"))
                             .state(&mn_input)
-                            .small(),
+                            .size(design::input_tier(cx)),
                     )
                     .into_any_element(),
             ))
@@ -753,7 +753,7 @@ impl AnalyticsView {
                     .child(
                         MoonInput::new(SharedString::from("tun-cfg-seed-f"))
                             .state(&seed_input)
-                            .small(),
+                            .size(design::input_tier(cx)),
                     )
                     .into_any_element(),
             ));
@@ -817,7 +817,7 @@ impl AnalyticsView {
                     .child(
                         MoonInput::new(SharedString::from("tun-cfg-mn-t"))
                             .state(&mn_input)
-                            .small(),
+                            .size(design::input_tier(cx)),
                     ),
             )
             .child(div().flex_1())

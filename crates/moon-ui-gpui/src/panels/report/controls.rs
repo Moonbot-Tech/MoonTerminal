@@ -631,7 +631,7 @@ impl ReportPanel {
                     .child(
                         MoonInput::new("rep-strategy-mask")
                             .state(&self.strategy_name_mask_input)
-                            .small()
+                            .size(design::input_tier(cx))
                             .cleanable(true),
                     )
                     .into_any_element()
@@ -696,20 +696,7 @@ impl ReportPanel {
             .child(
                 MoonCombobox::new(&self.strategy_select)
                     .trigger_variant(MoonButtonVariant::Soft)
-                    .trigger_size(MoonButtonSize::density(cx))
-                    // Workaround: MoonCombobox::trigger_size converts the density tier into
-                    // MoonUI's legacy `Size` and `MoonButtonMetrics::for_size` (combobox.rs:611,
-                    // :830), a different table than an ordinary MoonButton. `refine_style` runs
-                    // after those metrics, so these overrides make the trigger match the
-                    // MoonDropdown beside it. Delete once MoonUI resolves the tier natively.
-                    .h(design::action_control_h_px(cx))
-                    .px(design::ui_px(
-                        cx,
-                        design::button_tier(cx).control_metrics().pad_x,
-                    ))
-                    .text_size(design::t_body(cx))
-                    .line_height(design::ui_px(cx, design::tier_line_height(cx)))
-                    .rounded(design::r_button(cx))
+                    .trigger_button_size(MoonButtonSize::density(cx))
                     .menu_chrome(MoonComboboxMenuChrome::Menu)
                     .font_family(design::mono())
                     .placeholder(t!("report.all_strategies").to_string())

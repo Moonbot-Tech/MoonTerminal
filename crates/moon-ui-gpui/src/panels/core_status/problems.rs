@@ -282,8 +282,6 @@ pub(super) fn problems_view(
                     view.update(cx, |this, cx| this.pick_problem_core(core, cx));
                 }
             })
-            .header_height(design::TABLE_HEAD_H)
-            .row_height(design::TABLE_ROW_H)
             .style(design::table_style(p)),
         ))
 }

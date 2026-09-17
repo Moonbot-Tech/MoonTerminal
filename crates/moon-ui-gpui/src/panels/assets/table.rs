@@ -994,8 +994,6 @@ pub(super) fn assets_table(
         })
         .columns(assets_columns(&visible))
         .state(state)
-        .header_height(design::TABLE_HEAD_H)
-        .row_height(design::TABLE_ROW_H)
         .style(design::table_style(p))
         // A header click re-sorts the cached rows; the action column is not sortable.
         .on_sort(move |key, ascending, _window, app| {

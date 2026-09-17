@@ -40,7 +40,7 @@ impl AlertsPanel {
                 div().w(px(90.0)).child(
                     MoonInput::new("alerts-coin")
                         .state(&self.coin_input)
-                        .small()
+                        .size(design::input_tier(cx))
                         // A filter with no ✕ can only be undone by holding backspace.
                         .cleanable(true),
                 ),

@@ -228,8 +228,9 @@ pub(super) fn field(
     store: &EditorStore,
     id: &'static str,
     enabled: bool,
+    cx: &App,
 ) -> Option<impl IntoElement> {
-    field_masked(store, id, enabled, false)
+    field_masked(store, id, enabled, false, cx)
 }
 
 /// The same field, optionally masked — Moonbot's password boxes show dots, and a mirrored page that
@@ -239,6 +240,7 @@ pub(super) fn field_masked(
     id: &'static str,
     enabled: bool,
     masked: bool,
+    cx: &App,
 ) -> Option<impl IntoElement> {
     let state = store.input(id)?;
     // Emptied by the view when mixed (see `build_editors`); here it only says why it is empty.
@@ -247,7 +249,7 @@ pub(super) fn field_masked(
         div().w_full().child(
             MoonInput::new(id)
                 .state(&state)
-                .small()
+                .size(design::input_tier(cx))
                 .disabled(!enabled)
                 .when(mixed, |input| {
                     input
@@ -627,7 +629,7 @@ pub(super) fn num(
         div().flex_none().w(design::ui_px(cx, width)).child(
             MoonInput::new(id)
                 .state(&state)
-                .small()
+                .size(design::input_tier(cx))
                 .disabled(!enabled)
                 // Too narrow for the placeholder: the tone and the emptiness say it.
                 .when(mixed, |input| input.tone(MoonTone::Warning).selected(true)),

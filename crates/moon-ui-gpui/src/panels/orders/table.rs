@@ -127,8 +127,6 @@ pub(super) fn orders_table(
         })
         .columns(visible.iter().map(|c| column_def(*c)).collect::<Vec<_>>())
         .state(state)
-        .header_height(design::TABLE_HEAD_H)
-        .row_height(design::TABLE_ROW_H)
         .style(design::table_style(p))
         .on_sort(move |key, ascending, _window, app| {
             let key = key.to_string();

@@ -432,7 +432,7 @@ impl Render for Shell {
             })
             .child(
                 MoonWindowFrame::main("moon-main-window-frame", chrome_width)
-                    .header_height(design::HEADER_TOP_H)
+                    .header_height(design::header_height(cx))
                     .leading_inset(design::titlebar_leading_inset())
                     .show_controls(design::show_custom_window_controls())
                     .hit_overlay(),

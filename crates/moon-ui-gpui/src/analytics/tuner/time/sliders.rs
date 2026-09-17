@@ -13,7 +13,7 @@
 //! cursor is not lost once it leaves the track.
 
 use gpui::*;
-use moon_ui::{MoonCheckbox, MoonPalette, MoonSize, h_flex, v_flex};
+use moon_ui::{MoonCheckbox, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
@@ -439,14 +439,15 @@ impl AnalyticsView {
             .items_end()
             // Gap 4 (not 6) plus a checkbox-wide lead-in: together they reproduce the grid
             // row's checkbox column, so the slider labels stay under the field names. The
-            // lead-in is an invisible `Sm` checkbox rather than a stated width, so it keeps MoonUI's
-            // own box size at any UI zoom; hidden, it takes layout but paints nothing.
+            // lead-in is an invisible, tier-following checkbox rather than a stated width, so it
+            // keeps MoonUI's own box size at any density and UI zoom; hidden, it takes layout but
+            // paints nothing.
             .gap(design::ui_px(cx, 4.0))
             .opacity(if dim { 0.5 } else { 1.0 })
             .child(
                 div().flex_none().invisible().child(
                     MoonCheckbox::new(SharedString::from(format!("tt-slider-lead-{field}")))
-                        .size(MoonSize::Sm),
+                        .size(design::choice_tier(cx)),
                 ),
             )
             .child(

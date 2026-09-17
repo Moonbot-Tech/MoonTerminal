@@ -1789,7 +1789,7 @@ impl StrategiesView {
                 );
                 let mut input = MoonInput::new(SharedString::from(format!("field-input-{row_id}")))
                     .state(&state)
-                    .small()
+                    .size(design::input_tier(cx))
                     .tone(MoonTone::Warning)
                     .selected(dirty || differ)
                     .disabled(!active);
@@ -1938,7 +1938,7 @@ impl StrategiesView {
                     let mut input =
                         MoonInput::new(SharedString::from(format!("field-input-{row_id}")))
                             .state(&state)
-                            .small()
+                            .size(design::input_tier(cx))
                             // No colour case here: a colour field draws its own input in the arm
                             // above, so this one only ever renders free text.
                             .tone(if rejected {

@@ -8,7 +8,7 @@ use moon_ui::{MoonAccent, MoonInput, MoonInputState, MoonSegmentItem, MoonSegmen
 use rust_i18n::t;
 
 use super::fmt::{fmt_sell_pct, scroll_dy, wheel_step};
-use crate::Backend;
+use crate::{Backend, design};
 
 /// Base floor for a preset cell's fitted width.
 const MIN_CELL_W: f32 = 34.0;
@@ -188,6 +188,7 @@ pub(super) fn size_strip(
     backend: Entity<Backend>,
     group: Option<String>,
     unit: &str,
+    cx: &App,
 ) -> impl IntoElement {
     let interactive = group.is_some();
     let unit = unit.to_string();
@@ -247,7 +248,9 @@ pub(super) fn size_strip(
     if let Some(index) = edit_ix.filter(|index| *index < 6) {
         segment = segment.replace_item(
             index,
-            MoonInput::new("toolbar-size-edit").state(input).small(),
+            MoonInput::new("toolbar-size-edit")
+                .state(input)
+                .size(design::input_tier(cx)),
         );
     }
     segment.render()
@@ -277,6 +280,7 @@ pub(super) fn sell_strip(
     input: &Entity<MoonInputState>,
     backend: Entity<Backend>,
     group: Option<String>,
+    cx: &App,
 ) -> impl IntoElement {
     let interactive = group.is_some();
     let items = (0..6).map(|index| {
@@ -348,7 +352,9 @@ pub(super) fn sell_strip(
     if let Some(index) = edit_ix.filter(|index| interactive && *index < 6) {
         segment = segment.replace_item(
             index,
-            MoonInput::new("toolbar-sell-edit").state(input).small(),
+            MoonInput::new("toolbar-sell-edit")
+                .state(input)
+                .size(design::input_tier(cx)),
         );
     }
     segment.render()

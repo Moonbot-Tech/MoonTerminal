@@ -130,7 +130,7 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
                     div().w(px(150.0)).child(
                         MoonInput::new("oe-price-input")
                             .state(&s.price_input)
-                            .small()
+                            .size(design::input_tier(cx))
                             .mono(true),
                     ),
                 )
@@ -188,7 +188,7 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
         host.child(
             MoonInput::new(id)
                 .state(input)
-                .small()
+                .size(design::input_tier(cx))
                 .disabled(!enabled)
                 .mono(true),
         )

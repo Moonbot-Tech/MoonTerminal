@@ -205,7 +205,7 @@ impl Shell {
                     .child(
                         MoonInput::new("header-ticker-query")
                             .state(&self.ticker_input)
-                            .small(),
+                            .size(design::input_tier(cx)),
                     )
                     .child(list),
             )

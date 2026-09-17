@@ -7,8 +7,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::util::fmt::DeltaSign;
 use moon_ui::{
-    MoonButtonSize, MoonButtonVariant, MoonMetrics, MoonPalette, MoonSize, MoonTableStyle,
-    MoonTextMetrics, MoonTheme, MoonTone, rgba_from,
+    MoonButtonSize, MoonButtonVariant, MoonInputSize, MoonMetrics, MoonPalette, MoonSize,
+    MoonTabStrip, MoonTableStyle, MoonTextMetrics, MoonTheme, MoonTone, rgba_from,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -29,7 +29,6 @@ pub fn delta_tone(sign: DeltaSign) -> MoonTone {
 pub const HEADER_TOP_H: f32 = M.header_top_h;
 pub const TOOLBAR_H: f32 = M.toolbar_h;
 pub const STATUS_H: f32 = M.status_h;
-pub const TABLE_HEAD_H: f32 = M.table_header_h;
 pub const TABLE_ROW_H: f32 = M.table_row_h;
 pub const HEADER_PAD_X: f32 = 12.0;
 
@@ -95,16 +94,20 @@ pub const DISCLOSURE_BOX: f32 = 12.0;
 
 /// Height of the toolbar strip.
 ///
-/// The one home of its fit triple, matching [`header_height`] and the
-/// `table_row_h`/`table_head_h` pair below. Centralizing the formula prevents callers that size or
-/// position adjacent chrome from drifting away from the row that is actually rendered.
+/// The one home of the toolbar's tier-derived band, matching [`header_height`] and the
+/// `table_row_h`/`table_head_h` pair below. The base a Compact toolbar draws from comes from
+/// MoonUI's `tier_band_base`, not a literal here, so centralizing the call prevents callers that
+/// size or position adjacent chrome from drifting away from the row that is actually rendered.
 pub fn toolbar_height(cx: &App) -> f32 {
-    fit_h_value(cx, TOOLBAR_H, 13.0, 9.5)
+    let t = MoonTheme::active_tokens(cx);
+    t.fit_band(t.tier_band_base(TOOLBAR_H, |m| m.height), 13.0)
 }
 
-/// Height of the window header strip — the companion to [`toolbar_height`].
+/// Height of the window header strip — the companion to [`toolbar_height`]. Drifting the two apart
+/// is exactly the failure this shared shape exists to prevent.
 pub fn header_height(cx: &App) -> f32 {
-    fit_h_value(cx, HEADER_TOP_H, 14.0, 9.0)
+    let t = MoonTheme::active_tokens(cx);
+    t.fit_band(t.tier_band_base(HEADER_TOP_H, |m| m.height), 14.0)
 }
 
 /// [`header_height`] as `Pixels`, for the row that draws itself.
@@ -218,11 +221,11 @@ pub fn chrome_label_color(p: MoonPalette) -> u32 {
 
 /// Height of a chrome tab strip, in pixels at the current UI and font scale.
 ///
-/// One source for the triple `(28, 13, 7.5)`, which is `MoonTabStrip`'s own tab height: a strip
-/// whose row is a different height from the tabs inside it puts the active-tab underline off the
-/// row's bottom edge. Every strip in the app resolves it here — the two chart strips through
-/// [`chart_tab_strip_h`](crate::chart_tabs::chart_tab_strip_h), which delegates to
-/// [`tab_strip_h_value`], and the four window strips directly.
+/// One source for `MoonTabStrip`'s own tab height, now delegated to `MoonTabStrip::strip_height`
+/// rather than a hand copy: a strip whose row is a different height from the tabs inside it puts
+/// the active-tab underline off the row's bottom edge. Every strip in the app resolves it here —
+/// the two chart strips through [`chart_tab_strip_h`](crate::chart_tabs::chart_tab_strip_h), which
+/// delegates to [`tab_strip_h_value`], and the three window strips directly.
 ///
 /// Args:
 ///     cx: Application context supplying the current UI and font scales.
@@ -241,7 +244,7 @@ pub fn tab_strip_h(cx: &App) -> Pixels {
 /// Returns:
 ///     The scaled tab-strip height as a raw number.
 pub fn tab_strip_h_value(cx: &App) -> f32 {
-    fit_h_value(cx, 28.0, 13.0, 7.5)
+    MoonTabStrip::strip_height(&MoonTheme::active_tokens(cx))
 }
 
 /// Renders one chrome tab strip through the lifted label palette and the LIVE theme tokens.
@@ -893,6 +896,47 @@ pub fn button_tier(cx: &App) -> MoonSize {
         .nearest(MoonButtonSize::SUPPORTED)
 }
 
+/// The size tier a fixed dense row's checkbox or radio renders at: `Xs` at Compact, `Sm` at
+/// Standard and Large.
+///
+/// Capped at `Sm` rather than following [`button_tier`] all the way to `Md` at Large — these are
+/// FIXED DENSE ROWS (the tuner's filter rows, the time grids, the strategy tree's check column),
+/// and letting them grow to `Md` at Large would move Large, which this goal's boundary forbids.
+/// Capping here gives Compact its smaller checkbox while Standard and Large render
+/// byte-identically to today.
+///
+/// Args:
+///     cx: Application context used to read the active Moon scale.
+///
+/// Returns:
+///     `Xs` at Compact, `Sm` at Standard and Large.
+pub fn choice_tier(cx: &App) -> MoonSize {
+    button_tier(cx).min(MoonSize::Sm)
+}
+
+/// The `MoonInput` size a fixed-small terminal input should carry, at every density tier.
+///
+/// Terminal call sites that pin `.small()` today render `Small` (22/10/13) at every tier,
+/// including Compact, where that is 10px font beside 12px Compact body text. Simply dropping the
+/// pin does not fix this: an omitted `MoonInput` size resolves to the density default, `Normal`
+/// (28/10.5/14) at Standard and Large, which would move those tiers hard — a large Standard
+/// regression the boundary forbids outright. This is why the non-`Xs` arm stays `Small`, not the
+/// density default: it resolves to `Compact` (20/12/16) at Compact and `Small` (22/10/13) at
+/// Standard and Large — byte-identical to the pin those sites carry today, with Compact fixed.
+///
+/// Args:
+///     cx: Application context used to read the active Moon scale.
+///
+/// Returns:
+///     `MoonInputSize::Compact` at Compact, `MoonInputSize::Small` at Standard and Large.
+pub fn input_tier(cx: &App) -> MoonInputSize {
+    if MoonTheme::active_tokens(cx).tier() == MoonSize::Xs {
+        MoonInputSize::Compact
+    } else {
+        MoonInputSize::Small
+    }
+}
+
 /// Unscaled density-tier control font size, from [`button_tier`]'s `control_metrics().font_size`,
 /// for the terminal's `tokens.ui` text channel.
 ///
@@ -906,20 +950,6 @@ pub fn button_tier(cx: &App) -> MoonSize {
 ///     Design-reference font size, unscaled, like [`base_text`].
 pub fn tier_font_size(cx: &App) -> f32 {
     button_tier(cx).control_metrics().font_size
-}
-
-/// Unscaled density-tier control line height, from [`button_tier`]'s
-/// `control_metrics().line_height`, for a line box rendered through `tokens.ui`.
-///
-/// Compact 16 / Standard 20 / Large 24.
-///
-/// Args:
-///     cx: Application context used to read the active Moon scale.
-///
-/// Returns:
-///     Design-reference line height, unscaled, like [`base_text`].
-pub fn tier_line_height(cx: &App) -> f32 {
-    button_tier(cx).control_metrics().line_height
 }
 
 /// Offset from [`base_text`] to [`tier_font_size`] before the terminal passes text through
@@ -1491,8 +1521,8 @@ pub fn wrap_text(
 
 /// Return the effective font-scaled `MoonDataTable` row height.
 ///
-/// This mirrors the component's `fit_height(row_h, 14.0, 5.5)` call so wrappers computing natural
-/// table height do not clip rows at large font settings.
+/// This DELEGATES to the component's own `table_row_height()` so wrappers computing natural table
+/// height do not clip rows at large font settings or drift from the tier the table itself draws.
 ///
 /// Args:
 ///     cx: Application context used to read active theme tokens.
@@ -1500,12 +1530,12 @@ pub fn wrap_text(
 /// Returns:
 ///     The rendered row height in pixels.
 pub fn table_row_h(cx: &App) -> f32 {
-    fit_h_value(cx, TABLE_ROW_H, 14.0, 5.5)
+    MoonTheme::active_tokens(cx).table_row_height()
 }
 
 /// Return the effective font-scaled `MoonDataTable` header height.
 ///
-/// This mirrors the component's `fit_height(header_h, 11.0, 7.5)` call.
+/// This DELEGATES to the component's own `table_header_height()`.
 ///
 /// Args:
 ///     cx: Application context used to read active theme tokens.
@@ -1513,7 +1543,19 @@ pub fn table_row_h(cx: &App) -> f32 {
 /// Returns:
 ///     The rendered header height in pixels.
 pub fn table_head_h(cx: &App) -> f32 {
-    fit_h_value(cx, TABLE_HEAD_H, 11.0, 7.5)
+    MoonTheme::active_tokens(cx).table_header_height()
+}
+
+/// The UNFITTED `MoonDataTable` header base, in `Pixels`, for a caller that draws its own header
+/// row rather than letting `MoonDataTable` draw it.
+///
+/// Args:
+///     cx: Application context used to read active theme tokens.
+///
+/// Returns:
+///     The tier's header base put through the UI-zoom channel.
+pub fn table_head_base_px(cx: &App) -> Pixels {
+    ui_px(cx, MoonTheme::active_tokens(cx).table_header_base())
 }
 
 /// Return the current text-container width scale relative to the theme base.

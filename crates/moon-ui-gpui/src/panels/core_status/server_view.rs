@@ -503,7 +503,7 @@ fn server_row(
                         }
                     }
                 })
-                .child(server_identity(group, edit_input, w, weak_view, p))
+                .child(server_identity(group, edit_input, w, weak_view, p, app))
                 .child(ip_column(group, masked, w, p))
                 .child(div().flex_1())
                 .child(metric_cell(
@@ -941,6 +941,7 @@ fn server_identity(
     w: ByIpWidths,
     weak_view: &WeakEntity<CoreStatusView>,
     p: MoonPalette,
+    app: &App,
 ) -> AnyElement {
     let key = group.key;
     if let Some(state) = edit_input {
@@ -955,7 +956,7 @@ fn server_identity(
                     key.tree_id()
                 )))
                 .state(&state)
-                .small(),
+                .size(design::input_tier(app)),
             )
             .into_any_element();
     }

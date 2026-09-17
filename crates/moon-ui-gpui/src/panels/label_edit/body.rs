@@ -77,9 +77,11 @@ pub(super) fn dialog_body(state: &Entity<LabelEditState>, cx: &mut App) -> AnyEl
                 .child(t!("chart_labels.row_name").to_string()),
         )
         .child(
-            div()
-                .flex_1()
-                .child(MoonInput::new("le-name").state(&name_input).small()),
+            div().flex_1().child(
+                MoonInput::new("le-name")
+                    .state(&name_input)
+                    .size(design::input_tier(cx)),
+            ),
         )
         .child({
             // The MODULE's backing plate: one rectangle behind the whole block, which is why the

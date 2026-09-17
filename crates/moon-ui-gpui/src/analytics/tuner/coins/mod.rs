@@ -165,10 +165,11 @@ impl AnalyticsView {
             .items_center()
             .bg(moon(p.table_head))
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(MoonInput::new("an-coin-search").state(search).small()),
+                div().flex_1().min_w_0().child(
+                    MoonInput::new("an-coin-search")
+                        .state(search)
+                        .size(design::input_tier(cx)),
+                ),
             )
             // Right after the search: both narrow WHICH rows are worth looking at, so they
             // belong together, ahead of the chips that only switch the view.

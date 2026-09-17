@@ -448,10 +448,11 @@ impl AnalyticsView {
             .items_center()
             .bg(moon(p.table_head))
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(MoonInput::new("an-strat-search").state(&search).small()),
+                div().flex_1().min_w_0().child(
+                    MoonInput::new("an-strat-search")
+                        .state(&search)
+                        .size(design::input_tier(cx)),
+                ),
             )
             .child(self.strat_type_menu(cx))
             .child(self.strat_lists_menu(cx))

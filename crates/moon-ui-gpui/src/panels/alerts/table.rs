@@ -106,8 +106,6 @@ impl AlertsPanel {
             })
             .columns(cols.iter().map(|c| column_def(*c)).collect::<Vec<_>>())
             .state(&table_state)
-            .header_height(design::TABLE_HEAD_H)
-            .row_height(design::TABLE_ROW_H)
             .style(design::table_style(p))
             // Row selection carries no meaning here — the marked row is the one whose settings are
             // open — so a click clears the fork's three coupled selection fields immediately.

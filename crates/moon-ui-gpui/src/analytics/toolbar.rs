@@ -604,7 +604,7 @@ impl AnalyticsView {
                     .child(
                         MoonInput::new("an-strategy-mask")
                             .state(&self.strategy_mask_input)
-                            .small()
+                            .size(design::input_tier(cx))
                             .cleanable(true),
                     ),
             );

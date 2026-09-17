@@ -93,7 +93,7 @@ impl Render for DetachedChartHost {
                 MoonInput::new("detached-coin-search")
                     .state(&self.coin_input)
                     .cleanable(true)
-                    .small(),
+                    .size(design::input_tier(cx)),
             );
         // A press on either control group beside the field ends an open search, and only while
         // there is one to end; see `common::coin_toolbar_press_handler`. Coverage here is the

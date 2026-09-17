@@ -160,7 +160,7 @@ impl Shell {
                     div().w(design::font_w_px(cx, TIME_FIELD_W)).child(
                         MoonInput::new("quiet-from")
                             .state(&self.quiet_from_input)
-                            .small(),
+                            .size(design::input_tier(cx)),
                     ),
                 )
                 .child(quiet_field_label(t!("quiet.to").to_string(), cx))
@@ -168,7 +168,7 @@ impl Shell {
                     div().w(design::font_w_px(cx, TIME_FIELD_W)).child(
                         MoonInput::new("quiet-to")
                             .state(&self.quiet_to_input)
-                            .small(),
+                            .size(design::input_tier(cx)),
                     ),
                 ),
         )
@@ -200,7 +200,7 @@ impl Shell {
                     MoonInput::new("quiet-charts")
                         .state(&self.quiet_charts_input)
                         .placeholder(t!("quiet.charts_hint").to_string())
-                        .small(),
+                        .size(design::input_tier(cx)),
                 )
                 .child(
                     div()

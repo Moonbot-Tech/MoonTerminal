@@ -425,7 +425,7 @@ fn open_named_dialog(
                         .child(
                             MoonInput::new("core-update-named-input")
                                 .state(&field)
-                                .small(),
+                                .size(design::input_tier(cx)),
                         )
                         .child(div().text_color(moon(p.text_muted)).child(hint.clone())),
                 )
