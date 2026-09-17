@@ -1409,25 +1409,25 @@ pub(crate) fn pane_layout(
     // The zone takes its share of the PANE, not of what the book leaves: the reader sized it
     // against the pane, and a book toggle must not resize it. Too narrow to show a row — a
     // cramped slot in a stack — and it is left out rather than drawn as a sliver; the broom
-    // owns the whole pane.
-    let hvol_w = match hvol {
-        Some(spec) if !orderbook_only => {
-            let w = (rect.w * spec.width_frac).round();
-            if w >= moon_chart::hvol::ZONE_MIN_PX * pixel_scale {
-                w
-            } else {
-                0.0
-            }
-        }
+    // owns the whole pane. Laid over the plot, the zone takes nothing from it, so only a carved
+    // zone narrows the plot here; the overlaid one is sized below, once the plot is known.
+    let hvol_floor = moon_chart::hvol::ZONE_MIN_PX * pixel_scale;
+    let hvol_asked = match hvol {
+        Some(spec) if !orderbook_only => Some(((rect.w * spec.width_frac).round(), spec.overlay)),
+        _ => None,
+    };
+    let hvol_overlay = hvol_asked.is_some_and(|(_, overlay)| overlay);
+    let hvol_carved_w = match hvol_asked {
+        Some((w, false)) if w >= hvol_floor => w,
         _ => 0.0,
     };
-    let chart_w = (rect.w - price_axis_w - glass_w - hvol_w).max(1.0);
+    let chart_w = (rect.w - price_axis_w - glass_w - hvol_carved_w).max(1.0);
     // Left puts the axis gutter on the left and shifts the plot right; Right and Hide start the
     // plot at the zone's edge. The zone sits outboard of the axis gutter.
     let chart_x = if matches!(axis_pos, PriceAxisPos::Left) {
-        rect.x + hvol_w + price_axis_w
+        rect.x + hvol_carved_w + price_axis_w
     } else {
-        rect.x + hvol_w
+        rect.x + hvol_carved_w
     };
     // The book follows the plot only for a right-side axis, which leaves that gutter outboard of
     // it; otherwise it sits against the pane's right edge.
@@ -1457,10 +1457,21 @@ pub(crate) fn pane_layout(
             w: glass_w,
             h,
         },
+        // Carved, the zone sits outboard of everything at the pane's left edge; laid over, it is
+        // the plot's own left strip, never wider than the plot — which is the one case a book
+        // toggle CAN resize it, a plot narrower than the strip — and floored AFTER that clamp, so
+        // a plot cramped to a few pixels leaves the zone out rather than drawing the sliver the
+        // pane-relative check above had let through.
         hvol: Rect {
-            x: rect.x,
+            x: if hvol_overlay { chart_x } else { rect.x },
             y: rect.y,
-            w: hvol_w,
+            w: match hvol_asked {
+                Some((w, true)) => {
+                    let w = w.min(chart_w);
+                    if w >= hvol_floor { w } else { 0.0 }
+                }
+                _ => hvol_carved_w,
+            },
             h,
         },
     }

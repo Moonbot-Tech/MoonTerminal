@@ -180,6 +180,11 @@ impl RenderState {
             if hvol_zone[2] >= 1.0 {
                 let zone_left = hvol_zone[0] / sf;
                 let zone_top = hvol_zone[1] / sf;
+                // Laid over the plot, the zone's top-left corner is the plot's, where the tab's
+                // own corner captions print; the window caption drops to the zone's foot, above
+                // the bottom band, instead of printing through them.
+                let hvol_overlay = self.panes[idx].hvol_style.is_overlay();
+                let zone_foot = (hvol_zone[1] + hvol_zone[3]) / sf - volume_band_h;
                 if let Some((tf_s, pf_pct)) = self.panes[idx].hvol_caption {
                     let tf = match tf_s {
                         Some(s) => moon_chart::hvol::tf_label(s).unwrap_or_else(|| format!("{s}s")),
@@ -191,7 +196,11 @@ impl RenderState {
                     ];
                     for (n, line) in lines.iter().enumerate() {
                         let x = zone_left + HVOL_CAPTION_PAD;
-                        let y = zone_top + HVOL_CAPTION_PAD + LINE_H * n as f32;
+                        let y = if hvol_overlay {
+                            zone_foot - HVOL_CAPTION_PAD - LINE_H * (lines.len() - n) as f32
+                        } else {
+                            zone_top + HVOL_CAPTION_PAD + LINE_H * n as f32
+                        };
                         let metrics = self.draw_text(ctx, line, x, y, 0.0, 0.0, hvol_ink)?;
                         if hvol_plates {
                             placed.push(PlacedLabel {

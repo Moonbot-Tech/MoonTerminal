@@ -1302,11 +1302,16 @@ impl ChartDataState {
                     buy: rgba3(self.theme.candle_up, alpha),
                     sell: rgba3(self.theme.candle_down, alpha),
                     // The zone keeps its fill and frame in both modes, as the reference draws
-                    // them; `transparent` is about the captions' plates, below.
-                    bg: rgba3(self.theme.book_bg, 1.0),
+                    // them; `transparent` is about the captions' plates, below. Its own theme
+                    // colour: it used to borrow the order book's spread background, and a reader
+                    // who wanted the two apart had no way to get it.
+                    bg: rgba3(self.theme.hvol_bg, 1.0),
                     border: rgba3(self.theme.grid, self.theme.grid_alpha),
                     m: [
-                        0.0,
+                        // Laid over the plot: the layout above already left the plot whole and
+                        // put the zone on its left edge; this tells the shaders and the user-layer
+                        // clip the same thing.
+                        f32::from(u8::from(self.chart_graphics.hvol_overlay)),
                         f32::from(u8::from(self.chart_graphics.hvol_stacked)),
                         // Quantized for the reason the band's is: the live row grows with every
                         // print, and this struct is the diff gate on a cached texture.

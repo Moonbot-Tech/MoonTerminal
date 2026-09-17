@@ -45,6 +45,15 @@ pub struct ChartTheme {
     /// Candle-body fill opacity, 0..1 (outlines/wicks are drawn more opaquely).
     pub candle_fill_alpha: f32,
 
+    // --- Volumes ---
+    // The volume bars themselves — the bottom band and the horizontal profile alike — draw in the
+    // candle colours above, by decision: one pair for candles and volumes. Only the profile's
+    // backdrop is its own colour, and only since palette generation 3: before that it borrowed
+    // the order book's `book_bg`, and a reader who wanted the two apart had no way to get it.
+    /// Backdrop of the horizontal-volume zone, sRGB. The bottom band has no backdrop of its own:
+    /// it sits straight on the chart background, so this is the profile's alone.
+    pub hvol_bg: [u8; 3],
+
     // --- Trade ticks ---
     // Per-backend shader literals are now uniforms shared by all three backends.
     /// Buy trade-tick colour, sRGB.
@@ -146,6 +155,9 @@ impl Default for ChartTheme {
             candle_down: palette::CANDLE_DOWN,
             candle_neutral: [128, 128, 128],
             candle_fill_alpha: 0.85,
+            // `book_bg`, which the profile used to borrow, so a fresh install draws it exactly as
+            // the version before the field existed.
+            hvol_bg: [30, 30, 30],
             // Preserved colour defaults from the former shader literals.
             tick_buy: [47, 168, 92],
             tick_sell: [255, 142, 90],
@@ -227,6 +239,7 @@ impl ChartTheme {
         self.candle_down = palette::CANDLE_DOWN;
         self.candle_neutral = [150, 150, 150];
         self.candle_fill_alpha = 0.85;
+        self.hvol_bg = [255, 255, 255];
         // Only the colours are overridden: the dark tan and light blue both wash out on white.
         // The sizes and opacities read the same in either mode, so they are deliberately absent.
         //
@@ -275,9 +288,21 @@ impl ChartTheme {
 /// Palette generation [`ChartThemeSet::default`] currently ships.
 ///
 /// Bumped together with an appended entry in [`RETIRED_DARK`] / [`RETIRED_LIGHT`] whenever a
-/// shipped default colour is retired. A file below this number is carried across once and stamped;
-/// a file at or above it is never touched again.
-const CURRENT_PALETTE_REV: u32 = 2;
+/// shipped default colour is retired — or, as generation 3 did, whenever a field splits off
+/// another one and must INHERIT its value (see [`retire_theme`]). A file below this number is
+/// carried across once and stamped; a file at or above it is never touched again.
+const CURRENT_PALETTE_REV: u32 = 3;
+
+/// The generation that gave the horizontal-volume backdrop its own colour. A file below it has
+/// no `hvol_bg` key, and the value serde substituted for it is the SHIPPED default rather than
+/// the `book_bg` the user was actually looking at.
+///
+/// Known limit, accepted: a file stamped 3 that an OLDER build then re-saved (a downgrade, a
+/// colour changed there, an upgrade back) has lost the key but kept the stamp, so the next load
+/// here lands the backdrop on the shipped default with no repair. Telling that file from a
+/// current one would need the field to carry "absent" (an `Option` on a colour), and the cost is
+/// a cosmetic reset on a path nobody supports — the picker puts it right in one click.
+const HVOL_BG_SPLIT_REV: u32 = 3;
 
 /// The palette generation of a `theme.toml` written BEFORE that field existed.
 ///
@@ -346,16 +371,27 @@ const RETIRED_LIGHT: &[RetiredColors] = &[
 /// retired. A value the user chose — anything not byte-identical to a retired default — is left
 /// exactly as it was.
 ///
-/// Idempotent: no current default equals any retired value, so a second pass changes nothing.
+/// The retirement loop is idempotent: no current default equals any retired value, so a second
+/// pass changes nothing. The generation-3 step below is NOT — it copies `book_bg` into `hvol_bg`,
+/// which is what the profile drew before the field existed, and a second pass would overwrite a
+/// backdrop the user has chosen since. Every caller therefore runs this only on a file whose
+/// generation is below the current one (or on a flat file, which predates every generation), and
+/// stamps it afterwards.
 ///
 /// Args:
 ///     theme: The set read off disk, mutated in place.
 ///     fresh: The current defaults for this same theme mode, the source of every replacement.
 ///     retired: Every generation of defaults this mode has stopped shipping.
+///     from_rev: The generation the file sits at, which decides whether the split applies.
 ///
 /// Returns:
 ///     Whether any field changed, which is what decides if the file is written back.
-fn retire_theme(theme: &mut ChartTheme, fresh: &ChartTheme, retired: &[RetiredColors]) -> bool {
+fn retire_theme(
+    theme: &mut ChartTheme,
+    fresh: &ChartTheme,
+    retired: &[RetiredColors],
+    from_rev: u32,
+) -> bool {
     let mut changed = false;
     let mut swap = |slot: &mut [u8; 3], old: [u8; 3], new: [u8; 3]| {
         if *slot == old {
@@ -368,6 +404,10 @@ fn retire_theme(theme: &mut ChartTheme, fresh: &ChartTheme, retired: &[RetiredCo
         swap(&mut theme.candle_down, gen.candle_down, fresh.candle_down);
         swap(&mut theme.book_bid, gen.book_bid, fresh.book_bid);
         swap(&mut theme.book_ask, gen.book_ask, fresh.book_ask);
+    }
+    if from_rev < HVOL_BG_SPLIT_REV && theme.hvol_bg != theme.book_bg {
+        theme.hvol_bg = theme.book_bg;
+        changed = true;
     }
     changed
 }
@@ -417,8 +457,19 @@ impl ChartThemeSet {
         if self.palette_rev >= CURRENT_PALETTE_REV {
             return false;
         }
-        retire_theme(&mut self.dark, &ChartTheme::default(), RETIRED_DARK);
-        retire_theme(&mut self.light, &ChartTheme::default_light(), RETIRED_LIGHT);
+        let from_rev = self.palette_rev;
+        retire_theme(
+            &mut self.dark,
+            &ChartTheme::default(),
+            RETIRED_DARK,
+            from_rev,
+        );
+        retire_theme(
+            &mut self.light,
+            &ChartTheme::default_light(),
+            RETIRED_LIGHT,
+            from_rev,
+        );
         // Stamped even when no colour moved: the file has now been SEEN by this generation, and
         // without the stamp a user who had already customised all four would be re-examined, and
         // re-written, on every single launch.
@@ -494,7 +545,12 @@ impl ChartThemeSet {
         // Scoped to the flat side deliberately: `light` below is built fresh from the current
         // defaults and cannot hold a retired byte, and a flat file predates the marker by
         // construction, so there is no generation to gate on either.
-        retire_theme(&mut flat, &ChartTheme::default(), RETIRED_DARK);
+        retire_theme(
+            &mut flat,
+            &ChartTheme::default(),
+            RETIRED_DARK,
+            absent_palette_rev(),
+        );
         let set = Self {
             palette_rev: CURRENT_PALETTE_REV,
             dark: flat,
@@ -547,10 +603,20 @@ impl ChartThemeSet {
             let pasted_rev = set.palette_rev;
             if pasted_rev < CURRENT_PALETTE_REV {
                 if sent_dark {
-                    retire_theme(&mut set.dark, &ChartTheme::default(), RETIRED_DARK);
+                    retire_theme(
+                        &mut set.dark,
+                        &ChartTheme::default(),
+                        RETIRED_DARK,
+                        pasted_rev,
+                    );
                 }
                 if sent_light {
-                    retire_theme(&mut set.light, &ChartTheme::default_light(), RETIRED_LIGHT);
+                    retire_theme(
+                        &mut set.light,
+                        &ChartTheme::default_light(),
+                        RETIRED_LIGHT,
+                        pasted_rev,
+                    );
                 }
             }
             // The generation the PASTED side now sits at: carried up to the current one just
@@ -578,7 +644,12 @@ impl ChartThemeSet {
             // branch promises to preserve untouched; carrying it across here would let a paste of
             // an unrelated flat DARK theme rewrite a light colour the user never sent — and it may
             // legitimately hold a retired colour the user chose after their own migration ran.
-            retire_theme(&mut flat, &ChartTheme::default(), RETIRED_DARK);
+            retire_theme(
+                &mut flat,
+                &ChartTheme::default(),
+                RETIRED_DARK,
+                absent_palette_rev(),
+            );
             return Some(Self {
                 palette_rev: CURRENT_PALETTE_REV,
                 dark: flat,

@@ -12,7 +12,9 @@
 // Rows are placed against the PANE view's price mapping (b0), whose `bounds` is the plot: the zone
 // shares the plot's top and height, and only the horizontal extent is the zone's own (`hs_zone`).
 // Rows grow from the zone's RIGHT edge — the plot side — leftward, as the reference draws them,
-// and their length is LINEAR in the value against the visible maximum.
+// and their length is LINEAR in the value against the visible maximum. Laid over the plot
+// (`hs_m.x` >= 0.5) the zone IS the plot's left strip: the rows grow from its LEFT edge rightward
+// instead, anchored to the plot's edge, and the backdrop pass draws nothing.
 //
 // A separate pass draws the zone's backdrop and frame before the rows. Write sRGB colours
 // directly (UNORM target, as in grid.hlsl).
@@ -38,7 +40,7 @@ cbuffer HvolStyle : register(b1) {
     float4 hs_sell;    // sold rgb + opacity
     float4 hs_bg;      // backdrop rgb + opacity
     float4 hs_border;  // border rgb + opacity
-    float4 hs_m;       // x unused, y stacked (1) / overlaid (0), z 1/max, w border px
+    float4 hs_m;       // x over the plot (1) / carved out (0), y stacked (1) / overlaid (0), z 1/max, w border px
 };
 
 struct HvolRow {
@@ -97,11 +99,20 @@ HvolOut hvol_row_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     if (bot < hs_zone.y || top > hs_zone.y + hs_zone.w) {
         return hvol_cull();
     }
-    // From the zone's right edge, the plot side, leftward. At least one pixel of colour for a row
-    // that has anything in it, so a thin market still shows where it traded.
-    float right = hs_zone.x + hs_zone.z;
-    float x1 = round(right - start);
-    float x0 = min(round(x1 - len), x1 - 1.0);
+    // Carved out: from the zone's right edge, the plot side, leftward. Over the plot: from its
+    // left edge rightward. At least one pixel of colour for a row that has anything in it, so a
+    // thin market still shows where it traded.
+    float x0;
+    float x1;
+    if (hs_m.x >= 0.5) {
+        float left = hs_zone.x;
+        x0 = round(left + start);
+        x1 = max(round(x0 + len), x0 + 1.0);
+    } else {
+        float right = hs_zone.x + hs_zone.z;
+        x1 = round(right - start);
+        x0 = min(round(x1 - len), x1 - 1.0);
+    }
     float2 corner = CORNERS[vid % 6u];
     float2 px = float2(x0, top) + corner * float2(x1 - x0, bot - top);
     px.x = clamp(px.x, hs_zone.x, hs_zone.x + hs_zone.z);
@@ -125,7 +136,8 @@ struct HvolBgOut {
 
 HvolBgOut hvol_bg_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     HvolBgOut o;
-    if (hs_zone.z < 1.0) {
+    // No zone, or a zone laid over the plot, which has no backdrop or frame of its own.
+    if (hs_zone.z < 1.0 || hs_m.x >= 0.5) {
         o.pos = float4(2.0, 2.0, 0.0, 1.0);
         o.border = 0u;
         return o;

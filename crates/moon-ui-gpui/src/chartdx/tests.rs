@@ -15,7 +15,53 @@ fn areas(pane: Rect, broom: bool, book: bool, axis: PriceAxisPos) -> PaneAreas {
 }
 
 fn hvol() -> Option<moon_chart::hvol::HvolZoneSpec> {
-    Some(moon_chart::hvol::HvolZoneSpec { width_frac: 0.2 })
+    Some(moon_chart::hvol::HvolZoneSpec {
+        width_frac: 0.2,
+        overlay: false,
+    })
+}
+
+fn hvol_overlay() -> Option<moon_chart::hvol::HvolZoneSpec> {
+    Some(moon_chart::hvol::HvolZoneSpec {
+        width_frac: 0.2,
+        overlay: true,
+    })
+}
+
+/// Laid over the plot, the zone takes no width from it: the plot is exactly what it is with the
+/// zone off, and the zone is the plot's own left strip, whichever side the price axis takes.
+#[test]
+fn the_overlaid_hvol_zone_leaves_the_plot_whole_and_sits_on_its_left_edge() {
+    for axis in [PriceAxisPos::Left, PriceAxisPos::Right, PriceAxisPos::Hide] {
+        let case = format!("{axis:?}");
+        let off = pane_layout(PANE, false, true, true, axis, None, 1.0);
+        let on = pane_layout(PANE, false, true, true, axis, hvol_overlay(), 1.0);
+        for (a, b) in [(on.plot, off.plot), (on.glass, off.glass)] {
+            assert_eq!((a.x, a.y, a.w, a.h), (b.x, b.y, b.w, b.h), "{case}");
+        }
+        assert_eq!(on.hvol.x, on.plot.x, "{case}");
+        assert_eq!(on.hvol.w, (PANE.w * 0.2).round(), "{case}");
+        assert!(on.hvol.w <= on.plot.w, "{case}");
+        assert_eq!(on.hvol.h, on.plot.h, "{case}");
+    }
+    // A plot cramped below the zone's floor leaves the overlaid zone out, as a cramped pane
+    // leaves the carved one out: the pane-relative width passes the floor, the strip does not.
+    let cramped = Rect { w: 130.0, ..PANE };
+    let wide = Some(moon_chart::hvol::HvolZoneSpec {
+        width_frac: 0.5,
+        overlay: true,
+    });
+    assert!(
+        cramped.w * 0.5 >= moon_chart::hvol::ZONE_MIN_PX,
+        "the pane-relative width itself passes the floor"
+    );
+    let a = pane_layout(cramped, false, true, true, PriceAxisPos::Right, wide, 1.0);
+    assert!(
+        a.plot.w < moon_chart::hvol::ZONE_MIN_PX,
+        "the book and the axis leave the plot under the floor: {}",
+        a.plot.w
+    );
+    assert_eq!(a.hvol.w, 0.0, "no sliver over a cramped plot");
 }
 
 /// Both areas stay inside the pane and neither overlaps the other, whatever the flags — the

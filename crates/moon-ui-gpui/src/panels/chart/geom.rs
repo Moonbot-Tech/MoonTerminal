@@ -136,8 +136,10 @@ impl ChartPanel {
         // On no pane at all — an empty stack slot, the gap between panes — the answer is no. Chart
         // gestures have nothing to act on there either, but claiming the point would swallow the
         // press instead of leaving it to whoever owns that space.
-        // The horizontal-volume zone is not chart space, but it is not trading either: a press
-        // there pans and zooms as one in the axis gutter does, in every zone mode alike.
+        // A horizontal-volume zone carved out beside the plot is not chart space, but it is not
+        // trading either: a press there pans and zooms as one in the axis gutter does, whichever
+        // side its readout prints at. Laid over the plot it is plain chart space, and
+        // `hvol_pane_at` says so by answering `None`.
         within
             && self.pane_at_with_fallback(local).is_some()
             && self.chart_gesture_pane_at(local).is_none()
@@ -195,7 +197,12 @@ impl ChartPanel {
     /// The pane whose horizontal-volume zone holds this point, or `None` when the point is not on
     /// one. A gesture there has nothing to act on: the zone is a readout, and projecting the point
     /// through the plot's time mapping would place a figure at an extrapolated off-screen time.
+    /// A zone laid OVER the plot is never "on one": the strip is chart space, every point of it
+    /// maps to a real time, and a figure or a drag there acts on the chart as anywhere else.
     pub(super) fn hvol_pane_at(&self, pos: (f32, f32)) -> Option<usize> {
+        if self.hvol_zone_spec().is_none_or(|spec| spec.overlay) {
+            return None;
+        }
         let pane = self.pane_at_with_fallback(pos)?;
         let rect = self.local_pane_rect(pane)?;
         let zone = self.local_pane_areas(rect).hvol;

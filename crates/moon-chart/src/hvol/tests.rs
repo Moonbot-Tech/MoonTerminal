@@ -163,7 +163,8 @@ fn normalize_clamps_the_hvol_fields() {
     assert_eq!(
         zone_spec(&on),
         Some(HvolZoneSpec {
-            width_frac: WIDTH_MAX
+            width_frac: WIDTH_MAX,
+            overlay: false,
         })
     );
 }

@@ -247,10 +247,26 @@ pub struct HvolStyleGpu {
     pub bg: [f32; 4],
     /// Zone frame rgb + opacity, drawn with the backdrop.
     pub border: [f32; 4],
-    /// `x` unused (the rows always grow from the zone's RIGHT edge, the plot side, leftward) -
-    /// `y` 1 stacked (sold after bought), 0 overlaid - `z` 1/visible_max, quantized -
-    /// `w` border thickness in physical px.
+    /// `x` 1 laid over the plot (no backdrop or frame, rows grow from the zone's LEFT edge
+    /// rightward), 0 carved out beside it (rows grow from the RIGHT edge, the plot side, leftward,
+    /// as the reference draws them) - `y` 1 stacked (sold after bought), 0 overlaid -
+    /// `z` 1/visible_max, quantized - `w` border thickness in physical px.
     pub m: [f32; 4],
+}
+
+impl HvolStyleGpu {
+    /// Whether the zone is laid over the plot rather than carved out beside it (`m.x`).
+    pub fn is_overlay(&self) -> bool {
+        self.m[0] >= 0.5
+    }
+
+    /// The x past which the order-line and trade-mark pass may draw, in physical px, or `None`
+    /// when nothing keeps it off the pane's left edge: no zone, or a zone laid over the plot,
+    /// which the marks must reach across exactly as they reach across the bottom band. The one
+    /// statement of that clip, read by all three backends.
+    pub fn user_clip_left(&self) -> Option<f32> {
+        (self.zone[2] >= 1.0 && !self.is_overlay()).then(|| self.zone[0] + self.zone[2])
+    }
 }
 
 /// Price-line style constants: cbuffer `PriceStyle` at b1 in crosses.hlsl,

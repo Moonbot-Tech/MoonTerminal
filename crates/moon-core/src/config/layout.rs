@@ -1593,6 +1593,13 @@ pub struct ChartGraphicsCfg {
     /// exactly as [`Self::candle_volume_stacked`] draws the bottom band.
     #[serde(default, deserialize_with = "de_lenient_false")]
     pub hvol_stacked: bool,
+    /// Lay the profile OVER the plot's left edge instead of in a zone of its own beside it — the
+    /// way the bottom band sits inside the plot: the plot keeps its full width, the zone draws no
+    /// backdrop or frame (the theme's `hvol_bg` goes unused), and the rows grow from the plot's
+    /// left edge inward, mirrored, so they read as a profile anchored to the edge rather than
+    /// stubs pointing at it. Not a Moonbot setting: the reference always carves the zone out.
+    #[serde(default, deserialize_with = "de_lenient_false")]
+    pub hvol_overlay: bool,
 }
 
 /// The `hvol_tf_s` value that means "everything retained" — Moonbot's `Max`.
@@ -1626,6 +1633,7 @@ impl Default for ChartGraphicsCfg {
             hvol_width: def_hvol_width(),
             hvol_side: HvolSide::Right,
             hvol_stacked: false,
+            hvol_overlay: false,
         }
     }
 }

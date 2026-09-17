@@ -1,7 +1,8 @@
 //! Interface tab for chart-theme editing, ported from egui's `settings/interface.rs`.
 //!
-//! It exposes chart, crosshair, trade, order-book, panel, and candle colors plus numeric controls. Edits
-//! update the draft for live preview; Save writes `theme.toml`. [`Iface`] owns editor controls.
+//! It exposes chart, crosshair, candle, volume, trade, order-book and panel colors plus numeric
+//! controls. Edits update the draft for live preview; Save writes `theme.toml`. [`Iface`] owns
+//! editor controls.
 //!
 //! The trade-mark sizes and the bottom-volume band are NOT here. They describe a chart tab rather
 //! than a colour scheme, so they live on `ChartGraphicsCfg` and are edited from the chart's palette
@@ -31,6 +32,7 @@ pub(super) struct Iface {
     candle_down: Entity<MoonColorPickerState>,
     candle_neutral: Entity<MoonColorPickerState>,
     candle_fill_alpha: Entity<MoonSliderState>,
+    hvol_bg: Entity<MoonColorPickerState>,
     price_line: Entity<MoonColorPickerState>,
     price_line_alpha: Entity<MoonSliderState>,
     mark_line: Entity<MoonColorPickerState>,
@@ -282,6 +284,7 @@ pub(super) fn build(
             1.0,
             0.01,
         ),
+        hvol_bg: color_field(backend, window, cx, |t| t.hvol_bg, |t, v| t.hvol_bg = v),
         mark_line: color_field(backend, window, cx, |t| t.mark_line, |t, v| t.mark_line = v),
         mark_line_alpha: num_field(
             backend,
@@ -497,6 +500,11 @@ impl SettingsView {
                 },
                 cx,
             ))
+            .child(separator(p, cx))
+            // Volumes: the bars take the candle colours above; only the horizontal profile's
+            // backdrop is its own. Opacity, height and style stay in the chart's own popups.
+            .child(section(&t!("iface.sec_volumes"), p, cx))
+            .child(color_row(&t!("iface.hvol_bg"), &i.hvol_bg, p, cx))
             .child(separator(p, cx))
             // Price lines. Colour and width used to be per-backend shader literals.
             .child(section(&t!("iface.sec_price_lines"), p, cx))

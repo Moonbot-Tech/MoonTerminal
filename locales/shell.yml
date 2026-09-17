@@ -2908,3 +2908,11 @@ chart.volumes.hvol_backdrop_off:
   ru: "Нет"
   en: "Off"
   es: "No"
+chart.volumes.hvol_overlay:
+  ru: "Наложить на график"
+  en: "Overlay on the chart"
+  es: "Superponer al gráfico"
+chart.volumes.hvol_overlay_hint:
+  ru: "Как нижние объёмы: поверх свечей, без фона и рамки, столбики от левого края внутрь"
+  en: "Like the bottom volumes: over the candles, no backdrop or frame, rows grow inward from the left edge"
+  es: "Como los volúmenes inferiores: sobre las velas, sin fondo ni marco, las filas crecen desde el borde izquierdo"

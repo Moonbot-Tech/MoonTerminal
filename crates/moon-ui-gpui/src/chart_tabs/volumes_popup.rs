@@ -251,6 +251,19 @@ fn render_volumes_popup<T: VolumesPopupHost>(
             },
         )
     });
+    // Over the plot, like the bottom band, instead of in a zone carved out beside it. The theme's
+    // zone backdrop goes unused then, which the label says.
+    let overlay_cb = hvol_on.then(|| {
+        let entity = entity.clone();
+        MoonCheckbox::new(SharedString::from(format!("{id}-hvol-overlay")))
+            .label(t!("chart.volumes.hvol_overlay").to_string())
+            .description(t!("chart.volumes.hvol_overlay_hint").to_string())
+            .checked(cfg.hvol_overlay)
+            .on_change(move |ch: &bool, _w, app| {
+                let v = *ch;
+                write_cfg(&entity, app, |c| c.hvol_overlay = v);
+            })
+    });
     let kind_row = hvol_on.then(|| {
         let entity = entity.clone();
         seg_row(
@@ -316,6 +329,7 @@ fn render_volumes_popup<T: VolumesPopupHost>(
                     .children(window_row)
                     .children(price_frame_row)
                     .children(width_row)
+                    .children(overlay_cb)
                     .children(side_row)
                     .children(backdrop_row)
                     .children(kind_row),

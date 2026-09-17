@@ -225,6 +225,7 @@ fn hvol_fields_default_round_trip_and_read_leniently() {
     assert_eq!(empty.chart_graphics.hvol_tf_s, 0, "Auto");
     assert_eq!(empty.chart_graphics.hvol_side, HvolSide::Right);
     assert!(!empty.chart_graphics.hvol_stacked);
+    assert!(!empty.chart_graphics.hvol_overlay);
 
     let doc = "[chart_graphics]
                hvol_enabled = true
@@ -232,6 +233,7 @@ fn hvol_fields_default_round_trip_and_read_leniently() {
                hvol_side = \"left-transparent\"
                hvol_width = 0.3
                hvol_stacked = true
+               hvol_overlay = true
 ";
     let decoded: WindowLayout = toml::from_str(doc).expect("the hvol block must load");
     assert!(decoded.chart_graphics.hvol_enabled);
@@ -241,6 +243,7 @@ fn hvol_fields_default_round_trip_and_read_leniently() {
     assert!(decoded.chart_graphics.hvol_side.is_transparent());
     assert_eq!(decoded.chart_graphics.hvol_width, 0.3);
     assert!(decoded.chart_graphics.hvol_stacked);
+    assert!(decoded.chart_graphics.hvol_overlay);
     let written = toml::to_string(&decoded.chart_graphics).expect("serializes");
     assert!(
         written.contains("hvol_side = \"left-transparent\""),

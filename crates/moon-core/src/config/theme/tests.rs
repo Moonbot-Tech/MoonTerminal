@@ -166,6 +166,66 @@ fn migrating_defaults_stay_pinned_to_the_reviewed_palette() {
     assert_eq!(light.book_ask, [240, 137, 137]);
 }
 
+/// `theme.rs:ChartTheme::default` and `default_light` must ship `hvol_bg` equal to `book_bg`: that
+/// is the field the profile's backdrop read before it had its own, so a fresh install must draw
+/// exactly what the previous version drew.
+#[test]
+fn fresh_hvol_backdrop_matches_the_book_background_it_used_to_borrow() {
+    for theme in [ChartTheme::default(), ChartTheme::default_light()] {
+        assert_eq!(theme.hvol_bg, theme.book_bg);
+    }
+}
+
+/// `theme.rs:retire_theme` must copy a customised `book_bg` into `hvol_bg` on a file older than
+/// the split; leaving the shipped default there would recolour the profile's backdrop for every
+/// user who had tuned their spread background.
+#[test]
+fn pre_split_file_inherits_the_hvol_backdrop_from_the_book_background() {
+    let text =
+        "palette_rev = 2\n\n[dark]\nbook_bg = [7, 8, 9]\n\n[light]\nbook_bg = [21, 22, 23]\n";
+
+    let (set, write_back) = ChartThemeSet::resolve(Some(text));
+
+    assert!(write_back, "the split must be written back once");
+    assert_eq!(set.palette_rev, CURRENT_PALETTE_REV);
+    assert_eq!(set.dark.hvol_bg, [7, 8, 9]);
+    assert_eq!(set.light.hvol_bg, [21, 22, 23]);
+}
+
+/// `theme.rs:ChartThemeSet::retire_old_defaults` must leave `hvol_bg` of a file at the current
+/// generation alone even when it differs from `book_bg`; re-running the inheritance would erase
+/// the very choice the split exists to allow.
+#[test]
+fn post_split_hvol_backdrop_is_never_reinherited() {
+    let mut set = ChartThemeSet::default();
+    set.dark.hvol_bg = [93, 94, 95];
+    let before = set.clone();
+
+    assert!(!set.retire_old_defaults());
+    assert_eq!(set, before);
+
+    let text = before.to_share_string().expect("current pair serializes");
+    let (resolved, write_back) = ChartThemeSet::resolve(Some(&text));
+    assert!(!write_back);
+    assert_eq!(resolved, before);
+}
+
+/// `theme.rs:ChartThemeSet::parse_share` must apply the split to a pasted pre-split table on its
+/// own generation, and only to the sides actually sent.
+#[test]
+fn sharing_pre_split_dark_table_inherits_the_hvol_backdrop_on_the_pasted_side_only() {
+    let mut current = ChartThemeSet::default();
+    current.light.hvol_bg = [50, 51, 52];
+    let live_light = current.light.clone();
+    let text = "palette_rev = 2\n\n[dark]\nbg = [11, 22, 33]\nbook_bg = [7, 8, 9]\n";
+
+    let parsed =
+        ChartThemeSet::parse_share(text, &current).expect("a pre-split dark-only theme parses");
+
+    assert_eq!(parsed.dark.hvol_bg, [7, 8, 9]);
+    assert_eq!(parsed.light, live_light);
+}
+
 /// `theme.rs:retire_theme` must leave untargeted fields byte-for-byte intact while migrating
 /// retired palette colours; widening the migration would unexpectedly restyle a user's chart.
 #[test]

@@ -707,7 +707,7 @@ impl MetalLayers {
         // Order lines and trade marks stop at the horizontal-volume zone; the cursor pass keeps
         // the whole pane, as the crosshair and the volume readout live in the zone.
         let pane_sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
-        encoder.set_scissor_rect(userdata_scissor(pane_sc, self.hvol_style.zone));
+        encoder.set_scissor_rect(userdata_scissor(pane_sc, &self.hvol_style));
         self.draw_user_layers(encoder);
         encoder.set_scissor_rect(pane_sc);
         self.draw_cursor_layer(encoder, cursor_params, readout_rects);
@@ -740,6 +740,32 @@ impl MetalLayers {
             set_uniform(encoder, 0, self.view_uniform.buffer());
             set_storage(encoder, 1, self.zone_buffer.buffer());
             draw(encoder, &pipelines.zone, 6, self.zones.len() as u64);
+        }
+
+        // The horizontal volumes BEFORE the candles, like the bottom band: laid over the plot they
+        // must sit under the bodies and the crosses; carved out beside it the order is moot, as
+        // nothing else draws in their zone. HvolStyle rides slot 3, the style slot the band
+        // pipelines use too, and the candle block below rebinds it.
+        if self.hvol_style.zone[2] >= 1.0 {
+            crate::diag::bump(&crate::diag::CHART_HVOL_DRAW);
+            encoder.set_scissor_rect(bounds_scissor(
+                self.hvol_style.zone,
+                (base_sc.x + base_sc.width) as u32,
+                (base_sc.y + base_sc.height) as u32,
+            ));
+            set_uniform(encoder, 0, self.view_uniform.buffer());
+            set_storage(encoder, 2, self.hvol_buffer.buffer());
+            set_uniform(encoder, 3, self.hvol_style_uniform.buffer());
+            draw(
+                encoder,
+                &pipelines.hvol_bg,
+                6,
+                u64::from(crate::chartdx::types::HVOL_BG_INSTANCES),
+            );
+            if !self.hvol.is_empty() {
+                draw(encoder, &pipelines.hvol_rows, 12, self.hvol.len() as u64);
+            }
+            encoder.set_scissor_rect(base_sc);
         }
 
         // Candles render beneath trade crosses because combo blits over the base cache.
@@ -790,30 +816,6 @@ impl MetalLayers {
                 6,
                 moon_chart::volume_bars::VOLUME_SCALE_INSTANCES as u64,
             );
-        }
-
-        // The horizontal volumes live in their own zone beside the plot: after the plot's layers,
-        // before the book. HvolStyle rides slot 3, the style slot the band pipelines use too.
-        if self.hvol_style.zone[2] >= 1.0 {
-            crate::diag::bump(&crate::diag::CHART_HVOL_DRAW);
-            encoder.set_scissor_rect(bounds_scissor(
-                self.hvol_style.zone,
-                (base_sc.x + base_sc.width) as u32,
-                (base_sc.y + base_sc.height) as u32,
-            ));
-            set_uniform(encoder, 0, self.view_uniform.buffer());
-            set_storage(encoder, 2, self.hvol_buffer.buffer());
-            set_uniform(encoder, 3, self.hvol_style_uniform.buffer());
-            draw(
-                encoder,
-                &pipelines.hvol_bg,
-                6,
-                u64::from(crate::chartdx::types::HVOL_BG_INSTANCES),
-            );
-            if !self.hvol.is_empty() {
-                draw(encoder, &pipelines.hvol_rows, 12, self.hvol.len() as u64);
-            }
-            encoder.set_scissor_rect(base_sc);
         }
 
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
@@ -1513,13 +1515,14 @@ fn scissor_rect(
     }
 }
 
-/// The pane scissor less the horizontal-volume zone at its left edge, for the user layers.
-fn userdata_scissor(pane: MTLScissorRect, hvol_zone: [f32; 4]) -> MTLScissorRect {
-    if hvol_zone[2] < 1.0 {
+/// The pane scissor less a horizontal-volume zone carved out at its left edge, for the user
+/// layers; see `HvolStyleGpu::user_clip_left`.
+fn userdata_scissor(pane: MTLScissorRect, hvol: &HvolStyleGpu) -> MTLScissorRect {
+    let Some(edge) = hvol.user_clip_left() else {
         return pane;
-    }
+    };
     let right = pane.x + pane.width;
-    let left = ((hvol_zone[0] + hvol_zone[2]).ceil().max(0.0) as u64).clamp(pane.x, right - 1);
+    let left = (edge.ceil().max(0.0) as u64).clamp(pane.x, right - 1);
     MTLScissorRect {
         x: left,
         y: pane.y,

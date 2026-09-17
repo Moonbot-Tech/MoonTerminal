@@ -43,7 +43,7 @@ impl WgpuLayers {
         // Order lines and trade marks stop at the horizontal-volume zone; the cursor pass keeps
         // the whole pane, as the crosshair and the volume readout live in the zone.
         let sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
-        let user_sc = userdata_scissor(sc, self.hvol_style.zone);
+        let user_sc = userdata_scissor(sc, &self.hvol_style);
         pass.set_scissor_rect(user_sc.0, user_sc.1, user_sc.2, user_sc.3);
         self.draw_user_layers(pass);
         pass.set_scissor_rect(sc.0, sc.1, sc.2, sc.3);
@@ -52,9 +52,10 @@ impl WgpuLayers {
     }
 
     /// `base_sc` is the pass's own scissor, restored after the horizontal volumes draw under the
-    /// scissor of their zone alone: the zone can sit LEFT of the plot, outside the plot-to-book
-    /// span the other layers are clipped to, and widening that span for every layer would let a
-    /// candle or a cross at the plot's edge spill into the axis gutter beside it.
+    /// scissor of their zone alone: carved out, the zone sits LEFT of the plot, outside the
+    /// plot-to-book span the other layers are clipped to, and widening that span for every layer
+    /// would let a candle or a cross at the plot's edge spill into the axis gutter beside it; laid
+    /// over the plot, the zone's own scissor is what keeps the rows inside their strip.
     fn draw_base_layers(&self, pass: &mut wgpu::RenderPass<'_>, base_sc: (u32, u32, u32, u32)) {
         let pipelines = self.pipelines.as_ref().unwrap();
         let binds = self.prepared_binds.as_ref().unwrap();
@@ -76,6 +77,32 @@ impl WgpuLayers {
                 6,
                 self.zones.len() as u32,
             );
+        }
+        // The horizontal volumes BEFORE the candles, like the bottom band: laid over the plot they
+        // must sit under the bodies and the crosses; carved out beside it the order is moot, as
+        // nothing else draws in their zone. After the grid for the reason the zones are.
+        if self.hvol_style.zone[2] >= 1.0 {
+            crate::diag::bump(&crate::diag::CHART_HVOL_DRAW);
+            let (l, t, w, h) = base_sc;
+            let zone_sc = bounds_scissor(self.hvol_style.zone, l + w, t + h);
+            pass.set_scissor_rect(zone_sc.0, zone_sc.1, zone_sc.2, zone_sc.3);
+            draw_pipeline(
+                pass,
+                &pipelines.hvol_bg,
+                &binds.hvol,
+                6,
+                crate::chartdx::types::HVOL_BG_INSTANCES,
+            );
+            if !self.hvol.is_empty() {
+                draw_pipeline(
+                    pass,
+                    &pipelines.hvol_rows,
+                    &binds.hvol,
+                    12,
+                    self.hvol.len() as u32,
+                );
+            }
+            pass.set_scissor_rect(l, t, w, h);
         }
         // Candles render beneath trade crosses; combo is blitted over the base cache.
         if !self.candles.is_empty() {
@@ -132,31 +159,6 @@ impl WgpuLayers {
                 6,
                 moon_chart::volume_bars::VOLUME_SCALE_INSTANCES,
             );
-        }
-        // The horizontal volumes live in their own zone beside the plot: after the plot's layers,
-        // before the book.
-        if self.hvol_style.zone[2] >= 1.0 {
-            crate::diag::bump(&crate::diag::CHART_HVOL_DRAW);
-            let (l, t, w, h) = base_sc;
-            let zone_sc = bounds_scissor(self.hvol_style.zone, l + w, t + h);
-            pass.set_scissor_rect(zone_sc.0, zone_sc.1, zone_sc.2, zone_sc.3);
-            draw_pipeline(
-                pass,
-                &pipelines.hvol_bg,
-                &binds.hvol,
-                6,
-                crate::chartdx::types::HVOL_BG_INSTANCES,
-            );
-            if !self.hvol.is_empty() {
-                draw_pipeline(
-                    pass,
-                    &pipelines.hvol_rows,
-                    &binds.hvol,
-                    12,
-                    self.hvol.len() as u32,
-                );
-            }
-            pass.set_scissor_rect(l, t, w, h);
         }
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
         draw_pipeline(pass, &pipelines.book_bg, &binds.book, 6, 1);
@@ -688,13 +690,18 @@ fn scissor_rect(
 }
 
 /// The pane scissor less the horizontal-volume zone at its left edge, for the user layers.
-fn userdata_scissor(pane: (u32, u32, u32, u32), hvol_zone: [f32; 4]) -> (u32, u32, u32, u32) {
-    if hvol_zone[2] < 1.0 {
+/// The pane scissor less a horizontal-volume zone carved out at its left edge, for the user
+/// layers; see `HvolStyleGpu::user_clip_left`.
+fn userdata_scissor(
+    pane: (u32, u32, u32, u32),
+    hvol: &crate::chartdx::HvolStyleGpu,
+) -> (u32, u32, u32, u32) {
+    let Some(edge) = hvol.user_clip_left() else {
         return pane;
-    }
+    };
     let (l, t, w, h) = pane;
     let right = l + w;
-    let left = ((hvol_zone[0] + hvol_zone[2]).ceil().max(0.0) as u32).clamp(l, right - 1);
+    let left = (edge.ceil().max(0.0) as u32).clamp(l, right - 1);
     (left, t, right - left, h)
 }
 

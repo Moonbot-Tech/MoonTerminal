@@ -552,7 +552,8 @@ fragment float4 side_scale_fragment(constant VolumeStyle& vs [[buffer(3)]]) {
 // One instance = one row, twelve vertices: the bought length (0-5), then the sold one (6-11)
 // over it, as the sides band draws its columns. Kinds: hs.m.y 0 overlaid / 1 stacked (sold
 // continues from where bought ends). Rows are placed against the PANE view's price mapping and
-// grow from the zone's right edge, the plot side, leftward. Binds ChartView at 0, HvolStyle at 3
+// grow from the zone's right edge, the plot side, leftward — or, laid over the plot (hs.m.x >=
+// 0.5), from its left edge rightward, with no backdrop. Binds ChartView at 0, HvolStyle at 3
 // and the row storage at 2. A backdrop pass draws the zone's fill and frame before the rows.
 struct HvolStyle {
     float4 zone;
@@ -560,7 +561,7 @@ struct HvolStyle {
     float4 sell;
     float4 bg;
     float4 border;
-    float4 m; // x unused, y stacked (1) / overlaid (0), z 1/max, w border px
+    float4 m; // x over the plot (1) / carved out (0), y stacked (1) / overlaid (0), z 1/max, w border px
 };
 
 struct HvolRow {
@@ -604,10 +605,19 @@ vertex HvolOut hvol_row_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     if (bot < hs.zone.y || top > hs.zone.y + hs.zone.w) {
         return { float4(2.0, 2.0, 0.0, 1.0), 0u };
     }
-    // From the zone's right edge, the plot side, leftward; at least one pixel of colour.
-    float right = hs.zone.x + hs.zone.z;
-    float x1 = round(right - start);
-    float x0 = min(round(x1 - len), x1 - 1.0);
+    // Carved out: from the zone's right edge, the plot side, leftward. Over the plot: from its
+    // left edge rightward. At least one pixel of colour either way.
+    float x0;
+    float x1;
+    if (hs.m.x >= 0.5) {
+        float left = hs.zone.x;
+        x0 = round(left + start);
+        x1 = max(round(x0 + len), x0 + 1.0);
+    } else {
+        float right = hs.zone.x + hs.zone.z;
+        x1 = round(right - start);
+        x0 = min(round(x1 - len), x1 - 1.0);
+    }
     float2 corner = CORNERS_01[vid % 6u];
     float2 px = float2(x0, top) + corner * float2(x1 - x0, bot - top);
     px.x = clamp(px.x, hs.zone.x, hs.zone.x + hs.zone.z);
@@ -628,7 +638,8 @@ struct HvolBgOut {
 vertex HvolBgOut hvol_bg_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                                 constant ChartView& cv [[buffer(0)]],
                                 constant HvolStyle& hs [[buffer(3)]]) {
-    if (hs.zone.z < 1.0) {
+    // No zone, or a zone laid over the plot, which has no backdrop or frame of its own.
+    if (hs.zone.z < 1.0 || hs.m.x >= 0.5) {
         return { float4(2.0, 2.0, 0.0, 1.0), 0u };
     }
     float th = max(hs.m.w, 1.0);
