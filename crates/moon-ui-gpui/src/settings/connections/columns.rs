@@ -42,6 +42,15 @@ pub(super) const CONN_INDENT_BORDER: f32 = 1.0;
 /// The three indent parts sum to [`CONN_TABLE_INSET`]; `tests` proves it.
 pub(super) const CONN_INDENT_PAD: f32 = CONN_TABLE_INSET - CONN_INDENT_MARGIN - CONN_INDENT_BORDER;
 
+/// Budget for 21 Geist Mono glyphs at the most demanding normalized body size (Compact's
+/// 12px body and 1.0 text scale), plus 2px rounding room. The endpoint cell has no copy affix
+/// or horizontal padding. Keep its smaller basis so narrow-window shrink weights do not change.
+const ENDPOINT_CONTENT_CAP: f32 = 153.2;
+
+/// Five glyphs (`8/8`, space and caret) at the largest density's 16px reference font,
+/// MoonUI's 14px trigger padding and 2px rounding room. The trigger scales this budget itself.
+const DATA_TRIGGER_BASIS: f32 = 5.0 * 0.6 * 16.0 + 14.0 + 2.0;
+
 /// Where a column's header label sits over the control below it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum ConnColAlign {
@@ -191,14 +200,15 @@ const CONN_COLS: [ConnCol; 14] = [
         align: ConnColAlign::Left,
         head_pad: 8.0,
     },
-    // Shrinks with the editable text at narrow widths; the full endpoint stays in its tooltip.
+    // Only grows to its IPv4 content budget; longer IPv6 values keep their full tooltip.
+    // `grow: true` preserves shrinkage alongside the editable text at narrow widths.
     ConnCol {
         id: "h-endpoint",
         label: Some("conn.col.endpoint"),
         tip: Some("conn.tip.endpoint"),
         basis: 140.0,
         grow: true,
-        max: Some(220.0),
+        max: Some(ENDPOINT_CONTENT_CAP),
         width: ConnColWidth::TextScaled,
         align: ConnColAlign::Left,
         head_pad: 0.0,
@@ -265,7 +275,7 @@ const CONN_COLS: [ConnCol; 14] = [
         id: "h-data",
         label: Some("conn.col.data"),
         tip: Some("conn.tip.flags"),
-        basis: 52.0,
+        basis: DATA_TRIGGER_BASIS,
         grow: false,
         max: None,
         width: ConnColWidth::MicroTrigger,
