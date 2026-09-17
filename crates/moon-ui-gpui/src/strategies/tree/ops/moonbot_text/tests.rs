@@ -1,10 +1,10 @@
 //! Message-format regressions for strategy exports and folder batches pasted from MoonBot.
 
-use super::parse;
+use super::{expand_magnitude, parse};
 use crate::strategies::tree::ops::{
     clip_to_text, clipboard_matches_internal, paste_plan, resolve_clipboard,
 };
-use moon_core::feed::SchemaKind;
+use moon_core::feed::{SchemaField, SchemaFieldUi, SchemaKind, SchemaSection};
 use std::collections::HashSet;
 
 /// Reduced reproduction of the user's standalone MoonHook export, retaining literal field syntax.
@@ -153,4 +153,129 @@ fn external_clipboard_supersedes_old_local_copy_without_losing_unchanged_anchors
     );
     assert!(resolve_clipboard(Some(&local), Some("unrelated message"), &kinds()).is_none());
     assert!(resolve_clipboard(Some(&local), Some("##Begin_Strategy"), &kinds()).is_none());
+}
+
+/// The volume and delta lines of the user's MainShotL export, exactly as MoonBot's grid printed
+/// them — the eleven fields the core's parser refused on 2026-09-17 — beside a string field that
+/// happens to look like one of them.
+const SHOT: &str = "##Begin_Strategy
+StrategyName=MainShotL
+SignalType=MoonShot
+MinVolume=1400000
+MaxVolume=100000M
+MaxHourlyVolume=1000M
+MinHourlyVolFast=30k
+MaxHourlyVolFast=1000000M
+Delta_3h_Max=1E11k
+Delta2_Max=20.00k
+Delta3_Max=1000000.00k
+Delta_BTC_24_Max=5E08k
+Delta_Market_Max=1E09k
+MinuteVolDeltaMax=62.00
+Comment=10k
+Unknown_Field=10k
+##End_Strategy";
+
+fn field(name: &str, type_name: &str) -> SchemaField {
+    SchemaField {
+        name: name.into(),
+        type_name: type_name.into(),
+        ui: SchemaFieldUi::Edit,
+        picklist: vec![],
+        default: None,
+    }
+}
+
+/// A MoonShot kind whose schema types the fields the way the live core does.
+fn shot_kinds() -> Vec<SchemaKind> {
+    vec![SchemaKind {
+        ordinal: 6,
+        name: "MoonShot".into(),
+        sections: vec![SchemaSection {
+            title: "Filters / Volume".into(),
+            fields: vec![
+                field("MinVolume", "Int64"),
+                field("MaxVolume", "Int64"),
+                field("MaxHourlyVolume", "Int64"),
+                field("MinHourlyVolFast", "Int64"),
+                field("MaxHourlyVolFast", "Int64"),
+                field("Delta_3h_Max", "Double"),
+                field("Delta2_Max", "Double"),
+                field("Delta3_Max", "Double"),
+                field("Delta_BTC_24_Max", "Double"),
+                field("Delta_Market_Max", "Double"),
+                field("MinuteVolDeltaMax", "Double"),
+                field("Comment", "String"),
+            ],
+        }],
+    }]
+}
+
+/// Every suffixed number lands as the value the core echoed after the same export was pasted into
+/// MoonBot itself; a string field and a field the schema does not know keep their text.
+#[test]
+fn grid_magnitude_suffixes_expand_to_the_core_values() {
+    let clip = parse(SHOT, &shot_kinds()).unwrap();
+    for (key, value) in [
+        ("MinVolume", "1400000"),
+        ("MaxVolume", "100000000000"),
+        ("MaxHourlyVolume", "1000000000"),
+        ("MinHourlyVolFast", "30000"),
+        ("MaxHourlyVolFast", "1000000000000"),
+        ("Delta_3h_Max", "100000000000000"),
+        ("Delta2_Max", "20000"),
+        ("Delta3_Max", "1000000000"),
+        ("Delta_BTC_24_Max", "500000000000"),
+        ("Delta_Market_Max", "1000000000000"),
+        ("MinuteVolDeltaMax", "62.00"),
+        ("Comment", "10k"),
+        ("Unknown_Field", "10k"),
+    ] {
+        assert!(
+            clip[0].fields.contains(&(key.into(), value.into())),
+            "{key}: {:?}",
+            clip[0].fields.iter().find(|(k, _)| k == key)
+        );
+    }
+}
+
+/// The expansion is exact decimal arithmetic, and anything that is not a number with a suffix is
+/// left for the field parser to refuse.
+#[test]
+fn magnitude_expansion_is_exact_and_refuses_non_numbers() {
+    for (raw, expected) in [
+        ("0.1k", "100"),
+        ("1.5k", "1500"),
+        ("-1.5k", "-1500"),
+        ("1,5k", "1500"),
+        ("0.0001k", "0.1"),
+        ("1E-5k", "0.01"),
+        ("1.2345k", "1234.5"),
+        ("0k", "0"),
+        ("-0k", "0"),
+        (" 7M ", "7000000"),
+        ("2.5M", "2500000"),
+        ("12K", "12000"),
+        ("10m", "10000000"),
+    ] {
+        assert_eq!(expand_magnitude(raw).as_deref(), Some(expected), "{raw}");
+    }
+    for raw in [
+        "",
+        "k",
+        "M",
+        "1400000",
+        "62.00",
+        "YES",
+        "abck",
+        "1.2.3k",
+        "1Ek",
+        "1e400k",
+        "1E-2147483648k",
+        "1Gk",
+        "--1k",
+        "1k k",
+    ] {
+        assert_eq!(expand_magnitude(raw), None, "{raw}");
+    }
 }
