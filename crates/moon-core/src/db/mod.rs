@@ -970,13 +970,13 @@ fn tune_reader(conn: &Connection) {
 ///
 /// A genuinely absent file maps to `NotReady`; metadata and SQLite open errors
 /// map to `Failed` so callers cannot present them as an empty period. Access also
-/// fails when this process does not own the recovery lease.
+/// fails with a typed denial when the lease/recovery preflight did not authorize access.
 ///
 /// Returns:
 ///     Tuned report connection for the sole current process.
 pub fn open_reader() -> ReadResult<Connection> {
     report_recovery::ensure_access().map_err(|error| ReadFail::Failed {
-        kind: FailKind::Other,
+        kind: FailKind::ReplicaAccessDenied,
         msg: Arc::from(error.to_string()),
     })?;
     let path = paths::reports_db_path();

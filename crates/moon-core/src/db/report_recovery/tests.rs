@@ -275,6 +275,18 @@ fn report_access_requires_the_process_lease() {
     assert!(ensure_access().is_err());
 }
 
+/// Mapping a denied reader to `Other` hides the localized recording-off guidance from Report.
+#[test]
+fn report_reader_preserves_typed_access_denial() {
+    assert!(matches!(
+        super::super::open_reader(),
+        Err(super::super::ReadFail::Failed {
+            kind: super::super::FailKind::ReplicaAccessDenied,
+            ..
+        })
+    ));
+}
+
 /// `db/report_recovery.rs:recent_snapshot` must date the breaker from actual finalization.
 ///
 /// Replacing the marker timestamp with `RecoveryMetadata::created_unix_ms` makes the damage below

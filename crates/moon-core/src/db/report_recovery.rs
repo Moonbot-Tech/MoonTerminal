@@ -47,7 +47,7 @@ static LEASE: OnceLock<Mutex<Connection>> = OnceLock::new();
 /// Access becomes live only after the lease-owned recovery preflight succeeds.
 static ACCESS_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// Process-lifetime recovery notice consumed by the Analytics UI.
+/// Process-lifetime recovery notice consumed by Report and Analytics.
 static NOTICE: OnceLock<RecoveryNotice> = OnceLock::new();
 
 /// Private capability required to start the reports writer.
@@ -61,6 +61,11 @@ pub struct ReportWritePermit {
 /// User-facing startup recovery state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RecoveryNotice {
+    /// The process lease could not be acquired; recovery never started.
+    LeaseUnavailable {
+        /// Technical reason recorded for diagnostics.
+        detail: String,
+    },
     /// A damaged file set was preserved and replaced with a fresh replica.
     Recovered {
         /// Published directory containing the old main/WAL/SHM files and metadata.
@@ -159,6 +164,8 @@ pub(crate) fn ensure_access() -> anyhow::Result<()> {
 
 /// Acquire the process lease, recover confirmed corruption, and authorize the writer.
 ///
+/// A lease failure publishes its own notice because recovery has not started in that case.
+///
 /// Returns:
 ///     A private writer permit only when the reports paths are safe to open for writing.
 pub fn prepare() -> Option<ReportWritePermit> {
@@ -167,7 +174,7 @@ pub fn prepare() -> Option<ReportWritePermit> {
         Err(error) => {
             let detail = format!("reports replica lease unavailable: {error:#}");
             log::error!("{detail}");
-            let _ = NOTICE.set(RecoveryNotice::Failed { detail });
+            let _ = NOTICE.set(RecoveryNotice::LeaseUnavailable { detail });
             return None;
         }
     };

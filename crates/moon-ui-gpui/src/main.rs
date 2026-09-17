@@ -40,6 +40,7 @@ mod order_math;
 mod panels;
 mod persistence;
 mod pulse;
+mod report_notice;
 mod screener;
 mod settings;
 mod shell;
