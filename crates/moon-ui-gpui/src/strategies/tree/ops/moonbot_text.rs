@@ -118,7 +118,8 @@ fn expand_grid_magnitudes(
         .collect()
 }
 
-/// Expands MoonBot's grid magnitude suffix — `k` for thousands, `M` for millions — into the plain
+/// Expands MoonBot's grid magnitude suffix — `k` for thousands, `M` for millions, either case as
+/// MoonBot's own reader takes them (issue #606) — into the plain
 /// number the core's field parser accepts: `30k` → `30000`, `20.00k` → `20000`, `1E11k` →
 /// `100000000000000`. `None` when the text is not a number with such a suffix, so the caller keeps
 /// it verbatim and the field parser stays the one place that decides what is refused.
@@ -129,7 +130,7 @@ fn expand_magnitude(raw: &str) -> Option<String> {
     let text = raw.trim();
     let (mantissa, shift) = match text.as_bytes().last()? {
         b'k' | b'K' => (&text[..text.len() - 1], 3i32),
-        b'M' => (&text[..text.len() - 1], 6i32),
+        b'M' | b'm' => (&text[..text.len() - 1], 6i32),
         _ => return None,
     };
     let (negative, unsigned) = match mantissa.as_bytes().first()? {

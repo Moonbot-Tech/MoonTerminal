@@ -256,6 +256,7 @@ fn magnitude_expansion_is_exact_and_refuses_non_numbers() {
         (" 7M ", "7000000"),
         ("2.5M", "2500000"),
         ("12K", "12000"),
+        ("10m", "10000000"),
     ] {
         assert_eq!(expand_magnitude(raw).as_deref(), Some(expected), "{raw}");
     }
@@ -271,7 +272,6 @@ fn magnitude_expansion_is_exact_and_refuses_non_numbers() {
         "1Ek",
         "1e400k",
         "1E-2147483648k",
-        "10m",
         "1Gk",
         "--1k",
         "1k k",
