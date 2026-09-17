@@ -285,7 +285,6 @@ pub fn split(
         log_to_file,
         log_retention_days,
         ui_density: Some(ui_density),
-        ui_font_delta: None,
         ui_theme_mode,
         ui_scale,
         chart_memory_percent: clamp_chart_memory_percent(chart_memory_percent),

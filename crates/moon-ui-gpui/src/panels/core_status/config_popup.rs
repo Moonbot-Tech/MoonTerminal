@@ -60,8 +60,8 @@ const LINE_BOX: f32 = 1.3;
 /// Every rendered dimension of the alert table, resolved once from the active scales.
 ///
 /// The popup mixes two scales that MoonUI moves independently: its captions and values are raw
-/// GPUI text on the FONT scale (`design::t_caption` / `design::t_body`, which grow with the
-/// legacy font-delta channel — `ui_font_delta`, +3 at the shipped default), while its
+/// GPUI text on the terminal's text channel (`design::t_caption` / `design::t_body`, which grow
+/// with the density tier's `design::tier_text_step`, +3 at Standard), while its
 /// `MoonCheckbox`, `MoonButton` steppers and the ▶ box are MoonUI widgets on the UI scale. A column sized on one
 /// of the two is wrong whenever the other is larger: on the UI scale the text outgrew its column
 /// at the stock config, and on the font scale a widened UI would push the widgets out.
