@@ -641,11 +641,16 @@ pub struct ReadoutRect {
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+/// Order-book uniforms, packed as 16-byte rows identically in HLSL, WGSL and Metal.
 pub struct BookStyle {
     /// Spread-gap background between best bid and ask, or the entire zone without a book.
     pub book_bg: [f32; 4],
     pub bid: [f32; 4],
     pub ask: [f32; 4],
+    /// Resolved bid level-line sRGB colour.
+    pub level_bid: [f32; 4],
+    /// Resolved ask level-line sRGB colour.
+    pub level_ask: [f32; 4],
     /// x = level-line opacity, y = level-line height in physical px.
     pub level: [f32; 4],
     /// Ask-half background above the best ask.
@@ -657,11 +662,14 @@ pub struct BookStyle {
 }
 
 impl Default for BookStyle {
+    /// Preserve the bootstrap wall and automatic level colours until theme upload.
     fn default() -> Self {
         Self {
             book_bg: [0.0745, 0.0784, 0.0863, 1.0],
             bid: [0.1294, 0.5137, 0.1922, 1.0],
             ask: [1.0, 0.4980, 0.3137, 1.0],
+            level_bid: [0.1294 * 1.25, 0.5137 * 1.25, 0.1922 * 1.25, 1.0],
+            level_ask: [1.0, 0.4980 * 1.25, 0.3137 * 1.25, 1.0],
             level: [0.5, 1.5, 0.0, 0.0],
             bg_ask: [0.0745, 0.0784, 0.0863, 1.0],
             bg_bid: [0.0745, 0.0784, 0.0863, 1.0],
@@ -674,12 +682,14 @@ impl BookStyle {
     /// Compare without live bid and ask edges.
     ///
     /// Every non-edge style field is compared: the book or spread background, bid and ask fill RGBA
-    /// including opacity, level opacity and thickness, and ask and bid region backgrounds. A change
-    /// to any of them requires an immediate rebake, while live edge movement uses the throttled bake.
+    /// including opacity, level colours, opacity and thickness, and ask and bid region backgrounds.
+    /// A change to any of them requires an immediate rebake; live edges use the throttled bake.
     pub fn eq_ignore_edges(&self, other: &Self) -> bool {
         self.book_bg == other.book_bg
             && self.bid == other.bid
             && self.ask == other.ask
+            && self.level_bid == other.level_bid
+            && self.level_ask == other.level_ask
             && self.level == other.level
             && self.bg_ask == other.bg_ask
             && self.bg_bid == other.bg_bid

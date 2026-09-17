@@ -60,6 +60,8 @@ struct BookStyle {
     float4 book_bg;
     float4 bid;
     float4 ask;
+    float4 level_bid;
+    float4 level_ask;
     float4 level;
     float4 bg_ask;
     float4 bg_bid;
@@ -785,8 +787,8 @@ vertex BookOut book_bars_vertex(uint vid [[vertex_id]], uint iid [[instance_id]]
 fragment float4 book_bars_fragment(BookOut in [[stage_in]], constant BookStyle& bs [[buffer(1)]]) {
     if (in.kind < 0.5) return float4(bs.bid.rgb, 1.0);
     if (in.kind < 1.5) return float4(bs.ask.rgb, 1.0);
-    if (in.kind < 2.5) return float4(min(bs.bid.rgb * 1.25, float3(1.0)), bs.level.x);
-    return float4(min(bs.ask.rgb * 1.25, float3(1.0)), bs.level.x);
+    if (in.kind < 2.5) return float4(bs.level_bid.rgb, bs.level.x);
+    return float4(bs.level_ask.rgb, bs.level.x);
 }
 
 vertex PriceOut book_bg_vertex(uint vid [[vertex_id]], constant ChartView& cv [[buffer(0)]]) {

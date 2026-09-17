@@ -8,7 +8,10 @@
 //! popup (`crate::chart_tabs::graphics_popup`).
 
 use gpui::*;
-use moon_ui::{MoonButton, MoonColorPickerState, MoonPalette, MoonSliderState, h_flex, v_flex};
+use moon_ui::{
+    MoonButton, MoonColorPickerEvent, MoonColorPickerState, MoonPalette, MoonSliderState, h_flex,
+    v_flex,
+};
 use rust_i18n::t;
 
 use super::{SettingsView, color_row, section, separator, slider_row};
@@ -41,7 +44,10 @@ pub(super) struct Iface {
     book_bg_bid: Entity<MoonColorPickerState>,
     book_bid: Entity<MoonColorPickerState>,
     book_ask: Entity<MoonColorPickerState>,
+    book_level_bid: Entity<MoonColorPickerState>,
+    book_level_ask: Entity<MoonColorPickerState>,
     book_level_alpha: Entity<MoonSliderState>,
+    book_level_width: Entity<MoonSliderState>,
     panel_bg: Entity<MoonColorPickerState>,
 }
 
@@ -75,6 +81,85 @@ fn color_field(
             false
         }
     })
+}
+
+/// Bind a level picker without turning an automatic colour into a rounded stored default.
+fn book_level_field(
+    backend: &Entity<Backend>,
+    window: &mut Window,
+    cx: &mut Context<SettingsView>,
+    bid: bool,
+) -> Entity<MoonColorPickerState> {
+    let init = {
+        let b = backend.read(cx);
+        let p = b.preview.as_ref().unwrap_or(&b.config);
+        let rgba = p
+            .theme
+            .get(p.ui_theme_mode.is_light())
+            .resolved_book_level(bid);
+        [rgba[0], rgba[1], rgba[2]].map(|v| (v * 255.0).round() as u8)
+    };
+    super::draft_color(window, cx, init, move |p, color| {
+        let theme = p.theme.get_mut(p.ui_theme_mode.is_light());
+        let slot = if bid {
+            &mut theme.book_level_bid
+        } else {
+            &mut theme.book_level_ask
+        };
+        let changed = *slot != Some(color);
+        *slot = Some(color);
+        changed
+    })
+}
+
+/// Bind a wall picker and refresh its automatic level swatch after the draft changes.
+fn book_wall_field(
+    backend: &Entity<Backend>,
+    window: &mut Window,
+    cx: &mut Context<SettingsView>,
+    bid: bool,
+) -> Entity<MoonColorPickerState> {
+    let init = {
+        let b = backend.read(cx);
+        let p = b.preview.as_ref().unwrap_or(&b.config);
+        let theme = p.theme.get(p.ui_theme_mode.is_light());
+        if bid { theme.book_bid } else { theme.book_ask }
+    };
+    let st = crate::controls::color_picker::shared_color_state(init, window, cx);
+    cx.subscribe_in(&st, window, move |this, _, event, window, cx| {
+        let MoonColorPickerEvent::Change(color) = event else {
+            return;
+        };
+        let refresh = this.backend.update(cx, |b, bcx| {
+            let Some(p) = b.preview.as_mut() else {
+                return false;
+            };
+            let theme = p.theme.get_mut(p.ui_theme_mode.is_light());
+            let color = super::common::hsla_u8(*color);
+            let (wall, level) = if bid {
+                (&mut theme.book_bid, theme.book_level_bid)
+            } else {
+                (&mut theme.book_ask, theme.book_level_ask)
+            };
+            if *wall == color {
+                return false;
+            }
+            *wall = color;
+            bcx.notify();
+            level.is_none()
+        });
+        if refresh {
+            let state = book_level_field(&this.backend, window, cx, bid);
+            if bid {
+                this.iface.book_level_bid = state;
+            } else {
+                this.iface.book_level_ask = state;
+            }
+            cx.notify();
+        }
+    })
+    .detach();
+    st
 }
 
 /// Bind an `f32` slider to a field of the active colour-set theme for live preview.
@@ -235,8 +320,10 @@ pub(super) fn build(
             |t| t.book_bg_bid,
             |t, v| t.book_bg_bid = v,
         ),
-        book_bid: color_field(backend, window, cx, |t| t.book_bid, |t, v| t.book_bid = v),
-        book_ask: color_field(backend, window, cx, |t| t.book_ask, |t, v| t.book_ask = v),
+        book_bid: book_wall_field(backend, window, cx, true),
+        book_ask: book_wall_field(backend, window, cx, false),
+        book_level_bid: book_level_field(backend, window, cx, true),
+        book_level_ask: book_level_field(backend, window, cx, false),
         book_level_alpha: num_field(
             backend,
             cx,
@@ -246,11 +333,82 @@ pub(super) fn build(
             1.0,
             0.01,
         ),
+        book_level_width: num_field(
+            backend,
+            cx,
+            |t| t.book_level_width,
+            |t, v| t.book_level_width = v,
+            1.0,
+            4.0,
+            0.1,
+        ),
         panel_bg: color_field(backend, window, cx, |t| t.panel_bg, |t, v| t.panel_bg = v),
     }
 }
 
 impl SettingsView {
+    /// Render a level-colour picker with a per-side reset because MoonUI has no clear event.
+    /// The controls wrap at narrow widths; resetting rebuilds the retained picker from the wall.
+    fn book_level_row(&self, bid: bool, cx: &Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let (label, state, id) = if bid {
+            (
+                t!("iface.book_level_bid"),
+                &self.iface.book_level_bid,
+                "book-level-bid-auto",
+            )
+        } else {
+            (
+                t!("iface.book_level_ask"),
+                &self.iface.book_level_ask,
+                "book-level-ask-auto",
+            )
+        };
+        let automatic = {
+            let b = self.backend.read(cx);
+            let draft = b.preview.as_ref().unwrap_or(&b.config);
+            let theme = draft.theme.get(draft.ui_theme_mode.is_light());
+            if bid {
+                theme.book_level_bid.is_none()
+            } else {
+                theme.book_level_ask.is_none()
+            }
+        };
+        h_flex()
+            .w_full()
+            .flex_wrap()
+            .items_center()
+            .gap(design::ui_px(cx, 10.0))
+            .child(color_row(&label, state, p, cx))
+            .child(
+                MoonButton::new(id)
+                    .outline()
+                    .label(t!("iface.book_level_auto"))
+                    .disabled(automatic)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.backend.update(cx, |b, bcx| {
+                            if let Some(draft) = b.preview.as_mut() {
+                                let theme = draft.theme.get_mut(draft.ui_theme_mode.is_light());
+                                if bid {
+                                    theme.book_level_bid = None;
+                                } else {
+                                    theme.book_level_ask = None;
+                                }
+                                bcx.notify();
+                            }
+                        });
+                        let state = book_level_field(&this.backend, window, cx, bid);
+                        if bid {
+                            this.iface.book_level_bid = state;
+                        } else {
+                            this.iface.book_level_ask = state;
+                        }
+                        cx.notify();
+                    }))
+                    .render(),
+            )
+    }
+
     /// Render the Interface tab for the portable `theme.toml` chart theme variant.
     ///
     /// Sections cover chart-label font, chart background/grid, crosshair, candles, price lines,
@@ -385,6 +543,8 @@ impl SettingsView {
             .child(color_row(&t!("iface.book_bg_bid"), &i.book_bg_bid, p, cx))
             .child(color_row(&t!("iface.book_bid"), &i.book_bid, p, cx))
             .child(color_row(&t!("iface.book_ask"), &i.book_ask, p, cx))
+            .child(self.book_level_row(true, cx))
+            .child(self.book_level_row(false, cx))
             .child(slider_row(
                 &t!("iface.book_level_alpha"),
                 &i.book_level_alpha,
@@ -393,6 +553,13 @@ impl SettingsView {
                     fmt::pct((v * 100.0) as f64, 0)
                         .map_or_else(|| "0%".to_string(), |(text, _)| text)
                 },
+                cx,
+            ))
+            .child(slider_row(
+                &t!("iface.book_level_width"),
+                &i.book_level_width,
+                1.0..=4.0,
+                |v| format!("{} px", fmt::compact(v as f64, 1)),
                 cx,
             ))
             .child(separator(p, cx))

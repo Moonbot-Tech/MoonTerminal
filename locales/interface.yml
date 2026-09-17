@@ -210,3 +210,20 @@ iface.dock_reset_tip:
   ru: "Вернуть панели текущего режима на места по умолчанию во всех окнах групп. Настройки, таблицы и открепленные окна не меняются."
   en: "Put the panels of the current mode back to their default places in every group window. Settings, tables and detached windows are left alone."
   es: "Devolver los paneles del modo actual a sus lugares por defecto en todas las ventanas de grupo. Ajustes, tablas y ventanas separadas no cambian."
+
+iface.book_level_bid:
+  ru: "Цвет линий уровней bid"
+  en: "Bid level-line color"
+  es: "Color de líneas de niveles bid"
+iface.book_level_ask:
+  ru: "Цвет линий уровней ask"
+  en: "Ask level-line color"
+  es: "Color de líneas de niveles ask"
+iface.book_level_auto:
+  ru: "Сбросить на авто"
+  en: "Reset to auto"
+  es: "Restablecer a automático"
+iface.book_level_width:
+  ru: "Толщина линий уровней, пкс"
+  en: "Level-line thickness, px"
+  es: "Grosor de líneas de niveles, px"

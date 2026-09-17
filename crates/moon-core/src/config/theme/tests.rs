@@ -391,3 +391,101 @@ fn resolve_markerless_text_is_migrated_and_saved() {
     assert_eq!(fallback, ChartThemeSet::default());
     assert!(fallback_write_back);
 }
+
+/// Making level defaults explicit would detach old flat/paired themes from their wall colours.
+#[test]
+fn old_theme_files_keep_automatic_book_levels() {
+    for text in [
+        "book_bid = [17, 91, 231]
+book_ask = [240, 139, 7]
+",
+        "[dark]
+book_bid = [17, 91, 231]
+[light]
+book_ask = [240, 139, 7]
+",
+    ] {
+        let (set, _) = ChartThemeSet::resolve(Some(text));
+        for theme in [&set.dark, &set.light] {
+            assert_eq!(theme.book_level_bid, None);
+            assert_eq!(theme.book_level_ask, None);
+        }
+        assert_eq!(set.dark.book_bid, [17, 91, 231]);
+    }
+}
+
+/// Removing brightening/clamping or rounding to bytes changes untouched level pixels.
+/// Exhaust all input bytes against the old shader expression, including fractional channels.
+#[test]
+fn automatic_book_levels_match_the_old_shader_for_every_byte() {
+    let mut theme = ChartTheme::default();
+    for value in 0..=255u8 {
+        theme.book_bid = [value, 255 - value, 0];
+        theme.book_ask = [255 - value, value, 255];
+        for (bid, wall) in [(true, theme.book_bid), (false, theme.book_ask)] {
+            let actual = theme.resolved_book_level(bid);
+            for channel in 0..3 {
+                let old_shader = (f32::from(wall[channel]) / 255.0 * 1.25).min(1.0);
+                assert_eq!(actual[channel].to_bits(), old_shader.to_bits());
+            }
+            assert_eq!(actual[3], 1.0);
+        }
+    }
+    theme.book_bid = [1, 102, 254];
+    let resolved = theme.resolved_book_level(true);
+    assert_eq!(resolved[1], 0.5);
+    assert_eq!(resolved[2], 1.0);
+    assert_ne!(
+        resolved[0],
+        1.0 / 255.0,
+        "auto must not be rounded to a byte"
+    );
+}
+
+/// Ignoring an override or brightening it would recolour an explicitly selected line.
+#[test]
+fn explicit_book_levels_survive_reload_and_ignore_wall_changes() {
+    let text = "palette_rev = 2
+[dark]
+book_level_bid = [0, 102, 255]
+book_level_ask = [255, 51, 0]
+[light]
+book_level_bid = [51, 0, 102]
+book_level_ask = [102, 255, 51]
+";
+    let (set, _) = ChartThemeSet::resolve(Some(text));
+    let saved = set
+        .to_share_string()
+        .expect("explicit level colours serialize");
+    let (mut reloaded, write_back) = ChartThemeSet::resolve(Some(&saved));
+    assert!(!write_back);
+    assert_eq!(reloaded.dark.book_level_bid, Some([0, 102, 255]));
+    assert_eq!(reloaded.dark.book_level_ask, Some([255, 51, 0]));
+    assert_eq!(reloaded.light.book_level_bid, Some([51, 0, 102]));
+    assert_eq!(reloaded.light.book_level_ask, Some([102, 255, 51]));
+    for theme in [&mut reloaded.dark, &mut reloaded.light] {
+        theme.book_bid = [255, 255, 255];
+        theme.book_ask = [0, 0, 0];
+    }
+    assert_eq!(
+        reloaded.dark.resolved_book_level(true),
+        [0.0, 0.4, 1.0, 1.0]
+    );
+    assert_eq!(
+        reloaded.dark.resolved_book_level(false),
+        [1.0, 0.2, 0.0, 1.0]
+    );
+    assert_eq!(
+        reloaded.light.resolved_book_level(true),
+        [0.2, 0.0, 0.4, 1.0]
+    );
+    assert_eq!(
+        reloaded.light.resolved_book_level(false),
+        [0.4, 1.0, 0.2, 1.0]
+    );
+    reloaded.dark.book_level_bid = None;
+    let saved = reloaded.to_share_string().expect("reset serializes");
+    let (reset, _) = ChartThemeSet::resolve(Some(&saved));
+    assert_eq!(reset.dark.book_level_bid, None);
+    assert_eq!(reset.dark.resolved_book_level(true), [1.0; 4]);
+}
