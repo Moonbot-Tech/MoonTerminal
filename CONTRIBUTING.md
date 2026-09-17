@@ -97,7 +97,11 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
 - **Everything goes through a PR, prose included.** A repository ruleset rejects a direct push to
   `main` from anyone, the owner too, along with a force-push and deleting the branch. It asks for
   no approvals, so you merge your own PR.
-- The ruleset requires no status checks: CI reports on the PR, and nothing but you reading it stops
+- The ruleset requires one status, `alena-review`, and none of the CI checks. Authors listed in
+  `.github/workflows/alena-gate.yml` get it within seconds, unread. Anyone else's pull request is
+  read by Alena with one question in mind — can this change harm the trader who installs it — and
+  she posts the mark together with a comment. A listed author turns a wrong or stuck mark green by
+  writing `/override` in the pull request. CI still only reports: nothing but you reading it stops
   a red merge. Branch from fresh `main`, open a PR, squash-merge — history stays linear.
 - **CI runs `fmt`, not `clippy`.** Run `cargo clippy` yourself before pushing. The tree **is**
   rustfmt-clean: `cargo fmt --all` is the correct command, `rustfmt.toml`
@@ -110,8 +114,8 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   `Dependency audit (cargo-deny)`, `Tour` building the knowledge site, and `Fmt` running
   `cargo fmt --all -- --check`. They run in parallel. The macOS job is diagnostic
   (`continue-on-error`) — read its log, but it does not block. "Gate" is a convention here, not
-  enforcement: the ruleset on `main` requires a pull request but no status check, so nothing stops
-  a red merge except you reading the checks.
+  enforcement: the ruleset on `main` requires a pull request and the `alena-review` mark but none of
+  these checks, so nothing stops a red merge except you reading them.
 - Never force-push or reset a shared `main` — fix forward with a new commit or a revert.
 - New releases use canonical three-component stable tags such as `v0.24.0` and `v0.24.1`.
   Historical two-component tags such as `v0.21` remain readable as patch zero, but are not valid
