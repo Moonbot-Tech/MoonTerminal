@@ -932,6 +932,7 @@ fn worst_by_level(
 ///     w: Shared column widths, supplying the name column.
 ///     weak_view: Non-owning panel handle for the rename callback.
 ///     p: Active Moon palette.
+///     app: Application context used to select the inline editor's density tier.
 ///
 /// Returns:
 ///     A fixed-width identity element; the name keeps priority over the masked IP.

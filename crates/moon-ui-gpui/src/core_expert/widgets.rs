@@ -223,7 +223,16 @@ pub(super) fn slider(
     )
 }
 
-/// A full-width text field, or nothing when the page never declared it.
+/// Build a full-width text field, or nothing when the page never declared it.
+///
+/// Args:
+///     store: Editor-state owner that may provide the field's input state.
+///     id: Page declaration key for the field.
+///     enabled: Whether the mirrored page permits interaction.
+///     cx: Application context used to select the input's density tier.
+///
+/// Returns:
+///     The configured field when the page declared its input state.
 pub(super) fn field(
     store: &EditorStore,
     id: &'static str,
@@ -233,8 +242,18 @@ pub(super) fn field(
     field_masked(store, id, enabled, false, cx)
 }
 
-/// The same field, optionally masked — Moonbot's password boxes show dots, and a mirrored page that
-/// showed characters would suggest it holds the secret it cannot have.
+/// Build the same field, optionally masked — Moonbot's password boxes show dots, and a mirrored
+/// page that showed characters would suggest it holds the secret it cannot have.
+///
+/// Args:
+///     store: Editor-state owner that may provide the field's input state.
+///     id: Page declaration key for the field.
+///     enabled: Whether the mirrored page permits interaction.
+///     masked: Whether the field must hide its entered characters.
+///     cx: Application context used to select the input's density tier.
+///
+/// Returns:
+///     The configured field when the page declared its input state.
 pub(super) fn field_masked(
     store: &EditorStore,
     id: &'static str,

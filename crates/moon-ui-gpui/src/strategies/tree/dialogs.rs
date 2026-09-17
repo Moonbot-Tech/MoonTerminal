@@ -240,9 +240,10 @@ fn tree_op_dialog_width(window: &Window, cx: &App) -> f32 {
 /// Args:
 ///     id: Element id for the name field (`create-name`, `folder-name`, or `rename-name`).
 ///     input: Shared input state already constructed for this dialog opening.
+///     cx: Application context used to select the input's density tier.
 ///
 /// Returns:
-///     A full-width, shrinkable slot containing the small name field.
+///     A full-width, shrinkable slot containing the density-tier name field.
 fn tree_op_name_input(
     id: impl Into<SharedString>,
     input: &Entity<MoonInputState>,

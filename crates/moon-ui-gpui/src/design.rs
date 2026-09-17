@@ -95,16 +95,19 @@ pub const DISCLOSURE_BOX: f32 = 12.0;
 /// Height of the toolbar strip.
 ///
 /// The one home of the toolbar's tier-derived band, matching [`header_height`] and the
-/// `table_row_h`/`table_head_h` pair below. The base a Compact toolbar draws from comes from
-/// MoonUI's `tier_band_base`, not a literal here, so centralizing the call prevents callers that
-/// size or position adjacent chrome from drifting away from the row that is actually rendered.
+/// `table_row_h`/`table_head_h` pair below. It reads MoonUI's `tier_band_base` height metric,
+/// so Compact uses its rebased band while Standard renders today's number exactly and Large keeps
+/// its established value. Centralizing the call prevents callers that size or position adjacent
+/// chrome from drifting away from the row that is actually rendered.
 pub fn toolbar_height(cx: &App) -> f32 {
     let t = MoonTheme::active_tokens(cx);
     t.fit_band(t.tier_band_base(TOOLBAR_H, |m| m.height), 13.0)
 }
 
-/// Height of the window header strip — the companion to [`toolbar_height`]. Drifting the two apart
-/// is exactly the failure this shared shape exists to prevent.
+/// Height of the window header strip — the companion to [`toolbar_height`]. It reads MoonUI's
+/// `tier_band_base` height metric, so Standard renders today's number exactly while Compact and
+/// Large use their respective tier bands. Drifting the two apart is exactly the failure this
+/// shared shape exists to prevent.
 pub fn header_height(cx: &App) -> f32 {
     let t = MoonTheme::active_tokens(cx);
     t.fit_band(t.tier_band_base(HEADER_TOP_H, |m| m.height), 14.0)
@@ -221,11 +224,12 @@ pub fn chrome_label_color(p: MoonPalette) -> u32 {
 
 /// Height of a chrome tab strip, in pixels at the current UI and font scale.
 ///
-/// One source for `MoonTabStrip`'s own tab height, now delegated to `MoonTabStrip::strip_height`
-/// rather than a hand copy: a strip whose row is a different height from the tabs inside it puts
-/// the active-tab underline off the row's bottom edge. Every strip in the app resolves it here —
-/// the two chart strips through [`chart_tab_strip_h`](crate::chart_tabs::chart_tab_strip_h), which
-/// delegates to [`tab_strip_h_value`], and the three window strips directly.
+/// One source for `MoonTabStrip`'s own rendered tab-height metric, delegated to
+/// `MoonTabStrip::strip_height` rather than a hand copy. Standard renders today's number exactly;
+/// a strip whose row is a different height from the tabs inside it puts the active-tab underline
+/// off the row's bottom edge. Every strip in the app resolves it here — the two chart strips
+/// through [`chart_tab_strip_h`](crate::chart_tabs::chart_tab_strip_h), which delegates to
+/// [`tab_strip_h_value`], and the three window strips directly.
 ///
 /// Args:
 ///     cx: Application context supplying the current UI and font scales.
@@ -1521,8 +1525,9 @@ pub fn wrap_text(
 
 /// Return the effective font-scaled `MoonDataTable` row height.
 ///
-/// This DELEGATES to the component's own `table_row_height()` so wrappers computing natural table
-/// height do not clip rows at large font settings or drift from the tier the table itself draws.
+/// This delegates to the component's own `table_row_height()` tier metric, so Standard renders
+/// today's number exactly and wrappers computing natural table height do not clip rows at large
+/// font settings or drift from the tier the table itself draws.
 ///
 /// Args:
 ///     cx: Application context used to read active theme tokens.
@@ -1535,7 +1540,8 @@ pub fn table_row_h(cx: &App) -> f32 {
 
 /// Return the effective font-scaled `MoonDataTable` header height.
 ///
-/// This DELEGATES to the component's own `table_header_height()`.
+/// This delegates to the component's own `table_header_height()` tier metric, so Standard renders
+/// today's number exactly and wrappers stay aligned with the header the table itself draws.
 ///
 /// Args:
 ///     cx: Application context used to read active theme tokens.
@@ -1546,8 +1552,10 @@ pub fn table_head_h(cx: &App) -> f32 {
     MoonTheme::active_tokens(cx).table_header_height()
 }
 
-/// The UNFITTED `MoonDataTable` header base, in `Pixels`, for a caller that draws its own header
-/// row rather than letting `MoonDataTable` draw it.
+/// The unfitted `MoonDataTable` header-base tier metric, in `Pixels`, for a caller that draws its
+/// own header row rather than letting `MoonDataTable` draw it. Standard renders today's base
+/// number exactly; fitting remains the caller's responsibility because this helper does not apply
+/// the component's font-height adjustment.
 ///
 /// Args:
 ///     cx: Application context used to read active theme tokens.

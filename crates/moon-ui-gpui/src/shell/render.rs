@@ -431,6 +431,8 @@ impl Render for Shell {
                 )
             })
             .child(
+                // The drag overlay reads the same tier-derived header height as the drawn chrome:
+                // it now matches at Compact, Standard, and Large instead of only at Compact.
                 MoonWindowFrame::main("moon-main-window-frame", chrome_width)
                     .header_height(design::header_height(cx))
                     .leading_inset(design::titlebar_leading_inset())

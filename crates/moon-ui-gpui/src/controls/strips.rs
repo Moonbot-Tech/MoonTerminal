@@ -177,6 +177,7 @@ pub(super) fn sell_labels(pcts: [f64; 6]) -> [String; 6] {
 ///         when the displayed core and the write target disagree (goal A2 FIX-3), so a click,
 ///         double-click, or wheel step cannot mutate a source other than the one on screen.
 ///     unit: USDT-equivalent unit shown in tooltips.
+///     cx: Application context used to select the inline editor's density tier.
 ///
 /// Returns:
 ///     The configured segmented control.
@@ -270,6 +271,7 @@ pub(super) fn size_strip(
 ///     backend: Application state receiving edits.
 ///     group: Interactive group; absence disables the strip — also used when the displayed core
 ///         and the write target disagree (goal A2 FIX-3).
+///     cx: Application context used to select the inline editor's density tier.
 ///
 /// Returns:
 ///     The configured segmented control.
