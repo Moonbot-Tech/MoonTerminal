@@ -384,7 +384,7 @@ fn micro_control_h_value_stays_pinned_while_action_follows_density(cx: &mut gpui
 use super::{font_w, line_px, t_body, t_body_lg, t_caption, t_title, tier_font_base, ui_px};
 use gpui::px;
 
-/// `design.rs:text_px` must preserve Standard's legacy results after the tier rebase.
+/// `design.rs:tier_text_value` must preserve Standard's legacy results after the tier rebase.
 ///
 /// Breakage: restoring `font_delta` as the tier step, or changing the caption/body/title steps,
 /// shifts roughly 400 Standard text call sites even though Standard was promised unchanged.

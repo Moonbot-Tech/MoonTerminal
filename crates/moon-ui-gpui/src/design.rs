@@ -703,7 +703,7 @@ pub fn tier_text_value(cx: &App, value: f32) -> f32 {
 
 /// Line-box height on the terminal's text channel: [`ui_value`] of `value` plus [`tier_text_step`].
 ///
-/// Moves with [`text_px`] so a line box matches the text in it.
+/// Moves with [`tier_text_value`] so a line box matches the text in it.
 ///
 /// Args:
 ///     cx: Application context used to read the active tokens.
@@ -775,11 +775,6 @@ pub fn ui_px(cx: &App, value: f32) -> Pixels {
     px(ui_value(cx, value))
 }
 
-/// [`tier_text_value`] as `Pixels`.
-pub fn text_px(cx: &App, value: f32) -> Pixels {
-    px(tier_text_value(cx, value))
-}
-
 /// [`line_value`] as `Pixels`.
 pub fn line_px(cx: &App, value: f32) -> Pixels {
     px(line_value(cx, value))
@@ -801,7 +796,7 @@ pub fn base_text(cx: &App) -> f32 {
 
 /// Return the caption text size for raw GPUI elements such as `div().text_size(...)`.
 ///
-/// The raw-GPUI tiers derive from the density-tier font via [`text_px`]. MoonUI components such as
+/// The raw-GPUI tiers derive from the density-tier font via [`tier_text_value`]. MoonUI components such as
 /// `MoonText`, `MoonButtonSegment`, and `MoonDataCell` already scale their own default or supplied
 /// base size. Do not pass a `t_*` result or [`font_value`] into them, because that applies scaling
 /// twice.
@@ -1638,14 +1633,12 @@ pub fn font_w(cx: &App, base: f32) -> f32 {
 
 // Radius tokens come from `MoonMetrics::TERMINAL`, rather than local numeric values. Avoid raw
 // `px(N)` in `.rounded()`. Pill values such as `SEL_H / 2.0` or `999.0` describe shape, not a radius
-// tier, and are outside this rule. `*_BASE` values are unscaled inputs for MoonUI builders that scale
-// internally, such as `MoonButtonSize::Custom { radius }`; `r_*` functions return ready-to-use
-// `Pixels` for raw GPUI `.rounded()`. Mixing them applies scaling twice.
+// tier, and are outside this rule. `*_BASE` values are unscaled tokens for MoonUI builders that
+// scale internally; `r_*` functions return ready-to-use `Pixels` for raw GPUI `.rounded()`. Mixing
+// them applies scaling twice.
 //
 // `MoonMetrics` exposes these two shared radius tokens and no shared small-radius token for chips or
 // swatches; a third `radius_sm` metric has been requested upstream.
-/// Unscaled shared `button_radius` token for MoonUI builders that apply UI scaling internally.
-pub const R_BUTTON_BASE: f32 = M.button_radius;
 /// Unscaled shared `container_radius` token for MoonUI builders that apply UI scaling internally.
 pub const R_CONTAINER_BASE: f32 = M.container_radius;
 

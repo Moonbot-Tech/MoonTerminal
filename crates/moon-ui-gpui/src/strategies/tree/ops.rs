@@ -868,15 +868,6 @@ pub struct CutOrigin {
 }
 
 impl CutOrigin {
-    pub fn is_empty(&self) -> bool {
-        self.rows.is_empty() && self.folders.is_empty()
-    }
-
-    /// How many marks the operator made, for the notice that names the pending cut.
-    pub fn count(&self) -> usize {
-        self.rows.len() + self.folders.len()
-    }
-
     /// Whether a drawn strategy row renders dimmed: cut directly, or sitting under a cut folder.
     pub fn dims(&self, key: (CoreId, u64), folder_path: &str) -> bool {
         self.rows.contains(&key)
@@ -884,17 +875,6 @@ impl CutOrigin {
                 .folders
                 .iter()
                 .any(|(core, path)| *core == key.0 && path_starts_with(folder_path, path))
-    }
-
-    /// Whether a drawn folder row renders dimmed: cut itself, or nested under a cut folder.
-    ///
-    /// Through [`path_starts_with`] rather than [`split_path`] + [`starts_with`], for the reason
-    /// that function documents: this is drawn once per folder row per frame, and the split form
-    /// allocates a `Vec<String>` every time to answer a question that needs no allocation.
-    pub fn dims_folder(&self, core: CoreId, path: &str) -> bool {
-        self.folders
-            .iter()
-            .any(|(c, cut)| *c == core && path_starts_with(path, cut))
     }
 
     /// The cut folders belonging to one core, with a selected PARENT subsuming its selected

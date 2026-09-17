@@ -6,13 +6,12 @@ use super::{Merged, merge, split};
 use crate::config::{CoreGroup, DEFAULT_ORDER_SIZES_USD, GroupConfig, Language};
 use crate::market::MarketDataMode;
 
-/// Merge a settings file carrying UI zoom and the retired font adjustment.
-fn merged_with(ui_scale: f32, ui_font_delta: f32) -> Merged {
+/// Merge a settings file carrying UI zoom.
+fn merged_with(ui_scale: f32) -> Merged {
     merge(
         ServersFile::default(),
         SettingsFile {
             ui_scale,
-            ui_font_delta: Some(ui_font_delta),
             ..Default::default()
         },
         None,
@@ -32,7 +31,7 @@ fn merged_with(ui_scale: f32, ui_font_delta: f32) -> Merged {
 fn a_degenerate_stored_ui_scale_is_repaired_on_load() {
     for broken in [0.0_f32, -1.0, f32::NAN, f32::INFINITY] {
         assert_eq!(
-            merged_with(broken, 0.0).ui_scale,
+            merged_with(broken).ui_scale,
             default_ui_scale(),
             "a scale of {broken} cannot mean anything; loading must repair it, not pass it on"
         );
@@ -50,7 +49,7 @@ fn a_degenerate_stored_ui_scale_is_repaired_on_load() {
 fn an_unusual_but_usable_scale_survives_the_load() {
     for kept in [0.25_f32, 0.4, 6.0, 10.0] {
         assert_eq!(
-            merged_with(kept, 0.0).ui_scale,
+            merged_with(kept).ui_scale,
             kept,
             "a usable scale of {kept} must load verbatim; repair is not a clamp"
         );
@@ -58,21 +57,17 @@ fn an_unusual_but_usable_scale_survives_the_load() {
 }
 
 /// Restoring legacy delta mapping during merge would resize upgraded users.
-/// Every upgraded user starts at Standard regardless of their retired slider value.
+/// Every upgraded user starts at Standard regardless of their retired slider value: the
+/// `ui_font_delta` key of an old file has no field any more and must stay inert on load.
 #[test]
 fn legacy_font_delta_is_ignored_during_merge() {
     for legacy in [
-        -2.0,
-        0.0,
-        0.01,
-        3.0,
-        3.01,
-        6.0,
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-        f32::NAN,
+        "-2.0", "0.0", "0.01", "3.0", "3.01", "6.0", "inf", "-inf", "nan",
     ] {
-        assert_eq!(merged_with(1.0, legacy).ui_density, UiDensity::Standard);
+        let settings: SettingsFile =
+            toml::from_str(&format!("ui_scale = 1.0\nui_font_delta = {legacy}")).unwrap();
+        let merged = merge(ServersFile::default(), settings, None);
+        assert_eq!(merged.ui_density, UiDensity::Standard);
     }
 }
 

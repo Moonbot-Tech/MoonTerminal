@@ -357,9 +357,6 @@ pub struct SettingsFile {
     /// Number of days to retain log files; older files are deleted. 0 keeps all. Defaults to 14.
     #[serde(default = "servers::default_log_retention_days")]
     pub log_retention_days: u32,
-    /// Retired font adjustment, accepted for old files but ignored and dropped on save.
-    #[serde(default, skip_serializing)]
-    pub ui_font_delta: Option<f32>,
     /// Selected density. None means a legacy file; writers always supply the resolved choice.
     #[serde(default)]
     pub ui_density: Option<UiDensity>,
