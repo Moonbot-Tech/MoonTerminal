@@ -94,12 +94,11 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
 
 - Commit format: `<type>(<scope>): <subject>` — `feat`, `fix`, `refactor`, `docs`, `test`,
   `chore`. Example: `fix(report): flatten embedded line breaks in table cells`.
-- **Anything that is not prose goes through a PR.** Direct-to-`main` is limited to `README.md`,
-  `README.en.md` and `docs/**` (except `docs/FIRETEST.md` — a test asserts on its text).
-  Everything else can change the binary, the build, the tests or CI.
-- `main` has no branch protection and no required checks: a direct push is public and untested
-  the instant it lands, with CI reporting only afterwards. Branch from fresh `main`, open a PR,
-  squash-merge — history stays linear.
+- **Everything goes through a PR, prose included.** A repository ruleset rejects a direct push to
+  `main` from anyone, the owner too, along with a force-push and deleting the branch. It asks for
+  no approvals, so you merge your own PR.
+- The ruleset requires no status checks: CI reports on the PR, and nothing but you reading it stops
+  a red merge. Branch from fresh `main`, open a PR, squash-merge — history stays linear.
 - **CI runs `fmt`, not `clippy`.** Run `cargo clippy` yourself before pushing. The tree **is**
   rustfmt-clean: `cargo fmt --all` is the correct command, `rustfmt.toml`
   (`style_edition = "2024"`) is the authority, and CI enforces it via the `Fmt` job — which does
@@ -111,7 +110,8 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   `Dependency audit (cargo-deny)`, `Tour` building the knowledge site, and `Fmt` running
   `cargo fmt --all -- --check`. They run in parallel. The macOS job is diagnostic
   (`continue-on-error`) — read its log, but it does not block. "Gate" is a convention here, not
-  enforcement: with no branch protection nothing stops a red merge except you reading the checks.
+  enforcement: the ruleset on `main` requires a pull request but no status check, so nothing stops
+  a red merge except you reading the checks.
 - Never force-push or reset a shared `main` — fix forward with a new commit or a revert.
 - New releases use canonical three-component stable tags such as `v0.24.0` and `v0.24.1`.
   Historical two-component tags such as `v0.21` remain readable as patch zero, but are not valid
