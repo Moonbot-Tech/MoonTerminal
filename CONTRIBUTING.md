@@ -122,9 +122,11 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   tag history, requires its commit on `main`, and verifies GitHub's published
   SHA-256 digest for the exact
   `MoonTerminal.exe` asset while the release is a draft. Repository release immutability must be
-  enabled: publication then locks the verified tag and assets. The `RELEASE_ADMIN_TOKEN` Actions
-  secret must grant repository Administration read and Contents write for the immutable-release
-  preflight and final publication. Bare numeric and prerelease tags are not release inputs.
+  enabled: publication then locks the verified tag and assets. The publish job runs in the `release`
+  environment and waits there until one of its required reviewers approves the run.
+  `RELEASE_ADMIN_TOKEN` must be a secret of that environment, not of the repository, and must grant
+  repository Administration read and Contents write for the immutable-release preflight and final
+  publication. Bare numeric and prerelease tags are not release inputs.
 
 ## Dependencies and the lockfile
 
