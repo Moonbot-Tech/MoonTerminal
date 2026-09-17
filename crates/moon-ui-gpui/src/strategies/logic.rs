@@ -315,6 +315,39 @@ pub(super) fn edited_field_value(
         .unwrap_or_else(|| field_value(row, f))
 }
 
+/// Resolve a complete live multi-selection for a list action, or reject it without partial edits.
+///
+/// Each strategy uses its own schema default and pending/draft value. Rechecking the current
+/// selection, field eligibility, and dependency activity also fences delayed dialog submissions.
+pub(super) fn list_field_values(
+    st: &StrategiesView,
+    store: &CoreStore,
+    keys: &[Key],
+    field: &str,
+) -> Option<Vec<(Key, String)>> {
+    if st.viewing_version() || keys.len() < 2 {
+        return None;
+    }
+    let mut selected = selected_keys(st);
+    selected.sort_unstable();
+    let mut captured = keys.to_vec();
+    captured.sort_unstable();
+    if selected != captured || !st.rules.field_active(field, &selected_values(st, store)) {
+        return None;
+    }
+    keys.iter()
+        .map(|&key| {
+            let strategy = row(store, key.0, key.1)?;
+            let schema = schema_field_in_kind(store, key.0, strategy.kind_ordinal, field)?;
+            if !super::actions::list_edit::is_list_field(schema) {
+                return None;
+            }
+            let pending = store.core(key.0)?.strategy_edit(key.1);
+            Some((key, edited_field_value(st, key, strategy, schema, pending)))
+        })
+        .collect()
+}
+
 /// Value this field takes from a still-open strategy edit, or `None` when there is no open edit
 /// or the edit's desired snapshot does not actually change this field (see
 /// [`pending_changed_fields`] for why raw presence in `pending.fields` is not the test).

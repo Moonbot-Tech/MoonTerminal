@@ -2,8 +2,20 @@
 
 use super::*;
 
+// The action owns list editing, including its conventional sibling test module.
+pub(super) mod list_edit;
+use list_edit::{ListEdit, stage_list_values};
+
 #[cfg(test)]
 mod tests;
+
+/// Selection and workspace authority captured when opening a list-operation dialog.
+#[derive(Clone)]
+pub(super) struct ListEditTarget {
+    pub(super) workspace_generation: Option<u64>,
+    pub(super) keys: Vec<Key>,
+    pub(super) field: String,
+}
 
 /// Exact Start/Stop payload and workspace authority captured by the rendered action button.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -244,6 +256,45 @@ impl StrategiesView {
                 .insert((*core, *id, field.to_string()), value.clone());
         }
         cx.notify();
+    }
+
+    /// Stage a list operation against each strategy's current draft, pending edit, or live value.
+    ///
+    /// The dialog captures the selection and workspace generation. Revalidate the entire set and
+    /// every field before writing anything; a delayed submit must never edit a surviving subset.
+    /// Returns false for a stale dialog and true for a valid operation, including an empty no-op.
+    pub(super) fn stage_list_field_value(
+        &mut self,
+        target: &ListEditTarget,
+        entered: &str,
+        operation: ListEdit,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !strategy_action_authorized(
+            target.workspace_generation,
+            self.action_workspace_generation(cx),
+            self.workspace_cores.as_deref(),
+            &target.keys,
+        ) {
+            return false;
+        }
+        let current = {
+            let store = self.backend.read(cx).session.store();
+            list_field_values(self, store, &target.keys, &target.field)
+        };
+        let Some(current) = current else {
+            return false;
+        };
+        stage_list_values(
+            &mut self.field_edits,
+            &target.field,
+            &current,
+            entered,
+            operation,
+        );
+        self.focused_field = Some(target.field.clone());
+        cx.notify();
+        true
     }
 
     /// Capture the exact workspace-visible field-edit payload represented by Apply.
