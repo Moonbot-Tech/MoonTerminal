@@ -70,6 +70,24 @@ impl ChartTextWanted {
     }
 }
 
+/// The `strategy_ver` a strategy created or restored on this core is sent with: the revision the
+/// core itself stamps, read off the strategies it already holds.
+///
+/// On the wire that number is Moonbot's strategy FORMAT version, not an edit counter — every live
+/// strategy of a core carries the same one (12 on every core seen so far), and a snapshot sent
+/// with `0` comes back stamped with it. That echo then differs from the desired revision, so
+/// moonproto's resolution reads it as `Superseded` — "a newer revision won" — and never compares
+/// the fields; the panel shows "another change sent first overwrote this one" for a create the
+/// core actually accepted, and a create whose fields the core replaced with defaults is reported
+/// the same way. Sent with the stamp, the echo matches the revision and resolves to `Confirmed`
+/// or `Adjusted` on the fields, which is the message the user can act on.
+///
+/// The maximum is taken so a core holding strategies written by a newer Moonbot is not sent one
+/// it would have to migrate; a core with no strategies yet gets `0`, the old behaviour.
+fn revision_stamp(full: &[StrategySnapshot]) -> i32 {
+    full.iter().map(|s| s.strategy_ver).max().unwrap_or(0)
+}
+
 /// Resolve a spec's placement anchor for the core it is actually being applied to.
 ///
 /// THE one place a foreign anchor is dropped. Strategy ids are small per-core sequences, so an
@@ -1014,6 +1032,7 @@ pub(super) fn drain_commands(
                     false,
                     |full, schema, now| {
                         let mut next_id = full.iter().map(|s| s.strategy_id).max().unwrap_or(0) + 1;
+                        let ver = revision_stamp(full);
                         // Plan the whole batch before insertion because each insertion shifts every
                         // later position; id assignment still scans the complete vector.
                         let ids: Vec<u64> = full.iter().map(|s| s.strategy_id).collect();
@@ -1037,7 +1056,7 @@ pub(super) fn drain_commands(
                                 at,
                                 StrategySnapshot::new(
                                     id,
-                                    0,
+                                    ver,
                                     now,
                                     false,
                                     StrategyKind::from_ordinal(spec.kind_ordinal),
@@ -1077,7 +1096,7 @@ pub(super) fn drain_commands(
                         );
                         full.push(StrategySnapshot::new(
                             id,
-                            0,
+                            revision_stamp(full),
                             now,
                             false, // A restored strategy is always UNCHECKED and must be enabled deliberately.
                             StrategyKind::from_ordinal(kind_ordinal),
