@@ -433,3 +433,24 @@ fn a_price_move_is_drawn_only_when_there_is_one() {
         );
     }
 }
+
+/// `detects/crowd.rs:rail_color` must lift a core card's frozen colour through the shared
+/// `core_color::readable` against the card's own ground, `p.shell_high`; otherwise a yellow that
+/// reads on the dark card vanishes on the light one, or the rail and the arrival frame disagree on
+/// the one rule that keeps them the same hue. A `DetectItem` cannot be built here without an
+/// `App`, so this holds the source the way `ingest` is held above.
+#[test]
+fn rail_color_lifts_the_core_colour_against_the_card_ground() {
+    let body = include_str!("crowd.rs")
+        .split("fn rail_color(")
+        .nth(1)
+        .and_then(|tail| tail.split("\n}").next())
+        .expect("rail_color must exist");
+
+    assert!(body.contains("crate::core_color::readable("));
+    assert!(body.contains("p.shell_high"));
+    assert!(
+        !body.contains("rgb_to_u32(it.color)"),
+        "the frozen colour is painted unlifted"
+    );
+}

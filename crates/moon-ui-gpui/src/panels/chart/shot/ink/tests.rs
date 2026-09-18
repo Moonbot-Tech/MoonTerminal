@@ -1,6 +1,7 @@
 //! Unit coverage for the header strip's derived colours.
 
-use super::{contrast_ratio, mix, palette, pole, relative_luminance};
+use super::palette;
+use crate::contrast::contrast_ratio;
 
 /// `ink.rs:palette` must keep both text registers at the universal readable floor; otherwise a
 /// user-selected chart theme makes the burnt-in screenshot header disappear against its own band.
@@ -63,18 +64,6 @@ fn palette_uses_primary_ink_for_the_lead_and_a_visible_band_and_hairline() {
     assert!(contrast_ratio(colors.hairline, bg) > contrast_ratio(colors.band, bg));
 }
 
-/// `ink.rs:pole` must select the more-contrasting pole on a mid-grey ground; otherwise a familiar
-/// luminance-threshold simplification chooses white and drops the screenshot header below 4.5:1.
-#[test]
-fn pole_picks_black_for_the_mid_grey_that_defeats_a_half_luminance_threshold() {
-    let mid_grey = [128, 128, 128];
-
-    assert!(relative_luminance(mid_grey) > 0.179);
-    assert!(relative_luminance(mid_grey) < 0.5);
-    assert_eq!(pole(mid_grey), [0, 0, 0]);
-    assert!(contrast_ratio(pole(mid_grey), mid_grey) > contrast_ratio([255, 255, 255], mid_grey));
-}
-
 /// `ink.rs:palette` must preserve the readable floor across every greyscale ground; otherwise a
 /// bounded colour walk can terminate at an unreadable pole for a theme users are allowed to choose.
 #[test]
@@ -88,29 +77,4 @@ fn palette_rederives_the_universal_floor_across_all_grey_grounds() {
         .fold(f64::INFINITY, f64::min);
 
     assert!(minimum >= 4.5, "lowest grey-ground contrast was {minimum}");
-}
-
-/// `ink.rs:contrast_ratio` must remain a symmetric WCAG ratio; otherwise the stated floors vary
-/// with argument order and a contrast check can approve unreadable text.
-#[test]
-fn contrast_ratio_is_symmetric_and_has_known_endpoints() {
-    let grey = [60, 120, 180];
-
-    assert_eq!(contrast_ratio(grey, grey), 1.0);
-    assert_eq!(contrast_ratio([0, 0, 0], [255, 255, 255]), 21.0);
-    assert_eq!(
-        contrast_ratio(grey, [250, 250, 250]),
-        contrast_ratio([250, 250, 250], grey)
-    );
-}
-
-/// `ink.rs:mix` must preserve both endpoint colours; otherwise a full muting or full contrast walk
-/// changes the target colour and misses the intended contrast floor.
-#[test]
-fn mix_is_exact_at_both_endpoints() {
-    let from = [11, 22, 33];
-    let to = [201, 202, 203];
-
-    assert_eq!(mix(from, to, 0.0), from);
-    assert_eq!(mix(from, to, 1.0), to);
 }

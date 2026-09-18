@@ -27,7 +27,12 @@
 //! name `ink` is deliberate; do not "fix" it. (This paragraph cannot spell the banned token, for
 //! the same reason. That is not an oversight either — the contract really does scan prose.)
 //!
-//! Deliberately free of GPUI, of GDI and of the `windows` crate.
+//! Deliberately free of GPUI, of GDI and of the `windows` crate. The contrast arithmetic itself —
+//! luminance, ratio, the pole and the blend — lives in `crate::contrast`, shared with the core
+//! colour the arrival border and the Detects card paint; this module keeps only the strip's own
+//! derivation.
+
+use crate::contrast::{contrast_ratio, mix, pole};
 
 /// The strip's five colours, all derived, none chosen.
 pub(super) struct Palette {
@@ -160,122 +165,6 @@ fn toward_band(text: [u8; 3], band: [u8; 3], floor: f64) -> [u8; 3] {
         best = candidate;
     }
     best
-}
-
-/// The pole that actually contrasts MOST with a ground: whichever of white and black wins.
-///
-/// **Asked rather than assumed, and that is not pedantry — the obvious threshold is wrong.**
-/// "Light ground, go black; dark ground, go white" invites a `relative_luminance(bg) < 0.5` test,
-/// and the WCAG crossover is not at `0.5`: contrast against white is `1.05 / (L + 0.05)` and
-/// against black is `(L + 0.05) / 0.05`, which meet at `L ~ 0.179`. Everything between there and
-/// `0.5` is a ground where the threshold picks the pole that contrasts LESS.
-///
-/// A plain mid-grey `[128,128,128]` is exactly such a ground, and it is worth following all the
-/// way through because the margin is thin. Its luminance is `0.216`, so it reaches `3.95:1`
-/// against white and `5.32:1` against black — black wins, and the band this module then lifts
-/// toward black is `[120,120,120]`, on which text can reach `4.76:1`: over the floor. Under the
-/// `< 0.5` threshold the pole would have been WHITE, the band `[136,136,136]`, and text pushed
-/// toward white reaches `3.54:1` — under the floor, on a theme a user is perfectly entitled to
-/// configure. Comparing the two ratios has no threshold to get wrong.
-///
-/// (Every such pair multiplies to exactly `21`, since `1.05/(L+0.05) * (L+0.05)/0.05` cancels.
-/// That identity is the cheapest way to check any number quoted above, and it is why the two
-/// ratios for one ground can never both be small.)
-///
-/// A CHANNEL MEAN is wrong for a second, independent reason: it disagrees with luminance on
-/// saturated grounds — a strong blue has a low mean and a lower luminance still, while a strong
-/// yellow's mean says "middling" where the eye says "bright". The eye is what this picture is for.
-///
-/// The consequence that makes the floors in [`palette`] honest: the WORST ground possible is the
-/// one at the crossover, and even there the winning pole still reaches about **4.58:1** — above
-/// the readable floor. So a walk that ends at this pole is never illegible, whatever theme the
-/// user configured.
-///
-/// Args:
-///     against: The ground.
-///
-/// Returns:
-///     Pure white or pure black, whichever contrasts more. Ties go to white, arbitrarily but
-///     consistently — at a tie the two are equally readable by construction.
-pub(super) fn pole(against: [u8; 3]) -> [u8; 3] {
-    const WHITE: [u8; 3] = [255, 255, 255];
-    const BLACK: [u8; 3] = [0, 0, 0];
-    if contrast_ratio(WHITE, against) >= contrast_ratio(BLACK, against) {
-        WHITE
-    } else {
-        BLACK
-    }
-}
-
-/// Blend `a` toward `b`.
-///
-/// Args:
-///     a: The colour at `t == 0.0`.
-///     b: The colour at `t == 1.0`.
-///     t: How far along, clamped to `0.0..=1.0`.
-///
-/// Returns:
-///     The blended colour, rounded per channel. Exact at both endpoints.
-pub(super) fn mix(a: [u8; 3], b: [u8; 3], t: f64) -> [u8; 3] {
-    let t = t.clamp(0.0, 1.0);
-    let channel = |from: u8, to: u8| -> u8 {
-        let from = f64::from(from);
-        (from + (f64::from(to) - from) * t)
-            .round()
-            .clamp(0.0, 255.0) as u8
-    };
-    [
-        channel(a[0], b[0]),
-        channel(a[1], b[1]),
-        channel(a[2], b[2]),
-    ]
-}
-
-/// WCAG relative luminance of an sRGB colour.
-///
-/// The gamma expansion is not optional decoration: averaging the raw 0-255 channels calls
-/// `[0,255,0]` and `[128,128,128]` similarly bright, and they are nothing alike. This is the curve
-/// the contrast floors in this module are DEFINED against, so it has to be this one and not an
-/// approximation of it.
-///
-/// Args:
-///     rgb: The colour.
-///
-/// Returns:
-///     Luminance in `0.0..=1.0`.
-pub(super) fn relative_luminance(rgb: [u8; 3]) -> f64 {
-    let expand = |channel: u8| -> f64 {
-        let c = f64::from(channel) / 255.0;
-        if c <= 0.03928 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    0.2126 * expand(rgb[0]) + 0.7152 * expand(rgb[1]) + 0.0722 * expand(rgb[2])
-}
-
-/// WCAG contrast ratio between two colours.
-///
-/// Symmetric by construction — it orders the two luminances itself rather than trusting the caller
-/// to pass foreground first — because every caller here compares a text colour against a ground and
-/// none of them should have to remember which way round that goes.
-///
-/// Args:
-///     a: One colour.
-///     b: The other.
-///
-/// Returns:
-///     A ratio in `1.0..=21.0`: `1.0` for two identical colours, `21.0` for black against white.
-pub(super) fn contrast_ratio(a: [u8; 3], b: [u8; 3]) -> f64 {
-    let first = relative_luminance(a);
-    let second = relative_luminance(b);
-    let (lighter, darker) = if first >= second {
-        (first, second)
-    } else {
-        (second, first)
-    };
-    (lighter + 0.05) / (darker + 0.05)
 }
 
 #[cfg(test)]
