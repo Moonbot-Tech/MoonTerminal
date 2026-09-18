@@ -23,6 +23,7 @@ pub mod integrity;
 pub mod maint;
 pub mod metrics;
 mod name_fold;
+pub mod order_traces;
 mod quote;
 mod read_cancel;
 pub(crate) mod read_fail;

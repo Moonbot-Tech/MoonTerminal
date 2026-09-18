@@ -423,6 +423,14 @@ impl SessionManager {
                             stats.ui_state |= core.folders_rev != before;
                         }
                     }
+                    traces @ FeedMsg::ReportTraces { .. } => {
+                        // Not `ui_state`: the answer is for the trace resolver, which wakes its
+                        // own consumers, and a backfill can file hundreds of these in a minute.
+                        if let Some(core) = self.store.core_mut(sess.id) {
+                            core.apply(traces);
+                            stats.report_traces = true;
+                        }
+                    }
                     other => {
                         if let Some(core) = self.store.core_mut(sess.id) {
                             core.apply(other);

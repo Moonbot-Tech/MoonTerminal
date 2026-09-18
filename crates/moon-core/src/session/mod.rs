@@ -183,6 +183,9 @@ pub struct DrainStats {
     pub order_lines_data: bool,
     /// Slow GPUI chrome/account state changed and the Backend entity should be notified.
     pub ui_state: bool,
+    /// A core filed an archived-trace answer (`FeedMsg::ReportTraces`). The UI's one trace
+    /// resolver adopts it on this edge; nothing else reads `CoreData::report_traces`.
+    pub report_traces: bool,
 }
 
 /// Which order book a core's provider pulls, from the venue its platform code names.

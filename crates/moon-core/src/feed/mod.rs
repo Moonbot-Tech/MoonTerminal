@@ -513,8 +513,9 @@ pub enum CoreCmd {
     ///
     /// Fire-and-forget: the answer arrives as [`FeedMsg::ReportTraces`] keyed by the same uid, or
     /// not at all on a core too old to know the command — MoonProto turns that silence into a
-    /// failed outcome after its own timeout. The library shares one network request between
-    /// concurrent asks for the same row, so a second window on the same trade costs nothing.
+    /// failed outcome after its own timeout. The feed does not send it at once: it goes to the
+    /// head of the connection's paced trace queue (`live::trace_backfill`), ahead of the startup
+    /// backfill, and the answer is filed in the local archive before it is reported.
     RequestReportTraces { report_uid: i64 },
     /// Targeted `ClientSettings` edit from the toolbar, such as TP, SL, or sell-preset selection.
     /// The feed patches the retained settings snapshot through its helper and sends it in full

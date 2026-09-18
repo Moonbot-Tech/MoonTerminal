@@ -30,12 +30,16 @@ pub struct ArchivedOrderTrace {
     pub kind: ArchivedLineKind,
     /// Stop line the core delivered with the trace (Moonbot `SetStopPrice`), horizontal at one
     /// price from the first point's time to `stop_time_ms`. `None` when the archive holds none.
-    pub stop_price: Option<f32>,
+    pub stop_price: Option<f64>,
     pub stop_time_ms: Option<f64>,
     /// `(Unix UTC ms, price)`, in the core's chart-geometry layout. Unset coordinates (a zero
     /// time or a non-positive price) are already dropped, and a trace that lost every point is
     /// not constructed at all.
-    pub points: Vec<(f64, f32)>,
+    ///
+    /// Prices stay the wire's `f64`: this type is what the local archive persists, and the
+    /// protocol asks that the saved archive not be downcast (`docs/reports.md`). The chart
+    /// narrows to `f32` at the moment it builds a `LineTrace`, not before.
+    pub points: Vec<(f64, f64)>,
 }
 
 /// What one `request_traces` asked for one report row ended in.
@@ -73,13 +77,13 @@ pub fn archived_traces_from_proto(traces: &[moonproto::ReportTrace]) -> Vec<Arch
                 | moonproto::OrderType::BuyLimit => ArchivedLineKind::Entry,
                 _ => return None,
             };
-            let points: Vec<(f64, f32)> = trace
+            let points: Vec<(f64, f64)> = trace
                 .points
                 .iter()
                 .filter_map(|p| {
                     let time_ms = p.time.unix_millis();
                     (time_ms > 1 && p.price.is_finite() && p.price > 0.0)
-                        .then_some((time_ms as f64, p.price as f32))
+                        .then_some((time_ms as f64, p.price))
                 })
                 .collect();
             if points.is_empty() {
@@ -91,7 +95,7 @@ pub fn archived_traces_from_proto(traces: &[moonproto::ReportTrace]) -> Vec<Arch
             Some(ArchivedOrderTrace {
                 own: trace.own,
                 kind,
-                stop_price: has_stop.then_some(trace.stop_price as f32),
+                stop_price: has_stop.then_some(trace.stop_price),
                 stop_time_ms: has_stop.then_some(stop_time_ms as f64),
                 points,
             })

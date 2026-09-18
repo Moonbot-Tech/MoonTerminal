@@ -249,9 +249,9 @@ trade_window.figure.orders:
   en: "Orders"
   es: "Órdenes"
 trade_window.traces.pending:
-  ru: "запрашиваю трассы у ядра…"
-  en: "asking the core for traces…"
-  es: "pidiendo trazas al núcleo…"
+  ru: "ищу трассы: архив, затем ядро…"
+  en: "looking up traces: the archive, then the core…"
+  es: "buscando trazas: el archivo, luego el núcleo…"
 trade_window.traces.drawn:
   ru: "%{own} свои, %{inherited} унаследованных"
   en: "%{own} own, %{inherited} inherited"

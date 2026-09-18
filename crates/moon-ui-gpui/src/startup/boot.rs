@@ -129,6 +129,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let auto_workspace_layout_revision =
         cx.new(|_| crate::workspace::AutoWorkspaceLayoutRevision::default());
     let core_filter_revision = cx.new(|_| crate::CoreFilterRevision);
+    let traces_revision = cx.new(|_| crate::backend::traces::TracesRevision);
     // A run that is not a person watching the market gets the seeded stand-in: `--fixture` is a
     // bench on recorded data and `--debug-script` is FireTest, and both assert that nothing reaches
     // the network. The saved rule is handed over at construction, so a profile that opted in is
@@ -164,6 +165,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         display_time_revision: display_time_revision.clone(),
         workspace_revision: workspace_revision.clone(),
         auto_workspace_layout_revision: auto_workspace_layout_revision.clone(),
+        traces: Default::default(),
+        traces_revision,
         core_filter: HashSet::new(),
         run_pending: Default::default(),
         core_filter_revision,
@@ -614,6 +617,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     if drain.market_data {
                         b.market_data_revision.update(cx, |_, cx| cx.notify());
                     }
+                    if drain.report_traces {
+                        b.adopt_traces(cx);
+                    }
                     if drain.ui_state {
                         b.mark_backend_dirty(cx);
                     }
@@ -701,6 +707,10 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                         }
                     }
                     b.tick_telegram(cx);
+                    // A core removed from the session cannot answer what was asked of it; the
+                    // drain edge does not fire for a removal, so the slow tick settles those.
+                    // Nothing to walk while no ask is out.
+                    b.adopt_traces(cx);
                     b.maybe_diag_open_first_market(cx);
                     b.refresh_header_ticker_default(false);
                     b.sync_open_markets_if_due();

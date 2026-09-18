@@ -1,23 +1,20 @@
-//! The trade's archived order lines: asking the core, folding its answer, stating the result.
+//! The trade's archived order lines: what to resolve, what to draw, what the rail says.
 //!
 //! A live chart draws the session's CURRENT orders; the trade window empties that source on its
 //! engine because those orders describe a different moment than the one on screen. What it draws
 //! instead is what the core archived when THIS trade finalized — its own buy and sell lines with
 //! their repricing paths and stop markers, plus the lines it inherited through a join or a split —
-//! asked for by the report row's `ReportUID` and drawn through the same geometry a live closed
-//! order takes (`OrderLineStore::archived`).
+//! keyed by the report row's `ReportUID` and drawn through the same geometry a live closed order
+//! takes (`OrderLineStore::archived`).
 //!
-//! # The answer is filed, not delivered
+//! # One resolver, not one per window
 //!
-//! The feed files the core's answer in the session store under the row's uid, and this window
-//! reads it from the backend observer it already runs — one revision compare per notification,
-//! nothing while there is no request in flight. An answer filed BEFORE this window asked is never
-//! adopted, however complete it looks: `ReportUID` is unique within ONE report database, and a
-//! core whose database was recreated can reissue a uid an earlier window already asked about —
-//! the filed lines would then be another trade's. Every open asks the core afresh (MoonProto
-//! shares one network request between concurrent asks for the same row, so a second window on
-//! the same trade costs nothing), and the entry's revision stamp is what tells the fresh answer
-//! from the stale one.
+//! The window neither reads the archive nor asks the core itself: it hands the resolver on the
+//! backend (`backend::traces`) the rows it wants — the subject, then up to [`NEIGHBOUR_CAP`]
+//! neighbours nearest in time — and reads each row's state back after the resolver's wake. The
+//! resolver reads the local archive first and asks the core only for what that did not hold, so a
+//! trade opened yesterday costs no request today; a chart drawing the same trade in its lines
+//! mode shares the very same answer.
 //!
 //! # Three ends, three sentences
 //!
@@ -27,8 +24,11 @@
 //! keeps a Retry button. A row the replica never received a uid for cannot be asked about at all,
 //! and says that too.
 
+use std::sync::Arc;
+
 use gpui::*;
-use moon_core::feed::ReportTracesOutcome;
+use moon_core::db::ChartTradeRecord;
+use moon_core::feed::ArchivedOrderTrace;
 use moon_core::session::order_lines::{ArchivedOrdersInput, OrderLineStore};
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonPalette, MoonSize, h_flex, v_flex,
@@ -36,22 +36,23 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::TradeWindowView;
+use crate::backend::traces::TraceState as Resolved;
 use crate::design;
 use crate::design::moon;
 
-/// How many "other trades" a window asks the core about, nearest the subject in time first.
+/// How many "other trades" a window resolves, nearest the subject in time first.
 ///
 /// The Report period can hold hundreds of one coin's trades; the ones whose lines can share the
-/// subject's picture are the ones closed near it. MoonProto shares one network request between
-/// windows asking about the same row, so this bounds the terminal's own ask, not the wire's cost.
+/// subject's picture are the ones closed near it. The resolver reads them all from the archive in
+/// one pass and asks the core for at most this many misses.
 pub(super) const NEIGHBOUR_CAP: usize = 20;
 
 /// Where this window stands with the trade's archived order lines.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum TraceState {
-    /// The report row carries no `ReportUID`, so there is nothing to ask the core with.
+    /// The report row carries no `ReportUID`, so there is nothing to resolve it by.
     NotAskable,
-    /// A request is in flight; the observer is watching for its answer.
+    /// The archive is being read or the core has been asked.
     Pending,
     /// Lines are on the chart.
     Drawn { own: usize, inherited: usize },
@@ -73,12 +74,10 @@ impl TraceState {
 }
 
 impl TradeWindowView {
-    /// Ask the core for this trade's archived lines.
+    /// Resolve this trade's archived lines: the archive, then the core on a miss.
     ///
-    /// Called once at open and again from the Retry button. Whatever the store already holds for
-    /// this uid is superseded, not reused — see the module docs for why a filed answer cannot be
-    /// trusted across the core's own database lifetime — so the observer waits for an entry whose
-    /// revision is past the one seen here.
+    /// Called once at open. The Retry button takes [`Self::retry_traces`] instead, which skips
+    /// the archive on purpose.
     ///
     /// Args:
     ///     cx: View context.
@@ -97,20 +96,35 @@ impl TradeWindowView {
             cx.notify();
             return;
         };
-        (self.traces_seen_rev, self.traces_epoch) = self.report_traces_marks(cx);
-        self.traces = match self.send_trace_request(report_uid, cx) {
-            true => TraceState::Pending,
-            false => TraceState::Failed,
-        };
-        cx.notify();
+        let core = self.core;
+        self.backend.update(cx, |backend, cx| {
+            backend.ensure_traces(core, vec![report_uid], 1, cx);
+        });
+        self.sync_traces(true, cx);
     }
 
-    /// Ask the core for the lines of the neighbours the "other trades" tick shows.
+    /// Ask the core again for the subject, past whatever the archive holds.
+    ///
+    /// Args:
+    ///     cx: View context.
+    pub(super) fn retry_traces(&mut self, cx: &mut Context<Self>) {
+        let Some(report_uid) = self.record.report_uid else {
+            return;
+        };
+        let core = self.core;
+        self.backend.update(cx, |backend, cx| {
+            backend.retry_trace(core, report_uid, cx);
+        });
+        self.sync_traces(true, cx);
+    }
+
+    /// Resolve the lines of the neighbours the "other trades" tick shows.
     ///
     /// Nothing while the tick is off. Bounded to [`NEIGHBOUR_CAP`] trades nearest the subject in
     /// time — the Report period can hold hundreds of a coin's trades, and the ones that matter are
-    /// the ones whose lines can share the picture. A neighbour already asked, answered or refused
-    /// is not asked twice; a neighbour without a `ReportUID` cannot be asked at all.
+    /// the ones whose lines can share the picture. The resolver skips what it already holds, so a
+    /// re-click that keeps the same neighbours costs nothing; a neighbour without a `ReportUID`
+    /// cannot be resolved at all.
     ///
     /// Args:
     ///     cx: View context.
@@ -118,274 +132,141 @@ impl TradeWindowView {
         if !self.show_other_trades {
             return;
         }
-        // The cap counts neighbours of the CURRENT snapshot only: a re-click can replace the
-        // history with a different period, and slots burnt on trades no longer shown would leave
-        // the window unable to fill up with the ones that are.
         let focus_close = self.record.close_date;
-        let mut known = 0usize;
-        let mut candidates: Vec<(i64, i64)> = Vec::new();
-        for r in self.history.iter() {
-            if r.record_id == self.record.record_id {
-                continue;
-            }
-            let Some(uid) = r.report_uid else {
-                continue;
-            };
-            if self.neighbour_pending.contains_key(&uid) || self.neighbour_lines.contains_key(&uid)
-            {
-                known += 1;
-            } else {
-                candidates.push((uid, (r.close_date - focus_close).abs()));
-            }
-        }
-        if known >= NEIGHBOUR_CAP {
+        let mut candidates: Vec<(i64, i64)> = self
+            .history
+            .iter()
+            .filter(|r| r.record_id != self.record.record_id)
+            .filter_map(|r| {
+                r.report_uid
+                    .map(|uid| (uid, (r.close_date - focus_close).abs()))
+            })
+            .collect();
+        candidates.sort_by_key(|(_, distance)| *distance);
+        let uids: Vec<i64> = candidates
+            .into_iter()
+            .take(NEIGHBOUR_CAP)
+            .map(|(uid, _)| uid)
+            .collect();
+        if uids.is_empty() {
             return;
         }
-        candidates.sort_by_key(|(_, distance)| *distance);
-        let (seen_rev, epoch) = self.report_traces_marks(cx);
-        self.traces_epoch = epoch;
-        for (uid, _) in candidates.into_iter().take(NEIGHBOUR_CAP - known) {
-            if self.send_trace_request(uid, cx) {
-                self.neighbour_pending.insert(uid, seen_rev);
-            }
-        }
+        let core = self.core;
+        self.backend.update(cx, |backend, cx| {
+            backend.ensure_traces(core, uids, NEIGHBOUR_CAP, cx);
+        });
     }
 
-    /// The core's current `(report_traces_rev, report_traces_epoch)`, or zeros when the core is
-    /// not in the store.
-    fn report_traces_marks(&self, cx: &App) -> (u64, u64) {
-        self.backend
-            .read(cx)
-            .session
-            .store()
-            .core(self.core)
-            .map_or((0, 0), |core| {
-                (core.report_traces_rev, core.report_traces_epoch)
-            })
-    }
-
-    /// Send one request; `false` when it could not even be queued.
-    fn send_trace_request(&self, report_uid: i64, cx: &App) -> bool {
-        match self
-            .backend
-            .read(cx)
-            .session
-            .request_report_traces(self.core, report_uid)
-        {
-            Ok(()) => {
-                log::info!(
-                    "[trade] traces requested for {} uid={report_uid}",
-                    self.market
-                );
-                true
-            }
-            Err(error) => {
-                log::warn!(
-                    "[x] trade traces request for {} uid={report_uid} not sent: {error}",
-                    self.market
-                );
-                false
-            }
-        }
-    }
-
-    /// Read the core's answers once they are filed. Called from the backend observer.
-    ///
-    /// Cheap while nothing is pending: two emptiness checks. While requests are in flight it is
-    /// one revision compare per notification, and the map is consulted only when that moved.
+    /// Read the resolver's answers and rebuild the archived store when a line of this window's
+    /// changed. Called from the resolver's wake, and by hand after anything that changes which
+    /// rows the window draws.
     ///
     /// Args:
+    ///     force: Rebuild even when the signature did not move — the drawn set changed on this
+    ///         side (a tick, a new period) rather than on the resolver's.
     ///     cx: View context.
-    pub(super) fn poll_traces(&mut self, cx: &mut Context<Self>) {
-        let subject_pending = self.traces == TraceState::Pending;
-        if !subject_pending && self.neighbour_pending.is_empty() {
-            return;
-        }
-        let mut changed = false;
-        let (rev, epoch) = {
+    pub(super) fn sync_traces(&mut self, force: bool, cx: &mut Context<Self>) {
+        let subject_uid = self.record.report_uid.unwrap_or_default();
+        let (subject, neighbours, sig) = {
             let backend = self.backend.read(cx);
-            let Some(core) = backend.session.store().core(self.core) else {
-                // The core was REMOVED from the session (not merely disconnected — a reconnect
-                // keeps its data) while requests were out. No answer can land now, and a block
-                // left reading "asking…" with nothing to press would be a spinner in words.
-                if subject_pending {
-                    self.traces = TraceState::Failed;
+            let (subject, subject_stamp) = backend.trace_state_stamped(self.core, subject_uid);
+            let mut sig = subject_stamp;
+            let mut neighbours = Vec::new();
+            if self.show_other_trades {
+                for record in self.history.iter() {
+                    let Some(uid) = record
+                        .report_uid
+                        .filter(|_| record.record_id != self.record.record_id)
+                    else {
+                        continue;
+                    };
+                    let (state, stamp) = backend.trace_state_stamped(self.core, uid);
+                    sig = sig.wrapping_mul(31).wrapping_add(stamp);
+                    if let Some(lines) = state.lines().filter(|lines| !lines.is_empty()) {
+                        neighbours.push((record.clone(), lines.clone()));
+                    }
                 }
-                self.neighbour_pending.clear();
-                cx.notify();
-                return;
-            };
-            (core.report_traces_rev, core.report_traces_epoch)
+            }
+            (subject, neighbours, sig)
         };
-        if rev == self.neighbour_poll_rev {
+        if !force && sig == self.traces_sig {
             return;
         }
-        self.neighbour_poll_rev = rev;
-        if epoch != self.traces_epoch {
-            // A DIFFERENT MoonBot process answers on this core now and the store dropped every
-            // filed answer with the old one. Whatever was asked can no longer land: the subject
-            // fails (retryable), the neighbours are forgotten so a re-tick asks again.
-            self.traces_epoch = epoch;
-            if subject_pending {
-                log::warn!(
-                    "[x] trade traces for {}: core process replaced while the request was out",
+        self.traces_sig = sig;
+        if self.traces != TraceState::NotAskable {
+            let next = match &subject {
+                Resolved::Unknown | Resolved::Loading | Resolved::Unasked | Resolved::Pending => {
+                    TraceState::Pending
+                }
+                Resolved::Lines(lines) => {
+                    let own = lines.iter().filter(|line| line.own).count();
+                    TraceState::Drawn {
+                        own,
+                        inherited: lines.len() - own,
+                    }
+                }
+                Resolved::Empty => TraceState::Missing,
+                Resolved::Failed => TraceState::Failed,
+            };
+            if next != self.traces {
+                // The one line a live check reads back: what was resolved and what reached the
+                // chart.
+                log::info!(
+                    "[trade] traces for {} uid={subject_uid}: {next:?}",
                     self.market
                 );
-                self.traces = TraceState::Failed;
-            }
-            self.neighbour_pending.clear();
-            cx.notify();
-            return;
-        }
-        if subject_pending {
-            let report_uid = self.record.report_uid.unwrap_or_default();
-            // Only an entry filed AFTER the request went out is its answer; an older one is what
-            // `request_traces` deliberately chose to supersede.
-            if let Some(outcome) = self.filed_after(report_uid, self.traces_seen_rev, cx) {
-                match outcome {
-                    ReportTracesOutcome::Ready(lines) if lines.is_empty() => {
-                        log::info!(
-                            "[trade] traces for {} uid={report_uid}: the core holds no archive",
-                            self.market
-                        );
-                        self.traces = TraceState::Missing;
-                        self.subject_lines = None;
-                    }
-                    ReportTracesOutcome::Ready(lines) => {
-                        let own = lines.iter().filter(|line| line.own).count();
-                        let inherited = lines.len() - own;
-                        // The one line a live check reads back: what the core answered and what
-                        // reached the chart.
-                        log::info!(
-                            "[trade] traces for {} uid={report_uid}: {own} own, {inherited} inherited drawn",
-                            self.market
-                        );
-                        self.traces = TraceState::Drawn { own, inherited };
-                        self.subject_lines = Some(lines);
-                    }
-                    ReportTracesOutcome::Failed(error) => {
-                        // The diagnostic is an English transport fragment and belongs in the log,
-                        // never in the user's sentence — the block says only that the core did
-                        // not answer.
-                        log::warn!(
-                            "[x] trade traces for {} uid={report_uid} failed: {error}",
-                            self.market
-                        );
-                        self.traces = TraceState::Failed;
-                    }
-                }
-                changed = true;
+                self.traces = next;
             }
         }
-        let pending: Vec<(i64, u64)> = self
-            .neighbour_pending
-            .iter()
-            .map(|(u, r)| (*u, *r))
-            .collect();
-        for (uid, seen) in pending {
-            let Some(outcome) = self.filed_after(uid, seen, cx) else {
-                continue;
-            };
-            self.neighbour_pending.remove(&uid);
-            match outcome {
-                // An empty answer is filed too, so the neighbour is not asked again.
-                ReportTracesOutcome::Ready(lines) => {
-                    self.neighbour_lines.insert(uid, lines);
-                }
-                ReportTracesOutcome::Failed(error) => {
-                    log::warn!(
-                        "[x] neighbour traces for {} uid={uid} failed: {error}",
-                        self.market
-                    );
-                }
-            }
-            changed = true;
-        }
-        if changed {
-            self.rebuild_frozen_orders(cx);
-        }
+        self.rebuild_frozen_orders(subject.lines().cloned(), &neighbours, cx);
         cx.notify();
     }
 
-    /// The outcome filed for `uid` after revision `seen`, if any.
-    fn filed_after(&self, uid: i64, seen: u64, cx: &App) -> Option<ReportTracesOutcome> {
-        let backend = self.backend.read(cx);
-        let core = backend.session.store().core(self.core)?;
-        let entry = core.report_traces.get(&uid)?;
-        (entry.rev > seen).then(|| entry.outcome.clone())
-    }
-
-    /// Build the archived store from everything answered so far and hand it to the chart.
+    /// Build the archived store from everything resolved so far and hand it to the chart.
     ///
     /// The subject's lines first, at full opacity; then, while the "other trades" tick is on,
     /// every neighbour that answered with lines, pale. The store is rebuilt whole on each change
     /// — at most a couple of dozen orders — and stamped with a fresh revision so the chart's
-    /// revision gate sees it arrive. Called on the tick too, so untick takes the lines away with
-    /// the arrows and re-tick brings them back without asking the core again.
+    /// revision gate sees it arrive.
     ///
     /// Row stamps are lifted onto true UTC the way `fetch` lifts them for the REST window, so a
     /// subject's entry line ends at the same instant its entry arrow is drawn at.
     ///
     /// Args:
+    ///     subject: The subject's lines, when resolved.
+    ///     neighbours: Each drawn neighbour's row and lines.
     ///     cx: View context.
-    pub(super) fn rebuild_frozen_orders(&mut self, cx: &mut Context<Self>) {
+    fn rebuild_frozen_orders(
+        &mut self,
+        subject: Option<Arc<[ArchivedOrderTrace]>>,
+        neighbours: &[(ChartTradeRecord, Arc<[ArchivedOrderTrace]>)],
+        cx: &mut Context<Self>,
+    ) {
         let axis = self
             .backend
             .read(cx)
             .report_axis(crate::chartdx::axes::display_zone());
-        let input = |record: &moon_core::db::ChartTradeRecord| {
+        let input = |record: &ChartTradeRecord| {
             let (buy_utc_ms, close_utc_ms) = super::utc_stamps_ms(record, &axis);
-            (
-                record.is_short,
-                record.quantity as f32,
-                buy_utc_ms as f64,
-                close_utc_ms as f64,
-            )
-        };
-        let (is_short, quantity, entry_fill_ms, close_ms) = input(&self.record);
-        let subject_input = ArchivedOrdersInput {
-            market: &self.market,
-            is_short,
-            quantity,
-            entry_fill_ms: Some(entry_fill_ms),
-            close_ms,
+            ArchivedOrdersInput {
+                market: &self.market,
+                is_short: record.is_short,
+                quantity: record.quantity as f32,
+                entry_fill_ms: Some(buy_utc_ms as f64),
+                close_ms: close_utc_ms as f64,
+            }
         };
         let mut store =
-            OrderLineStore::archived(subject_input, self.subject_lines.as_deref().unwrap_or(&[]));
-        let mut neighbours_drawn = 0;
-        if self.show_other_trades {
-            for record in self.history.iter() {
-                let Some(lines) = record
-                    .report_uid
-                    .filter(|_| record.record_id != self.record.record_id)
-                    .and_then(|uid| self.neighbour_lines.get(&uid))
-                else {
-                    continue;
-                };
-                if lines.is_empty() {
-                    continue;
-                }
-                let (is_short, quantity, entry_fill_ms, close_ms) = input(record);
-                store.append_archived(
-                    ArchivedOrdersInput {
-                        market: &self.market,
-                        is_short,
-                        quantity,
-                        entry_fill_ms: Some(entry_fill_ms),
-                        close_ms,
-                    },
-                    lines,
-                );
-                neighbours_drawn += 1;
-            }
+            OrderLineStore::archived(input(&self.record), subject.as_deref().unwrap_or(&[]));
+        for (record, lines) in neighbours {
+            store.append_archived(input(record), lines);
         }
-        self.neighbours_drawn = neighbours_drawn;
+        self.neighbours_drawn = neighbours.len();
         self.frozen_rev = self.frozen_rev.wrapping_add(1).max(1);
         store.rev = self.frozen_rev;
         self.panel.update(cx, |panel, pcx| {
             panel.attach_frozen_orders(Some(std::rc::Rc::new(store)), pcx);
         });
-        cx.notify();
     }
 }
 
@@ -458,7 +339,7 @@ pub(super) fn render_block(
             .tooltip(t!("trade_window.traces.retry_tip").to_string())
             .on_click(move |_, _window, app| {
                 app.stop_propagation();
-                view.update(app, |this, cx| this.request_traces(cx));
+                view.update(app, |this, cx| this.retry_traces(cx));
             })
             .render()
     });

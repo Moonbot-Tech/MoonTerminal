@@ -149,13 +149,20 @@ impl OrderLineStore {
 /// primary line at that price over the order's life and the repricing path beside it from
 /// `server_points`, exactly as it does for a live order whose core sent a trace.
 fn archived_line(trace: &ArchivedOrderTrace) -> LineTrace {
-    let (first_ms, _) = trace.points[0];
-    let (_, last_price) = trace.points[trace.points.len() - 1];
+    // The one place the archive's `f64` prices narrow to the chart's `f32`: the store is drawn,
+    // never persisted, so nothing downstream loses what the local archive keeps.
+    let server_points: Vec<(f64, f32)> = trace
+        .points
+        .iter()
+        .map(|&(time_ms, price)| (time_ms, price as f32))
+        .collect();
+    let (first_ms, _) = server_points[0];
+    let (_, last_price) = server_points[server_points.len() - 1];
     LineTrace {
         steps: vec![(first_ms, last_price)],
-        server_points: trace.points.clone(),
+        server_points,
         tmp_point: None,
-        server_stop_price: trace.stop_price,
+        server_stop_price: trace.stop_price.map(|price| price as f32),
         server_stop_time_ms: trace.stop_time_ms,
         off_ms: None,
     }
