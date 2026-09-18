@@ -240,7 +240,6 @@ impl ChartDataState {
     ///     pane: Index of the pane being composed, which decides whether it owns the hovered arrow.
     ///     core: Exact pane core; records from other cores are ignored.
     ///     view: The pane's own view, supplying the epoch and the scale clustering works in.
-    ///     rendered: This pane's retained render state.
     ///     markers: Existing order/figure/news marker union to extend.
     ///     lines_drawn: `Some` when this pane's order pass draws the archived lines, so the
     ///         arrows of an answered end must give way; carries the close instants of the live
@@ -257,7 +256,6 @@ impl ChartDataState {
         pane: usize,
         core: CoreId,
         view: &ChartView,
-        _rendered: &mut super::PaneRender,
         markers: &mut Vec<MarkerInstance>,
         segs: &mut Vec<SegInstance>,
         lines_drawn: Option<&[f64]>,

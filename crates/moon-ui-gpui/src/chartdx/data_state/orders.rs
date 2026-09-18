@@ -232,7 +232,7 @@ impl ChartDataState {
             });
             // ...and the fill arrow goes: in this style the exit line starts where the entry
             // filled, and Moonbot marks that point with nothing louder than a line end.
-            let lines_live_graphics = lines_style.then(|| moon_core::config::ChartGraphicsCfg {
+            let lines_live_graphics = lines_style.then_some(moon_core::config::ChartGraphicsCfg {
                 hide_entry_fill_arrow: true,
                 ..self.chart_graphics
             });
@@ -427,7 +427,6 @@ impl ChartDataState {
                         *idx,
                         pane.core,
                         &pane.view,
-                        pr,
                         &mut markers,
                         &mut segs,
                         live_twins.as_deref(),
@@ -509,7 +508,6 @@ impl ChartDataState {
                         *idx,
                         pane.core,
                         &pane.view,
-                        pr,
                         &mut markers,
                         &mut segs,
                         // No core, no order pass: nothing draws lines here, so the arrows stay.
