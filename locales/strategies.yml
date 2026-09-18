@@ -350,6 +350,10 @@ strat.note_core_delete:
   ru: "Ядро нельзя удалить из дерева — уберите его из выбора"
   en: "A core cannot be deleted from the tree — drop it from the selection"
   es: "Un núcleo no se puede eliminar desde el árbol — quítelo de la selección"
+strat.note_goto_missing:
+  ru: "Стратегия #%{id} удалена на ядре и не сохранена локально — показать нечего"
+  en: "Strategy #%{id} was deleted on the core and is not kept locally — nothing to show"
+  es: "La estrategia #%{id} fue eliminada en el núcleo y no se guarda localmente — nada que mostrar"
 strat.note_delete_one_folder:
   ru: "Выбрано папок: %{n} — удаляйте по одной"
   en: "%{n} folders selected — delete them one at a time"

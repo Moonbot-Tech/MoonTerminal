@@ -61,7 +61,7 @@ pub(crate) fn id_strat(core: CoreId, id: u64) -> SharedString {
 fn id_del_folder(core: CoreId) -> SharedString {
     SharedString::from(format!("d:{core}"))
 }
-fn id_del_strat(core: CoreId, id: u64) -> SharedString {
+pub(crate) fn id_del_strat(core: CoreId, id: u64) -> SharedString {
     SharedString::from(format!("ds:{core}:{id}"))
 }
 

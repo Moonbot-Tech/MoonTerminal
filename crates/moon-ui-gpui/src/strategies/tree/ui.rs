@@ -271,6 +271,11 @@ pub(crate) enum TreeNote {
     Pasted { strategies: usize, cores: usize },
     /// There was nothing on either clipboard to paste.
     NothingToPaste,
+    /// A reveal named a strategy that is neither on its core nor kept in the Deleted branch.
+    ///
+    /// The Report keeps trades of strategies long gone; without this the window would open on
+    /// nothing and say nothing about why.
+    GotoMissing { strategy_id: u64 },
 }
 
 impl TreeNote {
@@ -291,6 +296,9 @@ impl TreeNote {
             Self::CoreNotDeletable => {
                 MoonNotification::warning(t!("strat.note_core_delete").to_string())
             }
+            Self::GotoMissing { strategy_id } => MoonNotification::warning(
+                t!("strat.note_goto_missing", id = strategy_id).to_string(),
+            ),
             Self::DeleteNeedsOneFolder { selected } => MoonNotification::warning(
                 t!("strat.note_delete_one_folder", n = selected).to_string(),
             ),

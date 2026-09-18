@@ -34,7 +34,7 @@ use sections::section_display_title;
 use split::{PanelResizeDrag, PanelSplit};
 use tree::pane_cache::{LeftPaneFrame, PaneCache};
 pub(crate) use window::StrategyRevealRequest;
-pub use window::{RevealTarget, open, open_goto, reveal_name};
+pub use window::{RevealTarget, open, open_goto, open_goto_version, reveal_name};
 use window::{STRATEGIES_HEADER_H, strategies_header};
 
 use std::cell::Cell;
@@ -123,6 +123,11 @@ pub struct StrategiesView {
     /// cached the tree built without it. See [`tree::cache::data_sig`].
     deleted_rev: u64,
     deleted_inflight: bool,
+    /// Whether the Deleted branch has been read from the database at least once.
+    ///
+    /// A reveal that finds no live row must not answer "missing" against a branch that was never
+    /// read; `deleted_inflight` alone cannot say so before the first load has even been started.
+    deleted_loaded: bool,
     /// Cores whose Deleted folder is expanded.
     expanded_deleted: HashSet<CoreId>,
     /// Resizable tree, versions, and sections widths persisted in `layout.strategies_panels`.
@@ -230,6 +235,12 @@ pub struct StrategiesView {
     /// Strategy expected from a core echo after create/paste, keyed by core and name.
     /// Selected in the tree when it arrives, then cleared.
     pending_select: Option<StrategyRevealRequest>,
+    /// An id reveal that found no live row while the Deleted branch was still loading.
+    ///
+    /// The deleted map arrives from a background read, so a request landing before it cannot tell
+    /// "deleted" from "never existed". It waits here for the load to finish; the next render
+    /// drains it again, and only then is it answered — found in the branch, or reported missing.
+    deferred_goto: Option<StrategyRevealRequest>,
     /// Signature of strategy and schema data that materially changes the window.
     last_sig: u64,
     /// Signature of the tree shape last pushed into [`MoonTreeState`]: node ids, labels, folder
@@ -381,8 +392,20 @@ impl Render for StrategiesView {
         // push above: an unchanged shape means MoonTree already holds the forest to resolve
         // against, and the reveal path expanded the target's core and folder chain before this.
         if let Some((core, id)) = goto {
+            // A strategy the core no longer lists is drawn in the Deleted branch under its own
+            // item id; the live id would resolve to nothing and the reveal would not scroll.
+            let live = {
+                let store = self.backend.read(cx).session.store();
+                store
+                    .core(core)
+                    .is_some_and(|cd| cd.strategies.iter().any(|r| r.id == id))
+            };
+            let item_id = match live {
+                true => tree::moon::id_strat(core, id),
+                false => tree::moon::id_del_strat(core, id),
+            };
             self.tree_state.update(cx, |st, c| {
-                let item = MoonTreeItem::new(tree::moon::id_strat(core, id), "");
+                let item = MoonTreeItem::new(item_id, "");
                 st.set_selected_item(Some(&item), c);
                 if let Some(ix) = st.selected_index() {
                     st.scroll_to_item(ix, ScrollStrategy::Center);

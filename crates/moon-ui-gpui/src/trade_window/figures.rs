@@ -116,6 +116,8 @@ fn cell(
 ///     zone_label: Already-formatted entry and exit stamps, in the Report's own clock. Borrowed
 ///         rather than owned: they are fixed for the window's life, so a caller has no reason to
 ///         hand over a copy per render.
+///     lead: The strategy block, first in the rail when the trade has a strategy — built by the
+///         caller because, unlike every figure here, it carries click handlers onto the view.
 ///     narrow: Whether to lay the blocks out horizontally.
 ///     p: Active palette.
 ///     cx: Render context.
@@ -125,6 +127,7 @@ fn cell(
 pub(super) fn rail(
     record: &ChartTradeRecord,
     zone_label: &(String, String),
+    lead: Option<AnyElement>,
     narrow: bool,
     p: MoonPalette,
     cx: &App,
@@ -165,7 +168,9 @@ pub(super) fn rail(
         ),
         None => (unknown.clone(), moon(p.text_muted)),
     };
-    let cells = vec![
+    let mut cells = Vec::with_capacity(10);
+    cells.extend(lead);
+    cells.extend([
         cell(
             "tw-side",
             t!("trade_window.figure.side").to_string(),
@@ -247,7 +252,7 @@ pub(super) fn rail(
             cx,
         )
         .into_any_element(),
-    ];
+    ]);
     let gap = design::ui_px(cx, design::CHROME_GAP);
     match narrow {
         true => h_flex()

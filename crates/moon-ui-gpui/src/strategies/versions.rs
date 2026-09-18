@@ -62,6 +62,14 @@ pub(super) struct VersionsState {
     /// This follows a click on a deleted strategy, which has no live mode and opens directly on its
     /// final parameters.
     pub pending_latest: bool,
+    /// Select THIS version (`valid_from`) of THIS strategy once its list finishes loading.
+    ///
+    /// Set by a reveal that names a version — the trade window's stamp — and consumed by the load
+    /// that follows the strategy selection. Keyed by strategy because the load lands a frame
+    /// later: a selection that moved on in between must not have the stamp applied to whatever
+    /// list arrives next. A stamp the list does not hold is dropped silently: the strategy is
+    /// still selected, which is the larger half of what was asked.
+    pub pending_select: Option<(Key, i64)>,
     /// Whether the pane is collapsed left into a narrow strip showing only the version count.
     pub collapsed: bool,
     /// Confirmation of the last "restore into current": which strategy it belongs to, what the
@@ -173,6 +181,15 @@ impl StrategiesView {
                                 this.select_version(Some(vf), cx);
                             }
                         }
+                        // A reveal that named a version wins over the deleted default above: it
+                        // is the more specific ask, and it arrived from the same click.
+                        if let Some((key, vf)) = this.versions.pending_select.take() {
+                            if key == (core, id)
+                                && this.versions.list.iter().any(|v| v.valid_from == vf)
+                            {
+                                this.select_version(Some(vf), cx);
+                            }
+                        }
                         cx.notify();
                     }
                 });
@@ -198,6 +215,7 @@ impl StrategiesView {
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.deleted_inflight = false;
+                    this.deleted_loaded = true;
                     let mut map: std::collections::HashMap<
                         moon_core::session::CoreId,
                         Vec<moon_core::strat_db::stats::HeadRow>,
@@ -209,6 +227,9 @@ impl StrategiesView {
                         this.deleted = map;
                         // The tree signature cannot see this map, so it reads this counter instead.
                         this.deleted_rev = this.deleted_rev.wrapping_add(1);
+                        cx.notify();
+                    } else if this.deferred_goto.is_some() {
+                        // An unchanged map still answers the reveal that waited for it.
                         cx.notify();
                     }
                 });
@@ -502,6 +523,33 @@ impl StrategiesView {
         }
         self.persist_session(cx);
         cx.notify();
+    }
+
+    /// Open one saved version of the ALREADY-SELECTED strategy from a reveal, expanding the pane.
+    ///
+    /// Immediate when the list for this strategy is already in hand, otherwise parked on
+    /// `pending_select` for the load `ensure_versions` starts on the next render. The pane is
+    /// un-collapsed either way: a reveal that lands on a version nobody can see reads as a click
+    /// that did nothing.
+    ///
+    /// Args:
+    ///     key: The strategy the reveal selected; a list loaded for another key is not consulted.
+    ///     vf: `valid_from` of the version to open.
+    ///     cx: View context.
+    pub(super) fn reveal_version(&mut self, key: Key, vf: i64, cx: &mut Context<Self>) {
+        if self.versions.collapsed {
+            self.versions.collapsed = false;
+            // Persisted like every other flip of this flag, or the next session reopens it folded.
+            self.save_panels(cx);
+        }
+        if self.versions.key == Some(key) && !self.versions.inflight {
+            self.versions.pending_select = None;
+            if self.versions.list.iter().any(|v| v.valid_from == vf) {
+                self.select_version(Some(vf), cx);
+            }
+            return;
+        }
+        self.versions.pending_select = Some((key, vf));
     }
 
     /// Select None for live editable mode or Some for a persisted snapshot loaded in the background.

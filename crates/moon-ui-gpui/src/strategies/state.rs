@@ -539,6 +539,7 @@ impl StrategiesView {
             deleted_gen: u64::MAX,
             deleted_rev: 0,
             deleted_inflight: false,
+            deleted_loaded: false,
             expanded_deleted: session
                 .as_ref()
                 .map(|s| s.expanded_deleted.clone())
@@ -587,6 +588,7 @@ impl StrategiesView {
             op_input: None,
             op_input_init: String::new(),
             pending_select: None,
+            deferred_goto: None,
             last_sig: initial_sig,
             last_tree_shape: None,
             tree_cache: None,

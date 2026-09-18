@@ -36,6 +36,7 @@
 mod figures;
 pub(crate) mod frame;
 mod render;
+mod strategy;
 #[cfg(test)]
 mod tests;
 mod window;
@@ -371,6 +372,9 @@ pub(crate) struct TradeWindowView {
     /// `None` covers "that core is not in the store at all", which is its own state and must not
     /// read as revision zero — a core that arrives with an empty list would then never be searched.
     strategies_rev: Option<u64>,
+    /// What `strategies.sqlite` says about the trade's strategy: its saved head and the version in
+    /// effect at entry. `None` until the one background read at open lands — see [`strategy`].
+    strategy_lookup: Option<strategy::StrategyLookup>,
     /// Set when the window closes, so the worker abandons the remaining pages.
     cancel: Arc<AtomicBool>,
     /// Identity of this window's own series, so two windows never share a chart revision.
@@ -445,6 +449,34 @@ impl TradeWindowView {
         window.remove_window();
     }
 
+    /// Read the strategy's saved head and entry-time version once, off the UI thread.
+    ///
+    /// A trade without a strategy reads nothing. The result repaints the rail; nothing else in
+    /// the window depends on it.
+    ///
+    /// Args:
+    ///     buy_utc_ms: Entry instant in Unix UTC milliseconds, on the clock `valid_from` uses.
+    ///     cx: View context.
+    fn spawn_strategy_lookup(&mut self, buy_utc_ms: i64, cx: &mut Context<Self>) {
+        let Some(strategy_id) = self.meta.strategy_id else {
+            return;
+        };
+        let core = self.core;
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let lookup = executor
+                .spawn(async move { strategy::StrategyLookup::read(core, strategy_id, buy_utc_ms) })
+                .await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.strategy_lookup = Some(lookup);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
     /// Name the trade's strategy once the core's list has arrived, and hand it to the chart.
     ///
     /// Called from the backend observer. Cheap while there is nothing to do: one boolean.
@@ -489,6 +521,10 @@ impl TradeWindowView {
         self.panel.update(cx, |panel, pcx| {
             panel.attach_trade_labels(Some(labels), pcx);
         });
+        // The rail's strategy block reads `strategy_pending` on render. This view's repaint must
+        // not depend on the panel's own notify above reaching the window: state of THIS view
+        // changed, so THIS view says so.
+        cx.notify();
     }
 
     /// Store a caption edit this window's own chart menu produced.

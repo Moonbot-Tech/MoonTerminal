@@ -15,7 +15,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::{TradeWindowState, TradeWindowView, figures};
+use super::{TradeWindowState, TradeWindowView, figures, strategy};
 use crate::design;
 use crate::design::moon;
 
@@ -80,6 +80,10 @@ impl Render for TradeWindowView {
         // Built per branch rather than cloned: `AnyElement` is single-use by construction, which
         // is also what keeps a stray second mount from silently sharing element ids.
         let body = self.chart_area(p, cx);
+        // Built once per render and placed in whichever of the two rail positions is live.
+        let mut strategy = self
+            .strategy_block(cx)
+            .map(|block| strategy::render_block(&block, &cx.entity(), p, cx));
         v_flex()
             .size_full()
             .relative()
@@ -156,7 +160,14 @@ impl Render for TradeWindowView {
                     }),
             )
             .when(narrow, |el| {
-                el.child(figures::rail(&self.record, &self.stamps, true, p, cx))
+                el.child(figures::rail(
+                    &self.record,
+                    &self.stamps,
+                    strategy.take(),
+                    true,
+                    p,
+                    cx,
+                ))
             })
             .child(
                 h_flex()
@@ -167,7 +178,14 @@ impl Render for TradeWindowView {
                     // may paint an opaque background over the chart body.
                     .child(div().flex_1().min_w_0().h_full().relative().child(body))
                     .when(!narrow, |el| {
-                        el.child(figures::rail(&self.record, &self.stamps, false, p, cx))
+                        el.child(figures::rail(
+                            &self.record,
+                            &self.stamps,
+                            strategy.take(),
+                            false,
+                            p,
+                            cx,
+                        ))
                     }),
             )
     }

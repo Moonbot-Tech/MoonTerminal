@@ -138,6 +138,15 @@ pub(crate) fn open_trade_window(
     // keeps asking until it does.
     let (resolved, named) = super::trade_labels(backend.read(cx), core, &meta);
     let labels = std::rc::Rc::new(resolved);
+    // The entry instant on the terminal's clock, for the strategy-version lookup: `fetch` resolves
+    // the same pair again for the REST window, but that one is re-resolved on every Retry and the
+    // version placement has no reason to follow it.
+    let (buy_utc_ms, _) = super::utc_stamps_ms(
+        &record,
+        &backend
+            .read(cx)
+            .report_axis(crate::chartdx::axes::display_zone()),
+    );
     let epoch = moon_chart::paint::now_unix_ms();
     // Kept for the failure log below, which the move into the window builder would otherwise take.
     let (coin, record_id) = (record.coin.clone(), record.record_id);
@@ -243,6 +252,7 @@ pub(crate) fn open_trade_window(
                 strategy_pending: !named,
                 // Nothing searched yet; the first notification does the walk.
                 strategies_rev: None,
+                strategy_lookup: None,
                 sequence: 0,
                 cancel: Arc::new(AtomicBool::new(false)),
                 window_id: window.window_handle().window_id(),
@@ -324,6 +334,7 @@ pub(crate) fn open_trade_window(
                 });
             })
             .detach();
+            this.spawn_strategy_lookup(buy_utc_ms, vcx);
             this.fetch(vcx);
             this
         });
