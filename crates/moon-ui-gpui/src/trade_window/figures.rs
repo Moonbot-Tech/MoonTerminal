@@ -118,6 +118,7 @@ fn cell(
 ///         hand over a copy per render.
 ///     lead: The strategy block, first in the rail when the trade has a strategy — built by the
 ///         caller because, unlike every figure here, it carries click handlers onto the view.
+///     tail: The orders block, last in the rail, built by the caller for the same reason.
 ///     narrow: Whether to lay the blocks out horizontally.
 ///     p: Active palette.
 ///     cx: Render context.
@@ -128,6 +129,7 @@ pub(super) fn rail(
     record: &ChartTradeRecord,
     zone_label: &(String, String),
     lead: Option<AnyElement>,
+    tail: Option<AnyElement>,
     narrow: bool,
     p: MoonPalette,
     cx: &App,
@@ -168,7 +170,7 @@ pub(super) fn rail(
         ),
         None => (unknown.clone(), moon(p.text_muted)),
     };
-    let mut cells = Vec::with_capacity(10);
+    let mut cells = Vec::with_capacity(11);
     cells.extend(lead);
     cells.extend([
         cell(
@@ -253,6 +255,7 @@ pub(super) fn rail(
         )
         .into_any_element(),
     ]);
+    cells.extend(tail);
     let gap = design::ui_px(cx, design::CHROME_GAP);
     match narrow {
         true => h_flex()

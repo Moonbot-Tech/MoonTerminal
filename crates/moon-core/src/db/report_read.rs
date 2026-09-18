@@ -236,6 +236,15 @@ pub struct ChartTradeRecord {
     /// definition the Report's own profit-percent column already uses. Unitless, and therefore
     /// readable even where [`Self::quote`] could not be resolved.
     pub profit_pct: Option<f64>,
+    /// The row's `ReportUID`: the core's own immutable identity for this trade, which survives a
+    /// database copy and is the key its archived order traces are filed under.
+    ///
+    /// OPTIONAL at the source like [`Self::emulator`]: a replica whose table predates the column,
+    /// a core too old to send it, or a row replicated before the core reported it (stored as 0,
+    /// the replica's local default) all yield `None` — the honest answer "this trade cannot be
+    /// asked about", never a zero to be sent as a key. Neither [`Self::record_id`] nor an order
+    /// uid may stand in for it.
+    pub report_uid: Option<i64>,
 }
 
 impl ChartTradeRecord {
@@ -2234,11 +2243,16 @@ pub fn query_chart_trade_history(
         } else {
             "NULL"
         };
+        let report_uid_sql = if source.cols.contains("reportuid") {
+            "r.reportuid"
+        } else {
+            "NULL"
+        };
         let sql = format!(
             "SELECT {record_id}, r.core_uid, r.coin, r.buydate, r.closedate, \
              r.buyprice, r.sellprice, r.quantity, r.isshort, \
              {profit_sql}, {quote_sql}, {percent_sql}, {emulator_sql}, \
-             {buy_ms_sql}, {close_ms_sql} \
+             {buy_ms_sql}, {close_ms_sql}, {report_uid_sql} \
              FROM {} r{where_sql} \
              ORDER BY r.closedate DESC, {record_id} DESC LIMIT ?",
             source.table
@@ -2267,6 +2281,7 @@ pub fn query_chart_trade_history(
                     row.get::<_, Value>(12)?,
                     row.get::<_, Value>(13)?,
                     row.get::<_, Value>(14)?,
+                    row.get::<_, Value>(15)?,
                 ))
             })
             .map_err(|error| read_fail(CONTEXT, error))?;
@@ -2287,6 +2302,7 @@ pub fn query_chart_trade_history(
                 emulator,
                 buy_ms,
                 close_ms,
+                report_uid,
             ) = row.map_err(|error| read_fail(CONTEXT, error))?;
             let Some(buy_date) = report_value_i64(&buy_date) else {
                 continue;
@@ -2330,6 +2346,10 @@ pub fn query_chart_trade_history(
                 profit: report_value_f64(&profit),
                 quote: QuoteCurrency::from_report_value(&quote),
                 profit_pct: report_value_f64(&profit_percent),
+                // NULL is `None`, an absent column is NULL, and so is a stored ZERO: the replica
+                // writes 0 for a row received before the core reported the column, and the core
+                // never issues 0 as an identity. All three mean "not askable".
+                report_uid: report_value_i64(&report_uid).filter(|uid| *uid != 0),
             });
         }
     }

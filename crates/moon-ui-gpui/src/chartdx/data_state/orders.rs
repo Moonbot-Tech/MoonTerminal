@@ -204,6 +204,23 @@ impl ChartDataState {
             // a trade window owns, so every other chart in the application takes the same branch it
             // always did.
             let no_orders = moon_core::session::order_lines::OrderLineStore::default();
+            // ...unless the viewer was handed the trade's ARCHIVED lines: those are the orders of
+            // the picture on screen, and they are drawn through this same pass.
+            let frozen_orders = self.frozen_orders.clone();
+            // Two style rules are written for a LIVE chart's leftovers and would delete the
+            // subject here: a closed order's sell line is hidden by default (it reads as a price
+            // the terminal still tracks), and the closed-order cap can be turned down to nothing.
+            // On a frozen viewer the closed order IS the picture, so both are lifted. Rebuilt per
+            // sync rather than kept, because a sync on such a viewer is rare and the copies are
+            // small.
+            let frozen_style = frozen.then(|| moon_core::config::OrdersStyle {
+                max_closed_orders: u32::MAX,
+                ..self.orders.clone()
+            });
+            let frozen_graphics = frozen.then(|| moon_core::config::ChartGraphicsCfg {
+                hide_closed_sell_line: false,
+                ..self.chart_graphics
+            });
             // The auto-Y fit goes with them. A fit stretched to reach a live order's price would
             // squash the very candles the window exists to show.
             let order_price = match frozen {
@@ -226,9 +243,16 @@ impl ChartDataState {
                 // The ONE order source both consumers below read. Emptied on a frozen engine, so
                 // neither the geometry nor the labels can reach a live order.
                 let order_lines = match frozen {
-                    true => &no_orders,
+                    true => frozen_orders.as_deref().unwrap_or(&no_orders),
                     false => &core_st.order_lines,
                 };
+                // Which store's revision this pane compares against: see `order_signature`.
+                let order_lines_rev = match frozen {
+                    true => order_lines.rev,
+                    false => core_st.order_lines_rev,
+                };
+                let orders_style = frozen_style.as_ref().unwrap_or(&self.orders);
+                let graphics = frozen_graphics.as_ref().unwrap_or(&self.chart_graphics);
                 // Both are order-line state, so they follow the order lines out. Input to a
                 // historical chart is already gated, but a hover or a drag left over from before
                 // the replay attached must not privilege a label that is no longer drawn.
@@ -244,7 +268,7 @@ impl ChartDataState {
                     drag_preview.map(|(uid, kind, price)| (uid, kind, price.to_bits()));
                 let figures_sig = self.figures_sig();
                 if force
-                    || pr.last_order_lines_rev != core_st.order_lines_rev
+                    || pr.last_order_lines_rev != order_lines_rev
                     || pr.last_order_strategies_rev != core_st.strategies_rev
                     || pr.last_order_schema_rev != core_st.schema_rev
                     || pr.last_order_highlight_uid != highlight_uid
@@ -263,8 +287,8 @@ impl ChartDataState {
                         &core_st.strategies,
                         core_st.schema.as_ref(),
                         &pane.market,
-                        &self.orders,
-                        &self.chart_graphics,
+                        orders_style,
+                        graphics,
                         self.last_ppp,
                         highlight_uid,
                         drag_preview,
@@ -348,11 +372,11 @@ impl ChartDataState {
                         pr.last_label_book_rev = u64::MAX;
                         self.view_dirty = true;
                     }
-                    pr.last_order_lines_rev = core_st.order_lines_rev;
+                    pr.last_order_lines_rev = order_lines_rev;
                     pr.last_order_strategies_rev = core_st.strategies_rev;
                     pr.last_order_schema_rev = core_st.schema_rev;
                     pr.last_order_lines_sync_ms = now;
-                    pr.pending_order_gpu_rev = Some(core_st.order_lines_rev);
+                    pr.pending_order_gpu_rev = Some(order_lines_rev);
                     pr.last_order_highlight_uid = highlight_uid;
                     pr.last_order_drag_preview = drag_preview_sig;
                     pr.last_figures_sig = figures_sig;

@@ -172,6 +172,7 @@ fn neighbour_toggle_selects_all_or_focus_without_losing_the_snapshot() {
         emulator: false,
         profit: None,
         profit_pct: None,
+        report_uid: None,
         quote: None,
     };
     let neighbour = ChartTradeRecord {

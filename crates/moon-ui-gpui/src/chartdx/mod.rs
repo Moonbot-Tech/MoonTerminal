@@ -1592,6 +1592,13 @@ struct ChartDataState {
     /// is no shared key either could collide on. Contrast `moon_core::fixture`, whose bench state
     /// is process-wide by design.
     trade_replay: Option<Rc<moon_core::market::trade_replay::TradeReplaySeries>>,
+    /// The archived order lines of the trade a frozen viewer shows, drawn INSTEAD of the session's
+    /// live order store — which that viewer empties, since it holds what is open right now.
+    ///
+    /// Same ownership as `trade_replay`: only the trade window sets it, on its own engine, and a
+    /// live chart's field stays `None`. Built by `OrderLineStore::archived`, so the order sync
+    /// reads it exactly as it reads a live store and the chart draws it through the same geometry.
+    frozen_orders: Option<Rc<moon_core::session::order_lines::OrderLineStore>>,
     last_frame_tick_at: Option<Instant>,
     present_rate_candidate_hz: f32,
     present_rate_candidate_hits: u8,

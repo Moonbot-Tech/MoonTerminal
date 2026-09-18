@@ -15,7 +15,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::{TradeWindowState, TradeWindowView, figures, strategy};
+use super::{TradeWindowState, TradeWindowView, figures, strategy, traces};
 use crate::design;
 use crate::design::moon;
 
@@ -84,6 +84,15 @@ impl Render for TradeWindowView {
         let mut strategy = self
             .strategy_block(cx)
             .map(|block| strategy::render_block(&block, &cx.entity(), p, cx));
+        // The orders block closes the rail; built once per render like the strategy block, and
+        // for the same reason — it carries a click onto the view.
+        let mut orders = Some(traces::render_block(
+            &self.traces,
+            self.neighbours_drawn,
+            &cx.entity(),
+            p,
+            cx,
+        ));
         v_flex()
             .size_full()
             .relative()
@@ -164,6 +173,7 @@ impl Render for TradeWindowView {
                     &self.record,
                     &self.stamps,
                     strategy.take(),
+                    orders.take(),
                     true,
                     p,
                     cx,
@@ -182,6 +192,7 @@ impl Render for TradeWindowView {
                             &self.record,
                             &self.stamps,
                             strategy.take(),
+                            orders.take(),
                             false,
                             p,
                             cx,

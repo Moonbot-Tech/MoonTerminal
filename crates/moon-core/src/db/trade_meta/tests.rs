@@ -34,6 +34,7 @@ fn record(core_uid: u64, record_id: i64, coin: &str, buy: i64, close: i64) -> Ch
         profit: None,
         quote: None,
         profit_pct: None,
+        report_uid: None,
     }
 }
 

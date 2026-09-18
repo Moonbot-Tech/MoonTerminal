@@ -247,9 +247,13 @@ pub fn build_order_geometry(
             continue;
         }
         // A placed but NOT yet filled order (entry unfilled, fill=0) is dimmer; after filling,
-        // the line becomes brighter (as in Moonbot). Closed orders use a separate, dimmest level.
-        let alpha = if closed {
+        // the line becomes brighter (as in Moonbot). Closed orders use a separate, dimmest level —
+        // except the SUBJECT of a frozen viewer, whose closed order is the picture's whole point
+        // and keeps the active level so it reads apart from the pale inherited lines beside it.
+        let alpha = if closed && !ord.subject {
             style.closed_alpha
+        } else if closed {
+            style.active_alpha
         } else if ord.fill_pct <= 0.0 {
             // Placed but unfilled: opacity comes from the order's entry-line style according
             // to its side: `buy` (long) or `buy_short` (short). After filling, it is brighter

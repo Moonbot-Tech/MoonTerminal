@@ -60,6 +60,7 @@ fn trade_mark_places_a_clock_skewed_trade_on_its_true_utc_candles() {
         profit: Some(25.0),
         quote: None,
         profit_pct: Some(0.16),
+        report_uid: None,
     };
     let axis = ReportAxis::from_measured(
         HashMap::from([(
@@ -99,6 +100,7 @@ fn trade_mark_uses_the_report_stamps_without_any_tape_input() {
         profit: Some(25.0),
         quote: None,
         profit_pct: Some(0.16),
+        report_uid: None,
     };
 
     let mark = trade_mark(&record, &ReportAxis::identity_core_local());
