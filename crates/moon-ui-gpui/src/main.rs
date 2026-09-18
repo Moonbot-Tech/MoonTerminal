@@ -22,6 +22,7 @@ mod chart_tabs;
 mod chartdx;
 mod chrome;
 mod conn_diag;
+mod contrast;
 mod controls;
 mod core_color;
 mod core_expert;

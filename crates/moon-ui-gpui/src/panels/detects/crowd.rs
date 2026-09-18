@@ -290,17 +290,23 @@ impl DetectsPanel {
 /// The colour a card is railed and badged in.
 ///
 /// A core card wears its server's colour, frozen with the card so a recoloured server does not
-/// repaint a detection that already happened. A crowd card has no server, so it takes the theme's
-/// own accent — read at RENDER rather than frozen, because unlike a server colour it follows the
-/// palette and a card that kept yesterday's accent through a theme switch would be the one thing on
-/// screen still wearing it.
+/// repaint a detection that already happened — but READ against the card ground at render, through
+/// the same `core_color::readable` lift the arrival border uses: the ground follows the palette,
+/// and a yellow that reads on the dark card would vanish on the light one after a theme switch. A
+/// pick that reads is painted exactly as frozen. A crowd card has no server, so it takes the
+/// theme's own accent — read at RENDER rather than frozen, because unlike a server colour it
+/// follows the palette and a card that kept yesterday's accent through a theme switch would be the
+/// one thing on screen still wearing it.
 ///
 /// Args:
 ///     it: The card.
 ///     p: Active Moon palette.
 pub(super) fn rail_color(it: &DetectItem, p: MoonPalette) -> u32 {
     match it.core() {
-        Some(_) => design::rgb_to_u32(it.color),
+        Some(_) => design::rgb_to_u32(crate::core_color::readable(
+            it.color,
+            design::u32_to_rgb(p.shell_high),
+        )),
         None => p.accent,
     }
 }
