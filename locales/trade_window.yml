@@ -183,6 +183,48 @@ trade_window.figure.held:
   en: "Held"
   es: "En posición"
 
+# Блок стратегии в начале рейла — только у сделок, у которых стратегия есть (#561).
+trade_window.figure.strategy:
+  ru: "Стратегия"
+  en: "Strategy"
+  es: "Estrategia"
+# Метки состояния под именем: стратегии на ядре больше нет, но её история сохранена локально /
+# нет нигде / ядро, которому она принадлежит, сейчас не подключено.
+trade_window.strategy.in_deleted:
+  ru: "в удалённых"
+  en: "in deleted"
+  es: "en eliminadas"
+trade_window.strategy.deleted:
+  ru: "удалена"
+  en: "deleted"
+  es: "eliminada"
+trade_window.strategy.core_offline:
+  ru: "ядро не подключено"
+  en: "core not connected"
+  es: "núcleo no conectado"
+# Строка версии: штамп — тот же, каким панель «Версии» подписывает свои строки, чтобы юзер нашёл
+# её глазами; «действует» — то же слово, что стоит там у текущей версии.
+trade_window.strategy.version:
+  ru: "версия %{stamp}"
+  en: "version %{stamp}"
+  es: "versión %{stamp}"
+trade_window.strategy.version_current:
+  ru: "версия: действует"
+  en: "version: in effect"
+  es: "versión: en vigor"
+trade_window.strategy.version_unknown:
+  ru: "версия неизвестна"
+  en: "version unknown"
+  es: "versión desconocida"
+trade_window.strategy.version_tip:
+  ru: "Версия стратегии, действовавшая на момент входа — по данным терминала: дата отмечает, когда терминал увидел настройки, а не когда ядро их применило. Клик открывает эту версию в панели «Версии»."
+  en: "The strategy version in effect at entry — by the terminal's record: the stamp is when the terminal saw the settings, not when the core applied them. Click opens that version in the Versions pane."
+  es: "La versión de la estrategia vigente en la entrada — según el registro del terminal: la fecha marca cuándo el terminal vio los ajustes, no cuándo el núcleo los aplicó. Clic abre esa versión en el panel «Versiones»."
+trade_window.strategy.version_unknown_tip:
+  ru: "Сделка старше первой сохранённой версии: терминал ещё не наблюдал это ядро"
+  en: "The trade predates the first saved version: the terminal was not observing this core yet"
+  es: "La operación es anterior a la primera versión guardada: el terminal aún no observaba este núcleo"
+
 trade_window.figure.unknown:
   ru: "нет данных"
   en: "unknown"

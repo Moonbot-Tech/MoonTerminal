@@ -257,19 +257,39 @@ impl StrategiesView {
     /// A NAME request whose row has not echoed back yet is handed to `pending_select`, which
     /// finishes the job the moment the core reports it — a just-created strategy has no id here
     /// and would otherwise be dropped for not existing yet.
+    ///
+    /// An ID request whose row is not on the core is looked up in the Deleted branch: the Report
+    /// keeps trades of strategies long gone, and a reveal from one of them is the common case,
+    /// not a stale click. Found there, it is selected the way a click in that branch selects —
+    /// latest version open — and a version the request names wins over that default. Found
+    /// nowhere, the window says so instead of opening on nothing.
     pub(super) fn drain_goto(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Key> {
-        let request = self.backend.read(cx).strategies_goto.clone()?;
-        self.backend.update(cx, |b, _| b.strategies_goto = None);
+        let request = match self.backend.read(cx).strategies_goto.clone() {
+            Some(request) => {
+                self.backend.update(cx, |b, _| b.strategies_goto = None);
+                // A fresh request supersedes one still waiting for the Deleted branch.
+                self.deferred_goto = None;
+                request
+            }
+            // The Deleted branch has answered since the request was parked; ask again. Still
+            // loading: keep waiting, the load's completion repaints this window.
+            None if self.deleted_loaded && !self.deleted_inflight => self.deferred_goto.take()?,
+            None => return None,
+        };
         if !request.is_authorized(self.backend.read(cx)) {
             self.pending_select = None;
             return None;
         }
-        let core = request.core;
-        let target = request.target;
+        let StrategyRevealRequest {
+            core,
+            target,
+            workspace_group,
+            version,
+        } = request;
         let row = {
             let store = self.backend.read(cx).session.store();
             store.core(core).and_then(|cd| {
@@ -283,19 +303,23 @@ impl StrategiesView {
             })
         };
         let Some(row) = row else {
-            // Not there yet. Only a NAME request can be waiting on an echo; an id that resolves
-            // to nothing is simply stale.
-            if let RevealTarget::Name(name) = target {
-                // The row is unknown, so `filter.matches` cannot be consulted — clear
-                // everything that could hide it rather than reveal it into a filtered-out list.
-                self.clear_filters_for_reveal(window, cx);
-                self.pending_select = Some(StrategyRevealRequest::new(
-                    core,
-                    RevealTarget::Name(name),
-                    request.workspace_group,
-                ));
-            }
-            return None;
+            let id = match target {
+                // Not there yet. Only a NAME request can be waiting on an echo.
+                RevealTarget::Name(name) => {
+                    // The row is unknown, so `filter.matches` cannot be consulted — clear
+                    // everything that could hide it rather than reveal it into a filtered-out
+                    // list.
+                    self.clear_filters_for_reveal(window, cx);
+                    self.pending_select = Some(StrategyRevealRequest::new(
+                        core,
+                        RevealTarget::Name(name),
+                        workspace_group,
+                    ));
+                    return None;
+                }
+                RevealTarget::Id(id) => id,
+            };
+            return self.reveal_deleted(core, id, workspace_group, version, window, cx);
         };
         // The exchange filter has to be asked separately: it selects CORES, and `filter.matches`
         // takes a `StrategyRow`, which carries no venue — so a target on a filtered-out exchange
@@ -313,8 +337,66 @@ impl StrategiesView {
         self.expanded_cores.insert(core);
         self.expand_path(core, tree::ops::path_segments(&row.folder_path));
         self.focus_strategy(key);
+        if let Some(vf) = version {
+            self.reveal_version(key, vf, cx);
+        }
         self.clamp_selected_section(cx);
         self.persist_session(cx);
+        Some(key)
+    }
+
+    /// Finish an id reveal whose strategy is not on its core: the Deleted branch, or nowhere.
+    ///
+    /// Args:
+    ///     core: Core the request named.
+    ///     id: Strategy id the request named.
+    ///     workspace_group: The request's workspace authority, kept for a deferred retry.
+    ///     version: Saved version the request asked to open, if any.
+    ///     window: The Strategies window, for the missing-target notice.
+    ///     cx: View context.
+    ///
+    /// Returns:
+    ///     The selected key when the branch holds the strategy; `None` while the branch is still
+    ///     loading (the request is parked) or when nothing holds it (the window says so).
+    fn reveal_deleted(
+        &mut self,
+        core: CoreId,
+        id: u64,
+        workspace_group: Option<String>,
+        version: Option<i64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Key> {
+        if !self.deleted_loaded || self.deleted_inflight {
+            // The branch is being read; `ensure_deleted` starts the read on this very render if
+            // it has not, and its completion repaints the window, which drains this again.
+            self.deferred_goto = Some(
+                StrategyRevealRequest::new(core, RevealTarget::Id(id), workspace_group)
+                    .with_version(version),
+            );
+            return None;
+        }
+        let kept = self
+            .deleted
+            .get(&core)
+            .is_some_and(|rows| rows.iter().any(|h| h.strategy_id as u64 == id));
+        if !kept {
+            // Pushed directly: render has already drained `pending_notes` this frame, and nothing
+            // else would repaint the window to show a note parked there.
+            let note = tree::ui::TreeNote::GotoMissing { strategy_id: id };
+            window.push_notification(note.notification(), cx);
+            return None;
+        }
+        // The Deleted branch is filtered by the search text only, and it lives under its core.
+        self.clear_filters_for_reveal(window, cx);
+        self.pending_select = None;
+        self.expanded_cores.insert(core);
+        self.expanded_deleted.insert(core);
+        let key: Key = (core, id);
+        self.select_deleted_strategy(key, cx);
+        if let Some(vf) = version {
+            self.reveal_version(key, vf, cx);
+        }
         Some(key)
     }
 

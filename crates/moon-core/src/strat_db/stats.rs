@@ -452,3 +452,120 @@ pub fn head_row(core_uid: u64, strategy_id: i64) -> Option<HeadRow> {
     .ok()
     .flatten()
 }
+
+/// Where one instant falls in a strategy's saved version history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VersionAt {
+    /// The version whose validity window holds the instant, identified by its `valid_from` key —
+    /// the same stamp the Versions pane prints and selects by. `current` is true when that version
+    /// has no `valid_to`, i.e. it is the one in effect right now.
+    Known { valid_from: i64, current: bool },
+    /// The instant predates the first snapshot the terminal ever saved for this strategy: history
+    /// only starts when the terminal begins observing the core, so nothing is known about earlier.
+    BeforeHistory,
+    /// No version was ever saved for this strategy.
+    NoHistory,
+}
+
+/// Resolve which saved version was in effect at `at_ms` for one strategy.
+///
+/// The latest `valid_from` at or before the instant wins, whether or not its `valid_to` has been
+/// closed since: a version closed by the strategy's deletion still IS the version that was in
+/// effect for a trade that entered before that deletion. Boundaries are the terminal's own
+/// observation times (see the `write` module header), so the answer is "by the terminal's
+/// record", not proof of what the core was running.
+///
+/// Args:
+///     core_uid: Core that owns the strategy.
+///     strategy_id: Delphi-signed strategy id.
+///     at_ms: Unix UTC milliseconds of the instant, on the same clock as `valid_from`.
+///
+/// Returns:
+///     The version placement, or `NoHistory` when the database is absent or unreadable.
+pub fn version_at(core_uid: u64, strategy_id: i64, at_ms: i64) -> VersionAt {
+    let Some(conn) = super::open_reader() else {
+        return VersionAt::NoHistory;
+    };
+    version_at_on(&conn, core_uid, strategy_id, at_ms)
+}
+
+/// [`version_at`] over an already-open connection, so the placement rule is testable in memory.
+pub(super) fn version_at_on(
+    conn: &Connection,
+    core_uid: u64,
+    strategy_id: i64,
+    at_ms: i64,
+) -> VersionAt {
+    let uid = core_uid as i64;
+    let hit: Option<(i64, Option<i64>)> = conn
+        .query_row(
+            "SELECT valid_from, valid_to FROM strategy_versions
+             WHERE core_uid=?1 AND strategy_id=?2 AND valid_from<=?3
+             ORDER BY valid_from DESC LIMIT 1",
+            rusqlite::params![uid, strategy_id, at_ms],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .unwrap_or(None);
+    if let Some((valid_from, valid_to)) = hit {
+        return VersionAt::Known {
+            valid_from,
+            current: valid_to.is_none(),
+        };
+    }
+    let any: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM strategy_versions WHERE core_uid=?1 AND strategy_id=?2",
+            rusqlite::params![uid, strategy_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    match any {
+        0 => VersionAt::NoHistory,
+        _ => VersionAt::BeforeHistory,
+    }
+}
+
+/// One strategy's head row together with whether its core has deleted it.
+///
+/// [`head_row`] answers "what was this strategy called"; this answers the question a caller
+/// holding a strategy that the live store no longer lists actually has: is it gone from the core
+/// but kept here, or is the core merely not connected right now.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeadStatus {
+    pub head: HeadRow,
+    /// `strategies.deleted`: the core's set no longer holds this strategy.
+    pub deleted: bool,
+}
+
+/// Returns the head and deletion flag of one strategy, or `None` when the terminal never saved it.
+pub fn head_status(core_uid: u64, strategy_id: i64) -> Option<HeadStatus> {
+    let conn = super::open_reader()?;
+    head_status_on(&conn, core_uid, strategy_id)
+}
+
+/// [`head_status`] over an already-open connection.
+pub(super) fn head_status_on(
+    conn: &Connection,
+    core_uid: u64,
+    strategy_id: i64,
+) -> Option<HeadStatus> {
+    conn.query_row(
+        &format!(
+            "SELECT {HEAD_COLS}, deleted FROM strategies WHERE core_uid=?1 AND strategy_id=?2"
+        ),
+        rusqlite::params![core_uid as i64, strategy_id],
+        |r| {
+            Ok(HeadStatus {
+                head: head_from_row(r)?,
+                deleted: r.get::<_, i64>(7)? != 0,
+            })
+        },
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
+#[cfg(test)]
+mod tests;

@@ -200,3 +200,147 @@ fn neighbour_toggle_selects_all_or_focus_without_losing_the_snapshot() {
         "the chart's existing kind filter owns emulator visibility"
     );
 }
+
+/// The strategy block's placement rule, one arm per fact combination the window can hold.
+mod strategy_presence {
+    use super::super::strategy::{Presence, StrategyLookup, presence};
+    use moon_core::strat_db::stats::{HeadRow, HeadStatus, VersionAt};
+
+    fn lookup(head: Option<bool>) -> StrategyLookup {
+        StrategyLookup {
+            head: head.map(|deleted| HeadStatus {
+                head: HeadRow {
+                    core_uid: 7,
+                    strategy_id: 42,
+                    name: "Hook".into(),
+                    kind: "Hook".into(),
+                    kind_ordinal: 0,
+                    folder_path: String::new(),
+                    is_short: false,
+                },
+                deleted,
+            }),
+            version: VersionAt::NoHistory,
+        }
+    }
+
+    #[test]
+    fn a_live_name_wins_before_anything_else() {
+        assert_eq!(presence(true, true, None), Presence::Live);
+        assert_eq!(
+            presence(true, false, Some(&lookup(Some(true)))),
+            Presence::Live
+        );
+    }
+
+    #[test]
+    fn no_lookup_yet_is_pending_not_gone() {
+        assert_eq!(presence(false, true, None), Presence::Pending);
+        assert_eq!(presence(false, false, None), Presence::Pending);
+    }
+
+    #[test]
+    fn a_deleted_head_is_deleted_whatever_the_core_says() {
+        assert_eq!(
+            presence(false, true, Some(&lookup(Some(true)))),
+            Presence::Deleted
+        );
+        assert_eq!(
+            presence(false, false, Some(&lookup(Some(true)))),
+            Presence::Deleted
+        );
+    }
+
+    #[test]
+    fn a_saved_live_head_without_its_core_is_offline() {
+        assert_eq!(
+            presence(false, false, Some(&lookup(Some(false)))),
+            Presence::Offline
+        );
+        assert_eq!(
+            presence(false, false, Some(&lookup(None))),
+            Presence::Offline
+        );
+    }
+
+    #[test]
+    fn nothing_saved_on_a_connected_core_is_gone() {
+        assert_eq!(presence(false, true, Some(&lookup(None))), Presence::Gone);
+    }
+
+    /// A connected core whose list does not hold a head still saved as live: transitional, and
+    /// the reveal must stay available so the Strategies window can settle it.
+    #[test]
+    fn a_saved_live_head_missing_from_a_connected_core_stays_pending() {
+        assert_eq!(
+            presence(false, true, Some(&lookup(Some(false)))),
+            Presence::Pending
+        );
+    }
+
+    #[test]
+    fn only_a_locatable_strategy_can_be_revealed() {
+        assert!(Presence::Live.can_reveal());
+        assert!(Presence::Deleted.can_reveal());
+        assert!(Presence::Pending.can_reveal());
+        assert!(!Presence::Offline.can_reveal());
+        assert!(!Presence::Gone.can_reveal());
+    }
+}
+
+/// The version line prints the pane's own stamp and opens only a PAST version.
+mod strategy_version_line {
+    use super::super::strategy::version_line;
+    use moon_core::strat_db::stats::VersionAt;
+
+    const NOW: i64 = 1_800_000_000_000;
+
+    #[test]
+    fn a_past_version_prints_the_pane_stamp_and_opens_itself() {
+        let _locale = crate::test_locale::force("en");
+        let vf = NOW - 3 * 86_400_000;
+        let (text, _, open) = version_line(
+            VersionAt::Known {
+                valid_from: vf,
+                current: false,
+            },
+            chrono_tz::UTC,
+            NOW,
+        )
+        .expect("a known version has a line");
+        let stamp =
+            moon_core::util::display_time::format_chart_clock(vf, chrono_tz::UTC, false, NOW);
+        assert_eq!(text, format!("version {stamp}"));
+        assert_eq!(open, Some(vf));
+    }
+
+    #[test]
+    fn the_current_version_says_so_and_opens_live_mode() {
+        let _locale = crate::test_locale::force("en");
+        let (text, _, open) = version_line(
+            VersionAt::Known {
+                valid_from: NOW - 1,
+                current: true,
+            },
+            chrono_tz::UTC,
+            NOW,
+        )
+        .expect("a current version has a line");
+        assert_eq!(text, "version: in effect");
+        assert_eq!(open, None);
+    }
+
+    #[test]
+    fn before_history_is_stated_and_opens_nothing() {
+        let _locale = crate::test_locale::force("en");
+        let (text, _, open) =
+            version_line(VersionAt::BeforeHistory, chrono_tz::UTC, NOW).expect("stated");
+        assert_eq!(text, "version unknown");
+        assert_eq!(open, None);
+    }
+
+    #[test]
+    fn no_history_has_no_line() {
+        assert!(version_line(VersionAt::NoHistory, chrono_tz::UTC, NOW).is_none());
+    }
+}

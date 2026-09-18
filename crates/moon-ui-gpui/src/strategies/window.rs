@@ -58,6 +58,9 @@ pub(crate) struct StrategyRevealRequest {
     pub(super) core: CoreId,
     pub(super) target: RevealTarget,
     pub(super) workspace_group: Option<String>,
+    /// A saved version to open in the Versions pane once the strategy is selected, by its
+    /// `valid_from` key. `None` leaves the pane on live mode, as every reveal did before.
+    pub(super) version: Option<i64>,
 }
 
 impl StrategyRevealRequest {
@@ -75,7 +78,14 @@ impl StrategyRevealRequest {
             core,
             target,
             workspace_group,
+            version: None,
         }
+    }
+
+    /// Ask the reveal to also open one saved version of the strategy.
+    pub(super) fn with_version(mut self, version: Option<i64>) -> Self {
+        self.version = version;
+        self
     }
 
     /// Revalidate this request without changing the current workspace selection.
@@ -113,7 +123,8 @@ fn workspace_allows_reveal(backend: &Backend, workspace_group: Option<&str>, cor
 /// Args:
 ///     backend: Shared state and singleton-window authority.
 ///     core: Core captured by the navigation producer.
-///     strat_id: Exact live strategy identity on `core`.
+///     strat_id: Exact strategy identity on `core` — live, or retained in the Deleted branch;
+///         one found in neither is reported by the window rather than dropped.
 ///     workspace_group: Group owning the callback, or `None` for an unscoped caller.
 ///     owner: Optional native owner window.
 ///     owner_display: Display used when a new tool window is required.
@@ -130,15 +141,55 @@ pub fn open_goto(
     owner_display: Option<DisplayId>,
     cx: &mut App,
 ) {
+    open_goto_version(
+        backend,
+        core,
+        strat_id,
+        None,
+        workspace_group,
+        owner,
+        owner_display,
+        cx,
+    );
+}
+
+/// [`open_goto`] that also opens one saved version in the Versions pane.
+///
+/// The trade window's version stamp is the caller: it prints the `valid_from` the pane labels a
+/// version with, and a click on it lands on that very row instead of leaving the reader to find
+/// the stamp by eye. A `None` version is exactly `open_goto`.
+///
+/// Args:
+///     backend: Shared state and singleton-window authority.
+///     core: Core captured by the navigation producer.
+///     strat_id: Exact strategy identity on `core`, live or retained in the Deleted branch.
+///     version: `valid_from` of the saved version to select, or `None` for live mode.
+///     workspace_group: Group owning the callback, or `None` for an unscoped caller.
+///     owner: Optional native owner window.
+///     owner_display: Display used when a new tool window is required.
+///     cx: Application context used to validate, queue, and open.
+///
+/// Returns:
+///     Nothing; a stale group-owned target is rejected without changing workspace state.
+#[allow(clippy::too_many_arguments)] // Mirrors `open_goto`'s producer-boundary shape plus the version.
+pub fn open_goto_version(
+    backend: Entity<Backend>,
+    core: CoreId,
+    strat_id: u64,
+    version: Option<i64>,
+    workspace_group: Option<String>,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    cx: &mut App,
+) {
     let queued = backend.update(cx, |b, bcx| {
         if !workspace_allows_reveal(b, workspace_group.as_deref(), core) {
             return false;
         }
-        b.strategies_goto = Some(StrategyRevealRequest::new(
-            core,
-            RevealTarget::Id(strat_id),
-            workspace_group.clone(),
-        ));
+        b.strategies_goto = Some(
+            StrategyRevealRequest::new(core, RevealTarget::Id(strat_id), workspace_group.clone())
+                .with_version(version),
+        );
         // Wake an existing window's observer because `open` only focuses a deduplicated window.
         bcx.notify();
         true
