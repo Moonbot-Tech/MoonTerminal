@@ -89,7 +89,9 @@ impl LineStyle {
 }
 
 /// Path (trail) style — the actual line movement through its repricing history.
-/// Separate from the primary (straight) line, with its own visibility toggle, color, thickness, and dash setting.
+/// Separate from the primary (straight) line, with its own color, thickness, and dash setting.
+/// Whether the path is drawn at all is NOT decided here: that is the per-tab
+/// `ChartGraphicsCfg::hide_order_move_history`, chosen where the user picks what a tab draws.
 ///
 /// ONE style for both representations of that history: the trace the core sends with the order
 /// (`buy_trace`/`sell_trace`) and the staircase the terminal reconstructs itself when the core sends
@@ -99,7 +101,11 @@ impl LineStyle {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PathStyle {
-    /// Whether to show the path through historical positions.
+    /// Retired global "show path" toggle (#612). Nothing draws by it any more: visibility moved
+    /// to the per-tab `hide_order_move_history`, and this field survives only so an existing
+    /// `orders.toml` still decodes and the one-shot startup migration can read what the user had
+    /// chosen. Still serialized, on purpose: that migration may have to retry on a later launch,
+    /// and a save in between must not have dropped the value it reads.
     pub show: bool,
     /// Path color (sRGB). Ignored while [`Self::use_line_color`] is set.
     pub color: [u8; 3],

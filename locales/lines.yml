@@ -49,10 +49,6 @@ lines.path_title:
   ru: "История переносов (путь / змейка)"
   en: "Repricing trail (path)"
   es: "Rastro de reprecios (ruta)"
-lines.show_path:
-  ru: "показывать путь"
-  en: "show path"
-  es: "mostrar ruta"
 lines.path_line_color:
   ru: "цветом своей линии"
   en: "in the line's own colour"

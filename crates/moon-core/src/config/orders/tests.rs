@@ -18,7 +18,10 @@ dashed = false
 ";
     let set: OrdersStyleSet = toml::from_str(text).expect("a pre-#508 orders.toml must decode");
     let path = &set.dark.path;
-    assert!(!path.show, "the saved show flag must survive");
+    assert!(
+        !path.show,
+        "the retired show flag must still decode: the startup migration reads it"
+    );
     assert_eq!(path.color, [211, 211, 211], "the saved colour must survive");
     assert!(
         (path.thickness - 2.5).abs() < 1e-6,
@@ -42,5 +45,4 @@ fn both_theme_sets_default_to_the_line_colour_for_the_path() {
     let set = OrdersStyleSet::default();
     assert!(set.dark.path.use_line_color);
     assert!(set.light.path.use_line_color);
-    assert!(set.dark.path.show && set.light.path.show);
 }

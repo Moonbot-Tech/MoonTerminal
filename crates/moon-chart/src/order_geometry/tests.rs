@@ -634,55 +634,39 @@ fn is_local_history_step(seg: &SegInstance) -> bool {
     near(seg.extend, SEG_EXTEND_NONE) && near(seg.p0, 60_000.0) && near(seg.p1, 60_000.0)
 }
 
-/// `order_geometry.rs:build_order_geometry` must gate the SERVER trace on `PathStyle::show` as it
-/// gates the local staircase (#508): with the toggle off the trace and its temporary-point riser
-/// go, while the live line and Moonbot's `SetStopPrice` interval stay. Gating only the staircase
-/// is the defect the issue describes — a toggle that does nothing on nearly every chart.
+/// `order_geometry.rs:build_order_geometry` must ignore `PathStyle::show` (#612): the field only
+/// survives so an old `orders.toml` still decodes, and the per-tab `hide_order_move_history` is the
+/// one gate on the repricing history. A `show = false` left on disk must hide nothing — the trace,
+/// the local staircase and its knots all draw exactly as with the default style.
 #[test]
-fn path_show_off_hides_the_server_trace_but_keeps_the_stop_segment_and_live_line() {
+fn a_stale_path_show_off_in_orders_toml_hides_nothing() {
     let mut store = OrderLineStore::default();
     assert!(store.update(&[test_order_with_buy_trace()], 0));
     let mut style = OrdersStyle::default();
     style.path.show = false;
 
     let segs = draw_order_segments(&store, &style, &ChartGraphicsCfg::default());
-
     assert!(
-        !segs.iter().any(is_server_history_step),
-        "path.show=false must remove the server trace"
-    );
-    assert!(
-        !segs.iter().any(|seg| {
-            near(seg.t0_rel, 2_500.0) && near(seg.t1_rel, 2_500.0) && near(seg.p1, 61_500.0)
-        }),
-        "path.show=false must remove the server temporary-point riser"
+        segs.iter().any(is_server_history_step),
+        "path.show=false must not remove the server trace"
     );
     assert!(
         segs.iter().any(is_server_stop_segment),
         "path.show=false must leave Moonbot's SetStopPrice interval alone"
     );
-    assert!(
-        segs.iter().any(|seg| {
-            near(seg.extend, SEG_EXTEND_EDGE) && near(seg.p0, 60_000.0) && near(seg.p1, 60_000.0)
-        }),
-        "path.show=false must retain the current-price order line"
-    );
 
-    // The local staircase's knots mark the steps of that staircase, so they go with it — or the
-    // toggle would leave a row of dots on the live line with nothing under them.
     let local = store_with_local_staircase();
-    let markers = draw_order_markers(&local, &style, &ChartGraphicsCfg::default());
+    let segs = draw_order_segments(&local, &style, &ChartGraphicsCfg::default());
     assert!(
-        !markers
-            .iter()
-            .any(|marker| near(marker.shape, MARKER_SHAPE_KNOT)),
-        "path.show=false must remove the fallback reprice knots along with the staircase"
+        segs.iter().any(is_local_history_step),
+        "path.show=false must not remove the local staircase"
     );
+    let markers = draw_order_markers(&local, &style, &ChartGraphicsCfg::default());
     assert!(
         markers
             .iter()
-            .any(|marker| near(marker.shape, MARKER_SHAPE_CROSS)),
-        "path.show=false must keep the live line's own start cross"
+            .any(|marker| near(marker.shape, MARKER_SHAPE_KNOT)),
+        "path.show=false must not remove the fallback reprice knots"
     );
 }
 

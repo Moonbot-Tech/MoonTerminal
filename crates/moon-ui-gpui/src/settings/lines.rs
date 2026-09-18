@@ -766,7 +766,9 @@ impl SettingsView {
             ))
             .child(separator(MoonPalette::active(cx), cx))
             // Path (the repricing trail, server-sent or local alike) has its own collapsible
-            // section. The colour picker is only a control while the path has a colour of its own:
+            // section — its LOOK only. Whether a tab draws it is the per-tab checkbox in the
+            // chart-graphics popup (#612); a global toggle here used to veto that one.
+            // The colour picker is only a control while the path has a colour of its own:
             // with "line colour" on it reads as a dead knob, so it is disabled rather than hidden,
             // keeping the row's shape while saying why it does nothing.
             .child({
@@ -783,13 +785,6 @@ impl SettingsView {
                     .w_full()
                     .gap_1()
                     .pl_4()
-                    .child(self.ord_check(
-                        cx,
-                        "path-show",
-                        &t!("lines.show_path"),
-                        |o| o.path.show,
-                        |o, v| o.path.show = v,
-                    ))
                     .child(self.ord_check(
                         cx,
                         "path-line-color",
