@@ -182,6 +182,10 @@ impl ChartPanel {
         cx: &mut Context<Self>,
     ) {
         if self.chart.set_trade_history(records) {
+            // A new set of trades is a new set of lines to resolve and, for what is already
+            // resolved, to draw.
+            self.request_trace_lines(true, cx);
+            self.sync_trace_lines(true, cx);
             self.sync_orders_if_visible(cx, true);
             self.view_dirty = true;
         }

@@ -167,6 +167,10 @@ fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, LineKind); 7] {
 /// [`POSITION_HOLD_RGB`], because the position is still held and the entry line alone would have
 /// made it disappear. Every other line kind keeps running to the edge, because the order is still
 /// working after a fill.
+///
+/// The four output buffers are CLEARED first and then filled: this builds one store's whole
+/// picture, it does not append. A caller drawing a second store beside the first hands it buffers
+/// of its own and extends — the terminal's archived-lines pass does exactly that.
 #[allow(clippy::too_many_arguments)]
 pub fn build_order_geometry(
     store: &OrderLineStore,
@@ -747,10 +751,12 @@ pub fn build_order_geometry(
             // `t1_rel` IS the fill here — the match above returns `fill_rel` unchanged whenever it
             // is set — so the marker sits at the same end the segment does, named once. The cross
             // branch below reads `t1_rel` for the same reason.
-            if fill_rel.is_some() {
+            if fill_rel.is_some() && !graphics.hide_entry_fill_arrow {
                 // A fill is an EVENT, not the decorative terminator `end_marker` governs, so it is
                 // drawn whatever that flag says: with the flag off the entry line would simply stop
-                // dead with nothing on the chart saying why. It REPLACES the cross rather than
+                // dead with nothing on the chart saying why — unless the tab's style says the
+                // exit line starting there already does (`hide_entry_fill_arrow`), and then the
+                // plain end cross below takes the endpoint. It REPLACES the cross rather than
                 // joining it — two glyphs on one endpoint is noise, and the arrow already says
                 // "ended, and here is how". Direction follows the ACTION, as in trade history: a
                 // long's entry is a buy (up), a short's entry is a sell (down). The half-extents
@@ -777,7 +783,9 @@ pub fn build_order_geometry(
                     1,
                     col,
                 ));
-            } else if st.end_marker && ended {
+            } else if ended && (st.end_marker || fill_rel.is_some()) {
+                // A fill whose arrow the tab's style suppressed still gets the cross, whatever
+                // `end_marker` says: the fill is an event and the line must not stop unmarked.
                 markers.push(MarkerInstance::at_price(
                     t1_rel,
                     cur_p,

@@ -94,6 +94,9 @@ pub(crate) struct TraceResolver {
     /// `report_traces_epoch` per core at the last adopt: a moved epoch means the core process was
     /// replaced and every pending ask on it can no longer be answered.
     epochs: HashMap<CoreId, u64>,
+    /// `rev` at the last change of any row of each core: what a consumer bound to one core
+    /// compares before walking its rows, so a backfill on another core costs it nothing.
+    core_revs: HashMap<CoreId, u64>,
     /// Advances on every state change; how the adopt pass reports "anything moved".
     rev: u64,
 }
@@ -129,6 +132,7 @@ impl TraceResolver {
             self.pending.remove(&key);
         }
         self.bump();
+        self.core_revs.insert(core, self.rev);
         self.slots.insert(
             key,
             Slot {
@@ -138,6 +142,11 @@ impl TraceResolver {
             },
         );
         self.evict();
+    }
+
+    /// The revision of the last change to any row of `core`; `0` while none was ever set.
+    pub(crate) fn core_rev(&self, core: CoreId) -> u64 {
+        self.core_revs.get(&core).copied().unwrap_or(0)
     }
 
     /// Drop settled rows past [`SLOT_CAP`], oldest first.
@@ -344,6 +353,12 @@ impl Backend {
     /// consumer fingerprints the row by to tell a wake that changed it from one that did not.
     pub(crate) fn trace_state_stamped(&self, core: CoreId, uid: i64) -> (TraceState, u64) {
         self.traces.stamped(core, uid)
+    }
+
+    /// The revision of the last change to any row of `core`: a consumer bound to one core skips
+    /// its walk when this did not move since its last one.
+    pub(crate) fn traces_core_rev(&self, core: CoreId) -> u64 {
+        self.traces.core_rev(core)
     }
 
     /// Resolve `uids` on `core`: the archive first, then the core for at most `cap` misses.

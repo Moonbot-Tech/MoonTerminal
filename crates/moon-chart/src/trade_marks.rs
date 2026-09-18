@@ -260,6 +260,18 @@ pub struct TradeMark {
     pub qty: f64,
     /// Whether the trade was opened short.
     pub is_short: bool,
+    /// Whether the entry end draws its arrow. `false` when something else already shows the
+    /// entry — the terminal's "Moonbot lines" style draws an archived entry line in its place.
+    pub show_entry: bool,
+    /// Whether the exit end draws its arrow; same reason.
+    pub show_exit: bool,
+}
+
+impl TradeMark {
+    /// Whether both ends draw, and therefore the connector between them.
+    pub fn whole(&self) -> bool {
+        self.show_entry && self.show_exit
+    }
 }
 
 /// Pixel radius within which two actions of the SAME kind collapse into one cluster, in logical
@@ -315,22 +327,26 @@ pub struct TradeCluster {
 pub fn explode_actions(marks: &[TradeMark]) -> Vec<TradeAction> {
     let mut actions = Vec::with_capacity(marks.len().saturating_mul(2));
     for (idx, mark) in marks.iter().enumerate() {
-        actions.push(TradeAction {
-            t_ms: mark.buy_ms,
-            price: mark.buy_price,
-            qty: mark.qty,
-            buy: !mark.is_short,
-            is_short: mark.is_short,
-            mark: idx,
-        });
-        actions.push(TradeAction {
-            t_ms: mark.close_ms,
-            price: mark.sell_price,
-            qty: mark.qty,
-            buy: mark.is_short,
-            is_short: mark.is_short,
-            mark: idx,
-        });
+        if mark.show_entry {
+            actions.push(TradeAction {
+                t_ms: mark.buy_ms,
+                price: mark.buy_price,
+                qty: mark.qty,
+                buy: !mark.is_short,
+                is_short: mark.is_short,
+                mark: idx,
+            });
+        }
+        if mark.show_exit {
+            actions.push(TradeAction {
+                t_ms: mark.close_ms,
+                price: mark.sell_price,
+                qty: mark.qty,
+                buy: mark.is_short,
+                is_short: mark.is_short,
+                mark: idx,
+            });
+        }
     }
     actions
 }
@@ -632,6 +648,11 @@ pub fn build_trade_geometry(
         let min_px = (CONNECTOR_MIN_PX * scale.max(0.1)) as f64;
         segs.reserve(marks.len());
         for mark in marks {
+            // A connector joins two arrows; with one end drawn as a line there is nothing to
+            // join it to.
+            if !mark.whole() {
+                continue;
+            }
             // Skip a connector too short to read. Measured in the CURRENT view, so the same trade
             // gains its line back the moment the user zooms in on it.
             let dx = (mark.close_ms - mark.buy_ms) as f64 * px_per_ms as f64;

@@ -27,6 +27,7 @@ mod report_trades;
 pub(crate) mod shot;
 #[cfg(test)]
 mod tests;
+mod trace_lines;
 mod trade;
 mod trade_history_hover;
 mod volume_menu;
@@ -339,6 +340,8 @@ pub struct ChartPanel {
     warn: warn::WarnState,
     /// Runtime-only durable history for this exact Main core and market.
     report_trades: report_trades::ReportTradesState,
+    /// The closed trades' archived lines for the "Moonbot lines" style — see [`trace_lines`].
+    trace_lines: trace_lines::TraceLinesState,
     /// Hover over a drawn closed-trade arrow, and the card it opens; see [`trade_history_hover`].
     trade_hover: trade_history_hover::TradeHoverState,
     /// Figure-drawing state for this panel: draft, hover, and drag.
@@ -580,6 +583,14 @@ impl ChartPanel {
             this.requery_trade_history_on_generation(cx);
         })
         .detach();
+        // The trace resolver's wake: one stamp compare per notification, a rebuild of the lines
+        // map only when a trade of THIS chart's changed. Cheap in the arrows style — it exits on
+        // the style before touching the history.
+        let traces_revision = backend.read(cx).traces_revision();
+        cx.observe(&traces_revision, |this, _revision, cx| {
+            this.sync_trace_lines(false, cx);
+        })
+        .detach();
         // Notify for setting changes and infrequent axis text. Frequent market data bypasses GPUI
         // notification because `gpu_canvas.frame()` reads MarketDataSource directly. A local
         // one-shot timer handles time-based pane TTL independently of backend observations.
@@ -609,6 +620,10 @@ impl ChartPanel {
                 // place such a panel hears about it, so the trade-kind re-query hangs here too; it
                 // returns immediately unless that pair actually moved.
                 this.requery_trade_history_on_trade_kinds(cx);
+                // ...and the trade style lives beside them: a default flipped to lines elsewhere
+                // has to start resolving here too.
+                this.request_trace_lines(true, cx);
+                this.sync_trace_lines(true, cx);
                 this.sync_chart_text(cx);
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
@@ -713,6 +728,7 @@ impl ChartPanel {
             news: news::NewsState::default(),
             warn: warn::WarnState::default(),
             report_trades: report_trades::ReportTradesState::default(),
+            trace_lines: trace_lines::TraceLinesState::default(),
             trade_hover: trade_history_hover::TradeHoverState::default(),
             fig_draft: None,
             fig_settings: None,
@@ -782,6 +798,14 @@ impl ChartPanel {
             this.requery_trade_history_on_generation(cx);
         })
         .detach();
+        // The trace resolver's wake: one stamp compare per notification, a rebuild of the lines
+        // map only when a trade of THIS chart's changed. Cheap in the arrows style — it exits on
+        // the style before touching the history.
+        let traces_revision = backend.read(cx).traces_revision();
+        cx.observe(&traces_revision, |this, _revision, cx| {
+            this.sync_trace_lines(false, cx);
+        })
+        .detach();
         cx.observe(&backend, |this, backend, cx| {
             let now = Instant::now();
             let (sig, settings_sig, panic_rev, fav_rev) = {
@@ -806,6 +830,10 @@ impl ChartPanel {
                 // own hears a ⧉ press from another group window only here, and the durable history
                 // query was narrowed by the previous trade-kind pair.
                 this.requery_trade_history_on_trade_kinds(cx);
+                // ...and the trade style lives beside them: a default flipped to lines elsewhere
+                // has to start resolving here too.
+                this.request_trace_lines(true, cx);
+                this.sync_trace_lines(true, cx);
                 this.sync_chart_text(cx);
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
@@ -902,6 +930,7 @@ impl ChartPanel {
             news: news::NewsState::default(),
             warn: warn::WarnState::default(),
             report_trades: report_trades::ReportTradesState::default(),
+            trace_lines: trace_lines::TraceLinesState::default(),
             trade_hover: trade_history_hover::TradeHoverState::default(),
             fig_draft: None,
             fig_settings: None,
@@ -1217,6 +1246,9 @@ impl ChartPanel {
             self.data_sig = self.chart.notify_signature(&b.session);
             self.chart.sync_orders_if_visible(&b.session, force);
         }
+        // The view may have moved: the trades nearest the right edge are a different set now.
+        // Rate-limited inside, so a pan costs one ranking every few hundred milliseconds at most.
+        self.request_trace_lines(false, cx);
         if self.clear_settled_order_drag_preview(cx) && self.apply_order_visual(cx) {
             cx.notify();
         }
@@ -1410,6 +1442,10 @@ impl ChartPanel {
             )
         };
         self.requery_trade_history_on_trade_kinds(cx);
+        // The style may have flipped to lines: resolve and hand over what is already resolved.
+        // The engine's own graphics update happens on render, before its next order pass.
+        self.request_trace_lines(true, cx);
+        self.sync_trace_lines(true, cx);
         cx.notify();
     }
 
@@ -1737,6 +1773,10 @@ impl ChartPanel {
         // For the reason the backend observer does it: the durable trade-history query is narrowed
         // by the drawn trade kinds, and those live in the graphics settings this just changed.
         self.requery_trade_history_on_trade_kinds(cx);
+        // The style may have flipped to lines: resolve and hand over what is already resolved.
+        // The engine's own graphics update happens on render, before its next order pass.
+        self.request_trace_lines(true, cx);
+        self.sync_trace_lines(true, cx);
         cx.notify();
     }
 

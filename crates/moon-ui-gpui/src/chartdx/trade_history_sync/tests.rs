@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use super::{trade_kind_visible, trade_mark};
+use super::{trade_kind_visible, trade_mark_with};
 use moon_core::config::ChartGraphicsCfg;
 use moon_core::db::{ChartTradeRecord, OffsetSegment, ReportAxis};
 
@@ -38,7 +38,7 @@ fn each_trade_kind_checkbox_hides_only_its_own_kind() {
     assert!(!trade_kind_visible(&cfg(false, false), true));
 }
 
-/// `chartdx/trade_history_sync.rs:trade_mark` must correct seconds before scaling milliseconds.
+/// `chartdx/trade_history_sync.rs:trade_mark_with` must correct seconds before scaling milliseconds.
 ///
 /// Replacing the two `axis.to_utc` calls with raw record dates would put entry and exit arrows on
 /// the wrong candle whenever a core reports a non-zero clock offset.
@@ -73,13 +73,13 @@ fn trade_mark_places_a_clock_skewed_trade_on_its_true_utc_candles() {
         chrono_tz::UTC,
     );
 
-    let mark = trade_mark(&record, &axis);
+    let mark = trade_mark_with(&record, &axis, true, true);
 
     assert_eq!(mark.buy_ms, 1_699_996_400_000);
     assert_eq!(mark.close_ms, 1_699_997_300_000);
 }
 
-/// `chartdx/trade_history_sync.rs:trade_mark` -- reintroducing a tape-based nudge or converting
+/// `chartdx/trade_history_sync.rs:trade_mark_with` -- reintroducing a tape-based nudge or converting
 /// a raw millisecond through the seconds path would move an arrow away from the report instant
 /// and make the chart disagree with the trade MoonBot actually recorded.
 #[test]
@@ -103,7 +103,7 @@ fn trade_mark_uses_the_report_stamps_without_any_tape_input() {
         report_uid: None,
     };
 
-    let mark = trade_mark(&record, &ReportAxis::identity_core_local());
+    let mark = trade_mark_with(&record, &ReportAxis::identity_core_local(), true, true);
 
     assert_eq!(mark.buy_ms, 1_700_000_000_766);
     assert_eq!(mark.close_ms, 1_700_000_900_000);

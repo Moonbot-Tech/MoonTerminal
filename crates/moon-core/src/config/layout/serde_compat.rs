@@ -12,11 +12,11 @@ use serde::Deserialize;
 
 use super::super::chart_labels::ChartLabelsCfg;
 use super::{
-    ChartGraphicsCfg, HvolSide, TableSortPreference, clamp_auto_workspace_rail_width,
-    clamp_strategies_tree_text_step, def_candle_volume_alpha, def_candle_volume_height,
-    def_candle_volume_scale, def_candle_volume_style, def_connector_thickness_px,
-    def_hvol_price_frame_pct, def_hvol_width, def_marker_scale, def_trade_arrow_scale,
-    def_trade_volume_alpha,
+    ChartGraphicsCfg, HvolSide, TableSortPreference, TradeHistoryStyle,
+    clamp_auto_workspace_rail_width, clamp_strategies_tree_text_step, def_candle_volume_alpha,
+    def_candle_volume_height, def_candle_volume_scale, def_candle_volume_style,
+    def_connector_thickness_px, def_hvol_price_frame_pct, def_hvol_width, def_marker_scale,
+    def_trade_arrow_scale, def_trade_volume_alpha,
 };
 
 /// Read the tuner seed from whatever `layout.toml` happens to hold, never failing.
@@ -224,6 +224,14 @@ where
     D: serde::Deserializer<'de>,
 {
     Ok(de_lenient::<D, f32>(d)?.unwrap_or_else(def_hvol_width))
+}
+
+/// Read the closed-trade style leniently: an unknown spelling reads as arrows, the default.
+pub(super) fn de_trade_history_style<'de, D>(d: D) -> Result<TradeHistoryStyle, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, TradeHistoryStyle>(d)?.unwrap_or_default())
 }
 
 /// Read the horizontal-volume side leniently: a spelling the enum does not know (a value from a

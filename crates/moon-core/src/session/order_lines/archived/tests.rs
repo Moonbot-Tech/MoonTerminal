@@ -17,6 +17,7 @@ fn input() -> ArchivedOrdersInput<'static> {
         quantity: 100.0,
         entry_fill_ms: Some(1_500.0),
         close_ms: 9_000.0,
+        bright: false,
     }
 }
 
@@ -102,6 +103,7 @@ fn appended_neighbours_are_pale_and_keep_their_own_fill() {
         quantity: 5.0,
         entry_fill_ms: Some(20_500.0),
         close_ms: 30_000.0,
+        bright: false,
     };
     store.append_archived(
         neighbour,

@@ -20,7 +20,7 @@ use serde_compat::{
     de_connector_thickness, de_hvol_price_frame_pct, de_hvol_side, de_hvol_tf_s, de_hvol_width,
     de_lenient_chart_labels, de_lenient_false, de_lenient_graphics, de_lenient_map,
     de_lenient_seed, de_lenient_true, de_lenient_u32, de_marker_scale,
-    de_strategies_tree_text_step, de_table_sort_map, de_trade_volume_alpha,
+    de_strategies_tree_text_step, de_table_sort_map, de_trade_history_style, de_trade_volume_alpha,
 };
 pub use serde_compat::{de_lenient, de_lenient_bool};
 
@@ -1413,6 +1413,23 @@ fn def_hvol_width() -> f32 {
 /// outward, as the reference draws it; the side here is the side of the zone the VOLUME READOUT
 /// under the crosshair prints at. The `Transparent` pair prints the zone's captions without
 /// their backing plates — the theme's plain ink over the rows instead of light on dark.
+/// How a tab draws the closed trades of its market: as the terminal's entry/exit arrows, or as
+/// the order lines Moonbot itself draws — the archived buy/sell lines with their repricing paths
+/// and stop markers, resolved through the local trace archive and the core.
+///
+/// One or the other PER TRADE, never both: the arrows and the lines describe the same trade at
+/// the same place, and drawn together they cover each other. In the lines style a trade the
+/// archive holds no lines for — older than the archive, or not answered yet — keeps its arrows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TradeHistoryStyle {
+    /// Entry and exit arrows joined by a connector — the picture this terminal shipped with.
+    #[default]
+    Marks,
+    /// Moonbot's order lines from the trace archive.
+    MoonbotLines,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HvolSide {
@@ -1482,6 +1499,12 @@ pub struct ChartGraphicsCfg {
     /// Whether closed trades made by an EMULATOR order draw their history marks.
     #[serde(default = "def_true", deserialize_with = "de_lenient_true")]
     pub show_emulator_trades: bool,
+    /// Arrows or Moonbot's order lines for the closed trades the two switches above admit.
+    ///
+    /// ABSENT reads as arrows: the lines are opt-in, and a tab saved before this field existed
+    /// keeps the picture it had.
+    #[serde(default, deserialize_with = "de_trade_history_style")]
+    pub trade_history_style: TradeHistoryStyle,
     /// Whether a CLOSED order hides its sell-price line. Live orders always keep theirs.
     ///
     /// On by default: after an order closes, its blue sell line stays on the chart at
@@ -1496,6 +1519,13 @@ pub struct ChartGraphicsCfg {
     /// it is opt-in rather than opt-out.
     #[serde(default, deserialize_with = "de_lenient_false")]
     pub hide_order_move_history: bool,
+    /// Whether the entry line ends in a plain cross at its fill instead of the fill arrow.
+    ///
+    /// RUNTIME ONLY, never stored: the chart sets it for the passes of the "Moonbot lines" style,
+    /// where the exit line starting at that very point already says the entry filled and the arrow
+    /// would be a second glyph on one event. A saved tab keeps the arrow it always had.
+    #[serde(skip)]
+    pub hide_entry_fill_arrow: bool,
 
     // --- Trade marks. Moved here from `ChartTheme` so they are per TAB rather than per theme. ---
     /// Multiplier on the trade-cross marker size. The device pixel ratio is applied separately and
@@ -1622,8 +1652,10 @@ impl Default for ChartGraphicsCfg {
             connector_thickness_px: def_connector_thickness_px(),
             show_real_trades: true,
             show_emulator_trades: true,
+            trade_history_style: TradeHistoryStyle::Marks,
             hide_closed_sell_line: true,
             hide_order_move_history: false,
+            hide_entry_fill_arrow: false,
             marker_scale: def_marker_scale(),
             trade_volume_alpha: def_trade_volume_alpha(),
             candle_volume_style: def_candle_volume_style(),
