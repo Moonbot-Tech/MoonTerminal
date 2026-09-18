@@ -587,8 +587,8 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 v_flex()
                     .gap(design::ui_px(cx, 6.0))
                     .child(trade_style_row)
-                    // The arrow rows stay in the lines style too: a trade the archive holds no
-                    // lines for keeps its arrows there.
+                    // The arrow rows stay in the lines style too: an entry the archive holds no
+                    // line for keeps its arrow there.
                     .child(arrow_row)
                     .child(connector_row)
                     .child(real_cb)

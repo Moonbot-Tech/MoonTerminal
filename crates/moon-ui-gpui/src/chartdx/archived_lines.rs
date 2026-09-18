@@ -7,6 +7,13 @@
 //! this module turns that map plus the pane's own trade history into an `OrderLineStore` the
 //! order pass draws as a SECOND source beside the session's live store, never in its place.
 //!
+//! The EXIT line never waits for the archive: the report row already states where the exit order
+//! was placed, at what price and when it filled, so every closed trade draws its exit as a line
+//! from the first frame, and the core's archived exit — with its repricing path — replaces that
+//! straight line when it arrives. Only the ENTRY still depends on the archive: the report dates
+//! the entry's completion, not its placement, so an entry the core archived no line for keeps
+//! its arrow until the wire says where the buy line began.
+//!
 //! Which trades to resolve is this engine's call too: the ones nearest the pane's right edge,
 //! because a market's history runs to a thousand rows and the core is asked about at most a few
 //! dozen at a time. The panel asks, the engine says what for.
@@ -19,7 +26,7 @@ use moon_core::config::TradeHistoryStyle;
 use moon_core::db::ChartTradeRecord;
 use moon_core::feed::{ArchivedLineKind, ArchivedOrderTrace};
 use moon_core::session::CoreId;
-use moon_core::session::order_lines::{ArchivedOrdersInput, OrderLineStore};
+use moon_core::session::order_lines::{ArchivedOrdersInput, OrderLineStore, ReportExit};
 
 use super::ChartDataState;
 use super::trade_history_sync::trade_kind_visible;
@@ -38,30 +45,19 @@ impl ChartDataState {
             | ((self.chart_graphics.show_emulator_trades as u64) << 2)
     }
 
-    /// Which ends of this trade the archive draws as lines — `(entry, exit)` — so the arrows
-    /// pass draws the arrow of the end that has none. The core archives only a line that was
-    /// repriced: a market entry typically answers with the exit line alone.
+    /// Which ends of this trade the lines pass draws — `(entry, exit)` — so the arrows pass
+    /// draws the arrow of the end that has none. The exit is always a line, from the archive or
+    /// from the row (see the module doc); the entry only when the core archived its own line —
+    /// it archives only a line its chart gave a point, so a market entry typically has none.
     pub(super) fn archived_line_ends(&self, record: &ChartTradeRecord) -> (bool, bool) {
-        let Some(lines) = record
-            .report_uid
-            .and_then(|uid| self.archived_lines.get(&uid))
-        else {
-            return (false, false);
-        };
-        let entry = lines
-            .iter()
-            .any(|line| line.own && line.kind == ArchivedLineKind::Entry);
-        let exit = lines
-            .iter()
-            .any(|line| line.own && line.kind == ArchivedLineKind::Exit);
-        (entry, exit)
+        line_ends(record, &self.archived_lines)
     }
 
     /// Replace the resolved lines and wake the order pass.
     ///
     /// Args:
     ///     lines: Archived lines by `ReportUID`, one entry per trade the resolver answered with
-    ///         lines. Trades without an entry draw nothing in lines mode.
+    ///         lines. A trade without an entry still draws its exit line, from its row.
     ///
     /// Returns:
     ///     Whether the map changed.
@@ -106,8 +102,8 @@ impl ChartDataState {
         )
     }
 
-    /// The archived store one pane draws, or `None` when the style is arrows or nothing of this
-    /// pane's is resolved yet. See [`archived_store`].
+    /// The archived store one pane draws, or `None` when the style is arrows or the pane has no
+    /// closed trade to draw. See [`archived_store`].
     ///
     /// Args:
     ///     core: The pane's core.
@@ -120,7 +116,7 @@ impl ChartDataState {
         market: &str,
         live_closed_ms: &[f64],
     ) -> Option<OrderLineStore> {
-        if !self.draws_trade_lines() || self.archived_lines.is_empty() {
+        if !self.draws_trade_lines() {
             return None;
         }
         let mut store = archived_store(
@@ -156,6 +152,33 @@ impl ChartDataState {
         let (_, close_ms) = record_utc_ms(record, &self.report_axis);
         is_live_twin(close_ms, live_closed_ms)
     }
+}
+
+/// See [`ChartDataState::archived_line_ends`]; `lines` is the resolver's map by `ReportUID`.
+fn line_ends(
+    record: &ChartTradeRecord,
+    lines: &HashMap<i64, Arc<[ArchivedOrderTrace]>>,
+) -> (bool, bool) {
+    // The same test `ReportExit::of_record` makes: a row with no exit price places no line.
+    let exit = record.sell_price > 0.0;
+    let entry = record
+        .report_uid
+        .and_then(|uid| lines.get(&uid))
+        .is_some_and(|lines| {
+            lines
+                .iter()
+                .any(|line| line.own && line.kind == ArchivedLineKind::Entry)
+        });
+    (entry, exit)
+}
+
+/// One number for the live twins a store was built against, for the per-pane cache key: the
+/// live store's revision moves on every order message of the core, the set of closed instants
+/// only when an order closes or leaves the ring — and only the latter reshapes the store.
+pub(super) fn twins_signature(live_closed_ms: &[f64]) -> u64 {
+    live_closed_ms.iter().fold(0u64, |acc, ms| {
+        acc.wrapping_mul(0x100_0000_01b3).wrapping_add(ms.to_bits())
+    })
 }
 
 /// See [`ChartDataState::is_live_twin`].
@@ -223,8 +246,9 @@ fn rank_wanted(
     out
 }
 
-/// Every trade of `core` the tab admits and the resolver answered with lines, as pale closed
-/// orders on `market` — the same builder the trade window's neighbours take. `None` when no
+/// Every trade of `core` the tab admits, as bright closed orders on `market` — the same builder
+/// the trade window's neighbours take. Each gets whatever the resolver answered with, and its
+/// exit line from the row where the answer holds none (or has not come yet). `None` when no
 /// trade qualifies, so the caller draws nothing extra rather than an empty store. The caller
 /// stamps `rev`.
 ///
@@ -259,17 +283,15 @@ fn archived_store(
         if record.core_uid != core || !trade_kind_visible(graphics, record.emulator) {
             continue;
         }
-        let Some(lines) = record
-            .report_uid
-            .and_then(|uid| lines.get(&uid))
-            .filter(|lines| !lines.is_empty())
-        else {
-            continue;
-        };
         let (buy_ms, close_ms) = record_utc_ms(record, axis);
         if is_live_twin(close_ms, live_closed_ms) {
             continue;
         }
+        // No answer yet, or an empty one: the builder still draws the row's own exit line.
+        let archived: &[ArchivedOrderTrace] = record
+            .report_uid
+            .and_then(|uid| lines.get(&uid))
+            .map_or(&[], |lines| lines.as_ref());
         store.append_archived(
             ArchivedOrdersInput {
                 market,
@@ -277,10 +299,11 @@ fn archived_store(
                 quantity: record.quantity as f32,
                 entry_fill_ms: Some(buy_ms as f64),
                 close_ms: close_ms as f64,
+                exit: ReportExit::of_record(record, axis),
                 // Moonbot draws its closed trades' lines in full colour; so does this style.
                 bright: true,
             },
-            lines,
+            archived,
         );
         drawn += 1;
     }

@@ -224,16 +224,24 @@ impl ChartDataState {
             // In the "Moonbot lines" style a trade that closed this session keeps drawing from
             // the live store (its archived twin is skipped), and it has to look like the archived
             // ones beside it — Moonbot draws every closed trade in full colour, so the closed
-            // opacity is lifted to the active one for the live pass too.
+            // TRADES of the live pass are lifted to the active opacity. Only the trades: a
+            // cancelled order stays under `closed_alpha`, the level the "closed/cancelled
+            // visibility" slider owns — swapping the alpha for the whole pass lit those up too.
+            // The fill arrow goes: in this style the exit line starts where the entry filled,
+            // and Moonbot marks that point with nothing louder than a line end. And the exit line
+            // STAYS: a Moonbot line pair is entry plus exit, which is how the archived pass below
+            // draws every older trade, so the tab's "hide a closed order's sell line" cannot apply
+            // to the trades of this pass either — or a trade would lose its exit the moment it
+            // closed and grow it back on the next launch, from the archive. A cancelled order has
+            // no exit line to keep: the store only ever steps a Sell line while the order holds a
+            // position, and the core keys the sell side's server trace by the EXIT leg's own id,
+            // which exists only once the entry filled — so lifting the switch shows nothing the
+            // slider is meant to dim.
             let lines_style = !frozen && self.draws_trade_lines();
-            let lines_live_style = lines_style.then(|| moon_core::config::OrdersStyle {
-                closed_alpha: self.orders.active_alpha,
-                ..self.orders.clone()
-            });
-            // ...and the fill arrow goes: in this style the exit line starts where the entry
-            // filled, and Moonbot marks that point with nothing louder than a line end.
             let lines_live_graphics = lines_style.then_some(moon_core::config::ChartGraphicsCfg {
+                hide_closed_sell_line: false,
                 hide_entry_fill_arrow: true,
+                bright_closed_trades: true,
                 ..self.chart_graphics
             });
             // The auto-Y fit goes with them. A fit stretched to reach a live order's price would
@@ -266,10 +274,7 @@ impl ChartDataState {
                     true => order_lines.rev,
                     false => core_st.order_lines_rev,
                 };
-                let orders_style = frozen_style
-                    .as_ref()
-                    .or(lines_live_style.as_ref())
-                    .unwrap_or(&self.orders);
+                let orders_style = frozen_style.as_ref().unwrap_or(&self.orders);
                 let graphics = frozen_graphics
                     .as_ref()
                     .or(lines_live_graphics.as_ref())
@@ -334,27 +339,32 @@ impl ChartDataState {
                     // are the picture, not leftovers — and neither the drag preview nor the
                     // highlight can name one of them. A live chart only: the frozen viewer draws
                     // its own archived store through the pass above.
-                    // The store is CACHED per pane on the three inputs that shape it — the
-                    // answers, the history, the live store's closed ring — because this branch
-                    // also runs on every frame of an order drag or hover (a forced sync), and a
-                    // walk over a thousand rows per pixel is not what those frames pay for.
-                    // The history and the report axis are not in the key: their setters go
-                    // through `dirty_all_trade_panes`, which drops the cache outright.
-                    let archived_key = (
-                        self.archived_lines_rev,
-                        order_lines_rev,
-                        self.archived_graphics_bits(),
-                        // The closed-order cap decides which live orders count as twins.
-                        u64::from(self.orders.max_closed_orders),
-                    );
                     // The trades that closed this session, drawn whole by the live pass: neither
                     // the archived pass nor the arrows pass adds anything for them.
                     let live_twins: Option<Vec<f64>> =
                         lines_style.then(|| self.live_twin_closes(&pane.market, order_lines));
+                    // The store is CACHED per pane on the inputs that shape it — the answers,
+                    // the history, the twins the live store yields — because this branch also
+                    // runs on every frame of an order drag or hover (a forced sync), and a walk
+                    // over a thousand rows per pixel is not what those frames pay for. The twins
+                    // enter as their own signature, not as the live store's revision: that
+                    // revision moves on every order message of the core, the twins only when an
+                    // order closes or leaves the ring. The history and the report axis are not
+                    // in the key: their setters go through `dirty_all_trade_panes`, which drops
+                    // the cache outright.
+                    let archived_key = live_twins.as_deref().map(|twins| {
+                        (
+                            self.archived_lines_rev,
+                            crate::chartdx::archived_lines::twins_signature(twins),
+                            self.archived_graphics_bits(),
+                            // The closed-order cap decides which live orders count as twins.
+                            u64::from(self.orders.max_closed_orders),
+                        )
+                    });
                     if let Some(twins) = &live_twins
-                        && pr.archived_store_key != Some(archived_key)
+                        && pr.archived_store_key != archived_key
                     {
-                        pr.archived_store_key = Some(archived_key);
+                        pr.archived_store_key = archived_key;
                         pr.archived_store = self
                             .archived_store_for_pane(pane.core, &pane.market, twins)
                             .map(std::rc::Rc::new);

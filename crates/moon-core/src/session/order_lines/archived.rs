@@ -32,12 +32,53 @@ pub struct ArchivedOrdersInput<'a> {
     /// Exit instant in Unix UTC ms: where the subject order — and every inherited line, whose
     /// own end the archive does not state — stops being drawn.
     pub close_ms: f64,
+    /// The exit as the REPORT states it, for the line the archive may not hold. The core archives
+    /// a line only once its chart gave it a point, so a trade that closed within a second, or one
+    /// whose exit never moved, answers with no exit line — and no archive is not no line: the
+    /// order was placed at this price at this instant and filled at the close. Both builders draw
+    /// that straight line themselves when the traces carry no own exit line; an own exit line in
+    /// the traces wins, with its repricing path. `None` skips the fallback (a row with no exit
+    /// price to place).
+    pub exit: Option<ReportExit>,
     /// Whether [`OrderLineStore::append_archived`] draws these lines at the ACTIVE opacity rather
     /// than the closed one. The trade window's neighbours are context and stay pale; a live
     /// chart in the "Moonbot lines" style draws its closed trades the way Moonbot does, in full
     /// colour. [`OrderLineStore::archived`] ignores it: there the subject is bright and the rest
     /// pale by construction.
     pub bright: bool,
+}
+
+/// The exit order as the report row records it: where a trade's exit line is placed when the
+/// core archived none for it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReportExit {
+    /// Exit price the row settled at.
+    pub price: f32,
+    /// When the exit order was created (`SellSetDate`), in Unix UTC ms. The exit line runs from
+    /// here to the trade's close; a placement dated after the close — a seconds-only stamp raised
+    /// past a millisecond close — collapses to a point at the close rather than running backwards.
+    pub set_ms: f64,
+}
+
+impl ReportExit {
+    /// The exit of one report row, lifted onto true UTC through the report axis — the same lift
+    /// its arrows and its close take, so the line starts where the exit arrow would have stood.
+    ///
+    /// Args:
+    ///     record: The closed trade's row.
+    ///     axis: The report axis that lifts the core's clock onto UTC.
+    ///
+    /// Returns:
+    ///     The exit to fall back on; `None` for a row that settled at no price.
+    pub fn of_record(
+        record: &crate::db::ChartTradeRecord,
+        axis: &crate::db::ReportAxis,
+    ) -> Option<Self> {
+        (record.sell_price > 0.0).then(|| Self {
+            price: record.sell_price as f32,
+            set_ms: axis.stamp_to_utc_ms(record.sell_set_stamp(), record.core_uid) as f64,
+        })
+    }
 }
 
 /// Synthetic uid of the subject order. Inherited lines count up from it; nothing here can collide
@@ -90,6 +131,16 @@ impl OrderLineStore {
             let mut order = archived_order(&input, uid, seq as u64, first_ms, false);
             order.lines[kind as usize] = line;
             store.insert_closed(order);
+        }
+        // No own exit line in the archive: the report's straight exit line joins the subject —
+        // beside its archived entry line when there is one, alone when the archive was empty.
+        if let Some(exit) = input.exit.filter(|_| !has_own_exit(traces)) {
+            let (start_ms, line) = report_exit_line(exit, input.close_ms);
+            let order = subject.get_or_insert_with(|| {
+                archived_order(&input, SUBJECT_UID, traces.len() as u64, start_ms, true)
+            });
+            order.create_ms = order.create_ms.min(start_ms);
+            order.lines[LineKind::Sell as usize] = line;
         }
         if let Some(order) = subject {
             store.insert_closed(order);
@@ -144,6 +195,20 @@ impl OrderLineStore {
             self.insert_closed(order);
             next_uid += 1;
         }
+        // Same fallback as `archived`, as an order of its own like every other line here.
+        if let Some(exit) = input.exit.filter(|_| !has_own_exit(traces)) {
+            let (start_ms, line) = report_exit_line(exit, input.close_ms);
+            let mut order = archived_order(
+                &input,
+                next_uid,
+                seq_base + traces.len() as u64,
+                start_ms,
+                false,
+            );
+            order.subject = input.bright;
+            order.lines[LineKind::Sell as usize] = line;
+            self.insert_closed(order);
+        }
     }
 
     /// File one closed order where `market_draw_orders` will find it: the map AND the closed ring.
@@ -176,6 +241,32 @@ fn archived_line(trace: &ArchivedOrderTrace) -> LineTrace {
         server_stop_time_ms: trace.stop_time_ms,
         off_ms: None,
     }
+}
+
+/// Whether the traces carry the trade's OWN exit line with at least one point — the line that
+/// makes the report's fallback unnecessary. An inherited exit belongs to an ancestor.
+fn has_own_exit(traces: &[ArchivedOrderTrace]) -> bool {
+    traces
+        .iter()
+        .any(|trace| trace.own && trace.kind == ArchivedLineKind::Exit && !trace.points.is_empty())
+}
+
+/// The exit line the report states: straight at the exit price from the exit order's placement
+/// to the close, with no repricing path — nothing moved, or the core kept nothing of it.
+///
+/// Returns:
+///     The line's start (the order's `create_ms` when it stands alone) and the line itself.
+fn report_exit_line(exit: ReportExit, close_ms: f64) -> (f64, LineTrace) {
+    let start_ms = exit.set_ms.min(close_ms);
+    let line = LineTrace {
+        steps: vec![(start_ms, exit.price)],
+        server_points: Vec::new(),
+        tmp_point: None,
+        server_stop_price: None,
+        server_stop_time_ms: None,
+        off_ms: None,
+    };
+    (start_ms, line)
 }
 
 /// A closed, filled order with no lines yet; the caller hangs the archived lines on it.

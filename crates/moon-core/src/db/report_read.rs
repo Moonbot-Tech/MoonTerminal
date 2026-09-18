@@ -195,6 +195,14 @@ pub struct ChartTradeRecord {
     /// A stored `0` is the wire's "this row is STILL OPEN" sentinel, not an instant;
     /// [`ReportStamp::resolve`] is what keeps it from being read as 1970.
     pub close_ms: Option<i64>,
+    /// When the EXIT order was created (`SellSetDate`) — not when it filled, that is
+    /// [`Self::close_date`]. Same core-local seconds and the same caveat as `buy_date`. Where the
+    /// exit line of this trade begins when the core archived none: the line was placed here and
+    /// filled at the close, and a line that never moved is still a line. `0` when the source
+    /// predates the column, and the exit is then taken to have been placed at the entry.
+    pub sell_set_date: i64,
+    /// Raw `sellsetdatems`, same caveats as [`Self::buy_ms`].
+    pub sell_set_ms: Option<i64>,
     /// Entry price.
     pub buy_price: f64,
     /// Exit price.
@@ -262,6 +270,19 @@ impl ChartTradeRecord {
     ///     The typed core-local stamp for this row's exit.
     pub fn close_stamp(&self) -> ReportStamp {
         ReportStamp::resolve(self.close_date, self.close_ms)
+    }
+
+    /// The stamp of the exit order's CREATION, preferring the millisecond column when the core
+    /// supplied one, and falling back to the entry when the source has no `SellSetDate` at all.
+    ///
+    /// Returns:
+    ///     The typed core-local stamp for the moment this row's exit order was placed.
+    pub fn sell_set_stamp(&self) -> ReportStamp {
+        if self.sell_set_date > 0 {
+            ReportStamp::resolve(self.sell_set_date, self.sell_set_ms)
+        } else {
+            self.buy_stamp()
+        }
     }
 }
 
@@ -2248,11 +2269,23 @@ pub fn query_chart_trade_history(
         } else {
             "NULL"
         };
+        // The exit order's creation, optional the same way: a source without it reads as `0`, and
+        // the record then dates the exit's placement at the entry.
+        let sell_set_sql = if source.cols.contains("sellsetdate") {
+            "r.sellsetdate"
+        } else {
+            "0"
+        };
+        let sell_set_ms_sql = if source.cols.contains("sellsetdatems") {
+            "r.sellsetdatems"
+        } else {
+            "NULL"
+        };
         let sql = format!(
             "SELECT {record_id}, r.core_uid, r.coin, r.buydate, r.closedate, \
              r.buyprice, r.sellprice, r.quantity, r.isshort, \
              {profit_sql}, {quote_sql}, {percent_sql}, {emulator_sql}, \
-             {buy_ms_sql}, {close_ms_sql}, {report_uid_sql} \
+             {buy_ms_sql}, {close_ms_sql}, {report_uid_sql}, {sell_set_sql}, {sell_set_ms_sql} \
              FROM {} r{where_sql} \
              ORDER BY r.closedate DESC, {record_id} DESC LIMIT ?",
             source.table
@@ -2282,6 +2315,8 @@ pub fn query_chart_trade_history(
                     row.get::<_, Value>(13)?,
                     row.get::<_, Value>(14)?,
                     row.get::<_, Value>(15)?,
+                    row.get::<_, Value>(16)?,
+                    row.get::<_, Value>(17)?,
                 ))
             })
             .map_err(|error| read_fail(CONTEXT, error))?;
@@ -2303,6 +2338,8 @@ pub fn query_chart_trade_history(
                 buy_ms,
                 close_ms,
                 report_uid,
+                sell_set_date,
+                sell_set_ms,
             ) = row.map_err(|error| read_fail(CONTEXT, error))?;
             let Some(buy_date) = report_value_i64(&buy_date) else {
                 continue;
@@ -2334,6 +2371,8 @@ pub fn query_chart_trade_history(
                 // `report_value_i64` maps NULL to `None`, which is exactly the absence the wire means.
                 buy_ms: report_value_i64(&buy_ms),
                 close_ms: report_value_i64(&close_ms),
+                sell_set_date: report_value_i64(&sell_set_date).unwrap_or_default(),
+                sell_set_ms: report_value_i64(&sell_set_ms),
                 buy_price,
                 sell_price,
                 quantity: report_value_f64(&quantity).unwrap_or_default(),

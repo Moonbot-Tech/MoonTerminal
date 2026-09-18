@@ -743,7 +743,7 @@ struct PaneRender {
     /// Last `archived_lines_rev` the userdata buffer was built with — the closed trades' Moonbot
     /// lines ride the same buffer as the live orders, so a new archive answer rebuilds it.
     last_archived_lines_rev: u64,
-    /// The archived store this pane last drew, and the `(archived_lines_rev, live order rev,
+    /// The archived store this pane last drew, and the `(archived_lines_rev, twins signature,
     /// graphics bits, closed-order cap)` it was built for. Reused across the forced syncs a drag
     /// or hover fires per frame; see the order pass.
     archived_store: Option<Rc<moon_core::session::order_lines::OrderLineStore>>,

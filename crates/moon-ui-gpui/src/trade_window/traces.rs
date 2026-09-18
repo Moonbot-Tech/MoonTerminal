@@ -29,7 +29,7 @@ use std::sync::Arc;
 use gpui::*;
 use moon_core::db::ChartTradeRecord;
 use moon_core::feed::ArchivedOrderTrace;
-use moon_core::session::order_lines::{ArchivedOrdersInput, OrderLineStore};
+use moon_core::session::order_lines::{ArchivedOrdersInput, OrderLineStore, ReportExit};
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonPalette, MoonSize, h_flex, v_flex,
 };
@@ -132,21 +132,10 @@ impl TradeWindowView {
         if !self.show_other_trades {
             return;
         }
-        let focus_close = self.record.close_date;
-        let mut candidates: Vec<(i64, i64)> = self
-            .history
-            .iter()
-            .filter(|r| r.record_id != self.record.record_id)
-            .filter_map(|r| {
-                r.report_uid
-                    .map(|uid| (uid, (r.close_date - focus_close).abs()))
-            })
-            .collect();
-        candidates.sort_by_key(|(_, distance)| *distance);
-        let uids: Vec<i64> = candidates
+        let uids: Vec<i64> = self
+            .nearest_neighbours()
             .into_iter()
-            .take(NEIGHBOUR_CAP)
-            .map(|(uid, _)| uid)
+            .filter_map(|record| record.report_uid)
             .collect();
         if uids.is_empty() {
             return;
@@ -155,6 +144,22 @@ impl TradeWindowView {
         self.backend.update(cx, |backend, cx| {
             backend.ensure_traces(core, uids, NEIGHBOUR_CAP, cx);
         });
+    }
+
+    /// The neighbours the "other trades" tick draws: the [`NEIGHBOUR_CAP`] trades of the
+    /// history nearest the subject in time, the subject itself excluded. ONE selection for the
+    /// ask and for the store, so what is drawn is exactly what was asked about — a row with no
+    /// `ReportUID` is drawn too (its exit line comes from the row), it just cannot be asked.
+    fn nearest_neighbours(&self) -> Vec<&ChartTradeRecord> {
+        let focus_close = self.record.close_date;
+        let mut candidates: Vec<&ChartTradeRecord> = self
+            .history
+            .iter()
+            .filter(|r| r.record_id != self.record.record_id)
+            .collect();
+        candidates.sort_by_key(|r| (r.close_date - focus_close).abs());
+        candidates.truncate(NEIGHBOUR_CAP);
+        candidates
     }
 
     /// Read the resolver's answers and rebuild the archived store when a line of this window's
@@ -173,18 +178,22 @@ impl TradeWindowView {
             let mut sig = subject_stamp;
             let mut neighbours = Vec::new();
             if self.show_other_trades {
-                for record in self.history.iter() {
-                    let Some(uid) = record
-                        .report_uid
-                        .filter(|_| record.record_id != self.record.record_id)
-                    else {
-                        continue;
+                for record in self.nearest_neighbours() {
+                    // Answered or not, the neighbour draws: its exit line comes from its own
+                    // row when the archive holds none (see `OrderLineStore::append_archived`).
+                    // A row without a uid was never asked and has no state to fold in.
+                    let lines = match record.report_uid {
+                        Some(uid) => {
+                            let (state, stamp) = backend.trace_state_stamped(self.core, uid);
+                            sig = sig.wrapping_mul(31).wrapping_add(stamp);
+                            state.lines().cloned()
+                        }
+                        None => None,
                     };
-                    let (state, stamp) = backend.trace_state_stamped(self.core, uid);
-                    sig = sig.wrapping_mul(31).wrapping_add(stamp);
-                    if let Some(lines) = state.lines().filter(|lines| !lines.is_empty()) {
-                        neighbours.push((record.clone(), lines.clone()));
-                    }
+                    neighbours.push((
+                        record.clone(),
+                        lines.unwrap_or_else(|| Arc::from(Vec::new())),
+                    ));
                 }
             }
             (subject, neighbours, sig)
@@ -225,7 +234,8 @@ impl TradeWindowView {
     /// Build the archived store from everything resolved so far and hand it to the chart.
     ///
     /// The subject's lines first, at full opacity; then, while the "other trades" tick is on,
-    /// every neighbour that answered with lines, pale. The store is rebuilt whole on each change
+    /// every neighbour, pale — with its archived lines when it has any, and its exit line from
+    /// its row regardless. The store is rebuilt whole on each change
     /// — at most a couple of dozen orders — and stamped with a fresh revision so the chart's
     /// revision gate sees it arrive.
     ///
@@ -254,6 +264,8 @@ impl TradeWindowView {
                 quantity: record.quantity as f32,
                 entry_fill_ms: Some(buy_utc_ms as f64),
                 close_ms: close_utc_ms as f64,
+                // The exit line the archive may not hold, from the row itself.
+                exit: ReportExit::of_record(record, &axis),
                 bright: false,
             }
         };

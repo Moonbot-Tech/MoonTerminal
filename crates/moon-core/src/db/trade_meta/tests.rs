@@ -26,6 +26,8 @@ fn record(core_uid: u64, record_id: i64, coin: &str, buy: i64, close: i64) -> Ch
         close_date: close,
         buy_ms: None,
         close_ms: None,
+        sell_set_date: 0,
+        sell_set_ms: None,
         buy_price: 1.0,
         sell_price: 2.0,
         quantity: 3.0,
