@@ -10,6 +10,7 @@ mod mode_advice;
 pub mod news;
 pub mod news_marks;
 mod order_edit;
+pub mod report_traces;
 mod strategies;
 pub mod strategy_order;
 pub mod synth;
@@ -22,6 +23,7 @@ pub use core_label::{clear_core_name, core_label, set_core_name};
 pub use live::FieldMask;
 pub use mode_advice::{SiblingOutcome, suggest_alternate_mode};
 pub use news::{NewsItem, NewsSnapshot};
+pub use report_traces::{ArchivedLineKind, ArchivedOrderTrace, ReportTracesOutcome};
 pub use strategies::field_text_is_valid;
 pub use types::*;
 
@@ -507,6 +509,13 @@ pub enum CoreCmd {
         ranges: Vec<moonproto::ReportRecIdRange>,
         singles: Vec<i64>,
     },
+    /// Ask the core for the archived order traces of one CLOSED report row, by its `ReportUID`.
+    ///
+    /// Fire-and-forget: the answer arrives as [`FeedMsg::ReportTraces`] keyed by the same uid, or
+    /// not at all on a core too old to know the command — MoonProto turns that silence into a
+    /// failed outcome after its own timeout. The library shares one network request between
+    /// concurrent asks for the same row, so a second window on the same trade costs nothing.
+    RequestReportTraces { report_uid: i64 },
     /// Targeted `ClientSettings` edit from the toolbar, such as TP, SL, or sell-preset selection.
     /// The feed patches the retained settings snapshot through its helper and sends it in full
     /// with `settings().send`.

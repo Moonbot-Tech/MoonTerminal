@@ -287,6 +287,14 @@ pub struct RetainedOrder {
     pub lines: [LineTrace; TRACED_KINDS],
     /// Current liquidation price, rendered as a continuous line without markers.
     pub liq: Option<f32>,
+    /// Whether this order is the SUBJECT of a frozen viewer — the very trade a trade window was
+    /// opened for — as opposed to context around it.
+    ///
+    /// Only [`OrderLineStore::archived`] ever sets it. A closed order is drawn at `closed_alpha`
+    /// because on a live chart it is a leftover; in a trade window the closed order is the whole
+    /// point, so the subject's lines keep the active opacity while the inherited lines beside
+    /// them stay pale, which is how the eye tells the two apart.
+    pub subject: bool,
 }
 
 impl RetainedOrder {
@@ -365,6 +373,7 @@ impl RetainedOrder {
             seq,
             lines: Default::default(),
             liq: None,
+            subject: false,
         }
     }
 }
@@ -868,6 +877,9 @@ fn explicit_close_reason(row: &OrderRow) -> OrderCloseReason {
         OrderCloseReason::Unknown
     }
 }
+
+mod archived;
+pub use archived::ArchivedOrdersInput;
 
 #[cfg(test)]
 mod tests;

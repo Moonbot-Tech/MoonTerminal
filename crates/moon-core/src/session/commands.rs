@@ -814,6 +814,26 @@ impl SessionManager {
         )
     }
 
+    /// Ask `core` for the archived order traces of one closed report row.
+    ///
+    /// The answer lands in `CoreData::report_traces` under the same `report_uid`, observed through
+    /// `report_traces_rev`; a core that never answers is turned into a failed outcome by MoonProto's
+    /// own timeout. Sending to a core that is not connected fails here, like every other command.
+    ///
+    /// Args:
+    ///     core: Core that recorded the trade.
+    ///     report_uid: The row's `ReportUID` — never `newrecid` or an order uid.
+    ///
+    /// Returns:
+    ///     `Ok` once the command is queued on the local session channel.
+    pub fn request_report_traces(&self, core: CoreId, report_uid: i64) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::RequestReportTraces { report_uid },
+            "request report traces",
+        )
+    }
+
     /// Soft-delete or restore report rows addressed by a bare list of `newrecid`s.
     ///
     /// The list is folded into ranges plus singles by [`super::compress_rec_ids`] rather than by the

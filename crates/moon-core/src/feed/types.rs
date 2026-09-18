@@ -1407,6 +1407,14 @@ pub enum FeedMsg {
     EngineActions(Vec<EngineActionResult>),
     /// Batch of core chart-alert changes from one drain tick, gated by `feed.alerts`.
     ChartAlerts(Vec<ChartAlertUpdate>),
+    /// The core's answer to [`super::CoreCmd::RequestReportTraces`] for one report row.
+    ///
+    /// Keyed by the row's `ReportUID` rather than by MoonProto's per-request ticket: two windows
+    /// on the same trade want the same answer, and the store holds one entry per row for both.
+    ReportTraces {
+        report_uid: i64,
+        outcome: super::report_traces::ReportTracesOutcome,
+    },
     /// Core-built strategy-filter rows for one or more markets, from `Event::ChartText`.
     ///
     /// These are ready strings, not typed skip codes. The UI paints them; it does not recompute

@@ -39,6 +39,7 @@ mod render;
 mod strategy;
 #[cfg(test)]
 mod tests;
+mod traces;
 mod window;
 
 use std::sync::Arc;
@@ -375,6 +376,28 @@ pub(crate) struct TradeWindowView {
     /// What `strategies.sqlite` says about the trade's strategy: its saved head and the version in
     /// effect at entry. `None` until the one background read at open lands — see [`strategy`].
     strategy_lookup: Option<strategy::StrategyLookup>,
+    /// Where this window stands with the trade's archived order lines — see [`traces`].
+    traces: traces::TraceState,
+    /// The core's `report_traces_rev` at the moment the request went out, so the observer reads
+    /// only an answer filed AFTER it — never one a previous window left behind.
+    traces_seen_rev: u64,
+    /// The subject's archived lines once the core answered with any, kept so the store can be
+    /// rebuilt when the neighbours change without asking the core again.
+    subject_lines: Option<std::sync::Arc<[moon_core::feed::ArchivedOrderTrace]>>,
+    /// Neighbours asked and not yet answered: their `ReportUID` and the revision seen when asked.
+    neighbour_pending: std::collections::HashMap<i64, u64>,
+    /// Neighbours the core answered for, empty answers included so they are not asked twice.
+    neighbour_lines:
+        std::collections::HashMap<i64, std::sync::Arc<[moon_core::feed::ArchivedOrderTrace]>>,
+    /// Last `report_traces_rev` the observer looked at, so an unchanged store costs one compare.
+    neighbour_poll_rev: u64,
+    /// The core's `report_traces_epoch` the outstanding requests were made under; a moved epoch
+    /// means the store dropped every filed answer and nothing asked before can land.
+    traces_epoch: u64,
+    /// How many neighbours' lines the current store draws, for the rail's block.
+    neighbours_drawn: usize,
+    /// Revision stamped on each rebuilt archived store, so the chart sees every rebuild as new.
+    frozen_rev: u64,
     /// Set when the window closes, so the worker abandons the remaining pages.
     cancel: Arc<AtomicBool>,
     /// Identity of this window's own series, so two windows never share a chart revision.
@@ -401,6 +424,10 @@ impl TradeWindowView {
         self.panel.update(cx, |panel, pcx| {
             panel.publish_trade_history(history, pcx);
         });
+        // New neighbours may have arrived with the snapshot; ask about the ones not yet known
+        // and redraw with whatever is already answered.
+        self.request_neighbour_traces(cx);
+        self.rebuild_frozen_orders(cx);
         cx.notify();
     }
 
@@ -421,6 +448,10 @@ impl TradeWindowView {
                 backend.layout_dirty = true;
             }
         });
+        // The neighbours' archived lines follow their arrows: asked for on tick (answers already
+        // in hand are reused), dropped from the store on untick.
+        self.request_neighbour_traces(cx);
+        self.rebuild_frozen_orders(cx);
         cx.notify();
     }
 

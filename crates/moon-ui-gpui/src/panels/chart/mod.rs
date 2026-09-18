@@ -1140,6 +1140,24 @@ impl ChartPanel {
         cx.notify();
     }
 
+    /// Hand this panel the archived order lines of the trade it shows, or take them away.
+    ///
+    /// The window's third publication beside the replay and the trade history, reaching the engine
+    /// this panel owns and nothing else, for the reason the other two do.
+    ///
+    /// Args:
+    ///     store: The lines, already built by `OrderLineStore::archived`, or `None` for no orders.
+    ///     cx: Panel context.
+    pub(crate) fn attach_frozen_orders(
+        &mut self,
+        store: Option<std::rc::Rc<moon_core::session::order_lines::OrderLineStore>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.chart.set_frozen_orders(store);
+        self.view_dirty = true;
+        cx.notify();
+    }
+
     /// Hand this panel the closed trade its captions describe.
     ///
     /// The window's second publication, beside the replay and the trade history: those two put the

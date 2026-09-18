@@ -241,3 +241,42 @@ trade_window.side.short:
   ru: "SHORT"
   en: "SHORT"
   es: "SHORT"
+
+# Блок «Ордера» в рельсе: архивные трассы ордеров этой сделки из ядра (#569). Пустой ответ ядра —
+# окончательное «трасс нет», без вечного спиннера; ошибка/таймаут — с кнопкой «Повторить».
+trade_window.figure.orders:
+  ru: "Ордера"
+  en: "Orders"
+  es: "Órdenes"
+trade_window.traces.pending:
+  ru: "запрашиваю трассы у ядра…"
+  en: "asking the core for traces…"
+  es: "pidiendo trazas al núcleo…"
+trade_window.traces.drawn:
+  ru: "%{own} свои, %{inherited} унаследованных"
+  en: "%{own} own, %{inherited} inherited"
+  es: "%{own} propias, %{inherited} heredadas"
+trade_window.traces.drawn_own:
+  ru: "%{own} линий на графике"
+  en: "%{own} lines on the chart"
+  es: "%{own} líneas en el gráfico"
+trade_window.traces.none:
+  ru: "трасс нет: сделка старше архива или режим ядра их не пишет"
+  en: "no traces: the trade predates the archive or the core's mode does not record them"
+  es: "sin trazas: la operación es anterior al archivo o el modo del núcleo no las guarda"
+trade_window.traces.not_askable:
+  ru: "ключ строки не получен — сделка реплицирована до обновления ядра"
+  en: "row key not received — the trade was replicated before the core update"
+  es: "clave de fila no recibida: la operación se replicó antes de actualizar el núcleo"
+trade_window.traces.failed:
+  ru: "ядро не ответило — старое ядро или обрыв"
+  en: "the core did not answer — an old core or a dropped link"
+  es: "el núcleo no respondió: núcleo antiguo o enlace caído"
+trade_window.traces.retry_tip:
+  ru: "Запросить трассы ордеров у ядра ещё раз"
+  en: "Ask the core for the order traces again"
+  es: "Volver a pedir las trazas de órdenes al núcleo"
+trade_window.traces.neighbours:
+  ru: "+%{n} соседних"
+  en: "+%{n} neighbouring"
+  es: "+%{n} vecinas"

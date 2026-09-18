@@ -31,6 +31,23 @@ const MAX_LOG: usize = 5000;
 /// Maximum number of undelivered Engine action toasts queued while no window is active.
 /// The active window's shell consumes the queue.
 const MAX_ENGINE_ACTIONS: usize = 64;
+/// One filed answer about a report row's archived traces; see `CoreData::report_traces`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReportTracesEntry {
+    /// `CoreData::report_traces_rev` at the moment this answer was filed.
+    pub rev: u64,
+    pub outcome: crate::feed::ReportTracesOutcome,
+}
+
+/// Cap on retained archived-trace answers per core.
+///
+/// A trade window asks for its own trade and for up to twenty neighbours, and asks again for the
+/// neighbours of a NEW period on every re-click, so two open windows can have well over forty
+/// answers outstanding at once. The cap must stay above what can be in flight — an answer evicted
+/// before its window's observer read it would leave that neighbour pending for the window's life —
+/// and exists only so a long session cannot grow this map without bound; an entry is a few dozen
+/// bytes plus the lines, which the drawing window keeps alive by its own `Arc` regardless.
+const MAX_REPORT_TRACES: usize = 256;
 
 pub type CoreId = u64;
 
@@ -263,6 +280,17 @@ pub struct CoreData {
     /// Replaced per market when `FeedMsg::ChartText` arrives. Kept across a brief disconnect so a
     /// chart that still shows the coin does not flash empty while the core rebuilds the strings.
     pub chart_text: HashMap<String, Vec<String>>,
+    /// Archived order traces the core answered for closed report rows, by `ReportUID`.
+    ///
+    /// Filled by [`FeedMsg::ReportTraces`], observed through `report_traces_rev`, and evicted
+    /// oldest-first past `MAX_REPORT_TRACES` — see `report_traces_order`. A trade window reads
+    /// its own row here after asking through `CoreCmd::RequestReportTraces`; a re-ask replaces
+    /// the entry, which is how a user-driven retry after a failure works. Each entry carries the
+    /// revision it landed under, so a window that asked AFTER an older answer was filed can tell
+    /// that stale entry from the one it is waiting for.
+    pub report_traces: HashMap<i64, ReportTracesEntry>,
+    /// Insertion order of `report_traces`, for the eviction above.
+    report_traces_order: VecDeque<i64>,
     /// Recent core server-log lines, trimmed as a ring buffer to `MAX_LOG`.
     pub log: VecDeque<LogLine>,
     /// Raw server-log lines with terminal receipt times for diagnostics and FireTest measurements.
@@ -408,6 +436,13 @@ pub struct CoreData {
     pub chart_alerts_rev: u64,
     /// Advances when any market's filter-overlay rows change.
     pub chart_text_rev: u64,
+    /// Advances when an archived-trace answer lands in `report_traces`, and when the map is
+    /// cleared on `RunStateForgotten` — a reader waiting on an entry has to wake for both.
+    pub report_traces_rev: u64,
+    /// Advances each time `report_traces` is CLEARED (`RunStateForgotten`): a reader that asked
+    /// under an older epoch knows its answer can no longer be filed and must fail or re-ask,
+    /// rather than wait for an entry that will never come.
+    pub report_traces_epoch: u64,
     /// Advances when typed `KernelHealth` metric values or the decoded endpoint change, gating
     /// Core Status without repainting for receipt-time-only updates.
     pub sys_rev: u64,
@@ -541,6 +576,10 @@ impl CoreData {
             log_seq: 0,
             chart_alerts_rev: 0,
             chart_text_rev: 0,
+            report_traces: HashMap::new(),
+            report_traces_order: VecDeque::new(),
+            report_traces_rev: 0,
+            report_traces_epoch: 0,
             sys_rev: 0,
             problems: crate::feed::CoreProblems::default(),
             folders: crate::feed::CoreFolders::default(),
@@ -1148,6 +1187,13 @@ impl CoreData {
                     self.strategies_running_confirmed = false;
                     self.strategies_running_rev = self.strategies_running_rev.wrapping_add(1);
                 }
+                // Archived-trace answers are keyed by `ReportUID`, which is unique only within
+                // one report database; the replacement process may answer from another one that
+                // reissues the same numbers, so what was filed can no longer be told from stale.
+                self.report_traces.clear();
+                self.report_traces_order.clear();
+                self.report_traces_rev = self.report_traces_rev.wrapping_add(1);
+                self.report_traces_epoch = self.report_traces_epoch.wrapping_add(1);
                 // The configuration and the report counters describe the departed process too, and
                 // the gear popup seeds an editable draft from the first: keeping them would let an
                 // OK press write the old instance's whole AutoStart page into its replacement. A
@@ -1312,6 +1358,24 @@ impl CoreData {
                 }
                 if changed {
                     self.chart_text_rev = self.chart_text_rev.wrapping_add(1);
+                }
+            }
+            FeedMsg::ReportTraces {
+                report_uid,
+                outcome,
+            } => {
+                self.report_traces_rev = self.report_traces_rev.wrapping_add(1);
+                let entry = ReportTracesEntry {
+                    rev: self.report_traces_rev,
+                    outcome,
+                };
+                if self.report_traces.insert(report_uid, entry).is_none() {
+                    self.report_traces_order.push_back(report_uid);
+                    while self.report_traces_order.len() > MAX_REPORT_TRACES {
+                        if let Some(old) = self.report_traces_order.pop_front() {
+                            self.report_traces.remove(&old);
+                        }
+                    }
                 }
             }
             FeedMsg::ServerLog(lines) => {

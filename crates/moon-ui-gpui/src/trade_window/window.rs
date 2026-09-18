@@ -253,6 +253,16 @@ pub(crate) fn open_trade_window(
                 // Nothing searched yet; the first notification does the walk.
                 strategies_rev: None,
                 strategy_lookup: None,
+                // Asked for below, once the observers are in place to hear the answer.
+                traces: super::traces::TraceState::Pending,
+                traces_seen_rev: 0,
+                subject_lines: None,
+                neighbour_pending: std::collections::HashMap::new(),
+                neighbour_lines: std::collections::HashMap::new(),
+                neighbour_poll_rev: 0,
+                traces_epoch: 0,
+                neighbours_drawn: 0,
+                frozen_rev: 0,
                 sequence: 0,
                 cancel: Arc::new(AtomicBool::new(false)),
                 window_id: window.window_handle().window_id(),
@@ -287,11 +297,14 @@ pub(crate) fn open_trade_window(
                 });
             })
             .detach();
-            // The ONE thing this window watches the application for: the strategy list of a core
-            // that was still connecting when the window opened. It costs a revision compare per
-            // notification — see `retry_strategy_name` — and nothing at all once the name is in.
+            // What this window watches the application for: the strategy list of a core that was
+            // still connecting when the window opened — a revision compare per notification, see
+            // `retry_strategy_name`, and nothing at all once the name is in...
+            // ...and the archived order traces it asked the core for. Same observer, same cost
+            // discipline: a revision compare while a request is in flight, one match otherwise.
             vcx.observe(&owner, |this: &mut TradeWindowView, _backend, cx| {
                 this.retry_strategy_name(cx);
+                this.poll_traces(cx);
             })
             .detach();
             // Captions edited from this window's own chart menu, relayed up by the panel for its
@@ -335,6 +348,8 @@ pub(crate) fn open_trade_window(
             })
             .detach();
             this.spawn_strategy_lookup(buy_utc_ms, vcx);
+            this.request_traces(vcx);
+            this.request_neighbour_traces(vcx);
             this.fetch(vcx);
             this
         });

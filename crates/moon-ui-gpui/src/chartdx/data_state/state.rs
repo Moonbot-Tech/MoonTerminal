@@ -72,6 +72,7 @@ impl ChartDataState {
             warn_hovered: None,
             market_source: None,
             trade_replay: None,
+            frozen_orders: None,
             last_frame_tick_at: None,
             present_rate_candidate_hz: 0.0,
             present_rate_candidate_hits: 0,
@@ -122,7 +123,13 @@ impl ChartDataState {
                 continue;
             };
             if let Some(core_st) = session.store().core(core) {
-                sig = sig.wrapping_mul(31).wrapping_add(core_st.order_lines_rev);
+                // A frozen viewer draws its archived store, so THAT revision is what wakes it; the
+                // live store's changes are exactly what such a viewer must not react to.
+                let order_lines_rev = match self.draws_live_market() {
+                    true => core_st.order_lines_rev,
+                    false => self.frozen_orders.as_ref().map_or(0, |store| store.rev),
+                };
+                sig = sig.wrapping_mul(31).wrapping_add(order_lines_rev);
                 if self.draws_live_market() {
                     sig = sig.wrapping_mul(31).wrapping_add(core_st.strategies_rev);
                     sig = sig.wrapping_mul(31).wrapping_add(core_st.schema_rev);
@@ -210,6 +217,22 @@ impl ChartDataState {
         }
         render.needs_present = true;
         drop(render);
+        self.view_dirty = true;
+    }
+
+    /// Hand a frozen viewer the archived order lines it draws, or take them away.
+    ///
+    /// The order sync is gated on a signature that folds in this store's revision, so the next
+    /// pass rebuilds the geometry; nothing else is reset because, unlike a replay, an order store
+    /// touches no resident history window.
+    ///
+    /// Args:
+    ///     store: The archived lines, or `None` to draw no orders at all.
+    pub(crate) fn set_frozen_orders(
+        &mut self,
+        store: Option<std::rc::Rc<moon_core::session::order_lines::OrderLineStore>>,
+    ) {
+        self.frozen_orders = store;
         self.view_dirty = true;
     }
 

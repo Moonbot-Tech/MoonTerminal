@@ -547,6 +547,19 @@ impl ChartEngine {
         self.data.borrow_mut().set_trade_replay(series);
     }
 
+    /// Draw a closed trade's archived order lines instead of the live order store.
+    ///
+    /// Only the trade window calls this, on the engine it owns; see `ChartDataState::frozen_orders`.
+    ///
+    /// Args:
+    ///     store: The archived lines, or `None` to draw none.
+    pub(crate) fn set_frozen_orders(
+        &mut self,
+        store: Option<std::rc::Rc<moon_core::session::order_lines::OrderLineStore>>,
+    ) {
+        self.data.borrow_mut().set_frozen_orders(store);
+    }
+
     /// Hand this engine the closed trade its captions describe, or take it away.
     ///
     /// Only the trade window calls this, on the engine it owns — the same boundary

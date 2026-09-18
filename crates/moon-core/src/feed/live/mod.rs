@@ -700,6 +700,9 @@ pub(super) fn run(
         let mut orders_mutated = false;
         let mut problems_relist = false;
         let mut core_config_events = Vec::new();
+        // Trace requests that never left this process: reported below through the same message the
+        // core's own answer takes, so a window waiting on one sees a failure rather than silence.
+        let mut trace_requests_failed = Vec::new();
         let command_drain = drain_commands(
             cmd_rx,
             &client,
@@ -715,9 +718,21 @@ pub(super) fn run(
             shared_config_sequence,
             &mut core_config_events,
             chart_text,
+            &mut trace_requests_failed,
         );
         if command_drain == CommandDrain::Disconnected {
             return Ok(());
+        }
+        for (report_uid, error) in trace_requests_failed {
+            if tx
+                .send(FeedMsg::ReportTraces {
+                    report_uid,
+                    outcome: crate::feed::ReportTracesOutcome::Failed(error),
+                })
+                .is_err()
+            {
+                return Ok(());
+            }
         }
         // The edit events the drain produced are NOT sent here: they go out below, after this
         // iteration's configuration snapshot, together with the ones the drive there produces —
@@ -2028,6 +2043,35 @@ pub(super) fn run(
                     ) => {
                         let _ = tx.send(FeedMsg::StrategiesAck);
                     }
+                    // The archived order traces of one closed trade, asked for by a trade window.
+                    // Ahead of the replica arm and outside its `feed.reports` gate: the answer is
+                    // the window's, not the writer's, and a core whose report feed is off can
+                    // still be asked about a trade the terminal read from an older replica.
+                    Event::Report(ReportEvent::TraceReady { ticket, traces }) => {
+                        log::info!(
+                            "core {} report traces uid={}: {} archived line(s)",
+                            crate::feed::core_label(server.id),
+                            ticket.report_uid,
+                            traces.len()
+                        );
+                        let _ = tx.send(FeedMsg::ReportTraces {
+                            report_uid: ticket.report_uid,
+                            outcome: crate::feed::ReportTracesOutcome::Ready(Arc::from(
+                                crate::feed::report_traces::archived_traces_from_proto(traces),
+                            )),
+                        });
+                    }
+                    Event::Report(ReportEvent::TraceFailed { ticket, error }) => {
+                        log::warn!(
+                            "core {} report traces for uid={} failed: {error}",
+                            crate::feed::core_label(server.id),
+                            ticket.report_uid
+                        );
+                        let _ = tx.send(FeedMsg::ReportTraces {
+                            report_uid: ticket.report_uid,
+                            outcome: crate::feed::ReportTracesOutcome::Failed(error.clone()),
+                        });
+                    }
                     // Typed report-database replica: send schema, rows, catch-up state, and
                     // reconciliation results to the SQLite writer, the sole write-connection owner.
                     Event::Report(rev) if server.feed.reports => {
@@ -2151,6 +2195,9 @@ pub(super) fn run(
                                     server.uid,
                                     server.name,
                                 ),
+                                // Matched by the arms above this one, before the replica gate.
+                                ReportEvent::TraceReady { .. }
+                                | ReportEvent::TraceFailed { .. } => {}
                             }
                         }
                     }
