@@ -155,8 +155,8 @@ fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, LineKind); 7] {
 
 /// Builds order-line geometry for `market`: primary order lines, a separate trace history
 /// of their movement in `style.path` — server-sent or locally reconstructed, one style for both
-/// (unless `graphics.hide_order_move_history` or `style.path.show` hides it, along with the
-/// fallback-step knots that mark it), start crosses plus end crosses or filled-entry arrows,
+/// (unless `graphics.hide_order_move_history` hides it, along with the fallback-step knots that
+/// mark it), start crosses plus end crosses or filled-entry arrows,
 /// and a continuous liquidation line. The server's `SetStopPrice` segment remains visible. Culls
 /// orders outside the visible time window. Confirmed strategies must belong to the same core
 /// as `store`; their enabled colors and pen patterns override the global style per order.
@@ -380,8 +380,9 @@ pub fn build_order_geometry(
             // Gates the three draw sites that reconstruct a line's repricing HISTORY: the server
             // trace below, the local staircase and its risers, and the knot markers. Never folded
             // into `has_server_trace` itself — that flag still decides which of the two mutually
-            // exclusive representations applies; this is an extra gate on both. Per chart tab,
-            // where `path.show` below is the global one from `orders.toml`.
+            // exclusive representations applies; this is an extra gate on both. Per chart tab and
+            // nothing else: the global `PathStyle::show` that used to veto it from `orders.toml`
+            // is gone (#612) — one place decides what a tab draws.
             let show_move_history = !graphics.hide_order_move_history;
             let show_light_lines = (right_rel - left_rel) > MB_TRACE_LIGHT_RANGE_MS;
             // The opacity of the repricing history, and of the SetStopPrice line at the end of
@@ -415,7 +416,7 @@ pub fn build_order_geometry(
             } else {
                 SEG_PATTERN_SOLID
             };
-            if has_server_trace && show_move_history && path.show {
+            if has_server_trace && show_move_history {
                 // MoonProtoBeta already stores repricing points in the same format as Delphi's
                 // TOrderLine.SetPointTrade: an anchor plus groups of three points. Draw them
                 // exactly like TOrderLine.DrawInternal, not as an ordinary polyline. The separate
@@ -608,13 +609,13 @@ pub fn build_order_geometry(
             // The local staircase: the same style as the server trace above, because to the user
             // it IS the same object — the line's repricing history — just reconstructed here when
             // the core sent none.
-            if !has_server_trace && show_move_history && path.show && n > 1 {
+            if !has_server_trace && show_move_history && n > 1 {
                 for i in 0..n {
                     let (t, p) = points[i];
                     // The repricing staircase is the ENTRY line's own history, so it stops where
                     // that line stops. Bounding it by `line_end_eff` rather than `line_end` is what
                     // keeps a filled order's path from walking on past the fill arrow — this path
-                    // is drawn by default (`PathStyle::show`), so leaving it out would have shown
+                    // is drawn by default, so leaving it out would have shown
                     // the very thing the fill mark exists to deny, one line lower on the chart.
                     let seg_end_t = if i + 1 < n {
                         points[i + 1].0.min(line_end_eff)
@@ -712,10 +713,10 @@ pub fn build_order_geometry(
 
             // Knots are fallback-step points on the straight line. For a server trace, do not
             // duplicate knots on the primary line because the trace is already a separate object.
-            // A knot is also part of the move HISTORY it marks, so it is hidden along with it —
-            // by the per-tab flag and by `path.show` alike, or "show path" off would leave a row
-            // of dots marking steps of a staircase that is no longer there.
-            if st.knots && !has_server_trace && show_move_history && path.show {
+            // A knot is also part of the move HISTORY it marks, so it is hidden along with it, or
+            // the per-tab flag would leave a row of dots marking steps of a staircase that is no
+            // longer there.
+            if st.knots && !has_server_trace && show_move_history {
                 for i in 1..n {
                     markers.push(MarkerInstance::at_price(
                         to_rel(points[i].0),

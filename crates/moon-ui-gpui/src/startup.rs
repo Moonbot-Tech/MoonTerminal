@@ -649,6 +649,48 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
             log::warn!("фильтры стратегий: charts.json не разобран; повторю при следующем запуске");
         }
     }
+    // The global "show path" toggle of `orders.toml` is retired (#612): a user who had the
+    // repricing history off keeps it off through the per-tab flag, on every default and override.
+    // Same write protocol as the passes above: `charts.json` first, the marker only once the tabs
+    // are on disk. `orders.toml` is read here, ahead of `AppConfig::load`, because the marker
+    // gates the pass and the file it reads is left untouched — a retry finds the same value.
+    if !layout.chart_path_visibility_migrated {
+        let orders = moon_core::config::OrdersStyleSet::load();
+        if let Some(carried) = path_visibility_migration::migrate_path_visibility(
+            &mut layout,
+            &mut saved_chart_specs,
+            &orders,
+        ) {
+            let specs_ok = if !saved_chart_specs.is_empty() {
+                if carried.specs_changed {
+                    chart_persist::save_all(&saved_chart_specs)
+                } else {
+                    true
+                }
+            } else if !charts_file_has_content {
+                true
+            } else {
+                match std::fs::read_to_string(moon_core::config::paths::charts_path()) {
+                    Ok(text) => {
+                        !chart_persist::empty_load_is_unreadable(true, &saved_chart_specs, &text)
+                    }
+                    Err(_) => false,
+                }
+            };
+            if specs_ok {
+                layout.chart_path_visibility_migrated = true;
+                if !layout.save() {
+                    log::warn!(
+                        "видимость пути ордера перенесена во вкладки, но метка не сохранена; повторю при запуске"
+                    );
+                }
+            } else {
+                log::warn!(
+                    "видимость пути ордера: charts.json не разобран; повторю при следующем запуске"
+                );
+            }
+        }
+    }
     let layout = layout;
     let saved_chart_specs = saved_chart_specs;
     let figures = moon_core::figures::FigureStore::load();
@@ -712,6 +754,7 @@ mod boot;
 mod fixture;
 mod graphics_migration;
 mod instance;
+mod path_visibility_migration;
 mod strategy_filters_migration;
 mod unlock;
 

@@ -1154,6 +1154,14 @@ pub struct WindowLayout {
     /// reader may since have moved — or removed — that very column.
     #[serde(default)]
     pub chart_strategy_filters_migrated: bool,
+    /// One-shot marker: the retired global "show path" toggle of `orders.toml` has been folded
+    /// into the per-tab `hide_order_move_history` — into [`Self::chart_graphics`], every stored
+    /// per-kind default and every tab override — so a user who had the path off keeps it off.
+    ///
+    /// NEVER reset it. The retired flag stays on disk, so a second pass would re-hide the history
+    /// on every tab the user has since shown it on.
+    #[serde(default)]
+    pub chart_path_visibility_migrated: bool,
     /// Chart caption labels — which figures the chart prints beside its plot, where, and how —
     /// GLOBAL DEFAULT (tabs can override it in their charts.json specification).
     ///
@@ -1935,6 +1943,20 @@ impl WindowLayout {
         kind: super::chart_defaults::ChartTabKind,
     ) -> Option<&super::chart_labels::ChartLabelsCfg> {
         self.kind_defaults(kind)?.chart_labels.as_ref()
+    }
+
+    /// Every chart-graphics default this layout STORES, to be edited in place: the base one, which
+    /// is Main's, and then each kind that holds a value of its own. A kind that follows Main is not
+    /// visited — it has nothing of its own, and the base already speaks for it.
+    ///
+    /// For a pass that must reach whatever a tab of ANY kind would open with, without splitting the
+    /// kinds apart the way [`Self::set_chart_graphics_default`] does: writing through that one would
+    /// freeze every following kind on a copy of Main.
+    pub fn stored_chart_graphics_mut(&mut self) -> impl Iterator<Item = &mut ChartGraphicsCfg> {
+        std::iter::once(&mut self.chart_graphics)
+            .chain(self.chart_defaults_addto.chart_graphics.as_mut())
+            .chain(self.chart_defaults_compare.chart_graphics.as_mut())
+            .chain(self.chart_defaults_trade.chart_graphics.as_mut())
     }
 
     /// Store the candle default for one kind, reporting whether it actually moved.

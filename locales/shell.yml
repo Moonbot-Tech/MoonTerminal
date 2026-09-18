@@ -1009,9 +1009,9 @@ chart.graphics.hide_move_history:
   en: "Hide the order repricing trail on this tab"
   es: "Ocultar el rastro de reprecios de la orden en esta pestaña"
 chart.graphics.hide_move_history_hint:
-  ru: "Останется только текущая цена. Отрезок переноса стопа виден всегда. Вид и общая галка — Настройки → Линии → История переносов"
-  en: "Only the current price stays. A stop's own move segment is always shown. Its look and the global toggle: Settings → Lines → Repricing trail"
-  es: "Solo queda el precio actual. El tramo de traslado del stop siempre se ve. Su aspecto y el interruptor global: Ajustes → Líneas → Rastro de reprecios"
+  ru: "Останется только текущая цена. Отрезок переноса стопа виден всегда. Вид пути — Настройки → Линии → История переносов"
+  en: "Only the current price stays. A stop's own move segment is always shown. The trail's look: Settings → Lines → Repricing trail"
+  es: "Solo queda el precio actual. El tramo de traslado del stop siempre se ve. El aspecto del rastro: Ajustes → Líneas → Rastro de reprecios"
 chart.graphics.frame_trade_marks:
   ru: "Метки сделок"
   en: "Trade marks"
