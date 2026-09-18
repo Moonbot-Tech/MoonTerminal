@@ -1207,11 +1207,15 @@ fn coin_cell(
         )
 }
 
-/// Render Market Sell and the placeholder Order action for a sellable asset row.
+/// Render the Market Sell and Order actions for a sellable asset row.
 ///
 /// The cell is populated for an open position or positive spot balance only when its resolved
 /// market exists on the core. Every unavailable case remains a muted dash with a cause-specific
-/// tooltip, while the Order button remains a stub for a future order-settings window.
+/// tooltip. `Order` follows Moonbot's own row button, which forks on the engine: on a POSITION
+/// row the core cancels its own sells on the market and places a limit close for the whole
+/// position (one command, no window); on a SPOT holding it opens the order window in SELL mode —
+/// the Active Order editor when the market has a live order, the sell dialog otherwise
+/// (`spot_order.rs`).
 fn actions_cell(
     e: &AssetEntry,
     view: &Entity<AssetsView>,
@@ -1263,8 +1267,10 @@ fn actions_cell(
     let msell_id = SharedString::from(format!("asset-msell-{core}-{market}"));
     let order_id = SharedString::from(format!("asset-order-{core}-{market}"));
     let view_ms = view.clone();
+    let view_order = view.clone();
     let market_ms = market.clone();
     let coin_ms = e.row.coin.clone();
+    let coin_order = e.row.coin.clone();
     // A position closes through its own command and carries no quantity; a spot holding sells this
     // one, which rides as the order size unchanged.
     let spot_qty = (!is_position).then_some(qty);
@@ -1299,12 +1305,47 @@ fn actions_cell(
                 .label(t!("assets.order").to_string())
                 .size(MoonSize::Xs)
                 .variant(MoonButtonVariant::Soft)
-                .on_click(move |_, _w, _app| {
-                    // Placeholder for a future order-settings window.
-                    log::info!(
-                        "assets: order button (stub) core={} market={market}",
-                        moon_core::feed::core_label(core)
-                    );
+                .tooltip(if is_position {
+                    t!("assets.order_hint", coin = coin_order.as_str()).to_string()
+                } else {
+                    t!("assets.order_hint_spot", coin = coin_order.as_str()).to_string()
+                })
+                .on_click(move |_, window, app| {
+                    if let Some(holding) = spot_qty {
+                        super::spot_order::open_spot_order(
+                            view_order.clone(),
+                            core,
+                            market.clone(),
+                            coin_order.clone(),
+                            holding,
+                            window,
+                            app,
+                        );
+                        return;
+                    }
+                    // One press, no dialog, as in Moonbot: the result is a resting limit order the
+                    // trader can cancel, not an irreversible fill. The toast is the feedback the
+                    // Assets row itself cannot give, and it claims only what `Ok` means here — the
+                    // command reached the core's channel; what the core did with it shows in
+                    // Orders and its log (`feed::trade::report`).
+                    let res = view_order.update(app, |this, cx| {
+                        this.backend
+                            .read(cx)
+                            .session
+                            .limit_close_position(core, market.clone())
+                    });
+                    let note = match res {
+                        Ok(()) => MoonNotification::info(
+                            t!("assets.order_sent", coin = coin_order.as_str()).to_string(),
+                        ),
+                        Err(err) => {
+                            log::warn!("assets limit close position {market} failed: {err:#}");
+                            MoonNotification::warning(
+                                t!("assets.order_failed", coin = coin_order.as_str()).to_string(),
+                            )
+                        }
+                    };
+                    window.push_notification(note, app);
                 })
                 .render(),
         );
@@ -1339,7 +1380,7 @@ impl MarketSellRefusal {
 ///
 /// Returns:
 ///     `true` for global Assets or while the captured core remains in the live group scope.
-fn market_sell_core_is_authorized(
+pub(super) fn market_sell_core_is_authorized(
     scope: &AssetsScope,
     effective_core_ids: Option<&[CoreId]>,
     core: CoreId,

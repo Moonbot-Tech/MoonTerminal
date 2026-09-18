@@ -31,6 +31,7 @@ mod columns;
 mod render;
 mod roster_width;
 mod settings;
+mod spot_order;
 mod table;
 #[cfg(test)]
 mod tests;

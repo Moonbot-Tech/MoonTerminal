@@ -205,6 +205,63 @@ assets.order:
   ru: "Order"
   en: "Order"
   es: "Orden"
+# Tooltip of the Order button on a position row: the core cancels its own sells on the market and
+# re-places a limit close for the WHOLE position at its own offset from the price — Moonbot's
+# `Order` gesture for a limit that was left behind by the market.
+assets.order_hint:
+  ru: "Переставить продажу: снять свои ордера по %{coin} и выставить лимитный на закрытие всей позиции (как Order в Moonbot)"
+  en: "Re-place the sell: cancel own %{coin} orders and place a limit close for the whole position (Moonbot's Order)"
+  es: "Reponer la venta: cancelar las órdenes propias de %{coin} y poner un límite de cierre de toda la posición (Order de Moonbot)"
+# Tooltip of the same button on a spot holding: Moonbot's Pending Order window in SELL mode.
+assets.order_hint_spot:
+  ru: "Выставить лимитную продажу %{coin}: окно ордера с ценой и размером (как Order в Moonbot на споте)"
+  en: "Place a limit sell of %{coin}: the order window with price and size (Moonbot's Order on spot)"
+  es: "Poner una venta límite de %{coin}: la ventana de orden con precio y tamaño (Order de Moonbot en spot)"
+# --- The spot Order dialog (Moonbot's Pending Order window, SELL type) ---
+assets.order_dialog.title:
+  ru: "Продать %{coin}"
+  en: "Sell %{coin}"
+  es: "Vender %{coin}"
+assets.order_dialog.side:
+  ru: "Ордер"
+  en: "Order"
+  es: "Orden"
+assets.order_dialog.size:
+  ru: "Размер, %{coin}"
+  en: "Size, %{coin}"
+  es: "Tamaño, %{coin}"
+assets.order_dialog.max:
+  ru: "Max"
+  en: "Max"
+  es: "Max"
+assets.order_dialog.price:
+  ru: "Цена продажи"
+  en: "Sell price"
+  es: "Precio de venta"
+# The "Current:" label welded to the live price figure (MIXED NODE, mono).
+assets.order_dialog.current:
+  ru: "Текущая: %{p}"
+  en: "Current: %{p}"
+  es: "Actual: %{p}"
+assets.order_dialog.bad_size:
+  ru: "Размер должен быть положительным числом"
+  en: "The size must be a positive number"
+  es: "El tamaño debe ser un número positivo"
+assets.order_dialog.bad_price:
+  ru: "Цена должна быть положительным числом"
+  en: "The price must be a positive number"
+  es: "El precio debe ser un número positivo"
+# Toasts of the position press. Said on enqueue only: the terminal knows the command left for the
+# core, not what the core did with it (a market it does not hold or a position already gone is a
+# silent no-op on its side).
+assets.order_sent:
+  ru: "Команда Order по %{coin} отправлена ядру — результат смотрите в Ордерах и логе ядра"
+  en: "Order command for %{coin} sent to the core — check Orders and the core log for the result"
+  es: "Comando Order de %{coin} enviado al núcleo: el resultado se ve en Órdenes y en el log del núcleo"
+assets.order_failed:
+  ru: "Команда на закрытие позиции %{coin} не отправлена: ядро недоступно"
+  en: "Limit close of the %{coin} position was not sent: the core is unreachable"
+  es: "Cierre límite de la posición %{coin} no enviado: el núcleo no está disponible"
 
 # --- Wallets for transferring coins between containers ---
 assets.wallet.kind.spot:

@@ -554,11 +554,28 @@ pub enum CoreCmd {
     /// moonproto `trade().close_position(ClosePositionParams{market, market_sell:true})`
     /// (`TDoClosePositionCommand`). This performs a live exchange action.
     MarketSellPosition { market: String },
+    /// Re-place the closing order of a market position from the Order button on an Assets
+    /// position row: moonproto `trade().close_position(ClosePositionParams{market,
+    /// market_sell:false})` (`TDoClosePositionCommand`). The core cancels its own sell orders on
+    /// the market and places a LIMIT close for the WHOLE current position — the same command as
+    /// [`Self::MarketSellPosition`] with the market flag off, and what Moonbot's `Order` button
+    /// sends. This performs a live exchange action.
+    LimitClosePosition { market: String },
     /// Sell a market's spot token at market from the Market Sell button on an Assets holding row.
     /// This uses moonproto `trade().sell_order(SellOrderParams)` (`TDoSellOrderCommand`), whose
     /// size field carries the account's balance currency rather than the coin — the feed converts
     /// `qty` with `price`, so both must describe the same market. This is a live exchange action.
     MarketSellToken {
+        market: String,
+        qty: f64,
+        price: f64,
+    },
+    /// Sell a market's spot token with a LIMIT order at exactly `price`, from the Assets holding
+    /// row's `Order` dialog (Moonbot's Pending Order window in SELL mode). Same
+    /// `TDoSellOrderCommand` as [`Self::MarketSellToken`], but the price is the trader's own and
+    /// rides unchanged — no through-the-book factor. `qty` is the coin quantity. This is a live
+    /// exchange action.
+    LimitSellToken {
         market: String,
         qty: f64,
         price: f64,
