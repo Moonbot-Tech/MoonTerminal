@@ -586,6 +586,17 @@ impl SessionManager {
         )
     }
 
+    /// Re-place the closing order of a core market position from the Order button on a position
+    /// row: the core cancels its own sells on the market and places a limit close for the whole
+    /// position. Same command as [`Self::market_sell_position`] without the market flag.
+    pub fn limit_close_position(&self, core: CoreId, market: String) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::LimitClosePosition { market },
+            "limit close position",
+        )
+    }
+
     /// Sell a core market's spot token at market from the Market Sell button on a holding row.
     ///
     /// `qty` is the coin quantity, usually the full balance, and `price` the market's own last
@@ -602,6 +613,23 @@ impl SessionManager {
             core,
             CoreCmd::MarketSellToken { market, qty, price },
             "market sell token",
+        )
+    }
+
+    /// Sell a core market's spot token with a limit order at `price`, from OK in the Assets
+    /// holding row's `Order` dialog. `qty` is the coin quantity; both must be finite and positive
+    /// or the feed sends nothing.
+    pub fn limit_sell_token(
+        &self,
+        core: CoreId,
+        market: String,
+        qty: f64,
+        price: f64,
+    ) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::LimitSellToken { market, qty, price },
+            "limit sell token",
         )
     }
 

@@ -233,6 +233,21 @@ pub(super) fn market_sell_position(client: &MoonClient, server_id: u64, market: 
     );
 }
 
+/// Re-places the closing order of a market POSITION (`TDoClosePositionCommand`,
+/// market_sell=false), as triggered by the Assets row's `Order` button. The core cancels its own
+/// sell orders on the market and places a limit close for the whole position at its own offset
+/// from the market price; the runtime determines the side. Unlike [`market_sell_position`], the
+/// order may rest unfilled — that is the button's purpose: a limit re-placed where the price is now.
+pub(super) fn limit_close_position(client: &MoonClient, server_id: u64, market: String) {
+    report(
+        server_id,
+        format!("limit close position {market}"),
+        client
+            .trade()
+            .close_position(ClosePositionParams::limit_orders(market)),
+    );
+}
+
 /// Fraction of the market price a spot `Market sell` prices its limit order at.
 ///
 /// Ported from the core's own sale on the 2026-09-03 BinKEAUSDC run: last ask 78528.68 priced the
@@ -297,6 +312,34 @@ pub(super) fn market_sell_token(
         client
             .trade()
             .sell_order(SellOrderParams::new(market, limit, size)),
+    );
+}
+
+/// Sells a market's SPOT TOKEN with a limit order at the trader's own `price`
+/// (`TDoSellOrderCommand`), as triggered by OK in the Assets row's `Order` dialog. `qty` is the
+/// coin quantity and rides as the order size unchanged, exactly as in [`market_sell_token`]; the
+/// only difference is that the price is sent as given. The same guard applies: a zero or
+/// non-finite price is the input that made the core invent a quantity, so it sends nothing.
+pub(super) fn limit_sell_token(
+    client: &MoonClient,
+    server_id: u64,
+    market: String,
+    qty: f64,
+    price: f64,
+) {
+    if !qty.is_finite() || qty <= 0.0 || !price.is_finite() || price <= 0.0 {
+        log::warn!(
+            "core {} limit sell token {market}: qty={qty} price={price} yields no sendable order terms, nothing sent",
+            crate::feed::core_label(server_id)
+        );
+        return;
+    }
+    report(
+        server_id,
+        format!("limit sell token {market} qty={qty} price={price}"),
+        client
+            .trade()
+            .sell_order(SellOrderParams::new(market, price, qty)),
     );
 }
 

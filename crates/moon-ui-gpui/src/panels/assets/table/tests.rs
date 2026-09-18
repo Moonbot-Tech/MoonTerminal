@@ -112,3 +112,51 @@ fn a_spot_market_sell_reads_a_live_price_before_dispatch() {
         "the token sale must carry the held quantity and the freshly read price"
     );
 }
+
+/// The Order button is Moonbot's row button, forked on the row the way the exe forks on the
+/// engine (#615): a POSITION row dispatches the LIMIT close of the whole position, a SPOT holding
+/// opens the order window in SELL mode.
+///
+/// Mutation A: the stub comes back — a button that logs and sends nothing, which the user reads as
+/// "the command does not arrive" and presses again. Mutation B: `market_sell_position` is reused,
+/// which fills at market instead of leaving a limit where the price is now. Mutation C: the spot
+/// fork is dropped, and a holding without a position sends a close-position command the core has
+/// nothing to act on.
+#[test]
+fn the_order_button_limit_closes_a_position_and_opens_the_sell_window_on_spot() {
+    let source = include_str!("../table.rs");
+    let button = source
+        .split_once("MoonButton::new(order_id)")
+        .expect("the Order button must exist")
+        .1;
+    let handler = button
+        .split_once(".on_click(")
+        .expect("the Order button must have a click handler")
+        .1;
+    let handler = handler
+        .split_once(".render()")
+        .expect("the handler ends before render")
+        .0;
+
+    let spot = handler
+        .find("if let Some(holding) = spot_qty {")
+        .expect("the spot fork must key on the holding quantity");
+    let window = handler
+        .find("super::spot_order::open_spot_order(")
+        .expect("a spot holding opens the sell window");
+    let close = handler
+        .find(".limit_close_position(core, market.clone())")
+        .expect("a position sends the limit close of the whole position");
+    assert!(
+        spot < window && window < close,
+        "the spot fork returns before the position command"
+    );
+    assert!(
+        !handler.contains("market_sell_position") && !handler.contains("(stub)"),
+        "Order is neither the market close nor a placeholder"
+    );
+    assert!(
+        handler.contains("push_notification("),
+        "the position press must answer with a toast; the order itself lands in another panel"
+    );
+}
