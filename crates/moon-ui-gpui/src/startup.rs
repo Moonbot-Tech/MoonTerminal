@@ -342,9 +342,11 @@ fn observed_uid_floor(
         moon_core::db::open_readonly().and_then(|conn| moon_core::db::max_core_uid(&conn)),
     );
     let strategies = store_floor("история стратегий", moon_core::strat_db::max_core_uid());
+    let traces = store_floor("архив трасс", moon_core::db::order_traces::max_core_uid());
     [
         reports,
         strategies,
+        traces,
         layout.max_core_uid(),
         figures.max_core_uid(),
         chart_persist::max_core_uid(chart_specs),

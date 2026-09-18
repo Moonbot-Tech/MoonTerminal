@@ -41,12 +41,12 @@ pub struct ReportTracesEntry {
 
 /// Cap on retained archived-trace answers per core.
 ///
-/// A trade window asks for its own trade and for up to twenty neighbours, and asks again for the
-/// neighbours of a NEW period on every re-click, so two open windows can have well over forty
-/// answers outstanding at once. The cap must stay above what can be in flight — an answer evicted
-/// before its window's observer read it would leave that neighbour pending for the window's life —
-/// and exists only so a long session cannot grow this map without bound; an entry is a few dozen
-/// bytes plus the lines, which the drawing window keeps alive by its own `Arc` regardless.
+/// The map is a mailbox: the UI's trace resolver takes what it is waiting for on every feed drain,
+/// and the feed sends at most eight requests unanswered at once (`live::trace_backfill`), so far
+/// fewer than this can land between two drains — an answer can only be evicted long after it was
+/// read. The cap exists so a long session's backfill answers, which nothing in the UI is waiting
+/// for, cannot grow this map without bound; an entry is a few dozen bytes plus the lines, which a
+/// drawing surface keeps alive by its own `Arc` regardless.
 const MAX_REPORT_TRACES: usize = 256;
 
 pub type CoreId = u64;
@@ -283,11 +283,13 @@ pub struct CoreData {
     /// Archived order traces the core answered for closed report rows, by `ReportUID`.
     ///
     /// Filled by [`FeedMsg::ReportTraces`], observed through `report_traces_rev`, and evicted
-    /// oldest-first past `MAX_REPORT_TRACES` — see `report_traces_order`. A trade window reads
-    /// its own row here after asking through `CoreCmd::RequestReportTraces`; a re-ask replaces
-    /// the entry, which is how a user-driven retry after a failure works. Each entry carries the
-    /// revision it landed under, so a window that asked AFTER an older answer was filed can tell
-    /// that stale entry from the one it is waiting for.
+    /// oldest-first past `MAX_REPORT_TRACES` — see `report_traces_order`. The UI's one trace
+    /// resolver reads the rows it asked for here after `CoreCmd::RequestReportTraces`; a re-ask
+    /// replaces the entry, which is how a user-driven retry after a failure works. Each entry
+    /// carries the revision it landed under, so a reader that asked AFTER an older answer was filed
+    /// can tell that stale entry from the one it is waiting for. The durable copy is the local
+    /// archive (`db::order_traces`): the feed queues every `Ready` answer to its writer before
+    /// sending the message here, and never files a `Failed` one.
     pub report_traces: HashMap<i64, ReportTracesEntry>,
     /// Insertion order of `report_traces`, for the eviction above.
     report_traces_order: VecDeque<i64>,

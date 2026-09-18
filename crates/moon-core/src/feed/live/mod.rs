@@ -21,6 +21,7 @@ mod telegram;
 mod temp_blacklist;
 #[cfg(test)]
 mod tests;
+mod trace_backfill;
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, sync_channel};
@@ -35,6 +36,7 @@ use moonproto::{
     ReportHistoryDepth, ReportSyncCheckpoint, ReportSyncComplete, ReportSyncRequest, TransportMode,
 };
 
+use self::trace_backfill::TracePacer;
 use super::assets::{build_assets, build_transfer_assets};
 use super::strategies::{
     alert_params, build_schema_model, detect_strat_name, fmt_field, schema_default_fields,
@@ -47,6 +49,7 @@ use super::{
     StrategyEditSnapshot, StrategyRow,
 };
 use crate::config::{ServerConfig, TransportVersion};
+use crate::db::order_traces::{AskSink, TraceDbMsg};
 use crate::db::{DbMsg, ReportStart, ReportTx};
 use crate::session::core_time_offset::{OffsetEstimator, OffsetSource};
 use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
@@ -649,6 +652,17 @@ pub(super) fn run(
     // re-syncs from the writer's durable start state and reconciles again. Hoisting it into the
     // shared sink would let a stale completion outlive the connection that produced it.
     let mut pending_alive: Option<(ReportAliveMapTicket, ReportSyncComplete)> = None;
+    // Archived order traces. EVERY `request_traces` this connection sends goes through one paced
+    // queue — a window's ask, a row that just closed, the startup backfill — and the writer of the
+    // local trace store is the one that says what is still unknown, answering through
+    // `trace_ask_rx`. Locals of this attempt like `pending_alive`: a reconnect starts the queue
+    // empty, and MoonProto fails what was in flight on its own.
+    let mut trace_pacer = TracePacer::default();
+    let trace_sink = crate::db::order_traces::sink();
+    let (trace_ask_sink, trace_ask_rx) = AskSink::new(wake_tx.clone());
+    // Field indices of `ReportUID` and `CloseDate`, resolved once per schema revision as the
+    // protocol asks, never by name per row.
+    let mut trace_fields: Option<(u16, u16)> = None;
     // File writer for this core's server log (logs/<date>_<core>.log), with daily rotation. Write
     // on the FEED THREAD rather than the UI thread because log volume is high and the UI must not
     // wait for disk. Only an in-memory copy reaches the UI for live viewing and search.
@@ -700,9 +714,8 @@ pub(super) fn run(
         let mut orders_mutated = false;
         let mut problems_relist = false;
         let mut core_config_events = Vec::new();
-        // Trace requests that never left this process: reported below through the same message the
-        // core's own answer takes, so a window waiting on one sees a failure rather than silence.
-        let mut trace_requests_failed = Vec::new();
+        // Trace asks from windows: queued ahead of the backfill and sent below at the pacer's rate.
+        let mut trace_asks = Vec::new();
         let command_drain = drain_commands(
             cmd_rx,
             &client,
@@ -718,16 +731,34 @@ pub(super) fn run(
             shared_config_sequence,
             &mut core_config_events,
             chart_text,
-            &mut trace_requests_failed,
+            &mut trace_asks,
         );
         if command_drain == CommandDrain::Disconnected {
             return Ok(());
         }
-        for (report_uid, error) in trace_requests_failed {
+        for uid in trace_asks {
+            trace_pacer.push_front(uid);
+        }
+        while let Ok(uids) = trace_ask_rx.try_recv() {
+            trace_pacer.push_back(uids);
+        }
+        // A request that never left this process is reported through the same message the core's
+        // own answer takes, so a window waiting on it sees a failure rather than silence — and it
+        // frees its slot like an answered one.
+        let trace_now = Instant::now();
+        while let Some(report_uid) = trace_pacer.take_due(trace_now) {
+            let Err(error) = client.reports().request_traces(report_uid) else {
+                continue;
+            };
+            log::warn!(
+                "core {} request_traces({report_uid}) failed: {error}",
+                crate::feed::core_label(server.id)
+            );
+            trace_pacer.answered(report_uid, false);
             if tx
                 .send(FeedMsg::ReportTraces {
                     report_uid,
-                    outcome: crate::feed::ReportTracesOutcome::Failed(error),
+                    outcome: crate::feed::ReportTracesOutcome::Failed(error.to_string()),
                 })
                 .is_err()
             {
@@ -2054,11 +2085,22 @@ pub(super) fn run(
                             ticket.report_uid,
                             traces.len()
                         );
+                        trace_pacer.answered(ticket.report_uid, true);
+                        let lines: Arc<[crate::feed::ArchivedOrderTrace]> = Arc::from(
+                            crate::feed::report_traces::archived_traces_from_proto(traces),
+                        );
+                        // Filed locally first — empty included, so the row is not asked about
+                        // again on every start — then handed to whoever asked.
+                        if let Some(sink) = &trace_sink {
+                            sink.send(TraceDbMsg::Answer {
+                                core_uid: server.uid,
+                                report_uid: ticket.report_uid,
+                                lines: lines.clone(),
+                            });
+                        }
                         let _ = tx.send(FeedMsg::ReportTraces {
                             report_uid: ticket.report_uid,
-                            outcome: crate::feed::ReportTracesOutcome::Ready(Arc::from(
-                                crate::feed::report_traces::archived_traces_from_proto(traces),
-                            )),
+                            outcome: crate::feed::ReportTracesOutcome::Ready(lines),
                         });
                     }
                     Event::Report(ReportEvent::TraceFailed { ticket, error }) => {
@@ -2067,6 +2109,7 @@ pub(super) fn run(
                             crate::feed::core_label(server.id),
                             ticket.report_uid
                         );
+                        trace_pacer.answered(ticket.report_uid, false);
                         let _ = tx.send(FeedMsg::ReportTraces {
                             report_uid: ticket.report_uid,
                             outcome: crate::feed::ReportTracesOutcome::Failed(error.clone()),
@@ -2075,6 +2118,34 @@ pub(super) fn run(
                     // Typed report-database replica: send schema, rows, catch-up state, and
                     // reconciliation results to the SQLite writer, the sole write-connection owner.
                     Event::Report(rev) if server.feed.reports => {
+                        // The trace store's three inputs, read off the same events the replica
+                        // writer gets and independent of whether that writer is running: a closed
+                        // row's traces are worth keeping even when the replica file is not.
+                        match rev {
+                            ReportEvent::Schema(schema) => {
+                                trace_fields = trace_field_indices(schema);
+                            }
+                            ReportEvent::RowUpsert(row) => {
+                                if let (Some(fields), Some(sink)) = (trace_fields, &trace_sink) {
+                                    if let Some(report_uid) = closed_row_uid(row, fields) {
+                                        sink.send(TraceDbMsg::RowClosed {
+                                            core_uid: server.uid,
+                                            report_uid,
+                                            ask: trace_ask_sink.clone(),
+                                        });
+                                    }
+                                }
+                            }
+                            ReportEvent::SyncComplete(_) => {
+                                if let Some(sink) = &trace_sink {
+                                    sink.send(TraceDbMsg::Backfill {
+                                        core_uid: server.uid,
+                                        ask: trace_ask_sink.clone(),
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
                         if let Some(sink) = reports {
                             match rev {
                                 ReportEvent::Schema(s) => sink.send(DbMsg::Schema {
@@ -2609,10 +2680,17 @@ pub(super) fn run(
         let startup_settled = startup_poll_settled(is_ready, startup_sent);
         let startup_wait =
             (!startup_settled).then(|| STARTUP_POLL.saturating_sub(last_startup.elapsed()));
-        let wake_wait = [order_wait, account_wait, startup_wait, strat_edit_wait]
-            .into_iter()
-            .flatten()
-            .fold(poll_wait, Duration::min);
+        let trace_wait = trace_pacer.next_due(wait_now);
+        let wake_wait = [
+            order_wait,
+            account_wait,
+            startup_wait,
+            strat_edit_wait,
+            trace_wait,
+        ]
+        .into_iter()
+        .flatten()
+        .fold(poll_wait, Duration::min);
         let wake_result = wake_rx.recv_timeout(wake_wait).map_err(|err| match err {
             std::sync::mpsc::RecvTimeoutError::Timeout => None,
             std::sync::mpsc::RecvTimeoutError::Disconnected => Some(()),
@@ -2629,6 +2707,41 @@ pub(super) fn run(
 
     let _ = client.disconnect();
     Ok(())
+}
+
+/// Field indices of `ReportUID` and `CloseDate` in one schema revision, or `None` when the core
+/// does not report the identity: such a core's rows cannot be asked about.
+///
+/// Args:
+///     schema: The revision the core just sent.
+fn trace_field_indices(schema: &moonproto::ReportSchema) -> Option<(u16, u16)> {
+    let integer = |name: &str| {
+        schema
+            .field_by_name(name)
+            .filter(|field| field.kind == moonproto::ReportFieldKind::Integer)
+            .map(|field| field.index)
+    };
+    Some((integer("ReportUID")?, integer("CloseDate")?))
+}
+
+/// The `ReportUID` of an upserted row that is CLOSED, or `None`.
+///
+/// A live upsert is partial: a row that does not carry `CloseDate` is not known to be closed and
+/// is left alone — the upsert that closes a trade carries the field it changed. A zero uid is the
+/// replica's placeholder and never a key.
+///
+/// Args:
+///     row: The upserted row.
+///     fields: `(ReportUID, CloseDate)` indices from [`trace_field_indices`].
+fn closed_row_uid(row: &moonproto::ReportRow, (uid_ix, close_ix): (u16, u16)) -> Option<i64> {
+    let closed = matches!(row.value(close_ix), Some(moonproto::ReportValue::Integer(v)) if *v != 0);
+    if !closed {
+        return None;
+    }
+    match row.value(uid_ix) {
+        Some(moonproto::ReportValue::Integer(uid)) if *uid != 0 => Some(*uid),
+        _ => None,
+    }
 }
 
 /// Returns whether this event batch must publish the retained assets snapshot.

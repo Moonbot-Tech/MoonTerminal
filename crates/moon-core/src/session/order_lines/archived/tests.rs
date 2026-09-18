@@ -1,6 +1,6 @@
 use super::*;
 
-fn trace(own: bool, kind: ArchivedLineKind, points: &[(f64, f32)]) -> ArchivedOrderTrace {
+fn trace(own: bool, kind: ArchivedLineKind, points: &[(f64, f64)]) -> ArchivedOrderTrace {
     ArchivedOrderTrace {
         own,
         kind,

@@ -771,6 +771,14 @@ pub fn strategies_db_path() -> PathBuf {
     db_dir().join(STRATEGIES_DB_FILE)
 }
 
+/// SQLite database for the archived order traces of closed trades (`db::order_traces`).
+/// DELIBERATELY separate from `reports.sqlite`, for the reason the strategy database is: the
+/// replica is rebuilt from the core, while the core's own trace archive is bounded in time, so once
+/// it has aged out this file is the only copy left.
+pub fn order_traces_db_path() -> PathBuf {
+    db_dir().join("order_traces.sqlite")
+}
+
 /// SQLite database for core warning episodes (sustained CPU / memory growth / connectivity), kept
 /// forever. DELIBERATELY separate from `reports.sqlite`: warning history is the only copy and must
 /// survive a report-replica reset, like the strategy database.

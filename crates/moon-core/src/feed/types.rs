@@ -1409,8 +1409,11 @@ pub enum FeedMsg {
     ChartAlerts(Vec<ChartAlertUpdate>),
     /// The core's answer to [`super::CoreCmd::RequestReportTraces`] for one report row.
     ///
-    /// Keyed by the row's `ReportUID` rather than by MoonProto's per-request ticket: two windows
-    /// on the same trade want the same answer, and the store holds one entry per row for both.
+    /// Keyed by the row's `ReportUID` rather than by MoonProto's per-request ticket: every
+    /// surface wanting the same trade wants the same answer, and the store holds one entry per row.
+    /// Sent for the backfill's answers too, which nothing in the UI waits for. A `Ready` answer
+    /// is also queued to the local archive's writer before this message is sent — queued, not
+    /// yet on disk — and a `Failed` one is never filed there: it is not evidence of anything.
     ReportTraces {
         report_uid: i64,
         outcome: super::report_traces::ReportTracesOutcome,

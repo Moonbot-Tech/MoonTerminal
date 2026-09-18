@@ -114,6 +114,11 @@ struct Backend {
     display_time_revision: Entity<DisplayTimeRevision>,
     /// Dedicated wake channel for every effective workspace-scope transition.
     workspace_revision: Entity<workspace::WorkspaceRevision>,
+    /// The one resolver of archived order traces, and its own wake channel — see
+    /// `backend::traces`. Its channel is separate for the reason the crowd service's is: a
+    /// backfill files answers by the hundred, and none of them is a reason to repaint a dock.
+    traces: backend::traces::TraceResolver,
+    traces_revision: Entity<backend::traces::TracesRevision>,
     /// Dedicated wake channel for shared Auto dock-topology and rail-width transitions.
     auto_workspace_layout_revision: Entity<workspace::AutoWorkspaceLayoutRevision>,
     /// Cores broadcast by the Profit Monitor's core click; empty means every core, as in a panel's

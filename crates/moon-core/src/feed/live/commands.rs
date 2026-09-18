@@ -783,7 +783,7 @@ pub(super) fn drain_commands(
     shared_config_sequence: &mut SharedConfigSequence,
     core_config_events: &mut Vec<CoreConfigEditEvent>,
     chart_text: &mut ChartTextWanted,
-    trace_requests_failed: &mut Vec<(i64, String)>,
+    trace_asks: &mut Vec<i64>,
 ) -> CommandDrain {
     apply_latest_market_role(
         latest_market_role,
@@ -1439,16 +1439,10 @@ pub(super) fn drain_commands(
                 }
             }
             Ok(CoreCmd::RequestReportTraces { report_uid }) => {
-                // The ticket is deliberately dropped: the answer is matched by `report_uid` when
-                // `TraceReady`/`TraceFailed` arrives, and a failed submission is reported the same
-                // way — the window must not wait on a request that never left.
-                if let Err(error) = client.reports().request_traces(report_uid) {
-                    log::warn!(
-                        "core {} request_traces({report_uid}) failed: {error}",
-                        crate::feed::core_label(server.id)
-                    );
-                    trace_requests_failed.push((report_uid, error.to_string()));
-                }
+                // Not sent here: the loop's pacer sends it, ahead of the backfill, at the rate
+                // the core is asked at for everything else. The answer is matched by `report_uid`
+                // when `TraceReady`/`TraceFailed` arrives.
+                trace_asks.push(report_uid);
             }
             Ok(CoreCmd::PanicSellMarket { market, on }) => {
                 trade::panic_sell_market(client, server.id, market, on);
