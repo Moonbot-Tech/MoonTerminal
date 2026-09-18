@@ -67,6 +67,8 @@ impl ChartDataState {
             trade_history: std::rc::Rc::new(Vec::new()),
             report_axis: moon_core::db::ReportAxis::identity_core_local(),
             trade_history_revision: 0,
+            archived_lines: Rc::new(HashMap::new()),
+            archived_lines_rev: 0,
             trade_hovered: None,
             warn_marks: std::rc::Rc::new(Vec::new()),
             warn_hovered: None,
@@ -133,6 +135,8 @@ impl ChartDataState {
                 if self.draws_live_market() {
                     sig = sig.wrapping_mul(31).wrapping_add(core_st.strategies_rev);
                     sig = sig.wrapping_mul(31).wrapping_add(core_st.schema_rev);
+                    // The closed trades' archived lines ride the same buffer as the live orders.
+                    sig = sig.wrapping_mul(31).wrapping_add(self.archived_lines_rev);
                 }
             }
         }

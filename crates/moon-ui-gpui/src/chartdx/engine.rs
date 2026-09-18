@@ -533,6 +533,36 @@ impl ChartEngine {
         self.data.borrow_mut().set_trade_history(records)
     }
 
+    /// Hand this engine the archived lines of its closed trades, for the "Moonbot lines" style.
+    ///
+    /// Args:
+    ///     lines: Lines by `ReportUID`, as the panel collected them from the trace resolver.
+    ///
+    /// Returns:
+    ///     Whether the map changed.
+    pub(crate) fn set_archived_lines(
+        &mut self,
+        lines: std::rc::Rc<
+            std::collections::HashMap<i64, std::sync::Arc<[moon_core::feed::ArchivedOrderTrace]>>,
+        >,
+    ) -> bool {
+        self.data.borrow_mut().set_archived_lines(lines)
+    }
+
+    /// The closed trades this engine wants archived lines for, nearest a pane's right edge first.
+    /// See `archived_lines`; the caller decides whether the style calls for asking.
+    ///
+    /// Args:
+    ///     cap: Most uids to name.
+    pub(crate) fn wanted_trace_uids(&self, cap: usize) -> Vec<i64> {
+        self.data.borrow().wanted_trace_uids(cap)
+    }
+
+    /// The durable closed-trade history this engine draws, as the panel published it.
+    pub(crate) fn trade_history(&self) -> std::rc::Rc<Vec<moon_core::db::ChartTradeRecord>> {
+        self.data.borrow().trade_history.clone()
+    }
+
     /// Draw a frozen trade replay instead of the live market source.
     ///
     /// Only the trade window calls this, on the engine it owns. Every other engine leaves the

@@ -18,7 +18,7 @@
 //! through the shared color adapter, refreshing it when the active tab changes.
 
 use gpui::*;
-use moon_core::config::ChartGraphicsCfg;
+use moon_core::config::{ChartGraphicsCfg, TradeHistoryStyle};
 use moon_ui::{MoonCheckbox, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex};
 use rust_i18n::t;
 
@@ -228,6 +228,31 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                     let v = *v;
                     write_cfg(&entity, app, |c| c.connector_thickness_px = v);
                 }
+            },
+        )
+    };
+
+    // Arrows or Moonbot's order lines for the closed trades: a two-way row like the volume kind,
+    // because the two are pictures of the same thing at the same place and never coexist.
+    let trade_style_row = {
+        let entity = entity.clone();
+        let lines = cfg.trade_history_style == TradeHistoryStyle::MoonbotLines;
+        seg_row(
+            format!("{id}-trade-style"),
+            t!("chart.graphics.trade_style").to_string(),
+            vec![
+                (t!("chart.graphics.trade_style_marks").to_string(), !lines),
+                (t!("chart.graphics.trade_style_lines").to_string(), lines),
+            ],
+            SEG_W2,
+            p,
+            cx,
+            move |ix, app| {
+                let style = match ix {
+                    1 => TradeHistoryStyle::MoonbotLines,
+                    _ => TradeHistoryStyle::Marks,
+                };
+                write_cfg(&entity, app, |c| c.trade_history_style = style);
             },
         )
     };
@@ -561,6 +586,9 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
             popup_group("frame-history", t!("chart.graphics.frame_history")).child(
                 v_flex()
                     .gap(design::ui_px(cx, 6.0))
+                    .child(trade_style_row)
+                    // The arrow rows stay in the lines style too: a trade the archive holds no
+                    // lines for keeps its arrows there.
                     .child(arrow_row)
                     .child(connector_row)
                     .child(real_cb)

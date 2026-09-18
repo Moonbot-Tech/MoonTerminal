@@ -32,6 +32,12 @@ pub struct ArchivedOrdersInput<'a> {
     /// Exit instant in Unix UTC ms: where the subject order — and every inherited line, whose
     /// own end the archive does not state — stops being drawn.
     pub close_ms: f64,
+    /// Whether [`OrderLineStore::append_archived`] draws these lines at the ACTIVE opacity rather
+    /// than the closed one. The trade window's neighbours are context and stay pale; a live
+    /// chart in the "Moonbot lines" style draws its closed trades the way Moonbot does, in full
+    /// colour. [`OrderLineStore::archived`] ignores it: there the subject is bright and the rest
+    /// pale by construction.
+    pub bright: bool,
 }
 
 /// Synthetic uid of the subject order. Inherited lines count up from it; nothing here can collide
@@ -92,12 +98,13 @@ impl OrderLineStore {
         store
     }
 
-    /// Add another closed trade's archived lines to this store, every one of them pale.
+    /// Add another closed trade's archived lines to this store, pale unless `input.bright`.
     ///
     /// For the trade window's "other trades": the neighbours of the subject drawn beside it, each
     /// asked from the core by its own `ReportUID`. None of them is the subject, so none takes the
-    /// active opacity — own and inherited alike, they are context. Uids continue past whatever
-    /// the store already holds, so two neighbours can never collide.
+    /// active opacity — own and inherited alike, they are context. The live chart's lines style
+    /// takes the same builder with `bright` set: there the closed trades ARE the picture. Uids
+    /// continue past whatever the store already holds, so two trades can never collide.
     ///
     /// The caller stamps `rev` afterwards: a rebuilt store must differ from the one it replaces
     /// for the chart's revision gate, and only the caller knows how many rebuilds it has made.
@@ -124,8 +131,11 @@ impl OrderLineStore {
                 ArchivedLineKind::Entry => LineKind::Buy,
                 ArchivedLineKind::Exit => LineKind::Sell,
             };
+            // Built as a non-subject — that flag also dates the entry fill, which only the first
+            // own entry line below may carry — and then lit up when the caller asked for it.
             let mut order =
                 archived_order(&input, next_uid, seq_base + seq as u64, first_ms, false);
+            order.subject = input.bright;
             if trace.own && kind == LineKind::Buy && !fill_taken {
                 fill_taken = true;
                 order.entry_fill_ms = input.entry_fill_ms;

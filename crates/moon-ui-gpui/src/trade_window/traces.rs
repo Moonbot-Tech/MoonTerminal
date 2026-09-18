@@ -254,6 +254,7 @@ impl TradeWindowView {
                 quantity: record.quantity as f32,
                 entry_fill_ms: Some(buy_utc_ms as f64),
                 close_ms: close_utc_ms as f64,
+                bright: false,
             }
         };
         let mut store =

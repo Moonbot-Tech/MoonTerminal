@@ -221,6 +221,21 @@ impl ChartDataState {
                 hide_closed_sell_line: false,
                 ..self.chart_graphics
             });
+            // In the "Moonbot lines" style a trade that closed this session keeps drawing from
+            // the live store (its archived twin is skipped), and it has to look like the archived
+            // ones beside it — Moonbot draws every closed trade in full colour, so the closed
+            // opacity is lifted to the active one for the live pass too.
+            let lines_style = !frozen && self.draws_trade_lines();
+            let lines_live_style = lines_style.then(|| moon_core::config::OrdersStyle {
+                closed_alpha: self.orders.active_alpha,
+                ..self.orders.clone()
+            });
+            // ...and the fill arrow goes: in this style the exit line starts where the entry
+            // filled, and Moonbot marks that point with nothing louder than a line end.
+            let lines_live_graphics = lines_style.then_some(moon_core::config::ChartGraphicsCfg {
+                hide_entry_fill_arrow: true,
+                ..self.chart_graphics
+            });
             // The auto-Y fit goes with them. A fit stretched to reach a live order's price would
             // squash the very candles the window exists to show.
             let order_price = match frozen {
@@ -251,8 +266,14 @@ impl ChartDataState {
                     true => order_lines.rev,
                     false => core_st.order_lines_rev,
                 };
-                let orders_style = frozen_style.as_ref().unwrap_or(&self.orders);
-                let graphics = frozen_graphics.as_ref().unwrap_or(&self.chart_graphics);
+                let orders_style = frozen_style
+                    .as_ref()
+                    .or(lines_live_style.as_ref())
+                    .unwrap_or(&self.orders);
+                let graphics = frozen_graphics
+                    .as_ref()
+                    .or(lines_live_graphics.as_ref())
+                    .unwrap_or(&self.chart_graphics);
                 // Both are order-line state, so they follow the order lines out. Input to a
                 // historical chart is already gated, but a hover or a drag left over from before
                 // the replay attached must not privilege a label that is no longer drawn.
@@ -269,6 +290,7 @@ impl ChartDataState {
                 let figures_sig = self.figures_sig();
                 if force
                     || pr.last_order_lines_rev != order_lines_rev
+                    || pr.last_archived_lines_rev != self.archived_lines_rev
                     || pr.last_order_strategies_rev != core_st.strategies_rev
                     || pr.last_order_schema_rev != core_st.schema_rev
                     || pr.last_order_highlight_uid != highlight_uid
@@ -305,6 +327,81 @@ impl ChartDataState {
                         &mut segs,
                         &mut markers,
                     );
+                    // The closed trades' Moonbot lines, in the "lines" trade style: a SECOND pass
+                    // through the same geometry with the pane's archived store, into the same
+                    // buffers, beside the live orders rather than in their place. The two frozen
+                    // overrides apply here for the frozen viewer's reason — these closed orders
+                    // are the picture, not leftovers — and neither the drag preview nor the
+                    // highlight can name one of them. A live chart only: the frozen viewer draws
+                    // its own archived store through the pass above.
+                    // The store is CACHED per pane on the three inputs that shape it — the
+                    // answers, the history, the live store's closed ring — because this branch
+                    // also runs on every frame of an order drag or hover (a forced sync), and a
+                    // walk over a thousand rows per pixel is not what those frames pay for.
+                    // The history and the report axis are not in the key: their setters go
+                    // through `dirty_all_trade_panes`, which drops the cache outright.
+                    let archived_key = (
+                        self.archived_lines_rev,
+                        order_lines_rev,
+                        self.archived_graphics_bits(),
+                        // The closed-order cap decides which live orders count as twins.
+                        u64::from(self.orders.max_closed_orders),
+                    );
+                    // The trades that closed this session, drawn whole by the live pass: neither
+                    // the archived pass nor the arrows pass adds anything for them.
+                    let live_twins: Option<Vec<f64>> =
+                        lines_style.then(|| self.live_twin_closes(&pane.market, order_lines));
+                    if let Some(twins) = &live_twins
+                        && pr.archived_store_key != Some(archived_key)
+                    {
+                        pr.archived_store_key = Some(archived_key);
+                        pr.archived_store = self
+                            .archived_store_for_pane(pane.core, &pane.market, twins)
+                            .map(std::rc::Rc::new);
+                    }
+                    if lines_style && let Some(archived) = pr.archived_store.clone() {
+                        let archived_style = moon_core::config::OrdersStyle {
+                            max_closed_orders: u32::MAX,
+                            ..self.orders.clone()
+                        };
+                        let archived_graphics = moon_core::config::ChartGraphicsCfg {
+                            hide_closed_sell_line: false,
+                            hide_entry_fill_arrow: true,
+                            ..self.chart_graphics
+                        };
+                        // Into buffers of its own, then appended: `build_order_geometry`
+                        // CLEARS what it is handed before it draws, and handing it the live
+                        // pass's buffers would erase every live order just drawn.
+                        let mut archived_zones = Vec::new();
+                        let mut archived_hlines = Vec::new();
+                        let mut archived_segs = Vec::new();
+                        let mut archived_markers = Vec::new();
+                        moon_chart::build_order_geometry(
+                            archived.as_ref(),
+                            &core_st.strategies,
+                            core_st.schema.as_ref(),
+                            &pane.market,
+                            &archived_style,
+                            &archived_graphics,
+                            self.last_ppp,
+                            None,
+                            None,
+                            pane.view.epoch_ms,
+                            now,
+                            f32::NEG_INFINITY,
+                            f32::INFINITY,
+                            0.0,
+                            self.candle_view.moonshot_zone,
+                            &mut archived_zones,
+                            &mut archived_hlines,
+                            &mut archived_segs,
+                            &mut archived_markers,
+                        );
+                        zones.extend(archived_zones);
+                        hlines.extend(archived_hlines);
+                        segs.extend(archived_segs);
+                        markers.extend(archived_markers);
+                    }
                     // Add user figures through the same userdata layers after orders, placing them
                     // above order zones but below cursor markers. Their FILLS join the zone layer
                     // (drawn over the grid, under the candles) before `hash_order_zones` reads it —
@@ -330,9 +427,9 @@ impl ChartDataState {
                         *idx,
                         pane.core,
                         &pane.view,
-                        pr,
                         &mut markers,
                         &mut segs,
+                        live_twins.as_deref(),
                     );
                     // Warning badges ride the same layer, after news.
                     self.append_warn_geometry(pane.view.epoch_ms, &mut markers);
@@ -373,6 +470,7 @@ impl ChartDataState {
                         self.view_dirty = true;
                     }
                     pr.last_order_lines_rev = order_lines_rev;
+                    pr.last_archived_lines_rev = self.archived_lines_rev;
                     pr.last_order_strategies_rev = core_st.strategies_rev;
                     pr.last_order_schema_rev = core_st.schema_rev;
                     pr.last_order_lines_sync_ms = now;
@@ -410,9 +508,10 @@ impl ChartDataState {
                         *idx,
                         pane.core,
                         &pane.view,
-                        pr,
                         &mut markers,
                         &mut segs,
+                        // No core, no order pass: nothing draws lines here, so the arrows stay.
+                        None,
                     );
                     self.append_warn_geometry(pane.view.epoch_ms, &mut markers);
                     crate::chartdx::trade_history_sync::set(

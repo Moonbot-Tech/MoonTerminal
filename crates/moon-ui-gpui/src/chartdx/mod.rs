@@ -28,6 +28,7 @@ mod engine;
 mod figure_snap;
 mod filter_headers;
 use filter_headers::FilterHeaderHit;
+mod archived_lines;
 mod figures_sync;
 mod news_sync;
 pub(crate) mod trade_history_sync;
@@ -739,6 +740,14 @@ struct PaneRender {
     last_label_book_rev: u64,
     /// Last order revision uploaded into the userdata buffer.
     last_order_lines_rev: u64,
+    /// Last `archived_lines_rev` the userdata buffer was built with — the closed trades' Moonbot
+    /// lines ride the same buffer as the live orders, so a new archive answer rebuilds it.
+    last_archived_lines_rev: u64,
+    /// The archived store this pane last drew, and the `(archived_lines_rev, live order rev,
+    /// graphics bits, closed-order cap)` it was built for. Reused across the forced syncs a drag
+    /// or hover fires per frame; see the order pass.
+    archived_store: Option<Rc<moon_core::session::order_lines::OrderLineStore>>,
+    archived_store_key: Option<(u64, u64, u64, u64)>,
     /// Strategy snapshots can change order appearance without an order update.
     last_order_strategies_rev: u64,
     /// Sparse strategy snapshots inherit defaults from a separately arriving schema.
@@ -962,6 +971,9 @@ impl PaneRender {
             last_book_lo: f32::NAN,
             last_book_hi: f32::NAN,
             last_order_lines_rev: u64::MAX,
+            last_archived_lines_rev: u64::MAX,
+            archived_store: None,
+            archived_store_key: None,
             last_order_strategies_rev: u64::MAX,
             last_order_schema_rev: u64::MAX,
             last_order_zone_sig: 0,
@@ -1571,6 +1583,13 @@ struct ChartDataState {
     report_axis: moon_core::db::ReportAxis,
     /// Revision incremented whenever the durable history set changes.
     trade_history_revision: u64,
+    /// Archived order lines of the closed trades in `trade_history`, by `ReportUID`: what the
+    /// "Moonbot lines" style draws in place of the arrows. Handed in by the panel from the trace
+    /// resolver (`backend::traces`); this engine never asks for them itself. See `archived_lines`.
+    archived_lines: Rc<HashMap<i64, std::sync::Arc<[moon_core::feed::ArchivedOrderTrace]>>>,
+    /// Advances on every `set_archived_lines`; folded into the order signature and the per-pane
+    /// gate so a new answer rebuilds the userdata buffer exactly like a live order change.
+    archived_lines_rev: u64,
     /// The trade arrow under the cursor as `(pane, mark index in that pane, buy)`. It is drawn
     /// grown and fully opaque.
     ///

@@ -45,7 +45,10 @@ pub(crate) fn set(
 ///
 /// Returns:
 ///     Whether the trade's marks are drawn.
-fn trade_kind_visible(graphics: &moon_core::config::ChartGraphicsCfg, emulator: bool) -> bool {
+pub(super) fn trade_kind_visible(
+    graphics: &moon_core::config::ChartGraphicsCfg,
+    emulator: bool,
+) -> bool {
     if emulator {
         graphics.show_emulator_trades
     } else {
@@ -68,7 +71,19 @@ fn trade_kind_visible(graphics: &moon_core::config::ChartGraphicsCfg, emulator: 
 ///
 /// Returns:
 ///     The mark with `buy_ms`/`close_ms` on the chart's true-UTC millisecond epoch.
-fn trade_mark(record: &ChartTradeRecord, axis: &moon_core::db::ReportAxis) -> TradeMark {
+/// One record as a mark, with a choice of which ends draw their arrows.
+///
+/// Args:
+///     record: The closed trade.
+///     axis: The report axis its stamps are lifted through.
+///     show_entry: Whether the entry arrow draws.
+///     show_exit: Whether the exit arrow draws.
+fn trade_mark_with(
+    record: &ChartTradeRecord,
+    axis: &moon_core::db::ReportAxis,
+    show_entry: bool,
+    show_exit: bool,
+) -> TradeMark {
     let (buy, close) = (record.buy_stamp(), record.close_stamp());
     let (buy_ms, close_ms) = axis.stamp_pair_to_utc_ms(buy, close, record.core_uid);
     TradeMark {
@@ -78,6 +93,8 @@ fn trade_mark(record: &ChartTradeRecord, axis: &moon_core::db::ReportAxis) -> Tr
         sell_price: record.sell_price,
         qty: record.quantity,
         is_short: record.is_short,
+        show_entry,
+        show_exit,
     }
 }
 
@@ -111,6 +128,10 @@ impl ChartDataState {
         let mut render = self.render.borrow_mut();
         for pane in &mut render.panes {
             pane.last_trade_history_sig = u64::MAX;
+            // The archived store is built from the same history over the same axis: it goes
+            // with the arrows.
+            pane.archived_store = None;
+            pane.archived_store_key = None;
             pane.gpu_prepare_dirty = true;
         }
         render.needs_present = true;
@@ -193,11 +214,19 @@ impl ChartDataState {
         let colors = pack(self.theme.label_positive)
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
             .wrapping_add(pack(self.theme.label_negative));
+        // In the lines style an arriving answer takes a trade's arrows away, so the answers'
+        // revision is part of what this layer was built from.
+        let lines_rev = if self.draws_trade_lines() {
+            self.archived_lines_rev
+        } else {
+            0
+        };
         let sig = self
             .trade_history_revision
             .wrapping_mul(0xD6E8_FEB8_6659_FD93)
             .wrapping_add((self.last_ppp.to_bits() as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9))
             .wrapping_add(colors)
+            .wrapping_add(lines_rev.wrapping_mul(0x94D0_49BB_1331_11EB))
             // Clustering happens when this layer is rebuilt, so ZOOM has to invalidate it — but
             // through a quantized bucket, never the raw scale, or a smooth zoom would rebuild every
             // marker on every frame.
@@ -211,8 +240,10 @@ impl ChartDataState {
     ///     pane: Index of the pane being composed, which decides whether it owns the hovered arrow.
     ///     core: Exact pane core; records from other cores are ignored.
     ///     view: The pane's own view, supplying the epoch and the scale clustering works in.
-    ///     rendered: This pane's retained render state.
     ///     markers: Existing order/figure/news marker union to extend.
+    ///     lines_drawn: `Some` when this pane's order pass draws the archived lines, so the
+    ///         arrows of an answered end must give way; carries the close instants of the live
+    ///         closed orders the live pass draws, whose trades get no arrows at all.
     ///     segs: Existing order/figure segment union to extend with the connectors.
     ///
     /// Returns:
@@ -225,13 +256,21 @@ impl ChartDataState {
         pane: usize,
         core: CoreId,
         view: &ChartView,
-        _rendered: &mut super::PaneRender,
         markers: &mut Vec<MarkerInstance>,
         segs: &mut Vec<SegInstance>,
+        lines_drawn: Option<&[f64]>,
     ) -> TradeGeometry {
         if self.orderbook_only {
             return TradeGeometry::default();
         }
+        // When the order pass draws the archived lines, an END the archive answered for is
+        // drawn as its line, and its arrow would sit on top of it: one or the other, per end.
+        // The core archives only a line that was repriced, so a market entry usually comes with
+        // an exit line and no entry line; the entry then keeps its arrow. A trade with no lines
+        // at all — older than the archive, or not answered yet — keeps both, so an old history is
+        // not a blank chart. The CALLER says whether the lines are drawn — a pane without a core
+        // runs no order pass at all, and its arrows stay — and names the trades that closed this
+        // session, which the live store draws whole: no arrow for either of their ends.
         let epoch_ms = view.epoch_ms;
         let mut sources = Vec::new();
         // The replica stores seconds and, when the core supplied them, milliseconds; every other
@@ -242,10 +281,23 @@ impl ChartDataState {
             .enumerate()
             .filter(|(_, record)| record.core_uid == core)
             .filter(|(_, record)| trade_kind_visible(&self.chart_graphics, record.emulator))
-            .map(|(index, record)| {
+            .filter_map(|(index, record)| {
+                let (entry_lined, exit_lined) = match lines_drawn {
+                    Some(twins) if self.is_live_twin(record, twins) => (true, true),
+                    Some(_) => self.archived_line_ends(record),
+                    None => (false, false),
+                };
+                if entry_lined && exit_lined {
+                    return None;
+                }
                 // Built in the same pass as the marks, so the two lists cannot fall out of step.
                 sources.push(index);
-                trade_mark(record, &self.report_axis)
+                Some(trade_mark_with(
+                    record,
+                    &self.report_axis,
+                    !entry_lined,
+                    !exit_lined,
+                ))
             })
             .collect::<Vec<_>>();
         let clusters = moon_chart::build_trade_geometry(

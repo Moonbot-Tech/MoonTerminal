@@ -976,6 +976,18 @@ chart.graphics.frame_history:
   ru: "История сделок"
   en: "Trade history"
   es: "Historial de operaciones"
+chart.graphics.trade_style:
+  ru: "Сделки"
+  en: "Trades"
+  es: "Operaciones"
+chart.graphics.trade_style_marks:
+  ru: "Метки"
+  en: "Marks"
+  es: "Marcas"
+chart.graphics.trade_style_lines:
+  ru: "Линии Moonbot"
+  en: "Moonbot lines"
+  es: "Líneas Moonbot"
 chart.graphics.frame_orders:
   ru: "Линии ордеров"
   en: "Order lines"

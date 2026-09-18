@@ -171,6 +171,11 @@ fn only_a_new_profile_without_a_workspace_mode_is_seeded_auto() {
 #[test]
 fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
     let empty: WindowLayout = toml::from_str("").expect("an empty layout must load");
+    assert_eq!(
+        empty.chart_graphics.trade_history_style,
+        TradeHistoryStyle::Marks,
+        "a file written before the style existed keeps its arrows"
+    );
     assert!(empty.chart_graphics.hide_closed_sell_line);
     assert!(empty.chart_graphics.show_real_trades);
     assert!(empty.chart_graphics.show_emulator_trades);
@@ -190,6 +195,7 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
                show_emulator_trades = false\n\
                hide_closed_sell_line = false\n\
                hide_order_move_history = \"not-a-bool\"\n\
+               trade_history_style = \"holograms\"\n\
                candle_volume_labels_over = \"maybe\"\n";
     let decoded: WindowLayout = toml::from_str(doc)
         .expect("one malformed chart-graphics field must not reject the layout document");
@@ -209,6 +215,17 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
     assert!(
         !decoded.chart_graphics.candle_volume_labels_over,
         "a malformed captions-over-volume switch must fall back to above"
+    );
+    assert_eq!(
+        decoded.chart_graphics.trade_history_style,
+        TradeHistoryStyle::Marks,
+        "a spelling this build does not know reads as arrows"
+    );
+    let lines: WindowLayout =
+        toml::from_str("[chart_graphics]\ntrade_history_style = \"moonbot-lines\"\n").unwrap();
+    assert_eq!(
+        lines.chart_graphics.trade_history_style,
+        TradeHistoryStyle::MoonbotLines
     );
 }
 

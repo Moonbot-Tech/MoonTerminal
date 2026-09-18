@@ -52,6 +52,8 @@ fn trade_hit_area_grows_with_the_drawn_arrow_scale() {
         sell_price: 101.0,
         qty: 1.0,
         is_short: false,
+        show_entry: true,
+        show_exit: true,
     };
     let base_ctx = TradeGeometryCtx {
         epoch_ms: 0.0,
