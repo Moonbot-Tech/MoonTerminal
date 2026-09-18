@@ -1106,6 +1106,68 @@ fn closed_filled_entry_marks_the_fill_not_the_later_close() {
     );
 }
 
+/// `bright_closed_trades` lifts a closed TRADE to the active opacity and leaves a cancelled order
+/// under `closed_alpha`. The "Moonbot lines" style used to get its bright closed trades by
+/// swapping `closed_alpha` for `active_alpha` across the whole live pass, which also lit up every
+/// cancelled order and left the "closed/cancelled visibility" slider dead in that style.
+#[test]
+fn bright_closed_trades_leave_cancelled_orders_under_closed_alpha() {
+    let now = now_unix_ms();
+    let mut traded = filled_order_without_trace(now);
+    traded.job_is_done = true;
+    let mut cancelled = test_order_with_buy_trace();
+    cancelled.uid = 43;
+    cancelled.buy_trace = None;
+    cancelled.create_time_ms = now - 500_000.0;
+    cancelled.buy_price = 50_000.0;
+    cancelled.job_is_done = true;
+
+    let mut store = OrderLineStore::default();
+    assert!(store.update(&[traded, cancelled], 0));
+    let style = OrdersStyle::default();
+    let graphics = ChartGraphicsCfg {
+        bright_closed_trades: true,
+        ..ChartGraphicsCfg::default()
+    };
+    let (mut zones, mut hlines, mut segs, mut markers) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    build_order_geometry(
+        &store,
+        &[],
+        None,
+        "BTCUSDT",
+        &style,
+        &graphics,
+        1.0,
+        None,
+        None,
+        now - 700_000.0,
+        now + 100_000.0,
+        0.0,
+        800_000.0,
+        800_000.0,
+        false,
+        &mut zones,
+        &mut hlines,
+        &mut segs,
+        &mut markers,
+    );
+    let alpha_at = |price: f32| {
+        segs.iter()
+            .find(|seg| near(seg.p0, price) && near(seg.p1, price))
+            .unwrap_or_else(|| panic!("no entry segment at {price}"))
+            .color[3]
+    };
+    assert!(
+        near(alpha_at(60_000.0), style.active_alpha),
+        "a closed trade's entry must draw at active_alpha in the lines style"
+    );
+    assert!(
+        near(alpha_at(50_000.0), style.closed_alpha),
+        "a cancelled order must stay at closed_alpha whatever the trade style says"
+    );
+}
+
 /// The retained fill date of the shared BTCUSDT fixture order.
 ///
 /// Assertions about adoption have to read THIS rather than `update`'s boolean: "nothing changed" is

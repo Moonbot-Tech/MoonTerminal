@@ -298,6 +298,20 @@ pub struct RetainedOrder {
 }
 
 impl RetainedOrder {
+    /// Whether this order became a TRADE: its entry filled, at least in part, so the report holds
+    /// a row for it. A closed order that never filled is a cancelled leftover, not a trade.
+    ///
+    /// Reads the close verdict first — `Filled` also covers a listing-sell with no buy leg, where
+    /// `fill_pct` stays zero — then the entry fill percentage for an order that vanished without a
+    /// terminal status (`BackstopMissing`), whose verdict says nothing about its fill. The exit
+    /// line's own steps settle the one case both miss, a listing-sell closed by the backstop: the
+    /// Sell line only ever gets a step while the order holds a position with a priced exit.
+    pub fn traded(&self) -> bool {
+        self.closed_reason == Some(OrderCloseReason::Filled)
+            || self.fill_pct > 0.0
+            || !self.lines[LineKind::Sell as usize].steps.is_empty()
+    }
+
     /// Earliest time anything belonging to this order is drawn at.
     ///
     /// Usually the creation, but a line may legitimately begin before it: an order the core dates
@@ -879,7 +893,7 @@ fn explicit_close_reason(row: &OrderRow) -> OrderCloseReason {
 }
 
 mod archived;
-pub use archived::ArchivedOrdersInput;
+pub use archived::{ArchivedOrdersInput, ReportExit};
 
 #[cfg(test)]
 mod tests;

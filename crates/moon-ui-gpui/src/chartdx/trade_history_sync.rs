@@ -263,12 +263,12 @@ impl ChartDataState {
         if self.orderbook_only {
             return TradeGeometry::default();
         }
-        // When the order pass draws the archived lines, an END the archive answered for is
-        // drawn as its line, and its arrow would sit on top of it: one or the other, per end.
-        // The core archives only a line that was repriced, so a market entry usually comes with
-        // an exit line and no entry line; the entry then keeps its arrow. A trade with no lines
-        // at all — older than the archive, or not answered yet — keeps both, so an old history is
-        // not a blank chart. The CALLER says whether the lines are drawn — a pane without a core
+        // When the order pass draws the closed trades as lines, an END drawn as a line loses its
+        // arrow, which would sit on top of it: one or the other, per end. The EXIT is always a
+        // line — from the archive or from the row itself — so its arrow never draws in that
+        // style; the ENTRY is a line only when the core archived its own entry line (it archives
+        // only a line its chart gave a point, so a market entry usually has none) and keeps its
+        // arrow otherwise. The CALLER says whether the lines are drawn — a pane without a core
         // runs no order pass at all, and its arrows stay — and names the trades that closed this
         // session, which the live store draws whole: no arrow for either of their ends.
         let epoch_ms = view.epoch_ms;

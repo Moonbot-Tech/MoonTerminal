@@ -253,8 +253,12 @@ pub fn build_order_geometry(
         // A placed but NOT yet filled order (entry unfilled, fill=0) is dimmer; after filling,
         // the line becomes brighter (as in Moonbot). Closed orders use a separate, dimmest level —
         // except the SUBJECT of a frozen viewer, whose closed order is the picture's whole point
-        // and keeps the active level so it reads apart from the pale inherited lines beside it.
-        let alpha = if closed && !ord.subject {
+        // and keeps the active level so it reads apart from the pale inherited lines beside it,
+        // and except a closed TRADE where the tab's style asks for Moonbot's full-colour trades
+        // (`bright_closed_trades`). A cancelled order is never lifted: `closed_alpha` is the one
+        // level the "closed/cancelled visibility" slider owns, whatever the trade style.
+        let bright_closed = ord.subject || (graphics.bright_closed_trades && ord.traded());
+        let alpha = if closed && !bright_closed {
             style.closed_alpha
         } else if closed {
             style.active_alpha

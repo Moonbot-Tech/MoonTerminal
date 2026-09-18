@@ -1526,6 +1526,14 @@ pub struct ChartGraphicsCfg {
     /// would be a second glyph on one event. A saved tab keeps the arrow it always had.
     #[serde(skip)]
     pub hide_entry_fill_arrow: bool,
+    /// Whether a closed order that became a TRADE — its entry filled, at least in part — draws at
+    /// the active opacity instead of `closed_alpha`. A cancelled order is untouched: it stays under
+    /// the "closed/cancelled visibility" slider, so the eye still tells a trade from a leftover.
+    ///
+    /// RUNTIME ONLY, never stored: the chart sets it for the live pass of the "Moonbot lines"
+    /// style, where Moonbot draws every closed trade in full colour beside the archived ones.
+    #[serde(skip)]
+    pub bright_closed_trades: bool,
 
     // --- Trade marks. Moved here from `ChartTheme` so they are per TAB rather than per theme. ---
     /// Multiplier on the trade-cross marker size. The device pixel ratio is applied separately and
@@ -1656,6 +1664,7 @@ impl Default for ChartGraphicsCfg {
             hide_closed_sell_line: true,
             hide_order_move_history: false,
             hide_entry_fill_arrow: false,
+            bright_closed_trades: false,
             marker_scale: def_marker_scale(),
             trade_volume_alpha: def_trade_volume_alpha(),
             candle_volume_style: def_candle_volume_style(),

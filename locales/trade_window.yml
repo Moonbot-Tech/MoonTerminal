@@ -261,9 +261,9 @@ trade_window.traces.drawn_own:
   en: "%{own} lines on the chart"
   es: "%{own} líneas en el gráfico"
 trade_window.traces.none:
-  ru: "трасс нет: сделка старше архива или режим ядра их не пишет"
-  en: "no traces: the trade predates the archive or the core's mode does not record them"
-  es: "sin trazas: la operación es anterior al archivo o el modo del núcleo no las guarda"
+  ru: "трасс в архиве нет — выход по отчёту, вход стрелкой"
+  en: "no traces in the archive — exit from the report, entry as an arrow"
+  es: "sin trazas en el archivo: salida según el informe, entrada como flecha"
 trade_window.traces.not_askable:
   ru: "ключ строки не получен — сделка реплицирована до обновления ядра"
   en: "row key not received — the trade was replicated before the core update"
