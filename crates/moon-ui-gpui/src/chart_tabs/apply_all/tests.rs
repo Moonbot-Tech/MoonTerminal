@@ -36,7 +36,6 @@ fn loud_snapshot() -> LayoutPopupSnapshot {
         mode: StackLayoutMode::Scroll,
         orientation: StackOrientation::Horizontal,
         orderbook: false,
-        liquidations: false,
         show_zone: false,
         auto_pin: true,
         price_axis_pos: PriceAxisPos::Right,
@@ -180,7 +179,6 @@ fn the_layout_press_carries_every_layout_value() {
     assert_eq!(s.layout_height_scroll, Some(700));
     assert_eq!(s.scale, Some(1.5));
     assert_eq!(s.orderbook_enabled, Some(false));
-    assert_eq!(s.liquidations_enabled, Some(false));
     assert_eq!(s.show_zone, Some(false));
     assert_eq!(s.auto_pin, Some(true));
     assert_eq!(s.layout_orientation, Some(StackOrientation::Horizontal));

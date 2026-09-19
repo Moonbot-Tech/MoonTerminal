@@ -83,17 +83,6 @@ impl ChartTabs {
         v.unwrap_or(true)
     }
 
-    /// Return whether the active tab draws liquidation trades, defaulting to enabled for `None`.
-    pub(super) fn active_liquidations_enabled(&self, cx: &App) -> bool {
-        let v = match &self.active {
-            Tab::Main => self.main.read(cx).liquidations_enabled(),
-            Tab::Add(n, b) | Tab::Custom(n, b) => self
-                .add_stack(*n, b)
-                .and_then(|p| p.read(cx).liquidations_enabled()),
-        };
-        v.unwrap_or(true)
-    }
-
     /// Return whether the active tab fills the control zone, defaulting to enabled for `None`.
     pub(super) fn active_show_zone(&self, cx: &App) -> bool {
         let v = match &self.active {
@@ -431,7 +420,6 @@ impl LayoutPopupHost for ChartTabs {
                 .active_layout_orientation(cx)
                 .unwrap_or(StackOrientation::Vertical),
             orderbook: self.active_orderbook_enabled(cx),
-            liquidations: self.active_liquidations_enabled(cx),
             show_zone: self.active_show_zone(cx),
             auto_pin: self.active_auto_pin(cx),
             price_axis_pos: self.active_price_axis_pos(cx),

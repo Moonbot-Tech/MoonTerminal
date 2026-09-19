@@ -44,7 +44,6 @@ impl ChartDataState {
             origin: (0.0, 0.0),
             scene_visible: false,
             orderbook_enabled: true,
-            liquidations_enabled: true,
             orderbook_only: false,
             price_axis_pos: crate::persistence::chart_persist::PriceAxisPos::Left,
             time_axis_visible: true,

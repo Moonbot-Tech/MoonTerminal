@@ -13,6 +13,7 @@ pub(crate) mod apply_all;
 pub(crate) mod apply_row;
 mod candle_popup;
 mod graphics_popup;
+mod history_popup;
 mod volumes_popup;
 // `pub(crate)` because the header price ticker reuses `search` and `render_popup`.
 pub(crate) mod coin_search;
@@ -431,7 +432,6 @@ impl ChartTabs {
             main_scale,
             main_layout,
             main_orderbook,
-            main_liquidations,
             main_show_zone,
             main_auto_pin,
             main_axis_pos,
@@ -446,7 +446,6 @@ impl ChartTabs {
         ): (
             Option<f32>,
             (Option<StackLayoutMode>, Option<u16>, Option<u16>),
-            Option<bool>,
             Option<bool>,
             Option<bool>,
             Option<bool>,
@@ -467,7 +466,6 @@ impl ChartTabs {
                 (s.layout_mode, s.layout_height_fit, s.layout_height_scroll)
             });
             let main_orderbook = main_spec.and_then(|s| s.orderbook_enabled);
-            let main_liquidations = main_spec.and_then(|s| s.liquidations_enabled);
             let main_show_zone = main_spec.and_then(|s| s.show_zone);
             let main_auto_pin = main_spec.and_then(|s| s.auto_pin);
             let main_axis_pos = main_spec.and_then(|s| s.price_axis_pos);
@@ -489,7 +487,6 @@ impl ChartTabs {
                 main_scale,
                 main_layout,
                 main_orderbook,
-                main_liquidations,
                 main_show_zone,
                 main_auto_pin,
                 main_axis_pos,
@@ -518,11 +515,6 @@ impl ChartTabs {
         }
         if main_orderbook.is_some() {
             main.update(cx, |p, pcx| p.set_orderbook_enabled(main_orderbook, pcx));
-        }
-        if main_liquidations.is_some() {
-            main.update(cx, |p, pcx| {
-                p.set_liquidations_enabled(main_liquidations, pcx)
-            });
         }
         if main_candle_view.is_some() {
             main.update(cx, |p, pcx| p.set_candle_view(main_candle_view, pcx));

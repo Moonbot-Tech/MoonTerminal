@@ -1133,17 +1133,6 @@ impl ChartEngine {
         self.data.borrow().chart_graphics
     }
 
-    /// Enables or disables liquidation trades for every pane in this window. Returns true on change.
-    pub fn set_liquidations_enabled(&mut self, enabled: bool) -> bool {
-        let mut data = self.data.borrow_mut();
-        if data.liquidations_enabled == enabled {
-            return false;
-        }
-        data.liquidations_enabled = enabled;
-        data.mark_view_dirty();
-        true
-    }
-
     /// Sets comparison book-only mode, hiding the plot and price axis while expanding the order book
     /// to the full width. Returns true on change.
     pub fn set_orderbook_only(&mut self, only: bool) -> bool {

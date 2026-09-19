@@ -1,24 +1,28 @@
-//! The "Chart graphics" popup (the palette button beside the candlestick one) configures how the
-//! chart DRAWS: the size of the closed-trade history arrows, the thickness of their entry-to-exit
-//! connector, which closed TRADES appear at all, whether a closed order keeps its sell line,
-//! whether any order line shows its repricing history, the size of the live trade marks, and the
-//! bottom volume band.
+//! The "Chart graphics" popup (the palette button beside the candlestick one) configures what the
+//! chart draws OVER the candles right now: the lines — the two core price lines, a live order's
+//! repricing trail, the MoonShot corridor — and the live trade marks, their per-trade volume bars
+//! and the liquidation crosses among them.
 //!
-//! The last two groups used to live in Settings -> Interface, keyed to the THEME. They describe a
-//! chart tab, not a colour scheme, so they moved here and became per tab like everything else in
-//! this popup; `moon_core::config::theme_legacy` carries an existing user's values across.
+//! It used to hold the closed-trade history and the bottom volume band as well, four frames in
+//! two columns. Those are subjects of their own and moved to popups of their own: the history to
+//! [`super::history_popup`], the band to [`super::volumes_popup`] beside the horizontal volumes it
+//! shares its colours with. What stayed is what a reader looking at the LIVE picture adjusts.
 //!
 //! Like the layout and candle popups beside it, these settings are PER TAB: the target is the tab
 //! strip's active tab or the detached window's panel. The tab spec persists them to `charts.json`
 //! through `ChartTabSpec::chart_graphics`, and a tab without an override follows the default of its
 //! KIND of tab (`chart_tabs::apply_all`). The ⧉ button opens the row that names which kinds a press
-//! addresses and stores these settings as their default.
+//! addresses and stores these settings as their default. Every switch here is a field of
+//! [`ChartGraphicsCfg`] — the price lines and the corridor moved in from `CandleViewCfg`, the
+//! liquidations from the tab spec — because the press copies the struct whole, and a switch shown
+//! here but stored elsewhere would either not travel with it or drag its own struct along.
 //!
-//! Controls read stored config on every render. The RGB picker keeps window-local MoonUI state
-//! through the shared color adapter, refreshing it when the active tab changes.
+//! Controls read stored config on every render and are stateless on purpose: `MoonSlider` needs a
+//! state entity held on the host, and every other control in these popups reads its value straight
+//! from the config, so the sizes are offered as steps.
 
 use gpui::*;
-use moon_core::config::{ChartGraphicsCfg, TradeHistoryStyle};
+use moon_core::config::ChartGraphicsCfg;
 use moon_ui::{MoonCheckbox, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex};
 use rust_i18n::t;
 
@@ -28,15 +32,6 @@ use crate::design;
 use crate::panels::{
     popup_apply_all_button, popup_close_button, popup_group, popup_group_inset_px, popup_title,
 };
-
-/// Selectable arrow-size multipliers, inside `moon_chart::trade_marks`'s clamp range.
-///
-/// Steps rather than a slider: `MoonSlider` needs a state entity held on the host, and every other
-/// control in these chart popups is stateless on purpose (see the module docs).
-const ARROW_SCALES: [f32; 6] = [0.6, 0.8, 1.0, 1.3, 1.6, 2.0];
-
-/// Selectable connector thicknesses, in logical px.
-const CONNECTOR_PX: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
 
 /// Selectable trade-marker size multipliers.
 ///
@@ -48,59 +43,16 @@ const MARKER_SCALES: [f32; 6] = [0.5, 0.7, 1.0, 1.5, 2.0, 3.0];
 /// Selectable opacities for the per-TRADE volume bars. `0.34` is the shipped default.
 const TRADE_VOLUME_ALPHAS: [f32; 6] = [0.0, 0.15, 0.34, 0.5, 0.75, 1.0];
 
-/// Selectable bottom-volume band heights, as a fraction of the plot height.
+/// Row width in rendered pixels, and the segment width of its six-step rows.
 ///
-/// The lower end sits above `moon_chart::volume_bars`'s drawable minimum, while the upper end is
-/// its maximum. These are offered sizes, not the clamp, and the clamp stays that module's business
-/// alone.
-const CANDLE_VOLUME_HEIGHTS: [f32; 6] = [0.05, 0.10, 0.18, 0.25, 0.35, 0.45];
-
-/// Selectable bottom-volume opacities.
-///
-/// Carries BOTH `0.30` and `0.22`: the first is the shipped default, the second is what the LIGHT
-/// theme used to force before this value became per tab. A migrated light-mode user therefore lands
-/// on an exact segment instead of the nearest one.
-const CANDLE_VOLUME_ALPHAS: [f32; 6] = [0.0, 0.15, 0.22, 0.30, 0.50, 1.0];
-
-/// Selectable bottom-volume styles, in display order.
-const VOLUME_STYLES: [u8; 3] = [
-    moon_core::market::candles::VOLUME_STYLE_HILLS,
-    moon_core::market::candles::VOLUME_STYLE_BARS,
-    moon_core::market::candles::VOLUME_STYLE_OFF,
-];
-
-/// Segment widths, in rendered pixels, for rows of two to seven segments. Every row fills the
-/// same content width, so a row's segment width is that width over its count.
-const ROW_W: f32 = 7.0 * 42.0;
-const SEG_W2: f32 = ROW_W / 2.0;
-const SEG_W3: f32 = ROW_W / 3.0;
+/// Kept at the width the two-column popup's rows had, so the checkbox labels wrap where they did;
+/// the localized ES strings are the longest of the three.
+pub(super) const ROW_W: f32 = 7.0 * 42.0;
 const SEG_W6: f32 = ROW_W / 6.0;
-const SEG_W7: f32 = ROW_W / 7.0;
-
-/// Gap between the popup's two columns, in rendered pixels.
-///
-/// Wider than the gap between groups in a column: the two columns are read as two pages side by
-/// side — the trade drawing on the left, the bottom band on the right — and a gap no larger than
-/// the one between stacked groups made the four frames read as one grid.
-const COLUMN_GAP: f32 = 12.0;
-
-/// Width of one popup column in rendered pixels: a row plus the group frame around it.
-///
-/// Sized on the widest row: the sides band's seven interval segments at 42 units each. Every
-/// other row divides the same width among its own segments. The checkbox labels wrap rather than
-/// widen, the RGB picker fits within that same width, and the localized ES strings are the
-/// longest of the three.
-fn column_width(cx: &App) -> f32 {
-    ROW_W + popup_group_inset_px(cx)
-}
 
 /// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
-///
-/// Two columns and the gap between them; see [`column_width`] for what sizes a column. The popup
-/// went two-wide once the bottom band grew its sides rows: single-column, it ran past the height
-/// of a laptop chart, and the volume group is the one that stands on its own.
 pub(super) fn content_width(cx: &App) -> Pixels {
-    px(2.0 * column_width(cx) + COLUMN_GAP)
+    px(ROW_W + popup_group_inset_px(cx))
 }
 
 /// Index of the step nearest a stored value.
@@ -114,7 +66,7 @@ pub(super) fn content_width(cx: &App) -> Pixels {
 ///
 /// Returns:
 ///     Index into `steps` of the closest value; zero when the stored value is not finite.
-fn nearest(steps: &[f32], value: f32) -> usize {
+pub(super) fn nearest(steps: &[f32], value: f32) -> usize {
     if !value.is_finite() {
         return 0;
     }
@@ -130,40 +82,20 @@ fn nearest(steps: &[f32], value: f32) -> usize {
     best
 }
 
-/// Label a bucket width in seconds the way the chart's timeframe controls spell one: `5s`, `1m`.
-///
-/// Delegates to the volume band's own `bucket_label` so the popup and the cursor readout can never
-/// spell the same width two ways; a width it cannot name (none on the list) prints its seconds.
-fn tf_label(tf_s: u32) -> String {
-    moon_chart::volume_bars::bucket_label(f64::from(tf_s) * 1_000.0)
-        .unwrap_or_else(|| format!("{tf_s}s"))
-}
-
 /// Label a 0..1 fraction as whole percent.
 ///
 /// Needs no dictionary entry: the digits and `%` read the same in all three languages, which is
-/// what keeps four rows of them out of the locale files.
-fn percent_label(v: f32) -> String {
+/// what keeps rows of them out of the locale files.
+pub(super) fn percent_label(v: f32) -> String {
     format!("{}%", (v * 100.0).round())
 }
 
-/// Localized name of a bottom-volume style id.
-///
-/// An unknown id falls back to the "off" label rather than panicking: the value is a `u8` in a
-/// hand-editable config, so a number outside the set is reachable by typing.
-fn volume_style_label(style: u8) -> String {
-    use moon_core::market::candles::{VOLUME_STYLE_BARS, VOLUME_STYLE_HILLS};
-    if style == VOLUME_STYLE_HILLS {
-        t!("chart.graphics.volume_style_hills").to_string()
-    } else if style == VOLUME_STYLE_BARS {
-        t!("chart.graphics.volume_style_bars").to_string()
-    } else {
-        t!("chart.graphics.volume_style_off").to_string()
-    }
-}
-
 /// Edit the target's config by loading its current value, mutating it, and applying it to the tab.
-fn write_cfg<T: GraphicsPopupHost>(
+///
+/// Shared by the three popups that edit [`ChartGraphicsCfg`]: this one, the history and the
+/// volumes. Each starts from the target's NORMALIZED value, so a hand-edited out-of-range number is
+/// not persisted back untouched by an unrelated click.
+pub(super) fn write_cfg<T: GraphicsPopupHost>(
     entity: &Entity<T>,
     app: &mut App,
     f: impl FnOnce(&mut ChartGraphicsCfg),
@@ -175,134 +107,85 @@ fn write_cfg<T: GraphicsPopupHost>(
     });
 }
 
+/// Build one checkbox bound to a single [`ChartGraphicsCfg`] flag.
+///
+/// Args:
+///     entity: Popup host, updated on toggle.
+///     id: Per-host element identity prefix.
+///     suffix: Element id suffix, unique within this popup.
+///     label_key: Locale key for the label.
+///     checked: Current value, read fresh on every render.
+///     set: Writes the new value into the target's config.
+///
+/// Returns:
+///     The checkbox.
+pub(super) fn flag_cb<T: GraphicsPopupHost>(
+    entity: &Entity<T>,
+    id: &str,
+    suffix: &str,
+    label_key: &str,
+    checked: bool,
+    set: fn(&mut ChartGraphicsCfg, bool),
+) -> MoonCheckbox {
+    let entity = entity.clone();
+    MoonCheckbox::new(SharedString::from(format!("{id}-{suffix}")))
+        .label(t!(label_key).to_string())
+        .checked(checked)
+        .on_change(move |ch: &bool, _w, app| {
+            let v = *ch;
+            write_cfg(&entity, app, |c| set(c, v));
+        })
+}
+
 /// Render popup content by reading the stored values on every render for the stateless controls.
 fn render_graphics_popup<T: GraphicsPopupHost>(
     id: &str,
     entity: Entity<T>,
     cfg: ChartGraphicsCfg,
-    target: (u32, moon_core::config::ChartBucket),
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    // --- Trade history frame: arrow size and connector thickness. ---
-    let arrow_row = {
-        let entity = entity.clone();
-        let current = nearest(&ARROW_SCALES, cfg.trade_arrow_scale);
-        seg_row(
-            format!("{id}-arrow"),
-            t!("chart.graphics.arrow_size").to_string(),
-            ARROW_SCALES
-                .iter()
-                .enumerate()
-                // Labelled as multipliers ("1x"), which needs no dictionary entry and stays
-                // readable when the base sizes are retuned.
-                .map(|(index, v)| (format!("{v}x"), index == current))
-                .collect(),
-            SEG_W6,
-            p,
-            cx,
-            move |ix, app| {
-                if let Some(v) = ARROW_SCALES.get(ix) {
-                    let v = *v;
-                    write_cfg(&entity, app, |c| c.trade_arrow_scale = v);
-                }
-            },
-        )
-    };
-    let connector_row = {
-        let entity = entity.clone();
-        let current = nearest(&CONNECTOR_PX, cfg.connector_thickness_px);
-        seg_row(
-            format!("{id}-connector"),
-            t!("chart.graphics.connector").to_string(),
-            CONNECTOR_PX
-                .iter()
-                .enumerate()
-                .map(|(index, v)| (format!("{v}"), index == current))
-                .collect(),
-            34.0,
-            p,
-            cx,
-            move |ix, app| {
-                if let Some(v) = CONNECTOR_PX.get(ix) {
-                    let v = *v;
-                    write_cfg(&entity, app, |c| c.connector_thickness_px = v);
-                }
-            },
-        )
-    };
+    // --- Lines frame: the two core price lines, the live order trail, the MoonShot corridor. ---
+    // Each price line has a toggle of its own: the orange LastPrice and the blue MarkPrice. A
+    // market whose provider reports no mark price draws none regardless of the flag.
+    let last_line_cb = flag_cb(
+        &entity,
+        id,
+        "last-price-line",
+        "chart.graphics.last_price_line",
+        cfg.last_price_line,
+        |c, v| c.last_price_line = v,
+    );
+    let mark_line_cb = flag_cb(
+        &entity,
+        id,
+        "mark-price-line",
+        "chart.graphics.mark_price_line",
+        cfg.mark_price_line,
+        |c, v| c.mark_price_line = v,
+    );
+    let hide_move_cb = flag_cb(
+        &entity,
+        id,
+        "hide-move-history",
+        "chart.graphics.hide_move_history",
+        cfg.hide_order_move_history,
+        |c, v| c.hide_order_move_history = v,
+    );
+    // The MoonShot order's own corridor fill, NOT the layout popup's "zone" (that one shades the
+    // trading control strip). It spans the full pane width, so it is the one order area worth a
+    // switch of its own.
+    let moonshot_cb = flag_cb(
+        &entity,
+        id,
+        "moonshot-zone",
+        "chart.graphics.moonshot_zone",
+        cfg.moonshot_zone,
+        |c, v| c.moonshot_zone = v,
+    );
 
-    // Arrows or Moonbot's order lines for the closed trades: a two-way row like the volume kind,
-    // because the two are pictures of the same thing at the same place and never coexist.
-    let trade_style_row = {
-        let entity = entity.clone();
-        let lines = cfg.trade_history_style == TradeHistoryStyle::MoonbotLines;
-        seg_row(
-            format!("{id}-trade-style"),
-            t!("chart.graphics.trade_style").to_string(),
-            vec![
-                (t!("chart.graphics.trade_style_marks").to_string(), !lines),
-                (t!("chart.graphics.trade_style_lines").to_string(), lines),
-            ],
-            SEG_W2,
-            p,
-            cx,
-            move |ix, app| {
-                let style = match ix {
-                    1 => TradeHistoryStyle::MoonbotLines,
-                    _ => TradeHistoryStyle::Marks,
-                };
-                write_cfg(&entity, app, |c| c.trade_history_style = style);
-            },
-        )
-    };
-
-    // --- Which closed trades the history layer draws, plus the closed order's sell line and every
-    // order line's repricing trail. ---
-    let real_cb = {
-        let entity = entity.clone();
-        MoonCheckbox::new(SharedString::from(format!("{id}-real")))
-            .label(t!("chart.graphics.real_trades").to_string())
-            .checked(cfg.show_real_trades)
-            .on_change(move |ch: &bool, _w, app| {
-                let v = *ch;
-                write_cfg(&entity, app, |c| c.show_real_trades = v);
-            })
-    };
-    let emulator_cb = {
-        let entity = entity.clone();
-        MoonCheckbox::new(SharedString::from(format!("{id}-emulator")))
-            .label(t!("chart.graphics.emulator_trades").to_string())
-            .checked(cfg.show_emulator_trades)
-            .on_change(move |ch: &bool, _w, app| {
-                let v = *ch;
-                write_cfg(&entity, app, |c| c.show_emulator_trades = v);
-            })
-    };
-    let hide_sell_cb = {
-        let entity = entity.clone();
-        MoonCheckbox::new(SharedString::from(format!("{id}-hide-closed-sell")))
-            .label(t!("chart.graphics.hide_closed_sell").to_string())
-            .description(t!("chart.graphics.hide_closed_sell_hint").to_string())
-            .checked(cfg.hide_closed_sell_line)
-            .on_change(move |ch: &bool, _w, app| {
-                let v = *ch;
-                write_cfg(&entity, app, |c| c.hide_closed_sell_line = v);
-            })
-    };
-    let hide_move_cb = {
-        let entity = entity.clone();
-        MoonCheckbox::new(SharedString::from(format!("{id}-hide-move-history")))
-            .label(t!("chart.graphics.hide_move_history").to_string())
-            .description(t!("chart.graphics.hide_move_history_hint").to_string())
-            .checked(cfg.hide_order_move_history)
-            .on_change(move |ch: &bool, _w, app| {
-                let v = *ch;
-                write_cfg(&entity, app, |c| c.hide_order_move_history = v);
-            })
-    };
-
-    // --- Trade marks: the live trade crosses and their per-trade volume bars. ---
+    // --- Trade marks: the live trade crosses, their per-trade volume bars, and the liquidation
+    // crosses appended to the same ring. ---
     let marker_scale_row = {
         let entity = entity.clone();
         let current = nearest(&MARKER_SCALES, cfg.marker_scale);
@@ -312,6 +195,8 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
             MARKER_SCALES
                 .iter()
                 .enumerate()
+                // Labelled as multipliers ("1x"), which needs no dictionary entry and stays
+                // readable when the base sizes are retuned.
                 .map(|(index, v)| (format!("{v}x"), index == current))
                 .collect(),
             SEG_W6,
@@ -325,6 +210,13 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
             },
         )
     };
+    // What the row governs is easy to miss on a busy chart — thin bars along the plot's floor, one
+    // per cross in the trade zone (`crosses.hlsl`, `volume_vertex`) — so a caption under it says
+    // where to look.
+    let trade_volume_alpha_hint = div()
+        .text_size(design::t_caption(cx))
+        .text_color(rgb(p.text_muted))
+        .child(t!("chart.graphics.trade_volume_alpha_hint").to_string());
     let trade_volume_alpha_row = {
         let entity = entity.clone();
         let current = nearest(&TRADE_VOLUME_ALPHAS, cfg.trade_volume_alpha);
@@ -347,212 +239,14 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
             },
         )
     };
-
-    // --- Bottom volumes: the per-CANDLE band drawn beneath the trade bars above. ---
-    let volume_style_row = {
-        let entity = entity.clone();
-        seg_row(
-            format!("{id}-volume-style"),
-            t!("chart.graphics.volume_style").to_string(),
-            VOLUME_STYLES
-                .iter()
-                // Exact equality, not `nearest`: a style is an identity, and snapping an unknown
-                // id to the closest NUMBER would light a style the chart is not drawing.
-                .map(|v| (volume_style_label(*v), *v == cfg.candle_volume_style))
-                .collect(),
-            SEG_W3,
-            p,
-            cx,
-            move |ix, app| {
-                if let Some(v) = VOLUME_STYLES.get(ix) {
-                    let v = *v;
-                    write_cfg(&entity, app, |c| c.candle_volume_style = v);
-                }
-            },
-        )
-    };
-    let volume_height_row = {
-        let entity = entity.clone();
-        let current = nearest(&CANDLE_VOLUME_HEIGHTS, cfg.candle_volume_height);
-        seg_row(
-            format!("{id}-volume-height"),
-            t!("chart.graphics.candle_volume_height").to_string(),
-            CANDLE_VOLUME_HEIGHTS
-                .iter()
-                .enumerate()
-                .map(|(index, v)| (percent_label(*v), index == current))
-                .collect(),
-            SEG_W6,
-            p,
-            cx,
-            move |ix, app| {
-                if let Some(v) = CANDLE_VOLUME_HEIGHTS.get(ix) {
-                    let v = *v;
-                    write_cfg(&entity, app, |c| c.candle_volume_height = v);
-                }
-            },
-        )
-    };
-    let volume_alpha_row = {
-        let entity = entity.clone();
-        let current = nearest(&CANDLE_VOLUME_ALPHAS, cfg.candle_volume_alpha);
-        seg_row(
-            format!("{id}-volume-alpha"),
-            t!("chart.graphics.candle_volume_alpha").to_string(),
-            CANDLE_VOLUME_ALPHAS
-                .iter()
-                .enumerate()
-                .map(|(index, v)| (percent_label(*v), index == current))
-                .collect(),
-            SEG_W6,
-            p,
-            cx,
-            move |ix, app| {
-                if let Some(v) = CANDLE_VOLUME_ALPHAS.get(ix) {
-                    let v = *v;
-                    write_cfg(&entity, app, |c| c.candle_volume_alpha = v);
-                }
-            },
-        )
-    };
-    // --- Moonbot's `Vol` on top of either style: the switch, then its kind and interval rows,
-    // which appear only while it is on so the plain popup keeps the shape it had. ---
-    let sides_on = cfg.candle_volume_sides;
-    let volume_sides_cb = {
-        let entity = entity.clone();
-        MoonCheckbox::new(SharedString::from(format!("{id}-volume-sides")))
-            .label(t!("chart.graphics.volume_sides").to_string())
-            .checked(sides_on)
-            .on_change(move |ch: &bool, _w, app| {
-                let v = *ch;
-                write_cfg(&entity, app, |c| c.candle_volume_sides = v);
-            })
-    };
-    let volume_kind_row = sides_on.then(|| {
-        let entity = entity.clone();
-        seg_row(
-            format!("{id}-volume-kind"),
-            t!("chart.graphics.volume_kind").to_string(),
-            vec![
-                (
-                    t!("chart.graphics.volume_kind_overlay").to_string(),
-                    !cfg.candle_volume_stacked,
-                ),
-                (
-                    t!("chart.graphics.volume_kind_stacked").to_string(),
-                    cfg.candle_volume_stacked,
-                ),
-            ],
-            SEG_W2,
-            p,
-            cx,
-            move |ix, app| {
-                write_cfg(&entity, app, |c| c.candle_volume_stacked = ix == 1);
-            },
-        )
-    });
-    let volume_tf_row = sides_on.then(|| {
-        let entity = entity.clone();
-        // Exact equality, like the style row: the stored value is already snapped onto this list
-        // by `normalize_chart_graphics`, so a segment lights only for the width the band draws.
-        let mut labels = vec![(
-            t!("chart.graphics.volume_tf_auto").to_string(),
-            cfg.candle_volume_tf_s == 0,
-        )];
-        labels.extend(
-            moon_chart::side_volume::SIDE_TF_CHOICES_S
-                .iter()
-                .map(|s| (tf_label(*s), *s == cfg.candle_volume_tf_s)),
-        );
-        seg_row(
-            format!("{id}-volume-tf"),
-            t!("chart.graphics.volume_tf").to_string(),
-            labels,
-            SEG_W7,
-            p,
-            cx,
-            move |ix, app| {
-                let v = match ix.checked_sub(1) {
-                    None => 0,
-                    Some(i) => match moon_chart::side_volume::SIDE_TF_CHOICES_S.get(i) {
-                        Some(s) => *s,
-                        None => return,
-                    },
-                };
-                write_cfg(&entity, app, |c| c.candle_volume_tf_s = v);
-            },
-        )
-    });
-    let volume_scale_pos_row = {
-        let entity = entity.clone();
-        seg_row(
-            format!("{id}-volume-scale-pos"),
-            t!("chart.graphics.volume_scale_pos").to_string(),
-            vec![
-                (
-                    t!("chart.graphics.volume_scale_left").to_string(),
-                    !cfg.candle_volume_scale_right,
-                ),
-                (
-                    t!("chart.graphics.volume_scale_right").to_string(),
-                    cfg.candle_volume_scale_right,
-                ),
-            ],
-            SEG_W2,
-            p,
-            cx,
-            move |ix, app| {
-                write_cfg(&entity, app, |c| c.candle_volume_scale_right = ix == 1);
-            },
-        )
-    };
-    // Where the plot's bottom captions go once the band takes the floor: lifted above it, or
-    // printed over the bars on their plates. A per-tab switch beside the band's own controls,
-    // because it is the BAND that displaces them; the label editor knows nothing of it.
-    let volume_labels_row = {
-        let entity = entity.clone();
-        seg_row(
-            format!("{id}-volume-labels"),
-            t!("chart.graphics.volume_labels").to_string(),
-            vec![
-                (
-                    t!("chart.graphics.volume_labels_above").to_string(),
-                    !cfg.candle_volume_labels_over,
-                ),
-                (
-                    t!("chart.graphics.volume_labels_over").to_string(),
-                    cfg.candle_volume_labels_over,
-                ),
-            ],
-            SEG_W2,
-            p,
-            cx,
-            move |ix, app| {
-                write_cfg(&entity, app, |c| c.candle_volume_labels_over = ix == 1);
-            },
-        )
-    };
-    let volume_scale_row = {
-        let entity = entity.clone();
-        v_flex()
-            .w_full()
-            .gap(design::ui_px(cx, 2.0))
-            .child(
-                div()
-                    .text_size(design::t_caption(cx))
-                    .text_color(rgb(p.text))
-                    .child(t!("chart.graphics.candle_volume_scale").to_string()),
-            )
-            .child(crate::controls::color_picker::ColorPicker::new(
-                format!("{id}-volume-scale-{target:?}"),
-                cfg.candle_volume_scale,
-                move |color, app| {
-                    if entity.read(app).spec_key() == target {
-                        write_cfg(&entity, app, |c| c.candle_volume_scale = color);
-                    }
-                },
-            ))
-    };
+    let liquidations_cb = flag_cb(
+        &entity,
+        id,
+        "liquidations",
+        "chart.graphics.liquidations",
+        cfg.liquidations,
+        |c, v| c.liquidations = v,
+    );
 
     // The ⧉ "apply to all" icon mirrors the candle popup beside it: distribute THIS target's
     // settings to all non-Main tabs and windows, include Main only when it is the source, then
@@ -567,69 +261,6 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
             },
         )
     };
-
-    // Two columns under one head row: what the chart draws OVER the candles on the left — the
-    // trade history, the order lines, the live marks — and the bottom band on the right. The band
-    // is the tallest group and the one with a subject of its own, so it takes a column alone; the
-    // three on the left add up to about its height, which is what keeps the popup's bottom edge
-    // level. Each column is a fixed row wide so a group's rows never stretch to the other's.
-    let col_w = px(column_width(cx));
-    let left_column = v_flex()
-        .w(col_w)
-        .flex_none()
-        .gap(design::ui_px(cx, 8.0))
-        .child(
-            // The two trade-kind checkboxes belong HERE, beside the arrow size and the connector they
-            // now share a subject with. They used to sit in the order-lines group because that is
-            // what they filtered; the order-lines group keeps the closed sell line and every order
-            // line's move-history trail, which genuinely are about order lines.
-            popup_group("frame-history", t!("chart.graphics.frame_history")).child(
-                v_flex()
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(trade_style_row)
-                    // The arrow rows stay in the lines style too: an entry the archive holds no
-                    // line for keeps its arrow there.
-                    .child(arrow_row)
-                    .child(connector_row)
-                    .child(real_cb)
-                    .child(emulator_cb),
-            ),
-        )
-        .child(
-            popup_group("frame-orders", t!("chart.graphics.frame_orders")).child(
-                v_flex()
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(hide_sell_cb)
-                    .child(hide_move_cb),
-            ),
-        )
-        .child(
-            popup_group("frame-trade-marks", t!("chart.graphics.frame_trade_marks")).child(
-                v_flex()
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(marker_scale_row)
-                    .child(trade_volume_alpha_row),
-            ),
-        );
-    let right_column = v_flex().w(col_w).flex_none().child(
-        popup_group(
-            "frame-bottom-volumes",
-            t!("chart.graphics.frame_bottom_volumes"),
-        )
-        .child(
-            v_flex()
-                .gap(design::ui_px(cx, 6.0))
-                .child(volume_style_row)
-                .child(volume_sides_cb)
-                .children(volume_kind_row)
-                .children(volume_tf_row)
-                .child(volume_height_row)
-                .child(volume_alpha_row)
-                .child(volume_scale_pos_row)
-                .child(volume_labels_row)
-                .child(volume_scale_row),
-        ),
-    );
 
     // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
     v_flex()
@@ -653,12 +284,28 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 )),
         )
         .child(
-            h_flex()
-                .w_full()
-                .items_start()
-                .gap(px(COLUMN_GAP))
-                .child(left_column)
-                .child(right_column),
+            // Group ids are `&'static str`: they only need to be unique among their siblings, and
+            // the enclosing root already carries the per-host prefix.
+            popup_group("frame-lines", t!("chart.graphics.frame_lines")).child(
+                v_flex()
+                    .w(px(ROW_W))
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(last_line_cb)
+                    .child(mark_line_cb)
+                    .child(hide_move_cb)
+                    .child(moonshot_cb),
+            ),
+        )
+        .child(
+            popup_group("frame-trade-marks", t!("chart.graphics.frame_trade_marks")).child(
+                v_flex()
+                    .w(px(ROW_W))
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(marker_scale_row)
+                    .child(trade_volume_alpha_row)
+                    .child(trade_volume_alpha_hint)
+                    .child(liquidations_cb),
+            ),
         )
         .into_any_element()
 }
@@ -667,7 +314,8 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
 ///
 /// The target is the strip's active tab or the window panel, resolved by the host. Applying and
 /// persisting go through [`LayoutPopupHost::apply_tab_setting`]; each host implements its own
-/// "apply to all", exactly as [`super::candle_popup::CandlePopupHost`] does.
+/// "apply to all", exactly as [`super::candle_popup::CandlePopupHost`] does. The history and
+/// volumes popups edit the same struct and ride on this trait; see their modules.
 pub(super) trait GraphicsPopupHost: LayoutPopupHost {
     /// Return the target's per-tab override, or `None` to follow the global default.
     fn graphics_override(&self, cx: &App) -> Option<ChartGraphicsCfg>;
@@ -750,13 +398,11 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
         p,
         cx,
     );
-    popover = popover.content(v_flex().gap_2().children(row).child(render_graphics_popup(
-        id_prefix,
-        entity,
-        cfg,
-        this.spec_key(),
-        p,
-        cx,
-    )));
+    popover = popover.content(
+        v_flex()
+            .gap_2()
+            .children(row)
+            .child(render_graphics_popup(id_prefix, entity, cfg, p, cx)),
+    );
     popover
 }

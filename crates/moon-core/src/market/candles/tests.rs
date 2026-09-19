@@ -375,9 +375,10 @@ fn cfg_defaults_sane() {
     assert_eq!(cfg.tf_ms(), TF5);
     assert_eq!(cfg.mode, CANDLE_MODE_OUTLINE_IN_ZONE);
     assert!(cfg.trade_candles > 0);
-    assert!(cfg.last_price_line);
-    assert!(cfg.mark_price_line);
-    assert!(cfg.moonshot_zone);
+    assert!(
+        cfg.carried_lines.is_none(),
+        "a fresh value carries nothing to migrate"
+    );
     // Clamp an unknown or removed timeframe to 5 minutes, including legacy 15-minute configs.
     let bad = CandleViewCfg { tf_min: 15, ..cfg };
     assert_eq!(bad.tf_ms(), TF5);
@@ -394,30 +395,78 @@ fn cfg_defaults_sane() {
 }
 
 /// A `layout.toml` or `charts.json` written before the price-line split carries only
-/// `price_lines`. Losing it would turn BOTH lines back on for every user who had them off, which
-/// is exactly the setting they went into the popup to change.
+/// `price_lines`. It is still read — into the carrier the startup pass moves to
+/// `ChartGraphicsCfg` — because losing it would turn BOTH lines back on for every user who had
+/// them off, which is exactly the setting they went into the popup to change.
 #[test]
-fn legacy_price_lines_flag_drives_both_split_lines() {
+fn legacy_price_lines_flag_is_carried_for_both_split_lines() {
     let off: CandleViewCfg = toml::from_str("tf_min = 5\nprice_lines = false\n")
         .expect("a pre-split layout.toml must still load");
-    assert!(!off.last_price_line);
-    assert!(!off.mark_price_line);
+    let carried = off.carried_lines.expect("carried");
+    assert_eq!(carried.last_price_line, Some(false));
+    assert_eq!(carried.mark_price_line, Some(false));
+    assert_eq!(
+        carried.moonshot_zone, None,
+        "a key the file never had is not invented"
+    );
 
     let on: CandleViewCfg =
         serde_json::from_str(r#"{"tf_min":5,"price_lines":true}"#).expect("a pre-split spec loads");
-    assert!(on.last_price_line);
-    assert!(on.mark_price_line);
+    let carried = on.carried_lines.expect("carried");
+    assert_eq!(carried.last_price_line, Some(true));
+    assert_eq!(carried.mark_price_line, Some(true));
 }
 
 /// A file carrying BOTH the legacy flag and a split one keeps the split value: the legacy flag is
-/// a fallback, not an override, or a stale key would outrank what the user just clicked.
+/// a fallback, not an override, or a stale key would outrank what the user last clicked.
 #[test]
 fn split_price_line_flags_outrank_the_legacy_one() {
     let cfg: CandleViewCfg =
         serde_json::from_str(r#"{"price_lines":false,"mark_price_line":true}"#)
             .expect("a mixed spec loads");
-    assert!(!cfg.last_price_line, "the legacy flag still covers last");
-    assert!(cfg.mark_price_line, "the split flag wins for mark");
+    let carried = cfg.carried_lines.expect("carried");
+    assert_eq!(
+        carried.last_price_line,
+        Some(false),
+        "the legacy flag still covers last"
+    );
+    assert_eq!(
+        carried.mark_price_line,
+        Some(true),
+        "the split flag wins for mark"
+    );
+}
+
+/// The carrier survives a save for as long as it is carried — under the old keys, never as a
+/// key of its own — and a value carrying nothing writes none of them. That is what lets a save
+/// that lands before the carry-over is committed leave the next launch's pass something to read.
+#[test]
+fn the_carrier_is_written_back_under_the_old_keys_until_consumed() {
+    let cfg: CandleViewCfg =
+        serde_json::from_str(r#"{"tf_min":5,"moonshot_zone":false}"#).expect("loads");
+    assert!(cfg.carried_lines.is_some());
+    let text = serde_json::to_string(&cfg).expect("serializes");
+    assert!(
+        text.contains(r#""moonshot_zone":false"#),
+        "still carried: written back"
+    );
+    assert!(
+        !text.contains("last_price_line"),
+        "a key the file never had is not invented"
+    );
+    assert!(!text.contains("carried_lines"));
+    let back: CandleViewCfg = serde_json::from_str(&text).expect("reloads");
+    assert_eq!(back, cfg);
+
+    let consumed = CandleViewCfg {
+        carried_lines: None,
+        ..cfg
+    };
+    let text = serde_json::to_string(&consumed).expect("serializes");
+    assert!(
+        !text.contains("moonshot_zone"),
+        "consumed: the old key is gone"
+    );
 }
 
 /// Every field stays optional: a spec that predates the whole struct, or one hand-edited down to a
@@ -438,8 +487,8 @@ fn a_non_finite_outline_width_falls_back_to_the_default() {
     assert_eq!(cfg, cfg, "the loaded config must compare equal to itself");
 }
 
-/// Only what the history read consumes may buy a pane reset. A style checkbox or the order-line
-/// corridor changing must leave the reduced value untouched, while the timeframe must move it.
+/// Only what the history read consumes may buy a pane reset. A style checkbox or a leftover
+/// carrier must leave the reduced value untouched, while the timeframe must move it.
 #[test]
 fn history_inputs_ignores_style_and_overlay_fields() {
     let base = CandleViewCfg::default();
@@ -449,7 +498,11 @@ fn history_inputs_ignores_style_and_overlay_fields() {
         neutral_in_zone: !base.neutral_in_zone,
         hide_candles: 5,
         trades_limit: 7,
-        moonshot_zone: !base.moonshot_zone,
+        carried_lines: Some(CarriedLines {
+            last_price_line: Some(false),
+            mark_price_line: None,
+            moonshot_zone: None,
+        }),
         ..base
     };
     assert_eq!(
@@ -466,14 +519,6 @@ fn history_inputs_ignores_style_and_overlay_fields() {
         },
         CandleViewCfg {
             trade_candles: base.trade_candles + 1,
-            ..base
-        },
-        CandleViewCfg {
-            last_price_line: false,
-            ..base
-        },
-        CandleViewCfg {
-            mark_price_line: false,
             ..base
         },
     ] {
@@ -508,9 +553,15 @@ fn a_real_pre_split_layout_block_still_loads() {
     assert_eq!(cfg.trade_candles, 0);
     assert!(cfg.wicks_in_zone);
     assert!(!cfg.neutral_in_zone);
-    assert!(!cfg.last_price_line, "the user had the price lines off");
-    assert!(!cfg.mark_price_line, "the user had the price lines off");
-    assert!(cfg.moonshot_zone, "a key that did not exist keeps drawing");
+    let carried = cfg
+        .carried_lines
+        .expect("the user had the price lines off: carried");
+    assert_eq!(carried.last_price_line, Some(false));
+    assert_eq!(carried.mark_price_line, Some(false));
+    assert_eq!(
+        carried.moonshot_zone, None,
+        "a key that did not exist is not invented"
+    );
 }
 
 /// Saving and reloading must be lossless, or a setting would drift every time the app writes its
@@ -530,9 +581,9 @@ fn candle_view_survives_a_save_and_reload_round_trip() {
         outline_px: 3.0,
         wicks_in_zone: false,
         neutral_in_zone: true,
-        last_price_line: false,
-        mark_price_line: false,
-        moonshot_zone: false,
+        // `None` is what every value the popup writes holds; the carried case has a test of its
+        // own above.
+        carried_lines: None,
     };
     let toml_back: CandleViewCfg =
         toml::from_str(&toml::to_string(&cfg).expect("serializes")).expect("reloads");

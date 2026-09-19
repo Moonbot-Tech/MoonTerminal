@@ -432,8 +432,18 @@ impl ChartDataState {
             }
             let history_source_changed = history_source_sig != pr.source_history_sig;
             // Changing the Liquidations toggle reuploads combo to add or remove liquidation crosses.
-            let liq_toggle_changed = pr.liquidations_enabled != self.liquidations_enabled;
-            pr.liquidations_enabled = self.liquidations_enabled;
+            let liq_toggle_changed = pr.liquidations_enabled != self.chart_graphics.liquidations;
+            pr.liquidations_enabled = self.chart_graphics.liquidations;
+            // Each price line follows its own switch, and a flip has to reach the upload branch
+            // below, which only a history read does: the two used to ride in `CandleViewCfg` and
+            // force the reset through `candle_cfg_changed`; from `ChartGraphicsCfg` they force it
+            // here, the way the liquidations switch beside them does.
+            let price_lines = (
+                self.chart_graphics.last_price_line,
+                self.chart_graphics.mark_price_line,
+            );
+            let price_lines_toggle_changed = pr.applied_price_lines != price_lines;
+            pr.applied_price_lines = price_lines;
             // Candle/trade-zone configuration changes, including timeframe, K, or limit, require a
             // history reset. Moving the current bucket does too because the last-K-candle zone has
             // advanced and old crosses must be removed. The bucket advances only once per timeframe,
@@ -492,6 +502,7 @@ impl ChartDataState {
                 || source_generation_changed
                 || source_archive_changed
                 || liq_toggle_changed
+                || price_lines_toggle_changed
                 || candle_cfg_changed
                 || zone_bucket_changed
                 || pr.resident_left_rel.is_nan()
@@ -928,16 +939,16 @@ impl ChartDataState {
                 }
                 if history.price_lines_changed || history.combo_reset {
                     // Each price line follows its OWN toggle, so one can be drawn without the
-                    // other. Flipping either forces a history reset through candle_cfg_changed and
-                    // reaches this branch; a disabled line uploads an empty buffer rather than a
-                    // stale one, because the layer keeps whatever it was last given.
-                    let last_points: &[_] = if candle_cfg.last_price_line {
+                    // other. Flipping either forces a history reset (`price_lines_toggle_changed`)
+                    // and reaches this branch; a disabled line uploads an empty buffer rather than
+                    // a stale one, because the layer keeps whatever it was last given.
+                    let last_points: &[_] = if self.chart_graphics.last_price_line {
                         &pr.history_buffers.last_points
                     } else {
                         &[]
                     };
                     fill_price_upload(last_points, pane.view.epoch_ms, &mut pr.last_line_upload);
-                    let mark_points: &[_] = if candle_cfg.mark_price_line {
+                    let mark_points: &[_] = if self.chart_graphics.mark_price_line {
                         &pr.history_buffers.mark_points
                     } else {
                         &[]

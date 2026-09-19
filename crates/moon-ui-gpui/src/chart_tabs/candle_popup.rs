@@ -5,6 +5,10 @@
 //! names which kinds of tab a press addresses and stores these settings as their default.
 //! All controls are stateless segments or checkboxes. Candle colors for up, down, and neutral are
 //! edited under Settings -> Interface in theme.toml and are shared by all windows.
+//!
+//! Only what is drawn AS candles or in their trade zone lives here. The two price lines and the
+//! MoonShot corridor are lines over the plot and sit in the "Chart graphics" popup, with the
+//! other lines — they used to be three checkboxes at the bottom of the trades frame.
 
 use gpui::*;
 use moon_core::market::candles::{
@@ -251,24 +255,6 @@ fn render_candle_popup<T: CandlePopupHost>(
             },
         )
     };
-    // The two MoonProto price lines carry a toggle each: the orange LastPrice and the blue
-    // MarkPrice. A market whose provider reports no mark price draws none regardless of the flag.
-    let last_line_cb = flag_cb(
-        &entity,
-        id,
-        "last-price-line",
-        "chart.candles.last_price_line",
-        cfg.last_price_line,
-        |c, v| c.last_price_line = v,
-    );
-    let mark_line_cb = flag_cb(
-        &entity,
-        id,
-        "mark-price-line",
-        "chart.candles.mark_price_line",
-        cfg.mark_price_line,
-        |c, v| c.mark_price_line = v,
-    );
     let wicks_cb = flag_cb(
         &entity,
         id,
@@ -284,17 +270,6 @@ fn render_candle_popup<T: CandlePopupHost>(
         "chart.candles.neutral_in_zone",
         cfg.neutral_in_zone,
         |c, v| c.neutral_in_zone = v,
-    );
-    // The MoonShot order's own corridor fill, NOT the layout popup's "zone" (that one shades the
-    // trading control strip). It spans the full pane width, so it is the one order area worth a
-    // switch of its own.
-    let moonshot_cb = flag_cb(
-        &entity,
-        id,
-        "moonshot-zone",
-        "chart.candles.moonshot_zone",
-        cfg.moonshot_zone,
-        |c, v| c.moonshot_zone = v,
     );
     // Candle colors for up, down, and neutral are edited under Settings -> Interface. The single
     // theme is shared by all windows and stored with every color in theme.toml, so this only tells
@@ -359,11 +334,8 @@ fn render_candle_popup<T: CandlePopupHost>(
                     .child(hint_block("chart.candles.zone_hint", p, cx))
                     .child(hide_row)
                     .child(hint_block("chart.candles.hide_hint", p, cx))
-                    .child(last_line_cb)
-                    .child(mark_line_cb)
                     .child(wicks_cb)
                     .child(neutral_cb)
-                    .child(moonshot_cb)
                     .child(colors_hint),
             ),
         )

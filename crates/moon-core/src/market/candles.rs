@@ -55,8 +55,10 @@ pub const VOLUME_STYLE_LEGACY_SIDES: u8 = 3;
 /// `charts.json` stores optional per-tab overrides.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 // Deserialized through [`CandleViewWire`], which migrates the pre-split `price_lines` flag and
-// supplies the per-field defaults `#[serde(default)]` used to give this struct directly.
-#[serde(from = "CandleViewWire")]
+// supplies the per-field defaults `#[serde(default)]` used to give this struct directly, and
+// serialized through [`CandleViewOut`], which writes a still-carried line switch back under its
+// old key.
+#[serde(from = "CandleViewWire", into = "CandleViewOut")]
 pub struct CandleViewCfg {
     /// Candle timeframe in minutes, selected from [`CANDLE_TF_CHOICES_MIN`].
     pub tf_min: u32,
@@ -77,15 +79,102 @@ pub struct CandleViewCfg {
     /// Whether to use a neutral candle color in the trade zone to avoid competing with
     /// the cross colors.
     pub neutral_in_zone: bool,
-    /// Whether to draw the orange LastPrice line.
-    pub last_price_line: bool,
-    /// Whether to draw the blue MarkPrice line. A market whose provider reports no mark price
-    /// draws nothing regardless.
-    pub mark_price_line: bool,
-    /// Whether a MoonShot order fills its corridor between `corridor_price_down` and
-    /// `corridor_price_up`. This is the ORDER's own area, unrelated to the layout popup's
-    /// `show_zone`, which shades the trading control strip.
-    pub moonshot_zone: bool,
+    /// The three line switches a file written BEFORE they moved to
+    /// `crate::config::ChartGraphicsCfg` still carries under this table, or `None` once the
+    /// carry-over has consumed them (or the file never had them).
+    ///
+    /// Written back under the OLD keys for exactly as long as it is carried: a save that lands
+    /// before the carry-over has been committed — the pass could not write `charts.json`, or
+    /// something else saved the layout first — must not strip the keys the next launch's pass
+    /// will read. Once consumed it is `None`, the keys go, and no marker is needed to keep the
+    /// pass from running twice: a file with no keys carries nothing. Neutralized by
+    /// [`Self::history_inputs`], and `None` on a value the popup writes once the pass has run —
+    /// a popup edit seeded from a default the pass had to hand back keeps carrying, which is
+    /// harmless: the next launch carries the same switches into the same tab.
+    pub carried_lines: Option<CarriedLines>,
+}
+
+/// The line switches an old `CandleViewCfg` table carried, each `None` where the key was absent.
+///
+/// The pre-split `price_lines` flag is already folded in: it stands in for either split flag the
+/// table does not name, exactly as it did while the switches lived here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CarriedLines {
+    pub last_price_line: Option<bool>,
+    pub mark_price_line: Option<bool>,
+    pub moonshot_zone: Option<bool>,
+}
+
+impl CarriedLines {
+    /// What a table that named NONE of the three drew while the switches lived here: the
+    /// struct's own defaults, all on, regardless of any other table — a kind's or a tab's own
+    /// `candle_view` replaced the inherited one whole. The carry-over stamps this for such a table
+    /// in a profile that is otherwise old, so the switches it drew stay the switches it draws.
+    pub const SHIPPED: CarriedLines = CarriedLines {
+        last_price_line: Some(true),
+        mark_price_line: Some(true),
+        moonshot_zone: Some(true),
+    };
+
+    /// This carrier with every switch it did not name read as the shipped default: what a table
+    /// of a kind's or a tab's OWN drew for it, since that table replaced the inherited one whole.
+    pub fn or_shipped(self) -> CarriedLines {
+        CarriedLines {
+            last_price_line: self.last_price_line.or(Self::SHIPPED.last_price_line),
+            mark_price_line: self.mark_price_line.or(Self::SHIPPED.mark_price_line),
+            moonshot_zone: self.moonshot_zone.or(Self::SHIPPED.moonshot_zone),
+        }
+    }
+
+    /// Whether the table named at least one of the three.
+    pub fn any(self) -> bool {
+        self.last_price_line.is_some()
+            || self.mark_price_line.is_some()
+            || self.moonshot_zone.is_some()
+    }
+}
+
+/// Serialization form of [`CandleViewCfg`]: its fields, plus a still-carried line switch under
+/// the old key it was read from, so a save before the carry-over is committed loses nothing.
+#[derive(Serialize)]
+struct CandleViewOut {
+    tf_min: u32,
+    mode: u8,
+    trade_candles: u16,
+    hide_candles: u16,
+    trades_limit: u32,
+    outline_px: f32,
+    wicks_in_zone: bool,
+    neutral_in_zone: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_price_line: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mark_price_line: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    moonshot_zone: Option<bool>,
+}
+
+impl From<CandleViewCfg> for CandleViewOut {
+    fn from(c: CandleViewCfg) -> Self {
+        let carried = c.carried_lines.unwrap_or(CarriedLines {
+            last_price_line: None,
+            mark_price_line: None,
+            moonshot_zone: None,
+        });
+        Self {
+            tf_min: c.tf_min,
+            mode: c.mode,
+            trade_candles: c.trade_candles,
+            hide_candles: c.hide_candles,
+            trades_limit: c.trades_limit,
+            outline_px: c.outline_px,
+            wicks_in_zone: c.wicks_in_zone,
+            neutral_in_zone: c.neutral_in_zone,
+            last_price_line: carried.last_price_line,
+            mark_price_line: carried.mark_price_line,
+            moonshot_zone: carried.moonshot_zone,
+        }
+    }
 }
 
 impl Default for CandleViewCfg {
@@ -99,9 +188,7 @@ impl Default for CandleViewCfg {
             outline_px: 1.0,
             wicks_in_zone: true,
             neutral_in_zone: false,
-            last_price_line: true,
-            mark_price_line: true,
-            moonshot_zone: true,
+            carried_lines: None,
         }
     }
 }
@@ -128,6 +215,8 @@ struct CandleViewWire {
     /// Pre-split toggle that drove BOTH price lines at once. Read only where the split flag for
     /// that line is absent, so a file carrying both keeps the newer one.
     price_lines: Option<bool>,
+    /// The three switches that now live in `ChartGraphicsCfg`, still read here so a profile
+    /// written before the move keeps the user's choice — see [`CandleViewCfg::carried_lines`].
     last_price_line: Option<bool>,
     mark_price_line: Option<bool>,
     moonshot_zone: Option<bool>,
@@ -153,15 +242,12 @@ impl From<CandleViewWire> for CandleViewCfg {
                 .unwrap_or(d.outline_px),
             wicks_in_zone: w.wicks_in_zone.unwrap_or(d.wicks_in_zone),
             neutral_in_zone: w.neutral_in_zone.unwrap_or(d.neutral_in_zone),
-            last_price_line: w
-                .last_price_line
-                .or(w.price_lines)
-                .unwrap_or(d.last_price_line),
-            mark_price_line: w
-                .mark_price_line
-                .or(w.price_lines)
-                .unwrap_or(d.mark_price_line),
-            moonshot_zone: w.moonshot_zone.unwrap_or(d.moonshot_zone),
+            carried_lines: Some(CarriedLines {
+                last_price_line: w.last_price_line.or(w.price_lines),
+                mark_price_line: w.mark_price_line.or(w.price_lines),
+                moonshot_zone: w.moonshot_zone,
+            })
+            .filter(|c| c.any()),
         }
     }
 }
@@ -175,7 +261,7 @@ impl CandleViewCfg {
     /// popup's ⧉ distributes a setting. Six fields cannot change what is READ and so must not buy
     /// one: `outline_px`, `wicks_in_zone`, `neutral_in_zone` and `hide_candles` only reach the
     /// candle STYLE, which the renderer gates separately; `trades_limit` is not passed to the read
-    /// protocol at all; `moonshot_zone` is order-line geometry.
+    /// protocol at all; `carried_lines` is a carry-over the startup pass has already consumed.
     ///
     /// Neutralizing those by name rather than listing the survivors is deliberate: a field added
     /// later keeps forcing a reset until someone decides otherwise, which is the safe direction to
@@ -187,7 +273,7 @@ impl CandleViewCfg {
             outline_px: 0.0,
             wicks_in_zone: false,
             neutral_in_zone: false,
-            moonshot_zone: false,
+            carried_lines: None,
             ..self
         }
     }

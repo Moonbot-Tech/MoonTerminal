@@ -536,7 +536,6 @@ pub(super) fn layout_values(
         StackSetting::Layout(Some(snap.mode), height_fit, height_scroll),
         StackSetting::Scale(scale),
         StackSetting::Orderbook(snap.orderbook),
-        StackSetting::Liquidations(snap.liquidations),
         StackSetting::ShowZone(snap.show_zone),
         StackSetting::AutoPin(snap.auto_pin),
         StackSetting::Orientation(orientation),

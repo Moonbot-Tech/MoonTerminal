@@ -18,9 +18,9 @@ use super::stack::{
     COMPACT_STABLE, ChartStackEntry, SlotOwner, apply_setting, chart_stack_card, compare_role,
     force_panels_scale, render_chart_stack, resolve_layout, set_panels_auto_pin,
     set_panels_candle_view, set_panels_chart_graphics, set_panels_chart_labels,
-    set_panels_cursor_labels, set_panels_line_labels, set_panels_liquidations,
-    set_panels_orderbook_enabled, set_panels_price_axis_pos, set_panels_scale,
-    set_panels_show_zone, set_panels_time_axis_visible, sync_compare, tile_gutter,
+    set_panels_cursor_labels, set_panels_line_labels, set_panels_orderbook_enabled,
+    set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone,
+    set_panels_time_axis_visible, sync_compare, tile_gutter,
 };
 use crate::Backend;
 use crate::panels::ChartPanel;
@@ -49,8 +49,6 @@ pub(crate) struct AddChartStack {
     layout_height_scroll: Option<u16>,
     /// Whether to show order books on this tab's charts (per window). `None` = enabled by default.
     orderbook_enabled: Option<bool>,
-    /// Whether to draw liquidation trades (per window). `None` = enabled by default.
-    liquidations_enabled: Option<bool>,
     /// Tab candle/trade display settings (`None` = global default).
     candle_view: Option<moon_core::market::CandleViewCfg>,
     /// Tab chart-drawing settings (`None` = the global `layout.chart_graphics` default).
@@ -175,7 +173,6 @@ impl AddChartStack {
             layout_height_fit: None,
             layout_height_scroll: None,
             orderbook_enabled: None,
-            liquidations_enabled: None,
             candle_view: None,
             chart_graphics: None,
             chart_labels: None,
@@ -719,9 +716,6 @@ impl AddChartStack {
         panel.update(cx, |panel, pcx| {
             panel.set_cursor_labels(self.cursor_labels.unwrap_or(true), pcx)
         });
-        panel.update(cx, |panel, pcx| {
-            panel.set_liquidations_enabled(self.liquidations_enabled.unwrap_or(true), pcx)
-        });
         {
             let cv = self.candle_view;
             panel.update(cx, |panel, pcx| panel.set_candle_view(cv, pcx));
@@ -929,25 +923,6 @@ impl AddChartStack {
         apply_setting(&mut self.cursor_labels, show, &self.charts, cx, |c, cx| {
             set_panels_cursor_labels(c, show.unwrap_or(true), cx)
         });
-    }
-
-    pub(crate) fn liquidations_enabled(&self) -> Option<bool> {
-        self.liquidations_enabled
-    }
-
-    /// Enable or disable liquidation trades for every stack chart (per window).
-    pub(crate) fn set_liquidations_enabled(
-        &mut self,
-        enabled: Option<bool>,
-        cx: &mut Context<Self>,
-    ) {
-        apply_setting(
-            &mut self.liquidations_enabled,
-            enabled,
-            &self.charts,
-            cx,
-            |c, cx| set_panels_liquidations(c, enabled.unwrap_or(true), cx),
-        );
     }
 
     pub(crate) fn candle_view(&self) -> Option<moon_core::market::CandleViewCfg> {

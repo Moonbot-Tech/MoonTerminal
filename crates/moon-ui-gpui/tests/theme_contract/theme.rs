@@ -276,6 +276,11 @@ fn popover_contents_do_not_paint_a_second_surface() {
             r#".id(SharedString::from(format!("{id}-popup")))"#,
         ),
         (
+            "chart_tabs/history_popup.rs",
+            "chart_tabs/history_popup.rs",
+            r#".id(SharedString::from(format!("{id}-popup")))"#,
+        ),
+        (
             "chart_tabs/volumes_popup.rs",
             "chart_tabs/volumes_popup.rs",
             r#".id(SharedString::from(format!("{id}-popup")))"#,

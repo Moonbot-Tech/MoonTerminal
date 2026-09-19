@@ -134,7 +134,6 @@ impl ChartTabs {
                     saved_scale,
                     saved_layout,
                     saved_orderbook,
-                    saved_liquidations,
                     saved_show_zone,
                     saved_auto_pin,
                     saved_orientation,
@@ -159,7 +158,6 @@ impl ChartTabs {
                             (s.layout_mode, s.layout_height_fit, s.layout_height_scroll)
                         }),
                         spec.and_then(|s| s.orderbook_enabled),
-                        spec.and_then(|s| s.liquidations_enabled),
                         spec.and_then(|s| s.show_zone),
                         spec.and_then(|s| s.auto_pin),
                         spec.and_then(|s| s.layout_orientation),
@@ -192,11 +190,6 @@ impl ChartTabs {
                 }
                 if saved_orderbook.is_some() {
                     panel.update(cx, |p, pcx| p.set_orderbook_enabled(saved_orderbook, pcx));
-                }
-                if saved_liquidations.is_some() {
-                    panel.update(cx, |p, pcx| {
-                        p.set_liquidations_enabled(saved_liquidations, pcx)
-                    });
                 }
                 if saved_show_zone.is_some() {
                     panel.update(cx, |p, pcx| p.set_show_zone(saved_show_zone, pcx));

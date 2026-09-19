@@ -16,6 +16,7 @@ use super::candle_popup;
 use super::common;
 use super::common::LayoutPopupHost as _;
 use super::graphics_popup;
+use super::history_popup;
 use super::labels_popup;
 use super::popup_slot::ChartPopup;
 use super::volumes_popup;
@@ -267,7 +268,25 @@ impl Render for ChartTabs {
                 .render(),
             cx,
         );
-        // The labels button beside the palette one edits the ACTIVE TAB's chart captions.
+        // The history button beside the palette one edits how the ACTIVE TAB draws closed trades.
+        let history_popup_open = self.popup_shows(ChartPopup::History);
+        let history_btn = history_popup::history_popup_host(
+            self,
+            "chart-history",
+            MoonButton::new("chart-history-settings")
+                .leading_icon(MoonButtonIconSlot::new("icons/book-open.svg"))
+                .tooltip(t!("chart.history.tip").to_string())
+                .size(MoonSize::Xs)
+                .variant(if history_popup_open {
+                    MoonButtonVariant::Blue
+                } else {
+                    MoonButtonVariant::Ghost
+                })
+                .selected(history_popup_open)
+                .render(),
+            cx,
+        );
+        // The labels button beside the history one edits the ACTIVE TAB's chart captions.
         let labels_popup_open = self.popup_shows(ChartPopup::Labels);
         let labels_btn = labels_popup::labels_popup_host(
             self,
@@ -465,6 +484,7 @@ impl Render for ChartTabs {
                     .children(gather_btn)
                     .child(candle_btn)
                     .child(graphics_btn)
+                    .child(history_btn)
                     .child(labels_btn)
                     .child(volumes_btn)
                     .child(settings_btn),

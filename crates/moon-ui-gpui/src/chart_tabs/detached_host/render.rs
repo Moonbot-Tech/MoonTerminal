@@ -15,6 +15,7 @@ use super::super::candle_popup;
 use super::super::common;
 use super::super::common::LayoutPopupHost as _;
 use super::super::graphics_popup;
+use super::super::history_popup;
 use super::super::labels_popup;
 use super::super::popup_slot::ChartPopup;
 use super::super::volumes_popup;
@@ -75,6 +76,7 @@ impl Render for DetachedChartHost {
         let popup_open = self.popup_shows(ChartPopup::Layout);
         let candle_popup_open = self.popup_shows(ChartPopup::Candle);
         let graphics_popup_open = self.popup_shows(ChartPopup::Graphics);
+        let history_popup_open = self.popup_shows(ChartPopup::History);
         let labels_popup_open = self.popup_shows(ChartPopup::Labels);
         let volumes_popup_open = self.popup_shows(ChartPopup::Volumes);
         // Header market-search input and matches. Render the list at the `v_flex` level after the
@@ -277,6 +279,23 @@ impl Render for DetachedChartHost {
                                         MoonButtonVariant::Ghost
                                     })
                                     .selected(graphics_popup_open)
+                                    .render(),
+                                cx,
+                            ))
+                            // The history button edits how THIS window draws closed trades.
+                            .child(history_popup::history_popup_host(
+                                self,
+                                "detached-chart-history",
+                                MoonButton::new("detached-history-settings")
+                                    .leading_icon(MoonButtonIconSlot::new("icons/book-open.svg"))
+                                    .tooltip(t!("chart.history.tip").to_string())
+                                    .size(MoonSize::Xs)
+                                    .variant(if history_popup_open {
+                                        MoonButtonVariant::Blue
+                                    } else {
+                                        MoonButtonVariant::Ghost
+                                    })
+                                    .selected(history_popup_open)
                                     .render(),
                                 cx,
                             ))

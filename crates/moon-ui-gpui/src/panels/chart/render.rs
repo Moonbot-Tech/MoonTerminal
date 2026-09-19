@@ -133,9 +133,6 @@ impl Render for ChartPanel {
             | self.chart.set_orders(orders_style)
             | self.chart.set_scale(self.scale)
             | self.chart.set_orderbook_enabled(self.orderbook_enabled)
-            | self
-                .chart
-                .set_liquidations_enabled(self.liquidations_enabled)
             | self.chart.set_orderbook_only(self.orderbook_only)
             | self.chart.set_hvol_allowed(self.hvol_allowed())
             | self.chart.set_candle_view(candle_view)
