@@ -174,7 +174,7 @@ impl SettingsView {
         }
     }
 
-    /// Keep equal-width arrows large enough for the active density and zoom.
+    /// Keep equal-width arrows large enough for the body text at any zoom.
     /// Build a `<<  <  value  >  >>` stepper row with small and large adjustments.
     /// Shared by second/day counters and the Storage version limit; `adjust` owns clamping.
     pub(super) fn stepper_controls(

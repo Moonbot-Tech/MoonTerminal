@@ -282,7 +282,7 @@ impl ChartPanel {
     /// The hover card, or `None` unless a badge is hovered AND Ctrl (Command on macOS) is held.
     pub(super) fn warn_card(
         &self,
-        ppp: f32,
+        sf: f32,
         ctrl: bool,
         palette: MoonPalette,
         cx: &App,
@@ -293,12 +293,12 @@ impl ChartPanel {
         let hover = self.warn.hover.as_ref()?;
         let (cursor_x, _) = self.input.cursor?;
         let (cluster, mark) = self.warn.items.get(hover.nearest)?;
-        let ppp = ppp.max(0.1);
+        let sf = sf.max(0.1);
         let slot = self.chart.slot_dev_size();
-        let slot_w = slot.0 as f32 / ppp;
-        let slot_h = slot.1 as f32 / ppp;
+        let slot_w = slot.0 as f32 / sf;
+        let slot_h = slot.1 as f32 / sf;
         let card_w = f32::from(design::ui_px(cx, CARD_W));
-        let left = (cursor_x / ppp - card_w * 0.5).clamp(0.0, (slot_w - card_w).max(0.0));
+        let left = (cursor_x / sf - card_w * 0.5).clamp(0.0, (slot_w - card_w).max(0.0));
         let axis_h = if self.time_axis_visible {
             moon_chart::TIME_AXIS_H
         } else {

@@ -499,7 +499,7 @@ fn field_row(
         .items_center()
         .gap(design::ui_px(cx, FIELD_GAP))
         .child(
-            // The face the density-selected checkbox beside these gives its label, on and off: its size,
+            // The face the control-tier checkbox beside these gives its label, on and off: its size,
             // soft text, and the same fade when dead.
             div()
                 .flex_1()

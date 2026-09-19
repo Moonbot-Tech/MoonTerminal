@@ -440,7 +440,7 @@ impl AnalyticsView {
             // Gap 4 (not 6) plus a checkbox-wide lead-in: together they reproduce the grid
             // row's checkbox column, so the slider labels stay under the field names. The
             // lead-in is an invisible, tier-following checkbox rather than a stated width, so it
-            // keeps MoonUI's own box size at any density and UI zoom; hidden, it takes layout but
+            // keeps MoonUI's own box size at the control tier and any UI zoom; hidden, it takes layout but
             // paints nothing.
             .gap(design::ui_px(cx, 4.0))
             .opacity(if dim { 0.5 } else { 1.0 })

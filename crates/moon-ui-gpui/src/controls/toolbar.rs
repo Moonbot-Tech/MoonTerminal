@@ -28,11 +28,11 @@ mod tests;
 /// Base gap between the Sell caption and its first percentage cell.
 const SELL_CAPTION_GAP: f32 = 8.0;
 
-/// Caption for a preset group, muted, sharing the density-tier body size with the chips beside it.
+/// Caption for a preset group, muted, sharing the control-tier body size with the chips beside it.
 ///
 /// `MoonText` with [`design::text_metrics`] rather than a hand-rolled text div: it applies
 /// the theme's mono family and already-scaled metrics, so the caption lands on the same size and
-/// baseline as the neighbouring density-tier controls. Colour is the remaining caption cue.
+/// baseline as the neighbouring control-tier controls. Colour is the remaining caption cue.
 ///
 /// The text is a literal, not `t!`: `Size`/`Sell` are on the deliberately-untranslated list
 /// (`locales/README.md`), as are the neighbouring `Lev`/`SL`/`TP`. The tooltip is translated, the
@@ -50,7 +50,7 @@ fn strip_caption(text: impl Into<SharedString>, p: MoonPalette, cx: &App) -> imp
 /// Args:
 ///     text: Caption or readout text rendered at the toolbar's shared text scale.
 ///     color: Active palette color for the text's semantic role.
-///     cx: Application context used to resolve density-tier text metrics.
+///     cx: Application context used to resolve control-tier text metrics.
 ///
 /// Returns:
 ///     A non-shrinking monospaced toolbar text element.
@@ -100,7 +100,7 @@ fn captioned_strip(
 /// (`MoonButton::width`) puts the value into `px(..)` verbatim, so a raw width would squeeze a
 /// label that grows with the legacy font-delta channel — the same ailment the preset cells had.
 ///
-/// Icon-only launchers use [`design::glyph_btn_w`], which follows the density tier. The
+/// Icon-only launchers use [`design::glyph_btn_w`], which follows the control tier. The
 /// [`ICON_BTN_W`] constant is retained only because a contract test pins its name.
 const LEV_W: f32 = 61.6;
 /// Base width of the stop-loss metric button.
@@ -126,7 +126,7 @@ const SELL_CAPTION: &str = "Sell";
 /// Stable unit for group-local manual order-size equivalents.
 const SIZE_UNIT: &str = "USDT eq.";
 
-/// Measure one complete localized launcher button at density-tier geometry.
+/// Measure one complete localized launcher button at control-tier geometry.
 ///
 /// The label is measured AND rendered in [`design::ui_font`]: it is a control caption, and the two
 /// sections that host labeled launchers set that family so `MoonButton`'s text segment inherits it
@@ -134,7 +134,7 @@ const SIZE_UNIT: &str = "USDT eq.";
 /// would budget the whole trailing cluster wrongly at every `row_fit` shedding threshold. MoonUI
 /// gives this size zero native padding so icon-only targets stay square; labeled launchers add
 /// [`TOOLBAR_LAUNCHER_PAD_X`] on each side via `MoonButton::padding_x`. The reserved width is the
-/// leading icon plus its density-tier gap ([`design::action_icon_reservation`]), both insets, and
+/// leading icon plus its control-tier gap ([`design::action_icon_reservation`]), both insets, and
 /// the two border pixels. The button is never allowed to become narrower than
 /// [`design::glyph_btn_w`].
 ///
@@ -1254,7 +1254,7 @@ pub fn toolbar(
 ///     backend: Shared terminal state passed to the destination.
 ///     open: Singleton-window entry point invoked by the click.
 ///     p: Active palette used for icon and text colors.
-///     cx: Application context used to resolve the density-tier icon-only width.
+///     cx: Application context used to resolve the control-tier icon-only width.
 ///
 /// Returns:
 ///     One rendered compact launcher button.

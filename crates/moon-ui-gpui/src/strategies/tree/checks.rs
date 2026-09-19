@@ -134,7 +134,7 @@ pub(super) fn bulk_check(
 ///
 /// The reservation is a real checkbox made invisible rather than a width taken from a mirrored
 /// metric: both visible and hidden boxes use row_checkbox and its tier-following size, so their
-/// widths stay identical at every density and UI zoom. Hidden costs nothing beyond layout — GPUI returns before painting the subtree or
+/// widths stay identical at every UI zoom. Hidden costs nothing beyond layout — GPUI returns before painting the subtree or
 /// registering its mouse listeners (`div.rs`), so the reserved column has no hitbox of its own.
 ///
 /// Args:

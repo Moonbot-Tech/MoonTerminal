@@ -1170,7 +1170,7 @@ fn leverage_presets_only_stage_values_until_apply() {
     );
 }
 
-/// `controls/toolbar.rs:row_fit` must budget the Profit Monitor launcher; changing its density-tier
+/// `controls/toolbar.rs:row_fit` must budget the Profit Monitor launcher; changing its control-tier
 /// glyph multiplier back to four makes this assertion red and lets the trailing launcher clip at narrow
 /// Main-window widths.
 #[test]

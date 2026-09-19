@@ -94,8 +94,8 @@ pub(super) enum ConnColWidth {
     ///
     /// The text columns share it for a second reason: their shrink order at a narrow window
     /// is decided by their RESOLVED bases, so a mixed policy would let one Font setting overtake
-    /// another column. Density now selects the text adjustment, while MoonUI still permits
-    /// custom finite font deltas. A scale-free comparison keeps that ordering independent
+    /// another column. The design fixes the text adjustment (`DESIGN_FONT_DELTA`), while MoonUI
+    /// still permits custom finite font deltas. A scale-free comparison keeps that ordering independent
     /// of either source.
     TextScaled,
 }

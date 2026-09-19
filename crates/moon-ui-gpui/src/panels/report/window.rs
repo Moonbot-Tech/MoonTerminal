@@ -244,9 +244,11 @@ pub fn open_scoped(
         display.as_ref().map(|display| display.visible_bounds()),
         saved_origin_is_visible,
     );
+    // The minimum is design pixels; the window API takes the platform's.
+    let zoom = moon_ui::MoonTheme::content_zoom(cx);
     let min_size = size(
-        px(REPORT_WINDOW_MIN_W.min(f32::from(bounds.size.width))),
-        px(REPORT_WINDOW_MIN_H.min(f32::from(bounds.size.height))),
+        px((REPORT_WINDOW_MIN_W * zoom).min(f32::from(bounds.size.width))),
+        px((REPORT_WINDOW_MIN_H * zoom).min(f32::from(bounds.size.height))),
     );
     let mut options = crate::window::windowing::tool_window_options(
         crate::persistence::panel_meta::panel_title("Report").to_string(),

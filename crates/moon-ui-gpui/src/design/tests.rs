@@ -351,10 +351,7 @@ fn micro_control_h_value_stays_below_the_control_row(cx: &mut gpui::TestAppConte
 
 // --- One size system ---------------------------------------------------------------------------
 
-use super::{
-    BODY_TEXT, CONTROL_TIER, body_font_base, font_w, line_px, t_body, t_body_lg, t_caption,
-    t_title, ui_px,
-};
+use super::{body_font_base, font_w, line_px, t_body, t_body_lg, t_caption, t_title, ui_px};
 use gpui::px;
 
 /// `design.rs:t_body` and its siblings must render what MoonUI's font channel rendered for the
@@ -397,7 +394,6 @@ fn body_text_matches_the_legacy_font_channel_at_the_design(cx: &mut gpui::TestAp
 /// makes text disagree with the controls it sits beside.
 #[gpui::test]
 fn t_body_is_the_control_tiers_font(cx: &mut gpui::TestAppContext) {
-    assert_eq!(BODY_TEXT, CONTROL_TIER.control_metrics().font_size);
     cx.update(|cx| {
         moon_ui::MoonTheme::install_config(
             crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),

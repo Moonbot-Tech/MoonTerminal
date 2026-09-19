@@ -618,8 +618,8 @@ pub(crate) fn popup_gear_trigger(
 
 /// Builds the ⚙ that opens a settings popup on a fixed-height chrome strip.
 ///
-/// Same as [`popup_gear_trigger`] but pinned to `MoonSize::Xs` so it stays dense regardless of
-/// the app's density setting.
+/// Same as [`popup_gear_trigger`] but pinned to `MoonSize::Xs`, the dense strip's own tier rather
+/// than [`design::CONTROL_TIER`].
 pub(crate) fn popup_gear_trigger_dense(
     id: impl Into<ElementId>,
     tooltip: impl Into<SharedString>,

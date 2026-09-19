@@ -158,8 +158,8 @@ impl Shell {
             + cluster_gap
             + 1.0
             + cluster_gap;
-        // Start below the same drawn header at Compact, Standard, and Large so the popup never
-        // overlaps chrome when the density tier changes.
+        // Start below the drawn header, whatever height the font delta gives it, so the popup
+        // never overlaps chrome.
         let top = design::header_height(cx);
         let overlay = div()
             .id("header-ticker-popup-box")

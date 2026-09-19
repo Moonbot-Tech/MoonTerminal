@@ -411,7 +411,7 @@ fn popup_text_width(cx: &App, text: &str, base_size: f32, weight: f32) -> f32 {
     design::ui_text_width(cx, text, base_size, weight, false)
 }
 
-/// Measure text set in the density-selected checkbox label's face, in the popup's proportional family.
+/// Measure text set in the control-tier checkbox label's face, in the popup's proportional family.
 ///
 /// That face follows the UI zoom but not the legacy font-delta channel (see
 /// [`crate::panels::common::CHECKBOX_METRICS`]), so it is measured apart from
@@ -468,7 +468,7 @@ fn settings_content_width_value(
     title_w.max(group_content + group_inset_px)
 }
 
-/// Build the tree text-step row: its label, then a density-sized stepper.
+/// Build the tree text-step row: its label, then a control-tier stepper.
 ///
 /// A sibling of [`pref_group`]'s checkbox rows rather than a member of [`POPUP_ROWS`] — the
 /// preference is numeric, not boolean, so it cannot share `PrefRow`'s bool-typed function

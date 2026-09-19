@@ -966,7 +966,7 @@ fn strategy_footer_is_one_atomic_action_row() {
     assert!(!selection.contains("176.0") && !selection.contains("MoonButtonSize::Micro"));
     assert!(
         !selection.contains(".size("),
-        "the selection toolbar's buttons must inherit the app's density tier, never pin one \
+        "the selection toolbar's buttons must inherit the control tier, never pin one \
          back explicitly"
     );
     assert!(

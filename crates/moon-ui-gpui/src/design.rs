@@ -75,7 +75,7 @@ pub const MOON_SCROLLBAR_OVERLAY_W: f32 = 8.0;
 ///
 /// Pass this value directly to `MoonDisclosure`: its `caret_box` applies `tokens.ui(...)`, so
 /// passing [`ui_px`] would apply the UI scale twice. The caret therefore follows the UI slider,
-/// matching raw text sized through [`t_body`] (the density-tier channel) and chrome such as
+/// matching raw text sized through [`t_body`] (the body-text channel) and chrome such as
 /// [`vline`].
 pub const DISCLOSURE_GLYPH: f32 = 11.0;
 
@@ -90,7 +90,7 @@ pub const GLYPH_CLOSE: &str = "✕";
 /// Base (unscaled) glyph edge for a passive disclosure caret whose enclosing row owns the click.
 ///
 /// Pass this value directly to `MoonDisclosure`; its `caret_box` applies the UI scale. This keeps
-/// the marker on the UI slider, matching [`t_body`]'s density-tier channel.
+/// the marker on the UI slider, matching [`t_body`]'s body-text channel.
 pub const DISCLOSURE_GLYPH_MARKER: f32 = 9.0;
 
 /// Base (unscaled) square box around either disclosure caret.
@@ -982,7 +982,7 @@ pub fn footer_tone_color(p: MoonPalette, tone: MoonTone) -> u32 {
 ///
 /// Exists so a caller measuring text it drew with `t_body()` + [`mono`] cannot reach for
 /// `t_body(cx)` as the size argument: that value is ALREADY scaled, and passing it in would scale
-/// twice. These five helpers measure TERMINAL text, which now follows the density tier; plain
+/// twice. These five helpers measure TERMINAL text, which follows the control tier; plain
 /// [`ui_text_width`] stays on the legacy font channel for mirroring MoonUI-internal text.
 pub fn mono_body_text_width(cx: &App, text: &str, weight: f32) -> f32 {
     ui_text_width_zoomed(cx, text, BODY_TEXT, weight, true)
@@ -990,7 +990,7 @@ pub fn mono_body_text_width(cx: &App, text: &str, weight: f32) -> f32 {
 
 /// Width of mono text drawn at the terminal's caption size — the [`t_caption`] partner of
 /// [`mono_body_text_width`], and it exists for the same reason: `t_caption(cx)` is already scaled,
-/// so passing it in would scale twice. Measures TERMINAL text on the density tier; plain
+/// so passing it in would scale twice. Measures TERMINAL text on the control tier; plain
 /// [`ui_text_width`] stays on the legacy font channel for mirroring MoonUI-internal text.
 pub fn mono_caption_text_width(cx: &App, text: &str, weight: f32) -> f32 {
     ui_text_width_zoomed(cx, text, BODY_TEXT - 2.0, weight, true)
@@ -998,7 +998,7 @@ pub fn mono_caption_text_width(cx: &App, text: &str, weight: f32) -> f32 {
 
 /// Width of mono text drawn at the terminal's title size — the [`t_title`] partner of
 /// [`mono_body_text_width`], and it exists for the same reason: `t_title(cx)` is already scaled,
-/// so passing it in would scale twice. Measures TERMINAL text on the density tier; plain
+/// so passing it in would scale twice. Measures TERMINAL text on the control tier; plain
 /// [`ui_text_width`] stays on the legacy font channel for mirroring MoonUI-internal text.
 pub fn mono_title_text_width(cx: &App, text: &str, weight: f32) -> f32 {
     ui_text_width_zoomed(cx, text, BODY_TEXT + 3.0, weight, true)
@@ -1009,7 +1009,7 @@ pub fn mono_title_text_width(cx: &App, text: &str, weight: f32) -> f32 {
 ///
 /// A layout that sizes itself from a measured label must measure in the family that label is
 /// RENDERED in: prose reads in [`ui_font`], so measuring it with the mono trio above overstates
-/// every proportional string and drifts the column it sizes. Measures TERMINAL text on the density
+/// every proportional string and drifts the column it sizes. Measures TERMINAL text on the control
 /// tier; plain [`ui_text_width`] stays on the legacy font channel for mirroring MoonUI-internal
 /// text.
 pub fn ui_body_text_width(cx: &App, text: &str, weight: f32) -> f32 {
@@ -1018,7 +1018,7 @@ pub fn ui_body_text_width(cx: &App, text: &str, weight: f32) -> f32 {
 
 /// Width of UI-face text drawn at the terminal's caption size — the [`t_caption`] partner of
 /// [`ui_body_text_width`], and the [`ui_font`] partner of [`mono_caption_text_width`]. Measures
-/// TERMINAL text on the density tier; plain [`ui_text_width`] stays on the legacy font channel for
+/// TERMINAL text on the control tier; plain [`ui_text_width`] stays on the legacy font channel for
 /// mirroring MoonUI-internal text.
 pub fn ui_caption_text_width(cx: &App, text: &str, weight: f32) -> f32 {
     ui_text_width_zoomed(cx, text, BODY_TEXT - 2.0, weight, false)
@@ -1210,7 +1210,7 @@ pub fn text_metrics_key(cx: &App, base_font_size: f32, weight: f32, mono: bool) 
 /// Identity of the typography a `tokens.ui`-channel text measurement was taken under.
 ///
 /// The [`ui_text_width_zoomed`] partner of [`text_metrics_key`]: for text that follows only the UI
-/// zoom, not the legacy font-delta channel — density-tier control labels, and the terminal's own
+/// zoom, not the legacy font-delta channel — control-tier labels, and the terminal's own
 /// `t_*` text after it moved onto the tier. Resolves through [`measure_font_at`] at
 /// [`ui_px`]`(size)` instead of [`measure_font`].
 ///
@@ -1509,8 +1509,7 @@ pub fn table_head_base_px(cx: &App) -> Pixels {
 /// Return the current text-container width scale relative to the theme base.
 ///
 /// [`ui_value`] of [`BODY_TEXT`], divided by [`base_text`]: 14 / 11 at the default typography.
-/// Identical to MoonUI's `font_width_scale` at
-/// Standard; Compact and Large follow the density tier, not `font_delta`.
+/// Identical to MoonUI's `font_width_scale` at the design's font delta.
 ///
 /// Args:
 ///     cx: Application context used to read active theme tokens.
@@ -1727,7 +1726,7 @@ pub fn logo_glow_frame_w(_cx: &App, width: f32) -> Pixels {
 /// Vertical 1px group separator.
 ///
 /// The height goes through `ui()`, matching MoonUI, which draws its own separators the same way
-/// (the brand cluster in `MoonWindowFrame` is one). Density-tier terminal text also tracks `ui()`
+/// (the brand cluster in `MoonWindowFrame` is one). Control-tier terminal text also tracks `ui()`
 /// via [`t_body`]; MoonUI-internal font-channel text still tracks `font_delta`, so the
 /// rule can sit beside a MoonUI row that grew on that channel. The 1px width stays raw, also
 /// matching MoonUI, since a hairline must not thicken with the font.

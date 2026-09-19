@@ -414,10 +414,12 @@ pub(crate) fn open(
         return;
     }
     let saved = backend.read(cx).layout.core_expert_window;
+    // The default and minimum sizes are design pixels; the window API takes the platform's.
+    let zoom = moon_ui::MoonTheme::content_zoom(cx);
     let bounds = saved.map_or(
         Bounds {
             origin: point(px(140.0), px(100.0)),
-            size: size(px(DEFAULT_SIZE.0), px(DEFAULT_SIZE.1)),
+            size: size(px(DEFAULT_SIZE.0 * zoom), px(DEFAULT_SIZE.1 * zoom)),
         },
         |g| Bounds {
             origin: point(px(g.x as f32), px(g.y as f32)),
@@ -439,7 +441,7 @@ pub(crate) fn open(
             saved,
             crate::window::windowing::reachable_window_bounds(bounds, display_id, None, cx),
         ),
-        Some(size(px(MIN_SIZE.0), px(MIN_SIZE.1))),
+        Some(size(px(MIN_SIZE.0 * zoom), px(MIN_SIZE.1 * zoom))),
         owner,
     );
     opts.display_id = display_id;

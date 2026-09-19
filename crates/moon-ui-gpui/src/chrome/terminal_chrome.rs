@@ -738,7 +738,7 @@ fn core_selector(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    // The pill follows the density-tier ordinary-control height so it shares one top/bottom edge
+    // The pill follows the control-tier ordinary-control height so it shares one top/bottom edge
     // with the neighbouring buttons; its content width is still capped below so a long
     // user-defined name cannot displace the header's right-hand readouts.
     let b = backend.read(cx);

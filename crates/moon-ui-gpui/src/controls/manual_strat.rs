@@ -110,7 +110,7 @@ const REDUCED_PILL_MAX_W: f32 = 120.0;
 /// `chrome::quiet::header_quiet_width`, which reads the new metrics on its own.
 const HEADER_OTHER_SECTIONS_W: f32 = 806.0;
 
-/// Width of the "MS" toggle (track, gap and label) at the density-default tier.
+/// Width of the "MS" toggle (track, gap and label) at the control tier.
 ///
 /// The label is measured in the mono family because the MS toggle sets no `.mono()` and
 /// `MoonToggle` defaults `mono: true`.

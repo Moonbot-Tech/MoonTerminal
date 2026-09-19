@@ -218,6 +218,15 @@ impl ChartEngine {
         self.data.borrow().content_zoom
     }
 
+    /// Device pixels per content pixel at the last frame: the window's effective factor, which is
+    /// what a content-space position (a pointer, a GPUI element) crosses by to reach the chart's
+    /// device pixels. Distinct from [`Self::slot_geometry`]'s factor, which is device pixels per
+    /// chart-design pixel and excludes the UI zoom.
+    pub fn slot_scale_factor(&self) -> f32 {
+        let data = self.data.borrow();
+        data.last_ppp * data.content_zoom
+    }
+
     pub fn slot_dev_size(&self) -> (u32, u32) {
         let data = self.data.borrow();
         (data.w.max(1), data.h.max(1))
@@ -227,11 +236,18 @@ impl ChartEngine {
         self.data.borrow().w.max(1) as f32
     }
 
+    /// Map a content-space window position onto the chart's device pixels, and say whether it
+    /// is inside the slot.
+    ///
+    /// Both the position and the slot bounds are content pixels, so the crossing uses the
+    /// window's effective factor ([`Self::slot_scale_factor`]); the chart-design factor would land
+    /// the pointer at `1 / zoom` of where it is under UI zoom.
     pub fn chart_local_from_window_pos(
         &self,
         pos: gpui::Point<Pixels>,
     ) -> Option<((f32, f32), bool)> {
-        let (bounds, sf, _) = self.slot_geometry()?;
+        let (bounds, _, _) = self.slot_geometry()?;
+        let sf = self.slot_scale_factor();
         let lx = f32::from(pos.x) - f32::from(bounds.origin.x);
         let ly = f32::from(pos.y) - f32::from(bounds.origin.y);
         let w = f32::from(bounds.size.width);

@@ -531,7 +531,7 @@ impl Render for DragChip {
             .border_1()
             .border_color(moon(p.blue))
             .text_color(moon(p.text))
-            // Raw GPUI text, already scaled on the density-tier channel.
+            // Raw GPUI text, already scaled on the body-text channel.
             .text_size(design::t_body_step_px(cx, self.step))
             .font_family(design::mono())
             .child(self.label.clone())

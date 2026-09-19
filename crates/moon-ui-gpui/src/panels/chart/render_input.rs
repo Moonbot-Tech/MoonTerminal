@@ -180,7 +180,7 @@ fn wheel_mode(modifiers: Modifiers) -> input::WheelMode {
 pub(super) fn scroll_wheel(
     this: &mut ChartPanel,
     e: &ScrollWheelEvent,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut Context<ChartPanel>,
 ) {
     if cx.has_active_drag() {
@@ -195,7 +195,9 @@ pub(super) fn scroll_wheel(
     if this.orderbook_only {
         return;
     }
-    let sf = window.scale_factor();
+    // Chart-design factor: the input container lays the panes out with the engine's geometry,
+    // which excludes the UI zoom (`render.rs` caches it beside `set_last_ppp`).
+    let sf = this.last_ppp;
     let Some((pos, within)) = this.chart_local(e.position) else {
         return;
     };
@@ -277,7 +279,9 @@ pub(super) fn mouse_down_left(
         window,
         cx,
     );
-    let sf = window.scale_factor();
+    // Chart-design factor: the input container lays the panes out with the engine's geometry,
+    // which excludes the UI zoom (`render.rs` caches it beside `set_last_ppp`).
+    let sf = this.last_ppp;
     let Some((pos, within)) = this.chart_local(e.position) else {
         return;
     };
@@ -479,7 +483,7 @@ pub(super) fn mouse_down_left(
 pub(super) fn mouse_up_left(
     this: &mut ChartPanel,
     e: &MouseUpEvent,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut Context<ChartPanel>,
 ) {
     // Before every early return below: the release ends the gesture whichever branch takes it.
@@ -504,7 +508,9 @@ pub(super) fn mouse_up_left(
     if release_order_drag(this, TradeMouseButton::Left, cx) {
         return;
     }
-    let sf = window.scale_factor();
+    // Chart-design factor: the input container lays the panes out with the engine's geometry,
+    // which excludes the UI zoom (`render.rs` caches it beside `set_last_ppp`).
+    let sf = this.last_ppp;
     let fb = this.chart.slot_dev_width();
     let changed = {
         let input = &mut this.input;
@@ -540,7 +546,9 @@ pub(super) fn mouse_down_right(
     // pointer leaving the slot gets no release at all, and clearing it there would have to trust
     // the fork's non-client mouse moves, which report no pressed button DURING a live drag.
     this.suppress_rmb_up = false;
-    let sf = window.scale_factor();
+    // Chart-design factor: the input container lays the panes out with the engine's geometry,
+    // which excludes the UI zoom (`render.rs` caches it beside `set_last_ppp`).
+    let sf = this.last_ppp;
     let Some((pos, within)) = this.chart_local(e.position) else {
         return;
     };
@@ -656,7 +664,7 @@ pub(super) fn mouse_down_right(
 pub(super) fn mouse_up_right(
     this: &mut ChartPanel,
     e: &MouseUpEvent,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut Context<ChartPanel>,
 ) {
     // A right-button drag zooms Y and is paced like any other, but `mouse_button(Right, false, ..)`
@@ -672,7 +680,9 @@ pub(super) fn mouse_up_right(
     if this.window_pos_in_control_zone(e.position, cx) {
         return;
     }
-    let sf = window.scale_factor();
+    // Chart-design factor: the input container lays the panes out with the engine's geometry,
+    // which excludes the UI zoom (`render.rs` caches it beside `set_last_ppp`).
+    let sf = this.last_ppp;
     let fb = this.chart.slot_dev_width();
     let changed = {
         let input = &mut this.input;
@@ -766,7 +776,7 @@ pub(super) fn mouse_down_middle(
 pub(super) fn mouse_move(
     this: &mut ChartPanel,
     e: &MouseMoveEvent,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut Context<ChartPanel>,
 ) {
     if cx.has_active_drag() {
@@ -864,7 +874,9 @@ pub(super) fn mouse_move(
         return;
     }
     crate::diag::bump(&crate::diag::CHART_MOUSE_MOVE_ENTITY);
-    let sf = window.scale_factor();
+    // Chart-design factor: the input container lays the panes out with the engine's geometry,
+    // which excludes the UI zoom (`render.rs` caches it beside `set_last_ppp`).
+    let sf = this.last_ppp;
     this.input.sync_pressed(
         e.pressed_button == Some(MouseButton::Left),
         e.pressed_button == Some(MouseButton::Right),

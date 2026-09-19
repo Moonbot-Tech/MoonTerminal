@@ -14,7 +14,7 @@
 //! and that should read as a caution the moment the header is glanced at.
 //!
 //! The label is the component's own, coloured through `MoonToggle::label_color`. Its size is the
-//! density tier's and therefore follows UI zoom only, so it is measured with
+//! control tier's and therefore follows UI zoom only, so it is measured with
 //! [`design::ui_text_width_zoomed`], not the font-scaled caption steps.
 
 use gpui::prelude::FluentBuilder;
@@ -49,7 +49,7 @@ pub(crate) fn header_quiet_width(cx: &App) -> f32 {
         + design::ui_value(cx, m.gap)
         + design::ui_value(cx, m.track_width)
         + design::ui_value(cx, design::CHROME_GAP)
-        // The gear is `popup_gear_trigger`, icon-only at the density tier, so MoonUI draws it
+        // The gear is `popup_gear_trigger`, icon-only at the control tier, so MoonUI draws it
         // square and its width IS its height.
         + design::action_control_h_value(cx)
 }
@@ -127,7 +127,7 @@ pub(crate) fn header_quiet_cluster(
             crate::shell::quiet_popup::CONTENT_W,
             open,
             content,
-            // Density-tier icon-only gear: this cluster sits in the header row, not a dense strip.
+            // Control-tier icon-only gear: this cluster sits in the header row, not a dense strip.
             popup_gear_trigger("header-quiet-gear", t!("quiet.gear_tip").to_string(), open),
             move |open, window, cx| {
                 shell.update(cx, |s, cx| s.set_quiet_settings_open(open, window, cx));

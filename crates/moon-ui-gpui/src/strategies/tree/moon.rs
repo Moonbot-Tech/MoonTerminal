@@ -83,7 +83,7 @@ const ROW_PAD_BASE: f32 = 4.5;
 /// Historical custom badge metrics used only when the local tree-text step is positive.
 /// The zero-step branch uses the shared Xs tier. The Custom box stays on the legacy-tuned
 /// constants — including font_size — because migrating the font alone would put text on the
-/// density tier inside a box that never moved (this task's exception for that split).
+/// control tier inside a box that never moved (this task's exception for that split).
 const BADGE_TINY_H: f32 = 13.0;
 const BADGE_TINY_RADIUS: f32 = 4.0;
 const BADGE_TINY_FONT: f32 = 8.5;

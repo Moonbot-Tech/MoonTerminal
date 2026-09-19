@@ -487,8 +487,7 @@ fn header_ticker_deltas_take_their_tone_from_the_shared_delta_mapping() {
 /// Small buttons beside it — `design::action_control_h_value(cx)` — never a flat copied height.
 ///
 /// The future edit this pins against: returning to a copied `SEL_H` constant, which stops following
-/// the density tier. The pill would then sit shorter than neighbouring action controls at Compact
-/// or Large density.
+/// the control tier. The pill would then sit shorter than neighbouring action controls.
 #[test]
 fn header_core_pill_shares_the_toolbar_buttons_fit_rule() {
     let source = read_src("chrome/terminal_chrome.rs");
@@ -502,7 +501,7 @@ fn header_core_pill_shares_the_toolbar_buttons_fit_rule() {
 
     assert!(
         body.contains("let trigger_h = design::action_control_h_value(cx);"),
-        "chrome/terminal_chrome.rs:{signature} must size the pill trigger from the density-tier action control"
+        "chrome/terminal_chrome.rs:{signature} must size the pill trigger from the control-tier action control"
     );
     assert!(
         !body.contains("SEL_H"),

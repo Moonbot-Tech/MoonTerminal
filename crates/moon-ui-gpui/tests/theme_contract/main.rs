@@ -27,6 +27,7 @@ mod report;
 mod shared_config;
 mod shell;
 mod shot;
+mod size_system;
 mod startup;
 mod strategies;
 mod telegram_core;

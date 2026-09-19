@@ -1115,7 +1115,7 @@ fn report_coin_history_load_does_not_change_the_viewport() {
     }
 }
 
-/// `labels_popup/mod.rs:name_budget` must subtract UI-scaled density-tier button padding, not
+/// `labels_popup/mod.rs:name_budget` must subtract UI-scaled control-tier button padding, not
 /// Font-scaled padding: replacing the tier's `pad_x` with `design::font_w` makes
 /// a raised UI delta overflow the chart-label name button while Font remains at its default.
 #[test]

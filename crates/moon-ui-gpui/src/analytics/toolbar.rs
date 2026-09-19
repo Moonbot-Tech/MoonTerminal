@@ -450,7 +450,7 @@ impl AnalyticsView {
             if t == Tab::Calendar {
                 row = row.child(design::chrome_divider(cx, p));
             }
-            // Title width plus the density-tier button's own pad_x on both sides, with a floor so
+            // Title width plus the control-tier button's own pad_x on both sides, with a floor so
             // a short label still has a useful click target.
             let tab_width =
                 (design::ui_text_width_zoomed(cx, &title, design::BODY_TEXT, 400.0, false)
@@ -524,7 +524,7 @@ impl AnalyticsView {
         }
         // Keep the selector widths and their internal gaps together. One additional gap belongs to
         // the caption, so the whole semantic group moves to the next line before any control is
-        // clipped. Density-tier triggers scale those design-reference widths through `tokens.ui`
+        // clipped. Control-tier triggers scale those design-reference widths through `tokens.ui`
         // at the button tier's control font, not the legacy 10.5px font channel.
         let action_trigger_scale = {
             let font_size = design::CONTROL_TIER.control_metrics().font_size.max(1.0);
