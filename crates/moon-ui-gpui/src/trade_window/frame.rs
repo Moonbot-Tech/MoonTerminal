@@ -1,4 +1,6 @@
-//! Where a trade window puts its viewport: one pure rule over the trade's own stamps.
+//! Where a trade window puts its viewport: two pure rules over the trade's own stamps, chosen by
+//! the reader — the market around the trade ([`trade_frame`]) or the trade itself
+//! ([`fit_frame`]).
 //!
 //! Separate from `trade_replay::replay_window_ms`, which decides what is FETCHED. Those two answer
 //! different questions and must not be confused. The fetch buys context generously and
@@ -107,6 +109,120 @@ pub(crate) fn trade_frame(entry_ms: i64, exit_ms: i64, bar_ms: i64) -> Option<(i
         return None;
     }
     Some((start_ms, end_ms))
+}
+
+/// Fraction of a FITTED frame left empty on each side. Passed to the chart as its own padding
+/// argument, so the fitted interval itself stays exactly the trade.
+///
+/// A quarter on each side puts the trade across HALF the width — one wheel click out from the
+/// trade filling it (a click is a factor of two, `chartdx::input`), which is what the reader
+/// asked for after seeing the trade edge to edge: "a little smaller, one click each way".
+pub(crate) const FIT_PAD: f32 = 0.25;
+
+/// One trade's own span for fitting: from where its entry order was PLACED, when the archive
+/// holds that line, to its close.
+///
+/// The placement is the start of the archived entry line — the first point the core recorded —
+/// and it is used only when it precedes the fill it belongs to; an archive stamp later than the
+/// fill is noise, and the fill is the floor. Without a line the fill is the start: a market entry
+/// was placed and filled in one instant as far as the picture is concerned.
+///
+/// Args:
+///     entry_set_ms: Start of the archived entry line, when there is one.
+///     entry_fill_ms: The entry fill, Unix milliseconds.
+///     close_ms: The close, Unix milliseconds.
+///
+/// Returns:
+///     `(start, end)`, with `start <= end`.
+pub(crate) fn trade_span(
+    entry_set_ms: Option<i64>,
+    entry_fill_ms: i64,
+    close_ms: i64,
+) -> (i64, i64) {
+    let start = entry_set_ms
+        .filter(|set| *set < entry_fill_ms)
+        .unwrap_or(entry_fill_ms);
+    (start.min(close_ms), close_ms.max(start))
+}
+
+/// The start of an archived ENTRY line, from the traces the resolver answered with.
+///
+/// Args:
+///     lines: The trade's archived lines.
+///
+/// Returns:
+///     The earliest point of an own entry line, or `None` when the archive holds none.
+pub(crate) fn entry_set_ms(lines: &[moon_core::feed::ArchivedOrderTrace]) -> Option<i64> {
+    lines
+        .iter()
+        .filter(|line| line.own && line.kind == moon_core::feed::ArchivedLineKind::Entry)
+        .flat_map(|line| line.points.iter().map(|(t, _)| *t))
+        .filter(|t| t.is_finite())
+        .map(|t| t as i64)
+        .min()
+}
+
+/// Frame a trade ON ITSELF: its own span, widened to take in the shown neighbours that sit
+/// within one trade-length of it.
+///
+/// The neighbour rule is the reader's own: a neighbour counts when its span touches the subject's
+/// span extended by the subject's held time on each side — so a scalp takes in the scalps beside
+/// it and a day-long position the day around it, and nothing further, or one distant trade
+/// would stretch the frame until the subject was a sliver. Neighbours are offered only while the
+/// window shows them; the caller passes none otherwise.
+///
+/// No floor and no fixed context: that is what the ordinary [`trade_frame`] is for, and the two
+/// are the reader's choice between "the market around the trade" and "the trade".
+///
+/// Args:
+///     subject: The subject's own span, from [`trade_span`].
+///     neighbours: The shown neighbours' spans, from [`trade_span`] each.
+///
+/// Returns:
+///     The interval to show, or `None` when the subject's span cannot describe one.
+pub(crate) fn fit_frame(
+    subject: (i64, i64),
+    neighbours: impl IntoIterator<Item = (i64, i64)>,
+) -> Option<(i64, i64)> {
+    let (start, end) = subject;
+    if end < start || start <= 0 {
+        return None;
+    }
+    let reach = end - start;
+    let (lo, hi) = (start.saturating_sub(reach), end.saturating_add(reach));
+    let (mut from, mut to) = (start, end);
+    for (n_start, n_end) in neighbours {
+        if n_end < n_start || n_end < lo || n_start > hi {
+            continue;
+        }
+        from = from.min(n_start);
+        to = to.max(n_end);
+    }
+    // A same-instant trade with nothing beside it is a point, and a point cannot be framed; the
+    // chart's own minimum width takes over from the ordinary rule instead.
+    if to <= from {
+        return trade_frame(from, to, 60_000);
+    }
+    Some((from, to))
+}
+
+/// The price band a fitted frame asks the auto-Y fit to include: every price the drawn lines
+/// and arrows sit at.
+///
+/// Args:
+///     prices: The subject's — and, while shown and taken in, the neighbours' — entry and exit
+///         prices and archived line points.
+///
+/// Returns:
+///     `(min, max)` over the finite positive prices, or `None` when there are none.
+pub(crate) fn fit_price_range(prices: impl IntoIterator<Item = f32>) -> Option<(f32, f32)> {
+    prices
+        .into_iter()
+        .filter(|p| p.is_finite() && *p > 0.0)
+        .fold(None, |acc: Option<(f32, f32)>, p| match acc {
+            None => Some((p, p)),
+            Some((lo, hi)) => Some((lo.min(p), hi.max(p))),
+        })
 }
 
 #[cfg(test)]

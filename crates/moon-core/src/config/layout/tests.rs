@@ -1901,6 +1901,48 @@ fn storing_one_kinds_captions_separates_nothing() {
     assert!(layout.chart_defaults_addto.chart_labels.is_some());
 }
 
+/// The candle and graphics twins of the no-separation store behave as the caption one does.
+///
+/// The trade window's settings rows write through these on every click; run through the ⧉
+/// setters instead, the first click would freeze the tab kinds at Main's current values.
+#[test]
+fn storing_one_kinds_candles_or_graphics_separates_nothing() {
+    use crate::config::chart_defaults::ChartTabKind;
+    use crate::market::candles::{CANDLE_MODE_OUTLINE, CandleViewCfg};
+
+    let mut layout = WindowLayout::default();
+    let candles = CandleViewCfg {
+        mode: CANDLE_MODE_OUTLINE,
+        ..CandleViewCfg::default()
+    };
+    assert!(layout.store_candle_view(ChartTabKind::Trade, candles));
+    assert!(
+        !layout.store_candle_view(ChartTabKind::Trade, candles),
+        "same value: not moved"
+    );
+    assert_eq!(layout.candle_view_for(ChartTabKind::Trade), candles);
+    assert!(layout.chart_defaults_addto.candle_view.is_none());
+    assert!(layout.chart_defaults_compare.candle_view.is_none());
+
+    let graphics = ChartGraphicsCfg {
+        hide_order_move_history: true,
+        ..ChartGraphicsCfg::default()
+    };
+    assert!(layout.store_chart_graphics(ChartTabKind::Trade, graphics));
+    assert_eq!(layout.chart_graphics_for(ChartTabKind::Trade), graphics);
+    assert!(layout.chart_defaults_addto.chart_graphics.is_none());
+    assert!(layout.chart_defaults_compare.chart_graphics.is_none());
+
+    // Main's base fields take the value directly, and the reset empties a kind's slot.
+    assert!(layout.store_chart_graphics(ChartTabKind::Main, graphics));
+    assert_eq!(layout.chart_graphics, graphics);
+    assert!(layout.reset_candle_view_default(ChartTabKind::Trade));
+    assert_eq!(
+        layout.candle_view_for(ChartTabKind::Trade),
+        layout.candle_view
+    );
+}
+
 /// A comparison opens on ITS OWN captions, not on the main chart's.
 ///
 /// Several panes of one coin stand side by side there, each a third of the usual width: the live
@@ -2094,6 +2136,27 @@ fn trade_window_other_trades_preserves_false_and_defaults_on() {
     let encoded = toml::to_string(&saved).expect("serialize preference");
     let reopened: WindowLayout = toml::from_str(&encoded).expect("reopen preference");
     assert_eq!(reopened.trade_window_other_trades, Some(false));
+}
+
+/// The two later trade-window switches: absent reads as OFF, a saved value survives a round trip,
+/// and a malformed hand edit is dropped rather than failing the whole layout.
+#[test]
+fn trade_window_fit_and_hide_rail_default_off_and_round_trip() {
+    let old: WindowLayout = toml::from_str("").expect("legacy layout");
+    assert!(!old.trade_window_fit.unwrap_or(false));
+    assert!(!old.trade_window_hide_rail.unwrap_or(false));
+    let saved: WindowLayout =
+        toml::from_str("trade_window_fit = true\ntrade_window_hide_rail = true").expect("on");
+    let encoded = toml::to_string(&saved).expect("serialize preference");
+    let reopened: WindowLayout = toml::from_str(&encoded).expect("reopen preference");
+    assert_eq!(reopened.trade_window_fit, Some(true));
+    assert_eq!(reopened.trade_window_hide_rail, Some(true));
+    let bad: WindowLayout = toml::from_str("trade_window_fit = \"yes\"").expect("lenient");
+    assert_eq!(bad.trade_window_fit, None);
+    // The tick switch reads the other way round: absent is ON.
+    assert!(old.trade_window_ticks.unwrap_or(true));
+    let off: WindowLayout = toml::from_str("trade_window_ticks = false").expect("off");
+    assert_eq!(off.trade_window_ticks, Some(false));
 }
 
 /// `layout.rs:ChartGraphicsCfg::candle_volume_sides` — the serde default is OFF while `Default`

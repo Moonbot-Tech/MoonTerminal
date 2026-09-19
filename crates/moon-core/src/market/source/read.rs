@@ -857,6 +857,32 @@ impl MarketDataSource {
         }))
     }
 
+    /// The market's contract terms as the core reports them: `(quote currency, contract_size)`.
+    ///
+    /// For the trade replay's band, which values a contract route's prints by them — see
+    /// `trade_replay::venue_caps::tick_value`. The same two figures `order_size_rules` reads
+    /// below, handed out raw because that rule draws its own line between inverse and linear.
+    ///
+    /// Args:
+    ///     core: Consumer core whose provider owns the market data.
+    ///     market: Canonical market name from `MarketHandle::name()`.
+    ///
+    /// Returns:
+    ///     The pair, or `None` while the market has not arrived.
+    pub fn market_contract_terms(&self, core: CoreId, market: &str) -> Option<(String, f64)> {
+        let client = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let provider = inner.core_provider.get(&core).copied()?;
+            inner
+                .clients
+                .get(&provider)
+                .and_then(SharedMoonClient::get)?
+        };
+        let snapshot = client.snapshot_versioned()?;
+        let handle = snapshot.markets().get(market)?;
+        Some(handle.with(|m| (m.base_currency.clone(), m.contract_size())))
+    }
+
     /// What a manual order on `market` must satisfy: its quantity unit, and the smallest order the
     /// exchange accepts, in money — see `min_order_floor`, which derives that floor for both units.
     ///

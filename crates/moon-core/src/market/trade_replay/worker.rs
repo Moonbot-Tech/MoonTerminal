@@ -75,14 +75,17 @@ const TRADE_DEADLINE: Duration = Duration::from_secs(180);
 /// holds one bounded window's rows.
 const OUTCOME_CACHE_LEN: usize = 8;
 
-/// Ceiling on the total number of ticks held across every remembered entry.
+/// Ceiling on the total number of ticks AND per-second volume slots held across every remembered
+/// entry.
 ///
-/// A single entry can carry up to [`TICK_BUDGET`] ticks, and [`OUTCOME_CACHE_LEN`] entries of
-/// that size would let the ring's own memory dwarf the point ring it feeds. This bounds the ring
-/// independently of its entry count: eviction runs oldest-first, exactly as the entry-count
-/// eviction does, and never touches the entry that was just inserted, so one huge series is held
-/// rather than immediately discarded and re-fetched.
-const OUTCOME_CACHE_MAX_TICKS: usize = 2 * TICK_BUDGET;
+/// A single entry can carry up to [`TICK_BUDGET`] ticks plus its `side_slots` — one per second the
+/// run traded, unbounded by the tick budget since they are summed before thinning — and
+/// [`OUTCOME_CACHE_LEN`] entries of that size would let the ring's own memory dwarf the point ring
+/// it feeds. This bounds the ring independently of its entry count: eviction runs oldest-first,
+/// exactly as the entry-count eviction does, and never touches the entry that was just inserted,
+/// so one huge series is held rather than immediately discarded and re-fetched. Sized for the two
+/// trade windows that can be open at once to both stay remembered, slots included.
+const OUTCOME_CACHE_MAX_TICKS: usize = 4 * TICK_BUDGET;
 
 /// Bounds the COMPOSED series and the outcome ring for one tick series — never the in-flight
 /// fetch, which is bounded instead by [`TRADE_PAGE_BUDGET`] times a route's own page size. A
@@ -346,6 +349,14 @@ pub struct TradeReplayRequest {
     pub window: ReplayWindow,
     /// Stable discriminator for the series this produces, so two open windows never collide.
     pub identity: u64,
+    /// How the venue's prints are valued for the band — see [`super::venue_caps::TickValue`].
+    /// Decided by the requester from the core's market terms; the worker only applies it.
+    pub tick_value: super::venue_caps::TickValue,
+    /// Whether the tick stage may run at all. `false` asks for the bars alone: no exchange
+    /// trade pages and no core archive read — the reader's switch for a slow venue. A tick
+    /// series a previous request already fetched and remembered is still served: it costs
+    /// nothing, and the switch is about not paying, not about not seeing.
+    pub ticks: bool,
     /// Set by the requester when its window closes; checked between pages.
     pub cancel: Arc<AtomicBool>,
     /// Where the answer goes. A dead receiver is normal and is not an error.
@@ -441,7 +452,13 @@ fn run(rx: &Receiver<TradeReplayRequest>) {
                     continue;
                 }
                 let mut served = serve_with_core(&agent, &gate, &cache, &request);
-                let native_wait = prepare_native_wait(&mut served, Instant::now());
+                // No native wait either with the stage off: the wait is the core-archive half
+                // of the same stage, and it would poll the archive for a window that asked for
+                // the bars alone.
+                let native_wait = match request.ticks {
+                    true => prepare_native_wait(&mut served, Instant::now()),
+                    false => None,
+                };
                 // The receiver is gone whenever the window closed mid-fetch. Normal, not an
                 // error — and exactly the signal that a queued tick stage would now answer no
                 // one, so it is never queued on a failed send.
@@ -594,7 +611,32 @@ fn serve_with_core(
     cache: &Mutex<VecDeque<(OutcomeKey, Remembered)>>,
     request: &TradeReplayRequest,
 ) -> Served {
+    if !request.ticks {
+        return bars_only(serve(agent, gate, cache, request));
+    }
     core_first(|| read_core(request), || serve(agent, gate, cache, request))
+}
+
+/// What a request with the tick stage switched off is answered with: what `serve` has, and no
+/// stage.
+///
+/// The cache inside `serve` has already remembered the answer as NOT settled when a stage would
+/// have run, so a later request with the stage on re-decides it rather than inheriting this one.
+/// A remembered tick series is served as it is — see `TradeReplayRequest::ticks` — but with the
+/// stage that would have continued it gone, its status can no longer say `Streaming`: nothing
+/// will finish it, so it is what it is, served and possibly partial. The bars alone say the stage
+/// is off.
+fn bars_only(mut served: Served) -> Served {
+    let had_stage = served.tick_stage.take().is_some();
+    if had_stage {
+        if let TradeReplayOutcome::Ready(series) = &mut served.outcome {
+            series.tick_status = match series.source.is_ticks() {
+                true => TickStatus::Served,
+                false => TickStatus::Disabled,
+            };
+        }
+    }
+    served
 }
 
 /// Keep wide candle context and replace only the narrow tick stage with core data.
@@ -631,6 +673,14 @@ fn read_core(request: &TradeReplayRequest) -> Option<TradeReplaySeries> {
         &request.market,
         request.window.tick_window(),
     )?;
+    // The core's own prints are valued as the LIVE band values them — `price × qty` on the
+    // ring's quantity as it comes (`SideSeries::add_trade`), whatever the market's unit — so a
+    // window served from the archive reads like the live chart of the same market, not like the
+    // REST series a contract route would value through its multiplier.
+    let side_slots = crate::market::source::side_slots_of_ticks(
+        &native.ticks,
+        super::venue_caps::TickValue::Base,
+    );
     let (ticks, bucket_ms) = fit_ticks(native.ticks, TICK_BUDGET);
     if ticks.is_empty() {
         return None;
@@ -640,6 +690,7 @@ fn read_core(request: &TradeReplayRequest) -> Option<TradeReplaySeries> {
         request.address.venue,
         ticks,
         bucket_ms,
+        side_slots,
         native.covered != (request.window.from_ms, request.window.to_ms),
         native.covered,
         Vec::new(),
@@ -1132,12 +1183,14 @@ fn serve_ticks(
             return;
         }
         points.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+        let side_slots = crate::market::source::side_slots_of_ticks(&points, request.tick_value);
         let (points, bucket_ms) = fit_ticks(points, TICK_BUDGET);
         let mut series = compose_ticks(
             request,
             request.address.venue,
             points,
             bucket_ms,
+            side_slots,
             true,
             covered,
             stage.candles.clone(),
@@ -1261,6 +1314,7 @@ fn serve_ticks(
     // ticks short of the requested window on one or both edges.
     let partial =
         !complete || covered.0 > request.window.from_ms || covered.1 < request.window.to_ms;
+    let side_slots = crate::market::source::side_slots_of_ticks(&ticks, request.tick_value);
     let (ticks, bucket_ms) = fit_ticks(ticks, TICK_BUDGET);
     // An empty harvest after the coverage clip is not a success: some slice genuinely produced
     // rows (`paginate_ticks` already refuses an empty one, above), so a caption of "Served" with
@@ -1275,6 +1329,7 @@ fn serve_ticks(
             request.address.venue,
             ticks,
             bucket_ms,
+            side_slots,
             partial,
             covered,
             stage.candles.clone(),
@@ -1575,11 +1630,16 @@ fn page_progress_span(
 ///
 /// Returns:
 ///     The series to hand the chart.
+///
+/// `side_slots` is the per-second split of the SAME run before it was thinned
+/// (`side_slots_of_ticks`), already merged and ascending; it is carried onto the series verbatim.
+#[allow(clippy::too_many_arguments)]
 fn compose_ticks(
     request: &TradeReplayRequest,
     venue: crate::venue::Venue,
     ticks: Vec<Tick>,
     bucket_ms: i64,
+    side_slots: Vec<crate::market::source::SideSlot>,
     partial: bool,
     covered: (i64, i64),
     candles: Vec<ChartCandle>,
@@ -1595,6 +1655,7 @@ fn compose_ticks(
         tick_status: TickStatus::Served,
         bucket_ms,
         partial,
+        side_slots,
         covered: Some(covered),
     }
 }
@@ -1648,6 +1709,7 @@ fn compose(
         tick_status: TickStatus::Pending,
         bucket_ms: 0,
         partial: false,
+        side_slots: Vec::new(),
         // No tick walk ran, so there is no covered span and the chart keeps every bar.
         covered: None,
     }
@@ -1729,7 +1791,9 @@ fn total_ticks(cache: &VecDeque<(OutcomeKey, Remembered)>) -> usize {
     cache
         .iter()
         .map(|(_, answer)| match answer {
-            Remembered::Ready { series, .. } => series.ticks.len(),
+            // The slots ride the same entry and are not bounded by the tick budget, so they
+            // count toward the same cap.
+            Remembered::Ready { series, .. } => series.ticks.len() + series.side_slots.len(),
             Remembered::Empty => 0,
         })
         .sum()

@@ -842,15 +842,28 @@ fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
         &trade_window,
         "pub(crate) fn open_trade_window(",
     ));
+    // The pin lives in ONE rule — `settings::pinned_candle_view` — that the opener, the popup,
+    // the mode restore and the reset all draw candles through; the opener must apply it before
+    // the view exists, and the rule itself must pin to one minute.
     let pin = opener
-        .find("view.tf_min = 1")
-        .expect("the trade window must pin replay candles to one minute");
+        .find("pinned_candle_view(")
+        .expect("the trade window must pin replay candles through settings::pinned_candle_view");
     let view = opener
         .find("let view = cx.new")
         .expect("the trade window must construct its view after configuring the panel");
     assert!(
         opener.contains("new_historical(") && opener.contains("set_candle_view(") && pin < view,
         "the opener must build a historical panel and pin one-minute candles before the first view fetch"
+    );
+    let settings = code_only(&read_src("trade_window/settings.rs"));
+    assert!(
+        settings.contains("const PINNED_TF_MIN: u32 = 1;"),
+        "the trade window's pinned timeframe must be one minute"
+    );
+    assert!(
+        code_only(braced_body(&settings, "pub(super) fn pinned_candle_view("))
+            .contains("tf_min = PINNED_TF_MIN"),
+        "pinned_candle_view must pin the timeframe unconditionally"
     );
 }
 

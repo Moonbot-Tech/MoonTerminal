@@ -9,7 +9,7 @@ use moon_core::feed::{ArchivedLineKind, ArchivedOrderTrace};
 
 // Named imports, not `super::*`: the parent's parent glob-imports gpui, whose `test` attribute
 // would shadow the built-in one under a glob.
-use super::{archived_store, line_ends, rank_wanted};
+use super::{archived_store, frozen_line_ends, frozen_store_drawn, line_ends, rank_wanted};
 use moon_core::session::order_lines::LineKind;
 
 fn record(
@@ -217,4 +217,43 @@ fn a_trade_whose_order_closed_this_session_is_left_to_the_live_store() {
     // Both twinned: nothing is drawn from the archive at all.
     let both = [1_700_000_003_000.0, 1_700_000_490_000.0];
     assert!(archived_store(&records, &resolved, 7, "ADAUSDT", &both, &graphics, &axis).is_none());
+}
+
+/// A frozen viewer honours the trade style: the store draws in the lines style and not in marks.
+///
+/// Breakage: the trade window drew its lines AND both arrows of every trade whatever the popup's
+/// style row said — the store was handed over in every style.
+#[test]
+fn a_frozen_viewer_draws_its_store_only_in_the_lines_style() {
+    assert!(
+        !frozen_store_drawn(false),
+        "marks style: the frozen store must not draw"
+    );
+    assert!(
+        frozen_store_drawn(true),
+        "lines style: the frozen store draws"
+    );
+}
+
+/// On a frozen viewer a trade outside the store keeps BOTH arrows: the store never draws its
+/// exit, so the row's price alone must not count as a line. Whether the store holds the trade is
+/// the caller's close-instant test — a row without a uid is stored too.
+///
+/// Breakage: with "other trades" on and more trades in the period than the neighbour cap, every
+/// trade beyond the cap lost its exit mark — no line from the store, no arrow from the pass.
+#[test]
+fn a_frozen_viewer_keeps_both_arrows_for_a_trade_its_store_does_not_hold() {
+    let with_uid = record(1, 7, 1_700_000_000, Some(11), false);
+    let unasked = record(3, 7, 1_700_000_900, None, false);
+    let mut map = HashMap::new();
+    map.insert(11, lines());
+    // Stored: the entry from the archive, the exit from the row.
+    assert_eq!(frozen_line_ends(&with_uid, &map, true), (true, true));
+    // Stored without a uid: no archive to ask, the exit line still comes from the row.
+    assert_eq!(frozen_line_ends(&unasked, &map, true), (false, true));
+    // Outside the store: both arrows, whatever the archive holds for it.
+    assert_eq!(frozen_line_ends(&with_uid, &map, false), (true, false));
+    assert_eq!(frozen_line_ends(&unasked, &map, false), (false, false));
+    // The live rule is untouched: the row's exit price alone lines the exit there.
+    assert_eq!(line_ends(&unasked, &map), (false, true));
 }

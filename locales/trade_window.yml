@@ -23,6 +23,45 @@ trade_window.other_trades:
   en: "Show other trades"
   es: "Mostrar otras operaciones"
 
+# The header's ⚙: one popup for everything the window draws (trades, history, candles); every row
+# is stored at once, for every trade window.
+trade_window.settings.tip:
+  ru: "Вид окна сделки"
+  en: "Trade window view"
+  es: "Vista de la ventana de la operación"
+
+trade_window.settings.title:
+  ru: "Вид окна сделки"
+  en: "Trade window view"
+  es: "Vista de la ventana"
+
+trade_window.settings.frame_trades:
+  ru: "Сделки"
+  en: "Trades"
+  es: "Operaciones"
+
+trade_window.settings.fit:
+  ru: "Вписать сделку в окно"
+  en: "Fit the trade to the window"
+  es: "Ajustar la operación a la ventana"
+
+trade_window.settings.hide_rail:
+  ru: "Скрыть правую панель"
+  en: "Hide the side panel"
+  es: "Ocultar el panel lateral"
+
+# The tick stage: the venue's own prints around the position, paged from its public REST — slow
+# on some venues, so the reader can leave the window on bars alone.
+trade_window.settings.load_ticks:
+  ru: "Подгружать тики"
+  en: "Load ticks"
+  es: "Cargar ticks"
+
+trade_window.source.candles_ticks_disabled:
+  ru: "свечи %{min} мин — тики выключены в настройках окна"
+  en: "%{min}-minute candles - ticks are off in the window settings"
+  es: "velas de %{min} min - los ticks están desactivados en los ajustes de la ventana"
+
 trade_window.state.loading:
   ru: "Загружаю рынок вокруг сделки…"
   en: "Loading the market around this trade…"

@@ -74,6 +74,7 @@ impl ChartDataState {
             market_source: None,
             trade_replay: None,
             frozen_orders: None,
+            frozen_fit_range: None,
             last_frame_tick_at: None,
             present_rate_candidate_hz: 0.0,
             present_rate_candidate_hits: 0,
@@ -231,11 +232,14 @@ impl ChartDataState {
     ///
     /// Args:
     ///     store: The archived lines, or `None` to draw no orders at all.
+    ///     fit_range: The price band the auto-Y fit must include, or `None` for the prices alone.
     pub(crate) fn set_frozen_orders(
         &mut self,
         store: Option<std::rc::Rc<moon_core::session::order_lines::OrderLineStore>>,
+        fit_range: Option<(f32, f32)>,
     ) {
         self.frozen_orders = store;
+        self.frozen_fit_range = fit_range;
         self.view_dirty = true;
     }
 

@@ -271,15 +271,74 @@ impl TradeWindowView {
         };
         let mut store =
             OrderLineStore::archived(input(&self.record), subject.as_deref().unwrap_or(&[]));
+        // The fitted frame and its price band, from the same rows and lines the store is built
+        // from: the subject's span — from where its entry was placed, when the archive says —
+        // widened by the shown neighbours within reach, and every price their lines and arrows
+        // sit at. Kept on the window for `reframe`; the band goes to the chart only while the
+        // window is fitted, so the ordinary frame keeps fitting the prices alone.
+        let span_of = |record: &ChartTradeRecord, lines: &[ArchivedOrderTrace]| {
+            let (buy_utc_ms, close_utc_ms) = super::utc_stamps_ms(record, &axis);
+            super::frame::trade_span(super::frame::entry_set_ms(lines), buy_utc_ms, close_utc_ms)
+        };
+        let prices_of = |record: &ChartTradeRecord, lines: &[ArchivedOrderTrace]| {
+            [record.buy_price as f32, record.sell_price as f32]
+                .into_iter()
+                .chain(lines.iter().flat_map(|line| {
+                    line.points
+                        .iter()
+                        .map(|(_, price)| *price as f32)
+                        .chain(line.stop_price.map(|p| p as f32))
+                }))
+                .collect::<Vec<f32>>()
+        };
+        let subject_lines: &[ArchivedOrderTrace] = subject.as_deref().unwrap_or(&[]);
+        let subject_span = span_of(&self.record, subject_lines);
+        let reach = subject_span.1 - subject_span.0;
+        let (lo, hi) = (
+            subject_span.0.saturating_sub(reach),
+            subject_span.1.saturating_add(reach),
+        );
+        let mut prices = prices_of(&self.record, subject_lines);
+        let mut spans = Vec::with_capacity(neighbours.len());
+        for (record, lines) in neighbours {
+            let span = span_of(record, lines);
+            spans.push(span);
+            // The same reach test `fit_frame` makes, so the band covers exactly the trades the
+            // frame takes in.
+            if span.1 >= lo && span.0 <= hi {
+                prices.extend(prices_of(record, lines));
+            }
+        }
+        self.fit_frame = super::frame::fit_frame(subject_span, spans);
+        let fit_range = self
+            .fit_trade
+            .then(|| super::frame::fit_price_range(prices))
+            .flatten();
+        // The same lines by `ReportUID`, for the arrows pass: it asks whether a trade's ENTRY has
+        // a line so as not to draw the entry arrow over it (`chartdx::archived_lines`). Built from
+        // the very traces the store is, so the two cannot disagree. The exit is not this map's
+        // question — the engine answers it from the store's own close instants, which is what
+        // also covers a row without a uid.
+        let mut by_uid = std::collections::HashMap::new();
+        if let (Some(uid), Some(lines)) = (self.record.report_uid, subject.as_ref()) {
+            by_uid.insert(uid, lines.clone());
+        }
         for (record, lines) in neighbours {
             store.append_archived(input(record), lines);
+            if let Some(uid) = record.report_uid {
+                by_uid.insert(uid, lines.clone());
+            }
         }
         self.neighbours_drawn = neighbours.len();
         self.frozen_rev = self.frozen_rev.wrapping_add(1).max(1);
         store.rev = self.frozen_rev;
         self.panel.update(cx, |panel, pcx| {
-            panel.attach_frozen_orders(Some(std::rc::Rc::new(store)), pcx);
+            panel.attach_archived_lines(std::rc::Rc::new(by_uid), pcx);
+            panel.attach_frozen_orders(Some(std::rc::Rc::new(store)), fit_range, pcx);
         });
+        // A rebuild that learned where the entry was placed moves the fitted frame; one that
+        // changed nothing does not move the reader.
+        self.reframe(cx);
     }
 }
 

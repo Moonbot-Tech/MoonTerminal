@@ -51,7 +51,7 @@ const MODES: [u8; 4] = [
 /// The same steps are used for hiding recent candles.
 const ZONES: [u16; 8] = [0, 1, 2, 3, 5, 10, 20, 50];
 
-const OUTLINES: [u8; 3] = [1, 2, 3];
+pub(crate) const OUTLINES: [u8; 3] = [1, 2, 3];
 
 /// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
 ///

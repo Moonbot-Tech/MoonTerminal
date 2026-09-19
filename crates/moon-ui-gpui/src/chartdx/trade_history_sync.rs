@@ -282,9 +282,14 @@ impl ChartDataState {
             .filter(|(_, record)| record.core_uid == core)
             .filter(|(_, record)| trade_kind_visible(&self.chart_graphics, record.emulator))
             .filter_map(|(index, record)| {
+                // On a live chart a twin of a live closed order draws both its lines from the
+                // session store; on a frozen viewer the list names what the frozen store draws,
+                // and the ends are decided per trade — see `archived_line_ends`.
                 let (entry_lined, exit_lined) = match lines_drawn {
-                    Some(twins) if self.is_live_twin(record, twins) => (true, true),
-                    Some(_) => self.archived_line_ends(record),
+                    Some(twins) if self.draws_live_market() && self.is_live_twin(record, twins) => {
+                        (true, true)
+                    }
+                    Some(drawn) => self.archived_line_ends(record, drawn),
                     None => (false, false),
                 };
                 if entry_lined && exit_lined {

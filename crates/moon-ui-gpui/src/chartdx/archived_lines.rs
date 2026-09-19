@@ -37,6 +37,31 @@ impl ChartDataState {
         self.chart_graphics.trade_history_style == TradeHistoryStyle::MoonbotLines
     }
 
+    /// Whether a FROZEN engine draws its archived store at all.
+    ///
+    /// The trade window's viewer holds its archived lines in its own store and never runs the live
+    /// chart's archived pass, so the trade style has to be answered for it separately — and it
+    /// used to be answered by nobody: the store drew in every style and the arrows pass, told
+    /// nothing, drew both arrows of every trade beside the lines. Now the store draws only in the
+    /// lines style, and `orders::sync` then hands the arrows pass the store's close instants
+    /// ([`Self::frozen_closes`]) so it keeps only the arrow of an end that has no line.
+    pub(super) fn frozen_store_drawn(&self) -> bool {
+        frozen_store_drawn(self.draws_trade_lines())
+    }
+
+    /// The close instants of every trade a frozen store draws, for the arrows pass.
+    ///
+    /// The frozen twin of [`Self::live_twin_closes`], WITHOUT the closed-order cap: a frozen store
+    /// draws whole (`orders::sync` lifts the cap for it), so every order in it counts. What the
+    /// arrows pass does with the list differs too — see [`Self::archived_line_ends`].
+    pub(super) fn frozen_closes(&self, market: &str, store: &OrderLineStore) -> Vec<f64> {
+        store
+            .market_draw_orders(market, usize::MAX)
+            .into_iter()
+            .filter_map(|order| order.closed_ms)
+            .collect()
+    }
+
     /// The graphics inputs the archived store is shaped by, packed for the per-pane cache key:
     /// the style and the two trade-kind switches.
     pub(super) fn archived_graphics_bits(&self) -> u64 {
@@ -46,11 +71,38 @@ impl ChartDataState {
     }
 
     /// Which ends of this trade the lines pass draws — `(entry, exit)` — so the arrows pass
-    /// draws the arrow of the end that has none. The exit is always a line, from the archive or
-    /// from the row (see the module doc); the entry only when the core archived its own line —
-    /// it archives only a line its chart gave a point, so a market entry typically has none.
-    pub(super) fn archived_line_ends(&self, record: &ChartTradeRecord) -> (bool, bool) {
-        line_ends(record, &self.archived_lines)
+    /// draws the arrow of the end that has none. The entry only when the core archived its own
+    /// line — it archives only a line its chart gave a point, so a market entry typically has
+    /// none. The exit: on a live chart always, from the archive or from the row (see the module
+    /// doc), because the live archived store is built from the whole history; on a frozen viewer
+    /// only when the store actually holds the trade — the trade window's store carries the
+    /// subject and a capped set of neighbours while its arrows draw the whole published history,
+    /// and a trade outside the store must keep both arrows or its exit would show nothing.
+    ///
+    /// The frozen test is by CLOSE INSTANT against `drawn` — the store's own closes — and not by
+    /// `ReportUID` membership of the map: a row without a uid (an older replica's) is in the
+    /// store, with its exit line from the row, but can never be in a map keyed by uid.
+    ///
+    /// Args:
+    ///     record: The trade.
+    ///     drawn: On a frozen viewer, the close instants of the trades its store draws; on a live
+    ///         chart, the live twins — which this reads only through the caller's own twin test.
+    pub(super) fn archived_line_ends(
+        &self,
+        record: &ChartTradeRecord,
+        drawn: &[f64],
+    ) -> (bool, bool) {
+        // The same predicate `orders::sync` picks its frozen branch by, so the two passes agree
+        // on which rule applies — a store not yet built is still a frozen viewer, whose exits are
+        // then lined by nothing.
+        match self.draws_live_market() {
+            true => line_ends(record, &self.archived_lines),
+            false => frozen_line_ends(
+                record,
+                &self.archived_lines,
+                self.is_live_twin(record, drawn),
+            ),
+        }
     }
 
     /// Replace the resolved lines and wake the order pass.
@@ -152,6 +204,24 @@ impl ChartDataState {
         let (_, close_ms) = record_utc_ms(record, &self.report_axis);
         is_live_twin(close_ms, live_closed_ms)
     }
+}
+
+/// See [`ChartDataState::frozen_store_drawn`].
+fn frozen_store_drawn(draws_lines: bool) -> bool {
+    draws_lines
+}
+
+/// [`line_ends`] for a FROZEN viewer: the entry from the map as on a live chart, the exit only
+/// when the store holds the trade (`stored`, decided by close instant by the caller).
+///
+/// See [`ChartDataState::archived_line_ends`] for why the two rules differ.
+fn frozen_line_ends(
+    record: &ChartTradeRecord,
+    lines: &HashMap<i64, Arc<[ArchivedOrderTrace]>>,
+    stored: bool,
+) -> (bool, bool) {
+    let (entry, exit) = line_ends(record, lines);
+    (entry, exit && stored)
 }
 
 /// See [`ChartDataState::archived_line_ends`]; `lines` is the resolver's map by `ReportUID`.

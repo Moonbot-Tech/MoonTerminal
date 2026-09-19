@@ -104,6 +104,9 @@ pub enum TickStatus {
     /// This build knows no public trades route for the venue (Bybit, Hyperliquid). Retrying
     /// cannot help.
     NoRoute,
+    /// The reader switched the tick stage off, so only the bars were asked for. A retry with the
+    /// stage on is what changes it.
+    Disabled,
     /// The window is older than the route's documented trade retention.
     OutOfRetention {
         /// How far back the venue's own tick retention actually reaches, in milliseconds.
@@ -720,6 +723,10 @@ pub struct TradeReplaySeries {
     /// Whether [`Self::ticks`] covers only PART of [`Self::window`] — the bars always cover all
     /// of it. Always `false` on a [`TradeReplaySource::Klines1m`] series.
     pub partial: bool,
+    /// What the prints bought and sold per second, summed from the RAW tick run before it was
+    /// thinned into [`Self::ticks`] — the band's data, which the thinned prints cannot supply.
+    /// Empty when there were no ticks.
+    pub side_slots: Vec<crate::market::source::SideSlot>,
     /// The inclusive span [`Self::ticks`] is guaranteed EXHAUSTIVE over, or `None` when there was
     /// no tick walk at all ([`TradeReplaySource::Klines1m`]).
     ///
@@ -793,6 +800,42 @@ impl TradeReplaySeries {
 
     /// Read retained replay rows while fitting Y only to the visible interval, not prefetch.
     /// The original `read_into` API fits the whole requested interval for non-prefetch callers.
+    /// The bought/sold split over this replay, sampled as the live band is.
+    ///
+    /// See [`crate::market::source::replay_sides`]: the prints' own sides inside
+    /// [`Self::covered`], the bars' turnover leaned by direction outside it.
+    ///
+    /// Args:
+    ///     tf_ms: Rolling window, milliseconds.
+    ///     step_ms: Sample spacing, milliseconds.
+    ///     window: Inclusive `[from, to]` bounds on sample open time, unix milliseconds.
+    ///     out: Reused buffer; cleared first.
+    pub fn side_volume_into(
+        &self,
+        tf_ms: i64,
+        step_ms: i64,
+        window: (i64, i64),
+        out: &mut Vec<crate::market::source::SideVolumeBucket>,
+    ) {
+        out.clear();
+        // No slots — no prints, or a contract size this build does not know — means the bars
+        // stand in everywhere, the covered span included: a covered second with no slot would
+        // otherwise draw nothing where the bars say something traded.
+        let covered = match self.side_slots.is_empty() {
+            true => None,
+            false => self.covered,
+        };
+        *out = crate::market::source::replay_sides(
+            &self.side_slots,
+            covered,
+            &self.candles,
+            tf_ms,
+            step_ms,
+            window.0,
+            window.1,
+        );
+    }
+
     pub fn read_with_price_window(
         &self,
         epoch_ms: f64,

@@ -240,8 +240,10 @@ impl ChartDataState {
             marker_scale,
             // The band is the per-trade bars' own data regrouped, so the two would draw the same
             // prints twice at the same edge; the band switches the bars off by decision, and
-            // leaves the reader's opacity setting untouched for when it is off.
-            volume_alpha: if sides_on {
+            // leaves the reader's opacity setting untouched for when it is off. A replay draws
+            // the band or nothing: the bars were the only volume its viewer had before the band
+            // learned to read the replay, and the reader asked for them to go.
+            volume_alpha: if sides_on || self.trade_replay.is_some() {
                 0.0
             } else {
                 self.chart_graphics.trade_volume_alpha
@@ -698,9 +700,10 @@ impl ChartDataState {
             // mode the price-fit read runs on
             // every camera pixel, and keying on it re-shipped the whole series and re-baked the
             // base texture sixty times a second on a chart that sat still (measured on the bench:
-            // `side_volume_upload_len` 134 k/s, `base_bake` 59/s). A replay pane has no live source
-            // and gets no split (its candle half still draws). Off, the resident series is dropped once and the layer emptied, so
-            // the next switch-on starts from nothing rather than a stale window.
+            // `side_volume_upload_len` 134 k/s, `base_bake` 59/s). A replay pane answers from its
+            // own prints and bars (`TradeReplaySeries::side_volume_into`). Off, the resident
+            // series is dropped once and the layer emptied, so the next switch-on starts from
+            // nothing rather than a stale window.
             // The rolling interval follows the VISIBLE span (Moonbot's Auto table) and the
             // sampling step follows the pixel, so either moving is a re-read: a coarser interval
             // sums more, a coarser step draws fewer samples.
@@ -737,10 +740,7 @@ impl ChartDataState {
             );
             let side_range_moved =
                 sides_on && (visible_abs.0 < pr.side_range.0 || visible_abs.1 > pr.side_range.1);
-            if sides_on
-                && self.trade_replay.is_none()
-                && (side_data_moved || side_key_moved || side_range_moved)
-            {
+            if sides_on && (side_data_moved || side_key_moved || side_range_moved) {
                 let window = side_window;
                 // Read into the spare buffer and ship only what DIFFERS from the resident
                 // series: the retained history moves on every trade batch, but a batch that
@@ -749,17 +749,25 @@ impl ChartDataState {
                 // base texture (measured before this compare: 140 k buckets/s on the bench).
                 let mut fresh = std::mem::take(&mut pr.side_scratch);
                 let side_timer = crate::diag::timer();
-                if source
-                    .side_volume_buckets(
-                        pane.core,
-                        &pane.market,
-                        side_tf_ms,
-                        side_step_ms,
-                        window,
-                        &mut fresh,
-                    )
-                    .is_some()
-                {
+                // A frozen replay answers from its own prints and bars, exactly as the history
+                // read above does; the live arm is untouched.
+                let read = match self.trade_replay.as_ref() {
+                    Some(series) => {
+                        series.side_volume_into(side_tf_ms, side_step_ms, window, &mut fresh);
+                        true
+                    }
+                    None => source
+                        .side_volume_buckets(
+                            pane.core,
+                            &pane.market,
+                            side_tf_ms,
+                            side_step_ms,
+                            window,
+                            &mut fresh,
+                        )
+                        .is_some(),
+                };
+                if read {
                     let moved = side_key_moved || fresh != pr.side_samples;
                     pr.side_tf_ms = side_tf_ms;
                     pr.side_step_ms = side_step_ms;
@@ -792,10 +800,9 @@ impl ChartDataState {
                 }
                 pr.side_scratch = fresh;
                 crate::diag::record_us(&crate::diag::CHART_SIDE_VOLUME_READ_US, side_timer);
-            } else if (!sides_on || self.trade_replay.is_some()) && pr.side_tf_ms != 0 {
-                // Off, or a replay took the pane over: either way the resident buckets describe a
-                // live window this pane no longer shows. Cleared once; the width mark at zero is
-                // also what makes the return to live re-read them.
+            } else if !sides_on && pr.side_tf_ms != 0 {
+                // Off: the resident buckets describe a window this pane no longer draws. Cleared
+                // once; the width mark at zero is also what makes the switch-on re-read them.
                 pr.side_tf_ms = 0;
                 pr.side_step_ms = 0;
                 pr.side_range = (i64::MAX, i64::MIN);

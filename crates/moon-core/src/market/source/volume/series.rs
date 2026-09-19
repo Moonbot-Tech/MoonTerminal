@@ -70,13 +70,23 @@ pub struct SideVolumeBucket {
     pub sell_quote: f32,
 }
 
-/// One native slot, keyed by `floor(time / SIDE_BUCKET_MS)`.
+/// One native slot, keyed by `floor(time / SIDE_BUCKET_MS)`: what was bought and sold, in quote
+/// currency, over one second.
+///
+/// Public because a trade replay carries its split as these — summed from the venue's own prints
+/// BEFORE the prints are thinned for drawing, since thinning keeps a few representative ticks
+/// per bucket and drops the rest with their quantities.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Slot {
-    id: i64,
-    buy: f64,
-    sell: f64,
+pub struct SideSlot {
+    /// `floor(time_ms / SIDE_BUCKET_MS)`.
+    pub id: i64,
+    /// Bought over the second, quote currency.
+    pub buy: f64,
+    /// Sold over the second, quote currency.
+    pub sell: f64,
 }
+
+type Slot = SideSlot;
 
 /// One market's ordered buckets and its place in the trade stream.
 pub(super) struct SideSeries {
@@ -367,24 +377,149 @@ pub fn synthetic_sides(
     to_ms: i64,
 ) -> Vec<SideVolumeBucket> {
     let mut slots: Vec<Slot> = Vec::new();
+    push_candle_slots(&mut slots, candles, |_| true);
+    finish_slots(slots, tf_ms, step_ms, from_ms, to_ms)
+}
+
+/// The per-second split of a run of prints: every tick's `price × qty` into the slot of its
+/// second, by side, sorted and merged.
+///
+/// This is what a trade replay keeps of its ticks' VOLUME, and it is taken from the raw run —
+/// before `fit_ticks` thins the prints for drawing, which keeps a few representative ticks per
+/// bucket and drops the rest with their quantities. Summed from the thinned run instead, the
+/// band collapsed exactly where the ticks were.
+///
+/// Args:
+///     ticks: The prints, any order.
+///     value: How a print's `qty` becomes a quote value on this market — a contract count needs
+///         the contract's size, and a size this build does not know yields NO slots, so the band
+///         falls back to the bars rather than print a figure that is off by the multiplier.
+///
+/// Returns:
+///     The slots ascending by id, one per second that traded.
+pub fn side_slots_of_ticks(
+    ticks: &[crate::feed::Tick],
+    value: crate::market::trade_replay::venue_caps::TickValue,
+) -> Vec<SideSlot> {
+    use crate::market::trade_replay::venue_caps::TickValue;
+    let mut slots: Vec<Slot> = Vec::with_capacity(ticks.len().min(4096));
+    for tick in ticks {
+        let value = match value {
+            TickValue::Base => f64::from(tick.price) * f64::from(tick.qty),
+            TickValue::InverseContracts { usd_per_contract } => {
+                f64::from(tick.qty) * usd_per_contract
+            }
+            TickValue::LinearContracts { coins_per_contract } => {
+                f64::from(tick.price) * f64::from(tick.qty) * coins_per_contract
+            }
+            TickValue::Unknown => return Vec::new(),
+        };
+        if !value.is_finite() || value <= 0.0 || !tick.time_ms.is_finite() {
+            continue;
+        }
+        let id = (tick.time_ms as i64).div_euclid(SIDE_BUCKET_MS);
+        let (buy, sell) = match tick.side {
+            crate::feed::Side::Buy => (value, 0.0),
+            crate::feed::Side::Sell => (0.0, value),
+        };
+        slots.push(Slot { id, buy, sell });
+    }
+    merge_slots(&mut slots);
+    slots
+}
+
+/// The split of a trade REPLAY: the real sides where the replay holds ticks, the candle turnover
+/// leaned by direction everywhere else — the same seam the live series has where its trade
+/// history runs out and the candle half takes over.
+///
+/// The tick slots are the venue's own prints with a side each ([`side_slots_of_ticks`]), so
+/// inside `covered` the band is a measurement; outside it the bars are what the replay has, and
+/// they are made up into sides exactly as [`synthetic_sides`] makes them up for the bench. The
+/// seam is drawn PER SECOND, not per bar: `covered` is the tick walk's own span, whose ends are
+/// the fetch window's millisecond-exact stamps and never a minute boundary, so a bar straddling
+/// an end gives the band only the seconds of it the ticks do not — the covered seconds already
+/// hold the real prints, and adding the bar's share on top would inflate exactly the minutes
+/// around the entry and the exit. The one second an end falls inside is taken from both — its
+/// prints and the bar's sixtieth — since a second is the finest slot there is; that is one slot at
+/// each end, not a minute.
+///
+/// Args:
+///     tick_slots: The replay's prints per second, from [`side_slots_of_ticks`].
+///     covered: The inclusive span the ticks are exhaustive over, or `None` for no ticks at all.
+///     candles: The replay's bars, one minute each.
+///     tf_ms: Rolling window, milliseconds.
+///     step_ms: Sample spacing, milliseconds.
+///     from_ms: First sample open, unix milliseconds.
+///     to_ms: Last sample open, unix milliseconds.
+///
+/// Returns:
+///     The samples, exactly as the live series emits them.
+pub fn replay_sides(
+    tick_slots: &[SideSlot],
+    covered: Option<(i64, i64)>,
+    candles: &[crate::market::ChartCandle],
+    tf_ms: i64,
+    step_ms: i64,
+    from_ms: i64,
+    to_ms: i64,
+) -> Vec<SideVolumeBucket> {
+    let mut slots: Vec<Slot> = tick_slots.to_vec();
+    // A bar's second is the replay's answer only where the ticks are not: a second inside the
+    // covered span already holds the same prints.
+    push_candle_slots(&mut slots, candles, |slot_id| match covered {
+        Some((lo, hi)) => !slot_inside_span(slot_id, lo, hi),
+        None => true,
+    });
+    finish_slots(slots, tf_ms, step_ms, from_ms, to_ms)
+}
+
+/// Whether the one-second slot `id` (`floor(time / SIDE_BUCKET_MS)`) lies wholly inside
+/// `[lo, hi]`, both in unix milliseconds.
+fn slot_inside_span(id: i64, lo: i64, hi: i64) -> bool {
+    let open = id * SIDE_BUCKET_MS;
+    open >= lo && open + SIDE_BUCKET_MS - 1 <= hi
+}
+
+/// Spread each candle's turnover over its seconds, leaned by its direction, keeping the seconds
+/// `keep` accepts.
+///
+/// Args:
+///     slots: Where the slots go, unsorted.
+///     candles: One-minute bars.
+///     keep: Which one-second slots (by id) to take.
+fn push_candle_slots(
+    slots: &mut Vec<Slot>,
+    candles: &[crate::market::ChartCandle],
+    keep: impl Fn(i64) -> bool,
+) {
     for c in candles {
         if !(c.quote_volume.is_finite() && c.quote_volume > 0.0 && c.t_open_ms.is_finite()) {
             continue;
         }
-        // The bench serves minutes, spread over the minute's slots.
+        // Minutes, spread over the minute's slots. The share is per SECOND, so a bar of which
+        // only some seconds are taken contributes only those seconds' share — never the whole
+        // minute squeezed into the remainder.
         let candle_ms = 60_000i64;
         let parts = (candle_ms / SIDE_BUCKET_MS).max(1);
         let buy_share: f64 = if c.close >= c.open { 0.62 } else { 0.38 };
         let total = f64::from(c.quote_volume) / parts as f64;
         let first = (c.t_open_ms as i64).div_euclid(SIDE_BUCKET_MS);
         for i in 0..parts {
+            let id = first + i;
+            if !keep(id) {
+                continue;
+            }
             slots.push(Slot {
-                id: first + i,
+                id,
                 buy: total * buy_share,
                 sell: total * (1.0 - buy_share),
             });
         }
     }
+}
+
+/// Sort unordered slots and merge the ones of one second.
+fn merge_slots(slots: &mut Vec<Slot>) {
     slots.sort_by_key(|s| s.id);
     slots.dedup_by(|b, a| {
         if a.id == b.id {
@@ -395,6 +530,17 @@ pub fn synthetic_sides(
             false
         }
     });
+}
+
+/// Sort and merge unordered slots, then sample them as the live series is sampled.
+fn finish_slots(
+    mut slots: Vec<Slot>,
+    tf_ms: i64,
+    step_ms: i64,
+    from_ms: i64,
+    to_ms: i64,
+) -> Vec<SideVolumeBucket> {
+    merge_slots(&mut slots);
     let mut out = Vec::new();
     rolling_slots(&slots, tf_ms, step_ms, from_ms, to_ms, &mut out);
     out

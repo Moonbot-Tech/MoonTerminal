@@ -47,7 +47,7 @@ const TRADE_VOLUME_ALPHAS: [f32; 6] = [0.0, 0.15, 0.34, 0.5, 0.75, 1.0];
 ///
 /// Kept at the width the two-column popup's rows had, so the checkbox labels wrap where they did;
 /// the localized ES strings are the longest of the three.
-pub(super) const ROW_W: f32 = 7.0 * 42.0;
+pub(crate) const ROW_W: f32 = 7.0 * 42.0;
 const SEG_W6: f32 = ROW_W / 6.0;
 
 /// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
@@ -66,7 +66,7 @@ pub(super) fn content_width(cx: &App) -> Pixels {
 ///
 /// Returns:
 ///     Index into `steps` of the closest value; zero when the stored value is not finite.
-pub(super) fn nearest(steps: &[f32], value: f32) -> usize {
+pub(crate) fn nearest(steps: &[f32], value: f32) -> usize {
     if !value.is_finite() {
         return 0;
     }

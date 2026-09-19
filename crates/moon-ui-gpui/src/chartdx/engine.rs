@@ -586,8 +586,9 @@ impl ChartEngine {
     pub(crate) fn set_frozen_orders(
         &mut self,
         store: Option<std::rc::Rc<moon_core::session::order_lines::OrderLineStore>>,
+        fit_range: Option<(f32, f32)>,
     ) {
-        self.data.borrow_mut().set_frozen_orders(store);
+        self.data.borrow_mut().set_frozen_orders(store, fit_range);
     }
 
     /// Hand this engine the closed trade its captions describe, or take it away.

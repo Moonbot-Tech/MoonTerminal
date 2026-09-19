@@ -69,3 +69,79 @@ fn trade_frames_scale_the_floor_with_bar_width_and_accept_same_second_trades() {
     );
     assert_eq!(trade_frame(exit, entry, MINUTE_MS), None);
 }
+
+/// A fitted frame is the trade itself, and takes in only the neighbours within one trade-length.
+///
+/// Breakage: a neighbour beyond the reach stretching the frame would make the subject a sliver;
+/// one within it left out would sit off-screen while its lines are drawn.
+#[test]
+fn a_fitted_frame_is_the_trade_plus_the_neighbours_within_reach() {
+    let entry = ENTRY_S * 1_000;
+    let close = entry + 10 * MINUTE_MS;
+    let subject = trade_span(None, entry, close);
+    assert_eq!(subject, (entry, close));
+    // Alone: exactly the trade.
+    assert_eq!(fit_frame(subject, []), Some((entry, close)));
+    // Within reach on both sides: taken in. Beyond it: left out.
+    let near_before = (entry - 8 * MINUTE_MS, entry - 2 * MINUTE_MS);
+    let near_after = (close + 3 * MINUTE_MS, close + 9 * MINUTE_MS);
+    let far = (close + 11 * MINUTE_MS, close + 20 * MINUTE_MS);
+    assert_eq!(
+        fit_frame(subject, [near_before, far, near_after]),
+        Some((near_before.0, near_after.1))
+    );
+    // A neighbour touching the reach's edge counts; one starting one ms past it does not.
+    let edge = (close + 10 * MINUTE_MS, close + 30 * MINUTE_MS);
+    assert_eq!(fit_frame(subject, [edge]), Some((entry, edge.1)));
+    let past = (close + 10 * MINUTE_MS + 1, close + 30 * MINUTE_MS);
+    assert_eq!(fit_frame(subject, [past]), Some((entry, close)));
+}
+
+/// The span starts where the entry order was placed only when the archive says so and that
+/// instant precedes the fill; otherwise at the fill.
+#[test]
+fn a_trade_span_starts_at_the_placement_when_the_archive_holds_it() {
+    let fill = ENTRY_S * 1_000;
+    let close = fill + MINUTE_MS;
+    assert_eq!(
+        trade_span(Some(fill - 3 * MINUTE_MS), fill, close),
+        (fill - 3 * MINUTE_MS, close)
+    );
+    assert_eq!(
+        trade_span(Some(fill + 5_000), fill, close),
+        (fill, close),
+        "a later stamp is noise"
+    );
+    assert_eq!(trade_span(None, fill, close), (fill, close));
+    // A same-instant trade frames through the ordinary rule rather than as a point.
+    assert!(fit_frame(trade_span(None, fill, fill), []).is_some_and(|(s, e)| e > s));
+}
+
+/// The entry-line start is the earliest own entry point; inherited and exit lines do not count.
+#[test]
+fn the_entry_placement_comes_from_the_own_entry_line_only() {
+    use moon_core::feed::{ArchivedLineKind, ArchivedOrderTrace};
+    let line = |own: bool, kind: ArchivedLineKind, points: Vec<(f64, f64)>| ArchivedOrderTrace {
+        own,
+        kind,
+        stop_price: None,
+        stop_time_ms: None,
+        points,
+    };
+    let lines = [
+        line(true, ArchivedLineKind::Exit, vec![(10.0, 1.0)]),
+        line(false, ArchivedLineKind::Entry, vec![(20.0, 1.0)]),
+        line(
+            true,
+            ArchivedLineKind::Entry,
+            vec![(50.0, 1.0), (40.0, 1.0)],
+        ),
+    ];
+    assert_eq!(entry_set_ms(&lines), Some(40));
+    assert_eq!(entry_set_ms(&lines[..2]), None);
+    assert_eq!(
+        fit_price_range([1.5, f32::NAN, 0.0, 2.5, 0.5]),
+        Some((0.5, 2.5))
+    );
+    assert_eq!(fit_price_range([]), None);
+}
