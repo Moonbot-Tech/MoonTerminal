@@ -93,10 +93,12 @@
 //! quantity**, and this is deliberate rather than an oversight: `OkxHistoryTrades`
 //! (SWAP instruments only — `sz` is base currency for SPOT), `BinanceCoinMAggTrades` (`q` on a
 //! dapi row, with no `baseQty` alternative), and `GateFuturesTrades` (`size`, whose base amount
-//! depends on the contract's `quanto_multiplier`). No code compensates for this: the chart's
-//! volume bars stay shape-correct because the drawn scale is window-relative and a per-instrument
-//! multiplier is a constant that cancels out of it, and a tick series' aggregated candles never
-//! reach the shared kline cache where an absolute figure could be read as genuine history. See
+//! depends on the contract's `quanto_multiplier`). The DRAWN prints need no compensation: their
+//! scale is window-relative and a per-instrument multiplier is a constant that cancels out of it,
+//! and a tick series' aggregated candles never reach the shared kline cache where an absolute
+//! figure could be read as genuine history. The volume band's SUMS do, since they are printed as
+//! absolute figures: [`tick_value`] values those three routes' prints through the core's own
+//! contract terms, and states no value at all while the core has not described the market. See
 //! each route's own parser for the fact restated in the vendor's own terms.
 
 use crate::venue::{Brand, MarketKind, Venue};
@@ -499,3 +501,75 @@ pub fn bybit_category(venue: Venue, market: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests;
+
+/// How a print's `qty` becomes a quote-currency VALUE, decided per market by the requester and
+/// carried on the request for the band's sums.
+///
+/// Three trade routes report a CONTRACT count in `qty` (see the module doc), and the drawn
+/// prints never needed the multiplier — their scale is window-relative. The band's sums do: they
+/// are printed as absolute quote figures. The multiplier is the core's own `contract_size` for
+/// the market, read the way `feed/live/convert.rs` and `market_quantity_unit` read it: an EMPTY
+/// quote beside a contract size other than one is a coin-margined contract worth that many
+/// dollars, anything else is a linear contract of that many coins (Gate's quanto contracts, OKX
+/// swaps). A contract route whose market the core has not described yet states no value at all.
+///
+/// The rule is not part of the worker's outcome key: a tick series remembered while the terms
+/// were unknown keeps its bars-only band on a reopen until the entry is evicted. A window is
+/// opened from the Report on a connected core whose markets have arrived, so that is a corner the
+/// key is not widened for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TickValue {
+    /// `qty` is base currency: `value = price × qty`.
+    Base,
+    /// `qty` counts contracts each worth a fixed quote amount: `value = qty × usd`.
+    InverseContracts { usd_per_contract: f64 },
+    /// `qty` counts contracts of a fixed coin size: `value = price × qty × coins`.
+    LinearContracts { coins_per_contract: f64 },
+    /// `qty` counts contracts of a size this build does not know: no absolute value can be
+    /// stated, and the band takes the bars' turnover instead.
+    Unknown,
+}
+
+/// Whether the venue's trade route reports contracts rather than base currency in `Tick::qty`.
+///
+/// The three routes the module doc names; the OKX route serves spot and swap alike, so the kind
+/// decides there.
+pub const fn tick_qty_is_contracts(venue: Venue) -> bool {
+    matches!(
+        (venue.brand, venue.kind),
+        (Brand::Binance, MarketKind::Quarterly)
+            | (Brand::Gate, MarketKind::Futures)
+            | (Brand::Okx, MarketKind::Futures)
+    )
+}
+
+/// The value rule for one market's prints.
+///
+/// Args:
+///     venue: The market's venue, which names the trade route.
+///     terms: The market's `(quote currency, contract_size)` as the core reports them, or `None`
+///         while the core has not described the market.
+///
+/// Returns:
+///     See [`TickValue`].
+pub fn tick_value(venue: Venue, terms: Option<(&str, f64)>) -> TickValue {
+    if !tick_qty_is_contracts(venue) {
+        return TickValue::Base;
+    }
+    let Some((quote, contract_size)) = terms else {
+        return TickValue::Unknown;
+    };
+    if !contract_size.is_finite() || contract_size <= 0.0 {
+        return TickValue::Unknown;
+    }
+    // The same pair `market_quantity_unit` reads, with the same line drawn: an empty quote alone
+    // is how a linear Hyperliquid market presents itself, so the size has to differ from one too.
+    match quote.trim().is_empty() && contract_size != 1.0 {
+        true => TickValue::InverseContracts {
+            usd_per_contract: contract_size,
+        },
+        false => TickValue::LinearContracts {
+            coins_per_contract: contract_size,
+        },
+    }
+}

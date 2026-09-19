@@ -1171,15 +1171,42 @@ impl ChartPanel {
     ///
     /// Args:
     ///     store: The lines, already built by `OrderLineStore::archived`, or `None` for no orders.
+    ///     fit_range: The price band the auto-Y fit must include beside the visible prices, or
+    ///         `None` to fit the prices alone.
     ///     cx: Panel context.
     pub(crate) fn attach_frozen_orders(
         &mut self,
         store: Option<std::rc::Rc<moon_core::session::order_lines::OrderLineStore>>,
+        fit_range: Option<(f32, f32)>,
         cx: &mut Context<Self>,
     ) {
-        self.chart.set_frozen_orders(store);
+        self.chart.set_frozen_orders(store, fit_range);
         self.view_dirty = true;
         cx.notify();
+    }
+
+    /// Hand this panel the archived lines its frozen store was built from, by `ReportUID`.
+    ///
+    /// The trade window's companion to [`Self::attach_frozen_orders`]: the store is what the
+    /// order pass DRAWS, this map is what the arrows pass ASKS — which end of a trade has a line,
+    /// so the arrow of that end is not drawn on top of it (`archived_line_ends`). A live chart
+    /// fills the same map from the resolver in `trace_lines`; a historical viewer never runs that
+    /// path and has to be handed it.
+    ///
+    /// Args:
+    ///     lines: The resolved lines by `ReportUID`, subject and drawn neighbours alike.
+    ///     cx: Panel context.
+    pub(crate) fn attach_archived_lines(
+        &mut self,
+        lines: std::rc::Rc<
+            std::collections::HashMap<i64, std::sync::Arc<[moon_core::feed::ArchivedOrderTrace]>>,
+        >,
+        cx: &mut Context<Self>,
+    ) {
+        if self.chart.set_archived_lines(lines) {
+            self.view_dirty = true;
+            cx.notify();
+        }
     }
 
     /// Hand this panel the closed trade its captions describe.
@@ -1466,7 +1493,7 @@ impl ChartPanel {
     ///
     /// Normalized because `layout.toml` is hand-editable and every reader of this config has to see
     /// the same clamped value the drawing path uses.
-    pub(super) fn effective_chart_graphics(&self, cx: &App) -> moon_core::config::ChartGraphicsCfg {
+    pub(crate) fn effective_chart_graphics(&self, cx: &App) -> moon_core::config::ChartGraphicsCfg {
         moon_chart::normalize_chart_graphics(self.chart_graphics.unwrap_or_else(|| {
             self.backend
                 .read(cx)

@@ -34,10 +34,10 @@ use crate::panels::{
 ///
 /// Steps rather than a slider: `MoonSlider` needs a state entity held on the host, and every other
 /// control in these popups is stateless and reads the config on each render.
-const ARROW_SCALES: [f32; 6] = [0.6, 0.8, 1.0, 1.3, 1.6, 2.0];
+pub(crate) const ARROW_SCALES: [f32; 6] = [0.6, 0.8, 1.0, 1.3, 1.6, 2.0];
 
 /// Selectable connector thicknesses, in logical px.
-const CONNECTOR_PX: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
+pub(crate) const CONNECTOR_PX: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
 
 const SEG_W2: f32 = ROW_W / 2.0;
 const SEG_W6: f32 = ROW_W / 6.0;

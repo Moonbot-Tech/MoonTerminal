@@ -1,4 +1,5 @@
 use super::*;
+use crate::market::trade_replay::venue_caps::TickValue;
 
 /// A trade as the retained ring holds one: a SELL is spelled by the quantity's sign bit.
 fn trade(ms: i64, price: f32, qty: f32) -> TradeHistoryRow {
@@ -266,4 +267,168 @@ fn synthetic_sides_preserve_the_candle_turnover() {
         out[0].buy_quote > out[0].sell_quote,
         "a rising bar leans to buying"
     );
+}
+
+/// A replay's split is the ticks' own sides where the ticks are, and the leaned candle turnover
+/// only where they are not.
+///
+/// Breakage: a candle inside the covered span would add the same prints a second time; a tick's
+/// side or value going into the wrong column would draw the band mirrored.
+#[test]
+fn replay_sides_take_ticks_where_covered_and_candles_elsewhere() {
+    use crate::feed::{Side, Tick};
+    let tick = |time_ms: f64, price: f32, qty: f32, side: Side| Tick {
+        time_ms,
+        price,
+        qty,
+        side,
+    };
+    // Two prints in the covered minute: 2 × 1.5 bought, 1 × 1.5 sold.
+    let ticks = [
+        tick(60_500.0, 1.5, 2.0, Side::Buy),
+        tick(61_500.0, 1.5, 1.0, Side::Sell),
+        // Rejected outright: a print with no value.
+        tick(62_500.0, 1.5, 0.0, Side::Buy),
+    ];
+    let candle = |t_open_ms: f64, quote: f32| crate::market::ChartCandle {
+        t_open_ms,
+        open: 1.0,
+        high: 2.0,
+        low: 0.5,
+        close: 1.5,
+        volume: 10.0,
+        quote_volume: quote,
+    };
+    // The covered minute's bar must be ignored; the next minute's bar stands in for its prints.
+    let candles = [candle(60_000.0, 1000.0), candle(120_000.0, 100.0)];
+    let slots = super::side_slots_of_ticks(&ticks, TickValue::Base);
+    let out = super::replay_sides(
+        &slots,
+        Some((60_000, 119_999)),
+        &candles,
+        60_000,
+        60_000,
+        0,
+        240_000,
+    );
+    let at = |t: i64| out.iter().find(|b| b.t_open_ms == t).expect("sample");
+    // The sample ending at 120 000 covers the covered minute: ticks only.
+    let covered = at(60_000);
+    assert!((covered.buy_quote - 3.0).abs() < 1e-3, "2 × 1.5 bought");
+    assert!((covered.sell_quote - 1.5).abs() < 1e-3, "1 × 1.5 sold");
+    // The next sample covers the uncovered minute: the candle's turnover, leaned to buying.
+    let bars = at(120_000);
+    assert!((bars.buy_quote + bars.sell_quote - 100.0).abs() < 1e-2);
+    assert!(
+        bars.buy_quote > bars.sell_quote,
+        "a rising bar leans to buying"
+    );
+    // No ticks at all: every bar counts.
+    let out = super::replay_sides(&[], None, &candles, 60_000, 60_000, 0, 240_000);
+    let first = out.iter().find(|b| b.t_open_ms == 60_000).expect("sample");
+    assert!((first.buy_quote + first.sell_quote - 1000.0).abs() < 1e-1);
+}
+
+/// The seam between ticks and bars is per second: a bar straddling the covered span's end gives
+/// only its uncovered seconds, so a covered second is never counted twice — the one second the
+/// end falls inside is the only overlap, and it is a sixtieth of a bar, not a minute.
+///
+/// Breakage: `covered` ends on the fetch window's millisecond stamps, never on a minute, so a
+/// per-bar rule re-added every boundary minute's turnover on top of its real prints — exactly
+/// around the entry and the exit.
+#[test]
+fn replay_sides_take_only_the_uncovered_seconds_of_a_straddling_bar() {
+    let candle = crate::market::ChartCandle {
+        t_open_ms: 60_000.0,
+        open: 1.0,
+        high: 2.0,
+        low: 0.5,
+        close: 1.5,
+        volume: 10.0,
+        quote_volume: 600.0,
+    };
+    // Ticks cover the minute's first 20.5 seconds; the bar may stand in only for the other 39.
+    let covered = Some((60_000, 80_499));
+    let out = super::replay_sides(&[], covered, &[candle], 60_000, 60_000, 0, 180_000);
+    let sample = out
+        .iter()
+        .find(|b| b.t_open_ms == 60_000)
+        .expect("the sample over the bar");
+    // 600 over 60 seconds = 10 per second; seconds 60..=79 are covered (the 80th straddles the
+    // end and is not wholly inside), so 40 seconds stand in.
+    assert!(
+        (sample.buy_quote + sample.sell_quote - 400.0).abs() < 1e-2,
+        "only the uncovered seconds: {}",
+        sample.buy_quote + sample.sell_quote
+    );
+}
+
+/// The replay's split is taken from the RAW prints, so thinning them for drawing changes nothing.
+///
+/// Breakage: summing the thinned run — a few representative ticks per bucket — collapsed the
+/// band exactly where the ticks were, as the developer saw on a live window (19.09.2026).
+#[test]
+fn side_slots_come_from_the_raw_prints_not_the_thinned_ones() {
+    use crate::feed::{Side, Tick};
+    // Sixty prints inside one second, alternating sides, 1 quote each.
+    let raw: Vec<Tick> = (0..60)
+        .map(|i| Tick {
+            time_ms: 60_000.0 + f64::from(i) * 10.0,
+            price: 1.0,
+            qty: 1.0,
+            side: if i % 2 == 0 { Side::Buy } else { Side::Sell },
+        })
+        .collect();
+    let slots = super::side_slots_of_ticks(&raw, TickValue::Base);
+    assert_eq!(slots.len(), 1);
+    assert!((slots[0].buy - 30.0).abs() < 1e-9);
+    assert!((slots[0].sell - 30.0).abs() < 1e-9);
+    // Thinned to four representatives, the run would have kept a fifteenth of the turnover.
+    let (thinned, _) = crate::market::trade_replay::fit_ticks(raw.clone(), 4);
+    let from_thinned = super::side_slots_of_ticks(&thinned, TickValue::Base);
+    assert!(from_thinned[0].buy + from_thinned[0].sell < 60.0);
+    // The band, drawn from the raw slots, reads the whole second.
+    let out = super::replay_sides(
+        &slots,
+        Some((60_000, 60_999)),
+        &[],
+        1_000,
+        1_000,
+        60_000,
+        61_000,
+    );
+    let sample = out.iter().find(|b| b.t_open_ms == 60_000).expect("sample");
+    assert!((sample.buy_quote + sample.sell_quote - 60.0).abs() < 1e-3);
+}
+
+/// A contract count becomes a quote value through the contract's size — by the fixed dollar
+/// value on an inverse contract, by the coin size and the price on a linear one — and stays out
+/// of the band altogether when the size is unknown.
+#[test]
+fn side_slots_value_contracts_by_their_size_or_not_at_all() {
+    use crate::feed::{Side, Tick};
+    let print = Tick {
+        time_ms: 1_000.0,
+        price: 50_000.0,
+        qty: 3.0,
+        side: Side::Buy,
+    };
+    let inverse = super::side_slots_of_ticks(
+        &[print],
+        TickValue::InverseContracts {
+            usd_per_contract: 100.0,
+        },
+    );
+    assert!((inverse[0].buy - 300.0).abs() < 1e-9, "3 contracts × $100");
+    let linear = super::side_slots_of_ticks(
+        &[print],
+        TickValue::LinearContracts {
+            coins_per_contract: 0.01,
+        },
+    );
+    assert!(
+        (linear[0].buy - 1_500.0).abs() < 1e-6,
+        "3 × 0.01 coins × 50 000"
+    );
+    assert!(super::side_slots_of_ticks(&[print], TickValue::Unknown).is_empty());
 }

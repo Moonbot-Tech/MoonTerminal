@@ -180,11 +180,16 @@ pub(crate) fn open_trade_window(
         // restore path either, and keeps the forced mode for its whole life by construction —
         // which is exactly right, since a candle replay genuinely has no ticks to fall back to.
         let mut user_candle_mode = 0;
+        // What the pin was taken from: with no override yet, the effective view IS the
+        // trade-window kind's stored set, and `follow_candle_default` re-pins when it moves.
+        let mut candles_followed = moon_core::market::CandleViewCfg::default();
         panel.update(cx, |panel, pcx| {
-            let mut view = panel.effective_candle_view(pcx);
-            view.tf_min = 1;
-            user_candle_mode = view.mode;
-            // THE INITIAL CANDLE-MODE FORCE. It holds until a tick outcome arrives: a fresh
+            let user = panel.effective_candle_view(pcx);
+            user_candle_mode = user.mode;
+            candles_followed = user;
+            // THE INITIAL CANDLE-MODE FORCE, and the timeframe pin with it — both in
+            // `settings::pinned_candle_view`, the one rule this window, its popup and its reset
+            // draw candles through. The mode force holds until a tick outcome arrives: a fresh
             // request yields candles before its optional tick upgrade, while a settled tick-cache
             // hit can yield ticks as its FIRST outcome. Candle mode Off is a pure TICK chart, and
             // a candle replay has no ticks. Inherited unchanged it would draw an empty pane under
@@ -193,10 +198,7 @@ pub(crate) fn open_trade_window(
             // asked to SEE this trade, so the window falls back to the shipped drawing mode rather
             // than to nothing, until `apply` restores the real choice once a tick series is on
             // offer.
-            if view.mode == moon_core::market::candles::CANDLE_MODE_OFF {
-                view.mode = moon_core::market::CandleViewCfg::default().mode;
-            }
-            panel.set_candle_view(Some(view), pcx);
+            panel.set_candle_view(Some(super::settings::pinned_candle_view(user, false)), pcx);
             // Frame the trade NOW, before the REST fetch answers. The pane used to stay live until
             // `publish`, so a window opened with toolbar Live on sat on `now` for the whole load
             // and the closed trade was off the left edge. The 1-minute pin above is the bar width
@@ -242,6 +244,17 @@ pub(crate) fn open_trade_window(
                     .layout
                     .trade_window_other_trades
                     .unwrap_or(true),
+                settings_open: false,
+                fit_trade: owner.read(vcx).layout.trade_window_fit.unwrap_or(false),
+                hide_rail: owner
+                    .read(vcx)
+                    .layout
+                    .trade_window_hide_rail
+                    .unwrap_or(false),
+                load_ticks: owner.read(vcx).layout.trade_window_ticks.unwrap_or(true),
+                fit_frame: None,
+                applied_frame: None,
+                candles_followed,
                 core,
                 market: market.clone(),
                 stamps: stamps.clone(),
@@ -295,8 +308,12 @@ pub(crate) fn open_trade_window(
             // What this window watches the application for: the strategy list of a core that was
             // still connecting when the window opened — a revision compare per notification, see
             // `retry_strategy_name`, and nothing at all once the name is in...
+            // ...and the trade-window candle setting, which any trade window's popup moves: a
+            // compare per notification, a re-pin only when it changed (graphics and captions
+            // reach the panel on their own, since it holds no override for them).
             vcx.observe(&owner, |this: &mut TradeWindowView, _backend, cx| {
                 this.retry_strategy_name(cx);
+                this.follow_candle_default(cx);
             })
             .detach();
             // ...and the archived order traces it asked the resolver for, on the resolver's own
@@ -350,6 +367,12 @@ pub(crate) fn open_trade_window(
             this.spawn_strategy_lookup(buy_utc_ms, vcx);
             this.request_traces(vcx);
             this.request_neighbour_traces(vcx);
+            // Build the store from the rows alone, now that the neighbours are asked for too:
+            // the exit lines the rows give and the fitted frame exist before any archive answers.
+            // A row with a `ReportUID` was built once already inside `request_traces`, before
+            // the neighbours; a row without one is built here for the first time, and again only
+            // when a shown neighbour's answer moves the signature.
+            this.sync_traces(true, vcx);
             this.fetch(vcx);
             this
         });

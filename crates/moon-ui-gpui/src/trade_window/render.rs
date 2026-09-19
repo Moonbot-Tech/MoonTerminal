@@ -10,9 +10,7 @@ use gpui::*;
 use moon_core::market::trade_replay::{
     TickStatus, TradeReplayEmpty, TradeReplayFailure, TradeReplaySource,
 };
-use moon_ui::{
-    MoonButton, MoonCheckbox, MoonPalette, MoonWindowFrame, MoonWindowFrameControls, h_flex, v_flex,
-};
+use moon_ui::{MoonButton, MoonPalette, MoonWindowFrame, MoonWindowFrameControls, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::{TradeWindowState, TradeWindowView, figures, strategy, traces};
@@ -122,16 +120,11 @@ impl Render for TradeWindowView {
                             .min_w_0()
                             .items_center(),
                     )
-                    .child(
-                        design::chrome_section(cx).child(
-                            MoonCheckbox::new("trade-window-other-trades")
-                                .label(t!("trade_window.other_trades").to_string())
-                                .checked(self.show_other_trades)
-                                .on_change(cx.listener(|this, show: &bool, _window, cx| {
-                                    this.set_other_trades(*show, cx);
-                                })),
-                        ),
-                    )
+                    // THE SETTINGS POPUP: one ⚙ for everything this window draws, including the
+                    // "other trades" toggle that used to sit here as a bare checkbox. The header
+                    // has a hard minimum width and every control on it is `flex_none`; one button
+                    // is what fits beside the scale and the close control.
+                    .child(design::chrome_section(cx).child(self.settings_popup_host(cx)))
                     // THE VERTICAL-SCALE CONTROL: one remembered zoom for every trade window,
                     // written through `pick_scale` into `WindowLayout.trade_window_scale` and
                     // restored when the next window opens. Auto (`None`) is the default when
@@ -168,7 +161,7 @@ impl Render for TradeWindowView {
                         el.child(frame.visual_controls(cx).flex_none())
                     }),
             )
-            .when(narrow, |el| {
+            .when(narrow && !self.hide_rail, |el| {
                 el.child(figures::rail(
                     &self.record,
                     &self.stamps,
@@ -187,7 +180,7 @@ impl Render for TradeWindowView {
                     // The chart renders in its own GPU pass UNDER the GPUI scene, so nothing here
                     // may paint an opaque background over the chart body.
                     .child(div().flex_1().min_w_0().h_full().relative().child(body))
-                    .when(!narrow, |el| {
+                    .when(!narrow && !self.hide_rail, |el| {
                         el.child(figures::rail(
                             &self.record,
                             &self.stamps,
@@ -282,6 +275,9 @@ impl TradeWindowView {
                     }
                     TickStatus::Pending | TickStatus::Streaming => {
                         t!("trade_window.source.candles_ticks_pending", min = tf_min).to_string()
+                    }
+                    TickStatus::Disabled => {
+                        t!("trade_window.source.candles_ticks_disabled", min = tf_min).to_string()
                     }
                     TickStatus::NoRoute => t!(
                         "trade_window.source.candles_no_route",

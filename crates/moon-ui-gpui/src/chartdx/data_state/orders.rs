@@ -217,8 +217,12 @@ impl ChartDataState {
                 max_closed_orders: u32::MAX,
                 ..self.orders.clone()
             });
+            // The fill arrow goes too, as in the live chart's archived pass below: the frozen
+            // store draws only in the lines style now (`frozen_store_drawn`), where the exit
+            // line starting at the fill already says the entry filled.
             let frozen_graphics = frozen.then(|| moon_core::config::ChartGraphicsCfg {
                 hide_closed_sell_line: false,
+                hide_entry_fill_arrow: true,
                 ..self.chart_graphics
             });
             // In the "Moonbot lines" style a trade that closed this session keeps drawing from
@@ -238,6 +242,8 @@ impl ChartDataState {
             // which exists only once the entry filled — so lifting the switch shows nothing the
             // slider is meant to dim.
             let lines_style = !frozen && self.draws_trade_lines();
+            // The frozen viewer's answer to the same style row: see `frozen_store_drawn`.
+            let frozen_store_drawn = frozen && self.frozen_store_drawn();
             let lines_live_graphics = lines_style.then_some(moon_core::config::ChartGraphicsCfg {
                 hide_closed_sell_line: false,
                 hide_entry_fill_arrow: true,
@@ -245,9 +251,11 @@ impl ChartDataState {
                 ..self.chart_graphics
             });
             // The auto-Y fit goes with them. A fit stretched to reach a live order's price would
-            // squash the very candles the window exists to show.
+            // squash the very candles the window exists to show — so a frozen viewer's band is
+            // what its OWNER asks for: the trade's own lines while the window is fitted to the
+            // trade, nothing otherwise.
             let order_price = match frozen {
-                true => None,
+                true => self.frozen_fit_range,
                 false => session
                     .store()
                     .core(pane.core)
@@ -266,9 +274,16 @@ impl ChartDataState {
                 // The ONE order source both consumers below read. Emptied on a frozen engine, so
                 // neither the geometry nor the labels can reach a live order.
                 let order_lines = match frozen {
-                    true => frozen_orders.as_deref().unwrap_or(&no_orders),
+                    true if frozen_store_drawn => frozen_orders.as_deref().unwrap_or(&no_orders),
+                    true => &no_orders,
                     false => &core_st.order_lines,
                 };
+                // What the arrows pass is told on a frozen viewer: the close instants of the
+                // trades the store draws, so a trade the store holds loses the arrow of each
+                // lined end and one it does not holds keeps both — see `archived_line_ends`.
+                // Empty in the marks style: the store is not drawn, every trade keeps both.
+                let frozen_closes: Option<Vec<f64>> =
+                    frozen_store_drawn.then(|| self.frozen_closes(&pane.market, order_lines));
                 // Which store's revision this pane compares against: see `order_signature`.
                 let order_lines_rev = match frozen {
                     true => order_lines.rev,
@@ -435,7 +450,11 @@ impl ChartDataState {
                         &pane.view,
                         &mut markers,
                         &mut segs,
-                        live_twins.as_deref(),
+                        // A frozen viewer names its store's closes; a live chart its live twins.
+                        match frozen {
+                            true => frozen_closes.as_deref(),
+                            false => live_twins.as_deref(),
+                        },
                     );
                     // Warning badges ride the same layer, after news.
                     self.append_warn_geometry(pane.view.epoch_ms, &mut markers);

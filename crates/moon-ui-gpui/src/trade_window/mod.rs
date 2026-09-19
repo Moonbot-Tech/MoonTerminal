@@ -36,6 +36,7 @@
 mod figures;
 pub(crate) mod frame;
 mod render;
+mod settings;
 mod strategy;
 #[cfg(test)]
 mod tests;
@@ -338,6 +339,28 @@ pub(crate) struct TradeWindowView {
     history: std::rc::Rc<Vec<ChartTradeRecord>>,
     /// This window's drawing preference, remembered for later opens.
     show_other_trades: bool,
+    /// Frame the window on the trade itself rather than on the fixed context; see [`frame`].
+    fit_trade: bool,
+    /// Hide the figures rail, leaving the chart the whole window.
+    hide_rail: bool,
+    /// Let the fetch run its tick stage; off, the window draws the bars alone.
+    load_ticks: bool,
+    /// The fitted frame the last store rebuild produced — the subject's span widened by the
+    /// neighbours within reach — so a toggle can re-frame without a rebuild, and a rebuild that
+    /// moved nothing does not yank a reader who panned.
+    fit_frame: Option<(i64, i64)>,
+    /// The frame last handed to the chart, so the same interval is never applied twice.
+    applied_frame: Option<(i64, i64)>,
+    /// Whether the header's ⚙ popup is up; see [`settings`].
+    settings_open: bool,
+    /// The trade-window candle setting this window last pinned its candles from.
+    ///
+    /// Graphics and captions reach the panel by its holding no override at all: it re-reads the
+    /// kind's stored set on every backend notification. The candles cannot travel that way — the
+    /// panel's candle override is always in place, because it carries the window's timeframe pin
+    /// — so `settings::follow_candle_default` re-pins from the stored set whenever this differs
+    /// from it, whichever window's popup moved it.
+    candles_followed: moon_core::market::CandleViewCfg,
     /// Core and exchange-native market the trade was resolved to.
     core: CoreId,
     market: String,
@@ -437,10 +460,104 @@ impl TradeWindowView {
             }
         });
         // The neighbours' archived lines follow their arrows: resolved on tick (what is already
-        // in hand is reused), dropped from the store on untick.
+        // in hand is reused), dropped from the store on untick — and a fitted frame takes the
+        // shown neighbours in, so it follows the tick too.
         self.request_neighbour_traces(cx);
         self.sync_traces(true, cx);
+        self.reframe(cx);
         cx.notify();
+    }
+
+    /// Switch between framing on the trade and framing on the fixed context, and remember it.
+    fn set_fit_trade(&mut self, fit: bool, cx: &mut Context<Self>) {
+        if self.fit_trade == fit {
+            return;
+        }
+        self.fit_trade = fit;
+        self.backend.update(cx, |backend, _| {
+            if backend.layout.trade_window_fit != Some(fit) {
+                backend.layout.trade_window_fit = Some(fit);
+                backend.layout_dirty = true;
+            }
+        });
+        // The auto-Y band the store carries follows the switch; the store itself is unchanged.
+        self.sync_traces(true, cx);
+        self.reframe(cx);
+        cx.notify();
+    }
+
+    /// Switch the tick stage on or off, remember it, and fetch again under the new rule.
+    ///
+    /// A fresh fetch either way: on, the stage has to run for this window; off, a stage already
+    /// streaming has to be superseded (the sequence counter drops its later pages) and the bars
+    /// shown alone.
+    fn set_load_ticks(&mut self, load: bool, cx: &mut Context<Self>) {
+        if self.load_ticks == load {
+            return;
+        }
+        self.load_ticks = load;
+        self.backend.update(cx, |backend, _| {
+            if backend.layout.trade_window_ticks != Some(load) {
+                backend.layout.trade_window_ticks = Some(load);
+                backend.layout_dirty = true;
+            }
+        });
+        self.fetch(cx);
+    }
+
+    /// Show or hide the figures rail, and remember it.
+    fn set_hide_rail(&mut self, hide: bool, cx: &mut Context<Self>) {
+        if self.hide_rail == hide {
+            return;
+        }
+        self.hide_rail = hide;
+        self.backend.update(cx, |backend, _| {
+            if backend.layout.trade_window_hide_rail != Some(hide) {
+                backend.layout.trade_window_hide_rail = Some(hide);
+                backend.layout_dirty = true;
+            }
+        });
+        cx.notify();
+    }
+
+    /// The frame this window wants right now: the trade itself while fitted, the fixed context
+    /// otherwise.
+    ///
+    /// Returns:
+    ///     The interval and the padding to show it with, or `None` when the stamps describe none.
+    fn wanted_frame(&self, cx: &App) -> Option<((i64, i64), f32)> {
+        if self.fit_trade
+            && let Some(fit) = self.fit_frame
+        {
+            return Some((fit, frame::FIT_PAD));
+        }
+        let (buy_utc_ms, close_utc_ms) = utc_stamps_ms(
+            &self.record,
+            &self
+                .backend
+                .read(cx)
+                .report_axis(crate::chartdx::axes::display_zone()),
+        );
+        frame::trade_frame(buy_utc_ms, close_utc_ms, 60_000).map(|frame| (frame, 0.0))
+    }
+
+    /// Put the viewport on the wanted frame, unless it is already there.
+    ///
+    /// Called after everything that can move the frame — a toggle, a store rebuild that learned
+    /// where the entry was placed — and never on a rebuild that moved nothing, so a reader who
+    /// panned away is not pulled back by a resolver wake.
+    fn reframe(&mut self, cx: &mut Context<Self>) {
+        let Some((frame, pad)) = self.wanted_frame(cx) else {
+            return;
+        };
+        if self.applied_frame == Some(frame) {
+            return;
+        }
+        self.applied_frame = Some(frame);
+        self.panel.update(cx, |panel, pcx| {
+            panel.show_time_range(frame.0, frame.1, pad);
+            pcx.notify();
+        });
     }
 
     /// Close this window on a bare Escape.
@@ -463,6 +580,12 @@ impl TradeWindowView {
             return;
         }
         cx.stop_propagation();
+        // An open settings popup takes the key first: the reader pressing Escape over it wants
+        // the popup gone, not the window — the same order every popup host in the tab strip keeps.
+        if self.settings_open {
+            self.set_settings_open(false, cx);
+            return;
+        }
         // The same call the open cap uses to retire a window, so the `on_release` path that
         // cancels the fetch and drops the market refs still runs.
         window.remove_window();
@@ -656,12 +779,27 @@ impl TradeWindowView {
         self.framed_this_sequence = false;
         cx.notify();
 
+        // How this market's prints are valued for the band: the core's contract terms decide on
+        // a contract route, and nothing else is asked on any other.
+        let tick_value = {
+            let backend = self.backend.read(cx);
+            let terms = backend
+                .session
+                .market_source()
+                .market_contract_terms(self.core, &self.market);
+            moon_core::market::trade_replay::venue_caps::tick_value(
+                address.venue,
+                terms.as_ref().map(|(quote, size)| (quote.as_str(), *size)),
+            )
+        };
         let (tx, rx) = mpsc::channel();
         worker::request(TradeReplayRequest {
             address,
             market: self.market.clone(),
             window,
             identity: self.identity,
+            tick_value,
+            ticks: self.load_ticks,
             cancel: self.cancel.clone(),
             reply: tx,
         });
@@ -686,11 +824,8 @@ impl TradeWindowView {
                 let Ok(outcome) = received else {
                     return;
                 };
-                let applied = cx.update(|cx| {
-                    this.update(cx, |this, cx| {
-                        this.apply(sequence, outcome, buy_utc_ms, close_utc_ms, cx)
-                    })
-                });
+                let applied =
+                    cx.update(|cx| this.update(cx, |this, cx| this.apply(sequence, outcome, cx)));
                 // The window closed while this outcome was in flight; nothing left to fold it
                 // into, and no later outcome for this sequence has anywhere to land either.
                 if applied.is_err() {
@@ -711,19 +846,8 @@ impl TradeWindowView {
     /// Args:
     ///     sequence: Dispatch counter the answer belongs to.
     ///     outcome: What the worker produced.
-    ///     buy_utc_ms: True-UTC entry stamp the ORIGINATING `fetch` resolved, in milliseconds,
-    ///         carried through unchanged so `publish` frames the same instants the REST request
-    ///         was fetched for.
-    ///     close_utc_ms: True-UTC exit stamp, same provenance as `buy_utc_ms`.
     ///     cx: View context.
-    fn apply(
-        &mut self,
-        sequence: u64,
-        outcome: TradeReplayOutcome,
-        buy_utc_ms: i64,
-        close_utc_ms: i64,
-        cx: &mut Context<Self>,
-    ) {
+    fn apply(&mut self, sequence: u64, outcome: TradeReplayOutcome, cx: &mut Context<Self>) {
         // An answer from a superseded request is not wrong, merely stale; dropping it silently is
         // the whole point of the counter.
         if sequence != self.sequence {
@@ -756,7 +880,7 @@ impl TradeWindowView {
                 if fold.restore_candle_mode {
                     self.restore_candle_mode(cx);
                 }
-                self.publish(series, buy_utc_ms, close_utc_ms, fold.frame, cx);
+                self.publish(series, fold.frame, cx);
                 if fold.frame {
                     self.framed_this_sequence = true;
                 }
@@ -791,12 +915,11 @@ impl TradeWindowView {
     /// Args:
     ///     cx: View context.
     fn restore_candle_mode(&mut self, cx: &mut Context<Self>) {
-        let mode = self.user_candle_mode;
-        self.panel.update(cx, |panel, pcx| {
-            let mut view = panel.effective_candle_view(pcx);
-            view.mode = mode;
-            panel.set_candle_view(Some(view), pcx);
-        });
+        // Through the one rule the constructor and the popup use, with ticks declared on screen:
+        // the caller is about to publish a tick series, so Off is honoured.
+        let view = settings::pinned_candle_view(self.candle_cfg(cx), true);
+        self.panel
+            .update(cx, |panel, pcx| panel.set_candle_view(Some(view), pcx));
     }
 
     /// The price scale this window's chart is set to, for its own control to state.
@@ -848,31 +971,20 @@ impl TradeWindowView {
     ///
     /// Args:
     ///     series: The frozen rows.
-    ///     buy_utc_ms: True-UTC entry stamp the `fetch` that produced `series` resolved, in
-    ///         milliseconds. Read here rather than re-resolving the axis: `publish` is always
-    ///         downstream of the `fetch` that carries this value, on the same `sequence`-guarded
-    ///         call chain, so it necessarily frames the exact pair `fetch` used to build the REST
-    ///         request whose `series` this now is.
-    ///     close_utc_ms: True-UTC exit stamp, same provenance as `buy_utc_ms`.
     ///     first_publish: Whether this is the first publish of the fetch's sequence. `false` is a
     ///         tick upgrade landing on a picture the candle stage already framed — re-running the
     ///         arrows and the viewport would yank back a user who panned while it loaded, so both
     ///         are skipped and only the chart's own rows are replaced.
     ///     cx: View context.
-    fn publish(
-        &mut self,
-        series: TradeReplaySeries,
-        buy_utc_ms: i64,
-        close_utc_ms: i64,
-        first_publish: bool,
-        cx: &mut Context<Self>,
-    ) {
-        // Read off the series BEFORE it is moved into the panel, exactly as `source` and `tf_min`
-        // are in `apply`. Skipped entirely on an upgrade: the frame this trade opened on is not
-        // recomputed, only reused.
-        let frame = first_publish
-            .then(|| frame::trade_frame(buy_utc_ms, close_utc_ms, series.tf_ms))
-            .flatten();
+    fn publish(&mut self, series: TradeReplaySeries, first_publish: bool, cx: &mut Context<Self>) {
+        // The frame this window wants, by the one rule `reframe` applies later — fitted to the
+        // trade or on the fixed context. Skipped entirely on an upgrade: the frame this trade
+        // opened on is not recomputed, only reused. The stamps are resolved on the same axis the
+        // fetch resolved its own, so the frame and the fetched rows describe the same instants.
+        let frame = first_publish.then(|| self.wanted_frame(cx)).flatten();
+        if let Some((interval, _)) = frame {
+            self.applied_frame = Some(interval);
+        }
         // The RAW records, deliberately: correcting them here would double-correct, since B.1
         // (`chartdx/trade_history_sync.rs`) already applies the axis inside
         // `append_trade_history_geometry`.
@@ -889,18 +1001,20 @@ impl TradeWindowView {
             // published here or the window shows a chart with nothing marked on it — which is the
             // one thing this whole feature exists to fix.
             panel.publish_trade_history(history, pcx);
-            // The viewport is placed on the TRADE with its own proportional context, not on the
-            // window the rows cover. Those differ on purpose: the fetch is asymmetric by design,
-            // so framing it put a short position three quarters of the way to the right while a
-            // long one sat centred — two trades, two differently composed pictures, which is the
-            // thing the user asked to be made the same everywhere.
+            // The viewport is placed on the TRADE — with its own proportional context, or fitted
+            // to it, whichever `wanted_frame` says — not on the window the rows cover. Those
+            // differ on purpose: the fetch is asymmetric by design, so framing it put a short
+            // position three quarters of the way to the right while a long one sat centred — two
+            // trades, two differently composed pictures, which is the thing the user asked to be
+            // made the same everywhere.
             //
-            // The padding argument is ZERO because the framing rule has already built the
-            // breathing room into the interval. Asking for more here would push the right edge
-            // past the twenty-minute trailing margin the fetch guarantees and draw blank.
+            // The padding is the rule's own: zero for the fixed context, whose interval already
+            // holds the breathing room (asking for more would push the right edge past the
+            // trailing margin the fetch guarantees and draw blank), `FIT_PAD` for a fitted frame,
+            // whose interval is exactly the trade.
             //
-            // TWO boundaries, both stated rather than defended against, and neither one a framing
-            // choice this function is free to make.
+            // TWO boundaries of the fixed-context rule, both stated rather than defended against,
+            // and neither one a framing choice this function is free to make.
             //
             // A position held longer than the fetch's own seven-day budget keeps only its floors,
             // so the framing rule hands back exactly what was downloaded and such a trade opens
@@ -917,8 +1031,8 @@ impl TradeWindowView {
             // the more useful of the two to open on. Neither boundary is silent — the chart takes
             // the wheel like any other, so the exit is a scroll away — and no one-year window can
             // hold both ends of a multi-year trade.
-            if let Some((start_ms, end_ms)) = frame {
-                panel.show_time_range(start_ms, end_ms, 0.0);
+            if let Some(((start_ms, end_ms), pad)) = frame {
+                panel.show_time_range(start_ms, end_ms, pad);
             }
         });
         cx.notify();

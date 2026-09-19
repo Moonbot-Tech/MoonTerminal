@@ -32,6 +32,7 @@ fn progressive_trade_ticks_preserve_view_and_accept_core_completion() {
         tick_status: TickStatus::Streaming,
         bucket_ms: 0,
         partial: true,
+        side_slots: Vec::new(),
         covered: Some((99_700_000, 100_000_000)),
     };
     let next = fold_outcome(&state, true, &TradeReplayOutcome::Ready(series.clone()));

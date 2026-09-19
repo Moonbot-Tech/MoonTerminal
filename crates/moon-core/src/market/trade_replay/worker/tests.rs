@@ -189,6 +189,7 @@ fn core_series(partial: bool) -> TradeReplaySeries {
         ticks: vec![tick(60_000, 10.0), tick(120_000, 11.0)],
         identity: 42,
         tick_status: TickStatus::Served,
+        side_slots: Vec::new(),
         bucket_ms: 0,
         partial,
         covered: Some(if partial {

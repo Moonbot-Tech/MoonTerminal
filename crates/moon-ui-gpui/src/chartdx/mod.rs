@@ -1620,6 +1620,12 @@ struct ChartDataState {
     /// live chart's field stays `None`. Built by `OrderLineStore::archived`, so the order sync
     /// reads it exactly as it reads a live store and the chart draws it through the same geometry.
     frozen_orders: Option<Rc<moon_core::session::order_lines::OrderLineStore>>,
+    /// The price band the trade window asks the auto-Y fit to include beside the visible prices
+    /// — the trade's own lines, and its shown neighbours' — or `None` to fit the prices alone.
+    ///
+    /// Set with `frozen_orders`, by the same owner: a live chart takes this band from the
+    /// session store's open orders (`auto_fit_range`), which an archived store never has.
+    frozen_fit_range: Option<(f32, f32)>,
     last_frame_tick_at: Option<Instant>,
     present_rate_candidate_hz: f32,
     present_rate_candidate_hits: u8,

@@ -445,6 +445,7 @@ fn bars_only_series() -> TradeReplaySeries {
         ticks: Vec::new(),
         identity: 42,
         tick_status: TickStatus::Pending,
+        side_slots: Vec::new(),
         bucket_ms: 0,
         partial: false,
         covered: None,

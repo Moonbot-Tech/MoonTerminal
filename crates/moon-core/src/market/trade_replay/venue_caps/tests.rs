@@ -85,3 +85,49 @@ fn kline_route_is_exact_for_reachable_and_synthetic_venue_pairs() {
         }
     }
 }
+
+/// The band's value rule: base currency on every route but the three contract ones, and on
+/// those the core's own contract terms decide — inverse by the empty quote, linear otherwise,
+/// unknown while the core has not described the market.
+#[test]
+fn tick_value_follows_the_route_and_the_cores_contract_terms() {
+    let v = |brand: Brand, kind: MarketKind| Venue { brand, kind };
+    assert_eq!(
+        tick_value(v(Brand::Binance, MarketKind::Spot), Some(("", 100.0))),
+        TickValue::Base
+    );
+    assert_eq!(
+        tick_value(v(Brand::Binance, MarketKind::Futures), None),
+        TickValue::Base
+    );
+    assert_eq!(
+        tick_value(v(Brand::Binance, MarketKind::Quarterly), Some(("", 100.0))),
+        TickValue::InverseContracts {
+            usd_per_contract: 100.0
+        }
+    );
+    assert_eq!(
+        tick_value(
+            v(Brand::Gate, MarketKind::Futures),
+            Some(("USDT", 10_000.0))
+        ),
+        TickValue::LinearContracts {
+            coins_per_contract: 10_000.0
+        }
+    );
+    assert_eq!(
+        tick_value(v(Brand::Okx, MarketKind::Futures), None),
+        TickValue::Unknown
+    );
+    assert_eq!(
+        tick_value(v(Brand::Okx, MarketKind::Futures), Some(("USDT", 0.0))),
+        TickValue::Unknown
+    );
+    // An empty quote beside a size of one is linear, as `market_quantity_unit` reads it.
+    assert_eq!(
+        tick_value(v(Brand::Gate, MarketKind::Futures), Some(("", 1.0))),
+        TickValue::LinearContracts {
+            coins_per_contract: 1.0
+        }
+    );
+}

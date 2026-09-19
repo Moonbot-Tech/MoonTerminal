@@ -40,6 +40,11 @@ use std::collections::HashMap;
 pub(crate) use add_stack::AddChartStack;
 use common::LayoutPopupHost;
 pub(crate) use common::seg_row;
+// The chart popups' step lists, for the trade window's own popup: it offers the same steps the
+// main chart does, so a value picked in either place lands on a segment in the other.
+pub(crate) use candle_popup::OUTLINES as CANDLE_OUTLINES;
+pub(crate) use graphics_popup::{ROW_W as POPUP_ROW_W, nearest};
+pub(crate) use history_popup::{ARROW_SCALES, CONNECTOR_PX};
 pub(crate) use main_stack::{MainChartStack, crowd_cards, crowd_rule_for_run, empty_logo};
 use popup_slot::ChartPopup;
 use sig::chart_tabs_sig;

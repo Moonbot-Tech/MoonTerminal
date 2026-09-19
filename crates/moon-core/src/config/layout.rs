@@ -777,6 +777,16 @@ pub struct WindowLayout {
     /// Stored alongside the shared scale and read leniently to preserve older layouts.
     #[serde(default, deserialize_with = "de_lenient")]
     pub trade_window_other_trades: Option<bool>,
+    /// Frame trade windows on the trade itself — its own span, and the neighbours within it
+    /// while they are shown — rather than on the fixed context; absent means OFF.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub trade_window_fit: Option<bool>,
+    /// Hide the trade window's figures rail; absent means shown.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub trade_window_hide_rail: Option<bool>,
+    /// Let trade windows fetch the venue's prints (the tick stage); absent means ON.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub trade_window_ticks: Option<bool>,
 
     /// Selected Profit Monitor period id.
     #[serde(default, deserialize_with = "de_lenient")]
@@ -2093,6 +2103,41 @@ impl WindowLayout {
         // `|` rather than `||`: the store must run even when the separation already reported a
         // change, or the pressed value would never be written.
         split | self.store_chart_labels(kind, value)
+    }
+
+    /// Store one kind's candles and NOTHING else, reporting whether they moved.
+    ///
+    /// The candle twin of [`Self::store_chart_labels`], for the same caller: a row inside the
+    /// trade window records what THAT kind shows and makes no statement about the tab kinds, so
+    /// the ⧉ press's separation pass must not run under it.
+    ///
+    /// Args:
+    ///     kind: The kind whose candles are being stored.
+    ///     value: The set to store.
+    ///
+    /// Returns:
+    ///     Whether the stored value actually changed.
+    pub fn store_candle_view(
+        &mut self,
+        kind: super::chart_defaults::ChartTabKind,
+        value: crate::market::candles::CandleViewCfg,
+    ) -> bool {
+        match self.kind_defaults_mut(kind) {
+            Some(d) => d.candle_view.replace(value) != Some(value),
+            None => std::mem::replace(&mut self.candle_view, value) != value,
+        }
+    }
+
+    /// Store one kind's graphics and NOTHING else; see [`Self::store_candle_view`].
+    pub fn store_chart_graphics(
+        &mut self,
+        kind: super::chart_defaults::ChartTabKind,
+        value: ChartGraphicsCfg,
+    ) -> bool {
+        match self.kind_defaults_mut(kind) {
+            Some(d) => d.chart_graphics.replace(value) != Some(value),
+            None => std::mem::replace(&mut self.chart_graphics, value) != value,
+        }
     }
 
     /// Store one kind's captions and NOTHING else, reporting whether they moved.
