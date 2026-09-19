@@ -298,16 +298,8 @@ fn every_hlsl_entry_point_compiles() {
         (
             "candles.hlsl",
             include_str!("shaders/candles.hlsl"),
-            &[
-                "candles_vertex",
-                "volume_bars_vertex",
-                "volume_scale_vertex",
-            ],
-            &[
-                "candles_fragment",
-                "volume_bars_fragment",
-                "volume_scale_fragment",
-            ],
+            &["candles_vertex", "volume_bars_vertex"],
+            &["candles_fragment", "volume_bars_fragment"],
         ),
         (
             "crosses.hlsl",

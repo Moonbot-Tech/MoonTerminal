@@ -30,8 +30,6 @@ struct CandlePipe {
     ps: ID3D11PixelShader,
     volume_vs: ID3D11VertexShader,
     volume_ps: ID3D11PixelShader,
-    scale_vs: ID3D11VertexShader,
-    scale_ps: ID3D11PixelShader,
     volume_cb: ID3D11Buffer,
     blend: ID3D11BlendState,
     buffer: ID3D11Buffer,
@@ -172,28 +170,17 @@ impl CandleLayer {
             context.PSSetConstantBuffers(0, Some(&cbs));
             context.VSSetShaderResources(3, Some(&[Some(pipe.srv.clone())]));
             context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
-            // The volume band and its scale go FIRST so the candle bodies sit on top of them.
-            // `m[0]` is the style: 0 is off. With the sides switch on (`m3[0]`) the shader culls
-            // the candles past the split boundary and the sides layer draws the scale, so the
-            // scale draw below is skipped here.
+            // The volume band goes FIRST so the candle bodies sit on top of it. `m[0]` is the
+            // style: 0 is off. The shader culls the candles past the split boundary, and the
+            // sides layer draws the band's scale bracket for both halves.
             if self.volume_style.m[0] >= 0.5 {
                 crate::diag::bump(&crate::diag::CHART_CANDLE_VOLUME_DRAW);
-                // Hills read `candles[iid + 1]`, so they get one instance fewer; bars would
-                // otherwise lose the newest bucket, hence the per-style count.
-                let bars = if self.volume_style.m[0] >= 1.5 {
-                    self.count.saturating_sub(1)
-                } else {
-                    self.count
-                };
+                // Hills read `candles[iid + 1]`, so they get one instance fewer.
+                let bars = self.count.saturating_sub(1);
                 if bars > 0 {
                     context.VSSetShader(&pipe.volume_vs, None);
                     context.PSSetShader(&pipe.volume_ps, None);
                     context.DrawInstanced(6, bars, 0, 0);
-                }
-                if self.volume_style.m3[0] < 0.5 {
-                    context.VSSetShader(&pipe.scale_vs, None);
-                    context.PSSetShader(&pipe.scale_ps, None);
-                    context.DrawInstanced(6, moon_chart::volume_bars::VOLUME_SCALE_INSTANCES, 0, 0);
                 }
             }
             context.VSSetShader(&pipe.vs, None);
@@ -208,8 +195,6 @@ impl CandleLayer {
         let ps = super::gpu::make_ps(device, CANDLES_HLSL, "candles_fragment");
         let volume_vs = super::gpu::make_vs(device, CANDLES_HLSL, "volume_bars_vertex");
         let volume_ps = super::gpu::make_ps(device, CANDLES_HLSL, "volume_bars_fragment");
-        let scale_vs = super::gpu::make_vs(device, CANDLES_HLSL, "volume_scale_vertex");
-        let scale_ps = super::gpu::make_ps(device, CANDLES_HLSL, "volume_scale_fragment");
         let blend = create_alpha_blend(device);
         let buffer = create_structured(
             device,
@@ -225,8 +210,6 @@ impl CandleLayer {
             ps,
             volume_vs,
             volume_ps,
-            scale_vs,
-            scale_ps,
             volume_cb,
             blend,
             buffer,

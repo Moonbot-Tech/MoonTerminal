@@ -103,9 +103,8 @@ impl RenderState {
             // beside it is gone, and reading the retired `m2.x` slot here would pin every label's
             // height to zero and silently stop drawing them. The same height lifts ChartBottom
             // captions above the bars, so the two cannot disagree about where the band ends.
-            // Either half makes a band: the candle turnover (`m[0]`) or the bought/sold split
-            // (`m3[0]`), which stands on its own with the candle band off.
-            let band_on = volume_style.m[0] >= 0.5 || volume_style.m3[0] >= 0.5;
+            // The band is one switch: `m[0]` and `m3[0]` are set together by `market.rs`.
+            let band_on = volume_style.m[0] >= 0.5;
             let volume_band_h = if band_on {
                 (plot_h * volume_style.m[1]).max(0.0)
             } else {
@@ -114,15 +113,9 @@ impl RenderState {
             if band_on {
                 if let Some(stats) = volume_stats {
                     let band = volume_band_h;
-                    // With the sides switch on (`m3[0]`) the band is LINEAR and its second line
-                    // sits at the ratio itself; otherwise it is square-root scaled, so the line
-                    // sits at the root of the ratio. Both mirror their shader exactly.
-                    let ratio = volume_style.m[3].clamp(0.0, 1.0);
-                    let avg_frac = if volume_style.m3[0] >= 0.5 {
-                        ratio
-                    } else {
-                        ratio.sqrt()
-                    };
+                    // The band is LINEAR and its second line sits at the ratio itself, mirroring
+                    // the sides shader exactly.
+                    let avg_frac = volume_style.m[3].clamp(0.0, 1.0);
                     // Moonbot's `Ind. Pos`: the scale is a bracket whose stem the shader stands
                     // at the same offset this reads, and each label prints to the RIGHT of the
                     // tick at its level — on either side, so the right-hand bracket's labels run
@@ -195,6 +188,7 @@ impl RenderState {
                         t!("chart.hvol.caption_pf", pf = format!("{pf_pct:.2}")).to_string(),
                     ];
                     for (n, line) in lines.iter().enumerate() {
+                        crate::diag::bump(&crate::diag::CHART_HVOL_CAPTION_DRAW);
                         let x = zone_left + HVOL_CAPTION_PAD;
                         let y = if hvol_overlay {
                             zone_foot - HVOL_CAPTION_PAD - LINE_H * (lines.len() - n) as f32

@@ -1,6 +1,7 @@
 // Sides half of the bottom band (`candle_volume_sides`): bought and sold turnover as ROLLING sums over the band's
 // interval, sampled along the time axis and drawn as two filled series in the base pass, under
-// the candle bodies and beside the candle band that `candles.hlsl` draws for the other styles.
+// the candle bodies and beside the candle half that `candles.hlsl` draws where the history does
+// not reach.
 // One instance is one sample and carries BOTH sides: vertices 0-5 are the buy column, 6-11 the
 // sell column, so the sell column is always rasterised after the buy one and the overlaid kind
 // blends deterministically. Neighbouring samples abut, which is what makes the series a hill.

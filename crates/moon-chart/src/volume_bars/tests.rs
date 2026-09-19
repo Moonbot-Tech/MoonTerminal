@@ -1,5 +1,4 @@
 use super::*;
-use moon_core::market::candles::{CandleSeries, candle_intersects_window};
 
 /// Builds one volume-only candle for a deterministic visibility scenario.
 fn candle(t_open_ms: f64, volume: f32) -> ChartCandle {
@@ -9,47 +8,6 @@ fn candle(t_open_ms: f64, volume: f32) -> ChartCandle {
         quote_volume: volume,
         ..ChartCandle::default()
     }
-}
-
-/// `volume_bars.rs:visible_volume_stats` — changing the half-open visibility predicate or
-/// averaging all samples would scale the band and its labels from off-screen candles.
-#[test]
-fn visible_stats_follow_the_shared_half_open_window_over_only_visible_buckets() {
-    let samples = vec![
-        VolumeSample {
-            t_open_ms: 0.0,
-            tf_ms: 10.0,
-            quote_volume: 100.0,
-        },
-        VolumeSample {
-            t_open_ms: 5.0,
-            tf_ms: 10.0,
-            quote_volume: 10.0,
-        },
-        VolumeSample {
-            t_open_ms: 20.0,
-            tf_ms: 10.0,
-            quote_volume: 30.0,
-        },
-    ];
-
-    let stats = visible_volume_stats(&samples, 10.0, 20.0).expect("two buckets intersect");
-    assert_eq!(stats.max, 30.0);
-    assert_eq!(stats.avg, 20.0);
-    assert_eq!(stats.count, 2);
-
-    assert!(!candle_intersects_window(0.0, 10.0, 10.0, 20.0));
-    assert!(candle_intersects_window(5.0, 10.0, 10.0, 20.0));
-    assert!(candle_intersects_window(20.0, 10.0, 10.0, 20.0));
-
-    let base = [candle(0.0, 100.0), candle(5.0, 10.0), candle(20.0, 30.0)];
-    let mut series = CandleSeries::default();
-    series.rebuild(10, &base, 10, &[]);
-    assert_eq!(
-        visible_volume_stats(&samples, 10.0, 20.0).is_some(),
-        series.price_range(10.0, 20.0).is_some(),
-        "volume scaling and the price range must include the same half-open candle set"
-    );
 }
 
 /// `volume_bars.rs:collect_samples` — replacing each candle's own timeframe with the series
@@ -66,28 +24,12 @@ fn collected_samples_keep_each_candles_timeframe_for_visibility() {
 
     assert_eq!(samples[0].tf_ms, 10.0);
     assert_eq!(samples[1].tf_ms, 100.0);
-    let stats = visible_volume_stats(&samples, 120.0, 130.0).expect("coarse bucket intersects");
+    // Read at the coarse bucket's own interval, so the figure is the bucket's turnover itself.
     assert_eq!(
-        stats,
-        VolumeStats {
-            max: 8.0,
-            avg: 8.0,
-            count: 1
-        }
+        visible_interval_max(&samples, 120.0, 130.0, 100.0, f64::INFINITY),
+        Some(8.0),
+        "the coarse bucket intersects and must set the scale"
     );
-}
-
-/// `volume_bars.rs:visible_volume_stats` — returning a zero maximum for empty or zero buckets
-/// would let the chart upload an invalid reciprocal and produce a broken volume band.
-#[test]
-fn visible_stats_refuse_empty_and_zero_volume_windows() {
-    assert_eq!(visible_volume_stats(&[], 0.0, 10.0), None);
-    let zeros = [VolumeSample {
-        t_open_ms: 0.0,
-        tf_ms: 10.0,
-        quote_volume: 0.0,
-    }];
-    assert_eq!(visible_volume_stats(&zeros, 0.0, 10.0), None);
 }
 
 /// `volume_bars.rs:collect_samples` reading base `ChartCandle::volume` instead of quote turnover
@@ -254,4 +196,35 @@ fn scale_bracket_offset_follows_the_reference_and_stays_inside_the_plot() {
         let shader_form = if signed >= 0.0 { signed } else { w + signed }.clamp(0.0, w);
         assert_eq!(shader_form, scale_bracket_offset(w, right));
     }
+}
+
+/// `volume_bars.rs:clamp_volume_style` / `volume_band_on` — every pair an older build could
+/// store that drew ANY volume folds onto hills with the split on; only OFF with the split off
+/// stays off. A rule that read the style alone would drop the split-only users, and one that
+/// read the split alone would drop everyone on plain hills or bars.
+#[test]
+fn every_stored_pair_that_drew_volumes_reads_as_hills_with_the_split() {
+    use moon_core::market::candles::{
+        VOLUME_STYLE_HILLS, VOLUME_STYLE_LEGACY_BARS, VOLUME_STYLE_LEGACY_SIDES, VOLUME_STYLE_OFF,
+    };
+    for (style, sides) in [
+        (VOLUME_STYLE_HILLS, false),
+        (VOLUME_STYLE_HILLS, true),
+        (VOLUME_STYLE_LEGACY_BARS, false),
+        (VOLUME_STYLE_LEGACY_BARS, true),
+        (VOLUME_STYLE_LEGACY_SIDES, false),
+        (VOLUME_STYLE_OFF, true),
+        (u8::MAX, false),
+    ] {
+        assert!(
+            volume_band_on(style, sides),
+            "({style}, {sides}) drew volumes"
+        );
+        assert_eq!(clamp_volume_style(style, sides), VOLUME_STYLE_HILLS);
+    }
+    assert!(!volume_band_on(VOLUME_STYLE_OFF, false));
+    assert_eq!(
+        clamp_volume_style(VOLUME_STYLE_OFF, false),
+        VOLUME_STYLE_OFF
+    );
 }

@@ -163,13 +163,19 @@ pub fn normalize_chart_graphics(cfg: ChartGraphicsCfg) -> ChartGraphicsCfg {
         connector_thickness_px: clamp_connector_thickness(cfg.connector_thickness_px),
         marker_scale: clamp_marker_scale(cfg.marker_scale),
         trade_volume_alpha: clamp_volume_alpha(cfg.trade_volume_alpha, def.trade_volume_alpha),
-        // The bottom band's two clamps belong to `volume_bars`, which owns that band and its
-        // range constants; this normalizer only gathers them.
-        candle_volume_style: crate::volume_bars::clamp_volume_style(cfg.candle_volume_style),
-        // One build stored the split as a style of its own; that file reads as hills with the
-        // switch on, so nobody who picked it loses the picture.
-        candle_volume_sides: cfg.candle_volume_sides
-            || cfg.candle_volume_style == moon_core::market::candles::VOLUME_STYLE_LEGACY_SIDES,
+        // The bottom band's clamps belong to `volume_bars`, which owns that band and its range
+        // constants; this normalizer only gathers them. The band is ONE switch, and the two
+        // stored fields are folded onto it here: any pair an older build wrote that drew volumes
+        // — bars, hills without the split, the split alone, the retired "sides" id — reads as
+        // hills with the split on, so nobody who had the band on loses it.
+        candle_volume_style: crate::volume_bars::clamp_volume_style(
+            cfg.candle_volume_style,
+            cfg.candle_volume_sides,
+        ),
+        candle_volume_sides: crate::volume_bars::volume_band_on(
+            cfg.candle_volume_style,
+            cfg.candle_volume_sides,
+        ),
         candle_volume_height: crate::volume_bars::clamp_band_fraction(cfg.candle_volume_height),
         candle_volume_alpha: clamp_volume_alpha(cfg.candle_volume_alpha, def.candle_volume_alpha),
         // The sides band's interval snaps onto its own list, in the module that owns the list.

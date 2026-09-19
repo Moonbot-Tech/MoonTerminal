@@ -106,28 +106,15 @@ impl WgpuLayers {
         }
         // Candles render beneath trade crosses; combo is blitted over the base cache.
         if !self.candles.is_empty() {
-            // The band and its scale draw BEFORE the bodies so the candles sit on top. With the
-            // sides switch on the shader culls the candles past the split boundary and the sides
-            // layer below draws the scale.
+            // The band draws BEFORE the bodies so the candles sit on top. The shader culls the
+            // candles past the split boundary, and the sides layer below draws the band's scale
+            // bracket for both halves.
             if self.volume_style.m[0] >= 0.5 {
                 crate::diag::bump(&crate::diag::CHART_CANDLE_VOLUME_DRAW);
                 // Hills read `candles[iid + 1]`, so they take one instance fewer.
-                let bars = if self.volume_style.m[0] >= 1.5 {
-                    self.candles.len().saturating_sub(1)
-                } else {
-                    self.candles.len()
-                };
+                let bars = self.candles.len().saturating_sub(1);
                 if bars > 0 {
                     draw_pipeline(pass, &pipelines.volume_bars, &binds.candle, 6, bars as u32);
-                }
-                if self.volume_style.m3[0] < 0.5 {
-                    draw_pipeline(
-                        pass,
-                        &pipelines.volume_scale,
-                        &binds.candle,
-                        6,
-                        moon_chart::volume_bars::VOLUME_SCALE_INSTANCES,
-                    );
                 }
             }
             crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);

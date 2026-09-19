@@ -5,8 +5,7 @@
 //! on the candle layer because it has its own instance buffer with its own cadence — and because
 //! it must draw with candles switched OFF, which the candle layer's `count == 0` early return
 //! forbids. It also draws the band's scale bracket whenever the switch is on: with the candle
-//! half read on the same linear scale, one bracket serves both — and with the candle band OFF the
-//! split stands alone under it, as Moonbot's `Vol` does.
+//! half read on the same linear scale, one bracket serves both.
 //!
 //! The base is redrawn only on data changes or camera movement, so this layer adds no work to the
 //! presentation path. The buffer is reuploaded in full whenever the bucket series is re-read.

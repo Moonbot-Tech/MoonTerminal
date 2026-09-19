@@ -224,24 +224,23 @@ impl ChartDataState {
         // TAB; `set_chart_graphics` has already normalized them.
         let marker_scale = self.chart_graphics.marker_scale;
         // Likewise per-tab-only: the band's style id is clamped once, not per pane. The band's
-        // remaining fields stay in the loop because they fold in per-pane statistics. The `.min`
+        // remaining fields stay in the loop because they fold in per-pane statistics. The clamp
         // stays even though `set_chart_graphics` normalizes on store: this is the drawing path's
-        // own idempotent clamp, which `normalize_chart_graphics` explicitly keeps.
-        let volume_style_id = self
-            .chart_graphics
-            .candle_volume_style
-            .min(moon_core::market::candles::VOLUME_STYLE_MAX);
-        // The bought/sold switch stands on its own: with the candle band OFF it is the only
-        // thing in the band, drawn as Moonbot's `Vol` is — the split alone, no candle turnover
-        // before it. It used to go dark with the band, which handed the floor back to the
-        // per-trade bars and read as "the old volumes came back".
-        let sides_on = self.chart_graphics.candle_volume_sides;
-        let candle_band_on = volume_style_id != moon_core::market::candles::VOLUME_STYLE_OFF;
+        // own idempotent clamp, which `normalize_chart_graphics` explicitly keeps — and it reads
+        // BOTH fields, because the band is one switch and either field alone is a half-state.
+        let sides_on = moon_chart::volume_bars::volume_band_on(
+            self.chart_graphics.candle_volume_style,
+            self.chart_graphics.candle_volume_sides,
+        );
+        let volume_style_id = moon_chart::volume_bars::clamp_volume_style(
+            self.chart_graphics.candle_volume_style,
+            self.chart_graphics.candle_volume_sides,
+        );
         let view_style = view::ViewStyle {
             marker_scale,
-            // The sides band is the per-trade bars' own data regrouped, so the two would draw the
-            // same prints twice at the same edge; that style switches the bars off by decision,
-            // and leaves the reader's opacity setting untouched for the other styles.
+            // The band is the per-trade bars' own data regrouped, so the two would draw the same
+            // prints twice at the same edge; the band switches the bars off by decision, and
+            // leaves the reader's opacity setting untouched for when it is off.
             volume_alpha: if sides_on {
                 0.0
             } else {
@@ -1264,13 +1263,27 @@ impl ChartDataState {
                     pixels_changed = true;
                 }
                 // Withheld until the window is known, as the read itself is: a caption naming
-                // `0.00%` on the first sync would print a window nothing is summed over.
-                pr.hvol_caption = hvol_window.filter(|_| price_window > 0.0).map(|w| {
-                    (
-                        moon_chart::hvol::window_seconds(w),
-                        moon_chart::hvol::price_frame_pct_of(price_window, pr.hvol_ref_price),
-                    )
-                });
+                // `0.00%` on the first sync would print a window nothing is summed over. And
+                // withheld for good by the tab's switch, the same way, so the text pass has one
+                // question to ask. Diffed, like the readout side below: the switch changes the
+                // caption with no data behind it, and an unconditional store would leave the
+                // press invisible until something else repainted. A data-driven change lands
+                // with the bins' own `pixels_changed`, or — when the reference price crosses
+                // its band without moving the tick-rounded window — as one present for the new
+                // figure the caption prints, which is what a changed caption needs; the band's
+                // hysteresis keeps that rare.
+                let caption = hvol_window
+                    .filter(|_| price_window > 0.0 && !self.chart_graphics.hvol_hide_captions)
+                    .map(|w| {
+                        (
+                            moon_chart::hvol::window_seconds(w),
+                            moon_chart::hvol::price_frame_pct_of(price_window, pr.hvol_ref_price),
+                        )
+                    });
+                if pr.hvol_caption != caption {
+                    pr.hvol_caption = caption;
+                    text_changed = true;
+                }
             } else if pr.hvol_window.is_some() || !pr.hvol_rows.is_empty() {
                 // Off, or nowhere to draw: drop the resident bins and samples once and empty the
                 // layer, so the next switch-on starts from nothing rather than a stale profile.
@@ -1398,12 +1411,12 @@ impl ChartDataState {
             let vol_from = view_time0 as f64 + pane.view.epoch_ms;
             let vol_to = vol_from + window_ms as f64;
             let stacked = self.chart_graphics.candle_volume_stacked;
-            // With the sides switch on the band is one LINEAR scale shared by two halves: the
-            // split's rolling sums from where the trade history begins, and before that the
-            // candle turnover read as an interval figure (`visible_interval_max`). One maximum
-            // over both, and the second reference line sits half-way — so the `avg` slot carries
-            // HALF the maximum, the figure the label prints there, and `m[3]` is the same ratio
-            // without a square root.
+            // The band is one LINEAR scale shared by two halves: the split's rolling sums from
+            // where the trade history begins, and before that the candle turnover read as an
+            // interval figure (`visible_interval_max`). One maximum over both, and the second
+            // reference line sits half-way — so the `avg` slot carries HALF the maximum, the
+            // figure the label prints there, and `m[3]` is that ratio. Off, there are no stats
+            // and the uniform below stays at its default, which the shaders read as no band.
             let side_boundary_ms = pr
                 .side_samples
                 .first()
@@ -1419,18 +1432,14 @@ impl ChartDataState {
                 // The interval computed THIS sync, not the one the last successful read was
                 // stamped with: with the switch on and no read landed yet (client or snapshot
                 // momentarily absent) the stamp is still zero, and the candle half must keep
-                // drawing from what it has rather than go dark with the split. With the candle
-                // band OFF that half is culled, so it must not set the scale either.
-                let history = candle_band_on.then(|| {
-                    moon_chart::volume_bars::visible_interval_max(
-                        &pr.volume_samples,
-                        vol_from,
-                        vol_to,
-                        side_tf_ms as f64,
-                        side_boundary_ms,
-                    )
-                });
-                let history = history.flatten();
+                // drawing from what it has rather than go dark with the split.
+                let history = moon_chart::volume_bars::visible_interval_max(
+                    &pr.volume_samples,
+                    vol_from,
+                    vol_to,
+                    side_tf_ms as f64,
+                    side_boundary_ms,
+                );
                 match (split, history) {
                     (None, None) => None,
                     (a, b) => Some(a.unwrap_or(0.0).max(b.unwrap_or(0.0))),
@@ -1439,10 +1448,9 @@ impl ChartDataState {
                 .map(|max| moon_chart::VolumeStats {
                     max,
                     avg: max * 0.5,
-                    count: 0,
                 })
             } else {
-                moon_chart::visible_volume_stats(&pr.volume_samples, vol_from, vol_to)
+                None
             };
             pr.volume_scale_right = self.chart_graphics.candle_volume_scale_right;
             pr.labels_over_volume = self.chart_graphics.candle_volume_labels_over;
@@ -1482,7 +1490,8 @@ impl ChartDataState {
                     m2: [
                         // Once the band-height cap; the height fraction alone decides that now.
                         0.0,
-                        moon_chart::volume_bars::VOLUME_BAR_W_PX * self.last_ppp,
+                        // Once the widest bar of the retired bars style.
+                        0.0,
                         moon_chart::volume_bars::VOLUME_SCALE_LINE_PX * self.last_ppp,
                         // Where the scale bracket stands: the text pass places the labels from
                         // the same rule, so a stem and its label cannot drift apart.

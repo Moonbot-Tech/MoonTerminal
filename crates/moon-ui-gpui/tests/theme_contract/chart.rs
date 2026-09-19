@@ -180,12 +180,11 @@ fn chart_appearance_contracts_stay_identical_across_shader_backends() {
             ],
             &[
                 "vs_m.x < 0.5",
-                "vs_m.x >= 1.5",
-                "sqrt(norm)",
+                "candles[iid + 1]",
+                "vs_m3.z / max(tf_rel, 1.0)",
                 "cv_bounds.w * vs_m.y",
                 "cv_bounds.y + cv_bounds.w - 1.0",
                 "clamp(pxh.x, cv_bounds.x, cv_bounds.x + cv_bounds.z)",
-                "clamp(px.x, cv_bounds.x, cv_bounds.x + cv_bounds.z)",
             ],
         ),
         (
@@ -200,12 +199,11 @@ fn chart_appearance_contracts_stay_identical_across_shader_backends() {
             ],
             &[
                 "vs.m.x < 0.5",
-                "vs.m.x < 1.5",
-                "sqrt(norm)",
+                "candles[iid + 1u]",
+                "vs.m3.z / max(tf_rel, 1.0)",
                 "cv.bounds.w * vs.m.y",
                 "cv.bounds.y + cv.bounds.w - 1.0",
                 "clamp(pxh.x, cv.bounds.x, cv.bounds.x + cv.bounds.z)",
-                "clamp(px.x, cv.bounds.x, cv.bounds.x + cv.bounds.z)",
             ],
         ),
         (
@@ -220,12 +218,11 @@ fn chart_appearance_contracts_stay_identical_across_shader_backends() {
             ],
             &[
                 "vs.m.x < 0.5",
-                "vs.m.x < 1.5",
-                "sqrt(norm)",
+                "candles[iid + 1]",
+                "vs.m3.z / max(tf_rel, 1.0)",
                 "cv.bounds.w * vs.m.y",
                 "cv.bounds.y + cv.bounds.w - 1.0",
                 "clamp(pxh.x, cv.bounds.x, cv.bounds.x + cv.bounds.z)",
-                "clamp(px.x, cv.bounds.x, cv.bounds.x + cv.bounds.z)",
             ],
         ),
     ];
@@ -1326,10 +1323,10 @@ fn strategy_colors_wake_both_order_geometry_cache_gates() {
 /// two halves on every backend: from the split boundary (`m3.y`) on, the sides layer draws the
 /// rolling sums and the candle band culls itself; before it, the candle band continues on the
 /// SAME linear scale — its turnover read as an interval figure (`m3.z`), in its own up/down
-/// colours — with no `sqrt` anywhere while the switch is on, because the shared labels read `max`
-/// and `max / 2`.
-/// One scale bracket: the sides layer's, so the candle band's yields with the switch. And the
-/// sides layer draws AFTER the candles, covering the candle bucket that straddles the boundary.
+/// colours — with no `sqrt` anywhere, because the shared labels read `max` and `max / 2`.
+/// One scale bracket: the sides layer's; the candle band has none of its own, since the band is
+/// one switch and the split is on whenever it draws. And the sides layer draws AFTER the
+/// candles, covering the candle bucket that straddles the boundary.
 #[test]
 fn every_backend_splits_the_band_at_the_sides_boundary() {
     const CANDLE_BAND: &[(&str, &str, &str, &str)] = &[
@@ -1361,13 +1358,17 @@ fn every_backend_splits_the_band_at_the_sides_boundary() {
         );
         let height = braced_body(&source, "vol_height_px(");
         assert!(
-            height.contains(interval_read) && height.contains(switch_gate),
-            "{path}: with the switch on the candle turnover must be read as an interval figure"
+            height.contains(interval_read) && !height.contains("sqrt"),
+            "{path}: the candle turnover must be read as an interval figure on the linear scale"
         );
-        let scale = braced_body(&source, "volume_scale_vertex(");
         assert!(
-            scale.contains(switch_gate),
-            "{path}: the candle band's scale lines must yield to the sides layer's"
+            !source.contains("volume_scale_vertex("),
+            "{path}: the candle band has no scale of its own; the sides layer draws the bracket"
+        );
+        let body = braced_body(&source, "volume_bars_vertex(");
+        assert!(
+            body.contains(switch_gate),
+            "{path}: the boundary cull is gated on the switch (`{switch_gate}`)"
         );
         let fragment = braced_body(&source, "volume_bars_fragment(");
         assert!(
@@ -1450,25 +1451,21 @@ fn every_backend_splits_the_band_at_the_sides_boundary() {
 /// The band's scale is Moonbot's BRACKET — a stem and three ticks — built by one function per
 /// shader file and drawn with `moon_chart::volume_bars::VOLUME_SCALE_INSTANCES` quads on every
 /// backend, so the instance count and the vertex geometry cannot disagree. Its x comes from the
-/// uniform's signed inset, the rule the text pass places the labels from. And the bought/sold
-/// switch stands on its own: `market.rs` no longer ties it to the candle band's style, so with
-/// the style OFF the split is the band — not the per-trade bars the old gate handed the floor to.
+/// uniform's signed inset, the rule the text pass places the labels from. And the band is ONE
+/// switch: `market.rs` reads the two stored fields through `volume_band_on`, never one of them
+/// alone — a stored pair an older build wrote (the split over an OFF style, bars, hills without
+/// the split) would otherwise draw a half-state the popup's checkbox cannot show.
 #[test]
-fn the_volume_scale_is_one_bracket_and_the_sides_stand_alone() {
+fn the_volume_scale_is_one_bracket_drawn_by_the_sides_layer() {
     const SHADERS: &[(&str, &[&str])] = &[
-        ("chartdx/shaders/candles.hlsl", &["volume_scale_vertex("]),
         ("chartdx/shaders/side_volume.hlsl", &["side_scale_vertex("]),
-        (
-            "chartdx/shaders/native_candles.wgsl",
-            &["volume_scale_vertex("],
-        ),
         (
             "chartdx/shaders/native_side_volume.wgsl",
             &["side_scale_vertex("],
         ),
         (
             "chartdx/shaders/chart_native.metal",
-            &["volume_scale_vertex(", "side_scale_vertex("],
+            &["side_scale_vertex("],
         ),
     ];
     for (path, entries) in SHADERS {
@@ -1497,7 +1494,6 @@ fn the_volume_scale_is_one_bracket_and_the_sides_stand_alone() {
     }
 
     for path in [
-        "chartdx/candles.rs",
         "chartdx/side_volume.rs",
         "chartdx/wgpu_backend/render.rs",
         "chartdx/metal_backend.rs",
@@ -1511,8 +1507,12 @@ fn the_volume_scale_is_one_bracket_and_the_sides_stand_alone() {
 
     let market = code_only(&read_src("chartdx/data_state/market.rs"));
     assert!(
-        market.contains("let sides_on = self.chart_graphics.candle_volume_sides;"),
-        "market.rs: the sides switch must not be gated on the candle band's style"
+        market.contains("let sides_on = moon_chart::volume_bars::volume_band_on("),
+        "market.rs: the band switch must be read through the one rule, not one stored field"
+    );
+    assert!(
+        !market.contains("let sides_on = self.chart_graphics.candle_volume_sides;"),
+        "market.rs: reading the split field alone is a half-state of the one switch"
     );
     assert!(
         market.contains("moon_chart::volume_bars::scale_bracket_signed_inset("),

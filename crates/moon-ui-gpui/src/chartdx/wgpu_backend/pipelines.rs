@@ -193,14 +193,6 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         "volume_bars_vertex",
         "volume_bars_fragment",
     );
-    let volume_scale = pipeline(
-        device,
-        format,
-        &candles_shader,
-        &candle_layout,
-        "volume_scale_vertex",
-        "volume_scale_fragment",
-    );
     // The sides band and its own linear scale, on the same VolumeStyle the candle band reads.
     let side_volume = pipeline(
         device,
@@ -328,7 +320,6 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         book_bars,
         candles,
         volume_bars,
-        volume_scale,
         side_volume,
         side_scale,
         hvol_rows,

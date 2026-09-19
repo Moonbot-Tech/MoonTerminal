@@ -131,3 +131,37 @@ fn the_shipped_graphics_survive_their_own_normalizer() {
         "a shipped graphics default sits outside the range its own normalizer accepts"
     );
 }
+
+/// `trade_marks.rs:normalize_chart_graphics` — the two stored band fields come out as ONE switch:
+/// a profile on bars, or on hills with the split off, or on the split over an OFF candle half, is
+/// hills with the split on; a profile with the band off stays off. Reading either field without
+/// the other would carry a half-state into the renderer and the popup.
+#[test]
+fn normalize_folds_the_band_fields_onto_the_one_switch() {
+    use moon_core::market::candles::{
+        VOLUME_STYLE_HILLS, VOLUME_STYLE_LEGACY_BARS, VOLUME_STYLE_OFF,
+    };
+    let mut cfg = ChartGraphicsCfg::default();
+    cfg.candle_volume_style = VOLUME_STYLE_LEGACY_BARS;
+    cfg.candle_volume_sides = false;
+    let out = normalize_chart_graphics(cfg);
+    assert_eq!(out.candle_volume_style, VOLUME_STYLE_HILLS);
+    assert!(out.candle_volume_sides);
+
+    cfg.candle_volume_style = VOLUME_STYLE_OFF;
+    cfg.candle_volume_sides = true;
+    let out = normalize_chart_graphics(cfg);
+    assert_eq!(out.candle_volume_style, VOLUME_STYLE_HILLS);
+    assert!(out.candle_volume_sides);
+
+    cfg.candle_volume_style = VOLUME_STYLE_OFF;
+    cfg.candle_volume_sides = false;
+    let out = normalize_chart_graphics(cfg);
+    assert_eq!(out.candle_volume_style, VOLUME_STYLE_OFF);
+    assert!(!out.candle_volume_sides);
+
+    // The shipped default is the switch ON, and it is already normal.
+    let def = ChartGraphicsCfg::default();
+    assert_eq!(normalize_chart_graphics(def), def);
+    assert!(def.candle_volume_sides);
+}

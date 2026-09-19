@@ -174,7 +174,7 @@ cbuffer VolumeStyle : register(b2) {
     float4 vs_down;  // falling bucket rgb + band opacity
     float4 vs_scale; // scale-bracket rgb + alpha
     float4 vs_m;     // x style, y height fraction, z 1/max, w avg/max
-    float4 vs_m2;    // x retired band cap, y bar width px, z bracket line px, w bracket stem signed inset px
+    float4 vs_m2;    // x retired band cap, y retired bar width, z bracket line px, w bracket stem signed inset px
     float4 vs_m3;    // x sides switch (0 off / 1 overlaid / 2 stacked), y split boundary rel ms, z interval rel ms, w bracket tick px
 };
 
@@ -199,16 +199,12 @@ float vol_band_h() {
 }
 
 float vol_height_px(Candle cd) {
-    if (vs_m3.x >= 0.5) {
-        // Sides switch on: the candle half continues the split's rolling sums, so its turnover
-        // is read as an interval figure (vol × interval / tf) on the same LINEAR scale.
-        float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs_tf_rel;
-        float norm = saturate(cd.vol * (vs_m3.z / max(tf_rel, 1.0)) * vs_m.z);
-        return norm * vol_band_h();
-    }
-    float norm = saturate(cd.vol * vs_m.z);
-    // sqrt matches the per-trade band: a linear scale buries every ordinary bucket under one spike.
-    return sqrt(norm) * vol_band_h();
+    // The candle half continues the split's rolling sums, so its turnover is read as an interval
+    // figure (vol × interval / tf) on the same LINEAR scale; the sides layer draws the bracket
+    // for both halves.
+    float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs_tf_rel;
+    float norm = saturate(cd.vol * (vs_m3.z / max(tf_rel, 1.0)) * vs_m.z);
+    return norm * vol_band_h();
 }
 
 VolumeBarOut vol_cull() {
@@ -231,98 +227,33 @@ VolumeBarOut volume_bars_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID
     float h0 = vol_height_px(cd);
     float2 corner = CORNERS[vid % 6u];
 
-    if (vs_m.x >= 1.5) {
-        // HILLS: a trapezoid from this bucket's centre to the next one's, so consecutive instances
-        // form one continuous filled area. Reading candles[iid + 1] is why the draw is issued with
-        // count - 1 instances. Built directly rather than as p0 + corner * sz, because its two
-        // edges differ in height and a rectangle cannot express that.
-        Candle cd1 = candles[iid + 1];
-        // A replay removes candles under its tick span. Never fill a hill across that gap.
-        float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs_tf_rel;
-        if (cd1.t_open > cd.t_open + tf_rel * 1.001) {
-            return vol_cull();
-        }
-        float2 c1 = vol_center_px(cd1);
-        float h1 = vol_height_px(cd1);
-        float x = lerp(c0.x, c1.x, corner.x);
-        float h = lerp(h0, h1, corner.x);
-        float2 pxh = float2(x, base - h * (1.0 - corner.y));
-        pxh.x = clamp(pxh.x, cv_bounds.x, cv_bounds.x + cv_bounds.z);
-        VolumeBarOut oh;
-        oh.pos = float4(pxh.x / cv_resolution.x * 2.0 - 1.0,
-                        1.0 - pxh.y / cv_resolution.y * 2.0, 0.0, 1.0);
-        oh.up = (cd.c >= cd.o) ? 1u : 0u;
-        return oh;
+    // HILLS — the one live style: a trapezoid from this bucket's centre to the next one's, so
+    // consecutive instances form one continuous filled area. Reading candles[iid + 1] is why the
+    // draw is issued with count - 1 instances. Built directly rather than as p0 + corner * sz,
+    // because its two edges differ in height and a rectangle cannot express that.
+    Candle cd1 = candles[iid + 1];
+    // A replay removes candles under its tick span. Never fill a hill across that gap.
+    float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs_tf_rel;
+    if (cd1.t_open > cd.t_open + tf_rel * 1.001) {
+        return vol_cull();
     }
-
-    // BARS: one thin column per bucket, centred in it.
-    float bw = clamp(c0.y * 0.5, 1.0, vs_m2.y);
-    float2 p0 = float2(round(c0.x - bw * 0.5), base - h0);
-    float2 sz = float2(bw, h0);
-    float2 px = p0 + corner * sz;
+    float2 c1 = vol_center_px(cd1);
+    float h1 = vol_height_px(cd1);
+    float x = lerp(c0.x, c1.x, corner.x);
+    float h = lerp(h0, h1, corner.x);
+    float2 pxh = float2(x, base - h * (1.0 - corner.y));
     // Clamp into the plot: the base pass scissor reaches across the price gutter and the order
     // book, so an unclamped band spills into both.
-    px.x = clamp(px.x, cv_bounds.x, cv_bounds.x + cv_bounds.z);
+    pxh.x = clamp(pxh.x, cv_bounds.x, cv_bounds.x + cv_bounds.z);
     VolumeBarOut o;
-    o.pos = float4(px.x / cv_resolution.x * 2.0 - 1.0,
-                   1.0 - px.y / cv_resolution.y * 2.0, 0.0, 1.0);
+    o.pos = float4(pxh.x / cv_resolution.x * 2.0 - 1.0,
+                   1.0 - pxh.y / cv_resolution.y * 2.0, 0.0, 1.0);
     o.up = (cd.c >= cd.o) ? 1u : 0u;
     return o;
 }
 
 float4 volume_bars_fragment(VolumeBarOut i) : SV_Target {
     return (i.up == 1u) ? vs_up : vs_down;
-}
-
-// The scale is Moonbot's BRACKET, not a pair of full-width lines: a stem from the band floor up to
-// the visible maximum, and three ticks to its right — at the maximum, at the second reference level
-// and on the floor. Instance 0 is the stem, 1..3 the ticks top-down (VOLUME_SCALE_INSTANCES). Where
-// the stem stands is vs_m2.w, the signed inset in physical px — from the plot's left edge when
-// non-negative, from its right edge when negative — the very rule the text pass places the labels
-// from (`moon_chart::volume_bars::scale_bracket_offset`); vs_m3.w is the tick length.
-float4 scale_bracket_quad(uint vid, uint iid, float band, float second_frac) {
-    float base = cv_bounds.y + cv_bounds.w - 1.0;
-    float th = max(vs_m2.z, 1.0);
-    float tick = max(vs_m3.w, th);
-    float off = (vs_m2.w >= 0.0) ? vs_m2.w : cv_bounds.z + vs_m2.w;
-    float bx = cv_bounds.x + clamp(off, 0.0, cv_bounds.z);
-    float top = round(base - band);
-    float2 origin;
-    float2 size;
-    if (iid == 0u) {
-        origin = float2(bx, top);
-        size = float2(th, base - top + 1.0);
-    } else {
-        float frac = (iid == 1u) ? 1.0 : ((iid == 2u) ? second_frac : 0.0);
-        float y = min(round(base - band * frac), base - th + 1.0);
-        origin = float2(bx, y);
-        size = float2(tick, th);
-    }
-    float2 corner = CORNERS[vid % 6u];
-    float2 px = origin + corner * size;
-    return float4(px.x / cv_resolution.x * 2.0 - 1.0,
-                  1.0 - px.y / cv_resolution.y * 2.0, 0.0, 1.0);
-}
-
-// The candle band's scale bracket: its second tick sits at the visible average, on the band's
-// square-root scale. It is what makes the band a SCALE rather than a decoration.
-struct VolumeScaleOut {
-    float4 pos : SV_Position;
-};
-
-VolumeScaleOut volume_scale_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
-    VolumeScaleOut o;
-    if (vs_m.x < 0.5 || vs_m3.x >= 0.5) {
-        // Off, or the sides layer draws the (linear) scale for both halves.
-        o.pos = float4(2.0, 2.0, 0.0, 1.0);
-        return o;
-    }
-    o.pos = scale_bracket_quad(vid, iid, vol_band_h(), sqrt(saturate(vs_m.w)));
-    return o;
-}
-
-float4 volume_scale_fragment(VolumeScaleOut i) : SV_Target {
-    return vs_scale;
 }
 
 float4 candles_fragment(CandleOut i) : SV_Target {

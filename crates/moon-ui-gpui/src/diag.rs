@@ -301,6 +301,10 @@ diag_counters!(
     // chart sits still is the defect this counter exists to show.
     CHART_HVOL_DRAW => "hvol_draw",
     CHART_HVOL_UPLOAD_LEN => "hvol_upload_len",
+    // The zone's two standing corner captions, drawn by the text pass: one bump per caption line
+    // per present. Zero while `hvol_hide_captions` is on — the only way to see from a log that
+    // the switch reached the text pass, since the captions have no layer of their own.
+    CHART_HVOL_CAPTION_DRAW => "hvol_caption_draw",
     // Rows past the profile buffer's capacity, dropped from both ends of the price range.
     CHART_HVOL_DROPPED => "hvol_dropped",
     CHART_HVOL_READ_US => "hvol_read_us",

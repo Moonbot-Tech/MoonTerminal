@@ -145,7 +145,6 @@ struct Pipelines {
     readout_rect: RenderPipelineState,
     candles: RenderPipelineState,
     volume_bars: RenderPipelineState,
-    volume_scale: RenderPipelineState,
     side_volume: RenderPipelineState,
     side_scale: RenderPipelineState,
     hvol_rows: RenderPipelineState,
@@ -775,27 +774,15 @@ impl MetalLayers {
             set_uniform(encoder, 1, self.candle_style_uniform.buffer());
             set_storage(encoder, 2, self.candle_buffer.buffer());
             set_uniform(encoder, 3, self.volume_style_uniform.buffer());
-            // The band and its scale draw BEFORE the bodies so the candles sit on top. With the
-            // sides switch on the shader culls the candles past the split boundary and the sides
-            // layer below draws the scale.
+            // The band draws BEFORE the bodies so the candles sit on top. The shader culls the
+            // candles past the split boundary, and the sides layer below draws the band's scale
+            // bracket for both halves.
             if self.volume_style.m[0] >= 0.5 {
                 crate::diag::bump(&crate::diag::CHART_CANDLE_VOLUME_DRAW);
                 // Hills read `candles[iid + 1]`, so they take one instance fewer.
-                let bars = if self.volume_style.m[0] >= 1.5 {
-                    self.candles.len().saturating_sub(1)
-                } else {
-                    self.candles.len()
-                };
+                let bars = self.candles.len().saturating_sub(1);
                 if bars > 0 {
                     draw(encoder, &pipelines.volume_bars, 6, bars as u64);
-                }
-                if self.volume_style.m3[0] < 0.5 {
-                    draw(
-                        encoder,
-                        &pipelines.volume_scale,
-                        6,
-                        moon_chart::volume_bars::VOLUME_SCALE_INSTANCES as u64,
-                    );
                 }
             }
             draw(encoder, &pipelines.candles, 18, self.candles.len() as u64);
@@ -1636,13 +1623,6 @@ fn create_pipelines(device: &DeviceRef, pixel_format: MTLPixelFormat) -> Pipelin
             pixel_format,
             "volume_bars_vertex",
             "volume_bars_fragment",
-        ),
-        volume_scale: pipeline(
-            device,
-            &library,
-            pixel_format,
-            "volume_scale_vertex",
-            "volume_scale_fragment",
         ),
         side_volume: pipeline(
             device,

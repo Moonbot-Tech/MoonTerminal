@@ -1063,32 +1063,16 @@ chart.graphics.trade_volume_alpha:
   en: "Per-trade volume bars"
   es: "Barras de volumen por trade"
 chart.graphics.trade_volume_alpha_hint:
-  ru: "Тонкие столбики снизу, по одному на трейд в зоне трейдов; 0% — скрыть"
-  en: "Thin bars along the bottom, one per trade in the trade zone; 0% hides them"
-  es: "Barras finas abajo, una por trade en la zona de trades; 0% las oculta"
-chart.graphics.volume_style:
-  ru: "Стиль отображения"
-  en: "Display style"
-  es: "Estilo de visualización"
-chart.graphics.volume_style_hills:
-  ru: "Холмы"
-  en: "Hills"
-  es: "Colinas"
-chart.graphics.volume_style_bars:
-  ru: "Столбики"
-  en: "Bars"
-  es: "Barras"
-chart.graphics.volume_style_off:
-  ru: "Выключены"
-  en: "Off"
-  es: "Desactivados"
-# The switch that puts Moonbot's `Vol` on top of hills or bars: bought and sold as rolling sums
-# where the trade history reaches, the candle turnover before that. Named after the
-# reference terminal at the user's request — the reader knows the picture by that name.
-chart.graphics.volume_sides:
-  ru: "МБ: покупки/продажи по трейдам"
-  en: "MB: bought/sold from trades"
-  es: "MB: compras/ventas por operaciones"
+  ru: "Тонкие столбики снизу, по одному на трейд в зоне трейдов; 0% — скрыть. Рисуются только при выключенных объёмах"
+  en: "Thin bars along the bottom, one per trade in the trade zone; 0% hides them. Drawn only with the volumes off"
+  es: "Barras finas abajo, una por trade en la zona de trades; 0% las oculta. Solo con los volúmenes desactivados"
+# The one switch of the vertical volumes: on, the band is Moonbot's `Vol` drawn as hills — bought
+# and sold as rolling sums where the trade history reaches, the candle turnover before that.
+# One word: the frame's own caption already says which volumes.
+chart.volumes.band_enabled:
+  ru: "Показать"
+  en: "Show"
+  es: "Mostrar"
 chart.graphics.volume_kind:
   ru: "Вид"
   en: "Kind"
@@ -1133,14 +1117,15 @@ chart.graphics.volume_labels_over:
   ru: "Поверх"
   en: "Over it"
   es: "Encima"
+# The unit is in the caption: the cells below print bare numbers so a row of seven stays narrow.
 chart.graphics.candle_volume_height:
-  ru: "Высота полосы объёмов"
-  en: "Volume band height"
-  es: "Altura de la banda de volumen"
+  ru: "Высота полосы объёмов, %"
+  en: "Volume band height, %"
+  es: "Altura de la banda de volumen, %"
 chart.graphics.candle_volume_alpha:
-  ru: "Непрозрачность объёмов"
-  en: "Volume opacity"
-  es: "Opacidad del volumen"
+  ru: "Непрозрачность объёмов, %"
+  en: "Volume opacity, %"
+  es: "Opacidad del volumen, %"
 chart.graphics.candle_volume_scale:
   ru: "Цвет шкалы объёмов"
   en: "Volume scale colour"
@@ -2915,26 +2900,34 @@ chart.volumes.frame_hvol:
   ru: "Горизонтальные объёмы"
   en: "Horizontal volumes"
   es: "Volúmenes horizontales"
+# One word, like `band_enabled`: the frame's caption names the indicator.
 chart.volumes.hvol_enabled:
-  ru: "Показывать горизонтальные объёмы"
-  en: "Show horizontal volumes"
-  es: "Mostrar volúmenes horizontales"
+  ru: "Показать"
+  en: "Show"
+  es: "Mostrar"
 chart.volumes.hvol_window:
   ru: "Окно"
   en: "Window"
   es: "Ventana"
+# The unit is in the caption: the cells below print bare numbers so a row of seven stays narrow.
 chart.volumes.hvol_price_frame:
-  ru: "Окно цены"
-  en: "Price window"
-  es: "Ventana de precio"
+  ru: "Окно цены, % от цены"
+  en: "Price window, % of price"
+  es: "Ventana de precio, % del precio"
 chart.volumes.hvol_width:
-  ru: "Ширина зоны"
-  en: "Zone width"
-  es: "Ancho de la zona"
+  ru: "Ширина зоны, %"
+  en: "Zone width, %"
+  es: "Ancho de la zona, %"
 chart.volumes.hvol_side:
   ru: "Подпись объёма"
   en: "Volume readout"
   es: "Lectura del volumen"
+# The zone's two standing corner captions (`chart.hvol.caption_tf` / `caption_pf`) off; the cursor
+# readout stays.
+chart.volumes.hvol_hide_captions:
+  ru: "Скрыть подписи окна"
+  en: "Hide the window captions"
+  es: "Ocultar las etiquetas de ventana"
 chart.volumes.hvol_backdrop:
   ru: "Подложка подписей"
   en: "Caption plates"

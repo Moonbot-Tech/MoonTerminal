@@ -2,7 +2,8 @@
 use moon_core::config::{HVOL_TF_MAX_S, HvolSide};
 
 use super::{
-    PRICE_FRAME_PCTS, WIDTHS, nearest, percent_label, price_frame_label, side_of, window_choices,
+    PRICE_FRAME_PCTS, WIDTHS, nearest, price_frame_label, side_of, whole_percent_label,
+    window_choices,
 };
 
 /// The window dropdown offers `Auto`, every listed window and `Max`, in that order and nothing
@@ -33,12 +34,13 @@ fn the_side_switches_compose_into_the_four_sides() {
     }
 }
 
-/// Price-window labels read as the slider's percentages, not as floating-point noise.
+/// Price-window labels read as the slider's percentages, not as floating-point noise — and
+/// without the sign, which the row's caption carries so seven cells stay narrow.
 #[test]
 fn price_frame_labels_are_trimmed_percentages() {
-    assert_eq!(price_frame_label(0.1), "0.1%");
-    assert_eq!(price_frame_label(0.05), "0.05%");
-    assert_eq!(price_frame_label(1.0), "1%");
+    assert_eq!(price_frame_label(0.1), "0.1");
+    assert_eq!(price_frame_label(0.05), "0.05");
+    assert_eq!(price_frame_label(1.0), "1");
     assert_eq!(nearest(&PRICE_FRAME_PCTS, 0.12), 1);
     assert_eq!(nearest(&PRICE_FRAME_PCTS, f32::NAN), 0);
 }
@@ -50,7 +52,8 @@ fn price_frame_labels_are_trimmed_percentages() {
 #[test]
 fn the_width_row_starts_at_the_minimum_and_keeps_the_stored_steps() {
     assert_eq!(WIDTHS[0], moon_chart::hvol::WIDTH_MIN);
-    assert_eq!(percent_label(WIDTHS[0]), "5%");
+    assert_eq!(whole_percent_label(WIDTHS[0]), "5");
+    assert_eq!(whole_percent_label(1.0), "100");
     assert_eq!(nearest(&WIDTHS, 0.05), 0);
     assert_eq!(nearest(&WIDTHS, 0.1), 1);
     assert_eq!(nearest(&WIDTHS, 0.2), 3);
