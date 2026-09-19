@@ -2,10 +2,7 @@ use super::*;
 use crate::feed::Side;
 
 fn key() -> TileKey {
-    (
-        crate::venue::venue(3).expect("Binance spot"),
-        "BTCUSDT".into(),
-    )
+    ("3:00000000".into(), "BTCUSDT".into())
 }
 
 fn tick(time_ms: i64) -> Tick {
@@ -93,10 +90,7 @@ fn coverage_run_follows_adjacency_not_the_hull() {
 #[test]
 fn keys_are_isolated() {
     let mut store = TickTileStore::default();
-    let other = (
-        crate::venue::venue(4).expect("second venue"),
-        "BTCUSDT".into(),
-    );
+    let other = ("4:00000000".into(), "BTCUSDT".into());
     store.insert(key(), 100, 199, ticks(&[150]));
     assert_eq!(store.gaps(&other, 100, 199), vec![(100, 199)]);
     assert!(store.read(&other, 0, 300).is_empty());
@@ -150,10 +144,7 @@ fn empty_tiles_are_bounded_by_count() {
 fn one_insert_over_a_hull_files_every_gap_and_eviction_spares_them_all() {
     let mut store = TickTileStore::default();
     // Crowd the store right up to the tile ceiling with old tiles on another key.
-    let other = (
-        crate::venue::venue(4).expect("second venue"),
-        "ETHUSDT".into(),
-    );
+    let other = ("4:00000000".into(), "ETHUSDT".into());
     for i in 0..TILE_STORE_MAX_TILES as i64 {
         store.insert(other.clone(), i * 100, i * 100 + 99, Vec::new());
     }

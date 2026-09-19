@@ -9,17 +9,20 @@
 //! per-caller hope. `moon-core` has no async runtime, so this is a plain blocking thread and an
 //! `mpsc` pair, exactly like the kline cache and the report valuation worker beside it.
 //!
-//! # Three caches, and each is load-bearing
+//! # Four caches, and each is load-bearing
 //!
 //! Bars go into the SHARED `klines.sqlite` under the real exchange key, because a one-minute bar
 //! fetched here is indistinguishable from one the recorder wrote and the rest of the application
 //! benefits from it. Whole OUTCOMES additionally go into a small in-memory ring owned by this
 //! worker, keyed by the exact question asked. That second cache is what satisfies "the second
-//! open of the SAME trade costs nothing": the SQLite cache cannot hold ticks at all, and nothing
+//! open of the SAME trade costs nothing": the kline cache cannot hold ticks at all, and nothing
 //! else in the process remembers that a given window was already answered. The third is the tick
-//! TILE store ([`super::tick_tiles`]), keyed by venue and market and answering by COVERAGE the
-//! way the bars are: it is what makes a NEIGHBOURING trade on the same market cost only the
-//! stretch of its focus no earlier window fetched — and nothing at all when there is none.
+//! TILE store ([`super::tick_tiles`]), keyed by exchange and market and answering by COVERAGE
+//! the way the bars are: it is what makes a NEIGHBOURING trade on the same market cost only the
+//! stretch of its focus no earlier window fetched — and nothing at all when there is none. The
+//! fourth is that store's disk, `trades.sqlite` ([`super::trade_cache`]): the tick stage hydrates
+//! the tiles from it before deciding what to fetch and writes every harvest through, so the
+//! same question survives a restart — behind a switch in the Storage tab.
 //!
 //! # The degrade ladder
 //!
@@ -1154,11 +1157,12 @@ fn serve_ticks(
 ) -> Result<(TradeReplaySeries, bool), Option<TickStatus>> {
     // The archive may have arrived while other candle jobs had priority in the worker queue.
     //
-    // Core ticks are NOT filed into the tile store, on purpose: `read_core` values them as the
-    // live band does (`TickValue::Base`, whatever the market's contract terms), while a tile is
-    // valued at serve time through the requester's own `tick_value` — filing the two under one
-    // key would value a core print through a contract multiplier it never had. A source-tagged
-    // span is the shape that lets them share a store, and that is the persisted store's job.
+    // Core ticks are NOT filed into the tile store nor into its disk, on purpose: `read_core`
+    // values them as the live band does (`TickValue::Base`, whatever the market's contract
+    // terms), while a tile is valued at serve time through the requester's own `tick_value` —
+    // filing the two under one key would value a core print through a contract multiplier it
+    // never had. Neither store carries a source per span yet; until one does, core prints stay
+    // out of both.
     let baseline_coverage = stage.baseline.as_ref().and_then(|series| series.covered);
     if let Some(mut series) =
         read_core(request).filter(|series| preserves_coverage(series.covered, baseline_coverage))
@@ -1186,8 +1190,27 @@ fn serve_ticks(
             retention_ms: route.retention_ms().unwrap_or(0),
         }));
     };
-    let key: TileKey = (request.address.venue, request.market.clone());
+    let key: TileKey = (request.address.exchange_key.clone(), request.market.clone());
     let focus = request.window.focus();
+    // The disk is the tile store's memory across a restart: whatever it holds around this focus
+    // is hydrated into the store FIRST, so the residual is decided against everything ever
+    // fetched for this market, not only what this session fetched. A read that times out
+    // hydrates nothing and costs at worst a fetch the disk could have spared.
+    let persisted = super::trade_cache::handle();
+    if let Some(cache) = &persisted {
+        let spans = cache
+            .read(
+                &request.address.exchange_key,
+                &request.market,
+                focus.0,
+                focus.1,
+            )
+            .unwrap_or_default();
+        let mut store = lock_tiles(tiles);
+        for span in spans {
+            store.insert(key.clone(), span.from_ms, span.to_ms, span.ticks);
+        }
+    }
     let residual = residual_plan(&plan, &lock_tiles(tiles), &key);
     // The one line that tells a neighbouring window apart from a reopen: the focus is the
     // window's own, the spans are what the store made of it. In milliseconds, not slices — a
@@ -1431,6 +1454,17 @@ fn serve_ticks(
     }));
     ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
     if let Some((from_ms, to_ms)) = harvest_span {
+        // Written through to the disk before the memory takes the vector: the disk files only
+        // the stretches it does not hold, by the same gap rule, so a print never lands twice.
+        if let Some(cache) = &persisted {
+            cache.insert(
+                &request.address.exchange_key,
+                &request.market,
+                from_ms,
+                to_ms,
+                harvest_ticks.clone(),
+            );
+        }
         lock_tiles(tiles).insert(key, from_ms, to_ms, harvest_ticks);
     }
     if ticks.is_empty() {

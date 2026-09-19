@@ -31,6 +31,7 @@
 pub mod gate;
 pub mod rest;
 pub(crate) mod tick_tiles;
+pub mod trade_cache;
 pub mod venue_caps;
 pub mod worker;
 

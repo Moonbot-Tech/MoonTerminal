@@ -45,12 +45,31 @@ pub const DEFAULT_IGNORE_FIELDS: &[&str] = &[
 #[serde(default)]
 pub struct StorageCfg {
     pub strategies: StrategiesStoreCfg,
+    pub trade_replay: TradeReplayStoreCfg,
 }
 
 impl Default for StorageCfg {
     fn default() -> Self {
         Self {
             strategies: StrategiesStoreCfg::default(),
+            trade_replay: TradeReplayStoreCfg::default(),
+        }
+    }
+}
+
+/// The `[trade_replay]` section for the persisted trade prints (`trades.sqlite`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TradeReplayStoreCfg {
+    /// Whether the prints a trade window fetched are kept on disk for the next window and the
+    /// next launch. Off, they live in memory for the session only and the file is not touched.
+    pub persist_trades: bool,
+}
+
+impl Default for TradeReplayStoreCfg {
+    fn default() -> Self {
+        Self {
+            persist_trades: true,
         }
     }
 }

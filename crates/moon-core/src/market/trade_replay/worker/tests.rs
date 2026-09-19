@@ -645,7 +645,7 @@ fn a_focus_held_by_the_tiles_is_served_without_a_walk() {
     let (reply, _rx) = mpsc::channel();
     let request = tile_request(reply);
     let stage = tile_stage(&request);
-    let key = (request.address.venue, request.market.clone());
+    let key = (request.address.exchange_key.clone(), request.market.clone());
     let tiles = Mutex::new(TickTileStore::default());
     // A wider neighbouring window's harvest: covers the focus and more.
     tiles.lock().unwrap().insert(
@@ -690,7 +690,7 @@ fn an_empty_covered_focus_is_no_trades() {
     let (reply, _rx) = mpsc::channel();
     let request = tile_request(reply);
     let stage = tile_stage(&request);
-    let key = (request.address.venue, request.market.clone());
+    let key = (request.address.exchange_key.clone(), request.market.clone());
     let tiles = Mutex::new(TickTileStore::default());
     tiles
         .lock()

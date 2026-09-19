@@ -21,6 +21,7 @@ pub(super) struct StorageInfo {
     pub reports: Option<(u64, u64)>,
     pub strategies: Option<(u64, u64)>,
     pub klines: Option<(u64, u64)>,
+    pub trades: Option<(u64, u64)>,
     /// Replica row count from the shared fallible read path.
     ///
     /// `None` means the background snapshot has not completed,
@@ -62,6 +63,7 @@ fn collect_info() -> StorageInfo {
         reports: sized(&paths::reports_db_path()),
         strategies: sized(&paths::strategies_db_path()),
         klines: sized(&paths::klines_db_path()),
+        trades: sized(&paths::trades_db_path()),
         ..Default::default()
     };
     out.report_rows = Some(moon_core::db::report_row_count());
@@ -178,6 +180,7 @@ impl SettingsView {
         let info = self.storage.info.clone().unwrap_or_default();
         let enabled = self.storage.cfg.strategies.enabled;
         let limit = self.storage.cfg.strategies.version_limit;
+        let persist_trades = self.storage.cfg.trade_replay.persist_trades;
 
         let size_line = |sz: Option<(u64, u64)>| -> String {
             match sz {
@@ -191,7 +194,7 @@ impl SettingsView {
                 .to_string(),
             }
         };
-        let total: u64 = [info.reports, info.strategies, info.klines]
+        let total: u64 = [info.reports, info.strategies, info.klines, info.trades]
             .iter()
             .flatten()
             .map(|(m, w)| m + w)
@@ -359,5 +362,37 @@ impl SettingsView {
             // MIXED NODE: `size_line` combines label and figure — stays mono.
             .child(hint(size_line(info.klines)).font_family(design::mono()))
             .child(hint(t!("storage.klines_hint").to_string()))
+            .child(separator(p, cx))
+            // ── Trade prints ────────────────────────────────────────────────
+            .child(section(&t!("storage.trades_title"), p, cx))
+            .child(
+                moon_ui::MoonCheckbox::new("trades-db-enabled")
+                    .checked(persist_trades)
+                    .label(t!("storage.trades_enabled").to_string())
+                    .description(t!("storage.trades_enabled_hint").to_string())
+                    .on_change(cx.listener(|this, v: &bool, _, cx| {
+                        let v = *v;
+                        if this.storage.cfg.trade_replay.persist_trades != v {
+                            this.storage.cfg.trade_replay.persist_trades = v;
+                            moon_core::market::trade_replay::trade_cache::set_enabled(v);
+                            storage_cfg::save(&this.storage.cfg);
+                            cx.notify();
+                        }
+                    })),
+            )
+            // MIXED NODE: `size_line` combines label and figure — stays mono.
+            .child(hint(size_line(info.trades)).font_family(design::mono()))
+            .child(
+                h_flex().child(
+                    tool_btn("trades-compact", t!("storage.compact").to_string(), busy)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.storage_op(cx, "storage.op_compact", || {
+                                moon_core::db::maint::compact_db(&paths::trades_db_path())
+                            });
+                        }))
+                        .render(),
+                ),
+            )
+            .child(hint(t!("storage.trades_hint").to_string()))
     }
 }

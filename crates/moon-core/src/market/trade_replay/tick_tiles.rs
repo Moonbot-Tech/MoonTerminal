@@ -8,7 +8,7 @@
 //! window's tick span holds the second whole — the second window pages the same prints from the
 //! venue again while the first sits beside it already showing them (#632). Bars never had this
 //! problem: they are served from the shared kline cache by COVERAGE. This store gives the ticks
-//! the same shape — tiles of `(from_ms, to_ms)` per `(venue, market)` — and a window is answered
+//! the same shape — tiles of `(from_ms, to_ms)` per `(exchange, market)` — and a window is answered
 //! from the tiles it already holds, fetching only the gaps.
 //!
 //! # Invariants
@@ -24,7 +24,7 @@
 //! - Memory is bounded by ticks held ([`TILE_STORE_MAX_TICKS`]) and by tile count
 //!   ([`TILE_STORE_MAX_TILES`]); eviction is oldest-inserted first and never touches the tiles of
 //!   the insert in progress, so one wide harvest is held rather than discarded on arrival.
-//! - Keyed by venue and market, never by core: the prints are public, and a trade on another
+//! - Keyed by exchange and market, never by core: the prints are public, and a trade on another
 //!   core over the same market is served from the same tiles.
 
 use std::collections::HashMap;
@@ -44,10 +44,13 @@ pub(crate) const TILE_STORE_MAX_TICKS: usize = 8 * super::worker::TICK_BUDGET;
 /// the store without bound.
 pub(crate) const TILE_STORE_MAX_TILES: usize = 256;
 
-/// What one key of the store identifies: the venue (spot and linear of one brand are DIFFERENT
-/// venues on one host, and their markets are frequently named identically) and the
-/// exchange-native market name.
-pub(crate) type TileKey = (crate::venue::Venue, String);
+/// What one key of the store identifies: the exchange key the kline cache files under
+/// (`ReplayAddress::exchange_key`, the platform code plus the DEX discriminator — spot and
+/// linear of one brand are DIFFERENT platforms, their markets frequently named identically, and
+/// two HIP-3 DEXes under one platform differ only in the discriminator) and the exchange-native
+/// market name. The same string keys the persisted store, so the disk and the memory can never
+/// file one market under two names.
+pub(crate) type TileKey = (String, String);
 
 /// One contiguous span the venue was asked for, with every print it answered.
 #[derive(Clone, Debug)]
@@ -75,7 +78,7 @@ impl TickTileStore {
     /// Sub-spans of `[from_ms, to_ms]` no tile of `key` covers, ascending and disjoint.
     ///
     /// Args:
-    ///     key: Venue and market.
+    ///     key: Exchange key and market.
     ///     from_ms: Left edge, inclusive.
     ///     to_ms: Right edge, inclusive.
     ///
@@ -83,24 +86,11 @@ impl TickTileStore {
     ///     Empty when the span is covered whole; the whole span when nothing covers any of it;
     ///     nothing at all for an inverted span.
     pub fn gaps(&self, key: &TileKey, from_ms: i64, to_ms: i64) -> Vec<(i64, i64)> {
-        if from_ms > to_ms {
-            return Vec::new();
-        }
-        let mut out = Vec::new();
-        let mut cursor = from_ms;
-        for tile in self.overlapping(key, from_ms, to_ms) {
-            if tile.from_ms > cursor {
-                out.push((cursor, tile.from_ms - 1));
-            }
-            cursor = cursor.max(tile.to_ms.saturating_add(1));
-            if cursor > to_ms {
-                break;
-            }
-        }
-        if cursor <= to_ms {
-            out.push((cursor, to_ms));
-        }
-        out
+        let held: Vec<(i64, i64)> = self
+            .overlapping(key, from_ms, to_ms)
+            .map(|t| (t.from_ms, t.to_ms))
+            .collect();
+        gaps_between(&held, from_ms, to_ms)
     }
 
     /// Whether `[from_ms, to_ms]` is covered whole, with no gap of any width.
@@ -179,7 +169,7 @@ impl TickTileStore {
     /// already ascending.
     ///
     /// Args:
-    ///     key: Venue and market.
+    ///     key: Exchange key and market.
     ///     from_ms: Left edge, inclusive.
     ///     to_ms: Right edge, inclusive.
     ///     ticks: Every print the venue answered for the span, any order.
@@ -263,6 +253,44 @@ impl TickTileStore {
     }
 }
 
+/// Sub-spans of `[from_ms, to_ms]` that `held` leaves uncovered, ascending and disjoint.
+///
+/// The one coverage rule of this module, shared with the persisted store so the disk and the
+/// memory can never disagree about what a span still owes. `held` is ascending and pairwise
+/// disjoint; spans in it outside the range are skipped.
+///
+/// Args:
+///     held: Covered spans, ascending, disjoint.
+///     from_ms: Left edge, inclusive.
+///     to_ms: Right edge, inclusive.
+///
+/// Returns:
+///     Empty when the range is covered whole or inverted; the whole range when nothing covers
+///     any of it.
+pub(crate) fn gaps_between(held: &[(i64, i64)], from_ms: i64, to_ms: i64) -> Vec<(i64, i64)> {
+    if from_ms > to_ms {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut cursor = from_ms;
+    for &(held_from, held_to) in held {
+        if held_to < cursor || held_from > to_ms {
+            continue;
+        }
+        if held_from > cursor {
+            out.push((cursor, held_from - 1));
+        }
+        cursor = cursor.max(held_to.saturating_add(1));
+        if cursor > to_ms {
+            break;
+        }
+    }
+    if cursor <= to_ms {
+        out.push((cursor, to_ms));
+    }
+    out
+}
+
 /// The part of `plan` the store does not already answer: every slice minus the tiles covering
 /// it, split into its uncovered sub-spans, in an order that keeps the walk's completed prefix
 /// contiguous with what the store holds.
@@ -278,7 +306,7 @@ impl TickTileStore {
 /// Args:
 ///     plan: The window's own tiles, in fetch order.
 ///     store: What is already held.
-///     key: Venue and market.
+///     key: Exchange key and market.
 ///
 /// Returns:
 ///     The residual plan; empty `slices` means nothing needs fetching. `trade_len` and
