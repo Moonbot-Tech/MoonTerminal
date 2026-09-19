@@ -681,6 +681,72 @@ pub fn resample(rows: &[ChartCandle], tf_ms: i64, out: &mut Vec<ChartCandle>) {
     }
 }
 
+/// One base source offered to [`merge_bases`]: rows sorted by `t_open_ms`, aggregated at `tf_ms`.
+///
+/// Not a [`CoarseLayer`], though it looks like one: a layer is drawn at its own width into holes
+/// and the FIRST layer offered wins, while a part is resampled into the series and the LAST part
+/// offered wins. Extending one merge by analogy with the other's order inverts the result.
+pub struct BasePart<'a> {
+    pub rows: &'a [ChartCandle],
+    pub tf_ms: i64,
+}
+
+/// Merges the base sources of one series into its timeframe, later parts winning a bucket.
+///
+/// Every part is resampled to `tf_ms` and inserted by bucket; a part whose timeframe is coarser
+/// than or does not divide the target — a 5-minute snapshot under a 1-minute series — contributes
+/// nothing. The caller lists the parts in ASCENDING priority, and that order is the whole
+/// contract: the range-only 5-minute snapshot first, then every cached kind finer than the native
+/// one (finest first, so a coarser exchange row overrides a bucket assembled from finer ones), then
+/// the native cached kind, then the live deep history.
+///
+/// The finer kinds are what fills a HOLEY native kind. A 5-minute chart whose kind-5 cache covers
+/// a fifth of its window used to draw the rest from the snapshot, whose rows carry only high and
+/// low and so render as bodies without wicks — while the kind-1 rows the 1-minute chart had
+/// written back covered nearly all of the same hours. A bucket resampled from fewer than a whole
+/// period of finer rows is taken as it is: it is still an exchange candle for the part it covers,
+/// which is more than the snapshot has, and the exchange's own coarse row overrides it the moment
+/// it lands in the cache.
+///
+/// The result is ascending by `t_open_ms` with one candle per bucket.
+pub fn merge_bases(tf_ms: i64, parts: &[BasePart<'_>], out: &mut Vec<ChartCandle>) {
+    out.clear();
+    let mut merged: std::collections::BTreeMap<i64, ChartCandle> =
+        std::collections::BTreeMap::new();
+    let mut scratch: Vec<ChartCandle> = Vec::new();
+    for part in parts {
+        if part.rows.is_empty() || part.tf_ms <= 0 || tf_ms < part.tf_ms || tf_ms % part.tf_ms != 0
+        {
+            continue;
+        }
+        resample(part.rows, tf_ms, &mut scratch);
+        for c in scratch.drain(..) {
+            merged.insert(c.t_open_ms as i64, c);
+        }
+    }
+    out.extend(merged.into_values());
+}
+
+/// Whether time-sorted `rows` aggregated at `tf_ms` leave a hole in `from_ms..to_ms`.
+///
+/// A hole is a missing bucket before the first row, between two consecutive rows, or after the
+/// last row — "missing" meaning more than one bucket short of the edge, so the partial bucket at
+/// either end is not one. The tail counts, unlike in [`compose_with_coarse`]: a native cache that
+/// ends where the previous session did is exactly the stretch the finer kinds may cover when
+/// another window has since fetched them. An empty set is one hole. This is the gate on reading
+/// the finer cached kinds: a native kind without holes has nothing for them to fill.
+pub fn has_holes(rows: &[ChartCandle], tf_ms: i64, from_ms: i64, to_ms: i64) -> bool {
+    let tf = tf_ms.max(1) as f64;
+    let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
+        return true;
+    };
+    if first.t_open_ms - from_ms as f64 > tf || to_ms as f64 - (last.t_open_ms + tf) > tf {
+        return true;
+    }
+    rows.windows(2)
+        .any(|w| w[1].t_open_ms - w[0].t_open_ms > tf)
+}
+
 /// Merged per-pane candle series combining base history with a local trade-derived tail.
 ///
 /// It lives in `ChartHistoryCursor`, rebuilds on a combo reset, and updates its live edge

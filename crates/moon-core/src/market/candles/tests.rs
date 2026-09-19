@@ -857,3 +857,110 @@ fn thin_ticks_keeps_only_real_ascending_points_and_copies_non_positive_buckets()
         "negative bucket widths also copy input unchanged"
     );
 }
+
+/// `market/candles.rs:merge_bases` — a holey native kind is filled from the finer cached kinds
+/// before the range-only snapshot gets to draw the bucket (#634: half the 5-minute candles of
+/// LSKUSDT drew as wickless bodies from the snapshot while kind-1 rows for the same hours sat in
+/// the cache unread). Priority is the part order: snapshot < kind 1 < kind 5 < native < deep.
+#[test]
+fn merge_bases_fills_native_holes_from_finer_kinds_over_the_snapshot() {
+    // Range-only snapshot rows for buckets 0 and 5: open == high, close == low, no wick.
+    let snap = [
+        candle(0.0, 12.0, 12.0, 8.0, 8.0, 100.0),
+        candle(5.0 * M, 13.0, 13.0, 9.0, 9.0, 100.0),
+    ];
+    // Native kind 5 covers only bucket 0.
+    let native = [candle(0.0, 10.0, 11.0, 9.5, 10.5, 50.0)];
+    // Kind-1 rows cover bucket 5 in full and bucket 10 for two minutes of five.
+    let fine = [
+        candle(5.0 * M, 10.0, 10.5, 9.9, 10.2, 1.0),
+        candle(6.0 * M, 10.2, 10.8, 10.1, 10.6, 1.0),
+        candle(7.0 * M, 10.6, 10.7, 10.0, 10.1, 1.0),
+        candle(8.0 * M, 10.1, 10.4, 9.8, 10.3, 1.0),
+        candle(9.0 * M, 10.3, 10.9, 10.2, 10.7, 1.0),
+        candle(10.0 * M, 10.7, 11.2, 10.6, 11.0, 1.0),
+        candle(11.0 * M, 11.0, 11.1, 10.4, 10.5, 1.0),
+    ];
+    let mut out = Vec::new();
+    merge_bases(
+        TF5,
+        &[
+            BasePart {
+                rows: &snap,
+                tf_ms: TF5,
+            },
+            BasePart {
+                rows: &fine,
+                tf_ms: 60_000,
+            },
+            BasePart {
+                rows: &native,
+                tf_ms: TF5,
+            },
+        ],
+        &mut out,
+    );
+    assert_eq!(out.len(), 3, "buckets 0, 5 and 10, got {out:?}");
+    assert_eq!(
+        out[0], native[0],
+        "the native row wins the bucket it covers"
+    );
+    assert_eq!(
+        out[1],
+        candle(5.0 * M, 10.0, 10.9, 9.8, 10.7, 5.0),
+        "a native hole is filled from the finer kind, not from the snapshot"
+    );
+    assert_eq!(
+        out[2],
+        candle(10.0 * M, 10.7, 11.2, 10.4, 10.5, 2.0),
+        "a partial period of finer rows still yields a bucket"
+    );
+
+    // Without the finer part the snapshot's wickless row is all bucket 5 has.
+    merge_bases(
+        TF5,
+        &[
+            BasePart {
+                rows: &snap,
+                tf_ms: TF5,
+            },
+            BasePart {
+                rows: &native,
+                tf_ms: TF5,
+            },
+        ],
+        &mut out,
+    );
+    assert_eq!(out[1], snap[1]);
+    // A part coarser than the target, or one that does not divide it, contributes nothing.
+    merge_bases(
+        60_000,
+        &[BasePart {
+            rows: &snap,
+            tf_ms: TF5,
+        }],
+        &mut out,
+    );
+    assert!(out.is_empty());
+}
+
+/// `market/candles.rs:has_holes` gates the finer-kind cache reads: a dense native set costs no
+/// extra read, a missing bucket anywhere in the window — prefix, gap or tail — does.
+#[test]
+fn has_holes_sees_the_prefix_the_gaps_and_the_tail() {
+    let row = |i: f64| candle(i * TF5 as f64, 1.0, 2.0, 0.5, 1.5, 1.0);
+    assert!(has_holes(&[], TF5, 0, 3 * TF5), "an empty set is one hole");
+    // Dense across the window: no hole.
+    let dense = [row(0.0), row(1.0), row(2.0)];
+    assert!(!has_holes(&dense, TF5, 0, 3 * TF5));
+    // The partial bucket at either edge is not a hole.
+    assert!(!has_holes(&dense, TF5, -(TF5 - 1), 3 * TF5));
+    assert!(!has_holes(&dense, TF5, 0, 4 * TF5));
+    // A gap between rows, or more than one bucket missing at either edge, is.
+    assert!(has_holes(&[row(0.0), row(2.0)], TF5, 0, 3 * TF5));
+    assert!(has_holes(&dense, TF5, -2 * TF5, 3 * TF5));
+    assert!(
+        has_holes(&dense, TF5, 0, 4 * TF5 + 1),
+        "a tail older than a bucket is a hole"
+    );
+}

@@ -955,10 +955,23 @@ pub struct ChartHistoryCursor {
     /// Resets are frequent during pan and zoom, so each reset must not query the database.
     cache_rows: Vec<ChartCandle>,
     cache_kind: Option<u32>,
-    /// Actual kind of the loaded rows: the panel's native kind or a fallback.
+    /// The native kind `cache_rows` and `cache_rows_finer` were READ at.
     ///
-    /// Fallback order is the recorder's 5-minute rows followed by 1-minute deep-history rows.
+    /// Set in the same pass as the rows, so it stays right when a later pass computes another
+    /// native kind while the retry gate keeps the read from running: the merge tags the rows with
+    /// this, not with the pass's own kind, or kind-5 rows would go into a 1-minute series as
+    /// 1-minute candles for the length of that gate.
     cache_rows_kind: u32,
+    /// The native kind's holes, filled from the cached kinds finer than it — kind 1 for a
+    /// 5-minute chart, kinds 1 and 5 for 30 minutes and up — already aggregated to the native
+    /// kind's timeframe (`cache_rows_kind`), coarser finer kind winning a bucket.
+    ///
+    /// Read in the same pass as `cache_rows` and over the same window, but only when `cache_rows`
+    /// leaves a hole in it; aggregated once here rather than at every series reset, which during
+    /// a pan would re-walk up to 30 days of 1-minute rows. At merge time these rank below the
+    /// native rows and above the range-only snapshot, instead of the old fallback that consulted
+    /// the finer kinds only when the native kind had no rows at all (#634).
+    cache_rows_finer: Vec<ChartCandle>,
     cache_from_ms: i64,
     /// Cache-only coarser layers used to extend the historical prefix as far back as possible.
     ///
