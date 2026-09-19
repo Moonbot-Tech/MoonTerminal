@@ -9,14 +9,17 @@
 //! per-caller hope. `moon-core` has no async runtime, so this is a plain blocking thread and an
 //! `mpsc` pair, exactly like the kline cache and the report valuation worker beside it.
 //!
-//! # Two caches, and both are load-bearing
+//! # Three caches, and each is load-bearing
 //!
 //! Bars go into the SHARED `klines.sqlite` under the real exchange key, because a one-minute bar
 //! fetched here is indistinguishable from one the recorder wrote and the rest of the application
 //! benefits from it. Whole OUTCOMES additionally go into a small in-memory ring owned by this
-//! worker, keyed by the exact question asked. That second cache is what actually satisfies "the
-//! second open of the same trade costs nothing": the SQLite cache cannot hold ticks at all, and
-//! nothing else in the process remembers that a given window was already answered.
+//! worker, keyed by the exact question asked. That second cache is what satisfies "the second
+//! open of the SAME trade costs nothing": the SQLite cache cannot hold ticks at all, and nothing
+//! else in the process remembers that a given window was already answered. The third is the tick
+//! TILE store ([`super::tick_tiles`]), keyed by venue and market and answering by COVERAGE the
+//! way the bars are: it is what makes a NEIGHBOURING trade on the same market cost only the
+//! stretch of its focus no earlier window fetched — and nothing at all when there is none.
 //!
 //! # The degrade ladder
 //!
@@ -38,6 +41,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::gate::ReplayGate;
+use super::tick_tiles::{TickTileStore, TileKey, residual_plan};
 use super::venue_caps::{TradeRoute, bybit_category, kline_route, trade_route};
 use super::{
     ReplayWindow, TickPlan, TickStatus, TradeReplayEmpty, TradeReplayFailure, TradeReplayOutcome,
@@ -411,6 +415,7 @@ fn run(rx: &Receiver<TradeReplayRequest>) {
     let agent = rest::agent();
     let gate = ReplayGate::new();
     let cache: Mutex<VecDeque<(OutcomeKey, Remembered)>> = Mutex::new(VecDeque::new());
+    let tiles: Mutex<TickTileStore> = Mutex::new(TickTileStore::default());
     let mut queue: VecDeque<Job> = VecDeque::new();
     let mut native_waits: Vec<(TradeReplayRequest, NativeWait)> = Vec::new();
     loop {
@@ -490,8 +495,8 @@ fn run(rx: &Receiver<TradeReplayRequest>) {
                 if request.cancel.load(Ordering::Relaxed) {
                     continue;
                 }
-                match serve_ticks(&agent, &gate, &request, &stage) {
-                    Ok((series, venue_refused)) => {
+                match serve_ticks(&agent, &gate, &request, &stage, &tiles) {
+                    Ok((series, retry_on_reopen)) => {
                         let series = retain_baseline(series, stage.baseline.as_ref());
                         // A PARTIAL harvest is still a COMPLETE run of the stage: the walk is
                         // done deciding what it can serve, so a reopen must not re-ask for ticks
@@ -501,12 +506,14 @@ fn run(rx: &Receiver<TradeReplayRequest>) {
                         // removes), but calling that answer SETTLED is not, because the venue
                         // called its own refusal transient. An exact-key reopen must retry it
                         // rather than pin the same partial answer until unrelated cache eviction.
+                        // The same holds when the walk was abandoned and the tile store served
+                        // the part of the focus it held: what it did not hold is still owed.
                         remember_store(
                             &cache,
                             stage.key,
                             Remembered::Ready {
                                 series: series.clone(),
-                                ticks_settled: !venue_refused,
+                                ticks_settled: !retry_on_reopen,
                             },
                         );
                         // Normal, not an error, for the same reason as the candle send above.
@@ -1113,6 +1120,12 @@ pub(crate) fn inside_retention(route: TradeRoute, window: ReplayWindow, now_ms: 
 }
 
 /// Run one queued tick stage to completion.
+///
+/// The tile store answers first: the stage's plan is reduced to what no earlier window already
+/// fetched ([`residual_plan`]), and only that remainder is walked — a window whose focus the
+/// store holds whole sends nothing, claims no permit and paces nothing. Whatever the walk brings
+/// back is filed into the store before the series is composed, so the composition is ONE path,
+/// always from the tiles, whether the prints came from this walk, from an earlier one, or both.
 /// Trade-only tiles use a bounded extended allowance before optional focus margins are fetched.
 ///
 /// Args:
@@ -1120,11 +1133,14 @@ pub(crate) fn inside_retention(route: TradeRoute, window: ReplayWindow, now_ms: 
 ///     gate: Per-host pacing.
 ///     request: The original request this stage upgrades.
 ///     stage: Which route, cache key and bar layer this stage answers.
+///     tiles: The worker's tile store.
 ///
 /// Returns:
-///     `Ok((series, venue_refused))` with the tick series to send as the SECOND outcome —
-///     `venue_refused` is [`TickHarvest::venue_refused`], carried out here so the caller can
-///     decide whether this harvest is safe to remember settled (see [`run`]'s `Job::Ticks` arm).
+///     `Ok((series, retry_on_reopen))` with the tick series to send as the SECOND outcome —
+///     `retry_on_reopen` is carried out here so the caller can decide whether this answer is safe
+///     to remember settled (see [`run`]'s `Job::Ticks` arm): it is set when the venue itself
+///     refused mid-walk ([`TickHarvest::venue_refused`]), and when the walk was abandoned but the
+///     store still had part of the focus to serve — the missing part is still owed.
 ///     `Err(Some(status))` when the stage ended for a reason the window must print instead — the
 ///     caller composes that second outcome from [`TickStage::candles`] carrying `status`.
 ///     `Err(None)` only for a cancelled window, where the requester is already gone and nothing
@@ -1134,8 +1150,15 @@ fn serve_ticks(
     gate: &ReplayGate,
     request: &TradeReplayRequest,
     stage: &TickStage,
+    tiles: &Mutex<TickTileStore>,
 ) -> Result<(TradeReplaySeries, bool), Option<TickStatus>> {
     // The archive may have arrived while other candle jobs had priority in the worker queue.
+    //
+    // Core ticks are NOT filed into the tile store, on purpose: `read_core` values them as the
+    // live band does (`TickValue::Base`, whatever the market's contract terms), while a tile is
+    // valued at serve time through the requester's own `tick_value` — filing the two under one
+    // key would value a core print through a contract multiplier it never had. A source-tagged
+    // span is the shape that lets them share a store, and that is the persisted store's job.
     let baseline_coverage = stage.baseline.as_ref().and_then(|series| series.covered);
     if let Some(mut series) =
         read_core(request).filter(|series| preserves_coverage(series.covered, baseline_coverage))
@@ -1155,159 +1178,256 @@ fn serve_ticks(
     };
     let trade_deadline = deadline + (TRADE_DEADLINE - JOB_DEADLINE);
     let plan = tick_plan(request.window, route, earliest_ms);
-    if plan.slices.is_empty() {
+    let Some(&anchor) = plan.slices.first() else {
         // The FOCUS itself — the trade, not its optional context — lies entirely before
         // `earliest_ms`: nothing worth fetching remains, so this is reported as retention rather
         // than as an empty venue answer.
         return Err(Some(TickStatus::OutOfRetention {
             retention_ms: route.retention_ms().unwrap_or(0),
         }));
-    }
-    let mut last_progress = None;
-    let published_coverage = Cell::new(baseline_coverage);
-    let mut publish_progress = |ticks: &[Tick], covered: (i64, i64)| {
-        let now = Instant::now();
-        if !preserves_coverage(Some(covered), published_coverage.get())
-            || request.cancel.load(Ordering::Relaxed)
-            || last_progress
-                .is_some_and(|last| now.duration_since(last) < Duration::from_millis(500))
-        {
-            return;
-        }
-        let mut points: Vec<_> = ticks
-            .iter()
-            .copied()
-            .filter(|tick| tick.time_ms as i64 >= covered.0 && tick.time_ms as i64 <= covered.1)
-            .collect();
-        if points.is_empty() {
-            return;
-        }
-        points.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
-        let side_slots = crate::market::source::side_slots_of_ticks(&points, request.tick_value);
-        let (points, bucket_ms) = fit_ticks(points, TICK_BUDGET);
-        let mut series = compose_ticks(
-            request,
-            request.address.venue,
-            points,
-            bucket_ms,
-            side_slots,
-            true,
-            covered,
-            stage.candles.clone(),
-        );
-        series.tick_status = TickStatus::Streaming;
-        if request
-            .reply
-            .send(TradeReplayOutcome::Ready(series))
-            .is_ok()
-        {
-            last_progress = Some(now);
-            published_coverage.set(Some(covered));
-        }
     };
-    let mut observer = GateObserver {
-        gate,
-        host: route.host(),
-        progress: &mut publish_progress,
-    };
-    let upgrade = CoreUpgradeProbe::new(Instant::now());
-    let verdict = paginate_ticks(
-        route,
-        &plan,
-        TICK_BUDGET,
-        TICK_PAGE_BUDGET,
-        || {
-            upgrade.stop(
-                request.cancel.load(Ordering::Relaxed),
-                Instant::now(),
-                published_coverage.get(),
-                || read_core(request),
-            )
-        },
-        |trade| Instant::now() >= if trade { trade_deadline } else { deadline },
-        &mut observer,
-        |from_ms, to_ms, cursor| {
-            rest::fetch_trades(agent, route, &request.market, from_ms, to_ms, cursor)
-        },
+    let key: TileKey = (request.address.venue, request.market.clone());
+    let focus = request.window.focus();
+    let residual = residual_plan(&plan, &lock_tiles(tiles), &key);
+    log::info!(
+        "[x] trade-replay tick stage {}: {} of {} slices held, {} to fetch",
+        request.market,
+        plan.slices.len().saturating_sub(residual.slices.len()),
+        plan.slices.len(),
+        residual.slices.len()
     );
-    if let Some(mut series) = upgrade.ready.into_inner() {
-        // The paginator stopped on our replacement, not a host refusal. Its paid-for rows are
-        // superseded by the core span, and this attempt must not leave the exchange in backoff.
-        gate.clear(route.host());
-        if request.cancel.load(Ordering::Relaxed) {
-            return Err(None);
-        }
-        series.candles = stage.candles.clone();
-        return Ok((series, false));
-    }
-    let harvest = match verdict {
-        TickVerdict::Ready(harvest) => harvest,
-        TickVerdict::Abandoned(reason) => {
-            // RELEASE THE PERMIT THIS STAGE TOOK, unless the venue is the reason we stopped.
-            //
-            // `TickObserver::claim` records a real attempt on the host's shared claim map, and
-            // only an explicit `clear` erases it. So an abandonment that is OUR OWN doing — the
-            // user closed the window, the job deadline expired, either budget was crossed, the
-            // market was simply quiet, or the venue answered that it does not list this symbol —
-            // would otherwise leave that attempt standing and put the host into 30-600 s of
-            // backoff. The next request to the SAME host is then refused, and because one host
-            // serves several venues that request belongs to an unrelated trade, and is usually a
-            // CANDLE stage that would have worked. The candle path one function up makes exactly
-            // this distinction already: it clears unconditionally after its own loop, its own
-            // cancellation break included, and clears on `UnknownSymbol` for the stated reason
-            // that "one bad market would throttle every other market on that host".
-            //
-            // TWO reasons keep the record, and both are the venue's own word rather than ours:
-            // `Transient` is a refusal or failure it just gave us, and `RateLimited` means our
-            // claim was REFUSED — we recorded nothing, so clearing would erase somebody else's
-            // legitimate backoff.
-            match reason {
-                TickAbandon::Transient | TickAbandon::RateLimited => {}
-                TickAbandon::Cancelled
-                | TickAbandon::Deadline
-                | TickAbandon::Empty
-                | TickAbandon::UnknownSymbol
-                | TickAbandon::OverPageBudget
-                | TickAbandon::OverTickBudget => gate.clear(route.host()),
+    // Whether a reopen must re-walk: the venue refused mid-walk, or the walk was abandoned and
+    // what follows is served from the store alone.
+    let mut retry_on_reopen = false;
+    // The reason the walk stopped without a harvest, when it did — what to print if the store
+    // cannot stand in for it either.
+    let mut abandoned: Option<TickAbandon> = None;
+    let mut complete = true;
+    // What this walk brought back, kept OUT of the store until the answer is composed: the span
+    // it is exhaustive over — the seed the served run grows from — and its prints, clipped to it.
+    // An empty walk over a completed residual has a span and no prints.
+    let mut harvest_span: Option<(i64, i64)> = None;
+    let mut harvest_ticks: Vec<Tick> = Vec::new();
+    if !residual.slices.is_empty() {
+        let mut last_progress = None;
+        let published_coverage = Cell::new(baseline_coverage);
+        let progress_key = key.clone();
+        let mut publish_progress = |ticks: &[Tick], covered: (i64, i64)| {
+            let now = Instant::now();
+            if request.cancel.load(Ordering::Relaxed)
+                || last_progress
+                    .is_some_and(|last| now.duration_since(last) < Duration::from_millis(500))
+            {
+                return;
             }
-            log::info!(
-                "[x] trade-replay tick stage abandoned on {}: {reason:?}",
-                route.host()
+            // The walk's own span, widened over the tiles that abut it: the second window's
+            // stream shows what the first already fetched from the first snapshot on, not only
+            // the remainder this walk is filling in.
+            let (run, mut points) = {
+                let store = lock_tiles(tiles);
+                let run = clip_span(store.extend_over(&progress_key, covered), focus);
+                let held = store.read(&progress_key, run.0, run.1);
+                (run, held)
+            };
+            if !preserves_coverage(Some(run), published_coverage.get()) {
+                return;
+            }
+            points.extend(ticks.iter().copied().filter(|tick| {
+                let time_ms = tick.time_ms as i64;
+                time_ms >= covered.0 && time_ms <= covered.1 && time_ms >= run.0 && time_ms <= run.1
+            }));
+            if points.is_empty() {
+                return;
+            }
+            points.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+            let side_slots =
+                crate::market::source::side_slots_of_ticks(&points, request.tick_value);
+            let (points, bucket_ms) = fit_ticks(points, TICK_BUDGET);
+            let mut series = compose_ticks(
+                request,
+                request.address.venue,
+                points,
+                bucket_ms,
+                side_slots,
+                true,
+                run,
+                stage.candles.clone(),
             );
-            return Err(match reason {
-                TickAbandon::Cancelled => None,
-                TickAbandon::Empty => Some(TickStatus::NoTrades),
-                _ => Some(TickStatus::Failed),
-            });
+            series.tick_status = TickStatus::Streaming;
+            if request
+                .reply
+                .send(TradeReplayOutcome::Ready(series))
+                .is_ok()
+            {
+                last_progress = Some(now);
+                published_coverage.set(Some(run));
+            }
+        };
+        let mut observer = GateObserver {
+            gate,
+            host: route.host(),
+            progress: &mut publish_progress,
+        };
+        let upgrade = CoreUpgradeProbe::new(Instant::now());
+        let verdict = paginate_ticks(
+            route,
+            &residual,
+            TICK_BUDGET,
+            TICK_PAGE_BUDGET,
+            || {
+                upgrade.stop(
+                    request.cancel.load(Ordering::Relaxed),
+                    Instant::now(),
+                    published_coverage.get(),
+                    || read_core(request),
+                )
+            },
+            |trade| Instant::now() >= if trade { trade_deadline } else { deadline },
+            &mut observer,
+            |from_ms, to_ms, cursor| {
+                rest::fetch_trades(agent, route, &request.market, from_ms, to_ms, cursor)
+            },
+        );
+        if let Some(mut series) = upgrade.ready.into_inner() {
+            // The paginator stopped on our replacement, not a host refusal. Its paid-for rows are
+            // superseded by the core span, and this attempt must not leave the exchange in backoff.
+            gate.clear(route.host());
+            if request.cancel.load(Ordering::Relaxed) {
+                return Err(None);
+            }
+            series.candles = stage.candles.clone();
+            return Ok((series, false));
         }
-    };
-    let TickHarvest {
-        mut ticks,
-        covered,
-        complete,
-        venue_refused,
-    } = harvest;
-    // The venue answered without refusing anywhere along the walk, so its refusal history is
-    // stale — exactly the candle stage's own `gate.clear` above. A refusal it gave us mid-walk
-    // (`venue_refused`) must stand, or the next request to this host sends blind into a burst it
-    // just declined.
-    if !venue_refused {
-        gate.clear(route.host());
+        match verdict {
+            TickVerdict::Ready(harvest) => {
+                let TickHarvest {
+                    mut ticks,
+                    covered,
+                    complete: walked_whole,
+                    venue_refused,
+                } = harvest;
+                // The venue answered without refusing anywhere along the walk, so its refusal
+                // history is stale — exactly the candle stage's own `gate.clear` above. A refusal
+                // it gave us mid-walk (`venue_refused`) must stand, or the next request to this
+                // host sends blind into a burst it just declined.
+                if !venue_refused {
+                    gate.clear(route.host());
+                }
+                // Clipped to what the walk actually finished (`covered`), not to the request
+                // window: a walk cut short still holds a complete answer for the slices it
+                // actually walked, and clipping to the wider window would let a stray
+                // page-overshoot outside `covered` back in. The hull `paginate_ticks` reports is
+                // exhaustive over its own completed slices and over what the store held between
+                // them (see `residual_plan` for why that order is load-bearing).
+                ticks.retain(|t| {
+                    t.time_ms.is_finite()
+                        && (t.time_ms as i64) >= covered.0
+                        && (t.time_ms as i64) <= covered.1
+                });
+                harvest_span = Some(covered);
+                harvest_ticks = ticks;
+                retry_on_reopen = venue_refused;
+                complete = walked_whole;
+            }
+            TickVerdict::Abandoned(reason) => {
+                // RELEASE THE PERMIT THIS STAGE TOOK, unless the venue is the reason we stopped.
+                //
+                // `TickObserver::claim` records a real attempt on the host's shared claim map,
+                // and only an explicit `clear` erases it. So an abandonment that is OUR OWN
+                // doing — the user closed the window, the job deadline expired, either budget
+                // was crossed, the market was simply quiet, or the venue answered that it does
+                // not list this symbol — would otherwise leave that attempt standing and put the
+                // host into 30-600 s of backoff. The next request to the SAME host is then
+                // refused, and because one host serves several venues that request belongs to
+                // an unrelated trade, and is usually a CANDLE stage that would have worked. The
+                // candle path one function up makes exactly this distinction already: it clears
+                // unconditionally after its own loop, its own cancellation break included, and
+                // clears on `UnknownSymbol` for the stated reason that "one bad market would
+                // throttle every other market on that host".
+                //
+                // TWO reasons keep the record, and both are the venue's own word rather than
+                // ours: `Transient` is a refusal or failure it just gave us, and `RateLimited`
+                // means our claim was REFUSED — we recorded nothing, so clearing would erase
+                // somebody else's legitimate backoff.
+                match reason {
+                    TickAbandon::Transient | TickAbandon::RateLimited => {}
+                    TickAbandon::Cancelled
+                    | TickAbandon::Deadline
+                    | TickAbandon::Empty
+                    | TickAbandon::UnknownSymbol
+                    | TickAbandon::OverPageBudget
+                    | TickAbandon::OverTickBudget => gate.clear(route.host()),
+                }
+                log::info!(
+                    "[x] trade-replay tick stage abandoned on {}: {reason:?}",
+                    route.host()
+                );
+                match reason {
+                    TickAbandon::Cancelled => return Err(None),
+                    // `Empty` is reached only when EVERY slice of the residual was walked to
+                    // completion and none held a print: an authoritative answer for each of
+                    // them, filed below as empty tiles so a later window inherits it instead
+                    // of asking the venue again. ONE span over the residual's hull, not one
+                    // insert per slice: the plan's hull is contiguous, so everything inside it
+                    // is either residual or already held, and `insert` files only the gaps —
+                    // under one insert, which eviction never turns on.
+                    TickAbandon::Empty => {
+                        harvest_span = residual
+                            .slices
+                            .iter()
+                            .copied()
+                            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)));
+                    }
+                    _ => {
+                        abandoned = Some(reason);
+                        retry_on_reopen = true;
+                        complete = false;
+                    }
+                }
+            }
+        }
     }
-    // Stably sorted ascending, BEFORE anything else: per-page sorting is NOT enough for the two
-    // BACKWARD-paginating venues (Bitget, OKX), whose concatenated pages walk backwards across
-    // every page boundary.
-    ticks.sort_by(|a, b| {
-        a.time_ms
-            .partial_cmp(&b.time_ms)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    // Clipped to what the walk actually finished (`covered`), not to the request window: a walk
-    // cut short still holds a complete answer for the slices it actually walked, and clipping to
-    // the wider window would let a stray page-overshoot outside `covered` back in.
-    ticks.retain(|t| {
-        t.time_ms.is_finite() && (t.time_ms as i64) >= covered.0 && (t.time_ms as i64) <= covered.1
-    });
+    // Composed from what THIS round holds — the store's tiles plus this walk's own harvest —
+    // and composed BEFORE the harvest is filed: filing evicts, and an eviction, whichever key it
+    // lands on, must never reach into the answer being composed. The run is the walk's own span
+    // grown over the tiles abutting it, or, with no walk, the covered run around the plan's first
+    // slice — the trade's own edge — and either is clipped to the focus, so a neighbouring
+    // window's wider harvest never widens this window's points beyond what its own plan asked.
+    let (covered, mut ticks) = {
+        let store = lock_tiles(tiles);
+        let run = match harvest_span {
+            Some(span) => Some(store.extend_over(&key, span)),
+            None => store.coverage_run(&key, anchor),
+        }
+        .map(|run| clip_span(run, focus))
+        .filter(|run| run.0 <= run.1);
+        let Some(run) = run else {
+            // Nothing held around the trade and nothing fetched: only an abandoned walk gets
+            // here, and its reason is what the window prints.
+            return Err(Some(TickStatus::Failed));
+        };
+        (run, store.read(&key, run.0, run.1))
+    };
+    // The store held nothing inside the harvest's own stretches — that is what made them
+    // residual — so the two sets are disjoint and their union double-counts no print.
+    ticks.extend(harvest_ticks.iter().copied().filter(|tick| {
+        let time_ms = tick.time_ms as i64;
+        time_ms >= covered.0 && time_ms <= covered.1
+    }));
+    ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+    if let Some((from_ms, to_ms)) = harvest_span {
+        lock_tiles(tiles).insert(key, from_ms, to_ms, harvest_ticks);
+    }
+    if ticks.is_empty() {
+        // The covered run holds no print. With a walk abandoned this round that is not an
+        // answer — the store's part is empty and the venue's part never arrived, so a retry is
+        // honest. Otherwise it is authoritative: every stretch of the run was asked and answered
+        // empty, and no retry can change it.
+        return Err(Some(match abandoned {
+            Some(_) => TickStatus::Failed,
+            None => TickStatus::NoTrades,
+        }));
+    }
     // `partial` must reflect what `covered` actually spans, not merely whether the walk finished.
     // `tick_plan`'s own `earliest_ms` clip can make the PLAN narrower than `request.window` before
     // the walk even starts, so a retention-clipped plan that completes still leaves the served
@@ -1316,13 +1436,6 @@ fn serve_ticks(
         !complete || covered.0 > request.window.from_ms || covered.1 < request.window.to_ms;
     let side_slots = crate::market::source::side_slots_of_ticks(&ticks, request.tick_value);
     let (ticks, bucket_ms) = fit_ticks(ticks, TICK_BUDGET);
-    // An empty harvest after the coverage clip is not a success: some slice genuinely produced
-    // rows (`paginate_ticks` already refuses an empty one, above), so a caption of "Served" with
-    // zero points would be the lying-chart failure this module exists to remove. `Failed`, not
-    // `NoTrades` — a retry is honest here, while `NoTrades` claims an authoritative empty.
-    if ticks.is_empty() {
-        return Err(Some(TickStatus::Failed));
-    }
     Ok((
         compose_ticks(
             request,
@@ -1334,8 +1447,22 @@ fn serve_ticks(
             covered,
             stage.candles.clone(),
         ),
-        venue_refused,
+        retry_on_reopen,
     ))
+}
+
+/// Intersect `span` with `bounds`; an empty intersection comes back inverted, for the caller's
+/// own `from <= to` check.
+fn clip_span(span: (i64, i64), bounds: (i64, i64)) -> (i64, i64) {
+    (span.0.max(bounds.0), span.1.min(bounds.1))
+}
+
+/// The worker's tile store, poison-tolerant like the outcome ring: nothing inside a tile can be
+/// half-written by a panic, so a poisoned lock still holds a consistent store.
+fn lock_tiles(tiles: &Mutex<TickTileStore>) -> std::sync::MutexGuard<'_, TickTileStore> {
+    tiles
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Walk every tile of one tick stage's [`TickPlan`], paginating each with the venue's own cursor,
