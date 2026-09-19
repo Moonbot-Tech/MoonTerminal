@@ -45,12 +45,39 @@ pub const DEFAULT_IGNORE_FIELDS: &[&str] = &[
 #[serde(default)]
 pub struct StorageCfg {
     pub strategies: StrategiesStoreCfg,
+    pub trade_replay: TradeReplayStoreCfg,
 }
 
 impl Default for StorageCfg {
     fn default() -> Self {
         Self {
             strategies: StrategiesStoreCfg::default(),
+            trade_replay: TradeReplayStoreCfg::default(),
+        }
+    }
+}
+
+/// The `[trade_replay]` section for the persisted trade prints (`trades.sqlite`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TradeReplayStoreCfg {
+    /// Whether the prints a trade window fetched are kept on disk for the next window and the
+    /// next launch. Off, they live in memory for the session only and the file is not touched.
+    pub persist_trades: bool,
+    /// Ceiling on the packed prints the file may hold, in megabytes; past it the oldest spans
+    /// go first. `0` keeps everything the retention window admits.
+    pub max_mb: u32,
+}
+
+/// Default ceiling on `trades.sqlite`, megabytes: a day of busy replays is tens of megabytes,
+/// so this is months of them for the reader who never touches the setting.
+pub const DEFAULT_TRADES_MAX_MB: u32 = 256;
+
+impl Default for TradeReplayStoreCfg {
+    fn default() -> Self {
+        Self {
+            persist_trades: true,
+            max_mb: DEFAULT_TRADES_MAX_MB,
         }
     }
 }

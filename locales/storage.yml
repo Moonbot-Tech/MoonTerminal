@@ -1,4 +1,5 @@
-# Storage tab of the Settings window: local databases for reports, strategies, and the kline cache.
+# Storage tab of the Settings window: local databases for reports, strategies, the kline cache
+# and the trade prints of replays.
 # rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
 _version: 2
 
@@ -90,6 +91,35 @@ storage.klines_hint:
   ru: "Восстановимый кэш истории свечей: можно удалить файл при закрытом терминале."
   en: "Recoverable kline history cache: the file can be deleted while the terminal is closed."
   es: "Caché recuperable del historial de velas: el archivo puede borrarse con el terminal cerrado."
+
+storage.trades_title:
+  ru: "Трейды сделок — trades.sqlite"
+  en: "Trade prints — trades.sqlite"
+  es: "Operaciones de las posiciones — trades.sqlite"
+storage.trades_enabled:
+  ru: "Сохранять трейды сделок"
+  en: "Keep trade prints"
+  es: "Guardar las operaciones"
+storage.trades_enabled_hint:
+  ru: "Трейды биржи, скачанные окном сделки, остаются на диске: соседняя сделка и следующий запуск берут их отсюда, а не с биржи. Применяется сразу. Выключено — держатся в памяти до закрытия терминала."
+  en: "Prints a trade window fetched stay on disk: the neighbouring trade and the next launch take them from here, not from the venue. Applies immediately. Off, they are kept in memory until the terminal closes."
+  es: "Las operaciones descargadas por una ventana de posición quedan en disco: la posición vecina y el próximo arranque las toman de aquí, no de la bolsa. Se aplica al instante. Apagado, se guardan en memoria hasta cerrar el terminal."
+storage.trades_max_mb:
+  ru: "Лимит файла"
+  en: "File limit"
+  es: "Límite del archivo"
+storage.trades_mb:
+  ru: "%{mb} МБ"
+  en: "%{mb} MB"
+  es: "%{mb} MB"
+storage.trades_max_mb_hint:
+  ru: "Сверх лимита удаляются самые старые трейды; 0 — хранить всё, что попадает в 14 дней. Применяется при следующей записи."
+  en: "Past the limit the oldest prints go first; 0 keeps everything within the 14 days. Applies on the next write."
+  es: "Superado el límite se borran primero las operaciones más antiguas; 0 conserva todo lo que cabe en 14 días. Se aplica en la próxima escritura."
+storage.trades_hint:
+  ru: "Восстановимый кэш: хранится 14 дней; файл можно удалить при закрытом терминале."
+  en: "Recoverable cache: kept for 14 days; the file can be deleted while the terminal is closed."
+  es: "Caché recuperable: se conserva 14 días; el archivo puede borrarse con el terminal cerrado."
 
 storage.compact:
   ru: "Сжать"

@@ -57,7 +57,8 @@ mod track;
 pub use liq::LiqSpanReadout;
 pub use profile::{PriceProfileRow, ProfileWindow, synthetic_profile};
 pub use series::{
-    SIDE_BUCKET_MS, SideSlot, SideVolumeBucket, replay_sides, side_slots_of_ticks, synthetic_sides,
+    SIDE_BUCKET_MS, SideSlot, SideVolumeBucket, merge_side_slots, replay_sides,
+    side_slots_of_ticks, synthetic_sides,
 };
 
 use track::{MarketTrack, TRACK_SPAN_MS};

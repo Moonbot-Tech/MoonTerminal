@@ -708,6 +708,14 @@ pub fn klines_db_path() -> PathBuf {
     db_dir().join("klines.sqlite")
 }
 
+/// SQLite database of persisted trade prints for replays (see `market::trade_replay::trade_cache`).
+///
+/// Its own file rather than a table beside the bars: prints are a different volume, keep their
+/// own retention, and are the one cache the reader may switch off or delete on their own.
+pub fn trades_db_path() -> PathBuf {
+    db_dir().join("trades.sqlite")
+}
+
 /// SQLite database for historical quote-to-USDT rates and prepared report valuations.
 ///
 /// The file is deliberately separate from `reports.sqlite`: reports are a recoverable replica,

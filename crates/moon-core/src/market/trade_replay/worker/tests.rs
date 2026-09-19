@@ -255,7 +255,7 @@ fn core_replay_rechecks_after_candles_and_keeps_context() {
     let route = trade_route(bars.venue).expect("spot trade route");
     let stage = TickStage {
         baseline: None,
-        route,
+        route: Some(route),
         key: OutcomeKey {
             venue: bars.venue,
             host: route.host(),
@@ -589,5 +589,150 @@ fn each_fetched_page_is_clipped_to_its_own_slice_before_collection() {
             .collect::<Vec<_>>(),
         vec![100, 199, 200, 299],
         "only rows inside their own requested slice may enter the aggregate harvest"
+    );
+}
+
+/// A request on Binance spot — a route with no retention, so the window's epoch-near stamps are
+/// inside it — over a one-minute trade at the middle of a one-hour window, whose focus (the
+/// trade plus the five-minute margins) is `1_500_000..=2_160_000`.
+fn tile_request(reply: Sender<TradeReplayOutcome>) -> TradeReplayRequest {
+    let history =
+        crate::market::source::MarketDataSource::new(crate::market::MarketStore::shared(0.0));
+    let venue = crate::venue::venue(3).expect("Binance spot");
+    TradeReplayRequest {
+        address: crate::market::source::ReplayAddress {
+            history,
+            venue,
+            exchange_key: "3:00000000".into(),
+            cache: None,
+        },
+        market: "BTCUSDT".into(),
+        window: ReplayWindow {
+            from_ms: 0,
+            to_ms: 3_600_000,
+            open_ms: 1_800_000,
+            close_ms: 1_860_000,
+            over_budget: false,
+        },
+        identity: 7,
+        tick_value: super::super::venue_caps::TickValue::Base,
+        ticks: true,
+        cancel: Arc::new(AtomicBool::new(false)),
+        reply,
+    }
+}
+
+fn tile_stage(request: &TradeReplayRequest) -> TickStage {
+    let route = trade_route(request.address.venue).expect("Binance spot trades route");
+    TickStage {
+        baseline: None,
+        route: Some(route),
+        key: OutcomeKey {
+            venue: request.address.venue,
+            host: route.host(),
+            market: request.market.clone(),
+            from_ms: request.window.from_ms,
+            to_ms: request.window.to_ms,
+        },
+        candles: Vec::new(),
+    }
+}
+
+/// A focus the tile store already holds whole is served from it — the real `serve_ticks`, with
+/// no page fetched: the residual is empty, so the paginator is never entered.
+#[test]
+fn a_focus_held_by_the_tiles_is_served_without_a_walk() {
+    let (reply, _rx) = mpsc::channel();
+    let request = tile_request(reply);
+    let stage = tile_stage(&request);
+    let key = (request.address.exchange_key.clone(), request.market.clone());
+    let tiles = Mutex::new(TickTileStore::default());
+    // A wider neighbouring window's harvest: covers the focus and more.
+    tiles.lock().unwrap().insert(
+        key,
+        1_400_000,
+        2_200_000,
+        vec![
+            tick(1_450_000, 9.0),
+            tick(1_700_000, 10.0),
+            tick(1_830_000, 11.0),
+            tick(2_190_000, 12.0),
+        ],
+        TileSource::Venue,
+    );
+    let (series, retry) = serve_ticks(&rest::agent(), &ReplayGate::new(), &request, &stage, &tiles)
+        .expect("served from the tiles");
+    assert!(!retry);
+    assert_eq!(series.source, TradeReplaySource::Ticks);
+    assert_eq!(series.tick_status, TickStatus::Served);
+    assert_eq!(
+        series.covered,
+        Some((1_500_000, 2_160_000)),
+        "clipped to the focus"
+    );
+    assert_eq!(
+        series
+            .ticks
+            .iter()
+            .map(|t| t.time_ms as i64)
+            .collect::<Vec<_>>(),
+        vec![1_700_000, 1_830_000]
+    );
+    assert_eq!(
+        series.side_slots.len(),
+        2,
+        "the band is summed from the served prints"
+    );
+}
+
+/// A venue with no public trade route is served from a captured core tile — and prints
+/// `NoRoute`, as before, when the tiles hold nothing for the focus.
+#[test]
+fn a_route_less_stage_serves_captured_tiles_or_prints_no_route() {
+    let (reply, _rx) = mpsc::channel();
+    let request = tile_request(reply);
+    let mut stage = tile_stage(&request);
+    stage.route = None;
+    let key = (request.address.exchange_key.clone(), request.market.clone());
+    let tiles = Mutex::new(TickTileStore::default());
+    let outcome = serve_ticks(&rest::agent(), &ReplayGate::new(), &request, &stage, &tiles);
+    assert!(
+        matches!(outcome, Err(Some(TickStatus::NoRoute))),
+        "{outcome:?}"
+    );
+    tiles.lock().unwrap().insert(
+        key,
+        1_700_000,
+        1_900_000,
+        vec![tick(1_750_000, 9.0), tick(1_850_000, 10.0)],
+        TileSource::Core,
+    );
+    let (series, retry) = serve_ticks(&rest::agent(), &ReplayGate::new(), &request, &stage, &tiles)
+        .expect("served from the captured tile");
+    assert!(
+        retry,
+        "a later capture may widen the tiles, so a reopen re-decides"
+    );
+    assert_eq!(series.covered, Some((1_700_000, 1_900_000)));
+    assert_eq!(series.ticks.len(), 2);
+    assert!(series.partial);
+}
+
+/// An empty run the tiles cover whole is the authoritative "no trades", not a retryable failure.
+#[test]
+fn an_empty_covered_focus_is_no_trades() {
+    let (reply, _rx) = mpsc::channel();
+    let request = tile_request(reply);
+    let stage = tile_stage(&request);
+    let key = (request.address.exchange_key.clone(), request.market.clone());
+    let tiles = Mutex::new(TickTileStore::default());
+    tiles
+        .lock()
+        .unwrap()
+        .insert(key, 1_400_000, 2_200_000, Vec::new(), TileSource::Venue);
+    let outcome = serve_ticks(&rest::agent(), &ReplayGate::new(), &request, &stage, &tiles);
+    assert!(
+        matches!(outcome, Err(Some(TickStatus::NoTrades))),
+        "{outcome:?}"
     );
 }
