@@ -30,17 +30,20 @@ use crate::Backend;
 
 /// Convert the chart's measured caption size and line box to MoonUI tier-segment inputs.
 ///
-/// Tier segments use only UI zoom, so the legacy font delta must never enter the calculation.
-/// The line box matches the caption layout's measured size plus four logical pixels.
+/// The caption is drawn by the chart at the monitor's density — its size is in the chart's own
+/// logical pixels — while the segment is a GPUI element scaled by the window content zoom. So the
+/// segment is handed the size divided by that zoom and lands on the same device pixels. The
+/// legacy font delta must never enter the calculation. The line box matches the caption layout's
+/// measured size plus four logical pixels.
 ///
 /// Args:
-///     cx: Application context providing the active UI zoom.
-///     size: Caption font size already measured in logical pixels.
+///     cx: Application context providing the active theme's content zoom.
+///     size: Caption font size as the chart measured it, in its own logical pixels.
 ///
 /// Returns:
 ///     Unscaled font size and line height for a tier-sized button segment.
 fn action_label_metrics(cx: &App, size: f32) -> (f32, f32) {
-    let zoom = crate::design::ui_value(cx, 1.0);
+    let zoom = moon_ui::MoonTheme::content_zoom(cx).max(0.1);
     (size / zoom, (size + 4.0) / zoom)
 }
 
@@ -128,10 +131,11 @@ impl ChartPanel {
         if !self.market_actions_pushed {
             return Vec::new();
         }
-        // The published rectangles are in the WINDOW's logical pixels and this overlay is laid out
-        // inside the chart SLOT, so the slot's own position comes off — the same conversion the
-        // arbitrage cursor zones make, through the same helper.
-        let Some((origin, _)) = self.chart_origin_logical() else {
+        // The published rectangles are in the CHART's logical pixels and this overlay is laid out
+        // inside the chart SLOT in content pixels, so the slot's own position comes off and the
+        // zoom divides — the same conversion the arbitrage cursor zones make, through the same
+        // helper.
+        let Some((origin, _, zoom)) = self.chart_origin_logical() else {
             return Vec::new();
         };
         let mut out: Vec<AnyElement> = Vec::new();
@@ -171,10 +175,10 @@ impl ChartPanel {
                 out.push(
                     div()
                         .absolute()
-                        .left(px(button.x - origin.0))
-                        .top(px(button.y - origin.1))
-                        .w(px(button.w))
-                        .h(px(button.h))
+                        .left(px((button.x - origin.0) / zoom))
+                        .top(px((button.y - origin.1) / zoom))
+                        .w(px(button.w / zoom))
+                        .h(px(button.h / zoom))
                         // The chart's own input lies UNDER this overlay and reads a left press as a
                         // trading gesture. `MoonButton` stops propagation only while it is disabled
                         // — so an enabled one would place an order under the control that was
@@ -194,7 +198,7 @@ impl ChartPanel {
                                 .variant(variant)
                                 .selected(selected)
                                 .disabled(!button.enabled)
-                                .bounds(MoonRect::new(0.0, 0.0, button.w, button.h))
+                                .bounds(MoonRect::new(0.0, 0.0, button.w / zoom, button.h / zoom))
                                 .on_click(move |event, window, app| {
                                     let (market, coin) = (market.clone(), coin.clone());
                                     // The lock is the one control that ASKS. Closing it is a choice

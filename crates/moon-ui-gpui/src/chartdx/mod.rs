@@ -1392,7 +1392,7 @@ pub(crate) struct PaneAreas {
 ///     time_axis_visible: Whether the time axis reserves its gutter under every area.
 ///     price_axis_pos: Configured per-tab price-axis position.
 ///     hvol: The horizontal volumes' width, `None` when they are off.
-///     pixel_scale: Device pixels per logical pixel.
+///     pixel_scale: Device pixels per chart-design pixel (the platform factor, excluding UI zoom).
 ///
 /// Returns:
 ///     The pane's [`PaneAreas`].
@@ -1629,7 +1629,13 @@ struct ChartDataState {
     last_frame_tick_at: Option<Instant>,
     present_rate_candidate_hz: f32,
     present_rate_candidate_hits: u8,
+    /// Device pixels per chart-design pixel: the platform factor, excluding UI zoom. Every size
+    /// the chart draws — line widths, candle outlines, axis gutters, caption text — goes through
+    /// it, which is what keeps the chart at the monitor's density while the interface zooms.
     last_ppp: f32,
+    /// The window's content zoom at the last frame: content pixels times this are chart-design
+    /// pixels. Read by the overlays that place GPUI elements over chart geometry.
+    content_zoom: f32,
     slot_bounds: Option<Bounds<Pixels>>,
     last_order_sig: u64,
     last_prepared_market_sig: u64,

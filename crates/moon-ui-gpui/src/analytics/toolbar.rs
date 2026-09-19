@@ -452,15 +452,10 @@ impl AnalyticsView {
             }
             // Title width plus the density-tier button's own pad_x on both sides, with a floor so
             // a short label still has a useful click target.
-            let tab_width = (design::ui_text_width_zoomed(
-                cx,
-                &title,
-                design::tier_font_size(cx),
-                400.0,
-                false,
-            ) + 2.0
-                * design::ui_value(cx, design::button_tier(cx).control_metrics().pad_x))
-            .max(design::ui_value(cx, 72.0));
+            let tab_width =
+                (design::ui_text_width_zoomed(cx, &title, design::BODY_TEXT, 400.0, false)
+                    + 2.0 * design::ui_value(cx, design::CONTROL_TIER.control_metrics().pad_x))
+                .max(design::ui_value(cx, 72.0));
             // Wrapped in its own font_family: the tab title is a label, while the toolbar row it
             // sits in (the analytics root stays mono) later carries the core NAME, which is data.
             row = row.child(
@@ -532,7 +527,7 @@ impl AnalyticsView {
         // clipped. Density-tier triggers scale those design-reference widths through `tokens.ui`
         // at the button tier's control font, not the legacy 10.5px font channel.
         let action_trigger_scale = {
-            let font_size = design::button_tier(cx).control_metrics().font_size.max(1.0);
+            let font_size = design::CONTROL_TIER.control_metrics().font_size.max(1.0);
             design::ui_value(cx, font_size) / font_size
         };
         let clear_core_filter_w = if workspace_pinned || self.sel_cores.is_empty() {
@@ -604,7 +599,7 @@ impl AnalyticsView {
                     .child(
                         MoonInput::new("an-strategy-mask")
                             .state(&self.strategy_mask_input)
-                            .size(design::input_tier(cx))
+                            .size(design::INPUT_SIZE)
                             .cleanable(true),
                     ),
             );
@@ -1219,7 +1214,7 @@ impl AnalyticsView {
             1.0 + design::ui_text_width_zoomed(
                 cx,
                 &custom_label,
-                design::tier_font_size(cx) - 2.0,
+                design::BODY_TEXT - 2.0,
                 400.0,
                 false,
             ) + field_w * 2.0

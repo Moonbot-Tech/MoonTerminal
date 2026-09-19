@@ -12,7 +12,6 @@
 //! Both boxes are built here so their size and id convention cannot drift apart, and both
 //! stage through [`stage_value`], the one rule deciding what a click leaves in `staged`.
 
-use gpui::App;
 use moon_ui::{MoonCheckbox, MoonTone};
 
 use crate::design;
@@ -33,16 +32,15 @@ mod tests;
 /// Args:
 ///     id: Element id, derived by the caller from the row's own stable node id.
 ///     checked: Value to display; both callers are controlled, so the widget stores nothing.
-///     cx: Application context used to read the active density tier.
 ///
 /// Returns:
 ///     The configured checkbox, still needing its `on_change`.
-pub(super) fn row_checkbox(id: SharedString, checked: bool, cx: &App) -> MoonCheckbox {
+pub(super) fn row_checkbox(id: SharedString, checked: bool) -> MoonCheckbox {
     MoonCheckbox::new(id)
         .checked(checked)
         .tone(MoonTone::Positive)
         // Fixed tree rows and invisible bulk slots share this same tier-following column.
-        .size(design::choice_tier(cx))
+        .size(design::CONTROL_TIER)
 }
 
 /// Choose checkbox tone and whether the core-state dot is green, without changing staging.
@@ -93,7 +91,6 @@ pub(super) fn stage_value(clicked: bool, server: bool) -> Option<bool> {
 ///     core: Core owning the row.
 ///     path: Folder segments, empty for the core root.
 ///     checked: The row's current switch.
-///     cx: Application context used to read the active density tier.
 ///
 /// Returns:
 ///     The checkbox wrapped in the press-swallowing container the surrounding row needs.
@@ -103,7 +100,6 @@ pub(super) fn bulk_check(
     core: CoreId,
     path: Vec<String>,
     checked: bool,
-    cx: &App,
 ) -> AnyElement {
     let view = view.clone();
     div()
@@ -118,7 +114,7 @@ pub(super) fn bulk_check(
             app.stop_propagation();
         })
         .child(
-            row_checkbox(SharedString::from(format!("chk:{row_id}")), checked, cx)
+            row_checkbox(SharedString::from(format!("chk:{row_id}")), checked)
                 // The reported value is ignored on purpose: the painted box is derived from child
                 // strategy checkboxes, so the view recomputes the next bulk value itself and cannot
                 // follow a stale widget value.
@@ -143,18 +139,16 @@ pub(super) fn bulk_check(
 ///
 /// Args:
 ///     row_id: The row's own tree id, reused so the widget keeps this node's identity.
-///     cx: Application context used to read the active density tier.
 ///
 /// Returns:
 ///     The invisible checkbox that reserves the column's width.
-pub(super) fn bulk_check_slot(row_id: &SharedString, cx: &App) -> AnyElement {
+pub(super) fn bulk_check_slot(row_id: &SharedString) -> AnyElement {
     div()
         .flex_none()
         .invisible()
         .child(row_checkbox(
             SharedString::from(format!("chk:{row_id}")),
             false,
-            cx,
         ))
         .into_any_element()
 }

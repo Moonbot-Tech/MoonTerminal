@@ -643,7 +643,6 @@ pub(super) fn body(
                         store,
                         "exp-sp-no-trades",
                         false,
-                        cx,
                     ))),
             )
     };
@@ -695,7 +694,7 @@ pub(super) fn body(
                                 "core_expert.sp_own_bot_id",
                                 view,
                             ))
-                            .children(field(store, "exp-sp-bot-token", false, cx)),
+                            .children(field(store, "exp-sp-bot-token", false)),
                     )
                     .child(
                         v_flex()
@@ -703,7 +702,7 @@ pub(super) fn body(
                             .min_w_0()
                             .gap(design::ui_px(cx, 2.0))
                             .child(hint(t!("core_expert.sp_type_pin").to_string(), p, cx))
-                            .children(field(store, "exp-sp-pin", false, cx)),
+                            .children(field(store, "exp-sp-pin", false)),
                     )
                     .child(
                         v_flex()
@@ -711,7 +710,7 @@ pub(super) fn body(
                             .min_w_0()
                             .gap(design::ui_px(cx, 2.0))
                             .child(hint(t!("core_expert.sp_this_bot_name").to_string(), p, cx))
-                            .children(field(store, "exp-sp-bot-name", false, cx)),
+                            .children(field(store, "exp-sp-bot-name", false)),
                     ),
             )
             .child(
@@ -1022,7 +1021,6 @@ pub(super) fn body(
                         store,
                         "exp-sp-skip-balances",
                         !sp.h_pos_black_list_text.contains(['\r', '\n']),
-                        cx,
                     ))),
             )
             .child(text_block(

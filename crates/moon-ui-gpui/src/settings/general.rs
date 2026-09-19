@@ -1,24 +1,23 @@
 //! General-tab editor for personal and machine settings in `settings.toml`.
-//! Changes remain in `Backend.preview`. UI theme, density, zoom, control zones and the Main-window
+//! Changes remain in `Backend.preview`. UI theme, zoom, control zones and the Main-window
 //! idle timeout are consumed live from that draft and roll back when Settings closes unsaved;
 //! other settings take effect after saving and reconciling the relevant runtime state.
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonCheckbox, MoonPalette, MoonSegmentItem, MoonSegmentedControl,
-    MoonSelect, MoonSliderState, MoonTooltipView, StyledExt, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonSize, MoonCheckbox, MoonPalette, MoonSelect, MoonSliderState,
+    MoonTooltipView, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
 use super::SettingsView;
 use crate::{Backend, design};
-use moon_core::config::UiDensity;
 
 /// Zoom endpoints shared by the slider state and its displayed captions.
-const UI_ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.75..=1.50;
-
-/// The three settings choices, in the order shown by the segmented control.
-const DENSITIES: [UiDensity; 3] = [UiDensity::Compact, UiDensity::Standard, UiDensity::Large];
+///
+/// The range the slider offers, not a bound on the setting: a hand-edited value outside it stays
+/// valid (`repair_ui_scale` touches only values that cannot mean anything).
+const UI_ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.50..=2.00;
 
 /// One bold caption beside a MoonUI select, the General tab's shape for an enum setting.
 ///
@@ -195,13 +194,13 @@ impl SettingsView {
             rgba_from(p.text_muted, 1.0)
         };
         // All four controls reserve the widest double-arrow label at the active tier.
-        let font = design::tier_font_size(cx);
+        let font = design::BODY_TEXT;
         let label_w = ["<<", ">>"]
             .into_iter()
             .map(|label| design::ui_text_width_zoomed(cx, label, font, 400.0, false))
             .fold(0.0_f32, f32::max);
         let button_w = label_w
-            + 2.0 * design::ui_value(cx, design::button_tier(cx).control_metrics().pad_x)
+            + 2.0 * design::ui_value(cx, design::CONTROL_TIER.control_metrics().pad_x)
             + 2.0; // MoonUI draws a one-pixel border on each side, independent of zoom.
         let btn = |suffix: &'static str, label: &'static str, delta: i32| {
             MoonButton::new(SharedString::from(format!("{id}{suffix}")))
@@ -230,51 +229,7 @@ impl SettingsView {
             .child(btn("+large", ">>", large))
     }
 
-    /// Store the selected density in the draft and reinstall the theme for live preview.
-    fn set_ui_density(&mut self, density: UiDensity, cx: &mut Context<Self>) {
-        self.backend.update(cx, |b, bcx| {
-            if let Some(p) = b.preview.as_mut() {
-                if p.ui_density != density {
-                    p.ui_density = density;
-                    crate::install_moon_theme_for_config(p, bcx);
-                    bcx.notify();
-                }
-            }
-        });
-        cx.notify();
-    }
-
-    /// Build the localized three-way density choice from the current settings draft.
-    fn density_control(&self, cx: &Context<Self>) -> impl IntoElement {
-        let b = self.backend.read(cx);
-        let selected = b.preview.as_ref().unwrap_or(&b.config).ui_density;
-        let labels = [
-            t!("iface.density_compact").to_string(),
-            t!("iface.density_standard").to_string(),
-            t!("iface.density_large").to_string(),
-        ];
-        let view = cx.entity();
-        v_flex()
-            .gap(design::ui_px(cx, 4.0))
-            .font_family(design::ui_font())
-            .child(t!("iface.density").to_string())
-            .child(
-                MoonSegmentedControl::new("ui-density")
-                    .items(DENSITIES.into_iter().zip(labels).map(|(density, label)| {
-                        MoonSegmentItem::new("", label)
-                            .fit_width(cx, 90.0, 180.0)
-                            .selected(selected == density)
-                    }))
-                    .on_click(move |index, _, _, app| {
-                        if let Some(&density) = DENSITIES.get(index) {
-                            view.update(app, |this, cx| this.set_ui_density(density, cx));
-                        }
-                    })
-                    .render(),
-            )
-    }
-
-    /// Build the General tab for UI theme, density and zoom, locale, chart grouping, control zones,
+    /// Build the General tab for UI theme and zoom, locale, chart grouping, control zones,
     /// Main-window idle closing, and file-log retention settings.
     ///
     /// Args:
@@ -313,7 +268,7 @@ impl SettingsView {
         v_flex()
             .w_full()
             .gap_1()
-            // UI theme, density and zoom are personal settings in settings.toml. The chart theme
+            // UI theme and zoom are personal settings in settings.toml. The chart theme
             // is edited on the Interface tab and stored in theme.toml. The selector's own
             // behaviour -- live preview and rebuilding the per-mode editors -- lives with its
             // state in `settings/mod.rs`, beside every other dropdown on this tab.
@@ -328,18 +283,17 @@ impl SettingsView {
                 &t!("iface.light_theme_hint"),
                 muted,
             ))
-            .child(self.density_control(cx))
-            .child(settings_hint(
-                "iface.density_hint",
-                &t!("iface.density_hint"),
-                muted,
-            ))
             .child(super::slider_row(
                 &t!("iface.ui_zoom"),
                 &self.ui_zoom,
                 UI_ZOOM_RANGE,
                 zoom_text,
                 cx,
+            ))
+            .child(settings_hint(
+                "iface.ui_zoom_hint",
+                &t!("iface.ui_zoom_hint"),
+                muted,
             ))
             .child(super::separator(p, cx))
             // Interface locale selector.

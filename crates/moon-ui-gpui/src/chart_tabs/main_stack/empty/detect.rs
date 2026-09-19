@@ -505,7 +505,7 @@ fn field_row(
                 .flex_1()
                 .text_size(design::ui_px(
                     cx,
-                    crate::panels::common::checkbox_metrics(cx).font,
+                    crate::panels::common::CHECKBOX_METRICS.font,
                 ))
                 .text_color(if enabled {
                     rgba_from(palette.text_soft, 1.0)
@@ -518,7 +518,7 @@ fn field_row(
             div().w(design::ui_px(cx, FIELD_WIDTH)).child(
                 MoonInput::new(id)
                     .state(input)
-                    .size(design::input_tier(cx))
+                    .size(design::INPUT_SIZE)
                     .mono(true)
                     .disabled(!enabled),
             ),

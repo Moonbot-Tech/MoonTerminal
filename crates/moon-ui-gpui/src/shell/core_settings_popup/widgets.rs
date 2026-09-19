@@ -335,7 +335,7 @@ pub(super) fn num(widgets: &SettingsWidgets, id: &'static str, cx: &App) -> Opti
             .child(
                 MoonInput::new(SharedString::from(id))
                     .state(&f.state)
-                    .size(design::input_tier(cx)),
+                    .size(design::INPUT_SIZE),
             )
             .into_any_element(),
     )
@@ -359,15 +359,10 @@ pub(super) fn slider(widgets: &SettingsWidgets, id: &'static str) -> Option<AnyE
 /// Args:
 ///     widgets: Prepared popup field states.
 ///     id: Field identity whose input state should fill the row.
-///     cx: Application context used to select the input's density tier.
 ///
 /// Returns:
 ///     The full-width editor when the prepared field state exists.
-pub(super) fn stretch_field(
-    widgets: &SettingsWidgets,
-    id: &'static str,
-    cx: &App,
-) -> Option<AnyElement> {
+pub(super) fn stretch_field(widgets: &SettingsWidgets, id: &'static str) -> Option<AnyElement> {
     let f = widgets.field(id)?;
     Some(
         div()
@@ -375,7 +370,7 @@ pub(super) fn stretch_field(
             .child(
                 MoonInput::new(SharedString::from(id))
                     .state(&f.state)
-                    .size(design::input_tier(cx)),
+                    .size(design::INPUT_SIZE),
             )
             .into_any_element(),
     )

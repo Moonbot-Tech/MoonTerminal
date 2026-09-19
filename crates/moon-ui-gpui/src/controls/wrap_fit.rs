@@ -209,7 +209,7 @@ pub(crate) fn signature(cx: &App, composition: impl Hash) -> u64 {
     // compact trigger actually draws, not a hand-kept legacy font-size constant.
     design::text_metrics_key_zoomed(
         cx,
-        design::button_tier(cx).control_metrics().font_size,
+        design::CONTROL_TIER.control_metrics().font_size,
         400.0,
         true,
     )
@@ -290,7 +290,7 @@ pub(crate) fn compact_design_floor(cx: &App, all_word: &str) -> f32 {
 
 /// The rendered width a design-reference width becomes on a density-tier trigger.
 ///
-/// Scales by `ui(font_size)/font_size` at [`design::button_tier`]'s control font — the same `ui`
+/// Scales by `ui(font_size)/font_size` at [`design::CONTROL_TIER`]'s control font — the same `ui`
 /// channel the button draws through. The Font-slider `font()` scale that [`design::font_w`] uses
 /// is a different number the moment the slider leaves zero.
 pub(crate) fn action_width(cx: &App, design_w: f32) -> f32 {
@@ -299,7 +299,7 @@ pub(crate) fn action_width(cx: &App, design_w: f32) -> f32 {
 
 /// The factor a density-tier trigger applies to design-reference widths (`tokens.ui`).
 fn action_scale(cx: &App) -> f32 {
-    let font_size = design::button_tier(cx).control_metrics().font_size.max(1.0);
+    let font_size = design::CONTROL_TIER.control_metrics().font_size.max(1.0);
     design::ui_value(cx, font_size) / font_size
 }
 

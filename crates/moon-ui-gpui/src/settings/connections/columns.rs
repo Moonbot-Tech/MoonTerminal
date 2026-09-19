@@ -42,13 +42,20 @@ pub(super) const CONN_INDENT_BORDER: f32 = 1.0;
 /// The three indent parts sum to [`CONN_TABLE_INSET`]; `tests` proves it.
 pub(super) const CONN_INDENT_PAD: f32 = CONN_TABLE_INSET - CONN_INDENT_MARGIN - CONN_INDENT_BORDER;
 
-/// Budget for 21 Geist Mono glyphs at the most demanding normalized body size (Compact's
-/// 12px body and 1.0 text scale), plus 2px rounding room. The endpoint cell has no copy affix
-/// or horizontal padding. Keep its smaller basis so narrow-window shrink weights do not change.
-const ENDPOINT_CONTENT_CAP: f32 = 153.2;
+/// Width of 21 Geist Mono glyphs (the longest IPv4 endpoint) at the body size, normalized by the
+/// text ratio the column's `TextScaled` policy multiplies back in (`tokens.font(10) / 10` at the
+/// design's font delta). The endpoint cell has no copy affix or horizontal padding.
+const ENDPOINT_CONTENT: f32 =
+    21.0 * 0.6 * crate::design::BODY_TEXT * 10.0 / (10.0 + crate::design::DESIGN_FONT_DELTA);
 
-/// Five glyphs (`8/8`, space and caret) at the largest density's 16px reference font,
-/// MoonUI's 14px trigger padding and 2px rounding room. The trigger scales this budget itself.
+/// [`ENDPOINT_CONTENT`] plus 2px rounding room: the cap the column grows to and no further, so a
+/// wide window hands the rest to the name column. The basis stays the bare content so narrow-window
+/// shrink weights sit just under it.
+const ENDPOINT_CONTENT_CAP: f32 = ENDPOINT_CONTENT + 2.0;
+
+/// Five glyphs (`8/8`, space and caret) at MoonUI's 16px `Md` reference font — a ceiling above
+/// the design's own control font — MoonUI's 14px trigger padding and 2px rounding room. The
+/// trigger scales this budget itself.
 const DATA_TRIGGER_BASIS: f32 = 5.0 * 0.6 * 16.0 + 14.0 + 2.0;
 
 /// Where a column's header label sits over the control below it.
@@ -206,7 +213,7 @@ const CONN_COLS: [ConnCol; 14] = [
         id: "h-endpoint",
         label: Some("conn.col.endpoint"),
         tip: Some("conn.tip.endpoint"),
-        basis: 140.0,
+        basis: ENDPOINT_CONTENT,
         grow: true,
         max: Some(ENDPOINT_CONTENT_CAP),
         width: ConnColWidth::TextScaled,

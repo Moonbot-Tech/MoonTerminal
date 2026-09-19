@@ -51,10 +51,13 @@ fn press_count(
     // `bounds()`, not `window_bounds()`: the latter is the RESTORE rectangle, which for a maximized
     // window names a position it is not at — and this position is compared against a mark every
     // window in the process shares.
+    // The mark is screen space, so the content-space press is multiplied by the zoom before the
+    // window's screen origin is added; the close button that records the mark converts the same way.
     let origin = window.bounds().origin;
+    let zoom = window.content_zoom();
     let pos = (
-        f32::from(origin.x + position.x),
-        f32::from(origin.y + position.y),
+        f32::from(origin.x) + f32::from(position.x) * zoom,
+        f32::from(origin.y) + f32::from(position.y) * zoom,
     );
     let count = this.click_series.observe(button, native, now, pos);
     // A press still parked where a × was clicked belongs to that closing, however many charts the

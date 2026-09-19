@@ -212,6 +212,12 @@ impl ChartEngine {
         Some((data.slot_bounds?, data.last_ppp, (data.w, data.h)))
     }
 
+    /// The window's content zoom at the last frame: content pixels times this are the chart's own
+    /// logical pixels, which the overlays over chart geometry need to convert both ways.
+    pub fn slot_content_zoom(&self) -> f32 {
+        self.data.borrow().content_zoom
+    }
+
     pub fn slot_dev_size(&self) -> (u32, u32) {
         let data = self.data.borrow();
         (data.w.max(1), data.h.max(1))
@@ -413,7 +419,7 @@ impl ChartEngine {
     /// do their job. Guarded on a real change because render calls this every frame.
     ///
     /// Args:
-    ///     ppp: Current device pixels per logical pixel.
+    ///     ppp: Current device pixels per chart-design pixel (the platform factor, excluding UI zoom).
     pub fn set_last_ppp(&mut self, ppp: f32) {
         let ppp = ppp.max(0.1);
         {

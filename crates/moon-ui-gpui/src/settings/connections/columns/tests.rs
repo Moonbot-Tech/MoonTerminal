@@ -142,7 +142,8 @@ fn caps_match_the_text_column_contract_at_each_font_scale() {
     for column in ConnColId::ALL {
         let expected_cap = match column {
             ConnColId::Key => Some(260.0),
-            ConnColId::Endpoint => Some(153.2),
+            // 21 glyphs at 0.6 em of the 14px body, normalized by the 1.3 text ratio, plus 2.
+            ConnColId::Endpoint => Some(21.0 * 0.6 * 14.0 * 10.0 / 13.0 + 2.0),
             ConnColId::Group => Some(140.0),
             _ => None,
         };
@@ -183,32 +184,32 @@ fn caps_match_the_text_column_contract_at_each_font_scale() {
 
 /// Raising the endpoint cap back to 220 wastes name-column space; lowering it below the
 /// longest IPv4 endpoint truncates legal addresses even when the window has spare width.
-/// Exercise the actual presentation tokens so a density mapping change cannot hide either.
+/// Exercise the actual presentation tokens so a change to the design's size system cannot hide
+/// either; the zoom loop pins that the UI scale never reaches the token channels.
 #[test]
 fn endpoint_cap_fits_ipv4_without_consuming_spare_name_width() {
-    use moon_core::config::{UiDensity, UiThemeMode};
+    use moon_core::config::UiThemeMode;
 
     let mut required_reference = 0.0_f32;
-    for density in [UiDensity::Compact, UiDensity::Standard, UiDensity::Large] {
-        for zoom in [0.75, 1.0, 1.5] {
-            let tokens = crate::startup::moon_theme_config_for_presentation(
-                UiThemeMode::Dark,
-                density,
-                zoom,
-            )
-            .dark;
-            let scale = tokens.font(10.0) / 10.0;
-            let body_size = tokens.ui(tokens.tier().control_metrics().font_size);
-            let content = "255.255.255.255:65535".chars().count() as f32 * 0.6 * body_size;
-            required_reference = required_reference.max(content / scale);
-            let cap = ConnColId::Endpoint
-                .max_width(MicroTriggerMetrics {
-                    scale,
-                    min_width: 0.0,
-                })
-                .expect("endpoint must leave spare width for name");
-            assert!(cap >= content, "IPv4 clipped at {density:?}/{zoom}");
-        }
+    for zoom in [0.75, 1.0, 1.5] {
+        let tokens =
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, zoom).dark;
+        assert_eq!(
+            tokens.font(10.0),
+            13.0,
+            "zoom {zoom} must travel as window zoom, not through the tokens"
+        );
+        let scale = tokens.font(10.0) / 10.0;
+        let body_size = tokens.ui(tokens.tier().control_metrics().font_size);
+        let content = "255.255.255.255:65535".chars().count() as f32 * 0.6 * body_size;
+        required_reference = required_reference.max(content / scale);
+        let cap = ConnColId::Endpoint
+            .max_width(MicroTriggerMetrics {
+                scale,
+                min_width: 0.0,
+            })
+            .expect("endpoint must leave spare width for name");
+        assert!(cap >= content, "IPv4 clipped at zoom {zoom}");
     }
     assert!(ConnColId::Endpoint.spec().max.unwrap() <= required_reference + 2.01);
     assert!(
@@ -217,34 +218,25 @@ fn endpoint_cap_fits_ipv4_without_consuming_spare_name_width() {
     );
 }
 
-/// Restoring Data's 52px basis truncates the count with its caret at Standard and Large.
+/// Restoring Data's 52px basis truncates the count with its caret.
 /// The independent budget follows MoonUI's five mono glyphs and 14px visual padding,
 /// including its font-channel fitting pass as well as the tier-sized rendered label.
 #[test]
-fn data_trigger_fits_every_count_at_each_density_and_zoom() {
-    use moon_core::config::{UiDensity, UiThemeMode};
+fn data_trigger_fits_every_count_at_each_zoom() {
+    use moon_core::config::UiThemeMode;
 
-    for density in [UiDensity::Compact, UiDensity::Standard, UiDensity::Large] {
-        for zoom in [0.75, 1.0, 1.5] {
-            let tokens = crate::startup::moon_theme_config_for_presentation(
-                UiThemeMode::Dark,
-                density,
-                zoom,
-            )
-            .dark;
-            let reference_font = tokens.tier().control_metrics().font_size;
-            let fitting_font = tokens.font(reference_font);
-            let rendered_font = tokens.ui(reference_font);
-            let trigger_width = ConnColId::Data.spec().basis * fitting_font / reference_font;
-            for on in 0..=8 {
-                let label = format!("{on}/8 \u{25be}");
-                let required = label.chars().count() as f32 * 0.6 * fitting_font.max(rendered_font)
-                    + tokens.ui(14.0);
-                assert!(
-                    trigger_width >= required,
-                    "{on}/8 clipped at {density:?}/{zoom}"
-                );
-            }
+    for zoom in [0.75, 1.0, 1.5] {
+        let tokens =
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, zoom).dark;
+        let reference_font = tokens.tier().control_metrics().font_size;
+        let fitting_font = tokens.font(reference_font);
+        let rendered_font = tokens.ui(reference_font);
+        let trigger_width = ConnColId::Data.spec().basis * fitting_font / reference_font;
+        for on in 0..=8 {
+            let label = format!("{on}/8 \u{25be}");
+            let required = label.chars().count() as f32 * 0.6 * fitting_font.max(rendered_font)
+                + tokens.ui(14.0);
+            assert!(trigger_width >= required, "{on}/8 clipped at zoom {zoom}");
         }
     }
 }

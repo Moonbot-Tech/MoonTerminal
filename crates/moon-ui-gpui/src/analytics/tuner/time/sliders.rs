@@ -447,7 +447,7 @@ impl AnalyticsView {
             .child(
                 div().flex_none().invisible().child(
                     MoonCheckbox::new(SharedString::from(format!("tt-slider-lead-{field}")))
-                        .size(design::choice_tier(cx)),
+                        .size(design::CONTROL_TIER),
                 ),
             )
             .child(

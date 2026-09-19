@@ -715,7 +715,7 @@ pub fn metric_popup_content(
                     div().w(px(72.0)).child(
                         MoonInput::new(SharedString::from(format!("{}-input", metric.id())))
                             .state(input)
-                            .size(design::input_tier(cx)),
+                            .size(design::INPUT_SIZE),
                     ),
                 )
                 .child(div().text_color(rgb(p.text_muted)).child(metric.unit())),

@@ -858,6 +858,29 @@ FireTest не читает исходники и не проверяет арх�
 native input, counters/CPU/GPU/RAM. Статические запреты вида "не рендерить меню как child
 панели" живут в `tests/theme_contract/`, а не внутри runtime-сценария.
 
+### Масштаб интерфейса
+
+Один пользовательский масштаб (`ui_scale`, Settings → General → «Масштаб интерфейса», 50–200 %)
+устанавливается как content zoom окна: `startup::moon_theme_config_for_presentation` кладёт его в
+`MoonScale::zoom`, а `MoonRoot` каждого окна применяет его через `Window::set_content_zoom`. Zoom
+входит в `scale_factor` окна, поэтому масштабируется каждый пиксель — текст, геометрия, картинки,
+hit-area, сохранённые размеры доков — без участия компонентов. Токены MoonUI при этом остаются на
+масштабе дизайна: `scale.ui == scale.font == 1.0`, `tier = Sm`, `font_delta = 3`;
+`design::ui_px` — identity-адаптер над токенами, а `design::CONTROL_TIER` / `BODY_TEXT` /
+`INPUT_SIZE` — единая система размеров, от которой считаются контролы, текст и chrome-полосы.
+Настройки плотности (Compact / Standard / Large) больше нет: ступенчатая смена tier'ов подменяла
+дизайн другим, а не масштабировала его, и не сохраняла пропорции.
+
+График в zoom не участвует: `chartdx` берёт размер render target из полного `scale_factor`
+(слот действительно занимает `bounds × factor` device-пикселей), а свои размеры — толщину линий,
+свечи, оси, подписи — из `scale_factor / content_zoom`, то есть из платформенного DPI. Текстовый
+слой графика живёт в его собственных логических пикселях и переходит в content-пиксели GPUI
+только в `chartdx::text::content_px` / `chart_metrics`; оверлеи над геометрией графика
+(`panels/chart/arb_open.rs`, `market_actions.rs`) делят на zoom в одном месте —
+`chart_origin_logical` / `MoonTheme::content_zoom`. Экранные координаты (`window.bounds()`,
+размещение окон, FireTest-probe) остаются платформенными; `windowing::responsive_width` читает
+`viewport_size()`, то есть content-пиксели.
+
 ## Окна
 
 Терминал использует собственную шапку и borderless/CSD поведение. Проверять отдельно:

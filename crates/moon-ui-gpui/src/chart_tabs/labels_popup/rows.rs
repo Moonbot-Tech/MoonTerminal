@@ -116,7 +116,7 @@ fn row_line<T: LabelsPopupHost>(
             &row_display_name(row),
             &format!("  ·{}", row.used_parts()),
             name_budget(cx),
-            |text| design::ui_text_width_zoomed(cx, text, design::tier_font_size(cx), 400.0, true),
+            |text| design::ui_text_width_zoomed(cx, text, design::BODY_TEXT, 400.0, true),
         );
         MoonButton::new(SharedString::from(format!("cl-open-{ix}")))
             .label(label)

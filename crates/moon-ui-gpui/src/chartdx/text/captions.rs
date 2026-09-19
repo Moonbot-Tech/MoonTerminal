@@ -27,7 +27,9 @@
 //! Two different zones are never divided against each other — each stays inside its own band, which
 //! is the paragraph above.
 
-use gpui::{Hsla, point, px};
+use gpui::{Hsla, point};
+
+use super::{chart_metrics, content_px};
 use moon_core::config::{
     ARB_PART_BASE, CHART_LABEL_ROWS, ChartLabelField, ChartLabelRow, ChartLabelsCfg,
     FILTER_HEADER_PART, LABEL_WRAP_LINES, LabelAlign, LabelColor, LabelZone, PREFIX_PART_BASE,
@@ -1509,16 +1511,14 @@ impl RenderState {
             self.caption_runs
                 .resize_with(run_ix + 1, gpui::GpuCanvasTextRun::default);
         }
-        self.caption_runs[run_ix]
-            .measure(
-                ctx,
-                text,
-                gpui::font(crate::design::mono()),
-                px(size),
-                px(size + 4.0),
-            )
-            .width
-            .as_f32()
+        let metrics = self.caption_runs[run_ix].measure(
+            ctx,
+            text,
+            gpui::font(crate::design::mono()),
+            content_px(ctx, size),
+            content_px(ctx, size + 4.0),
+        );
+        chart_metrics(ctx, metrics).width.as_f32()
     }
 
     /// Draw one caption through its OWN retained run.
@@ -1547,17 +1547,18 @@ impl RenderState {
             self.caption_runs
                 .resize_with(run_ix + 1, gpui::GpuCanvasTextRun::default);
         }
-        self.caption_runs[run_ix].draw_aligned(
+        let metrics = self.caption_runs[run_ix].draw_aligned(
             ctx,
-            point(px(x), px(y)),
+            point(content_px(ctx, x), content_px(ctx, y)),
             text,
             gpui::font(crate::design::mono()),
-            px(size),
-            px(size + 4.0),
+            content_px(ctx, size),
+            content_px(ctx, size + 4.0),
             color,
             ax,
             0.0,
-        )
+        )?;
+        Ok(chart_metrics(ctx, metrics))
     }
 
     /// Re-resolve one pane's captions from the values it currently holds.

@@ -1415,7 +1415,7 @@ fn exchange_row(
                     .uppercase(false)
                     .color(p.text_soft)
                     .weight(600.0)
-                    .font_size(design::tier_font_base(app, step))
+                    .font_size(design::body_font_base(app, step))
                     .line_height(ROW_LINE_BASE + step)
                     .render(),
             ),
@@ -1528,7 +1528,7 @@ fn counts_slot(text: String, width: f32, color: u32, step: f32, app: &App) -> im
                 .mono(true)
                 .uppercase(false)
                 .color(color)
-                .font_size(design::tier_font_base(app, step))
+                .font_size(design::body_font_base(app, step))
                 .line_height(ROW_LINE_BASE + step)
                 .render(),
         )
@@ -1719,11 +1719,11 @@ fn core_folder_row(
         })
         .child(match check_target.filter(|_| fill.has_contents()) {
             Some((core, path, checked)) => {
-                checks::bulk_check(view, &check_row_id, core, path, checked, app)
+                checks::bulk_check(view, &check_row_id, core, path, checked)
             }
             // Reserved rather than omitted, so this row's caption stays on the same control column
             // as every sibling at its depth.
-            None => checks::bulk_check_slot(&check_row_id, app),
+            None => checks::bulk_check_slot(&check_row_id),
         })
         .child(
             div().flex_1().min_w_0().truncate().child(
@@ -1732,7 +1732,7 @@ fn core_folder_row(
                     .uppercase(false)
                     .color(color)
                     .weight(weight)
-                    .font_size(design::tier_font_base(app, step))
+                    .font_size(design::body_font_base(app, step))
                     .line_height(ROW_LINE_BASE + step)
                     .render(),
             ),
@@ -1746,7 +1746,7 @@ fn core_folder_row(
                             .mono(false)
                             .uppercase(false)
                             .color(p.amber)
-                            .font_size(design::tier_font_base(app, step))
+                            .font_size(design::body_font_base(app, step))
                             .line_height(ROW_LINE_BASE + step)
                             .render(),
                     ),
@@ -1908,7 +1908,7 @@ fn deleted_strategy_row(
                     .mono(true)
                     .uppercase(false)
                     .color(p.text_muted)
-                    .font_size(design::tier_font_base(app, step))
+                    .font_size(design::body_font_base(app, step))
                     .line_height(ROW_LINE_BASE + step)
                     .render(),
             ),
@@ -1966,7 +1966,7 @@ fn deleted_strategy_row(
                 .mono(true)
                 .uppercase(false)
                 .color(p.text_muted)
-                .font_size(design::tier_font_base(app, step))
+                .font_size(design::body_font_base(app, step))
                 .line_height(ROW_LINE_BASE + step)
                 .render(),
         )
@@ -2049,7 +2049,7 @@ fn strategy_row(
                     // replaces them. A tone change rather than a badge: the row keeps its shape,
                     // and the tree stays scannable while several rows are marked.
                     .color(if cut { p.text_muted } else { p.text })
-                    .font_size(design::tier_font_base(app, step))
+                    .font_size(design::body_font_base(app, step))
                     .line_height(ROW_LINE_BASE + step)
                     .render(),
             ),
@@ -2121,7 +2121,6 @@ fn strategy_row(
             checks::row_checkbox(
                 SharedString::from(format!("chk:{}", id_strat(core, id))),
                 val,
-                app,
             )
             .tone(tone)
             .on_change(move |ch: &bool, _window, app| {

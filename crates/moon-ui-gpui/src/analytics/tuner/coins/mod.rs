@@ -168,7 +168,7 @@ impl AnalyticsView {
                 div().flex_1().min_w_0().child(
                     MoonInput::new("an-coin-search")
                         .state(search)
-                        .size(design::input_tier(cx)),
+                        .size(design::INPUT_SIZE),
                 ),
             )
             // Right after the search: both narrow WHICH rows are worth looking at, so they

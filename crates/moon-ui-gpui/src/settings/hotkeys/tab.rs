@@ -124,7 +124,7 @@ fn muted_line(text: String, p: &MoonPalette, cx: &App) -> impl IntoElement {
         .wrap()
         // The one size the whole tab uses: titles, surfaces, captions and the header alike. A
         // caption one step smaller was tried and read as a different font.
-        .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
+        .rendered_metrics(design::text_metrics(cx, 0.0, 14.0))
         .color(p.text_muted)
         .render()
 }
@@ -138,9 +138,8 @@ fn muted_line(text: String, p: &MoonPalette, cx: &App) -> impl IntoElement {
 /// move the column. Per-glyph cached in `design::ui_text_width`, so one Settings render costs a
 /// hash lookup per character, not a shaping call.
 fn scope_column_px(cx: &App) -> Pixels {
-    let width = |text: &str| {
-        design::ui_text_width_zoomed(cx, text, design::tier_font_size(cx), 400.0, false)
-    };
+    let width =
+        |text: &str| design::ui_text_width_zoomed(cx, text, design::BODY_TEXT, 400.0, false);
     let widest = registry::rows()
         .iter()
         .filter_map(|row| match row {
@@ -217,7 +216,7 @@ impl SettingsView {
                 MoonText::new(t!("hotkeys.group.builtin").to_string())
                     .uppercase(false)
                     .mono(false)
-                    .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
+                    .rendered_metrics(design::text_metrics(cx, 0.0, 14.0))
                     .color(p.text)
                     .render(),
             )
@@ -327,7 +326,7 @@ impl SettingsView {
                     .uppercase(false)
                     .mono(false)
                     .wrap()
-                    .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
+                    .rendered_metrics(design::text_metrics(cx, 0.0, 14.0))
                     .color(p.text_muted)
                     .render(),
             )
@@ -348,7 +347,7 @@ impl SettingsView {
             .uppercase(false)
             .mono(false)
             .wrap()
-            .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
+            .rendered_metrics(design::text_metrics(cx, 0.0, 14.0))
             .color(color)
             .render()
             .into_any_element()
@@ -483,7 +482,7 @@ impl SettingsView {
                                     .uppercase(false)
                                     .mono(row.mono_title)
                                     .wrap()
-                                    .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
+                                    .rendered_metrics(design::text_metrics(cx, 0.0, 14.0))
                                     .color(if row.muted { p.text_muted } else { p.text })
                                     .render(),
                             )
@@ -714,7 +713,7 @@ impl SettingsView {
             MoonText::new(t!("hotkeys.move_kind.title").to_string())
                 .uppercase(false)
                 .mono(false)
-                .rendered_metrics(design::tier_text_metrics(cx, -2.0, 12.0))
+                .rendered_metrics(design::text_metrics(cx, -2.0, 12.0))
                 .color(p.text_muted)
                 .render()
                 .into_any_element()
@@ -1072,7 +1071,7 @@ impl SettingsView {
                 MoonText::new("->")
                     .uppercase(false)
                     .mono(true)
-                    .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
+                    .rendered_metrics(design::text_metrics(cx, 0.0, 14.0))
                     .color(p.text_muted)
                     .render(),
             )
@@ -1149,7 +1148,7 @@ impl SettingsView {
                 MoonText::new("->")
                     .uppercase(false)
                     .mono(true)
-                    .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
+                    .rendered_metrics(design::text_metrics(cx, 0.0, 14.0))
                     .color(p.text_muted)
                     .render(),
             )
@@ -1266,7 +1265,7 @@ impl SettingsView {
             MoonText::new(t!("hotkeys.pull.gestures").to_string())
                 .uppercase(false)
                 .mono(false)
-                .rendered_metrics(design::tier_text_metrics(cx, 0.0, 14.0))
+                .rendered_metrics(design::text_metrics(cx, 0.0, 14.0))
                 .color(p.text)
                 .render()
                 .into_any_element(),

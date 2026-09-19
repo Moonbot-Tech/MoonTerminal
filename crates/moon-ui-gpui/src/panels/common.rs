@@ -350,31 +350,14 @@ pub(crate) struct CheckboxMetrics {
     pub(crate) font: f32,
 }
 
-/// Resolves the active density to the same box, gap and font used by `MoonCheckbox`.
-///
-/// Args:
-///     cx: Application context used to read the active density tier.
-///
-/// Returns:
-///     Unscaled metrics for use with [`design::ui_px`] and [`design::ui_text_width_zoomed`].
-pub(crate) fn checkbox_metrics(cx: &App) -> CheckboxMetrics {
-    let tokens = moon_ui::MoonTheme::active_tokens(cx);
-    let tier = tokens.tier().nearest(&[
-        moon_ui::MoonSize::Xs,
-        moon_ui::MoonSize::Sm,
-        moon_ui::MoonSize::Md,
-    ]);
-    let control = tier.control_metrics();
-    CheckboxMetrics {
-        mark: match tier {
-            moon_ui::MoonSize::Xs => 12.0,
-            moon_ui::MoonSize::Sm => 16.0,
-            _ => 20.0,
-        },
-        gap: control.gap,
-        font: control.font_size,
-    }
-}
+/// The box, gap and font `MoonCheckbox` draws at [`design::CONTROL_TIER`]: a 16px mark with the
+/// tier's gap and control font, unscaled, for use with [`design::ui_px`] and
+/// [`design::ui_text_width_zoomed`].
+pub(crate) const CHECKBOX_METRICS: CheckboxMetrics = CheckboxMetrics {
+    mark: 16.0,
+    gap: design::CONTROL_TIER.control_metrics().gap,
+    font: design::CONTROL_TIER.control_metrics().font_size,
+};
 
 /// `MoonCheckbox` label weight (medium), as GPUI's numeric font weight.
 pub(crate) const COMPACT_CHECKBOX_WEIGHT: f32 = 500.0;
@@ -750,7 +733,7 @@ pub(crate) fn pinned_scope_label(
         .font_family(design::mono())
         .text_size(design::ui_px(
             cx,
-            design::button_tier(cx).control_metrics().font_size,
+            design::CONTROL_TIER.control_metrics().font_size,
         ))
         .text_color(rgb(design::chrome_label_color(p)))
         .child(div().flex_none().child(design::PINNED_SCOPE_GLYPH))

@@ -87,7 +87,7 @@ pub(super) fn slider_row(
     let min = format(*range.start());
     let max = format(*range.end());
     let val = format(val);
-    let endpoint_font = design::tier_font_size(cx) - 2.0;
+    let endpoint_font = design::BODY_TEXT - 2.0;
     let scale_w = design::ui_text_width_zoomed(cx, &min, endpoint_font, 400.0, true)
         + design::ui_text_width_zoomed(cx, &max, endpoint_font, 400.0, true)
         + design::ui_value(cx, 10.0);

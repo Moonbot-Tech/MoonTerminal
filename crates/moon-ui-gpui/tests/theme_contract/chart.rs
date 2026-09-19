@@ -1123,7 +1123,7 @@ fn chart_label_name_budget_uses_the_button_s_ui_scale() {
     let source = code_only(&read_src("chart_tabs/labels_popup/mod.rs"));
     let budget = braced_body(&source, "pub(super) fn name_budget(");
     assert!(
-        budget.contains("design::button_tier(cx).control_metrics().pad_x"),
+        budget.contains("design::CONTROL_TIER.control_metrics().pad_x"),
         "name_budget must subtract MoonButton padding with the UI scale"
     );
 }

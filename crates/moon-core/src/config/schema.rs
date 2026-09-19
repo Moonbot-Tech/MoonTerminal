@@ -44,28 +44,18 @@ pub fn default_version() -> u32 {
     0
 }
 
-/// User-selected interface density, mapped to MoonUI tiers by the UI crate.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum UiDensity {
-    Compact,
-    #[default]
-    Standard,
-    Large,
-}
-
-/// Return the default UI geometry scale.
+/// Return the default UI scale: the window content zoom every window opens at.
 pub fn default_ui_scale() -> f32 {
     1.0
 }
 
 /// Repair a stored UI scale on the way in, touching ONLY values that cannot mean anything.
 ///
-/// `MoonScale::ui` multiplies control heights, gaps, paddings and hit areas, and MoonUI's
-/// `MoonThemeTokens::ui` floors the factor at `0.25`. So a stored `0.0` does not blank the
-/// interface — it renders everything at a quarter size, which still paints text at its own font
-/// metric while shrinking every hit rectangle to the point where clicks stop landing. A
-/// `settings.toml` written before the loader applied schema defaults holds exactly that.
+/// The scale is the window content zoom (`MoonScale::zoom`). MoonUI's `set_zoom` replaces an
+/// impossible value with `1.0` on install, so a stored `0.0` would not blank the interface — but
+/// the slider and the saved file would keep showing a number the windows do not honour, and the
+/// next save would write it back. A `settings.toml` written before the loader applied schema
+/// defaults holds exactly that, so it is repaired where it is read.
 ///
 /// Only non-finite and non-positive values are repaired. There is deliberately NO upper or lower
 /// bound beyond that: hand-edited scales outside the Settings slider range remain valid.
@@ -357,13 +347,11 @@ pub struct SettingsFile {
     /// Number of days to retain log files; older files are deleted. 0 keeps all. Defaults to 14.
     #[serde(default = "servers::default_log_retention_days")]
     pub log_retention_days: u32,
-    /// Selected density. None means a legacy file; writers always supply the resolved choice.
-    #[serde(default)]
-    pub ui_density: Option<UiDensity>,
     /// Interface theme mode. Graphite shares dark colour data; this plaintext setting is not secret.
     #[serde(default)]
     pub ui_theme_mode: UiThemeMode,
-    /// Overall UI geometry scale, edited independently of density in Settings.
+    /// Window content zoom, the one UI scale control in Settings. A retired `ui_density` key in
+    /// an older file is ignored on load and not written back.
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
     /// Startup retained-history depth percentage passed to MoonProto.
@@ -409,15 +397,6 @@ pub struct SettingsFile {
     pub next_uid: u64,
     #[serde(default)]
     pub servers: Vec<ServerMeta>,
-}
-
-impl SettingsFile {
-    /// Return the explicit density, or Standard so every upgraded user starts at Standard.
-    ///
-    /// The retired font slider never influences density.
-    pub fn resolved_ui_density(&self) -> UiDensity {
-        self.ui_density.unwrap_or(UiDensity::Standard)
-    }
 }
 
 #[cfg(test)]

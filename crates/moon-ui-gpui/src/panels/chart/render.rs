@@ -46,7 +46,9 @@ impl Render for ChartPanel {
         self.chart.set_scene_visible(true);
         self.chart
             .set_market_source(Some(self.backend.read(cx).session.market_source()));
-        let ppp = window.scale_factor();
+        // The chart keeps the monitor's density under UI zoom: its sizes go through the platform
+        // factor alone, which is the window's effective factor with the content zoom taken out.
+        let ppp = window.scale_factor() / window.content_zoom();
         // Cache DPI for the data-prepare path, which has no Window. DPI changes infrequently.
         self.last_ppp = ppp;
         self.chart.set_last_ppp(ppp);
@@ -461,15 +463,20 @@ impl Render for ChartPanel {
                 canvas(
                     move |bounds, _, _| bounds,
                     move |bounds, _, window, cx| {
-                        let sf = window.scale_factor();
+                        // The probe is platform space: the storms add its rectangle to the
+                        // window's screen origin or scale it by its factor, so content-space
+                        // bounds go in multiplied by the content zoom, with the zoom taken out
+                        // of the factor.
+                        let zoom = window.content_zoom();
+                        let sf = window.scale_factor() / zoom;
                         let firetest_probe = crate::firetest::ChartProbe::new(
                             crate::window::windowing::window_hwnd(window),
                             f32::from(window.window_bounds().get_bounds().origin.x),
                             f32::from(window.window_bounds().get_bounds().origin.y),
-                            f32::from(bounds.origin.x),
-                            f32::from(bounds.origin.y),
-                            f32::from(bounds.size.width),
-                            f32::from(bounds.size.height),
+                            f32::from(bounds.origin.x) * zoom,
+                            f32::from(bounds.origin.y) * zoom,
+                            f32::from(bounds.size.width) * zoom,
+                            f32::from(bounds.size.height) * zoom,
                             sf,
                         );
                         if is_main {

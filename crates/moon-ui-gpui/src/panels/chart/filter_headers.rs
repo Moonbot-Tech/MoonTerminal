@@ -14,7 +14,7 @@ impl ChartPanel {
         let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
             return false;
         };
-        let Some((origin, scale)) = self.chart_origin_logical() else {
+        let Some((origin, scale, _)) = self.chart_origin_logical() else {
             return false;
         };
         let mut cfg = self.effective_labels(cx);

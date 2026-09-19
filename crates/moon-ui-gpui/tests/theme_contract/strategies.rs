@@ -900,18 +900,16 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
     let measured_width = code_only(braced_body(&settings, "fn settings_content_width("));
     let popup_measurement = code_only(braced_body(&settings, "fn popup_text_width("));
     assert!(popup_measurement.contains("design::ui_text_width("));
-    assert!(measured_width.contains("checkbox_metrics(cx).mark"));
-    assert!(measured_width.contains("checkbox_metrics(cx).gap"));
+    assert!(measured_width.contains("CHECKBOX_METRICS.mark"));
+    assert!(measured_width.contains("CHECKBOX_METRICS.gap"));
     assert!(measured_width.contains("strat.settings.text_step"));
-    assert!(measured_width.contains(".tier()"));
-    assert!(measured_width.contains(".nearest(&[MoonSize::Xs, MoonSize::Sm, MoonSize::Md])"));
-    assert!(measured_width.contains("tier.control_metrics().height"));
-    // The reserve is the tier's two square buttons plus the ratio-derived value cell plus the
-    // density checkbox gap, all under one `tokens.ui(..)`; pinned piecewise so rustfmt's line
+    assert!(measured_width.contains("design::CONTROL_TIER.control_metrics().height"));
+    // The reserve is the control tier's two square buttons plus the ratio-derived value cell plus
+    // the checkbox gap, all under one `tokens.ui(..)`; pinned piecewise so rustfmt's line
     // breaking cannot red this contract.
-    assert!(measured_width.contains("tokens.ui(height * 2.0"));
+    assert!(measured_width.contains(".ui(height * 2.0"));
     assert!(measured_width.contains("+ (height * ratio).round()"));
-    assert!(measured_width.contains("+ crate::panels::common::checkbox_metrics(cx).gap)"));
+    assert!(measured_width.contains("+ crate::panels::common::CHECKBOX_METRICS.gap)"));
     assert!(measured_width.contains("popup_group_inset_px(cx)"));
     assert!(!settings.contains("const CONTENT_WIDTH"));
     for tuner_symbol in [

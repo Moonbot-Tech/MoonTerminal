@@ -165,14 +165,13 @@ fn settings_content_width(cx: &App) -> f32 {
     let label_width = design::ui_text_width_zoomed(
         cx,
         &t!(GROUP_BY_VENUE_LABEL),
-        crate::panels::common::checkbox_metrics(cx).font,
+        crate::panels::common::CHECKBOX_METRICS.font,
         COMPACT_CHECKBOX_WEIGHT,
         false,
     );
     let checkbox_leading = f32::from(design::ui_px(
         cx,
-        crate::panels::common::checkbox_metrics(cx).mark
-            + crate::panels::common::checkbox_metrics(cx).gap,
+        crate::panels::common::CHECKBOX_METRICS.mark + crate::panels::common::CHECKBOX_METRICS.gap,
     ));
     let group_content = group_width.max(checkbox_leading + label_width);
     title_width.max(group_content + popup_group_inset_px(cx))

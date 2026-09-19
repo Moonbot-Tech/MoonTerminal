@@ -259,7 +259,7 @@ fn password_row(
             div().w(design::font_w_px(cx, FIELD_W)).child(
                 MoonInput::new(id)
                     .state(state)
-                    .size(design::input_tier(cx))
+                    .size(design::INPUT_SIZE)
                     .disabled(!enabled)
                     // The Settings root renders prose in the UI face and `MoonInput` inherits it.
                     // A secret must not: the eye below reveals it, and a key is read character by

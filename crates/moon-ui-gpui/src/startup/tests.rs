@@ -7,41 +7,36 @@ use std::time::{Duration, Instant};
 
 use super::{ReportRevisionDecision, ReportRevisionGate, TickEdges, consume_report_commit};
 
-/// Removing either font multiplier assignment or leaving the density delta unscaled makes
-/// non-tier text ignore zoom or grow out of proportion to tier-sized controls.
+/// Catches `startup.rs:moon_theme_config_for_presentation` putting the UI scale back into MoonUI's
+/// token multipliers, or dropping the design's fixed tier and text delta: the scale must travel
+/// as the window content zoom alone, or every window would scale twice.
 #[test]
-fn presentation_zoom_scales_text_and_density_on_both_palettes() {
-    use moon_core::config::{UiDensity, UiThemeMode};
+fn presentation_installs_the_scale_as_window_zoom_only() {
+    use moon_core::config::UiThemeMode;
+    use moon_ui::MoonSize;
 
     for mode in [UiThemeMode::Dark, UiThemeMode::Graphite, UiThemeMode::Light] {
-        for (density, delta) in [
-            (UiDensity::Compact, 0.0),
-            (UiDensity::Standard, 4.5),
-            (UiDensity::Large, 9.0),
-        ] {
-            let theme = super::moon_theme_config_for_presentation(mode, density, 1.5);
-            for scale in [theme.dark.scale, theme.light.scale] {
-                assert_eq!(scale.ui, 1.5);
-                assert_eq!(scale.font, 1.5);
-                assert_eq!(scale.font_delta, delta);
-            }
+        let theme = super::moon_theme_config_for_presentation(mode, 1.5);
+        for scale in [theme.dark.scale, theme.light.scale] {
+            assert_eq!(scale.zoom, 1.5);
+            assert_eq!(scale.ui, 1.0);
+            assert_eq!(scale.font, 1.0);
+            assert_eq!(scale.font_delta, 3.0);
+            assert_eq!(scale.tier, MoonSize::Sm);
         }
     }
 }
 
-/// Bypassing the shared scale guard lets invalid settings poison text metrics even when
-/// MoonUI's geometry setter falls back, leaving text and controls at different zoom levels.
+/// Catches bypassing MoonUI's zoom guard: an invalid stored scale must fall back to 1.0 on both
+/// palettes rather than reach the windows.
 #[test]
-fn presentation_zoom_rejects_non_finite_and_non_positive_scales() {
-    use moon_core::config::{UiDensity, UiThemeMode};
+fn presentation_rejects_non_finite_and_non_positive_scales() {
+    use moon_core::config::UiThemeMode;
 
     for zoom in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0] {
-        let theme =
-            super::moon_theme_config_for_presentation(UiThemeMode::Dark, UiDensity::Standard, zoom);
+        let theme = super::moon_theme_config_for_presentation(UiThemeMode::Dark, zoom);
         for scale in [theme.dark.scale, theme.light.scale] {
-            assert_eq!(scale.ui, 1.0);
-            assert_eq!(scale.font, 1.0);
-            assert_eq!(scale.font_delta, 3.0);
+            assert_eq!(scale.zoom, 1.0);
         }
     }
 }

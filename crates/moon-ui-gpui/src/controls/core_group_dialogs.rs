@@ -129,7 +129,7 @@ impl Render for SaveCoreGroup {
             .child(
                 MoonInput::new("core-group-name")
                     .state(&self.name)
-                    .size(design::input_tier(cx)),
+                    .size(design::INPUT_SIZE),
             )
     }
 }
@@ -482,7 +482,7 @@ impl Render for ManageCoreGroups {
                         div().w(px(220.0)).child(
                             MoonInput::new(format!("core-group-row-{index}"))
                                 .state(&row.input)
-                                .size(design::input_tier(cx)),
+                                .size(design::INPUT_SIZE),
                         ),
                     )
                     .child(div().flex_1().text_color(moon(p.text_muted)).child(facts))

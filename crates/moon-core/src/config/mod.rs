@@ -100,7 +100,7 @@ pub use layout::{
 pub use news_tags::NewsTagSettings;
 pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
 pub use quiet::{QuietCfg, QuietWarnBypass};
-pub use schema::{TelegramConfig, UiDensity, UiThemeMode};
+pub use schema::{TelegramConfig, UiThemeMode};
 pub use secrets::Secret;
 pub use servers::{
     ChartBucket, CoreSortMode, FeedFlags, MANUAL_STRAT_SLOTS, ManualStratState, ServerConfig,
@@ -120,12 +120,11 @@ use crate::market::MarketDataMode;
 /// Interface preferences readable WITHOUT any key, for a window shown before the config is open.
 ///
 /// The login window has to be painted before `servers.enc` can be decrypted, and everything it
-/// needs is in plaintext `settings.toml` anyway. Exposing these four values keeps that window from
+/// needs is in plaintext `settings.toml` anyway. Exposing these three values keeps that window from
 /// either flashing default colours or reaching into the config internals.
 #[derive(Clone, Copy, Debug)]
 pub struct PresentationPrefs {
     pub ui_theme_mode: UiThemeMode,
-    pub ui_density: UiDensity,
     pub ui_scale: f32,
     pub language: Language,
 }
@@ -216,7 +215,6 @@ pub fn presentation_prefs() -> PresentationPrefs {
     let (settings, load) = store::read_settings();
     PresentationPrefs {
         ui_theme_mode: schema::resolve_ui_theme_mode(settings.ui_theme_mode, load, profile_age()),
-        ui_density: settings.resolved_ui_density(),
         ui_scale: schema::repair_ui_scale(settings.ui_scale),
         language: settings.language,
     }
@@ -293,11 +291,9 @@ pub struct AppConfig {
     pub log_to_file: bool,
     /// Log-file retention in days; 0 keeps everything (settings.toml). Defaults to 14.
     pub log_retention_days: u32,
-    /// Interface density; Standard retains the historical +3 text adjustment in the UI crate.
-    pub ui_density: UiDensity,
     /// Interface theme mode (plaintext settings.toml); Graphite shares the dark colour set.
     pub ui_theme_mode: UiThemeMode,
-    /// Overall UI geometry scale. Defaults to 1.0.
+    /// Window content zoom applied to every window. Defaults to 1.0.
     pub ui_scale: f32,
     /// Startup retained-history depth percentage passed to MoonProto.
     ///
@@ -367,7 +363,6 @@ impl AppConfig {
             main_idle_close_secs: Default::default(),
             log_to_file: Default::default(),
             log_retention_days: Default::default(),
-            ui_density: Default::default(),
             ui_theme_mode: Default::default(),
             ui_scale: Default::default(),
             chart_memory_percent: Default::default(),
@@ -467,7 +462,6 @@ impl AppConfig {
                 main_idle_close_secs: merged.main_idle_close_secs,
                 log_to_file: merged.log_to_file,
                 log_retention_days: merged.log_retention_days,
-                ui_density: merged.ui_density,
                 ui_theme_mode: merged.ui_theme_mode,
                 ui_scale: merged.ui_scale,
                 chart_memory_percent: merged.chart_memory_percent,
@@ -521,7 +515,6 @@ impl AppConfig {
             cfg.chart_stack_height = schema::default_chart_stack_height();
             cfg.log_to_file = true;
             cfg.log_retention_days = 14;
-            cfg.ui_density = UiDensity::default();
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
             // The serde default is `true` while the field's `Default` is `false`; `save()` below
@@ -549,7 +542,6 @@ impl AppConfig {
             cfg.chart_stack_height = schema::default_chart_stack_height();
             cfg.log_to_file = true;
             cfg.log_retention_days = 14;
-            cfg.ui_density = UiDensity::default();
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
             // The serde default is `true` while the field's `Default` is `false`; `save()` below
@@ -579,7 +571,6 @@ impl AppConfig {
             chart_stack_height: schema::default_chart_stack_height(),
             log_to_file: true,
             log_retention_days: 14,
-            ui_density: meta.resolved_ui_density(),
             // A brand-new profile opens LIGHT; anyone else keeps exactly what they had. Reaching
             // this branch already proves `servers.enc` and both legacy configs are absent, but NOT
             // that `settings.toml` and `layout.toml` are — so the shared fact is asked rather than
@@ -773,7 +764,6 @@ impl AppConfig {
                 workspace_membership: WorkspaceMembership::default(),
             })
             .collect();
-        let ui_density = settings.resolved_ui_density();
         let mut config = Self {
             servers,
             groups: Vec::new(),
@@ -790,7 +780,6 @@ impl AppConfig {
             main_idle_close_secs: 0,
             log_to_file: settings.log_to_file,
             log_retention_days: settings.log_retention_days,
-            ui_density,
             ui_theme_mode: settings.ui_theme_mode,
             ui_scale: settings.ui_scale,
             chart_memory_percent: settings.chart_memory_percent,
@@ -896,7 +885,6 @@ impl AppConfig {
             self.main_idle_close_secs,
             self.log_to_file,
             self.log_retention_days,
-            self.ui_density,
             self.ui_theme_mode,
             self.ui_scale,
             self.chart_memory_percent,
@@ -1037,7 +1025,6 @@ impl AppConfig {
             0,     // main_idle_close_secs is behavioral.
             true,  // Log settings are non-structural.
             14,
-            UiDensity::default(),
             UiThemeMode::default(),
             schema::default_ui_scale(),
             schema::default_chart_memory_percent(),

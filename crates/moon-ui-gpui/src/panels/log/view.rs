@@ -66,7 +66,7 @@ impl Render for LogPanel {
                 div().w(px(180.0)).child(
                     MoonInput::new("log-query")
                         .state(&self.query)
-                        .size(crate::design::input_tier(cx))
+                        .size(crate::design::INPUT_SIZE)
                         .cleanable(true),
                 ),
             )

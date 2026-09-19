@@ -316,7 +316,7 @@ fn dialog_body(
             t!("assets.order_dialog.size", coin = draft.coin.as_str()).to_string(),
             MoonInput::new("assets-spot-order-size")
                 .state(&draft.size_input)
-                .size(design::input_tier(cx))
+                .size(design::INPUT_SIZE)
                 .mono(true),
             Some(max),
         ))
@@ -326,7 +326,7 @@ fn dialog_body(
             t!("assets.order_dialog.price").to_string(),
             MoonInput::new("assets-spot-order-price")
                 .state(&draft.price_input)
-                .size(design::input_tier(cx))
+                .size(design::INPUT_SIZE)
                 .mono(true),
             current,
         ))

@@ -505,7 +505,7 @@ impl AnalyticsView {
                         // The master checkbox ignores unmapped fields (no matching
                         // strategy parameter): 'all enabled' = all MAPPED ones.
                         .checked(self.tuner.all_mapped_enabled())
-                        .size(design::choice_tier(cx))
+                        .size(design::CONTROL_TIER)
                         .on_change({
                             let view = cx.entity();
                             move |ch: &bool, _w, app| {
@@ -632,7 +632,7 @@ impl AnalyticsView {
                     div().flex_none().child(
                         MoonCheckbox::new(SharedString::from(format!("tun-en-{fi}")))
                             .checked(self.tuner.enabled[fi])
-                            .size(design::choice_tier(cx))
+                            .size(design::CONTROL_TIER)
                             .on_change({
                                 let view = cx.entity();
                                 move |ch: &bool, _w, app| {
@@ -773,7 +773,7 @@ impl AnalyticsView {
                         div().w(design::font_w_px(cx, in_w)).flex_none().child(
                             MoonInput::new(SharedString::from(format!("tun-in-{vi}-{fi}-{is_to}")))
                                 .state(&input)
-                                .size(design::input_tier(cx)),
+                                .size(design::INPUT_SIZE),
                         ),
                     );
                 }

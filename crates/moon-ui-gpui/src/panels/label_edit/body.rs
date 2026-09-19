@@ -80,7 +80,7 @@ pub(super) fn dialog_body(state: &Entity<LabelEditState>, cx: &mut App) -> AnyEl
             div().flex_1().child(
                 MoonInput::new("le-name")
                     .state(&name_input)
-                    .size(design::input_tier(cx)),
+                    .size(design::INPUT_SIZE),
             ),
         )
         .child({

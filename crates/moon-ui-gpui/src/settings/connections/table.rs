@@ -314,7 +314,7 @@ fn paste_key_affix(
         .child(
             MoonText::new("⧉")
                 .color(p.text_muted)
-                .rendered_metrics(design::tier_text_metrics(cx, 0.0, 11.0))
+                .rendered_metrics(design::text_metrics(cx, 0.0, 11.0))
                 .mono(true)
                 .uppercase(false)
                 .render(),

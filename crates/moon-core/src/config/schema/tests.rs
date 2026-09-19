@@ -1,44 +1,40 @@
-//! Compatibility tests for persisted history sizing, theme defaults and density migration.
+//! Compatibility tests for persisted history sizing, theme defaults and retired keys.
 
 use moonproto::state::MarketHistorySizing;
 
 use super::*;
 
-/// Restoring legacy delta thresholds would resize upgraded users away from Standard.
-/// Every upgraded user starts at Standard unless an explicit density key overrides it.
+/// Catches `SettingsFile` growing `deny_unknown_fields`, or a retired key regaining a field:
+/// every profile written while `ui_density` and `ui_font_delta` existed must still load, and
+/// the values it carries for them must not reach the interface.
 #[test]
-fn density_ignores_legacy_values_and_respects_explicit_choices() {
+fn retired_density_and_font_keys_are_ignored_on_load() {
     for legacy in [
-        "-2.0", "0.0", "0.01", "3.0", "3.01", "6.0", "nan", "inf", "-inf",
+        "ui_font_delta = 6.0",
+        "ui_density = \"compact\"",
+        "ui_density = \"large\"\nui_font_delta = nan",
     ] {
-        let input = format!("ui_font_delta = {legacy}");
-        let parsed: SettingsFile = toml::from_str(&input).unwrap();
-        assert_eq!(parsed.resolved_ui_density(), UiDensity::Standard);
-        for (stored, density) in [
-            ("compact", UiDensity::Compact),
-            ("standard", UiDensity::Standard),
-            ("large", UiDensity::Large),
-        ] {
-            let parsed: SettingsFile =
-                toml::from_str(&format!("{input}\nui_density = \"{stored}\"")).unwrap();
-            assert_eq!(parsed.resolved_ui_density(), density);
-        }
+        let parsed: SettingsFile = toml::from_str(legacy)
+            .unwrap_or_else(|e| panic!("a file carrying `{legacy}` must still load: {e}"));
+        assert_eq!(
+            parsed.ui_scale,
+            default_ui_scale(),
+            "`{legacy}` must not touch the scale"
+        );
     }
-    let missing: SettingsFile = toml::from_str("").unwrap();
-    assert_eq!(missing.resolved_ui_density(), UiDensity::Standard);
 }
 
-/// Catches serializing the retired key or restoring its mapping on save.
-/// Every upgraded user starts at Standard, and the saved choice must keep that on reload.
+/// Catches serializing either retired key again: a file that carried them loses them on its
+/// next save, so the interface never reads a density it no longer has.
 #[test]
-fn density_serialization_drops_the_legacy_key() {
-    let mut settings: SettingsFile = toml::from_str("ui_font_delta = 6.0").unwrap();
-    settings.ui_density = Some(settings.resolved_ui_density());
+fn retired_keys_are_dropped_on_save() {
+    let settings: SettingsFile =
+        toml::from_str("ui_font_delta = 6.0\nui_density = \"large\"\nui_scale = 1.25").unwrap();
     let saved = toml::to_string(&settings).unwrap();
     assert!(!saved.contains("ui_font_delta"));
-    assert!(saved.contains("ui_density = \"standard\""));
+    assert!(!saved.contains("ui_density"));
     let reloaded: SettingsFile = toml::from_str(&saved).unwrap();
-    assert_eq!(reloaded.resolved_ui_density(), UiDensity::Standard);
+    assert_eq!(reloaded.ui_scale, 1.25);
 }
 
 /// The plausible production mutation is `config/schema.rs:clamp_chart_memory_percent`: restoring

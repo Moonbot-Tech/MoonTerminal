@@ -30,7 +30,7 @@ const SELL_CAPTION_GAP: f32 = 8.0;
 
 /// Caption for a preset group, muted, sharing the density-tier body size with the chips beside it.
 ///
-/// `MoonText` with [`design::tier_text_metrics`] rather than a hand-rolled text div: it applies
+/// `MoonText` with [`design::text_metrics`] rather than a hand-rolled text div: it applies
 /// the theme's mono family and already-scaled metrics, so the caption lands on the same size and
 /// baseline as the neighbouring density-tier controls. Colour is the remaining caption cue.
 ///
@@ -60,7 +60,7 @@ fn strip_text(text: impl Into<SharedString>, color: u32, cx: &App) -> impl IntoE
             .mono(true)
             .color(color)
             .uppercase(false)
-            .rendered_metrics(design::tier_text_metrics(cx, 0.0, 11.0))
+            .rendered_metrics(design::text_metrics(cx, 0.0, 11.0))
             .render(),
     )
 }
@@ -152,7 +152,7 @@ fn launcher_label_width(cx: &App, label: &str) -> f32 {
     let text = design::ui_text_width_zoomed(
         cx,
         label,
-        design::tier_font_size(cx),
+        design::BODY_TEXT,
         TOOLBAR_LAUNCHER_TEXT_WEIGHT,
         false,
     );
@@ -327,7 +327,7 @@ fn row_fit(
         // The exchange max-order VALUE is permanent — outcome 4 asks for a readout that is always
         // on the row — so it belongs in the unsheddable budget rather than on the ladder. Measured
         // from the REAL rendered string: a coin's cap runs from three digits to nine.
-        + design::ui_text_width_zoomed(cx, max_order_value, design::tier_font_size(cx), 400.0, true);
+        + design::ui_text_width_zoomed(cx, max_order_value, design::BODY_TEXT, 400.0, true);
     // Seven 1px rules — the hairline is deliberately NOT font-scaled (see `design::vline`). Pinned
     // against the row itself by `toolbar_row_budget_counts_every_rule_it_draws` in
     // `tests/theme_contract/shell.rs`: adding a section here without updating this count is invisible
@@ -347,9 +347,8 @@ fn row_fit(
     let gaps = gap * 21.0;
     let base = design::ui_value(cx, design::HEADER_PAD_X) * 2.0 + controls + rules + gaps;
     // A caption costs its own width plus the gap separating it from its strip.
-    let caption_w = |text: &str| {
-        design::ui_text_width_zoomed(cx, text, design::tier_font_size(cx), 400.0, true) + gap
-    };
+    let caption_w =
+        |text: &str| design::ui_text_width_zoomed(cx, text, design::BODY_TEXT, 400.0, true) + gap;
     let full_caption = size_caption_text();
     let unit_caption_width = caption_w(SIZE_UNIT);
     let full_caption_width = caption_w(&full_caption);
@@ -974,7 +973,6 @@ pub fn toolbar(
                     // than the one this row just showed.
                     write_matches_display.then(|| group.to_string()),
                     SIZE_UNIT,
-                    cx,
                 ),
                 manual_block_tip.clone(),
                 design::CHROME_GAP,
@@ -1074,7 +1072,6 @@ pub fn toolbar(
                 // sell price. A displayed core disagreeing with the write target disables it too
                 // (goal A2 FIX-3).
                 (!manual_on && write_matches_display).then(|| group.to_string()),
-                cx,
             );
             let sell_block = captioned_strip(
                 "toolbar-sell-caption",

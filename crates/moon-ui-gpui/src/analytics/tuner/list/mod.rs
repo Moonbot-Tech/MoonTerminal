@@ -451,7 +451,7 @@ impl AnalyticsView {
                 div().flex_1().min_w_0().child(
                     MoonInput::new("an-strat-search")
                         .state(&search)
-                        .size(design::input_tier(cx)),
+                        .size(design::INPUT_SIZE),
                 ),
             )
             .child(self.strat_type_menu(cx))

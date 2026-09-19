@@ -269,7 +269,7 @@ fn row(
                 .min_w_0()
                 .text_size(design::ui_px(
                     cx,
-                    crate::panels::common::checkbox_metrics(cx).font,
+                    crate::panels::common::CHECKBOX_METRICS.font,
                 ))
                 .text_color(rgb(palette.text_soft))
                 .child(t!(block_label(block)).to_string()),

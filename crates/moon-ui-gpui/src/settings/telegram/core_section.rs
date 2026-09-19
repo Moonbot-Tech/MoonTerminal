@@ -443,7 +443,7 @@ impl SettingsView {
         let p = MoonPalette::active(cx);
         let mut input = MoonInput::new(id)
             .state(state)
-            .size(design::input_tier(cx))
+            .size(design::INPUT_SIZE)
             .disabled(!can_edit)
             .mono(true);
         if masked {

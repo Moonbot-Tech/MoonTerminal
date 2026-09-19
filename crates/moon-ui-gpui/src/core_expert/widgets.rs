@@ -171,7 +171,7 @@ fn text_at(
     div().flex_none().child(
         MoonText::new(text)
             .color(color)
-            .rendered_metrics(design::tier_text_metrics(cx, step, 15.0))
+            .rendered_metrics(design::text_metrics(cx, step, 15.0))
             .weight(if bold { 600.0 } else { 400.0 })
             .uppercase(false)
             .render(),
@@ -189,7 +189,7 @@ pub(super) fn text_block(
     div().w_full().min_w_0().child(
         MoonText::new(text)
             .color(color)
-            .rendered_metrics(design::tier_text_metrics(cx, 0.0, 15.0))
+            .rendered_metrics(design::text_metrics(cx, 0.0, 15.0))
             .weight(if bold { 600.0 } else { 400.0 })
             .uppercase(false)
             .wrap()
@@ -229,7 +229,6 @@ pub(super) fn slider(
 ///     store: Editor-state owner that may provide the field's input state.
 ///     id: Page declaration key for the field.
 ///     enabled: Whether the mirrored page permits interaction.
-///     cx: Application context used to select the input's density tier.
 ///
 /// Returns:
 ///     The configured field when the page declared its input state.
@@ -237,9 +236,8 @@ pub(super) fn field(
     store: &EditorStore,
     id: &'static str,
     enabled: bool,
-    cx: &App,
 ) -> Option<impl IntoElement> {
-    field_masked(store, id, enabled, false, cx)
+    field_masked(store, id, enabled, false)
 }
 
 /// Build the same field, optionally masked — Moonbot's password boxes show dots, and a mirrored
@@ -250,7 +248,6 @@ pub(super) fn field(
 ///     id: Page declaration key for the field.
 ///     enabled: Whether the mirrored page permits interaction.
 ///     masked: Whether the field must hide its entered characters.
-///     cx: Application context used to select the input's density tier.
 ///
 /// Returns:
 ///     The configured field when the page declared its input state.
@@ -259,7 +256,6 @@ pub(super) fn field_masked(
     id: &'static str,
     enabled: bool,
     masked: bool,
-    cx: &App,
 ) -> Option<impl IntoElement> {
     let state = store.input(id)?;
     // Emptied by the view when mixed (see `build_editors`); here it only says why it is empty.
@@ -268,7 +264,7 @@ pub(super) fn field_masked(
         div().w_full().child(
             MoonInput::new(id)
                 .state(&state)
-                .size(design::input_tier(cx))
+                .size(design::INPUT_SIZE)
                 .disabled(!enabled)
                 .when(mixed, |input| {
                     input
@@ -648,7 +644,7 @@ pub(super) fn num(
         div().flex_none().w(design::ui_px(cx, width)).child(
             MoonInput::new(id)
                 .state(&state)
-                .size(design::input_tier(cx))
+                .size(design::INPUT_SIZE)
                 .disabled(!enabled)
                 // Too narrow for the placeholder: the tone and the emptiness say it.
                 .when(mixed, |input| input.tone(MoonTone::Warning).selected(true)),
