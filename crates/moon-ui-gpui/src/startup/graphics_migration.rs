@@ -48,7 +48,11 @@ fn resolve(legacy: LegacyChartGraphics) -> ChartGraphicsCfg {
         cfg.trade_volume_alpha = v;
     }
     if let Some(v) = legacy.candle_volume_style {
+        // A theme file predates the bought/sold switch, so its style alone said whether the
+        // band drew. Carry that as the switch too: left at the shipped default (on), a user who
+        // had the band OFF would open on it.
         cfg.candle_volume_style = v;
+        cfg.candle_volume_sides = v != moon_core::market::candles::VOLUME_STYLE_OFF;
     }
     if let Some(v) = legacy.candle_volume_height {
         cfg.candle_volume_height = v;
@@ -62,11 +66,13 @@ fn resolve(legacy: LegacyChartGraphics) -> ChartGraphicsCfg {
     moon_chart::normalize_chart_graphics(cfg)
 }
 
-/// Copy the six migrated values into one tab spec, leaving its own five settings alone.
+/// Copy the six migrated values — and the band switch the style implies — into one tab spec,
+/// leaving its other settings alone.
 fn stamp(spec: &mut ChartGraphicsCfg, from: ChartGraphicsCfg) {
     spec.marker_scale = from.marker_scale;
     spec.trade_volume_alpha = from.trade_volume_alpha;
     spec.candle_volume_style = from.candle_volume_style;
+    spec.candle_volume_sides = from.candle_volume_sides;
     spec.candle_volume_height = from.candle_volume_height;
     spec.candle_volume_alpha = from.candle_volume_alpha;
     spec.candle_volume_scale = from.candle_volume_scale;
@@ -133,3 +139,6 @@ pub(super) fn migrate_chart_graphics_from_theme(
     }
     true
 }
+
+#[cfg(test)]
+mod tests;

@@ -177,7 +177,7 @@ struct VolumeStyle {
     down: vec4<f32>,
     scale: vec4<f32>,
     m: vec4<f32>,  // x style, y height fraction, z 1/max, w avg/max
-    m2: vec4<f32>, // x retired band cap, y bar width px, z bracket line px, w bracket stem signed inset px
+    m2: vec4<f32>, // x retired band cap, y retired bar width, z bracket line px, w bracket stem signed inset px
     m3: vec4<f32>, // x sides switch (0 off / 1 overlaid / 2 stacked), y split boundary rel ms, z interval rel ms, w bracket tick px
 };
 
@@ -204,14 +204,10 @@ fn vol_band_h() -> f32 {
 }
 
 fn vol_height_px(cd: Candle) -> f32 {
-    if vs.m3.x >= 0.5 {
-        // Sides switch on: the candle half is read as an interval figure on the linear scale.
-        let tf_rel = select(cs.tf_rel, cd.tf_rel, cd.tf_rel > 0.0);
-        let lin = clamp(cd.vol * (vs.m3.z / max(tf_rel, 1.0)) * vs.m.z, 0.0, 1.0);
-        return lin * vol_band_h();
-    }
-    let norm = clamp(cd.vol * vs.m.z, 0.0, 1.0);
-    return sqrt(norm) * vol_band_h();
+    // The candle half is read as an interval figure on the linear scale the sides layer shares.
+    let tf_rel = select(cs.tf_rel, cd.tf_rel, cd.tf_rel > 0.0);
+    let lin = clamp(cd.vol * (vs.m3.z / max(tf_rel, 1.0)) * vs.m.z, 0.0, 1.0);
+    return lin * vol_band_h();
 }
 
 fn vol_cull() -> VolumeBarOut {
@@ -241,15 +237,9 @@ fn volume_bars_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) 
         o.up = 1u;
     }
 
-    if vs.m.x < 1.5 {
-        let bw = clamp(c0.y * 0.5, 1.0, vs.m2.y);
-        let p0 = vec2<f32>(round(c0.x - bw * 0.5), base - h0);
-        var px = p0 + corner * vec2<f32>(bw, h0);
-        px.x = clamp(px.x, cv.bounds.x, cv.bounds.x + cv.bounds.z);
-        o.pos = to_clip(px, cv.resolution);
-        return o;
-    }
-
+    // HILLS — the one live style: a trapezoid from this bucket's centre to the next one's, so
+    // consecutive instances form one continuous filled area. Reading candles[iid + 1] is why the
+    // draw is issued with count - 1 instances.
     let cd1 = candles[iid + 1u];
     // A replay removes candles under its tick span. Never fill a hill across that gap.
     let tf_rel = select(cs.tf_rel, cd.tf_rel, cd.tf_rel > 0.0);
@@ -269,64 +259,6 @@ fn volume_bars_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) 
 @fragment
 fn volume_bars_fragment(in: VolumeBarOut) -> @location(0) vec4<f32> {
     return select(vs.down, vs.up, in.up == 1u);
-}
-
-// The scale is Moonbot's BRACKET, not a pair of full-width lines: a stem from the band floor up to
-// the visible maximum, and three ticks to its right — at the maximum, at the second reference level
-// and on the floor. Instance 0 is the stem, 1..3 the ticks top-down (VOLUME_SCALE_INSTANCES). Where
-// the stem stands is vs.m2.w, the signed inset in physical px — from the plot's left edge when
-// non-negative, from its right edge when negative — the very rule the text pass places the labels
-// from (`moon_chart::volume_bars::scale_bracket_offset`); vs.m3.w is the tick length.
-fn scale_bracket_quad(vid: u32, iid: u32, band: f32, second_frac: f32) -> vec4<f32> {
-    let base = cv.bounds.y + cv.bounds.w - 1.0;
-    let th = max(vs.m2.z, 1.0);
-    let tick = max(vs.m3.w, th);
-    var off = vs.m2.w;
-    if off < 0.0 {
-        off = cv.bounds.z + vs.m2.w;
-    }
-    let bx = cv.bounds.x + clamp(off, 0.0, cv.bounds.z);
-    let top = round(base - band);
-    var origin: vec2<f32>;
-    var size: vec2<f32>;
-    if iid == 0u {
-        origin = vec2<f32>(bx, top);
-        size = vec2<f32>(th, base - top + 1.0);
-    } else {
-        var frac = 0.0;
-        if iid == 1u {
-            frac = 1.0;
-        } else if iid == 2u {
-            frac = second_frac;
-        }
-        let y = min(round(base - band * frac), base - th + 1.0);
-        origin = vec2<f32>(bx, y);
-        size = vec2<f32>(tick, th);
-    }
-    let corner = CORNERS_01[vid % 6u];
-    let px = origin + corner * size;
-    return to_clip(px, cv.resolution);
-}
-
-struct VolumeScaleOut {
-    @builtin(position) pos: vec4<f32>,
-};
-
-@vertex
-fn volume_scale_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VolumeScaleOut {
-    var o: VolumeScaleOut;
-    if vs.m.x < 0.5 || vs.m3.x >= 0.5 {
-        // Off, or the sides layer draws the (linear) scale for both halves.
-        o.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
-        return o;
-    }
-    o.pos = scale_bracket_quad(vid, iid, vol_band_h(), sqrt(clamp(vs.m.w, 0.0, 1.0)));
-    return o;
-}
-
-@fragment
-fn volume_scale_fragment(_in: VolumeScaleOut) -> @location(0) vec4<f32> {
-    return vs.scale;
 }
 
 @fragment

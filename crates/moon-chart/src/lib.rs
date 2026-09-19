@@ -32,4 +32,4 @@ pub mod side_volume;
 pub mod tick_volume;
 pub mod view;
 pub mod volume_bars;
-pub use volume_bars::{VolumeSample, VolumeStats, collect_samples, visible_volume_stats};
+pub use volume_bars::{VolumeSample, VolumeStats, collect_samples};

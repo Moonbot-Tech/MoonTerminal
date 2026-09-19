@@ -142,7 +142,6 @@ struct Pipelines {
     book_bars: wgpu::RenderPipeline,
     candles: wgpu::RenderPipeline,
     volume_bars: wgpu::RenderPipeline,
-    volume_scale: wgpu::RenderPipeline,
     side_volume: wgpu::RenderPipeline,
     side_scale: wgpu::RenderPipeline,
     hvol_rows: wgpu::RenderPipeline,

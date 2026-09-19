@@ -1,7 +1,14 @@
 //! The "Volumes" popup (the `V` button beside the labels one) configures the chart's two volume
-//! indicators, one column each: the VERTICAL volumes — the bottom band, per candle, with Moonbot's
-//! bought/sold `Vol` on top of it — and the HORIZONTAL volumes — Moonbot's `HVol`, turnover by
-//! price over a trailing window drawn as rows in a zone beside the plot.
+//! indicators, one column each: the VERTICAL volumes — Moonbot's `Vol`, bought and sold as
+//! rolling sums drawn as hills along the bottom, continued by the candle turnover where the trade
+//! history does not reach — and the HORIZONTAL volumes — Moonbot's `HVol`, turnover by price over
+//! a trailing window drawn as rows in a zone beside the plot.
+//!
+//! The band is ONE checkbox. It used to be a style row (hills, bars, off) and a separate switch
+//! for the bought/sold split, six pictures for what every user wanted as one: on, the way Moonbot
+//! draws it. The two stored fields remain (`candle_volume_style`, `candle_volume_sides`); the
+//! checkbox writes both, and `moon_chart::normalize_chart_graphics` folds whatever an older build
+//! wrote onto the same pair, so this popup never sees a half-state.
 //!
 //! The band's rows used to live in the graphics popup, whose subject is what the chart draws over
 //! the candles. They belong beside the profile: the two are the reference's pair of volume
@@ -28,7 +35,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::common::{StackSetting, seg_row};
-use super::graphics_popup::{GraphicsPopupHost, nearest, percent_label, write_cfg};
+use super::graphics_popup::{GraphicsPopupHost, nearest, write_cfg};
 use super::popup_slot::ChartPopup;
 use crate::design;
 use crate::panels::{
@@ -57,23 +64,18 @@ const CANDLE_VOLUME_HEIGHTS: [f32; 6] = [0.05, 0.10, 0.18, 0.25, 0.35, 0.45];
 /// on an exact segment instead of the nearest one.
 const CANDLE_VOLUME_ALPHAS: [f32; 6] = [0.0, 0.15, 0.22, 0.30, 0.50, 1.0];
 
-/// Selectable bottom-volume styles, in display order.
-const VOLUME_STYLES: [u8; 3] = [
-    moon_core::market::candles::VOLUME_STYLE_HILLS,
-    moon_core::market::candles::VOLUME_STYLE_BARS,
-    moon_core::market::candles::VOLUME_STYLE_OFF,
-];
-
 /// Segment widths, in rendered pixels. Each column is as wide as its widest row and no wider,
 /// and every other row in it divides that width among its own segments.
 ///
-/// Both columns' widest rows are seven cells at the width the graphics popup uses: the sides
-/// band's intervals on the left, the zone widths on the right. The window used to be the widest
-/// row by far — `Auto`, nine windows and `Max`, eleven cells — and set the whole popup's width
-/// on its own; it is a dropdown now, one line wide, for exactly that reason.
-const BAND_ROW_W: f32 = 7.0 * 42.0;
+/// The two columns are the SAME width, and as narrow as their widest rows allow: seven cells
+/// each — the sides band's intervals (`Авто`, `30s`) on the left, the zone widths on the right —
+/// at the narrowest cell a four-character label still sits inside. Percent rows print bare
+/// numbers, the unit in the row's caption, which is what lets the cells be this narrow. The
+/// window used to be the widest row by far — `Auto`, nine windows and `Max`, eleven cells — and
+/// set the whole popup's width on its own; it is a dropdown now, one line wide, for exactly that
+/// reason.
+const BAND_ROW_W: f32 = 7.0 * 32.0;
 const B_SEG_W2: f32 = BAND_ROW_W / 2.0;
-const B_SEG_W3: f32 = BAND_ROW_W / 3.0;
 const B_SEG_W6: f32 = BAND_ROW_W / 6.0;
 const B_SEG_W7: f32 = BAND_ROW_W / 7.0;
 const HVOL_ROW_W: f32 = BAND_ROW_W;
@@ -113,26 +115,18 @@ fn tf_label(tf_s: u32) -> String {
         .unwrap_or_else(|| format!("{tf_s}s"))
 }
 
-/// Localized name of a bottom-volume style id.
-///
-/// An unknown id falls back to the "off" label rather than panicking: the value is a `u8` in a
-/// hand-editable config, so a number outside the set is reachable by typing.
-fn volume_style_label(style: u8) -> String {
-    use moon_core::market::candles::{VOLUME_STYLE_BARS, VOLUME_STYLE_HILLS};
-    if style == VOLUME_STYLE_HILLS {
-        t!("chart.graphics.volume_style_hills").to_string()
-    } else if style == VOLUME_STYLE_BARS {
-        t!("chart.graphics.volume_style_bars").to_string()
-    } else {
-        t!("chart.graphics.volume_style_off").to_string()
-    }
-}
-
-/// Label a price window in percent of price, trimmed of trailing zeros: `0.1%`, `0.05%`, `1%`.
+/// Label a price window in percent of price, trimmed of trailing zeros: `0.1`, `0.05`, `1`. The
+/// unit is in the row's caption, not in every cell, so the cells stay narrow.
 fn price_frame_label(pct: f32) -> String {
     let text = format!("{pct:.2}");
-    let text = text.trim_end_matches('0').trim_end_matches('.');
-    format!("{text}%")
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// Label a 0..1 fraction as a whole number of percent, without the sign: `18`, `100`. The unit
+/// is in the row's caption, like [`price_frame_label`]; `graphics_popup::percent_label` keeps the
+/// sign for the rows whose captions do not name it.
+fn whole_percent_label(v: f32) -> String {
+    format!("{}", (v * 100.0).round())
 }
 
 /// The windows the dropdown offers, in its order: `Auto` (0), every listed window, `Max`.
@@ -161,30 +155,32 @@ fn render_volumes_popup<T: VolumesPopupHost>(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    // --- Bottom volumes: the per-CANDLE band drawn beneath the trade bars above. ---
-    let volume_style_row = {
+    // --- Bottom volumes: the one switch. Read through the band's own rule rather than either
+    // field alone, so a stored pair an older build wrote lights the box exactly when the chart
+    // draws the band; written as the pair the rule maps it to, so a save never stores a
+    // half-state for the normaliser to repair. ---
+    let volumes_on =
+        moon_chart::volume_bars::volume_band_on(cfg.candle_volume_style, cfg.candle_volume_sides);
+    let volumes_cb = {
         let entity = entity.clone();
-        seg_row(
-            format!("{id}-volume-style"),
-            t!("chart.graphics.volume_style").to_string(),
-            VOLUME_STYLES
-                .iter()
-                // Exact equality, not `nearest`: a style is an identity, and snapping an unknown
-                // id to the closest NUMBER would light a style the chart is not drawing.
-                .map(|v| (volume_style_label(*v), *v == cfg.candle_volume_style))
-                .collect(),
-            B_SEG_W3,
-            p,
-            cx,
-            move |ix, app| {
-                if let Some(v) = VOLUME_STYLES.get(ix) {
-                    let v = *v;
-                    write_cfg(&entity, app, |c| c.candle_volume_style = v);
-                }
-            },
-        )
+        MoonCheckbox::new(SharedString::from(format!("{id}-volumes-enabled")))
+            .label(t!("chart.volumes.band_enabled").to_string())
+            .checked(volumes_on)
+            .on_change(move |ch: &bool, _w, app| {
+                let v = *ch;
+                write_cfg(&entity, app, |c| {
+                    c.candle_volume_style = if v {
+                        moon_core::market::candles::VOLUME_STYLE_HILLS
+                    } else {
+                        moon_core::market::candles::VOLUME_STYLE_OFF
+                    };
+                    c.candle_volume_sides = v;
+                });
+            })
     };
-    let volume_height_row = {
+    // The remaining rows appear only while the band is on, so the popup keeps its shape when
+    // there is nothing to configure — the horizontal column does the same below.
+    let volume_height_row = volumes_on.then(|| {
         let entity = entity.clone();
         let current = nearest(&CANDLE_VOLUME_HEIGHTS, cfg.candle_volume_height);
         seg_row(
@@ -193,7 +189,7 @@ fn render_volumes_popup<T: VolumesPopupHost>(
             CANDLE_VOLUME_HEIGHTS
                 .iter()
                 .enumerate()
-                .map(|(index, v)| (percent_label(*v), index == current))
+                .map(|(index, v)| (whole_percent_label(*v), index == current))
                 .collect(),
             B_SEG_W6,
             p,
@@ -205,7 +201,7 @@ fn render_volumes_popup<T: VolumesPopupHost>(
                 }
             },
         )
-    };
+    });
     // --- Shared frame: what both indicators draw with. The opacity is ONE value by design —
     // the profile's rows take the band's (`chartdx::data_state::market`) — and the kind is two
     // stored fields that mean the same thing, written together here so the two pictures agree;
@@ -221,7 +217,7 @@ fn render_volumes_popup<T: VolumesPopupHost>(
             CANDLE_VOLUME_ALPHAS
                 .iter()
                 .enumerate()
-                .map(|(index, v)| (percent_label(*v), index == current))
+                .map(|(index, v)| (whole_percent_label(*v), index == current))
                 .collect(),
             common_w / 6.0,
             p,
@@ -233,19 +229,6 @@ fn render_volumes_popup<T: VolumesPopupHost>(
                 }
             },
         )
-    };
-    // --- Moonbot's `Vol` on top of either style: the switch, then its interval row, which
-    // appears only while it is on so the plain popup keeps the shape it had. ---
-    let sides_on = cfg.candle_volume_sides;
-    let volume_sides_cb = {
-        let entity = entity.clone();
-        MoonCheckbox::new(SharedString::from(format!("{id}-volume-sides")))
-            .label(t!("chart.graphics.volume_sides").to_string())
-            .checked(sides_on)
-            .on_change(move |ch: &bool, _w, app| {
-                let v = *ch;
-                write_cfg(&entity, app, |c| c.candle_volume_sides = v);
-            })
     };
     let volume_kind_row = {
         let entity = entity.clone();
@@ -273,7 +256,7 @@ fn render_volumes_popup<T: VolumesPopupHost>(
             },
         )
     };
-    let volume_tf_row = sides_on.then(|| {
+    let volume_tf_row = volumes_on.then(|| {
         let entity = entity.clone();
         // Exact equality, like the style row: the stored value is already snapped onto this list
         // by `normalize_chart_graphics`, so a segment lights only for the width the band draws.
@@ -305,7 +288,7 @@ fn render_volumes_popup<T: VolumesPopupHost>(
             },
         )
     });
-    let volume_scale_pos_row = {
+    let volume_scale_pos_row = volumes_on.then(|| {
         let entity = entity.clone();
         seg_row(
             format!("{id}-volume-scale-pos"),
@@ -327,11 +310,11 @@ fn render_volumes_popup<T: VolumesPopupHost>(
                 write_cfg(&entity, app, |c| c.candle_volume_scale_right = ix == 1);
             },
         )
-    };
+    });
     // Where the plot's bottom captions go once the band takes the floor: lifted above it, or
     // printed over the bars on their plates. A per-tab switch beside the band's own controls,
     // because it is the BAND that displaces them; the label editor knows nothing of it.
-    let volume_labels_row = {
+    let volume_labels_row = volumes_on.then(|| {
         let entity = entity.clone();
         seg_row(
             format!("{id}-volume-labels"),
@@ -353,8 +336,8 @@ fn render_volumes_popup<T: VolumesPopupHost>(
                 write_cfg(&entity, app, |c| c.candle_volume_labels_over = ix == 1);
             },
         )
-    };
-    let volume_scale_row = {
+    });
+    let volume_scale_row = volumes_on.then(|| {
         let entity = entity.clone();
         v_flex()
             .w_full()
@@ -374,7 +357,7 @@ fn render_volumes_popup<T: VolumesPopupHost>(
                     }
                 },
             ))
-    };
+    });
 
     let hvol_on = cfg.hvol_enabled;
     let enabled_cb = {
@@ -470,7 +453,7 @@ fn render_volumes_popup<T: VolumesPopupHost>(
             WIDTHS
                 .iter()
                 .enumerate()
-                .map(|(index, v)| (percent_label(*v), index == current))
+                .map(|(index, v)| (whole_percent_label(*v), index == current))
                 .collect(),
             H_SEG_W7,
             p,
@@ -555,6 +538,19 @@ fn render_volumes_popup<T: VolumesPopupHost>(
                     }),
             )
     });
+    // The zone's two standing captions — the window and the price window — off, for a reader who
+    // wants the zone bare. Next to the plates row, since both are about those captions; the
+    // cursor readout is not touched by either.
+    let captions_cb = hvol_on.then(|| {
+        let entity = entity.clone();
+        MoonCheckbox::new(SharedString::from(format!("{id}-hvol-hide-captions")))
+            .label(t!("chart.volumes.hvol_hide_captions").to_string())
+            .checked(cfg.hvol_hide_captions)
+            .on_change(move |ch: &bool, _w, app| {
+                let v = *ch;
+                write_cfg(&entity, app, |c| c.hvol_hide_captions = v);
+            })
+    });
     let apply_all_btn = {
         let entity = entity.clone();
         popup_apply_all_button(
@@ -596,23 +592,25 @@ fn render_volumes_popup<T: VolumesPopupHost>(
                     .child(volume_kind_row),
             ),
         )
+        // The two frames stretch to one height — `items_stretch`, since `h_flex` centres by
+        // default: two boxes of different heights side by side read as two popups, and the
+        // shorter one's rows look cut off under the taller one's.
         .child(
             h_flex()
                 .w_full()
-                .items_start()
+                .items_stretch()
                 .gap(px(COLUMN_GAP))
                 .child(
                     popup_group("frame-band", t!("chart.volumes.frame_band")).child(
                         v_flex()
                             .w(px(BAND_ROW_W))
                             .gap(design::ui_px(cx, 6.0))
-                            .child(volume_style_row)
-                            .child(volume_sides_cb)
+                            .child(volumes_cb)
                             .children(volume_tf_row)
-                            .child(volume_height_row)
-                            .child(volume_scale_pos_row)
-                            .child(volume_labels_row)
-                            .child(volume_scale_row),
+                            .children(volume_height_row)
+                            .children(volume_scale_pos_row)
+                            .children(volume_labels_row)
+                            .children(volume_scale_row),
                     ),
                 )
                 .child(
@@ -626,6 +624,7 @@ fn render_volumes_popup<T: VolumesPopupHost>(
                             .children(width_row)
                             .children(overlay_cb)
                             .children(side_row)
+                            .children(captions_cb)
                             .children(backdrop_row),
                     ),
                 ),

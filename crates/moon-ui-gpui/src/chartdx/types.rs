@@ -349,18 +349,19 @@ pub struct VolumeStyleGpu {
     pub down: [f32; 4],
     /// Scale-bracket colour, rgb + alpha.
     pub scale: [f32; 4],
-    /// `x` style (0 off, 1 bars, 2 hills) - `y` band height as a fraction of the plot -
+    /// `x` style (0 off, 2 hills; 1 was the retired bars style and is never uploaded) - `y` band
+    /// height as a fraction of the plot -
     /// `z` 1/visible_max, quantized - `w` the second reference line's height over the maximum,
     /// 0..1: the visible average, or one half with the sides switch on.
     pub m: [f32; 4],
-    /// `x` unused, once a fixed band-height cap - `y` max bar width in physical px -
-    /// `z` scale-bracket stem and tick thickness in physical px - `w` the bracket stem's SIGNED
-    /// inset in physical px: from the plot's left edge when non-negative, from its right edge
-    /// when negative (`moon_chart::volume_bars::scale_bracket_signed_inset`).
+    /// `x` unused, once a fixed band-height cap - `y` unused, once the retired bars style's max
+    /// bar width - `z` scale-bracket stem and tick thickness in physical px - `w` the bracket
+    /// stem's SIGNED inset in physical px: from the plot's left edge when non-negative, from its
+    /// right edge when negative (`moon_chart::volume_bars::scale_bracket_signed_inset`).
     ///
-    /// `x` is kept rather than repacked: the wire layout of this struct is pinned by
-    /// `theme_contract`, and shifting three live fields to reclaim one dead slot would rewrite
-    /// every shader's member list for nothing.
+    /// `x` and `y` are kept rather than repacked: the wire layout of this struct is pinned by
+    /// `theme_contract`, and shifting two live fields to reclaim dead slots would rewrite every
+    /// shader's member list for nothing.
     pub m2: [f32; 4],
     /// The bought/sold switch (`ChartGraphicsCfg::candle_volume_sides`): `x` 0 off, 1 overlaid,
     /// 2 stacked - `y` where the split history begins, relative ms (candles from there on are

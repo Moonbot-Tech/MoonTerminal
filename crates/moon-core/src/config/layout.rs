@@ -1376,7 +1376,8 @@ fn def_trade_volume_alpha() -> f32 {
     0.34
 }
 
-/// Default bottom-volume display style.
+/// Default bottom-volume display style: the band is on. The only other live id is OFF — see
+/// `crate::market::candles::VOLUME_STYLE_OFF`.
 fn def_candle_volume_style() -> u8 {
     crate::market::candles::VOLUME_STYLE_HILLS
 }
@@ -1573,7 +1574,11 @@ pub struct ChartGraphicsCfg {
     pub trade_volume_alpha: f32,
 
     // --- Bottom candle volumes, likewise moved off `ChartTheme`. ---
-    /// Display style: `crate::market::candles::VOLUME_STYLE_OFF` / `_BARS` / `_HILLS`.
+    /// Display style: `crate::market::candles::VOLUME_STYLE_OFF` or `_HILLS`. Together with
+    /// [`Self::candle_volume_sides`] it is ONE switch — the volumes popup's checkbox — and the
+    /// normaliser (`moon_chart::normalize_chart_graphics`) folds every pair an older build could
+    /// write onto that switch: hills with the split on, or off. The two fields stay because both
+    /// files carry them; neither is read on its own.
     #[serde(
         default = "def_candle_volume_style",
         deserialize_with = "de_candle_volume_style"
@@ -1602,8 +1607,13 @@ pub struct ChartGraphicsCfg {
     /// Moonbot's `Vol` on top of the band: where the retained trade history reaches, the band
     /// shows BOUGHT and SOLD as rolling sums over `candle_volume_tf_s`; before that it keeps the
     /// candle turnover in the candle's own colours, scaled to the same interval so the two halves
-    /// share one scale. Rides on hills or bars alike, and stands alone with the candle band OFF
-    /// — the split only, as Moonbot draws it; off, the band is the candle turnover only.
+    /// share one scale. On whenever the band is on — the other half of the one switch
+    /// [`Self::candle_volume_style`] describes.
+    ///
+    /// `Default` is ON, so a fresh profile opens on the band. The serde default is still OFF,
+    /// deliberately: a file without this key was written before the switch existed, and there
+    /// the style alone said whether the band drew — the normaliser reads it that way, so a user
+    /// who had the band off stays off. A file this build writes always carries the key.
     #[serde(default, deserialize_with = "de_lenient_false")]
     pub candle_volume_sides: bool,
     /// With [`Self::candle_volume_sides`]: draw SOLD on top of BOUGHT so a column's height is
@@ -1667,6 +1677,11 @@ pub struct ChartGraphicsCfg {
     /// stubs pointing at it. Not a Moonbot setting: the reference always carves the zone out.
     #[serde(default, deserialize_with = "de_lenient_false")]
     pub hvol_overlay: bool,
+    /// Leave out the zone's two corner captions — the window (`Окно: 12h`) and the price window
+    /// (`Окно цены: 0.10%`). The cursor readout and its plates are untouched; this hides only the
+    /// standing captions, for a reader who knows what `Auto` picked and wants the zone bare.
+    #[serde(default, deserialize_with = "de_lenient_false")]
+    pub hvol_hide_captions: bool,
 }
 
 /// The `hvol_tf_s` value that means "everything retained" — Moonbot's `Max`.
@@ -1696,7 +1711,7 @@ impl Default for ChartGraphicsCfg {
             candle_volume_height: def_candle_volume_height(),
             candle_volume_alpha: def_candle_volume_alpha(),
             candle_volume_scale: def_candle_volume_scale(),
-            candle_volume_sides: false,
+            candle_volume_sides: true,
             candle_volume_stacked: false,
             candle_volume_tf_s: 0,
             candle_volume_scale_right: false,
@@ -1708,6 +1723,7 @@ impl Default for ChartGraphicsCfg {
             hvol_side: HvolSide::Right,
             hvol_stacked: false,
             hvol_overlay: false,
+            hvol_hide_captions: false,
         }
     }
 }

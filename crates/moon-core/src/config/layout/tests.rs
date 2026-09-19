@@ -243,6 +243,7 @@ fn hvol_fields_default_round_trip_and_read_leniently() {
     assert_eq!(empty.chart_graphics.hvol_side, HvolSide::Right);
     assert!(!empty.chart_graphics.hvol_stacked);
     assert!(!empty.chart_graphics.hvol_overlay);
+    assert!(!empty.chart_graphics.hvol_hide_captions);
 
     let doc = "[chart_graphics]
                hvol_enabled = true
@@ -251,6 +252,7 @@ fn hvol_fields_default_round_trip_and_read_leniently() {
                hvol_width = 0.3
                hvol_stacked = true
                hvol_overlay = true
+               hvol_hide_captions = true
 ";
     let decoded: WindowLayout = toml::from_str(doc).expect("the hvol block must load");
     assert!(decoded.chart_graphics.hvol_enabled);
@@ -261,6 +263,7 @@ fn hvol_fields_default_round_trip_and_read_leniently() {
     assert_eq!(decoded.chart_graphics.hvol_width, 0.3);
     assert!(decoded.chart_graphics.hvol_stacked);
     assert!(decoded.chart_graphics.hvol_overlay);
+    assert!(decoded.chart_graphics.hvol_hide_captions);
     let written = toml::to_string(&decoded.chart_graphics).expect("serializes");
     assert!(
         written.contains("hvol_side = \"left-transparent\""),
@@ -2091,4 +2094,17 @@ fn trade_window_other_trades_preserves_false_and_defaults_on() {
     let encoded = toml::to_string(&saved).expect("serialize preference");
     let reopened: WindowLayout = toml::from_str(&encoded).expect("reopen preference");
     assert_eq!(reopened.trade_window_other_trades, Some(false));
+}
+
+/// `layout.rs:ChartGraphicsCfg::candle_volume_sides` — the serde default is OFF while `Default`
+/// is ON, on purpose: a file without the key predates the switch and its style alone said
+/// whether the band drew, so reading the key as ON there would open every user who had the band
+/// off on it. A fresh profile, by contrast, opens on the band.
+#[test]
+fn a_file_without_the_sides_key_leaves_the_style_to_decide() {
+    use crate::market::candles::VOLUME_STYLE_OFF;
+    let old: WindowLayout = toml::from_str("[chart_graphics]\ncandle_volume_style = 0\n").unwrap();
+    assert_eq!(old.chart_graphics.candle_volume_style, VOLUME_STYLE_OFF);
+    assert!(!old.chart_graphics.candle_volume_sides);
+    assert!(ChartGraphicsCfg::default().candle_volume_sides);
 }

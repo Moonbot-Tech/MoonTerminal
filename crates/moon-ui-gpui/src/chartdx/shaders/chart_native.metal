@@ -352,7 +352,7 @@ struct VolumeStyle {
     float4 down;
     float4 scale;
     float4 m;  // x style, y height fraction, z 1/max, w avg/max
-    float4 m2; // x retired band cap, y bar width px, z bracket line px, w bracket stem signed inset px
+    float4 m2; // x retired band cap, y retired bar width, z bracket line px, w bracket stem signed inset px
     float4 m3; // x sides switch (0 off / 1 overlaid / 2 stacked), y split boundary rel ms, z interval rel ms, w bracket tick px
 };
 
@@ -375,14 +375,10 @@ static inline float vol_band_h(constant ChartView& cv, constant VolumeStyle& vs)
 
 static inline float vol_height_px(constant ChartView& cv, constant CandleStyle& cs,
                                   constant VolumeStyle& vs, Candle cd) {
-    if (vs.m3.x >= 0.5) {
-        // Sides switch on: the candle half is read as an interval figure on the linear scale.
-        float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs.tf_rel;
-        float lin = saturate(cd.vol * (vs.m3.z / max(tf_rel, 1.0)) * vs.m.z);
-        return lin * vol_band_h(cv, vs);
-    }
-    float norm = saturate(cd.vol * vs.m.z);
-    return sqrt(norm) * vol_band_h(cv, vs);
+    // The candle half is read as an interval figure on the linear scale the sides layer shares.
+    float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs.tf_rel;
+    float lin = saturate(cd.vol * (vs.m3.z / max(tf_rel, 1.0)) * vs.m.z);
+    return lin * vol_band_h(cv, vs);
 }
 
 vertex VolumeBarOut volume_bars_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
@@ -403,13 +399,9 @@ vertex VolumeBarOut volume_bars_vertex(uint vid [[vertex_id]], uint iid [[instan
     float2 corner = CORNERS_01[vid % 6u];
     uint up = (cd.c >= cd.o) ? 1u : 0u;
 
-    if (vs.m.x < 1.5) {
-        float bw = clamp(c0.y * 0.5, 1.0, vs.m2.y);
-        float2 px = float2(round(c0.x - bw * 0.5), base - h0) + corner * float2(bw, h0);
-        px.x = clamp(px.x, cv.bounds.x, cv.bounds.x + cv.bounds.z);
-        return { to_clip(px, cv.resolution), up };
-    }
-
+    // HILLS — the one live style: a trapezoid from this bucket's centre to the next one's, so
+    // consecutive instances form one continuous filled area. Reading candles[iid + 1] is why the
+    // draw is issued with count - 1 instances.
     Candle cd1 = candles[iid + 1];
     // A replay removes candles under its tick span. Never fill a hill across that gap.
     float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs.tf_rel;
@@ -462,20 +454,6 @@ static inline float4 scale_bracket_quad(uint vid, uint iid, float band, float se
     float2 corner = CORNERS_01[vid % 6u];
     float2 px = origin + corner * size;
     return to_clip(px, cv.resolution);
-}
-
-vertex VolumeScaleOut volume_scale_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
-                                          constant ChartView& cv [[buffer(0)]],
-                                          constant VolumeStyle& vs [[buffer(3)]]) {
-    if (vs.m.x < 0.5 || vs.m3.x >= 0.5) {
-        // Off, or the sides layer draws the (linear) scale for both halves.
-        return { float4(2.0, 2.0, 0.0, 1.0) };
-    }
-    return { scale_bracket_quad(vid, iid, vol_band_h(cv, vs), sqrt(saturate(vs.m.w)), cv, vs) };
-}
-
-fragment float4 volume_scale_fragment(constant VolumeStyle& vs [[buffer(3)]]) {
-    return vs.scale;
 }
 
 // ---- Sides volume band (mirrors side_volume.hlsl) --------------------------

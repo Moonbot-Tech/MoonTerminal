@@ -34,20 +34,23 @@ pub const CANDLE_MODE_OFF: u8 = 3;
 ///
 /// A `u8` rather than an enum for the same reason [`CANDLE_MODE_FILLED`] is one: the value travels
 /// into a shader uniform as a float and is clamped at the edge, so an open integer keeps the whole
-/// path — `layout.toml`, `charts.json`, the chart popup's style row, `VolumeStyleGpu.m.x` — free of
-/// per-representation conversions. Both files are hand-editable; a bare enum string in them would be
-/// a new value shape to parse.
+/// path — `layout.toml`, `charts.json`, `VolumeStyleGpu.m.x` — free of per-representation
+/// conversions. Both files are hand-editable; a bare enum string in them would be a new value
+/// shape to parse.
+///
+/// Only two styles are live: OFF and HILLS. The band is ONE switch in the volumes popup — on, it
+/// is always Moonbot's `Vol` (`candle_volume_sides`) on hills; off, it is gone. The other ids below
+/// are what older builds wrote, and `moon_chart::normalize_chart_graphics` folds every one of them
+/// into that pair: nothing else may treat them as a style.
 pub const VOLUME_STYLE_OFF: u8 = 0;
-/// Thin per-candle bars, one bar per bucket.
-pub const VOLUME_STYLE_BARS: u8 = 1;
+/// A retired style: thin per-candle bars, one bar per bucket. A stored file carrying it reads as
+/// hills with the switch on.
+pub const VOLUME_STYLE_LEGACY_BARS: u8 = 1;
 /// Moonbot-style "hills": a filled area whose top edge joins neighbouring buckets.
 pub const VOLUME_STYLE_HILLS: u8 = 2;
-/// Highest valid style id, for clamping a hand-edited chart configuration.
-pub const VOLUME_STYLE_MAX: u8 = VOLUME_STYLE_HILLS;
 /// A style id one build wrote for "Moonbot's `Vol` as its own style" before the bought/sold split
-/// became the `candle_volume_sides` switch that rides on top of hills or bars. A stored file
-/// carrying it reads as hills with the switch on — `moon_chart::normalize_chart_graphics` does
-/// the translation; nothing else may treat this number as a style.
+/// became the `candle_volume_sides` switch. A stored file carrying it reads as hills with the
+/// switch on, like every other non-OFF id.
 pub const VOLUME_STYLE_LEGACY_SIDES: u8 = 3;
 
 /// Candle/trade chart display settings controlled by the candle button in the tab strip.

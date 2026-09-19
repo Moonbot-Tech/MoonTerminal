@@ -1,6 +1,6 @@
-//! Geometry and scaling for the BOTTOM VOLUME band: the per-candle bars or Moonbot-style filled
-//! "hills" drawn along the plot's lower edge, plus the max/average scale bracket that gives the
-//! band a readable scale.
+//! Geometry and scaling for the BOTTOM VOLUME band: Moonbot-style filled "hills" drawn along the
+//! plot's lower edge — the bought/sold split where the trade history reaches, the candle turnover
+//! before it — plus the scale bracket (max and max / 2) that gives the band a readable scale.
 //!
 //! # Why the geometry lives here
 //!
@@ -32,9 +32,6 @@
 
 use moon_core::market::ChartCandle;
 use moon_core::market::candles::candle_intersects_window;
-
-/// Widest single bar in the `BARS` style, logical pixels.
-pub const VOLUME_BAR_W_PX: f32 = 3.0;
 
 /// Thickness of the scale bracket's stem and ticks, logical pixels.
 pub const VOLUME_SCALE_LINE_PX: f32 = 2.0;
@@ -120,12 +117,12 @@ pub struct VolumeSample {
     pub quote_volume: f32,
 }
 
-/// Max and mean bucket turnover, in the quote currency, over the candles currently on screen.
+/// The band's scale over the candles currently on screen, in the quote currency: the visible
+/// maximum and the figure the second reference line prints.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VolumeStats {
     pub max: f32,
     pub avg: f32,
-    pub count: u32,
 }
 
 /// Reduce a candle slice to the samples the band needs.
@@ -151,44 +148,11 @@ pub fn collect_samples(
     }));
 }
 
-/// Max and average volume over the samples intersecting `[from_ms, to_ms]`.
-///
-/// Uses `moon_core`'s [`candle_intersects_window`], the same predicate the chart's auto-Y range
-/// uses, so the band and the price scale never disagree about which candles are on screen.
-///
-/// `None` when nothing is visible or every visible bucket is empty — the caller must not build a
-/// reciprocal from a zero maximum.
-pub fn visible_volume_stats(
-    samples: &[VolumeSample],
-    from_ms: f64,
-    to_ms: f64,
-) -> Option<VolumeStats> {
-    let mut max = 0.0f32;
-    let mut sum = 0.0f64;
-    let mut count = 0u32;
-    for s in samples {
-        if !candle_intersects_window(s.t_open_ms, s.tf_ms, from_ms, to_ms) {
-            continue;
-        }
-        max = max.max(s.quote_volume);
-        sum += s.quote_volume as f64;
-        count += 1;
-    }
-    if count == 0 || max <= 0.0 {
-        return None;
-    }
-    Some(VolumeStats {
-        max,
-        avg: (sum / count as f64) as f32,
-        count,
-    })
-}
-
 /// The retained bucket a chart time falls in, for the cursor readout.
 ///
 /// Buckets are half-open `[t_open_ms, t_open_ms + tf_ms)`. The history tail mixes coarser buckets
 /// into the series, so membership is judged against each candle's OWN width, exactly as
-/// [`visible_volume_stats`] judges visibility. Where a coarse filler and a fine bucket both cover
+/// [`visible_interval_max`] judges visibility. Where a coarse filler and a fine bucket both cover
 /// the instant, the NARROWEST wins: it is the more precise statement about that moment, and a
 /// readout that named the coarse total while the chart drew the fine bar would contradict the bar
 /// under the pointer.
@@ -251,23 +215,42 @@ pub fn bucket_label(tf_ms: f64) -> Option<String> {
     })
 }
 
-/// Clamp a configured bottom-volume style id to a style that exists.
+/// Whether a stored `(candle_volume_style, candle_volume_sides)` pair means the band is ON.
 ///
-/// Lives here rather than beside the other `ChartGraphicsCfg` clamps because this module owns the
-/// bottom band; `moon_core::market::candles` owns the ids themselves and is the only place the
-/// ceiling is defined.
+/// The band is one switch: ON is Moonbot's `Vol` on hills, OFF is no band. Every pair an older
+/// build could write — bars or hills with the split off, the split alone over an OFF candle half,
+/// the retired "sides" style id, a hand-typed number past the last id — reads as ON when it drew
+/// ANY volume, because each of those users had the band on and asked to see it; only OFF with the
+/// split off reads as OFF. The one rule the normaliser, the renderer's own clamp and the popup's
+/// checkbox all derive from, so a stored file can never light a picture the chart is not drawing.
 ///
 /// Args:
 ///     style: Configured style id from a hand-editable config.
+///     sides: The configured bought/sold switch.
 ///
 /// Returns:
-///     The id, saturated at the highest defined style.
-pub fn clamp_volume_style(style: u8) -> u8 {
-    if style == moon_core::market::candles::VOLUME_STYLE_LEGACY_SIDES {
-        // The retired "sides" style: hills, with `candle_volume_sides` set by the normalizer.
-        return moon_core::market::candles::VOLUME_STYLE_HILLS;
+///     Whether the band draws.
+pub fn volume_band_on(style: u8, sides: bool) -> bool {
+    style != moon_core::market::candles::VOLUME_STYLE_OFF || sides
+}
+
+/// The style id the band draws with for a stored pair: hills when it is on, OFF otherwise.
+///
+/// Lives here rather than beside the other `ChartGraphicsCfg` clamps because this module owns the
+/// bottom band; `moon_core::market::candles` owns the ids themselves.
+///
+/// Args:
+///     style: Configured style id from a hand-editable config.
+///     sides: The configured bought/sold switch.
+///
+/// Returns:
+///     `VOLUME_STYLE_HILLS` or `VOLUME_STYLE_OFF`.
+pub fn clamp_volume_style(style: u8, sides: bool) -> u8 {
+    if volume_band_on(style, sides) {
+        moon_core::market::candles::VOLUME_STYLE_HILLS
+    } else {
+        moon_core::market::candles::VOLUME_STYLE_OFF
     }
-    style.min(moon_core::market::candles::VOLUME_STYLE_MAX)
 }
 
 /// The tallest candle on screen once its turnover is read as a ROLLING-INTERVAL figure, in the
