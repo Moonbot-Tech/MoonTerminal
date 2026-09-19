@@ -63,6 +63,8 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
 - **Comments and docstrings are in English.** Every one you write or rewrite: `//!`, `///`, `//`.
   Existing Russian comments are left alone — translate one only if you are already rewriting
   that block.
+- **Issues, issue comments, commits and PR text are in English** as well — the tracker is the
+  public record every contributor reads.
 - **UI strings go through `t!("key")`**, with the keys in `locales/*.yml`. No literals in panels.
 - A key is added in **all three languages at once** — ru/en/es. [`locales/README.md`](locales/README.md)
   is binding, not background: it holds the deliberately-untranslated list and the rule that glyphs
