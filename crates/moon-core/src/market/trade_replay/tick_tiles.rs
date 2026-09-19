@@ -16,16 +16,20 @@
 //! - Tiles of one key never overlap. [`crate::feed::types::Tick`] carries no exchange trade id,
 //!   so an overlap would be a double count nothing downstream can detect; [`TickTileStore::insert`]
 //!   clips a new span to the gaps it actually fills.
-//! - A tile's ticks are RAW — the venue's prints as they came, before `fit_ticks` thins them —
-//!   because the volume band is summed from every print, and the thinning is a per-window
-//!   decision (`worker::TICK_BUDGET` against the union served), not a property of the data.
-//! - An EMPTY tile is a real answer: the venue was asked and held no print there. It costs no
+//! - A tile's ticks are RAW — the prints as the source answered them, before `fit_ticks` thins
+//!   them — because the volume band is summed from every print, and the thinning is a
+//!   per-window decision (`worker::TICK_BUDGET` against the union served), not a property of
+//!   the data.
+//! - An EMPTY tile is a real answer: the source was asked and held no print there. It costs no
 //!   ticks, and it is what turns "no trades" into an answer a later window inherits.
 //! - Memory is bounded by ticks held ([`TILE_STORE_MAX_TICKS`]) and by tile count
 //!   ([`TILE_STORE_MAX_TILES`]); eviction is oldest-inserted first and never touches the tiles of
 //!   the insert in progress, so one wide harvest is held rather than discarded on arrival.
 //! - Keyed by exchange and market, never by core: the prints are public, and a trade on another
 //!   core over the same market is served from the same tiles.
+//! - Every tile names its SOURCE — the venue's REST route or a core's retained archive. Both
+//!   report the same wire quantity, so both are valued through the market's own terms; the
+//!   source is provenance: it says who answered, on disk and in a log, not how to value it.
 
 use std::collections::HashMap;
 
@@ -52,7 +56,35 @@ pub(crate) const TILE_STORE_MAX_TILES: usize = 256;
 /// file one market under two names.
 pub(crate) type TileKey = (String, String);
 
-/// One contiguous span the venue was asked for, with every print it answered.
+/// Where a tile's prints came from. Provenance, not a unit: both sources report the wire
+/// quantity, and the band values every tile through the market's own terms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TileSource {
+    /// The venue's public trade route.
+    Venue,
+    /// A core's retained trade archive, copied when the trade closed.
+    Core,
+}
+
+impl TileSource {
+    /// The stable code the persisted store files this source under.
+    pub const fn code(self) -> i64 {
+        match self {
+            Self::Venue => 0,
+            Self::Core => 1,
+        }
+    }
+
+    /// Inverse of [`Self::code`]; an unknown code reads as the venue, the older of the two.
+    pub const fn from_code(code: i64) -> Self {
+        match code {
+            1 => Self::Core,
+            _ => Self::Venue,
+        }
+    }
+}
+
+/// One contiguous span a source was asked for, with every print it answered.
 #[derive(Clone, Debug)]
 pub(crate) struct TickTile {
     /// First millisecond covered, inclusive.
@@ -61,6 +93,8 @@ pub(crate) struct TickTile {
     pub to_ms: i64,
     /// Ascending by time, every one inside `[from_ms, to_ms]`. Empty is an answer.
     pub ticks: Vec<Tick>,
+    /// Who answered.
+    pub source: TileSource,
     /// Insertion order across every key; eviction removes the smallest.
     seq: u64,
 }
@@ -99,22 +133,39 @@ impl TickTileStore {
         from_ms <= to_ms && self.gaps(key, from_ms, to_ms).is_empty()
     }
 
-    /// Every print held inside `[from_ms, to_ms]`, ascending by time.
+    /// Every print held inside `[from_ms, to_ms]`, ascending by time, source dropped.
     ///
     /// Answers whatever is held, covered or not: the caller decides coverage through
     /// [`Self::coverage_run`] or [`Self::covers`] first, and this only collects.
+    #[cfg(test)]
     pub fn read(&self, key: &TileKey, from_ms: i64, to_ms: i64) -> Vec<Tick> {
+        self.read_by_source(key, from_ms, to_ms)
+            .into_iter()
+            .flat_map(|(_, ticks)| ticks)
+            .collect()
+    }
+
+    /// Every print held inside `[from_ms, to_ms]`, one run per tile in ascending tile order,
+    /// each with the source that answered it — a run per tile so the band's slots are summed
+    /// whole per tile, and the source for whoever wants to know who answered.
+    pub fn read_by_source(
+        &self,
+        key: &TileKey,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Vec<(TileSource, Vec<Tick>)> {
         let mut out = Vec::new();
         for tile in self.overlapping(key, from_ms, to_ms) {
-            out.extend(
-                tile.ticks
-                    .iter()
-                    .filter(|t| {
-                        let time_ms = t.time_ms as i64;
-                        time_ms >= from_ms && time_ms <= to_ms
-                    })
-                    .copied(),
-            );
+            let ticks: Vec<Tick> = tile
+                .ticks
+                .iter()
+                .filter(|t| {
+                    let time_ms = t.time_ms as i64;
+                    time_ms >= from_ms && time_ms <= to_ms
+                })
+                .copied()
+                .collect();
+            out.push((tile.source, ticks));
         }
         out
     }
@@ -172,8 +223,16 @@ impl TickTileStore {
     ///     key: Exchange key and market.
     ///     from_ms: Left edge, inclusive.
     ///     to_ms: Right edge, inclusive.
-    ///     ticks: Every print the venue answered for the span, any order.
-    pub fn insert(&mut self, key: TileKey, from_ms: i64, to_ms: i64, mut ticks: Vec<Tick>) {
+    ///     ticks: Every print the source answered for the span, any order.
+    ///     source: Who answered.
+    pub fn insert(
+        &mut self,
+        key: TileKey,
+        from_ms: i64,
+        to_ms: i64,
+        mut ticks: Vec<Tick>,
+        source: TileSource,
+    ) {
         let gaps = self.gaps(&key, from_ms, to_ms);
         if gaps.is_empty() {
             return;
@@ -198,6 +257,7 @@ impl TickTileStore {
                 from_ms: gap_from,
                 to_ms: gap_to,
                 ticks: inside,
+                source,
                 seq,
             });
         }

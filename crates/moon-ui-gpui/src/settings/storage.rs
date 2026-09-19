@@ -167,6 +167,18 @@ impl SettingsView {
         }
     }
 
+    /// Adjusts the `trades.sqlite` ceiling in megabytes, clamps it to `0..=100_000` (zero is no
+    /// ceiling), and updates live state and storage.toml.
+    fn adjust_trades_max_mb(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let v = (self.storage.cfg.trade_replay.max_mb as i32 + delta).clamp(0, 100_000) as u32;
+        if self.storage.cfg.trade_replay.max_mb != v {
+            self.storage.cfg.trade_replay.max_mb = v;
+            moon_core::market::trade_replay::trade_cache::set_max_mb(v);
+            storage_cfg::save(&self.storage.cfg);
+            cx.notify();
+        }
+    }
+
     /// Render storage controls with the version-limit stepper wrapping below its label when needed.
     pub(super) fn storage_tab(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         // Start background snapshot collection when the tab is first shown.
@@ -181,6 +193,7 @@ impl SettingsView {
         let enabled = self.storage.cfg.strategies.enabled;
         let limit = self.storage.cfg.strategies.version_limit;
         let persist_trades = self.storage.cfg.trade_replay.persist_trades;
+        let trades_max_mb = self.storage.cfg.trade_replay.max_mb;
 
         let size_line = |sz: Option<(u64, u64)>| -> String {
             match sz {
@@ -382,6 +395,31 @@ impl SettingsView {
             )
             // MIXED NODE: `size_line` combines label and figure — stays mono.
             .child(hint(size_line(info.trades)).font_family(design::mono()))
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap(design::ui_px(cx, 8.0))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(rgba_from(p.text, 1.0))
+                            .child(t!("storage.trades_max_mb").to_string()),
+                    )
+                    .child(self.stepper_controls(
+                        cx,
+                        "trades-max-mb",
+                        persist_trades,
+                        if trades_max_mb == 0 {
+                            t!("storage.version_limit_off").to_string()
+                        } else {
+                            t!("storage.trades_mb", mb = trades_max_mb).to_string()
+                        },
+                        64,
+                        1024,
+                        Self::adjust_trades_max_mb,
+                    )),
+            )
+            .child(hint(t!("storage.trades_max_mb_hint").to_string()))
             .child(
                 h_flex().child(
                     tool_btn("trades-compact", t!("storage.compact").to_string(), busy)

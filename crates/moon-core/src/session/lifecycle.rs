@@ -423,6 +423,17 @@ impl SessionManager {
                             stats.ui_state |= core.folders_rev != before;
                         }
                     }
+                    FeedMsg::TradeClosed {
+                        coin,
+                        quote,
+                        buy,
+                        close,
+                    } => {
+                        // Not `ui_state`: nothing on screen changes; the prints go to the replay
+                        // worker's own store. Every step that cannot resolve simply files
+                        // nothing — the next window pages the venue as it always did.
+                        self.capture_closed_trade(sess.id, &coin, &quote, buy, close);
+                    }
                     traces @ FeedMsg::ReportTraces { .. } => {
                         // Not `ui_state`: the answer is for the trace resolver, which wakes its
                         // own consumers, and a backfill can file hundreds of these in a minute.
@@ -441,6 +452,66 @@ impl SessionManager {
             }
         }
         stats
+    }
+
+    /// File a just-closed trade's prints from its core's retained archive.
+    ///
+    /// Resolves the row the way the trade window does — the coin through the core's catalog,
+    /// the core-local stamps through the core's measured clock offset, the exchange through the
+    /// live provider — and hands the result to the replay worker, which copies what the archive
+    /// holds. Silent at every step that cannot resolve: an offline provider, a coin the catalog
+    /// does not know, a clock never measured (then the stamps are taken as they are, which is
+    /// what the report itself shows).
+    ///
+    /// Args:
+    ///     core: The core that closed the trade.
+    ///     coin: The row's coin token.
+    ///     quote: The core's quote setting.
+    ///     buy: Entry stamp, core-local.
+    ///     close: Exit stamp, core-local.
+    fn capture_closed_trade(
+        &self,
+        core: CoreId,
+        coin: &str,
+        quote: &str,
+        buy: crate::db::ReportStamp,
+        close: crate::db::ReportStamp,
+    ) {
+        let Some(market) = self.market_source.resolve_market(core, quote, coin) else {
+            log::debug!("[x] trade-replay capture: {coin} resolves to no market on core {core}");
+            return;
+        };
+        let Ok(address) = self.market_source.replay_address(core) else {
+            return;
+        };
+        let measured = self
+            .store
+            .core(core)
+            .and_then(|c| {
+                let offset_secs = c.time_offset.offset_secs?;
+                Some((
+                    core,
+                    vec![crate::db::OffsetSegment {
+                        from_utc: c.time_offset.observed_at_utc.div_euclid(1_000),
+                        offset_secs,
+                    }],
+                ))
+            })
+            .into_iter()
+            .collect();
+        let axis = crate::db::ReportAxis::from_measured(measured, chrono_tz::UTC);
+        let (open_ms, close_ms) = axis.stamp_pair_to_utc_ms(buy, close, core);
+        if open_ms <= 0 || close_ms < open_ms {
+            return;
+        }
+        crate::market::trade_replay::worker::capture(
+            crate::market::trade_replay::worker::CaptureRequest {
+                address,
+                market,
+                open_ms,
+                close_ms,
+            },
+        );
     }
 
     /// Current connection token for delayed trade playback; removal makes it unavailable.

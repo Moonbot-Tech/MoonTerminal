@@ -428,6 +428,19 @@ pub fn side_slots_of_ticks(
     slots
 }
 
+/// Merge slot runs summed separately — one per print source of a replay — into one ascending run,
+/// same-second slots added together.
+///
+/// Args:
+///     slots: Any number of runs concatenated, any order.
+///
+/// Returns:
+///     One run ascending by id, one slot per second.
+pub fn merge_side_slots(mut slots: Vec<SideSlot>) -> Vec<SideSlot> {
+    merge_slots(&mut slots);
+    slots
+}
+
 /// The split of a trade REPLAY: the real sides where the replay holds ticks, the candle turnover
 /// leaned by direction everywhere else — the same seam the live series has where its trade
 /// history runs out and the candle half takes over.

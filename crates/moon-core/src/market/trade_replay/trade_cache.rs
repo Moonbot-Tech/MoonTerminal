@@ -4,10 +4,11 @@
 //!
 //! The tile store answers a neighbouring window inside one session; this file answers the same
 //! question across a restart. Same shape — spans of `(from_ms, to_ms)` per exchange and market,
-//! disjoint, holding the venue's RAW prints — persisted as one row per span, the prints packed
-//! into a blob. The worker hydrates the tile store from here before it decides what to fetch, and
-//! writes every harvest through after it filed it, so the two never disagree about what was
-//! fetched: the disk is the tile store's memory, not a second cache with its own rules.
+//! disjoint, holding RAW prints from the venue's route or from a core's archive, each row naming
+//! which — persisted as one row per span, the prints packed into a blob. The worker hydrates the
+//! tile store from here before it decides what to fetch, and writes every harvest and every
+//! capture through after it filed it, so the two never disagree about what is held: the disk is
+//! the tile store's memory, not a second cache with its own rules.
 //!
 //! # Why a separate file
 //!
@@ -33,12 +34,13 @@
 //! file on first use.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{OnceLock, mpsc};
 use std::time::Duration;
 
 use rusqlite::OptionalExtension;
 
+use super::tick_tiles::TileSource;
 use crate::feed::types::{Side, Tick};
 
 /// Bytes per packed print: `i64 time_ms`, `f32 price`, `f32 qty`, `u32 side` (`0` buy, `1`
@@ -56,10 +58,17 @@ const READ_TIMEOUT: Duration = Duration::from_millis(250);
 /// later; two weeks holds a week of trades opened twice. The bars keep 30 days at one minute.
 const RETENTION_DAYS: i64 = 14;
 
-/// Ceiling on the packed bytes the file may hold — checked at open, after the retention pass,
-/// and again after every insert; past it the oldest spans go first. A day of busy replays is
-/// tens of megabytes, so this is months of them.
-const MAX_BYTES: i64 = 256 * 1024 * 1024;
+/// Ceiling on the packed bytes the file may hold, from `[trade_replay] max_mb` — checked at
+/// open, after the retention pass, and again after every insert; past it the oldest spans go
+/// first. Live, like the switch: the Storage tab moves it without a restart. `None` when the
+/// reader set it to zero and keeps everything the retention window admits.
+fn max_bytes() -> Option<i64> {
+    ensure_enabled_loaded();
+    match MAX_MB.load(Ordering::Relaxed) {
+        0 => None,
+        mb => Some(i64::from(mb) * 1024 * 1024),
+    }
+}
 
 const DAY_MS: i64 = 86_400_000;
 
@@ -67,7 +76,7 @@ const DAY_MS: i64 = 86_400_000;
 /// in a layout this build does not know — a print row of another width would unpack into
 /// garbage stamps that `tick_tiles::insert` silently drops, filing the span as quiet — so the
 /// table is dropped and started over: it is a cache, and refetching is the honest price.
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 /// One persisted span, as read back.
 #[derive(Clone, Debug)]
@@ -76,6 +85,8 @@ pub struct StoredSpan {
     pub to_ms: i64,
     /// Ascending by time, all inside `[from_ms, to_ms]`.
     pub ticks: Vec<Tick>,
+    /// Who answered — see [`TileSource`].
+    pub source: TileSource,
 }
 
 enum Op {
@@ -85,6 +96,7 @@ enum Op {
         from_ms: i64,
         to_ms: i64,
         ticks: Vec<Tick>,
+        source: TileSource,
     },
     Read {
         exchange: String,
@@ -131,7 +143,7 @@ impl TradeCache {
                     log::warn!("trade cache schema failed {}: {e}", path.display());
                     return;
                 }
-                let held = match prune(&conn, crate::util::time::now_unix_ms_i64()) {
+                let held = match prune(&conn, crate::util::time::now_unix_ms_i64(), max_bytes()) {
                     Ok(held) => held,
                     Err(e) => {
                         // The ceiling still needs a true count to work from: a zero here would
@@ -150,7 +162,15 @@ impl TradeCache {
 
     /// Queue one answered span. Nonblocking; the worker files only the stretches of it not yet
     /// held, exactly as the tile store does, so a re-fetch never doubles a print.
-    pub fn insert(&self, exchange: &str, market: &str, from_ms: i64, to_ms: i64, ticks: Vec<Tick>) {
+    pub fn insert(
+        &self,
+        exchange: &str,
+        market: &str,
+        from_ms: i64,
+        to_ms: i64,
+        ticks: Vec<Tick>,
+        source: TileSource,
+    ) {
         if from_ms > to_ms {
             return;
         }
@@ -160,6 +180,7 @@ impl TradeCache {
             from_ms,
             to_ms,
             ticks,
+            source,
         });
     }
 
@@ -195,13 +216,23 @@ impl TradeCache {
 static CACHE: OnceLock<Option<TradeCache>> = OnceLock::new();
 /// Live value of `[trade_replay] persist_trades`; the Storage tab flips it.
 static ENABLED: AtomicBool = AtomicBool::new(true);
+/// Live value of `[trade_replay] max_mb`; the Storage tab moves it.
+static MAX_MB: AtomicU32 = AtomicU32::new(crate::config::storage::DEFAULT_TRADES_MAX_MB);
 static ENABLED_INIT: OnceLock<()> = OnceLock::new();
 
 fn ensure_enabled_loaded() {
     ENABLED_INIT.get_or_init(|| {
         let cfg = crate::config::storage::load();
         ENABLED.store(cfg.trade_replay.persist_trades, Ordering::Relaxed);
+        MAX_MB.store(cfg.trade_replay.max_mb, Ordering::Relaxed);
     });
+}
+
+/// Move the live ceiling; the Storage tab writes `storage.toml` beside this. Takes effect on
+/// the next insert — a file already past a lowered ceiling is trimmed then, not at once.
+pub fn set_max_mb(mb: u32) {
+    ensure_enabled_loaded();
+    MAX_MB.store(mb, Ordering::Relaxed);
 }
 
 /// Whether prints are persisted, for the Storage tab.
@@ -245,6 +276,7 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             from_ms INTEGER NOT NULL,
             to_ms INTEGER NOT NULL,
             ticks BLOB NOT NULL,
+            source INTEGER NOT NULL,
             updated_ms INTEGER NOT NULL,
             PRIMARY KEY(exchange, market, from_ms)
         );
@@ -267,24 +299,35 @@ fn held_bytes(conn: &rusqlite::Connection) -> rusqlite::Result<i64> {
 ///
 /// Returns:
 ///     The packed bytes the file holds afterwards, for the worker to carry forward.
-fn prune(conn: &rusqlite::Connection, now_ms: i64) -> rusqlite::Result<i64> {
+fn prune(conn: &rusqlite::Connection, now_ms: i64, ceiling: Option<i64>) -> rusqlite::Result<i64> {
     conn.execute(
         "DELETE FROM spans WHERE updated_ms < ?1",
         [now_ms - RETENTION_DAYS * DAY_MS],
     )?;
-    trim_to_ceiling(conn, held_bytes(conn)?)
+    trim_to_ceiling(conn, held_bytes(conn)?, ceiling)
 }
 
-/// Drop the oldest spans until `held` packed bytes fit under [`MAX_BYTES`].
+/// Drop the oldest spans until `held` packed bytes fit under `ceiling`.
+///
+/// The ceiling is a parameter, not read here: the worker resolves the live setting
+/// ([`max_bytes`]) at each call, and a test hands in a number of its own.
 ///
 /// Args:
 ///     conn: The open connection.
 ///     held: Packed bytes the file holds now.
+///     ceiling: Packed bytes allowed, or `None` for no ceiling.
 ///
 /// Returns:
 ///     Packed bytes held afterwards.
-fn trim_to_ceiling(conn: &rusqlite::Connection, mut held: i64) -> rusqlite::Result<i64> {
-    while held > MAX_BYTES {
+fn trim_to_ceiling(
+    conn: &rusqlite::Connection,
+    mut held: i64,
+    ceiling: Option<i64>,
+) -> rusqlite::Result<i64> {
+    let Some(ceiling) = ceiling else {
+        return Ok(held);
+    };
+    while held > ceiling {
         // One span at a time, oldest first: the excess is usually one wide harvest, and a
         // batch would take a fresh neighbour down with it.
         let oldest: Option<(i64, i64)> = conn
@@ -314,17 +357,19 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, mut held: i64) {
                 from_ms,
                 to_ms,
                 ticks,
+                source,
             } => {
                 let now = crate::util::time::now_unix_ms_i64();
                 let res = conn.unchecked_transaction().and_then(|tx| {
-                    let wrote = insert_span(&tx, &exchange, &market, from_ms, to_ms, &ticks, now)?;
+                    let wrote =
+                        insert_span(&tx, &exchange, &market, from_ms, to_ms, &ticks, source, now)?;
                     tx.commit()?;
                     Ok(wrote)
                 });
                 match res {
                     Ok(wrote) => {
                         held += wrote;
-                        match trim_to_ceiling(&conn, held) {
+                        match trim_to_ceiling(&conn, held, max_bytes()) {
                             Ok(now_held) => held = now_held,
                             Err(e) => {
                                 // Rows may already be gone: re-count rather than carry an
@@ -362,6 +407,7 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, mut held: i64) {
 ///
 /// Returns:
 ///     Packed bytes written.
+#[allow(clippy::too_many_arguments)]
 fn insert_span(
     conn: &rusqlite::Connection,
     exchange: &str,
@@ -369,6 +415,7 @@ fn insert_span(
     from_ms: i64,
     to_ms: i64,
     ticks: &[Tick],
+    source: TileSource,
     now_ms: i64,
 ) -> rusqlite::Result<i64> {
     let mut written = 0i64;
@@ -390,9 +437,9 @@ fn insert_span(
         let blob = pack(inside);
         written += blob.len() as i64;
         conn.execute(
-            "INSERT OR REPLACE INTO spans(exchange, market, from_ms, to_ms, ticks, updated_ms)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![exchange, market, gap_from, gap_to, blob, now_ms],
+            "INSERT OR REPLACE INTO spans(exchange, market, from_ms, to_ms, ticks, source, updated_ms)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![exchange, market, gap_from, gap_to, blob, source.code(), now_ms],
         )?;
     }
     Ok(written)
@@ -407,7 +454,7 @@ fn read_spans(
     to_ms: i64,
 ) -> rusqlite::Result<Vec<StoredSpan>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT from_ms, to_ms, ticks FROM spans
+        "SELECT from_ms, to_ms, ticks, source FROM spans
          WHERE exchange = ?1 AND market = ?2 AND to_ms >= ?3 AND from_ms <= ?4
          ORDER BY from_ms",
     )?;
@@ -415,10 +462,12 @@ fn read_spans(
         let span_from: i64 = r.get(0)?;
         let span_to: i64 = r.get(1)?;
         let blob: Vec<u8> = r.get(2)?;
+        let source: i64 = r.get(3)?;
         Ok(StoredSpan {
             from_ms: span_from,
             to_ms: span_to,
             ticks: unpack(&blob),
+            source: TileSource::from_code(source),
         })
     })?;
     rows.collect()

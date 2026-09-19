@@ -469,13 +469,11 @@ fn report_chart_history(
     }
 }
 
-/// Build a market candidate for the core from the DB `coin` value.
+/// The catalog-verified market for the core from the DB `coin` value.
 ///
-/// Supports both historical formats: a base (`M`) and an already complete market (`MUSDT`).
-/// A base is spelled into a market by `symbol::parse::market_names_for`, which knows each
-/// exchange's form; this used to concatenate coin and quote by hand and therefore proposed a
-/// market that exists on no Gate, OKX or Hyperliquid core. The selected core's catalog must verify
-/// the result; an empty universe returns `None` instead of opening a clean chart for a guessed key.
+/// The rule itself lives in `moon_core::market::source::MarketDataSource::resolve_market`, where
+/// the session's own trade-print capture uses it too; this only supplies the core's quote
+/// setting from the configuration.
 ///
 /// Args:
 ///     b: Backend containing the exact core's configuration and market catalog.
@@ -485,51 +483,14 @@ fn report_chart_history(
 /// Returns:
 ///     Catalog-verified market, or `None` while the selected core cannot resolve it.
 pub(super) fn resolve_market(b: &Backend, core: u64, coin: &str) -> Option<String> {
-    let exchange = b.session.market_source().exchange_of(core);
     let quote = b
         .config
         .servers
         .iter()
         .find(|s| s.id == core)
-        .map(|s| moon_core::symbol::resolve_quote_on(&s.market, exchange))
+        .map(|s| s.market.as_str())
         .unwrap_or_default();
-    // A complete market is one carrying a HIP-3 DEX prefix or THIS CORE'S quote. Deliberately not
-    // "carries any recognized quote": a coin whose own name ends in one — `WBTC`, `STETH`,
-    // `PYUSD` — would then be taken for a finished market and never get its quote appended.
-    let parsed = moon_core::symbol::parse::split_market(coin, exchange);
-    let already_full =
-        parsed.dex.is_some() || (!quote.is_empty() && parsed.quote.eq_ignore_ascii_case(&quote));
-    let candidate = if already_full || quote.is_empty() {
-        coin.to_string()
-    } else {
-        moon_core::symbol::parse::market_names_for(coin, &quote, exchange)
-            .next()
-            .unwrap_or_else(|| coin.to_string())
-    };
-    // An empty universe is catalog-not-ready, never permission to open an unverified key.
-    let ms = b.session.market_source();
-    let universe = ms.search_markets(core, coin, 32);
-    if universe.is_empty() {
-        return None;
-    }
-    // Ask the CATALOG which of these markets is this coin. The report stores the core's own
-    // token, and for a folded one — `1kRATS` for the market `1000RATSUSDT` — no reading of the
-    // market name can connect the two, so this used to fall through to a spelled candidate that
-    // exists nowhere and opened an empty chart.
-    let refs: Vec<&str> = universe.iter().map(String::as_str).collect();
-    let labelled: Vec<(String, moon_core::market::MarketLabel)> = universe
-        .iter()
-        .cloned()
-        .zip(ms.market_labels(core, &refs))
-        .collect();
-    if let Some(name) = moon_core::market::pick_market_for_coin(&labelled, coin) {
-        return Some(name.to_string());
-    }
-    // The historical format where the stored value is already a full market name.
-    universe
-        .iter()
-        .find(|market| market.eq_ignore_ascii_case(&candidate))
-        .cloned()
+    b.session.market_source().resolve_market(core, quote, coin)
 }
 
 /// Build a full-cell core cell with the shared muted tone.

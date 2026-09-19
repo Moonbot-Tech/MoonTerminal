@@ -255,7 +255,7 @@ fn core_replay_rechecks_after_candles_and_keeps_context() {
     let route = trade_route(bars.venue).expect("spot trade route");
     let stage = TickStage {
         baseline: None,
-        route,
+        route: Some(route),
         key: OutcomeKey {
             venue: bars.venue,
             host: route.host(),
@@ -626,7 +626,7 @@ fn tile_stage(request: &TradeReplayRequest) -> TickStage {
     let route = trade_route(request.address.venue).expect("Binance spot trades route");
     TickStage {
         baseline: None,
-        route,
+        route: Some(route),
         key: OutcomeKey {
             venue: request.address.venue,
             host: route.host(),
@@ -658,6 +658,7 @@ fn a_focus_held_by_the_tiles_is_served_without_a_walk() {
             tick(1_830_000, 11.0),
             tick(2_190_000, 12.0),
         ],
+        TileSource::Venue,
     );
     let (series, retry) = serve_ticks(&rest::agent(), &ReplayGate::new(), &request, &stage, &tiles)
         .expect("served from the tiles");
@@ -684,6 +685,39 @@ fn a_focus_held_by_the_tiles_is_served_without_a_walk() {
     );
 }
 
+/// A venue with no public trade route is served from a captured core tile — and prints
+/// `NoRoute`, as before, when the tiles hold nothing for the focus.
+#[test]
+fn a_route_less_stage_serves_captured_tiles_or_prints_no_route() {
+    let (reply, _rx) = mpsc::channel();
+    let request = tile_request(reply);
+    let mut stage = tile_stage(&request);
+    stage.route = None;
+    let key = (request.address.exchange_key.clone(), request.market.clone());
+    let tiles = Mutex::new(TickTileStore::default());
+    let outcome = serve_ticks(&rest::agent(), &ReplayGate::new(), &request, &stage, &tiles);
+    assert!(
+        matches!(outcome, Err(Some(TickStatus::NoRoute))),
+        "{outcome:?}"
+    );
+    tiles.lock().unwrap().insert(
+        key,
+        1_700_000,
+        1_900_000,
+        vec![tick(1_750_000, 9.0), tick(1_850_000, 10.0)],
+        TileSource::Core,
+    );
+    let (series, retry) = serve_ticks(&rest::agent(), &ReplayGate::new(), &request, &stage, &tiles)
+        .expect("served from the captured tile");
+    assert!(
+        retry,
+        "a later capture may widen the tiles, so a reopen re-decides"
+    );
+    assert_eq!(series.covered, Some((1_700_000, 1_900_000)));
+    assert_eq!(series.ticks.len(), 2);
+    assert!(series.partial);
+}
+
 /// An empty run the tiles cover whole is the authoritative "no trades", not a retryable failure.
 #[test]
 fn an_empty_covered_focus_is_no_trades() {
@@ -695,7 +729,7 @@ fn an_empty_covered_focus_is_no_trades() {
     tiles
         .lock()
         .unwrap()
-        .insert(key, 1_400_000, 2_200_000, Vec::new());
+        .insert(key, 1_400_000, 2_200_000, Vec::new(), TileSource::Venue);
     let outcome = serve_ticks(&rest::agent(), &ReplayGate::new(), &request, &stage, &tiles);
     assert!(
         matches!(outcome, Err(Some(TickStatus::NoTrades))),

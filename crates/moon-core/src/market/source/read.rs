@@ -324,6 +324,59 @@ impl MarketDataSource {
         })
     }
 
+    /// The catalog-verified market a report row's `coin` names on `core`, or `None`.
+    ///
+    /// Supports both historical formats of the stored value: a base (`M`) and an already complete
+    /// market (`MUSDT`). A base is spelled into a market by `symbol::parse::market_names_for`,
+    /// which knows each exchange's form, and the core's catalog must verify the result — a folded
+    /// token (`1kRATS` for `1000RATSUSDT`) is connected to its market by the catalog's own label,
+    /// never by reading the name. An empty universe is catalog-not-ready, never permission to
+    /// return an unverified key.
+    ///
+    /// Args:
+    ///     core: Core that recorded the row.
+    ///     quote: That core's quote setting (`ServerConfig::market`).
+    ///     coin: Historical base coin or full market value from the row.
+    ///
+    /// Returns:
+    ///     Catalog-verified market, or `None` while the core cannot resolve it.
+    pub fn resolve_market(&self, core: CoreId, quote: &str, coin: &str) -> Option<String> {
+        let exchange = self.exchange_of(core);
+        let quote = crate::symbol::resolve_quote_on(quote, exchange);
+        // A complete market is one carrying a HIP-3 DEX prefix or THIS CORE'S quote. Deliberately
+        // not "carries any recognized quote": a coin whose own name ends in one — `WBTC`,
+        // `STETH`, `PYUSD` — would then be taken for a finished market and never get its quote
+        // appended.
+        let parsed = crate::symbol::parse::split_market(coin, exchange);
+        let already_full = parsed.dex.is_some()
+            || (!quote.is_empty() && parsed.quote.eq_ignore_ascii_case(&quote));
+        let candidate = if already_full || quote.is_empty() {
+            coin.to_string()
+        } else {
+            crate::symbol::parse::market_names_for(coin, &quote, exchange)
+                .next()
+                .unwrap_or_else(|| coin.to_string())
+        };
+        let universe = self.search_markets(core, coin, 32);
+        if universe.is_empty() {
+            return None;
+        }
+        let refs: Vec<&str> = universe.iter().map(String::as_str).collect();
+        let labelled: Vec<(String, crate::market::MarketLabel)> = universe
+            .iter()
+            .cloned()
+            .zip(self.market_labels(core, &refs))
+            .collect();
+        if let Some(name) = crate::market::pick_market_for_coin(&labelled, coin) {
+            return Some(name.to_string());
+        }
+        // The historical format where the stored value is already a full market name.
+        universe
+            .iter()
+            .find(|market| market.eq_ignore_ascii_case(&candidate))
+            .cloned()
+    }
+
     /// The naming family of the exchange `core` reads market data from.
     ///
     /// It follows the market-data provider, because that is whose catalog the names come from.
