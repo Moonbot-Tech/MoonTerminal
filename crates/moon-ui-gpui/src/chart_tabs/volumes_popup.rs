@@ -135,6 +135,13 @@ fn price_frame_label(pct: f32) -> String {
     format!("{text}%")
 }
 
+/// The windows the dropdown offers, in its order: `Auto` (0), every listed window, `Max`.
+fn window_choices() -> impl Iterator<Item = u32> {
+    std::iter::once(0)
+        .chain(moon_chart::hvol::HVOL_TF_CHOICES_S.iter().copied())
+        .chain(std::iter::once(HVOL_TF_MAX_S))
+}
+
 /// The side a `(left, transparent)` pair spells.
 fn side_of(left: bool, transparent: bool) -> HvolSide {
     match (left, transparent) {
@@ -397,11 +404,8 @@ fn render_volumes_popup<T: VolumesPopupHost>(
                 moon_chart::hvol::tf_label(tf_s).unwrap_or_else(|| format!("{tf_s}s"))
             }
         };
-        let choices = std::iter::once(0)
-            .chain(moon_chart::hvol::HVOL_TF_CHOICES_S.iter().copied())
-            .chain(std::iter::once(HVOL_TF_MAX_S));
         let items = crate::panels::radio_items(
-            choices.map(|tf_s| {
+            window_choices().map(|tf_s| {
                 (
                     tf_s,
                     SharedString::from(format!("{id}-hvol-window-{tf_s}")),

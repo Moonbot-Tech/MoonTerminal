@@ -2,30 +2,22 @@
 use moon_core::config::{HVOL_TF_MAX_S, HvolSide};
 
 use super::{
-    PRICE_FRAME_PCTS, WIDTHS, WINDOW_SEGMENTS, nearest, percent_label, price_frame_label, side_of,
+    PRICE_FRAME_PCTS, WIDTHS, nearest, percent_label, price_frame_label, side_of, window_choices,
 };
 
-/// The window row's index arithmetic covers `Auto`, every listed window and `Max`, in that order.
+/// The window dropdown offers `Auto`, every listed window and `Max`, in that order and nothing
+/// else.
 ///
-/// Breakage: an off-by-one between the row's segments and the list maps a press on `12h` to `6h`,
-/// or a press on `Max` to nothing.
+/// Breakage: a list that drops `Max` or reorders the windows leaves a stored value with no item
+/// checked, and a press lands on a neighbour.
 #[test]
-fn the_window_row_maps_every_segment() {
-    let choices = moon_chart::hvol::HVOL_TF_CHOICES_S;
-    let pick = |ix: usize| -> Option<u32> {
-        match ix {
-            0 => Some(0),
-            i if i == choices.len() + 1 => Some(HVOL_TF_MAX_S),
-            i => choices.get(i - 1).copied(),
-        }
-    };
-    assert_eq!(pick(0), Some(0), "Auto");
-    for (i, s) in choices.iter().enumerate() {
-        assert_eq!(pick(i + 1), Some(*s));
-    }
-    assert_eq!(pick(choices.len() + 1), Some(HVOL_TF_MAX_S), "Max");
-    assert_eq!(pick(choices.len() + 2), None);
-    assert_eq!(WINDOW_SEGMENTS as usize, choices.len() + 2);
+fn the_window_dropdown_offers_every_window_in_order() {
+    let choices: Vec<u32> = window_choices().collect();
+    let listed = moon_chart::hvol::HVOL_TF_CHOICES_S;
+    assert_eq!(choices.len(), listed.len() + 2);
+    assert_eq!(choices[0], 0, "Auto");
+    assert_eq!(&choices[1..=listed.len()], &listed[..]);
+    assert_eq!(choices[listed.len() + 1], HVOL_TF_MAX_S, "Max");
 }
 
 /// The two side switches compose into the four sides Moonbot lists, and back.
