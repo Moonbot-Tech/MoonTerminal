@@ -1189,11 +1189,26 @@ fn serve_ticks(
     let key: TileKey = (request.address.venue, request.market.clone());
     let focus = request.window.focus();
     let residual = residual_plan(&plan, &lock_tiles(tiles), &key);
+    // The one line that tells a neighbouring window apart from a reopen: the focus is the
+    // window's own, the spans are what the store made of it. In milliseconds, not slices — a
+    // held tile in the middle of a slice splits it into two residual spans, so a slice count
+    // would read as "nothing held" exactly when something was.
+    let span_ms = |slices: &[(i64, i64)]| -> i64 {
+        slices
+            .iter()
+            .map(|(from_ms, to_ms)| to_ms - from_ms + 1)
+            .sum()
+    };
+    let plan_ms = span_ms(&plan.slices);
+    let residual_ms = span_ms(&residual.slices);
     log::info!(
-        "[x] trade-replay tick stage {}: {} of {} slices held, {} to fetch",
+        "[x] trade-replay tick stage {} focus={}..{}: {} of {} ms held, {} ms in {} spans to fetch",
         request.market,
-        plan.slices.len().saturating_sub(residual.slices.len()),
-        plan.slices.len(),
+        focus.0,
+        focus.1,
+        plan_ms - residual_ms,
+        plan_ms,
+        residual_ms,
         residual.slices.len()
     );
     // Whether a reopen must re-walk: the venue refused mid-walk, or the walk was abandoned and
