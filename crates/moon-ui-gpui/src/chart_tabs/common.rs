@@ -96,8 +96,6 @@ pub(crate) enum StackSetting {
     Orientation(Option<StackOrientation>),
     /// Order book enabled/disabled.
     Orderbook(bool),
-    /// Liquidation trades enabled/disabled.
-    Liquidations(bool),
     /// Management-zone fill enabled/disabled.
     ShowZone(bool),
     /// Automatic pinning on order enabled/disabled.
@@ -112,9 +110,10 @@ pub(crate) enum StackSetting {
     CursorLabels(bool),
     /// Candle/trade display settings (the candlestick popup).
     CandleView(moon_core::market::CandleViewCfg),
-    /// Chart-drawing settings: trade-arrow size, connector thickness, which closed trades are drawn,
-    /// whether a closed order keeps its sell line, the trade-mark size and the bottom volume band
-    /// (the palette popup).
+    /// Chart-drawing settings, one struct behind three popups: the lines over the plot and the
+    /// live trade marks (the palette popup), how the closed trades are drawn (the history popup),
+    /// and the two volume indicators (the volumes popup). A press from any of the three carries
+    /// the whole struct.
     Graphics(moon_core::config::ChartGraphicsCfg),
     /// Which captions the chart prints beside its plot, where, and in which style (the labels popup).
     Labels(moon_core::config::ChartLabelsCfg),
@@ -291,7 +290,6 @@ impl StackSetting {
             }
             StackSetting::Orientation(o) => s.layout_orientation = o,
             StackSetting::Orderbook(v) => s.orderbook_enabled = Some(v),
-            StackSetting::Liquidations(v) => s.liquidations_enabled = Some(v),
             StackSetting::ShowZone(v) => s.show_zone = Some(v),
             StackSetting::AutoPin(v) => s.auto_pin = Some(v),
             StackSetting::PriceAxis(p) => s.price_axis_pos = Some(p),
@@ -332,9 +330,6 @@ macro_rules! set_stack_setting {
             crate::chart_tabs::common::StackSetting::Orientation(o) => $s.set_orientation(o, $c),
             crate::chart_tabs::common::StackSetting::Orderbook(v) => {
                 $s.set_orderbook_enabled(Some(v), $c)
-            }
-            crate::chart_tabs::common::StackSetting::Liquidations(v) => {
-                $s.set_liquidations_enabled(Some(v), $c)
             }
             crate::chart_tabs::common::StackSetting::ShowZone(v) => $s.set_show_zone(Some(v), $c),
             crate::chart_tabs::common::StackSetting::AutoPin(v) => $s.set_auto_pin(Some(v), $c),
@@ -400,7 +395,6 @@ pub(super) struct LayoutPopupSnapshot {
     pub mode: StackLayoutMode,
     pub orientation: StackOrientation,
     pub orderbook: bool,
-    pub liquidations: bool,
     pub show_zone: bool,
     pub auto_pin: bool,
     pub price_axis_pos: PriceAxisPos,
@@ -983,7 +977,6 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
     let pick_entity = entity.clone();
     let all_entity = entity.clone();
     let ob_entity = entity.clone();
-    let liq_entity = entity.clone();
     let sz_entity = entity.clone();
     let ap_entity = entity.clone();
     let or_entity = entity.clone();
@@ -1013,7 +1006,6 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
         this.fit_input(),
         this.scroll_input(),
         snap.orderbook,
-        snap.liquidations,
         snap.show_zone,
         snap.auto_pin,
         snap.price_axis_pos,
@@ -1090,11 +1082,6 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
         move |checked, app| {
             ob_entity.update(app, |this, cx| {
                 this.apply_tab_setting(StackSetting::Orderbook(checked), cx)
-            });
-        },
-        move |checked, app| {
-            liq_entity.update(app, |this, cx| {
-                this.apply_tab_setting(StackSetting::Liquidations(checked), cx)
             });
         },
         move |checked, app| {

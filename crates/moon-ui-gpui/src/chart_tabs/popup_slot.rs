@@ -1,8 +1,8 @@
 //! The one overlay a chart host is showing.
 //!
-//! A chart host — the tab strip or a detached window — carries seven overlays that all hang off the
-//! same toolbar row: the ⚙ layout popup, candles, graphics, labels, volumes, the drawing-tool
-//! defaults panel and the market-search list. They used to be independent `bool`s, and nothing but
+//! A chart host — the tab strip or a detached window — carries eight overlays that all hang off the
+//! same toolbar row: the ⚙ layout popup, candles, graphics, the trade history, labels, volumes, the
+//! drawing-tool defaults panel and the market-search list. They used to be independent `bool`s, and nothing but
 //! a side effect kept them apart: `MoonPopover` dismisses itself on an outside click in the CAPTURE
 //! phase, which happens to fire before the neighbouring button's own press. Two of them never took that
 //! path — labels turns outside-click dismissal off because its dropdown menus paint in their own
@@ -21,11 +21,13 @@ pub(crate) enum ChartPopup {
     Layout,
     /// Candles and trades display settings.
     Candle,
-    /// The chart-graphics palette.
+    /// The chart-graphics palette: the lines over the plot and the live trade marks.
     Graphics,
+    /// How the closed trades are drawn.
+    History,
     /// The chart-labels module list.
     Labels,
-    /// The volume indicators: the horizontal volumes' zone (and, next, the bottom band's rows).
+    /// The volume indicators: the bottom band and the horizontal volumes' zone.
     Volumes,
     /// Defaults for the armed drawing tool. Tab strip only — a detached window draws no tool row.
     FigStyle,

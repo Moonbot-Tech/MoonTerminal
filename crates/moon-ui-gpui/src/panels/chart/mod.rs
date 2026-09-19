@@ -190,9 +190,6 @@ pub struct ChartPanel {
     /// Whether this panel shows order books. This per-window/tab setting is applied through the
     /// engine's `set_orderbook_enabled`; it defaults to enabled.
     orderbook_enabled: bool,
-    /// Whether this panel renders liquidation trades. This per-window/tab setting is applied through
-    /// the engine's `set_liquidations_enabled`; it defaults to enabled.
-    liquidations_enabled: bool,
     /// Per-window/tab candle and trade display settings. `None` follows the global
     /// `layout.candle_view` default; the effective value is applied during rendering.
     candle_view: Option<moon_core::market::CandleViewCfg>,
@@ -680,7 +677,6 @@ impl ChartPanel {
             market,
             scale: None,
             orderbook_enabled: true,
-            liquidations_enabled: true,
             candle_view: None,
             chart_graphics: None,
             chart_labels: None,
@@ -882,7 +878,6 @@ impl ChartPanel {
             market: None,
             scale: None,
             orderbook_enabled: true,
-            liquidations_enabled: true,
             candle_view: None,
             chart_graphics: None,
             chart_labels: None,
@@ -1349,16 +1344,6 @@ impl ChartPanel {
             self.view_dirty = true;
             self.sync_orderbook_refs(cx);
             self.drop_order_hover_if_disallowed(cx);
-            cx.notify();
-        }
-    }
-
-    /// Enables or disables liquidation trades for this window/tab. Rendering applies the engine
-    /// flag, whose change resets the composed layer to add or remove liquidation crosses.
-    pub fn set_liquidations_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        if self.liquidations_enabled != enabled {
-            self.liquidations_enabled = enabled;
-            self.view_dirty = true;
             cx.notify();
         }
     }

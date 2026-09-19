@@ -866,6 +866,8 @@ fn a_chart_host_shows_one_overlay_at_a_time() {
         "chart_tabs/common.rs",
         "chart_tabs/candle_popup.rs",
         "chart_tabs/graphics_popup.rs",
+        "chart_tabs/history_popup.rs",
+        "chart_tabs/volumes_popup.rs",
         "chart_tabs/labels_popup/mod.rs",
     ] {
         let source = code_only(&read_src(module));

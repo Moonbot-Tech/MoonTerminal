@@ -384,18 +384,6 @@ pub(super) fn set_panels_line_labels<S: 'static>(
     }
 }
 
-/// Apply the liquidation-trade toggle to every panel in the stack.
-pub(super) fn set_panels_liquidations<S: 'static>(
-    entries: &[ChartStackEntry],
-    enabled: bool,
-    cx: &mut Context<S>,
-) {
-    for e in entries {
-        e.panel
-            .update(cx, |p, pcx| p.set_liquidations_enabled(enabled, pcx));
-    }
-}
-
 /// Apply candle rendering settings to every stack panel, with `None` meaning the global default.
 pub(super) fn set_panels_candle_view<S: 'static>(
     entries: &[ChartStackEntry],

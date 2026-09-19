@@ -176,8 +176,11 @@ pub struct ChartTabSpec {
     /// another window requests it.
     #[serde(default)]
     pub orderbook_enabled: Option<bool>,
-    /// Whether this tab's charts render liquidation trades. None defaults to enabled per window/tab.
-    #[serde(default)]
+    /// The liquidations switch a spec written BEFORE it moved into `chart_graphics` still
+    /// carries, or `None` once the startup carry-over (`startup::lines_migration`) has consumed it.
+    /// Written back only while carried, so a save before the carry-over keeps it for the next
+    /// launch's pass and the save after it leaves the old key behind for good.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub liquidations_enabled: Option<bool>,
     /// Whether a hidden order book still leaves an order zone — the marked strip on the right —
     /// when zones are separate; off together with the book, the tab takes no order gesture at all.

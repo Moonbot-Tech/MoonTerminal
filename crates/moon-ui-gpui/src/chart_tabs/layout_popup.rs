@@ -164,7 +164,7 @@ fn mode_label(m: StackLayoutMode) -> &'static str {
 /// `height_fit_input` and `height_scroll_input` are separate fields whose Blur/Enter subscription
 /// belongs to the caller. `on_pick_mode` runs on mode selection. `MoonPopover` positions the panel.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_layout_popup<F, G, H, I, J, K, N, O, P2, Q2, R2, S2>(
+pub(super) fn render_layout_popup<F, G, H, I, J, K, N, O, P2, Q2, S2>(
     id: &str,
     current: StackLayoutMode,
     orientation: StackOrientation,
@@ -172,7 +172,6 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, N, O, P2, Q2, R2, S2>(
     height_fit_input: &Entity<MoonInputState>,
     height_scroll_input: &Entity<MoonInputState>,
     orderbook_enabled: bool,
-    liquidations_enabled: bool,
     show_zone: bool,
     auto_pin: bool,
     price_axis_pos: PriceAxisPos,
@@ -187,7 +186,6 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, N, O, P2, Q2, R2, S2>(
     apply_all_label: String,
     on_apply_all: G,
     on_toggle_orderbook: H,
-    on_toggle_liquidations: R2,
     on_toggle_show_zone: I,
     on_toggle_auto_pin: J,
     on_toggle_orientation: K,
@@ -209,7 +207,6 @@ where
     O: Fn(bool, &mut App) + 'static,
     P2: Fn(bool, &mut App) + 'static,
     Q2: Fn(bool, &mut App) + 'static,
-    R2: Fn(bool, &mut App) + 'static,
 {
     let horizontal = orientation.is_horizontal();
     let sel = POPUP_MODES.iter().position(|m| *m == current).unwrap_or(0);
@@ -366,12 +363,6 @@ where
         .label(t!("chart.layout.orderbook").to_string())
         .checked(orderbook_enabled)
         .on_change(move |ch: &bool, _w, app| on_toggle_orderbook(*ch, app));
-
-    // "Liquidations" toggles liquidation-trade crosses on this tab's charts.
-    let liquidations_cb = MoonCheckbox::new(SharedString::from(format!("{id}-liquidations")))
-        .label(t!("chart.layout.liquidations").to_string())
-        .checked(liquidations_enabled)
-        .on_change(move |ch: &bool, _w, app| on_toggle_liquidations(*ch, app));
 
     // "Order zone with the book hidden": whether a hidden order book still leaves the marked order
     // strip on the right under separate zones. Off together with the book, such a tab is chart edge
@@ -559,14 +550,14 @@ where
                     .children(min_slot_row.filter(|_| divider_shown)),
             ),
         )
-        // "Display" frame: order book, liquidations, control zone, time axis, line labels, and
-        // crosshair labels.
+        // "Display" frame: order book, control zone, time axis, line labels, and crosshair labels —
+        // what shares the pane with the plot. The liquidation crosses used to be a row here; they
+        // are drawn among the trade marks and moved to the graphics popup with them.
         .child(
             popup_group("frame-display", t!("chart.layout.frame_display")).child(
                 v_flex()
                     .gap(design::ui_px(cx, 6.0))
                     .child(orderbook_cb)
-                    .child(liquidations_cb)
                     .child(show_zone_cb)
                     .child(time_axis_cb)
                     .child(line_labels_cb)

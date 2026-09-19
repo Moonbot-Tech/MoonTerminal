@@ -694,7 +694,6 @@ impl ChartTabs {
             Option<bool>,
             Option<bool>,
             Option<bool>,
-            Option<bool>,
             Option<(CoreId, String)>,
             bool,
             Option<crate::persistence::chart_persist::PriceAxisPos>,
@@ -722,7 +721,6 @@ impl ChartTabs {
                             (s.layout_mode, s.layout_height_fit, s.layout_height_scroll),
                             s.layout_orientation,
                             s.orderbook_enabled,
-                            s.liquidations_enabled,
                             s.show_zone,
                             s.auto_pin,
                             s.compare_anchor.clone(),
@@ -751,7 +749,6 @@ impl ChartTabs {
             layout,
             orientation,
             ob,
-            liq,
             sz,
             ap,
             anchor,
@@ -787,9 +784,6 @@ impl ChartTabs {
                 s.set_layout(layout.0, layout.1, layout.2, c);
                 if let Some(v) = ob {
                     s.set_orderbook_enabled(Some(v), c);
-                }
-                if let Some(v) = liq {
-                    s.set_liquidations_enabled(Some(v), c);
                 }
                 if let Some(v) = sz {
                     s.set_show_zone(Some(v), c);

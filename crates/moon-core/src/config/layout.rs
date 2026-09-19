@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use super::paths;
 
 mod empty;
+mod lines_carry;
 mod serde_compat;
+
+pub use lines_carry::stamp_carried_lines;
 
 pub use empty::{EmptyBlock, EmptyPlaces, EmptySlot};
 
@@ -1535,6 +1538,24 @@ pub struct ChartGraphicsCfg {
     #[serde(skip)]
     pub bright_closed_trades: bool,
 
+    // --- Lines over the plot. The three price-line flags moved here from `CandleViewCfg`, and the
+    // liquidations switch from the tab spec's own per-tab field, so that every setting the
+    // "Chart graphics" popup shows travels with its ⧉ press; the carry-over for an existing profile
+    // is `WindowLayout::carry_lines_into_graphics` and the startup pass beside it. ---
+    /// Whether the orange `LastPrice` line from the core is drawn.
+    #[serde(default = "def_true", deserialize_with = "de_lenient_true")]
+    pub last_price_line: bool,
+    /// Whether the blue `MarkPrice` line from the core is drawn. A market whose provider reports
+    /// no mark price draws none regardless.
+    #[serde(default = "def_true", deserialize_with = "de_lenient_true")]
+    pub mark_price_line: bool,
+    /// Whether a MoonShot order fills its corridor between the entry and the target.
+    #[serde(default = "def_true", deserialize_with = "de_lenient_true")]
+    pub moonshot_zone: bool,
+    /// Whether liquidation trades draw their crosses beside the trade marks.
+    #[serde(default = "def_true", deserialize_with = "de_lenient_true")]
+    pub liquidations: bool,
+
     // --- Trade marks. Moved here from `ChartTheme` so they are per TAB rather than per theme. ---
     /// Multiplier on the trade-cross marker size. The device pixel ratio is applied separately and
     /// is not part of this number.
@@ -1665,6 +1686,10 @@ impl Default for ChartGraphicsCfg {
             hide_order_move_history: false,
             hide_entry_fill_arrow: false,
             bright_closed_trades: false,
+            last_price_line: true,
+            mark_price_line: true,
+            moonshot_zone: true,
+            liquidations: true,
             marker_scale: def_marker_scale(),
             trade_volume_alpha: def_trade_volume_alpha(),
             candle_volume_style: def_candle_volume_style(),

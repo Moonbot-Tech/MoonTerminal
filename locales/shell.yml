@@ -988,10 +988,40 @@ chart.graphics.trade_style_lines:
   ru: "Линии Moonbot"
   en: "Moonbot lines"
   es: "Líneas Moonbot"
-chart.graphics.frame_orders:
-  ru: "Линии ордеров"
-  en: "Order lines"
-  es: "Líneas de órdenes"
+chart.graphics.frame_lines:
+  ru: "Линии"
+  en: "Lines"
+  es: "Líneas"
+chart.graphics.last_price_line:
+  ru: "Линия Last price"
+  en: "Last price line"
+  es: "Línea Last price"
+chart.graphics.mark_price_line:
+  ru: "Линия Mark price"
+  en: "Mark price line"
+  es: "Línea Mark price"
+chart.graphics.moonshot_zone:
+  ru: "Коридор MoonShot"
+  en: "MoonShot corridor"
+  es: "Corredor MoonShot"
+chart.graphics.liquidations:
+  ru: "Ликвидации"
+  en: "Liquidations"
+  es: "Liquidaciones"
+# The "Trade history" popup (the book button): how the closed trades are drawn. Its rows keep
+# their `chart.graphics.*` keys from the popup they came out of.
+chart.history.title:
+  ru: "История сделок"
+  en: "Trade history"
+  es: "Historial de operaciones"
+chart.history.tip:
+  ru: "Настройки истории сделок"
+  en: "Trade history settings"
+  es: "Ajustes del historial de operaciones"
+chart.history.frame_closed_orders:
+  ru: "Закрытые ордера"
+  en: "Closed orders"
+  es: "Órdenes cerradas"
 chart.graphics.arrow_size:
   ru: "Размер треугольников"
   en: "Triangle size"
@@ -1013,33 +1043,29 @@ chart.graphics.hide_closed_sell:
   en: "Hide the sell-price line of closed orders"
   es: "Ocultar la línea de venta de las órdenes cerradas"
 chart.graphics.hide_closed_sell_hint:
-  ru: "Живые ордера всегда показывают свою линию продажи"
-  en: "Live orders always keep their sell line"
-  es: "Las órdenes activas siempre conservan su línea de venta"
+  ru: "Только ордера, закрытые в этом сеансе, и только в стиле «Метки»; яркость — ползунок закрытых в Настройки → Линии"
+  en: "Only orders closed this session, and only in the Marks style; brightness is the closed-orders slider in Settings → Lines"
+  es: "Solo las órdenes cerradas en esta sesión y solo en el estilo «Marcas»; el brillo es el control de órdenes cerradas en Ajustes → Líneas"
 chart.graphics.hide_move_history:
-  ru: "Скрывать историю переносов ордера на этой вкладке"
-  en: "Hide the order repricing trail on this tab"
-  es: "Ocultar el rastro de reprecios de la orden en esta pestaña"
-chart.graphics.hide_move_history_hint:
-  ru: "Останется только текущая цена. Отрезок переноса стопа виден всегда. Вид пути — Настройки → Линии → История переносов"
-  en: "Only the current price stays. A stop's own move segment is always shown. The trail's look: Settings → Lines → Repricing trail"
-  es: "Solo queda el precio actual. El tramo de traslado del stop siempre se ve. El aspecto del rastro: Ajustes → Líneas → Rastro de reprecios"
+  ru: "Скрывать историю переносов"
+  en: "Hide the repricing trail"
+  es: "Ocultar el rastro de reprecios"
 chart.graphics.frame_trade_marks:
-  ru: "Метки сделок"
-  en: "Trade marks"
-  es: "Marcas de operaciones"
+  ru: "Трейды"
+  en: "Trades"
+  es: "Trades"
 chart.graphics.marker_scale:
-  ru: "Размер метки сделки"
-  en: "Trade marker size"
-  es: "Tamaño de la marca de operación"
+  ru: "Размер трейдов"
+  en: "Trade size"
+  es: "Tamaño de los trades"
 chart.graphics.trade_volume_alpha:
-  ru: "Непрозрачность объёмов сделок"
-  en: "Trade volume opacity"
-  es: "Opacidad del volumen de operaciones"
-chart.graphics.frame_bottom_volumes:
-  ru: "Объёмы снизу"
-  en: "Bottom volumes"
-  es: "Volúmenes inferiores"
+  ru: "Столбики объёма трейдов"
+  en: "Per-trade volume bars"
+  es: "Barras de volumen por trade"
+chart.graphics.trade_volume_alpha_hint:
+  ru: "Тонкие столбики снизу, по одному на трейд в зоне трейдов; 0% — скрыть"
+  en: "Thin bars along the bottom, one per trade in the trade zone; 0% hides them"
+  es: "Barras finas abajo, una por trade en la zona de trades; 0% las oculta"
 chart.graphics.volume_style:
   ru: "Стиль отображения"
   en: "Display style"
@@ -1227,18 +1253,6 @@ chart.candles.limit:
   ru: "Лимит трейдов"
   en: "Trades limit"
   es: "Límite de trades"
-chart.candles.last_price_line:
-  ru: "Линия Last price"
-  en: "Last price line"
-  es: "Línea Last price"
-chart.candles.mark_price_line:
-  ru: "Линия Mark price"
-  en: "Mark price line"
-  es: "Línea Mark price"
-chart.candles.moonshot_zone:
-  ru: "Коридор MoonShot"
-  en: "MoonShot corridor"
-  es: "Corredor MoonShot"
 chart.candles.wicks_in_zone:
   ru: "Тени в зоне трейдов"
   en: "Wicks in trade zone"
@@ -1323,10 +1337,6 @@ chart.layout.orderbook:
   ru: "Стакан"
   en: "Order book"
   es: "Libro de órdenes"
-chart.layout.liquidations:
-  ru: "Ликвидации"
-  en: "Liquidations"
-  es: "Liquidaciones"
 chart.layout.show_zone:
   ru: "Зона ордеров при скрытом стакане"
   en: "Order zone with the book hidden"
@@ -2882,8 +2892,9 @@ chart.hvol.caption_max:
   ru: "Макс"
   en: "Max"
   es: "Máx"
-# The "Volumes" popup (the V button): the chart's volume indicators. Today the horizontal
-# volumes — Moonbot's `HVol`; the bottom band's rows are to move here from the graphics popup.
+# The "Volumes" popup (the V button): the chart's two volume indicators — the bottom band
+# (vertical) and Moonbot's `HVol` (horizontal). The band's rows keep their `chart.graphics.*`
+# keys from the popup they came out of.
 chart.volumes.tip:
   ru: "Объёмы"
   en: "Volumes"
@@ -2892,14 +2903,22 @@ chart.volumes.title:
   ru: "Объёмы"
   en: "Volumes"
   es: "Volúmenes"
+chart.volumes.frame_common:
+  ru: "Общие"
+  en: "Shared"
+  es: "Comunes"
+chart.volumes.frame_band:
+  ru: "Вертикальные объёмы"
+  en: "Vertical volumes"
+  es: "Volúmenes verticales"
 chart.volumes.frame_hvol:
   ru: "Горизонтальные объёмы"
   en: "Horizontal volumes"
   es: "Volúmenes horizontales"
 chart.volumes.hvol_enabled:
-  ru: "Показывать профиль объёма по цене"
-  en: "Show the volume-by-price profile"
-  es: "Mostrar el perfil de volumen por precio"
+  ru: "Показывать горизонтальные объёмы"
+  en: "Show horizontal volumes"
+  es: "Mostrar volúmenes horizontales"
 chart.volumes.hvol_window:
   ru: "Окно"
   en: "Window"

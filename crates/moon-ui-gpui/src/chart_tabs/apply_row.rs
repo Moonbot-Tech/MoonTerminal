@@ -25,7 +25,7 @@ use crate::design;
 ///
 /// Deliberately no values. They are read from the popup at the moment the button is pressed, for
 /// two reasons: the popup stays fully editable while the row is up, so a snapshot taken at ⧉ would
-/// silently discard everything typed afterwards; and one of these is shared by all four popups on a
+/// silently discard everything typed afterwards; and one of these is shared by every popup on a
 /// host, so a snapshot could be performed from a popup that did not take it.
 #[derive(Default, Clone, Debug, PartialEq)]
 pub(crate) struct ApplyPress {
@@ -83,7 +83,7 @@ pub(super) fn render_apply_row<T: ApplyRowHost>(
     if !press.open {
         return None;
     }
-    // Every value has a default of its own, or none does: the four popups each carry one kind of
+    // Every value has a default of its own, or none does: each popup carries one kind of
     // setting. A press whose values have nowhere to be stored can only be written into tabs.
     let as_default = !values.is_empty() && values.iter().all(|v| v.global_slot().is_some());
     let targets = press.targets;

@@ -224,7 +224,6 @@ impl DetachedChartHost {
                     s.layout_height_fit,
                     s.layout_height_scroll,
                     s.orderbook_enabled,
-                    s.liquidations_enabled,
                     s.show_zone,
                     s.auto_pin,
                     s.price_axis_pos,
@@ -246,7 +245,6 @@ impl DetachedChartHost {
             hf,
             hs,
             ob,
-            liq,
             sz,
             ap,
             axis_pos,
@@ -267,9 +265,6 @@ impl DetachedChartHost {
             }
             if ob.is_some() {
                 panel.update(cx, |p, pcx| p.set_orderbook_enabled(ob, pcx));
-            }
-            if liq.is_some() {
-                panel.update(cx, |p, pcx| p.set_liquidations_enabled(liq, pcx));
             }
             if candle_view.is_some() {
                 panel.update(cx, |p, pcx| p.set_candle_view(candle_view, pcx));
@@ -893,7 +888,6 @@ impl LayoutPopupHost for DetachedChartHost {
             mode: p.layout_mode().unwrap_or(StackLayoutMode::Fit),
             orientation: p.layout_orientation().unwrap_or(StackOrientation::Vertical),
             orderbook: p.orderbook_enabled().unwrap_or(true),
-            liquidations: p.liquidations_enabled().unwrap_or(true),
             show_zone: p.show_zone().unwrap_or(true),
             auto_pin: p.auto_pin().unwrap_or(false),
             price_axis_pos: p.price_axis_pos().unwrap_or_default(),

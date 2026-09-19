@@ -15,9 +15,9 @@ use super::stack::{
     ChartStackEntry, SlotOwner, apply_setting, chart_stack_card, compare_role, force_panels_scale,
     render_chart_stack, resolve_layout, retain_nonempty_panels, set_panels_auto_pin,
     set_panels_candle_view, set_panels_chart_graphics, set_panels_chart_labels,
-    set_panels_cursor_labels, set_panels_line_labels, set_panels_liquidations,
-    set_panels_orderbook_enabled, set_panels_price_axis_pos, set_panels_scale,
-    set_panels_show_zone, set_panels_time_axis_visible, sync_compare, tile_gutter,
+    set_panels_cursor_labels, set_panels_line_labels, set_panels_orderbook_enabled,
+    set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone,
+    set_panels_time_axis_visible, sync_compare, tile_gutter,
 };
 use crate::Backend;
 use crate::panels::ChartPanel;
@@ -47,8 +47,6 @@ pub(crate) struct MainChartStack {
     layout_height_scroll: Option<u16>,
     /// Per-window order-book visibility for this tab; `None` defaults to enabled.
     orderbook_enabled: Option<bool>,
-    /// Per-window liquidation-trade visibility; `None` defaults to enabled.
-    liquidations_enabled: Option<bool>,
     /// Candle and trade display settings for the tab; `None` uses the global default.
     candle_view: Option<moon_core::market::CandleViewCfg>,
     /// Chart-drawing settings for the tab; `None` uses the global `layout.chart_graphics` default.
@@ -223,7 +221,6 @@ impl MainChartStack {
             layout_height_fit: None,
             layout_height_scroll: None,
             orderbook_enabled: None,
-            liquidations_enabled: None,
             candle_view: None,
             chart_graphics: None,
             chart_labels: None,
@@ -323,9 +320,6 @@ impl MainChartStack {
         }
         if let Some(en) = self.orderbook_enabled {
             panel.update(cx, |panel, pcx| panel.set_orderbook_enabled(en, pcx));
-        }
-        if let Some(en) = self.liquidations_enabled {
-            panel.update(cx, |panel, pcx| panel.set_liquidations_enabled(en, pcx));
         }
         if self.candle_view.is_some() {
             let cv = self.candle_view;
@@ -897,25 +891,6 @@ impl MainChartStack {
             &self.charts,
             cx,
             |c, cx| set_panels_orderbook_enabled(c, enabled.unwrap_or(true), cx),
-        );
-    }
-
-    pub(crate) fn liquidations_enabled(&self) -> Option<bool> {
-        self.liquidations_enabled
-    }
-
-    /// Enable or disable liquidation trades for every chart in this stack and window.
-    pub(crate) fn set_liquidations_enabled(
-        &mut self,
-        enabled: Option<bool>,
-        cx: &mut Context<Self>,
-    ) {
-        apply_setting(
-            &mut self.liquidations_enabled,
-            enabled,
-            &self.charts,
-            cx,
-            |c, cx| set_panels_liquidations(c, enabled.unwrap_or(true), cx),
         );
     }
 

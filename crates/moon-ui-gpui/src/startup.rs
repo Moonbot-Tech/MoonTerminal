@@ -693,6 +693,53 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
             }
         }
     }
+    // The four switches that moved into `ChartGraphicsCfg` — three price-line/corridor flags out
+    // of `candle_view`, the liquidations switch out of the tab spec — are carried over from
+    // wherever an old profile still names them. No marker: both sources are consumed, and written
+    // back only while carried (`lines_migration`). The kinds' old switches are read BEFORE the
+    // layout pass takes them, because a tab with graphics of its own drew its kind's candle lines.
+    {
+        let kinds = lines_migration::KindCarried::snapshot(&layout);
+        let unconsumed = layout.clone();
+        let layout_changed = layout.carry_lines_into_graphics();
+        let specs_changed = lines_migration::carry_specs(&layout, &kinds, &mut saved_chart_specs);
+        // An EMPTY spec list is ambiguous, as the passes above note: `load_all` maps a parse
+        // failure to an empty vec. Tabs that did not load were not carried, and they may hold
+        // graphics of their own that need the kinds' old switches — which the layout pass has
+        // just consumed. So the file is asked, the way the sibling passes ask it.
+        let specs_unreadable = saved_chart_specs.is_empty()
+            && charts_file_has_content
+            && std::fs::read_to_string(moon_core::config::paths::charts_path())
+                .map(|text| {
+                    chart_persist::empty_load_is_unreadable(true, &saved_chart_specs, &text)
+                })
+                .unwrap_or(true);
+        // `charts.json` first, as the passes above do. The specs pass reads the kinds' old
+        // switches, which the layout pass has just consumed — so if the specs cannot be written
+        // (or could not be read), the layout must not be committed either, or the next launch's
+        // specs pass would find no kind carrying anything: the layout goes back to the copy that
+        // still carries its keys, and both are carried again next launch. The tabs in memory keep
+        // what they were given.
+        if specs_unreadable {
+            log::warn!(
+                "переключатели линий: charts.json не разобран, вкладки не перенесены; \
+                 повторю при следующем запуске"
+            );
+            layout = unconsumed;
+        } else if specs_changed && !chart_persist::save_all(&saved_chart_specs) {
+            log::warn!(
+                "переключатели линий перенесены во вкладки, но charts.json не сохранён; \
+                 повторю при следующем запуске"
+            );
+            layout = unconsumed;
+        } else if layout_changed && !layout.save() {
+            // The specs are on disk and consumed; the layout alone is carried again next launch.
+            log::warn!(
+                "переключатели линий перенесены в графику чарта, но layout.toml не сохранён; \
+                 повторю при следующем запуске"
+            );
+        }
+    }
     let layout = layout;
     let saved_chart_specs = saved_chart_specs;
     let figures = moon_core::figures::FigureStore::load();
@@ -756,6 +803,7 @@ mod boot;
 mod fixture;
 mod graphics_migration;
 mod instance;
+mod lines_migration;
 mod path_visibility_migration;
 mod strategy_filters_migration;
 mod unlock;

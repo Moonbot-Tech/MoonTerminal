@@ -837,9 +837,13 @@ struct PaneRender {
     active: bool,
     /// Whether this panel enables its per-window order book; disabled hides the book and corner label.
     orderbook_enabled: bool,
-    /// Whether this panel draws per-window liquidation trades. Disabled omits liquidation crosses
-    /// from combo. Changing the flag resets combo for reupload with or without liquidations.
+    /// Whether the combo ring was last filled WITH liquidation crosses, compared against
+    /// `ChartGraphicsCfg::liquidations` on every sync: a flip resets the ring for a re-upload with
+    /// or without them.
     liquidations_enabled: bool,
+    /// The `(last, mark)` price-line switches the pane last uploaded under, compared against
+    /// `ChartGraphicsCfg` on every sync for the same reason as the flag above.
+    applied_price_lines: (bool, bool),
     /// This panel's order-book-only mode, hiding chart and price axis and using the full width.
     orderbook_only: bool,
     /// Price-axis position (`Left`, `Right`, or `Hide`), controlling label side and reserved gutter.
@@ -1010,6 +1014,7 @@ impl PaneRender {
             active: false,
             orderbook_enabled: true,
             liquidations_enabled: true,
+            applied_price_lines: (true, true),
             orderbook_only: false,
             price_axis_pos: crate::persistence::chart_persist::PriceAxisPos::Left,
             time_axis_visible: true,
@@ -1508,9 +1513,6 @@ struct ChartDataState {
     /// Whether to show the per-window or panel order book. Disabled sets `glass_w=0`, skips level
     /// construction, and hides the label. Applied to every panel in this engine.
     orderbook_enabled: bool,
-    /// Whether to draw per-window or panel liquidation trades. Disabled omits liquidation crosses
-    /// from combo. Applied to every panel in this engine.
-    liquidations_enabled: bool,
     /// Order-book-only mode from the comparison broom button: hide chart and price axis and use the
     /// full width for the order book. Applied to every panel in follower engines.
     orderbook_only: bool,
