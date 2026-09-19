@@ -663,6 +663,7 @@ impl MarketDataSource {
                     && retry_due;
                 if cache_stale {
                     cursor.cache_rows.clear();
+                    cursor.cache_rows_finer.clear();
                     cursor.cache_rows_5m.clear();
                     cursor.cache_rows_1d.clear();
                     cursor.cache_generation = cursor.cache_generation.wrapping_add(1);
@@ -687,15 +688,42 @@ impl MarketDataSource {
                         };
                         cursor.cache_rows = read(native_kind_min);
                         cursor.cache_rows_kind = native_kind_min;
-                        // If the native kind is absent, fall back first to the background recorder's
-                        // 5-minute rows and then to 1-minute deep-history rows. Every supported
-                        // timeframe is divisible by both, so the merge can resample them.
-                        for fb in [5u32, 1] {
-                            if !cursor.cache_rows.is_empty() || native_kind_min <= fb {
-                                break;
-                            }
-                            cursor.cache_rows = read(fb);
-                            cursor.cache_rows_kind = fb;
+                        // Where the native kind leaves a hole, the finer kinds too: the 1-minute
+                        // deep-history rows and the recorder's 5-minute rows, over the same
+                        // window, aggregated to the native kind right here. Every supported
+                        // timeframe is divisible by both. Reading them only when the native kind
+                        // was EMPTY left a holey native kind to the range-only snapshot, which
+                        // draws as bodies without wicks (#634); a native kind without holes has
+                        // nothing to fill and costs no extra read. The right edge is now: a
+                        // native cache that stops where the previous session did leaves a tail
+                        // another window's finer rows may have covered since.
+                        let native_tf_ms = native_kind_min as i64 * 60_000;
+                        let now_unix = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_millis() as i64);
+                        if crate::market::candles::has_holes(
+                            &cursor.cache_rows,
+                            native_tf_ms,
+                            need_from,
+                            now_unix,
+                        ) {
+                            let finer: Vec<(u32, Vec<ChartCandle>)> = [1u32, 5]
+                                .into_iter()
+                                .filter(|fk| *fk < native_kind_min)
+                                .map(|fk| (fk, read(fk)))
+                                .collect();
+                            let parts: Vec<crate::market::candles::BasePart<'_>> = finer
+                                .iter()
+                                .map(|(fk, rows)| crate::market::candles::BasePart {
+                                    rows,
+                                    tf_ms: *fk as i64 * 60_000,
+                                })
+                                .collect();
+                            crate::market::candles::merge_bases(
+                                native_tf_ms,
+                                &parts,
+                                &mut cursor.cache_rows_finer,
+                            );
                         }
                         // Load cache-only coarser layers used to extend the historical prefix. Kind-5
                         // rows come from the recorder and possible deep-history writeback; the
@@ -718,12 +746,13 @@ impl MarketDataSource {
                         cursor.cache_kind = Some(native_kind_min);
                         cursor.cache_from_ms = need_from;
                     }
-                    if !cursor.cache_rows.is_empty() {
+                    if !cursor.cache_rows.is_empty() || !cursor.cache_rows_finer.is_empty() {
                         log::log!(
                             super::SOURCE_TRACE_LEVEL,
-                            "kline cache: префикс {market} kind{}: {} рядов",
+                            "kline cache: префикс {market} kind{}: {} рядов, из finer kinds: {}",
                             cursor.cache_rows_kind,
-                            cursor.cache_rows.len()
+                            cursor.cache_rows.len(),
+                            cursor.cache_rows_finer.len()
                         );
                     }
                 }
@@ -968,14 +997,22 @@ impl MarketDataSource {
                         crate::market::candles::orient_range_rows(&mut cursor.ring_rows_5m);
                     }
                 }
-                // Use authoritative native klines from prior sessions as the visible cache portion.
+                // Use authoritative native klines from prior sessions as the visible cache portion,
+                // and the finer cached kinds beside them to fill the native kind's holes.
+                let in_window = |c: &&ChartCandle| {
+                    let t = c.t_open_ms as i64;
+                    t >= from_base_ms && t <= to_ms
+                };
                 let cache_part: Vec<ChartCandle> = cursor
                     .cache_rows
                     .iter()
-                    .filter(|c| {
-                        let t = c.t_open_ms as i64;
-                        t >= from_base_ms && t <= to_ms
-                    })
+                    .filter(in_window)
+                    .cloned()
+                    .collect();
+                let finer_part: Vec<ChartCandle> = cursor
+                    .cache_rows_finer
+                    .iter()
+                    .filter(in_window)
                     .cloned()
                     .collect();
                 // Write deep rows back to the cache without blocking when the cheap fingerprint
@@ -1014,28 +1051,37 @@ impl MarketDataSource {
                     }
                 }
                 // Merge every base source into the series timeframe in increasing priority:
-                // 5-minute range-only snapshot < authoritative cached klines < live, freshest deep
-                // history. Skip sources whose timeframe is coarser than or does not divide the
-                // target, such as a 5-minute snapshot for a 1-minute series.
+                // 5-minute range-only snapshot < the native kind's holes filled from the finer
+                // cached kinds < native cached klines < live, freshest deep history. The cached
+                // parts carry the kind they were READ at, not this pass's native kind (see
+                // `cache_rows_kind`). `merge_bases` skips a source whose timeframe is coarser
+                // than or does not divide the target, such as a 5-minute snapshot for a
+                // 1-minute series.
                 {
-                    let tf = cp.tf_ms;
-                    let mut merged: std::collections::BTreeMap<i64, ChartCandle> =
-                        std::collections::BTreeMap::new();
-                    let mut scratch: Vec<ChartCandle> = Vec::new();
-                    for (part, part_tf) in [
-                        (&snap_part, 5 * 60_000i64),
-                        (&cache_part, cursor.cache_rows_kind as i64 * 60_000),
-                        (&deep_part, deep_kind_min as i64 * 60_000),
-                    ] {
-                        if part.is_empty() || part_tf <= 0 || tf < part_tf || tf % part_tf != 0 {
-                            continue;
-                        }
-                        crate::market::candles::resample(part, tf, &mut scratch);
-                        for c in scratch.drain(..) {
-                            merged.insert(c.t_open_ms as i64, c);
-                        }
-                    }
-                    cursor.server_candles.extend(merged.into_values());
+                    use crate::market::candles::BasePart;
+                    let cache_tf_ms = cursor.cache_rows_kind as i64 * 60_000;
+                    crate::market::candles::merge_bases(
+                        cp.tf_ms,
+                        &[
+                            BasePart {
+                                rows: &snap_part,
+                                tf_ms: SNAP5_TF_MS,
+                            },
+                            BasePart {
+                                rows: &finer_part,
+                                tf_ms: cache_tf_ms,
+                            },
+                            BasePart {
+                                rows: &cache_part,
+                                tf_ms: cache_tf_ms,
+                            },
+                            BasePart {
+                                rows: &deep_part,
+                                tf_ms: deep_kind_min as i64 * 60_000,
+                            },
+                        ],
+                        &mut cursor.server_candles,
+                    );
                 }
                 cursor.candle_trade_rows.clear();
                 if let Some(reader) = trade_reader.as_ref() {
@@ -1173,7 +1219,8 @@ impl MarketDataSource {
                     log::warn!(
                         "candle gap {market} tf={}с: последняя свеча {}м назад, макс. дыра \
                          {}м (кончается {}м назад); серия n={} \
-                         [{}], заливка n={}, кэш kind{} n={} [{}], 5м n={} [{}], ринг5м n={} [{}],                          1д n={} [{}]",
+                         [{}], заливка n={}, кэш kind{} n={} [{}], из finer n={} [{}], 5м n={} \
+                         [{}], ринг5м n={} [{}], 1д n={} [{}]",
                         cp.tf_ms / 1000,
                         ago_min(last_ms),
                         (max_hole / 60_000.0).round(),
@@ -1184,6 +1231,8 @@ impl MarketDataSource {
                         cursor.cache_rows_kind,
                         cursor.cache_rows.len(),
                         span(&cursor.cache_rows),
+                        cursor.cache_rows_finer.len(),
+                        span(&cursor.cache_rows_finer),
                         cursor.cache_rows_5m.len(),
                         span(&cursor.cache_rows_5m),
                         cursor.ring_rows_5m.len(),
