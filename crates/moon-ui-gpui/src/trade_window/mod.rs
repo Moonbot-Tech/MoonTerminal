@@ -27,14 +27,15 @@
 //!
 //! # Window ownership and dismissal
 //!
-//! The root owns the focus handle because Escape is a window command, not a chart command: a bare
-//! Escape closes this independent window even after the chart takes focus, while modified Escape
-//! stays available to the chart's own hotkey layer. The header mounts the frame's close control as
-//! the visible dismissal affordance; the key is the fallback for a taskbar-hidden window whose
-//! chrome cannot be reached.
+//! The root owns the focus handle because both the things this window listens for are WINDOW
+//! commands — Escape closes it, and the configured window-local hotkeys (price scale, super-zoom)
+//! act on its own chart — so both must reach the view whatever descendant holds focus. The header
+//! mounts the frame's close control as the visible dismissal affordance; the key is the fallback
+//! for a taskbar-hidden window whose chrome cannot be reached.
 
 mod figures;
 pub(crate) mod frame;
+mod hotkeys;
 mod render;
 mod settings;
 mod strategy;
@@ -424,10 +425,16 @@ pub(crate) struct TradeWindowView {
     window_id: WindowId,
     /// Window-root focus handle, so a key press reaches this view rather than only the chart.
     ///
-    /// The root owns the handle instead of the [`ChartPanel`] because the key this window cares
-    /// about is a WINDOW command — Escape closes the window — and a descendant that took focus
-    /// would otherwise be the only thing hearing it.
+    /// The root owns the handle because both the things this window listens for are WINDOW
+    /// commands — Escape closes it, and the configured window-local hotkeys (price scale,
+    /// super-zoom) act on its own chart — so both must reach the view whatever descendant holds
+    /// focus.
     focus: FocusHandle,
+    /// Reads Caps Lock and lone-modifier presses out of this window's modifier-change stream.
+    ///
+    /// Per window because one such press spans several events, so the state cannot be local to
+    /// the handler. Same role as the detached chart host's own watch.
+    modifier_watch: moon_ui::MoonHotkeyModifierWatch,
     /// Live taskbar-suppression burst; replaced on every activation and cancelled on release.
     taskbar_hide: crate::window::windowing::TaskbarHideTask,
     /// Offset this window was opened at, so [`remembered_geometry`] knows not to persist it back.
@@ -574,9 +581,8 @@ impl TradeWindowView {
     /// a user whose pointer cannot reach the chrome — a window dragged mostly off-screen, a
     /// display that went away — would otherwise have nothing left.
     ///
-    /// Bare Escape only. A modifier held over it is a different gesture, and the chart's own
-    /// hotkey layer already reads Escape with modifiers as its own; consuming those here would
-    /// take a binding away from a surface that has one.
+    /// Bare Escape only. A modifier held over it is a different gesture; a modified Escape is
+    /// left to the bubble-phase hotkey route, where it currently resolves to nothing.
     ///
     /// Args:
     ///     event: The key press.

@@ -1094,6 +1094,21 @@ fn trade_windows_restore_and_persist_the_shared_scale() {
         pick.contains("layout_dirty"),
         "picking a scale must mark the layout dirty so it reaches layout.toml"
     );
+    // #608: the Scale hotkey must reuse the same persist/force path as the header dropdown, never
+    // call `force_scale`/`set_scale` directly — otherwise the key and the dropdown disagree, the
+    // step forgets itself on reopen, and a manual drag at the end of the preset list stops being
+    // dropped the way `pick_scale` already guarantees.
+    let hotkeys = code_only(&read_src("trade_window/hotkeys.rs"));
+    let dispatch_hotkey = braced_body(&hotkeys, "fn dispatch_hotkey(");
+    assert!(
+        dispatch_hotkey.contains("crate::controls::step_scale(")
+            && dispatch_hotkey.contains("self.pick_scale("),
+        "the scale hotkey must step through controls::step_scale and persist through pick_scale"
+    );
+    assert!(
+        !dispatch_hotkey.contains("force_scale(") && !dispatch_hotkey.contains("set_scale("),
+        "the scale hotkey must not bypass pick_scale's persist/force path"
+    );
 }
 
 /// `report_trades.rs:ChartPanel::load_history_scope` must only publish loaded markers after a

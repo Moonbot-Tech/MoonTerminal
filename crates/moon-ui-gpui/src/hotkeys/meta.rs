@@ -187,7 +187,9 @@ pub const SAME_FOR_MOVE: SlotMeta = meta(Origin::Shared, Scope::BOOK.or(Scope::P
 /// `shell/actions.rs::select_hotkey_target`: an action that takes a target acts on the chart under
 /// the POINTER when that chart is in this window's group, and on the window's main chart otherwise
 /// — so it carries both surfaces, and a detached window (`chart_tabs::detached_host`, which uses its
-/// own chart and no hover) is the case where only the second one is left.
+/// own chart and no hover) is the case where only the second one is left. The trade window
+/// (`trade_window::hotkeys`) routes only the WINDOW-scoped scale and super-zoom slots, so those
+/// rows' WINDOW label stays true there.
 pub fn key_slot_meta(slot: KeySlot) -> SlotMeta {
     use KeySlot as S;
     use Origin::*;

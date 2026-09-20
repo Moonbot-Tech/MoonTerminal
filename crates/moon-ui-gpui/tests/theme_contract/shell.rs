@@ -2108,10 +2108,22 @@ fn bare_key_bindings_ignore_a_refocused_state_and_a_mouse_gesture() {
                 .join("detached_host")
                 .join("render.rs"),
         ),
+        (
+            "trade_window/window.rs",
+            root.join("trade_window").join("window.rs"),
+        ),
+        (
+            "trade_window/render.rs",
+            root.join("trade_window").join("render.rs"),
+        ),
     ];
     for (name, path) in files {
         let source = fs::read_to_string(&path).unwrap();
-        let observer = name.ends_with("init.rs") || name.ends_with("mod.rs");
+        // #608: `trade_window/window.rs` carries the new deactivation observer — the trade
+        // window's `mod.rs` is the VIEW module and has no window-activation wiring of its own, so
+        // the heuristic gains `window.rs` rather than matching on `mod.rs` again.
+        let observer =
+            name.ends_with("init.rs") || name.ends_with("mod.rs") || name.ends_with("window.rs");
         if observer {
             assert!(
                 source.contains("modifier_watch.forget()"),
@@ -2205,8 +2217,11 @@ fn every_binding_path_answers_the_typing_question() {
         }
     }
     assert!(
-        resolvers >= 2,
-        "expected both window roots to resolve hotkeys"
+        // #608: the trade window is now a third root that calls `hotkeys::resolve` /
+        // `resolve_modifiers`; losing that route must drop this count, not just the trade
+        // window's own tests.
+        resolvers >= 3,
+        "expected all three window roots to resolve hotkeys"
     );
     assert!(
         code_only(&read_src("startup/boot.rs")).contains("is_text_input_active()"),
