@@ -32,9 +32,12 @@ use crate::symbol::{coin_match_key, coin_of_market};
 /// The tape must reach this far back before the buy for the corridor to have a run-up.
 const RUN_UP_MS: i64 = 30_000;
 
+/// The archived first point of an entry line and every point of an exit line.
+type ArchivedLines = (Option<(i64, f64)>, Option<Vec<(i64, f64)>>);
+
 /// The archived first point of the deal's own entry line and every point of its own exit
 /// line, when the archive holds them.
-fn archived_lines(deal: &Deal) -> (Option<(i64, f64)>, Option<Vec<(i64, f64)>>) {
+fn archived_lines(deal: &Deal) -> ArchivedLines {
     let Ok(entries) = read_many(deal.core_uid, &[deal.report_uid]) else {
         return (None, None);
     };

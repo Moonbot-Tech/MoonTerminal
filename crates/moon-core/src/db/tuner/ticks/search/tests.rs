@@ -99,8 +99,9 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
     assert!(result.holdout.is_none());
     assert_eq!(handle.completed(), 3);
     // The same values through the variant column.
-    let tally = variant_tally(&deals, &base, &defaults, "Spread", &result.values, 0.0);
+    let (tally, spent) = variant_tally(&deals, &base, &defaults, "Spread", &result.values, 0.0);
     assert!((tally.profit - 80.0).abs() < 1e-6);
+    assert!((spent - 8_000.0).abs() < 1e-6);
 }
 
 #[test]

@@ -40,7 +40,7 @@ pub use exit::{ExitModel, ExitParams};
 pub use mshot::{MshotEntry, MshotParams, UsePrice};
 pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};
 pub use search::{PreparedDeal, SearchParams, SearchResult, suggest, variant_tally};
-pub use stats::fact_stats;
+pub use stats::{fact_stats, stats_of};
 pub use verify::{Verdict, verify};
 
 /// Relative tolerance under which a modelled price counts as reproducing the fact: 0.05 %.

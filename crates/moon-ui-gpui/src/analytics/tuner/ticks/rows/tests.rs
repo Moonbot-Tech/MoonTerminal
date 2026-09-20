@@ -43,18 +43,24 @@ fn state() -> TicksState {
             tape: TapeStatus::Missing,
             verdict: None,
             address: None,
+            ticks: None,
+            entry_start: None,
         },
         DealRow {
             deal: deal(2, 1_000, 100.0, 99.0, false),
             tape: TapeStatus::Covered,
             verdict: Some(verdict(Some(true), Some(true))),
             address: None,
+            ticks: None,
+            entry_start: None,
         },
         DealRow {
             deal: deal(3, 2_000, 100.0, 99.0, true),
             tape: TapeStatus::Refused(TickStatus::NoRoute),
             verdict: Some(verdict(Some(false), None)),
             address: None,
+            ticks: None,
+            entry_start: None,
         },
     ];
     let mut state = TicksState::default();
@@ -119,4 +125,61 @@ fn covered_and_fetchable_count_what_the_captions_say() {
     assert_eq!(data.covered(), 1);
     assert_eq!(data.fetchable().count(), 0, "no address, nothing to ask");
     assert!(data.kinds.is_empty() && !data.entry_modelled());
+}
+
+// ---- the variant edits and the search gate ----------------------------------------------------
+
+#[test]
+fn variant_edits_fold_to_sorted_changes_and_empty_cells_clear() {
+    let mut state = TicksState::default();
+    assert!(!state.has_changes());
+    state.set_variant(0, "SellPrice", " 0.5 ".into());
+    state.set_variant(0, "MShotPrice", "2".into());
+    state.set_variant(1, "StopLoss", "-1".into());
+    assert_eq!(
+        state.variant_changes(0),
+        vec![
+            ("MShotPrice".to_string(), "2".to_string()),
+            ("SellPrice".to_string(), "0.5".to_string()),
+        ]
+    );
+    assert!(state.has_changes());
+    state.set_variant(0, "MShotPrice", "   ".into());
+    assert_eq!(state.variant_changes(0).len(), 1, "a blank clears the cell");
+    assert_eq!(state.variant_changes(1).len(), 1);
+}
+
+#[test]
+fn the_share_gate_answers_per_group_and_only_once_something_answered() {
+    use moon_core::db::tuner::ticks::params::ParamGroup;
+    let mut data = TicksData::default();
+    assert_eq!(data.group_passes(ParamGroup::Entry), None);
+    data.entry_share = (8, 10);
+    data.exit_share = (7, 10);
+    assert_eq!(data.group_passes(ParamGroup::Entry), Some(true));
+    assert_eq!(data.group_passes(ParamGroup::Exit), Some(false));
+    data.kinds = vec!["MoonShot".into()];
+    assert_eq!(data.single_kind(), Some("MoonShot"));
+    data.kinds.push("Spread".into());
+    assert_eq!(data.single_kind(), None);
+}
+
+#[test]
+fn invalidate_stops_the_search_and_drops_the_variant_scores_but_keeps_the_edits() {
+    let mut state = state();
+    state.set_variant(0, "SellPrice", "1".into());
+    state.var_stats[0] = Some(moon_core::db::tuner::VarStats::default());
+    let handle = moon_core::db::tuner::threshold_search::SearchHandle::new();
+    state.sugg = super::super::state::SuggState::Running {
+        handle: handle.clone(),
+        total: 3,
+    };
+    state.invalidate();
+    assert!(handle.is_cancelled());
+    assert!(matches!(state.sugg, super::super::state::SuggState::Idle));
+    assert!(state.var_stats[0].is_none());
+    assert!(
+        state.has_changes(),
+        "the user's edits survive a scope change"
+    );
 }

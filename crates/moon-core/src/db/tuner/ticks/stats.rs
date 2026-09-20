@@ -23,5 +23,15 @@ pub fn fact_stats<'a>(deals: impl IntoIterator<Item = &'a Deal>) -> VarStats {
     stats_from_tally(tally, spent)
 }
 
+/// The KPI of one variant out of its tally and the spend of the deals it traded — the shape
+/// the matrix draws, from what the search and the variant columns compute.
+///
+/// Args:
+///     tally: The variant's results, chronological.
+///     spent: Sum of the entry sizes of the deals the variant traded.
+pub fn stats_of(tally: Tally, spent: f64) -> VarStats {
+    stats_from_tally(tally, spent)
+}
+
 #[cfg(test)]
 mod tests;

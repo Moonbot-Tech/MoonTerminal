@@ -1809,9 +1809,9 @@ analytics.ticks.params_title:
   en: "Parameters"
   es: "Parámetros"
 analytics.ticks.params_sub:
-  ru: "фаза 1: только текущие значения"
-  en: "phase 1: current values only"
-  es: "fase 1: solo valores actuales"
+  ru: "сейчас · варианты · подбор"
+  en: "now · variants · search"
+  es: "ahora · variantes · búsqueda"
 analytics.ticks.assumptions:
   ru: "Модель не учитывает: стакан и очередь · выход кроме тейка · дельты как константы окна · опора ASK/BID = последний принт стороны · MShotRepeat* · задержка перестановки 100 мс"
   en: "Not modelled: the book and the queue · exits other than the take · deltas constant over the window · ASK/BID reference = the last print of that side · MShotRepeat* · a 100 ms replacement latency"
@@ -1844,3 +1844,63 @@ analytics.ticks.no_deals:
   ru: "в выборке нет сделок с мс-штампами"
   en: "no trades with millisecond stamps in the scope"
   es: "no hay operaciones con marcas de ms en el ámbito"
+analytics.ticks.var_n:
+  ru: "В%{n}"
+  en: "V%{n}"
+  es: "V%{n}"
+analytics.ticks.var_sub:
+  ru: "по %{n} из %{m} с лентой"
+  en: "%{n} of %{m} with tape"
+  es: "%{n} de %{m} con cinta"
+analytics.ticks.holdout:
+  ru: "holdout: %{n} сделок, %{profit}"
+  en: "holdout: %{n} trades, %{profit}"
+  es: "holdout: %{n} operaciones, %{profit}"
+analytics.ticks.fix:
+  ru: "фикс."
+  en: "fix"
+  es: "fijo"
+analytics.ticks.vary:
+  ru: "перебирать"
+  en: "vary"
+  es: "variar"
+analytics.ticks.vary_tip:
+  ru: "Подбор перебирает поля этой группы (кроме фиксированных)"
+  en: "The search varies this group's fields (except the fixed ones)"
+  es: "La búsqueda varía los campos de este grupo (salvo los fijados)"
+analytics.ticks.vary_gated:
+  ru: "Модель воспроизводит факт лишь в %{hits} из %{n} сделок — меньше %{gate} %, подбирать по ней нельзя"
+  en: "The model reproduces the fact on only %{hits} of %{n} trades — under %{gate} %, so it cannot be searched over"
+  es: "El modelo reproduce el hecho solo en %{hits} de %{n} operaciones — menos del %{gate} %, no se puede buscar sobre él"
+analytics.ticks.vary_unknown:
+  ru: "Доля воспроизведения ещё не посчитана — нет сделок с лентой"
+  en: "The reproduction share is not known yet — no trades with tape"
+  es: "La cuota de reproducción aún no se conoce — no hay operaciones con cinta"
+analytics.ticks.v1_to_v2:
+  ru: "В1 → В2"
+  en: "V1 → V2"
+  es: "V1 → V2"
+analytics.ticks.clear_v:
+  ru: "очистить В%{n}"
+  en: "clear V%{n}"
+  es: "limpiar V%{n}"
+analytics.ticks.sugg_one_kind:
+  ru: "Подбор — только по стратегиям одного вида"
+  en: "The search needs strategies of one kind"
+  es: "La búsqueda necesita estrategias de un solo tipo"
+analytics.ticks.sugg_nothing:
+  ru: "Нечего перебирать: обе группы выключены или заблокированы"
+  en: "Nothing to vary: both groups are off or gated"
+  es: "Nada que variar: ambos grupos están apagados o bloqueados"
+analytics.ticks.sugg_no_tape:
+  ru: "Нет сделок с лентой в памяти"
+  en: "No trades with tape in memory"
+  es: "No hay operaciones con cinta en memoria"
+analytics.ticks.sugg_none:
+  ru: "Подбор ничего не нашёл"
+  en: "The search found nothing"
+  es: "La búsqueda no encontró nada"
+analytics.ticks.closer_warn:
+  ru: "MShotPrice ближе фактического: оценка занижена — прострелы, до которых реальный ордер не дотянулся, в отчёте отсутствуют"
+  en: "MShotPrice closer than the fact: underestimated — spikes the real order never reached are not in the report"
+  es: "MShotPrice más cerca que el hecho: subestimado — los picos que la orden real nunca alcanzó no están en el informe"

@@ -725,15 +725,16 @@ impl AnalyticsView {
                 );
             }
             StratMode::Ticks if !side_collapsed => {
-                // The matrix on top, the parameter grid below — the same right column as the
-                // filter axis, with the grid read-only until phase 2.
+                // The matrix on top, the parameter grid with its search row below — the same
+                // right column as the filter axis.
+                let side = self.ticks_side(p, window, cx);
                 main = main.child(
                     v_flex()
                         .w(design::font_w_px(cx, 470.0))
                         .flex_none()
                         .h_full()
                         .min_h_0()
-                        .child(self.ticks_side(p, cx)),
+                        .child(side),
                 );
             }
             StratMode::Filters | StratMode::Coins | StratMode::Ticks => {}

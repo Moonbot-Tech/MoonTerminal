@@ -151,18 +151,29 @@ fn varied<'a>(p: &SearchParams<'a>) -> Vec<&'static super::params::TickParam> {
         .collect()
 }
 
-/// The tally of a point over `deals`, in order.
-fn tally(deals: &[PreparedDeal], entry: &EntryParams, exit: &ExitParams) -> Tally {
+/// The tally of a point over `deals`, in order, and the spend of the deals it traded.
+fn tally_and_spent(deals: &[PreparedDeal], entry: &EntryParams, exit: &ExitParams) -> (Tally, f64) {
     // The replay of every deal is independent; the tally is folded in order afterwards.
-    let results: Vec<Option<f64>> = deals
+    let results: Vec<Option<(f64, f64)>> = deals
         .par_iter()
-        .map(|d| simulate(&d.deal, &d.ticks, entry, exit, d.entry_start).profit_money(&d.deal))
+        .map(|d| {
+            simulate(&d.deal, &d.ticks, entry, exit, d.entry_start)
+                .profit_money(&d.deal)
+                .map(|money| (money, d.deal.spent))
+        })
         .collect();
     let mut tally = Tally::default();
-    for money in results.into_iter().flatten() {
+    let mut spent = 0.0;
+    for (money, size) in results.into_iter().flatten() {
         tally.push(money);
+        spent += size;
     }
-    tally
+    (tally, spent)
+}
+
+/// The tally of a point over `deals`, in order.
+fn tally(deals: &[PreparedDeal], entry: &EntryParams, exit: &ExitParams) -> Tally {
+    tally_and_spent(deals, entry, exit).0
 }
 
 /// Whether `a` beats `b` under the objective, with the sample floor.
@@ -330,7 +341,8 @@ pub fn suggest(
     })
 }
 
-/// The KPI of one explicit set of values over `deals` — a variant column.
+/// The KPI of one explicit set of values over `deals` — a variant column — and the spend of
+/// the deals it traded.
 ///
 /// Args:
 ///     deals: The covered deals, chronological.
@@ -346,7 +358,7 @@ pub fn variant_tally(
     kind: &str,
     values: &[(String, String)],
     latency_ms: f64,
-) -> Tally {
+) -> (Tally, f64) {
     let mut point = Point::new();
     for (key, value) in values {
         if let Some(field) = TICK_PARAMS.iter().find(|f| f.key == key) {
@@ -354,7 +366,7 @@ pub fn variant_tally(
         }
     }
     let (entry, exit) = params_of(base, defaults, &point, kind, latency_ms);
-    install(|| tally(deals, &entry, &exit))
+    install(|| tally_and_spent(deals, &entry, &exit))
 }
 
 #[cfg(test)]

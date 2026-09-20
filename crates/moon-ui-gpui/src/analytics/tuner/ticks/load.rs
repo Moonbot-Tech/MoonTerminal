@@ -70,10 +70,18 @@ impl AnalyticsView {
         if !after_report {
             self.report_busy_retries.reset();
         }
-        self.latest_reads
-            .cancel(&[ReadLane::Ticks, ReadLane::TicksReplay, ReadLane::TicksFetch]);
+        self.latest_reads.cancel(&[
+            ReadLane::Ticks,
+            ReadLane::TicksReplay,
+            ReadLane::TicksFetch,
+            ReadLane::TicksVariants,
+            ReadLane::TicksSearch,
+        ]);
         self.ticks.seq = self.ticks.seq.wrapping_add(1);
         self.ticks.fetch.clear();
+        // A search over the previous deal set answers nothing about the new one; the lane
+        // cancel above does not reach its handle, only this does.
+        self.ticks.stop_search();
         let req = self.ticks.seq;
         let report_req = self.current_report_generation();
         let q = self.tuner_query();
@@ -207,17 +215,20 @@ impl AnalyticsView {
                             },
                             verdict: None,
                             address,
+                            ticks: None,
+                            entry_start: None,
                         }
                     })
                     .collect();
-                let traces = archived_entry_starts(&rows);
+                let mut traces = archived_lines(&rows);
                 for row in &mut rows {
                     // Each row waits on the worker; a scope change cancels this lane, and the
                     // wait is not a statement the progress handler could interrupt.
                     if moon_core::db::current_is_cancelled() {
                         break;
                     }
-                    replay_row(row, &defaults, traces.get(&row.deal.report_uid).copied());
+                    let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
+                    replay_row(row, &defaults, lines);
                 }
                 let mut kinds: Vec<String> = rows.iter().map(|r| r.deal.kind.clone()).collect();
                 kinds.sort();
@@ -231,6 +242,7 @@ impl AnalyticsView {
                     kinds,
                     now,
                 };
+                data.retain_within_cap();
                 data.refresh_summary();
                 data
             },
@@ -241,6 +253,8 @@ impl AnalyticsView {
                 this.ticks.dirty =
                     report_result_is_stale(report_req, this.current_report_generation(), false);
                 this.ticks.publish(Ok(data), false);
+                // The replayable set may have changed under the variant columns: rescore them.
+                this.arm_ticks_variants(cx);
                 if after_report {
                     this.settle_report_refresh_retry(false, cx);
                 }
@@ -276,8 +290,37 @@ fn now_values(targets: &[(i64, Option<u64>)], keys: &[String]) -> HashMap<String
         .collect()
 }
 
-/// The archived first point of each deal's own entry line, read once per core.
-fn archived_entry_starts(rows: &[DealRow]) -> HashMap<i64, (i64, f64)> {
+/// What the order archive holds of one deal's own lines: the entry line's first point and
+/// the exit line's points.
+#[derive(Clone, Debug, Default)]
+pub(super) struct ArchivedLines {
+    pub(super) entry_start: Option<(i64, f64)>,
+    pub(super) exit_points: Option<Vec<(i64, f64)>>,
+}
+
+impl ArchivedLines {
+    /// Read from one archived entry.
+    pub(super) fn of(entry: &TraceEntry) -> Self {
+        let TraceEntry::Lines(lines) = entry else {
+            return Self::default();
+        };
+        let entry_start = lines
+            .iter()
+            .find(|l| l.own && l.kind == ArchivedLineKind::Entry)
+            .and_then(|l| l.points.first().map(|&(t, p)| (t as i64, p)));
+        let exit_points = lines
+            .iter()
+            .find(|l| l.own && l.kind == ArchivedLineKind::Exit)
+            .map(|l| l.points.iter().map(|&(t, p)| (t as i64, p)).collect());
+        Self {
+            entry_start,
+            exit_points,
+        }
+    }
+}
+
+/// The archived lines of every deal, read once per core.
+fn archived_lines(rows: &[DealRow]) -> HashMap<i64, ArchivedLines> {
     let mut by_core: HashMap<u64, Vec<i64>> = HashMap::new();
     for row in rows {
         by_core
@@ -291,14 +334,7 @@ fn archived_entry_starts(rows: &[DealRow]) -> HashMap<i64, (i64, f64)> {
             continue;
         };
         for (uid, entry) in entries {
-            if let TraceEntry::Lines(lines) = entry
-                && let Some(start) = lines
-                    .iter()
-                    .find(|l| l.own && l.kind == ArchivedLineKind::Entry)
-                    .and_then(|l| l.points.first().map(|&(t, p)| (t as i64, p)))
-            {
-                out.insert(uid, start);
-            }
+            out.insert(uid, ArchivedLines::of(&entry));
         }
     }
     out
@@ -324,12 +360,10 @@ pub(super) fn held_tape(
 }
 
 /// Run the model on one row, from what the worker holds; a row without an address is left
-/// as it is.
-pub(super) fn replay_row(
-    row: &mut DealRow,
-    defaults: &HashMap<String, f64>,
-    entry_start: Option<(i64, f64)>,
-) {
+/// as it is. A covered row keeps its tape and its archived entry start for the variants.
+pub(super) fn replay_row(row: &mut DealRow, defaults: &HashMap<String, f64>, lines: ArchivedLines) {
+    row.ticks = None;
+    row.entry_start = lines.entry_start;
     let Some(address) = row.address.clone() else {
         return;
     };
@@ -371,5 +405,13 @@ pub(super) fn replay_row(
         EntryParams::Fact
     };
     let exit = params::exit_params(&sv);
-    row.verdict = Some(verify(&row.deal, &ticks, &entry, &exit, entry_start, None));
+    row.verdict = Some(verify(
+        &row.deal,
+        &ticks,
+        &entry,
+        &exit,
+        lines.entry_start,
+        lines.exit_points.as_deref(),
+    ));
+    row.ticks = Some(Arc::from(ticks));
 }

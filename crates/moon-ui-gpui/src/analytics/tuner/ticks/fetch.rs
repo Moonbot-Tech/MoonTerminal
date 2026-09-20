@@ -15,12 +15,11 @@ use std::sync::mpsc;
 use gpui::*;
 
 use super::super::super::AnalyticsView;
-use super::load::replay_row;
+use super::load::{ArchivedLines, replay_row};
 use super::state::TapeStatus;
 use crate::analytics::bg::ReadLane;
-use moon_core::db::order_traces::{TraceEntry, read_many};
+use moon_core::db::order_traces::read_many;
 use moon_core::db::tuner::ticks::Deal;
-use moon_core::feed::report_traces::ArchivedLineKind;
 use moon_core::market::trade_replay::worker::{self, TradeReplayRequest};
 use moon_core::market::trade_replay::{
     TickStatus, TradeReplayOutcome, margin_ms, replay_window_ms,
@@ -138,14 +137,16 @@ impl AnalyticsView {
                         }
                     };
                 }
-                let entry_start = archived_entry_start(&deal);
+                let lines = archived_lines_of(&deal);
                 let mut row = super::state::DealRow {
                     deal,
                     tape: TapeStatus::Missing,
                     verdict: None,
                     address: Some(address),
+                    ticks: None,
+                    entry_start: None,
                 };
-                replay_row(&mut row, &defaults, entry_start);
+                replay_row(&mut row, &defaults, lines);
                 if row.tape == TapeStatus::Missing {
                     row.tape = match status {
                         TickStatus::Served | TickStatus::Pending | TickStatus::Streaming => {
@@ -165,8 +166,12 @@ impl AnalyticsView {
                     slot.tape = row.tape;
                     slot.verdict = row.verdict;
                     slot.deal.tick = row.deal.tick;
+                    slot.ticks = row.ticks;
+                    slot.entry_start = row.entry_start;
                 });
                 this.ticks.fetch.done += 1;
+                // A row joined the replayable set: the variant columns are due a rescore.
+                this.arm_ticks_variants(cx);
                 this.ticks_fetch_next(cx);
             },
         );
@@ -185,14 +190,10 @@ fn fetch_identity(report_uid: i64) -> u64 {
     hash | 1
 }
 
-/// The archived first point of one deal's own entry line.
-fn archived_entry_start(deal: &Deal) -> Option<(i64, f64)> {
-    let entries = read_many(deal.core_uid, &[deal.report_uid]).ok()?;
-    match entries.get(&deal.report_uid)? {
-        TraceEntry::Lines(lines) => lines
-            .iter()
-            .find(|l| l.own && l.kind == ArchivedLineKind::Entry)
-            .and_then(|l| l.points.first().map(|&(t, p)| (t as i64, p))),
-        TraceEntry::Empty { .. } => None,
-    }
+/// The archived lines of one deal.
+fn archived_lines_of(deal: &Deal) -> ArchivedLines {
+    read_many(deal.core_uid, &[deal.report_uid])
+        .ok()
+        .and_then(|entries| entries.get(&deal.report_uid).map(ArchivedLines::of))
+        .unwrap_or_default()
 }
