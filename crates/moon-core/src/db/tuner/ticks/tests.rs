@@ -40,6 +40,7 @@ fn deal() -> Deal {
         spent: 1_000.0,
         is_short: false,
         sell_reason: "Sell Price".into(),
+        fact_pnl: 10.0,
         deltas: Deltas::default(),
         tick: None,
     }

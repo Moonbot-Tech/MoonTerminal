@@ -24,12 +24,14 @@
 
 use crate::feed::types::Tick;
 
+pub mod deals;
 pub mod entry;
 pub mod exit;
 pub mod mshot;
 pub mod params;
 pub mod verify;
 
+pub use deals::{DealsRead, read_deals};
 pub use entry::{EntryModel, entry_model_for};
 pub use exit::{ExitModel, ExitParams};
 pub use mshot::{MshotEntry, MshotParams, UsePrice};
@@ -115,6 +117,9 @@ pub struct Deal {
     pub is_short: bool,
     /// `sellreason` as the core wrote it (`"Auto Price Down"`, `"Sell Price"`, …).
     pub sell_reason: String,
+    /// The row's result in the scope's active metric (`pnl` of the unified source) — what the
+    /// "Fact" column over the same subset sums.
+    pub fact_pnl: f64,
     pub deltas: Deltas,
     /// Price step of the market, when the caller could resolve it (the live catalog, or
     /// [`infer_tick`] over the window). `None` disables the step-bound rules and rounds nothing.

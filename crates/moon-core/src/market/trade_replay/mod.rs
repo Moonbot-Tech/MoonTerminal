@@ -42,10 +42,8 @@ use crate::market::candles::ChartCandle;
 use crate::market::{CandleReadParams, ChartHistoryBuffers, ChartHistoryRead};
 use crate::venue::{Brand, Venue};
 pub use coverage::Coverage;
-pub use settings::{
-    cleanup_at_startup, long_position_ms, margin_ms, set_cleanup_at_startup, set_long_position_min,
-    set_margin_s,
-};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 pub use worker::{TickAnswer, TickQuery, query_held};
 
 /// Milliseconds in one minute, the only timeframe a replay is fetched at.

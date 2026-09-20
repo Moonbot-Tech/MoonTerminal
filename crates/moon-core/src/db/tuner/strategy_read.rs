@@ -229,6 +229,58 @@ fn load_raw_json_at(
     }
 }
 
+/// The strategy KIND (`SignalType`: `MoonShot`, `Spread`, …) of each `(strategy_id, core_uid)`
+/// pair, from its newest version — a strategy never changes kind, and a deleted one still has
+/// versions to read it from. Pairs with no version at all are absent from the map.
+///
+/// Args:
+///     pairs: Distinct `(strategy_id, core_uid)` pairs.
+///
+/// A database that cannot be opened or queried yields an EMPTY map and one warning: the caller
+/// then shows every deal as "kind unknown" (no entry model), which is visible, rather than
+/// failing the whole read for a file the axis only annotates from.
+pub fn strategy_kinds(pairs: &[(i64, u64)]) -> std::collections::HashMap<(i64, u64), String> {
+    let mut out = std::collections::HashMap::new();
+    if pairs.is_empty() {
+        return out;
+    }
+    let Some(conn) = open_strategies_ro() else {
+        log::warn!("[x] tuner: strategies.sqlite unavailable, strategy kinds unresolved");
+        return out;
+    };
+    let mut stmt = match conn.prepare(
+        "SELECT json_extract(v.raw_json, '$.SignalType') FROM strategy_versions v
+             WHERE v.strategy_id = ?1 AND v.core_uid = ?2
+             ORDER BY v.valid_to IS NULL DESC, v.valid_from DESC LIMIT 1",
+    ) {
+        Ok(stmt) => stmt,
+        Err(error) => {
+            log::warn!("[x] tuner: strategy kinds query failed to prepare: {error}");
+            return out;
+        }
+    };
+    let mut failed = 0usize;
+    for &(strategy_id, core_uid) in pairs {
+        match stmt.query_row(rusqlite::params![strategy_id, core_uid as i64], |r| {
+            r.get::<_, Option<String>>(0)
+        }) {
+            Ok(Some(kind)) => {
+                out.insert((strategy_id, core_uid), kind);
+            }
+            // No version at all, or a version without the field: genuinely unknown.
+            Ok(None) | Err(rusqlite::Error::QueryReturnedNoRows) => {}
+            Err(_) => failed += 1,
+        }
+    }
+    if failed > 0 {
+        log::warn!(
+            "[x] tuner: strategy kinds unresolved for {failed} of {} strategies (query errors)",
+            pairs.len()
+        );
+    }
+    out
+}
+
 /// `keys` out of one version's `raw_json`, in strategy format — see
 /// [`strategy_current_values_opt`] for the rules.
 fn flatten_values(raw: &str, keys: &[String]) -> Option<std::collections::HashMap<String, String>> {

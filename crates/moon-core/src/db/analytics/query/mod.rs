@@ -508,6 +508,12 @@ const UNIFIED_COLS: &[&str] = &[
     // `spentbtc == boughtq`). It carries real money, so it belongs in profit — but it is not a
     // trade, and counting it would inflate trade counts, turnover and win rate alike.
     "sellreason",
+    // The trade's identity in the order-trace archive and its millisecond stamps: the
+    // Entry/Exit tuner replays the tape around each row and keys the archive by `reportuid`.
+    // NULL on a replica that predates the columns, which that axis then counts as "no stamp".
+    "reportuid",
+    "buydatems",
+    "closedatems",
 ];
 
 /// Money projection resolved by quote coverage before one analytical scan.

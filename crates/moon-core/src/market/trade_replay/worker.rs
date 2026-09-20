@@ -257,8 +257,9 @@ const CAPTURE_SETTLE_SLACK: Duration = Duration::from_secs(5);
 ///
 /// The Entry/Exit tuner's question: is this trade's window covered, and if so, hand me the
 /// prints. Asked once per report row of a table, so it must cost a lock and a disk read, never
-/// a page. It goes to the coordinator's queue, which no venue call ever holds: the walks run
-/// on the lanes, so a table of rows is answered while every venue is being paged.
+/// a page. The answer goes to the worker's queue like every other job because the tile store
+/// lives on the worker's thread; it is served right after the candle jobs, ahead of any tick
+/// walk, so a table of rows is not held behind one window's venue paging.
 pub struct TickQuery {
     /// The exchange half of the tile key — [`ReplayAddress::exchange_key`].
     pub exchange_key: String,
@@ -280,60 +281,11 @@ pub struct TickAnswer {
     pub covered: Coverage,
 }
 
-/// What reaches the coordinator's one inbound channel.
+/// What reaches the worker's one inbound channel.
 enum Inbound {
     Replay(TradeReplayRequest),
     Capture(CaptureRequest),
     Held(TickQuery),
-    /// A lane armed a native follow-up for a request it answered; the coordinator polls it.
-    /// Boxed for the same reason as [`Job::Native`].
-    NativeWait(Box<(TradeReplayRequest, NativeWait)>),
-    /// Drop every held tile and remembered answer — see [`forget_tiles`].
-    ForgetTiles,
-}
-
-/// One unit of a lane's own queue: the venue calls of one request.
-///
-/// A candle job and its own tick upgrade are two separate units on purpose: queuing the tick
-/// stage inline would make a second report-row double-click on the same host wait behind it for
-/// its OWN candles — see [`next_lane_job`], which is what keeps candle jobs strictly ahead.
-enum LaneJob {
-    Candles(TradeReplayRequest),
-    /// The stage is boxed: it carries the window's bars, several times the request's size.
-    Ticks(TradeReplayRequest, Box<TickStage>),
-}
-
-/// What every lane shares with the coordinator and with each other. The gate and the two
-/// stores were built for one thread and are already behind their own locks; nothing here is
-/// thread-affine.
-struct Shared {
-    agent: ureq::Agent,
-    gate: ReplayGate,
-    cache: Mutex<VecDeque<(OutcomeKey, Remembered)>>,
-    tiles: Mutex<TickTileStore>,
-    /// Back to the coordinator, for the native follow-ups a lane arms.
-    back: Sender<Inbound>,
-}
-
-/// The handle to one lane thread.
-struct Lane {
-    tx: Sender<LaneJob>,
-}
-
-/// What a lane serves: one host's calls of one intent.
-type LaneKey = (&'static str, ReplayIntent);
-
-/// The lane key of a request: the kline route's host — the budget every call of the request
-/// is metered under (the trade route derives its host from the same table) — and the intent,
-/// so a chart window and the tuner's batch on the same host walk side by side. A venue with no
-/// route answers `NoEndpoint` without a call and shares one idle lane per intent.
-fn lane_key(request: &TradeReplayRequest) -> LaneKey {
-    (
-        kline_route(request.address.venue)
-            .map(|route| route.host())
-            .unwrap_or(""),
-        request.intent,
-    )
 }
 
 /// One bounded native follow-up independent of public tick-route eligibility.
@@ -378,8 +330,9 @@ impl NativeWait {
     }
 }
 
-/// Pop the coordinator's next unit of work, by kind: every pending [`Job::Held`], then every
-/// [`Job::Native`], then the captures in arrival order; oldest first within each kind.
+/// Pop the next unit of work, by kind: every pending [`Job::Candles`], then every
+/// [`Job::Held`], then every [`Job::Native`], then the rest ([`Job::Ticks`], [`Job::Capture`])
+/// in arrival order; oldest first within each kind.
 ///
 /// Args:
 ///     queue: The coordinator's own pending-work deque.
@@ -387,34 +340,16 @@ impl NativeWait {
 /// Returns:
 ///     The next job to run, or `None` when the queue is empty.
 fn next_job(queue: &mut VecDeque<Job>) -> Option<Job> {
-    // A held-data query costs a lock and a disk read; it goes ahead of the native probes so a
-    // table asking once per row is answered at once.
+    // A held-data query costs a lock and a disk read; it goes ahead of the native probes and the
+    // tick walks so a table asking once per row is not paced by one window's venue paging.
     for pick in [
+        |job: &Job| matches!(job, Job::Candles(_)),
         |job: &Job| matches!(job, Job::Held(_)),
         |job: &Job| matches!(job, Job::Native(..)),
     ] {
         if let Some(index) = queue.iter().position(pick) {
             return queue.remove(index);
         }
-    }
-    queue.pop_front()
-}
-
-/// Pop a lane's next unit of work: every pending candle job first, then the tick stages in
-/// arrival order — a second window on the same host gets its bars before the first window's
-/// paging starts.
-///
-/// Args:
-///     queue: The lane's own pending-work deque.
-///
-/// Returns:
-///     The next job to run, or `None` when the queue is empty.
-fn next_lane_job(queue: &mut VecDeque<LaneJob>) -> Option<LaneJob> {
-    if let Some(index) = queue
-        .iter()
-        .position(|job| matches!(job, LaneJob::Candles(_)))
-    {
-        return queue.remove(index);
     }
     queue.pop_front()
 }
@@ -593,17 +528,6 @@ pub fn query_held(query: TickQuery) {
     send(Inbound::Held(query));
 }
 
-/// Drop every tile the worker holds in memory, and every remembered answer with them.
-///
-/// For the Storage tab, after it cut `trades.sqlite` down: the disk is the tile store's memory
-/// and the two must not disagree about what is held — a held-data query reads the tiles first,
-/// and would go on answering "held" for prints the file no longer has until the process
-/// restarted. Emptied, the tiles fill again from the trimmed disk on the next ask. Returns at
-/// once; a lane mid-walk files what it fetched into the emptied store as it always did.
-pub fn forget_tiles() {
-    send(Inbound::ForgetTiles);
-}
-
 fn send(inbound: Inbound) {
     let worker = WORKER.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<Inbound>();
@@ -666,29 +590,20 @@ fn enqueue(
             queue.push_back(Job::Capture(request, spans, false));
         }
         Inbound::Held(query) => queue.push_back(Job::Held(query)),
-        Inbound::ForgetTiles => {
-            // Straight here, not through the queue: nothing queued behind it may keep
-            // answering from tiles the disk has already lost.
-            *lock_tiles(&shared.tiles) = TickTileStore::default();
-            shared
-                .cache
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clear();
-            log::info!("[x] trade-replay tiles and remembered answers dropped after a trim");
-        }
     }
 }
 
 /// Coordinator loop: an internal priority queue, forever.
 ///
-/// Held-data queries, bounded native follow-ups and captures share this queue: held-data first,
-/// then native probes, then captures in arrival order ([`next_job`]); none of them calls a
-/// venue, so none waits for a lane. A replay request is handed to its host's lane on arrival
-/// ([`enqueue`]), and a lane hands back the native follow-up it arms. A capture is an in-process
-/// copy out of a core's ring, milliseconds; the settle pass of each capture is timed
-/// (`settle_waits`) and enters the queue when due. Idle waits end at the next native probe or
-/// settle deadline; otherwise every already-queued message is drained non-blockingly first.
+/// Candle, held-data, tick, bounded native follow-up and capture jobs share one queue: candles
+/// first, then held-data queries, then native probes, then ticks and captures in arrival order
+/// ([`next_job`]). A tick stage is a separate job rather than an inline continuation of its
+/// candle job so the first outcome reaches its window before any venue paging starts. A capture is an in-process
+/// copy out of a core's ring, milliseconds, so it never holds a tick stage up for long; the
+/// settle pass of each capture is timed (`settle_waits`) and enters the queue when due. Idle
+/// waits end at the next native probe or settle deadline; otherwise every already-queued
+/// request is drained non-blockingly first, so a burst of report-row clicks is batched into
+/// the queue before priority is applied rather than served one at a time.
 ///
 /// Args:
 ///     rx: Queue of pending requests.
@@ -777,12 +692,11 @@ fn run(rx: &Receiver<Inbound>, back: Sender<Inbound>) {
                 }
             }
             Job::Held(query) => {
-                let answer = held_answer(tiles, &query);
+                let answer = held_answer(&tiles, &query);
                 // A dead receiver is the asker gone — a closed table — and costs nothing more.
                 let _ = query.reply.send(answer);
             }
-            Job::Native(native) => {
-                let (request, mut wait) = *native;
+            Job::Native(request, mut wait) => {
                 if request.cancel.load(Ordering::Relaxed) {
                     continue;
                 }
@@ -1604,39 +1518,10 @@ fn serve_ticks(
     let key: TileKey = (request.address.exchange_key.clone(), request.market.clone());
     let focus = request.window.focus_spans();
     let persisted = super::trade_cache::handle();
-    // A requester that reads the tiles gets the ring THROUGH them: what the ring holds inside
-    // the focus is filed as `Core` tiles before the stage decides what is left to fetch, so a
-    // trade the close-time capture missed costs the venue only what the ring does not hold.
-    // Run after the disk hydrate on either branch below, and only for a focus the store does
-    // not already hold whole: the ring copy scans the donor's whole retained ring, and a
-    // retry of a row the disk answered would pay it for nothing.
-    let file_ring = || {
-        if !request.intent.files_core() {
-            return;
-        }
-        let held_whole = {
-            let store = lock_tiles(tiles);
-            held_coverage(&store, &key, &focus, Coverage::none()).covers(&focus)
-        };
-        if held_whole {
-            return;
-        }
-        file_core_into_tiles(&request.address, &request.market, &focus, tiles, |span| {
-            request.address.history.capture_core_span(
-                &request.address,
-                &request.market,
-                span.0,
-                span.1,
-            )
-        });
-    };
-    // No venue to ask — none has a route, or the focus is past the route's retention: the focus
-    // is served from what the tiles hold inside it — a capture from the core's archive, the
-    // tuner's fetch, an earlier window — or the window prints `none`, the reason there is no
-    // venue to ask.
-    let serve_held = |none: TickStatus| {
+    let Some(route) = stage.route else {
         hydrate(tiles, persisted.as_ref(), &key, &focus);
-        file_ring();
+        // No venue to ask: the focus is served from what the tiles hold inside it — a capture
+        // from the core's archive — or the window prints that there is no route, as before.
         let (covered, runs) = {
             let store = lock_tiles(tiles);
             let covered = held_coverage(&store, &key, &focus, Coverage::none());
@@ -1690,8 +1575,8 @@ fn serve_ticks(
             retention_ms: route.retention_ms().unwrap_or(0),
         });
     }
+    // After the retention refusal, which is free: a window too old for the route pays no read.
     hydrate(tiles, persisted.as_ref(), &key, &focus);
-    file_ring();
     let residual = residual_plan(&plan, &lock_tiles(tiles), &key);
     // The one line that tells a neighbouring window apart from a reopen: the focus is the
     // window's own, the spans are what the store made of it. In milliseconds, not slices — a
