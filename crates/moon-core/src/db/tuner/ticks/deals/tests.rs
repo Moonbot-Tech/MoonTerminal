@@ -20,7 +20,11 @@ fn replica() -> Connection {
             (12, 7, 42, 'BEN', 150, 180, 150000, 180000, 50.0, 49.0, 500.0, -10.0, 1,
              'Auto Price Down', 1, NULL, -1.0, 0.0),
             (13, 7, 42, 'OLD', 110, 190, 0, 0, 1.0, 1.1, 100.0, 10.0, 0,
-             'Sell Price', 1, 0.0, 0.0, 0.0);",
+             'Sell Price', 1, 0.0, 0.0, 0.0),
+            (14, 7, 42, 'ACE', 160, 170, 160000, 170000, 99.0, 99.0, 1000.0, -0.3, 0,
+             'Funding', 1, 0.0, 0.0, 0.0),
+            (15, 7, 0, 'BEN', 165, 175, 165000, 175000, 50.0, 51.0, 500.0, 10.0, 0,
+             'Manual Sell', 1, 0.0, 0.0, 0.0);",
     )
     .expect("fixture");
     conn
@@ -41,6 +45,12 @@ fn rows_with_stamps_become_deals_and_the_rest_are_counted() {
     let (q, src) = tuner_source_on(&conn, &scope()).expect("source");
     let read = read_on(&conn, &q, &src).expect("read");
     assert_eq!(read.without_ms, 1, "the row without millisecond stamps");
+    // The funding row and the no-strategy manual sell carry stamps and are still not deals.
+    assert_eq!(read.service, 2, "the service rows");
+    assert_eq!(
+        read.untunable, 0,
+        "the kind gate is applied after the kinds resolve, not here"
+    );
     assert_eq!(read.deals.len(), 2);
     // Chronological by the millisecond close: BEN (180 000) before ACE (200 000).
     assert_eq!(read.deals[0].report_uid, 12);

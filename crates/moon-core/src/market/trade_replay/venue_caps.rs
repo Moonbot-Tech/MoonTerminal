@@ -342,13 +342,9 @@ impl TradeRoute {
             Self::BinanceUsdMAggTrades | Self::BinanceCoinMAggTrades => {
                 std::time::Duration::from_millis(650)
             }
-            // Not a weight limit: under back-to-back requests the futures trades endpoint
-            // answered a repeat of the previous page for a changed `offset` (2026-09-21, see
-            // the route table), and never did 300 ms apart; a page is 1 000 rows, so the
-            // floor costs a busy minute of tape a third of a second.
-            Self::GateFuturesTrades => std::time::Duration::from_millis(350),
             Self::BinanceSpotAggTrades
             | Self::GateSpotTrades
+            | Self::GateFuturesTrades
             | Self::BitgetSpotFills
             | Self::BitgetMixFills
             | Self::OkxHistoryTrades => super::gate::MIN_INTERVAL,

@@ -16,13 +16,9 @@ max_mb = 512
     assert_eq!(cfg.trade_replay.margin_s, DEFAULT_TRADE_MARGIN_S);
     assert_eq!(cfg.trade_replay.max_mb, 512);
     assert!(cfg.trade_replay.persist_trades);
-    // The long-position threshold came after the margin and reads as the five minutes it was as
-    // a constant; the startup cleanup may not switch itself on.
-    assert_eq!(
-        cfg.trade_replay.long_position_min,
-        DEFAULT_LONG_POSITION_MIN
-    );
-    assert!(!cfg.trade_replay.cleanup_at_startup);
+    // The autoload switch came after the margin and reads as OFF from a file without it: it
+    // spends the venues' budget, and may not switch itself on.
+    assert!(!cfg.trade_replay.autoload_missing);
 }
 
 /// The long-position threshold round-trips through the file and is bounded where `load`

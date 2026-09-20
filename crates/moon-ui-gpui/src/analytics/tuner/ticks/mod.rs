@@ -26,11 +26,12 @@ use super::{sort_arrow_of, toggle_sort_key};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use columns::*;
+pub(in crate::analytics::tuner) use fetch::strategy_field_defaults;
 use state::SuggState;
 use state::{DealRow, TapeStatus};
 
 pub(in crate::analytics::tuner) mod columns;
-mod fetch;
+pub(crate) mod fetch;
 mod grid;
 mod load;
 pub(in crate::analytics::tuner) mod rows;
@@ -51,6 +52,15 @@ impl AnalyticsView {
         // The order is settled before the data is viewed: both live in `ticks`, and the sort
         // cache needs the mutable half.
         let drawn = rows::order_for(&mut self.ticks).len();
+        // The rows the scope holds but the table does not show, for the caption and for the
+        // empty state: a period entirely before the millisecond stamps is not an empty period,
+        // and the table must say which it is rather than draw the shared "no trades".
+        let left_out = self
+            .ticks
+            .data
+            .data()
+            .map(|d| (d.without_ms, d.service, d.untunable))
+            .unwrap_or_default();
         let summary = self.ticks.data.view(|d| d.rows.is_empty()).map(|d| {
             (
                 d.rows.len(),
@@ -60,6 +70,24 @@ impl AnalyticsView {
             )
         });
         let (body, total, covered, fetchable, without_ms) = match summary {
+            Err(crate::load_state::Note::Empty) if left_out != (0, 0, 0) => (
+                crate::load_state::muted(
+                    t!(
+                        "analytics.ticks.empty_left_out",
+                        without = left_out.0,
+                        service = left_out.1,
+                        untunable = left_out.2
+                    )
+                    .to_string(),
+                    10.0,
+                    p,
+                    cx,
+                ),
+                0usize,
+                0usize,
+                0usize,
+                left_out.0,
+            ),
             Err(note) => (
                 super::super::note_el("an-ticks-note", note, 10.0, p, cx),
                 0usize,
@@ -99,16 +127,33 @@ impl AnalyticsView {
         // flight at all; a bare "N/M" reads as stuck in both cases.
         let progress = fetch::job::progress();
         let fetch_active = progress.active;
+        // Rows of THIS table a running batch does not have — the autoload's, or one left by a
+        // previous window: a second button adds them, while the first stays the stop.
+        let addable = self.ticks_fetch_addable();
+        // A batch this window did not start — the startup autoload, or one left by a previous
+        // window — is listened to from the first paint that finds it running, so its answers
+        // land in the table and the button keeps counting. Idempotent: one listener per view
+        // while a batch runs.
+        if fetch_active {
+            self.attach_fetch_listener(cx);
+        }
         let fetch_label = if !fetch_active && self.ticks.tape_reading {
             t!("analytics.ticks.fetch_reading").to_string()
         } else if !fetch_active {
             t!("analytics.ticks.fetch_btn").to_string()
-        } else if let Some((_, market)) = progress.in_flight {
+        } else if !progress.in_flight.is_empty() {
+            // Every market a request is out for, in the order they went out: the walks run in
+            // parallel across venues, and one name would read as one request.
+            let markets: Vec<&str> = progress
+                .in_flight
+                .iter()
+                .map(|(_, market)| market.as_str())
+                .collect();
             t!(
                 "analytics.ticks.fetch_progress_at",
                 done = progress.done,
                 total = progress.total,
-                market = market
+                market = markets.join(" · ")
             )
             .to_string()
         } else {
@@ -153,23 +198,32 @@ impl AnalyticsView {
                             .text_color(moon(p.text_muted))
                             .child(scope),
                     )
-                    // "N with tape of M · K without stamps": the honest size of the sample.
+                    // "N with tape of M · K without stamps": the honest size of the sample,
+                    // with the service rows and the switch's leftovers when there are any.
                     .child(
                         div()
                             .flex_none()
                             .font_family(design::ui_font())
                             .text_size(design::t_caption(cx))
                             .text_color(moon(p.text_muted))
-                            .child(
-                                t!(
-                                    "analytics.ticks.coverage",
-                                    covered = covered,
-                                    total = total,
-                                    without = without_ms
-                                )
-                                .to_string(),
-                            ),
+                            .child(coverage_caption(
+                                covered, total, without_ms, left_out.1, left_out.2,
+                            )),
                     )
+                    .when(fetch_active && addable > 0, |el| {
+                        el.child(
+                            div().font_family(design::ui_font()).child(
+                                MoonButton::new("an-ticks-fetch-add")
+                                    .variant(MoonButtonVariant::Soft)
+                                    .label(t!("analytics.ticks.fetch_add", n = addable).to_string())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.ticks_fetch_missing(cx);
+                                        cx.notify();
+                                    }))
+                                    .render(),
+                            ),
+                        )
+                    })
                     .when(fetchable > 0 || fetch_active, |el| {
                         el.child(
                             div().font_family(design::ui_font()).child(
@@ -557,6 +611,68 @@ fn tape_mark(tape: TapeStatus) -> (&'static str, String) {
     }
 }
 
+/// The tape dot of a row: filled in the state's colour, hollow while the tape is missing —
+/// the same distinction the column's ●/○ draws, readable at any table width.
+fn tape_dot(
+    tape: TapeStatus,
+    tip: String,
+    report_uid: i64,
+    p: MoonPalette,
+    scale: f32,
+) -> AnyElement {
+    let (color, filled) = match tape {
+        TapeStatus::Covered => (p.green, true),
+        TapeStatus::Fetching => (p.amber, true),
+        TapeStatus::Refused(_) => (p.red, true),
+        TapeStatus::NoAddress => (p.text_muted, true),
+        TapeStatus::Missing => (p.text_muted, false),
+    };
+    let size = px(TAPE_DOT_PX * scale);
+    let dot = div().size(size).rounded_full().flex_none();
+    let dot = if filled {
+        dot.bg(moon(color))
+    } else {
+        dot.border_1().border_color(moon(color))
+    };
+    div()
+        .id(SharedString::from(format!("an-ticks-dot-{report_uid}")))
+        .flex_none()
+        .child(dot)
+        .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tip.clone())).into())
+        .into_any_element()
+}
+
+/// Diameter of the row's tape dot, in base px, before the font scale.
+const TAPE_DOT_PX: f32 = 7.0;
+
+/// The header caption of the table: how many rows have their tape, out of how many, and what
+/// the scope holds beyond the table — rows without millisecond stamps always, the service rows
+/// and the untunable ones only when there are any.
+fn coverage_caption(
+    covered: usize,
+    total: usize,
+    without_ms: usize,
+    service: usize,
+    untunable: usize,
+) -> String {
+    let mut caption = t!(
+        "analytics.ticks.coverage",
+        covered = covered,
+        total = total,
+        without = without_ms
+    )
+    .to_string();
+    if service > 0 {
+        caption.push_str(" · ");
+        caption.push_str(&t!("analytics.ticks.coverage_service", n = service));
+    }
+    if untunable > 0 {
+        caption.push_str(" · ");
+        caption.push_str(&t!("analytics.ticks.coverage_untunable", n = untunable));
+    }
+    caption
+}
+
 /// The mark of the model column — one glyph per group — and its tooltip with the deviations.
 fn model_mark(row: &DealRow) -> (String, String) {
     let Some(v) = row.verdict else {
@@ -631,6 +747,10 @@ fn deal_row(
         .bg(moon(p.table_body))
         .border_t_1()
         .border_color(moon_alpha(p.border, 0.5))
+        // The tape's state as a dot at the LEFT edge, before the coin: the tape column sits
+        // last and is the first thing a narrow table cuts off, and whether a row has its tape
+        // is the one thing about it this axis is for. Same tooltip as the column's mark.
+        .child(tape_dot(row.tape, tape_tip.clone(), d.report_uid, p, scale))
         .child(
             div()
                 .flex_1()

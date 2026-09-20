@@ -2,12 +2,17 @@
 //!
 //! Read through the same unified source the other axes scan (`read_tuner_rows`), so the
 //! "Fact" column and the tape replay describe the SAME trades — period, cores, strategies,
-//! emulator and side filters included. A row without a millisecond stamp cannot be replayed
-//! (the tape is sub-second) and is counted rather than dropped silently; the caption prints
-//! the count.
+//! emulator and side filters included. Three kinds of row are counted rather than dropped
+//! silently, and the caption and the load log print the counts: a row without a millisecond
+//! stamp cannot be replayed (the tape is sub-second); a SERVICE row — funding, a liquidation, a
+//! joined sell, no strategy behind it — is not a trade the tape explains ([`scope`]); and a
+//! trade the tuner cannot be run on — a container kind, an unresolved one, a manual exit. The
+//! "Fact" column keeps them all: it is the scope's money, and this file decides only what the
+//! model reads.
 
 use rusqlite::Connection;
 
+use super::scope::{is_service_row, is_tunable};
 use super::{Deal, Deltas};
 use crate::db::analytics::Query;
 use crate::db::read_fail::read_fail_on;
@@ -22,6 +27,12 @@ pub struct DealsRead {
     /// Rows the scope holds that carry no millisecond stamp — older replicas, or a core that
     /// predates the stamps. In the "Fact" column, not in the replay.
     pub without_ms: usize,
+    /// Service rows with stamps — funding, liquidations, joined sells, no strategy — left out;
+    /// see [`scope`].
+    pub service: usize,
+    /// Trades with stamps the tuner cannot be run on — a container or unresolved kind, a manual
+    /// exit — left out; see [`is_tunable`].
+    pub untunable: usize,
 }
 
 /// The delta columns in the order [`Deltas`] is filled below; every one is a `FIELDS` column,
@@ -41,14 +52,15 @@ const DELTA_COLS: [&str; 12] = [
     "exchange1hdelta",
 ];
 
-/// Read the scope's closed trades as deals.
+/// Read the scope's closed trades as deals: the trades the tuner can be run on
+/// ([`is_tunable`]), the rest counted in [`DealsRead::untunable`].
 ///
 /// Args:
 ///     q: The tuner scope — period, cores, strategies, filters.
 ///
 /// Returns:
-///     The replayable deals with their kinds resolved, and the count left out; `NotReady` when
-///     no report source has the schema yet.
+///     The replayable deals with their kinds resolved, and the counts left out; `NotReady`
+///     when no report source has the schema yet.
 pub fn read_deals(q: &Query) -> ReadResult<DealsRead> {
     let mut read = crate::db::tuner::read_tuner_rows(q, read_on)?;
     // The kind selects the entry model; resolved once per distinct strategy, off the replica's
@@ -66,6 +78,10 @@ pub fn read_deals(q: &Query) -> ReadResult<DealsRead> {
             deal.kind = kind.clone();
         }
     }
+    let before = read.deals.len();
+    read.deals
+        .retain(|deal| is_tunable(&deal.kind, &deal.sell_reason));
+    read.untunable = before - read.deals.len();
     Ok(read)
 }
 
@@ -107,6 +123,18 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             out.without_ms += 1;
             continue;
         }
+        let strategy_id = int(2)?;
+        let sell_reason = r
+            .get::<_, Option<String>>(10)
+            .map_err(fail)?
+            .unwrap_or_default();
+        // Counted after the stamp gate on purpose: the caption's "without stamps" is the
+        // scope's whole unreplayable history, the service count only what the stamps would
+        // otherwise have admitted.
+        if is_service_row(strategy_id, &sell_reason) {
+            out.service += 1;
+            continue;
+        }
         let mut deltas = Deltas::default();
         let slots: [&mut f64; 12] = [
             &mut deltas.d5s,
@@ -129,7 +157,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
         out.deals.push(Deal {
             report_uid,
             core_uid: int(1)? as u64,
-            strategy_id: int(2)?,
+            strategy_id,
             kind: String::new(),
             coin: r
                 .get::<_, Option<String>>(3)
@@ -141,10 +169,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             sell_price: num(7)?,
             spent: num(8)?,
             is_short: int(9)? != 0,
-            sell_reason: r
-                .get::<_, Option<String>>(10)
-                .map_err(fail)?
-                .unwrap_or_default(),
+            sell_reason,
             fact_pnl: num(11)?,
             deltas,
             tick: None,

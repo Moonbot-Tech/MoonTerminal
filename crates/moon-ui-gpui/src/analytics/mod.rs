@@ -35,6 +35,8 @@ mod toolbar;
 /// The former flat set of `strategies`/`tuner*`/`strat_time`/`time_tuner` modules at the
 /// analytics root now lives under `tuner/`.
 mod tuner;
+/// The tape autoload of the Entry/Exit axis, driven from the coordination tick.
+pub(crate) use tuner::ticks::fetch::autoload as tape_autoload;
 
 // Pages reach these through the familiar `super::…`, unaware of the `period` module.
 pub(in crate::analytics) use period::{

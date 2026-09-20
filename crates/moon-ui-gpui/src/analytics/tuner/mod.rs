@@ -41,7 +41,7 @@ mod coins;
 /// "By filter": the threshold grid, its histogram and its auto-suggestion.
 mod filter;
 /// "By time": the weekly schedule grid, the hour profile and the sliders.
-mod ticks;
+pub(in crate::analytics) mod ticks;
 mod time;
 
 // State types held by `AnalyticsView` (the parent).

@@ -1712,10 +1712,26 @@ analytics.ticks.coverage:
   ru: "с лентой %{covered} из %{total} · без мс-штампа %{without}"
   en: "tape for %{covered} of %{total} · no ms stamp %{without}"
   es: "cinta en %{covered} de %{total} · sin marca ms %{without}"
+analytics.ticks.coverage_service:
+  ru: "служебных %{n}"
+  en: "service rows %{n}"
+  es: "filas de servicio %{n}"
+analytics.ticks.coverage_untunable:
+  ru: "вне тюнинга %{n}"
+  en: "outside tuning %{n}"
+  es: "fuera del ajuste %{n}"
+analytics.ticks.empty_left_out:
+  ru: "В периоде нет сделок, по которым ось может считать: без мс-штампа %{without} (старые строки реплики или ядро до штампов — лента по ним не восстанавливается), служебных %{service} (фандинг, ликвидации, объединённые продажи, без стратегии), вне тюнинга %{untunable} (ручные продажи, стратегии без торгового правила)."
+  en: "The period holds no trade the axis can read: %{without} without millisecond stamps (older replica rows, or a core before the stamps — no tape can be tied to them), %{service} service rows (funding, liquidations, joined sells, no strategy), %{untunable} outside tuning (manual sells, strategies without a trading rule)."
+  es: "El periodo no tiene operaciones que el eje pueda leer: %{without} sin marcas de milisegundos (filas antiguas de la réplica o un núcleo anterior a las marcas — no hay cinta que atar), %{service} filas de servicio (funding, liquidaciones, ventas unidas, sin estrategia), %{untunable} fuera del ajuste (ventas manuales, estrategias sin regla de trading)."
 analytics.ticks.fetch_btn:
   ru: "Прогрузить трейды"
   en: "Fetch trades"
   es: "Cargar trades"
+analytics.ticks.fetch_add:
+  ru: "+ ещё %{n}"
+  en: "+ %{n} more"
+  es: "+ %{n} más"
 analytics.ticks.fetch_reading:
   ru: "лента читается…"
   en: "reading the tape…"

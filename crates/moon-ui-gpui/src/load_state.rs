@@ -516,7 +516,9 @@ fn fail_detail_row(label: String, value: SharedString, p: MoonPalette, cx: &App)
 }
 
 /// Render a non-error placeholder using the shared muted body style.
-fn muted(text: String, pad: f32, p: MoonPalette, cx: &App) -> AnyElement {
+/// A muted one-line placeholder — the shape every `Note` that is not a failure renders as,
+/// for a panel that words its own empty state.
+pub(crate) fn muted(text: String, pad: f32, p: MoonPalette, cx: &App) -> AnyElement {
     div()
         .p(design::ui_px(cx, pad))
         .text_color(moon(p.text_muted))

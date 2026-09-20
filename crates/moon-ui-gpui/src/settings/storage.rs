@@ -266,9 +266,8 @@ impl SettingsView {
         let limit = self.storage.cfg.strategies.version_limit;
         let persist_trades = self.storage.cfg.trade_replay.persist_trades;
         let trades_max_mb = self.storage.cfg.trade_replay.max_mb;
-        let trades_margin_s = self.storage.cfg.trade_replay.margin_s;
-        let long_position_min = self.storage.cfg.trade_replay.long_position_min;
-        let cleanup_at_startup = self.storage.cfg.trade_replay.cleanup_at_startup;
+        let trades_margin_min = self.storage.cfg.trade_replay.margin_min;
+        let autoload_missing = self.storage.cfg.trade_replay.autoload_missing;
 
         let size_line = |sz: Option<(u64, u64)>| -> String {
             match sz {
@@ -520,6 +519,23 @@ impl SettingsView {
                     )),
             )
             .child(hint(t!("storage.trades_margin_hint").to_string()))
+            // The Entry/Exit axis' tape autoload: a live cell in moon-core, read by the
+            // coordination tick, so a flip needs no restart.
+            .child(
+                moon_ui::MoonCheckbox::new("trades-autoload-missing")
+                    .checked(autoload_missing)
+                    .label(t!("storage.trades_autoload").to_string())
+                    .description(t!("storage.trades_autoload_hint").to_string())
+                    .on_change(cx.listener(|this, v: &bool, _, cx| {
+                        let v = *v;
+                        if this.storage.cfg.trade_replay.autoload_missing != v {
+                            this.storage.cfg.trade_replay.autoload_missing = v;
+                            moon_core::market::trade_replay::set_tape_autoload(v);
+                            storage_cfg::save(&this.storage.cfg);
+                            cx.notify();
+                        }
+                    })),
+            )
             .child(
                 h_flex()
                     .flex_wrap()

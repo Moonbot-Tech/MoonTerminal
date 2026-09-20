@@ -23,33 +23,6 @@ pub const SERVICE_SELL_REASONS: [&str; 3] = ["Funding", "LIQUIDATION", "JoinedSe
 /// Strategy kinds (`SignalType`) that hold no trading rule of their own.
 const CONTAINER_KINDS: [&str; 3] = ["Manual", "Alerts", "Watcher"];
 
-/// How much more than it bought a row may sell and still be one position: the fraction the
-/// exchange's own rounding of a lot can add. Anything past it is coins the core topped the sale
-/// up with from the wallet balance.
-const SOLD_OVER_BOUGHT_EPS: f64 = 1e-6;
-
-/// Whether the row sold MORE coins than it bought.
-///
-/// On spot, a position that comes out under the exchange's minimum lot is topped up from the
-/// wallet balance, and the sale then covers coins this trade never bought: its `sellprice` is an
-/// average over a different amount, and the level the model is judged against is not the level
-/// the rule placed. Such a row is excluded like a manual sell — the tape cannot explain it.
-///
-/// Measured on this machine's replica (2026-09-22): 1 row of 606 767 by this signature, so the
-/// exclusion costs nothing here and matters on a spot core that does it often. The opposite
-/// direction — selling slightly LESS — is ordinary: the fee is taken in coin, and 2 242 rows sit
-/// a fraction below their bought amount.
-///
-/// Args:
-///     quantity: The row's `quantity` — what the sale moved.
-///     bought: The row's `boughtq` — what the entry filled.
-pub fn sold_more_than_bought(quantity: f64, bought: f64) -> bool {
-    quantity.is_finite()
-        && bought.is_finite()
-        && bought > 0.0
-        && quantity > bought * (1.0 + SOLD_OVER_BOUGHT_EPS)
-}
-
 /// Whether a report row is a service row — never a deal of the axis.
 ///
 /// Args:

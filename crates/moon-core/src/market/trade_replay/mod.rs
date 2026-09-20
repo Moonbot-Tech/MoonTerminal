@@ -42,8 +42,7 @@ use crate::market::candles::ChartCandle;
 use crate::market::{CandleReadParams, ChartHistoryBuffers, ChartHistoryRead};
 use crate::venue::{Brand, Venue};
 pub use coverage::Coverage;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU32, Ordering};
+pub use settings::{margin_ms, model_margin_ms, set_margin_min, set_tape_autoload, tape_autoload};
 pub use worker::{TickAnswer, TickQuery, query_held};
 
 /// Milliseconds in one minute, the only timeframe a replay is fetched at.
@@ -79,24 +78,20 @@ const MAX_SPAN_MS: i64 = 7 * 24 * 60 * MINUTE_MS;
 /// exit — so a window clipped exactly to the position would answer the wrong question.
 const CONTEXT_FRACTION: f64 = 0.5;
 
-// A position held longer than `[trade_replay] long_position_min` ([`long_position_ms`]) asks
-// for ticks only around its entry and its exit ([`ReplayWindow::focus_spans`]), each end
-// getting the window's margin on both sides of it; the middle stays bars.
-//
-// A meaning bound, not a resource one: the page budget already caps what a walk can fetch, but
-// on a multi-hour position it burned out ~40 minutes after the entry and the exit came back as
-// bars — while at the zoom such a position is viewed at, the chart draws bars for the middle
-// anyway. Five minutes was the developer's call as a constant (2026-09-21; an hour the day
-// before) and is the default now that the Storage tab moves it: past it the ticks between the
-// ends are a ribbon nobody reads, and what matters is how the entry and the exit printed. The
-// tuner's model runs a long position on that two-end tape as it is — also the developer's
-// call, the same day: an exit that really happened in the unwalked middle is a miss in the
-// replay, and the deal table's "held" column shows how far the tape reaches on each side.
-//
-// The tuner's fetch clusters several trades of one market into one request whose open is the
-// first entry and whose close is the last exit, and keeps the cluster within the same
-// threshold: a longer one would be walked as two ends, and the trades in between would go
-// without their tape.
+/// A position held longer than this asks for ticks only around its entry and its exit
+/// ([`ReplayWindow::focus_spans`]), each end getting the window's margin centred on it; the
+/// middle stays bars.
+///
+/// A meaning bound, not a resource one: the page budget already caps what a walk can fetch, but
+/// on a multi-hour position it burned out ~40 minutes after the entry and the exit came back as
+/// bars — while at the zoom such a position is viewed at, the chart draws bars for the middle
+/// anyway. One hour is the developer's call (2026-09-20): past it the ticks between the ends
+/// are a ribbon nobody reads, and what matters is how the entry and the exit printed.
+///
+/// Public because the tuner's fetch clusters several trades of one market into one request
+/// whose open is the first entry and whose close is the last exit: a cluster longer than this
+/// would be walked as two ends, and the trades in between would go without their tape.
+pub const LONG_POSITION_MS: i64 = 60 * MINUTE_MS;
 
 /// How far before the entry and past the exit a MODEL's request treats the tape as part of the
 /// trade itself (walked under the trade budget, never cut short by the normal page ceiling):
@@ -251,7 +246,7 @@ pub enum TradeReplayOutcome {
 /// Who is asking for the prints, which decides three things the requester cannot express in
 /// the window alone: which margin the walk spends its page budget on first, whether a short
 /// answer waits for the core's archive, and whether the remembered-answer ring is consulted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ReplayIntent {
     /// A live trade window. The exit's trail is walked before the entry's lead — the part of the
     /// picture the eye lands on — and an answer short of the focus keeps polling the core's
@@ -269,6 +264,15 @@ impl ReplayIntent {
     /// Whether the plan walks the entry's lead before the exit's trail on a forward route.
     pub(crate) fn lead_first(self) -> bool {
         matches!(self, Self::Model)
+    }
+
+    /// How far outside the position the trade tiles reach — see [`MODEL_PAD_MS`]. A chart's
+    /// trade tiles are the position alone.
+    pub(crate) fn trade_pad_ms(self) -> i64 {
+        match self {
+            Self::Chart => 0,
+            Self::Model => MODEL_PAD_MS,
+        }
     }
 
     /// Whether an answer short of the focus arms the bounded core-archive follow-up.
@@ -303,10 +307,10 @@ pub struct ReplayWindow {
     /// Millisecond-exact when the core supplied a millisecond column, whole seconds otherwise.
     pub close_ms: i64,
     /// How many milliseconds of prints are asked for around the position, per end — the
-    /// `[trade_replay] margin_s` setting at the moment the window was built ([`margin_ms`]).
-    /// A short position gets this much before the entry and after the exit ([`Self::focus`]);
-    /// a long one gets it on both sides of each end ([`Self::focus_spans`]). Zero is the position
-    /// alone — a value the setting no longer offers, but one a hand-built window may still carry.
+    /// `[trade_replay] margin_min` setting at the moment the window was built (floored for a
+    /// model's window, see `model_margin_ms`). A short position
+    /// gets this much before the entry and after the exit ([`Self::focus`]); a long one gets it
+    /// centred on each end ([`Self::focus_spans`]). Zero is the position alone.
     pub margin_ms: i64,
     /// How long a position must be held to be walked as its two ends — the `[trade_replay]
     /// long_position_min` setting at the moment the window was built ([`long_position_ms`]),

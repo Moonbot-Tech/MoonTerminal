@@ -6,15 +6,29 @@
 //! progress live on one background thread that outlives every window; a view only hands it rows
 //! (resolved while the view still had the live source), listens for what lands, and reads the
 //! progress for its caption. Closing the window drops the listener, nothing else; reopening it
-//! attaches a new one and reads the same progress.
+//! attaches a new one and reads the same progress. The startup autoload ([`enqueue`]) adds rows
+//! to the same queue; a batch is whatever is in it, wherever it came from.
 //!
-//! One row at a time, because the replay worker is one thread and the venues are rate-limited.
-//! A venue that refuses (the gate's backoff, or its own error mid-walk) puts its rows aside for
-//! the gate's own number of seconds while the rows of other venues go on; the refused row goes
-//! back first once the wait is out, and a row the venue itself refused is asked once more before
-//! it counts as final.
+//! One request at a time PER VENUE, several venues at once. The replay worker walks the hosts
+//! in parallel lanes and paces each on its own, so two requests on one exchange key would only
+//! queue behind each other there while the second one's slot could have been another venue's.
+//! A request is a CLUSTER: the next pending row of a free key — a row the user is looking at
+//! first ([`prioritize`]), else the oldest — plus every pending row of the
+//! same market whose window overlaps it, as long as the first entry and the last exit stay
+//! within one hour ([`LONG_POSITION_MS`], past which the worker walks only the two ends). One
+//! walk of the whole stretch serves them all — a pumped coin closes dozens of trades in an
+//! hour, and asked one by one each of them re-walked the same minutes and paid the same page
+//! budget, and on a venue with small pages (OKX, 100 prints) each of them died on that budget
+//! in turn. Every row of the cluster is then replayed off the tiles on its own and answered on
+//! its own. A venue that refuses (the gate's backoff, or its own error mid-walk) puts its rows
+//! aside for the gate's own number of seconds while the rows of other venues go on; the
+//! refused rows go back first once the wait is out, and a row the venue itself refused is asked
+//! once more before it counts as final. A walk the worker cut short on its own page budget or
+//! deadline — a pumped coin on a venue with small pages — is CONTINUED: the rows it did not
+//! reach go back to the end of their venue's turn, and the next walk picks up where the tiles
+//! end, for as long as each walk gains tape ([`MAX_CONTINUATIONS`] at most).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
@@ -27,13 +41,23 @@ use moon_core::market::ReplayAddress;
 use moon_core::market::trade_replay::venue_caps::TickValue;
 use moon_core::market::trade_replay::worker::{self, TradeReplayRequest};
 use moon_core::market::trade_replay::{
-    ReplayIntent, ReplayWindow, TickStatus, TradeReplayEmpty, TradeReplayFailure,
-    TradeReplayOutcome,
+    Coverage, LONG_POSITION_MS, ReplayIntent, ReplayWindow, TickStatus, TradeReplayEmpty,
+    TradeReplayFailure, TradeReplayOutcome, replay_window_ms,
 };
 
 /// The wait after a venue's own refusal mid-walk, when the gate names no number: the gate's own
 /// floor, so the second ask lands after the backoff it will have recorded.
 const VENUE_REFUSAL_WAIT: Duration = Duration::from_secs(30);
+
+/// How many times a row goes back for the rest of its tape after a walk that stopped on the
+/// worker's own budget. Each continuation is a walk of up to the trade budget (240 pages);
+/// twelve of them are ~20 minutes of a pumped coin's tape on OKX (100 prints a page, ~240 a
+/// second measured 2026-09-20), which is more than any one position needs.
+const MAX_CONTINUATIONS: u8 = 12;
+
+/// Ceiling on the rows out at once, whatever the number of exchange keys: one per key is the
+/// rule, this is the guard against a fleet on many small venues fanning into many threads.
+const MAX_IN_FLIGHT: usize = 8;
 
 /// One deal as the job asks for it: everything the request needs, resolved by the view while it
 /// still had the live source for the exchange identity and the contract terms.
@@ -45,6 +69,14 @@ pub(in crate::analytics::tuner) struct QueuedRow {
     pub(in crate::analytics::tuner) window: ReplayWindow,
     /// Whether the venue itself already refused this row once; the second refusal is final.
     retried: bool,
+    /// How many walks were continued for this row's tape, and how much of the request's focus
+    /// the last walk's answer covered — a continuation must gain on it.
+    continued: u8,
+    covered_ms: i64,
+    /// Whether the user is looking at this row — the dispatcher takes such rows before the
+    /// rest of their venue's queue ([`prioritize`]). A mark, not a position: it survives a
+    /// deferral and a continuation, which reorder the queue.
+    priority: bool,
 }
 
 impl QueuedRow {
@@ -62,6 +94,9 @@ impl QueuedRow {
             tick_value,
             window,
             retried: false,
+            continued: 0,
+            covered_ms: 0,
+            priority: false,
         }
     }
 }
@@ -84,8 +119,9 @@ pub(in crate::analytics::tuner) struct Progress {
     /// Rows answered since the batch started, and the batch's size.
     pub(in crate::analytics::tuner) done: usize,
     pub(in crate::analytics::tuner) total: usize,
-    /// The row a request is out for: its id and its market.
-    pub(in crate::analytics::tuner) in_flight: Option<(i64, String)>,
+    /// The requests out, in the order they went out: the ids of the rows each one serves, and
+    /// its market.
+    pub(in crate::analytics::tuner) in_flight: Vec<(Vec<i64>, String)>,
 }
 
 /// A row set aside until its venue's wait is out.
@@ -94,14 +130,21 @@ struct Deferred {
     due: Instant,
 }
 
+/// A request out for a cluster of rows.
+struct InFlight {
+    uids: Vec<i64>,
+    market: String,
+    exchange_key: String,
+    /// Raised by a stop so the walk ends at once.
+    cancel: Arc<AtomicBool>,
+}
+
 #[derive(Default)]
 struct State {
     /// Rows still to ask for; popped from the end, so the caller orders them newest-first.
     pending: Vec<QueuedRow>,
     deferred: Vec<Deferred>,
-    in_flight: Option<(i64, String)>,
-    /// The in-flight request's cancel flag, raised by a stop so the walk ends at once.
-    in_flight_cancel: Option<Arc<AtomicBool>>,
+    in_flight: Vec<InFlight>,
     done: usize,
     total: usize,
     /// The strategy-field defaults the model runs with, captured when the batch started.
@@ -117,7 +160,7 @@ struct State {
 
 impl State {
     fn active(&self) -> bool {
-        self.in_flight.is_some() || !self.pending.is_empty() || !self.deferred.is_empty()
+        !self.in_flight.is_empty() || !self.pending.is_empty() || !self.deferred.is_empty()
     }
 
     fn notify(&mut self, event: JobEvent) {
@@ -154,6 +197,34 @@ impl State {
         self.pending.extend(due.into_iter().map(|d| d.row));
         any
     }
+
+    /// The next row that may go out — see [`pick_dispatchable`].
+    fn dispatchable(&self) -> Option<usize> {
+        let busy: HashSet<&str> = self
+            .in_flight
+            .iter()
+            .map(|f| f.exchange_key.as_str())
+            .collect();
+        pick_dispatchable(
+            self.pending
+                .iter()
+                .map(|row| (row.address.exchange_key.as_str(), row.priority)),
+            &busy,
+            self.in_flight.len(),
+        )
+    }
+
+    /// Every id the batch already knows — queued, waiting, out, or answered — so a row is
+    /// never asked for twice by two sources of rows.
+    fn known(&self) -> HashSet<i64> {
+        self.pending
+            .iter()
+            .map(|r| r.deal.report_uid)
+            .chain(self.deferred.iter().map(|d| d.row.deal.report_uid))
+            .chain(self.in_flight.iter().flat_map(|f| f.uids.iter().copied()))
+            .chain(self.finished.iter().map(|(uid, _)| *uid))
+            .collect()
+    }
 }
 
 struct Job {
@@ -188,47 +259,99 @@ fn ensure_thread() {
     });
 }
 
-/// Start a batch, unless one is running. `rows` is newest-first: the job pops from the end,
-/// so the oldest — nearest the venues' retention edge — goes first.
+/// Add rows to the batch — the running one, or a fresh one when none runs. Rows the batch
+/// already knows (queued, waiting, out, or answered since it started) are dropped, so the
+/// startup autoload and a "Fetch trades" press cannot ask for the same trade twice. `rows` is
+/// newest-first: the job pops from the end, so the oldest — nearest the venues' retention edge
+/// — goes first. `defaults` are taken only when they open a fresh batch.
 ///
 /// Returns:
-///     Whether the batch was taken.
-pub(in crate::analytics::tuner) fn start(
+///     How many rows were added.
+pub(in crate::analytics::tuner) fn enqueue(
     rows: Vec<QueuedRow>,
     defaults: HashMap<String, f64>,
-) -> bool {
+) -> usize {
     if rows.is_empty() {
-        return false;
+        return 0;
     }
     ensure_thread();
     let job = job();
     let mut st = lock(job);
-    if st.active() {
-        return false;
+    if !st.active() {
+        st.total = 0;
+        st.done = 0;
+        st.deferred.clear();
+        st.finished.clear();
+        st.defaults = defaults;
+        st.stop = false;
     }
-    st.total = rows.len();
-    st.done = 0;
-    st.pending = rows;
-    st.deferred.clear();
-    st.finished.clear();
-    st.defaults = defaults;
-    st.stop = false;
+    let known = st.known();
+    let fresh: Vec<QueuedRow> = rows
+        .into_iter()
+        .filter(|row| !known.contains(&row.deal.report_uid))
+        .collect();
+    let added = fresh.len();
+    if added == 0 {
+        return 0;
+    }
+    // In FRONT of what is queued: `pending` pops from the end, and the rows already there —
+    // the user's own press, or an earlier autoload pass — keep their turn.
+    let mut pending = fresh;
+    pending.append(&mut st.pending);
+    st.pending = pending;
+    st.total += added;
     st.notify(JobEvent::Progress);
     drop(st);
     job.wake.notify_all();
-    true
+    added
 }
 
-/// Abandon the batch: the queue empties, the request in flight is cancelled and its answer is
-/// dropped.
+/// Mark the rows among `uids` as the ones the user is looking at: the dispatcher takes a
+/// marked row of a free venue before the venue's other rows, oldest marked row first. The
+/// autoload queues a month of trades oldest-first, so the freshest rows, the ones at the top
+/// of a table, would otherwise be the last of hundreds; a press of "Fetch trades" and every
+/// load of the axis mark theirs. A mark rather than a move: a venue's backoff sweeps rows out
+/// of the queue and back, and a continuation re-queues a row — a position would not survive
+/// either, the mark does. Rows out, answered or unknown are left alone.
+///
+/// Returns:
+///     How many rows were newly marked, queued or waiting.
+pub(in crate::analytics::tuner) fn prioritize(uids: &HashSet<i64>) -> usize {
+    if uids.is_empty() {
+        return 0;
+    }
+    let job = job();
+    let mut st = lock(job);
+    let mut marked = 0usize;
+    let State {
+        pending, deferred, ..
+    } = &mut *st;
+    for row in pending
+        .iter_mut()
+        .chain(deferred.iter_mut().map(|d| &mut d.row))
+    {
+        if !row.priority && uids.contains(&row.deal.report_uid) {
+            row.priority = true;
+            marked += 1;
+        }
+    }
+    drop(st);
+    if marked > 0 {
+        job.wake.notify_all();
+    }
+    marked
+}
+
+/// Abandon the batch: the queue empties, every request in flight is cancelled and its answer
+/// is dropped.
 pub(in crate::analytics::tuner) fn stop() {
     let job = job();
     let mut st = lock(job);
     st.stop = true;
     st.pending.clear();
     st.deferred.clear();
-    if let Some(cancel) = &st.in_flight_cancel {
-        cancel.store(true, Ordering::Relaxed);
+    for out in &st.in_flight {
+        out.cancel.store(true, Ordering::Relaxed);
     }
     st.notify(JobEvent::Progress);
     drop(st);
@@ -242,6 +365,12 @@ pub(in crate::analytics::tuner) fn attach() -> mpsc::Receiver<JobEvent> {
     rx
 }
 
+/// Every id the batch knows — queued, waiting, out, or answered since it started — so a view
+/// can count what it could still add to a running batch.
+pub(in crate::analytics::tuner) fn known_uids() -> HashSet<i64> {
+    lock(job()).known()
+}
+
 /// The job as the caption reads it.
 pub(in crate::analytics::tuner) fn progress() -> Progress {
     let st = lock(job());
@@ -249,7 +378,11 @@ pub(in crate::analytics::tuner) fn progress() -> Progress {
         active: st.active(),
         done: st.done,
         total: st.total,
-        in_flight: st.in_flight.clone(),
+        in_flight: st
+            .in_flight
+            .iter()
+            .map(|f| (f.uids.clone(), f.market.clone()))
+            .collect(),
     }
 }
 
@@ -269,6 +402,119 @@ fn split_by_key<T>(rows: Vec<T>, key: &str, key_of: impl Fn(&T) -> &str) -> (Vec
     rows.into_iter().partition(|row| key_of(row) == key)
 }
 
+/// The index of the next row that may go out, while the in-flight ceiling allows one more: the
+/// OLDEST pending row (the queue pops from its end) whose exchange key has nothing in flight —
+/// among the rows the user is looking at ([`prioritize`]) when any of those is on a free key,
+/// else among all.
+///
+/// Args:
+///     pending: The exchange key and the priority mark of every pending row, in queue order
+///         (newest first).
+///     busy: The exchange keys with a request out.
+///     out: How many requests are out.
+///
+/// Returns:
+///     The queue index to take, or `None` when nothing may go out now.
+pub(super) fn pick_dispatchable<'a>(
+    pending: impl Iterator<Item = (&'a str, bool)>,
+    busy: &HashSet<&str>,
+    out: usize,
+) -> Option<usize> {
+    if out >= MAX_IN_FLIGHT {
+        return None;
+    }
+    let rows: Vec<(&str, bool)> = pending.collect();
+    let free = |(key, _): &(&str, bool)| !busy.contains(key);
+    rows.iter()
+        .rposition(|row| row.1 && free(row))
+        .or_else(|| rows.iter().rposition(free))
+}
+
+/// What the cluster rule reads of a row: its market on its exchange, and its window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ClusterKey<'a> {
+    pub(super) exchange_key: &'a str,
+    pub(super) market: &'a str,
+    pub(super) buy_ms: i64,
+    pub(super) close_ms: i64,
+    pub(super) margin_ms: i64,
+}
+
+/// The rows that go out with the seed in one request: every pending row of the seed's market
+/// whose margined window overlaps the cluster's hull, taken while the hull's first entry and
+/// last exit stay within [`LONG_POSITION_MS`]. Grows until nothing more joins — a row that
+/// joins can bridge to the next one.
+///
+/// Args:
+///     rows: The pending rows' keys, in queue order.
+///     seed: The index of the row the dispatcher picked.
+///
+/// Returns:
+///     The indices of the cluster, the seed included, ascending.
+pub(super) fn pick_cluster(rows: &[ClusterKey<'_>], seed: usize) -> Vec<usize> {
+    let anchor = rows[seed];
+    let mut taken = vec![seed];
+    let (mut first_buy, mut last_close) = (anchor.buy_ms, anchor.close_ms);
+    loop {
+        let mut grew = false;
+        for (index, row) in rows.iter().enumerate() {
+            if taken.contains(&index)
+                || row.exchange_key != anchor.exchange_key
+                || row.market != anchor.market
+            {
+                continue;
+            }
+            let overlaps = row.buy_ms.saturating_sub(row.margin_ms)
+                <= last_close.saturating_add(anchor.margin_ms)
+                && row.close_ms.saturating_add(row.margin_ms)
+                    >= first_buy.saturating_sub(anchor.margin_ms);
+            let hull_from = first_buy.min(row.buy_ms);
+            let hull_to = last_close.max(row.close_ms);
+            if overlaps && hull_to.saturating_sub(hull_from) <= LONG_POSITION_MS {
+                taken.push(index);
+                first_buy = hull_from;
+                last_close = hull_to;
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    taken.sort_unstable();
+    taken
+}
+
+/// Whether a row goes back for the rest of its tape: the walk ran (no refusal to wait out —
+/// the caller checks that first), left the row uncovered, stopped SHORT of the request's focus
+/// on the worker's own budget or deadline, covered more of it than the row's previous walk
+/// did — the same answer serves every row of a cluster, so a row the walk has not reached yet
+/// still sees the walk advance — and the row has continuations left. A walk that covered the
+/// whole focus and still left the row missing found no prints for it, which no continuation
+/// changes; one that gained nothing found a stretch the venue serves nothing for.
+///
+/// Args:
+///     status: The walk's tick status.
+///     tape: What the row became after the replay off the tiles.
+///     walk_short: Whether the answer's coverage stops short of the request's focus.
+///     covered_ms: Width of the answer's coverage.
+///     previous_ms: Width after the row's previous walk; zero before the first.
+///     continued: Continuations the row already had.
+pub(super) fn continues(
+    status: TickStatus,
+    tape: TapeStatus,
+    walk_short: bool,
+    covered_ms: i64,
+    previous_ms: i64,
+    continued: u8,
+) -> bool {
+    tape == TapeStatus::Missing
+        && matches!(status, TickStatus::Served | TickStatus::Streaming)
+        && walk_short
+        && covered_ms > previous_ms
+        && continued < MAX_CONTINUATIONS
+}
+
 /// How long the batch waits before asking for the same row again, when it should: the gate
 /// refused the host and the row is still uncovered. A row the tiles covered anyway needs no
 /// second ask, and every other status is the row's final word.
@@ -279,65 +525,137 @@ pub(super) fn retry_wait(status: TickStatus, tape: TapeStatus) -> Option<u32> {
     }
 }
 
-/// The thread: one row at a time, waits included.
-fn run(job: &Job) {
+/// The thread: dispatches one row per free exchange key onto its own walk, waits included.
+/// It never walks itself, so a venue's three-minute walk holds nobody else's turn.
+fn run(job: &'static Job) {
     loop {
-        let (row, defaults) = {
-            let mut st = lock(job);
-            loop {
-                if st.stop {
-                    st.stop = false;
-                    st.pending.clear();
-                    st.deferred.clear();
-                }
-                let now = Instant::now();
-                if st.resume_due(now) {
-                    st.notify(JobEvent::Progress);
-                }
-                if let Some(row) = st.pending.pop() {
-                    break (row, st.defaults.clone());
-                }
-                if st.deferred.is_empty() {
-                    // The batch is over, or none was ever started: sleep until a start.
-                    st.notify(JobEvent::Progress);
-                    st = job
-                        .wake
-                        .wait(st)
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                } else {
-                    let earliest = st.deferred.iter().map(|d| d.due).min().unwrap_or(now);
-                    let wait = earliest.saturating_duration_since(now);
-                    st = job
-                        .wake
-                        .wait_timeout(st, wait)
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .0;
-                }
+        let mut st = lock(job);
+        if st.stop {
+            st.stop = false;
+            st.pending.clear();
+            st.deferred.clear();
+        }
+        let now = Instant::now();
+        if st.resume_due(now) {
+            st.notify(JobEvent::Progress);
+        }
+        if let Some(index) = st.dispatchable() {
+            let keys: Vec<ClusterKey<'_>> = st
+                .pending
+                .iter()
+                .map(|row| ClusterKey {
+                    exchange_key: &row.address.exchange_key,
+                    market: &row.address.market,
+                    buy_ms: row.deal.buy_ms,
+                    close_ms: row.deal.close_ms,
+                    margin_ms: row.window.margin_ms,
+                })
+                .collect();
+            let indices = pick_cluster(&keys, index);
+            // Removed from the back, so each index still names the row it was picked for.
+            let mut rows: Vec<QueuedRow> = indices
+                .iter()
+                .rev()
+                .map(|&i| st.pending.remove(i))
+                .collect();
+            rows.reverse();
+            let defaults = st.defaults.clone();
+            let cancel = Arc::new(AtomicBool::new(false));
+            let uids: Vec<i64> = rows.iter().map(|r| r.deal.report_uid).collect();
+            let first = &rows[0];
+            st.in_flight.push(InFlight {
+                uids: uids.clone(),
+                market: match rows.len() {
+                    1 => first.address.market.clone(),
+                    n => format!("{}×{n}", first.address.market),
+                },
+                exchange_key: first.address.exchange_key.clone(),
+                cancel: cancel.clone(),
+            });
+            for &uid in &uids {
+                st.notify(JobEvent::Started(uid));
             }
-        };
-        serve_one(job, row, &defaults);
+            drop(st);
+            // A thread per walk rather than a lane per venue: the walk blocks on the worker's
+            // reply for up to its trade deadline, and the number of them is bounded by the
+            // exchange keys and `MAX_IN_FLIGHT`, never by the batch.
+            let spawned = std::thread::Builder::new()
+                .name("tuner-ticks-walk".into())
+                .spawn(move || serve_cluster(job, rows, cancel, &defaults));
+            if let Err(error) = spawned {
+                // No thread, no walk: the rows went with the closure. Counted as done so the
+                // batch's total still balances, and said once.
+                log::warn!(
+                    "[x] ticks fetch: no thread for {} row(s): {error}",
+                    uids.len()
+                );
+                let mut st = lock(job);
+                st.in_flight.retain(|f| f.uids != uids);
+                st.done += uids.len();
+                st.notify(JobEvent::Progress);
+            }
+            continue;
+        }
+        if st.deferred.is_empty() && st.pending.is_empty() {
+            // Nothing queued and nothing waiting: the batch is over once the walks out come
+            // back, or none was ever started. Sleep until a start, an enqueue, or a walk's end.
+            if st.in_flight.is_empty() {
+                st.notify(JobEvent::Progress);
+            }
+            drop(
+                job.wake
+                    .wait(st)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+        } else {
+            // Rows queued but every one of them is on a busy key, or rows waiting out a
+            // venue's backoff: wake at the earliest due time, or when a walk ends.
+            let earliest = st.deferred.iter().map(|d| d.due).min().unwrap_or(now);
+            let wait = match st.deferred.is_empty() {
+                true => Duration::from_secs(60),
+                false => earliest.saturating_duration_since(now),
+            };
+            drop(
+                job.wake
+                    .wait_timeout(st, wait)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+        }
     }
 }
 
-/// Ask for one row, wait for the worker, replay the row off the tiles, and file the answer.
-fn serve_one(job: &Job, mut row: QueuedRow, defaults: &HashMap<String, f64>) {
-    let uid = row.deal.report_uid;
-    let cancel = Arc::new(AtomicBool::new(false));
+/// Ask for one cluster of rows — one request over the hull of their windows — wait for the
+/// worker, replay every row off the tiles, and file each answer. Runs on its own thread.
+fn serve_cluster(
+    job: &'static Job,
+    rows: Vec<QueuedRow>,
+    cancel: Arc<AtomicBool>,
+    defaults: &HashMap<String, f64>,
+) {
+    let uids: Vec<i64> = rows.iter().map(|r| r.deal.report_uid).collect();
+    let first = &rows[0];
+    // The hull: the first entry to the last exit, with the seed's margin — what
+    // `pick_cluster` kept within an hour, so the worker walks it as one stretch.
+    let first_buy = rows
+        .iter()
+        .map(|r| r.deal.buy_ms)
+        .min()
+        .unwrap_or(first.deal.buy_ms);
+    let last_close = rows
+        .iter()
+        .map(|r| r.deal.close_ms)
+        .max()
+        .unwrap_or(first.deal.close_ms);
+    let window =
+        replay_window_ms(first_buy, last_close, first.window.margin_ms).unwrap_or(first.window);
     let (reply, rx) = mpsc::channel();
-    let progress = {
-        let mut st = lock(job);
-        st.in_flight = Some((uid, row.address.market.clone()));
-        st.in_flight_cancel = Some(cancel.clone());
-        st.notify(JobEvent::Started(uid));
-        (st.done + 1, st.total)
-    };
     let started = Instant::now();
     worker::request(TradeReplayRequest {
-        address: row.replay_address.clone(),
-        market: row.address.market.clone(),
-        window: row.window,
-        identity: fetch_identity(uid),
-        tick_value: row.tick_value,
+        address: first.replay_address.clone(),
+        market: first.address.market.clone(),
+        window,
+        identity: fetch_identity(uids[0]),
+        tick_value: first.tick_value,
         ticks: true,
         intent: ReplayIntent::Model,
         cancel: cancel.clone(),
@@ -347,11 +665,18 @@ fn serve_one(job: &Job, mut row: QueuedRow, defaults: &HashMap<String, f64>) {
     // last outcome before the drop is the tick stage's word. A model's request arms no archive
     // follow-up, so the drop comes right after the stage.
     let mut status = TickStatus::Failed;
+    // What the walk's answer covers of the request's focus — the tiles it found plus what it
+    // fetched. Short of the focus, the walk stopped on its own budget or deadline, and the
+    // rows it did not reach may be worth a continuation; wider than the last answer, it gained.
+    let mut walk_covered = Coverage::none();
     let mut outcomes = 0usize;
     while let Ok(outcome) = rx.recv() {
         outcomes += 1;
         status = match outcome {
-            TradeReplayOutcome::Ready(series) => series.tick_status,
+            TradeReplayOutcome::Ready(series) => {
+                walk_covered = series.covered.clone();
+                series.tick_status
+            }
             // The candle stage refused by the gate: the same wait as a refused walk.
             TradeReplayOutcome::Failed(TradeReplayFailure::RateLimited { retry_in_s }) => {
                 TickStatus::RateLimited { retry_in_s }
@@ -368,71 +693,108 @@ fn serve_one(job: &Job, mut row: QueuedRow, defaults: &HashMap<String, f64>) {
     if cancel.load(Ordering::Relaxed) {
         // Stopped mid-walk: nothing to file, the queue is already empty.
         let mut st = lock(job);
-        st.in_flight = None;
-        st.in_flight_cancel = None;
+        st.in_flight.retain(|f| f.uids != uids);
         st.notify(JobEvent::Progress);
+        drop(st);
+        job.wake.notify_all();
         return;
     }
-    let lines = archived_lines_of(&row.deal);
-    let mut answer = DealRow {
-        deal: row.deal.clone(),
-        tape: TapeStatus::Missing,
-        verdict: None,
-        address: Some(row.address.clone()),
-        ticks: None,
-        entry_start: None,
-    };
-    replay_row(&mut answer, defaults, lines);
-    let mut wait = retry_wait(status, answer.tape).map(|s| Duration::from_secs(u64::from(s)));
-    // The venue itself refused mid-walk — the row that put its host into the backoff. Once
-    // more, after the wait the gate will name for the rows behind it; the second time is final.
-    if wait.is_none()
-        && answer.tape == TapeStatus::Missing
-        && status == TickStatus::Failed
-        && !row.retried
-    {
-        row.retried = true;
-        wait = Some(VENUE_REFUSAL_WAIT);
-    }
-    if answer.tape == TapeStatus::Missing && wait.is_none() {
-        answer.tape = match status {
-            TickStatus::Served | TickStatus::Pending | TickStatus::Streaming => TapeStatus::Missing,
-            refused => TapeStatus::Refused(refused),
+    let cluster = rows.len();
+    let market = first.address.market.clone();
+    let (from_ms, to_ms) = (window.from_ms, window.to_ms);
+    let walk_short = !walk_covered.covers(&window.focus_spans());
+    let covered_ms = walk_covered.width_ms();
+    // Every row on its own off the tiles: the walk's one answer says how the venue behaved,
+    // the coverage says which rows it reached.
+    for (position, mut row) in rows.into_iter().enumerate() {
+        let uid = row.deal.report_uid;
+        let replayed_at = Instant::now();
+        let lines = archived_lines_of(&row.deal);
+        let mut answer = DealRow {
+            deal: row.deal.clone(),
+            tape: TapeStatus::Missing,
+            verdict: None,
+            address: Some(row.address.clone()),
+            ticks: None,
+            entry_start: None,
         };
-    }
-    // One line per row, so a batch that looks stuck can be read instead of guessed: what the
-    // worker answered, how long it took, and what the row became. The binary logs at `warn` by
-    // default; this target is the one the base filter raises for exactly these lines.
-    log::info!(
-        target: moon_core::diagnostics::TICKS_AXIS_TARGET,
-        "[x] ticks fetch {}/{} {} uid={} window={}..{}: {status:?} after {outcomes} outcome(s) in {} ms, replayed in {} ms -> {}",
-        progress.0,
-        progress.1,
-        row.address.market,
-        uid,
-        row.window.from_ms,
-        row.window.to_ms,
-        answered.as_millis(),
-        started.elapsed().saturating_sub(answered).as_millis(),
+        replay_row(&mut answer, defaults, lines);
+        let mut wait = retry_wait(status, answer.tape).map(|s| Duration::from_secs(u64::from(s)));
+        // Back to the end of the venue's turn, for the next walk to continue from where the
+        // tiles end — see [`continues`]; the ceiling, no gain, or any other word is final.
+        let continue_walk = wait.is_none()
+            && continues(
+                status,
+                answer.tape,
+                walk_short,
+                covered_ms,
+                row.covered_ms,
+                row.continued,
+            );
+        if continue_walk {
+            row.continued += 1;
+            row.covered_ms = covered_ms;
+        }
+        // The venue itself refused mid-walk — the row that put its host into the backoff.
+        // Once more, after the wait the gate will name for the rows behind it; the second
+        // time is final.
+        if wait.is_none()
+            && answer.tape == TapeStatus::Missing
+            && status == TickStatus::Failed
+            && !row.retried
+        {
+            row.retried = true;
+            wait = Some(VENUE_REFUSAL_WAIT);
+        }
+        if answer.tape == TapeStatus::Missing && wait.is_none() && !continue_walk {
+            answer.tape = match status {
+                TickStatus::Served | TickStatus::Pending | TickStatus::Streaming => {
+                    TapeStatus::Missing
+                }
+                refused => TapeStatus::Refused(refused),
+            };
+        }
+        let replayed_ms = replayed_at.elapsed().as_millis();
+        let outcome_text = match (wait, continue_walk) {
+            (Some(wait), _) => format!("retry in {} s", wait.as_secs()),
+            (None, true) => format!(
+                "continue {}/{MAX_CONTINUATIONS}, {covered_ms} ms of the focus covered",
+                row.continued
+            ),
+            (None, false) => format!("{:?}", answer.tape),
+        };
+        let mut st = lock(job);
+        // The request is out until its last row is filed; the key stays busy meanwhile.
+        if position + 1 == cluster {
+            st.in_flight.retain(|f| f.uids != uids);
+        }
         match wait {
-            Some(wait) => format!("retry in {} s", wait.as_secs()),
-            None => format!("{:?}", answer.tape),
+            Some(wait) if !st.stop => st.defer(row, wait),
+            // The FRONT of the queue is the last to go: the venue's other rows first.
+            None if continue_walk && !st.stop => st.pending.insert(0, row),
+            _ => {
+                st.done += 1;
+                st.finished.push((uid, Instant::now()));
+            }
         }
-    );
-    let mut st = lock(job);
-    st.in_flight = None;
-    st.in_flight_cancel = None;
-    match wait {
-        Some(wait) if !st.stop => {
-            st.defer(row, wait);
-            st.notify(JobEvent::Row(Box::new(answer)));
-        }
-        _ => {
-            st.done += 1;
-            st.finished.push((uid, Instant::now()));
-            st.notify(JobEvent::Row(Box::new(answer)));
-        }
+        // One line per row, so a batch that looks stuck can be read instead of guessed: what
+        // the worker answered for the cluster, how long the walk took, and what the row
+        // became. The count is the batch's as of THIS answer — walks run in parallel, so a
+        // number taken at dispatch would repeat. The binary logs at `warn` by default; this
+        // target is the one the base filter raises for exactly these lines.
+        log::info!(
+            target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+            "[x] ticks fetch {}/{} {market} uid={uid} cluster={}/{cluster} window={from_ms}..{to_ms}: {status:?} after {outcomes} outcome(s) in {} ms, replayed in {replayed_ms} ms -> {outcome_text}",
+            st.done,
+            st.total,
+            position + 1,
+            answered.as_millis(),
+        );
+        st.notify(JobEvent::Row(Box::new(answer)));
+        drop(st);
     }
+    // The key is free again, or the batch is over: the dispatcher decides which.
+    job.wake.notify_all();
 }
 
 /// A replay identity for a fetch, distinct from every chart window's: the row's own id, which

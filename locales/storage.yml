@@ -129,57 +129,17 @@ storage.trades_min:
   en: "%{min} min"
   es: "%{min} min"
 storage.trades_margin_hint:
-  ru: "С каждого края сделки; у долгой — вокруг входа и вокруг выхода, середина свечами. Не меньше 30 с — столько нужно тюнеру."
-  en: "At each end of a trade; on a long one, around the entry and around the exit, candles between. At least 30 s — what the tuner needs."
-  es: "En cada extremo de una posición; en una larga, alrededor de la entrada y de la salida, velas entre ambas. Al menos 30 s: lo que necesita el afinador."
-storage.trades_long_position:
-  ru: "Долгая сделка от"
-  en: "Long trade from"
-  es: "Posición larga desde"
-storage.trades_long_position_hint:
-  ru: "Дольше — трейды только вокруг входа и выхода."
-  en: "Held longer — prints around the entry and the exit only."
-  es: "Más larga — operaciones solo alrededor de la entrada y la salida."
-storage.trades_cleanup_at_startup:
-  ru: "Чистка при старте"
-  en: "Clean up at startup"
-  es: "Limpiar al arrancar"
-storage.trades_cleanup_at_startup_hint:
-  ru: "То же, что кнопка «Чистка». Со следующего запуска."
-  en: "Same as the \"Clean up\" button. From the next launch."
-  es: "Lo mismo que el botón «Limpiar». Desde el próximo arranque."
-storage.trades_cleanup:
-  ru: "Чистка"
-  en: "Clean up"
-  es: "Limpiar"
-storage.trades_cleanup_hint:
-  ru: "Оставляет трейды сделок стратегий, закрытых самой стратегией (что читает тюнер), в пределах ступени «Трейды вокруг сделки». Ручные продажи, фандинг, ликвидации и трейды без сделки в отчёте уходят. Файл сжимается сразу."
-  en: "Keeps the prints of strategy trades the strategy closed itself (what the tuner reads), within the \"Prints around a trade\" step. Manual sells, funding, liquidations and prints with no trade in the report go. The file is compacted at once."
-  es: "Conserva las operaciones de posiciones de estrategias cerradas por la propia estrategia (lo que lee el afinador), dentro del paso «Operaciones alrededor de una posición». Ventas manuales, funding, liquidaciones y operaciones sin posición en el informe se van. El archivo se compacta al instante."
-storage.trades_cleanup_preview:
-  ru: "удалится ≈ %{prints} трейдов, освободится ≈ %{size}"
-  en: "≈ %{prints} prints go, ≈ %{size} freed"
-  es: "se borrarán ≈ %{prints} operaciones, se liberarán ≈ %{size}"
-storage.trades_cleanup_empty:
-  ru: "нечего удалять"
-  en: "nothing to delete"
-  es: "nada que borrar"
-storage.trades_cleanup_pending:
-  ru: "считаю…"
-  en: "counting…"
-  es: "contando…"
-storage.trades_cleanup_failed:
-  ru: "не посчитать — %{err}"
-  en: "could not count — %{err}"
-  es: "no se pudo contar — %{err}"
-storage.trades_cleanup_done:
-  ru: "удалено %{prints} трейдов, освобождено ≈ %{size}"
-  en: "%{prints} prints deleted, ≈ %{size} freed"
-  es: "%{prints} operaciones borradas, ≈ %{size} liberados"
-storage.op_cleanup:
-  ru: "Чистка"
-  en: "Cleanup"
-  es: "Limpieza"
+  ru: "Сколько минут трейдов брать с каждого конца сделки: у короткой — до входа и после выхода, у долгой (дольше часа) — столько же вокруг входа и вокруг выхода, середина свечами. 0 — только сама сделка, не больше 120."
+  en: "Minutes of prints taken at each end of a trade: before the entry and after the exit of a short one; the same amount centred on the entry and on the exit of a long one (over an hour), candles between. 0 is the position alone, 120 at most."
+  es: "Minutos de operaciones tomados en cada extremo de una posición: antes de la entrada y después de la salida en una corta; la misma cantidad centrada en la entrada y en la salida en una larga (más de una hora), velas entre ambas. 0 es solo la posición, 120 como máximo."
+storage.trades_autoload:
+  ru: "Подгружать недостающую ленту при старте"
+  en: "Fetch the missing tape at startup"
+  es: "Descargar la cinta que falta al arrancar"
+storage.trades_autoload_hint:
+  ru: "Когда ядра поднялись, терминал сам запрашивает у бирж трейды недавних закрытых сделок стратегий с мс-штампами — тех, что закрылись, пока терминал не работал и захват при закрытии их не застал. Только сделки, по которым тюнер может считать: без фандинга, ликвидаций, объединённых и ручных продаж. Окно — сколько биржа ещё отдаёт (Binance фьючерсы 48 ч, Gate spot 30 дней, OKX и Bitget 90, не дальше 30 дней). Bybit и Hyperliquid публичной истории трейдов не дают. Тратит лимит публичных запросов; идёт той же очередью, что «Прогрузить трейды» в тюнере, и останавливается той же кнопкой."
+  en: "Once the cores are up the terminal asks the venues for the prints of recent closed strategy trades with millisecond stamps — the ones that closed while it was not running and the close-time capture missed. Only trades the tuner can be run on: no funding, liquidations, joined or manual sells. The window is what the venue still serves (Binance futures 48 h, Gate spot 30 days, OKX and Bitget 90, never past 30 days). Bybit and Hyperliquid serve no public trade history. Spends the public request budget; runs in the same queue as \"Fetch trades\" in the tuner and stops with the same button."
+  es: "Cuando los núcleos están arriba, el terminal pide a las bolsas las operaciones de las posiciones de estrategias cerradas recientes con marcas de milisegundos — las que cerraron mientras no estaba en marcha y la captura al cierre no vio. Solo operaciones sobre las que el ajustador puede calcular: sin funding, liquidaciones, ventas unidas ni manuales. La ventana es lo que la bolsa aún sirve (futuros Binance 48 h, Gate spot 30 días, OKX y Bitget 90, nunca más de 30 días). Bybit e Hyperliquid no dan historial público. Gasta el límite de peticiones públicas; va en la misma cola que «Cargar trades» del ajustador y se para con el mismo botón."
 storage.trades_hint:
   ru: "Файл можно удалить при закрытом терминале."
   en: "The file can be deleted while the terminal is closed."

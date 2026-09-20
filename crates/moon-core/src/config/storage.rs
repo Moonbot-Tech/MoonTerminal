@@ -61,21 +61,17 @@ pub struct TradeReplayStoreCfg {
     /// Ceiling on the packed prints the file may hold, in megabytes; past it the spans written
     /// longest ago go first. `0` keeps everything, with no age limit.
     pub max_mb: u32,
-    /// Seconds of prints kept around a trade, per end: a short position gets this much before
-    /// its entry and after its exit; a long one (held past [`Self::long_position_min`]) gets
-    /// this much on both sides of each end, with bars between. It sizes what a trade window
-    /// fetches, what a close copies out of the core's ring, and what the file keeps. One of
-    /// [`TRADE_MARGIN_STEPS_S`]: a hand-edited value is snapped to the nearest step on load.
-    pub margin_s: u32,
-    /// Minutes a position may be held and still count as SHORT; held past them it is LONG —
-    /// walked as its two ends with bars between, by a trade window and by the close-time capture.
-    /// Bounded to [`LONG_POSITION_MIN_RANGE`] on load; a file written before the field reads
-    /// as the default, which is what the threshold was while it was a constant.
-    pub long_position_min: u32,
-    /// Whether the terminal runs the Storage tab's cleanup on its own once the cores are up.
-    /// Off by default: it rewrites the file unasked. A file written before the field reads as
-    /// off.
-    pub cleanup_at_startup: bool,
+    /// Minutes of prints kept around a trade, per end: a short position gets this many minutes
+    /// before its entry and after its exit; a long one (over an hour) gets this many minutes
+    /// centred on each end, half before and half after, with bars between. It sizes what a trade
+    /// window fetches, what a close copies out of the core's ring, and what the file keeps.
+    /// `0` is the position alone; clamped to [`MAX_TRADE_MARGIN_MIN`] on load.
+    pub margin_min: u32,
+    /// Whether the terminal fetches, once the cores are up, the tape of every recent closed
+    /// trade with millisecond stamps that the venues still serve — what the close-time capture
+    /// missed because the terminal was not running. Off by default: it spends the venues' public
+    /// request budget without being asked. A file written before the field reads as off.
+    pub autoload_missing: bool,
 }
 
 /// Default minutes of [`TradeReplayStoreCfg::long_position_min`]: the five minutes the
@@ -116,9 +112,8 @@ impl Default for TradeReplayStoreCfg {
         Self {
             persist_trades: true,
             max_mb: DEFAULT_TRADES_MAX_MB,
-            margin_s: DEFAULT_TRADE_MARGIN_S,
-            long_position_min: DEFAULT_LONG_POSITION_MIN,
-            cleanup_at_startup: false,
+            margin_min: DEFAULT_TRADE_MARGIN_MIN,
+            autoload_missing: false,
         }
     }
 }

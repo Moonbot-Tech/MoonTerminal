@@ -116,7 +116,7 @@ fn real_data_reproduction() {
         .expect("pairs")
         .flatten()
         .collect();
-    let margin_ms = crate::market::trade_replay::margin_ms();
+    let margin_ms = crate::market::trade_replay::model_margin_ms();
 
     let keys = param_keys();
     let defaults = HashMap::new();

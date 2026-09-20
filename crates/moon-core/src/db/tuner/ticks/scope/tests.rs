@@ -9,22 +9,6 @@ fn service_rows_are_the_no_strategy_and_the_named_reasons() {
     assert!(is_service_row(42, "Funding"));
     assert!(is_service_row(42, "LIQUIDATION"));
     assert!(is_service_row(42, "JoinedSell"));
-}
-
-/// A spot sale topped up from the wallet balance moved coins the entry never bought, so its
-/// price is an average of something else.
-#[test]
-fn a_sale_bigger_than_its_entry_is_not_a_deal() {
-    assert!(sold_more_than_bought(101.0, 100.0));
-    assert!(!sold_more_than_bought(100.0, 100.0), "the ordinary case");
-    // The fee is taken in coin on spot, so selling slightly LESS is normal.
-    assert!(!sold_more_than_bought(99.88, 100.0));
-    // Nothing to compare against is not a finding.
-    assert!(!sold_more_than_bought(101.0, 0.0));
-    assert!(!sold_more_than_bought(f64::NAN, 100.0));
-    assert!(!sold_more_than_bought(101.0, f64::INFINITY));
-    // Float noise on a lot must not read as a top-up.
-    assert!(!sold_more_than_bought(100.0 + 1e-9, 100.0));
     assert!(!is_service_row(42, "Auto Price Down"));
     assert!(!is_service_row(42, "Sell Price"));
     assert!(!is_service_row(42, "StopLoss Market Sell"));

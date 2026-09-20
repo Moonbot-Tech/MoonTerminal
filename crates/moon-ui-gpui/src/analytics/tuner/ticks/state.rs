@@ -91,6 +91,12 @@ pub(in crate::analytics::tuner) struct TicksData {
     pub(in crate::analytics::tuner) rows: Vec<DealRow>,
     /// Scope rows without millisecond stamps — in the Fact column, not in the table.
     pub(in crate::analytics::tuner) without_ms: usize,
+    /// Service rows with stamps the axis never takes (funding, liquidations, joined sells, no
+    /// strategy) — in the Fact column, not in the table.
+    pub(in crate::analytics::tuner) service: usize,
+    /// Trades the tuner cannot be run on — container or unresolved kinds, manual exits — in
+    /// the Fact column, not in the table.
+    pub(in crate::analytics::tuner) untunable: usize,
     /// Column 0: the whole scope (the same SQL as every axis' "Fact", stamps or not); column
     /// 1: the rows the tape covers.
     pub(in crate::analytics::tuner) kpi: Vec<VarStats>,

@@ -31,6 +31,7 @@ pub mod exit;
 pub mod line;
 pub mod mshot;
 pub mod params;
+pub mod scope;
 pub mod search;
 pub mod stats;
 pub mod verify;
@@ -40,6 +41,7 @@ pub use entry::{EntryModel, entry_model_for};
 pub use exit::{ExitModel, ExitParams};
 pub use mshot::{MshotEntry, MshotParams, UsePrice};
 pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};
+pub use scope::{is_service_row, is_tunable};
 pub use search::{PreparedDeal, SearchParams, SearchResult, suggest, variant_tally};
 pub use stats::{fact_stats, stats_of};
 pub use verify::{Verdict, verify};
@@ -207,19 +209,22 @@ pub enum EntryParams {
     MoonShot(MshotParams),
 }
 
-/// The tape must reach this far back before the buy for the corridor to have a run-up.
-pub const RUN_UP_MS: i64 = 30_000;
+/// The tape must reach this far back before the buy for the corridor to have a run-up. The
+/// replay worker walks exactly this much as part of the trade for a model's request
+/// (`trade_replay::MODEL_PAD_MS`), so the two are one number.
+pub const RUN_UP_MS: i64 = crate::market::trade_replay::MODEL_PAD_MS;
 
 /// The tape must reach this far past the close for the exit to have a tail: a line the fact
 /// crossed at the close is reproduced by a print at or before it, but a near miss a few seconds
 /// later must be judged on its price — [`verify`] counts a model still open when the tape ends
 /// as a miss of the exit group, and a tape cut at the close would turn every such near miss
 /// into one.
-pub const TAIL_MS: i64 = 30_000;
+pub const TAIL_MS: i64 = crate::market::trade_replay::MODEL_PAD_MS;
 
 /// The part of a deal's window the model cannot do without: the run-up before the buy through
 /// the tail after the close, clipped to what the window asks for at all (a long position asks
-/// only around its two ends, and a zero margin asks for the position alone). The rest of the
+/// only around its two ends; a model's window is built with a margin of at least the pads, see
+/// `trade_replay::model_margin_ms`). The rest of the
 /// window — the trail beyond the tail, the lead beyond the run-up — is served as far as the
 /// tape goes: a venue's page budget runs out on the trail of a pumped coin long before the
 /// margin, and a variant that outlives the tape is marked open at the window's end.

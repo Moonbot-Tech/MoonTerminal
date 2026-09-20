@@ -6,9 +6,10 @@
 //! market, which only the live market source knows — and publishes the rows at once, without
 //! their tape (stage B). Stage C then asks the replay worker for the held tape of every row in
 //! ONE batch of queries, reads the archived entry lines, runs the model on the parameters as
-//! of the buy, and folds the answers into the published rows. In one batch, because the worker
-//! is one thread that serves held queries only between its walks: asked one at a time, a
-//! thousand rows would each wait for a walk of the fetch batch that may be running.
+//! of the buy, and folds the answers into the published rows. In one batch because it is one
+//! round trip for the table: the worker's coordinator answers held queries off no venue call,
+//! so each costs a lock and a disk read, and a thousand of them asked together come back in
+//! the time of one.
 //!
 //! This file only ever WRITES `TicksState`; the rendering only reads it.
 
@@ -32,16 +33,15 @@ use moon_core::db::tuner::{VarStats, Variant, strategy_current_values, strategy_
 use moon_core::feed::report_traces::ArchivedLineKind;
 use moon_core::feed::types::Tick;
 use moon_core::market::trade_replay::{
-    Coverage, TickQuery, margin_ms, query_held, replay_window_ms,
+    Coverage, TickQuery, model_margin_ms, query_held, replay_window_ms,
 };
 
-/// How long a held query waits for the worker's answer. The worker serves a held query
-/// between its jobs, and a walk of the fetch batch can hold it for up to its trade deadline
-/// plus a candle stage, with chart windows' own stages queued ahead; past this the rows still
-/// unanswered fold as missing, and the log says how many.
+/// How long a held query waits for the worker's answer. The coordinator answers held queries
+/// off no venue call, so the wait is normally milliseconds; the ceiling is for a disk that
+/// stalls — past it the rows still unanswered fold as missing, and the log says how many.
 const HELD_ANSWER_WAIT: Duration = Duration::from_secs(240);
 
-/// What stage A brings back.
+/// What stage A brings back: the deals, the "Fact" KPI and the grid's "now" values.
 type StageA = (
     Result<DealsRead, ReadFail>,
     Result<Vec<VarStats>, ReadFail>,
@@ -97,12 +97,15 @@ impl AnalyticsView {
                 let deals = moon_core::db::tuner::ticks::read_deals(&q);
                 // One line per load, so "no deals" can be read against the scope that was
                 // actually asked — period, strategies — instead of guessed from the panel.
+                // `q.strategies` is empty for "every strategy" (0 targets).
                 match &deals {
                     Ok(read) => log::info!(
                         target: moon_core::diagnostics::TICKS_AXIS_TARGET,
-                        "[x] ticks load: {} deal(s) with ms stamps, {} without, period {}..{}, {} strategy target(s)",
+                        "[x] ticks load: {} deal(s) with ms stamps, {} without, {} service, {} not tunable, period {}..{}, {} strategy target(s)",
                         read.deals.len(),
                         read.without_ms,
+                        read.service,
+                        read.untunable,
                         q.from,
                         q.to,
                         q.strategies.len()
@@ -156,45 +159,19 @@ impl AnalyticsView {
         );
     }
 
-    /// Where each deal's prints live, per distinct `(core, coin)`: the core's exchange key and
-    /// the catalog-verified market. A core that is not connected, or a coin its catalog does
+    /// Where each deal's prints live, per distinct `(core, coin)` — the fetch's own resolver,
+    /// asked once per distinct pair. A core that is not connected, or a coin its catalog does
     /// not spell, resolves to nothing and the row says so.
     fn resolve_addresses(
         &self,
         deals: &[Deal],
         cx: &Context<Self>,
     ) -> HashMap<(u64, String), Option<Arc<RowAddress>>> {
-        let backend = self.backend.read(cx);
-        let source = backend.session.market_source();
-        let mut out: HashMap<(u64, String), Option<Arc<RowAddress>>> = HashMap::new();
-        for deal in deals {
-            let key = (deal.core_uid, deal.coin.clone());
-            if out.contains_key(&key) {
-                continue;
-            }
-            let quote = backend
-                .config
-                .servers
-                .iter()
-                .find(|s| s.id == deal.core_uid)
-                .map(|s| s.market.as_str())
-                .unwrap_or_default();
-            let address = source
-                .replay_address(deal.core_uid)
-                .ok()
-                .and_then(|address| {
-                    let market = source.resolve_market(deal.core_uid, quote, &deal.coin)?;
-                    let tick = source.price_step(deal.core_uid, &market);
-                    Some(Arc::new(RowAddress {
-                        core_uid: deal.core_uid,
-                        exchange_key: address.exchange_key,
-                        market,
-                        tick,
-                    }))
-                });
-            out.insert(key, address);
-        }
-        out
+        let mut resolver = super::fetch::FetchResolver::of(&self.backend.read(cx));
+        deals
+            .iter()
+            .map(|deal| ((deal.core_uid, deal.coin.clone()), resolver.address(deal)))
+            .collect()
     }
 
     /// Stage B: the rows, published at once without their tape; stage C follows.
@@ -243,6 +220,8 @@ impl AnalyticsView {
                 let mut data = TicksData {
                     rows,
                     without_ms: read.without_ms,
+                    service: read.service,
+                    untunable: read.untunable,
                     kpi: fact,
                     entry_share: (0, 0),
                     exit_share: (0, 0),
@@ -348,6 +327,9 @@ impl AnalyticsView {
                 this.ticks.update_rows(rows);
                 // The row the fetch job is out for says so again after the fold.
                 this.mark_fetch_in_flight();
+                // The rows still missing are what the user is looking at: a running batch
+                // takes them next.
+                this.ticks_prioritize_visible();
                 // The replayable set may have changed under the variant columns: rescore them.
                 this.arm_ticks_variants(cx);
                 cx.notify();
@@ -403,7 +385,7 @@ fn ask_held(
     mpsc::Receiver<moon_core::market::trade_replay::TickAnswer>,
     Coverage,
 )> {
-    let window = replay_window_ms(deal.buy_ms, deal.close_ms, margin_ms())?;
+    let window = replay_window_ms(deal.buy_ms, deal.close_ms, model_margin_ms())?;
     let spans = window.focus_spans();
     let (reply, rx) = mpsc::channel();
     query_held(TickQuery {
