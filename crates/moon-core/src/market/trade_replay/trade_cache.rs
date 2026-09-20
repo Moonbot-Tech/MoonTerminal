@@ -13,9 +13,19 @@
 //! # Why a separate file
 //!
 //! Not a table in `klines.sqlite`: prints are a different volume (a busy perpetual is a megabyte
-//! per ten minutes where its bars are a kilobyte), keep their own retention, and are the one
-//! thing the reader may want to switch off or delete without touching the bars. The Storage tab
-//! shows this file on its own line with its own switch.
+//! per ten minutes where its bars are a kilobyte), keep their own ceiling, and are the one thing
+//! the reader may want to switch off or delete without touching the bars. The Storage tab shows
+//! this file on its own line with its own switch.
+//!
+//! # What is kept, and for how long
+//!
+//! Everything, until the reader's ceiling says otherwise: there is no age limit. The prints a
+//! close copied out of a core's ring are the only copy there will ever be for a venue whose
+//! trade route reaches back hours (Binance futures) or does not exist (Bybit, Hyperliquid), so
+//! the file is an archive, not a cache. `[trade_replay] max_mb` is the one rule — past it the
+//! spans written longest ago go first (by `updated_ms`, which only a write sets — a replay that
+//! reads a span does not renew it) — and `0` keeps everything for ever; deleting the file
+//! is then the reader's own call, made with the terminal closed.
 //!
 //! # Threading
 //!
@@ -52,16 +62,10 @@ const ROW_BYTES: usize = 20;
 /// How long a read waits for the worker before answering `None`.
 const READ_TIMEOUT: Duration = Duration::from_millis(250);
 
-/// Spans untouched for longer than this are dropped at open.
-///
-/// A replay is opened from a report the reader is walking now, not a history browsed months
-/// later; two weeks holds a week of trades opened twice. The bars keep 30 days at one minute.
-const RETENTION_DAYS: i64 = 14;
-
 /// Ceiling on the packed bytes the file may hold, from `[trade_replay] max_mb` — checked at
-/// open, after the retention pass, and again after every insert; past it the oldest spans go
-/// first. Live, like the switch: the Storage tab moves it without a restart. `None` when the
-/// reader set it to zero and keeps everything the retention window admits.
+/// open and again after every insert; past it the spans written longest ago go first. Live,
+/// like the switch: the Storage tab moves it without a restart. `None` when the reader set it
+/// to zero and keeps everything, for ever.
 fn max_bytes() -> Option<i64> {
     ensure_enabled_loaded();
     match MAX_MB.load(Ordering::Relaxed) {
@@ -69,8 +73,6 @@ fn max_bytes() -> Option<i64> {
         mb => Some(i64::from(mb) * 1024 * 1024),
     }
 }
-
-const DAY_MS: i64 = 86_400_000;
 
 /// The row format this build writes and reads. A file whose `user_version` differs is a cache
 /// in a layout this build does not know — a print row of another width would unpack into
@@ -114,12 +116,12 @@ pub struct TradeCache {
 }
 
 impl TradeCache {
-    /// Start the worker; it opens the file, runs the schema and the retention pass, then serves
+    /// Start the worker; it opens the file, runs the schema and the ceiling pass, then serves
     /// the queue. The handle comes back at once.
     ///
     /// Everything that touches the disk happens on the cache's OWN thread, never on the
     /// caller's: `handle()` is called from the trade-replay worker, whose queue holds every
-    /// other window's candle and tick job, and a retention pass over a file this size is a
+    /// other window's candle and tick job, and a ceiling pass over a file this size is a
     /// blocking scan that has no business in front of them. An op queued before the open
     /// finishes simply waits in the channel; a read that waits longer than [`READ_TIMEOUT`]
     /// answers `None`, which costs one fetch and nothing else.
@@ -143,12 +145,12 @@ impl TradeCache {
                     log::warn!("trade cache schema failed {}: {e}", path.display());
                     return;
                 }
-                let held = match prune(&conn, crate::util::time::now_unix_ms_i64(), max_bytes()) {
+                let held = match prune(&conn, max_bytes()) {
                     Ok(held) => held,
                     Err(e) => {
                         // The ceiling still needs a true count to work from: a zero here would
                         // hold the file's existing bytes exempt for the whole session.
-                        log::warn!("trade cache retention failed {}: {e}", path.display());
+                        log::warn!("trade cache ceiling pass failed {}: {e}", path.display());
                         held_bytes(&conn).unwrap_or(0)
                     }
                 };
@@ -295,19 +297,21 @@ fn held_bytes(conn: &rusqlite::Connection) -> rusqlite::Result<i64> {
     )
 }
 
-/// Drop what retention no longer keeps, then the oldest spans past the byte ceiling.
+/// The open-time pass: the spans written longest ago go until the file fits under the byte
+/// ceiling — and nothing else. No age limit: a span nobody opened for a year is still the only
+/// copy of those prints (see the module header), and a reader who wants the file smaller has the
+/// ceiling for it.
 ///
 /// Returns:
 ///     The packed bytes the file holds afterwards, for the worker to carry forward.
-fn prune(conn: &rusqlite::Connection, now_ms: i64, ceiling: Option<i64>) -> rusqlite::Result<i64> {
-    conn.execute(
-        "DELETE FROM spans WHERE updated_ms < ?1",
-        [now_ms - RETENTION_DAYS * DAY_MS],
-    )?;
+fn prune(conn: &rusqlite::Connection, ceiling: Option<i64>) -> rusqlite::Result<i64> {
     trim_to_ceiling(conn, held_bytes(conn)?, ceiling)
 }
 
-/// Drop the oldest spans until `held` packed bytes fit under `ceiling`.
+/// Drop the spans written longest ago until `held` packed bytes fit under `ceiling`.
+///
+/// "Written", not "used": `updated_ms` is set by [`insert_span`] alone, a read leaves it as it
+/// was, so the order is the order the prints were filed in — the oldest trades' prints go first.
 ///
 /// The ceiling is a parameter, not read here: the worker resolves the live setting
 /// ([`max_bytes`]) at each call, and a test hands in a number of its own.

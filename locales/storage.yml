@@ -113,9 +113,9 @@ storage.trades_mb:
   en: "%{mb} MB"
   es: "%{mb} MB"
 storage.trades_max_mb_hint:
-  ru: "Сверх лимита удаляются самые старые трейды; 0 — хранить всё, что попадает в 14 дней. Применяется при следующей записи."
-  en: "Past the limit the oldest prints go first; 0 keeps everything within the 14 days. Applies on the next write."
-  es: "Superado el límite se borran primero las operaciones más antiguas; 0 conserva todo lo que cabe en 14 días. Se aplica en la próxima escritura."
+  ru: "Сверх лимита перезаписываются самые старые по записи трейды; 0 — хранить всё, без срока. Применяется при следующей записи."
+  en: "Past the limit the prints written longest ago are overwritten first; 0 keeps everything, with no age limit. Applies on the next write."
+  es: "Superado el límite se sobrescriben primero las operaciones escritas hace más tiempo; 0 conserva todo, sin límite de antigüedad. Se aplica en la próxima escritura."
 storage.trades_margin:
   ru: "Трейды вокруг сделки"
   en: "Prints around a trade"
@@ -129,9 +129,9 @@ storage.trades_margin_hint:
   en: "Minutes of prints taken at each end of a trade: before the entry and after the exit of a short one; the same amount centred on the entry and on the exit of a long one (over an hour), candles between. 0 is the position alone, 120 at most."
   es: "Minutos de operaciones tomados en cada extremo de una posición: antes de la entrada y después de la salida en una corta; la misma cantidad centrada en la entrada y en la salida en una larga (más de una hora), velas entre ambas. 0 es solo la posición, 120 como máximo."
 storage.trades_hint:
-  ru: "Восстановимый кэш: хранится 14 дней; файл можно удалить при закрытом терминале."
-  en: "Recoverable cache: kept for 14 days; the file can be deleted while the terminal is closed."
-  es: "Caché recuperable: se conserva 14 días; el archivo puede borrarse con el terminal cerrado."
+  ru: "Трейды закрытых сделок из кольца ядра и докачки; срока хранения нет — только лимит файла. Удалить файл можно при закрытом терминале."
+  en: "Prints of closed trades from the core's ring and from fetches; no age limit, only the file limit. The file can be deleted while the terminal is closed."
+  es: "Operaciones de posiciones cerradas del anillo del núcleo y de descargas; sin límite de antigüedad, solo el límite del archivo. El archivo puede borrarse con el terminal cerrado."
 
 storage.compact:
   ru: "Сжать"

@@ -1,5 +1,8 @@
 use super::*;
 
+/// Milliseconds in a day, for stamps the tests spread a year apart.
+const DAY_MS: i64 = 86_400_000;
+
 fn conn() -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
     init_schema(&conn).expect("schema");
@@ -204,11 +207,12 @@ fn a_foreign_layout_is_dropped_at_open() {
     );
 }
 
-/// Retention drops what was not touched for two weeks; the byte ceiling drops the oldest first.
+/// Age alone drops nothing — a span untouched for a year is kept whole — and the byte ceiling
+/// drops the spans written longest ago first.
 #[test]
-fn prune_applies_retention_then_the_byte_ceiling() {
+fn prune_applies_only_the_byte_ceiling_never_an_age_limit() {
     let conn = conn();
-    let now = 100 * DAY_MS;
+    let now = 400 * DAY_MS;
     insert_span(
         &conn,
         "x",
@@ -217,7 +221,7 @@ fn prune_applies_retention_then_the_byte_ceiling() {
         99,
         &[tick(50, Side::Buy)],
         TileSource::Venue,
-        now - 20 * DAY_MS,
+        now - 365 * DAY_MS,
     )
     .expect("old");
     insert_span(
@@ -233,11 +237,19 @@ fn prune_applies_retention_then_the_byte_ceiling() {
     .expect("fresh");
     // A ceiling of this test's own, so nothing here reads a `storage.toml`.
     let ceiling: i64 = 4 * 1024;
-    let held = prune(&conn, now, Some(ceiling)).expect("prune");
-    assert_eq!(held, ROW_BYTES as i64, "one print left after retention");
+    let held = prune(&conn, Some(ceiling)).expect("prune");
+    assert_eq!(
+        held,
+        2 * ROW_BYTES as i64,
+        "both prints kept: age is not a rule"
+    );
     let spans = read_spans(&conn, "x", "M", 0, 1_000).expect("read");
-    assert_eq!(times(&spans), vec![(100, 199, vec![150])]);
-    // Well past the ceiling: fake it by inserting one huge span older than a small fresh one.
+    assert_eq!(
+        times(&spans),
+        vec![(0, 99, vec![50]), (100, 199, vec![150])]
+    );
+    // Well past the ceiling: fake it by inserting one huge span written more recently than the
+    // year-old one — the year-old span goes first, then the huge one, and the fresh one stays.
     let huge: Vec<Tick> = (0..(ceiling / ROW_BYTES as i64 + 10))
         .map(|i| tick(1_000 + i, Side::Buy))
         .collect();
@@ -252,13 +264,13 @@ fn prune_applies_retention_then_the_byte_ceiling() {
         now - 2 * DAY_MS,
     )
     .expect("huge");
-    let held = prune(&conn, now, Some(ceiling)).expect("prune again");
+    let held = prune(&conn, Some(ceiling)).expect("prune again");
     assert!(held <= ceiling);
     assert!(
         read_spans(&conn, "x", "H", 0, i64::MAX)
             .expect("read huge")
             .is_empty(),
-        "the oldest span paid for the ceiling"
+        "the spans written longest ago paid for the ceiling"
     );
     assert_eq!(
         times(&read_spans(&conn, "x", "M", 0, 1_000).expect("read")),
@@ -285,13 +297,14 @@ fn pack_is_fixed_width_and_unpack_ignores_a_torn_tail() {
     assert_eq!(back[1].side, Side::Buy);
 }
 
-/// With no ceiling the byte pass keeps everything retention admits.
+/// With no ceiling everything is kept, however old: a span last touched at the epoch survives
+/// an open a year later.
 #[test]
 fn no_ceiling_keeps_everything() {
     let conn = conn();
     let rows: Vec<Tick> = (0..500).map(|i| tick(1_000 + i, Side::Buy)).collect();
     insert_span(&conn, "x", "M", 1_000, 1_999, &rows, TileSource::Venue, 10).expect("insert");
-    let held = prune(&conn, 20, None).expect("prune");
+    let held = prune(&conn, None).expect("prune");
     assert_eq!(held, 500 * ROW_BYTES as i64);
     assert_eq!(
         read_spans(&conn, "x", "M", 0, 5_000).expect("read")[0]
