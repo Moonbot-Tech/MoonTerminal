@@ -304,7 +304,7 @@ fn replay_sides_take_ticks_where_covered_and_candles_elsewhere() {
     let slots = super::side_slots_of_ticks(&ticks, TickValue::Base);
     let out = super::replay_sides(
         &slots,
-        Some((60_000, 119_999)),
+        &[(60_000, 119_999)],
         &candles,
         60_000,
         60_000,
@@ -324,7 +324,7 @@ fn replay_sides_take_ticks_where_covered_and_candles_elsewhere() {
         "a rising bar leans to buying"
     );
     // No ticks at all: every bar counts.
-    let out = super::replay_sides(&[], None, &candles, 60_000, 60_000, 0, 240_000);
+    let out = super::replay_sides(&[], &[], &candles, 60_000, 60_000, 0, 240_000);
     let first = out.iter().find(|b| b.t_open_ms == 60_000).expect("sample");
     assert!((first.buy_quote + first.sell_quote - 1000.0).abs() < 1e-1);
 }
@@ -348,8 +348,8 @@ fn replay_sides_take_only_the_uncovered_seconds_of_a_straddling_bar() {
         quote_volume: 600.0,
     };
     // Ticks cover the minute's first 20.5 seconds; the bar may stand in only for the other 39.
-    let covered = Some((60_000, 80_499));
-    let out = super::replay_sides(&[], covered, &[candle], 60_000, 60_000, 0, 180_000);
+    let covered = [(60_000, 80_499)];
+    let out = super::replay_sides(&[], &covered, &[candle], 60_000, 60_000, 0, 180_000);
     let sample = out
         .iter()
         .find(|b| b.t_open_ms == 60_000)
@@ -390,7 +390,7 @@ fn side_slots_come_from_the_raw_prints_not_the_thinned_ones() {
     // The band, drawn from the raw slots, reads the whole second.
     let out = super::replay_sides(
         &slots,
-        Some((60_000, 60_999)),
+        &[(60_000, 60_999)],
         &[],
         1_000,
         1_000,
@@ -431,4 +431,39 @@ fn side_slots_value_contracts_by_their_size_or_not_at_all() {
         "3 × 0.01 coins × 50 000"
     );
     assert!(super::side_slots_of_ticks(&[print], TickValue::Unknown).is_empty());
+}
+
+/// Split coverage: bars stand in only between the two covered stretches, never inside either.
+#[test]
+fn replay_sides_take_bars_only_between_split_stretches() {
+    let candle = |t_open_ms: f64| crate::market::ChartCandle {
+        t_open_ms,
+        open: 1.0,
+        high: 2.0,
+        low: 0.5,
+        close: 1.5,
+        volume: 10.0,
+        quote_volume: 600.0,
+    };
+    let candles = [candle(0.0), candle(60_000.0), candle(120_000.0)];
+    let covered = [(0, 59_999), (120_000, 179_999)];
+    let out = super::replay_sides(&[], &covered, &candles, 60_000, 60_000, 0, 180_000);
+    let total = |t: i64| {
+        out.iter()
+            .find(|b| b.t_open_ms == t)
+            .map(|b| b.buy_quote + b.sell_quote)
+            .unwrap_or(0.0)
+    };
+    assert!(
+        total(0).abs() < 1e-6,
+        "inside the first stretch the ticks answer"
+    );
+    assert!(
+        (total(60_000) - 600.0).abs() < 1e-1,
+        "the middle minute is the bar's"
+    );
+    assert!(
+        total(120_000).abs() < 1e-6,
+        "inside the second stretch the ticks answer"
+    );
 }

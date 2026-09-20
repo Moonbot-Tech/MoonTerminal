@@ -93,6 +93,13 @@ pub(crate) enum TradeWindowState {
         /// Whether the `Ticks` points cover only part of the window. Always `false` on
         /// `Klines1m`.
         partial: bool,
+        /// Whether the `Ticks` points are two stretches BY DESIGN — a long position, whose window
+        /// asked for ticks only around the entry and around the exit — and both stretches are
+        /// there. Both halves are needed: the shared tile store can hand a short position two
+        /// islands too (a gap, not a design), and a core archive can bracket a long position
+        /// whole (one stretch, middle included). Always `false` on `Klines1m`, whose coverage is
+        /// empty.
+        ends: bool,
         /// Brand of the venue the rows came from, so a `NoRoute` caption can name it. Read off
         /// `series.venue` rather than kept as a `TradeWindowView` field: `window.rs`'s
         /// construction of that struct is outside this branch's file bounds, so nothing here may
@@ -740,7 +747,11 @@ impl TradeWindowView {
                 .read(cx)
                 .report_axis(crate::chartdx::axes::display_zone()),
         );
-        let Some(window) = replay_window_ms(buy_utc_ms, close_utc_ms) else {
+        let Some(window) = replay_window_ms(
+            buy_utc_ms,
+            close_utc_ms,
+            moon_core::market::trade_replay::margin_ms(),
+        ) else {
             self.state = TradeWindowState::Empty(TradeReplayEmpty::DegenerateWindow);
             cx.notify();
             return;
@@ -876,6 +887,7 @@ impl TradeWindowView {
                 let tick_status = series.tick_status;
                 let bucket_ms = series.bucket_ms;
                 let partial = series.partial;
+                let ends = series.window.focus_spans().is_split() && series.covered.is_split();
                 let brand = series.venue.brand;
                 if fold.restore_candle_mode {
                     self.restore_candle_mode(cx);
@@ -890,6 +902,7 @@ impl TradeWindowView {
                     tick_status,
                     bucket_ms,
                     partial,
+                    ends,
                     brand,
                 }
             }

@@ -8,6 +8,7 @@ fn capture_budgets_only_the_requested_interval_and_preserves_late_rows() {
         to_ms: 900,
         open_ms: 400,
         close_ms: 600,
+        margin_ms: 0,
         over_budget: false,
     };
     let mut capture = ReplayCapture::new(window, 3, CoreSpanRule::BracketPosition);
@@ -54,6 +55,7 @@ fn core_replay_requires_both_trade_edges_and_clips_context() {
         to_ms: 900,
         open_ms: 400,
         close_ms: 600,
+        margin_ms: 0,
         over_budget: false,
     };
     assert_eq!(usable_span(0, 1_000, window), Some((100, 900)));
@@ -79,6 +81,7 @@ fn a_capture_takes_any_overlap_and_clips_to_the_ring() {
         to_ms: 900,
         open_ms: 100,
         close_ms: 900,
+        margin_ms: 0,
         over_budget: false,
     };
     // The ring reaches neither edge: what it holds is still exhaustive.

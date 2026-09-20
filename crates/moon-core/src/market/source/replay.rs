@@ -56,6 +56,7 @@ impl MarketDataSource {
             to_ms,
             open_ms: from_ms,
             close_ms: to_ms,
+            margin_ms: 0,
             over_budget: false,
         };
         self.core_ticks(address, market, window, CoreSpanRule::Overlap)

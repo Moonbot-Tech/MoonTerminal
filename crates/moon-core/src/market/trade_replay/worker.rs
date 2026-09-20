@@ -47,8 +47,8 @@ use super::gate::ReplayGate;
 use super::tick_tiles::{TickTileStore, TileKey, TileSource, residual_plan};
 use super::venue_caps::{TradeRoute, bybit_category, kline_route, trade_route};
 use super::{
-    ReplayWindow, TickPlan, TickStatus, TradeReplayEmpty, TradeReplayFailure, TradeReplayOutcome,
-    TradeReplaySeries, TradeReplaySource, fit_ticks, pages, rest, tick_plan,
+    Coverage, ReplayWindow, TickPlan, TickStatus, TradeReplayEmpty, TradeReplayFailure,
+    TradeReplayOutcome, TradeReplaySeries, TradeReplaySource, fit_ticks, pages, rest, tick_plan,
 };
 use crate::feed::types::Tick;
 use crate::market::candles::ChartCandle;
@@ -156,6 +156,10 @@ struct OutcomeKey {
     /// Window the rows cover.
     from_ms: i64,
     to_ms: i64,
+    /// Prints asked for around the position ([`ReplayWindow::margin_ms`]): the bar window above
+    /// does not depend on it, so without this a settled answer fetched under one margin would be
+    /// served unchanged after the Storage tab moved it.
+    margin_ms: i64,
 }
 
 /// Which route, cache key and bar layer a queued tick stage answers.
@@ -191,9 +195,10 @@ pub(crate) enum Job {
     Candles(TradeReplayRequest),
     Ticks(TradeReplayRequest, TickStage),
     Native(TradeReplayRequest, NativeWait),
-    /// Copy one span of a just-closed trade out of the core's retained archive into the tile
-    /// store and its disk — see [`CaptureRequest`].
-    Capture(CaptureRequest, (i64, i64)),
+    /// Copy the stretches of a just-closed trade out of the core's retained archive into the
+    /// tile store and its disk — see [`CaptureRequest`] and [`capture_spans`]. The flag names
+    /// the settle pass, the one that runs after the trail has printed and schedules nothing.
+    Capture(CaptureRequest, Coverage, bool),
 }
 
 /// A trade that just closed on a connected core, whose prints the core's own retained archive
@@ -201,10 +206,12 @@ pub(crate) enum Job {
 ///
 /// The archive is a bounded ring per market: a busy market keeps minutes, a quiet one hours.
 /// Opened later, the same trade would find the ring already moved on and page the venue. So the
-/// close itself is the trigger: the span from five minutes before the entry to the exit is copied
-/// at once, and the five minutes after the exit — the focus's trail, which has not happened yet
-/// at close time — are copied once they have, by a timed second pass. A terminal closed between
-/// the two loses only the trail, which the next window fetches from the venue as a residual.
+/// close itself is the trigger: what the trade's own window would ask for as ticks
+/// ([`ReplayWindow::focus_spans`] — the position with its margins, or on a long position only
+/// the two ends) is copied up to the exit at once, and the margin after the exit
+/// ([`Self::margin_ms`], the focus's trail, which has not happened yet at close time) is copied
+/// once it has, by a timed second pass. A terminal closed between the two loses only the trail,
+/// which the next window fetches from the venue as a residual.
 ///
 /// Filed with [`TileSource::Core`] — provenance only: the core reports the same wire quantity
 /// the venue's route does, and the band values every tile through the market's own terms.
@@ -217,11 +224,14 @@ pub struct CaptureRequest {
     pub open_ms: i64,
     /// The trade's exit, true-UTC milliseconds.
     pub close_ms: i64,
+    /// Prints to copy around the trade, per end — [`super::margin_ms`] at close time; see
+    /// [`ReplayWindow::margin_ms`].
+    pub margin_ms: i64,
 }
 
-/// How long after the exit the trail pass runs: the focus margin plus a few seconds for the
-/// core's own feed to catch up to wall time.
-const CAPTURE_TRAIL_DELAY: Duration = Duration::from_secs(5 * 60 + 5);
+/// How long after the exit the settle pass waits past the margin: a few seconds for the core's
+/// own feed to catch up to wall time.
+const CAPTURE_SETTLE_SLACK: Duration = Duration::from_secs(5);
 
 /// What reaches the worker's one inbound channel.
 enum Inbound {
@@ -253,10 +263,11 @@ impl NativeWait {
         now: Instant,
     ) -> Option<TradeReplayOutcome> {
         let required = match &self.fallback {
-            TradeReplayOutcome::Ready(series) if series.source.is_ticks() => series.covered,
-            _ => None,
+            TradeReplayOutcome::Ready(series) if series.source.is_ticks() => series.covered.clone(),
+            _ => Coverage::none(),
         };
-        if let Some(series) = native.filter(|series| preserves_coverage(series.covered, required)) {
+        if let Some(series) = native.filter(|series| preserves_coverage(&series.covered, &required))
+        {
             return Some(TradeReplayOutcome::Ready(attach_context(
                 series,
                 &self.fallback,
@@ -317,10 +328,13 @@ pub(crate) struct TickHarvest {
     /// test can hand in DESCENDING pages and observe that the SORT, not the pagination, is what
     /// fixes them.
     pub ticks: Vec<Tick>,
-    /// The inclusive time range [`Self::ticks`] is guaranteed exhaustive over — [`serve_ticks`]
-    /// clips to this rather than to the request window, since a walk cut short still holds a
-    /// complete answer for the slices it actually finished.
-    pub covered: (i64, i64),
+    /// The stretches [`Self::ticks`] is guaranteed exhaustive over — [`serve_ticks`] clips to
+    /// these rather than to the request window, since a walk cut short still holds a complete
+    /// answer for the slices it actually finished. One stretch per contiguous group of completed
+    /// tiles: a long position's plan walks the entry's and the exit's neighbourhoods, and a
+    /// residual plan's completed tiles may be separated by stretches the store already held —
+    /// those are bridged by [`serve_ticks`] over the store, never here.
+    pub covered: Coverage,
     /// Whether every slice of the plan was walked to completion.
     pub complete: bool,
     /// Whether the walk stopped because the venue itself refused (`Transient`/`UnknownSymbol`),
@@ -350,12 +364,12 @@ pub(crate) enum TickVerdict {
 pub(crate) trait TickObserver {
     fn claim(&mut self, host: &str) -> Result<(), u32>;
     fn pace(&mut self, host: &str);
-    /// Publish a contiguous completed prefix without claiming unfetched time between tiles.
-    fn progress(&mut self, _ticks: &[Tick], _covered: (i64, i64)) {}
+    /// Publish the completed stretches so far without claiming unfetched time between tiles.
+    fn progress(&mut self, _ticks: &[Tick], _covered: &Coverage) {}
 }
 
-/// Callback that publishes a contiguous tick snapshot to one replay window.
-type TickProgress<'a> = dyn FnMut(&[Tick], (i64, i64)) + 'a;
+/// Callback that publishes a tick snapshot to one replay window.
+type TickProgress<'a> = dyn FnMut(&[Tick], &Coverage) + 'a;
 
 /// Bridges the pure [`TickObserver`] seam to the real [`ReplayGate`] for production use.
 ///
@@ -380,7 +394,7 @@ impl TickObserver for GateObserver<'_> {
     }
 
     /// Forward progress to this request's own reply channel.
-    fn progress(&mut self, ticks: &[Tick], covered: (i64, i64)) {
+    fn progress(&mut self, ticks: &[Tick], covered: &Coverage) {
         (self.progress)(ticks, covered);
     }
 }
@@ -463,11 +477,8 @@ fn enqueue(queue: &mut VecDeque<Job>, inbound: Inbound) {
     match inbound {
         Inbound::Replay(request) => queue.push_back(Job::Candles(request)),
         Inbound::Capture(request) => {
-            // The lead and the position itself: everything up to the exit has already printed.
-            let span = (
-                request.open_ms.saturating_sub(super::FOCUS_MARGIN_MS),
-                request.close_ms,
-            );
+            // Everything up to the exit has already printed; the trail is the settle pass's.
+            let spans = capture_spans(&request, false);
             // One line per close announced, so a close announced twice is visible as two.
             log::info!(
                 "[x] trade-replay capture queued {} open={} close={}",
@@ -475,7 +486,7 @@ fn enqueue(queue: &mut VecDeque<Job>, inbound: Inbound) {
                 request.open_ms,
                 request.close_ms
             );
-            queue.push_back(Job::Capture(request, span));
+            queue.push_back(Job::Capture(request, spans, false));
         }
     }
 }
@@ -501,7 +512,7 @@ fn run(rx: &Receiver<Inbound>) {
     let mut queue: VecDeque<Job> = VecDeque::new();
     let mut native_waits: Vec<(TradeReplayRequest, NativeWait)> = Vec::new();
     // Settle passes of captures, each due once the focus's trail has printed.
-    let mut settle_waits: Vec<(CaptureRequest, (i64, i64), Instant)> = Vec::new();
+    let mut settle_waits: Vec<(CaptureRequest, Coverage, Instant)> = Vec::new();
     loop {
         let now = Instant::now();
         let mut index = 0;
@@ -517,7 +528,7 @@ fn run(rx: &Receiver<Inbound>) {
         while index < settle_waits.len() {
             if settle_waits[index].2 <= now {
                 let (request, span, _) = settle_waits.remove(index);
-                queue.push_back(Job::Capture(request, span));
+                queue.push_back(Job::Capture(request, span, true));
             } else {
                 index += 1;
             }
@@ -574,28 +585,26 @@ fn run(rx: &Receiver<Inbound>) {
                     }
                 }
             }
-            Job::Capture(request, span) => {
-                // The first pass ends at the exit; the settle pass spans the whole focus.
-                let settle_pass = span.1 > request.close_ms;
-                capture_from_core(&request, span, &tiles);
-                if !settle_pass {
-                    // The trail has not printed yet: come back once it has, for the WHOLE
-                    // focus rather than the trail alone — the gap rule files only what the
-                    // first pass missed, so a feed that lagged behind the exit at close time
-                    // (the archive not yet reaching it, and the first pass refused) is caught
-                    // up here at no extra cost. Measured from the exit itself, not from now —
-                    // a capture queued late settles at once.
+            Job::Capture(request, spans, settle_pass) => {
+                for &span in spans.spans() {
+                    capture_from_core(&request, span, &tiles);
+                }
+                // The settle pass is the last word and schedules nothing.
+                if settle_pass {
+                    continue;
+                }
+                if let Some((settle, due_ms)) = settle_plan(&request) {
+                    // The trail has not printed yet: come back once it has, for the whole of
+                    // what the window asks for rather than the trail alone — the gap rule files
+                    // only what the first pass missed, so a feed that lagged behind the exit at
+                    // close time (the archive not yet reaching it, and the first pass refused)
+                    // is caught up here at no extra cost. Measured from the trail's own end, not
+                    // from now — a capture queued late settles at once.
                     let now_ms = crate::util::time::now_unix_ms_i64();
-                    let focus = (
-                        request.open_ms.saturating_sub(super::FOCUS_MARGIN_MS),
-                        request.close_ms.saturating_add(super::FOCUS_MARGIN_MS),
-                    );
-                    let wait_ms = (request.close_ms + CAPTURE_TRAIL_DELAY.as_millis() as i64)
-                        .saturating_sub(now_ms)
-                        .max(0);
+                    let wait_ms = due_ms.saturating_sub(now_ms).max(0);
                     settle_waits.push((
                         request,
-                        focus,
+                        settle,
                         Instant::now() + Duration::from_millis(wait_ms as u64),
                     ));
                 }
@@ -706,7 +715,7 @@ fn prepare_native_wait(served: &mut Served, now: Instant) -> Option<NativeWait> 
     if served.tick_stage.is_some()
         || matches!(&served.outcome, TradeReplayOutcome::Ready(series)
             if series.source == TradeReplaySource::CoreTicks || (series.source.is_ticks()
-                && preserves_coverage(series.covered, Some(series.window.focus()))))
+                && preserves_coverage(&series.covered, &series.window.focus_spans())))
     {
         return None;
     }
@@ -821,7 +830,7 @@ fn read_core(request: &TradeReplayRequest) -> Option<TradeReplaySeries> {
         bucket_ms,
         side_slots,
         native.covered != (request.window.from_ms, request.window.to_ms),
-        native.covered,
+        Coverage::one(native.covered),
         Vec::new(),
     );
     series.source = TradeReplaySource::CoreTicks;
@@ -848,7 +857,7 @@ impl CoreUpgradeProbe {
         &self,
         cancelled: bool,
         now: Instant,
-        published: Option<(i64, i64)>,
+        published: &Coverage,
         read: impl FnOnce() -> Option<TradeReplaySeries>,
     ) -> bool {
         if cancelled || self.ready.borrow().is_some() {
@@ -859,20 +868,17 @@ impl CoreUpgradeProbe {
         }
         self.next.set(now + Duration::from_millis(500));
         *self.ready.borrow_mut() =
-            read().filter(|series| preserves_coverage(series.covered, published));
+            read().filter(|series| preserves_coverage(&series.covered, published));
         self.ready.borrow().is_some()
     }
 }
 
 /// Replacement may improve resolution/source but cannot remove any published tick interval.
-fn preserves_coverage(candidate: Option<(i64, i64)>, published: Option<(i64, i64)>) -> bool {
-    match (candidate, published) {
-        (Some((left, right)), Some((shown_left, shown_right))) => {
-            left <= shown_left && right >= shown_right
-        }
-        (Some(_), None) => true,
-        (None, _) => false,
-    }
+///
+/// A candidate with no coverage at all never preserves anything, not even nothing: it walked no
+/// ticks and cannot stand in for a series that did.
+fn preserves_coverage(candidate: &Coverage, published: &Coverage) -> bool {
+    !candidate.is_empty() && candidate.covers(published)
 }
 
 /// A retry can update the cache only if it retains all previously available tick coverage.
@@ -881,7 +887,7 @@ fn retain_baseline(
     baseline: Option<&TradeReplaySeries>,
 ) -> TradeReplaySeries {
     match baseline {
-        Some(previous) if !preserves_coverage(candidate.covered, previous.covered) => {
+        Some(previous) if !preserves_coverage(&candidate.covered, &previous.covered) => {
             previous.clone()
         }
         _ => candidate,
@@ -926,6 +932,7 @@ fn serve(
         market: request.market.clone(),
         from_ms: request.window.from_ms,
         to_ms: request.window.to_ms,
+        margin_ms: request.window.margin_ms,
     };
     match remember_lookup(cache, &key, request.identity) {
         Some(Remembered::Ready {
@@ -1281,36 +1288,38 @@ fn serve_ticks(
     // The archive may have arrived while other candle jobs had priority in the worker queue.
     // Answered straight from the ring, not filed: what the ring holds of a closed trade was
     // filed when the trade closed (`capture_from_core`), and a thinned answer is not a tile.
-    let baseline_coverage = stage.baseline.as_ref().and_then(|series| series.covered);
+    let baseline_coverage = stage
+        .baseline
+        .as_ref()
+        .map(|series| series.covered.clone())
+        .unwrap_or_default();
     if let Some(mut series) =
-        read_core(request).filter(|series| preserves_coverage(series.covered, baseline_coverage))
+        read_core(request).filter(|series| preserves_coverage(&series.covered, &baseline_coverage))
     {
         series.candles = stage.candles.clone();
         return Ok((series, false));
     }
     let key: TileKey = (request.address.exchange_key.clone(), request.market.clone());
-    let focus = request.window.focus();
+    let focus = request.window.focus_spans();
     let persisted = super::trade_cache::handle();
     let Some(route) = stage.route else {
-        hydrate(tiles, persisted.as_ref(), &key, request, focus);
-        // No venue to ask: the focus is served from what the tiles hold around it — a capture
+        hydrate(tiles, persisted.as_ref(), &key, request, &focus);
+        // No venue to ask: the focus is served from what the tiles hold inside it — a capture
         // from the core's archive — or the window prints that there is no route, as before.
         let (covered, runs) = {
             let store = lock_tiles(tiles);
-            let run = store
-                .coverage_run(&key, focus)
-                .map(|run| clip_span(run, focus))
-                .filter(|run| run.0 <= run.1);
-            let Some(run) = run else {
+            let covered = held_coverage(&store, &key, &focus, Coverage::none());
+            if covered.is_empty() {
                 return Err(Some(TickStatus::NoRoute));
-            };
-            (run, store.read_by_source(&key, run.0, run.1))
+            }
+            let runs = read_coverage(&store, &key, &covered);
+            (covered, runs)
         };
         let (ticks, side_slots) = flatten_runs(runs, request.tick_value);
         if ticks.is_empty() {
             return Err(Some(TickStatus::NoRoute));
         }
-        let partial = covered.0 > request.window.from_ms || covered.1 < request.window.to_ms;
+        let partial = !covered.contains((request.window.from_ms, request.window.to_ms));
         let (ticks, bucket_ms) = fit_ticks(ticks, TICK_BUDGET);
         return Ok((
             compose_ticks(
@@ -1339,16 +1348,16 @@ fn serve_ticks(
     };
     let trade_deadline = deadline + (TRADE_DEADLINE - JOB_DEADLINE);
     let plan = tick_plan(request.window, route, earliest_ms);
-    let Some(&anchor) = plan.slices.first() else {
+    if plan.slices.is_empty() {
         // The FOCUS itself — the trade, not its optional context — lies entirely before
         // `earliest_ms`: nothing worth fetching remains, so this is reported as retention rather
         // than as an empty venue answer.
         return Err(Some(TickStatus::OutOfRetention {
             retention_ms: route.retention_ms().unwrap_or(0),
         }));
-    };
+    }
     // After the retention refusal, which is free: a window too old for the route pays no read.
-    hydrate(tiles, persisted.as_ref(), &key, request, focus);
+    hydrate(tiles, persisted.as_ref(), &key, request, &focus);
     let residual = residual_plan(&plan, &lock_tiles(tiles), &key);
     // The one line that tells a neighbouring window apart from a reopen: the focus is the
     // window's own, the spans are what the store made of it. In milliseconds, not slices — a
@@ -1363,10 +1372,8 @@ fn serve_ticks(
     let plan_ms = span_ms(&plan.slices);
     let residual_ms = span_ms(&residual.slices);
     log::info!(
-        "[x] trade-replay tick stage {} focus={}..{}: {} of {} ms held, {} ms in {} spans to fetch",
+        "[x] trade-replay tick stage {} focus={focus}: {} of {} ms held, {} ms in {} spans to fetch",
         request.market,
-        focus.0,
-        focus.1,
         plan_ms - residual_ms,
         plan_ms,
         residual_ms,
@@ -1379,16 +1386,17 @@ fn serve_ticks(
     // cannot stand in for it either.
     let mut abandoned: Option<TickAbandon> = None;
     let mut complete = true;
-    // What this walk brought back, kept OUT of the store until the answer is composed: the span
-    // it is exhaustive over — the seed the served run grows from — and its prints, clipped to it.
-    // An empty walk over a completed residual has a span and no prints.
-    let mut harvest_span: Option<(i64, i64)> = None;
+    // What this walk brought back, kept OUT of the store until the answer is composed: the
+    // stretches it is exhaustive over — the seeds the served coverage grows from — and its
+    // prints, clipped to them. An empty walk over a completed residual has stretches and no
+    // prints.
+    let mut harvest_coverage: Option<Coverage> = None;
     let mut harvest_ticks: Vec<Tick> = Vec::new();
     if !residual.slices.is_empty() {
         let mut last_progress = None;
-        let published_coverage = Cell::new(baseline_coverage);
+        let published_coverage = RefCell::new(baseline_coverage);
         let progress_key = key.clone();
-        let mut publish_progress = |ticks: &[Tick], covered: (i64, i64)| {
+        let mut publish_progress = |ticks: &[Tick], covered: &Coverage| {
             let now = Instant::now();
             if request.cancel.load(Ordering::Relaxed)
                 || last_progress
@@ -1396,16 +1404,16 @@ fn serve_ticks(
             {
                 return;
             }
-            // The walk's own span, widened over the tiles that abut it: the second window's
-            // stream shows what the first already fetched from the first snapshot on, not only
-            // the remainder this walk is filling in.
+            // The walk's own stretches, widened over the tiles that abut them: the second
+            // window's stream shows what the first already fetched from the first snapshot on,
+            // not only the remainder this walk is filling in.
             let (run, mut runs) = {
                 let store = lock_tiles(tiles);
-                let run = clip_span(store.extend_over(&progress_key, covered), focus);
-                let held = store.read_by_source(&progress_key, run.0, run.1);
+                let run = held_coverage(&store, &progress_key, &focus, covered.clone());
+                let held = read_coverage(&store, &progress_key, &run);
                 (run, held)
             };
-            if !preserves_coverage(Some(run), published_coverage.get()) {
+            if !preserves_coverage(&run, &published_coverage.borrow()) {
                 return;
             }
             runs.push((
@@ -1415,10 +1423,7 @@ fn serve_ticks(
                     .copied()
                     .filter(|tick| {
                         let time_ms = tick.time_ms as i64;
-                        time_ms >= covered.0
-                            && time_ms <= covered.1
-                            && time_ms >= run.0
-                            && time_ms <= run.1
+                        covered.contains_ms(time_ms) && run.contains_ms(time_ms)
                     })
                     .collect(),
             ));
@@ -1434,7 +1439,7 @@ fn serve_ticks(
                 bucket_ms,
                 side_slots,
                 true,
-                run,
+                run.clone(),
                 stage.candles.clone(),
             );
             series.tick_status = TickStatus::Streaming;
@@ -1444,7 +1449,7 @@ fn serve_ticks(
                 .is_ok()
             {
                 last_progress = Some(now);
-                published_coverage.set(Some(run));
+                *published_coverage.borrow_mut() = run;
             }
         };
         let mut observer = GateObserver {
@@ -1462,7 +1467,7 @@ fn serve_ticks(
                 upgrade.stop(
                     request.cancel.load(Ordering::Relaxed),
                     Instant::now(),
-                    published_coverage.get(),
+                    &published_coverage.borrow(),
                     || read_core(request),
                 )
             },
@@ -1500,15 +1505,11 @@ fn serve_ticks(
                 // Clipped to what the walk actually finished (`covered`), not to the request
                 // window: a walk cut short still holds a complete answer for the slices it
                 // actually walked, and clipping to the wider window would let a stray
-                // page-overshoot outside `covered` back in. The hull `paginate_ticks` reports is
-                // exhaustive over its own completed slices and over what the store held between
-                // them (see `residual_plan` for why that order is load-bearing).
-                ticks.retain(|t| {
-                    t.time_ms.is_finite()
-                        && (t.time_ms as i64) >= covered.0
-                        && (t.time_ms as i64) <= covered.1
-                });
-                harvest_span = Some(covered);
+                // page-overshoot outside `covered` back in. Each stretch `paginate_ticks`
+                // reports is exhaustive over its own completed slices; what the store held
+                // between two of them is bridged below, over the store.
+                ticks.retain(|t| t.time_ms.is_finite() && covered.contains_ms(t.time_ms as i64));
+                harvest_coverage = Some(covered);
                 harvest_ticks = ticks;
                 retry_on_reopen = venue_refused;
                 complete = walked_whole;
@@ -1551,16 +1552,13 @@ fn serve_ticks(
                     // `Empty` is reached only when EVERY slice of the residual was walked to
                     // completion and none held a print: an authoritative answer for each of
                     // them, filed below as empty tiles so a later window inherits it instead
-                    // of asking the venue again. ONE span over the residual's hull, not one
-                    // insert per slice: the plan's hull is contiguous, so everything inside it
-                    // is either residual or already held, and `insert` files only the gaps —
-                    // under one insert, which eviction never turns on.
+                    // of asking the venue again. The residual's own slices, coalesced where
+                    // they abut — never a hull over them: a long position's two neighbourhoods
+                    // have unwalked hours between them, and a stretch the store already held
+                    // between two residual slices is bridged over the store below.
                     TickAbandon::Empty => {
-                        harvest_span = residual
-                            .slices
-                            .iter()
-                            .copied()
-                            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)));
+                        harvest_coverage =
+                            Some(Coverage::from_spans(residual.slices.iter().copied()));
                     }
                     _ => {
                         abandoned = Some(reason);
@@ -1573,24 +1571,25 @@ fn serve_ticks(
     }
     // Composed from what THIS round holds — the store's tiles plus this walk's own harvest —
     // and composed BEFORE the harvest is filed: filing evicts, and an eviction, whichever key it
-    // lands on, must never reach into the answer being composed. The run is the walk's own span
-    // grown over the tiles abutting it, or, with no walk, the covered run around the plan's first
-    // slice — the trade's own edge — and either is clipped to the focus, so a neighbouring
-    // window's wider harvest never widens this window's points beyond what its own plan asked.
+    // lands on, must never reach into the answer being composed. The coverage is the walk's own
+    // stretches grown over the tiles abutting them, plus every run the store holds inside the
+    // focus, and all of it clipped to the focus, so a neighbouring window's wider harvest never
+    // widens this window's points beyond what its own plan asked.
     let (covered, mut runs) = {
         let store = lock_tiles(tiles);
-        let run = match harvest_span {
-            Some(span) => Some(store.extend_over(&key, span)),
-            None => store.coverage_run(&key, anchor),
-        }
-        .map(|run| clip_span(run, focus))
-        .filter(|run| run.0 <= run.1);
-        let Some(run) = run else {
+        let covered = held_coverage(
+            &store,
+            &key,
+            &focus,
+            harvest_coverage.clone().unwrap_or_default(),
+        );
+        if covered.is_empty() {
             // Nothing held around the trade and nothing fetched: only an abandoned walk gets
             // here, and its reason is what the window prints.
             return Err(Some(TickStatus::Failed));
-        };
-        (run, store.read_by_source(&key, run.0, run.1))
+        }
+        let runs = read_coverage(&store, &key, &covered);
+        (covered, runs)
     };
     // The store held nothing inside the harvest's own stretches — that is what made them
     // residual — so the two sets are disjoint and their union double-counts no print.
@@ -1599,27 +1598,35 @@ fn serve_ticks(
         harvest_ticks
             .iter()
             .copied()
-            .filter(|tick| {
-                let time_ms = tick.time_ms as i64;
-                time_ms >= covered.0 && time_ms <= covered.1
-            })
+            .filter(|tick| covered.contains_ms(tick.time_ms as i64))
             .collect(),
     ));
     let (ticks, side_slots) = flatten_runs(runs, request.tick_value);
-    if let Some((from_ms, to_ms)) = harvest_span {
-        // Written through to the disk before the memory takes the vector: the disk files only
-        // the stretches it does not hold, by the same gap rule, so a print never lands twice.
-        if let Some(cache) = &persisted {
-            cache.insert(
-                &request.address.exchange_key,
-                &request.market,
-                from_ms,
-                to_ms,
-                harvest_ticks.clone(),
-                TileSource::Venue,
-            );
+    if let Some(harvest) = harvest_coverage {
+        // One insert per stretch, each with its own prints: the disk files only the parts it
+        // does not hold, by the same gap rule as the memory, so a print never lands twice — and
+        // the unwalked ground between two stretches is filed by neither.
+        for &(from_ms, to_ms) in harvest.spans() {
+            let inside: Vec<Tick> = harvest_ticks
+                .iter()
+                .copied()
+                .filter(|tick| {
+                    let time_ms = tick.time_ms as i64;
+                    time_ms >= from_ms && time_ms <= to_ms
+                })
+                .collect();
+            if let Some(cache) = &persisted {
+                cache.insert(
+                    &request.address.exchange_key,
+                    &request.market,
+                    from_ms,
+                    to_ms,
+                    inside.clone(),
+                    TileSource::Venue,
+                );
+            }
+            lock_tiles(tiles).insert(key.clone(), from_ms, to_ms, inside, TileSource::Venue);
         }
-        lock_tiles(tiles).insert(key, from_ms, to_ms, harvest_ticks, TileSource::Venue);
     }
     if ticks.is_empty() {
         // The covered run holds no print. With a walk abandoned this round that is not an
@@ -1635,8 +1642,7 @@ fn serve_ticks(
     // `tick_plan`'s own `earliest_ms` clip can make the PLAN narrower than `request.window` before
     // the walk even starts, so a retention-clipped plan that completes still leaves the served
     // ticks short of the requested window on one or both edges.
-    let partial =
-        !complete || covered.0 > request.window.from_ms || covered.1 < request.window.to_ms;
+    let partial = !complete || !covered.contains((request.window.from_ms, request.window.to_ms));
     let (ticks, bucket_ms) = fit_ticks(ticks, TICK_BUDGET);
     Ok((
         compose_ticks(
@@ -1653,10 +1659,52 @@ fn serve_ticks(
     ))
 }
 
-/// Intersect `span` with `bounds`; an empty intersection comes back inverted, for the caller's
-/// own `from <= to` check.
-fn clip_span(span: (i64, i64), bounds: (i64, i64)) -> (i64, i64) {
-    (span.0.max(bounds.0), span.1.min(bounds.1))
+/// What the store proves exhaustive inside `focus`, seeded by a walk's own `harvest`: every
+/// harvest stretch widened over the tiles abutting it, plus every run of tiles the store holds
+/// inside the focus, all clipped to the focus.
+///
+/// The walk's stretches are not in the store yet — the answer is composed before they are
+/// filed — so they seed the extension rather than being found by it. Two stretches a held tile
+/// sits between coalesce through that tile; two with unwalked ground between them stay two.
+///
+/// Args:
+///     store: The worker's tiles.
+///     key: Exchange key and market.
+///     focus: The window's own focus spans, the outer bound of what is served.
+///     harvest: The walk's stretches, or none when nothing was walked.
+///
+/// Returns:
+///     The served coverage; empty when neither the store nor the walk holds any of the focus.
+fn held_coverage(
+    store: &TickTileStore,
+    key: &TileKey,
+    focus: &Coverage,
+    harvest: Coverage,
+) -> Coverage {
+    let mut runs = Coverage::none();
+    for &span in harvest.spans() {
+        runs.add(store.extend_over(key, span));
+    }
+    for &span in focus.spans() {
+        for run in store.coverage_runs(key, span) {
+            runs.add(run);
+        }
+    }
+    runs.clip(focus)
+}
+
+/// Every held run of prints inside `covered`, one entry per tile with its source, in ascending
+/// order across the stretches.
+fn read_coverage(
+    store: &TickTileStore,
+    key: &TileKey,
+    covered: &Coverage,
+) -> Vec<(TileSource, Vec<Tick>)> {
+    let mut runs = Vec::new();
+    for &(from_ms, to_ms) in covered.spans() {
+        runs.extend(store.read_by_source(key, from_ms, to_ms));
+    }
+    runs
 }
 
 /// One ascending run of prints for the chart, and the band's per-second slots summed over every
@@ -1696,29 +1744,80 @@ fn hydrate(
     persisted: Option<&super::trade_cache::TradeCache>,
     key: &TileKey,
     request: &TradeReplayRequest,
-    focus: (i64, i64),
+    focus: &Coverage,
 ) {
     let Some(cache) = persisted else {
         return;
     };
-    let spans = cache
-        .read(
-            &request.address.exchange_key,
-            &request.market,
-            focus.0,
-            focus.1,
-        )
-        .unwrap_or_default();
     let mut store = lock_tiles(tiles);
-    for span in spans {
-        store.insert(
-            key.clone(),
-            span.from_ms,
-            span.to_ms,
-            span.ticks,
-            span.source,
-        );
+    for &(from_ms, to_ms) in focus.spans() {
+        let spans = cache
+            .read(
+                &request.address.exchange_key,
+                &request.market,
+                from_ms,
+                to_ms,
+            )
+            .unwrap_or_default();
+        for span in spans {
+            store.insert(
+                key.clone(),
+                span.from_ms,
+                span.to_ms,
+                span.ticks,
+                span.source,
+            );
+        }
     }
+}
+
+/// What a close-time capture copies: the stretches the trade's own window asks for as ticks
+/// ([`ReplayWindow::focus_spans`]), so a long position files only its two neighbourhoods — the
+/// hours between them, which no window serves, stay out of the store's tick ceiling and off the
+/// disk. Before the settle pass the trail has not printed yet, so the stretches end at the exit.
+///
+/// Args:
+///     request: The trade and its core.
+///     settle: Whether this is the settle pass, which includes the trail after the exit.
+///
+/// Returns:
+///     The stretches to copy, ascending; one or two.
+fn capture_spans(request: &CaptureRequest, settle: bool) -> Coverage {
+    let margin = request.margin_ms.max(0);
+    let window = ReplayWindow {
+        from_ms: request.open_ms.saturating_sub(margin),
+        to_ms: request.close_ms.saturating_add(margin),
+        open_ms: request.open_ms,
+        close_ms: request.close_ms,
+        margin_ms: margin,
+        over_budget: false,
+    };
+    let spans = window.focus_spans();
+    match settle {
+        true => spans,
+        false => spans.clip(&Coverage::one((window.from_ms, request.close_ms))),
+    }
+}
+
+/// What the settle pass of a capture copies and when it is due, or `None` when there is nothing
+/// to settle: the settle spans reach past the exit only when the margin gives the trade a trail,
+/// and a margin of zero does not — scheduling a pass that copied the same stretch again would
+/// schedule itself forever.
+///
+/// Args:
+///     request: The trade and its core.
+///
+/// Returns:
+///     The settle spans and the true-UTC millisecond they are due at (the trail's end plus
+///     [`CAPTURE_SETTLE_SLACK`]).
+fn settle_plan(request: &CaptureRequest) -> Option<(Coverage, i64)> {
+    let settle = capture_spans(request, true);
+    let trail_end = settle.hull().map(|hull| hull.1)?;
+    if trail_end <= request.close_ms {
+        return None;
+    }
+    let due_ms = trail_end.saturating_add(CAPTURE_SETTLE_SLACK.as_millis() as i64);
+    Some((settle, due_ms))
 }
 
 /// Copy `span` of one market out of the closing core's retained archive into the tile store and
@@ -1854,7 +1953,9 @@ where
     }
     let mut ticks: Vec<Tick> = Vec::new();
     let mut pages_fetched = 0usize;
-    let mut covered: Option<(i64, i64)> = None;
+    // Completed tiles, coalesced where they abut: one stretch while the walk stays contiguous,
+    // two once it crosses to a long position's other neighbourhood.
+    let mut covered = Coverage::none();
     let mut complete = true;
     let mut venue_refused = false;
     let mut stop_reason: Option<TickAbandon> = None;
@@ -1931,13 +2032,15 @@ where
             // The focus can require many pages. Show its already-walked span before the tile
             // completes, but do not publish non-focus tiles that a budget may later discard.
             if is_focus && page.next.is_some() {
-                if let Some(span) = page_progress_span(
-                    covered,
+                if let Some(span) = walked_part(
+                    &covered,
                     (slice_from, slice_to),
                     &ticks[start_len..],
                     page.next,
                 ) {
-                    observer.progress(&ticks, span);
+                    let mut so_far = covered.clone();
+                    so_far.add(span);
+                    observer.progress(&ticks, &so_far);
                 }
             }
             match page.next {
@@ -1953,74 +2056,29 @@ where
             stop_reason = Some(TickAbandon::OverTickBudget);
             break;
         }
-        covered = Some(match covered {
-            None => (slice_from, slice_to),
-            Some((c_from, c_to)) => (c_from.min(slice_from), c_to.max(slice_to)),
-        });
-        if let Some(span) = covered {
-            observer.progress(&ticks, span);
-        }
+        covered.add((slice_from, slice_to));
+        observer.progress(&ticks, &covered);
     }
 
     if ticks.is_empty() {
         return TickVerdict::Abandoned(stop_reason.unwrap_or(TickAbandon::Empty));
     }
-    // Extend `covered` by the interrupted tile's own paid-for rows — but ONLY when its pagination
-    // direction actually reached the edge touching `covered`, never unconditionally. Within one
-    // slice a paginated run is contiguous, but its direction is per-venue: Binance's `FromId`
-    // cursor walks FORWARD from the tile's own `slice_from` (a prefix of the tile); Bitget/OKX's
-    // `LessThanId` walks BACKWARD from `slice_to` (a suffix). A tile to the RIGHT of `covered` only
-    // touches the shared edge under a FORWARD cursor (it starts at `slice_from`, which sits right
-    // beside `covered`); a tile to the LEFT only under a BACKWARD one (it starts at `slice_to`,
-    // beside `covered` on that side). Gate's `Page`/`Offset` cursors carry an UNDOCUMENTED order
-    // (`venue_caps.rs`), so neither side ever trusts them. Getting this wrong would union in a
-    // stretch of the tile that was never actually fetched — the exact false "the market was quiet
-    // here" gap this whole design exists to prevent.
-    if let (Some((c_from, c_to)), Some((slice_from, slice_to, start, cursor))) =
-        (covered, interrupted)
-    {
-        if start < ticks.len() {
-            let (lo, hi) = ticks[start..]
-                .iter()
-                .fold((i64::MAX, i64::MIN), |(lo, hi), t| {
-                    let time_ms = t.time_ms as i64;
-                    (lo.min(time_ms), hi.max(time_ms))
-                });
-            // `AfterMs` is excluded from both: its own doc says no current route ever emits it, so
-            // there is no evidence for which edge it would touch.
-            let forward = matches!(cursor, Some(rest::TradeCursor::FromId(_)));
-            let backward = matches!(cursor, Some(rest::TradeCursor::LessThanId(_)));
-            covered = Some(if slice_from > c_to && forward {
-                (c_from, c_to.max(hi))
-            } else if slice_to < c_from && backward {
-                (c_from.min(lo), c_to)
-            } else {
-                (c_from, c_to)
-            });
+    // Add the interrupted tile's own paid-for stretch — the part of it its pagination direction
+    // proves walked, see `walked_part` — so those rows are served rather than reclaimed by the
+    // clip in `serve_ticks`. It coalesces with the completed stretch it abuts, or stands alone.
+    if let Some((slice_from, slice_to, start, cursor)) = interrupted {
+        if let Some(span) = walked_part(&covered, (slice_from, slice_to), &ticks[start..], cursor) {
+            covered.add(span);
         }
     }
-    let covered = covered.unwrap_or_else(|| {
-        // No slice ever reached natural completion, yet a stop mid-walk still left partial pages
-        // in `ticks` — this function serves what is held rather than discarding it (D2-2). The
-        // observed extremes of what was actually fetched can only UNDER-state true coverage,
-        // never claim more than was really walked, which the interrupted slice's own nominal
-        // bounds could.
-        let (lo, hi) = ticks.iter().fold((i64::MAX, i64::MIN), |(lo, hi), t| {
-            let time_ms = t.time_ms as i64;
-            (lo.min(time_ms), hi.max(time_ms))
-        });
-        (lo, hi)
-    });
     if let Some(
         reason
         @ (TickAbandon::Deadline | TickAbandon::OverPageBudget | TickAbandon::OverTickBudget),
     ) = stop_reason
     {
         log::info!(
-            "[x] trade-replay tick stage partial on {}: {reason:?}, covered={}..{} ms, pages={pages_fetched}",
-            route.host(),
-            covered.0,
-            covered.1
+            "[x] trade-replay tick stage partial on {}: {reason:?}, covered={covered} ms, pages={pages_fetched}",
+            route.host()
         );
     }
     TickVerdict::Ready(TickHarvest {
@@ -2031,9 +2089,30 @@ where
     })
 }
 
-/// Join a partial focus page only when its pagination direction touches the completed span.
-fn page_progress_span(
-    covered: Option<(i64, i64)>,
+/// The stretch of a partly walked tile its rows prove exhaustive, or `None` when nothing can be
+/// said.
+///
+/// Within one slice a paginated run is contiguous, but its direction is per-venue: Binance's
+/// `FromId` cursor walks FORWARD from the tile's own `slice_from`, so the rows so far are every
+/// print from that edge to the last one seen; Bitget/OKX's `LessThanId` walks BACKWARD from
+/// `slice_to`, so they are every print from the first one seen to that edge. Gate's
+/// `Page`/`Offset` cursors carry an UNDOCUMENTED order (`venue_caps.rs`), so their rows prove
+/// nothing while a completed stretch exists to keep honest — and only when NO slice completed at
+/// all does the observed extent of the rows stand in, which can only UNDER-state true coverage,
+/// never claim more than was walked (D2-2). `AfterMs` is treated as undocumented: no current route
+/// emits it, so there is no evidence for which edge it walks from.
+///
+/// Args:
+///     covered: The stretches completed so far.
+///     slice: The interrupted tile's own bounds.
+///     rows: The rows fetched for it so far.
+///     cursor: The cursor most recently used for it.
+///
+/// Returns:
+///     The proven stretch, to be added to `covered` — it coalesces with the stretch it abuts
+///     or stands alone, so no unwalked ground is ever claimed either way.
+fn walked_part(
+    covered: &Coverage,
     slice: (i64, i64),
     rows: &[Tick],
     cursor: Option<rest::TradeCursor>,
@@ -2043,19 +2122,11 @@ fn page_progress_span(
         (first.time_ms as i64, first.time_ms as i64),
         |(lo, hi), t| (lo.min(t.time_ms as i64), hi.max(t.time_ms as i64)),
     );
-    match covered {
-        None => Some((lo, hi)),
-        Some((from, to))
-            if slice.0 > to && matches!(cursor, Some(rest::TradeCursor::FromId(_))) =>
-        {
-            Some((from, to.max(hi)))
-        }
-        Some((from, to))
-            if slice.1 < from && matches!(cursor, Some(rest::TradeCursor::LessThanId(_))) =>
-        {
-            Some((from.min(lo), to))
-        }
-        span => span,
+    match cursor {
+        Some(rest::TradeCursor::FromId(_)) => Some((slice.0, hi)),
+        Some(rest::TradeCursor::LessThanId(_)) => Some((lo, slice.1)),
+        _ if covered.is_empty() => Some((lo, hi)),
+        _ => None,
     }
 }
 
@@ -2073,9 +2144,9 @@ fn page_progress_span(
 ///     ticks: Trade points, ascending, already clipped to the harvest's covered range.
 ///     bucket_ms: The bucket [`fit_ticks`] thinned the points to; `0` means raw.
 ///     partial: Whether `ticks` covers only part of `request.window`.
-///     covered: The walk's own exhaustive span, carried onto the series verbatim — the chart
-///         withholds the bars lying inside it, and only this range knows that a covered minute
-///         with no trade in it is still covered.
+///     covered: The walk's own exhaustive stretches, carried onto the series verbatim — the
+///         chart withholds the bars lying inside them, and only this coverage knows that a
+///         covered minute with no trade in it is still covered.
 ///     candles: The exchange klines to carry as the bar layer.
 ///
 /// Returns:
@@ -2091,7 +2162,7 @@ fn compose_ticks(
     bucket_ms: i64,
     side_slots: Vec<crate::market::source::SideSlot>,
     partial: bool,
-    covered: (i64, i64),
+    covered: Coverage,
     candles: Vec<ChartCandle>,
 ) -> TradeReplaySeries {
     TradeReplaySeries {
@@ -2106,7 +2177,7 @@ fn compose_ticks(
         bucket_ms,
         partial,
         side_slots,
-        covered: Some(covered),
+        covered,
     }
 }
 
@@ -2160,8 +2231,8 @@ fn compose(
         bucket_ms: 0,
         partial: false,
         side_slots: Vec::new(),
-        // No tick walk ran, so there is no covered span and the chart keeps every bar.
-        covered: None,
+        // No tick walk ran, so nothing is covered and the chart keeps every bar.
+        covered: Coverage::none(),
     }
 }
 

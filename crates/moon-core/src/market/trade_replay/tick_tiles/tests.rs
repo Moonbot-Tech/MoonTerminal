@@ -76,18 +76,21 @@ fn insert_sorts_and_drops_what_is_not_inside() {
     assert_eq!(times(&store.read(&key(), 140, 199)), vec![150, 190]);
 }
 
-/// Abutting tiles form one run; a hole splits it; the run around a seed picks the wider side.
+/// Abutting tiles form one run; a hole splits it; a seed over both runs gets both, ascending.
 #[test]
-fn coverage_run_follows_adjacency_not_the_hull() {
+fn coverage_runs_follow_adjacency_not_the_hull() {
     let mut store = TickTileStore::default();
     store.insert(key(), 100, 199, Vec::new(), TileSource::Venue);
     store.insert(key(), 200, 299, Vec::new(), TileSource::Venue);
     store.insert(key(), 400, 449, Vec::new(), TileSource::Venue);
-    assert_eq!(store.coverage_run(&key(), (150, 160)), Some((100, 299)));
-    assert_eq!(store.coverage_run(&key(), (410, 420)), Some((400, 449)));
-    assert_eq!(store.coverage_run(&key(), (300, 399)), None);
-    // Both runs overlap this seed; the wider one is the answer.
-    assert_eq!(store.coverage_run(&key(), (250, 420)), Some((100, 299)));
+    assert_eq!(store.coverage_runs(&key(), (150, 160)), vec![(100, 299)]);
+    assert_eq!(store.coverage_runs(&key(), (410, 420)), vec![(400, 449)]);
+    assert!(store.coverage_runs(&key(), (300, 399)).is_empty());
+    // Both runs overlap this seed; the run of two abutting tiles is reported once.
+    assert_eq!(
+        store.coverage_runs(&key(), (250, 420)),
+        vec![(100, 299), (400, 449)]
+    );
     assert_eq!(store.extend_over(&key(), (300, 399)), (100, 449));
     assert_eq!(store.extend_over(&key(), (600, 700)), (600, 700));
 }

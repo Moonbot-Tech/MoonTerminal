@@ -14,12 +14,13 @@ fn progressive_trade_ticks_preserve_view_and_accept_core_completion() {
         tick_status: TickStatus::Streaming,
         bucket_ms: 0,
         partial: true,
+        ends: false,
         brand: moon_core::venue::Brand::Binance,
     };
     let mut series = TradeReplaySeries {
         source: TradeReplaySource::Ticks,
         venue: moon_core::venue::venue(3).expect("spot venue"),
-        window: replay_window_ms(100_000_000, 100_060_000).expect("valid trade"),
+        window: replay_window_ms(100_000_000, 100_060_000, 5 * 60_000).expect("valid trade"),
         tf_ms: 60_000,
         candles: Vec::new(),
         ticks: vec![moon_core::feed::Tick {
@@ -33,7 +34,7 @@ fn progressive_trade_ticks_preserve_view_and_accept_core_completion() {
         bucket_ms: 0,
         partial: true,
         side_slots: Vec::new(),
-        covered: Some((99_700_000, 100_000_000)),
+        covered: moon_core::market::trade_replay::Coverage::one((99_700_000, 100_000_000)),
     };
     let next = fold_outcome(&state, true, &TradeReplayOutcome::Ready(series.clone()));
     assert!(next.accept);
@@ -51,6 +52,7 @@ fn progressive_trade_ticks_preserve_view_and_accept_core_completion() {
         tick_status: TickStatus::AwaitingCore,
         bucket_ms: 0,
         partial: false,
+        ends: false,
         brand: moon_core::venue::Brand::Bybit,
     };
     let delayed_core = fold_outcome(&awaiting, true, &TradeReplayOutcome::Ready(series.clone()));

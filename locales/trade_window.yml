@@ -124,6 +124,12 @@ trade_window.source.ticks_edges:
   en: "edges filled by %{min}-minute candles"
   es: "bordes cubiertos por velas de %{min} min"
 
+# Долгая позиция: тики только вокруг входа и выхода, середина — свечи. Присоединяется так же.
+trade_window.source.ticks_ends:
+  ru: "тики у входа и выхода, между ними свечи %{min} мин"
+  en: "ticks around the entry and the exit, %{min}-minute candles between"
+  es: "ticks en la entrada y la salida, velas de %{min} min entre ellas"
+
 # Таймфрейм подставляется из САМИХ строк, а не заявляется константой: раньше здесь стояла
 # фиксированная «минутные свечи», пока панель пересобирала минутки в пятиминутки. Свечи теперь
 # всегда называют причину, по которой окно показывает их вместо тиков.
