@@ -64,8 +64,8 @@ pub struct TradeReplayStoreCfg {
     /// Whether the prints a trade window fetched are kept on disk for the next window and the
     /// next launch. Off, they live in memory for the session only and the file is not touched.
     pub persist_trades: bool,
-    /// Ceiling on the packed prints the file may hold, in megabytes; past it the oldest spans
-    /// go first. `0` keeps everything the retention window admits.
+    /// Ceiling on the packed prints the file may hold, in megabytes; past it the spans written
+    /// longest ago go first. `0` keeps everything, with no age limit.
     pub max_mb: u32,
     /// Minutes of prints kept around a trade, per end: a short position gets this many minutes
     /// before its entry and after its exit; a long one (over an hour) gets this many minutes
