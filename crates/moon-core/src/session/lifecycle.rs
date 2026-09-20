@@ -510,6 +510,7 @@ impl SessionManager {
                 market,
                 open_ms,
                 close_ms,
+                margin_ms: crate::market::trade_replay::margin_ms(),
             },
         );
     }

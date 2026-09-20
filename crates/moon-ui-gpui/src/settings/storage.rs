@@ -179,6 +179,19 @@ impl SettingsView {
         }
     }
 
+    /// Adjusts the minutes of prints kept around a trade, per end, clamps them to
+    /// `0..=MAX_TRADE_MARGIN_MIN`, and updates live state and storage.toml.
+    fn adjust_trades_margin_min(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let ceiling = moon_core::config::storage::MAX_TRADE_MARGIN_MIN as i32;
+        let v = (self.storage.cfg.trade_replay.margin_min as i32 + delta).clamp(0, ceiling) as u32;
+        if self.storage.cfg.trade_replay.margin_min != v {
+            self.storage.cfg.trade_replay.margin_min = v;
+            moon_core::market::trade_replay::set_margin_min(v);
+            storage_cfg::save(&self.storage.cfg);
+            cx.notify();
+        }
+    }
+
     /// Render storage controls with the version-limit stepper wrapping below its label when needed.
     pub(super) fn storage_tab(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         // Start background snapshot collection when the tab is first shown.
@@ -194,6 +207,7 @@ impl SettingsView {
         let limit = self.storage.cfg.strategies.version_limit;
         let persist_trades = self.storage.cfg.trade_replay.persist_trades;
         let trades_max_mb = self.storage.cfg.trade_replay.max_mb;
+        let trades_margin_min = self.storage.cfg.trade_replay.margin_min;
 
         let size_line = |sz: Option<(u64, u64)>| -> String {
             match sz {
@@ -420,6 +434,29 @@ impl SettingsView {
                     )),
             )
             .child(hint(t!("storage.trades_max_mb_hint").to_string()))
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap(design::ui_px(cx, 8.0))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(rgba_from(p.text, 1.0))
+                            .child(t!("storage.trades_margin").to_string()),
+                    )
+                    // Enabled whether or not the file is on: the margin sizes what a window
+                    // fetches and what a close copies, not only what the file keeps.
+                    .child(self.stepper_controls(
+                        cx,
+                        "trades-margin-min",
+                        true,
+                        t!("storage.trades_min", min = trades_margin_min).to_string(),
+                        5,
+                        15,
+                        Self::adjust_trades_margin_min,
+                    )),
+            )
+            .child(hint(t!("storage.trades_margin_hint").to_string()))
             .child(
                 h_flex().child(
                     tool_btn("trades-compact", t!("storage.compact").to_string(), busy)

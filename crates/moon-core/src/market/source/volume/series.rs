@@ -458,7 +458,8 @@ pub fn merge_side_slots(mut slots: Vec<SideSlot>) -> Vec<SideSlot> {
 ///
 /// Args:
 ///     tick_slots: The replay's prints per second, from [`side_slots_of_ticks`].
-///     covered: The inclusive span the ticks are exhaustive over, or `None` for no ticks at all.
+///     covered: The inclusive spans the ticks are exhaustive over, disjoint; empty for no ticks
+///         at all.
 ///     candles: The replay's bars, one minute each.
 ///     tf_ms: Rolling window, milliseconds.
 ///     step_ms: Sample spacing, milliseconds.
@@ -469,7 +470,7 @@ pub fn merge_side_slots(mut slots: Vec<SideSlot>) -> Vec<SideSlot> {
 ///     The samples, exactly as the live series emits them.
 pub fn replay_sides(
     tick_slots: &[SideSlot],
-    covered: Option<(i64, i64)>,
+    covered: &[(i64, i64)],
     candles: &[crate::market::ChartCandle],
     tf_ms: i64,
     step_ms: i64,
@@ -479,9 +480,10 @@ pub fn replay_sides(
     let mut slots: Vec<Slot> = tick_slots.to_vec();
     // A bar's second is the replay's answer only where the ticks are not: a second inside the
     // covered span already holds the same prints.
-    push_candle_slots(&mut slots, candles, |slot_id| match covered {
-        Some((lo, hi)) => !slot_inside_span(slot_id, lo, hi),
-        None => true,
+    push_candle_slots(&mut slots, candles, |slot_id| {
+        !covered
+            .iter()
+            .any(|&(lo, hi)| slot_inside_span(slot_id, lo, hi))
     });
     finish_slots(slots, tf_ms, step_ms, from_ms, to_ms)
 }

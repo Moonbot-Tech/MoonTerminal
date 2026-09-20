@@ -220,6 +220,7 @@ impl TradeWindowView {
                     tf_min,
                     bucket_ms,
                     partial,
+                    ends,
                     tick_status,
                     ..
                 } => {
@@ -252,8 +253,13 @@ impl TradeWindowView {
                         // Every sibling Russian caption in `trade_window.yml` joins its two halves
                         // with an em dash, never the ASCII hyphen the other locales use — so the
                         // glyph itself must follow the active locale, not just the words either
-                        // side of it.
-                        let edges = t!("trade_window.source.ticks_edges", min = tf_min).to_string();
+                        // side of it. Two stretches (a long position) name where the ticks ARE,
+                        // since "the edges" would misdescribe a middle made of bars.
+                        let edges = if *ends {
+                            t!("trade_window.source.ticks_ends", min = tf_min).to_string()
+                        } else {
+                            t!("trade_window.source.ticks_edges", min = tf_min).to_string()
+                        };
                         let sep = match rust_i18n::locale().as_ref() {
                             "ru" => "—",
                             _ => "-",

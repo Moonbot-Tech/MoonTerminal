@@ -67,17 +67,31 @@ pub struct TradeReplayStoreCfg {
     /// Ceiling on the packed prints the file may hold, in megabytes; past it the oldest spans
     /// go first. `0` keeps everything the retention window admits.
     pub max_mb: u32,
+    /// Minutes of prints kept around a trade, per end: a short position gets this many minutes
+    /// before its entry and after its exit; a long one (over an hour) gets this many minutes
+    /// centred on each end, half before and half after, with bars between. It sizes what a trade
+    /// window fetches, what a close copies out of the core's ring, and what the file keeps.
+    /// `0` is the position alone; clamped to [`MAX_TRADE_MARGIN_MIN`] on load.
+    pub margin_min: u32,
 }
 
 /// Default ceiling on `trades.sqlite`, megabytes: a day of busy replays is tens of megabytes,
 /// so this is months of them for the reader who never touches the setting.
 pub const DEFAULT_TRADES_MAX_MB: u32 = 256;
 
+/// Default minutes of prints around a trade, per end (the developer's call, 2026-09-20).
+pub const DEFAULT_TRADE_MARGIN_MIN: u32 = 15;
+
+/// Ceiling on [`TradeReplayStoreCfg::margin_min`]: the bar context after an exit is two hours at
+/// least, and prints past the bars would have nowhere to draw.
+pub const MAX_TRADE_MARGIN_MIN: u32 = 120;
+
 impl Default for TradeReplayStoreCfg {
     fn default() -> Self {
         Self {
             persist_trades: true,
             max_mb: DEFAULT_TRADES_MAX_MB,
+            margin_min: DEFAULT_TRADE_MARGIN_MIN,
         }
     }
 }
@@ -120,7 +134,13 @@ pub fn load() -> StorageCfg {
         }
         return cfg;
     }
-    toml_io::load_or_default(&path, "storage.toml", |_| {})
+    sanitize(toml_io::load_or_default(&path, "storage.toml", |_| {}))
+}
+
+/// Bound what a hand-edited file may carry: the margin never exceeds [`MAX_TRADE_MARGIN_MIN`].
+fn sanitize(mut cfg: StorageCfg) -> StorageCfg {
+    cfg.trade_replay.margin_min = cfg.trade_replay.margin_min.min(MAX_TRADE_MARGIN_MIN);
+    cfg
 }
 
 /// Saves storage settings from the Storage tab.
@@ -129,3 +149,6 @@ pub fn save(cfg: &StorageCfg) {
         log::warn!("storage.toml: сохранение не удалось: {e:#}");
     }
 }
+
+#[cfg(test)]
+mod tests;

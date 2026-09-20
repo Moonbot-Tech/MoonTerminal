@@ -116,6 +116,18 @@ storage.trades_max_mb_hint:
   ru: "Сверх лимита удаляются самые старые трейды; 0 — хранить всё, что попадает в 14 дней. Применяется при следующей записи."
   en: "Past the limit the oldest prints go first; 0 keeps everything within the 14 days. Applies on the next write."
   es: "Superado el límite se borran primero las operaciones más antiguas; 0 conserva todo lo que cabe en 14 días. Se aplica en la próxima escritura."
+storage.trades_margin:
+  ru: "Трейды вокруг сделки"
+  en: "Prints around a trade"
+  es: "Operaciones alrededor de una posición"
+storage.trades_min:
+  ru: "%{min} мин"
+  en: "%{min} min"
+  es: "%{min} min"
+storage.trades_margin_hint:
+  ru: "Сколько минут трейдов брать с каждого конца сделки: у короткой — до входа и после выхода, у долгой (дольше часа) — столько же вокруг входа и вокруг выхода, середина свечами. 0 — только сама сделка, не больше 120."
+  en: "Minutes of prints taken at each end of a trade: before the entry and after the exit of a short one; the same amount centred on the entry and on the exit of a long one (over an hour), candles between. 0 is the position alone, 120 at most."
+  es: "Minutos de operaciones tomados en cada extremo de una posición: antes de la entrada y después de la salida en una corta; la misma cantidad centrada en la entrada y en la salida en una larga (más de una hora), velas entre ambas. 0 es solo la posición, 120 como máximo."
 storage.trades_hint:
   ru: "Восстановимый кэш: хранится 14 дней; файл можно удалить при закрытом терминале."
   en: "Recoverable cache: kept for 14 days; the file can be deleted while the terminal is closed."

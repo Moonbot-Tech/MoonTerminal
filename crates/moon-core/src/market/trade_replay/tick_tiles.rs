@@ -136,7 +136,7 @@ impl TickTileStore {
     /// Every print held inside `[from_ms, to_ms]`, ascending by time, source dropped.
     ///
     /// Answers whatever is held, covered or not: the caller decides coverage through
-    /// [`Self::coverage_run`] or [`Self::covers`] first, and this only collects.
+    /// [`Self::coverage_runs`] or [`Self::covers`] first, and this only collects.
     #[cfg(test)]
     pub fn read(&self, key: &TileKey, from_ms: i64, to_ms: i64) -> Vec<Tick> {
         self.read_by_source(key, from_ms, to_ms)
@@ -195,20 +195,20 @@ impl TickTileStore {
         run
     }
 
-    /// The contiguous covered run that overlaps `seed`, or `None` when no tile does.
+    /// Every contiguous covered run that overlaps `seed`, ascending; empty when no tile does.
     ///
-    /// When two disjoint runs both overlap the seed, the wider one wins — one span is what a
-    /// series can carry, and the wider one withholds more bars honestly.
-    pub fn coverage_run(&self, key: &TileKey, seed: (i64, i64)) -> Option<(i64, i64)> {
-        let mut best: Option<(i64, i64)> = None;
+    /// Each run is the full stretch its tiles form (see [`Self::extend_over`]), so a run may
+    /// reach past the seed on either side; the caller clips. Two runs with a hole between them
+    /// come back as two — a series carries them as two, and withholds bars inside each.
+    pub fn coverage_runs(&self, key: &TileKey, seed: (i64, i64)) -> Vec<(i64, i64)> {
+        let mut runs: Vec<(i64, i64)> = Vec::new();
         for tile in self.overlapping(key, seed.0, seed.1) {
             let run = self.extend_over(key, (tile.from_ms, tile.to_ms));
-            best = match best {
-                Some(b) if b.1 - b.0 >= run.1 - run.0 => Some(b),
-                _ => Some(run),
-            };
+            if runs.last() != Some(&run) {
+                runs.push(run);
+            }
         }
-        best
+        runs
     }
 
     /// Record one answered span: whatever of `[from_ms, to_ms]` is not yet covered becomes a
@@ -355,13 +355,14 @@ pub(crate) fn gaps_between(held: &[(i64, i64)], from_ms: i64, to_ms: i64) -> Vec
 /// it, split into its uncovered sub-spans, in an order that keeps the walk's completed prefix
 /// contiguous with what the store holds.
 ///
-/// That order is load-bearing. `paginate_ticks` reports its coverage as the hull of the slices it
-/// completed, which is honest only while every point inside that hull is either completed or
-/// already held — the property the original plan has by construction (each prefix of it is
-/// contiguous). A slice split by cached stretches keeps it only if its sub-spans are walked from
-/// the edge that touches the slices before it: the `from` edge when those reach `from - 1`, the
-/// `to` edge when they reach `to + 1`. The first slice of the plan touches nothing, and either
-/// order is safe for it because the store holds everything between its own sub-spans.
+/// That order is what keeps a streamed snapshot growing from one edge. `paginate_ticks` reports
+/// its coverage as the completed slices coalesced where they abut, and `serve_ticks` widens each
+/// stretch over the tiles the store holds beside it — so a residual sub-span walked from the edge
+/// that touches what came before it (the `from` edge when those reach `from - 1`, the `to` edge
+/// when they reach `to + 1`) joins the published stretch at once, while the other order publishes
+/// an island first and joins it only when the sub-span completes. Correctness does not depend on
+/// it: a stretch never claims ground between two completed slices that neither the walk nor the
+/// store covers. The first slice of a plan touches nothing, and either order is the same for it.
 ///
 /// Args:
 ///     plan: The window's own tiles, in fetch order.
