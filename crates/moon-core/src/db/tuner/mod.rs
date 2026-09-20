@@ -30,7 +30,7 @@ mod time;
 pub use fields::{FIELDS, FieldClass, FieldSpec, slot_type_for};
 pub use strategy_read::{
     StratFilters, strategy_cores, strategy_current_values, strategy_current_values_opt,
-    strategy_filters, strategy_kinds,
+    strategy_filters, strategy_values_at,
 };
 pub use time::{
     SliderProfiles, TimeAxes, TimeSuggest, TimeWindow, format_week_span, format_working_time,

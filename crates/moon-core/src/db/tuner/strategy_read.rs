@@ -143,10 +143,97 @@ pub fn strategy_current_values_opt(
     core: Option<u64>,
     keys: &[String],
 ) -> Option<std::collections::HashMap<String, String>> {
-    let mut out = std::collections::HashMap::new();
     let conn = open_strategies_ro()?;
     let raw = load_head_raw_json(&conn, strategy_id, core)?;
-    let Ok(serde_json::Value::Object(map)) = serde_json::from_str(&raw) else {
+    flatten_values(&raw, keys)
+}
+
+/// The values of `keys` as of `at_ms` — from the version whose `[valid_from, valid_to)` holds
+/// that moment. A trade older than the first recorded version reads the FIRST version, the
+/// closest thing on record to what ran then; `None` as in [`strategy_current_values_opt`].
+///
+/// The Entry/Exit tuner runs its model on the parameters a trade was actually made under; the
+/// head would silently judge yesterday's fill by today's corridor.
+///
+/// Args:
+///     strategy_id: The strategy.
+///     core: Its core, when known; rows are per-core.
+///     at_ms: The moment, Unix ms — the trade's `buydatems`.
+///     keys: Field names to read.
+pub fn strategy_values_at(
+    strategy_id: i64,
+    core: Option<u64>,
+    at_ms: i64,
+    keys: &[String],
+) -> Option<std::collections::HashMap<String, String>> {
+    let conn = open_strategies_ro()?;
+    let raw = load_raw_json_at(&conn, strategy_id, core, at_ms)?;
+    flatten_values(&raw, keys)
+}
+
+/// The `raw_json` of the version valid at `at_ms`, else the earliest version on record, scoped
+/// to `core` when known. `None` when the strategy has no version at all.
+fn load_raw_json_at(
+    conn: &Connection,
+    strategy_id: i64,
+    core: Option<u64>,
+    at_ms: i64,
+) -> Option<String> {
+    // Two spellings per query rather than one with an optional clause: the placeholder
+    // numbering shifts with the core clause, and a `?3` bound to nothing is a silent `None`
+    // that would send every core-less read to the first version.
+    let at = match core {
+        Some(c) => conn
+            .query_row(
+                "SELECT v.raw_json FROM strategy_versions v
+                     WHERE v.strategy_id = ?1 AND v.core_uid = ?2
+                       AND v.valid_from <= ?3 AND (v.valid_to IS NULL OR v.valid_to > ?3)
+                     ORDER BY v.valid_from DESC LIMIT 1",
+                rusqlite::params![strategy_id, c as i64, at_ms],
+                |r| r.get(0),
+            )
+            .ok(),
+        None => conn
+            .query_row(
+                "SELECT v.raw_json FROM strategy_versions v
+                     WHERE v.strategy_id = ?1
+                       AND v.valid_from <= ?2 AND (v.valid_to IS NULL OR v.valid_to > ?2)
+                     ORDER BY v.valid_from DESC LIMIT 1",
+                rusqlite::params![strategy_id, at_ms],
+                |r| r.get(0),
+            )
+            .ok(),
+    };
+    if at.is_some() {
+        return at;
+    }
+    match core {
+        Some(c) => conn
+            .query_row(
+                "SELECT v.raw_json FROM strategy_versions v
+                     WHERE v.strategy_id = ?1 AND v.core_uid = ?2
+                     ORDER BY v.valid_from ASC LIMIT 1",
+                rusqlite::params![strategy_id, c as i64],
+                |r| r.get(0),
+            )
+            .ok(),
+        None => conn
+            .query_row(
+                "SELECT v.raw_json FROM strategy_versions v
+                     WHERE v.strategy_id = ?1
+                     ORDER BY v.valid_from ASC LIMIT 1",
+                rusqlite::params![strategy_id],
+                |r| r.get(0),
+            )
+            .ok(),
+    }
+}
+
+/// `keys` out of one version's `raw_json`, in strategy format — see
+/// [`strategy_current_values_opt`] for the rules.
+fn flatten_values(raw: &str, keys: &[String]) -> Option<std::collections::HashMap<String, String>> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(serde_json::Value::Object(map)) = serde_json::from_str(raw) else {
         return None;
     };
     for key in keys {
@@ -328,3 +415,6 @@ pub fn strategy_filters(
     }
     out
 }
+
+#[cfg(test)]
+mod tests;
