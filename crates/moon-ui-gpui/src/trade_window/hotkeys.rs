@@ -3,7 +3,7 @@
 //! This window filters instead of calling the shared `apply` / `pre_dispatch` helpers: its chart
 //! is frozen, it belongs to no window group and has no trading target. `pre_dispatch` would be
 //! actively dangerous here — every `ChartPanel`, the historical one included, registers itself as
-//! `Backend::hovered_chart` (`panels/chart/render_input.rs:979`), so a `FigUndo` would delete the
+//! `Backend::hovered_chart` (`panels/chart/render_input.rs:982`), so a `FigUndo` would delete the
 //! user's last figure on the LIVE market, locally, with nothing to bring it back, and would
 //! additionally send the removal to the core when that figure carries a chart alert
 //! (`backend/figures.rs:345-361`: `chart_alert_delete` fires only under `if fig.alert`).
