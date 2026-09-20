@@ -429,7 +429,12 @@ impl Render for ReportPanel {
                 // saving on a full row would be two text fits per frame for a number nothing looks
                 // at. The compact width comes from the same frame that drew it.
                 saving: if compact {
-                    controls::compact_row_saving(cx, core_fit.full_w, core_fit.compact_w)
+                    controls::compact_row_saving(
+                        cx,
+                        core_fit.full_w,
+                        core_fit.compact_w,
+                        self.strategy_full_width(cx),
+                    )
                 } else {
                     0.0
                 },

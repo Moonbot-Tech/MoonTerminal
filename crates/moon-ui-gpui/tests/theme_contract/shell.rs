@@ -386,15 +386,17 @@ fn shared_core_selectors_batch_exchange_changes_once() {
     }
 }
 
-/// The pinned Orders Auto core must fit its live flattened name without widening Classic.
+/// The pinned Orders scope must fit its own label — Overview phrase or live name — without
+/// widening Classic.
 ///
-/// Plausible regression: removing the Auto-only wrap makes a fitted live name crowd the trailing
-/// controls in a narrow dock; applying it to every branch instead changes the interactive Classic
-/// toolbar; or rendering the pinned scope as a disabled dropdown instead of through the shared
-/// static host reopens the click-through hole `pinned_scope_label`'s own contract closes. The live
-/// firetest independently verifies that the fitted cap shows the observed name.
+/// Plausible regression: restoring the fixed shared width clips "Полная сводка" to an ellipsis on
+/// a chip that can open no menu to spell it out; dropping the ceiling lets a long core name crowd
+/// the trailing controls in a narrow dock; applying the fit to the Classic branch changes the
+/// interactive toolbar; or rendering the pinned scope as a disabled dropdown instead of through
+/// the shared static host reopens the click-through hole `pinned_scope_label`'s own contract
+/// closes. The live firetest independently verifies that the fitted cap shows the observed name.
 #[test]
-fn orders_auto_core_selector_fits_live_name_only_in_auto_core() {
+fn orders_pinned_scope_selector_fits_its_own_label() {
     let controls = read_src("panels/orders/controls.rs");
     let render = read_src("panels/orders/render.rs");
     let combo = braced_body(&controls, "pub(super) fn source_combo(");
@@ -407,18 +409,18 @@ fn orders_auto_core_selector_fits_live_name_only_in_auto_core() {
         .split_once("let view = cx.entity();")
         .map(|(_, rest)| rest)
         .expect("Orders Classic core selector must build the interactive combo");
-    let width_auto = owned_branch
-        .split_once("let width = if auto_core {")
-        .and_then(|(_, rest)| rest.split_once("} else {"))
+    let width_pinned = owned_branch
+        .split_once("let width = px(")
+        .and_then(|(_, rest)| rest.split_once("));"))
         .map(|(body, _)| body)
-        .expect("Orders content fitting must stay inside the AutoCore guard");
+        .expect("the pinned Orders scope must resolve one bounded width");
 
     assert!(
-        combo.contains("let auto_core = scope.is_auto_core();")
-            && combo.contains("crate::display_text::flatten_lines(name)")
-            && width_auto.contains("MoonDropdown::fitted_trigger_label(")
-            && width_auto.contains("crate::controls::CORE_COMBO_TRIGGER_W,")
-            && width_auto.contains("AUTO_CORE_TRIGGER_MAX_W,")
+        combo.contains("crate::display_text::flatten_lines(name)")
+            && width_pinned.contains("crate::controls::pinned_scope_width(")
+            && width_pinned.contains("crate::controls::CORE_COMBO_TRIGGER_W,")
+            && width_pinned.contains("AUTO_CORE_TRIGGER_MAX_W,")
+            && !owned_branch.contains("crate::controls::wrap_fit::action_width(")
             && owned_branch.contains("crate::panels::pinned_scope_host(")
             && owned_branch.contains("\"orders-source-tip\",")
             && owned_branch.contains("\"orders-source\",")
@@ -426,8 +428,8 @@ fn orders_auto_core_selector_fits_live_name_only_in_auto_core() {
             && !owned_branch.contains("crate::controls::core_combo(")
             && classic_branch.contains("crate::controls::core_combo(")
             && !classic_branch.contains("pinned_scope_host("),
-        "Orders AutoCore must fit its live name within its bounded budget and render it through \
-         the shared non-interactive pinned-scope host, never a disabled dropdown"
+        "the pinned Orders scope must fit its own label within its bounded budget and render it \
+         through the shared non-interactive pinned-scope host, never a disabled dropdown"
     );
     let max_width = controls
         .lines()
