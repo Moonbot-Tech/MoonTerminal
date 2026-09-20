@@ -1,90 +1,90 @@
 # locales/
 
-Словари локализации интерфейса MoonTerminal. Формат — rust-i18n `_version: 2`
-(в каждом файле, в начале). Каждый ключ → карта `локаль → строка`; все языки
-(`ru` / `en` / `es`) лежат рядом, чтобы сразу видеть пропущенный перевод.
-Интерполяция переменных: `%{var}`.
+MoonTerminal interface localisation dictionaries. Format — rust-i18n `_version: 2`
+(in each file, at the top). Each key → a `locale → string` map; every language
+(`ru` / `en` / `es`) sits side by side, so a missing translation is visible at once.
+Variable interpolation: `%{var}`.
 
-rust-i18n мёржит **все** файлы в этой папке в одно глобальное пространство
-ключей — деление на файлы чисто организационное, по областям UI:
+rust-i18n merges **all** files in this folder into one global
+key space — splitting into files is purely organisational, by UI area:
 
-| Файл               | Область                                                       |
+| File               | Area                                                          |
 |--------------------|--------------------------------------------------------------|
-| `shell.yml`        | верхняя панель, статус-бар, тулбар, чарт-вкладка/окно         |
-| `crowd.yml`        | статистика толпы на пустом Main и её тумблер                  |
-| `strategies.yml`   | окно «Стратегии» (дерево, фильтр, параметры, контекст-меню)   |
-| `orders.yml`       | правая панель ордера + таблица ордеров в нижнем доке          |
-| `dock.yml`         | вкладки нижнего дока, открепление, лог, заглушки панелей      |
-| `settings.yml`     | окно настроек: общее + ярлыки вкладок                         |
-| `interface.yml`    | вкладка «Интерфейс» (тема, `theme.toml`)                      |
-| `general.yml`      | вкладка «Общие»                                               |
-| `connections.yml`  | вкладка «Подключения» (ядра, группы, статусы, колонки, тултипы) |
-| `hotkeys.yml`      | вкладка «Хоткеи»                                               |
-| `security.yml`     | блок «Безопасность» в «Общих» + окно входа по паролю            |
-| `telegram_core.yml`| вкладка «Telegram»: встроенный ридер выбранного ядра          |
-| `report.yml`       | панель «Отчёт» (колонки, фильтры, итоги)                      |
-| `assets.yml`       | окно/панель «Активы» (колонки, кошельки)                      |
-| `dialogs.yml`      | диалоги создания/переименования/удаления + общие кнопки       |
-| `errors.yml`       | сообщения об ошибках (валидация, GPU)                         |
-| `common.yml`       | строки, общие для нескольких панелей (загрузка, ошибки чтения БД) |
-| `city.yml`         | названия городов для выбора пояса в часах шапки               |
-| `workspace.yml`    | режим автоторговли, навигация по ядрам и статусы доступности  |
-| `core_expert.yml`  | окно «Настройки ядра — экспертный режим» (вкладки Moonbot, состояния страницы) |
-| `sounds.yml`       | свои звуки: блок папки на вкладке «Звуки сделок», тост «звук не найден», пометка «нет файла» |
+| `shell.yml`        | top bar, status bar, toolbar, chart tab/window                |
+| `crowd.yml`        | crowd stats on empty Main and its toggle                      |
+| `strategies.yml`   | the Strategies window (tree, filter, parameters, context menu)|
+| `orders.yml`       | the right-hand order panel + the orders table in the bottom dock |
+| `dock.yml`         | bottom-dock tabs, detaching, log, panel stubs                 |
+| `settings.yml`     | Settings window: shared chrome + tab labels                   |
+| `interface.yml`    | the Interface tab (theme, `theme.toml`)                       |
+| `general.yml`      | the General tab                                               |
+| `connections.yml`  | the Connections tab (cores, groups, statuses, columns, tooltips) |
+| `hotkeys.yml`      | the Hotkeys tab                                               |
+| `security.yml`     | the Security block in General + the password login window     |
+| `telegram_core.yml`| the Telegram tab: the selected core's built-in reader         |
+| `report.yml`       | the Report panel (columns, filters, totals)                   |
+| `assets.yml`       | the Assets window/panel (columns, wallets)                    |
+| `dialogs.yml`      | create/rename/delete dialogs + shared buttons                 |
+| `errors.yml`       | error messages (validation, GPU)                              |
+| `common.yml`       | strings shared by several panels (loading, DB-read errors)    |
+| `city.yml`         | city names for the header-clock zone picker                   |
+| `workspace.yml`    | auto-trading mode, core navigation and availability statuses  |
+| `core_expert.yml`  | the Core settings — expert mode window (Moonbot tabs, page states) |
+| `sounds.yml`       | own sounds: the folder block on the Trade sounds tab, the Sound not found toast, the no file mark |
 
-Новый раздел UI → новый файл; ключ именуем `<область>.<...>` (точка как разделитель).
+A new UI section → a new file; we name the key `<area>.<...>` (dot as the separator).
 
-## Намеренно НЕ переводим
+## Deliberately NOT translated
 
-Отраслевой стандарт / тех-метрики оставляем как есть на всех языках:
+Industry standard / tech metrics we leave as they are in every language:
 
     BUY · SELL · Cancel Buy · PANIC SELL · LONG · SHORT · ON · OFF · Live
-    Spot · Futures · Quarterly (типы рынка в названиях бирж)
+    Spot · Futures · Quarterly (market kinds in exchange names)
     Size · Sell · SL · TP · Lev · TS · VStop · Buy · Fill · Strat · Host · Port
-    USDT eq. в подписи Size, USDT eq. — техническое обозначение эквивалента
-    PRO · FREE (названия тарифов)
-    Hotkeys (ярлык вкладки в экспертных настройках ядра — так же подписан в самом Moonbot)
-    Copy to ClipBoard · Paste (кнопки «Переноса настроек» — в Moonbot они латиницей на всех языках)
-    HMAC · RSA · @MBOnlineBot · RU/EN/ES (вкладка «Логин» экспертных настроек — так же в Moonbot)
-    Remote · System (заголовки секций вкладки «Специальные» — в Moonbot латиницей на всех языках)
-    Orders Controls · Fixed Order Sizes · Fixed Sell Prices · Manual strategies (внутренние вкладки Hotkeys — так же в Moonbot)
-    Max Orders · Listen UDP port · UDP Commands Port/Pass · Control VDS IP (подписи «Специальных» — так же в Moonbot)
-    Add @TMoonBot to your channel · Generate PIN code · Reset channel · Cancel buys · Apply (кнопки «Специальных» — так же в Moonbot)
-    RTT · MTU (сетевые аббревиатуры в телеметрии старта ядра)
-    строку метрик статус-бара (ticks / book / fps / present / CPU / RAM)
-    вкладка Настройки → «Линии» целиком (Buy/Sell/Stop/dashed/knots/…)
-    технические колонки «Отчёта»: ID · TaskID · ExOrderID · Strat · BaseCur · Sell set
-    трёхбуквенные коды городов в часах шапки (WAW · NYC · TYO …) — они как тикеры;
-    сами НАЗВАНИЯ городов переводим, они лежат в `city.yml`
+    USDT eq. in the Size, USDT eq. caption — a technical equivalent label
+    PRO · FREE (plan names)
+    Hotkeys (the tab label in expert core settings — labelled the same in Moonbot itself)
+    Copy to ClipBoard · Paste (the Settings transfer buttons — in Moonbot they are Latin in every language)
+    HMAC · RSA · @MBOnlineBot · RU/EN/ES (the Login tab of expert settings — the same in Moonbot)
+    Remote · System (section headings of the Special tab — in Moonbot Latin in every language)
+    Orders Controls · Fixed Order Sizes · Fixed Sell Prices · Manual strategies (inner Hotkeys tabs — the same in Moonbot)
+    Max Orders · Listen UDP port · UDP Commands Port/Pass · Control VDS IP (Special labels — the same in Moonbot)
+    Add @TMoonBot to your channel · Generate PIN code · Reset channel · Cancel buys · Apply (Special buttons — the same in Moonbot)
+    RTT · MTU (network abbreviations in core-start telemetry)
+    the status-bar metrics line (ticks / book / fps / present / CPU / RAM)
+    the Settings → Lines tab in full (Buy/Sell/Stop/dashed/knots/…)
+    technical Report columns: ID · TaskID · ExOrderID · Strat · BaseCur · Sell set
+    three-letter city codes in the header clock (WAW · NYC · TYO …) — they are like tickers;
+    the city NAMES themselves we do translate, they live in `city.yml`
 
-## Иконки-глифы на кнопках (правило для будущего подключения `t!`)
+## Glyph icons on buttons (the rule for wiring `t!` up later)
 
-Глифы (`⚙ ▶ ⏸ ↩ + ■ 🔍 ▾`) в значениях словаря **не храним** — в словаре только
-чистый переводимый текст. На кнопке глиф ставится **отдельным сегментом** рядом с
-текстом, как уже сделано с лупой `🔍` в `controls.rs`:
+Glyphs (`⚙ ▶ ⏸ ↩ + ■ 🔍 ▾`) we **do not store** in dictionary values — the dictionary holds only
+clean translatable text. On a button the glyph is placed as a **separate segment** next to
+the text, as already done with the `🔍` magnifier in `controls.rs`:
 
 ```rust
 MoonButton::new("settings")
-    .segment(MoonButtonSegment::new("⚙"))            // глиф — не переводится
-    .segment(MoonButtonSegment::new(t!("shell.settings_btn")))  // текст — из словаря
+    .segment(MoonButtonSegment::new("⚙"))            // glyph — not translated
+    .segment(MoonButtonSegment::new(t!("shell.settings_btn")))  // text — from the dictionary
 ```
 
-Почему так: иконка одинакова во всех языках, переводчик её не теряет, а строки
-в `*.yml` остаются чистыми. Настоящие векторные иконки (`MoonButton::icon(path)` /
-`leading_icon`/`trailing_icon`) к локали отношения не имеют — их трогать не нужно.
+Why: the icon is the same in every language, a translator cannot lose it, and the strings
+in `*.yml` stay clean. Real vector icons (`MoonButton::icon(path)` /
+`leading_icon`/`trailing_icon`) have nothing to do with locale — they need not be touched.
 
-Текст и подсказки во всех компонентах MoonUI принимают `Into<SharedString>`, поэтому
-`t!("ключ")` подставляется напрямую: `.label()`, `.segment()`, `.text_segment()`,
+Text and tooltips in every MoonUI component take `Into<SharedString>`, so
+`t!("key")` is substituted directly: `.label()`, `.segment()`, `.text_segment()`,
 `.tooltip()`, `MoonTooltipView::new()`, `MoonMenuItem::with_key(id, …)`,
 `MoonDataTableColumn::new(id, …)`.
 
-## Статус подключения (важно)
+## Connection status (important)
 
-Словари подключены в `crates/moon-ui-gpui/src/main.rs` через:
+The dictionaries are wired in `crates/moon-ui-gpui/src/main.rs` through:
 
 ```rust
 rust_i18n::i18n!("../../locales", fallback = "en");
 ```
 
-В коде терминала использовать `rust_i18n::t`, новые строки добавлять в отдельный
-`*.yml` по области UI.
+In the terminal code use `rust_i18n::t`, add new strings to a separate
+`*.yml` by UI area.

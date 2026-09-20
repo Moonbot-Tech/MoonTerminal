@@ -15,7 +15,7 @@
 //! - **A drifted lock nobody committed.** These assertions only run against whatever
 //!   `Cargo.lock` is on disk; they cannot tell a stale-but-honest lock from a stale-and-silently-
 //!   diverged one. That is `cargo fetch --locked`'s job in `build.yml`, run before anything here.
-//! - **The sibling MoonUI override workflow.** `docs/ARCHITECTURE.md` ("Локальная разработка")
+//! - **The sibling MoonUI override workflow.** `docs/ARCHITECTURE.md` ("Local development")
 //!   documents an ignored `.cargo/config.toml` at the workspace root that `[patch]`es the three
 //!   MoonUI crates to a local checkout — which legitimately rewrites `Cargo.lock` with `path`
 //!   entries for the duration of that work. CI never has that file, so the invariant below still
@@ -46,7 +46,7 @@ fn lock_text() -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
-/// The documented local-override marker (`docs/ARCHITECTURE.md`, "Локальная разработка"). Its
+/// The documented local-override marker (`docs/ARCHITECTURE.md`, "Local development"). Its
 /// presence means the on-disk `Cargo.lock` was deliberately rewritten with `path` entries for
 /// the three MoonUI crates and no longer reflects what CI, which never has this file, compiles.
 fn override_active() -> bool {
