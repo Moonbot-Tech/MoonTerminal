@@ -508,7 +508,7 @@ fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
             && !firetest.contains("fs::read_to_string")
             && !firetest.contains("run_ui_overlay_contract")
             && !firetest.contains("PRE_CHART_TESTS"),
-        "FireTest не должен читать исходники; статические архитектурные проверки живут в tests/theme_contract.rs"
+        "FireTest must not read the sources; static architectural checks live in tests/theme_contract.rs"
     );
     assert!(
         firetest.contains("\"chart-smoke\" => Script::ChartSmoke")
@@ -518,7 +518,7 @@ fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
         "new UI/chart checks must be added to chart-smoke stages, not separate debug scripts"
     );
     assert!(
-        docs.contains("находит реальные bounds графика")
+        docs.contains("resolves the chart's real bounds")
             && docs.contains("stage=idle_floor")
             && docs.contains("stage=command_error_contract")
             && docs.contains("stage=tool_windows_open")
@@ -529,11 +529,11 @@ fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
             && docs.contains("stage=price_scale_50")
             && docs.contains("stage=price_scale_20")
             && docs.contains("stage=price_scale_auto")
-            && docs.contains("настоящий оконный input path")
-            && docs.contains("FireTest проверяет поведение и нагрузку")
+            && docs.contains("a real windowed input path")
+            && docs.contains("FireTest checks behaviour and load")
             && !docs.contains("include_str!")
             && !docs.contains("source contract"),
-        "docs/FIRETEST.md должен описывать FireTest как runtime/perf сценарий, а не статическую проверку исходников"
+        "docs/FIRETEST.md must describe FireTest as a runtime/perf scenario, not a static check over the source text"
     );
 }
 

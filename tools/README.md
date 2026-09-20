@@ -1,111 +1,111 @@
 # tools/
 
-| Что | Где |
+| What | Where |
 |---|---|
-| Генератор страницы-туториала (`docs/tour/index.html`) | [`tour/`](tour/README.md) |
-| Бенчмарк рендера (нативный Rust vs Tauri) | этот файл, ниже |
+| Tutorial page generator (`docs/tour/index.html`) | [`tour/`](tour/README.md) |
+| Render benchmark (native Rust vs Tauri) | this file, below |
 
 ---
 
-# Бенчмарк: нативный Rust vs Tauri (CPU / GPU / RAM / кадры)
+# Benchmark: native Rust vs Tauri (CPU / GPU / RAM / frames)
 
-Инструменты для честного сравнения двух рендеров под **одинаковой воспроизводимой нагрузкой**.
+Tools for an honest comparison of two renderers under **the same reproducible load**.
 
-## Что входит
+## What is included
 
-- **`bench.ps1`** — замер CPU/GPU/RAM по ВСЕМУ дереву процессов (натив = один процесс;
-  Tauri = `app.exe` + потомки `msedgewebview2.exe`), + кадры/латентность через PresentMon.
-- **Синт/стресс-режим** (env-флаги) — оба бинаря сами наращивают нагрузку: каждые N секунд
-  открывают новое чарт-ОКНО с M синт-панелями, до K окон. Данные — **детерминированный
-  синтетический фид** (одинаковый в обоих). Реализация в нативе: [`crates/moon-core/src/feed/synth.rs`](../crates/moon-core/src/feed/synth.rs).
+- **`bench.ps1`** — measures CPU/GPU/RAM over the WHOLE process tree (native = one process;
+  Tauri = `app.exe` + `msedgewebview2.exe` children), + frames/latency via PresentMon.
+- **Synth/stress mode** (env flags) — both binaries ramp the load themselves: every N seconds
+  they open a new chart WINDOW with M synth panels, up to K windows. The data is a **deterministic
+  synthetic feed** (the same in both). Native implementation: [`crates/moon-core/src/feed/synth.rs`](../crates/moon-core/src/feed/synth.rs).
 
-## Зачем синтетика, а не живой рынок
+## Why synthetic data rather than a live market
 
-Рыночный шум убивает сравнение (активность разная в каждый прогон). Синт-фид гонит
-**фиксированную частоту** тиков/стакана с сидом → нагрузка идентична между прогонами И между
-бинарями. Реальные серверы при этом подключаются как обычно (их фон тоже попадает в замер) —
-синтетика только у тест-панелей. Для **чистого** сравнения рендера держи реальные ядра
-выключенными или сравнивай дельту рампа (RAM/CPU до и после раскрытия окон).
+Market noise kills the comparison (activity differs every run). The synth feed drives a
+**fixed rate** of ticks/order book with a seed → the load is identical across runs AND across
+binaries. Real servers still connect as usual (their background also lands in the measurement) —
+synthetic data is only on the test panels. For a **clean** render comparison keep real cores
+off, or compare the ramp delta (RAM/CPU before and after the windows open).
 
-## Env-флаги (одинаковые для обоих бинарей)
+## Env flags (the same for both binaries)
 
-| Флаг | Деф. | Что |
+| Flag | Def. | What |
 |------|------|-----|
-| `MOON_SYNTH` | — | вкл. синт-ядро (рынки `SYNTH0..`), рядом с реальными |
-| `MOON_SYNTH_MARKETS` | =charts | сколько синт-рынков кормить |
-| `MOON_SYNTH_TPS` | 50 | тиков/сек на рынок |
-| `MOON_SYNTH_BOOKHZ` | 20 | обновлений стакана/сек на рынок |
-| `MOON_SYNTH_DEPTH` | 50 | уровней на сторону стакана |
-| `MOON_SYNTH_SEED` | 1 | сид ценового блуждателя (воспроизводимость) |
-| `MOON_STRESS` | — | вкл. стресс-рамп окон |
-| `MOON_STRESS_INTERVAL_MS` | 10000 | период появления нового окна |
-| `MOON_STRESS_WINDOWS` | 10 | макс. окон |
-| `MOON_STRESS_CHARTS` | 5 | панелей в каждом окне |
+| `MOON_SYNTH` | — | turn on the synth core (markets `SYNTH0..`), next to the real ones |
+| `MOON_SYNTH_MARKETS` | =charts | how many synth markets to feed |
+| `MOON_SYNTH_TPS` | 50 | ticks/sec per market |
+| `MOON_SYNTH_BOOKHZ` | 20 | order-book updates/sec per market |
+| `MOON_SYNTH_DEPTH` | 50 | levels per side of the order book |
+| `MOON_SYNTH_SEED` | 1 | price-walker seed (reproducibility) |
+| `MOON_STRESS` | — | turn on the window stress ramp |
+| `MOON_STRESS_INTERVAL_MS` | 10000 | period for a new window to appear |
+| `MOON_STRESS_WINDOWS` | 10 | max windows |
+| `MOON_STRESS_CHARTS` | 5 | panels in each window |
 
-Итог по умолчанию: **10 окон × 5 панелей = 50 панелей** одновременно, нарастая по 5 каждые
-10 с. CPU/GPU/RAM растут ступенями — видно, как рендер масштабируется по числу окон/панелей.
+Default outcome: **10 windows × 5 panels = 50 panels** at once, growing by 5 every
+10 s. CPU/GPU/RAM grow in steps — you see how the renderer scales with the number of windows/panels.
 
-## Процедура (Windows, от админа)
+## Procedure (Windows, as administrator)
 
-### 0. Уравнять условия
-Оба окна — **одинаковый размер в физ. пикселях**, один монитор/DPI, 60 Гц, питание High
-performance, на переднем плане. DevTools закрыты.
+### 0. Level the conditions
+Both windows — **the same size in physical pixels**, one monitor/DPI, 60 Hz, High
+performance power, in the foreground. DevTools closed.
 
-### 1. Собрать оба в RELEASE
+### 1. Build both in RELEASE
 ```powershell
-# Натив
+# Native
 cargo build --release          # → target/release/moonterminal.exe
 # Tauri
 npm run tauri build            # → src-tauri/target/release/<exe>
 ```
 
-### 2. Запуск с синт/стресс-нагрузкой
+### 2. Run with the synthetic/stress load
 ```powershell
 $env:MOON_SYNTH=1; $env:MOON_STRESS=1
 & .\target\release\moonterminal.exe
 ```
-Дай окнам раскрыться: 10×10с ≈ **100 с** до полного рампа.
-**Не закрывай и не трогай окна** — это и есть измеряемая нагрузка; она держится, пока
-приложение живо.
+Let the windows open: 10×10s ≈ **100 s** until the ramp is complete.
+**Do not close or touch the windows** — that is the load being measured; it holds while
+the application is alive.
 
-### 3. Замер (в другом окне терминала)
+### 3. Measure (from another terminal window)
 ```powershell
-# Натив — один процесс. WarmupSec ≥ windows×interval, чтобы замер шёл ПОСЛЕ рампа.
+# Native — one process. WarmupSec ≥ windows×interval, so the measurement runs AFTER the ramp.
 ./tools/bench.ps1 -RootProcess moonterminal -DurationSec 175 -WarmupSec 115 -Label native
 
-# Tauri — дерево процессов + кадры через PresentMon (GPU-счётчик для Tauri ненадёжен, см. ниже)
+# Tauri — process tree + frames via PresentMon (the GPU counter for Tauri is unreliable, see below)
 ./tools/bench.ps1 -RootProcess <tauri-exe> -DurationSec 175 -WarmupSec 115 -Label tauri `
    -PresentMonPath C:\tools\PresentMon.exe -PresentProcess msedgewebview2.exe
 ```
 
-### 4. Сравнить
-`tools/bench-out/*-summary.csv` — медианы CPU/GPU/RAM. PresentMon-строка — fps, frame_ms
-p50/p95/**p99**, dropped. Делай **N≥3** прогона каждого, сравнивай медианы. Хвосты (p99,
-dropped) важнее среднего — ровная задержка глазу незаметнее одного дропа.
+### 4. Compare
+`tools/bench-out/*-summary.csv` — CPU/GPU/RAM medians. The PresentMon row — fps, frame_ms
+p50/p95/**p99**, dropped. Do **N≥3** runs of each, compare medians. Tails (p99,
+dropped) matter more than the average — a steady delay is less visible to the eye than one drop.
 
-## Грабли (проверено на практике)
+## Pitfalls (found the hard way)
 
-- **Считается ВСЁ дерево процессов** корня (`-RootProcess` + потомки). Для Tauri это
-  автоматически включает все `msedgewebview2.exe` — НЕ считай только `app.exe`.
-- **`bench.ps1` в UTF-8 без BOM** не парсится Windows PowerShell **5.1** (кириллица ломает
-  токенайзер). Запускай через **PowerShell 7 (`pwsh`)** или из копии файла с UTF-8 BOM.
-- **GPU через `Get-Counter '\GPU Engine(*)'` дико тормозит при многих окнах** (число
-  GPU-инстансов взрывается при 10 окнах → каждый семпл всё медленнее, цикл может «зависнуть»
-  на минуты). Для строгого GPU/кадров используй **PresentMon** (`-PresentMonPath`), а не
-  встроенный счётчик. Для натива present-процесс = сам exe; для Tauri = `msedgewebview2.exe`.
-- **`WarmupSec` ≥ `windows × interval_ms/1000`** (для дефолта — ≥100с, бери 115), иначе в
-  замер попадёт фаза рампа и медианы поедут.
-- **RAM working set** на GPU-приложении (Vulkan/ReBAR) включает маппинг VRAM — абсолютное
-  число большое; смотри на **дельту** рампа, а не на абсолют. Это не OOM.
+- **The WHOLE process tree** of the root is counted (`-RootProcess` + children). For Tauri this
+  automatically includes every `msedgewebview2.exe` — do NOT count only `app.exe`.
+- **`bench.ps1` in UTF-8 without BOM** is not parsed by Windows PowerShell **5.1** (Cyrillic breaks
+  the tokenizer). Run it through **PowerShell 7 (`pwsh`)** or from a copy of the file with a UTF-8 BOM.
+- **GPU via `Get-Counter '\GPU Engine(*)'` slows badly with many windows** (the number of
+  GPU instances explodes at 10 windows → each sample gets slower, the loop can “hang”
+  for minutes). For strict GPU/frames use **PresentMon** (`-PresentMonPath`), not
+  the built-in counter. For native the present-process = the exe itself; for Tauri = `msedgewebview2.exe`.
+- **`WarmupSec` ≥ `windows × interval_ms/1000`** (for the default — ≥100s, take 115), otherwise the
+  ramp phase lands in the measurement and the medians drift.
+- **RAM working set** on a GPU application (Vulkan/ReBAR) includes the VRAM mapping — the absolute
+  number is large; look at the ramp **delta**, not the absolute. This is not OOM.
 
-## Опорные числа (натив, 10 окон × 5 панелей, n=60 в стабиле)
+## Reference numbers (native, 10 windows × 5 panels, n=60 once stable)
 
-Снято на 24-логических ядрах, 61.6 GB RAM, поверх живой реальной сессии:
+Taken on 24 logical cores, 61.6 GB RAM, on top of a live real session:
 
-| Метрика | mean | median | p95 | p99/max |
+| Metric | mean | median | p95 | p99/max |
 |---|---|---|---|---|
-| CPU % (вся машина) | 7.38 | **7.1** | 8.92 | 10.94 |
-| GPU % (3D-движок) | 12.34 | **11.73** | 16.89 | 17.43 |
+| CPU % (whole machine) | 7.38 | **7.1** | 8.92 | 10.94 |
+| GPU % (3D engine) | 12.34 | **11.73** | 16.89 | 17.43 |
 
-Дельта RAM рампа ≈ **+2.4 GB** (35.1 → 37.9 GB при раскрытии 10 окон). Это ориентир, а не
-абсолют — для сравнения с Tauri важны медианы CPU/GPU и frame_ms из PresentMon.
+Ramp RAM delta ≈ **+2.4 GB** (35.1 → 37.9 GB as 10 windows open). This is a landmark, not an
+absolute — for comparison with Tauri the CPU/GPU medians and PresentMon frame_ms matter.
