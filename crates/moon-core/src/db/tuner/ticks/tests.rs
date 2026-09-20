@@ -11,6 +11,7 @@ use crate::feed::types::Side;
 
 /// The ignored run over a live data root.
 mod real_data;
+mod required;
 
 fn tick(t_ms: i64, price: f64, side: Side) -> Tick {
     Tick {

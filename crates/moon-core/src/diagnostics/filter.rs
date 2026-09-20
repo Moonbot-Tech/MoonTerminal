@@ -32,8 +32,11 @@ use super::config::DiagCfg;
 /// Raised for `panels::chart` alone rather than the whole binary: that subtree is where the money
 /// paths log — the manual order, its refusals, the shot — and it is a handful of event-driven
 /// lines, whereas the binary at large has never had its volume at `info` measured even once.
-pub const DEFAULT_BASE_FILTER: &str =
-    "warn,moonterminal::panels::chart=info,moon_gpui=info,moon_core=info";
+/// [`TICKS_AXIS_TARGET`] is the one other raise, for the same reason: one line per load of the
+/// tuner's Entry/Exit axis and one per deal it asks the venue for, written so a batch that looks
+/// stuck can be read instead of guessed.
+pub const DEFAULT_BASE_FILTER: &str = "warn,moonterminal::panels::chart=info,\
+    moonterminal::analytics::tuner::ticks=info,moon_gpui=info,moon_core=info";
 
 /// Module prefix carrying balance-repair tracing (`feed::live` and its children).
 const BALANCES_TARGET: &str = "moon_core::feed::live";
@@ -139,3 +142,10 @@ pub fn filter_rejection(filter: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests;
+
+/// Explicit `target:` of the tuner Entry/Exit axis' lines — its load and its per-deal tape
+/// fetch — raised to `info` by [`DEFAULT_BASE_FILTER`]. Named here, beside the directive, so the
+/// two cannot drift apart: the axis logs with this constant as its target rather than with its
+/// own `module_path!()`, which would be muted again by the binary's `warn` baseline the day the
+/// module moved.
+pub const TICKS_AXIS_TARGET: &str = "moonterminal::analytics::tuner::ticks";

@@ -3,9 +3,12 @@
 //! Stage A reads the scope's deals, the whole-scope "Fact" KPI (the same SQL every axis'
 //! "Fact" comes from) and the grid's "now" values off the database. Its completion resolves,
 //! on the UI thread, where each deal's prints live — the core's exchange key and the coin's
-//! market, which only the live market source knows — and starts stage B, which asks the
-//! replay worker for the held tape of every deal, reads the archived entry line, and runs the
-//! model on the parameters as of the buy. The axis' `LoadState` stays "loading" across both.
+//! market, which only the live market source knows — and publishes the rows at once, without
+//! their tape (stage B). Stage C then asks the replay worker for the held tape of every row in
+//! ONE batch of queries, reads the archived entry lines, runs the model on the parameters as
+//! of the buy, and folds the answers into the published rows. In one batch, because the worker
+//! is one thread that serves held queries only between its walks: asked one at a time, a
+//! thousand rows would each wait for a walk of the fetch batch that may be running.
 //!
 //! This file only ever WRITES `TicksState`; the rendering only reads it.
 
@@ -23,7 +26,7 @@ use crate::analytics::refresh::{CatchUpOutcome, report_result_is_stale};
 use moon_core::db::ReadFail;
 use moon_core::db::order_traces::{TraceEntry, read_many};
 use moon_core::db::tuner::ticks::{
-    Deal, DealsRead, EntryParams, entry_model_for, infer_tick, params, verify,
+    Deal, DealsRead, EntryParams, entry_model_for, infer_tick, params, required_spans, verify,
 };
 use moon_core::db::tuner::{VarStats, Variant, strategy_current_values, strategy_values_at};
 use moon_core::feed::report_traces::ArchivedLineKind;
@@ -32,12 +35,11 @@ use moon_core::market::trade_replay::{
     Coverage, TickQuery, margin_ms, query_held, replay_window_ms,
 };
 
-/// How long stage B waits for the worker's answer on one deal. The worker serves a held
-/// query right after candle jobs, so an answer past this means the worker is gone.
-const HELD_ANSWER_WAIT: Duration = Duration::from_secs(10);
-
-/// The tape must reach this far back before the buy for the corridor to have a run-up.
-const RUN_UP_MS: i64 = 30_000;
+/// How long a held query waits for the worker's answer. The worker serves a held query
+/// between its jobs, and a walk of the fetch batch can hold it for up to its trade deadline
+/// plus a candle stage, with chart windows' own stages queued ahead; past this the rows still
+/// unanswered fold as missing, and the log says how many.
+const HELD_ANSWER_WAIT: Duration = Duration::from_secs(240);
 
 /// What stage A brings back.
 type StageA = (
@@ -73,12 +75,10 @@ impl AnalyticsView {
         self.latest_reads.cancel(&[
             ReadLane::Ticks,
             ReadLane::TicksReplay,
-            ReadLane::TicksFetch,
             ReadLane::TicksVariants,
             ReadLane::TicksSearch,
         ]);
         self.ticks.seq = self.ticks.seq.wrapping_add(1);
-        self.ticks.fetch.clear();
         // A search over the previous deal set answers nothing about the new one; the lane
         // cancel above does not reach its handle, only this does.
         self.ticks.stop_search();
@@ -95,6 +95,26 @@ impl AnalyticsView {
             cx,
             move || {
                 let deals = moon_core::db::tuner::ticks::read_deals(&q);
+                // One line per load, so "no deals" can be read against the scope that was
+                // actually asked — period, strategies — instead of guessed from the panel.
+                match &deals {
+                    Ok(read) => log::info!(
+                        target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+                        "[x] ticks load: {} deal(s) with ms stamps, {} without, period {}..{}, {} strategy target(s)",
+                        read.deals.len(),
+                        read.without_ms,
+                        q.from,
+                        q.to,
+                        q.strategies.len()
+                    ),
+                    Err(error) => log::info!(
+                        target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+                        "[x] ticks load failed: {error:?}, period {}..{}, {} strategy target(s)",
+                        q.from,
+                        q.to,
+                        q.strategies.len()
+                    ),
+                }
                 let fact = moon_core::db::tuner::variant_stats(&q, &[Variant::default()]);
                 let now = now_values(&targets, &keys);
                 (deals, fact, now)
@@ -177,9 +197,7 @@ impl AnalyticsView {
         out
     }
 
-    /// Stage B: the held tape of every deal, the archived entry line, the model on the
-    /// parameters as of the buy. Off the UI thread; the worker's answers are waited for one
-    /// at a time.
+    /// Stage B: the rows, published at once without their tape; stage C follows.
     #[allow(clippy::too_many_arguments)]
     fn start_replay_stage(
         &mut self,
@@ -192,13 +210,12 @@ impl AnalyticsView {
         addresses: HashMap<(u64, String), Option<Arc<RowAddress>>>,
         cx: &mut Context<Self>,
     ) {
-        let defaults = self.filter_defaults(cx);
         self.spawn_latest_db(
             &[ReadLane::TicksReplay],
             false,
             cx,
             move || {
-                let mut rows: Vec<DealRow> = read
+                let rows: Vec<DealRow> = read
                     .deals
                     .into_iter()
                     .map(|deal| {
@@ -220,16 +237,6 @@ impl AnalyticsView {
                         }
                     })
                     .collect();
-                let mut traces = archived_lines(&rows);
-                for row in &mut rows {
-                    // Each row waits on the worker; a scope change cancels this lane, and the
-                    // wait is not a statement the progress handler could interrupt.
-                    if moon_core::db::current_is_cancelled() {
-                        break;
-                    }
-                    let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
-                    replay_row(row, &defaults, lines);
-                }
                 let mut kinds: Vec<String> = rows.iter().map(|r| r.deal.kind.clone()).collect();
                 kinds.sort();
                 kinds.dedup();
@@ -253,8 +260,12 @@ impl AnalyticsView {
                 this.ticks.dirty =
                     report_result_is_stale(report_req, this.current_report_generation(), false);
                 this.ticks.publish(Ok(data), false);
-                // The replayable set may have changed under the variant columns: rescore them.
-                this.arm_ticks_variants(cx);
+                // The fetch job runs on across reloads and windows: a window that finds a batch
+                // running listens to it from here on.
+                if super::fetch::job::progress().active {
+                    this.attach_fetch_listener(cx);
+                }
+                this.start_tape_stage(req, cx);
                 if after_report {
                     this.settle_report_refresh_retry(false, cx);
                 }
@@ -262,6 +273,146 @@ impl AnalyticsView {
             },
         );
     }
+
+    /// Stage C: the held tape of every published row, asked from the worker in one batch, the
+    /// archived entry lines, and the model on the parameters as of the buy — folded into the
+    /// rows when all of it is in.
+    fn start_tape_stage(&mut self, req: u64, cx: &mut Context<Self>) {
+        let Some(data) = self.ticks.data.data() else {
+            return;
+        };
+        let targets: Vec<(Deal, Arc<RowAddress>)> = data
+            .rows
+            .iter()
+            .filter_map(|r| Some((r.deal.clone(), r.address.clone()?)))
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        let defaults = self.filter_defaults(cx);
+        self.ticks.tape_reading = true;
+        // The fetch job may answer rows while this stage reads them; the ones it answered after
+        // this instant are read again at the end, or the stage would fold the tape it read
+        // BEFORE the answer over the answer.
+        let reading_since = std::time::Instant::now();
+        self.spawn_latest_db(
+            &[ReadLane::TicksReplay],
+            false,
+            cx,
+            move || {
+                let mut tapes = held_tapes(&targets);
+                let mut rows: Vec<DealRow> = targets
+                    .into_iter()
+                    .map(|(deal, address)| DealRow {
+                        deal,
+                        tape: TapeStatus::Missing,
+                        verdict: None,
+                        address: Some(address),
+                        ticks: None,
+                        entry_start: None,
+                    })
+                    .collect();
+                let mut traces = archived_lines(&rows);
+                for row in &mut rows {
+                    let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
+                    let tape = tapes.remove(&row.deal.report_uid);
+                    replay_row_with(row, &defaults, lines, tape);
+                }
+                // Rows the job answered while the batch was read: read again, each behind
+                // whatever walk is running. A row the job answers during THIS loop is kept
+                // covered by the fold (`update_rows`), not re-read once more.
+                let late = super::fetch::job::finished_after(reading_since);
+                if !late.is_empty() {
+                    let traces = archived_lines(&rows);
+                    for row in rows
+                        .iter_mut()
+                        .filter(|r| late.contains(&r.deal.report_uid))
+                    {
+                        if moon_core::db::current_is_cancelled() {
+                            break;
+                        }
+                        let lines = traces
+                            .get(&row.deal.report_uid)
+                            .cloned()
+                            .unwrap_or_default();
+                        replay_row(row, &defaults, lines);
+                    }
+                }
+                rows
+            },
+            move |this, rows, cx| {
+                if this.ticks.seq != req {
+                    return;
+                }
+                this.ticks.tape_reading = false;
+                this.ticks.update_rows(rows);
+                // The row the fetch job is out for says so again after the fold.
+                this.mark_fetch_in_flight();
+                // The replayable set may have changed under the variant columns: rescore them.
+                this.arm_ticks_variants(cx);
+                cx.notify();
+            },
+        );
+    }
+}
+
+/// The held tape of every target, asked from the worker in one batch and collected in order.
+/// A query the worker did not answer in time, or one cancelled by a scope change, is absent.
+fn held_tapes(targets: &[(Deal, Arc<RowAddress>)]) -> HashMap<i64, HeldTape> {
+    let deadline = std::time::Instant::now() + HELD_ANSWER_WAIT;
+    let asked: Vec<(
+        i64,
+        mpsc::Receiver<moon_core::market::trade_replay::TickAnswer>,
+        Coverage,
+    )> = targets
+        .iter()
+        .filter_map(|(deal, address)| {
+            let (rx, spans) = ask_held(address, deal)?;
+            Some((deal.report_uid, rx, spans))
+        })
+        .collect();
+    let asked_n = asked.len();
+    let mut out = HashMap::with_capacity(asked_n);
+    let mut unanswered = 0usize;
+    for (uid, rx, spans) in asked {
+        if moon_core::db::current_is_cancelled() {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let Ok(answer) = rx.recv_timeout(remaining) else {
+            unanswered += 1;
+            continue;
+        };
+        out.insert(uid, (answer.ticks, answer.covered, spans));
+    }
+    if unanswered > 0 {
+        log::info!(
+            target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+            "[x] ticks load: {unanswered} of {asked_n} held queries unanswered within {} s, folded as missing",
+            HELD_ANSWER_WAIT.as_secs()
+        );
+    }
+    out
+}
+
+/// One held query sent, with the spans it asked for; the answer arrives on the receiver.
+fn ask_held(
+    address: &RowAddress,
+    deal: &Deal,
+) -> Option<(
+    mpsc::Receiver<moon_core::market::trade_replay::TickAnswer>,
+    Coverage,
+)> {
+    let window = replay_window_ms(deal.buy_ms, deal.close_ms, margin_ms())?;
+    let spans = window.focus_spans();
+    let (reply, rx) = mpsc::channel();
+    query_held(TickQuery {
+        exchange_key: address.exchange_key.clone(),
+        market: address.market.clone(),
+        spans: spans.clone(),
+        reply,
+    });
+    Some((rx, spans))
 }
 
 /// The grid's "now" column: every selected strategy's current value per field, folded to
@@ -340,44 +491,49 @@ fn archived_lines(rows: &[DealRow]) -> HashMap<i64, ArchivedLines> {
     out
 }
 
+/// The held prints of one deal's window, their coverage, and the spans that were asked for.
+type HeldTape = (Vec<Tick>, Coverage, Coverage);
+
 /// The held prints of one deal's window, through the worker. `None` when the worker did not
 /// answer in time.
-pub(super) fn held_tape(
-    address: &RowAddress,
-    deal: &Deal,
-) -> Option<(Vec<Tick>, Coverage, Coverage)> {
-    let window = replay_window_ms(deal.buy_ms, deal.close_ms, margin_ms())?;
-    let spans = window.focus_spans();
-    let (reply, rx) = mpsc::channel();
-    query_held(TickQuery {
-        exchange_key: address.exchange_key.clone(),
-        market: address.market.clone(),
-        spans: spans.clone(),
-        reply,
-    });
+pub(super) fn held_tape(address: &RowAddress, deal: &Deal) -> Option<HeldTape> {
+    let (rx, spans) = ask_held(address, deal)?;
     let answer = rx.recv_timeout(HELD_ANSWER_WAIT).ok()?;
     Some((answer.ticks, answer.covered, spans))
 }
 
-/// Run the model on one row, from what the worker holds; a row without an address is left
-/// as it is. A covered row keeps its tape and its archived entry start for the variants.
+/// Run the model on one row, from what the worker holds — asked here, one query; a row
+/// without an address is left as it is.
 pub(super) fn replay_row(row: &mut DealRow, defaults: &HashMap<String, f64>, lines: ArchivedLines) {
+    let tape = row
+        .address
+        .as_ref()
+        .and_then(|address| held_tape(address, &row.deal));
+    replay_row_with(row, defaults, lines, tape);
+}
+
+/// Run the model on one row from a tape already asked for. A covered row keeps its tape and
+/// its archived entry start for the variants; a row without an address is left as it is.
+pub(super) fn replay_row_with(
+    row: &mut DealRow,
+    defaults: &HashMap<String, f64>,
+    lines: ArchivedLines,
+    tape: Option<HeldTape>,
+) {
     row.ticks = None;
     row.entry_start = lines.entry_start;
     let Some(address) = row.address.clone() else {
         return;
     };
-    let Some((ticks, covered, spans)) = held_tape(&address, &row.deal) else {
+    let Some((ticks, covered, spans)) = tape else {
         row.tape = TapeStatus::Missing;
         row.verdict = None;
         return;
     };
-    let first = ticks.first().map(|t| t.time_ms as i64);
-    let last = ticks.last().map(|t| t.time_ms as i64);
-    let complete = covered.covers(&spans)
-        && first.is_some_and(|f| f <= row.deal.buy_ms - RUN_UP_MS)
-        && last.is_some_and(|l| l >= row.deal.close_ms);
-    if !complete {
+    // Coverage is the worker's own word on what was walked; a quiet run-up with no print in it
+    // is covered all the same, which the tape's first stamp could not tell from a missing one.
+    // What must be covered is the model's own rule (`required_spans`), not the whole margin.
+    if ticks.is_empty() || !covered.covers(&required_spans(&row.deal, &spans)) {
         row.tape = TapeStatus::Missing;
         row.verdict = None;
         return;

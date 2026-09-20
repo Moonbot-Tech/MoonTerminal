@@ -26,11 +26,8 @@ use crate::db::analytics::Query;
 use crate::db::order_traces::{TraceEntry, read_many};
 use crate::db::tuner::strategy_values_at;
 use crate::feed::report_traces::ArchivedLineKind;
-use crate::market::trade_replay::{Coverage, TickQuery, query_held};
+use crate::market::trade_replay::{Coverage, TickQuery, query_held, replay_window_ms};
 use crate::symbol::{coin_match_key, coin_of_market};
-
-/// The tape must reach this far back before the buy for the corridor to have a run-up.
-const RUN_UP_MS: i64 = 30_000;
 
 /// The archived first point of an entry line and every point of an exit line.
 type ArchivedLines = (Option<(i64, f64)>, Option<Vec<(i64, f64)>>);
@@ -57,17 +54,18 @@ fn archived_lines(deal: &Deal) -> ArchivedLines {
     }
 }
 
-/// The held prints for a deal under one `(exchange, market)` spelling, through the worker.
-fn held_ticks(exchange_key: &str, market: &str, from_ms: i64, to_ms: i64) -> Vec<Tick> {
+/// The held prints of one market spelling inside the spans, through the worker, and its
+/// coverage of them.
+fn held_ticks(exchange_key: &str, market: &str, spans: &Coverage) -> (Vec<Tick>, Coverage) {
     let (reply, rx) = mpsc::channel();
     query_held(TickQuery {
         exchange_key: exchange_key.to_string(),
         market: market.to_string(),
-        spans: Coverage::one((from_ms, to_ms)),
+        spans: spans.clone(),
         reply,
     });
     rx.recv_timeout(Duration::from_secs(10))
-        .map(|answer| answer.ticks)
+        .map(|answer| (answer.ticks, answer.covered))
         .unwrap_or_default()
 }
 
@@ -135,25 +133,27 @@ fn real_data_reproduction() {
             continue;
         };
         let coin_key = coin_match_key(&deal.coin);
+        // The same window and the same gate the axis applies (`load.rs::replay_row`): the
+        // worker's coverage must include `required_spans`, whatever the prints say.
+        let Some(window) = replay_window_ms(deal.buy_ms, deal.close_ms, margin_ms) else {
+            continue;
+        };
+        let spans = window.focus_spans();
         let mut ticks: Vec<Tick> = Vec::new();
+        let mut covered = Coverage::none();
         for (exchange, market) in pairs
             .iter()
             .filter(|(_, m)| coin_match_key(coin_of_market(m)) == coin_key)
         {
-            ticks.extend(held_ticks(
-                exchange,
-                market,
-                deal.buy_ms - margin_ms,
-                deal.close_ms + margin_ms,
-            ));
+            let (held, held_covered) = held_ticks(exchange, market, &spans);
+            ticks.extend(held);
+            for &span in held_covered.spans() {
+                covered.add(span);
+            }
         }
         ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
         ticks.dedup_by(|a, b| a.time_ms == b.time_ms && a.price == b.price && a.qty == b.qty);
-        let first = ticks.first().map(|t| t.time_ms as i64);
-        let last = ticks.last().map(|t| t.time_ms as i64);
-        if first.is_none_or(|f| f > deal.buy_ms - RUN_UP_MS)
-            || last.is_none_or(|l| l < deal.close_ms)
-        {
+        if ticks.is_empty() || !covered.covers(&required_spans(&deal, &spans)) {
             continue;
         }
         with_tape += 1;

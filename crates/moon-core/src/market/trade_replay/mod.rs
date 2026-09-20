@@ -251,7 +251,7 @@ pub enum TradeReplayOutcome {
 /// Who is asking for the prints, which decides three things the requester cannot express in
 /// the window alone: which margin the walk spends its page budget on first, whether a short
 /// answer waits for the core's archive, and whether the remembered-answer ring is consulted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReplayIntent {
     /// A live trade window. The exit's trail is walked before the entry's lead — the part of the
     /// picture the eye lands on — and an answer short of the focus keeps polling the core's
@@ -271,30 +271,9 @@ impl ReplayIntent {
         matches!(self, Self::Model)
     }
 
-    /// How far outside the position the trade tiles reach — see [`MODEL_PAD_MS`]. A chart's
-    /// trade tiles are the position alone.
-    pub(crate) fn trade_pad_ms(self) -> i64 {
-        match self {
-            Self::Chart => 0,
-            Self::Model => MODEL_PAD_MS,
-        }
-    }
-
     /// Whether an answer short of the focus arms the bounded core-archive follow-up.
     pub(crate) fn awaits_core(self) -> bool {
         matches!(self, Self::Chart)
-    }
-
-    /// Whether what the core's ring holds of the window is FILED into the tiles rather than
-    /// answered from. A model's requester reads the tiles, not the answer: an answer straight
-    /// from the ring — the candle stage's core-first, the tick stage's own read, the mid-walk
-    /// upgrade — reached nobody, since none of them files a tile and the close-time capture that
-    /// would have filed it never ran for a trade that closed while the terminal was down.
-    /// Filed, the ring's stretch is what the walk no longer asks the venue
-    /// for, and the held query finds it. A chart keeps the ring as an answer: its window shows
-    /// the series it is sent.
-    pub(crate) fn files_core(self) -> bool {
-        matches!(self, Self::Model)
     }
 
     /// Whether the remembered-answer ring is read and written for this request. A model's

@@ -667,6 +667,33 @@ fn run(rx: &Receiver<Inbound>, back: Sender<Inbound>) {
             continue;
         };
         match job {
+            Job::Candles(request) => {
+                // A window that closed while its request sat in the queue costs nothing at all:
+                // this is the cheapest of the three cancellation guards and the only one that
+                // prevents the work.
+                if request.cancel.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let mut served = serve_with_core(&agent, &gate, &cache, &request);
+                // No native wait either with the stage off: the wait is the core-archive half
+                // of the same stage, and it would poll the archive for a window that asked for
+                // the bars alone.
+                let native_wait = match request.ticks {
+                    true => arm_native_wait(&request, &mut served, Instant::now()),
+                    false => None,
+                };
+                // The receiver is gone whenever the window closed mid-fetch. Normal, not an
+                // error — and exactly the signal that a queued tick stage would now answer no
+                // one, so it is never queued on a failed send.
+                let sent = request.reply.send(served.outcome).is_ok();
+                if sent {
+                    if let Some(stage) = served.tick_stage {
+                        queue.push_back(Job::Ticks(request, stage));
+                    } else if let Some(wait) = native_wait {
+                        native_waits.push((request, wait));
+                    }
+                }
+            }
             Job::Capture(request, spans, settle_pass) => {
                 for &span in spans.spans() {
                     capture_from_core(&request, span, tiles);
@@ -823,7 +850,7 @@ fn run_lane(rx: &Receiver<LaneJob>, shared: &Shared) {
                         // The same holds when the walk was abandoned and the tile store served
                         // the part of the focus it held: what it did not hold is still owed.
                         remember_store(
-                            cache,
+                            &cache,
                             request.intent,
                             stage.key,
                             Remembered::Ready {
@@ -857,7 +884,7 @@ fn run_lane(rx: &Receiver<LaneJob>, shared: &Shared) {
                         // the fetch itself did not produce an answer, so a reopen must retry it.
                         if status == TickStatus::NoTrades {
                             remember_store(
-                                cache,
+                                &cache,
                                 request.intent,
                                 stage.key,
                                 Remembered::Ready {

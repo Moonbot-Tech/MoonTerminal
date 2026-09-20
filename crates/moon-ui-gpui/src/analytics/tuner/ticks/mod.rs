@@ -93,16 +93,31 @@ impl AnalyticsView {
                 (list, total, covered, fetchable, without_ms)
             }
         };
-        let fetch_active = self.ticks.fetch.is_active();
-        let fetch_label = if fetch_active {
+        // The batch is the process's (`fetch::job`), not this window's: the caption reads its
+        // progress, and says what it is doing right now, not only how far it is — one walk can
+        // take minutes on a slow venue, and a batch asleep on a venue's backoff has nothing in
+        // flight at all; a bare "N/M" reads as stuck in both cases.
+        let progress = fetch::job::progress();
+        let fetch_active = progress.active;
+        let fetch_label = if !fetch_active && self.ticks.tape_reading {
+            t!("analytics.ticks.fetch_reading").to_string()
+        } else if !fetch_active {
+            t!("analytics.ticks.fetch_btn").to_string()
+        } else if let Some((_, market)) = progress.in_flight {
             t!(
-                "analytics.ticks.fetch_progress",
-                done = self.ticks.fetch.done,
-                total = self.ticks.fetch.total
+                "analytics.ticks.fetch_progress_at",
+                done = progress.done,
+                total = progress.total,
+                market = market
             )
             .to_string()
         } else {
-            t!("analytics.ticks.fetch_btn").to_string()
+            t!(
+                "analytics.ticks.fetch_waiting",
+                done = progress.done,
+                total = progress.total
+            )
+            .to_string()
         };
         v_flex()
             .w_full()

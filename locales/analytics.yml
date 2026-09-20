@@ -1716,10 +1716,18 @@ analytics.ticks.fetch_btn:
   ru: "Прогрузить трейды"
   en: "Fetch trades"
   es: "Cargar trades"
-analytics.ticks.fetch_progress:
-  ru: "трейды: %{done}/%{total} · стоп"
-  en: "trades: %{done}/%{total} · stop"
-  es: "trades: %{done}/%{total} · parar"
+analytics.ticks.fetch_reading:
+  ru: "лента читается…"
+  en: "reading the tape…"
+  es: "leyendo la cinta…"
+analytics.ticks.fetch_progress_at:
+  ru: "трейды: %{done}/%{total} · %{market}… · стоп"
+  en: "trades: %{done}/%{total} · %{market}… · stop"
+  es: "trades: %{done}/%{total} · %{market}… · parar"
+analytics.ticks.fetch_waiting:
+  ru: "трейды: %{done}/%{total} · ждём биржу · стоп"
+  en: "trades: %{done}/%{total} · waiting for the venue · stop"
+  es: "trades: %{done}/%{total} · esperando al exchange · parar"
 analytics.ticks.col.time:
   ru: "вход"
   en: "entry"

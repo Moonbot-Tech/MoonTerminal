@@ -1167,9 +1167,6 @@ fn tick_plan_of_a_long_position_tiles_the_entry_and_the_exit_only() {
 /// A model's request walks the entry's lead before the exit's trail on a forward route — the
 /// run-up is what its entry model reads — and the lead is still walked away from the trade, so
 /// every completed prefix stays one stretch. A backward route already walks the lead first.
-/// The model's trade tile reaches [`MODEL_PAD_MS`] outside the position — the run-up and the
-/// tail are walked under the trade budget, never as an optional margin; a chart's is the
-/// position alone.
 #[test]
 fn tick_plan_of_a_model_request_walks_the_lead_before_the_trail() {
     use venue_caps::TradeRoute::*;
@@ -1177,29 +1174,23 @@ fn tick_plan_of_a_model_request_walks_the_lead_before_the_trail() {
     let close_ms = open_ms + MINUTE_MS;
     let window = replay_window_ms(open_ms, close_ms, MARGIN_MS).expect("window");
     let (focus_from, focus_to) = window.focus();
-    let padded = (open_ms - MODEL_PAD_MS, close_ms + MODEL_PAD_MS);
-    let lead = (focus_from, padded.0 - 1);
-    let trail = (padded.1 + 1, focus_to);
-    let forward = tick_plan(window, BinanceUsdMAggTrades, None, ReplayIntent::Model);
-    assert_eq!(forward.slices, vec![padded, lead, trail]);
-    assert_eq!((forward.trade_len, forward.focus_len), (1, 3));
+    let lead = (focus_from, open_ms - 1);
+    let trail = (close_ms + 1, focus_to);
     let trade = (open_ms, close_ms);
+    let forward = tick_plan(window, BinanceUsdMAggTrades, None, ReplayIntent::Model);
+    assert_eq!(forward.slices, vec![trade, lead, trail]);
+    assert_eq!((forward.trade_len, forward.focus_len), (1, 3));
     let chart = tick_plan(window, BinanceUsdMAggTrades, None, ReplayIntent::Chart);
     assert_eq!(
         chart.slices,
-        vec![trade, (close_ms + 1, focus_to), (focus_from, open_ms - 1)],
-        "the chart keeps its order and its bare trade tile"
+        vec![trade, trail, lead],
+        "the chart keeps its order"
     );
     let backward = tick_plan(window, OkxHistoryTrades, None, ReplayIntent::Model);
     assert_eq!(
         backward.slices,
-        vec![padded, lead, trail],
-        "a backward route walks the lead first for either intent, the model's tile padded"
-    );
-    assert_eq!(
         tick_plan(window, OkxHistoryTrades, None, ReplayIntent::Chart).slices,
-        vec![trade, (focus_from, open_ms - 1), (close_ms + 1, focus_to)],
-        "and the chart's bare"
+        "a backward route walks the lead first for either intent"
     );
 }
 

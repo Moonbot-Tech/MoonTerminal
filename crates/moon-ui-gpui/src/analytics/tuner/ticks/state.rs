@@ -165,35 +165,6 @@ impl TicksData {
     }
 }
 
-/// The user's fetch request: which rows are queued, which one is in flight.
-#[derive(Default)]
-pub(in crate::analytics::tuner) struct FetchQueue {
-    /// `reportuid`s still to ask for, oldest first.
-    pub(in crate::analytics::tuner) pending: Vec<i64>,
-    /// The row a request is out for.
-    pub(in crate::analytics::tuner) in_flight: Option<i64>,
-    /// Rows asked for since the button was pressed, for the "N/M" caption.
-    pub(in crate::analytics::tuner) done: usize,
-    pub(in crate::analytics::tuner) total: usize,
-    /// Bumped on every scope change; an answer carrying an older number is dropped.
-    pub(in crate::analytics::tuner) seq: u64,
-}
-
-impl FetchQueue {
-    pub(in crate::analytics::tuner) fn is_active(&self) -> bool {
-        self.in_flight.is_some() || !self.pending.is_empty()
-    }
-
-    /// Forget everything queued; an answer in flight is retired by the generation.
-    pub(in crate::analytics::tuner) fn clear(&mut self) {
-        self.pending.clear();
-        self.in_flight = None;
-        self.done = 0;
-        self.total = 0;
-        self.seq = self.seq.wrapping_add(1);
-    }
-}
-
 /// The search of the axis, as far as the row shows it.
 pub(in crate::analytics::tuner) enum SuggState {
     Idle,
@@ -261,7 +232,15 @@ pub(in crate::analytics) struct TicksState {
     /// Whether the two parameter groups are unfolded.
     pub(in crate::analytics::tuner) entry_open: bool,
     pub(in crate::analytics::tuner) exit_open: bool,
-    pub(in crate::analytics::tuner) fetch: FetchQueue,
+    /// The task listening to the process-wide fetch job (`fetch::job`) for this view; `None`
+    /// until a batch is started or found running. Dropped with the view, which ends it.
+    pub(in crate::analytics::tuner) fetch_task: Option<gpui::Task<()>>,
+    /// Whether that task is still in its loop — it ends with the batch, and the next batch
+    /// attaches a fresh one.
+    pub(in crate::analytics::tuner) fetch_listening: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Whether the tape stage of a load is still reading the rows' tape off the worker: until
+    /// it folds, every addressed row reads "missing" without meaning it.
+    pub(in crate::analytics::tuner) tape_reading: bool,
 }
 
 impl Default for TicksState {
@@ -292,7 +271,9 @@ impl Default for TicksState {
             rows_rev: 0,
             entry_open: true,
             exit_open: true,
-            fetch: FetchQueue::default(),
+            fetch_task: None,
+            fetch_listening: Default::default(),
+            tape_reading: false,
         }
     }
 }
@@ -303,17 +284,13 @@ impl TicksState {
         self.dirty = true;
     }
 
-    /// The scope changed: every row and the fetch queue belong to the previous scope.
-    ///
-    /// A row a fetch was out for goes back to "missing": its answer will be dropped by the
-    /// queue's generation, and a stale picture kept across a failed reload must not show a
-    /// fetch that is not running.
+    /// The scope changed: every row belongs to the previous scope. The fetch batch is the
+    /// process's, not the scope's, and runs on; its answers land on rows by id where present.
     pub(in crate::analytics) fn invalidate(&mut self) {
         self.dirty = true;
         self.seq = self.seq.wrapping_add(1);
         self.rows_rev = self.rows_rev.wrapping_add(1);
         self.order = None;
-        self.fetch.clear();
         // The variant KPIs and a running search describe the previous scope's deals; the
         // variant EDITS are the user's and stay, to be rescored over the new scope.
         self.var_seq = self.var_seq.wrapping_add(1);
@@ -411,6 +388,46 @@ impl TicksState {
         }
         // The tape and model columns sort by what just changed, so the order is rebuilt; the
         // rows themselves stay where they are.
+        self.rows_rev = self.rows_rev.wrapping_add(1);
+        self.order = None;
+    }
+
+    /// Fold a batch of answered rows in by id — the tape stage's whole result — with one
+    /// summary pass rather than one per row. A row not in the table (the scope moved on) is
+    /// dropped.
+    pub(in crate::analytics::tuner) fn update_rows(&mut self, answers: Vec<DealRow>) {
+        let Some(data) = self.data.data_mut() else {
+            return;
+        };
+        let index: HashMap<i64, usize> = data
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.deal.report_uid, i))
+            .collect();
+        for answer in answers {
+            let Some(&i) = index.get(&answer.deal.report_uid) else {
+                continue;
+            };
+            let slot = &mut data.rows[i];
+            // The fetch job may have covered the row while this batch was being read, and
+            // said so through the listener; a read from before its walk must not undo that.
+            // Coverage only grows between reloads, so the fresher word is the covered one.
+            if slot.tape == TapeStatus::Covered && answer.tape == TapeStatus::Missing {
+                continue;
+            }
+            slot.tape = answer.tape;
+            slot.verdict = answer.verdict;
+            slot.deal.tick = answer.deal.tick;
+            slot.ticks = answer.ticks;
+            slot.entry_start = answer.entry_start;
+        }
+        data.retain_within_cap();
+        data.refresh_summary();
+        let kpi = data.kpi.clone();
+        if let Some(slot) = self.kpi.data_mut() {
+            *slot = kpi;
+        }
         self.rows_rev = self.rows_rev.wrapping_add(1);
         self.order = None;
     }

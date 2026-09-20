@@ -33,8 +33,6 @@ pub(super) enum ReadLane {
     Ticks,
     /// The Entry/Exit axis' replay stage.
     TicksReplay,
-    /// The Entry/Exit axis' per-row tape fetch, one row at a time.
-    TicksFetch,
     /// The Entry/Exit axis' variant columns, rescored after an edit.
     TicksVariants,
     /// The Entry/Exit axis' search.
@@ -144,7 +142,6 @@ impl AnalyticsView {
             ReadLane::Time,
             ReadLane::Ticks,
             ReadLane::TicksReplay,
-            ReadLane::TicksFetch,
             ReadLane::TicksVariants,
             ReadLane::TicksSearch,
         ]);
@@ -161,7 +158,6 @@ impl AnalyticsView {
             ReadLane::Time,
             ReadLane::Ticks,
             ReadLane::TicksReplay,
-            ReadLane::TicksFetch,
             ReadLane::TicksVariants,
             ReadLane::TicksSearch,
         ]);

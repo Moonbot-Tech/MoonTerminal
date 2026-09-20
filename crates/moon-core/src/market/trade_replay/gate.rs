@@ -215,6 +215,9 @@ impl ReplayGate {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = claims.get(host).copied();
+        if let Some(remaining) = refused_for(previous.as_ref(), now) {
+            return Err(remaining);
+        }
         claims.insert(
             host,
             Attempt {
@@ -226,6 +229,26 @@ impl ReplayGate {
     }
 
     /// How long a host is still refused for, without taking or recording anything.
+    ///
+    /// The number a requester waits out before asking again — the same one [`Self::claim`]
+    /// would refuse with right now — read after a walk stopped on the gate, where a second
+    /// `claim` would take the permit the moment the wait ended.
+    ///
+    /// Args:
+    ///     host: Stable host key, from the route.
+    ///     now: Current instant.
+    ///
+    /// Returns:
+    ///     Remaining seconds, or `None` when a permit may be taken now.
+    pub fn refused_for(&self, host: &'static str, now: Instant) -> Option<u32> {
+        let claims = self
+            .claims
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        refused_for(claims.get(host), now)
+    }
+
+    /// Forget a host's refusal history after it answered successfully.
     ///
     /// The number a requester waits out before asking again — the same one [`Self::claim`]
     /// would refuse with right now — read after a walk stopped on the gate, where a second

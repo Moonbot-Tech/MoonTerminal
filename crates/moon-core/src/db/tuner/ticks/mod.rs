@@ -23,6 +23,7 @@
 //! checked against the live `strategies.sqlite` field names on 2026-09-20.
 
 use crate::feed::types::Tick;
+use crate::market::trade_replay::Coverage;
 
 pub mod deals;
 pub mod entry;
@@ -206,11 +207,43 @@ pub enum EntryParams {
     MoonShot(MshotParams),
 }
 
+/// The tape must reach this far back before the buy for the corridor to have a run-up.
+pub const RUN_UP_MS: i64 = 30_000;
+
+/// The tape must reach this far past the close for the exit to have a tail: a line the fact
+/// crossed at the close is reproduced by a print at or before it, but a near miss a few seconds
+/// later must be judged on its price — [`verify`] counts a model still open when the tape ends
+/// as a miss of the exit group, and a tape cut at the close would turn every such near miss
+/// into one.
+pub const TAIL_MS: i64 = 30_000;
+
+/// The part of a deal's window the model cannot do without: the run-up before the buy through
+/// the tail after the close, clipped to what the window asks for at all (a long position asks
+/// only around its two ends, and a zero margin asks for the position alone). The rest of the
+/// window — the trail beyond the tail, the lead beyond the run-up — is served as far as the
+/// tape goes: a venue's page budget runs out on the trail of a pumped coin long before the
+/// margin, and a variant that outlives the tape is marked open at the window's end.
+///
+/// Args:
+///     deal: The deal, for its buy and close stamps.
+///     spans: The window's focus spans, as asked from the worker.
+///
+/// Returns:
+///     The spans the held coverage must include for the deal to count as covered.
+pub fn required_spans(deal: &Deal, spans: &Coverage) -> Coverage {
+    Coverage::one((
+        deal.buy_ms.saturating_sub(RUN_UP_MS),
+        deal.close_ms.saturating_add(TAIL_MS),
+    ))
+    .clip(spans)
+}
+
 /// Run one trade through the entry and the exit model.
 ///
 /// `ticks` is the tape the caller fetched for the deal's window, ascending by time; it must
 /// reach back before `deal.buy_ms` for the entry model to have a run-up, and past
-/// `deal.close_ms` for the exit to have a tail. An empty tape yields no fill.
+/// `deal.close_ms` for the exit to have a tail ([`required_spans`] is the caller's gate). An
+/// empty tape yields no fill.
 ///
 /// Args:
 ///     deal: The report row and what the caller knows about its market.
