@@ -19,7 +19,9 @@ use crate::analytics::bg::ReadLane;
 use moon_core::db::tuner::threshold_search::SearchHandle;
 use moon_core::db::tuner::ticks::mshot::DEFAULT_LATENCY_MS;
 use moon_core::db::tuner::ticks::params::ParamGroup;
-use moon_core::db::tuner::ticks::search::{PreparedDeal, SearchParams, suggest, variant_tally};
+use moon_core::db::tuner::ticks::search::{
+    PreparedDeal, SearchParams, clip_to_horizon, common_horizon_ms, suggest, variant_tally,
+};
 use moon_core::db::tuner::ticks::stats_of;
 
 /// How long a burst of cell edits may keep coalescing before the columns are rescored.
@@ -48,9 +50,12 @@ fn base_of(now: &HashMap<String, NowValue>) -> HashMap<String, String> {
 }
 
 impl AnalyticsView {
-    /// The replayable rows as the search and the columns take them.
+    /// The replayable rows as the search and the columns take them — every tape cut at the
+    /// sample's one exit horizon (`clip_to_horizon`), so no variant is judged on more tape
+    /// than another.
     fn prepared_deals(&self) -> Vec<PreparedDeal> {
-        self.ticks
+        let mut deals: Vec<PreparedDeal> = self
+            .ticks
             .data
             .data()
             .map(|d| {
@@ -60,11 +65,16 @@ impl AnalyticsView {
                             deal: row.deal.clone(),
                             ticks: row.ticks.clone()?,
                             entry_start: row.entry_start,
+                            trail_ms: row.held.map(|(_, trail)| trail).unwrap_or(0),
                         })
                     })
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if let Some(horizon_ms) = common_horizon_ms(&deals) {
+            clip_to_horizon(&mut deals, horizon_ms);
+        }
+        deals
     }
 
     /// Arm a debounced rescore of the variant columns — every edit of a cell, every row that

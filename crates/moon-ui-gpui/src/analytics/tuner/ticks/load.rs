@@ -32,8 +32,10 @@ use moon_core::db::tuner::ticks::{
 use moon_core::db::tuner::{VarStats, Variant, strategy_current_values, strategy_values_at};
 use moon_core::feed::report_traces::ArchivedLineKind;
 use moon_core::feed::types::Tick;
+use moon_core::market::trade_replay::venue_caps::trade_route;
+use moon_core::market::trade_replay::worker::inside_retention;
 use moon_core::market::trade_replay::{
-    Coverage, TickQuery, model_margin_ms, query_held, replay_window_ms,
+    Coverage, TickQuery, TickStatus, model_margin_ms, query_held, replay_window_ms,
 };
 
 /// How long a held query waits for the worker's answer. The coordinator answers held queries
@@ -211,6 +213,7 @@ impl AnalyticsView {
                             address,
                             ticks: None,
                             entry_start: None,
+                            held: None,
                         }
                     })
                     .collect();
@@ -289,13 +292,28 @@ impl AnalyticsView {
                         address: Some(address),
                         ticks: None,
                         entry_start: None,
+                        held: None,
                     })
                     .collect();
                 let mut traces = archived_lines(&rows);
+                let now_ms = moon_core::util::now_unix_ms_i64();
                 for row in &mut rows {
                     let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
                     let tape = tapes.remove(&row.deal.report_uid);
+                    let answered = tape.is_some();
                     replay_row_with(row, &defaults, lines, tape);
+                    // Said at load, not after a walk: a row the venue cannot serve is not
+                    // "missing" — it would only ever come back refused. The fetch job's own
+                    // path (`replay_row` after a walk) is NOT given this: its retries and its
+                    // continuation read `Missing`, and its refusal is the walk's own word.
+                    // Nor is a row whose held query went unanswered: the tile store was not
+                    // read for it, so "cannot be fetched" would be said of a store never asked.
+                    if answered && row.tape == TapeStatus::Missing {
+                        if let Some(address) = row.address.as_ref() {
+                            row.tape = unservable_status(address, &row.deal, now_ms)
+                                .unwrap_or(TapeStatus::Missing);
+                        }
+                    }
                 }
                 // Rows the job answered while the batch was read: read again, each behind
                 // whatever walk is running. A row the job answers during THIS loop is kept
@@ -330,6 +348,13 @@ impl AnalyticsView {
                 // The rows still missing are what the user is looking at: a running batch
                 // takes them next.
                 this.ticks_prioritize_visible();
+                // With the autoload on, the rows of THIS table the venue can still serve go to
+                // the fetch without a press: the switch is the consent to spend the budget,
+                // and the startup pass covers only its own horizon (30 days, every core) —
+                // a wider period on the table would otherwise sit behind a button.
+                if moon_core::market::trade_replay::tape_autoload() {
+                    this.ticks_fetch_missing(cx);
+                }
                 // The replayable set may have changed under the variant columns: rescore them.
                 this.arm_ticks_variants(cx);
                 cx.notify();
@@ -484,6 +509,23 @@ pub(super) fn held_tape(address: &RowAddress, deal: &Deal) -> Option<HeldTape> {
     Some((answer.ticks, answer.covered, spans))
 }
 
+/// Why a fetch of a row the terminal holds no tape for could only come back refused, said at
+/// load rather than after a walk: no public route for the venue (the worker would serve such a
+/// stage from the tile store alone, which the held query just found empty), or a window older
+/// than the route's retention. `None` where the venue could serve it. The same rule the fetch
+/// job and the startup autoload apply (`inside_retention`), asked here so the row does not
+/// read as fetchable — and is not queued — when it is not.
+fn unservable_status(address: &RowAddress, deal: &Deal, now_ms: i64) -> Option<TapeStatus> {
+    let Some(route) = trade_route(address.venue) else {
+        return Some(TapeStatus::Refused(TickStatus::NoRoute));
+    };
+    let window = replay_window_ms(deal.buy_ms, deal.close_ms, model_margin_ms())?;
+    let retention_ms = route.retention_ms()?;
+    (!inside_retention(route, window, now_ms)).then_some(TapeStatus::Refused(
+        TickStatus::OutOfRetention { retention_ms },
+    ))
+}
+
 /// Run the model on one row, from what the worker holds — asked here, one query; a row
 /// without an address is left as it is.
 pub(super) fn replay_row(row: &mut DealRow, defaults: &HashMap<String, f64>, lines: ArchivedLines) {
@@ -504,6 +546,7 @@ pub(super) fn replay_row_with(
 ) {
     row.ticks = None;
     row.entry_start = lines.entry_start;
+    row.held = None;
     let Some(address) = row.address.clone() else {
         return;
     };
@@ -512,6 +555,12 @@ pub(super) fn replay_row_with(
         row.verdict = None;
         return;
     };
+    row.held = covered.hull().map(|(from, to)| {
+        (
+            row.deal.buy_ms.saturating_sub(from).max(0),
+            to.saturating_sub(row.deal.close_ms).max(0),
+        )
+    });
     // Coverage is the worker's own word on what was walked; a quiet run-up with no print in it
     // is covered all the same, which the tape's first stamp could not tell from a missing one.
     // What must be covered is the model's own rule (`required_spans`), not the whole margin.

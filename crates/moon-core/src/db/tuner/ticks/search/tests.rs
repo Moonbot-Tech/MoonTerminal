@@ -33,6 +33,7 @@ fn prepared(uid: i64, peak: f64) -> PreparedDeal {
         is_short: false,
         sell_reason: "Sell Price".into(),
         fact_pnl: 2.0,
+        profit: None,
         deltas: Deltas::default(),
         tick: None,
     };
@@ -48,7 +49,16 @@ fn prepared(uid: i64, peak: f64) -> PreparedDeal {
         deal,
         ticks: Arc::from(ticks),
         entry_start: None,
+        trail_ms: 0,
     }
+}
+
+/// The stamp of a tape's last print past the deal's close.
+fn tape_end_ms(d: &PreparedDeal) -> i64 {
+    d.ticks
+        .last()
+        .map(|t| (t.time_ms as i64) - d.deal.close_ms)
+        .unwrap_or(0)
 }
 
 fn base() -> HashMap<String, String> {
@@ -170,4 +180,63 @@ fn a_cancelled_run_answers_nothing_and_nothing_varied_answers_nothing() {
     handle.cancel();
     assert!(suggest(&deals, &params, &handle).is_none());
     assert!(handle.abandoned());
+}
+
+/// The sample is judged on ONE exit horizon — the shortest HELD trail among its deals, the
+/// coverage's word rather than the last print's: a tape that prints past the horizon is cut
+/// there, a tape that prints less is left alone, a print exactly on the horizon stays, and a
+/// quiet tail (held 8 s, last print at the close) does not shorten the horizon below what
+/// is held.
+#[test]
+fn the_common_horizon_is_the_shortest_held_trail_and_clips_only_the_longer_tapes() {
+    let mut long = prepared(1, 101.0);
+    let close = long.deal.close_ms;
+    // Prints 5 s and 10 s past the close, on top of the fixture's last print AT the close.
+    let mut ticks: Vec<Tick> = long.ticks.to_vec();
+    ticks.push(tick(close + 5_000, 100.1));
+    ticks.push(tick(close + 10_000, 100.0));
+    long.ticks = Arc::from(ticks);
+    long.trail_ms = 10_000;
+    let mut short = prepared(2, 101.0);
+    let close2 = short.deal.close_ms;
+    let mut ticks: Vec<Tick> = short.ticks.to_vec();
+    ticks.push(tick(close2 + 5_000, 100.3));
+    short.ticks = Arc::from(ticks);
+    short.trail_ms = 5_000;
+    // Held 8 s past the close, but the market printed nothing there.
+    let mut quiet = prepared(3, 101.0);
+    quiet.trail_ms = 8_000;
+    assert_eq!(
+        tape_end_ms(&quiet),
+        0,
+        "the fixture's tape ends at the close"
+    );
+
+    let mut deals = vec![long.clone(), short.clone(), quiet.clone()];
+    assert_eq!(common_horizon_ms(&deals), Some(5_000));
+    assert_eq!(common_horizon_ms(&[]), None);
+    clip_to_horizon(&mut deals, 5_000);
+    assert_eq!(
+        tape_end_ms(&deals[0]),
+        5_000,
+        "the long tape is cut at the horizon, the print on it stays"
+    );
+    assert_eq!(deals[0].ticks.len(), long.ticks.len() - 1);
+    assert_eq!(
+        deals[1].ticks.len(),
+        short.ticks.len(),
+        "the short one is untouched"
+    );
+    assert_eq!(deals[2].ticks.len(), quiet.ticks.len());
+    // A quiet deal alone with the long one: the horizon is what it HOLDS, 8 s, not the
+    // zero its last print would say — the long tape keeps its 5-s print and loses the 10-s one.
+    let mut with_quiet = vec![long.clone(), quiet];
+    let horizon = common_horizon_ms(&with_quiet).expect("two deals");
+    assert_eq!(horizon, 8_000);
+    clip_to_horizon(&mut with_quiet, horizon);
+    assert_eq!(tape_end_ms(&with_quiet[0]), 5_000);
+    // A negative trail (a hand-built deal) reads as zero, never as a horizon before the close.
+    let mut odd = long;
+    odd.trail_ms = -1;
+    assert_eq!(common_horizon_ms(&[odd]), Some(0));
 }

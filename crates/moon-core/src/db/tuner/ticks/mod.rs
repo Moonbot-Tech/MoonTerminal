@@ -121,7 +121,8 @@ pub struct Deal {
     pub close_ms: i64,
     pub buy_price: f64,
     pub sell_price: f64,
-    /// `spentbtc` — what the entry cost, in the row's quote currency; the money KPI of a variant
+    /// `spentbtc` — what the entry cost, in the scan's own money unit (the row's quote, or
+    /// USDT where the scan's projection converts a valued scope); the money KPI of a variant
     /// is `profit_pct * spent` so the columns stay in the units of the "Fact" column.
     pub spent: f64,
     pub is_short: bool,
@@ -130,6 +131,13 @@ pub struct Deal {
     /// The row's result in the scope's active metric (`pnl` of the unified source) — what the
     /// "Fact" column over the same subset sums.
     pub fact_pnl: f64,
+    /// The row's result as MONEY IN USDT whatever the metric — `profitbtc` of the USDT-valued
+    /// source (`read_deals`), fees as the core wrote them, converted like the Report's USDT
+    /// column; `None` when the scope's money cannot be valued in USDT (a non-USDT quote
+    /// without valuation coverage, a mixed scope), and the table shows a dash. The table's
+    /// profit column alone reads it — the KPI stays in the scope's own unit through
+    /// `fact_pnl` and `spent`.
+    pub profit: Option<f64>,
     pub deltas: Deltas,
     /// Price step of the market, when the caller could resolve it (the live catalog, or
     /// [`infer_tick`] over the window). `None` disables the step-bound rules and rounds nothing.

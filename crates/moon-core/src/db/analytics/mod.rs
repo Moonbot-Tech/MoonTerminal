@@ -440,6 +440,40 @@ fn scope_decision_on(conn: &Connection, q: &Query) -> ReadResult<ScopeDecision> 
     })
 }
 
+/// The row-level projection under which the scope's money reads in USDT, or `None` when it
+/// cannot: the money lens's own decision with USDT asked for (`prefer_usdt`), accepted only
+/// when the unit it publishes IS USDT — a pure USDT scope (native, already USDT), or a scope
+/// the valuation covers (converted). A single non-USDT quote without coverage decides
+/// `Native` in its own quote, a mixed or unknown scope splits: neither is USDT, and a caller
+/// that labels a column "USDT" must show nothing there rather than that money.
+///
+/// Args:
+///     conn: Open report reader or pinned snapshot.
+///     q: Concrete Analytics query; its metric is ignored.
+///
+/// Returns:
+///     The USDT projection, or `None` when the scope's money cannot be valued in USDT.
+///
+/// Errors:
+///     Returns a classified report read failure when quote or valuation preflight cannot complete.
+pub(in crate::db) fn usdt_projection_on(
+    conn: &Connection,
+    q: &Query,
+) -> ReadResult<Option<ProjectionMode>> {
+    let mut money = q.clone();
+    money.metric = ProfitMetric::Quote;
+    money.prefer_usdt = true;
+    Ok(match scope_decision_on(conn, &money)? {
+        ScopeDecision::Comparable { unit, projection }
+            if unit == ProfitUnit::Quote(crate::db::QuoteCurrency::usdt()) =>
+        {
+            Some(projection)
+        }
+        ScopeDecision::Empty { projection } => Some(projection),
+        ScopeDecision::Comparable { .. } | ScopeDecision::Split(_) => None,
+    })
+}
+
 /// Resolve one query to a safe row-level projection for non-`ProfitScope` consumers.
 ///
 /// Args:

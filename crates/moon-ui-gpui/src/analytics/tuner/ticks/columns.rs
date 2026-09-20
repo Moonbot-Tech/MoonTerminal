@@ -25,15 +25,10 @@ pub(in crate::analytics::tuner) enum Align {
 
 pub(in crate::analytics::tuner) const COL_COIN: &str = "coin";
 pub(in crate::analytics::tuner) const COL_TIME: &str = "time";
-pub(in crate::analytics::tuner) const COL_BUY: &str = "buy";
-pub(in crate::analytics::tuner) const COL_SELL: &str = "sell";
 pub(in crate::analytics::tuner) const COL_RESULT: &str = "result";
+pub(in crate::analytics::tuner) const COL_PROFIT: &str = "profit";
 pub(in crate::analytics::tuner) const COL_DURATION: &str = "duration";
-pub(in crate::analytics::tuner) const COL_D5S: &str = "d5s";
-pub(in crate::analytics::tuner) const COL_D1M: &str = "d1m";
-pub(in crate::analytics::tuner) const COL_D1H: &str = "d1h";
-pub(in crate::analytics::tuner) const COL_DMARK: &str = "dmark";
-pub(in crate::analytics::tuner) const COL_PRICEBUG: &str = "pricebug";
+pub(in crate::analytics::tuner) const COL_HELD: &str = "held";
 pub(in crate::analytics::tuner) const COL_REASON: &str = "reason";
 pub(in crate::analytics::tuner) const COL_TAPE: &str = "tape";
 pub(in crate::analytics::tuner) const COL_MODEL: &str = "model";
@@ -48,21 +43,16 @@ const fn col(key: &'static str, label: &'static str, w: f32, min_w: f32, align: 
     }
 }
 
-/// The columns after the coin, in reading order: when, the two prices and what came of them,
-/// the market at the buy, why it closed, and the two marks of this axis.
+/// The columns after the coin, in reading order: when, what came of it (per cent and money),
+/// how long it was held, how much tape the terminal holds around it, why it closed, and the
+/// two marks of this axis. The prices and the market deltas were dropped on 2026-09-20: this
+/// table is the axis's SAMPLE — which trades have their tape and how the model does on them —
+/// and every other figure is one double-click away in the trade window.
 pub(in crate::analytics::tuner) const DEAL_COLS: &[DealCol] = &[
     col(
         COL_TIME,
         "analytics.ticks.col.time",
         64.0,
-        56.0,
-        Align::Right,
-    ),
-    col(COL_BUY, "analytics.ticks.col.buy", 72.0, 56.0, Align::Right),
-    col(
-        COL_SELL,
-        "analytics.ticks.col.sell",
-        72.0,
         56.0,
         Align::Right,
     ),
@@ -74,27 +64,24 @@ pub(in crate::analytics::tuner) const DEAL_COLS: &[DealCol] = &[
         Align::Right,
     ),
     col(
+        COL_PROFIT,
+        "analytics.ticks.col.profit",
+        72.0,
+        56.0,
+        Align::Right,
+    ),
+    col(
         COL_DURATION,
         "analytics.ticks.col.duration",
         52.0,
         44.0,
         Align::Right,
     ),
-    col(COL_D5S, "analytics.ticks.col.d5s", 46.0, 40.0, Align::Right),
-    col(COL_D1M, "analytics.ticks.col.d1m", 46.0, 40.0, Align::Right),
-    col(COL_D1H, "analytics.ticks.col.d1h", 46.0, 40.0, Align::Right),
     col(
-        COL_DMARK,
-        "analytics.ticks.col.dmark",
-        46.0,
-        40.0,
-        Align::Right,
-    ),
-    col(
-        COL_PRICEBUG,
-        "analytics.ticks.col.pricebug",
-        46.0,
-        40.0,
+        COL_HELD,
+        "analytics.ticks.col.held",
+        76.0,
+        60.0,
         Align::Right,
     ),
     col(

@@ -42,6 +42,45 @@ pub struct PreparedDeal {
     pub ticks: Arc<[Tick]>,
     /// The archived first point of the entry line, when the archive holds it.
     pub entry_start: Option<(i64, f64)>,
+    /// How far past the close the HELD COVERAGE of this deal's window reaches, in
+    /// milliseconds — the caller's word from the tile store, not the last print's stamp: a
+    /// quiet market prints nothing for seconds, and a tail measured by its last print would
+    /// read as shorter than what is actually held. What [`common_horizon_ms`] takes the
+    /// sample's horizon from; a covered row holds at least the model's tail
+    /// (`required_spans`), so it is never under `TAIL_MS` there.
+    pub trail_ms: i64,
+}
+
+/// Cut every deal's tape at the same distance past its close — the exit horizon the whole
+/// sample is judged on.
+///
+/// The tapes of a sample were captured under different margins (the setting moves; a close
+/// filed under 5 min sits beside one filed under 30 s), and a variant judged on each deal's OWN
+/// tape end is judged unevenly: on the long tape it gets minutes to reach its take, on the
+/// short one seconds, and a variant that outlives the tape drops out of the tally
+/// (`OpenAtWindowEnd`) — the long tapes then flatter every slow exit. One horizon for all,
+/// the shortest trail among them, is the only fair comparison the sample allows; a deal a
+/// variant has not closed by then still drops out, but now every deal drops out at the same
+/// distance. The decision of 2026-09-20.
+///
+/// Args:
+///     deals: The prepared sample; a deal whose tape already ends at or before the horizon is
+///         left untouched.
+///     horizon_ms: The horizon past each close, from [`common_horizon_ms`].
+pub fn clip_to_horizon(deals: &mut [PreparedDeal], horizon_ms: i64) {
+    for deal in deals.iter_mut() {
+        let end_ms = deal.deal.close_ms.saturating_add(horizon_ms.max(0));
+        let keep = deal.ticks.partition_point(|t| (t.time_ms as i64) <= end_ms);
+        if keep < deal.ticks.len() {
+            deal.ticks = Arc::from(&deal.ticks[..keep]);
+        }
+    }
+}
+
+/// The exit horizon a sample allows: the shortest held trail past the close among its deals
+/// ([`PreparedDeal::trail_ms`]), or `None` for an empty sample. See [`clip_to_horizon`].
+pub fn common_horizon_ms(deals: &[PreparedDeal]) -> Option<i64> {
+    deals.iter().map(|d| d.trail_ms.max(0)).min()
 }
 
 /// What one search varies and how.

@@ -65,6 +65,33 @@ fn rows_with_stamps_become_deals_and_the_rest_are_counted() {
     assert!((ace.deltas.pricebug - 0.5).abs() < 1e-9);
     // Percent metric: 10 / 1000 · 100.
     assert!((ace.fact_pnl - 1.0).abs() < 1e-9, "{}", ace.fact_pnl);
+    // The scan leaves the USDT money to the overlay.
+    assert_eq!(ace.profit, None);
+}
+
+/// The USDT money of every deal comes off the USDT source in the same snapshot, keyed by the
+/// row's `reportuid`: on this pure-USDT replica the source resolves native (already USDT) and
+/// the overlay hands each deal its `profitbtc`, sign and all, while `fact_pnl` stays what the
+/// metric made it.
+#[test]
+fn the_usdt_overlay_fills_profit_by_report_uid() {
+    let conn = replica();
+    let (q, src) = tuner_source_on(&conn, &scope()).expect("source");
+    let mut read = read_on(&conn, &q, &src).expect("read");
+    let usdt_src = crate::db::tuner::tuner_source_usdt_on(&conn, &q)
+        .expect("usdt source")
+        .expect("a pure-USDT replica is USDT as it is");
+    overlay_usdt_profit(&conn, &q, &usdt_src, &mut read.deals).expect("overlay");
+    let ben = &read.deals[0];
+    let ace = &read.deals[1];
+    assert_eq!((ben.report_uid, ace.report_uid), (12, 11));
+    assert_eq!(ben.profit, Some(-10.0));
+    assert_eq!(ace.profit, Some(10.0));
+    assert!((ace.fact_pnl - 1.0).abs() < 1e-9, "per cent, not money");
+    assert!(
+        (ace.spent - 1000.0).abs() < 1e-9,
+        "the spend stays the scan's"
+    );
     // A NULL delta reads as zero, never as a missing row.
     assert_eq!(read.deals[0].deltas.d1h, 0.0);
     assert!(

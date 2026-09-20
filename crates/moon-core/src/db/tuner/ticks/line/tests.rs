@@ -33,6 +33,7 @@ fn deal(short: bool) -> Deal {
         is_short: short,
         sell_reason: "Auto Price Down".into(),
         fact_pnl: 5.0,
+        profit: None,
         deltas: Deltas::default(),
         tick: None,
     }

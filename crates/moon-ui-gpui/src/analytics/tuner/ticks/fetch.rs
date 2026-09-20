@@ -79,6 +79,7 @@ impl FetchResolver {
                 let tick = self.source.price_step(deal.core_uid, &market);
                 Some(Arc::new(RowAddress {
                     core_uid: deal.core_uid,
+                    venue: address.venue,
                     exchange_key: address.exchange_key,
                     market,
                     tick,
@@ -206,23 +207,6 @@ impl AnalyticsView {
                 "[x] ticks fetch: {moved} row(s) of the open table marked to go first"
             );
         }
-    }
-
-    /// How many fetchable rows of the table a running batch does not know yet — what a press
-    /// would add. Zero while no batch runs (then every fetchable row is what a press starts).
-    pub(in crate::analytics::tuner) fn ticks_fetch_addable(&self) -> usize {
-        let Some(data) = self.ticks.data.data() else {
-            return 0;
-        };
-        // While the tape stage reads, every row is "missing" without meaning it, and a press
-        // would add nothing (`ticks_fetch_missing` waits for the fold): no button then.
-        if self.ticks.tape_reading || !job::progress().active {
-            return 0;
-        }
-        let known = job::known_uids();
-        data.fetchable()
-            .filter(|row| !known.contains(&row.deal.report_uid))
-            .count()
     }
 
     /// Abandon the batch; every request in flight is cancelled by the job, and the startup

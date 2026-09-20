@@ -1,4 +1,4 @@
-use super::super::columns::{COL_MODEL, COL_RESULT, COL_TAPE, COL_TIME};
+use super::super::columns::{COL_HELD, COL_MODEL, COL_PROFIT, COL_RESULT, COL_TAPE, COL_TIME};
 use super::super::state::{DealRow, TapeStatus, TicksData, TicksState};
 use super::{order_for, result_pct};
 use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};
@@ -19,6 +19,7 @@ fn deal(uid: i64, buy_ms: i64, buy: f64, sell: f64, short: bool) -> Deal {
         is_short: short,
         sell_reason: String::new(),
         fact_pnl: 0.0,
+        profit: None,
         deltas: Deltas::default(),
         tick: None,
     }
@@ -37,7 +38,7 @@ fn verdict(entry: Option<bool>, exit: Option<bool>) -> Verdict {
 }
 
 fn state() -> TicksState {
-    let rows = vec![
+    let mut rows = vec![
         DealRow {
             deal: deal(1, 3_000, 100.0, 101.0, false),
             tape: TapeStatus::Missing,
@@ -45,6 +46,7 @@ fn state() -> TicksState {
             address: None,
             ticks: None,
             entry_start: None,
+            held: None,
         },
         DealRow {
             deal: deal(2, 1_000, 100.0, 99.0, false),
@@ -53,6 +55,7 @@ fn state() -> TicksState {
             address: None,
             ticks: None,
             entry_start: None,
+            held: None,
         },
         DealRow {
             deal: deal(3, 2_000, 100.0, 99.0, true),
@@ -61,8 +64,17 @@ fn state() -> TicksState {
             address: None,
             ticks: None,
             entry_start: None,
+            held: None,
         },
     ];
+    // Money as the core wrote it, deliberately NOT the sign of the price move: the profit sort
+    // must read `profit`, not derive it from the prices.
+    for (row, profit) in rows.iter_mut().zip([-3.0, 12.5, 0.0]) {
+        row.deal.profit = Some(profit);
+    }
+    // What the terminal holds around each trade, `(lead, trail)`: the third row has nothing.
+    rows[0].held = Some((60_000, 30_000));
+    rows[1].held = Some((60_000, 60_000));
     let mut state = TicksState::default();
     state.data.apply(Ok(TicksData {
         rows,
@@ -102,6 +114,27 @@ fn a_short_result_is_signed_from_its_own_side() {
     state.sort = Some((COL_RESULT.to_string(), true));
     let top = uids(&mut state)[0];
     assert!(top == 1 || top == 3);
+}
+
+/// The profit column sorts by the row's money, whatever the prices say.
+#[test]
+fn profit_sorts_by_the_rows_money() {
+    let mut state = state();
+    state.sort = Some((COL_PROFIT.to_string(), true));
+    assert_eq!(uids(&mut state), [2, 3, 1]);
+    state.sort = Some((COL_PROFIT.to_string(), false));
+    assert_eq!(uids(&mut state), [1, 3, 2]);
+}
+
+/// The held column sorts by the trail the terminal holds past the exit — what the exit
+/// horizon of the sample is taken from; a row with nothing held sorts as the shortest.
+#[test]
+fn the_held_tape_sorts_by_its_trail() {
+    let mut state = state();
+    state.sort = Some((COL_HELD.to_string(), true));
+    assert_eq!(uids(&mut state), [2, 1, 3]);
+    state.sort = Some((COL_HELD.to_string(), false));
+    assert_eq!(uids(&mut state), [3, 1, 2]);
 }
 
 #[test]

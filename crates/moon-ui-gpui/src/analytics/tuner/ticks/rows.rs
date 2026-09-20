@@ -87,15 +87,15 @@ fn sort_indices(rows: &[DealRow], order: &mut [usize], key: &str, desc: bool) {
             let c = rows[a].deal.coin.cmp(&rows[b].deal.coin);
             if desc { c.reverse() } else { c }
         }),
-        COL_BUY => by_f64(&|r| r.deal.buy_price, order),
-        COL_SELL => by_f64(&|r| r.deal.sell_price, order),
         COL_RESULT => by_f64(&result_pct, order),
+        // Unpriced sorts as the smallest.
+        COL_PROFIT => by_f64(&|r| r.deal.profit.unwrap_or(f64::MIN), order),
         COL_DURATION => by_f64(&|r| (r.deal.close_ms - r.deal.buy_ms) as f64, order),
-        COL_D5S => by_f64(&|r| r.deal.deltas.d5s, order),
-        COL_D1M => by_f64(&|r| r.deal.deltas.d1m, order),
-        COL_D1H => by_f64(&|r| r.deal.deltas.d1h, order),
-        COL_DMARK => by_f64(&|r| r.deal.deltas.dmark, order),
-        COL_PRICEBUG => by_f64(&|r| r.deal.deltas.pricebug, order),
+        // By the trail — the half the exit horizon is taken from; nothing held is the shortest.
+        COL_HELD => by_f64(
+            &|r| r.held.map(|(_, trail)| trail as f64).unwrap_or(-1.0),
+            order,
+        ),
         COL_REASON => order.sort_by(|&a, &b| {
             let c = rows[a].deal.sell_reason.cmp(&rows[b].deal.sell_reason);
             if desc { c.reverse() } else { c }

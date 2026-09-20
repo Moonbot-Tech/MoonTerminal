@@ -10,6 +10,8 @@
 //! "Fact" column keeps them all: it is the scope's money, and this file decides only what the
 //! model reads.
 
+use std::collections::HashMap;
+
 use rusqlite::Connection;
 
 use super::scope::{is_service_row, is_tunable};
@@ -62,7 +64,20 @@ const DELTA_COLS: [&str; 12] = [
 ///     The replayable deals with their kinds resolved, and the counts left out; `NotReady`
 ///     when no report source has the schema yet.
 pub fn read_deals(q: &Query) -> ReadResult<DealsRead> {
-    let mut read = crate::db::tuner::read_tuner_rows(q, read_on)?;
+    // The scan on the tuner's own source (the metric decides `pnl`), then the USDT money of
+    // every row off the USDT source in the same snapshot — the table's profit column must not
+    // change unit with the scope's quote, and the scan's `profitbtc` would.
+    let mut read = crate::db::tuner::read_tuner_rows(q, |conn, q, src| {
+        let mut read = read_on(conn, q, src)?;
+        match crate::db::tuner::tuner_source_usdt_on(conn, q)? {
+            Some(usdt_src) => overlay_usdt_profit(conn, q, &usdt_src, &mut read.deals)?,
+            None => log::info!(
+                target: crate::diagnostics::TICKS_AXIS_TARGET,
+                "[x] ticks deals: the scope's money cannot be valued in USDT, the profit column stays empty"
+            ),
+        }
+        Ok(read)
+    })?;
     // The kind selects the entry model; resolved once per distinct strategy, off the replica's
     // snapshot, because it lives in strategies.sqlite.
     let mut pairs: Vec<(i64, u64)> = read
@@ -171,6 +186,8 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             is_short: int(9)? != 0,
             sell_reason,
             fact_pnl: num(11)?,
+            // Filled by `overlay_usdt_profit` off the USDT source, when there is one.
+            profit: None,
             deltas,
             tick: None,
         });
@@ -182,6 +199,58 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
     index.sort_by_key(|&i| order[i]);
     out.deals = index.into_iter().map(|i| out.deals[i].clone()).collect();
     Ok(out)
+}
+
+/// Fill [`Deal::profit`] of every deal with the row's `profitbtc` off the USDT-valued source
+/// (`tuner_source_usdt_on`), keyed by `reportuid`. A deal the USDT source does not carry —
+/// a row that joined the replica between the two scans of one snapshot cannot exist, so this
+/// is a source that projects the row differently — stays unpriced and is counted in the log.
+///
+/// Args:
+///     conn: The snapshot the scan ran in.
+///     q: The floored query the scan ran with (its period bounds are the parameters).
+///     usdt_src: The USDT `FROM` source.
+///     deals: The scanned deals, filled in place.
+fn overlay_usdt_profit(
+    conn: &Connection,
+    q: &Query,
+    usdt_src: &str,
+    deals: &mut [Deal],
+) -> ReadResult<()> {
+    const CTX: &str = "tuner: ticks deals (USDT money)";
+    let sql = format!("SELECT o.\"reportuid\", COALESCE(o.\"profitbtc\", 0) FROM {usdt_src}");
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
+    let mut rows = stmt
+        .query(rusqlite::params![q.from, q.to])
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
+    let mut money: HashMap<i64, f64> = HashMap::new();
+    while let Some(r) = rows.next().map_err(|e| read_fail_on(conn, CTX, e))? {
+        let uid = r
+            .get::<_, Option<i64>>(0)
+            .map_err(|e| read_fail_on(conn, CTX, e))?
+            .unwrap_or(0);
+        let profit = r
+            .get::<_, Option<f64>>(1)
+            .map_err(|e| read_fail_on(conn, CTX, e))?
+            .filter(|v| v.is_finite())
+            .unwrap_or(0.0);
+        money.insert(uid, profit);
+    }
+    let mut unpriced = 0usize;
+    for deal in deals.iter_mut() {
+        deal.profit = money.get(&deal.report_uid).copied();
+        if deal.profit.is_none() {
+            unpriced += 1;
+        }
+    }
+    if unpriced > 0 {
+        log::warn!(
+            target: crate::diagnostics::TICKS_AXIS_TARGET,
+            "[x] ticks deals: {unpriced} of {} deal(s) missing from the USDT source, profit left empty",
+            deals.len()
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -16,6 +16,7 @@ fn deal(pnl: f64, spent: f64) -> Deal {
         is_short: false,
         sell_reason: String::new(),
         fact_pnl: pnl,
+        profit: None,
         deltas: Deltas::default(),
         tick: None,
     }

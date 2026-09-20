@@ -2,8 +2,8 @@
 //! tape rather than masked by SQL.
 //!
 //! Left, under the strategy list: the deal table — one row per closed trade with millisecond
-//! stamps, its market at the buy, why it closed, whether the terminal holds its tape, and
-//! whether the model reproduces the fact. Right: the shared "Fact vs …" matrix (the whole
+//! stamps, what came of it, whether the terminal holds its tape, and whether the model
+//! reproduces the fact; a double-click opens the trade window on it. Right: the shared "Fact vs …" matrix (the whole
 //! scope, the replayable subset captioned with the ✓ shares, the variant columns), and the
 //! parameter grid with the strategies' values, the two variant columns and the search row.
 //!
@@ -27,6 +27,7 @@ use crate::design;
 use crate::design::{moon, moon_alpha};
 use columns::*;
 pub(in crate::analytics::tuner) use fetch::strategy_field_defaults;
+use moon_core::market::trade_replay::TickStatus;
 use state::SuggState;
 use state::{DealRow, TapeStatus};
 
@@ -109,7 +110,7 @@ impl AnalyticsView {
                                 let order = view.ticks.order.as_ref()?;
                                 let row =
                                     view.ticks.data.data()?.rows.get(*order.order.get(ix)?)?;
-                                Some(deal_row(row, p, scale, row_h, zone, app))
+                                Some(deal_row(row, weak.clone(), p, scale, row_h, zone, app))
                             })
                             .unwrap_or_else(|| div().into_any_element())
                     })
@@ -127,9 +128,6 @@ impl AnalyticsView {
         // flight at all; a bare "N/M" reads as stuck in both cases.
         let progress = fetch::job::progress();
         let fetch_active = progress.active;
-        // Rows of THIS table a running batch does not have — the autoload's, or one left by a
-        // previous window: a second button adds them, while the first stays the stop.
-        let addable = self.ticks_fetch_addable();
         // A batch this window did not start — the startup autoload, or one left by a previous
         // window — is listened to from the first paint that finds it running, so its answers
         // land in the table and the button keeps counting. Idempotent: one listener per view
@@ -137,11 +135,9 @@ impl AnalyticsView {
         if fetch_active {
             self.attach_fetch_listener(cx);
         }
-        let fetch_label = if !fetch_active && self.ticks.tape_reading {
-            t!("analytics.ticks.fetch_reading").to_string()
-        } else if !fetch_active {
-            t!("analytics.ticks.fetch_btn").to_string()
-        } else if !progress.in_flight.is_empty() {
+        // The button is only the switch — "fetch" or "stop"; what the batch is doing goes into
+        // the caption beside it, where the sample's coverage sits when nothing runs.
+        let caption = if fetch_active && !progress.in_flight.is_empty() {
             // Every market a request is out for, in the order they went out: the walks run in
             // parallel across venues, and one name would read as one request.
             let markets: Vec<&str> = progress
@@ -156,13 +152,22 @@ impl AnalyticsView {
                 market = markets.join(" · ")
             )
             .to_string()
-        } else {
+        } else if fetch_active {
             t!(
                 "analytics.ticks.fetch_waiting",
                 done = progress.done,
                 total = progress.total
             )
             .to_string()
+        } else if self.ticks.tape_reading {
+            t!("analytics.ticks.fetch_reading").to_string()
+        } else {
+            coverage_caption(covered, total, without_ms, left_out.1, left_out.2)
+        };
+        let fetch_label = if fetch_active {
+            t!("analytics.ticks.fetch_stop").to_string()
+        } else {
+            t!("analytics.ticks.fetch_btn").to_string()
         };
         v_flex()
             .w_full()
@@ -199,31 +204,16 @@ impl AnalyticsView {
                             .child(scope),
                     )
                     // "N with tape of M · K without stamps": the honest size of the sample,
-                    // with the service rows and the switch's leftovers when there are any.
+                    // with the service rows and the switch's leftovers when there are any — or,
+                    // while a batch runs, how far it is and which markets it is on.
                     .child(
                         div()
                             .flex_none()
                             .font_family(design::ui_font())
                             .text_size(design::t_caption(cx))
                             .text_color(moon(p.text_muted))
-                            .child(coverage_caption(
-                                covered, total, without_ms, left_out.1, left_out.2,
-                            )),
+                            .child(caption),
                     )
-                    .when(fetch_active && addable > 0, |el| {
-                        el.child(
-                            div().font_family(design::ui_font()).child(
-                                MoonButton::new("an-ticks-fetch-add")
-                                    .variant(MoonButtonVariant::Soft)
-                                    .label(t!("analytics.ticks.fetch_add", n = addable).to_string())
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.ticks_fetch_missing(cx);
-                                        cx.notify();
-                                    }))
-                                    .render(),
-                            ),
-                        )
-                    })
                     .when(fetchable > 0 || fetch_active, |el| {
                         el.child(
                             div().font_family(design::ui_font()).child(
@@ -234,6 +224,10 @@ impl AnalyticsView {
                                         MoonButtonVariant::Soft
                                     })
                                     .label(fetch_label)
+                                    // While the tape stage reads, a press would queue rows the
+                                    // tiles already hold (`ticks_fetch_missing` waits for the
+                                    // fold), so the switch waits too.
+                                    .disabled(!fetch_active && self.ticks.tape_reading)
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if fetch_active {
                                             this.ticks_fetch_stop(cx);
@@ -251,6 +245,51 @@ impl AnalyticsView {
             // The virtual list owns its own scrolling.
             .child(div().w_full().flex_1().min_h_0().child(body))
             .into_any_element()
+    }
+
+    /// Open the trade window on one deal of the table — the same opener a Report row uses, so
+    /// the two lists cannot disagree about what a trade is.
+    ///
+    /// Silent when the row has no address (its core is offline, or the coin resolves to no
+    /// market): the tape dot at the row's left edge already says so, and a double-click has
+    /// nowhere to put a reason.
+    ///
+    /// Args:
+    ///     report_uid: The row's `ReportUID` — the core's own key for the trade, not the replica's row id.
+    ///     cx: View context.
+    fn open_deal_window(&mut self, report_uid: i64, cx: &mut Context<Self>) {
+        let Some(row) = self
+            .ticks
+            .data
+            .data()
+            .and_then(|d| d.rows.iter().find(|r| r.deal.report_uid == report_uid))
+        else {
+            return;
+        };
+        let Some(address) = row.address.as_ref() else {
+            return;
+        };
+        let q = self.query();
+        // The window's neighbours are the core's other trades of this coin over the axis's
+        // period — the Query's bounds are true UTC and `to` is exclusive, as the filter's
+        // `date_to` is inclusive; one second either way on the neighbours is not a trade lost.
+        let filter = moon_core::db::ReportFilter {
+            core_uids: vec![row.deal.core_uid],
+            date_from: (q.from >= 0).then_some(q.from),
+            date_to: Some(q.to),
+            axis: q.axis.clone(),
+            ..moon_core::db::ReportFilter::default()
+        };
+        // By the core's ReportUID, not the replica's row id: the two are different counters, and
+        // `reportuid` is the one the deal table is keyed by.
+        let target = crate::trade_window::open_record::RecordTarget {
+            core: row.deal.core_uid,
+            coin: row.deal.coin.clone(),
+            record: crate::trade_window::open_record::RecordKey::ReportUid(report_uid),
+            market: address.market.clone(),
+            filter,
+        };
+        crate::trade_window::open_record::open_trade_record(&self.backend, q.axis, target, cx);
     }
 
     /// The table's heading row: every column sortable, the arrow on the active one.
@@ -309,7 +348,7 @@ impl AnalyticsView {
             .children(DEAL_COLS.iter().map(|c| {
                 sortable(
                     SharedString::from(format!("an-ticks-hdr-{}", c.key)),
-                    t!(c.label).to_string(),
+                    column_title(c),
                     c.key,
                     Some(c),
                 )
@@ -339,7 +378,7 @@ impl AnalyticsView {
     /// both groups — the model's own account of itself), then the variant columns, each over
     /// the replayable rows and captioned with how many.
     fn ticks_kpi(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        let (covered, total, entry, exit, replayable) = self
+        let (covered, total, entry, exit, replayable, horizon) = self
             .ticks
             .data
             .data()
@@ -350,6 +389,7 @@ impl AnalyticsView {
                     d.entry_share,
                     d.exit_share,
                     d.replayable().count(),
+                    d.exit_horizon_ms(),
                 )
             })
             .unwrap_or_default();
@@ -360,16 +400,22 @@ impl AnalyticsView {
                 format!("{:.0} %", hits as f64 / n as f64 * 100.0)
             }
         };
+        // The exit horizon every variant and the search are judged on: the shortest trail the
+        // replayable rows hold past their close (`prepared_deals`).
+        let mut subset_sub = t!(
+            "analytics.ticks.subset_sub",
+            n = covered,
+            m = total,
+            entry = share(entry),
+            exit = share(exit)
+        )
+        .to_string();
+        if let Some(horizon) = horizon {
+            subset_sub.push_str(&t!("analytics.ticks.horizon", h = duration_text(horizon)));
+        }
         let mut labels = vec![VarLabel::with_sub(
             t!("analytics.ticks.subset").to_string(),
-            t!(
-                "analytics.ticks.subset_sub",
-                n = covered,
-                m = total,
-                entry = share(entry),
-                exit = share(exit)
-            )
-            .to_string(),
+            subset_sub,
         )];
         // The matrix reads one vector: `[fact, subset]` from the load, then the variants that
         // were scored. An untouched variant is not a column.
@@ -560,6 +606,18 @@ impl AnalyticsView {
     }
 }
 
+/// The heading of one column. The profit column names its unit — the cells are bare numbers,
+/// and `Deal::profit` is USDT whatever the scope's own quote or metric (the ticker is
+/// language-neutral, see locales/README.md).
+fn column_title(col: &DealCol) -> String {
+    let title = t!(col.label).to_string();
+    if col.key == COL_PROFIT {
+        format!("{title}, USDT")
+    } else {
+        title
+    }
+}
+
 /// Height of one deal row, in base px — the single pitch the list and the row share.
 fn deal_row_h(cx: &App) -> f32 {
     design::fit_h_value(cx, 24.0, 14.0, 5.0)
@@ -584,12 +642,12 @@ fn duration_text(ms: i64) -> String {
     }
 }
 
-/// A delta cell: signed, one decimal, dimmed at zero.
-fn delta_text(v: f64) -> String {
-    if v == 0.0 {
-        "—".to_string()
-    } else {
-        format!("{v:+.1}")
+/// The tape the terminal holds around a trade, as "lead/trail" — what lies before the entry
+/// and past the exit; a dash when nothing is held.
+fn held_text(held: Option<(i64, i64)>) -> String {
+    match held {
+        Some((lead, trail)) => format!("{}/{}", duration_text(lead), duration_text(trail)),
+        None => "—".to_string(),
     }
 }
 
@@ -600,6 +658,19 @@ fn tape_mark(tape: TapeStatus) -> (&'static str, String) {
         TapeStatus::Missing => ("○", t!("analytics.ticks.tape_missing").to_string()),
         TapeStatus::Fetching => ("…", t!("analytics.ticks.tape_fetching").to_string()),
         TapeStatus::NoAddress => ("·", t!("analytics.ticks.tape_no_address").to_string()),
+        // The two refusals said at load, for every row the venue cannot serve, in words; the
+        // rest come back from a walk and name the venue's own answer.
+        TapeStatus::Refused(TickStatus::NoRoute) => {
+            ("✕", t!("analytics.ticks.tape_no_route").to_string())
+        }
+        TapeStatus::Refused(TickStatus::OutOfRetention { retention_ms }) => (
+            "✕",
+            t!(
+                "analytics.ticks.tape_retention",
+                hours = retention_ms / 3_600_000
+            )
+            .to_string(),
+        ),
         TapeStatus::Refused(status) => (
             "✕",
             t!(
@@ -698,9 +769,10 @@ fn model_mark(row: &DealRow) -> (String, String) {
     )
 }
 
-/// One deal row.
+/// One deal row. A double-click opens the trade window on it, as a Report row does.
 fn deal_row(
     row: &DealRow,
+    view: WeakEntity<AnalyticsView>,
     p: MoonPalette,
     scale: f32,
     row_h: f32,
@@ -761,8 +833,6 @@ fn deal_row(
     for col in DEAL_COLS {
         let (value, color, tip) = match col.key {
             COL_TIME => (hms(d.buy_ms, zone), text, None),
-            COL_BUY => (moon_core::util::fmt::adaptive(d.buy_price), text, None),
-            COL_SELL => (moon_core::util::fmt::adaptive(d.sell_price), text, None),
             COL_RESULT => (
                 format!("{result:+.2}"),
                 if result > 0.0 {
@@ -774,12 +844,34 @@ fn deal_row(
                 },
                 None,
             ),
+            // A dash where the scope's money cannot be valued in USDT (`Deal::profit`).
+            COL_PROFIT => match d.profit {
+                Some(profit) => (
+                    super::super::summary::fmt_signed_plain(profit),
+                    if profit > 0.0 {
+                        p.green
+                    } else if profit < 0.0 {
+                        p.red
+                    } else {
+                        p.text_muted
+                    },
+                    None,
+                ),
+                None => ("—".to_string(), p.text_muted, None),
+            },
             COL_DURATION => (duration_text(d.close_ms - d.buy_ms), p.text_muted, None),
-            COL_D5S => (delta_text(d.deltas.d5s), p.text_muted, None),
-            COL_D1M => (delta_text(d.deltas.d1m), p.text_muted, None),
-            COL_D1H => (delta_text(d.deltas.d1h), p.text_muted, None),
-            COL_DMARK => (delta_text(d.deltas.dmark), p.text_muted, None),
-            COL_PRICEBUG => (delta_text(d.deltas.pricebug), p.text_muted, None),
+            COL_HELD => (
+                held_text(row.held),
+                p.text_muted,
+                row.held.map(|(lead, trail)| {
+                    t!(
+                        "analytics.ticks.held_tip",
+                        lead = duration_text(lead),
+                        trail = duration_text(trail)
+                    )
+                    .to_string()
+                }),
+            ),
             COL_REASON => (
                 d.sell_reason.clone(),
                 p.text_muted,
@@ -807,6 +899,15 @@ fn deal_row(
         };
         el = el.child(cell(col, value, color, tip));
     }
-    el = el.hover(move |s| s.bg(moon_alpha(p.panel_high, 0.9)));
+    let uid = d.report_uid;
+    el = el
+        .hover(move |s| s.bg(moon_alpha(p.panel_high, 0.9)))
+        .on_click(move |ev: &ClickEvent, _window, app| {
+            if ev.click_count() < 2 {
+                return;
+            }
+            // The view may already be gone; a dropped window is not an error here.
+            let _ = view.update(app, |this, cx| this.open_deal_window(uid, cx));
+        });
     el.into_any_element()
 }

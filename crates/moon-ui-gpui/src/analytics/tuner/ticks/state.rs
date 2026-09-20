@@ -63,12 +63,20 @@ pub(in crate::analytics::tuner) struct DealRow {
     pub(in crate::analytics::tuner) ticks: Option<Arc<[Tick]>>,
     /// The archived first point of the entry line, when the archive holds it.
     pub(in crate::analytics::tuner) entry_start: Option<(i64, f64)>,
+    /// What the terminal HOLDS of the window, as `(lead_ms, trail_ms)`: how far before the
+    /// entry and past the exit the held coverage reaches, clipped to what the window asks for
+    /// (the setting's margin, floored for the model). `None` until the tape stage answered, or
+    /// when it holds nothing. The table's "tape" column; the exit horizon of the sample is the
+    /// shortest trail among the replayable rows.
+    pub(in crate::analytics::tuner) held: Option<(i64, i64)>,
 }
 
 /// Where a deal's prints live, as the replay worker keys them, plus what a fetch needs.
 #[derive(Clone, Debug)]
 pub(in crate::analytics::tuner) struct RowAddress {
     pub(in crate::analytics::tuner) core_uid: u64,
+    /// The venue the core is connected to — decides the public trade route and its retention.
+    pub(in crate::analytics::tuner) venue: moon_core::venue::Venue,
     pub(in crate::analytics::tuner) exchange_key: String,
     pub(in crate::analytics::tuner) market: String,
     /// The market's price step from the live catalog, when the core reports it.
@@ -117,6 +125,16 @@ impl TicksData {
             .iter()
             .filter(|r| r.tape == TapeStatus::Covered)
             .count()
+    }
+
+    /// The exit horizon of the replayable sample, in milliseconds — the shortest HELD trail
+    /// past the close among the rows the variants and the search replay, the same rule as
+    /// `search::common_horizon_ms` over the same rows (`prepared_deals` hands it each row's
+    /// `held` trail), or `None` with nothing to replay.
+    pub(in crate::analytics::tuner) fn exit_horizon_ms(&self) -> Option<i64> {
+        self.replayable()
+            .map(|r| r.held.map(|(_, trail)| trail.max(0)).unwrap_or(0))
+            .min()
     }
 
     /// Rows a fetch could still fill: missing, with an address, not already asked.
@@ -418,8 +436,15 @@ impl TicksState {
             let slot = &mut data.rows[i];
             // The fetch job may have covered the row while this batch was being read, and
             // said so through the listener; a read from before its walk must not undo that.
-            // Coverage only grows between reloads, so the fresher word is the covered one.
-            if slot.tape == TapeStatus::Covered && answer.tape == TapeStatus::Missing {
+            // Coverage only grows between reloads, so the fresher word is the covered one —
+            // and a refusal the walk itself gave outranks a plain "missing" read from before
+            // it, or the row would read as fetchable again and be queued once more.
+            let stale = match (slot.tape, answer.tape) {
+                (TapeStatus::Covered, other) => other != TapeStatus::Covered,
+                (TapeStatus::Refused(_), TapeStatus::Missing) => true,
+                _ => false,
+            };
+            if stale {
                 continue;
             }
             slot.tape = answer.tape;
@@ -427,6 +452,7 @@ impl TicksState {
             slot.deal.tick = answer.deal.tick;
             slot.ticks = answer.ticks;
             slot.entry_start = answer.entry_start;
+            slot.held = answer.held;
         }
         data.retain_within_cap();
         data.refresh_summary();

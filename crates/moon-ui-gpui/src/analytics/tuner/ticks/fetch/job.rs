@@ -365,12 +365,6 @@ pub(in crate::analytics::tuner) fn attach() -> mpsc::Receiver<JobEvent> {
     rx
 }
 
-/// Every id the batch knows — queued, waiting, out, or answered since it started — so a view
-/// can count what it could still add to a running batch.
-pub(in crate::analytics::tuner) fn known_uids() -> HashSet<i64> {
-    lock(job()).known()
-}
-
 /// The job as the caption reads it.
 pub(in crate::analytics::tuner) fn progress() -> Progress {
     let st = lock(job());
@@ -717,6 +711,7 @@ fn serve_cluster(
             address: Some(row.address.clone()),
             ticks: None,
             entry_start: None,
+            held: None,
         };
         replay_row(&mut answer, defaults, lines);
         let mut wait = retry_wait(status, answer.tape).map(|s| Duration::from_secs(u64::from(s)));

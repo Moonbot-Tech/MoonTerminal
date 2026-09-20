@@ -1728,62 +1728,46 @@ analytics.ticks.fetch_btn:
   ru: "Прогрузить трейды"
   en: "Fetch trades"
   es: "Cargar trades"
-analytics.ticks.fetch_add:
-  ru: "+ ещё %{n}"
-  en: "+ %{n} more"
-  es: "+ %{n} más"
+analytics.ticks.fetch_stop:
+  ru: "Стоп"
+  en: "Stop"
+  es: "Parar"
 analytics.ticks.fetch_reading:
   ru: "лента читается…"
   en: "reading the tape…"
   es: "leyendo la cinta…"
 analytics.ticks.fetch_progress_at:
-  ru: "трейды: %{done}/%{total} · %{market}… · стоп"
-  en: "trades: %{done}/%{total} · %{market}… · stop"
-  es: "trades: %{done}/%{total} · %{market}… · parar"
+  ru: "трейды: %{done}/%{total} · %{market}…"
+  en: "trades: %{done}/%{total} · %{market}…"
+  es: "trades: %{done}/%{total} · %{market}…"
 analytics.ticks.fetch_waiting:
-  ru: "трейды: %{done}/%{total} · ждём биржу · стоп"
-  en: "trades: %{done}/%{total} · waiting for the venue · stop"
-  es: "trades: %{done}/%{total} · esperando al exchange · parar"
+  ru: "трейды: %{done}/%{total} · ждём биржу"
+  en: "trades: %{done}/%{total} · waiting for the venue"
+  es: "trades: %{done}/%{total} · esperando al exchange"
 analytics.ticks.col.time:
   ru: "вход"
   en: "entry"
   es: "entrada"
-analytics.ticks.col.buy:
-  ru: "buy"
-  en: "buy"
-  es: "buy"
-analytics.ticks.col.sell:
-  ru: "sell"
-  en: "sell"
-  es: "sell"
 analytics.ticks.col.result:
   ru: "%"
   en: "%"
   es: "%"
+analytics.ticks.col.profit:
+  ru: "прибыль"
+  en: "profit"
+  es: "beneficio"
 analytics.ticks.col.duration:
   ru: "длит."
   en: "dur."
   es: "dur."
-analytics.ticks.col.d5s:
-  ru: "d5s"
-  en: "d5s"
-  es: "d5s"
-analytics.ticks.col.d1m:
-  ru: "d1m"
-  en: "d1m"
-  es: "d1m"
-analytics.ticks.col.d1h:
-  ru: "d1h"
-  en: "d1h"
-  es: "d1h"
-analytics.ticks.col.dmark:
-  ru: "dmark"
-  en: "dmark"
-  es: "dmark"
-analytics.ticks.col.pricebug:
-  ru: "pbug"
-  en: "pbug"
-  es: "pbug"
+analytics.ticks.col.held:
+  ru: "в базе"
+  en: "held"
+  es: "guardado"
+analytics.ticks.held_tip:
+  ru: "Трейды в базе: %{lead} до входа, %{trail} после выхода"
+  en: "Prints held: %{lead} before the entry, %{trail} past the exit"
+  es: "Operaciones guardadas: %{lead} antes de la entrada, %{trail} tras la salida"
 analytics.ticks.col.reason:
   ru: "причина"
   en: "reason"
@@ -1816,6 +1800,14 @@ analytics.ticks.tape_refused:
   ru: "Биржа не отдала трейды: %{status}"
   en: "The venue did not serve the trades: %{status}"
   es: "El exchange no entregó los trades: %{status}"
+analytics.ticks.tape_no_route:
+  ru: "Биржа не даёт публичной истории трейдов — ленту не скачать"
+  en: "The venue serves no public trade history — the tape cannot be fetched"
+  es: "La bolsa no ofrece historial público de operaciones — la cinta no se puede descargar"
+analytics.ticks.tape_retention:
+  ru: "Сделка старше удержания биржи (%{hours} ч) — биржа уже не отдаёт эти трейды"
+  en: "Older than the venue's retention (%{hours} h) — the venue no longer serves these trades"
+  es: "Más antigua que la retención de la bolsa (%{hours} h) — la bolsa ya no entrega esas operaciones"
 analytics.ticks.model_tip:
   ru: "Вход: отклонение модели от факта %{entry} · Выход: %{exit}"
   en: "Entry: model vs fact %{entry} · Exit: %{exit}"
@@ -1828,6 +1820,10 @@ analytics.ticks.subset_sub:
   ru: "по %{n} из %{m} · вход ✓ %{entry} · выход ✓ %{exit}"
   en: "%{n} of %{m} · entry ✓ %{entry} · exit ✓ %{exit}"
   es: "%{n} de %{m} · entrada ✓ %{entry} · salida ✓ %{exit}"
+analytics.ticks.horizon:
+  ru: " · выход ≤ %{h} после закрытия"
+  en: " · exit ≤ %{h} past the close"
+  es: " · salida ≤ %{h} tras el cierre"
 analytics.ticks.params_title:
   ru: "Параметры"
   en: "Parameters"
