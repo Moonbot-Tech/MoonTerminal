@@ -61,6 +61,9 @@ fn cfg_input_id(kind: TunerKind, which: CfgInput) -> &'static str {
         (TunerKind::Coins, CfgInput::Restarts) => "c-cfg-it",
         (TunerKind::Coins, CfgInput::MinTrades) => "c-cfg-mn",
         (TunerKind::Coins, CfgInput::Seed) => "c-cfg-seed",
+        (TunerKind::Ticks, CfgInput::Restarts) => "x-cfg-it",
+        (TunerKind::Ticks, CfgInput::MinTrades) => "x-cfg-mn",
+        (TunerKind::Ticks, CfgInput::Seed) => "x-cfg-seed",
     }
 }
 
@@ -110,13 +113,14 @@ impl AnalyticsView {
             TunerKind::Filter => "f",
             TunerKind::Time => "t",
             TunerKind::Coins => "c",
+            TunerKind::Ticks => "x",
         };
         // `None` — the axis has nothing to round. The coin list is text; a rounding control
         // beside it would be a switch that does nothing.
         let round = match kind {
             TunerKind::Filter => Some(self.tuner.round_results),
             TunerKind::Time => Some(self.time_tuner.round_results),
-            TunerKind::Coins => None,
+            TunerKind::Coins | TunerKind::Ticks => None,
         };
         let mut header = h_flex()
             .w_full()
@@ -163,7 +167,7 @@ impl AnalyticsView {
                                             this.time_tuner.invalidate_suggest();
                                         }
                                         // No rounding on this axis — the control is hidden.
-                                        TunerKind::Coins => {}
+                                        TunerKind::Coins | TunerKind::Ticks => {}
                                     }
                                     cx.notify();
                                 });
@@ -173,8 +177,10 @@ impl AnalyticsView {
             );
         }
         // Render write controls for a retained anchor, but enable them only when the action
-        // authority admits at least one selected target.
-        if self.sel_strategy.is_some() {
+        // authority admits at least one selected target. The tape axis has nothing to write
+        // until its variants land (phase 2), so it shows no write controls at all rather than
+        // two buttons that do nothing.
+        if self.sel_strategy.is_some() && kind != TunerKind::Ticks {
             let workspace_target_visible = self.visible_target_count(self.action_core_ids()) > 0;
             // Copy is single-target only — hidden in multi-select (many addressees, no
             // per-target preview); bulk Save is the multi path.
@@ -190,6 +196,7 @@ impl AnalyticsView {
                                 TunerKind::Filter => this.open_copy_dialog(window, cx),
                                 TunerKind::Time => this.time_open_copy_dialog(window, cx),
                                 TunerKind::Coins => this.coins_open_copy_dialog(window, cx),
+                                TunerKind::Ticks => {}
                             }
                             cx.notify();
                         }))
@@ -206,6 +213,7 @@ impl AnalyticsView {
                     // The list differs from what the strategies hold — the same condition
                     // the coin table's "changed" badge and its Revert button read.
                     TunerKind::Coins => self.coins.has_changes(),
+                    TunerKind::Ticks => false,
                 };
                 MoonButton::new(SharedString::from(format!("tun-save-{k}")))
                     .variant(if dirty {
@@ -220,6 +228,7 @@ impl AnalyticsView {
                             TunerKind::Filter => this.open_save_dialog(cx),
                             TunerKind::Time => this.time_open_save_dialog(cx),
                             TunerKind::Coins => this.coins_open_save_dialog(cx),
+                            TunerKind::Ticks => {}
                         }
                         cx.notify();
                     }))
@@ -247,7 +256,7 @@ impl AnalyticsView {
             // The coin axis does not draw this row yet — its own controls arrive with the
             // selection metrics. Answering here keeps the match exhaustive rather than letting a
             // fourth axis compile into a silent default.
-            TunerKind::Coins => div().into_any_element(),
+            TunerKind::Coins | TunerKind::Ticks => div().into_any_element(),
         }
     }
 
@@ -849,7 +858,7 @@ impl AnalyticsView {
         let cached = match kind {
             TunerKind::Filter => self.tuner.inputs.get(id),
             TunerKind::Time => self.time_tuner.inputs.get(id),
-            TunerKind::Coins => None,
+            TunerKind::Coins | TunerKind::Ticks => None,
         };
         if let Some(state) = cached {
             return state.clone();
@@ -861,7 +870,7 @@ impl AnalyticsView {
             (TunerKind::Time, CfgInput::MinTrades) => self.time_tuner.min_trades.clone(),
             // The time row draws only the minimum-trades box, and the coin axis draws no row at
             // all, so neither has a value for the rest.
-            (TunerKind::Time, _) | (TunerKind::Coins, _) => String::new(),
+            (TunerKind::Time, _) | (TunerKind::Coins, _) | (TunerKind::Ticks, _) => String::new(),
         };
         let ph = placeholder.to_string();
         let state = cx.new(|cx| {
@@ -915,7 +924,7 @@ impl AnalyticsView {
                             this.time_tuner.min_trades = value;
                             this.time_tuner.invalidate_suggest();
                         }
-                        (TunerKind::Time, _) | (TunerKind::Coins, _) => {}
+                        (TunerKind::Time, _) | (TunerKind::Coins, _) | (TunerKind::Ticks, _) => {}
                     }
                     if !matches!(ev, MoonInputEvent::Change) {
                         cx.notify();
@@ -927,7 +936,7 @@ impl AnalyticsView {
         match kind {
             TunerKind::Filter => self.tuner.inputs.insert(id.to_string(), state.clone()),
             TunerKind::Time => self.time_tuner.inputs.insert(id.to_string(), state.clone()),
-            TunerKind::Coins => None,
+            TunerKind::Coins | TunerKind::Ticks => None,
         };
         state
     }

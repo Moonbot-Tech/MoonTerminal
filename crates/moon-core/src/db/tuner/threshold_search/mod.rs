@@ -12,7 +12,8 @@
 
 mod compose;
 mod handle;
-mod search;
+/// The rayon pool and the per-restart seeds; shared with the tape search of `ticks`.
+pub(crate) mod search;
 
 #[cfg(test)]
 mod tests;
@@ -553,7 +554,7 @@ fn build_folds(
 ///
 /// A sample whose trades ALL share one timestamp has no boundary to snap to, and no later period
 /// to hold back — so it is not split at all.
-fn train_split(closes: &[i64], frac: f64) -> usize {
+pub(crate) fn train_split(closes: &[i64], frac: f64) -> usize {
     let n = closes.len();
     if n < 2 || !frac.is_finite() || frac >= 1.0 {
         return n;

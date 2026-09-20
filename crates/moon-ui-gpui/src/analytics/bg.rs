@@ -29,6 +29,12 @@ pub(super) enum ReadLane {
     CoinKpi,
     CoinPicked,
     Time,
+    /// The Entry/Exit axis' database stage.
+    Ticks,
+    /// The Entry/Exit axis' replay stage.
+    TicksReplay,
+    /// The Entry/Exit axis' per-row tape fetch, one row at a time.
+    TicksFetch,
 }
 
 /// Active cancellation tokens keyed by the UI state each request may publish.
@@ -132,6 +138,9 @@ impl AnalyticsView {
             ReadLane::CoinKpi,
             ReadLane::CoinPicked,
             ReadLane::Time,
+            ReadLane::Ticks,
+            ReadLane::TicksReplay,
+            ReadLane::TicksFetch,
         ]);
     }
 
@@ -144,6 +153,9 @@ impl AnalyticsView {
             ReadLane::CoinKpi,
             ReadLane::CoinPicked,
             ReadLane::Time,
+            ReadLane::Ticks,
+            ReadLane::TicksReplay,
+            ReadLane::TicksFetch,
         ]);
     }
 

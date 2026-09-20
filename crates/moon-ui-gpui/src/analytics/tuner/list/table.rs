@@ -210,8 +210,8 @@ impl AnalyticsView {
                             .child(t!("analytics.strat.title").to_string()),
                     )
                     // Order is deliberate and asserted by `theme_contract`: filter, then time,
-                    // then coin. Each id stays bound to its own mode — the persisted per-axis
-                    // column masks are keyed by mode, not by position.
+                    // then coin, then entry/exit. Each id stays bound to its own mode — the
+                    // persisted per-axis column masks are keyed by mode, not by position.
                     .child(mode_btn(
                         "sm-filters",
                         StratMode::Filters,
@@ -226,6 +226,11 @@ impl AnalyticsView {
                         "sm-coins",
                         StratMode::Coins,
                         t!("analytics.strat.mode_coin").to_string(),
+                    ))
+                    .child(mode_btn(
+                        "sm-ticks",
+                        StratMode::Ticks,
+                        t!("analytics.strat.mode_ticks").to_string(),
                     ))
                     .child(div().flex_1())
                     .children({

@@ -91,7 +91,7 @@ impl SearchHandle {
     }
 
     /// Record one finished restart. An abandoned restart never calls this.
-    pub(super) fn record_restart(&self) {
+    pub(crate) fn record_restart(&self) {
         self.0.completed.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -108,7 +108,7 @@ impl SearchHandle {
     }
 
     /// Mark that a unit of work was dropped unfinished. One-way, like cancellation.
-    pub(super) fn note_abandoned(&self) {
+    pub(crate) fn note_abandoned(&self) {
         self.0.abandoned.store(true, Ordering::Relaxed);
     }
 

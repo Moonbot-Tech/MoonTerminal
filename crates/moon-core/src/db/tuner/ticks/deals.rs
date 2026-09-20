@@ -26,7 +26,8 @@ pub struct DealsRead {
 
 /// The delta columns in the order [`Deltas`] is filled below; every one is a `FIELDS` column,
 /// so the unified source projects it (NULL when the replica lacks it).
-const DELTA_COLS: [&str; 11] = [
+const DELTA_COLS: [&str; 12] = [
+    "d5s",
     "d1m",
     "d5m",
     "d15m",
@@ -107,7 +108,8 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             continue;
         }
         let mut deltas = Deltas::default();
-        let slots: [&mut f64; 11] = [
+        let slots: [&mut f64; 12] = [
+            &mut deltas.d5s,
             &mut deltas.d1m,
             &mut deltas.d5m,
             &mut deltas.d15m,

@@ -145,7 +145,7 @@ fn pool() -> Option<&'static rayon::ThreadPool> {
 ///
 /// Returns:
 ///     Whatever `f` returns.
-pub(super) fn install<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+pub(crate) fn install<R: Send>(f: impl FnOnce() -> R + Send) -> R {
     match pool() {
         Some(pool) => pool.install(f),
         None => f(),
@@ -160,7 +160,7 @@ pub(super) fn install<R: Send>(f: impl FnOnce() -> R + Send) -> R {
 ///
 /// The low bit is forced on because xorshift64* is degenerate on a zero state and the mix can
 /// legitimately produce zero.
-pub(super) fn restart_seed(base: u64, restart: usize) -> u64 {
+pub(crate) fn restart_seed(base: u64, restart: usize) -> u64 {
     // splitmix64, the standard companion mixer for seeding a weaker generator.
     let mut z = (base ^ restart as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);

@@ -849,6 +849,7 @@ fn current_strategy_column_masks_cannot_discard_the_saved_layout() {
             filter: 3,
             coins: 7,
             time: 11,
+            ticks: Some(13),
         }),
         ..WindowLayout::default()
     };
@@ -857,7 +858,20 @@ fn current_strategy_column_masks_cannot_discard_the_saved_layout() {
     let masks = decoded
         .analytics_strat_cols_modes2
         .expect("current masks survive");
-    assert_eq!((masks.filter, masks.coins, masks.time), (3, 7, 11));
+    assert_eq!(
+        (masks.filter, masks.coins, masks.time, masks.ticks),
+        (3, 7, 11, Some(13))
+    );
+    // A file written before the fourth axis existed still loads: the missing slot reads `None`.
+    let older: WindowLayout = toml::from_str(
+        "analytics_strat_cols_modes2 = { filter = 3, coins = 7, time = 11 }
+",
+    )
+    .expect("a three-slot key must load");
+    let masks = older
+        .analytics_strat_cols_modes2
+        .expect("older masks survive");
+    assert_eq!((masks.time, masks.ticks), (11, None));
 
     for written in ["17", "true", "[1, 2]", "{ filter = \"bad\" }"] {
         let doc = format!(

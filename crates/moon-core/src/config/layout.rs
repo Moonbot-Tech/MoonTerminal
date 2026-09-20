@@ -361,6 +361,10 @@ pub struct StratColsByMode {
     pub filter: u16,
     pub coins: u16,
     pub time: u16,
+    /// The "Entry/Exit" axis. Added after the key shipped, so a file saved before it has no
+    /// value here: `None` is "never chosen" and the UI substitutes the axis default, while a
+    /// saved `Some(0)` is the deliberate all-hidden mask the other three slots also allow.
+    pub ticks: Option<u16>,
 }
 
 impl Default for StratColsByMode {
@@ -371,6 +375,7 @@ impl Default for StratColsByMode {
             filter: 0,
             coins: 0,
             time: 0,
+            ticks: None,
         }
     }
 }

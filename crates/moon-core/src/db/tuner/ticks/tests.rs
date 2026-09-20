@@ -475,7 +475,7 @@ fn the_pre_spike_price_is_the_last_print_at_least_four_seconds_back() {
 }
 
 #[test]
-fn a_take_the_tape_never_reaches_falls_back_to_the_fact() {
+fn a_take_the_tape_never_reaches_leaves_the_position_open() {
     let fill = Fill {
         t_ms: 10_000,
         price: 99.0,
@@ -487,9 +487,8 @@ fn a_take_the_tape_never_reaches_falls_back_to_the_fact() {
         (25_000, 99.5),
     ]);
     let out = ExitModel::new(&ExitParams::default()).exit(&deal(), &ticks, fill);
-    assert_eq!(out.kind, ExitKind::Fact);
-    assert_eq!(out.t_ms, 20_000);
-    assert!((out.price - 100.0).abs() < 1e-9);
+    assert_eq!(out.kind, ExitKind::OpenAtWindowEnd);
+    assert_eq!(out.t_ms, 25_000, "the tape's end");
 }
 
 #[test]
@@ -617,6 +616,7 @@ fn verify_marks_an_entry_inside_the_tolerance() {
         &EntryParams::MoonShot(mshot()),
         &ExitParams::default(),
         None,
+        None,
     );
     assert_eq!(v.entry, Some(true));
     assert_eq!(v.exit, Some(true));
@@ -624,7 +624,7 @@ fn verify_marks_an_entry_inside_the_tolerance() {
 }
 
 #[test]
-fn verify_marks_a_missed_entry_and_leaves_the_fact_exit_unanswered() {
+fn verify_marks_a_missed_entry_and_judges_the_exit_from_the_fact() {
     let ticks = tape(&[(0, 100.0), (10_000, 99.5), (20_000, 100.0)]);
     let v = verify(
         &deal(),
@@ -632,10 +632,13 @@ fn verify_marks_a_missed_entry_and_leaves_the_fact_exit_unanswered() {
         &EntryParams::MoonShot(mshot()),
         &ExitParams::default(),
         None,
+        None,
     );
     assert_eq!(v.entry, Some(false));
     assert_eq!(v.fill, None);
-    assert_eq!(v.exit, None, "no fill, nothing to exit");
+    // The exit is judged from the factual entry, so a missed entry does not silence it: the
+    // take off the fact's 99.0 is reached at t=20000.
+    assert_eq!(v.exit, Some(true));
 
     // Fact entry, take never reached: the exit is the fact and answers nothing.
     let ticks = tape(&[
@@ -650,10 +653,12 @@ fn verify_marks_a_missed_entry_and_leaves_the_fact_exit_unanswered() {
         &EntryParams::Fact,
         &ExitParams::default(),
         None,
+        None,
     );
     assert_eq!(v.entry, None);
-    assert_eq!(v.exit, None);
-    assert_eq!(v.exit_kind, Some(ExitKind::Fact));
+    // The core did close it and the model never did: the exit group missed.
+    assert_eq!(v.exit, Some(false));
+    assert_eq!(v.exit_kind, Some(ExitKind::OpenAtWindowEnd));
 }
 
 #[test]
@@ -666,6 +671,7 @@ fn verify_reports_the_deviation_of_an_entry_off_the_fact() {
         &ticks,
         &EntryParams::MoonShot(mshot()),
         &ExitParams::default(),
+        None,
         None,
     );
     assert_eq!(v.entry, Some(false));
@@ -685,6 +691,7 @@ fn verify_leaves_a_take_unanswered_against_a_fact_another_rule_closed() {
         &ticks,
         &EntryParams::MoonShot(mshot()),
         &ExitParams::default(),
+        None,
         None,
     );
     assert_eq!(v.exit_kind, Some(ExitKind::Take));
@@ -788,7 +795,12 @@ fn the_descriptor_keys_every_field_the_builders_read_and_splits_the_groups() {
     let exit_any: Vec<_> = params_for(ParamGroup::Exit, "Spread")
         .map(|p| p.key)
         .collect();
-    assert_eq!(exit_any, ["SellPrice", "SellDelay"]);
+    assert!(exit_any.starts_with(&["SellPrice", "SellDelay", "PriceDownTimer"]));
+    assert!(
+        !exit_any.contains(&"MShotSellAtLastPrice"),
+        "a MoonShot-only field"
+    );
+    assert!(exit_any.contains(&"StopLoss") && exit_any.contains(&"SellShotDistance"));
     assert!(entry_model_for("MoonShot") && !entry_model_for("Spread"));
 }
 

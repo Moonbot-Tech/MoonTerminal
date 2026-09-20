@@ -627,6 +627,8 @@ pub struct AnalyticsView {
     /// The "By coin" mode: the table's view controls, the picked coins that define
     /// variant v1, and the two background results it renders from.
     coins: tuner::CoinsState,
+    /// "Entry/Exit" axis: the deals, their tape and the model's verdicts.
+    ticks: tuner::TicksState,
     /// The coin picker's read: the selected strategies' blacklist, with the core each coin
     /// belongs to and when it was added.
     coin_lists: tuner::CoinListsState,
@@ -1072,6 +1074,7 @@ impl AnalyticsView {
                 saved_tuner_compose,
             ),
             coins: tuner::CoinsState::load(saved_coin_sort),
+            ticks: tuner::TicksState::default(),
             coin_lists: tuner::CoinListsState::default(),
             time_tuner: tuner::TimeTunerState::load(),
             cal_from,
@@ -1172,6 +1175,7 @@ impl AnalyticsView {
         self.tuner.invalidate_for_axis();
         self.time_tuner.invalidate();
         self.coins.invalidate();
+        self.ticks.invalidate();
         self.coin_lists.invalidate();
         self.mark_report_data_stale();
         self.request_report_refresh(RefreshUrgency::Writer, false, cx);
@@ -1230,6 +1234,7 @@ impl AnalyticsView {
         self.tuner.mark_report_stale();
         self.time_tuner.mark_report_stale();
         self.coins.mark_report_stale();
+        self.ticks.mark_report_stale();
     }
 
     /// Acknowledge every committed generation visible when a refresh begins.
@@ -1674,6 +1679,7 @@ impl AnalyticsView {
         // starting it now would plan against the PREVIOUS period's coins (or, on a first
         // show, against none at all). It is armed from the completion handler below.
         self.coins.invalidate();
+        self.ticks.invalidate();
         // The list panels ride the same reload, so they are retired with it — otherwise a
         // reply already in flight for the previous scope lands under the new heading.
         self.coin_lists.invalidate();

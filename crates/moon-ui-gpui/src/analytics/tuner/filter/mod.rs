@@ -90,7 +90,10 @@ impl AnalyticsView {
     ///
     /// Returns:
     ///     Lowercase field names mapped to their first available core-schema default.
-    fn filter_defaults(&self, cx: &Context<Self>) -> HashMap<String, f64> {
+    pub(in crate::analytics::tuner) fn filter_defaults(
+        &self,
+        cx: &Context<Self>,
+    ) -> HashMap<String, f64> {
         let backend = self.backend.read(cx);
         let store = backend.session.store();
         let mut defaults = HashMap::new();

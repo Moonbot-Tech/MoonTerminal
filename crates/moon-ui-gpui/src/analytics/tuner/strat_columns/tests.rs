@@ -105,6 +105,7 @@ fn legacy_masks_gain_new_metrics_without_reinterpreting_old_bits() {
         filter: COL_BIT_KIND | COL_BIT_LASTEDIT,
         coins: 0,
         time: COL_BIT_CORE,
+        ticks: None,
     };
     let restored = restore_strat_columns(None, Some(previous), None);
 
@@ -117,4 +118,35 @@ fn legacy_masks_gain_new_metrics_without_reinterpreting_old_bits() {
     assert_eq!(COL_BIT_LASTEDIT, 1 << 11, "historical bit remains stable");
     let hidden = restore_strat_columns(Some(StratColsByMode::default()), Some(previous), None);
     assert_eq!(hidden.filter, 0, "current masks preserve a deliberate hide");
+}
+
+/// A current per-mode key saved before the Entry/Exit axis existed has no value in its slot;
+/// the axis takes its default. A saved mask - zero included - is kept, as the three older
+/// slots keep theirs.
+#[test]
+fn a_saved_key_without_the_ticks_slot_takes_the_axis_default() {
+    let before_ticks = StratColsByMode {
+        filter: COL_BIT_KIND,
+        coins: 0,
+        time: 0,
+        ticks: None,
+    };
+    let restored = restore_strat_columns(Some(before_ticks), None, None);
+    assert_eq!(restored.filter, COL_BIT_KIND);
+    assert_eq!(restored.coins, 0);
+    assert_eq!(
+        restored.ticks,
+        Some(super::super::StratMode::Ticks.default_cols())
+    );
+    for saved in [0, COL_BIT_CORE] {
+        let set = StratColsByMode {
+            ticks: Some(saved),
+            ..before_ticks
+        };
+        assert_eq!(
+            restore_strat_columns(Some(set), None, None).ticks,
+            Some(saved),
+            "a saved choice is kept, an all-hidden one included"
+        );
+    }
 }

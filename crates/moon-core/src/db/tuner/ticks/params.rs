@@ -70,6 +70,32 @@ const GRID_SELL_PRICE: &[f64] = &[
     5.0,
 ];
 const GRID_SELL_DELAY_MS: &[f64] = &[0.0, 100.0, 250.0, 500.0, 1000.0];
+const GRID_PD_TIMER_S: &[f64] = &[
+    0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 60.0, 120.0,
+];
+const GRID_PD_PCT: &[f64] = &[
+    5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 70.0, 80.0, 90.0, 100.0,
+];
+const GRID_PD_DELAY_S: &[f64] = &[0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 30.0, 60.0];
+const GRID_DROP: &[f64] = &[
+    -1.0, -0.5, -0.2, -0.1, 0.0, 0.01, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0,
+];
+const GRID_SL_DELAY_S: &[f64] = &[0.0, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0];
+const GRID_SL_TIME_S: &[f64] = &[0.0, 60.0, 300.0, 900.0, 1800.0, 3600.0, 7200.0];
+const GRID_SL_COUNT: &[f64] = &[0.0, 1.0, 2.0, 3.0, 5.0, 10.0];
+const GRID_SS_DISTANCE: &[f64] = &[
+    0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.25, 1.5, 2.0,
+];
+const GRID_SS_CORRIDOR: &[f64] = &[10.0, 25.0, 50.0, 75.0, 90.0];
+const GRID_SS_INTERVAL_S: &[f64] = &[0.2, 0.4, 0.6, 1.0, 2.0, 5.0, 10.0, 25.0];
+const GRID_SS_WAIT_S: &[f64] = &[0.0, 0.1, 0.2, 0.5, 1.0, 2.0];
+const GRID_SS_BOUND: &[f64] = &[
+    -1.0, -0.5, -0.2, -0.1, 0.0, 0.2, 0.4, 0.5, 1.0, 2.0, 5.0, 10.0,
+];
+const GRID_STOP: &[f64] = &[
+    -10.0, -7.0, -5.0, -4.0, -3.0, -2.5, -2.0, -1.5, -1.0, -0.75, -0.5, -0.3, -0.2, -0.1,
+];
+const GRID_STOP_DELAY_S: &[f64] = &[0.0, 1.0, 2.0, 4.0, 6.0, 10.0, 20.0, 30.0];
 
 /// Every parameter of the axis, grid order: the Entry group first, then Exit.
 pub const TICK_PARAMS: &[TickParam] = &[
@@ -219,7 +245,51 @@ pub const TICK_PARAMS: &[TickParam] = &[
         },
         kinds: ANY,
     },
+    exit_num("PriceDownTimer", GRID_PD_TIMER_S),
+    exit_num("PriceDownPercent", GRID_PD_PCT),
+    exit_num("PriceDownDelay", GRID_PD_DELAY_S),
+    exit_bool("PriceDownRelative"),
+    exit_num("PriceDownAllowedDrop", GRID_DROP),
+    exit_num("SellLevelDelay", GRID_SL_DELAY_S),
+    exit_num("SellLevelDelayNext", GRID_SL_DELAY_S),
+    exit_num("SellLevelTime", GRID_SL_TIME_S),
+    exit_num("SellLevelCount", GRID_SL_COUNT),
+    exit_num("SellLevelAdjust", GRID_DROP),
+    exit_bool("SellLevelRelative"),
+    exit_num("SellLevelAllowedDrop", GRID_DROP),
+    exit_num("SellLevelWorkTime", GRID_SL_TIME_S),
+    exit_bool("IgnoreSellShot"),
+    exit_num("SellShotDistance", GRID_SS_DISTANCE),
+    exit_num("SellShotCorridor", GRID_SS_CORRIDOR),
+    exit_num("SellShotCalcInterval", GRID_SS_INTERVAL_S),
+    exit_num("SellShotRaiseWait", GRID_SS_WAIT_S),
+    exit_num("SellShotReplaceDelay", GRID_SS_WAIT_S),
+    exit_num("SellShotAllowedUp", GRID_SS_BOUND),
+    exit_num("SellShotAllowedDown", GRID_SS_BOUND),
+    exit_num("SellShotDelay", GRID_SS_WAIT_S),
+    exit_num("StopLoss", GRID_STOP),
+    exit_num("StopLossDelay", GRID_STOP_DELAY_S),
 ];
+
+/// A numeric field of the Exit group every kind understands.
+const fn exit_num(key: &'static str, grid: &'static [f64]) -> TickParam {
+    TickParam {
+        key,
+        group: ParamGroup::Exit,
+        kind: ParamKind::Num { grid },
+        kinds: ANY,
+    }
+}
+
+/// A boolean field of the Exit group every kind understands.
+const fn exit_bool(key: &'static str) -> TickParam {
+    TickParam {
+        key,
+        group: ParamGroup::Exit,
+        kind: ParamKind::Bool,
+        kinds: ANY,
+    }
+}
 
 /// The parameters of one group that a kind's grid shows.
 pub fn params_for<'k>(
@@ -312,7 +382,7 @@ pub fn mshot_params(v: &StrategyValues<'_>, latency_ms: f64) -> MshotParams {
     }
 }
 
-/// Sell-line parameters out of a strategy's values.
+/// Sell-line parameters out of a strategy's values; `latency_ms` is the model's own.
 pub fn exit_params(v: &StrategyValues<'_>) -> ExitParams {
     let base = ExitParams::default();
     ExitParams {
@@ -320,5 +390,37 @@ pub fn exit_params(v: &StrategyValues<'_>) -> ExitParams {
         sell_at_last_price: v.bool("MShotSellAtLastPrice", base.sell_at_last_price),
         sell_price_adjust_pct: v.num("MShotSellPriceAdjust", base.sell_price_adjust_pct),
         sell_delay_ms: v.num("SellDelay", base.sell_delay_ms),
+        price_down_timer_s: v.num("PriceDownTimer", base.price_down_timer_s),
+        price_down_pct: v.num("PriceDownPercent", base.price_down_pct),
+        price_down_delay_s: v.num("PriceDownDelay", base.price_down_delay_s),
+        price_down_relative: v.bool("PriceDownRelative", base.price_down_relative),
+        price_down_allowed_drop_pct: v
+            .num("PriceDownAllowedDrop", base.price_down_allowed_drop_pct),
+        sell_level_delay_s: v.num("SellLevelDelay", base.sell_level_delay_s),
+        sell_level_delay_next_s: v.num("SellLevelDelayNext", base.sell_level_delay_next_s),
+        sell_level_time_s: v.num("SellLevelTime", base.sell_level_time_s),
+        sell_level_count: v
+            .num("SellLevelCount", f64::from(base.sell_level_count))
+            .max(0.0) as u32,
+        sell_level_adjust_pct: v.num("SellLevelAdjust", base.sell_level_adjust_pct),
+        sell_level_relative: v.bool("SellLevelRelative", base.sell_level_relative),
+        sell_level_allowed_drop_pct: v
+            .num("SellLevelAllowedDrop", base.sell_level_allowed_drop_pct),
+        sell_level_work_time_s: v.num("SellLevelWorkTime", base.sell_level_work_time_s),
+        ignore_sell_shot: v.bool("IgnoreSellShot", base.ignore_sell_shot),
+        sell_shot_distance_pct: v.num("SellShotDistance", base.sell_shot_distance_pct),
+        sell_shot_corridor_pct: v.num("SellShotCorridor", base.sell_shot_corridor_pct),
+        sell_shot_calc_interval_s: v.num("SellShotCalcInterval", base.sell_shot_calc_interval_s),
+        sell_shot_raise_wait_s: v.num("SellShotRaiseWait", base.sell_shot_raise_wait_s),
+        sell_shot_replace_delay_s: v.num("SellShotReplaceDelay", base.sell_shot_replace_delay_s),
+        sell_shot_price_down: v.num("SellShotPriceDown", base.sell_shot_price_down),
+        sell_shot_price_down_delay_s: v
+            .num("SellShotPriceDownDelay", base.sell_shot_price_down_delay_s),
+        sell_shot_allowed_up_pct: v.num("SellShotAllowedUp", base.sell_shot_allowed_up_pct),
+        sell_shot_allowed_down_pct: v.num("SellShotAllowedDown", base.sell_shot_allowed_down_pct),
+        sell_shot_delay_s: v.num("SellShotDelay", base.sell_shot_delay_s),
+        stop_loss_pct: v.num("StopLoss", base.stop_loss_pct),
+        stop_loss_delay_s: v.num("StopLossDelay", base.stop_loss_delay_s),
+        latency_ms: base.latency_ms,
     }
 }

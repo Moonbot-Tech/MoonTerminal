@@ -50,10 +50,15 @@ fn tuning_mode_buttons_keep_their_order_and_baseline() {
             .find(needle)
             .unwrap_or_else(|| panic!("{needle} must be rendered in the card header"))
     };
-    let (filters, time, coins) = (at("\"sm-filters\""), at("\"sm-time\""), at("\"sm-coins\""));
+    let (filters, time, coins, ticks) = (
+        at("\"sm-filters\""),
+        at("\"sm-time\""),
+        at("\"sm-coins\""),
+        at("\"sm-ticks\""),
+    );
     assert!(
-        filters < time && time < coins,
-        "the axis buttons must read filter, time, coin"
+        filters < time && time < coins && coins < ticks,
+        "the axis buttons must read filter, time, coin, entry/exit"
     );
     assert!(
         at("design::micro_control_h(cx)") < filters,
@@ -62,8 +67,8 @@ fn tuning_mode_buttons_keep_their_order_and_baseline() {
     );
     assert_eq!(
         header.matches("mode_btn(").count(),
-        3,
-        "exactly three axis buttons — a fourth needs this test updated deliberately, not a \
+        4,
+        "exactly four axis buttons — a fifth needs this test updated deliberately, not a \
          copy-pasted line the ordering assertion above would happily accept"
     );
 }

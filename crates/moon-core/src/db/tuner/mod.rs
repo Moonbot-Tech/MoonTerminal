@@ -637,7 +637,7 @@ fn variant_stats_sql(src: &str, variants: &[Variant]) -> String {
 ///
 /// Returns:
 ///     Complete KPI values for one variant.
-fn stats_from_tally(tally: Tally, spent: f64) -> VarStats {
+pub(crate) fn stats_from_tally(tally: Tally, spent: f64) -> VarStats {
     let mut stats = VarStats {
         n: tally.n,
         wins: tally.wins,

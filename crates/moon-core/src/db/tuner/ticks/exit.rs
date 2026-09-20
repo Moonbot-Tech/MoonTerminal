@@ -2,20 +2,21 @@
 //! model for every strategy kind — after the entry filled, the exit of any strategy is a
 //! function of the sell-order rules and the tape.
 //!
-//! Phase 1 carries the take-profit alone: `SellPrice` per cent above the fill, raised by
-//! `MShotSellAtLastPrice` to the pre-spike price less `MShotSellPriceAdjust` (the FAQ: "the
-//! 4-second-old ASK, i.e. before the spike"; the model reads the last print at least
-//! [`PRE_SPIKE_LOOKBACK_MS`] before the fill, since the tape has no book). A position the take
-//! never closed exits AS THE REPORT SAYS IT DID — [`ExitKind::Fact`] — which the caller shows as
-//! "exit not modelled" rather than as a reproduction. The moving line (`PriceDown*`,
-//! `SellLevel*`, `SellShot*`, `StopLoss`) is phase 2, checked against the archived Exit lines
-//! before it is trusted.
+//! The take-profit is `SellPrice` per cent above the fill, raised by `MShotSellAtLastPrice` to
+//! the pre-spike price less `MShotSellPriceAdjust` (the FAQ: "the 4-second-old ASK, i.e. before
+//! the spike"; the model reads the last print at least [`PRE_SPIKE_LOOKBACK_MS`] before the
+//! fill, since the tape has no book). From there the line moves under the strategy's sell rules
+//! — `PriceDown*`, `SellLevel*`, `SellShot*` — and the stop fires under `StopLoss*`; see
+//! [`super::line`]. A position nothing closed inside the tape is [`ExitKind::OpenAtWindowEnd`]:
+//! not a trade, whatever the core's exit was.
 
-use super::mshot::PRE_SPIKE_LOOKBACK_MS;
-use super::{Deal, Exit, ExitKind, Fill, reaches};
+use super::line::{LineWalk, walk};
+use super::mshot::{DEFAULT_LATENCY_MS, PRE_SPIKE_LOOKBACK_MS};
+use super::{Deal, Exit, Fill};
 use crate::feed::types::Tick;
 
-/// Sell-line parameters, in the strategy's own units.
+/// Sell-line parameters, in the strategy's own units (per cent, seconds; `SellDelay` is ms).
+/// Every rule's fields are documented in [`super::line`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExitParams {
     /// `SellPrice` — take-profit distance from the fill, per cent.
@@ -27,15 +28,75 @@ pub struct ExitParams {
     /// `SellDelay` — milliseconds the core waits before placing the sell; prints inside the
     /// delay cannot fill it.
     pub sell_delay_ms: f64,
+    // PriceDown
+    pub price_down_timer_s: f64,
+    pub price_down_pct: f64,
+    pub price_down_delay_s: f64,
+    pub price_down_relative: bool,
+    pub price_down_allowed_drop_pct: f64,
+    // SellLevel
+    pub sell_level_delay_s: f64,
+    pub sell_level_delay_next_s: f64,
+    pub sell_level_time_s: f64,
+    pub sell_level_count: u32,
+    pub sell_level_adjust_pct: f64,
+    pub sell_level_relative: bool,
+    pub sell_level_allowed_drop_pct: f64,
+    pub sell_level_work_time_s: f64,
+    // SellShot
+    pub ignore_sell_shot: bool,
+    pub sell_shot_distance_pct: f64,
+    pub sell_shot_corridor_pct: f64,
+    pub sell_shot_calc_interval_s: f64,
+    pub sell_shot_raise_wait_s: f64,
+    pub sell_shot_replace_delay_s: f64,
+    pub sell_shot_price_down: f64,
+    pub sell_shot_price_down_delay_s: f64,
+    pub sell_shot_allowed_up_pct: f64,
+    pub sell_shot_allowed_down_pct: f64,
+    pub sell_shot_delay_s: f64,
+    // Stops
+    pub stop_loss_pct: f64,
+    pub stop_loss_delay_s: f64,
+    /// Model parameter: how long a replacement of the sell takes to reach the book.
+    pub latency_ms: f64,
 }
 
 impl Default for ExitParams {
+    /// A plain 1 % take, nothing moving it, no stop.
     fn default() -> Self {
         Self {
             sell_price_pct: 1.0,
             sell_at_last_price: false,
             sell_price_adjust_pct: 0.0,
             sell_delay_ms: 0.0,
+            price_down_timer_s: 0.0,
+            price_down_pct: 0.0,
+            price_down_delay_s: 0.0,
+            price_down_relative: true,
+            price_down_allowed_drop_pct: 0.0,
+            sell_level_delay_s: 0.0,
+            sell_level_delay_next_s: 0.0,
+            sell_level_time_s: 0.0,
+            sell_level_count: 0,
+            sell_level_adjust_pct: 0.0,
+            sell_level_relative: false,
+            sell_level_allowed_drop_pct: 0.0,
+            sell_level_work_time_s: 0.0,
+            ignore_sell_shot: true,
+            sell_shot_distance_pct: 0.0,
+            sell_shot_corridor_pct: 50.0,
+            sell_shot_calc_interval_s: 0.6,
+            sell_shot_raise_wait_s: 0.0,
+            sell_shot_replace_delay_s: 0.0,
+            sell_shot_price_down: 0.0,
+            sell_shot_price_down_delay_s: 0.0,
+            sell_shot_allowed_up_pct: 10.0,
+            sell_shot_allowed_down_pct: -100.0,
+            sell_shot_delay_s: 0.0,
+            stop_loss_pct: 0.0,
+            stop_loss_delay_s: 0.0,
+            latency_ms: DEFAULT_LATENCY_MS,
         }
     }
 }
@@ -72,47 +133,20 @@ impl<'a> ExitModel<'a> {
         take
     }
 
-    /// Replay the tape after the fill.
+    /// Replay the tape after the fill: the take, the moving line, the stop.
     ///
     /// Args:
     ///     deal: The report row — its side, and its own exit for the fallback.
     ///     ticks: The window's prints, ascending.
     ///     fill: The modelled (or factual) entry.
     pub fn exit(&self, deal: &Deal, ticks: &[Tick], fill: Fill) -> Exit {
+        self.walk(deal, ticks, fill).exit
+    }
+
+    /// The same replay with every level the line stood at, for the archive comparison.
+    pub fn walk(&self, deal: &Deal, ticks: &[Tick], fill: Fill) -> LineWalk {
         let take = self.take_level(deal, ticks, fill);
-        let armed_at = fill.t_ms + self.params.sell_delay_ms.max(0.0) as i64;
-        for tick in ticks {
-            let t_ms = tick.time_ms as i64;
-            // A print at the fill's own millisecond is the fill itself, not the exit.
-            if t_ms <= armed_at || t_ms <= fill.t_ms {
-                continue;
-            }
-            let price = f64::from(tick.price);
-            // A long's take is reached from below by a print coming UP, a short's from above.
-            if price > 0.0 && reaches(price, take, deal.is_short) {
-                return Exit {
-                    t_ms,
-                    price: take,
-                    kind: ExitKind::Take,
-                };
-            }
-        }
-        // No rule of this phase closed it. The report's exit is the honest stand-in while the
-        // fill is the factual one; a modelled fill that differs from the fact makes the fact's
-        // exit a guess — the caller keeps that distinction (`Verdict::exit` is `None` here).
-        let tail = ticks.last().map(|t| t.time_ms as i64).unwrap_or(fill.t_ms);
-        if deal.close_ms > fill.t_ms && deal.close_ms <= tail && deal.sell_price > 0.0 {
-            return Exit {
-                t_ms: deal.close_ms,
-                price: deal.sell_price,
-                kind: ExitKind::Fact,
-            };
-        }
-        Exit {
-            t_ms: tail,
-            price: f64::NAN,
-            kind: ExitKind::OpenAtWindowEnd,
-        }
+        walk(deal, ticks, fill, take, self.params)
     }
 }
 

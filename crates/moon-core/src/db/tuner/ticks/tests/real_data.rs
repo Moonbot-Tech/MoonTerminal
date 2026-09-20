@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags};
 
+use super::super::exit::ExitModel;
 use super::super::mshot::DEFAULT_LATENCY_MS;
 use super::super::params::{StrategyValues, exit_params, mshot_params, param_keys};
 use super::super::*;
@@ -31,15 +32,25 @@ use crate::symbol::{coin_match_key, coin_of_market};
 /// The tape must reach this far back before the buy for the corridor to have a run-up.
 const RUN_UP_MS: i64 = 30_000;
 
-/// The archived first point of the deal's own entry line, when the archive holds one.
-fn archived_entry_start(deal: &Deal) -> Option<(i64, f64)> {
-    let entries = read_many(deal.core_uid, &[deal.report_uid]).ok()?;
-    match entries.get(&deal.report_uid)? {
-        TraceEntry::Lines(lines) => lines
-            .iter()
-            .find(|l| l.own && l.kind == ArchivedLineKind::Entry)
-            .and_then(|l| l.points.first().map(|&(t, p)| (t as i64, p))),
-        TraceEntry::Empty { .. } => None,
+/// The archived first point of the deal's own entry line and every point of its own exit
+/// line, when the archive holds them.
+fn archived_lines(deal: &Deal) -> (Option<(i64, f64)>, Option<Vec<(i64, f64)>>) {
+    let Ok(entries) = read_many(deal.core_uid, &[deal.report_uid]) else {
+        return (None, None);
+    };
+    match entries.get(&deal.report_uid) {
+        Some(TraceEntry::Lines(lines)) => {
+            let entry = lines
+                .iter()
+                .find(|l| l.own && l.kind == ArchivedLineKind::Entry)
+                .and_then(|l| l.points.first().map(|&(t, p)| (t as i64, p)));
+            let exit = lines
+                .iter()
+                .find(|l| l.own && l.kind == ArchivedLineKind::Exit)
+                .map(|l| l.points.iter().map(|&(t, p)| (t as i64, p)).collect());
+            (entry, exit)
+        }
+        _ => (None, None),
     }
 }
 
@@ -144,19 +155,43 @@ fn real_data_reproduction() {
         }
         with_tape += 1;
         deal.tick = infer_tick(&ticks);
-        let entry_start = archived_entry_start(&deal);
+        let (entry_start, exit_points) = archived_lines(&deal);
         let sv = StrategyValues {
             values: &values,
             defaults: &defaults,
         };
         let entry = EntryParams::MoonShot(mshot_params(&sv, DEFAULT_LATENCY_MS));
         let exit = exit_params(&sv);
-        let plain = verify(&deal, &ticks, &entry, &exit, None);
-        let archived = verify(&deal, &ticks, &entry, &exit, entry_start);
+        // The modelled line beside the archive's moves, for the eye.
+        if let (Some(fill), Some(moves)) = (
+            simulate(&deal, &ticks, &entry, &exit, entry_start).fill,
+            exit_points.as_deref().map(verify::archived_replacements),
+        ) {
+            let modelled = ExitModel::new(&exit).walk(&deal, &ticks, fill);
+            let fmt = |pts: &[(i64, f64)]| -> String {
+                pts.iter()
+                    .take(6)
+                    .map(|(t, p)| format!("{:+}ms {:.6}", t - deal.buy_ms, p))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let mine: Vec<(i64, f64)> = modelled.points.iter().map(|p| (p.t_ms, p.price)).collect();
+            eprintln!("    model line: {}", fmt(&mine));
+            eprintln!("    archive   : {}", fmt(&moves));
+        }
+        let plain = verify(&deal, &ticks, &entry, &exit, None, None);
+        let archived = verify(
+            &deal,
+            &ticks,
+            &entry,
+            &exit,
+            entry_start,
+            exit_points.as_deref(),
+        );
         eprintln!(
             "{uid} {coin:<8} buy {buy:.6} | plain fill {fill:?} dev {dev:?} ✓{ok:?} | \
              archived start {start:?} fill {fill2:?} dev {dev2:?} ✓{ok2:?} | \
-             exit {exit_kind:?} ✓{exit_ok:?} dev {exit_dev:?} | {reason} | ticks {n} step {tick:?}",
+             exit {exit_kind:?} ✓{exit_ok:?} dev {exit_dev:?} line {line:?} | {reason} | ticks {n} step {tick:?}",
             uid = deal.report_uid,
             coin = deal.coin,
             buy = deal.buy_price,
@@ -170,6 +205,7 @@ fn real_data_reproduction() {
             exit_kind = archived.exit_kind,
             exit_ok = archived.exit,
             exit_dev = round3(archived.exit_dev_pct),
+            line = archived.line_points,
             reason = deal.sell_reason,
             n = ticks.len(),
             tick = deal.tick,

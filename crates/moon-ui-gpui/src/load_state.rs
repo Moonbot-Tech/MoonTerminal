@@ -54,6 +54,20 @@ impl<T> LoadState<T> {
         }
     }
 
+    /// The renderable data for an in-place edit — a row's status after a fetch — without
+    /// republishing the whole value. Copies on write only when something else still holds
+    /// the previous snapshot (a render in flight).
+    pub(crate) fn data_mut(&mut self) -> Option<&mut T>
+    where
+        T: Clone,
+    {
+        match self {
+            LoadState::Ready(v) => Some(Arc::make_mut(v)),
+            LoadState::Loading { stale } => stale.as_mut().map(Arc::make_mut),
+            LoadState::NotReady | LoadState::Failed(_) => None,
+        }
+    }
+
     /// Mark a new request as started, carrying forward only data still worth
     /// showing. Both completed non-data states drop it.
     pub(crate) fn begin(&mut self) {

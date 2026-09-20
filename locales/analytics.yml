@@ -1698,3 +1698,149 @@ analytics.recovery_recording_off_detail:
   ru: "Новые сделки сейчас не сохраняются в этой реплике отчётов. После устранения причины и перезапуска терминала пропуск будет загружен из ядра: метка синхронизации хранится в самой реплике. Не удастся вернуть только сделки, которые ядро уже не хранит."
   en: "New trades are not being recorded in this reports replica. After fixing the cause and restarting the terminal, the gap will be refilled from the core: the sync checkpoint is stored in the replica itself. Only trades the core no longer retains cannot be recovered."
   es: "Las nuevas operaciones no se están guardando en esta réplica de informes. Tras corregir la causa y reiniciar el terminal, el historial faltante se descargará del núcleo: el punto de sincronización se guarda en la propia réplica. Solo las operaciones que el núcleo ya no conserva no podrán recuperarse."
+
+# Tuner: the "Entry/Exit" axis — the trade tape replayed around each closed trade.
+analytics.strat.mode_ticks:
+  ru: "Вход/Выход"
+  en: "Entry/Exit"
+  es: "Entrada/Salida"
+analytics.ticks.title:
+  ru: "Сделки"
+  en: "Trades"
+  es: "Operaciones"
+analytics.ticks.coverage:
+  ru: "с лентой %{covered} из %{total} · без мс-штампа %{without}"
+  en: "tape for %{covered} of %{total} · no ms stamp %{without}"
+  es: "cinta en %{covered} de %{total} · sin marca ms %{without}"
+analytics.ticks.fetch_btn:
+  ru: "Прогрузить трейды"
+  en: "Fetch trades"
+  es: "Cargar trades"
+analytics.ticks.fetch_progress:
+  ru: "трейды: %{done}/%{total} · стоп"
+  en: "trades: %{done}/%{total} · stop"
+  es: "trades: %{done}/%{total} · parar"
+analytics.ticks.col.time:
+  ru: "вход"
+  en: "entry"
+  es: "entrada"
+analytics.ticks.col.buy:
+  ru: "buy"
+  en: "buy"
+  es: "buy"
+analytics.ticks.col.sell:
+  ru: "sell"
+  en: "sell"
+  es: "sell"
+analytics.ticks.col.result:
+  ru: "%"
+  en: "%"
+  es: "%"
+analytics.ticks.col.duration:
+  ru: "длит."
+  en: "dur."
+  es: "dur."
+analytics.ticks.col.d5s:
+  ru: "d5s"
+  en: "d5s"
+  es: "d5s"
+analytics.ticks.col.d1m:
+  ru: "d1m"
+  en: "d1m"
+  es: "d1m"
+analytics.ticks.col.d1h:
+  ru: "d1h"
+  en: "d1h"
+  es: "d1h"
+analytics.ticks.col.dmark:
+  ru: "dmark"
+  en: "dmark"
+  es: "dmark"
+analytics.ticks.col.pricebug:
+  ru: "pbug"
+  en: "pbug"
+  es: "pbug"
+analytics.ticks.col.reason:
+  ru: "причина"
+  en: "reason"
+  es: "motivo"
+analytics.ticks.col.tape:
+  ru: "лента"
+  en: "tape"
+  es: "cinta"
+analytics.ticks.col.model:
+  ru: "модель"
+  en: "model"
+  es: "modelo"
+analytics.ticks.tape_covered:
+  ru: "Лента трейдов покрывает окно сделки"
+  en: "The trade tape covers the trade's window"
+  es: "La cinta de trades cubre la ventana de la operación"
+analytics.ticks.tape_missing:
+  ru: "Ленты нет или в ней дыра — «Прогрузить трейды» запросит её у биржи"
+  en: "No tape, or a hole in it — \"Fetch trades\" asks the venue"
+  es: "Sin cinta o con un hueco — «Cargar trades» la pedirá al exchange"
+analytics.ticks.tape_fetching:
+  ru: "Запрашивается у биржи…"
+  en: "Fetching from the venue…"
+  es: "Pidiendo al exchange…"
+analytics.ticks.tape_no_address:
+  ru: "Ядро не подключено или монета не найдена в его каталоге — запросить не у кого"
+  en: "The core is not connected, or its catalog has no such market — nothing to ask"
+  es: "El núcleo no está conectado o su catálogo no tiene el mercado — no hay a quién pedir"
+analytics.ticks.tape_refused:
+  ru: "Биржа не отдала трейды: %{status}"
+  en: "The venue did not serve the trades: %{status}"
+  es: "El exchange no entregó los trades: %{status}"
+analytics.ticks.model_tip:
+  ru: "Вход: отклонение модели от факта %{entry} · Выход: %{exit}"
+  en: "Entry: model vs fact %{entry} · Exit: %{exit}"
+  es: "Entrada: modelo vs hecho %{entry} · Salida: %{exit}"
+analytics.ticks.subset:
+  ru: "Факт · с лентой"
+  en: "Fact · with tape"
+  es: "Hecho · con cinta"
+analytics.ticks.subset_sub:
+  ru: "по %{n} из %{m} · вход ✓ %{entry} · выход ✓ %{exit}"
+  en: "%{n} of %{m} · entry ✓ %{entry} · exit ✓ %{exit}"
+  es: "%{n} de %{m} · entrada ✓ %{entry} · salida ✓ %{exit}"
+analytics.ticks.params_title:
+  ru: "Параметры"
+  en: "Parameters"
+  es: "Parámetros"
+analytics.ticks.params_sub:
+  ru: "фаза 1: только текущие значения"
+  en: "phase 1: current values only"
+  es: "fase 1: solo valores actuales"
+analytics.ticks.assumptions:
+  ru: "Модель не учитывает: стакан и очередь · выход кроме тейка · дельты как константы окна · опора ASK/BID = последний принт стороны · MShotRepeat* · задержка перестановки 100 мс"
+  en: "Not modelled: the book and the queue · exits other than the take · deltas constant over the window · ASK/BID reference = the last print of that side · MShotRepeat* · a 100 ms replacement latency"
+  es: "No modelado: libro y cola · salidas salvo el take · deltas constantes en la ventana · referencia ASK/BID = último print del lado · MShotRepeat* · latencia de reemplazo de 100 ms"
+analytics.ticks.group_entry:
+  ru: "Вход"
+  en: "Entry"
+  es: "Entrada"
+analytics.ticks.group_exit:
+  ru: "Выход"
+  en: "Exit"
+  es: "Salida"
+analytics.ticks.entry_from_fact:
+  ru: "вход для %{kinds} не моделируется — берётся из факта"
+  en: "the entry of %{kinds} is not modelled — taken from the fact"
+  es: "la entrada de %{kinds} no se modela — se toma del hecho"
+analytics.ticks.group_collapse:
+  ru: "Свернуть группу"
+  en: "Collapse the group"
+  es: "Plegar el grupo"
+analytics.ticks.group_expand:
+  ru: "Развернуть группу"
+  en: "Expand the group"
+  es: "Desplegar el grupo"
+analytics.ticks.now:
+  ru: "сейчас"
+  en: "now"
+  es: "ahora"
+analytics.ticks.no_deals:
+  ru: "в выборке нет сделок с мс-штампами"
+  en: "no trades with millisecond stamps in the scope"
+  es: "no hay operaciones con marcas de ms en el ámbito"

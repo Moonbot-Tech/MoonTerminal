@@ -27,8 +27,11 @@ use crate::feed::types::Tick;
 pub mod deals;
 pub mod entry;
 pub mod exit;
+pub mod line;
 pub mod mshot;
 pub mod params;
+pub mod search;
+pub mod stats;
 pub mod verify;
 
 pub use deals::{DealsRead, read_deals};
@@ -36,6 +39,8 @@ pub use entry::{EntryModel, entry_model_for};
 pub use exit::{ExitModel, ExitParams};
 pub use mshot::{MshotEntry, MshotParams, UsePrice};
 pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};
+pub use search::{PreparedDeal, SearchParams, SearchResult, suggest, variant_tally};
+pub use stats::fact_stats;
 pub use verify::{Verdict, verify};
 
 /// Relative tolerance under which a modelled price counts as reproducing the fact: 0.05 %.
@@ -72,6 +77,8 @@ pub fn reaches(price: f64, level: f64, from_below: bool) -> bool {
 /// delta can. All values are per cent, exactly as `orders_rep` stores them.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Deltas {
+    /// The last five seconds' move (`d5s`) — the spike itself; shown, not a modifier input.
+    pub d5s: f64,
     pub d1m: f64,
     pub d5m: f64,
     pub d15m: f64,
@@ -147,15 +154,13 @@ pub struct Fill {
 pub enum ExitKind {
     /// A print reached the take-profit level.
     Take,
-    /// A print crossed the moving sell line (PriceDown / SellLevel / SellShot) — phase 2.
+    /// A print crossed the moving sell line (PriceDown / SellLevel / SellShot).
     Line,
-    /// The stop-loss level was crossed — phase 2.
+    /// The stop-loss level was crossed: a market exit at the print.
     Stop,
-    /// No exit rule decided; the exit is the report's own (`sellprice` at `closedatems`). A
-    /// phase-1 placeholder the caller shows as "exit not modelled".
-    Fact,
     /// Nothing closed the position before the tape ran out. Not a trade: excluded from the KPI
-    /// and counted in the caption.
+    /// and counted in the caption. Under the strategy's own parameters this is the model
+    /// failing to reproduce an exit the core made, and the verdict says so.
     OpenAtWindowEnd,
 }
 
