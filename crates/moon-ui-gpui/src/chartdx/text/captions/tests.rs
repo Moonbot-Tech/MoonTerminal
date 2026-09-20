@@ -9,7 +9,7 @@ use moon_core::config::{
 
 use super::super::caption::CaptionGeom;
 use super::super::labels::LabelText;
-use super::{CaptionGeomInput, ZONE_PAD, group_lines, zone_start_y};
+use super::{CaptionGeomInput, MAX_CAPTION_LINE_H, ZONE_PAD, group_lines, zone_start_y};
 
 /// Treating the filters header like an ordinary name places it beside the lines instead of
 /// above them; retaining hidden texts prevents the following module from reclaiming height.
@@ -306,9 +306,9 @@ fn the_shipped_buttons_share_one_line_along_the_bottom() {
     );
 }
 
-/// Plot 400 tall, volume band 80. The corner geometry is unused on ChartBottom / ChartTop.
-fn start_y(zone: LabelZone, volume_band_h: f32) -> f32 {
-    let geom = CaptionGeomInput {
+/// Plot 400 tall. The corner geometry is unused on ChartBottom / ChartTop.
+fn plot_geom() -> CaptionGeomInput {
+    CaptionGeomInput {
         pane_left: 0.0,
         pane_right: 1000.0,
         plot_left: 0.0,
@@ -318,15 +318,28 @@ fn start_y(zone: LabelZone, volume_band_h: f32) -> f32 {
         orderbook_enabled: false,
         orderbook_left: 0.0,
         scale_factor: 1.0,
-        volume_band_h,
-    };
-    let corner = CaptionGeom {
+        volume_band_h: 0.0,
+        corner_strip_h: 0.0,
+    }
+}
+
+fn corner() -> CaptionGeom {
+    CaptionGeom {
         zone_left: 800.0,
         right_x: 970.0,
         top_y: 54.0,
         max_w: 170.0,
+    }
+}
+
+/// Plot 400 tall, volume band 80. The corner geometry is unused on ChartBottom / ChartTop.
+fn start_y(zone: LabelZone, align: LabelAlign, volume_band_h: f32, corner_strip_h: f32) -> f32 {
+    let geom = CaptionGeomInput {
+        volume_band_h,
+        corner_strip_h,
+        ..plot_geom()
     };
-    zone_start_y(zone, &geom, &corner)
+    zone_start_y(zone, align, &geom, &corner())
 }
 
 /// Every module in ChartBottom sits above the volume bars, not on them. This is the floor the
@@ -334,7 +347,7 @@ fn start_y(zone: LabelZone, volume_band_h: f32) -> f32 {
 #[test]
 fn chart_bottom_sits_above_the_volume_band() {
     assert_eq!(
-        start_y(LabelZone::ChartBottom, 80.0),
+        start_y(LabelZone::ChartBottom, LabelAlign::Left, 80.0, 0.0),
         450.0 - 80.0 - ZONE_PAD
     );
 }
@@ -342,20 +355,98 @@ fn chart_bottom_sits_above_the_volume_band() {
 /// Volumes off: ChartBottom stays on the plot floor, the way it always did.
 #[test]
 fn chart_bottom_without_volumes_sits_on_the_plot_floor() {
-    assert_eq!(start_y(LabelZone::ChartBottom, 0.0), 450.0 - ZONE_PAD);
+    assert_eq!(
+        start_y(LabelZone::ChartBottom, LabelAlign::Left, 0.0, 0.0),
+        450.0 - ZONE_PAD
+    );
 }
 
 /// The control strip's floor is the plot's. The volume bars never reach it, so lifting it would
 /// float ZoneBottom captions into empty plot for no reason.
 #[test]
 fn the_control_strip_floor_ignores_the_volume_band() {
-    assert_eq!(start_y(LabelZone::ZoneBottom, 80.0), 450.0 - ZONE_PAD);
+    assert_eq!(
+        start_y(LabelZone::ZoneBottom, LabelAlign::Left, 80.0, 0.0),
+        450.0 - ZONE_PAD
+    );
 }
 
 /// ChartTop is the plot's upper edge. A volume-band height must not walk it down the pane.
 #[test]
 fn chart_top_ignores_the_volume_band() {
-    assert_eq!(start_y(LabelZone::ChartTop, 80.0), 50.0 + ZONE_PAD);
+    assert_eq!(
+        start_y(LabelZone::ChartTop, LabelAlign::Left, 80.0, 0.0),
+        50.0 + ZONE_PAD
+    );
+}
+
+/// Breakage 1 (PROVE): the guard itself. Room exactly at the cutoff still reserves the strip;
+/// one pixel short drops it entirely rather than pushing a caption's first line past
+/// `plot_bottom` on a compressed stack slot.
+#[test]
+fn chart_top_left_guard_pins_the_room_boundary() {
+    fn y(plot_bottom: f32) -> f32 {
+        let geom = CaptionGeomInput {
+            plot_bottom,
+            corner_strip_h: 18.0,
+            ..plot_geom()
+        };
+        zone_start_y(LabelZone::ChartTop, LabelAlign::Left, &geom, &corner())
+    }
+    let strip = 18.0;
+    // room == plot_bottom - plot_top - ZONE_PAD; the boundary is where room first covers the
+    // strip plus the tallest a caption line can ever be.
+    let boundary_bottom = 50.0 + ZONE_PAD + strip + MAX_CAPTION_LINE_H;
+    assert_eq!(
+        y(boundary_bottom),
+        50.0 + ZONE_PAD + strip,
+        "room == strip + MAX_CAPTION_LINE_H: still reserves the strip"
+    );
+    assert_eq!(
+        y(boundary_bottom - 1.0),
+        50.0 + ZONE_PAD,
+        "room one pixel short: reserves nothing"
+    );
+}
+
+/// Breakage 2 (PROVE): the left-aligned top band must clear the 18px button band.
+#[test]
+fn chart_top_left_clears_the_corner_strip() {
+    assert_eq!(
+        start_y(LabelZone::ChartTop, LabelAlign::Left, 0.0, 18.0),
+        50.0 + ZONE_PAD + 18.0
+    );
+}
+
+/// Center/right ChartTop never compete with the corner buttons (left edge only).
+#[test]
+fn chart_top_center_and_right_ignore_the_corner_strip() {
+    assert_eq!(
+        start_y(LabelZone::ChartTop, LabelAlign::Center, 0.0, 18.0),
+        50.0 + ZONE_PAD
+    );
+    assert_eq!(
+        start_y(LabelZone::ChartTop, LabelAlign::Right, 0.0, 18.0),
+        50.0 + ZONE_PAD
+    );
+}
+
+/// The control strip keeps its own inset (`corner.top_y`); widening the gate would double it.
+#[test]
+fn the_control_strip_ignores_the_corner_strip() {
+    assert_eq!(
+        start_y(LabelZone::ZoneTop, LabelAlign::Left, 0.0, 18.0),
+        54.0
+    );
+}
+
+/// ChartBottom shares nothing with the corner strip (plot's top-left only).
+#[test]
+fn chart_bottom_ignores_the_corner_strip() {
+    assert_eq!(
+        start_y(LabelZone::ChartBottom, LabelAlign::Left, 0.0, 18.0),
+        450.0 - ZONE_PAD
+    );
 }
 
 fn wrap_item(part: usize, wraps: bool) -> super::Item {

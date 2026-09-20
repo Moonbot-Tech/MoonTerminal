@@ -47,6 +47,15 @@ const CAPTION_GAP: f32 = 8.0;
 const ZONE_PAD: f32 = 6.0;
 /// Smallest width a caption is truncated to before it is dropped instead.
 const MIN_LEGIBLE_W: f32 = 12.0;
+/// Largest size one caption is ever resolved to — the ceiling [`Item::size`] clamps against.
+const CAPTION_SIZE_MAX: f32 = 60.0;
+/// Tallest one caption LINE can be: the largest resolved size plus what [`Item::line_h`] adds.
+///
+/// The corner-strip reservation is spent only where a line this tall would still fit beneath the
+/// strip. The caption size is a user setting — the interface's label-font slider and a
+/// per-caption size multiplier both feed it — so the strip's own height says nothing about how
+/// tall the line it is pushing down will be.
+const MAX_CAPTION_LINE_H: f32 = CAPTION_SIZE_MAX + 4.0;
 
 /// Opacity a caption is drawn at when it is SHOWN but cannot be acted on: an arbitrage venue with
 /// no core behind it, a button the workspace rail has closed.
@@ -164,6 +173,11 @@ pub(in crate::chartdx) struct CaptionGeomInput {
     /// that zone clears the bars unless the caller chose to hide them; the control strip's floor
     /// is the plot's, and the bars never reach it.
     pub volume_band_h: f32,
+    /// Height of the chart's top-left button strip — pin, compare lock, broom — measured down from
+    /// `plot_top`, in logical pixels. Zero when no button is drawn on this pane. A LEFT-ALIGNED
+    /// [`LabelZone::ChartTop`] band starts below it; every other zone and every other alignment
+    /// ignores it, because the strip stands only in that one corner.
+    pub corner_strip_h: f32,
 }
 
 /// One caption prepared for drawing: where its text lives and how it is styled.
@@ -528,7 +542,6 @@ impl RenderState {
                 Some(band) => widths::edge_cap(total, self.prose_width(ctx, texts, &band.rows)),
                 None => None,
             };
-            let start_y = zone_start_y(zone, &geom, &corner);
             // Rows fill toward the far edge of the band and stop there.
             let downward = zone.is_top();
             let limit_y = if downward {
@@ -548,6 +561,7 @@ impl RenderState {
                     continue;
                 }
                 let (align, elastic, hungry) = (bands[n].align, bands[n].elastic, bands[n].hungry);
+                let start_y = zone_start_y(zone, align, &geom, &corner);
                 let (x, fraction) = zone_anchor(zone, align, &geom, &corner);
                 let base_left = zone_bounds(zone, &geom, &corner).0;
                 // A special left anchor spends part of the zone before its text begins, so remove
@@ -635,7 +649,7 @@ impl RenderState {
                 part: text.part,
                 style,
                 plate: row_cfg.plate,
-                size: (base * style.size_mult).clamp(6.0, 60.0),
+                size: (base * style.size_mult).clamp(6.0, CAPTION_SIZE_MAX),
                 wraps: caption_field(row_cfg, text.part).is_some_and(ChartLabelField::wraps),
                 lines: 1,
                 wrap_ix: usize::MAX,
@@ -1861,13 +1875,43 @@ fn zone_anchor(
 }
 
 /// Y of a zone's first row: below the plot's top edge, or above its bottom one.
-fn zone_start_y(zone: LabelZone, geom: &CaptionGeomInput, corner: &CaptionGeom) -> f32 {
+fn zone_start_y(
+    zone: LabelZone,
+    align: LabelAlign,
+    geom: &CaptionGeomInput,
+    corner: &CaptionGeom,
+) -> f32 {
     if zone.is_top() {
         match zone {
             // The control strip keeps the inset its own geometry resolved, which clears the pane's
             // close button; the plot's corners only clear the plot edge.
             LabelZone::ZoneTop => corner.top_y,
-            _ => geom.plot_top + ZONE_PAD,
+            // The plot's top edge, plus the corner strip where one stands. Mirror of the right-edge
+            // inset in `zone_bounds`: there a right-aligned caption clears the pane's close button,
+            // here a LEFT-aligned one clears the pin/lock/broom strip. Left-aligned ChartTop only —
+            // the strip occupies that one corner, and the control strip resolves its own inset.
+            _ => {
+                geom.plot_top
+                    + ZONE_PAD
+                    + match (zone, align) {
+                        (LabelZone::ChartTop, LabelAlign::Left) => {
+                            // Never push a caption OUT of the plot to dodge a button. `draw_stack` draws a band's
+                            // FIRST line even when it overflows — a pane can be shorter than one line of text — so
+                            // on a compressed stack slot this reservation would move that line past `plot_bottom`
+                            // and print it over the neighbour below. Spend the strip only where the room below the
+                            // pad can hold it AND the tallest line a caption can be: the caption size is a user
+                            // setting, so the strip's own height is no guide to it. Where it cannot, the old
+                            // button-over-caption overlap is the lesser glitch.
+                            let strip = geom.corner_strip_h.max(0.0);
+                            let room = geom.plot_bottom - geom.plot_top - ZONE_PAD;
+                            match room >= strip + MAX_CAPTION_LINE_H {
+                                true => strip,
+                                false => 0.0,
+                            }
+                        }
+                        _ => 0.0,
+                    }
+            }
         }
     } else {
         // ChartBottom shares the plot with the volume bars. Every module in that zone sits above
