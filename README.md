@@ -7,86 +7,86 @@
 <h1 align="center">MoonTerminal</h1>
 
 <p align="center">
-  <b>Кроссплатформенный десктопный торговый терминал для ядра Moonbot</b><br>
-  GPU-рендеринг графиков · живой поток MoonProto · Windows · macOS · Linux
+  <b>Cross-platform desktop trading terminal for the Moonbot kernel</b><br>
+  GPU-rendered charts · live MoonProto feed · Windows · macOS · Linux
 </p>
 
 <p align="center">
   <a href="https://github.com/Moonbot-Tech/MoonTerminal/actions/workflows/build.yml"><img src="https://github.com/Moonbot-Tech/MoonTerminal/actions/workflows/build.yml/badge.svg" alt="Build"></a>
   <a href="https://github.com/Moonbot-Tech/MoonTerminal/releases"><img src="https://img.shields.io/github/v/release/Moonbot-Tech/MoonTerminal?label=release&color=4C6EF5" alt="Release"></a>
-  <img src="https://img.shields.io/badge/status-in%20development-F59E0B" alt="Статус: в разработке">
-  <img src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-4C6EF5" alt="Платформы">
-  <img src="https://img.shields.io/badge/built%20with-Rust-DEA584?logo=rust&logoColor=white" alt="Сделано на Rust">
-  <img src="https://img.shields.io/badge/GPU-DX11%20%C2%B7%20Metal%20%C2%B7%20wgpu-8B5CF6" alt="GPU-бэкенды">
+  <img src="https://img.shields.io/badge/status-in%20development-F59E0B" alt="Status: in development">
+  <img src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-4C6EF5" alt="Platforms">
+  <img src="https://img.shields.io/badge/built%20with-Rust-DEA584?logo=rust&logoColor=white" alt="Built with Rust">
+  <img src="https://img.shields.io/badge/GPU-DX11%20%C2%B7%20Metal%20%C2%B7%20wgpu-8B5CF6" alt="GPU backends">
 </p>
 
 <p align="center">
-  <b>Русский</b> · <a href="README.en.md">English</a>
+  <a href="README.ru.md">Русский</a> · <b>English</b>
   &nbsp;&nbsp;|&nbsp;&nbsp;
-  <a href="#возможности">Возможности</a> ·
-  <a href="#скриншоты">Скриншоты</a> ·
-  <a href="#архитектура">Архитектура</a> ·
-  <a href="#сборка">Сборка</a> ·
-  <a href="#конфигурация">Конфигурация</a> ·
-  <a href="#документация">Документация</a>
+  <a href="#features">Features</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#build">Build</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#documentation">Documentation</a>
 </p>
 
 <p align="center">
-  <a href="https://moonbot-tech.github.io/MoonTerminal/"><b>Инструкция для пользователей</b></a> — интерактивный тур по интерфейсу терминала
+  <a href="https://moonbot-tech.github.io/MoonTerminal/"><b>User guide</b></a> — an interactive tour of the terminal interface
 </p>
 
-MoonTerminal — нативный десктопный торговый терминал для ядра криптотрейдинга **[Moonbot](https://moonbot.pro)**. Он показывает живые графики, стаканы, ордера, отчёты и стратегии для одного или нескольких ядер Moonbot в едином GPU-ускоренном окне под Windows, macOS и Linux.
+MoonTerminal is a native desktop trading terminal for the **[Moonbot](https://moonbot.pro)** cryptocurrency-trading kernel. It renders live charts, order books, orders, reports, and strategies for one or more Moonbot cores from a single GPU-accelerated window on Windows, macOS, and Linux.
 
-> **В разработке.** Это рабочее пространство активной разработки терминала: оболочка на GPUI, интеграция MoonUI, живой поток данных MoonProto, платформенный GPU-рендеринг графиков и отладочный инструментарий. Это ещё не готовый упакованный продукт.
+> **Work in progress.** This is the active development workspace for the terminal — a GPUI shell, MoonUI integration, the MoonProto live feed, per-platform GPU chart rendering, and debug tooling. It is not a finished, packaged product yet.
 
 <p align="center">
-  <img src="assets/img/screenshot-main.png" alt="Главное окно MoonTerminal" width="900">
+  <img src="assets/img/screenshot-main.png" alt="MoonTerminal main window" width="900">
 </p>
 
-## Возможности
+## Features
 
-- **GPU-рендеринг графиков** — собственный GPU-проход на каждой платформе (DirectX 11 под Windows, Metal под macOS, нативный `wgpu` под Linux). Без CPU-readback, поэтому live-скролл и зум остаются плавными и не перерисовывают всё окно.
-- **Живой поток MoonProto** — событийные рыночные данные через backend-цикл на waker'е. Видимый график подтягивает данные на кадровом тике, а не постоянным поллингом.
-- **Торговые панели** — ордера и редактирование ордеров, стакан, отчёты, активы и кошельки, рыночный скринер и дерево стратегий для ваших ядер Moonbot.
-- **Ордерные линии на графике** — строятся из текущего снапшота плюс захваченных событий, поэтому короткие терминальные статусы (`Cancel` / `Fail` / `Done`) не теряются.
-- **Открепляемые окна** — вкладки графиков и панели дока выносятся в отдельные окна; состояние дока и раскладки сохраняется между сессиями.
-- **Локализация интерфейса** — русский, английский и испанский через `rust-i18n`.
-- **Шифрованная конфигурация** — учётные данные серверов хранятся в защищённом хранилище / кейринге ОС (Secret Service под Linux).
-- **Мелочи для повседневной работы** — звуки алертов, иконки монет, свои хоткеи и темы, а также встроенный `chart-smoke` FireTest, который проверяет живые bounds графика, нативный ввод и счётчики CPU/GPU/RAM.
+- **GPU-rendered charts** — an own-pass GPU renderer on every platform (DirectX 11 on Windows, Metal on macOS, native `wgpu` on Linux). No CPU readback, so live scroll and zoom stay smooth without repainting the whole window.
+- **Live MoonProto feed** — event-driven market data through a waker-based backend loop. The visible chart pulls data on the frame tick instead of constant polling.
+- **Trading panels** — orders and order editing, order book, reports, assets & wallets, a market screener, and a strategy tree for your Moonbot cores.
+- **Order lines on chart** — live order lines are built from the current snapshot plus captured events, so short terminal statuses (`Cancel` / `Fail` / `Done`) are never dropped.
+- **Detachable multi-window layout** — chart tabs and dock panels pop out into separate windows; dock and layout state persist between sessions.
+- **Localized UI** — Russian, English, and Spanish via `rust-i18n`.
+- **Encrypted configuration** — server credentials are stored through the OS secure storage / keyring (Secret Service on Linux).
+- **Desk-ready details** — alert sounds, coin icons, custom hotkeys and themes, plus a built-in `chart-smoke` FireTest probe that reports real chart bounds, native input, and CPU/GPU/RAM counters.
 
-## Скриншоты
+## Screenshots
 
 <table>
   <tr>
-    <td width="50%"><img src="assets/img/screenshot-charts.png" alt="Рабочая область графиков"></td>
-    <td width="50%"><img src="assets/img/screenshot-settings-connections.png" alt="Настройки — подключения / ядра Moonbot"></td>
+    <td width="50%"><img src="assets/img/screenshot-charts.png" alt="Chart workspace"></td>
+    <td width="50%"><img src="assets/img/screenshot-settings-connections.png" alt="Settings — connections / Moonbot cores"></td>
   </tr>
   <tr>
-    <td align="center"><sub>Графики — GPU-рендеринг свечей, стакан, ордерные линии</sub></td>
-    <td align="center"><sub>Настройки → Подключения — настройка по каждому ядру</sub></td>
+    <td align="center"><sub>Chart workspace — GPU-rendered candles, order book, order lines</sub></td>
+    <td align="center"><sub>Settings → Connections — per-core connection setup</sub></td>
   </tr>
 </table>
 
-## Архитектура
+## Architecture
 
-MoonTerminal — виртуальный workspace на Rust: UI-независимое ядро, поверх которого работает оболочка на GPUI.
+MoonTerminal is a Rust virtual workspace built around a UI-agnostic core with the GPUI shell on top.
 
-| Крейт | Ответственность |
+| Crate | Responsibility |
 |---|---|
-| [`moon-core`](crates/moon-core) | UI-независимое ядро — подключения, конфиг, сессии, market state, отчёты. |
-| [`moon-chart`](crates/moon-chart) | Математика графика — time/price view, дефолтный масштаб, pan/zoom, оси (без wgpu). |
-| [`moon-ui-gpui`](crates/moon-ui-gpui) | Бинарь `moonterminal` — GPUI shell, панели, debug-инструменты, интеграция графика. |
-| [`Moonbot-Tech/MoonUI`](https://github.com/Moonbot-Tech/MoonUI) | Внешняя Git-зависимость — standalone GPUI runtime + компоненты Moon UI. |
+| [`moon-core`](crates/moon-core) | UI-agnostic kernel — connections, config, sessions, market state, reports. |
+| [`moon-chart`](crates/moon-chart) | Chart math — time/price view, default scale, pan/zoom, axes (wgpu-free). |
+| [`moon-ui-gpui`](crates/moon-ui-gpui) | The `moonterminal` binary — GPUI shell, panels, debug tooling, chart integration. |
+| [`Moonbot-Tech/MoonUI`](https://github.com/Moonbot-Tech/MoonUI) | External Git dependency — standalone GPUI runtime + Moon UI components. |
 
-**Рендер.** График рисуется отдельным GPU-проходом поверх MoonUI/GPUI — DX11/HLSL под Windows, Metal под macOS, нативный `wgpu`/WGSL-бэкенд GPUI под Linux. График сам решает, нужен ли кадр, и готовит данные к этому же кадру, поэтому оболочка и панели ордеров не перерисовываются на частоте live-скролла или движения мыши.
+**Rendering.** The chart draws through a dedicated GPU pass on top of MoonUI/GPUI — DX11/HLSL on Windows, Metal on macOS, the native GPUI `wgpu`/WGSL backend on Linux. The chart decides whether a frame is needed and prepares its data for that same frame, so the shell and order panels never repaint at live-scroll or mouse-move frequency.
 
-**Data path.** События MoonProto приходят через event sink с waker'ом; backend-цикл будится реальными событиями и командами, а не таймером. Видимый график тянет рыночные данные на кадровом тике, а core-owned общий read-model обслуживает остальных потребителей.
+**Data path.** MoonProto events arrive through an event sink with a waker; the backend loop wakes on real events and commands rather than a timer. The visible chart pulls market data on the frame tick, while a core-owned shared read-model serves the other consumers.
 
-Полная картина — в [документе об архитектуре](docs/ARCHITECTURE.md).
+See the [architecture doc](docs/ARCHITECTURE.md) for the full picture.
 
-## Сборка
+## Build
 
-### Клонирование
+### Clone
 
 ```bash
 git clone https://github.com/Moonbot-Tech/MoonTerminal.git
@@ -95,18 +95,18 @@ cd MoonTerminal
 
 ### Windows
 
-Требования:
+Requirements:
 
 - Git
-- Rust через `rustup`
-- Visual Studio 2022 Build Tools с C++-тулчейном и Windows SDK
-- Опционально: `make`
+- Rust via `rustup`
+- Visual Studio 2022 Build Tools with the C++ toolchain and Windows SDK
+- Optional: `make`
 
 ```powershell
 cargo build -p moon-ui-gpui --bin moonterminal --target x86_64-pc-windows-msvc
 ```
 
-Отладочный исполняемый файл:
+Debug executable:
 
 ```text
 target\x86_64-pc-windows-msvc\debug\moonterminal.exe
@@ -114,20 +114,20 @@ target\x86_64-pc-windows-msvc\debug\moonterminal.exe
 
 ### macOS
 
-Требования:
+Requirements:
 
-- Xcode или рабочий Metal-тулчейн
-- Rust через `rustup`
+- Xcode or a working Metal toolchain
+- Rust via `rustup`
 
 ```bash
 cargo build -p moon-ui-gpui --bin moonterminal
 ```
 
-Каноничная проверка Metal — см. [гайд по сборке под macOS и Linux](docs/MAC_LINUX_BUILD.md).
+For canonical Metal validation see the [macOS & Linux build guide](docs/MAC_LINUX_BUILD.md).
 
 ### Linux
 
-Базовый набор для Ubuntu/Debian:
+Ubuntu/Debian baseline:
 
 ```bash
 sudo apt update && sudo apt install -y git build-essential pkg-config \
@@ -138,49 +138,49 @@ sudo apt update && sudo apt install -y git build-essential pkg-config \
 cargo build -p moon-ui-gpui --bin moonterminal
 ```
 
-Шифрованный конфиг под Linux использует Secret Service в пользовательской GUI/DBus-сессии.
-Подробности — в [гайде по сборке под macOS и Linux](docs/MAC_LINUX_BUILD.md).
+The Linux encrypted config uses Secret Service in the user GUI/DBus session. Details in the
+[macOS & Linux build guide](docs/MAC_LINUX_BUILD.md).
 
-### Основные команды
+### Common commands
 
-| Команда | Назначение |
+| Command | Purpose |
 |---|---|
-| `make run` | собрать и запустить отладочный терминал |
-| `make build` | отладочная сборка |
-| `make release` | релизная сборка |
-| `make check` | проверка типов |
+| `make run` | build and run the debug terminal |
+| `make build` | debug build |
+| `make release` | release build |
+| `make check` | type check |
 | `make fmt` | `cargo fmt` |
-| `make clean` | очистить `target` |
-| `make update-moon-ui` | сдвинуть пин MoonUI в коммитимом `Cargo.lock` |
-| `make update-moonproto` | сдвинуть пин MoonProto (отдельным осознанным коммитом) |
-| `make update-all` | сдвинуть ВСЁ, включая сторонние пины — снимает заморозку версий |
+| `make clean` | clean `target` |
+| `make update-moon-ui` | move the MoonUI pin in the committed `Cargo.lock` |
+| `make update-moonproto` | move the MoonProto pin (its own deliberate commit) |
+| `make update-all` | move EVERYTHING including the pinned forks — lifts the version freeze |
 
-Makefile выбирает MSVC-таргет на Windows и нативный таргет на macOS/Linux.
+The Makefile selects the MSVC target on Windows and the native target on macOS/Linux.
 
-## Конфигурация
+## Configuration
 
-Серверы настраиваются в интерфейсе приложения:
+Servers are configured in the application UI:
 
 ```text
-Настройки → Подключения
+Settings → Connections
 ```
 
-Настройка подключений по каждому ядру — см. [скриншот «Настройки → Подключения»](#скриншоты) выше.
+Per-core connection setup — see the [Settings → Connections screenshot](#screenshots) above.
 
-Рантайм-конфиг лежит рядом с исполняемым файлом. Учётные данные серверов хранятся в шифрованном конфиге через защищённое хранилище/кейринг ОС, где доступно. Локальные конфиг-файлы и логи игнорируются Git.
+Runtime config lives next to the executable. Server credentials are stored in encrypted config using the OS secure storage / keyring where available. Local config files and logs are ignored by Git.
 
-## Документация
+## Documentation
 
-| Документ | Что внутри |
+| Guide | What's inside |
 |---|---|
-| [Инструкция для пользователей](https://moonbot-tech.github.io/MoonTerminal/) | Интерактивный тур: карта главного окна, первое подключение, панели, хоткеи |
-| [Архитектура](docs/ARCHITECTURE.md) | Крейты, платформенный GPU-рендеринг и живой data path |
-| [FireTest](docs/FIRETEST.md) | Встроенный live-зонд `chart-smoke` |
-| [Сборка под macOS и Linux](docs/MAC_LINUX_BUILD.md) | Проверка Metal и настройка Linux |
-| [Окна](docs/WINDOWING.md) | Своя шапка окна и borderless/CSD-поведение |
+| [User guide](https://moonbot-tech.github.io/MoonTerminal/) | Interactive tour: the main-window map, first connection, panels, hotkeys |
+| [Architecture](docs/ARCHITECTURE.md) | Crates, per-platform GPU rendering, and the live data path |
+| [FireTest](docs/FIRETEST.md) | The built-in `chart-smoke` live probe |
+| [macOS & Linux build](docs/MAC_LINUX_BUILD.md) | Metal validation and Linux setup |
+| [Windowing](docs/WINDOWING.md) | Custom title bar and borderless/CSD behavior |
 
 ---
 
 <p align="center">
-  Moonbot · Продвинутый терминал для торговли криптовалютой · <a href="https://moonbot.pro">moonbot.pro</a>
+  Moonbot · Advanced terminal for cryptocurrency trading · <a href="https://moonbot.pro">moonbot.pro</a>
 </p>
