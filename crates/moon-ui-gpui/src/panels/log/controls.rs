@@ -3,6 +3,16 @@
 use super::*;
 use rust_i18n::t;
 
+/// Widest the source selector grows for a label the shared trigger width cannot hold.
+///
+/// One pair for the dropdown and the pinned chip that replaces it under an Auto workspace, so
+/// taking the panel over never resizes the row.
+const SOURCE_TRIGGER_MAX_W: f32 = 260.0;
+/// Narrowest the file selector renders; a file NAME is longer than a source name.
+const FILE_TRIGGER_MIN_W: f32 = 180.0;
+/// Widest the file selector grows; see [`SOURCE_TRIGGER_MAX_W`].
+const FILE_TRIGGER_MAX_W: f32 = 260.0;
+
 impl LogPanel {
     /// Build the pseudo-source-first, exchange-grouped log-source dropdown.
     ///
@@ -48,9 +58,13 @@ impl LogPanel {
             });
         if workspace_owned {
             let p = MoonPalette::active(cx);
-            let width = px(crate::controls::wrap_fit::action_width(
+            // The same ceiling the interactive source dropdown below fits within, so pinning a
+            // scope never changes how much of a source NAME this row shows.
+            let width = px(crate::controls::pinned_scope_width(
                 cx,
+                &cur,
                 crate::controls::CORE_COMBO_TRIGGER_W,
+                SOURCE_TRIGGER_MAX_W,
             ));
             return crate::panels::pinned_scope_host(
                 "log-source-tip",
@@ -134,7 +148,7 @@ impl LogPanel {
             // Starts at the width the shared core selector uses everywhere else, and grows only
             // for a label that does not fit: unlike those, this trigger shows one source NAME
             // ("BinF3", an exchange, "Локальный"), not a "Ядер: 3" summary.
-            .fit_trigger_width(crate::controls::CORE_COMBO_TRIGGER_W, 260.0)
+            .fit_trigger_width(crate::controls::CORE_COMBO_TRIGGER_W, SOURCE_TRIGGER_MAX_W)
             .fit_menu_width(180.0, 560.0)
             .menu_max_height_ui(360.0)
             .items(items)
@@ -162,7 +176,12 @@ impl LogPanel {
         };
         if workspace_owned {
             let p = MoonPalette::active(cx);
-            let width = px(crate::controls::wrap_fit::action_width(cx, 180.0));
+            let width = px(crate::controls::pinned_scope_width(
+                cx,
+                &cur,
+                FILE_TRIGGER_MIN_W,
+                FILE_TRIGGER_MAX_W,
+            ));
             return crate::panels::pinned_scope_host("log-file-tip", "log-file", cur, width, p, cx);
         }
         let view = cx.entity();
@@ -194,7 +213,7 @@ impl LogPanel {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
-            .fit_trigger_width(180.0, 260.0)
+            .fit_trigger_width(FILE_TRIGGER_MIN_W, FILE_TRIGGER_MAX_W)
             .fit_menu_width(220.0, 560.0)
             .items(items)
             .into_any_element()

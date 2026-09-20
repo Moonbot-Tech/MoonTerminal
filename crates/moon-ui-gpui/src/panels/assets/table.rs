@@ -266,9 +266,11 @@ impl AssetsView {
                 )
                 .label
             });
-            let width = px(crate::controls::wrap_fit::action_width(
+            let width = px(crate::controls::pinned_scope_width(
                 cx,
+                &label,
                 crate::controls::CORE_COMBO_TRIGGER_W,
+                crate::controls::PINNED_SCOPE_TRIGGER_MAX_W,
             ));
             crate::panels::pinned_scope_host("assets-core-tip", "assets-core", label, width, p, cx)
         } else {

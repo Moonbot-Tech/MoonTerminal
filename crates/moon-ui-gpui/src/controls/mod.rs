@@ -101,6 +101,56 @@ pub(crate) const STRATEGIES_ICON: &str = "icons/bot.svg";
 /// longest label is the Spanish "Todos los núcleos", which truncates here as it already did at 118.
 pub(crate) const CORE_COMBO_TRIGGER_W: f32 = 106.0;
 
+/// Ceiling a pinned scope chip fits within when its host names no narrower one.
+///
+/// The chip is not a control: it cannot open a menu that spells the scope out, so a clipped label
+/// leaves the panel with no way at all to say which cores it is showing. The ceiling still exists
+/// because a core NAME is user-chosen and unbounded — past it the chip ellipsizes as before.
+pub(crate) const PINNED_SCOPE_TRIGGER_MAX_W: f32 = 250.0;
+
+/// Width a pinned scope chip renders at: its own label, floored at the shared trigger width.
+///
+/// The one place that decision lives, because the seven hosts that render the chip all faced the
+/// same regression — the shared FIXED width fits "Все ядра" and "Ядер: 3" but not the Auto
+/// Overview phrase ("Полная сводка") or a live core name, and every one of them clipped it.
+///
+/// Measured against the chip's OWN geometry rather than through `MoonDropdown`'s trigger fitting,
+/// which is what [`crate::panels::common::pinned_scope_label`] actually draws: the dropdown reserves room
+/// for its caret and its own wider horizontal padding, and a chip that draws neither ends up with
+/// a visible empty tail to the right of its text. Every term below is one the chip renders, in the
+/// order it renders them.
+///
+/// Both bounds are the caller's, and they are the SAME pair its interactive counterpart fits
+/// within: a pinned chip that sized itself differently from the dropdown it replaces would make
+/// the row jump the moment an Auto workspace takes the panel over. Between them the chip is
+/// content-sized, so a short label leaves no tail and a long one still ellipsizes at the ceiling.
+///
+/// Args:
+///     cx: Application context supplying the active theme and font scale.
+///     label: The exact text the chip will render.
+///     min_w: Design-reference floor, held even by a short label.
+///     max_w: Design-reference ceiling, past which the label ellipsizes.
+///
+/// Returns:
+///     The fitted width in logical pixels, never below the scaled `min_w`.
+pub(crate) fn pinned_scope_width(cx: &gpui::App, label: &str, min_w: f32, max_w: f32) -> f32 {
+    // The chip's own text channel: the button tier's font size, mono, regular weight — the three
+    // `pinned_scope_label` sets on the element it measures here.
+    let font_size = crate::design::button_tier(cx).control_metrics().font_size;
+    let text_w = |text: &str| crate::design::ui_text_width_zoomed(cx, text, font_size, 400.0, true);
+    let chrome = text_w(crate::design::PINNED_SCOPE_GLYPH)
+        + crate::design::ui_value(cx, crate::design::PINNED_SCOPE_GAP)
+        + crate::design::ui_value(cx, crate::design::PINNED_SCOPE_PAD_X) * 2.0
+        // The 1px border on each side, which `border_1` draws inside the element's own width.
+        + 2.0;
+    // One pixel over the summed glyph advances: a text run lays out marginally wider than they
+    // add up to, and the shortfall would ellipsize the final character of a label that fits.
+    (text_w(label) + chrome + 1.0).ceil().clamp(
+        wrap_fit::action_width(cx, min_w),
+        wrap_fit::action_width(cx, max_w),
+    )
+}
+
 /// Trading-metric slider bounds `(min, max, step)` matching core semantics.
 ///
 /// `Shell` also uses these bounds when it creates slider state.
