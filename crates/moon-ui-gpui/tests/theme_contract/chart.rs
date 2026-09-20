@@ -1703,3 +1703,91 @@ fn every_backend_draws_the_horizontal_volumes_the_same_way() {
         );
     }
 }
+
+/// Issue #647 F5: `corner_strip_h` must follow the one pinnability rule, never be hard-wired to
+/// `CHART_CORNER_STRIP_H` (every button-less Main pane loses 18 px for nothing) or to `0.0`
+/// (the bug ships unfixed).
+#[test]
+fn corner_button_reservation_follows_the_one_pin_rule() {
+    let market = code_only(&read_src("chartdx/data_state/market.rs"));
+    assert!(market.contains("pr.corner_buttons =") && market.contains("is_pinnable("));
+    let prepare = code_only(&read_src("chartdx/text/prepare.rs"));
+    assert!(prepare.contains("corner_strip_h:") && prepare.contains("CHART_CORNER_STRIP_H"));
+}
+
+/// Lock/pin/broom each need a STATE-dependent tooltip, or the anchor-vs-follower defect this
+/// issue was filed for returns on whichever button lost its second key.
+#[test]
+fn chart_strip_buttons_carry_state_dependent_tooltips() {
+    let source = code_only(&read_src("panels/chart/render.rs"));
+    let cases = [
+        (
+            "chart-lock-{idx}",
+            ["chart.strip.lock_anchor_tip", "chart.strip.lock_tip"],
+        ),
+        (
+            "chart-pin-{idx}",
+            ["chart.strip.pin_tip", "chart.strip.unpin_tip"],
+        ),
+        (
+            "chart-broom-{idx}",
+            ["chart.strip.broom_tip", "chart.strip.broom_on_tip"],
+        ),
+    ];
+    for (id, tips) in cases {
+        let anchor = format!("format!(\"{id}\")");
+        let chain = chain_between(&source, &anchor, ".on_click(", "tooltip chain");
+        assert!(chain.contains(".tooltip("), "{id}: missing .tooltip(");
+        for tip in tips {
+            assert!(chain.contains(tip), "{id}: missing {tip}");
+        }
+    }
+}
+
+/// The engine must learn `compare_eligible` every render, or captions silently stop clearing the
+/// lock with no compile error and no other test red.
+#[test]
+fn chart_panel_pushes_compare_lock_shown_every_render() {
+    let source = code_only(&read_src("panels/chart/render.rs"));
+    let render = braced_body(
+        &source,
+        "fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement",
+    );
+    assert!(render.contains("set_compare_lock_shown(self.compare_eligible)"));
+}
+
+/// The button geometry and the caption reservation must share one set of design tokens, or a
+/// resized button reopens the overlap while every other test stays green.
+#[test]
+fn chart_strip_button_geometry_matches_the_caption_reservation() {
+    let design = read_src("design.rs");
+    assert_eq!(parse_f32_const(&design, "CHART_CORNER_BTN_TOP"), Some(3.0));
+    assert_eq!(
+        parse_f32_const(&design, "CHART_CORNER_BTN_SIZE"),
+        Some(15.0)
+    );
+    let source = code_only(&read_src("panels/chart/render.rs"));
+    for id in ["chart-pin-{idx}", "chart-lock-{idx}", "chart-broom-{idx}"] {
+        let anchor = format!("format!(\"{id}\")");
+        let chain = chain_between(&source, &anchor, ".on_click(", "bounds chain");
+        assert!(
+            chain.contains("CHART_CORNER_BTN_TOP") && chain.contains("CHART_CORNER_BTN_SIZE"),
+            "{id}: bounds literal drifted from the design tokens the captions reserve against"
+        );
+    }
+}
+
+/// Issue #647's six tooltip keys must ship all three languages, or that locale shows the raw key.
+#[test]
+fn chart_strip_tooltip_keys_ship_in_three_languages() {
+    for key in [
+        "chart.strip.pin_tip",
+        "chart.strip.unpin_tip",
+        "chart.strip.lock_tip",
+        "chart.strip.lock_anchor_tip",
+        "chart.strip.broom_tip",
+        "chart.strip.broom_on_tip",
+    ] {
+        assert_locale_key_in_three_languages("shell.yml", key);
+    }
+}

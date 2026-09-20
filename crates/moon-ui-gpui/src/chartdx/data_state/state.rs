@@ -48,6 +48,7 @@ impl ChartDataState {
             price_axis_pos: crate::persistence::chart_persist::PriceAxisPos::Left,
             time_axis_visible: true,
             hvol_allowed: true,
+            compare_lock_shown: false,
             candle_view: moon_core::market::CandleViewCfg::default(),
             chart_graphics: moon_core::config::ChartGraphicsCfg::default(),
             chart_labels: std::rc::Rc::new(moon_core::config::ChartLabelsCfg::default()),

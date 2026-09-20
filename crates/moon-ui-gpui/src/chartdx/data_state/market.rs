@@ -287,6 +287,9 @@ impl ChartDataState {
             pr.active = false;
         }
         for (idx, rect) in &layout {
+            // Read the pin rule before the &mut borrow below: `is_pinnable` takes &self and cannot be
+            // called while `pane_mut`'s borrow is live.
+            let pinnable = container.is_pinnable(*idx);
             let Some(pane) = container.pane_mut(*idx) else {
                 continue;
             };
@@ -1534,6 +1537,8 @@ impl ChartDataState {
             // Store the pane's order-book-only flag for gating the corner label in render_state/text.
             // Order-book-only mode forces the book on even when the Order Book toggle is cleared.
             pr.orderbook_only = self.orderbook_only;
+            // Any corner button on this pane: the lock is panel-wide, the pin is per-pane.
+            pr.corner_buttons = self.compare_lock_shown || pinnable;
             // Store the effective axis position, including forced hiding in book-only mode, for labels.
             pr.price_axis_pos = areas.axis_pos;
             pr.time_axis_visible = self.time_axis_visible;
