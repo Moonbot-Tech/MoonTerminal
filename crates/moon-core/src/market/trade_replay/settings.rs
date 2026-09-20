@@ -8,11 +8,9 @@
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use super::MINUTE_MS;
-
-/// Live value of `[trade_replay] margin_min` — how many minutes of prints a window asks for
+/// Live value of `[trade_replay] margin_s` — how many seconds of prints a window asks for
 /// around a trade, per end ([`super::ReplayWindow::margin_ms`]).
-static MARGIN_MIN: AtomicU32 = AtomicU32::new(crate::config::storage::DEFAULT_TRADE_MARGIN_MIN);
+static MARGIN_S: AtomicU32 = AtomicU32::new(crate::config::storage::DEFAULT_TRADE_MARGIN_S);
 /// Live value of `[trade_replay] autoload_missing`.
 static TAPE_AUTOLOAD: AtomicBool = AtomicBool::new(false);
 static INIT: OnceLock<()> = OnceLock::new();
@@ -22,8 +20,14 @@ static INIT: OnceLock<()> = OnceLock::new();
 fn init() {
     INIT.get_or_init(|| {
         let cfg = crate::config::storage::load();
-        MARGIN_MIN.store(cfg.trade_replay.margin_min, Ordering::Relaxed);
+        MARGIN_S.store(cfg.trade_replay.margin_s, Ordering::Relaxed);
         TAPE_AUTOLOAD.store(cfg.trade_replay.autoload_missing, Ordering::Relaxed);
+        // Once per launch, so a file migrated from `margin_min` shows what it was read as.
+        log::info!(
+            "[x] trade-replay settings: margin {} s, tape autoload {}",
+            cfg.trade_replay.margin_s,
+            cfg.trade_replay.autoload_missing
+        );
     });
 }
 
@@ -31,13 +35,13 @@ fn init() {
 /// close-time capture is built with.
 pub fn margin_ms() -> i64 {
     init();
-    i64::from(MARGIN_MIN.load(Ordering::Relaxed)) * MINUTE_MS
+    i64::from(MARGIN_S.load(Ordering::Relaxed)) * 1_000
 }
 
 /// The margin a MODEL's window is built with: the chart's margin, but never less than TWICE
 /// the model's own pad ([`super::MODEL_PAD_MS`]). The plan's trade tiles and the model's
 /// required span are both clipped to the window's focus, so a chart margin under the pad —
-/// "the position alone" is a valid setting — would otherwise leave the model without its
+/// 10 s is a valid setting — would otherwise leave the model without its
 /// run-up and its tail and never say so. Twice, because a long position's focus centres the
 /// margin on each end ([`super::ReplayWindow::focus_spans`]): half of it lies outside the
 /// position, and that half must still be a whole pad.
@@ -47,11 +51,12 @@ pub fn model_margin_ms() -> i64 {
 
 /// Move the live margin; the Storage tab writes `storage.toml` beside this. Windows already open
 /// keep the margin they were built with; the next one asks for the new stretch, and the tile
-/// store hands back what earlier windows already fetched of it.
-pub fn set_margin_min(minutes: u32) {
+/// store hands back what earlier windows already fetched of it. Snapped onto the step list like
+/// the file is on load, so the cell never holds a value the tab cannot show.
+pub fn set_margin_s(secs: u32) {
     init();
-    MARGIN_MIN.store(
-        minutes.min(crate::config::storage::MAX_TRADE_MARGIN_MIN),
+    MARGIN_S.store(
+        crate::config::storage::snap_trade_margin_s(secs),
         Ordering::Relaxed,
     );
 }

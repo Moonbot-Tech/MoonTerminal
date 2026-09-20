@@ -61,12 +61,12 @@ pub struct TradeReplayStoreCfg {
     /// Ceiling on the packed prints the file may hold, in megabytes; past it the spans written
     /// longest ago go first. `0` keeps everything, with no age limit.
     pub max_mb: u32,
-    /// Minutes of prints kept around a trade, per end: a short position gets this many minutes
-    /// before its entry and after its exit; a long one (over an hour) gets this many minutes
-    /// centred on each end, half before and half after, with bars between. It sizes what a trade
-    /// window fetches, what a close copies out of the core's ring, and what the file keeps.
-    /// `0` is the position alone; clamped to [`MAX_TRADE_MARGIN_MIN`] on load.
-    pub margin_min: u32,
+    /// Seconds of prints kept around a trade, per end: a short position gets this much before
+    /// its entry and after its exit; a long one (over an hour) gets this much centred on each
+    /// end, half before and half after, with bars between. It sizes what a trade window fetches,
+    /// what a close copies out of the core's ring, and what the file keeps. One of
+    /// [`TRADE_MARGIN_STEPS_S`]: a hand-edited value is snapped to the nearest step on load.
+    pub margin_s: u32,
     /// Whether the terminal fetches, once the cores are up, the tape of every recent closed
     /// trade with millisecond stamps that the venues still serve — what the close-time capture
     /// missed because the terminal was not running. Off by default: it spends the venues' public
@@ -88,21 +88,16 @@ pub const LONG_POSITION_MIN_RANGE: std::ops::RangeInclusive<u32> = 1..=120;
 pub const DEFAULT_TRADES_MAX_MB: u32 = 256;
 
 /// The values [`TradeReplayStoreCfg::margin_s`] may take, ascending: the Storage tab steps
-/// through this list rather than by a fixed amount, so the short end is fine-grained and the
-/// long end coarse. The floor is 30 s — the tuner's run-up and tail
-/// (`trade_replay::MODEL_PAD_MS`): one setting sizes the chart's window, the close-time capture,
-/// the tuner's fetch and the cleanup alike, and none of them pads it behind the tab's back (the
-/// developer's call, 2026-09-23; the steps started at 5 s before that, and the tuner lifted
-/// them to a minute on its own). 65 s is a step so the default survives the snap; it is not
-/// the floor. The ceiling is two hours: the bar context after an exit is two hours at least,
-/// and prints past the bars would have nowhere to draw.
-pub const TRADE_MARGIN_STEPS_S: &[u32] = &[30, 60, 65, 180, 300, 600, 900, 1800, 3600, 7200];
+/// through this list rather than by a fixed amount, so the short end is fine-grained (10 s for a
+/// scalp) and the long end coarse. The floor is 10 s — "the position alone" is gone: a window
+/// with no prints outside the position has nothing to show around the entry. The ceiling is two
+/// hours: the bar context after an exit is two hours at least, and prints past the bars would
+/// have nowhere to draw.
+pub const TRADE_MARGIN_STEPS_S: &[u32] = &[10, 30, 60, 180, 300, 600, 900, 1800, 3600, 7200];
 
-/// Default seconds of prints around a trade, per end. 65 s (the user's call, 2026-09-26;
-/// 30 s from 2026-09-23, 5 s from 2026-09-21, 15 minutes before that). Not the floor of
-/// [`TRADE_MARGIN_STEPS_S`]: 30 s stays the tuner's pad and a step, so a file that already
-/// stores 30 keeps 30. A file with no margin key at all takes this default.
-pub const DEFAULT_TRADE_MARGIN_S: u32 = 65;
+/// Default seconds of prints around a trade, per end — 15 minutes (the developer's call,
+/// 2026-09-20).
+pub const DEFAULT_TRADE_MARGIN_S: u32 = 900;
 
 /// Ceiling on [`TradeReplayStoreCfg::margin_s`] — the last of [`TRADE_MARGIN_STEPS_S`].
 pub const MAX_TRADE_MARGIN_S: u32 = 7200;
@@ -112,7 +107,7 @@ impl Default for TradeReplayStoreCfg {
         Self {
             persist_trades: true,
             max_mb: DEFAULT_TRADES_MAX_MB,
-            margin_min: DEFAULT_TRADE_MARGIN_MIN,
+            margin_s: DEFAULT_TRADE_MARGIN_S,
             autoload_missing: false,
         }
     }
@@ -128,8 +123,7 @@ struct TradeReplayStoreRaw {
     max_mb: u32,
     margin_s: Option<u32>,
     margin_min: Option<u32>,
-    long_position_min: u32,
-    cleanup_at_startup: bool,
+    autoload_missing: bool,
 }
 
 impl Default for TradeReplayStoreRaw {
@@ -140,8 +134,7 @@ impl Default for TradeReplayStoreRaw {
             max_mb: d.max_mb,
             margin_s: None,
             margin_min: None,
-            long_position_min: d.long_position_min,
-            cleanup_at_startup: d.cleanup_at_startup,
+            autoload_missing: d.autoload_missing,
         }
     }
 }
@@ -156,18 +149,9 @@ impl From<TradeReplayStoreRaw> for TradeReplayStoreCfg {
             persist_trades: raw.persist_trades,
             max_mb: raw.max_mb,
             margin_s,
-            long_position_min: raw.long_position_min,
-            cleanup_at_startup: raw.cleanup_at_startup,
+            autoload_missing: raw.autoload_missing,
         }
     }
-}
-
-/// [`LONG_POSITION_MIN_RANGE`] applied to a value from the file or the tab.
-pub fn clamp_long_position_min(minutes: u32) -> u32 {
-    minutes.clamp(
-        *LONG_POSITION_MIN_RANGE.start(),
-        *LONG_POSITION_MIN_RANGE.end(),
-    )
 }
 
 /// The step of [`TRADE_MARGIN_STEPS_S`] nearest to `secs` — the lower one when `secs` sits
@@ -248,13 +232,10 @@ pub fn load() -> StorageCfg {
     sanitize(toml_io::load_or_default(&path, "storage.toml", |_| {}))
 }
 
-/// Bound what a hand-edited file may carry: the long-position threshold is clamped to
-/// [`LONG_POSITION_MIN_RANGE`], and the margin is snapped onto [`TRADE_MARGIN_STEPS_S`],
+/// Bound what a hand-edited file may carry: the margin is snapped onto [`TRADE_MARGIN_STEPS_S`],
 /// which also caps it at [`MAX_TRADE_MARGIN_S`].
 fn sanitize(mut cfg: StorageCfg) -> StorageCfg {
     cfg.trade_replay.margin_s = snap_trade_margin_s(cfg.trade_replay.margin_s);
-    cfg.trade_replay.long_position_min =
-        clamp_long_position_min(cfg.trade_replay.long_position_min);
     cfg
 }
 

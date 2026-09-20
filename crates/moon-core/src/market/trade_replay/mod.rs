@@ -42,7 +42,7 @@ use crate::market::candles::ChartCandle;
 use crate::market::{CandleReadParams, ChartHistoryBuffers, ChartHistoryRead};
 use crate::venue::{Brand, Venue};
 pub use coverage::Coverage;
-pub use settings::{margin_ms, model_margin_ms, set_margin_min, set_tape_autoload, tape_autoload};
+pub use settings::{margin_ms, model_margin_ms, set_margin_s, set_tape_autoload, tape_autoload};
 pub use worker::{TickAnswer, TickQuery, query_held};
 
 /// Milliseconds in one minute, the only timeframe a replay is fetched at.
@@ -307,10 +307,11 @@ pub struct ReplayWindow {
     /// Millisecond-exact when the core supplied a millisecond column, whole seconds otherwise.
     pub close_ms: i64,
     /// How many milliseconds of prints are asked for around the position, per end — the
-    /// `[trade_replay] margin_min` setting at the moment the window was built (floored for a
+    /// `[trade_replay] margin_s` setting at the moment the window was built (floored for a
     /// model's window, see `model_margin_ms`). A short position
     /// gets this much before the entry and after the exit ([`Self::focus`]); a long one gets it
-    /// centred on each end ([`Self::focus_spans`]). Zero is the position alone.
+    /// centred on each end ([`Self::focus_spans`]). Zero is the position alone — a value the
+    /// setting no longer offers, but one a hand-built window may still carry.
     pub margin_ms: i64,
     /// How long a position must be held to be walked as its two ends — the `[trade_replay]
     /// long_position_min` setting at the moment the window was built ([`long_position_ms`]),

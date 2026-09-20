@@ -129,9 +129,9 @@ storage.trades_min:
   en: "%{min} min"
   es: "%{min} min"
 storage.trades_margin_hint:
-  ru: "Сколько минут трейдов брать с каждого конца сделки: у короткой — до входа и после выхода, у долгой (дольше часа) — столько же вокруг входа и вокруг выхода, середина свечами. 0 — только сама сделка, не больше 120."
-  en: "Minutes of prints taken at each end of a trade: before the entry and after the exit of a short one; the same amount centred on the entry and on the exit of a long one (over an hour), candles between. 0 is the position alone, 120 at most."
-  es: "Minutos de operaciones tomados en cada extremo de una posición: antes de la entrada y después de la salida en una corta; la misma cantidad centrada en la entrada y en la salida en una larga (más de una hora), velas entre ambas. 0 es solo la posición, 120 como máximo."
+  ru: "Сколько трейдов брать с каждого конца сделки: у короткой — до входа и после выхода, у долгой (дольше часа) — столько же вокруг входа и вокруг выхода, середина свечами. Ступени от 10 с до 120 мин."
+  en: "Prints taken at each end of a trade: before the entry and after the exit of a short one; the same stretch centred on the entry and on the exit of a long one (over an hour), candles between. Steps from 10 s to 120 min."
+  es: "Operaciones tomadas en cada extremo de una posición: antes de la entrada y después de la salida en una corta; el mismo tramo centrado en la entrada y en la salida en una larga (más de una hora), velas entre ambas. Pasos de 10 s a 120 min."
 storage.trades_autoload:
   ru: "Подгружать недостающую ленту при старте"
   en: "Fetch the missing tape at startup"

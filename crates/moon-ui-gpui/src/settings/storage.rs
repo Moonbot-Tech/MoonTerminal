@@ -210,8 +210,8 @@ impl SettingsView {
     }
 
     /// Moves the prints kept around a trade, per end, `delta` steps along
-    /// `TRADE_MARGIN_STEPS_S` (30 s … 120 min, including 65 s, not a fixed amount), and updates
-    /// live state and storage.toml.
+    /// `TRADE_MARGIN_STEPS_S` (10 s … 120 min, not a fixed amount), and updates live state and
+    /// storage.toml.
     fn adjust_trades_margin_step(&mut self, delta: i32, cx: &mut Context<Self>) {
         let v = storage_cfg::step_trade_margin_s(self.storage.cfg.trade_replay.margin_s, delta);
         if self.storage.cfg.trade_replay.margin_s != v {
@@ -225,29 +225,13 @@ impl SettingsView {
         }
     }
 
-    /// Moves the minutes a position must be held to count as long, clamped to
-    /// `LONG_POSITION_MIN_RANGE`, and updates live state and storage.toml. The cleanup's count
-    /// moves with it: a long position claims its two ends, a short one its whole length.
-    fn adjust_long_position_min(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let current = self.storage.cfg.trade_replay.long_position_min as i32;
-        let v = storage_cfg::clamp_long_position_min((current + delta).max(0) as u32);
-        if self.storage.cfg.trade_replay.long_position_min != v {
-            self.storage.cfg.trade_replay.long_position_min = v;
-            moon_core::market::trade_replay::set_long_position_min(v);
-            storage_cfg::save(&self.storage.cfg);
-            self.storage_cleanup_refresh(cx);
-            cx.notify();
-        }
-    }
-
-    /// The stepper's label for a margin: a whole number of minutes when the step divides by
-    /// 60, seconds otherwise. 65 s is a step and must not read as "1 min", which is what 60 s
-    /// already says.
+    /// The stepper's label for a margin: whole seconds under a minute, whole minutes from
+    /// there — every step of `TRADE_MARGIN_STEPS_S` is one or the other.
     fn trades_margin_label(secs: u32) -> String {
-        if secs % 60 == 0 {
-            t!("storage.trades_min", min = secs / 60).to_string()
-        } else {
+        if secs < 60 {
             t!("storage.trades_sec", s = secs).to_string()
+        } else {
+            t!("storage.trades_min", min = secs / 60).to_string()
         }
     }
 
@@ -266,7 +250,7 @@ impl SettingsView {
         let limit = self.storage.cfg.strategies.version_limit;
         let persist_trades = self.storage.cfg.trade_replay.persist_trades;
         let trades_max_mb = self.storage.cfg.trade_replay.max_mb;
-        let trades_margin_min = self.storage.cfg.trade_replay.margin_min;
+        let trades_margin_s = self.storage.cfg.trade_replay.margin_s;
         let autoload_missing = self.storage.cfg.trade_replay.autoload_missing;
 
         let size_line = |sz: Option<(u64, u64)>| -> String {
