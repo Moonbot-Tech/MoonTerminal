@@ -1,6 +1,9 @@
 //! Classified load-state presentation regression tests.
 
-use super::{LoadState, Note};
+use super::{
+    DbReadFailedNotice, LoadState, Note, db_read_failed_hint, db_read_failed_hint_key,
+    db_read_failed_retryable,
+};
 use moon_core::db::{FailKind, ReadFail};
 use std::sync::Arc;
 
@@ -75,4 +78,73 @@ fn incomparable_quote_has_a_non_database_note() {
         state.view(Vec::is_empty),
         Err(Note::IncomparableQuote)
     ));
+}
+
+/// `load_state.rs:db_read_failed_hint_key` must keep each FailKind on the locale key Analytics
+/// and Report already ship. Mapping Busy onto the corrupt key would tell the user retrying cannot
+/// help while the lock is still the one thing a retry clears.
+#[test]
+fn db_read_failed_hint_key_matches_the_published_common_keys() {
+    assert_eq!(
+        db_read_failed_hint_key(FailKind::Corrupt),
+        Some("common.db_read_failed_corrupt")
+    );
+    assert_eq!(
+        db_read_failed_hint_key(FailKind::Busy),
+        Some("common.db_read_failed_retry")
+    );
+    assert_eq!(
+        db_read_failed_hint_key(FailKind::Other),
+        Some("common.db_read_failed_other")
+    );
+    assert_eq!(db_read_failed_hint_key(FailKind::ReplicaAccessDenied), None);
+    assert_eq!(
+        DbReadFailedNotice::of(FailKind::ReplicaAccessDenied),
+        DbReadFailedNotice::Recovery
+    );
+}
+
+/// `load_state.rs:db_read_failed_retryable` must hide Retry for the two kinds that cannot recover.
+/// Offering the button on Corrupt or ReplicaAccessDenied teaches the user that buttons do nothing.
+#[test]
+fn db_read_failed_retryable_only_for_busy_and_other() {
+    assert!(db_read_failed_retryable(FailKind::Busy));
+    assert!(db_read_failed_retryable(FailKind::Other));
+    assert!(!db_read_failed_retryable(FailKind::Corrupt));
+    assert!(!db_read_failed_retryable(FailKind::ReplicaAccessDenied));
+}
+
+/// `load_state.rs:db_read_failed_hint` must emit the published common.yml copy in each locale.
+/// Collapsing every kind onto `chart.trade_history.failed` is the badge the user reported.
+#[test]
+fn db_read_failed_hint_names_the_cause_in_english_and_russian() {
+    for (locale, busy, corrupt, other, denial_title) in [
+        (
+            "en",
+            "The reports database is busy right now. Retry — the period will recompute.",
+            "The database file is damaged — retrying will not help. See the Log tab.",
+            "This is a read error, not an absence of trades. See the Log tab for details.",
+            "Access to the reports replica is unavailable.",
+        ),
+        (
+            "ru",
+            "База отчётов сейчас занята. Повторите — период пересчитается.",
+            "Файл базы повреждён — повтор не поможет. Подробности во вкладке «Лог».",
+            "Это ошибка чтения, а не отсутствие сделок. Подробности — во вкладке «Лог».",
+            "Доступ к реплике отчётов закрыт.",
+        ),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        assert_eq!(db_read_failed_hint(FailKind::Busy), busy);
+        assert_eq!(db_read_failed_hint(FailKind::Corrupt), corrupt);
+        assert_eq!(db_read_failed_hint(FailKind::Other), other);
+        let denial = db_read_failed_hint(FailKind::ReplicaAccessDenied);
+        assert!(
+            denial.starts_with(denial_title),
+            "{locale}: lease denial must open with the recovery title, got {denial}"
+        );
+        assert_ne!(busy, corrupt);
+        assert_ne!(busy, other);
+        assert_ne!(corrupt, other);
+    }
 }

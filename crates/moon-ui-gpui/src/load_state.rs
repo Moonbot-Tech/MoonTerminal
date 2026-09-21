@@ -147,6 +147,108 @@ pub(crate) enum Note {
     Empty,
 }
 
+/// Shared user-facing notice for a classified reports-replica failure.
+///
+/// Analytics, Report, and the chart overlay all branch on this so a Busy lock,
+/// a damaged file, an I/O error, and a lease denial never collapse into one
+/// sentence. `Recovery` is the one arm whose wording lives in
+/// [`crate::report_notice::recovery_notice_text`] rather than a `common.*` key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DbReadFailedNotice {
+    /// Lease/recovery preflight refused this process. Retrying cannot help.
+    Recovery,
+    /// Malformed database image. Retrying cannot help.
+    Corrupt,
+    /// Lock contention past `busy_timeout`. Retrying may succeed.
+    Busy,
+    /// Filesystem or SQLite error. Retrying might succeed; nothing promises it.
+    Other,
+}
+
+impl DbReadFailedNotice {
+    /// Map a database failure kind onto the shared notice.
+    ///
+    /// Args:
+    ///     kind: Classified reports-replica failure.
+    ///
+    /// Returns:
+    ///     The notice every surface uses for that kind.
+    pub(crate) fn of(kind: FailKind) -> Self {
+        match kind {
+            FailKind::ReplicaAccessDenied => Self::Recovery,
+            FailKind::Corrupt => Self::Corrupt,
+            FailKind::Busy => Self::Busy,
+            FailKind::Other => Self::Other,
+        }
+    }
+
+    /// Whether Retry can still succeed for this notice.
+    ///
+    /// Args:
+    ///     self: Classified notice.
+    ///
+    /// Returns:
+    ///     `true` only for contention and unclassified I/O — the two kinds a
+    ///     later read can still clear.
+    pub(crate) fn retryable(self) -> bool {
+        matches!(self, Self::Busy | Self::Other)
+    }
+}
+
+/// Whether a later read can still clear this classified failure.
+///
+/// Args:
+///     kind: Classified reports-replica failure.
+///
+/// Returns:
+///     `true` for `Busy` and `Other`; `false` for `Corrupt` and lease denial.
+pub(crate) fn db_read_failed_retryable(kind: FailKind) -> bool {
+    DbReadFailedNotice::of(kind).retryable()
+}
+
+/// Locale key for a classified reports-replica failure, or `None` when the
+/// recovery notice composer owns the wording.
+///
+/// Args:
+///     kind: Classified reports-replica failure.
+///
+/// Returns:
+///     The `common.db_read_failed_*` key, or `None` for lease denial.
+#[cfg(test)]
+pub(crate) fn db_read_failed_hint_key(kind: FailKind) -> Option<&'static str> {
+    match DbReadFailedNotice::of(kind) {
+        DbReadFailedNotice::Recovery => None,
+        DbReadFailedNotice::Corrupt => Some("common.db_read_failed_corrupt"),
+        DbReadFailedNotice::Busy => Some("common.db_read_failed_retry"),
+        DbReadFailedNotice::Other => Some("common.db_read_failed_other"),
+    }
+}
+
+/// Localized guidance for a classified reports-replica failure.
+///
+/// Lease denial uses the shared recovery composer (title plus detail). The
+/// other three kinds reuse the `common.db_read_failed_*` strings already shown
+/// by Analytics and Report.
+///
+/// Args:
+///     kind: Classified reports-replica failure.
+///
+/// Returns:
+///     Translated badge/hint copy for this kind.
+pub(crate) fn db_read_failed_hint(kind: FailKind) -> String {
+    match DbReadFailedNotice::of(kind) {
+        DbReadFailedNotice::Recovery => {
+            let (title, detail) = crate::report_notice::recovery_notice_text(
+                moon_core::db::report_recovery::status(),
+            );
+            format!("{title} {detail}")
+        }
+        DbReadFailedNotice::Corrupt => t!("common.db_read_failed_corrupt").to_string(),
+        DbReadFailedNotice::Busy => t!("common.db_read_failed_retry").to_string(),
+        DbReadFailedNotice::Other => t!("common.db_read_failed_other").to_string(),
+    }
+}
+
 /// Render a placeholder. Failures go through `MoonAlert` so they carry the
 /// component system's error affordance instead of reading like body text —
 /// the whole point is that a read failure must not look like an empty period.
@@ -204,15 +306,9 @@ pub(crate) fn note_el(
                         .child(MoonAlert::error(id, detail).title(title).render())
                         .into_any_element();
                 }
-                FailKind::Corrupt => t!("common.db_read_failed_corrupt"),
-                FailKind::Busy => t!("common.db_read_failed_retry"),
-                FailKind::Other => t!("common.db_read_failed_other"),
+                FailKind::Corrupt | FailKind::Busy | FailKind::Other => db_read_failed_hint(kind),
             };
-            (
-                t!("common.db_read_failed").to_string(),
-                msg,
-                hint.to_string(),
-            )
+            (t!("common.db_read_failed").to_string(), msg, hint)
         }
     };
     div()
