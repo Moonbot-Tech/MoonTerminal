@@ -215,6 +215,29 @@ fn chart_and_header_data_text_keep_the_mono_family() {
     // `design::mono()` call. Keep that existing assertion as the single oracle for this site.
 }
 
+/// Issue #675: the Sells-to-zone cursor badge is a mode glyph, not a compared figure.
+///
+/// Breakage: drawing it with `design::mono()` puts it back in the readout cluster's face, so
+/// one small glyph among identical small glyphs is again the only armed-mode marker.
+#[test]
+fn sells_zone_cursor_badge_uses_the_ui_face() {
+    let text = read_src("chartdx/text/mod.rs");
+    for function in [
+        "fn draw_cursor_badge_text_run(",
+        "fn measure_cursor_badge_text_run(",
+    ] {
+        let body = code_only(braced_body(&text, function));
+        assert!(
+            body.contains("gpui::font(crate::design::ui_font())"),
+            "chartdx/text/mod.rs:{function} must use the UI face because the badge is a mode glyph"
+        );
+        assert!(
+            !body.contains("gpui::font(crate::design::mono())"),
+            "chartdx/text/mod.rs:{function} must not inherit the mono readout face"
+        );
+    }
+}
+
 /// Settings changes its root to the UI face, while its input and numeric value containers remain data.
 ///
 /// Breakage: omitting one re-pin makes a typed value, slider endpoint, or counter render in Inter

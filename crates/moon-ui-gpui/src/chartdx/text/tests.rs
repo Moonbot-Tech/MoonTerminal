@@ -155,6 +155,31 @@ fn the_volume_readout_sits_above_the_label_size_and_stays_clamped() {
     assert_eq!(readout_font_px(-1_000.0), 6.0 + READOUT_FONT_BUMP);
 }
 
+/// The Sells-to-zone cursor badge is larger than the neighbouring readout at every slider
+/// setting that still has room under the shared 40 px cap.
+///
+/// Breakage this pins: routing the badge back through `readout_font_px` or `label_font_px`
+/// (issue #675 — a mode marker that inherited the readout style) makes the two equal again.
+#[test]
+fn the_mode_badge_sits_above_the_readout_and_the_control_tier() {
+    use crate::chartdx::text::{cursor_badge_font_px, readout_font_px};
+    use crate::design::BODY_TEXT;
+
+    for delta in [-6.0, -2.0, 0.0, 3.0, 12.0] {
+        let badge = cursor_badge_font_px(delta);
+        let readout = readout_font_px(delta);
+        assert!(
+            badge > readout,
+            "the mode badge must read larger than the neighbouring readout at delta {delta}"
+        );
+        assert!(
+            badge >= BODY_TEXT,
+            "the mode badge must not fall below the control-tier body at delta {delta}"
+        );
+    }
+    assert_eq!(cursor_badge_font_px(1_000.0), 40.0);
+}
+
 /// The bottom-volume scale labels are larger and heavier than ordinary axis text.
 ///
 /// Breakage this pins: restoring the axis size or the regular face for the two reference-line

@@ -151,6 +151,46 @@ impl RenderState {
         )
     }
 
+    /// Draws the Sells-to-zone mode badge at the control-tier size on the UI face.
+    pub(super) fn draw_cursor_badge_text(
+        &mut self,
+        ctx: &mut GpuCanvasTextContext<'_>,
+        text: &str,
+        x: f32,
+        y: f32,
+        ax: f32,
+        ay: f32,
+        color: Hsla,
+    ) -> anyhow::Result<GpuCanvasTextMetrics> {
+        draw_cursor_badge_text_run(
+            &mut self.text_runs,
+            &mut self.text_run_cursor,
+            ctx,
+            self.label_font_delta,
+            text,
+            x,
+            y,
+            ax,
+            ay,
+            color,
+        )
+    }
+
+    /// Measures the Sells-to-zone mode badge at the size it is drawn at.
+    pub(super) fn measure_cursor_badge_text(
+        &mut self,
+        ctx: &GpuCanvasTextContext<'_>,
+        text: &str,
+    ) -> GpuCanvasTextMetrics {
+        measure_cursor_badge_text_run(
+            &mut self.text_runs,
+            self.text_run_cursor,
+            ctx,
+            self.label_font_delta,
+            text,
+        )
+    }
+
     /// Measures one line of the cursor's volume readout at the size it is drawn at.
     pub(super) fn measure_readout_text(
         &mut self,

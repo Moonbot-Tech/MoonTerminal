@@ -275,12 +275,18 @@ impl ChartEngine {
             .set_target_present_rate_hz(self.present_rate_hz);
     }
 
+    /// Uploads the live Moon palette for chart chrome that follows the UI theme.
+    ///
+    /// Compared on the fields the GPU text pass actually reads — panel chrome plus `accent`,
+    /// which paints the Sells-to-zone cursor badge — so a theme swap that keeps the panel
+    /// colours still reaches the mode marker. Returns nothing; a change dirties the present.
     pub fn set_ui_palette(&mut self, palette: moon_ui::MoonPalette) {
         let mut state = self.state.borrow_mut();
         if state.ui_palette.panel != palette.panel
             || state.ui_palette.chart_bg != palette.chart_bg
             || state.ui_palette.text_soft != palette.text_soft
             || state.ui_palette.border != palette.border
+            || state.ui_palette.accent != palette.accent
         {
             state.ui_palette = palette;
             state.needs_present = true;
