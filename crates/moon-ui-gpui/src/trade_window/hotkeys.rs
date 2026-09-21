@@ -72,6 +72,7 @@ pub(super) fn route(action: crate::hotkeys::HotkeyAction) -> Option<TradeHotkey>
         | A::CancelHoveredOrder
         | A::CloseAllCharts
         | A::CenterChart
+        | A::ToggleLive
         | A::ChartShot => None,
     }
 }

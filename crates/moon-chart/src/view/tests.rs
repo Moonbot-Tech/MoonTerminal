@@ -1,6 +1,6 @@
 //! Regression coverage for chart view initialization, navigation, and scale behavior.
 
-use super::{ChartView, MANUAL_HOLD_MS};
+use super::ChartView;
 
 /// Return how much live history remains left of the future margin after default initialization.
 ///
@@ -108,9 +108,11 @@ fn zoom_in_is_clamped_to_min_window_30s() {
     let width = 1000.0;
     let mut view = ChartView::new(0.0);
     view.ensure_default_window(width, 60.0, None);
+    view.resume_live(now);
+    let live_x = width * (1.0 - view.right_margin_frac);
 
     for _ in 0..20 {
-        view.zoom_x_at(2.0, width, width * 0.5, now, false);
+        view.zoom_x_at(2.0, width, live_x, now, false);
     }
 
     let (_, window_ms) = view.visible_x(width);
@@ -118,7 +120,7 @@ fn zoom_in_is_clamped_to_min_window_30s() {
         (window_ms - 30_000.0).abs() < 1.0,
         "minimum window was {window_ms} ms"
     );
-    assert!(view.follow);
+    assert!(view.follow, "zoom at the live edge must keep follow");
 }
 
 /// Removing the `default_ppm` initialization branch in `view.rs:ensure_default_window` must fail;
@@ -172,7 +174,7 @@ fn a_manual_zoom_survives_later_default_window_preparation() {
 }
 
 /// Resetting `right_time_ms` inside `view.rs:ensure_default_window` must fail; otherwise preparing
-/// a panned chart jumps the user back to the live edge before the normal hold timer expires.
+/// a panned chart jumps the user back to the live edge they just left.
 #[test]
 fn a_manual_pan_position_survives_default_window_preparation() {
     let now = 100_000_000.0;
@@ -188,34 +190,27 @@ fn a_manual_pan_position_survives_default_window_preparation() {
     assert!(!view.follow);
 }
 
+/// Dropping follow on a pan and then arming a timed return must fail: a user who dragged into
+/// history to inspect a spike would be yanked back to the live edge without asking.
 #[test]
-fn pan_then_hold_auto_returns_to_live() {
-    let now = 100_000.0;
-    let mut view = ChartView::new(0.0);
-    view.ensure_default_window(1000.0, 60.0, None);
-    view.resume_live(now);
+fn a_pan_detaches_until_the_user_rejoins() {
+    let mut view = live_view(NOW, WIDTH);
+    view.pan_x_px(WIDTH * 0.2, NOW, WIDTH);
+    assert!(!view.follow, "a pan into history did not leave live");
+    let parked = view.right_time_ms;
+    assert!(parked < NOW, "the pan did not move the anchor into history");
 
-    view.pan_x_px(50.0, now, 1000.0);
-    assert!(!view.follow);
-    // Live does not resume within the hold window.
-    assert!(!view.tick_auto_live(now + 1000.0));
-    assert!(!view.follow);
-    // Live resumes automatically after the hold expires.
-    assert!(view.tick_auto_live(now + MANUAL_HOLD_MS + 1.0));
-    assert!(view.follow);
-}
+    // Time passing is not a gesture. The old 3 s hold used to call resume_live from a timer.
+    view.follow_edge(NOW + 10_000.0, NOW + 10_000.0);
+    assert!(
+        !view.follow,
+        "follow_edge restored live without a rejoin pan"
+    );
+    assert_eq!(view.right_time_ms, parked);
 
-/// Persistent-manual (a framed trade window) must never auto-return to live after a pan.
-/// `resume_live` would yank the closed trade off-screen.
-#[test]
-fn tick_auto_live_does_not_resume_a_persistent_manual_view() {
-    let now = 100_000.0;
-    let mut view = ChartView::new(0.0);
-    view.ensure_default_window(1000.0, 60.0, None);
-    view.set_manual_persistent();
-    view.pan_x_px(50.0, now, 1000.0);
-    assert!(!view.tick_auto_live(now + MANUAL_HOLD_MS + 1.0));
-    assert!(!view.follow);
+    // Dragging back onto the live edge still rejoins — the other half of the request.
+    view.pan_x_px(-WIDTH, NOW, WIDTH);
+    assert!(view.follow, "a pan back onto the live edge did not rejoin");
 }
 
 /// A framed trade window is persistent-manual. Zooming out until `now` sits near the right
@@ -407,8 +402,7 @@ fn an_explicit_live_off_is_not_undone_by_a_pan() {
     view.pan_x_px(WIDTH * 0.2, NOW, WIDTH);
 
     assert!(view.right_time_ms < NOW, "the pan did not reach history");
-    assert_eq!(view.auto_live_deadline_ms(), None);
-    assert!(!view.tick_auto_live(NOW + MANUAL_HOLD_MS * 100.0));
+    assert!(!view.follow);
 }
 
 /// Restoring the signed comparison in `view.rs:snap_to_live_if_near` must fail: `now - right` is
@@ -652,10 +646,11 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
     let mut view = ChartView::new(0.0);
     view.ensure_default_window(area, 60.0, None);
     view.resume_live(now);
+    let live_x = area * (1.0 - view.right_margin_frac);
 
     // Zoom out until clamped (min ppm = area / MAX_WINDOW_MS, about 4e-8 < 1e-6).
     for _ in 0..40 {
-        view.zoom_x_at(0.5, area, area * 0.5, now, false);
+        view.zoom_x_at(0.5, area, live_x, now, false);
     }
     let lo = area / super::MAX_WINDOW_MS;
     assert!(
@@ -668,7 +663,7 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
         view.px_per_ms < 1e-6,
         "test must cover values below the historical floor"
     );
-    assert!(view.follow, "live zoom must preserve follow");
+    assert!(view.follow, "zoom at the live edge must keep follow");
 
     // The old floor does NOT cap the window: it equals area/ppm (365 days), not area/1e-6.
     view.follow_edge(now, now);
@@ -693,7 +688,7 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
     // Repeated zoom attempts at the limit do not shift the view (no leftward drift).
     let (left_before, _) = view.visible_x(area);
     for _ in 0..5 {
-        view.zoom_x_at(0.5, area, area * 0.3, now, false);
+        view.zoom_x_at(0.5, area, live_x, now, false);
     }
     let (left_after, _) = view.visible_x(area);
     assert!(
@@ -712,8 +707,7 @@ fn explicit_follow_off_has_no_auto_return() {
     // Explicitly disabling Live does not schedule a delayed return.
     view.set_manual_persistent();
     assert!(!view.follow);
-    assert!(view.auto_live_deadline_ms().is_none());
-    assert!(!view.tick_auto_live(now + 10_000.0));
+    view.follow_edge(now + 10_000.0, now + 10_000.0);
     assert!(!view.follow);
 }
 
@@ -847,7 +841,6 @@ fn frame_requests_wait_for_real_width_reframe_on_resize_and_yield_to_user_naviga
     let mut view = ChartView::new(epoch);
     assert!(view.request_time_range(start, end, 0.0));
     assert!(!view.follow);
-    assert_eq!(view.auto_live_deadline_ms(), None);
     assert!(!view.apply_frame_request(1.0));
     assert!(view.apply_frame_request(900.0));
     let (_, span_900) = view.visible_x(900.0);
@@ -904,6 +897,52 @@ fn super_zoom_preserves_manual_cursor_time() {
     assert!(!view.is_live(now));
 }
 
+/// Super-zoom (and the plain wheel, which shares this function) used to pin a live chart to the
+/// live edge and throw the cursor away. Zooming into a spike a minute old then needed a Pause
+/// click first. The cursor time must hold, and Live must drop, the way a pan already does.
+#[test]
+fn zoom_on_a_live_chart_keeps_the_cursor_time_and_lets_go() {
+    let width = 900.0;
+    let now = 1_700_000_000_000.0;
+    let mut view = ChartView::new(now - 100_000.0);
+    view.ensure_default_window(width, 60.0, None);
+    view.resume_live(now);
+    assert!(view.follow);
+
+    let cursor_x = width * 0.4;
+    let before = view.visible_x(width).0 + cursor_x / view.px_per_ms;
+    view.zoom_x_at(2.0, width, cursor_x, now, true);
+    let after = view.visible_x(width).0 + cursor_x / view.px_per_ms;
+    assert!(
+        (after - before).abs() < 1.0,
+        "super zoom moved the time under the cursor by {} ms",
+        after - before
+    );
+    assert!(!view.follow, "super zoom at the cursor kept Live");
+    assert!(!view.is_live(now));
+}
+
+/// Zooming with the pointer on the live edge must stay live: that is the no-regression half of
+/// letting go when the pointer is in history.
+#[test]
+fn zoom_at_the_live_edge_stays_live() {
+    let mut view = live_view(NOW, WIDTH);
+    let live_x = WIDTH * (1.0 - view.right_margin_frac);
+    view.zoom_x_at(2.0, WIDTH, live_x, NOW, true);
+    assert!(view.follow, "super zoom at the live edge dropped Live");
+    view.zoom_x_at(0.5, WIDTH, live_x, NOW, false);
+    assert!(view.follow, "plain zoom at the live edge dropped Live");
+}
+
+/// The super-zoom hotkey has no pointer, so it zooms at the plot centre. On a live chart that
+/// centre is in history, and Live must drop the same way the wheel does.
+#[test]
+fn zoom_at_the_plot_centre_on_a_live_chart_lets_go() {
+    let mut view = live_view(NOW, WIDTH);
+    view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, NOW, true);
+    assert!(!view.follow, "a centre-anchored super zoom kept Live");
+}
+
 /// Moonbot's Ctrl+Right: a dragged, paused chart comes back to the price in ONE frame, on the scale
 /// it had picked, rather than easing there over dozens of ticks or keeping the percent parked.
 ///
@@ -923,7 +962,6 @@ fn center_on_price_snaps_a_dragged_paused_chart_back_in_one_frame() {
 
     assert!(!view.manual_price, "the manual Y view survived the return");
     assert!(view.follow, "the explicit pause survived the return");
-    assert!(view.auto_live_deadline_ms().is_none());
     assert!(
         (view.render_center - 1000.0).abs() < 1e-3,
         "the centre eased instead of jumping: {}",

@@ -2,10 +2,11 @@
 //!   X (time): wheel zoom around the cursor, LMB/Shift-wheel pan. Live/latest is
 //!             determined spatially: a pan or zoom that brings the right edge within the
 //!             rejoin radius of now ([`ChartView::live_rejoin_px`]) re-anchors to now on
-//!             that very step, pinning it there. Panning into HISTORY starts a 3-second
-//!             manual hold, while the toolbar's manual mode remains persistent. A pan
-//!             never walks past the live edge into the future; only a framed interval can
-//!             sit ahead of now, and `clamp_future_anchor` keeps its live edge on screen.
+//!             that very step, pinning it there. Panning into HISTORY leaves the chart
+//!             where the user put it until they drag back into that radius or press Live;
+//!             the toolbar's Pause is the same permanence, plus it refuses the pull-back.
+//!             A pan never walks past the live edge into the future; only a framed interval
+//!             can sit ahead of now, and `clamp_future_anchor` keeps its live edge on screen.
 //!             WHICH drag may leave live at all is the input layer's call (a fast flick).
 //!   Y (price): auto/fixed-percent scaling and manual Y-pan/RMB-zoom are independent
 //!              of X-follow, so browsing history horizontally does not freeze the
@@ -199,8 +200,6 @@ const DEFAULT_WINDOW_MS: f32 = DEFAULT_HISTORY_MS / (1.0 - DEFAULT_RIGHT_MARGIN_
 const MIN_WINDOW_MS: f32 = 30_000.0;
 /// Ctrl+Shift+wheel and super-zoom hotkeys allow a three-second plot window.
 const SUPER_MIN_WINDOW_MS: f32 = 3_000.0;
-/// How long to keep manual X mode after the last pan before automatically returning to live.
-const MANUAL_HOLD_MS: f64 = 3000.0;
 
 /// Narrowest plot a framing request will accept as REAL, in pixels.
 ///
@@ -289,12 +288,9 @@ pub struct ChartView {
     /// Time of the previous `update_y` (unix ms), used to normalize Y smoothing by real dt
     /// rather than per frame (otherwise auto-Y speed would depend on preparation frequency).
     last_update_ms: f64,
-    /// Keep manual X mode after a pan until this time (unix ms); once it expires,
-    /// `tick_auto_live` automatically returns to live. 0 means no pending return (or already live).
-    manual_until: f64,
     /// Whether following was turned off EXPLICITLY — [`Self::set_manual_persistent`], which is what
-    /// the toolbar's Live button reaches — so that no later pan may schedule a return, or a pull-back
-    /// rejoin, that was not asked for.
+    /// the toolbar's Live button reaches — so that a later pan may not rejoin via the pull-back
+    /// that a plain drag still uses.
     manual_persistent: bool,
     /// Interval this view has been asked to frame, retained until a user gesture overrides it.
     frame_request: Option<FrameRequest>,
@@ -338,7 +334,6 @@ impl ChartView {
             last_phase_present_hz: f32::NAN,
             phase_default_px_per_ms: 0.0,
             last_update_ms: 0.0,
-            manual_until: 0.0,
             manual_persistent: false,
             frame_request: None,
             center_snap_pending: false,
@@ -533,40 +528,13 @@ impl ChartView {
         self.clear_frame_request();
         self.follow = true;
         self.right_time_ms = now_ms;
-        self.manual_until = 0.0;
         self.manual_persistent = false;
     }
 
     /// Explicitly and persistently disables live from the toolbar, with no automatic return.
     pub fn set_manual_persistent(&mut self) {
         self.follow = false;
-        self.manual_until = 0.0;
         self.manual_persistent = true;
-    }
-
-    /// Returns to live when the manual hold after a pan expires (Item 9). Driven by a timer
-    /// because the own-pass moves the camera but prepare does not tick while idle
-    /// (see moon-ui-gpui/src/panels/chart/mod.rs).
-    /// Returns true if live was resumed.
-    pub fn tick_auto_live(&mut self, now_ms: f64) -> bool {
-        if self.manual_persistent {
-            return false;
-        }
-        if !self.follow && self.manual_until > 0.0 && now_ms >= self.manual_until {
-            self.resume_live(now_ms);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Next automatic-return deadline (unix ms), if pending, used to arm the timer.
-    pub fn auto_live_deadline_ms(&self) -> Option<f64> {
-        if !self.follow && self.manual_until > 0.0 {
-            Some(self.manual_until)
-        } else {
-            None
-        }
     }
 
     pub fn reset_default_window_on_next_prepare(&mut self) {
@@ -852,16 +820,8 @@ impl ChartView {
         let dt_ms = dx as f64 / self.px_per_ms.max(MIN_PX_PER_MS) as f64;
         self.right_time_ms = (before - dt_ms).min(before.max(now_ms));
         self.follow = false;
-        if dx < 0.0 && self.snap_to_live_if_near(now_ms, area_w) {
-            return;
-        }
-        if self.manual_persistent {
-            self.manual_until = 0.0;
-        } else {
-            // Item 9: panning does not disable live permanently. Start a manual hold window,
-            // after which `tick_auto_live` re-anchors to now. Every pan frame advances the deadline,
-            // so the return occurs about 3 s AFTER release.
-            self.manual_until = now_ms + MANUAL_HOLD_MS;
+        if dx < 0.0 {
+            let _ = self.snap_to_live_if_near(now_ms, area_w);
         }
     }
 
@@ -878,15 +838,16 @@ impl ChartView {
         self.render_center = self.center_price;
     }
 
-    /// Zooms X. In live mode, preserves the live anchor (as in WebGame/Moonbot); in manual
-    /// X view, preserves the time under the cursor and may re-anchor to live after a discrete step.
+    /// Zooms X, keeping the time under the cursor fixed. Follow is then re-decided spatially:
+    /// zooming at the live edge stays live, zooming into history lets go, the same
+    /// [`Self::snap_to_live_if_near`] rule a pan already uses. An explicit Pause is left alone.
     ///
     /// Args:
     ///     super_zoom: Allow the three-second floor instead of the plain 30-second floor.
     ///         Plain input preserves a narrower current window instead of snapping back.
     ///     factor: Multiplicative zoom step.
     ///     area_w: Plot width in logical pixels.
-    ///     cursor_x: Cursor coordinate within the plot.
+    ///     cursor_x: Cursor coordinate within the plot. Hotkeys pass the plot centre.
     ///     now_ms: Current Unix time in milliseconds.
     ///
     /// Returns:
@@ -908,7 +869,6 @@ impl ChartView {
             return;
         }
         self.clear_frame_request();
-        let was_follow = self.follow;
         let right_before = self.right_time_ms;
         let old_px = self.px_per_ms.max(MIN_PX_PER_MS);
         let cursor_x = cursor_x.clamp(0.0, area_w.max(1.0));
@@ -931,11 +891,8 @@ impl ChartView {
         let hi = (area_w.max(1.0) / effective_floor).max(lo);
         self.px_per_ms = next.clamp(lo, hi);
         self.x_default_scale = (self.px_per_ms - self.phase_default_px_per_ms).abs() <= 1e-9;
-        if was_follow {
-            self.right_time_ms = now_ms;
-            self.follow = true;
-            return;
-        }
+        // Drop follow so the spatial rejoin below can decide; an explicit Pause still refuses it.
+        self.follow = false;
         let new_window = area_w / self.px_per_ms.max(MIN_PX_PER_MS);
         let left = cursor_time - self.epoch_ms - cursor_x as f64 / self.px_per_ms as f64;
         // Zoom's OWN rule: it must not SCROLL the chart. Anywhere left of the right margin the cursor

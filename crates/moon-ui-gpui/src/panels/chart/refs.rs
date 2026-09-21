@@ -1,6 +1,6 @@
 //! Chart-panel backend refcounts for markets and order books, plus wall-clock timers for unpinned
-//! pane TTL auto-close in numbered AddToChart and Custom panels and automatic live rejoin after a
-//! pan. Custom panes are normally pinned after population. Split from `chart.rs`.
+//! pane TTL auto-close in numbered AddToChart and Custom panels. Custom panes are normally pinned
+//! after population. Split from `chart.rs`.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -184,48 +184,6 @@ impl ChartPanel {
                         cx.notify();
                     }
                     this.arm_ttl_timer(cx);
-                })
-                .is_ok()
-            });
-        })
-        .detach();
-    }
-
-    fn next_auto_live_delay(&self, now_ms: f64) -> Option<Duration> {
-        self.chart
-            .next_auto_live_deadline_ms()
-            .map(|deadline| Duration::from_millis((deadline - now_ms).max(1.0).ceil() as u64))
-    }
-
-    /// Arms a one-shot auto-live timer, mirroring [`Self::arm_ttl_timer`]. Input changes call this
-    /// after a pan; on expiry it rejoins due panes to live and re-arms for the next deadline, or
-    /// remains idle when no pane has a pending return.
-    pub(super) fn arm_auto_live_timer(&mut self, cx: &mut Context<Self>) {
-        if self.historical || self.auto_live_timer_armed {
-            return;
-        }
-        let Some(delay) = self.next_auto_live_delay(now_unix_ms()) else {
-            return;
-        };
-        self.auto_live_timer_armed = true;
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            executor.timer(delay).await;
-            let _ = cx.update(|cx| {
-                this.update(cx, |this, cx| {
-                    this.auto_live_timer_armed = false;
-                    if this.chart.tick_auto_live(now_unix_ms()) {
-                        this.view_dirty = true;
-                        let follow = this.chart.follow();
-                        this.backend.update(cx, |b, bcx| {
-                            if b.follow != follow {
-                                b.follow = follow;
-                                bcx.notify();
-                            }
-                        });
-                        cx.notify();
-                    }
-                    this.arm_auto_live_timer(cx);
                 })
                 .is_ok()
             });

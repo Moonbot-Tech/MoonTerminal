@@ -24,8 +24,8 @@ pub const MANUAL_STRATEGY_KEYS: usize = 10;
 /// already given Ctrl+F10 to something else. 3: the same for `fig_undo` on Ctrl+Z. 4: cleared the
 /// two pending-order GESTURES, which stopped being inert and started placing live orders. 5: the
 /// figure-delete gesture yields its Middle default to a trading gesture already on Middle. 6: the
-/// same as 2 and 3 for `center_chart` on Ctrl+Right.
-const SCHEMA: u8 = 6;
+/// same as 2 and 3 for `center_chart` on Ctrl+Right. 7: the same for `toggle_live` on Space.
+const SCHEMA: u8 = 7;
 
 /// Parts produced by the plain Split Order action, matching Moonbot, where that action always
 /// splits a sell order into three. The configurable count belongs to `Split N` instead.
@@ -279,7 +279,7 @@ impl MouseGestureBinding {
 /// One editable keyboard slot of [`HotkeysConfig`].
 ///
 /// The slot identity lives HERE, beside the struct it addresses, and not in the settings page that
-/// draws it. That is the whole point of the type: the same twenty-nine slots were enumerated by
+/// draws it. That is the whole point of the type: the same named slots were enumerated by
 /// hand in half a dozen places — this file's own collision list, the page's field map, its id and
 /// label tables, the clash order, the row layout — and each list could forget a slot on its own.
 /// A list that cannot reach the data is the reason they could not be merged: `bound_keys` is in
@@ -319,6 +319,8 @@ pub enum KeySlot {
     SuperZoomOut,
     /// Moonbot's built-in Ctrl+Right, "Center chart": back to the price and the live edge.
     CenterChart,
+    /// Toggle the toolbar Live/Pause flag. Default Space; no Moonbot import slot.
+    ToggleLive,
     SwitchFigure,
     ChartShot,
     DrawHline,
@@ -339,7 +341,7 @@ impl KeySlot {
     /// unenumerated. What checks it is a test that serializes the config with every slot written a
     /// marker and looks for a stored keystroke that kept its own value: the STRUCT is the reference,
     /// never this list, because a test that walks this list to verify this list proves nothing.
-    pub const NAMED: [Self; 30] = [
+    pub const NAMED: [Self; 31] = [
         Self::CancelBuy,
         Self::PanicSell,
         Self::PanicSellOne,
@@ -360,6 +362,7 @@ impl KeySlot {
         Self::SuperZoomIn,
         Self::SuperZoomOut,
         Self::CenterChart,
+        Self::ToggleLive,
         Self::SwitchFigure,
         Self::ChartShot,
         Self::DrawHline,
@@ -418,6 +421,7 @@ impl KeySlot {
             Self::SuperZoomIn => "super_zoom_in",
             Self::SuperZoomOut => "super_zoom_out",
             Self::CenterChart => "center_chart",
+            Self::ToggleLive => "toggle_live",
             Self::SwitchFigure => "switch_figure",
             Self::ChartShot => "chart_shot",
             Self::DrawHline => "draw_hline",
@@ -725,6 +729,7 @@ impl HotkeysConfig {
             KeySlot::SuperZoomIn => &self.super_zoom_in,
             KeySlot::SuperZoomOut => &self.super_zoom_out,
             KeySlot::CenterChart => &self.center_chart,
+            KeySlot::ToggleLive => &self.toggle_live,
             KeySlot::SwitchFigure => &self.switch_figure,
             KeySlot::ChartShot => &self.chart_shot,
             KeySlot::DrawHline => &self.draw_hline,
@@ -776,6 +781,7 @@ impl HotkeysConfig {
             KeySlot::SuperZoomIn => &mut self.super_zoom_in,
             KeySlot::SuperZoomOut => &mut self.super_zoom_out,
             KeySlot::CenterChart => &mut self.center_chart,
+            KeySlot::ToggleLive => &mut self.toggle_live,
             KeySlot::SwitchFigure => &mut self.switch_figure,
             KeySlot::ChartShot => &mut self.chart_shot,
             KeySlot::DrawHline => &mut self.draw_hline,
@@ -1034,6 +1040,13 @@ pub struct HotkeysConfig {
     /// collision check and no backfill: generation 6 of [`HotkeysConfig::fill_unbound_slots`].
     #[serde(default = "default_center_chart")]
     pub center_chart: String,
+    /// Toggle the application-wide Live/Pause flag, the same as the toolbar button.
+    ///
+    /// Space is free on every shipped default, the Moonbot import already spells it, and
+    /// `is_bare_alnum` leaves it out of the amber clash hint. Generation 7 of
+    /// [`HotkeysConfig::fill_unbound_slots`] yields the default where Space is already taken.
+    #[serde(default = "default_toggle_live")]
+    pub toggle_live: String,
     #[serde(default = "default_switch_figure")]
     pub switch_figure: String,
 
@@ -1197,6 +1210,7 @@ impl Default for HotkeysConfig {
             super_zoom_in: String::new(),
             super_zoom_out: String::new(),
             center_chart: default_center_chart(),
+            toggle_live: default_toggle_live(),
             switch_figure: default_switch_figure(),
             chart_shot: default_chart_shot(),
             draw_hline: default_draw_hline(),
@@ -1350,6 +1364,8 @@ impl HotkeysConfig {
     ///
     /// Generation 5 → 6: the key check once more, for `center_chart` arriving on Ctrl+Right.
     ///
+    /// Generation 6 → 7: the same check for `toggle_live` arriving on Space.
+    ///
     /// Returns whether anything changed, so the caller can persist the stamp.
     pub(super) fn fill_unbound_slots(&mut self) -> bool {
         if self.schema >= SCHEMA {
@@ -1375,6 +1391,9 @@ impl HotkeysConfig {
         }
         if self.schema < 6 {
             self.clear_generation_6_collisions();
+        }
+        if self.schema < 7 {
+            self.clear_generation_7_collisions();
         }
         self.schema = SCHEMA;
         true
@@ -1516,6 +1535,20 @@ impl HotkeysConfig {
         // Recomputed rather than reused: the generations above may have just changed slots.
         let taken = self.bound_keys();
         clear_if_duplicate(&taken, &mut self.center_chart, "Center chart");
+    }
+
+    /// Generation 6 -> 7: `toggle_live` ships on Space through its serde default, so it reaches
+    /// an existing file already filled, exactly as `center_chart` did.
+    ///
+    /// Space is free on every default we and Moonbot ship, but nothing stops a user from having
+    /// given it to another action — and the chart keys resolve ABOVE the trading actions, so the
+    /// arriving default would quietly take a key that used to send an order. The NEW slot yields.
+    ///
+    /// Returns:
+    ///     Nothing; clears only the new toggle-live slot when its default collides.
+    fn clear_generation_7_collisions(&mut self) {
+        let taken = self.bound_keys();
+        clear_if_duplicate(&taken, &mut self.toggle_live, "Live / Pause");
     }
 
     /// The gesture one slot actually FIRES on, or `None` for a slot that dispatches nothing.
@@ -1719,6 +1752,16 @@ fn default_switch_figure() -> String {
 ///     The default GPUI keystroke for centring every chart on its price.
 fn default_center_chart() -> String {
     "ctrl-right".into()
+}
+
+/// Space is free on every shipped default, accepted by the Moonbot import parser, and excluded
+/// from the bare-alnum clash hint. A focused text field still types a space
+/// (`hotkeys::belongs_to_the_field`).
+///
+/// Returns:
+///     The default GPUI keystroke for toggling Live/Pause.
+fn default_toggle_live() -> String {
+    "space".into()
 }
 
 /// Ctrl+F10, next to the built-in Ctrl+Shift+F10 that resets window positions but never colliding
