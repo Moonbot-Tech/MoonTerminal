@@ -46,6 +46,17 @@ fn super_zoom_routes_windows_shift_delta_before_pan() {
     assert_eq!(wheel_mode(Modifiers::shift()), WheelMode::Pan);
     assert_eq!(wheel_mode(Modifiers::alt()), WheelMode::Pan);
     assert_eq!(wheel_mode(Modifiers::default()), WheelMode::Zoom);
+    let ctrl = Modifiers {
+        control: true,
+        ..Modifiers::default()
+    };
+    assert_eq!(wheel_mode(ctrl), WheelMode::CtrlZoom);
+    let ctrl_alt = Modifiers {
+        control: true,
+        alt: true,
+        ..Modifiers::default()
+    };
+    assert_eq!(wheel_mode(ctrl_alt), WheelMode::Pan);
 }
 
 /// A still book-zone press stays an order click; travel of 4 px (the same start as

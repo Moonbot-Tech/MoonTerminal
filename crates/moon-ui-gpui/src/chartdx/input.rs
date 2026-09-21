@@ -7,7 +7,7 @@
 
 use crate::chartdx::pane::Container;
 use moon_chart::paint::now_unix_ms;
-use moon_chart::view::{ChartView, Rect, record_zoom_window};
+use moon_chart::view::{ChartView, Rect, XZoom, record_zoom_window};
 use moon_core::session::CoreId;
 
 /// Mouse button subset used by chart navigation instead of `winit::MouseButton`.
@@ -20,12 +20,32 @@ pub enum Btn {
 /// Navigation gesture, also identifying which discrete wheel accumulator owns a delta.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WheelMode {
-    /// Ordinary time zoom with the 30-second floor.
+    /// Unmodified wheel. Thirty-second floor. A live chart stays pinned to now.
     Zoom,
-    /// Time zoom with the three-second floor.
+    /// Ctrl+wheel. Thirty-second floor, cursor-anchored, so a live chart may let go.
+    CtrlZoom,
+    /// Ctrl+Shift+wheel. Three-second floor, cursor-anchored.
     SuperZoom,
-    /// Horizontal time pan.
+    /// Horizontal time pan (Shift or Alt).
     Pan,
+}
+
+/// Map a wheel gesture onto the view's zoom kind.
+///
+/// Args:
+///     mode: Gesture that owns this wheel delta.
+///
+/// Returns:
+///     [`XZoom::Plain`] for an unmodified wheel, [`XZoom::Ctrl`] for Ctrl+wheel,
+///     [`XZoom::Super`] for Ctrl+Shift. Pan is not a zoom; that arm exists so the
+///     match stays exhaustive and, if reached, does not pin a live chart.
+fn x_zoom(mode: WheelMode) -> XZoom {
+    match mode {
+        WheelMode::Zoom => XZoom::Plain,
+        WheelMode::CtrlZoom => XZoom::Ctrl,
+        WheelMode::SuperZoom => XZoom::Super,
+        WheelMode::Pan => XZoom::Ctrl,
+    }
 }
 
 const WHEEL_THRESHOLD: f32 = 100.0;
@@ -215,8 +235,9 @@ impl ChartInput {
     /// Apply wheel X zoom or X pan to the hovered pane.
     ///
     /// `dy` is a line delta for discrete input or a pixel delta when `precise` is true. `mode`
-    /// selects plain zoom, super zoom, or Shift/Alt panning, and `gate_ok` requires the pointer to be
-    /// inside the chart zone. Returns whether a view changed and needs presentation.
+    /// selects plain zoom (live edge stays pinned), Ctrl zoom, super zoom, or Shift/Alt panning,
+    /// and `gate_ok` requires the pointer to be inside the chart zone. Returns whether a view
+    /// changed and needs presentation.
     pub fn wheel(
         &mut self,
         dy: f32,
@@ -259,7 +280,7 @@ impl ChartInput {
                 // threshold accumulation, avoiding repeated jumps from inertial pixel deltas.
                 self.wheel_accum = 0.0;
                 let factor = 2f32.powf(dy / WHEEL_PX_PER_2X);
-                view.zoom_x_at(factor, plot_w, cursor_x, now, mode == WheelMode::SuperZoom);
+                view.zoom_x_at(factor, plot_w, cursor_x, now, x_zoom(mode));
                 record_zoom_window(view.visible_x(plot_w).1);
             } else {
                 // Accumulate discrete wheel lines and apply the step at the threshold.
@@ -270,7 +291,7 @@ impl ChartInput {
                 // Terminal UX: wheel up zooms in, wheel down zooms out.
                 let factor = 2f32.powf(self.wheel_accum.signum());
                 self.wheel_accum = 0.0;
-                view.zoom_x_at(factor, plot_w, cursor_x, now, mode == WheelMode::SuperZoom);
+                view.zoom_x_at(factor, plot_w, cursor_x, now, x_zoom(mode));
                 record_zoom_window(view.visible_x(plot_w).1);
             }
             return true;
@@ -299,7 +320,7 @@ impl ChartInput {
                     width,
                     width * 0.5,
                     now_unix_ms(),
-                    true,
+                    XZoom::Super,
                 );
                 record_zoom_window(view.visible_x(width).1);
                 changed = true;

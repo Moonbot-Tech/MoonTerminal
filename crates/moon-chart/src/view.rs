@@ -1,11 +1,13 @@
 //! Chart view state — a port of the Moonbot/WebGame interactions:
-//!   X (time): wheel zoom around the cursor, LMB/Shift-wheel pan. Live/latest is
-//!             determined spatially: a pan or zoom that brings the right edge within the
+//!   X (time): an unmodified wheel on a live chart changes only the scale and leaves the
+//!             right edge at now. Ctrl+wheel, Ctrl+Shift+wheel, the super-zoom hotkeys, and
+//!             any chart already in history zoom around the cursor. Live/latest for those
+//!             gestures, and for a pan, is spatial: bringing the right edge within the
 //!             rejoin radius of now ([`ChartView::live_rejoin_px`]) re-anchors to now on
-//!             that very step, pinning it there. Panning into HISTORY leaves the chart
-//!             where the user put it until they drag back into that radius, press Live, or
-//!             sit idle for [`AUTO_RESUME_LIVE_MS`]; the toolbar's Pause is the same
-//!             permanence, plus it refuses both the pull-back and that idle return.
+//!             that very step. Panning into HISTORY leaves the chart where the user put it
+//!             until they drag back into that radius, press Live, or sit idle for
+//!             [`AUTO_RESUME_LIVE_MS`]; the toolbar's Pause is the same permanence, plus it
+//!             refuses both the pull-back and that idle return.
 //!             A pan never walks past the live edge into the future; only a framed interval
 //!             can sit ahead of now, and `clamp_future_anchor` keeps its live edge on screen.
 //!             WHICH drag may leave live at all is the input layer's call (a fast flick).
@@ -337,6 +339,23 @@ struct FrameRequest {
     /// Width the request was last honoured at, or NaN while it is still pending. Compared rather
     /// than flagged so a resize re-applies and an identical width does not.
     applied_area_w: f32,
+}
+
+/// Which time-zoom gesture is changing the X scale.
+///
+/// The floor and the live-edge rule travel together. A caller cannot ask for the
+/// three-second floor and the unmodified-wheel pin at the same time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum XZoom {
+    /// Unmodified wheel. Thirty-second floor. A chart that is already live changes
+    /// scale only; the right edge stays at `now`.
+    Plain,
+    /// Ctrl+wheel. Thirty-second floor. The time under the cursor stays put, and a
+    /// live chart lets go unless that shift still lands inside the rejoin radius.
+    Ctrl,
+    /// Ctrl+Shift+wheel and the super-zoom hotkeys. Three-second floor.
+    /// Cursor-anchored, with the same live-edge rule as [`XZoom::Ctrl`].
+    Super,
 }
 
 #[derive(Clone)]
@@ -985,28 +1004,26 @@ impl ChartView {
         self.render_center = self.center_price;
     }
 
-    /// Zooms X, keeping the time under the cursor fixed. Follow is then re-decided spatially:
-    /// zooming at the live edge stays live, zooming into history lets go, the same
-    /// [`Self::snap_to_live_if_near`] rule a pan already uses. An explicit Pause is left alone.
+    /// Zooms X.
+    ///
+    /// [`XZoom::Plain`] on a chart that is already live changes `px_per_ms` only and
+    /// leaves the right edge at `now`. Every other gesture keeps the time under the
+    /// cursor fixed, then re-decides follow spatially: zooming at the live edge stays
+    /// live, zooming into history lets go, the same [`Self::snap_to_live_if_near`] rule
+    /// a pan already uses. An explicit Pause is left alone because follow is already off
+    /// and `manual_persistent` refuses the rejoin.
     ///
     /// Args:
-    ///     super_zoom: Allow the three-second floor instead of the plain 30-second floor.
-    ///         Plain input preserves a narrower current window instead of snapping back.
-    ///     factor: Multiplicative zoom step.
+    ///     factor: Multiplicative zoom step. Non-finite, zero, and negative values are ignored.
     ///     area_w: Plot width in logical pixels.
     ///     cursor_x: Cursor coordinate within the plot. Hotkeys pass the plot centre.
     ///     now_ms: Current Unix time in milliseconds.
+    ///     zoom: Which gesture this step is. Selects the window floor and, for
+    ///         [`XZoom::Plain`], the live-edge pin.
     ///
     /// Returns:
     ///     Nothing; the X scale and anchor are updated in place.
-    pub fn zoom_x_at(
-        &mut self,
-        factor: f32,
-        area_w: f32,
-        cursor_x: f32,
-        now_ms: f64,
-        super_zoom: bool,
-    ) {
+    pub fn zoom_x_at(&mut self, factor: f32, area_w: f32, cursor_x: f32, now_ms: f64, zoom: XZoom) {
         // A local invariant rather than a promise extracted from every caller: the clamp below
         // returns a NaN unchanged, `next` is computed from the RAW `px_per_ms` rather than the
         // floored `old_px`, and `x_default_scale`'s comparison never matches a NaN again — so one
@@ -1017,6 +1034,7 @@ impl ChartView {
         }
         self.note_interaction(now_ms);
         self.clear_frame_request();
+        let was_follow = self.follow;
         let right_before = self.right_time_ms;
         let old_px = self.px_per_ms.max(MIN_PX_PER_MS);
         let cursor_x = cursor_x.clamp(0.0, area_w.max(1.0));
@@ -1028,8 +1046,8 @@ impl ChartView {
         } else {
             0.0005
         };
-        // Plain input may zoom out from super zoom, but must never widen on a zoom-in step.
-        let floor = if super_zoom {
+        // Plain and Ctrl input may zoom out from super zoom, but must never widen on a zoom-in step.
+        let floor = if zoom == XZoom::Super {
             SUPER_MIN_WINDOW_MS
         } else {
             MIN_WINDOW_MS
@@ -1039,6 +1057,14 @@ impl ChartView {
         let hi = (area_w.max(1.0) / effective_floor).max(lo);
         self.px_per_ms = next.clamp(lo, hi);
         self.x_default_scale = (self.px_per_ms - self.phase_default_px_per_ms).abs() <= 1e-9;
+        // Unmodified wheel while already live: scale only. #670 dropped this for every
+        // zoom, so one plain notch at mid-plot left the chart paused. Ctrl, Ctrl+Shift,
+        // the super-zoom hotkeys, and a chart already in history keep the cursor anchor.
+        if was_follow && zoom == XZoom::Plain {
+            self.right_time_ms = now_ms;
+            self.follow = true;
+            return;
+        }
         // Drop follow so the spatial rejoin below can decide; an explicit Pause still refuses it.
         self.follow = false;
         let new_window = area_w / self.px_per_ms.max(MIN_PX_PER_MS);

@@ -165,12 +165,25 @@ fn wheel_delta(x: f32, y: f32, modifiers: Modifiers) -> f32 {
     if y == 0.0 && modifiers.shift { x } else { y }
 }
 
-/// Resolve Ctrl+Shift before the Shift/Alt pan gesture, including Windows X-axis wheel events.
+/// Resolve Ctrl+Shift before the Shift/Alt pan gesture, and Ctrl alone before a plain zoom.
+///
+/// Ctrl+Shift is the three-second super zoom. Shift or Alt pans, including a Windows
+/// wheel that the platform moved onto X. Ctrl without those keys is a cursor-anchored
+/// zoom that may leave the live edge. Anything else is the unmodified wheel, which
+/// keeps a live chart pinned to now.
+///
+/// Args:
+///     modifiers: Modifiers held with the wheel event.
+///
+/// Returns:
+///     The gesture that should consume this wheel delta.
 fn wheel_mode(modifiers: Modifiers) -> input::WheelMode {
     if modifiers.control && modifiers.shift {
         input::WheelMode::SuperZoom
     } else if modifiers.shift || modifiers.alt {
         input::WheelMode::Pan
+    } else if modifiers.control {
+        input::WheelMode::CtrlZoom
     } else {
         input::WheelMode::Zoom
     }

@@ -1,6 +1,6 @@
 //! Regression coverage for chart view initialization, navigation, and scale behavior.
 
-use super::{ChartView, initial_window_ms, should_return_to_live};
+use super::{ChartView, XZoom, initial_window_ms, should_return_to_live};
 
 /// Return how much live history remains left of the future margin after default initialization.
 ///
@@ -102,6 +102,12 @@ fn x_pan_detaches_immediately_even_inside_live_snap_zone() {
 
 /// Replacing `view.rs:zoom_x_at`'s width-based ceiling with the widened default scale must fail;
 /// otherwise users can no longer zoom from the six-hour overview down to the 30-second floor.
+///
+/// The floor loop used to place the cursor on the now-line, the one position that stays live
+/// either way. Deleting the `XZoom::Plain` pin — the short-circuit #670 removed for every zoom —
+/// must fail the mid-plot step: one unmodified zoom-in drops Live and the header flips to Pause.
+/// The same step with `XZoom::Ctrl` must still let go, and a chart already in history must stay
+/// cursor-anchored.
 #[test]
 fn zoom_in_is_clamped_to_min_window_30s() {
     let now = 100_000.0;
@@ -109,10 +115,35 @@ fn zoom_in_is_clamped_to_min_window_30s() {
     let mut view = ChartView::new(0.0);
     view.ensure_default_window(width, 60.0, None);
     view.resume_live(now);
-    let live_x = width * (1.0 - view.right_margin_frac);
+    assert_eq!(view.right_time_ms, now);
+    let (_, window_before) = view.visible_x(width);
+    let mid = width * 0.5;
 
+    view.zoom_x_at(2.0, width, mid, now, XZoom::Plain);
+    let (_, window_mid) = view.visible_x(width);
+    assert!(
+        (window_mid - window_before / 2.0).abs() < 1.0,
+        "plain zoom-in did not halve the window: {window_before} -> {window_mid}"
+    );
+    assert!(view.follow, "plain zoom-in at mid-plot dropped Live");
+    assert_eq!(
+        view.right_time_ms, now,
+        "plain zoom-in moved the live edge off now"
+    );
+
+    // Zooming back out on that live chart restores the scale and stays at now.
+    view.zoom_x_at(0.5, width, mid, now, XZoom::Plain);
+    let (_, window_out) = view.visible_x(width);
+    assert!(
+        (window_out - window_before).abs() < 1.0,
+        "plain zoom-out did not restore the window: {window_out} vs {window_before}"
+    );
+    assert!(view.follow, "plain zoom-out dropped Live");
+    assert_eq!(view.right_time_ms, now);
+
+    let live_x = width * (1.0 - view.right_margin_frac);
     for _ in 0..20 {
-        view.zoom_x_at(2.0, width, live_x, now, false);
+        view.zoom_x_at(2.0, width, live_x, now, XZoom::Plain);
     }
 
     let (_, window_ms) = view.visible_x(width);
@@ -121,6 +152,47 @@ fn zoom_in_is_clamped_to_min_window_30s() {
         "minimum window was {window_ms} ms"
     );
     assert!(view.follow, "zoom at the live edge must keep follow");
+    assert_eq!(view.right_time_ms, now);
+
+    let mut ctrl = ChartView::new(0.0);
+    ctrl.ensure_default_window(width, 60.0, None);
+    ctrl.resume_live(now);
+    let before = ctrl.visible_x(width).0 + mid / ctrl.px_per_ms;
+    ctrl.zoom_x_at(2.0, width, mid, now, XZoom::Ctrl);
+    let after = ctrl.visible_x(width).0 + mid / ctrl.px_per_ms;
+    assert!(
+        (after - before).abs() < 5.0,
+        "ctrl zoom moved the time under the cursor by {} ms",
+        after - before
+    );
+    assert!(!ctrl.follow, "ctrl zoom at mid-plot kept Live");
+    assert!(
+        ctrl.right_time_ms < now - 1_000.0,
+        "ctrl zoom left the anchor at {}",
+        ctrl.right_time_ms
+    );
+
+    let mut edge = ChartView::new(0.0);
+    edge.ensure_default_window(width, 60.0, None);
+    edge.resume_live(now);
+    edge.zoom_x_at(2.0, width, live_x, now, XZoom::Ctrl);
+    assert!(edge.follow, "ctrl zoom on the now-line dropped Live");
+    assert_eq!(edge.right_time_ms, now);
+
+    let mut hist = ChartView::new(0.0);
+    hist.ensure_default_window(width, 60.0, None);
+    hist.resume_live(now);
+    hist.pan_x_px(width * 2.0, now, width);
+    assert!(!hist.follow, "the history setup did not leave Live");
+    let before_h = hist.visible_x(width).0 + mid / hist.px_per_ms;
+    hist.zoom_x_at(2.0, width, mid, now, XZoom::Plain);
+    let after_h = hist.visible_x(width).0 + mid / hist.px_per_ms;
+    assert!(
+        (after_h - before_h).abs() < 5.0,
+        "plain zoom in history moved the cursor time by {} ms",
+        after_h - before_h
+    );
+    assert!(!hist.follow, "plain zoom in history resumed Live");
 }
 
 /// Removing the `default_ppm` initialization branch in `view.rs:ensure_default_window` must fail;
@@ -134,7 +206,7 @@ fn a_saved_x_scale_wins_during_initialization_and_explicit_reset() {
     view.ensure_default_window(width, 60.0, Some(saved_ppm));
     assert!((view.px_per_ms - saved_ppm).abs() < 1e-9);
 
-    view.zoom_x_at(2.0, width, width * 0.5, 100_000.0, false);
+    view.zoom_x_at(2.0, width, width * 0.5, 100_000.0, XZoom::Ctrl);
     assert!((view.px_per_ms - saved_ppm).abs() >= 1e-9);
     view.reset_default_window_on_next_prepare();
     view.ensure_default_window(width, 60.0, Some(saved_ppm));
@@ -149,7 +221,7 @@ fn explicit_reset_without_a_saved_scale_restores_six_hours_of_history() {
     let width = 1000.0;
     let mut view = ChartView::new(0.0);
     view.ensure_default_window(width, 60.0, None);
-    view.zoom_x_at(2.0, width, width * 0.5, 0.0, false);
+    view.zoom_x_at(2.0, width, width * 0.5, 0.0, XZoom::Ctrl);
 
     view.reset_default_window_on_next_prepare();
     view.ensure_default_window(width, 60.0, None);
@@ -165,7 +237,7 @@ fn explicit_reset_without_a_saved_scale_restores_six_hours_of_history() {
 fn a_manual_zoom_survives_later_default_window_preparation() {
     let mut view = ChartView::new(0.0);
     view.ensure_default_window(1000.0, 60.0, None);
-    view.zoom_x_at(2.0, 1000.0, 500.0, 100_000.0, false);
+    view.zoom_x_at(2.0, 1000.0, 500.0, 100_000.0, XZoom::Ctrl);
     let manual_ppm = view.px_per_ms;
 
     view.ensure_default_window(1600.0, 120.0, None);
@@ -437,7 +509,7 @@ fn zooming_out_does_not_walk_the_view_into_the_future() {
 
     let mut manual_steps = 0;
     while !view.follow && manual_steps < 6 {
-        view.zoom_x_at(0.5, WIDTH, 0.0, NOW, false);
+        view.zoom_x_at(0.5, WIDTH, 0.0, NOW, XZoom::Ctrl);
         manual_steps += 1;
         assert!(
             view.right_time_ms <= NOW + 1.0,
@@ -454,7 +526,7 @@ fn zooming_out_does_not_walk_the_view_into_the_future() {
     // zoom. A bare `.min(now_ms)` satisfies the loop above and fails here — one wheel notch would
     // drag the framed interval off its place.
     let mut parked = parked_at_the_future_limit(NOW, WIDTH);
-    parked.zoom_x_at(0.5, WIDTH, WIDTH * 0.5, NOW, false);
+    parked.zoom_x_at(0.5, WIDTH, WIDTH * 0.5, NOW, XZoom::Ctrl);
     assert!(
         parked.right_time_ms > NOW,
         "a zoom pulled the parked view {} ms back behind the live edge",
@@ -471,7 +543,7 @@ fn zooming_in_cannot_escape_the_future_ceiling() {
     let mut view = parked_at_the_future_limit(NOW, WIDTH);
 
     for _ in 0..6 {
-        view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, NOW, false);
+        view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, NOW, XZoom::Ctrl);
         let x_now = live_edge_px(&view, NOW, WIDTH);
         assert!(
             x_now >= -0.5,
@@ -650,7 +722,7 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
 
     // Zoom out until clamped (min ppm = area / MAX_WINDOW_MS, about 4e-8 < 1e-6).
     for _ in 0..40 {
-        view.zoom_x_at(0.5, area, live_x, now, false);
+        view.zoom_x_at(0.5, area, live_x, now, XZoom::Ctrl);
     }
     let lo = area / super::MAX_WINDOW_MS;
     assert!(
@@ -688,7 +760,7 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
     // Repeated zoom attempts at the limit do not shift the view (no leftward drift).
     let (left_before, _) = view.visible_x(area);
     for _ in 0..5 {
-        view.zoom_x_at(0.5, area, live_x, now, false);
+        view.zoom_x_at(0.5, area, live_x, now, XZoom::Ctrl);
     }
     let (left_after, _) = view.visible_x(area);
     assert!(
@@ -862,21 +934,21 @@ fn super_zoom_floor_and_plain_escape_work_at_every_width() {
         let now = 1_700_000_000_000.0;
         let mut view = ChartView::new(now);
         view.ensure_default_window(width, 60.0, None);
-        view.zoom_x_at(1_000_000.0, width, width * 0.5, now, false);
+        view.zoom_x_at(1_000_000.0, width, width * 0.5, now, XZoom::Ctrl);
         assert!((view.visible_x(width).1 - 30_000.0).abs() < 0.1);
-        view.zoom_x_at(2.0, width, width * 0.5, now, true);
+        view.zoom_x_at(2.0, width, width * 0.5, now, XZoom::Super);
         assert!((view.visible_x(width).1 - 15_000.0).abs() < 0.1);
-        view.zoom_x_at(2.0, width, width * 0.5, now, false);
+        view.zoom_x_at(2.0, width, width * 0.5, now, XZoom::Ctrl);
         assert!((view.visible_x(width).1 - 15_000.0).abs() < 0.1);
-        view.zoom_x_at(1_000_000.0, width, width * 0.5, now, true);
+        view.zoom_x_at(1_000_000.0, width, width * 0.5, now, XZoom::Super);
         assert!((view.visible_x(width).1 - 3_000.0).abs() < 0.1);
-        view.zoom_x_at(2.0, width, width * 0.5, now, false);
+        view.zoom_x_at(2.0, width, width * 0.5, now, XZoom::Ctrl);
         assert!((view.visible_x(width).1 - 3_000.0).abs() < 0.1);
-        view.zoom_x_at(0.5, width, width * 0.5, now, false);
+        view.zoom_x_at(0.5, width, width * 0.5, now, XZoom::Ctrl);
         assert!((view.visible_x(width).1 - 6_000.0).abs() < 0.1);
-        view.zoom_x_at(0.125, width, width * 0.5, now, false);
+        view.zoom_x_at(0.125, width, width * 0.5, now, XZoom::Ctrl);
         assert!((view.visible_x(width).1 - 48_000.0).abs() < 0.1);
-        view.zoom_x_at(2.0, width, width * 0.5, now, false);
+        view.zoom_x_at(2.0, width, width * 0.5, now, XZoom::Ctrl);
         assert!((view.visible_x(width).1 - 30_000.0).abs() < 0.1);
     }
 }
@@ -889,17 +961,18 @@ fn super_zoom_preserves_manual_cursor_time() {
     let mut view = ChartView::new(now - 100_000.0);
     view.ensure_default_window(width, 60.0, None);
     view.set_manual_persistent();
-    view.zoom_x_at(1_000_000.0, width, width * 0.4, now, true);
+    view.zoom_x_at(1_000_000.0, width, width * 0.4, now, XZoom::Super);
     let before = view.visible_x(width).0 + width * 0.4 / view.px_per_ms;
-    view.zoom_x_at(0.5, width, width * 0.4, now, true);
+    view.zoom_x_at(0.5, width, width * 0.4, now, XZoom::Super);
     let after = view.visible_x(width).0 + width * 0.4 / view.px_per_ms;
     assert!((after - before).abs() < 1.0);
     assert!(!view.is_live(now));
 }
 
-/// Super-zoom (and the plain wheel, which shares this function) used to pin a live chart to the
-/// live edge and throw the cursor away. Zooming into a spike a minute old then needed a Pause
-/// click first. The cursor time must hold, and Live must drop, the way a pan already does.
+/// Super-zoom used to share the unmodified wheel's live pin and throw the cursor away. Zooming
+/// into a spike a minute old then needed a Pause click first. Ctrl+Shift still lets go: the
+/// cursor time must hold, and Live must drop, the way a pan already does. An unmodified wheel
+/// does not — that pin is `zoom_in_is_clamped_to_min_window_30s`.
 #[test]
 fn zoom_on_a_live_chart_keeps_the_cursor_time_and_lets_go() {
     let width = 900.0;
@@ -911,7 +984,7 @@ fn zoom_on_a_live_chart_keeps_the_cursor_time_and_lets_go() {
 
     let cursor_x = width * 0.4;
     let before = view.visible_x(width).0 + cursor_x / view.px_per_ms;
-    view.zoom_x_at(2.0, width, cursor_x, now, true);
+    view.zoom_x_at(2.0, width, cursor_x, now, XZoom::Super);
     let after = view.visible_x(width).0 + cursor_x / view.px_per_ms;
     assert!(
         (after - before).abs() < 1.0,
@@ -928,18 +1001,18 @@ fn zoom_on_a_live_chart_keeps_the_cursor_time_and_lets_go() {
 fn zoom_at_the_live_edge_stays_live() {
     let mut view = live_view(NOW, WIDTH);
     let live_x = WIDTH * (1.0 - view.right_margin_frac);
-    view.zoom_x_at(2.0, WIDTH, live_x, NOW, true);
+    view.zoom_x_at(2.0, WIDTH, live_x, NOW, XZoom::Super);
     assert!(view.follow, "super zoom at the live edge dropped Live");
-    view.zoom_x_at(0.5, WIDTH, live_x, NOW, false);
+    view.zoom_x_at(0.5, WIDTH, live_x, NOW, XZoom::Ctrl);
     assert!(view.follow, "plain zoom at the live edge dropped Live");
 }
 
 /// The super-zoom hotkey has no pointer, so it zooms at the plot centre. On a live chart that
-/// centre is in history, and Live must drop the same way the wheel does.
+/// centre is in history, and Live must drop the same way Ctrl+Shift+wheel does.
 #[test]
 fn zoom_at_the_plot_centre_on_a_live_chart_lets_go() {
     let mut view = live_view(NOW, WIDTH);
-    view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, NOW, true);
+    view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, NOW, XZoom::Super);
     assert!(!view.follow, "a centre-anchored super zoom kept Live");
 }
 
@@ -1085,14 +1158,14 @@ fn a_super_zoom_memory_opens_at_the_plain_wheel_floor() {
         window_ms < 30_000.0 + 5_000.0,
         "super-zoom memory overshot the plain floor toward the six-hour default ({window_ms} ms)"
     );
-    view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, 0.0, false);
+    view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, 0.0, XZoom::Ctrl);
     let (_, after_plain) = view.visible_x(WIDTH);
     assert!(
         (after_plain - 30_000.0).abs() < 1.0,
         "plain wheel in-stop on the opened chart was {after_plain} ms, not 30s"
     );
     for _ in 0..8 {
-        view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, 0.0, true);
+        view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, 0.0, XZoom::Super);
     }
     let (_, after_super) = view.visible_x(WIDTH);
     assert!(
@@ -1243,7 +1316,7 @@ fn pan_zoom_and_y_drag_count_as_chart_interaction() {
     view.pan_x_px(WIDTH, NOW, WIDTH);
     assert_eq!(view.last_interaction_ms, Some(NOW));
 
-    view.zoom_x_at(0.5, WIDTH, WIDTH / 2.0, NOW + 10.0, false);
+    view.zoom_x_at(0.5, WIDTH, WIDTH / 2.0, NOW + 10.0, XZoom::Ctrl);
     assert_eq!(view.last_interaction_ms, Some(NOW + 10.0));
 
     view.pan_y_px(8.0, NOW + 20.0);
