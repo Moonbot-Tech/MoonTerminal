@@ -61,14 +61,31 @@ pub(in crate::analytics::tuner) struct DealRow {
     /// The window's prints, kept for the variants and the search while the row is covered and
     /// the memory cap allows; `None` otherwise.
     pub(in crate::analytics::tuner) ticks: Option<Arc<[Tick]>>,
-    /// The archived first point of the entry line, when the archive holds it.
-    pub(in crate::analytics::tuner) entry_start: Option<(i64, f64)>,
+    /// The archived points of the trade's own entry line, when the archive holds it —
+    /// where the order stood before the tape begins, and the core's first moves.
+    pub(in crate::analytics::tuner) entry_line: Option<Arc<[(i64, f64)]>>,
     /// What the terminal HOLDS of the window, as `(lead_ms, trail_ms)`: how far before the
     /// entry and past the exit the held coverage reaches, clipped to what the window asks for
     /// (the setting's margin, floored for the model). `None` until the tape stage answered, or
     /// when it holds nothing. The table's "tape" column; the exit horizon of the sample is the
     /// shortest trail among the replayable rows.
     pub(in crate::analytics::tuner) held: Option<(i64, i64)>,
+}
+
+impl DealRow {
+    /// Whether the tuner counts this row: its tape covers the window and the model reproduces
+    /// the fact in every group it answers, having answered at least one. An unanswered group —
+    /// a kind without an entry model, an exit rule the model does not have — is not a miss; a
+    /// group the model got wrong is; a row it verified nothing about is not a reproduction
+    /// either, and a row without its tape has no verdict at all.
+    pub(in crate::analytics::tuner) fn tunable(&self) -> bool {
+        self.tape == TapeStatus::Covered
+            && self.verdict.is_some_and(|v| {
+                v.entry != Some(false)
+                    && v.exit != Some(false)
+                    && (v.entry == Some(true) || v.exit == Some(true))
+            })
+    }
 }
 
 /// Where a deal's prints live, as the replay worker keys them, plus what a fetch needs.
@@ -125,6 +142,11 @@ impl TicksData {
             .iter()
             .filter(|r| r.tape == TapeStatus::Covered)
             .count()
+    }
+
+    /// Rows the tuner counts — see [`DealRow::tunable`]; the status line's figure.
+    pub(in crate::analytics::tuner) fn tunable(&self) -> usize {
+        self.rows.iter().filter(|r| r.tunable()).count()
     }
 
     /// The exit horizon of the replayable sample, in milliseconds — the shortest HELD trail
@@ -249,6 +271,10 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) dirty: bool,
     /// `(column key, descending)` of the deal table.
     pub(in crate::analytics::tuner) sort: Option<(String, bool)>,
+    /// The table shows only the rows the tuner counts ([`DealRow::tunable`]); on by default,
+    /// because the rest — no tape yet, a fact the model missed — is what the status line
+    /// counts, not what the sample is.
+    pub(in crate::analytics::tuner) only_tunable: bool,
     /// The sorted row order, cached against `rows_rev` and the sort.
     pub(in crate::analytics::tuner) order: Option<super::rows::OrderCache>,
     /// Bumped whenever `data` changes, so the cached order is rebuilt.
@@ -291,6 +317,7 @@ impl Default for TicksState {
             seq: 0,
             dirty: true,
             sort: Some((super::columns::COL_TIME.to_string(), true)),
+            only_tunable: true,
             order: None,
             rows_rev: 0,
             entry_open: true,
@@ -451,7 +478,7 @@ impl TicksState {
             slot.verdict = answer.verdict;
             slot.deal.tick = answer.deal.tick;
             slot.ticks = answer.ticks;
-            slot.entry_start = answer.entry_start;
+            slot.entry_line = answer.entry_line;
             slot.held = answer.held;
         }
         data.retain_within_cap();

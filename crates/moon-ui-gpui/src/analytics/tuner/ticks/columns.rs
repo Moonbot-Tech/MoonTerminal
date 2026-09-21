@@ -1,6 +1,8 @@
 //! Columns of the DEAL table of the "Entry/Exit" axis: what each shows, its width, and the
 //! sort it offers. Hand-laid like the coin table, because the two trailing cells (tape, model)
-//! are marks, not metrics, and no shared descriptor draws a mark.
+//! are marks, not metrics, and no shared descriptor draws a mark. The heading and the row
+//! cells are built from the SAME descriptor through one box (`ticks::deal_cell`), so they
+//! cannot drift apart horizontally.
 
 /// One column of the deal table.
 pub(in crate::analytics::tuner) struct DealCol {
@@ -24,6 +26,9 @@ pub(in crate::analytics::tuner) enum Align {
 }
 
 pub(in crate::analytics::tuner) const COL_COIN: &str = "coin";
+pub(in crate::analytics::tuner) const COL_CORE: &str = "core";
+/// The entry time — the table's default order (newest first), not a column: a deal is found
+/// by its coin and core, and the time is one double-click away in the trade window.
 pub(in crate::analytics::tuner) const COL_TIME: &str = "time";
 pub(in crate::analytics::tuner) const COL_RESULT: &str = "result";
 pub(in crate::analytics::tuner) const COL_PROFIT: &str = "profit";
@@ -43,19 +48,14 @@ const fn col(key: &'static str, label: &'static str, w: f32, min_w: f32, align: 
     }
 }
 
-/// The columns after the coin, in reading order: when, what came of it (per cent and money),
-/// how long it was held, how much tape the terminal holds around it, why it closed, and the
-/// two marks of this axis. The prices and the market deltas were dropped on 2026-09-20: this
-/// table is the axis's SAMPLE — which trades have their tape and how the model does on them —
-/// and every other figure is one double-click away in the trade window.
+/// The columns after the coin, in reading order: whose core, what came of it (per cent and
+/// money), how long it was held, how much tape the terminal holds around it, why it closed,
+/// and the two marks of this axis. The prices and the market deltas were dropped on
+/// 2026-09-20, the entry time on 2026-09-21: this table is the axis's SAMPLE — which trades
+/// have their tape and how the model does on them — and every other figure is one
+/// double-click away in the trade window.
 pub(in crate::analytics::tuner) const DEAL_COLS: &[DealCol] = &[
-    col(
-        COL_TIME,
-        "analytics.ticks.col.time",
-        64.0,
-        56.0,
-        Align::Right,
-    ),
+    col(COL_CORE, "analytics.col.core", 72.0, 48.0, Align::Left),
     col(
         COL_RESULT,
         "analytics.ticks.col.result",

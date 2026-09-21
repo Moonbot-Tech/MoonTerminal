@@ -212,7 +212,7 @@ impl AnalyticsView {
                             verdict: None,
                             address,
                             ticks: None,
-                            entry_start: None,
+                            entry_line: None,
                             held: None,
                         }
                     })
@@ -294,7 +294,7 @@ impl AnalyticsView {
                         verdict: None,
                         address: Some(address),
                         ticks: None,
-                        entry_start: None,
+                        entry_line: None,
                         held: None,
                     })
                     .collect();
@@ -458,11 +458,11 @@ fn now_values(targets: &[(i64, Option<u64>)], keys: &[String]) -> HashMap<String
         .collect()
 }
 
-/// What the order archive holds of one deal's own lines: the entry line's first point and
-/// the exit line's points.
+/// What the order archive holds of one deal's own lines: the entry line's points and the
+/// exit line's points.
 #[derive(Clone, Debug, Default)]
 pub(super) struct ArchivedLines {
-    pub(super) entry_start: Option<(i64, f64)>,
+    pub(super) entry_points: Option<Arc<[(i64, f64)]>>,
     pub(super) exit_points: Option<Vec<(i64, f64)>>,
 }
 
@@ -472,16 +472,16 @@ impl ArchivedLines {
         let TraceEntry::Lines(lines) = entry else {
             return Self::default();
         };
-        let entry_start = lines
+        let entry_points = lines
             .iter()
             .find(|l| l.own && l.kind == ArchivedLineKind::Entry)
-            .and_then(|l| l.points.first().map(|&(t, p)| (t as i64, p)));
+            .map(|l| l.points.iter().map(|&(t, p)| (t as i64, p)).collect());
         let exit_points = lines
             .iter()
             .find(|l| l.own && l.kind == ArchivedLineKind::Exit)
             .map(|l| l.points.iter().map(|&(t, p)| (t as i64, p)).collect());
         Self {
-            entry_start,
+            entry_points,
             exit_points,
         }
     }
@@ -565,7 +565,7 @@ pub(super) fn replay_row_with(
     tape: Option<HeldTape>,
 ) {
     row.ticks = None;
-    row.entry_start = lines.entry_start;
+    row.entry_line = lines.entry_points.clone();
     row.held = None;
     let Some(address) = row.address.clone() else {
         return;
@@ -612,12 +612,20 @@ pub(super) fn replay_row_with(
         EntryParams::Fact
     };
     let exit = params::exit_params(&sv);
+    // The ask the core lifted its take to, off the archive — the tape has no book.
+    row.deal.pre_spike_ask = moon_core::db::tuner::ticks::archived_pre_spike_ask(
+        lines.exit_points.as_deref(),
+        &exit,
+        row.deal.is_short,
+    );
+    row.deal.archived_take =
+        moon_core::db::tuner::ticks::archived_take(lines.exit_points.as_deref());
     row.verdict = Some(verify(
         &row.deal,
         &ticks,
         &entry,
         &exit,
-        lines.entry_start,
+        lines.entry_points.as_deref(),
         lines.exit_points.as_deref(),
     ));
     row.ticks = Some(Arc::from(ticks));

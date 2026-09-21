@@ -64,7 +64,7 @@ impl AnalyticsView {
                         Some(PreparedDeal {
                             deal: row.deal.clone(),
                             ticks: row.ticks.clone()?,
-                            entry_start: row.entry_start,
+                            entry_line: row.entry_line.clone(),
                             trail_ms: row.held.map(|(_, trail)| trail).unwrap_or(0),
                         })
                     })

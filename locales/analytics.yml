@@ -1720,6 +1720,22 @@ analytics.ticks.coverage_untunable:
   ru: "вне тюнинга %{n}"
   en: "outside tuning %{n}"
   es: "fuera del ajuste %{n}"
+analytics.ticks.tunable_n:
+  ru: "годных для тюнера %{n}"
+  en: "tunable %{n}"
+  es: "aptas para el ajuste %{n}"
+analytics.ticks.only_tunable:
+  ru: "только годные"
+  en: "tunable only"
+  es: "solo aptas"
+analytics.ticks.only_tunable_tip:
+  ru: "Показывать только сделки, по которым тюнер считает: лента покрывает окно, и модель воспроизводит вход и выход"
+  en: "Show only the trades the tuner counts: the tape covers the window, and the model reproduces the entry and the exit"
+  es: "Mostrar solo las operaciones que el ajuste cuenta: la cinta cubre la ventana y el modelo reproduce la entrada y la salida"
+analytics.ticks.none_tunable:
+  ru: "Годных для тюнера сделок пока нет — %{hidden} скрыто галкой «только годные»"
+  en: "No tunable trades yet — %{hidden} hidden by \"tunable only\""
+  es: "Aún no hay operaciones aptas — %{hidden} ocultas por «solo aptas»"
 analytics.ticks.empty_left_out:
   ru: "В периоде нет сделок, по которым ось может считать: без мс-штампа %{without} (старые строки реплики или ядро до штампов — лента по ним не восстанавливается), служебных %{service} (фандинг, ликвидации, объединённые продажи, без стратегии), вне тюнинга %{untunable} (ручные продажи, стратегии без торгового правила)."
   en: "The period holds no trade the axis can read: %{without} without millisecond stamps (older replica rows, or a core before the stamps — no tape can be tied to them), %{service} service rows (funding, liquidations, joined sells, no strategy), %{untunable} outside tuning (manual sells, strategies without a trading rule)."
@@ -1744,10 +1760,6 @@ analytics.ticks.fetch_waiting:
   ru: "трейды: %{done}/%{total} · ждём биржу"
   en: "trades: %{done}/%{total} · waiting for the venue"
   es: "trades: %{done}/%{total} · esperando al exchange"
-analytics.ticks.col.time:
-  ru: "вход"
-  en: "entry"
-  es: "entrada"
 analytics.ticks.col.result:
   ru: "%"
   en: "%"

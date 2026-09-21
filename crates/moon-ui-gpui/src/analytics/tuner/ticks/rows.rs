@@ -1,6 +1,6 @@
-//! The deal table's row order — a permutation over the loaded rows, cached against the data
-//! generation and the sort, so a repaint that changed neither reuses it instead of sorting
-//! hundreds of deals per frame.
+//! The deal table's row order — a permutation over the loaded rows, filtered by the "tunable
+//! only" switch and cached against the data generation, the sort and the switch, so a repaint
+//! that changed none of them reuses it instead of sorting hundreds of deals per frame.
 
 use super::columns::*;
 use super::state::{DealRow, TapeStatus, TicksState};
@@ -9,25 +9,29 @@ use super::state::{DealRow, TapeStatus, TicksState};
 pub(in crate::analytics::tuner) struct OrderCache {
     pub(in crate::analytics::tuner) rows_rev: u64,
     pub(in crate::analytics::tuner) sort: Option<(String, bool)>,
-    /// Indices into `TicksData::rows`.
+    pub(in crate::analytics::tuner) only_tunable: bool,
+    /// Indices into `TicksData::rows` — the shown rows only, when the switch hides the rest.
     pub(in crate::analytics::tuner) order: Vec<usize>,
 }
 
-/// The current order, rebuilt only when the rows or the sort changed.
+/// The current order, rebuilt only when the rows, the sort or the "tunable only" switch
+/// changed.
 pub(in crate::analytics::tuner) fn order_for(state: &mut TicksState) -> &[usize] {
-    let fresh = state
-        .order
-        .as_ref()
-        .is_some_and(|c| c.rows_rev == state.rows_rev && c.sort == state.sort);
+    let fresh = state.order.as_ref().is_some_and(|c| {
+        c.rows_rev == state.rows_rev && c.sort == state.sort && c.only_tunable == state.only_tunable
+    });
     if !fresh {
         let rows: &[DealRow] = state.data.data().map(|d| d.rows.as_slice()).unwrap_or(&[]);
-        let mut order: Vec<usize> = (0..rows.len()).collect();
+        let mut order: Vec<usize> = (0..rows.len())
+            .filter(|&i| !state.only_tunable || rows[i].tunable())
+            .collect();
         if let Some((key, desc)) = &state.sort {
             sort_indices(rows, &mut order, key, *desc);
         }
         state.order = Some(OrderCache {
             rows_rev: state.rows_rev,
             sort: state.sort.clone(),
+            only_tunable: state.only_tunable,
             order,
         });
     }
@@ -85,6 +89,10 @@ fn sort_indices(rows: &[DealRow], order: &mut [usize], key: &str, desc: bool) {
     match key {
         COL_COIN => order.sort_by(|&a, &b| {
             let c = rows[a].deal.coin.cmp(&rows[b].deal.coin);
+            if desc { c.reverse() } else { c }
+        }),
+        COL_CORE => order.sort_by(|&a, &b| {
+            let c = rows[a].deal.core_name.cmp(&rows[b].deal.core_name);
             if desc { c.reverse() } else { c }
         }),
         COL_RESULT => by_f64(&result_pct, order),

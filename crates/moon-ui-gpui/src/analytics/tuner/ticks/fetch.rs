@@ -311,7 +311,7 @@ impl AnalyticsView {
                     slot.verdict = answer.verdict;
                     slot.deal.tick = answer.deal.tick;
                     slot.ticks = answer.ticks;
-                    slot.entry_start = answer.entry_start;
+                    slot.entry_line = answer.entry_line;
                 });
                 // A row joined the replayable set: the variant columns are due a rescore.
                 self.arm_ticks_variants(cx);

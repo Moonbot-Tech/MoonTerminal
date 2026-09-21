@@ -725,7 +725,7 @@ fn serve_cluster(
             verdict: None,
             address: Some(row.address.clone()),
             ticks: None,
-            entry_start: None,
+            entry_line: None,
             held: None,
         };
         replay_row(&mut answer, defaults, lines, row.window.long_position_ms);
