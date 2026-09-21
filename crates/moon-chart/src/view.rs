@@ -3,8 +3,9 @@
 //!             determined spatially: a pan or zoom that brings the right edge within the
 //!             rejoin radius of now ([`ChartView::live_rejoin_px`]) re-anchors to now on
 //!             that very step, pinning it there. Panning into HISTORY leaves the chart
-//!             where the user put it until they drag back into that radius or press Live;
-//!             the toolbar's Pause is the same permanence, plus it refuses the pull-back.
+//!             where the user put it until they drag back into that radius, press Live, or
+//!             sit idle for [`AUTO_RESUME_LIVE_MS`]; the toolbar's Pause is the same
+//!             permanence, plus it refuses both the pull-back and that idle return.
 //!             A pan never walks past the live edge into the future; only a framed interval
 //!             can sit ahead of now, and `clamp_future_anchor` keeps its live edge on screen.
 //!             WHICH drag may leave live at all is the input layer's call (a fast flick).
@@ -140,6 +141,46 @@ pub fn admit_order_band(
     Some((clo.min(olo.max(clo - slack)), chi.max(ohi.min(chi + slack))))
 }
 
+/// Whether Live should come back given the last chart interaction, the current flag, and how many
+/// live charts are open.
+///
+/// Already-live state stays live. An empty population restores Live so a later chart does not
+/// inherit a stale Pause — including a deliberate one. A toolbar/hotkey Pause (`manual_persistent`)
+/// is never revived while any chart remains. A pan/zoom leave returns after [`AUTO_RESUME_LIVE_MS`]
+/// with no further interaction. A missing interaction stamp never timer-resumes: that is the
+/// conservative reading when the leave cannot be proven to be a gesture.
+///
+/// Args:
+///     last_interaction_ms: Newest pan/zoom/Y-drag stamp across open live charts, Unix ms.
+///     now_ms: Current Unix time in milliseconds.
+///     follow: Whether Live is on.
+///     manual_persistent: Whether Live was turned off by the toolbar or `ToggleLive`.
+///     charts_open: Count of live (non-historical) charts, including detached windows.
+///
+/// Returns:
+///     `true` when the application-wide Live flag should be raised.
+pub fn should_return_to_live(
+    last_interaction_ms: Option<f64>,
+    now_ms: f64,
+    follow: bool,
+    manual_persistent: bool,
+    charts_open: usize,
+) -> bool {
+    if follow {
+        return false;
+    }
+    if charts_open == 0 {
+        return true;
+    }
+    if manual_persistent {
+        return false;
+    }
+    match last_interaction_ms {
+        Some(t) if now_ms.is_finite() && t.is_finite() => (now_ms - t) >= AUTO_RESUME_LIVE_MS,
+        _ => false,
+    }
+}
+
 /// Rectangle in pixels (top-left origin).
 #[derive(Clone, Copy)]
 pub struct Rect {
@@ -171,6 +212,11 @@ const LIVE_REJOIN_FRAC: f32 = 0.05;
 /// Pixel floor under [`LIVE_REJOIN_FRAC`], so a narrow pane still has a pull-back worth feeling:
 /// 5% of a 300 px stack pane is 15 px, which a drag crosses without noticing it.
 const LIVE_REJOIN_MIN_PX: f32 = 40.0;
+/// How long a pan/zoom-parked chart may sit with no view-changing gesture before Live returns.
+///
+/// Three minutes, fixed. A setting here would hand the idle policy back to the user. Ticks,
+/// repaints and price motion do not count; only pan, zoom and Y-drag stamp the clock.
+pub const AUTO_RESUME_LIVE_MS: f64 = 180_000.0;
 /// Maximum visible time window in ms. It used to be 6 hours (Delphi MaxTimeRange=360 min)
 /// for a tick chart; candles (deep history from the core, with timeframes up to one day) need
 /// a MUCH larger window: 365 days (about 365 daily candles). Trades do not become more
@@ -358,8 +404,11 @@ pub struct ChartView {
     last_update_ms: f64,
     /// Whether following was turned off EXPLICITLY — [`Self::set_manual_persistent`], which is what
     /// the toolbar's Live button reaches — so that a later pan may not rejoin via the pull-back
-    /// that a plain drag still uses.
+    /// that a plain drag still uses. The idle auto-return also refuses this mark.
     manual_persistent: bool,
+    /// Last pan, zoom or Y-drag on this view, Unix milliseconds. [`should_return_to_live`] reads
+    /// the newest stamp across open charts; a tick or a repaint never writes it.
+    last_interaction_ms: Option<f64>,
     /// Interval this view has been asked to frame, retained until a user gesture overrides it.
     frame_request: Option<FrameRequest>,
     /// Put the NEXT known price at the centre outright instead of easing toward it.
@@ -404,6 +453,7 @@ impl ChartView {
             phase_default_px_per_ms: 0.0,
             last_update_ms: 0.0,
             manual_persistent: false,
+            last_interaction_ms: None,
             frame_request: None,
             center_snap_pending: false,
         }
@@ -523,6 +573,7 @@ impl ChartView {
         if !(ppm.is_finite() && ppm > 0.0) {
             return false;
         }
+        self.note_interaction(now_ms);
         let ppm = ppm.clamp(MIN_PX_PER_MS, 100.0);
         if (self.px_per_ms - ppm).abs() <= self.px_per_ms * 1e-6 {
             return false;
@@ -543,6 +594,13 @@ impl ChartView {
     pub fn is_live(&self, now_ms: f64) -> bool {
         let _ = now_ms;
         self.follow
+    }
+
+    /// Stamp a view-changing gesture. Ticks, repaints and price motion never call this.
+    fn note_interaction(&mut self, now_ms: f64) {
+        if now_ms.is_finite() {
+            self.last_interaction_ms = Some(now_ms);
+        }
     }
 
     /// Latest time the right anchor may hold. A pan never goes past `now`, so this bounds only a view
@@ -903,6 +961,7 @@ impl ChartView {
     /// the drag rather than after the button comes up. A step AWAY from now never rejoins — that is
     /// the hysteresis that lets a drag leave the radius it starts in.
     pub fn pan_x_px(&mut self, dx: f32, now_ms: f64, area_w: f32) {
+        self.note_interaction(now_ms);
         self.clear_frame_request();
         let before = self.right_time_ms;
         let dt_ms = dx as f64 / self.px_per_ms.max(MIN_PX_PER_MS) as f64;
@@ -919,7 +978,7 @@ impl ChartView {
     /// chart pressed mid-drag is overridden by the very next drag delta, and the snap must go with
     /// it rather than fire later on whatever next leaves the manual view.
     pub fn pan_y_px(&mut self, dy: f32, now_ms: f64) {
-        let _ = now_ms;
+        self.note_interaction(now_ms);
         self.center_price += dy / self.px_per_price.max(1e-6);
         self.manual_price = true;
         self.center_snap_pending = false;
@@ -956,6 +1015,7 @@ impl ChartView {
         if !(factor.is_finite() && factor > 0.0) {
             return;
         }
+        self.note_interaction(now_ms);
         self.clear_frame_request();
         let right_before = self.right_time_ms;
         let old_px = self.px_per_ms.max(MIN_PX_PER_MS);
@@ -999,6 +1059,7 @@ impl ChartView {
 
     /// Zooms Y by RMB drag from the press-time snapshot. Up=zoom out, down=zoom in.
     pub fn rmb_zoom(&mut self, start_center: f32, start_range: f32, cum_dy: f32, now_ms: f64) {
+        self.note_interaction(now_ms);
         let factor = 2f32.powf(-cum_dy / YSCALE_PX_PER_2X);
         let r = (start_range * factor).clamp(start_range * 0.25, start_range * 4.0);
         self.center_price = start_center;

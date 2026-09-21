@@ -276,6 +276,7 @@ impl Backend {
     }
 
     pub(crate) fn register_chart_consumer(&mut self, chart: ChartDataHandle) {
+        self.chart_consumers.retain(ChartDataHandle::is_alive);
         if self
             .chart_consumers
             .iter()
@@ -283,7 +284,20 @@ impl Backend {
         {
             return;
         }
+        // Condition 2 of idle auto-return: leftover Pause must not greet the next live chart.
+        // The 100 ms tick also restores when the population is empty, but a close-then-open
+        // inside that window would already have a consumer again, so the empty check would miss.
+        let live_before = self
+            .chart_consumers
+            .iter()
+            .filter(|existing| !existing.is_historical())
+            .count();
+        let incoming_live = !chart.is_historical();
         self.chart_consumers.push(chart);
+        if live_before == 0 && incoming_live {
+            self.follow = true;
+            self.follow_persistent = false;
+        }
     }
 
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
@@ -302,6 +316,48 @@ impl Backend {
     pub(crate) fn live_chart_consumers(&mut self) -> Vec<ChartDataHandle> {
         self.chart_consumers.retain(ChartDataHandle::is_alive);
         self.chart_consumers.clone()
+    }
+
+    /// Flip the application-wide Live/Pause flag from the toolbar or `ToggleLive`.
+    ///
+    /// Turning Pause on is a deliberate leave: the idle auto-return must not undo it. Turning
+    /// Live on clears that mark so a later pan can auto-return again.
+    pub(crate) fn toggle_follow(&mut self) {
+        self.follow = !self.follow;
+        self.follow_persistent = !self.follow;
+    }
+
+    /// Restore Live when every live chart is gone, or when a pan/zoom leave has sat idle for
+    /// [`moon_chart::view::AUTO_RESUME_LIVE_MS`].
+    ///
+    /// A toolbar/hotkey Pause is left alone while any live chart remains. Historical trade
+    /// windows do not count as charts and do not keep a stale Pause alive. The transition itself
+    /// is the only dirtying: a tick that decides nothing notifies nothing.
+    ///
+    /// Args:
+    ///     now_ms: Current Unix time in milliseconds, the same clock the views stamp against.
+    ///
+    /// Returns:
+    ///     Whether Live was restored on this tick.
+    pub(crate) fn tick_auto_live(&mut self, now_ms: f64) -> bool {
+        self.chart_consumers.retain(ChartDataHandle::is_alive);
+        let charts_open = self
+            .chart_consumers
+            .iter()
+            .filter(|chart| !chart.is_historical())
+            .count();
+        if !moon_chart::view::should_return_to_live(
+            self.last_live_chart_interaction_ms,
+            now_ms,
+            self.follow,
+            self.follow_persistent,
+            charts_open,
+        ) {
+            return false;
+        }
+        self.follow = true;
+        self.follow_persistent = false;
+        true
     }
 
     /// Return whether a live core currently belongs to a Main window group.
@@ -2822,6 +2878,7 @@ impl Backend {
         self.open_on_main((core, market.clone()), false);
         if std::env::var_os("MOON_RENDER_DIAG_PAUSE_AFTER_OPEN").is_some() {
             self.follow = false;
+            self.follow_persistent = true;
         }
         log::info!(
             "diag auto-open: core={} market={market}",

@@ -1,6 +1,6 @@
 //! Regression coverage for chart view initialization, navigation, and scale behavior.
 
-use super::{ChartView, initial_window_ms};
+use super::{ChartView, initial_window_ms, should_return_to_live};
 
 /// Return how much live history remains left of the future margin after default initialization.
 ///
@@ -1132,4 +1132,123 @@ fn a_later_zoom_memory_does_not_jump_an_already_open_chart() {
         "an already-open chart jumped to the later memory: history {} ms",
         -left
     );
+}
+
+/// Three minutes of wall time, the idle auto-return the product asked for. Named here rather than
+/// read from the production constant so a drift of that constant turns these tests red.
+const THREE_MINUTES_MS: f64 = 3.0 * 60.0 * 1000.0;
+
+/// A live chart must stay live: auto-return is a leave-Live repair, not a heartbeat.
+///
+/// Breakage: dropping the `follow` early-return in `should_return_to_live` would flip Live on
+/// every idle tick even when the user is already following.
+#[test]
+fn a_live_view_does_not_auto_return() {
+    assert!(!should_return_to_live(
+        Some(0.0),
+        THREE_MINUTES_MS,
+        true,
+        false,
+        1
+    ));
+}
+
+/// A pan-parked chart returns to Live at three idle minutes and not one millisecond sooner.
+///
+/// Breakage: shrinking `AUTO_RESUME_LIVE_MS` would yank a parked chart back while the user is
+/// still reading it; dropping the idle check would leave it frozen until they press Live.
+#[test]
+fn a_pan_parked_view_returns_after_three_idle_minutes() {
+    let last = 1_000.0;
+    assert!(!should_return_to_live(
+        Some(last),
+        last + THREE_MINUTES_MS - 1.0,
+        false,
+        false,
+        1,
+    ));
+    assert!(should_return_to_live(
+        Some(last),
+        last + THREE_MINUTES_MS,
+        false,
+        false,
+        1,
+    ));
+}
+
+/// A later pan or zoom restarts the three-minute clock, so Live does not jump under the hand.
+///
+/// Breakage: comparing against the first stamp instead of the newest would auto-return while the
+/// user is still navigating.
+#[test]
+fn a_later_interaction_restarts_the_idle_timer() {
+    let first = 1_000.0;
+    let second = first + THREE_MINUTES_MS;
+    assert!(!should_return_to_live(
+        Some(second),
+        second + THREE_MINUTES_MS - 1.0,
+        false,
+        false,
+        1,
+    ));
+}
+
+/// The toolbar/Space Pause must not be undone by the idle timer while any chart is still open.
+///
+/// Breakage: ignoring `manual_persistent` would turn Live back on under a user who parked on
+/// purpose.
+#[test]
+fn a_deliberate_pause_is_not_revived_while_charts_remain() {
+    assert!(!should_return_to_live(
+        Some(0.0),
+        THREE_MINUTES_MS,
+        false,
+        true,
+        1,
+    ));
+}
+
+/// Closing every live chart drops leftover Pause, even a deliberate one, so the next open starts Live.
+///
+/// Breakage: keeping `follow == false` across an empty population would open the next chart paused.
+#[test]
+fn closing_every_chart_drops_stale_not_live_state() {
+    assert!(should_return_to_live(Some(0.0), 0.0, false, true, 0));
+    assert!(should_return_to_live(None, 0.0, false, false, 0));
+    assert!(!should_return_to_live(None, 0.0, true, false, 0));
+}
+
+/// A parked chart with no gesture stamp is not timer-resumed: that leave cannot be proven a pan.
+///
+/// Breakage: treating `None` as "idle since forever" would revive a chart whose Pause origin is
+/// unknown.
+#[test]
+fn a_park_without_an_interaction_stamp_does_not_timer_resume() {
+    assert!(!should_return_to_live(
+        None,
+        THREE_MINUTES_MS,
+        false,
+        false,
+        1
+    ));
+}
+
+/// Pan, zoom and Y-drag are the gestures that count as "reading this chart"; a tick is not.
+///
+/// Breakage: dropping `note_interaction` from those methods would leave the idle clock stuck at
+/// the first pan, so a later zoom would not postpone auto-return.
+#[test]
+fn pan_zoom_and_y_drag_count_as_chart_interaction() {
+    let mut view = live_view(NOW, WIDTH);
+    view.pan_x_px(WIDTH, NOW, WIDTH);
+    assert_eq!(view.last_interaction_ms, Some(NOW));
+
+    view.zoom_x_at(0.5, WIDTH, WIDTH / 2.0, NOW + 10.0, false);
+    assert_eq!(view.last_interaction_ms, Some(NOW + 10.0));
+
+    view.pan_y_px(8.0, NOW + 20.0);
+    assert_eq!(view.last_interaction_ms, Some(NOW + 20.0));
+
+    view.rmb_zoom(100.0, 10.0, 20.0, NOW + 30.0);
+    assert_eq!(view.last_interaction_ms, Some(NOW + 30.0));
 }

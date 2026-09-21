@@ -67,6 +67,7 @@ impl Runtime {
         let market = target_market.to_string();
         backend.open_on_main((core, market.clone()), false);
         backend.follow = true;
+        backend.follow_persistent = false;
         self.opened_group = Some(group.clone());
         firetest_info(&format!(
             "[firetest] open chart: core={core} group={group} name={name} market={market}"

@@ -364,7 +364,7 @@ impl Shell {
             // `ChartEngine::set_follow` on the next present.
             HotkeyAction::ToggleLive => {
                 self.backend.update(cx, |b, bcx| {
-                    b.follow = !b.follow;
+                    b.toggle_follow();
                     bcx.notify();
                 });
                 true

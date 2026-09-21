@@ -1531,7 +1531,9 @@ impl ChartPanel {
     /// Applies a synchronized time-axis scale to every open pane in this panel.
     pub fn apply_x_ppm(&mut self, ppm: f32, cx: &mut Context<Self>) {
         if self.chart.set_x_ppm_all(ppm, now_unix_ms()) {
-            self.view_dirty = true;
+            // Shift+middle-click and apply-all are view-changing zooms: they restart the idle
+            // Live timer the same way a wheel zoom does.
+            self.mark_input_changed(cx);
             cx.notify();
         }
     }
@@ -1879,9 +1881,14 @@ impl ChartPanel {
         // manual by construction.
         if !self.historical {
             let follow = self.chart.follow();
+            let now = now_unix_ms();
             self.backend.update(cx, |b, bcx| {
+                b.last_live_chart_interaction_ms = Some(now);
                 if b.follow != follow {
                     b.follow = follow;
+                    if follow {
+                        b.follow_persistent = false;
+                    }
                     bcx.notify();
                 }
             });

@@ -313,6 +313,13 @@ struct Backend {
     last_chart_close: Option<(f64, (f32, f32))>,
     /// Toolbar live-follow state: `true` tracks the present; `false` pauses the view.
     follow: bool,
+    /// Whether `follow` was turned off by the toolbar or `ToggleLive`. A pan/zoom leave leaves
+    /// this false so the idle auto-return may restore Live; a deliberate Pause does not.
+    follow_persistent: bool,
+    /// Newest pan/zoom/Y-drag on any live chart, Unix milliseconds. Historical trade windows
+    /// never write it. The 100 ms coordination tick feeds this to
+    /// [`moon_chart::view::should_return_to_live`].
+    last_live_chart_interaction_ms: Option<f64>,
     /// Broad toolbar and order-controls revision used to trigger notification and redraw.
     /// It increments for hotkeys, size edits and wheel changes, fixed-sell slot changes, and
     /// fixed-sell percentage edits, as well as direct size selection.

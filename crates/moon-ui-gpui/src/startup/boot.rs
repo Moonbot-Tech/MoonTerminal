@@ -240,6 +240,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         close_active_chart_rev: 0,
         last_chart_close: None,
         follow: true,
+        follow_persistent: false,
+        last_live_chart_interaction_ms: None,
         order_size_rev: 0,
         order_size_edit_req: None,
         sell_edit_req: None,
@@ -758,8 +760,15 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     b.tick_quiet(cx);
                     // Audio must finish its queue even when no more market events arrive.
                     b.pump_sounds();
-                    let now_ms = moon_chart::paint::now_unix_ms() as i64;
+                    let now_ms_f = moon_chart::paint::now_unix_ms();
+                    let now_ms = now_ms_f as i64;
                     b.tick_core_warnings(now_ms);
+                    // Idle auto-return to Live. Same clock as the warnings tick, hung off this
+                    // 100 ms loop rather than a per-chart timer, so a parked chart does not become
+                    // a new repaint source: only the transition dirties.
+                    if b.tick_auto_live(now_ms_f) {
+                        b.mark_backend_dirty(cx);
+                    }
                     // The update queue spawns no timer of its own: this coordination loop already
                     // runs at 100 ms with no window open, unlike
                     // `controls/core_run/actions.rs`'s `expire_later`/`claim_sweep` dance, which
