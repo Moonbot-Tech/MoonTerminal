@@ -1751,6 +1751,10 @@ alerts.sound:
   ru: "Выбор звука"
   en: "Sound"
   es: "Sonido"
+alerts.duration_hint:
+  ru: "Если у фигуры есть стратегия алертов, время показа берётся из её KeepAlert."
+  en: "A figure with an alerts strategy uses that strategy's KeepAlert."
+  es: "Si la figura tiene estrategia de alertas, el tiempo lo marca su KeepAlert."
 alerts.fig.hline:
   ru: "Линия"
   en: "Line"

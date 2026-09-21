@@ -286,7 +286,7 @@ impl AlertsPanel {
             .child(menu)
     }
 
-    /// Builds the alert-playback bar: sound and its UI-only duration and repeat steppers.
+    /// Builds the alert-playback bar: duration, repeat, sound, and the KeepAlert caption.
     pub(super) fn bottom_bar(&self, p: MoonPalette, cx: &mut Context<Self>) -> impl IntoElement {
         // Place each caption above a fixed-height control so all controls share a bottom baseline.
         // Every metric is resolved through `design` BEFORE the closures, both so the bar scales with
@@ -298,12 +298,16 @@ impl AlertsPanel {
         let gap_s = design::ui_px(cx, 2.0);
         let gap_m = design::ui_px(cx, 3.0);
         let value_w = design::font_w_px(cx, 34.0);
+        let duration_s = self.backend.read(cx).alert_duration_s();
+        let repeat = self.backend.read(cx).alert_repeat();
         let field = move |title: String, control: AnyElement| {
             v_flex()
+                .flex_none()
                 .gap(gap_m)
                 .child(
                     div()
                         .h(cap_h)
+                        .font_family(design::ui_font())
                         .text_size(cap)
                         .text_color(moon(p.text_muted))
                         .child(title),
@@ -312,8 +316,8 @@ impl AlertsPanel {
         };
         let stepper = |id: &'static str,
                        val: String,
-                       dn: fn(&mut AlertsPanel),
-                       up: fn(&mut AlertsPanel),
+                       dn: fn(&mut AlertsPanel, &mut Context<AlertsPanel>),
+                       up: fn(&mut AlertsPanel, &mut Context<AlertsPanel>),
                        cx: &mut Context<Self>|
          -> AnyElement {
             h_flex()
@@ -325,7 +329,7 @@ impl AlertsPanel {
                         .label("‹")
                         .variant(MoonButtonVariant::Soft)
                         .on_click(cx.listener(move |this, _, _w, cx| {
-                            dn(this);
+                            dn(this, cx);
                             cx.notify();
                         }))
                         .render(),
@@ -342,7 +346,7 @@ impl AlertsPanel {
                         .label("›")
                         .variant(MoonButtonVariant::Soft)
                         .on_click(cx.listener(move |this, _, _w, cx| {
-                            up(this);
+                            up(this, cx);
                             cx.notify();
                         }))
                         .render(),
@@ -352,6 +356,7 @@ impl AlertsPanel {
         h_flex()
             .flex_none()
             .w_full()
+            .overflow_hidden()
             .px(design::ui_px(cx, 10.0))
             .py(design::ui_px(cx, 8.0))
             .gap(design::ui_px(cx, 16.0))
@@ -363,9 +368,9 @@ impl AlertsPanel {
                 t!("alerts.duration").to_string(),
                 stepper(
                     "alert-dur",
-                    format!("{}", self.duration_s),
-                    |v| v.duration_s = v.duration_s.saturating_sub(5).max(5),
-                    |v| v.duration_s = (v.duration_s + 5).min(600),
+                    format!("{duration_s}"),
+                    |v, cx| v.step_duration(cx, false),
+                    |v, cx| v.step_duration(cx, true),
                     cx,
                 ),
             ))
@@ -373,9 +378,9 @@ impl AlertsPanel {
                 t!("alerts.repeat").to_string(),
                 stepper(
                     "alert-rep",
-                    format!("{}", self.repeat),
-                    |v| v.repeat = v.repeat.saturating_sub(1),
-                    |v| v.repeat = (v.repeat + 1).min(20),
+                    format!("{repeat}"),
+                    |v, cx| v.step_repeat(cx, false),
+                    |v, cx| v.step_repeat(cx, true),
                     cx,
                 ),
             ))
@@ -383,12 +388,57 @@ impl AlertsPanel {
                 t!("alerts.sound").to_string(),
                 self.sound_dropdown(cx).into_any_element(),
             ))
-            .child(div().flex_1())
             .child(
                 div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .truncate()
+                    .font_family(design::ui_font())
+                    .text_size(cap)
+                    .text_color(moon(p.text_muted))
+                    .child(t!("alerts.duration_hint").to_string()),
+            )
+            .child(
+                div()
+                    .flex_none()
                     .text_color(moon(p.text_muted))
                     .child(t!("alerts.count", n = self.rows.len()).to_string()),
             )
+    }
+
+    /// Steps the persisted figure-alert card duration by five seconds.
+    ///
+    /// Args:
+    ///     cx: Panel context used to read and write the layout-backed value.
+    ///     up: `true` widens the lifetime, `false` shortens it.
+    fn step_duration(&mut self, cx: &mut Context<Self>, up: bool) {
+        let cur = self.backend.read(cx).alert_duration_s();
+        let next = if up {
+            cur.saturating_add(5)
+                .min(moon_core::config::ALERT_DURATION_S_MAX)
+        } else {
+            cur.saturating_sub(5)
+                .max(moon_core::config::ALERT_DURATION_S_MIN)
+        };
+        self.backend.update(cx, |b, _| b.set_alert_duration_s(next));
+    }
+
+    /// Steps the persisted figure-alert sound play count by one.
+    ///
+    /// Args:
+    ///     cx: Panel context used to read and write the layout-backed value.
+    ///     up: `true` plays more times, `false` plays fewer, down to silence at zero.
+    fn step_repeat(&mut self, cx: &mut Context<Self>, up: bool) {
+        let cur = self.backend.read(cx).alert_repeat();
+        let next = if up {
+            cur.saturating_add(1)
+                .min(moon_core::config::ALERT_REPEAT_MAX)
+        } else {
+            cur.saturating_sub(1)
+        };
+        self.backend.update(cx, |b, _| b.set_alert_repeat(next));
     }
 
     /// Builds the default-sound dropdown for an alert without a strategy sound.

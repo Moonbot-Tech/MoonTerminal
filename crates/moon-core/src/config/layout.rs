@@ -46,6 +46,19 @@ pub const STRATEGIES_TREE_TEXT_STEP_MAX: f32 = 4.0;
 /// user raises it.
 pub const STRATEGIES_TREE_TEXT_STEP_DEFAULT: f32 = 0.0;
 
+/// Seconds a strategy-less figure-alert card stays on the Detects feed when the Alerts panel
+/// duration has never been stored. MoonBot's `AlertConfig.KeepTime` default is 30; the unwired
+/// stepper used to initialise to 20 and reset on every rebuild.
+pub const ALERT_DURATION_S_DEFAULT: u32 = 30;
+/// Narrowest duration the Alerts panel stepper will store, in seconds.
+pub const ALERT_DURATION_S_MIN: u32 = 5;
+/// Widest duration the Alerts panel stepper will store, in seconds.
+pub const ALERT_DURATION_S_MAX: u32 = 600;
+/// Times a figure-alert sound plays when the Alerts panel repeat has never been stored.
+pub const ALERT_REPEAT_DEFAULT: u32 = 2;
+/// Most times the Alerts panel will enqueue one figure-alert clip.
+pub const ALERT_REPEAT_MAX: u32 = 20;
+
 /// Share of a display's WORK AREA the very first window of a brand-new profile occupies.
 ///
 /// Proportional rather than a pixel size on purpose: monitors differ, and any fixed number is
@@ -1308,6 +1321,17 @@ pub struct WindowLayout {
     /// live only in memory and reset to the default on every start.
     #[serde(default)]
     pub alert_sound: String,
+    /// Seconds a strategy-less figure-alert card stays on the Detects feed, chosen in the Alerts
+    /// panel. `None` is the MoonBot `KeepTime` default ([`ALERT_DURATION_S_DEFAULT`]); a stored
+    /// value is clamped to the stepper range on read. An alert whose strategy named `KeepAlert`
+    /// ignores this field.
+    #[serde(default, deserialize_with = "de_lenient_u32")]
+    pub alert_duration_s: Option<u32>,
+    /// How many times the detect player enqueues a figure-alert clip, chosen in the Alerts panel.
+    /// `None` is [`ALERT_REPEAT_DEFAULT`]. Zero is silence for that firing; ordinary (non-alert)
+    /// detects still play once.
+    #[serde(default, deserialize_with = "de_lenient_u32")]
+    pub alert_repeat: Option<u32>,
 }
 
 /// Per-axis enable switches for the core-warning engine, set from the Core Status gear popup.
@@ -1964,6 +1988,38 @@ pub fn clamp_auto_workspace_rail_width(width: f32) -> f32 {
     } else {
         AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT
     }
+}
+
+/// Seconds a strategy-less figure-alert card stays on the Detects feed.
+///
+/// `None` is an upgrade from a `layout.toml` that never stored the field: that file must not
+/// flash the card for a second, so the MoonBot `KeepTime` default stands. A stored value is
+/// clamped to the stepper range, including a hand-edited zero, which would otherwise expire the
+/// card on the ingest pass that built it.
+///
+/// Args:
+///     stored: Value from [`WindowLayout::alert_duration_s`].
+///
+/// Returns:
+///     A duration in `ALERT_DURATION_S_MIN..=ALERT_DURATION_S_MAX`.
+pub fn resolve_alert_duration_s(stored: Option<u32>) -> u32 {
+    stored
+        .unwrap_or(ALERT_DURATION_S_DEFAULT)
+        .clamp(ALERT_DURATION_S_MIN, ALERT_DURATION_S_MAX)
+}
+
+/// How many times the detect player should enqueue one figure-alert clip.
+///
+/// `None` is the panel's shipped repeat. Zero is a stored choice (play nothing); values above
+/// the stepper ceiling clamp so a hand-edited layout cannot flood the sound queue.
+///
+/// Args:
+///     stored: Value from [`WindowLayout::alert_repeat`].
+///
+/// Returns:
+///     A play count in `0..=ALERT_REPEAT_MAX`.
+pub fn resolve_alert_repeat(stored: Option<u32>) -> u32 {
+    stored.unwrap_or(ALERT_REPEAT_DEFAULT).min(ALERT_REPEAT_MAX)
 }
 
 /// Clamp a persisted or runtime Strategies tree text step to the supported integer range.
