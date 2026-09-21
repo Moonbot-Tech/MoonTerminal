@@ -192,7 +192,7 @@ pub(in crate::db) fn strategies_for_coins_on(
 /// the series, the top trades and the strategy table as well.
 ///
 /// Names never come from the strategies DB here — the group key IS the coin. It is attached
-/// all the same (`open_reader` does it for every reader) because liquidation attribution
+/// all the same (these readers are opened with `AttachSet::ALL`) because liquidation attribution
 /// decides WHICH strategy's coins these are, and this must agree with the panel beside it.
 /// `NotReady` when no source has the required schema.
 pub fn coin_groups(q: &Query) -> ReadResult<Vec<GroupStat>> {

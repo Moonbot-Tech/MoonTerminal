@@ -1018,7 +1018,7 @@ pub(super) const WHERE_UNDATED: &str = "(closedate IS NULL OR closedate <= 0)";
 
 /// Is the strategy database available on this connection?
 ///
-/// Probed rather than tracked: `open_reader` attaches it, but a caller may hand us a
+/// Probed rather than tracked: the attach set is now per-query, a caller may hand us a
 /// connection it opened itself, and a second ATTACH under the same alias fails. Asking the
 /// connection is the only answer that cannot go stale.
 ///

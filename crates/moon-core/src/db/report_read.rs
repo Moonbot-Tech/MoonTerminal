@@ -2160,6 +2160,10 @@ pub fn query_reports(
     })
 }
 
+/// Chart trade history needs `strat` for name masks and liquidation attribution
+/// and never references the `valuation` schema, so it does not pay for it.
+pub const CHART_TRADE_HISTORY_ATTACH: super::AttachSet = super::AttachSet::STRATEGIES_ONLY;
+
 /// Read a bounded newest-first closed-trade history for one exact chart core and coin identity set.
 ///
 /// The caller may provide a published Report filter to retain its date, side, emulator, deletion,

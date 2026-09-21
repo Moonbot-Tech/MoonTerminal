@@ -3828,6 +3828,7 @@ dependencies = [
  "hmac",
  "iana-time-zone",
  "keyring",
+ "libc",
  "log",
  "moonproto",
  "rayon",

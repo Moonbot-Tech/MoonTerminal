@@ -1470,3 +1470,60 @@ fn query_reports_exposes_rec_ids_aligned_to_rows() {
         );
     }
 }
+
+/// Schema names currently attached on `conn`, from `PRAGMA database_list`.
+fn attached_schema_names(conn: &Connection) -> Vec<String> {
+    let mut stmt = conn
+        .prepare("PRAGMA database_list")
+        .expect("prepare database_list");
+    stmt.query_map([], |row| row.get::<_, String>(1))
+        .expect("query database_list")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read schema names")
+}
+
+/// Seed a valuation cache at the process path cargo tests resolve, never live `data/*.sqlite`.
+fn seed_test_valuation_store() -> std::path::PathBuf {
+    let path = crate::config::paths::valuation_db_path();
+    let displayed = path.to_string_lossy();
+    assert!(
+        displayed.contains("target"),
+        "valuation fixture must stay under the cargo target dir, got {displayed}"
+    );
+    test_support::remove_db(&path);
+    drop(valuation::open_store(&path).expect("seed valuation fixture"));
+    path
+}
+
+/// `db/mod.rs::attach_databases` must attach valuation only when the set asks for it.
+///
+/// Dropping or inverting `if attach.valuation()` either skips valuation on `AttachSet::ALL`
+/// (silent native-money totals) or attaches it on `STRATEGIES_ONLY`. Observed via
+/// `PRAGMA database_list`, not the `AttachSet` flags.
+#[test]
+fn attach_databases_attaches_valuation_only_when_requested() {
+    let _health = valuation::test_health_guard();
+    let path = seed_test_valuation_store();
+
+    let strategies_only = Connection::open_in_memory().unwrap();
+    attach_databases(&strategies_only, AttachSet::STRATEGIES_ONLY).expect("strategies-only attach");
+    assert!(
+        !attached_schema_names(&strategies_only)
+            .iter()
+            .any(|name| name == "valuation"),
+        "STRATEGIES_ONLY must not attach the valuation schema"
+    );
+
+    let all = Connection::open_in_memory().unwrap();
+    attach_databases(&all, AttachSet::ALL).expect("all attach");
+    assert!(
+        attached_schema_names(&all)
+            .iter()
+            .any(|name| name == "valuation"),
+        "ALL must attach the valuation schema so money is not silently native"
+    );
+
+    drop(all);
+    drop(strategies_only);
+    test_support::remove_db(&path);
+}

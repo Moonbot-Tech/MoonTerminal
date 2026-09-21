@@ -157,9 +157,10 @@ pub(crate) enum Note {
 /// Shared user-facing notice for a classified reports-replica failure.
 ///
 /// Analytics, Report, and the chart overlay all branch on this so a Busy lock,
-/// a damaged file, an I/O error, and a lease denial never collapse into one
-/// sentence. `Recovery` is the one arm whose wording lives in
-/// [`crate::report_notice::recovery_notice_text`] rather than a `common.*` key.
+/// a damaged file, an I/O error, a process-level resource running out, and a
+/// lease denial never collapse into one sentence. `Recovery` is the one arm
+/// whose wording lives in [`crate::report_notice::recovery_notice_text`] rather
+/// than a `common.*` key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DbReadFailedNotice {
     /// Lease/recovery preflight refused this process. Retrying cannot help.
@@ -168,6 +169,8 @@ pub(crate) enum DbReadFailedNotice {
     Corrupt,
     /// Lock contention past `busy_timeout`. Retrying may succeed.
     Busy,
+    /// A process-level resource ran out. Retrying usually clears it once other readers finish.
+    Exhausted,
     /// Filesystem or SQLite error. Retrying might succeed; nothing promises it.
     Other,
 }
@@ -185,6 +188,7 @@ impl DbReadFailedNotice {
             FailKind::ReplicaAccessDenied => Self::Recovery,
             FailKind::Corrupt => Self::Corrupt,
             FailKind::Busy => Self::Busy,
+            FailKind::Exhausted => Self::Exhausted,
             FailKind::Other => Self::Other,
         }
     }
@@ -195,10 +199,10 @@ impl DbReadFailedNotice {
     ///     self: Classified notice.
     ///
     /// Returns:
-    ///     `true` only for contention and unclassified I/O — the two kinds a
-    ///     later read can still clear.
+    ///     `true` only for contention, unclassified I/O, and a process-level
+    ///     resource running out — the three kinds a later read can still clear.
     pub(crate) fn retryable(self) -> bool {
-        matches!(self, Self::Busy | Self::Other)
+        matches!(self, Self::Busy | Self::Other | Self::Exhausted)
     }
 }
 
@@ -208,7 +212,7 @@ impl DbReadFailedNotice {
 ///     kind: Classified reports-replica failure.
 ///
 /// Returns:
-///     `true` for `Busy` and `Other`; `false` for `Corrupt` and lease denial.
+///     `true` for `Busy`, `Other`, and `Exhausted`; `false` for `Corrupt` and lease denial.
 pub(crate) fn db_read_failed_retryable(kind: FailKind) -> bool {
     DbReadFailedNotice::of(kind).retryable()
 }
@@ -228,13 +232,14 @@ pub(crate) fn db_read_failed_hint_key(kind: FailKind) -> Option<&'static str> {
         DbReadFailedNotice::Corrupt => Some("common.db_read_failed_corrupt"),
         DbReadFailedNotice::Busy => Some("common.db_read_failed_retry"),
         DbReadFailedNotice::Other => Some("common.db_read_failed_other"),
+        DbReadFailedNotice::Exhausted => Some("common.db_read_failed_exhausted"),
     }
 }
 
 /// Localized guidance for a classified reports-replica failure.
 ///
 /// Lease denial uses the shared recovery composer (title plus detail). The
-/// other three kinds reuse the `common.db_read_failed_*` strings already shown
+/// other four kinds reuse the `common.db_read_failed_*` strings already shown
 /// by Analytics and Report.
 ///
 /// Args:
@@ -259,6 +264,7 @@ pub(crate) fn db_read_failed_hint(kind: FailKind) -> String {
         )
         .to_string(),
         DbReadFailedNotice::Other => t!("common.db_read_failed_other").to_string(),
+        DbReadFailedNotice::Exhausted => t!("common.db_read_failed_exhausted").to_string(),
     }
 }
 
@@ -352,7 +358,8 @@ pub(crate) fn note_el(
             None,
         ),
         // Say only what is true of this failure: corruption requires repair,
-        // contention may clear on retry, and I/O errors or misuse promise neither.
+        // contention and resource exhaustion may clear on retry, and I/O errors
+        // or misuse promise neither.
         Note::Failed {
             msg,
             kind,
@@ -370,7 +377,9 @@ pub(crate) fn note_el(
                         .child(MoonAlert::error(id, detail).title(title).render())
                         .into_any_element();
                 }
-                FailKind::Corrupt | FailKind::Busy | FailKind::Other => db_read_failed_hint(kind),
+                FailKind::Corrupt | FailKind::Busy | FailKind::Other | FailKind::Exhausted => {
+                    db_read_failed_hint(kind)
+                }
             };
             (
                 t!("common.db_read_failed").to_string(),

@@ -187,7 +187,7 @@ fn load_trade(
     record_id: i64,
     filter: ReportFilter,
 ) -> Option<(ChartTradeRecord, TradeMeta, Vec<ChartTradeRecord>)> {
-    let conn = db::open_reader().ok()?;
+    let conn = db::open_reader_with(db::CHART_TRADE_HISTORY_ATTACH).ok()?;
     let snapshot = db::read_snapshot(&conn).ok()?;
     let history = period_history(&snapshot, core, &coin, &filter).ok()?;
     let record = history

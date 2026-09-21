@@ -191,7 +191,7 @@ impl ReportInitialMetadata {
             .unwrap_or_default();
         let visible = connection
             .as_ref()
-            .and_then(db::load_visible)
+            .and_then(|c| db::load_visible(c))
             .map(|saved| saved.into_iter().collect())
             .unwrap_or_else(|| {
                 DEFAULT_VISIBLE
@@ -205,7 +205,7 @@ impl ReportInitialMetadata {
             .unwrap_or_default();
         let (sort_key, sort_desc) = connection
             .as_ref()
-            .and_then(db::load_sort)
+            .and_then(|c| db::load_sort(c))
             .unwrap_or_else(|| ("buydate".to_string(), true));
         let dock_comment = connection
             .as_ref()

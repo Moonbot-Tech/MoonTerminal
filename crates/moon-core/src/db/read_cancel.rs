@@ -82,6 +82,19 @@ pub fn with_read_cancellation<T>(cancellation: ReadCancellation, read: impl FnOn
     read()
 }
 
+/// Whether the current thread's request token has been cancelled.
+///
+/// Returns:
+///     True when a token is installed and [`ReadCancellation::is_cancelled`].
+pub(super) fn current_is_cancelled() -> bool {
+    CURRENT.with(|current| {
+        current
+            .borrow()
+            .as_ref()
+            .is_some_and(ReadCancellation::is_cancelled)
+    })
+}
+
 /// Install the current request's progress callback on a fully attached reader.
 ///
 /// Args:

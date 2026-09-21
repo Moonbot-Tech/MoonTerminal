@@ -205,7 +205,7 @@ fn load_history(
     exact_coins: Vec<String>,
     filter: Option<ReportFilter>,
 ) -> db::ReadResult<ChartTradeHistory> {
-    let conn = db::open_reader()?;
+    let conn = db::open_reader_with(db::CHART_TRADE_HISTORY_ATTACH)?;
     let snapshot = db::read_snapshot(&conn)?;
     db::query_chart_trade_history(
         &snapshot,

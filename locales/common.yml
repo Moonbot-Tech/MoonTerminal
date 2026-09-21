@@ -23,6 +23,10 @@ common.db_read_failed_other:
   ru: "Это ошибка чтения, а не отсутствие сделок. Подробности — во вкладке «Лог»."
   en: "This is a read error, not an absence of trades. See the Log tab for details."
   es: "Es un error de lectura, no una ausencia de operaciones. Consulte la pestaña Registro."
+common.db_read_failed_exhausted:
+  ru: "Слишком много чтений базы отчётов открыто одновременно. Обычно это проходит, когда другие чтения заканчиваются. Если не проходит, файл может держать другой процесс."
+  en: "Too many report reads are open at once. This usually clears once the other reads finish. If it persists, another process may be holding the file."
+  es: "Hay demasiadas lecturas de informes abiertas a la vez. Suele resolverse cuando terminan las demás lecturas. Si persiste, otro proceso puede estar reteniendo el archivo."
 common.db_read_failed_retry:
   ru: "База отчётов сейчас занята. Повторите — период пересчитается. Если это повторяется, файл может держать другой процесс — облачная синхронизация папки %{data_dir}, антивирус, вторая копия терминала или внешняя программа для БД."
   en: "The reports database is busy right now. Retry — the period will recompute. If this keeps happening, another process may be holding the file — cloud sync over %{data_dir}, antivirus, a second copy of the terminal, or an external DB tool."
