@@ -1035,6 +1035,27 @@ fn move_gestures_stay_a_click_on_every_button() {
     );
 }
 
+/// Issue #668: `mouse_down_left` withholds only the band's own press, not every left
+/// click while Sells-to-zone is armed. A return to `!sells_zone_mode` on any of the
+/// five trading gates again blocks order-book placement and market entry.
+///
+/// Plausible breakage: one of `try_action_click` / `try_place_order_click` /
+/// `try_move_orders_click` / `try_cancel_order_click` / `grab_order_line` reading
+/// `!sells_zone_mode` again instead of `sells_zone_claims_press`.
+#[test]
+fn mouse_down_left_withholds_only_the_band_press() {
+    let source = code_only(&read_src("panels/chart/render_input.rs"));
+    let body = code_only(braced_body(&source, "pub(super) fn mouse_down_left("));
+    assert!(
+        body.contains("sells_zone_claims_press("),
+        "the five trading gates must consult sells_zone_claims_press"
+    );
+    assert!(
+        !body.contains("!sells_zone_mode"),
+        "a !sells_zone_mode gate brings issue #668 back: no book placement while armed"
+    );
+}
+
 /// Removing `engine.rs:ChartEngine::set_follow`'s historical guard must fail: the global Live flag
 /// re-anchors a closed-trade window to now and leaves its old candles off-screen.
 ///

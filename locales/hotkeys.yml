@@ -276,9 +276,9 @@ hotkeys.sells_to_rect:
   en: "Sells to rectangle"
   es: "Sells to rectangle"
 hotkeys.sells_to_rect_hint:
-  ru: "Режим зоны: каждая пара Ctrl-кликов задаёт границы, ядро раскладывает по ним продажи рынка. Выход — повтор, Escape или другой инструмент."
-  en: "Zone mode: each pair of Ctrl-clicks names a band and the core spreads the market's sells across it. Leave by pressing it again, Escape, or picking another tool."
-  es: "Modo zona: cada par de Ctrl-clics define una banda y el core reparte las ventas del mercado. Salir: pulsarlo de nuevo, Escape u otra herramienta."
+  ru: "Режим зоны: каждая пара Ctrl-кликов задаёт границы, ядро раскладывает по ним продажи рынка. Выход — повтор, Escape или другой инструмент. Ctrl+клик зарезервирован, пока режим включён, поэтому торговый жест, привязанный к нему, приостановлен; любой другой клик торгует как обычно."
+  en: "Zone mode: each pair of Ctrl-clicks names a band and the core spreads the market's sells across it. Leave by pressing it again, Escape, or picking another tool. Ctrl+click is reserved while the mode runs, so a trading gesture bound to it is paused; every other click trades as usual."
+  es: "Modo zona: cada par de Ctrl-clics define una banda y el core reparte las ventas del mercado. Salir: pulsarlo de nuevo, Escape u otra herramienta. El Ctrl+clic está reservado mientras el modo está activo, así que un gesto de trading ligado a él se pausa; cualquier otro clic opera como de costumbre."
 hotkeys.split_parts_value:
   ru: "Частей: %{n}"
   en: "Parts: %{n}"
