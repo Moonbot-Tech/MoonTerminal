@@ -9,6 +9,7 @@
 
 mod account_reconciliation;
 mod archive_probe;
+mod capture;
 mod client_settings;
 mod commands;
 mod convert;
@@ -663,6 +664,9 @@ pub(super) fn run(
     // Field indices of `ReportUID` and `CloseDate`, resolved once per schema revision as the
     // protocol asks, never by name per row.
     let mut trace_fields: Option<(u16, u16)> = None;
+    // Per-feed memory of open report rows, so a partial closing upsert can be completed into
+    // a print capture — see `capture::CaptureTracker`.
+    let mut capture: Option<capture::CaptureTracker> = None;
     // File writer for this core's server log (logs/<date>_<core>.log), with daily rotation. Write
     // on the FEED THREAD rather than the UI thread because log volume is high and the UI must not
     // wait for disk. Only an in-memory copy reaches the UI for live viewing and search.
@@ -2124,6 +2128,8 @@ pub(super) fn run(
                         match rev {
                             ReportEvent::Schema(schema) => {
                                 trace_fields = trace_field_indices(schema);
+                                capture = capture::CaptureFields::from_schema(schema)
+                                    .map(capture::CaptureTracker::new);
                             }
                             ReportEvent::RowUpsert(row) => {
                                 if let (Some(fields), Some(sink)) = (trace_fields, &trace_sink) {
@@ -2133,6 +2139,25 @@ pub(super) fn run(
                                             report_uid,
                                             ask: trace_ask_sink.clone(),
                                         });
+                                    }
+                                }
+                                if let Some(closed) =
+                                    capture.as_mut().and_then(|tracker| tracker.on_row(row))
+                                {
+                                    let _ = tx.send(FeedMsg::TradeClosed {
+                                        coin: closed.coin,
+                                        quote: server.market.clone(),
+                                        buy: closed.buy,
+                                        close: closed.close,
+                                    });
+                                }
+                            }
+                            // A page row carries the core's whole column set: the open rows on
+                            // it are what a later partial close completes itself from.
+                            ReportEvent::SyncPage(page) => {
+                                if let Some(tracker) = capture.as_mut() {
+                                    for row in page.rows.iter() {
+                                        tracker.on_page_row(row);
                                     }
                                 }
                             }

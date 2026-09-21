@@ -1,34 +1,34 @@
 # MoonTerminal Architecture
 
-Дата актуализации: 2026-08-09.
+Last updated: 2026-08-09.
 
-Этот документ описывает текущую публичную архитектуру терминала и намеренно не включает старые
-экспериментальные планы миграции.
+This document describes the terminal's current public architecture and deliberately omits old
+experimental migration plans.
 
-## Состав
+## Crates
 
-- `moon-core` — UI-независимое ядро: подключения, конфиг, сессии, market state, отчёты.
-- `moon-chart` — математика чарта: time/price view, phase-clean default scale, pan/zoom, оси.
-- `moon-ui-gpui` — бинарь `moonterminal`: GPUI shell, панели, debug-tools, chart integration.
-- `Moonbot-Tech/MoonUI` — внешний git dependency: standalone GPUI runtime + Moon UI components.
+- `moon-core` — UI-agnostic core: connections, config, sessions, market state, reports.
+- `moon-chart` — chart math: time/price view, phase-clean default scale, pan/zoom, axes.
+- `moon-ui-gpui` — the `moonterminal` binary: GPUI shell, panels, debug-tools, chart integration.
+- `Moonbot-Tech/MoonUI` — external git dependency: standalone GPUI runtime + Moon UI components.
 
-Legacy UI/runtime packages не являются активными зависимостями. Новые общие UI/runtime изменения
-должны идти через MoonUI.
+Legacy UI/runtime packages are not active dependencies. New shared UI/runtime changes
+must go through MoonUI.
 
-## Рендер
+## Rendering
 
-Чарт рисуется через GPU own-pass поверх MoonUI/GPUI:
+The chart is drawn via a GPU own-pass on top of MoonUI/GPUI:
 
 - Windows: DX11/HLSL.
 - macOS: Metal/MSL.
-- Linux: нативный GPUI wgpu backend/WGSL.
+- Linux: native GPUI wgpu backend/WGSL.
 
-Это не старый `egui + wgpu offscreen + readback` и не shared-texture bridge между разными
-рендерерами. CPU readback для живого чарта не используется.
+This is not the old `egui + wgpu offscreen + readback` and not a shared-texture bridge between
+different renderers. CPU readback is not used for the live chart.
 
-Ключевой контракт: график сам принимает решение, нужен ли кадр (`gpu_canvas.frame()`), и может
-подготовить данные к этому же кадру без top-down `cx.notify()` всего окна. Shell/Orders не должны
-перерисовываться на частоте live-scroll, mousemove или present.
+Key contract: the chart itself decides whether a frame is needed (`gpu_canvas.frame()`), and can
+prepare data for that same frame without a top-down `cx.notify()` of the whole window. Shell/Orders must not
+repaint at live-scroll, mousemove, or present frequency.
 
 ## Data Path
 
@@ -48,21 +48,21 @@ Closed-trade arrows sit at the report timestamps. `ReportStamp` plus
 `ReportAxis::stamp_pair_to_utc_ms` feed `chartdx::trade_history_sync::trade_mark` with milliseconds
 when the core supplied them and whole seconds otherwise; nothing moves a mark afterwards.
 
-Текущий live-path ушёл от старого постоянного polling и top-down переноса chart data:
+The current live-path left the old constant polling and top-down chart-data push:
 
-- MoonProto события приходят через event sink с waker.
-- Backend loop ждёт реальные события/команды через waker, а не будится таймером.
-- Видимый chart подтягивает market data через `MarketDataSource` внутри `gpu_canvas.frame()`.
-- `MarketDataSource` читает `snapshot_versioned()` и двигает consumer cursor только для реально
-  видимого chart path.
-- `SharedMarketStore` остаётся core-owned совместимым read-model для остальных потребителей; это
-  не GPUI entity и не причина top-down render.
+- MoonProto events arrive through an event sink with a waker.
+- The Backend loop waits for real events/commands via the waker; it is not woken by a timer.
+- The visible chart pulls market data through `MarketDataSource` inside `gpu_canvas.frame()`.
+- `MarketDataSource` reads `snapshot_versioned()` and advances the consumer cursor only for the
+  actually visible chart path.
+- `SharedMarketStore` remains a core-owned compatible read-model for other consumers; it is
+  not a GPUI entity and not a reason for a top-down render.
 
-Push-события остаются для UI-виджетов и редких уведомлений. Chart data path — pull на frame tick.
-Ордерные события — отдельный важный контракт: MoonProto `OrderEvent::Created/Updated/Removed`
-несёт Arc-backed строку ордера на момент события. Терминал строит order-lines из текущего
-snapshot плюс captured event rows, чтобы короткий terminal status (`Cancel`, `Fail`, `Done`) не
-терялся, даже если latest snapshot уже убрал uid из live-list.
+Push events remain for UI widgets and rare notifications. The chart data path is pull on the frame tick.
+Order events are a separate important contract: MoonProto `OrderEvent::Created/Updated/Removed`
+carries an Arc-backed order row at the moment of the event. The terminal builds order-lines from the current
+snapshot plus captured event rows, so a short terminal status (`Cancel`, `Fail`, `Done`) is not
+lost even if the latest snapshot has already dropped the uid from the live-list.
 
 Order geometry resolves `UseCustomColors`, `BuyOrderColor`, `SellOrderColor` and `OrderLineKind`
 from the order's own core's confirmed strategy snapshot and kind-specific schema defaults. Retained orders keep strategy ID/name;
@@ -74,136 +74,136 @@ markers, zone colors and semantic label colors retain their existing settings. B
 wake signature and the pane geometry cache track strategy and schema revisions, so late data and edits
 apply without waiting for an order price change.
 
-## Ручная торговля: группа задаёт видимые параметры
+## Manual trading: the group owns the visible parameters
 
-У ручного ордера два источника настроек с намеренно разной областью владения:
+A manual order has two settings sources with deliberately different ownership:
 
-- группа окна (`GroupConfig.trade`) хранит всё, что трейдер видит в toolbar: шесть размеров
-  B1-B6 в USD-эквиваленте, выбранный размер, основной TP и его режим, S1-S6 и выбранный слот,
-  SL с флагом включения и Stop Market;
-- ядро хранит невидимые и зависящие от аккаунта параметры: leverage и прочие настройки
-  исполнения;
-- выбор ручной стратегии (manual strategy) — состояние ТЕРМИНАЛА, по ядру
-  (`ServerConfig::manual_strategy`). Ордер несёт стратегию явным `StratID`, поэтому переключать
-  сам режим на ядре не нужно, и два терминала на одном ядре могут работать с разными стратегиями.
-  Хранится ПАРА: закреплённый `id` — рабочий идентификатор, имя — якорь на случай, если стратегию
-  пересоздали (она сохраняет имя и теряет номер). Перерезолвить имя перед каждым ордером нельзя:
-  Moonbot подменяет ручные хук-стратегии на ходу. Живой селектор ядра (`use_manual_strategy`) не
-  участвует ни в отображении, ни в ордере — он двигается сам по себе; ядро, у которого локального
-  состояния ещё нет, один раз засевается из его снимка (`tick_manual_strat_seed`).
-  Ограничение: `id` уникален в пределах одного Moonbot, поэтому смена ключа ядра обнуляет
-  закрепление и оставляет только имя;
-- стоп ручного ордера по умолчанию НЕ трогается терминалом (`ManualStratState::mb_logic`, галка
-  «Логика МБ» в popup-е MS). Это поведение самого Moonbot: стоп берётся из стратегии, а если та
-  указывает `UseHookStrategy` — из хук-стратегии, у которой ядро берёт и стоп, и sell price. Пока
-  галка стоит, SL в toolbar показывает значения того источника и заблокирован, а после ордера
-  ничего не досылается; если источник прочитать нечем (не пришла схема, названного хука нет в
-  снимке) — в поле прочерк, а не сохранённое число, которое ордер не понесёт. Снятая галка возвращает досыл: видимый стоп уезжает вторым пакетом
-  (`queue_visible_stop`) и перебивает то, что применило ядро.
+- the window group (`GroupConfig.trade`) stores everything the trader sees in the toolbar: the six
+  B1-B6 sizes in USD equivalent, the selected size, the main TP and its mode, S1-S6 and the selected slot,
+  SL with its enable flag and Stop Market;
+- the core stores invisible and account-dependent parameters: leverage and other execution
+  settings;
+- the manual-strategy choice is TERMINAL state, per core
+  (`ServerConfig::manual_strategy`). The order carries the strategy as an explicit `StratID`, so the
+  mode itself does not need to be switched on the core, and two terminals on one core can work with different strategies.
+  A PAIR is stored: the pinned `id` is the working identifier; the name is an anchor in case the strategy
+  is recreated (it keeps the name and loses the number). The name must not be re-resolved before every order:
+  Moonbot swaps manual hook-strategies on the fly. The core's live selector (`use_manual_strategy`) takes
+  part in neither display nor the order — it moves on its own; a core that has no local
+  state yet is seeded once from its snapshot (`tick_manual_strat_seed`).
+  Constraint: `id` is unique within one Moonbot, so changing the core's key clears
+  the pin and leaves only the name;
+- a manual order's stop is by default NOT touched by the terminal (`ManualStratState::mb_logic`, the
+  "Moonbot's own logic" checkbox in the MS popup). This is Moonbot's own behaviour: the stop is taken from the strategy, and if that
+  points to `UseHookStrategy` — from the hook-strategy, from which the core takes both the stop and the sell price. While
+  the checkbox is on, the toolbar SL shows that source's values and is locked, and after the order
+  nothing extra is sent; if the source cannot be read (schema never arrived, the named hook is not in
+  the snapshot) — the field shows a dash, not a saved number the order will not carry. Clearing the checkbox restores the follow-up send: the visible stop goes out as a second packet
+  (`queue_visible_stop`) and overrides what the core applied.
 
-Этот контракт одинаков для Main, вкладок AddToChart и вынесенных chart-окон. При клике на любом
-чарте терминал определяет группу по целевому ядру, берёт именно групповые значения, переводит
-USD-сайз в базовую валюту через текущий base/USD rate и при отсутствии корректного курса
-отказывается ставить ордер. Переключение активного ядра не меняет toolbar.
+This contract is the same for Main, AddToChart tabs, and detached chart windows. On a click on any
+chart the terminal resolves the group from the target core, takes the group values, converts
+the USD size into the base currency through the current base/USD rate, and if there is no valid rate
+refuses to place the order. Switching the active core does not change the toolbar.
 
-Moonbot применяет TP/SL к новому ордеру из полного `ClientSettings`, поэтому терминал
-синхронизирует групповой exit-набор во все ядра группы. Все полные изменения
-`ClientSettings` — включая blacklist — проходят через один per-core последователь. Ручной ордер является барьером: сначала ядро должно прислать echo нужного
-группового поколения, затем уходит order command; следующее поколение не может его обогнать.
-`use_market_stop` дополнительно передаётся прямо в `NewOrderParams`.
+Moonbot applies TP/SL to a new order from the full `ClientSettings`, so the terminal
+syncs the group's exit set to every core in the group. All full
+`ClientSettings` changes — including the blacklist — go through one per-core sequencer. A manual order is a barrier: first the core must echo the required
+group generation, then the order command goes out; the next generation cannot overtake it.
+`use_market_stop` is additionally passed straight into `NewOrderParams`.
 
-Схема v16 намеренно не переносит старые per-core размеры: те значения были в базовой монете
-(например, `0.01 BTC`) и не могут безопасно стать долларами. Каждая группа начинает с явных
-USD-пресетов `50, 100, 250, 500, 1000, 2500`, F3; toolbar обозначает их как `Size, USDT eq.`.
-Схема v17 сразу создаёт для каждой группы нейтральное локальное поколение выходов: TP `0%` в
-Scalp-режиме, S1-S6 `0%`, SL `0%` выключен, stop-market выключен. Настройки ядра никогда не
-засеивают эти поля. Открытый Settings preview получает каждую toolbar-правку одновременно с live
-config, поэтому последующий Save не откатывает видимые значения.
+Schema v16 deliberately does not migrate old per-core sizes: those values were in the base coin
+(for example, `0.01 BTC`) and cannot safely become dollars. Each group starts with the explicit
+USD presets `50, 100, 250, 500, 1000, 2500`, F3; the toolbar labels them `Size, USDT eq.`.
+Schema v17 immediately creates a neutral local exit generation for each group: TP `0%` in
+Scalp mode, S1-S6 `0%`, SL `0%` disabled, stop-market disabled. Core settings never
+seed these fields. An open Settings preview receives every toolbar edit at the same time as the live
+config, so a later Save does not roll the visible values back.
 
-## Порядок ядер (core order)
+## Core order
 
-Набор ядер показывается пользователю в десятке мест — селектор в шапке, фильтры «Ордеров»,
-«Активов», «Состояния ядер», «Отчёта», «Аналитики», источник «Скринера» и «Лога», дерево
-«Стратегий», дерево и списки в настройках. Порядок во всех этих местах ОДИН и задаётся
-пользователем: `CoreSortMode` (`moon-core/src/config/servers.rs`) — по имени (алфавит, **режим
-по умолчанию**), по добавлению «сначала старые» или по добавлению «сначала новые»; хранится в
+The set of cores is shown to the user in a dozen places — the header selector, the Orders,
+Assets, Core status, Report, and Analytics filters, the Screener and Log source, the
+Strategies tree, and the tree and lists in Settings. The order in all of these places is ONE and is set by
+the user: `CoreSortMode` (`moon-core/src/config/servers.rs`) — By name — alphabetical (**the default
+mode**), By insertion — oldest first, or By insertion — newest first; stored in
 `settings.toml`.
 
-Правила, которые легко нарушить незаметно:
+Rules that are easy to break unnoticed:
 
-- **Любой список ядер строится через `core_order`** (`moon-ui-gpui/src/core_order.rs`):
-  `CoreOrder::{from_sessions, from_db}` возвращают `OrderedCores`, чьё поле приватно — собрать
-  такой список в обход модуля нельзя. Если строки списка богаче пары `(id, имя)` —
-  `CoreOrder::sort_by`. Функция ранга приватна намеренно: с ней порядок можно было бы забыть
-  применить, и ничто бы не упало.
-- **Порядок НЕ кэшируется** — ранжирование идёт на рендере. Кэшированный порядок протухает в
-  открытом окне при смене режима, а инвалидировать нечего, если он нигде не хранится. Панели,
-  которые кэшируют СТРОКИ (`assets`, `core_status`), подмешивают `CoreId` в сигнатуру кэша.
-- **`SessionManager::sessions()` — всегда порядок КОНФИГА**, не порядок подключения: вставка
-  идёт по рангу (`session/lifecycle.rs`), поэтому ядро, выключенное и включённое обратно,
-  возвращается на своё место. Режим сортировки сюда не проникает — его применяет UI.
-- **`uid` выдаётся из durable-счётчика** `SettingsFile::next_uid`, а не как «максимум + 1»:
-  иначе uid удалённого сервера достаётся новому вместе с его историей.
-- **Счётчик поднимается до «пола» на каждом старте** — максимального uid, который когда-либо
-  видело любое долговременное хранилище: `reports.sqlite` и `strategies.sqlite` (по три таблицы
-  с ключом `core_uid`), `order_traces.sqlite`, плюс `layout.toml`, `charts.json` и `figures.json`. Счётчик появился
-  только в схеме v15, а до неё засеивался ВЫЖИВШИМИ серверами, тогда как строки удалённого
-  никто не чистит. Пол считает `startup::observed_uid_floor` и передаёт в `AppConfig::load`
-  числом — зависимости «конфиг → БД» не возникает. Что легко сломать:
-  - **Применять пол надо ВНУТРИ загрузки, а не после неё.** `AppConfig::load` сама раздаёт uid
-    записям с `uid == 0` и тут же сохраняет их, поэтому поднятие после возврата опаздывает
-    ровно на то столкновение, которое предотвращает. По той же причине пол применяется на
-    ВСЕХ пяти ветках загрузки, а не только на `servers.enc`: легаси-миграции и «конфиг не
-    найден» — как раз те случаи, когда счётчика нет, а хранилища полны.
-  - **Забыть пол на новой ветке нельзя — не соберётся.** Счётчик это тип `config::UidCounter`
-    с приватным полем и единственным конструктором `UidCounter::new(persisted, uid_floor)`;
-    `AppConfig` намеренно НЕ выводит `Default`, его место занял `AppConfig::blank(uid_floor)`.
-    Оба закрыты в `config`, так что снаружи конфиг без пола не построить вовсе. Гарантия ровно
-    в том, что пол НАЗВАН, а не в том, что он полон: нечитаемое хранилище даёт `None` и
-    неотличимо от отсутствующего. Соседний `uid_counter/tests.rs` держит запреты, которые
-    система типов выразить не может (никаких `Default`, serde, `From<u64>`, `Deref`, `Copy`),
-    читая исходник крейта.
-  - **Читать хранилища надо ПОСЛЕ миграций путей.** `layout.toml` и `charts.json` переезжают в
-    `cfg/` через `migrate_flat_to_cfg`, поэтому `startup` вызывает миграции до чтения.
-  - **Пробник отчётов открывает базу только на чтение** (`db::open_readonly`, не `open_reader`,
-    который открывает на запись): он работает до `spawn_writer` и был бы единственным
-    соединением, а закрытие пишущего соединения запускает чекпоинт WAL — на главном потоке,
-    до первого окна.
-  - Удаление ядра историю НЕ чистит: на пенсию уходит номер, а не данные. Нечитаемое хранилище
-    вклада не даёт — пол только растёт, так что это best-effort, а не гарантия.
-- **Повреждённая реплика отчётов восстанавливается только после uid-floor и до writer.**
-  `db::report_recovery::prepare` сначала берёт межпроцессный lease, затем использует ограниченный
-  полный `integrity_check`. Подтверждённая порча никогда не «чинится» на месте:
-  `reports.sqlite`, `reports.sqlite-wal` и `reports.sqlite-shm` копируются в staging, проверяются
-  по размеру и SHA-256, получают versioned metadata и публикуются одним rename каталога в
-  `data/damaged-reports/`. Только опубликованный снимок разрешает атомарно переименовать оригиналы
-  в его подпапку `originals/` и создать чистую реплику; исходные байты не удаляются. Приватный
-  `ReportWritePermit` не даёт вызвать `spawn_writer` в обход этого порядка, а тот же lease
-  закрывает доступ readers и ручному VACUUM из второго процесса. Само владение lease ещё не
-  разрешает доступ: gate открывается только после результата `Ready` или полностью завершённого
-  `Recovered`, поэтому `Blocked`/`Failed` не оставляют обходного read-write пути.
-  - Маркер `finalized` делает перенос оригиналов возобновляемой транзакцией: после сбоя следующий
-    запуск находит уже перенесённые члены, сверяет их с опубликованными хешами и заканчивает
-    операцию. Отличающийся файл остаётся сохранённым, writer остаётся выключенным.
-  - Новая подтверждённая порча в течение 24 часов после успешной замены включает circuit breaker:
-    текущий комплект остаётся на месте, чтобы файловая или синхронизационная проблема не создала
-    бесконечную цепочку копий.
-  - Фоновая проверка остаётся после запуска. Если она, reader или ошибка writer публикует порчу уже
-    во время сессии, общий barrier не позволяет начать последующий ACK: writer прекращает
-    retry-loop, а ядро сможет прислать неподтверждённый batch снова после чистого восстановления.
-    Не-коррупционные постоянные ошибки тоже ограничены по числу retry-rounds и не держат канал
-    заблокированным бесконечно.
-  - `CheckFailed` не равен `Damaged`: неубедительная проверка ничего не удаляет. Базы стратегий,
-    предупреждений и кэша рынка в этот протокол не входят.
-- **Оба режима «по добавлению» делят один `insertion_key`** и потому являются точными зеркалами
-  друг друга. Ключ инъективен (`uid`, а при `uid == 0` — «новейший из возможных», плюс `id` как
-  тай-брейк), так что разворот не опирается на стабильность сортировки, а строка, которую сейчас
-  добавляют в Настройках, оказывается первой в «сначала новые» и последней в «сначала старые».
-- Смена режима — презентационная: она нейтрализована в `AppConfig::structural_sig`, реконнекта
-  ядер не вызывает. Порядок `Vec<ServerConfig>` при этом остаётся в сигнатуре — из него строится
-  `SessionManager::config_order`, решающий, куда вставить переподнятую сессию.
+- **Every core list is built through `core_order`** (`moon-ui-gpui/src/core_order.rs`):
+  `CoreOrder::{from_sessions, from_db}` return `OrderedCores`, whose field is private — assembling
+  such a list around the module is impossible. If the list rows are richer than the pair `(id, name)` —
+  `CoreOrder::sort_by`. The rank function is private on purpose: with it public, the order could be forgotten
+  and nothing would fail.
+- **The order is NOT cached** — ranking happens at render. A cached order goes stale in
+  an open window when the mode changes, and there is nothing to invalidate if it is stored nowhere. Panels
+  that cache ROWS (`assets`, `core_status`) mix `CoreId` into the cache signature.
+- **`SessionManager::sessions()` is always CONFIG order**, not connection order: insertion
+  follows rank (`session/lifecycle.rs`), so a core that is turned off and back on
+  returns to its place. The sort mode does not reach here — the UI applies it.
+- **`uid` is issued from a durable counter** `SettingsFile::next_uid`, not as "max + 1":
+  otherwise a deleted server's uid would go to a new one together with its history.
+- **The counter is raised to a "floor" on every start** — the maximum uid that any
+  durable store has ever seen: `reports.sqlite` and `strategies.sqlite` (three tables each
+  keyed by `core_uid`), `order_traces.sqlite`, plus `layout.toml`, `charts.json` and `figures.json`. The counter appeared
+  only in schema v15, and before that it was seeded from SURVIVING servers, while the deleted core's rows
+  are never cleaned. The floor is computed by `startup::observed_uid_floor` and passed into `AppConfig::load`
+  as a number — no "config → DB" dependency arises. What is easy to break:
+  - **The floor must be applied INSIDE the load, not after it.** `AppConfig::load` itself assigns uids
+    to records with `uid == 0` and immediately saves them, so raising after return is late
+    for exactly the collision it prevents. For the same reason the floor is applied on
+    ALL five load branches, not only `servers.enc`: legacy migrations and "config not
+    found" are exactly the cases where there is no counter and the stores are full.
+  - **Forgetting the floor on a new branch cannot compile.** The counter is the type `config::UidCounter`
+    with a private field and a single constructor `UidCounter::new(persisted, uid_floor)`;
+    `AppConfig` deliberately does NOT derive `Default`; its place is taken by `AppConfig::blank(uid_floor)`.
+    Both are closed inside `config`, so a config without a floor cannot be built from outside at all. The guarantee is exactly
+    that the floor is NAMED, not that it is complete: an unreadable store yields `None` and
+    is indistinguishable from an absent one. The neighbouring `uid_counter/tests.rs` holds the bans that
+    the type system cannot express (no `Default`, serde, `From<u64>`, `Deref`, `Copy`),
+    by reading the crate source.
+  - **Stores must be read AFTER path migrations.** `layout.toml` and `charts.json` move into
+    `cfg/` via `migrate_flat_to_cfg`, so `startup` runs the migrations before the reads.
+  - **The report probe opens the database read-only** (`db::open_readonly`, not `open_reader`,
+    which opens for write): it runs before `spawn_writer` and would be the only
+    connection, and closing a writing connection triggers a WAL checkpoint — on the main thread,
+    before the first window.
+  - Deleting a core does NOT clean its history: the number retires, not the data. An unreadable store
+    contributes nothing — the floor only grows, so this is best-effort, not a guarantee.
+- **A damaged report replica is recovered only after the uid-floor and before the writer.**
+  `db::report_recovery::prepare` first takes an inter-process lease, then uses a bounded
+  full `integrity_check`. Confirmed damage is never "repaired" in place:
+  `reports.sqlite`, `reports.sqlite-wal` and `reports.sqlite-shm` are copied to staging, checked
+  by size and SHA-256, given versioned metadata and published by one directory rename into
+  `data/damaged-reports/`. Only a published snapshot permits atomically renaming the originals
+  into its `originals/` subfolder and creating a clean replica; the source bytes are not deleted. The private
+  `ReportWritePermit` does not let `spawn_writer` be called around this order, and the same lease
+  closes access for readers and a manual VACUUM from a second process. Holding the lease itself does not yet
+  grant access: the gate opens only after a `Ready` result or a fully completed
+  `Recovered`, so `Blocked`/`Failed` leave no bypassing read-write path.
+  - The `finalized` marker makes the original transfer a resumable transaction: after a crash the next
+    start finds already-moved members, checks them against the published hashes and finishes
+    the operation. A differing file stays saved; the writer stays off.
+  - A new confirmed damage within 24 hours after a successful replacement trips the circuit breaker:
+    the current set stays in place, so a filesystem or sync problem does not create
+    an infinite chain of copies.
+  - The background check remains after start. If it, a reader, or a writer error publishes damage already
+    during the session, a shared barrier does not allow a subsequent ACK to start: the writer stops
+    the retry-loop, and the core can send the unacknowledged batch again after a clean recovery.
+    Non-corruption persistent errors are also bounded by retry-round count and do not keep the channel
+    blocked forever.
+  - `CheckFailed` is not equal to `Damaged`: an inconclusive check deletes nothing. Strategy,
+    warning, and market-cache databases are not in this protocol.
+- **Both "by insertion" modes share one `insertion_key`** and are therefore exact mirrors
+  of each other. The key is injective (`uid`, and when `uid == 0` — "newest possible", plus `id` as
+  a tie-break), so the reverse does not rely on sort stability, and the row currently
+  being added in Settings lands first in "By insertion — newest first" and last in "By insertion — oldest first".
+- A mode change is presentational: it is neutralized in `AppConfig::structural_sig` and does not
+  reconnect cores. The order of `Vec<ServerConfig>` stays in the signature — `SessionManager::config_order`
+  is built from it and decides where a re-raised session is inserted.
 
-## Рабочие пространства Classic и Auto
+## Classic and Auto workspaces
 
 Workspace mode is selected independently for each group window. `layout.toml` owns the durable
 per-group `workspace_mode_by_group`, `auto_workspace_core_by_group`, and
@@ -211,60 +211,60 @@ per-group `workspace_mode_by_group`, `auto_workspace_core_by_group`, and
 means Overview. A legacy or malformed mode resolves to `Classic`; a stale UID remains part of
 `WindowLayout::max_core_uid` but resolves to Overview until a live core returns to that group.
 
-Runtime-состояние намеренно отделено от layout:
+Runtime state is deliberately separated from layout:
 
-- `WorkspaceFocus` хранит последнее живое Auto-окно, с которым взаимодействовал пользователь или
-  из которого открыл `Analytics`/`Strategies`. Это process-lifetime ownership singleton-инструментов,
-  а не настройка для следующего запуска; уход владельца в Classic, закрытие или перестройка окна
-  очищают невалидный focus.
-- `WorkspaceRevision` публикует изменения режима, выбранного ядра, singleton-владельца, состава
-  групповых окон и конфигурации. Кэшированные и асинхронные потребители наблюдают именно этот
-  revision, а не надеются на случайную перерисовку Shell.
+- `WorkspaceFocus` holds the last live Auto window the user interacted with or
+  opened `Analytics`/`Strategies` from. This is process-lifetime ownership of the singleton tools,
+  not a setting for the next start; the owner leaving for Classic, closing, or rebuilding the window
+  clears an invalid focus.
+- `WorkspaceRevision` publishes changes of mode, selected core, singleton owner, group-window
+  membership and configuration. Cached and async consumers observe this
+  revision, rather than hoping for an incidental Shell repaint.
 
-Classic сохраняет прежнюю семантику полностью. Локальные фильтры панелей и singleton-окон остаются
-их собственностью и не переписываются при входе в Auto. Карта
-`active_trade_core_by_group` тоже не меняется: выбранное в Auto живое ядро лишь временно становится
-`active_trade_core`, а Overview использует сохранённый Classic core или прежний fallback. Поэтому
-ручные команды всегда имеют одно ядро и Overview не превращает их в broadcast; header/chart
-producers в Auto не записывают временный выбор обратно в Classic.
+Classic keeps its previous semantics in full. Local panel filters and singleton-window filters remain
+their own and are not rewritten on Auto entry. The
+`active_trade_core_by_group` map is also unchanged: the live core selected in Auto only temporarily becomes
+`active_trade_core`, and Overview uses the saved Classic core or the previous fallback. Therefore
+manual commands always have one core and Overview does not turn them into a broadcast; header/chart
+producers in Auto do not write the temporary choice back into Classic.
 
-Для групповой панели effective scope вычисляется на чтении:
+For a group panel the effective scope is computed at read time:
 
-- Classic — её сохранённые All/explicit core filters;
-- Auto Overview — все доступные ядра этой группы;
-- Auto core — ровно одно выбранное доступное ядро.
+- Classic — its saved All/explicit core filters;
+- Auto Overview — all available cores of that group;
+- Auto core — exactly one selected available core.
 
-Auto показывает соответствующий selector как pinned/disabled, но не копирует scope в локальное
-поле. Валидность сохранённых Classic-фильтров проверяется по полной конфигурации/живому составу, а
-не по временно узкому Auto scope. `Detects`, например, продолжает ingest и cursoring по всей группе
-и фильтрует только представление, чтобы переключение ядра не теряло и не переигрывало события.
+Auto shows the matching selector as pinned/disabled, but does not copy the scope into a local
+field. Validity of saved Classic filters is checked against the full configuration/live membership, not
+against the temporarily narrow Auto scope. `Detects`, for example, continues ingest and cursoring over the whole group
+and filters only the view, so a core switch neither loses nor replays events.
 
-`Analytics` и `Strategies` используют effective scope последнего живого `WorkspaceFocus`; без него
-они возвращаются к своим сохранённым фильтрам. Выбор, детали и изменяющие команды `Strategies`
-ограничены видимым effective core, а group-owned `open_goto` повторно проверяет текущий Auto scope
-и отказывает, не меняя rail selection. Исключения намеренные: standalone `Report`, открытый из Analytics,
-сохраняет свой явный `ReportScope`; global `Assets`, Profit Monitor и Screener остаются
-application-wide aggregate surfaces. Групповой status bar и общие счётчики rail тоже не сужаются
-выбранным ядром.
+`Analytics` and `Strategies` use the effective scope of the last live `WorkspaceFocus`; without one
+they fall back to their saved filters. Selection, details and mutating `Strategies` commands
+are limited to the visible effective core, and group-owned `open_goto` re-checks the current Auto scope
+and refuses without changing the rail selection. The exceptions are deliberate: a standalone `Report` opened from Analytics
+keeps its explicit `ReportScope`; global `Assets`, Profit Monitor and Screener remain
+application-wide aggregate surfaces. The group's Auto status bar and the shared rail counters are also not narrowed
+by the selected core.
 
-Смена scope может произойти между кликом, ответом фонового запроса, native picker/dialog и отправкой
-команды. Поэтому асинхронный результат обязан нести identity текущего scope/revision и приниматься
-только при совпадении: Report query сравнивает собственные sequence и filter, Analytics
-инвалидирует прежние query identities, а Report export после выбора пути сравнивает generation
-группового workspace и effective core IDs. Отложенные, изменяющие и destructive пути
+A scope change can happen between a click, a background-request reply, a native picker/dialog and sending
+the command. Therefore an async result must carry the identity of the current scope/revision and be accepted
+only on a match: a Report query compares its own sequence and filter, Analytics
+invalidates previous query identities, and Report export after path selection compares the group
+workspace generation and the effective core IDs. Deferred, mutating and destructive paths
 (`Strategies`, tuner Save/Copy, order edit, Assets Market Sell, wallet transfer, Report export,
-Report delete/restore, Analytics purge) повторно проверяют effective core непосредственно перед
-записью или отправкой;
-длинный purge делает ту же проверку
-между ожиданиями и каждой следующей командой. Отказ не переносит действие на новое ядро: stale
-Market Sell не отправляет команду, показывает warning и закрывает confirmation; stale wallet
-transfer очищает pending dialog без команды; stale Report export пишет cancellation в лог и не
-создаёт файл; purge остаётся в видимом failed state.
+Report delete/restore, Analytics purge) re-check the effective core immediately before
+the write or send;
+a long purge does the same check
+between waits and each next command. A refusal does not move the action onto a new core: a stale
+Market Sell does not send the command, shows a warning and closes the confirmation; a stale wallet
+transfer clears the pending dialog without a command; a stale Report export writes a cancellation to the log and does not
+create a file; a purge stays in the visible failed state.
 
-Многоцелевые действия не сужаются молча до оставшихся видимыми ядер. `Strategies` сохраняет точный
-план Start/Stop, Apply или Delete, а Analytics Tuner Save/Copy — generation и полный ordered target
-set. Если хотя бы одна цель, payload или scope изменились до dispatch, отменяется весь batch до
-первой команды; сохранённые Classic drafts и staging при этом не очищаются.
+Multi-target actions are not silently narrowed to the cores that remain visible. `Strategies` keeps the exact
+Start/Stop, Apply or Delete plan, and Analytics Tuner Save/Copy — the generation and the full ordered target
+set. If even one target, payload or scope changed before dispatch, the whole batch is cancelled before
+the first command; saved Classic drafts and staging are not cleared.
 
 Each group keeps one `DockArea`, but Classic and Auto have separate authorities. Classic persists
 `docks.json` and `detached.json` as one transaction through `window-state.pending.json`; startup
@@ -359,27 +359,27 @@ name is what left Binance COIN-M (code 6, reports `Binance Quarterly`) with no b
 test in `tests/theme_contract/naming.rs` sweeps the whole crate to keep `reported` out of every
 surface but the formatter.
 
-Все три layout-класса — `layout.toml`, общая `auto_dock.json` и совместный Classic snapshot —
-сериализуются одним persistence worker. Live GPUI-контур только передаёт immutable snapshots и
-принимает acknowledgements: accepted enqueue снимает dirty, а новая мутация или failed ack
-выставляет его снова. Quit ставит
-финальный полный snapshot за уже выполняющейся записью, join'ит worker и использует синхронный
-fallback только для классов, которые worker не смог подтвердить.
+All three layout classes — `layout.toml`, the shared `auto_dock.json` and the joint Classic snapshot —
+are serialized by one persistence worker. The live GPUI contour only passes immutable snapshots and
+accepts acknowledgements: an accepted enqueue clears dirty, and a new mutation or a failed ack
+sets it again. Quit places
+the final full snapshot behind the write already in flight, joins the worker and uses a synchronous
+fallback only for the classes the worker could not confirm.
 
 The Strategies gear popup resolves two optional `layout.toml` booleans: venue grouping defaults
 ON and active-only visibility defaults OFF. Explicit strategy reveals clear active-only through the
 same preference setter and persist that choice through the shared layout coordinator; the popup's
 open state remains process-only.
 
-Интерактивные таблицы без собственного хранилища сохраняют выбранную колонку и направление в
-`WindowLayout.table_sorts` через `persistence/table_persist.rs`. Ключ включает устойчивый id
-таблицы и host-контекст (`:dock` / `:win`); каждое сохранённое имя валидирует сам panel по своим
-текущим sortable/visible колонкам, а отсутствие или устаревший ключ оставляет исторический default.
-Orders, Assets, Core Status Flat/By IP, Screener и Analytics Tuner By coin используют этот общий
-контракт. Alerts сохраняет sort вместе с dock state, Report — в SQLite, а Analytics strategy list,
-Profit Monitor и Settings core order сохраняют свои отдельные layout/settings preferences; общий
-map не дублирует эти authorities. Все compare-then-dirty записи уходят через существующий
-debounced layout worker и финальный quit flush.
+Interactive tables without their own store keep the selected column and direction in
+`WindowLayout.table_sorts` via `persistence/table_persist.rs`. The key includes a stable table id
+and the host context (`:dock` / `:win`); each saved name is validated by the panel itself against its
+current sortable/visible columns, and a missing or stale key leaves the historical default.
+Orders, Assets, Core status Flat/By IP, Screener and Analytics Tuner By coin use this shared
+contract. Alerts stores sort with dock state, Report — in SQLite, and the Analytics strategy list,
+Profit Monitor and Settings core order keep their own layout/settings preferences; the shared
+map does not duplicate those authorities. All compare-then-dirty writes go through the existing
+debounced layout worker and the final quit flush.
 
 `ReportPanel` is a lightweight GPUI entity: its SQLite connection/schema, core list, columns, and
 saved display preferences load on the background executor and publish only into a still-live panel.
@@ -455,155 +455,154 @@ deleted/strategy scope, the clicked row identity, and the row's catalog-verified
 market. The chart query forces closed-only history and replaces core/coin predicates with exact
 values; editing controls while an older result remains visible cannot silently retarget that row.
 
-## Правка полей стратегии: подтверждение вместо доверия
+## Editing a strategy field: confirmation, not trust
 
-С MoonProto `9c7b3d73` `strats().snapshot(id)` и `snapshots()` — это СТРОГО подтверждённое ядром
-состояние. `sync_local_strategies` больше не переписывает локальную копию оптимистично, поэтому
-отправленная правка живёт отдельно, в `StratsState::strategy_edit(id)`, со статусом `Pending`
-или `TimedOut`, и разрешается событиями `StratEvent::Edit{Submitted,Confirmed,Adjusted,
-Superseded,TimedOut}` в окне 45 с. **Таймаут — не отказ**: ядро могло применить правку и потерять
-эхо, поздний ответ всё ещё подтверждает её.
+As of MoonProto `9c7b3d73`, `strats().snapshot(id)` and `snapshots()` are STRICTLY core-confirmed
+state. `sync_local_strategies` no longer rewrites the local copy optimistically, so
+a sent edit lives separately, in `StratsState::strategy_edit(id)`, with status `Pending`
+or `TimedOut`, and is resolved by `StratEvent::Edit{Submitted,Confirmed,Adjusted,
+Superseded,TimedOut}` events in a 45 s window. **A timeout is not a refusal**: the core may have applied the edit and lost
+the echo; a late reply still confirms it.
 
-В терминал это приходит типизированным носителем (`moon-core` не умеет локализовать, поэтому
-наружу идут enum'ы, а не готовые строки): `FeedMsg::StrategyEdits` несёт ПОЛНУЮ замену открытого
-набора плюс пачку разрешений, а `CoreData` держит открытые правки и кольцо разрешений
-(`STRATEGY_EDIT_NOTE_CAP`) с ДВУМЯ счётчиками — `strategy_edit_rev` и `strategy_edit_note_rev`.
-Счётчиков два намеренно: поверхность, рисующая только открытые правки, не должна
-перерисовываться на каждом разрешении, и наоборот.
+This arrives at the terminal as a typed carrier (`moon-core` cannot localize, so
+enums go out, not ready-made strings): `FeedMsg::StrategyEdits` carries a FULL replacement of the open
+set plus a batch of resolutions, and `CoreData` holds the open edits and the resolution ring
+(`STRATEGY_EDIT_NOTE_CAP`) with TWO counters — `strategy_edit_rev` and `strategy_edit_note_rev`.
+There are two counters on purpose: a surface that draws only open edits must not
+repaint on every resolution, and vice versa.
 
-**`StrategyEditNote.seq` генерируется НА ЯДРО.** Любой потребитель, который сплющивает
-уведомления нескольких ядер в один список или делит между ними один курсор, теряет эту привязку —
-id стратегии локален для ядра и повторяется, а общий курсор съедает чужие уведомления. Курсор
-всегда `HashMap<CoreId, u64>`, и сопоставление всегда по паре «ядро + id».
+**`StrategyEditNote.seq` is generated PER CORE.** Any consumer that flattens
+notifications from several cores into one list or shares one cursor among them loses this binding —
+a strategy id is local to the core and repeats, and a shared cursor eats other cores' notifications. The cursor
+is always `HashMap<CoreId, u64>`, and matching is always by the pair "core + id".
 
-**`TimedOut` не имеет парного разрешения** — `StrategyEditResult` знает только
-`Confirmed`/`Adjusted`/`Superseded`. Таймаут существует лишь как фаза открытой строки и
-определяется опросом `CoreData::strategy_edit(id)`, никогда не из кольца уведомлений.
+**`TimedOut` has no paired resolution** — `StrategyEditResult` knows only
+`Confirmed`/`Adjusted`/`Superseded`. Timeout exists only as a phase of an open row and
+is determined by polling `CoreData::strategy_edit(id)`, never from the notification ring.
 
-Исходящая синхронизация полного списка обязана накладывать открытые правки поверх подтверждённого
-состояния (`feed/live/commands.rs::overlay_pending_edits`) И дописывать открытые правки, которых в
-подтверждённом состоянии нет вовсе — это созданные и восстановленные стратегии, у которых
-подтверждённой пары не бывает по определению. Без первого следующая синхронизация вернёт на провод
-до-правочное значение; без второго только что созданная стратегия просто исчезнет из списка.
-Порядок дописывания детерминирован по `(submitted_at, strategy_id)`, потому что
-`strategy_edits()` — это итерация по `HashMap`.
+Outgoing full-list sync must overlay open edits on top of confirmed
+state (`feed/live/commands.rs::overlay_pending_edits`) AND append open edits that are not in
+confirmed state at all — these are created and restored strategies, which by definition have
+no confirmed pair. Without the first, the next sync would put the pre-edit value back on the wire;
+without the second, a just-created strategy would simply vanish from the list.
+Append order is deterministic by `(submitted_at, strategy_id)`, because
+`strategy_edits()` is a `HashMap` iteration.
 
-Оговорка на будущее: `StratsState.local_snapshots` наверху приватен и аксессора не имеет, поэтому
-`overlay_pending_edits` пересобирает эту композицию у себя. Дублирование намеренное и временное.
-## Репликация отчётов: чекпойнт и карта живых строк
+A caveat for later: `StratsState.local_snapshots` at the top is private and has no accessor, so
+`overlay_pending_edits` rebuilds this composition itself. The duplication is deliberate and temporary.
+## Report replication: the checkpoint and the live-row map
 
-Реплика `orders_rep` догоняет ядро по возрастанию `newRecID`, поэтому обычный catch-up физически
-не способен увидеть, что старая строка была скрыта, восстановлена или вычищена retention'ом, пока
-терминал был офлайн. Протокол закрывает это компактной **картой живых строк**, и весь порядок
-операций держится на одном правиле: **чекпойнт пишет только та транзакция, которая применила
-карту.**
+The `orders_rep` replica catches up with the core by increasing `newRecID`, so ordinary catch-up is physically
+unable to see that an old row was hidden, restored, or purged by retention while
+the terminal was offline. The protocol closes this with a compact **live-row map**, and the whole order
+of operations rests on one rule: **only the transaction that applied the map writes the checkpoint.**
 
-- **Стартовое состояние ядра** — `rep::ReportStart`: `Fresh` (локальных строк нет),
-  `Resume(n)` (строки есть, epoch ещё не сохранён) или `Checkpoint{epoch, next_from_rec_id}`.
-  Чекпойнт лежит в `app_meta` под `rep_epoch_{core_uid}` / `rep_next_{core_uid}`, и feed стартует
-  через `sync_from`, `sync(resume)` или `sync(fresh(All))` соответственно. Пара с epoch нужна
-  потому, что пересозданную на ядре базу иначе не отличить: новая может уже перерасти старые
-  номера, и чисто числовой курсор этого не заметит.
-- `Resume(n)` — **одноразовый миграционный путь** для реплик, записанных до появления чекпойнтов.
-  Полная перекачка вместо него стоила бы существующему пользователю сотни МБ. Принятый остаточный
-  риск: на этом единственном проходе epoch'а ещё нет, детект пересоздания падает на эвристику
-  high-water, и ядро, пересоздавшее базу офлайн так, что новая уже переросла старый максимум
-  `newrecid`, останется незамеченным — строки с совпадающими id сохранят значения мёртвой базы,
-  а карта живых строк это не чинит (она несёт видимость, не содержимое). Отсутствующие в новой
-  базе id она всё же скроет, а начиная с первого сохранённого чекпойнта пересоздание ловится по
-  epoch. Кому это важно — сброс реплики форсирует полный sync.
-- **Сохранённый `next_from_rec_id` никогда не поднимают до `max(newrecid)+1`.** Живые апсерты
-  штатно ложатся ВЫШЕ чекпойнта между двумя catch-up'ами, так что локальный максимум обычно
-  больше; взять максимум — значит пропустить страницы между ними. Перезапрошенные строки
-  идемпотентны по `(core_uid, newrecid)`. Обратное тоже верно: чекпойнт без локальных строк
-  отбрасывается.
-- **Сброшенный бит скрывает строку, а не удаляет её** (`deleted=1`): карта не отличает
-  soft-delete от retention, а скрытую строку должен уметь вернуть последующий restore или апсерт.
-  Поэтому же живой `RowUpsert` без поля `deleted` пишет `deleted=0` — ровно так его читает сам
-  moonproto, накладывая живые события на карту в полёте.
-- `rep::apply_alive_map` сканирует **только локальные строки ядра** в пределах `covered_up_to`
-  (первичный ключ обслуживает и фильтр, и порядок — ни сортировки, ни нового индекса), копит
-  потоком лишь расхождения в свёрнутые диапазоны и применяет их двумя `UPDATE`. `covered_up_to` —
-  это high-water ядра, он бывает в миллионах; проход по нему заблокировал бы единственный writer.
-- **Без колонки `deleted` чекпойнт не сохраняется**: записать видимость некуда, а отметка
-  «карта применена» навсегда лишила бы ядро повторной попытки.
-- **Любой сброс реплики чистит чекпойнт вместе со строками** (`rep::reset_replica`) — и путь
-  `database_recreated` у страницы, и `DatabaseRecreated` у карты. Иначе следующий старт взял бы
-  старый epoch, снова стёр частично собранную реплику и зациклил полную перекачку.
-- Порядок отказов: страница коммитится до своего `page_applied`, `SyncComplete` приходит после
-  последнего ACK, `DbMsg::SyncComplete` и `DbMsg::AliveMap` идут одним FIFO к одному writer'у.
-  Откат батча не двигает ни чекпойнт, ни опубликованное стартовое состояние — следующее
-  соединение просто повторяет catch-up.
+- **A core's start state** is `rep::ReportStart`: `Fresh` (no local rows),
+  `Resume(n)` (rows exist, epoch not yet saved) or `Checkpoint{epoch, next_from_rec_id}`.
+  The checkpoint lives in `app_meta` under `rep_epoch_{core_uid}` / `rep_next_{core_uid}`, and the feed starts
+  via `sync_from`, `sync(resume)` or `sync(fresh(All))` respectively. The pair with epoch is needed
+  because a database recreated on the core is otherwise indistinguishable: the new one may already have grown past the old
+  numbers, and a purely numeric cursor will not notice.
+- `Resume(n)` is a **one-shot migration path** for replicas written before checkpoints existed.
+  A full re-pump instead would cost an existing user hundreds of MB. The accepted residual
+  risk: on this single pass there is still no epoch, recreate detection falls to the high-water
+  heuristic, and a core that recreated the database offline such that the new one already grew past the old
+  `newrecid` maximum will go unnoticed — rows with matching ids will keep the dead database's values,
+  and the live-row map does not fix that (it carries visibility, not content). Ids missing from the new
+  database it will still hide, and from the first saved checkpoint onward a recreate is caught by
+  epoch. Anyone who cares — a replica reset forces a full sync.
+- **The saved `next_from_rec_id` is never raised to `max(newrecid)+1`.** Live upserts
+  routinely land ABOVE the checkpoint between two catch-ups, so the local maximum is usually
+  larger; taking the maximum would skip the pages between them. Re-requested rows
+  are idempotent by `(core_uid, newrecid)`. The reverse is also true: a checkpoint with no local rows
+  is discarded.
+- **A cleared bit hides the row, it does not delete it** (`deleted=1`): the map does not distinguish
+  soft-delete from retention, and a later restore or upsert must be able to bring the hidden row back.
+  That is also why a live `RowUpsert` without a `deleted` field writes `deleted=0` — exactly how
+  moonproto itself reads it, overlaying live events on the map in flight.
+- `rep::apply_alive_map` scans **only the core's local rows** within `covered_up_to`
+  (the primary key serves both the filter and the order — no sort, no new index), accumulates
+  only the mismatches as collapsed ranges in a stream, and applies them with two `UPDATE`s. `covered_up_to`
+  is the core's high-water; it can be in the millions; walking it would block the only writer.
+- **Without a `deleted` column the checkpoint is not saved**: there is nowhere to write visibility, and a
+  "map applied" mark would permanently deny the core another attempt.
+- **Any replica reset clears the checkpoint together with the rows** (`rep::reset_replica`) — both the
+  `database_recreated` path of a page and `DatabaseRecreated` of the map. Otherwise the next start would take
+  the old epoch, wipe the partially built replica again and loop a full re-pump.
+- Failure order: a page is committed before its `page_applied`, `SyncComplete` arrives after
+  the last ACK, `DbMsg::SyncComplete` and `DbMsg::AliveMap` go in one FIFO to one writer.
+  Rolling back a batch moves neither the checkpoint nor the published start state — the next
+  connection simply repeats catch-up.
 
-### Архив трасс ордеров (`order_traces.sqlite`)
+### The order-trace archive (`order_traces.sqlite`)
 
-Трассы закрытых сделок ядро отдаёт по запросу `request_traces(ReportUID)` из архива,
-ограниченного по сроку хранения, а moonproto своего кэша не держит и прямо просит терминал
-завести постоянное хранилище по `ReportUID` и спрашивать только то, чего нет
-(`docs/reports.md`, «Archived Order Traces»). Файл отдельный от реплики по той же причине, что и
-`strategies.sqlite`: реплика пересобирается с ядра, а трасса, которую ядро уже забыло, больше
-нигде не существует.
+The core serves traces of closed trades on `request_traces(ReportUID)` from an archive
+bounded by retention, and moonproto keeps no cache of its own and explicitly asks the terminal
+to keep a durable store keyed by `ReportUID` and to ask only for what is missing
+(`docs/reports.md`, "Archived Order Traces"). The file is separate from the replica for the same reason as
+`strategies.sqlite`: the replica is rebuilt from the core, and a trace the core has already forgotten no longer
+exists anywhere.
 
-- **Один writer** (`db::order_traces`, поток `order-traces-db`), три входа от фида любого ядра:
-  ответ ядра (`Answer`, пустой тоже — как строка без линий с `checked_at_ms`, чтобы не спрашивать
-  ту же старую сделку на каждом старте; пустой ответ старше `EMPTY_RECHECK` снова считается
-  неизвестным), закрытие строки (`RowClosed` — писатель сам решает, надо ли спрашивать, и
-  отвечает фиду списком через `AskSink`), завершение catch-up (`Backfill` — писатель через
-  reader реплики с `ATTACH` перечисляет закрытые за `BACKFILL_DEPTH` строки без актуального
-  ответа, новые первыми). `TraceFailed` не записывается никогда: это не «пусто».
-- **Один темп** (`feed/live/trace_backfill.rs`): каждый `request_traces` соединения — запрос
-  окна, закрывшаяся строка, докачка — идёт через одну очередь: не больше `WINDOW` неотвеченных
-  и не чаще одного в `MIN_INTERVAL`; запрос окна встаёт в голову. Три отказа подряд бросают
-  очередь — старое ядро на команду молчит, и moonproto превращает каждое молчание в отказ через
-  12 с.
-- **Один резолвер** (`backend/traces.rs`): любой потребитель — окно сделки, чарт в режиме линий
-  — отдаёт ему список `ReportUID` с потолком запросов к ядру и читает состояние строки после
-  его собственного wake-канала (`TracesRevision`). Резолвер сначала читает архив off-thread,
-  промахи спрашивает у ядра, ответы забирает из `CoreData::report_traces` на дрейне фида —
-  один наблюдатель на процесс. Никто больше не ходит ни в файл, ни к ядру напрямую.
-- **Живой чарт** — стиль «Сделки: Метки / Линии Moonbot» (`ChartGraphicsCfg::trade_history_style`,
-  per-tab, дефолт по виду через ⧉). В режиме линий выход сделки — всегда линия: из архива с
-  путём переносов, когда ядро его отдало, иначе прямая из самой строки отчёта (цена продажи,
-  `SellSetDate` → `CloseDate`, `ReportExit::of_record`); вход — линия только с собственной
-  архивной Buy-линией, иначе остаётся стрелкой (в отчёте нет старта входа); движок сам ранжирует
-  сделки истории по близости закрытия к правому краю каждой панели (`chartdx/archived_lines.rs`,
-  `rank_wanted`), панель отдаёт первые 30 резолверу (`panels/chart/trace_lines.rs`, не чаще раза в
-  400 мс на панораму) и по его wake собирает карту `ReportUID → линии`; движок вторым проходом
-  `build_order_geometry` кладёт `append_archived`-стор в те же буферы, что живые ордера, с теми
-  же поблажками, что у замороженного окна (`hide_closed_sell_line` снят, потолок закрытых снят).
-- Ключ `(core_uid, report_uid)`; `0` — локальная заглушка реплики и ключом не бывает. Файл
-  участвует в «поле» uid (`observed_uid_floor`), как и остальные хранилища с `core_uid`.
-- Цены точек хранятся как `f64` (дока провода запрещает даункаст при сохранении); в `f32`
-  чарта они сужаются только при сборке `LineTrace`.
+- **One writer** (`db::order_traces`, thread `order-traces-db`), three entries from any core's feed:
+  the core's reply (`Answer`, empty too — as a row with no lines and a `checked_at_ms`, so the same
+  old trade is not asked on every start; an empty reply older than `EMPTY_RECHECK` is again treated as
+  unknown), a row close (`RowClosed` — the writer itself decides whether to ask, and
+  answers the feed with a list through `AskSink`), catch-up completion (`Backfill` — the writer, through
+  the replica reader with `ATTACH`, lists closed rows within `BACKFILL_DEPTH` that have no current
+  reply, newest first). `TraceFailed` is never written: that is not "empty".
+- **One pace** (`feed/live/trace_backfill.rs`): every `request_traces` of a connection — a window
+  request, a just-closed row, a backfill — goes through one queue: no more than `WINDOW` unanswered
+  and no more often than one per `MIN_INTERVAL`; a window request goes to the head. Three refusals in a row drop
+  the queue — an old core is silent on the command, and moonproto turns each silence into a refusal after
+  12 s.
+- **One resolver** (`backend/traces.rs`): any consumer — the Trade window, a chart in lines mode
+  — hands it a list of `ReportUID` with a ceiling of core requests and reads the row state after
+  its own wake channel (`TracesRevision`). The resolver first reads the archive off-thread,
+  asks the core for misses, and takes replies from `CoreData::report_traces` on the feed drain —
+  one observer per process. Nobody else talks to the file or the core directly.
+- **The live chart** — the "Trades: Marks / Moonbot lines" style (`ChartGraphicsCfg::trade_history_style`,
+  per-tab, default per view via ⧉). In lines mode a trade's exit is always a line: from the archive with
+  the transfer path when the core supplied it, otherwise a straight line from the report row itself (sell price,
+  `SellSetDate` → `CloseDate`, `ReportExit::of_record`); the entry is a line only with its own
+  archived Buy line, otherwise it stays an arrow (the report has no entry start); the engine itself ranks
+  history trades by how close the close is to the right edge of each pane (`chartdx/archived_lines.rs`,
+  `rank_wanted`), the panel hands the first 30 to the resolver (`panels/chart/trace_lines.rs`, no more than once per
+  400 ms on a pan) and on its wake builds the map `ReportUID → lines`; the engine's second
+  `build_order_geometry` pass puts the `append_archived` store into the same buffers as live orders, with the
+  same relaxations as a frozen window (`hide_closed_sell_line` off, closed-trade ceiling off).
+- Key `(core_uid, report_uid)`; `0` is a local replica stub and is never a key. The file
+  takes part in the uid "floor" (`observed_uid_floor`), like the other stores with `core_uid`.
+- Point prices are stored as `f64` (the wire docs forbid a downcast on save); they narrow to the chart's `f32`
+  only when building `LineTrace`.
 
-## Пересчёт в USDT: два режима
+## USDT valuation: two modes
 
-Отчёт и Аналитика умеют показывать котируемые деньги в USDT двумя способами. Режим один на всё
-приложение (`SettingsFile.report_valuation_mode`, читается через `Backend::valuation_mode`), потому
-что два окна с разными режимами показывали бы один и тот же период двумя одинаково «правдивыми»
-итогами.
+Report and Analytics can show quoted money in USDT in two ways. The mode is one for the whole
+application (`SettingsFile.report_valuation_mode`, read through `Backend::valuation_mode`), because
+two windows on different modes would show the same period as two equally "true"
+totals.
 
-Селектор живёт в **Настройках, вкладка «Общие»**, а не на панелях Отчёта и Аналитики: значение по
-умолчанию отвечает на вопрос «сколько сделка стоила, когда закрылась», и это правильный вопрос
-почти для всех — экспертной настройке не место в рабочем тулбаре. Сохранение вызывает
-`Backend::apply_valuation_mode`: оно поднимает флаг спроса воркера и публикует `report_revision`.
-Публикация обязательна — смена режима не двигает ни одного ряда, поэтому ни одно поколение сама по
-себе не сдвинется, и открытые окна продолжили бы рисовать прежние числа под новым ярлыком.
+The selector lives in **Settings, the General tab**, not on the Report and Analytics panels: the default
+value answers "what was the trade worth when it closed", and that is the right question
+for almost everyone — an expert setting does not belong on the working toolbar. Saving calls
+`Backend::apply_valuation_mode`: it raises the worker demand flag and publishes `report_revision`.
+The publish is mandatory — a mode change moves no row, so no generation would shift
+by itself, and open windows would keep drawing the old numbers under the new label.
 
-- **По курсу сделки** (по умолчанию) — `valuation.sqlite`. Сначала используется close полностью
-  закрытой минуты сделки. Если такой свечи нет, резолвер без фиксированного лимита по времени ищет
-  первую более позднюю закрытую свечу и берёт её open. Это исторический P&L.
-- **По текущему курсу** — `db::valuation::current`, снимок «ординал валюты → цена в USDT» в памяти.
-  **Никогда не персистится**: `ALGORITHM_VERSION` входит в оба первичных ключа кэша, так что общей
-  строки у режимов быть не может, а сохранённый «текущий» курс после перезапуска — это устаревший
-  курс под ярлыком свежего.
+- **At trade time** (the default) — `valuation.sqlite`. First the close of the trade's fully
+  closed minute is used. If that candle is missing, the resolver with no fixed time limit looks for
+  the first later closed candle and takes its open. This is historical P&L.
+- **Current rate** — `db::valuation::current`, an in-memory snapshot "currency ordinal → USDT price".
+  **Never persisted**: `ALGORITHM_VERSION` is in both cache primary keys, so the modes cannot share a
+  row, and a saved "current" rate after restart is a stale
+  rate under a fresh label.
 
-Исторический резолвер пробует прямые и обратные spot-маркеты Binance, Bybit и Hyperliquid. Индексы
-spot-вселенной Hyperliquid берутся из `spotMeta`, а не зашиваются в код. Если прямого рынка нет,
-допустим детерминированный маршрут из двух рынков через любую известную `QuoteCurrency`; обе его
-ноги обязаны иметь свечу одной и той же минуты. Поэтому, например, `USDH -> USDC -> USDT` не
-складывает цены разных моментов. В `rates` отдельно сохраняются минута сделки, фактическая минута,
-price basis и обе ноги; полный источник и задержка доступны в подсказке колонки Report.
+The historical resolver tries direct and inverse Binance, Bybit and Hyperliquid spot markets. Indexes
+of the Hyperliquid spot universe come from `spotMeta`, they are not baked into the code. If there is no direct market,
+a deterministic two-market route through any known `QuoteCurrency` is allowed; both of its
+legs must have a candle of the same minute. Therefore, for example, `USDH -> USDC -> USDT` does not
+add prices from different moments. `rates` stores separately the trade minute, the actual minute,
+price basis and both legs; the full source and the delay are available in the Report column tooltip.
 
 Transport timeouts and temporary service failures permit another provider to supply the requested
 closed candle; malformed responses remain data errors. Successful fallback valuations retain their
@@ -617,134 +616,134 @@ When the full scope cannot be converted, its core/exchange tables remain visible
 sections. Each section has its own monetary subtotal; the footer never adds unlike currencies.
 Unknown denominations retain their core identities and counts but publish no monetary amount.
 
-Отсутствие свечи до текущего закрытого горизонта не является окончательным «курс недоступен».
-`rate_searches` хранит достигнутый горизонт и wall-clock время следующей попытки; строка остаётся
-pending, переживает перезапуск и повторяется без горячего цикла. Смена `ALGORITHM_VERSION` выводит
-старое семейство производного кэша в архив и полностью перестраивает оценки, не меняя отчётные БД.
+A missing candle up to the current closed horizon is not a final "rate unavailable".
+`rate_searches` stores the reached horizon and the wall-clock time of the next attempt; the row stays
+pending, survives a restart and is retried without a hot loop. Changing `ALGORITHM_VERSION` moves
+the old derived-cache family into archive and fully rebuilds the valuations, without changing the report DBs.
 
-Обе ветки строят один и тот же `CoverageSql` через `valuation::projection(mode, attached, ...)`, так
-что поколоночные значения Отчёта, итоговая строка, экспорт, сводка Аналитики, календарь, группы и
-тюнер конвертируются по одному правилу. Курсы попадают в SQL литералами, а не плейсхолдерами:
-готовая строка переиспользуется как FROM-фрагмент вызывающими, которые связывают только свой
-диапазон дат.
+Both branches build the same `CoverageSql` through `valuation::projection(mode, attached, ...)`, so
+Report per-column values, the totals row, export, the Analytics summary, calendar, groups and
+tuner are converted by one rule. Rates go into SQL as literals, not placeholders:
+the ready string is reused as a FROM fragment by callers that bind only their
+date range.
 
-Известные ограничения текущего режима — документированные свойства, не баги; оба названы в подсказке
-под селектором (`general.valuation_mode_hint`):
+Known limits of the current-rate mode are documented properties, not bugs; both are named in the hint
+under the selector (`general.valuation_mode_hint`):
 
-- Курсы берутся со **спота Binance/Bybit**, а не с биржи, где шла торговля.
-- **Тюнер тоже переоценивается.** Пороги подбираются по переоценённой истории, то есть оптимизируется
-  не то, что фактически произошло. Это осознанное решение пользователя, а не недосмотр.
-- Валюта без свежего курса не конвертируется вовсе: после `FRESHNESS_MS` (10 минут) курс перестаёт
-  считаться текущим, и итог честно распадается по валютам — так же, как при неполном историческом
-  покрытии. Валюта, у которой все маршруты постоянно отсутствуют, считается `unavailable`; валюта,
-  которую просто ещё не успели опросить, — «в процессе».
+- Rates are taken from **Binance/Bybit spot**, not from the exchange where the trade was made.
+- **The tuner is re-valued too.** Thresholds are fitted against re-valued history, so what is optimized
+  is not what actually happened. This is a conscious user choice, not an oversight.
+- A currency without a fresh rate is not converted at all: after `FRESHNESS_MS` (10 minutes) the rate stops
+  counting as current, and the total honestly splits by currency — the same as under incomplete historical
+  coverage. A currency whose every route is permanently missing is `unavailable`; a currency
+  that simply has not been queried yet is "in progress".
 
-Воркер обновляет снимок стадией `ValuationStage::CurrentRates`, **по одной валюте за оборот цикла**
-(холодный проход по валюте стоит до четырёх последовательных маршрутов по 15 с) и **только пока
-`ValuationHandle::set_current_wanted(true)`** — при выключенном режиме в сеть не уходит ни одного
-запроса. Публикуется через `generation`/`commit_dirty` (данные), а не через `status_revision`
-(здоровье): счётчик здоровья намеренно не вызывает перезапрос.
+The worker updates the snapshot with stage `ValuationStage::CurrentRates`, **one currency per cycle turn**
+(a cold pass over a currency costs up to four sequential 15 s routes) and **only while
+`ValuationHandle::set_current_wanted(true)`** — with the mode off, not a single request goes to the network.
+It is published through `generation`/`commit_dirty` (data), not through `status_revision`
+(health): the health counter is deliberately not a reason to re-query.
 
-Публикация стоит пользователю дорого: на сдвиг поколения каждый открытый Отчёт и окно Аналитики
-делают полный перезапрос и пересборку дерева. Поэтому обновление стоит на двух ограничителях —
-`CURRENT_REFRESH_MINUTES` (5, половина окна свежести, так что один провалившийся проход не может
-дать курсу протухнуть) и `CurrentRateState::renders_differently`: снимок сохраняется всегда (по нему
-считается свежесть), а поколение двигается, только если изменилась цена, её происхождение или набор
-недоступных валют. `fetched_at_ms` в сравнение намеренно не входит — он двигается каждый проход и не
-попадает ни в одну цифру на экране, так что привязанная к доллару котировка не стоит ни одного
-перезапроса. Истечение срока при этом видно как уменьшившийся набор курсов, поэтому отсечка
-по-прежнему доходит до экрана вовремя.
+A publish is expensive for the user: on a generation shift every open Report and Analytics window
+does a full re-query and rebuilds the tree. Therefore the update sits on two limiters —
+`CURRENT_REFRESH_MINUTES` (5, half the freshness window, so one failed pass cannot
+let a rate go stale) and `CurrentRateState::renders_differently`: the snapshot is always saved (freshness
+is computed from it), and the generation moves only if the price, its origin, or the set of
+unavailable currencies changed. `fetched_at_ms` is deliberately not in the comparison — it moves every pass and
+lands in no on-screen figure, so a dollar-pegged quote costs not a single
+re-query. Expiry is still visible as a smaller set of rates, so the cut-off
+still reaches the screen in time.
 
-## Резервные копии настроек и стратегий (`backups/`)
+## Settings and strategy backups (`backups/`)
 
-`moon_core::backup_store` — единый внутренний владелец файлового lifecycle обоих типов снимков:
-он проверяет корень, выдаёт уникальные `.incoming-*` каталоги, атомарно публикует готовый каталог
-и удаляет старый только после проверки полного состава файлов. Доменные модули не дублируют эту
-логику: они задают содержимое, полную грамматику имён и свою политику хранения.
+`moon_core::backup_store` is the single internal owner of the file lifecycle of both snapshot kinds:
+it checks the root, issues unique `.incoming-*` directories, atomically publishes a ready directory
+and deletes the old one only after checking the full file set. Domain modules do not duplicate this
+logic: they specify contents, the full name grammar and their own retention policy.
 
-`backups` (`moon-core/src/backups.rs`) — один wall-clock coordinator для обоих доменов. Он привязан
-к 12:00 UTC, на обычном старте сразу догоняет последний наступивший полуденный слот и затем каждый
-раз заново вычисляет задержку до следующего полудня. Настройки и стратегии выполняются в отдельных
-job-потоках: длительная SQLite-копия или повтор после ошибки не задерживает второй домен. FireTest
-coordinator не запускает.
+`backups` (`moon-core/src/backups.rs`) is one wall-clock coordinator for both domains. It is pinned
+to 12:00 UTC, on a normal start immediately catches up the last noon slot that has arrived, and then each
+time recomputes the delay until the next noon. Settings and strategies run in separate
+job threads: a long SQLite copy or a retry after an error does not delay the second domain. FireTest
+does not start the coordinator.
 
-`config::backup` (`moon-core/src/config/backup.rs`) складывает в
-`<data_dir>/backups/settings/<UTC timestamp>/` копии двух невосстановимых файлов — `servers.enc`
-(ключи API) и `cfg/settings.toml` (группы, галки ядер, счётчик uid). Кнопка «Сохранить» снимок больше
-не создаёт: все обычные записи используют `AppConfig::save()`, а coordinator создаёт не более одной
-канонической копии на UTC-полуденный период. Обе записи конфига и обе операции копирования защищены
-одним pair-lock, поэтому снимок не смешивает поколения файлов. Миграция схемы перед перезаписью
-использует тот же наступивший дневной слот как safety barrier, а не отдельную серию снимков. Старые
-снимки прежних версий прямо в `backups/` остаются на месте: приложение не переносит и не удаляет их.
-Перед первой из двух замен `save()` ставит `.config-pair-pending` и снимает marker только после
-второй; незавершённая пара не попадает в backup, а следующий обычный запуск пересохраняет собранный
-в памяти конфиг целиком. Кроме process-lock, snapshot повторно читает оба источника после сборки:
-это обнаруживает замену из второго экземпляра терминала и оставляет слот на повтор вместо mixed copy.
+`config::backup` (`moon-core/src/config/backup.rs`) puts into
+`<data_dir>/backups/settings/<UTC timestamp>/` copies of two irrecoverable files — `servers.enc`
+(API keys) and `cfg/settings.toml` (groups, core checkboxes, the uid counter). The Save button no longer
+creates a snapshot: all ordinary writes use `AppConfig::save()`, and the coordinator creates at most one
+canonical copy per UTC-noon period. Both config writes and both copy operations are guarded by
+one pair-lock, so a snapshot does not mix file generations. A schema migration before overwrite
+uses that same arrived day slot as a safety barrier, not a separate snapshot series. Old
+snapshots of previous versions sitting directly in `backups/` stay put: the application neither moves nor deletes them.
+Before the first of the two replacements `save()` plants `.config-pair-pending` and clears the marker only after
+the second; an incomplete pair does not enter the backup, and the next ordinary start re-saves the in-memory
+config as a whole. Besides the process-lock, the snapshot re-reads both sources after assembly:
+this detects a replacement from a second terminal instance and leaves the slot for a retry instead of a mixed copy.
 
-`strat_db::backup` хранит консистентные SQLite-копии в
-`<data_dir>/backups/strategies/<UTC timestamp>/strategies.sqlite`. Если существующая база содержит
-хотя бы одну строку стратегии, startup catch-up разрешён сразу. На чистой базе плановый снимок ждёт,
-пока writer успешно применит по одному полному набору от каждого активного ядра с включённым feed
-стратегий; пустой набор тоже считается доставленным. Feed продвигает свой delivery-cursor только по
-подтверждению успешного SQLite commit от writer-а: переполненная очередь или ошибка записи оставляет
-тот же набор на секундный retry даже без нового MoonProto-события. Изменение состава ядер через
-Настройки обновляет барьер, а финальный rename выполняется под коротким topology claim, поэтому новый
-core не может появиться между проверкой поколения и публикацией. После временной ошибки готового
-источника backup-job повторяет просроченный слот через пять минут. Ручная кнопка на вкладке
-«Хранилище» использует тот же атомарный механизм, но всегда создаёт отдельный снимок и не подменяет
-обязательный полуденный.
+`strat_db::backup` stores consistent SQLite copies in
+`<data_dir>/backups/strategies/<UTC timestamp>/strategies.sqlite`. If the existing database contains
+at least one strategy row, startup catch-up is allowed immediately. On a clean database a scheduled snapshot waits
+until the writer has successfully applied one full set from each active core with the strategies feed
+enabled; an empty set also counts as delivered. The feed advances its delivery-cursor only on
+confirmation of a successful SQLite commit from the writer: an overflowed queue or a write error leaves
+the same set for a one-second retry even without a new MoonProto event. A change of core membership through
+Settings updates the barrier, and the final rename runs under a short topology claim, so a new
+core cannot appear between the generation check and the publish. After a temporary error of a ready
+source the backup-job retries the overdue slot in five minutes. The manual button on the
+Storage tab uses the same atomic mechanism, but always creates a separate snapshot and does not replace
+the mandatory noon one.
 
-Оба домена сохраняют все ручные и плановые снимки последних семи UTC-полуденных периодов. Старые
-`data/strategies-backup-*.sqlite` и прежние корневые settings-снимки остаются нетронутыми.
+Both domains keep all manual and scheduled snapshots of the last seven UTC-noon periods. Old
+`data/strategies-backup-*.sqlite` files and former root settings snapshots stay untouched.
 
-Что легко сломать незаметно:
+What is easy to break unnoticed:
 
-- **Имя каталога `YYYYMMDD-HHMMSS` (UTC) — это контракт, а не оформление.** Двоеточие запрещено в
-  именах файлов Windows, а фиксированная ширина даёт «лексикографический порядок = хронологический»,
-  на чём и держится отсечение старых копий. Сортировка по mtime НЕ годится: копирование файла и
-  облачная синхронизация его переписывают. Штамп строит `util::time::utc_stamp_compact` — из частей
-  даты, а не нарезкой готовой строки, потому что `{y:04}` задаёт МИНИМАЛЬНУЮ ширину.
-- **Снимок публикуется целиком.** Файлы собираются в каталоге `.incoming-*`, который намеренно не
-  проходит распознавание, и лишь потом весь непустой каталог публикуется одним `fs::rename`.
-  Плановый снимок имеет каноническое имя полуденного слота: если два экземпляра терминала
-  одновременно собрали его, завершённый победитель считается общим успехом, а не ошибкой второго.
-- **Чистка не должна уметь удалять чужое.** Корень-симлинк пропускается, тип потомка берётся
-  через `DirEntry::file_type` (не разыменовывает ссылки), удаляются только ожидаемые имена файлов,
-  а сам каталог сносится НЕрекурсивным `remove_dir` — поэтому посторонний файл внутри снимка
-  сохраняет и себя, и снимок.
-- **`backups/` НЕ входит ни в один из миграционных списков `paths.rs`.** Обе миграции работают
-  через `fs::copy`/`fs::rename` и в каталоги не рекурсируют, но и не отказываются от них: имя
-  каталога в списке молча увезло бы всё дерево снимков туда, где `backups_dir()` его не ищет.
-  Прецедент — `logs/`, которого там нет по той же причине. Закрыто тестом.
-- **Нечитаемый `settings.toml` НЕ перезаписывается.** `toml_io::ConfigLoad` отличает «файла нет»
-  от «файл не прочитался»; во втором случае автоматическое пере-сохранение по устаревшей версии
-  схемы отменяется. Иначе временная ошибка чтения (права, шара, невыгруженный облачный
-  плейсхолдер) превращалась бы в безвозвратную замену живого конфига дефолтами.
+- **The directory name `YYYYMMDD-HHMMSS` (UTC) is a contract, not decoration.** A colon is forbidden in
+  Windows file names, and the fixed width gives "lexicographic order = chronological",
+  which is what old-copy pruning rests on. Sorting by mtime does NOT work: a file copy and
+  cloud sync rewrite it. The stamp is built by `util::time::utc_stamp_compact` — from date parts,
+  not by slicing a ready-made string, because `{y:04}` sets a MINIMUM width.
+- **A snapshot is published whole.** Files are assembled in a `.incoming-*` directory, which is deliberately not
+  recognized, and only then the whole non-empty directory is published with one `fs::rename`.
+  A scheduled snapshot has the canonical noon-slot name: if two terminal instances
+  assembled it at the same time, the finished winner is a shared success, not an error of the second.
+- **Cleanup must not be able to delete someone else's files.** A symlink root is skipped, the child's type is taken
+  via `DirEntry::file_type` (does not follow links), only expected file names are deleted,
+  and the directory itself is removed with a NON-recursive `remove_dir` — so a foreign file inside a snapshot
+  preserves both itself and the snapshot.
+- **`backups/` is NOT in any of the `paths.rs` migration lists.** Both migrations work
+  through `fs::copy`/`fs::rename` and do not recurse into directories, but they also do not refuse them: a
+  directory name on the list would silently haul the whole snapshot tree to where `backups_dir()` does not look.
+  Precedent — `logs/`, which is absent there for the same reason. Closed by a test.
+- **An unreadable `settings.toml` is NOT overwritten.** `toml_io::ConfigLoad` distinguishes "file is missing"
+  from "file failed to read"; in the second case automatic re-save under an outdated
+  schema version is cancelled. Otherwise a temporary read error (permissions, a share, an unloaded cloud
+  placeholder) would become an irreversible replacement of the live config with defaults.
 
-## Telegram: свой поток, парность чата и одноразовый туннель
+## Telegram: its own thread, chat pairing, and the one-shot tunnel
 
-`moon-core/src/telegram/` — UI-независимый агент: свой бот и Mini App. Async-рантайма нет,
-HTTP — синхронный `ureq`, `getUpdates` держит сокет до 25 с, поэтому транспорт живёт в своих
-потоках, по форме как `crowd/`. **Пустой токен — жёсткий выключатель: `TelegramService::start`
-возвращает `None` до канала, потока, пути, слушателя и helper-процесса.**
+`moon-core/src/telegram/` is a UI-agnostic agent: its own bot and Mini App. There is no async runtime,
+HTTP is synchronous `ureq`, `getUpdates` holds the socket for up to 25 s, so the transport lives in its own
+threads, in the same shape as `crowd/`. **An empty token is a hard off-switch: `TelegramService::start`
+returns `None` before a channel, thread, path, listener, or helper process.**
 
-- **Два потока.** `telegram-bot` блокирующе поллит `getUpdates`. `telegram-miniapp-owner`
-  отдельно держит loopback-сервер и туннель, иначе один задержавшийся poll заблокировал бы HTTP.
-  GPUI `Backend` общается только типизированными каналами `Work` / `Response` и дренирует их в
-  100 мс цикле (`Backend::tick_telegram`).
-- **Токен живёт в `Secret` внутри `servers.enc`, не в `settings.toml`.** `TelegramConfig`
-  сериализуется только в шифрованный агрегат; `Secret` в `Debug` — `Secret(***)`, `ApiError` не
-  несёт ни токена, ни Bot API URL. Settings маскирует поле и хеширует только пустоту токена.
-- **Граница доверия — парность чата.** Имя бота из `getMe` публично. Команды принимает только
-  chat id из `authorized_chat_ids` после `/pair`. Код парности — шесть символов, 10 минут, один
-  раз, только в памяти. Непарный собеседник получает плоский `telegram.refusal` («Доступ
-  запрещён») — без намёка, что за ботом стоит терминал. `/pair` и `/miniapp` — только из
-  private-чата.
-- **Mini App с петли наружу через quick-туннель.** `MiniAppServer` биндится на `127.0.0.1:0`;
-  `cloudflared` (verified-download через путь self-updater, SHA-256) поднимает туннель на этот
-  порт. Единственный аутентифицированный запрос — `POST /api/session`: HMAC `initData`, затем
-  `authorize_paired_identity`, затем живая перепроверка `mini_app_enabled` и членства чата в
-  `Backend::telegram_mini_request`. Подлинность запуска Telegram — не авторизация терминала.
+- **Two threads.** `telegram-bot` blocking-polls `getUpdates`. `telegram-miniapp-owner`
+  separately holds the loopback server and the tunnel, otherwise one delayed poll would block HTTP.
+  The GPUI `Backend` talks only through typed `Work` / `Response` channels and drains them in the
+  100 ms loop (`Backend::tick_telegram`).
+- **The token lives in a `Secret` inside `servers.enc`, not in `settings.toml`.** `TelegramConfig`
+  is serialized only into the encrypted aggregate; `Secret` in `Debug` is `Secret(***)`, `ApiError` carries
+  neither the token nor the Bot API URL. Settings masks the field and hashes only the token's emptiness.
+- **The trust boundary is chat pairing.** The bot name from `getMe` is public. Commands are accepted only from
+  a chat id in `authorized_chat_ids` after `/pair`. The pairing code is six characters, 10 minutes, one
+  shot, memory-only. An unpaired correspondent gets a flat `telegram.refusal` ("Access
+  denied.") — with no hint that a terminal sits behind the bot. `/pair` and `/miniapp` are only from a
+  private chat.
+- **Mini App from the loop to the outside through a quick-tunnel.** `MiniAppServer` binds on `127.0.0.1:0`;
+  `cloudflared` (verified-download via the self-updater path, SHA-256) raises a tunnel to that
+  port. The only authenticated request is `POST /api/session`: HMAC `initData`, then
+  `authorize_paired_identity`, then a live re-check of `mini_app_enabled` and chat membership in
+  `Backend::telegram_mini_request`. Authenticity of a Telegram launch is not terminal authorization.
 - **Native Mini App menu follows the tunnel.** The Mini App owner publishes the latest URL and
   localized label; the bot worker reconciles per-chat `setChatMenuButton` between long polls.
   Only paired private chats receive a web-app menu. Disabled, unavailable, or revoked targets
@@ -792,195 +791,198 @@ HTTP — синхронный `ureq`, `getUpdates` держит сокет до 
   revoke old service liveness before retiring the worker, cancelling queued deliveries and retries.
   Settings edits remain a draft until Save; archived candidates load asynchronously from history
   independently of checkbox selection. Read-only viewers gain no core-control authority.
-- **Страница Mini App сейчас нарочно пустая: единственный её запрос — проверка сессии
-  (`POST /api/session`). Это решение по объёму, а не недописанный экран.**
-- **Выключение присоединяет всё, что подняли.** Смена токена или списка чатов —
-  `TelegramState::restart`. Снятие галки Mini App не трогает бота (`MiniAppOwner::stop`: сначала
-  туннель, потом слушатель). Выход — `TelegramState::stop`. `Drop` у `TelegramService` и
-  `MiniAppOwner` делает то же.
+- **The Mini App page is currently empty on purpose: its only request is the session check
+  (`POST /api/session`). This is a scope decision, not an unfinished screen.**
+- **Shutdown joins everything that was started.** A token or chat-list change is
+  `TelegramState::restart`. Clearing the Mini App checkbox does not touch the bot (`MiniAppOwner::stop`: first
+  the tunnel, then the listener). Exit is `TelegramState::stop`. `Drop` of `TelegramService` and
+  `MiniAppOwner` does the same.
 
-### Telegram на ядре
+### Telegram on the core
 
-Settings → вкладка Telegram, вторая секция под ботом терминала, заголовок «Telegram на ядре»,
-с выбором ядра. Секция выше — бот самого терминала (`moon-core/src/telegram/**`, парность,
-пуши, Mini App): другая сущность, не этот ридер.
+Settings → Telegram tab, the second section under the terminal bot, heading "Telegram on the core",
+with a core picker. The section above is the terminal's own bot (`moon-core/src/telegram/**`, pairing,
+pushes, Mini App): a different entity, not this reader.
 
-Вход: `SettingsEvent::TelegramUpdated` → `feed/live/convert.rs::telegram_from_proto` →
-`FeedMsg::Telegram(Option<Arc<CoreTelegramState>>)` → `CoreData.telegram` и `telegram_rev`;
-панель читает это через `settings_sig`, панели не подписываются. Выход:
+Inbound: `SettingsEvent::TelegramUpdated` → `feed/live/convert.rs::telegram_from_proto` →
+`FeedMsg::Telegram(Option<Arc<CoreTelegramState>>)` → `CoreData.telegram` and `telegram_rev`;
+the panel reads this through `settings_sig`; panels do not subscribe. Outbound:
 `CoreCmd::Telegram(TelegramCmd)` → `feed/live/telegram.rs::handle` →
 `client.telegram().<method>()`.
 
-`telegram_rev` — счётчик квитанций, не контентный: MoonProto шлёт событие на каждый снимок,
-включая неизменный ответ, и баннер «отправлено, ждём» сбрасывается по этому счётчику.
-`telegram_fresh` и `FeedMsg::TelegramStale`: `ConnStatus::Ready` не значит, что снимок свежий —
-reconnect в цикле сразу даёт `Ready`, поэтому `live = Ready && telegram_fresh`; устаревший
-снимок рисуется приглушённо, действия выключены, QR нет.
+`telegram_rev` is an acknowledgement counter, not a content one: MoonProto sends an event on every snapshot,
+including an unchanged reply, and the "Sent, waiting for the core…" banner is cleared by this counter.
+`telegram_fresh` and `FeedMsg::TelegramStale`: `ConnStatus::Ready` does not mean the snapshot is fresh —
+a reconnect in the loop immediately yields `Ready`, so `live = Ready && telegram_fresh`; a stale
+snapshot is drawn muted, actions are off, there is no QR.
 
-Телефон, код, пароль 2FA, почта, пароль прокси / секрет MTProto и `qr_link` вводятся,
-отправляются и забываются: ни настройка, ни черновик, ни строка лога. Зеркальные типы пишут
-`Debug` вручную, чтобы `{:?}` не унёс секрет. `refresh()` ровно на трёх триггерах — активация
-вкладки, раскрытие секции, выбор ядра — плюс один раз после `Connected { fresh: false }`;
-login / QR / code / reset / logout сами не повторяются.
+Phone, code, 2FA password, email, proxy password / MTProto secret and `qr_link` are entered,
+sent and forgotten: neither a setting, nor a draft, nor a log line. Mirror types write
+`Debug` by hand so `{:?}` does not leak a secret. `refresh()` on exactly three triggers — tab
+activation, section expand, core pick — plus once after `Connected { fresh: false }`;
+login / QR / code / reset / logout do not repeat themselves.
 
 ## UI Components
 
-Приложение зависит от `Moonbot-Tech/MoonUI` и использует компоненты через `moon_ui::*` /
-`moon_ui::components::*`. Прикладные панели терминала не должны заново рисовать общие UI-паттерны
-вручную, если в MoonUI уже есть подходящий компонент или близкий Longbridge-наследник.
+The application depends on `Moonbot-Tech/MoonUI` and uses components through `moon_ui::*` /
+`moon_ui::components::*`. The terminal's application panels must not redraw shared UI patterns
+by hand if MoonUI already has a fitting component or a close Longbridge descendant.
 
-Правило адаптации:
+Adaptation rule:
 
-- если компонент Longbridge уже даёт нужную механику, но тема/геометрия/состояния не соответствуют
-  Moonbot design, править или оборачивать его нужно внутри MoonUI;
-- терминал после этого использует MoonUI API, а не прямой Longbridge API и не локальный ad-hoc
-  виджет в конкретной панели;
-- если в MoonUI не хватает публичного hook/API для терминального сценария, сначала добавить этот
-  hook в MoonUI, затем заменить экранный ручной код;
-- временные исключения должны быть явно помечены в коде или docs с причиной и планом удаления;
-- chart renderer не является UI-компонентом: chart host может использовать MoonUI chrome/overlays,
-  но собственный GPU render остаётся в `chartdx`.
+- if a Longbridge component already gives the needed mechanics but theme/geometry/states do not match
+  Moonbot design, it must be fixed or wrapped inside MoonUI;
+- the terminal then uses the MoonUI API, not the direct Longbridge API and not a local ad-hoc
+  widget in a specific panel;
+- if MoonUI lacks a public hook/API for a terminal scenario, first add that
+  hook in MoonUI, then replace the on-screen hand-rolled code;
+- temporary exceptions must be explicitly marked in code or docs with a reason and a removal plan;
+- the chart renderer is not a UI component: the chart host may use MoonUI chrome/overlays,
+  but its own GPU render stays in `chartdx`.
 
-Практический пример: popup/menu/dialog механика должна идти через `moon_ui::components`
-(`WindowExt`, `Root` dialog/sheet/context-menu/notification layers, Moon menu wrappers). Если
-базовый Longbridge `ContextMenuExt` рисует в чужой теме, его надо привести к Moon-теме в MoonUI
-или использовать Moon-обёртку. В терминале нельзя рендерить открытое контекст-меню как child
-панели: открывать через `window.open_moon_context_menu(...)`, чтобы z-order, dismiss и future
-portal-поведение оставались ответственностью MoonUI Root.
+Practical example: popup/menu/dialog mechanics must go through `moon_ui::components`
+(`WindowExt`, `Root` dialog/sheet/context-menu/notification layers, Moon menu wrappers). If
+the base Longbridge `ContextMenuExt` draws in a foreign theme, it must be brought to the Moon theme in MoonUI
+or a Moon wrapper used. The terminal must not render an open context menu as a panel
+child: open it through `window.open_moon_context_menu(...)`, so z-order, dismiss and future
+portal behaviour remain MoonUI Root's responsibility.
 
-Root overlay layers не являются внешними render hooks для приложения. Приложение открывает dialog,
-sheet, context menu и notification через `WindowExt`/Moon wrappers; сам `Root::render` решает, где
-и в каком порядке эти слои оказываются относительно основного view. Это важно для chart
-UnderScene/z-order и для одинакового поведения на Windows/macOS/Linux.
+Root overlay layers are not external render hooks for the application. The application opens a dialog,
+sheet, context menu and notification through `WindowExt`/Moon wrappers; `Root::render` itself decides where
+and in what order those layers sit relative to the main view. This matters for chart
+UnderScene/z-order and for the same behaviour on Windows/macOS/Linux.
 
-FireTest не читает исходники и не проверяет архитектуру статически. Встроенный
-`--debug-script chart-smoke` проверяет живое поведение: открытие графика, реальные bounds,
-native input, counters/CPU/GPU/RAM. Статические запреты вида "не рендерить меню как child
-панели" живут в `tests/theme_contract/`, а не внутри runtime-сценария.
+FireTest does not read sources and does not check architecture statically. The built-in
+`--debug-script chart-smoke` checks live behaviour: opening a chart, real bounds,
+native input, counters/CPU/GPU/RAM. Static bans of the form "do not render a menu as a panel
+child" live in `tests/theme_contract/`, not inside the runtime scenario.
 
-### Масштаб интерфейса
+### UI scale
 
-Один пользовательский масштаб (`ui_scale`, Settings → General → «Масштаб интерфейса», 50–200 %)
-устанавливается как content zoom окна: `startup::moon_theme_config_for_presentation` кладёт его в
-`MoonScale::zoom`, а `MoonRoot` каждого окна применяет его через `Window::set_content_zoom`. Zoom
-входит в `scale_factor` окна, поэтому масштабируется каждый пиксель — текст, геометрия, картинки,
-hit-area, сохранённые размеры доков — без участия компонентов. Токены MoonUI при этом остаются на
-масштабе дизайна: `scale.ui == scale.font == 1.0`, `tier = Sm`, `font_delta = 3`;
-`design::ui_px` — identity-адаптер над токенами, а `design::CONTROL_TIER` / `BODY_TEXT` /
-`INPUT_SIZE` — единая система размеров, от которой считаются контролы, текст и chrome-полосы.
-Настройки плотности (Compact / Standard / Large) больше нет: ступенчатая смена tier'ов подменяла
-дизайн другим, а не масштабировала его, и не сохраняла пропорции.
+One user scale (`ui_scale`, Settings → General → "UI zoom", 50–200 %) is installed as the window's
+content zoom: `startup::moon_theme_config_for_presentation` puts it into `MoonScale::zoom`, and each
+window's `MoonRoot` applies it through `Window::set_content_zoom`. The zoom folds into the window's
+`scale_factor`, so every pixel scales — text, geometry, images, hit areas, persisted dock sizes —
+without the components taking part. MoonUI's tokens stay at the design's own scale:
+`scale.ui == scale.font == 1.0`, `tier = Sm`, `font_delta = 3`; `design::ui_px` is an identity
+adapter over the tokens, and `design::CONTROL_TIER` / `BODY_TEXT` / `INPUT_SIZE` are the one size
+system that controls, text and chrome bands derive from. There is no density setting (Compact /
+Standard / Large) any more: stepping MoonUI tiers substituted a different design instead of scaling
+the reviewed one, and did not keep its proportions.
 
-График в zoom не участвует: `chartdx` берёт размер render target из полного `scale_factor`
-(слот действительно занимает `bounds × factor` device-пикселей), а свои размеры — толщину линий,
-свечи, оси, подписи — из `scale_factor / content_zoom`, то есть из платформенного DPI. Текстовый
-слой графика живёт в его собственных логических пикселях и переходит в content-пиксели GPUI
-только в `chartdx::text::content_px` / `chart_metrics`; оверлеи над геометрией графика
-(`panels/chart/arb_open.rs`, `market_actions.rs`) делят на zoom в одном месте —
-`chart_origin_logical` / `MoonTheme::content_zoom`. Экранные координаты (`window.bounds()`,
-размещение окон, FireTest-probe) остаются платформенными; `windowing::responsive_width` читает
-`viewport_size()`, то есть content-пиксели.
+The chart does not take part in the zoom. `chartdx` sizes its render target by the full
+`scale_factor` (the slot really is `bounds × factor` device pixels) and its own sizes — line
+widths, candles, axes, captions — by `scale_factor / content_zoom`, the platform DPI. Three spaces
+meet at the chart and each crossing has one home: a content-space pointer reaches device pixels
+through `ChartEngine::slot_scale_factor` (the window's factor); the engine's geometry and the input
+container use `last_ppp` (the chart-design factor); the chart's text layer lives in its own logical
+pixels and crosses into GPUI's content pixels only in `chartdx::text::content_px` /
+`chart_metrics`; and GPUI overlays over chart geometry divide device pixels by the window's factor
+(`panels/chart/render.rs`) or go through `chart_origin_logical` (`arb_open.rs`,
+`market_actions.rs`). Screen coordinates (`window.bounds()`, window placement, the FireTest probe,
+first-open window sizes) stay in the platform's pixels; `windowing::responsive_width` reads
+`viewport_size()`, which is content pixels.
 
-## Окна
+## Windows
 
-Терминал использует собственную шапку и borderless/CSD поведение. Проверять отдельно:
+The terminal uses its own header and borderless/CSD behaviour. Check separately:
 
-- Windows: restore bounds на multi-monitor/DPI.
-- macOS: Metal toolchain и `.app` запуск из GUI session.
-- Linux X11/Wayland: отсутствие второй системной шапки, Secret Service для encrypted config,
-  стабильность surface/present.
+- Windows: restore bounds on multi-monitor/DPI.
+- macOS: Metal toolchain and `.app` launch from a GUI session.
+- Linux X11/Wayland: no second system header, Secret Service for encrypted config,
+  surface/present stability.
 
-## Локальная Разработка
+## Local development
 
-Публичные `Cargo.toml` держат git-зависимости на `Moonbot-Tech/MoonUI` `branch = "master"`.
+Public `Cargo.toml` files keep git dependencies on `Moonbot-Tech/MoonUI` `branch = "master"`.
 
-`Cargo.lock` **коммитится**, и это заморозка сторонних версий: скомпрометированный или просто
-неожиданный релиз чужого крейта не может попасть в сборку сам собой. Политика в четырёх пунктах:
+`Cargo.lock` **is committed**, and that is a freeze of third-party versions: a compromised or simply
+unexpected release of someone else's crate cannot enter the build on its own. The policy in four points:
 
-1. Сторонние версии двигаются только осознанным коммитом.
-2. MoonUI остаётся rolling: CI на каждом прогоне делает точечный
-   `cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui`, локально это `make update-moon-ui`.
-3. MoonProto двигается ТОЛЬКО вручную (`make update-moonproto`) отдельным коммитом; CI его не трогает.
-4. Каждая собирающая job в CI сначала проверяет замок против манифестов (`cargo fetch --locked`),
-   затем обновляет MoonUI, затем падает, если это обновление сдвинуло хоть что-то кроме MoonUI —
-   точечный `cargo update` по документации консервативен, а не хирургичен, и новый MoonUI может
-   потянуть за собой чужую версию. Такой случай должен быть красным PR и осознанным коммитом.
+1. Third-party versions move only by a deliberate commit.
+2. MoonUI stays rolling: CI on every run does a targeted
+   `cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui`; locally that is `make update-moon-ui`.
+3. MoonProto moves ONLY by hand (`make update-moonproto`) in a separate commit; CI does not touch it.
+4. Every compiling CI job first checks the lock against the manifests (`cargo fetch --locked`),
+   then updates MoonUI, then fails if that update moved anything other than MoonUI —
+   a targeted `cargo update` is conservative by documentation, not surgical, and a new MoonUI may
+   pull someone else's version along. That case must be a red PR and a deliberate commit.
 
-`EmbarkStudios/cargo-deny` отдельной блокирующей job сканирует коммитнутый замок: advisories,
-дубли и белый список git-источников (`deny.toml`).
+`EmbarkStudios/cargo-deny` as a separate blocking job scans the committed lock: advisories,
+duplicates and the git-source allow-list (`deny.toml`).
 
-Reproducible build по сторонним зависимостям — да; свежесть MoonUI — отдельный явный шаг.
+A reproducible build for third-party dependencies — yes; MoonUI freshness is a separate explicit step.
 
-Каждый бинарь пишет в лог build stamp:
+Every binary writes a build stamp to the log:
 
 ```text
 build: moonterminal=<git-sha>[+dirty] release_base=<stable-git-tag|unknown> moonui=<git-sha|local:git-sha>[+dirty]
 ```
 
-Перед тегом релиза: сдвиньте MoonUI осознанно, закоммитьте замок, дождитесь гейтов на ЭТОМ коммите
-и только потом ставьте следующий канонический стабильный тег `vMAJOR.MINOR.PATCH`: новую minor-линейку
-начинайте с `.0`, а исправления выпускайте увеличением PATCH. Исторические двухкомпонентные теги
-вроде `v0.21` читаются updater-ом как patch zero, но новые такие теги и эквивалентный alias
-`v0.21.0` запрещены. `release.yml`
-собирает immutable commit этого тега строго `--locked`, проверяет GitHub SHA-256 для Windows
-артефакта ещё в draft и только после этого публикует релиз как Latest. В репозитории должна быть
-включена release immutability: публикация блокирует проверенные tag и assets; MoonUI там не обновляется.
+Before a release tag: move MoonUI deliberately, commit the lock, wait for the gates on THIS commit
+and only then set the next canonical stable tag `vMAJOR.MINOR.PATCH`: start a new minor line
+at `.0`, and ship fixes by incrementing PATCH. Historical two-component tags
+like `v0.21` are read by the updater as patch zero, but new tags of that form and the equivalent alias
+`v0.21.0` are forbidden. `release.yml`
+builds the immutable commit of that tag strictly `--locked`, checks the GitHub SHA-256 of the Windows
+artifact while still in draft, and only then publishes the release as Latest. The repository must have
+release immutability enabled: publication locks the verified tag and assets; MoonUI is not updated there.
 
-### Самообновление Windows
+### Windows self-update
 
-Обычный Windows-процесс после `startup::boot` запускает один принадлежащий `Backend` цикл поиска:
-первый scan выполняется сразу, последующие привязаны к UTC-получасам со стабильной фазой процесса
-и минимальным пятиминутным промежутком после старта. В штатном режиме новая публикация видна не
-позже чем через 30 минут, а на стартовой границе — через 35 минут; suspend, сеть и обязательный
-дедлайн GitHub могут увеличить задержку.
+An ordinary Windows process after `startup::boot` starts one `Backend`-owned discovery loop:
+the first scan runs immediately, later ones are pinned to UTC half-hours with a stable process phase
+and a minimum five-minute gap after start. In the normal case a new publication is visible no
+later than 30 minutes, and on the start boundary — 35 minutes; suspend, the network and the mandatory
+GitHub deadline can increase the delay.
 
-Discovery ограничен первыми 200 релизами: две страницы по 100 записей и не более двух
-последовательных metadata-запросов за scan. Первая страница условно перепроверяется каждый цикл,
-вторая — при отсутствии кэша, изменении первой или по суточному sentinel. ETag хранится отдельно
-для точного URL страницы; `304` без соответствующего валидатора и неполный двухстраничный scan
-заканчиваются fail-closed без частичного обновления кэша. Стабильный полный кэш расходует до 49
-запросов в сутки на процесс. При малом остатке quota необязательная вторая страница пропускается;
-`Retry-After`, исчерпанный `X-RateLimit-Reset` и ограниченный локальный backoff только откладывают
-следующий scan. Лимит GitHub общий для IP, поэтому неизвестное число процессов за одним NAT нельзя
-считать гарантированно укладывающимся в unauthenticated quota.
+Discovery is limited to the first 200 releases: two pages of 100 entries and no more than two
+consecutive metadata requests per scan. The first page is conditionally rechecked every cycle,
+the second — when there is no cache, the first changed, or by a daily sentinel. The ETag is stored separately
+for the exact page URL; a `304` without the matching validator and an incomplete two-page scan
+end fail-closed with no partial cache update. A stable full cache spends up to 49
+requests per day per process. With little remaining quota the optional second page is skipped;
+`Retry-After`, an exhausted `X-RateLimit-Reset` and a bounded local backoff only delay
+the next scan. The GitHub limit is shared per IP, so an unknown number of processes behind one NAT cannot
+be assumed to fit the unauthenticated quota.
 
-Кнопка в шапке появляется только для наибольшего канонического стабильного тега новее встроенного
-`release_base`, если релиз immutable, не draft/prerelease, содержит ровно один `MoonTerminal.exe`
-и GitHub вернул обязательный `sha256:` digest. Неизвестная базовая версия, ошибка сети или
-неполные metadata сохраняют последнее достоверное состояние; установка начинается только явным
-кликом.
+The header button appears only for the greatest canonical stable tag newer than the built-in
+`release_base`, if the release is immutable, not draft/prerelease, contains exactly one `MoonTerminal.exe`
+and GitHub returned the required `sha256:` digest. An unknown base version, a network error or
+incomplete metadata keep the last trusted state; install starts only on an explicit
+click.
 
-`moon_core::update` скачивает exe потоково в уникальный `.part` внутри
-`.moonterminal-update/<nonce>/`, ограничивает размер, дважды проверяет SHA-256 через тот же открытый
-file handle и только затем публикует staged-файл. Один `UpdateController` принадлежит `Backend` и
-наблюдается всеми `Shell`, поэтому разные окна не могут начать параллельную замену.
+`moon_core::update` downloads the exe as a stream into a unique `.part` inside
+`.moonterminal-update/<nonce>/`, bounds the size, checks SHA-256 twice through the same open
+file handle and only then publishes the staged file. One `UpdateController` belongs to `Backend` and
+is observed by every `Shell`, so different windows cannot start a parallel replace.
 
-Скачанный exe запускается скрытым helper-процессом. Helper сначала валидирует versioned manifest,
-канонические пути/nonce/hash, открывает handle точного родительского процесса и публикует `ready`.
-UI подтверждает прочитанный `ready` отдельным nonce-bound `commit`; без него helper завершается по
-deadline и не заменяет exe. Только после `commit` UI вызывает обычный `App::quit`, сохраняя
-существующий `on_app_quit`-маршрут, а helper ждёт выхода родителя, использует `ReplaceFileW` с
-backup, запускает новый target и ждёт
-ограниченные по времени `started` и `healthy`. Новая версия публикует `healthy` сразу после входа
-в безопасную часть `startup::run`, но строго до миграций/открытия portable storage: до этой границы
-любой сбой завершает только запущенного child, восстанавливает backup и повторно открывает прежнюю
-версию с уведомлением; после неё откат старого exe уже запрещён, чтобы не читать новую схему старым
-кодом. Helper удаляет backup только после собственного чтения `healthy`. `cfg/`, `data/`,
-`logs/`, `backups/` и `servers.enc` в транзакции не участвуют. На macOS/Linux updater отключён.
+The downloaded exe is launched as a hidden helper process. The helper first validates the versioned manifest,
+canonical paths/nonce/hash, opens a handle of the exact parent process and publishes `ready`.
+The UI confirms the read `ready` with a separate nonce-bound `commit`; without it the helper exits on
+deadline and does not replace the exe. Only after `commit` does the UI call ordinary `App::quit`, keeping
+the existing `on_app_quit` path, and the helper waits for the parent to exit, uses `ReplaceFileW` with
+a backup, starts the new target and waits for
+time-bounded `started` and `healthy`. The new version publishes `healthy` immediately after entering
+the safe part of `startup::run`, but strictly before migrations/opening portable storage: before this boundary
+any failure terminates only the launched child, restores the backup and reopens the previous
+version with a notification; after it, rolling back the old exe is already forbidden, so old
+code does not read a new schema. The helper deletes the backup only after its own read of `healthy`. `cfg/`, `data/`,
+`logs/`, `backups/` and `servers.enc` do not take part in the transaction. On macOS/Linux the updater is disabled.
 
-Граница доверия — HTTPS, immutable GitHub Release и его SHA-256 metadata. Release workflow
-сериализует публикацию по тегу; административный `RELEASE_ADMIN_TOKEN` допускается только в
-последнем шаге проверки immutable-release и публикации. Job публикации работает в environment
-`release`: ждёт одобрения одного из его required reviewers, а токен обязан лежать в секретах этого
-environment, не репозитория, и тогда запускам вне него недоступен (environment принимает только теги
-`v*` и `main`). Это обнаруживает подмену
-asset относительно опубликованного релиза, но не является code signing и не защищает от
-компрометации владельца репозитория или release-публикатора.
+The trust boundary is HTTPS, an immutable GitHub Release and its SHA-256 metadata. The release workflow
+serializes publication per tag; the administrative `RELEASE_ADMIN_TOKEN` is allowed only in
+the last step of the immutable-release check and publication. The publication job runs in the
+`release` environment: it waits for approval from one of its required reviewers, and the token must live in that
+environment's secrets, not the repository's, and is then unavailable to runs outside it (the environment accepts only
+`v*` and `main` tags). This detects an
+asset swap relative to the published release, but is not code signing and does not protect against
+compromise of the repository owner or the release publisher.
 
-Активная локальная подмена MoonUI через `.cargo/config.toml` переписывает отслеживаемый `Cargo.lock`
-(в нём появятся `path`-записи). Восстановите его перед коммитом.
+An active local MoonUI override through `.cargo/config.toml` rewrites the tracked `Cargo.lock`
+(it will gain `path` entries). Restore it before committing.
 
-Для локальной разработки рядом должны лежать:
+For local development these must sit side by side:
 
 ```text
 workspace/
@@ -989,7 +991,7 @@ workspace/
   MoonProtoBeta/
 ```
 
-Локальная подмена делается только в ignored `MoonTerminal/.cargo/config.toml`:
+The local override is done only in the ignored `MoonTerminal/.cargo/config.toml`:
 
 ```toml
 [patch."https://github.com/Moonbot-Tech/MoonUI"]
@@ -1001,5 +1003,5 @@ moon-ui = { path = "../MoonUI/crates/moon-ui" }
 moonproto = { path = "../MoonProtoBeta" }
 ```
 
-Не использовать top-level `paths`: он меняет форму dependency graph и уже сейчас даёт Cargo warning,
-который в будущих версиях Cargo может стать ошибкой.
+Do not use top-level `paths`: it changes the shape of the dependency graph and already produces a Cargo warning
+that in future Cargo versions may become an error.

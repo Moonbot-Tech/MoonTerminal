@@ -1,5 +1,6 @@
-//! Shared hotkey recognition and backend action execution for group windows and detached chart
-//! windows. Key matching previously lived in scattered `pressed()` checks under
+//! Shared hotkey recognition and backend action execution for group windows, detached chart
+//! windows, and the trade window — which routes only the window-local scale and super-zoom slots
+//! through its own filter. Key matching previously lived in scattered `pressed()` checks under
 //! `Shell::on_hotkey`, leaving some configured bindings inactive and detached chart windows with
 //! no handling. The shared flow is now:
 //!
@@ -871,7 +872,9 @@ fn with_hovered_chart(
 /// Apply the policies that belong to the action itself, before a window's own routing.
 ///
 /// Every window's `on_hotkey` calls this once, ahead of its own match, so a third window inherits
-/// both rules instead of restating them. `true` means the event is spent and the caller stops.
+/// both rules instead of restating them. The trade window routes no cursor-addressed or
+/// order-creating action and filters to its own actions before this would run, so it deliberately
+/// does not call it. `true` means the event is spent and the caller stops.
 ///
 /// - **Auto-repeat**: a held key repeats at the system rate. That is harmless for a toggle and
 ///   multiplies anything that creates orders, so a repeat of such an action is consumed and does
@@ -998,6 +1001,15 @@ pub fn dispatch_from_chart(
 /// Consumes the press when it disarms, so the SECOND Escape closes the chart exactly as before.
 /// Every window calls this ahead of its own routing, which is why it takes the event and not an
 /// action.
+///
+/// The one exception is the trade window (`trade_window::on_key`): it is an Escape-handling root
+/// that does NOT call this, and has not since before the window grew a hotkey route at all.
+/// `sells_zone_arm` is Backend-wide state, so the mode can be armed from a live chart and still be
+/// armed while a trade window holds the keyboard. Escape pressed there closes the window (or its
+/// ⚙ popup) and leaves the mode armed, so the trained "Escape cancels the mode" does not hold in
+/// that one window. This is a KNOWN GAP, not a design: do not take this paragraph as permission
+/// to leave it. The three callers that DO run it are `shell/actions.rs:251`,
+/// `chart_tabs/detached_host/mod.rs:457`, and `chart_tabs/strip.rs:504`.
 pub fn escape_leaves_sells_zone(
     ev: &KeyDownEvent,
     backend: &Entity<Backend>,

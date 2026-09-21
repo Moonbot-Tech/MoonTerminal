@@ -141,6 +141,7 @@ impl Render for ChartPanel {
             | self.chart.set_orderbook_enabled(self.orderbook_enabled)
             | self.chart.set_orderbook_only(self.orderbook_only)
             | self.chart.set_hvol_allowed(self.hvol_allowed())
+            | self.chart.set_compare_lock_shown(self.compare_eligible)
             | self.chart.set_candle_view(candle_view)
             | self.chart.set_chart_graphics(chart_graphics)
             | self.chart.set_report_axis(report_axis)
@@ -532,6 +533,14 @@ impl Render for ChartPanel {
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-pin-{idx}")))
                     .label(if pinned { "●" } else { "○" })
+                    .tooltip(
+                        if pinned {
+                            t!("chart.strip.unpin_tip")
+                        } else {
+                            t!("chart.strip.pin_tip")
+                        }
+                        .to_string(),
+                    )
                     .size(MoonSize::Xs)
                     .variant(if pinned {
                         MoonButtonVariant::Blue
@@ -539,7 +548,12 @@ impl Render for ChartPanel {
                         MoonButtonVariant::Ghost
                     })
                     .selected(pinned)
-                    .bounds(MoonRect::new(left + 3.0, top + 3.0, 15.0, 15.0))
+                    .bounds(MoonRect::new(
+                        left + 3.0,
+                        top + crate::design::CHART_CORNER_BTN_TOP,
+                        crate::design::CHART_CORNER_BTN_SIZE,
+                        crate::design::CHART_CORNER_BTN_SIZE,
+                    ))
                     .on_click(move |_, _w, app| {
                         entity.update(app, |this, cx| this.toggle_pin(idx, cx));
                     })
@@ -551,6 +565,14 @@ impl Render for ChartPanel {
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-lock-{idx}")))
                     .label("🔒")
+                    .tooltip(
+                        if compare_anchor {
+                            t!("chart.strip.lock_anchor_tip")
+                        } else {
+                            t!("chart.strip.lock_tip")
+                        }
+                        .to_string(),
+                    )
                     .size(MoonSize::Xs)
                     .variant(if compare_anchor {
                         MoonButtonVariant::Blue
@@ -558,7 +580,12 @@ impl Render for ChartPanel {
                         MoonButtonVariant::Ghost
                     })
                     .selected(compare_anchor)
-                    .bounds(MoonRect::new(left + 21.0, top + 3.0, 15.0, 15.0))
+                    .bounds(MoonRect::new(
+                        left + 21.0,
+                        top + crate::design::CHART_CORNER_BTN_TOP,
+                        crate::design::CHART_CORNER_BTN_SIZE,
+                        crate::design::CHART_CORNER_BTN_SIZE,
+                    ))
                     .on_click(move |_, _w, app| {
                         entity.update(app, |this, cx| this.request_compare_lock(cx));
                     })
@@ -569,6 +596,14 @@ impl Render for ChartPanel {
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-broom-{idx}")))
                     .label("🧹")
+                    .tooltip(
+                        if compare_broom_on {
+                            t!("chart.strip.broom_on_tip")
+                        } else {
+                            t!("chart.strip.broom_tip")
+                        }
+                        .to_string(),
+                    )
                     .size(MoonSize::Xs)
                     .variant(if compare_broom_on {
                         MoonButtonVariant::Blue
@@ -576,7 +611,12 @@ impl Render for ChartPanel {
                         MoonButtonVariant::Ghost
                     })
                     .selected(compare_broom_on)
-                    .bounds(MoonRect::new(left + 39.0, top + 3.0, 15.0, 15.0))
+                    .bounds(MoonRect::new(
+                        left + 39.0,
+                        top + crate::design::CHART_CORNER_BTN_TOP,
+                        crate::design::CHART_CORNER_BTN_SIZE,
+                        crate::design::CHART_CORNER_BTN_SIZE,
+                    ))
                     .on_click(move |_, _w, app| {
                         entity.update(app, |this, cx| this.request_compare_broom(cx));
                     })

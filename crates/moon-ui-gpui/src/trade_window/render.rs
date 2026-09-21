@@ -91,16 +91,40 @@ impl Render for TradeWindowView {
             p,
             cx,
         ));
+        // A modifier held for a MOUSE gesture is a prefix too, and releasing it must not fire a
+        // lone-modifier binding. Window-level and in the capture phase: the chart consumes its own
+        // presses, so a bubble listener on this root would never see them.
+        //
+        // Registered through a paint-phase hook rather than called here: `on_mouse_event`
+        // belongs to paint and `render` runs a phase earlier (`window::input_hook`).
+        let modifier_hook = {
+            let view = cx.entity();
+            crate::window::input_hook::window_mouse_hook(
+                move |_e: &MouseDownEvent, phase, _window: &mut Window, cx| {
+                    if phase == DispatchPhase::Capture {
+                        view.update(cx, |this, _| this.modifier_watch.interrupt());
+                    }
+                },
+            )
+        };
         v_flex()
             .size_full()
             .relative()
-            // The root, not the chart, owns the keyboard: Escape is a WINDOW command. Capture
-            // phase, because the chart panel below is focusable and would otherwise be free to
-            // consume the press before it ever bubbles up here.
+            // Escape is taken in the CAPTURE phase so it wins over anything a descendant may grow
+            // later and so it is settled before the hotkey table can see it; the configured
+            // hotkeys ride the bubble phase, like every other window root in the app.
             .track_focus(&self.focus)
-            .capture_key_down(
-                cx.listener(|this, ev: &KeyDownEvent, window, cx| this.on_key(ev, window, cx)),
+            .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                crate::hotkeys::trace_key_arrived(ev);
+                this.modifier_watch.interrupt();
+                this.on_key(ev, window, cx);
+            }))
+            .on_key_down(
+                cx.listener(|this, ev: &KeyDownEvent, window, cx| this.on_hotkey(ev, window, cx)),
             )
+            .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, window, cx| {
+                this.on_modifier_hotkey(ev, window, cx)
+            }))
             .child(
                 h_flex()
                     .h(header_h)
@@ -192,6 +216,7 @@ impl Render for TradeWindowView {
                         ))
                     }),
             )
+            .child(modifier_hook)
     }
 }
 
@@ -220,6 +245,7 @@ impl TradeWindowView {
                     tf_min,
                     bucket_ms,
                     partial,
+                    ends,
                     tick_status,
                     ..
                 } => {
@@ -252,8 +278,13 @@ impl TradeWindowView {
                         // Every sibling Russian caption in `trade_window.yml` joins its two halves
                         // with an em dash, never the ASCII hyphen the other locales use — so the
                         // glyph itself must follow the active locale, not just the words either
-                        // side of it.
-                        let edges = t!("trade_window.source.ticks_edges", min = tf_min).to_string();
+                        // side of it. Two stretches (a long position) name where the ticks ARE,
+                        // since "the edges" would misdescribe a middle made of bars.
+                        let edges = if *ends {
+                            t!("trade_window.source.ticks_ends", min = tf_min).to_string()
+                        } else {
+                            t!("trade_window.source.ticks_edges", min = tf_min).to_string()
+                        };
                         let sep = match rust_i18n::locale().as_ref() {
                             "ru" => "—",
                             _ => "-",

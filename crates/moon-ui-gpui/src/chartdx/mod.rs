@@ -846,6 +846,9 @@ struct PaneRender {
     applied_price_lines: (bool, bool),
     /// This panel's order-book-only mode, hiding chart and price axis and using the full width.
     orderbook_only: bool,
+    /// Whether ANY corner button — pin, compare lock or broom — is drawn on this pane, so the caption
+    /// pass can reserve the strip's height only where a button actually stands.
+    corner_buttons: bool,
     /// Price-axis position (`Left`, `Right`, or `Hide`), controlling label side and reserved gutter.
     /// Applied to every engine panel.
     price_axis_pos: crate::persistence::chart_persist::PriceAxisPos,
@@ -1016,6 +1019,7 @@ impl PaneRender {
             liquidations_enabled: true,
             applied_price_lines: (true, true),
             orderbook_only: false,
+            corner_buttons: false,
             price_axis_pos: crate::persistence::chart_persist::PriceAxisPos::Left,
             time_axis_visible: true,
             gpu_prepare_dirty: true,
@@ -1526,6 +1530,10 @@ struct ChartDataState {
     /// configured: a follower of an active comparison lock does not, and the panel decides that
     /// from its role. On by default.
     hvol_allowed: bool,
+    /// Whether the panel draws the comparison lock on every pane of this engine — the panel's own
+    /// `compare_eligible`. Panel-wide by construction, not per-pane. Read by the caption pass so the
+    /// top-left captions clear the pin/lock/broom strip.
+    compare_lock_shown: bool,
     /// Effective candle and trade rendering settings for time frame, mode, and zone, applied to all
     /// engine panels. They may be a per-tab override or the `layout.candle_view` fallback.
     candle_view: moon_core::market::CandleViewCfg,

@@ -276,6 +276,7 @@ pub(crate) fn open_trade_window(
                 window_id: window.window_handle().window_id(),
                 taskbar_hide: crate::window::windowing::hide_window_from_taskbar_soon(window),
                 focus: vcx.focus_handle(),
+                modifier_watch: moon_ui::MoonHotkeyModifierWatch::default(),
                 cascade_px: step,
             };
             // AFTER the panel exists, so the chart cannot take the keyboard back from the root on
@@ -334,6 +335,10 @@ pub(crate) fn open_trade_window(
             vcx.observe_window_activation(window, |this: &mut TradeWindowView, window, _cx| {
                 this.taskbar_hide.cancel();
                 this.taskbar_hide = crate::window::windowing::hide_window_from_taskbar_soon(window);
+                if !window.is_window_active() {
+                    // The modifier state a returning window is re-told is not a press.
+                    this.modifier_watch.forget();
+                }
             })
             .detach();
             vcx.on_release(|this, app| {

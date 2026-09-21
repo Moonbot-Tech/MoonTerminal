@@ -1180,6 +1180,18 @@ impl ChartEngine {
         true
     }
 
+    /// Sets whether this panel draws the comparison lock on every engine pane, for the caption
+    /// pass's corner-strip reservation. Returns true on change.
+    pub fn set_compare_lock_shown(&mut self, shown: bool) -> bool {
+        let mut data = self.data.borrow_mut();
+        if data.compare_lock_shown == shown {
+            return false;
+        }
+        data.compare_lock_shown = shown;
+        data.mark_view_dirty();
+        true
+    }
+
     /// Sets the per-window price-axis position for every engine pane. Returns true on change.
     pub fn set_price_axis_pos(
         &mut self,

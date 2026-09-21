@@ -21,6 +21,7 @@ pub(super) struct StorageInfo {
     pub reports: Option<(u64, u64)>,
     pub strategies: Option<(u64, u64)>,
     pub klines: Option<(u64, u64)>,
+    pub trades: Option<(u64, u64)>,
     /// Replica row count from the shared fallible read path.
     ///
     /// `None` means the background snapshot has not completed,
@@ -62,6 +63,7 @@ fn collect_info() -> StorageInfo {
         reports: sized(&paths::reports_db_path()),
         strategies: sized(&paths::strategies_db_path()),
         klines: sized(&paths::klines_db_path()),
+        trades: sized(&paths::trades_db_path()),
         ..Default::default()
     };
     out.report_rows = Some(moon_core::db::report_row_count());
@@ -165,6 +167,31 @@ impl SettingsView {
         }
     }
 
+    /// Adjusts the `trades.sqlite` ceiling in megabytes, clamps it to `0..=100_000` (zero is no
+    /// ceiling), and updates live state and storage.toml.
+    fn adjust_trades_max_mb(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let v = (self.storage.cfg.trade_replay.max_mb as i32 + delta).clamp(0, 100_000) as u32;
+        if self.storage.cfg.trade_replay.max_mb != v {
+            self.storage.cfg.trade_replay.max_mb = v;
+            moon_core::market::trade_replay::trade_cache::set_max_mb(v);
+            storage_cfg::save(&self.storage.cfg);
+            cx.notify();
+        }
+    }
+
+    /// Adjusts the minutes of prints kept around a trade, per end, clamps them to
+    /// `0..=MAX_TRADE_MARGIN_MIN`, and updates live state and storage.toml.
+    fn adjust_trades_margin_min(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let ceiling = moon_core::config::storage::MAX_TRADE_MARGIN_MIN as i32;
+        let v = (self.storage.cfg.trade_replay.margin_min as i32 + delta).clamp(0, ceiling) as u32;
+        if self.storage.cfg.trade_replay.margin_min != v {
+            self.storage.cfg.trade_replay.margin_min = v;
+            moon_core::market::trade_replay::set_margin_min(v);
+            storage_cfg::save(&self.storage.cfg);
+            cx.notify();
+        }
+    }
+
     /// Render storage controls with the version-limit stepper wrapping below its label when needed.
     pub(super) fn storage_tab(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         // Start background snapshot collection when the tab is first shown.
@@ -178,6 +205,9 @@ impl SettingsView {
         let info = self.storage.info.clone().unwrap_or_default();
         let enabled = self.storage.cfg.strategies.enabled;
         let limit = self.storage.cfg.strategies.version_limit;
+        let persist_trades = self.storage.cfg.trade_replay.persist_trades;
+        let trades_max_mb = self.storage.cfg.trade_replay.max_mb;
+        let trades_margin_min = self.storage.cfg.trade_replay.margin_min;
 
         let size_line = |sz: Option<(u64, u64)>| -> String {
             match sz {
@@ -191,7 +221,7 @@ impl SettingsView {
                 .to_string(),
             }
         };
-        let total: u64 = [info.reports, info.strategies, info.klines]
+        let total: u64 = [info.reports, info.strategies, info.klines, info.trades]
             .iter()
             .flatten()
             .map(|(m, w)| m + w)
@@ -359,5 +389,85 @@ impl SettingsView {
             // MIXED NODE: `size_line` combines label and figure — stays mono.
             .child(hint(size_line(info.klines)).font_family(design::mono()))
             .child(hint(t!("storage.klines_hint").to_string()))
+            .child(separator(p, cx))
+            // ── Trade prints ────────────────────────────────────────────────
+            .child(section(&t!("storage.trades_title"), p, cx))
+            .child(
+                moon_ui::MoonCheckbox::new("trades-db-enabled")
+                    .checked(persist_trades)
+                    .label(t!("storage.trades_enabled").to_string())
+                    .description(t!("storage.trades_enabled_hint").to_string())
+                    .on_change(cx.listener(|this, v: &bool, _, cx| {
+                        let v = *v;
+                        if this.storage.cfg.trade_replay.persist_trades != v {
+                            this.storage.cfg.trade_replay.persist_trades = v;
+                            moon_core::market::trade_replay::trade_cache::set_enabled(v);
+                            storage_cfg::save(&this.storage.cfg);
+                            cx.notify();
+                        }
+                    })),
+            )
+            // MIXED NODE: `size_line` combines label and figure — stays mono.
+            .child(hint(size_line(info.trades)).font_family(design::mono()))
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap(design::ui_px(cx, 8.0))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(rgba_from(p.text, 1.0))
+                            .child(t!("storage.trades_max_mb").to_string()),
+                    )
+                    .child(self.stepper_controls(
+                        cx,
+                        "trades-max-mb",
+                        persist_trades,
+                        if trades_max_mb == 0 {
+                            t!("storage.version_limit_off").to_string()
+                        } else {
+                            t!("storage.trades_mb", mb = trades_max_mb).to_string()
+                        },
+                        64,
+                        1024,
+                        Self::adjust_trades_max_mb,
+                    )),
+            )
+            .child(hint(t!("storage.trades_max_mb_hint").to_string()))
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap(design::ui_px(cx, 8.0))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(rgba_from(p.text, 1.0))
+                            .child(t!("storage.trades_margin").to_string()),
+                    )
+                    // Enabled whether or not the file is on: the margin sizes what a window
+                    // fetches and what a close copies, not only what the file keeps.
+                    .child(self.stepper_controls(
+                        cx,
+                        "trades-margin-min",
+                        true,
+                        t!("storage.trades_min", min = trades_margin_min).to_string(),
+                        5,
+                        15,
+                        Self::adjust_trades_margin_min,
+                    )),
+            )
+            .child(hint(t!("storage.trades_margin_hint").to_string()))
+            .child(
+                h_flex().child(
+                    tool_btn("trades-compact", t!("storage.compact").to_string(), busy)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.storage_op(cx, "storage.op_compact", || {
+                                moon_core::db::maint::compact_db(&paths::trades_db_path())
+                            });
+                        }))
+                        .render(),
+                ),
+            )
+            .child(hint(t!("storage.trades_hint").to_string()))
     }
 }

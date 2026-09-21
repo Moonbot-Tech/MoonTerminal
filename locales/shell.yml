@@ -1458,6 +1458,31 @@ chart.layout.width_scroll_hint:
   ru: "≥20 — фиксированная ширина"
   en: "≥20 — fixed width"
   es: "≥20 — ancho fijo"
+# --- Chart corner strip (pin / compare lock / broom) tooltips ---
+chart.strip.pin_tip:
+  ru: "Закрепить график: не закроется сам"
+  en: "Pin the chart: it will not close on its own"
+  es: "Fijar el gráfico: no se cerrará solo"
+chart.strip.unpin_tip:
+  ru: "Открепить: график снова может закрыться сам"
+  en: "Unpin: the chart may close on its own again"
+  es: "Desfijar: el gráfico podrá cerrarse solo"
+chart.strip.lock_tip:
+  ru: "Сравнение: сделать этот график ведущим по цене"
+  en: "Compare: make this chart the price leader"
+  es: "Comparar: hacer de este gráfico el líder de precio"
+chart.strip.lock_anchor_tip:
+  ru: "Ведущий график сравнения. Нажмите, чтобы завершить"
+  en: "Price leader of the comparison. Click to end it"
+  es: "Líder de precio de la comparación. Clic para terminar"
+chart.strip.broom_tip:
+  ru: "Оставить у остальных графиков только стаканы"
+  en: "Show only the order books of the other charts"
+  es: "Dejar solo los libros de órdenes en los otros gráficos"
+chart.strip.broom_on_tip:
+  ru: "Вернуть остальным графикам котировки"
+  en: "Bring the other charts' plots back"
+  es: "Devolver los gráficos a los demás"
 chart.tab.custom:
   ru: "Набор %{n}"
   en: "Set %{n}"

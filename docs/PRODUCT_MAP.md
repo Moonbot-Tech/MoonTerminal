@@ -1,160 +1,160 @@
-# MoonTerminal как продукт — карта фич и словарь юзерских слов
+# MoonTerminal as a product — a feature map and a dictionary of users' words
 
-Для тех, кто отвечает на вопросы юзеров о терминале — людей и ИИ-агентов.
-Задача дока: быстро понять, О ЧЁМ спрашивает юзер, и знать, что в терминале
-ЕСТЬ, а чего НЕТ. Правда о поведении — всегда код; док — навигация к нему.
-Актуален на v0.42.3 (11.09.2026). Пополняется вместе с релизами: новая
-фича — строка в карту, новое юзерское словечко — строка в словарь.
+For whoever answers user questions about the terminal — people and AI agents.
+The document's job: quickly understand WHAT the user is asking about, and know what the terminal
+HAS and what it does NOT. Truth about behaviour is always the code; the doc is navigation to it.
+Current as of v0.42.3 (11.09.2026). Grown with releases: a new
+feature — a row in the map, a new user word — a row in the dictionary.
 
-## Как искать фичу по имени
+## How to find a feature by name
 
-1. `locales/*.yml` — все надписи UI по-русски (`grep -rni "слово" locales/`).
-   Нашлась строка — рядом ключ, по ключу грепается код. Файлы по областям:
+1. `locales/*.yml` — all UI labels (`grep -rni "слово" locales/`). Each key carries `ru`, `en` and `es` values, so an English reader can grep either side.
+   Found a string — the key is next to it, and the code is grepped by that key. Files by area:
    shell, interface, settings, hotkeys, orders, report, analytics,
    strategies, screener, news, connections, core_status, core_run,
    core_settings, dialogs, crowd.
-2. Словарь ниже — юзерские слова, которых в надписях нет.
-3. `docs/ARCHITECTURE.md` — главы по механике (рендер, data path, ручная
-   торговля, порядок ядер, Classic/Auto, venue directory, правка стратегий,
-   репликация отчётов, USDT-пересчёт, бэкапы, Telegram, окна, автообновление).
-4. Не нашлось нигде — фичи, скорее всего, нет; но это выясняется кодом,
-   а не отсутствием совпадений в грепе.
+2. The dictionary below — users' words that are not in the labels.
+3. `docs/ARCHITECTURE.md` — chapters on the mechanics (Rendering, Data Path, manual
+   trading, Core order, Classic/Auto, venue directory, editing strategies,
+   Report replication, USDT valuation, backups, Telegram, windows, self-update).
+4. Found nowhere — the feature most likely does not exist; but that is settled by the code,
+   not by a miss in grep.
 
-## Карта кода
+## Code map
 
-- `crates/moon-core` — данные и состояние: конфиг, темы, БД отчётов и
-  аналитики, фигуры, venue, market/source (стаканы, тики).
-- `crates/moon-chart` — отрисовка графика (слои, фигуры, объёмы).
-- `crates/moon-ui-gpui` — панели и окна: chartdx (рендер-стейт, шейдеры
-  DX11/native/Metal, тексты), panels/, settings/, analytics/, strategies/,
+- `crates/moon-core` — data and state: config, themes, report and
+  analytics DBs, figures, venue, market/source (order books, ticks).
+- `crates/moon-chart` — chart drawing (layers, figures, volumes).
+- `crates/moon-ui-gpui` — panels and windows: chartdx (render state, shaders
+  DX11/native/Metal, texts), panels/, settings/, analytics/, strategies/,
   chart_tabs/.
-- MoonUI (отдельная репа Moonbot-Tech/MoonUI, пин в `Cargo.lock`) — базовые
-  UI-компоненты: пикеры, таблицы, попапы.
-- MoonProto (Moonbot-Tech/MoonProto) — Rust-SDK связи с ядром: команды,
-  подписки.
+- MoonUI (separate repo Moonbot-Tech/MoonUI, pin in `Cargo.lock`) — base
+  UI components: pickers, tables, popups.
+- MoonProto (Moonbot-Tech/MoonProto) — Rust SDK for talking to the core: commands,
+  subscriptions.
 
-## Словарь: юзерские слова → что это
+## Dictionary: what users' words mean
 
-- **«Карта ордеров»** = heatmap стакана во времени, как в Bookmap (стенки
-  книги цветом на истории). Такой фичи нет (хотелка — #489). Не путать со
-  **стаканом на графике** — он есть: кумулятивные стены bid/ask по бокам
-  графика + тонкие линии отдельных уровней поверх (Настройки → Интерфейс →
-  Стакан; рисуют шейдеры, одинаково в DX11/native/Metal). Слово «heatmap»
-  в коде — только про Аналитику (профит).
-- **«Превью графиков»** = charts из Мунбота: мелкие карточки-графики
-  детектов, кликом открываются в основной график.
-- **«Тики»** — точки сделок на графике (покупка/продажа/ликвидация); цвета
-  зашиты константами в шейдерах, настраиваются только размер и прозрачность
+- **«Карта ордеров»** (“order map”) = an order-book heatmap over time, as in Bookmap (book
+  walls in colour on history). There is no such feature (request — #489). Do not confuse it with the
+  **order book on the chart** — that exists: cumulative bid/ask walls on the sides of
+  the chart + thin lines of individual levels on top (Settings → Interface →
+  Order book; drawn by the shaders, the same in DX11/native/Metal). The word “heatmap”
+  in the code is only about Analytics (profit).
+- **«Превью графиков»** (“chart previews”) = Moonbot charts: small detect chart-cards
+  that open into the main chart on click.
+- **«Тики»** (“ticks”) — trade dots on the chart (buy/sell/liquidation); colours
+  are baked as constants in the shaders, only size and opacity are configurable
   (#490).
-- **«Вспышка» / «моргание»** — рамка-пульс графика, приехавшего на вкладку
-  по детекту (3 пульса, цвет — акцент темы; выключается настройкой вкладки).
-- **«Каптионы» / подписи** — caption-модули вокруг графика (дельты фона,
-  funding, курс, счётчик Session, отсчёт до закрытия свечи…): свой редактор,
-  раскладка по двум осям, настройка per-tab.
-- **«Реплей» / «окно сделки»** — просмотр закрытой сделки: свечной контекст
-  6ч до входа / 2ч после выхода, тиковая детализация вокруг позиции,
-  история из архивов ядра.
-- **«Супер-растяжка»** — мунботовский Ctrl+Shift+колесо (время до 3 сек);
-  здесь её нет, предел 30 сек (#493).
-- **«Фигуры»** — рисование: отрезок, луч, прямоугольник, треугольник,
-  «Позиция», два вида фибо (включая мунботовское), заливки, стили линий,
-  Ctrl+Z, магнит по Ctrl, алерты на фигуру со звуком и флагами.
-- **«Флешки»** — пачки скринов с багами и UX-претензиями от Кости
-  (@kostmain), жанр чата проекта; после каждой — волна правок.
+- **«Вспышка» / «моргание»** (“flash” / “blink”) — the pulse frame of a chart that arrived on a tab
+  from a detect (3 pulses, colour — the theme accent; turned off in the tab setting).
+- **«Каптионы» / подписи** (“Captions”) — caption modules around the chart (background deltas,
+  funding, rate, Session counter, countdown to candle close…): their own editor,
+  layout on two axes, per-tab setting.
+- **«Реплей» / «окно сделки»** (“replay” / “Trade window”) — viewing a closed trade: candle context
+  6h before entry / 2h after exit, tick detail around the position,
+  history from the core's archives.
+- **«Супер-растяжка»** (“super stretch”) — Moonbot's Ctrl+Shift+wheel (time down to 3 sec);
+  it is not here, the floor is 30 sec (#493).
+- **«Фигуры»** (“Figures”) — drawing: Segment, Ray, Rectangle, Triangle,
+  “Position”, two kinds of Fibonacci (including Moonbot's), fills, line styles,
+  Ctrl+Z, magnet on Ctrl, figure alerts with sound and flags.
+- **«Флешки»** (“screenshot dumps”) — batches of screenshots with bugs and UX complaints from Kostya
+  (@kostmain), a genre of the project chat; after each — a wave of fixes.
 
-## Карта фич по областям
+## Feature map by area
 
-**Рабочие пространства**: Classic и Auto («Авто-режим» — обзор автовиков:
-rail ядер, свои панели, проблемные ядра подсвечены); ядро можно приписать
-к пресету пространства.
+**Workspaces**: Classic and Auto (AUTO mode — an overview of Auto cores:
+core rail, their own panels, problem cores highlighted); a core can be assigned
+to a workspace preset.
 
-**Шапка**: режим MANUAL/AUTO, активное ядро, метка РЕАЛ/эмулятор, баланс,
-тумблер MS, SPR, Hook, Buy/Sell-проценты, SL/TS, курс BTC и дельты, часы с
-выбором города (весь терминал живёт в выбранном поясе), тихий режим по
-расписанию. Вторая строка — размер ордера, плечо, MAX, SL/TP, проценты
-продажи. Кластеры с разделителями, на узком окне ужимается лесенкой.
+**Header**: MANUAL/AUTO mode, the active core, the Real/Emulator badge, balance,
+the MS toggle, SPR, Hook, Buy/Sell percentages, SL/TS, BTC rate and deltas, the clock with
+city picker (the whole terminal lives in the chosen zone), Sleep mode on a
+schedule. Second row — order size, leverage, MAX, SL/TP, sell
+percentages. Clusters with dividers; on a narrow window it compresses in a cascade.
 
-**График**: тиковый след + свечи с ТФ, история дотягивается из архивов
-ядра, зона «только сделки», стакан по бокам (стены + линии уровней),
-объёмы внизу (в валюте котировки), купленный/проданный объём у графика,
-замер объёма вокруг курсора, счёт ликвидаций, новости-метки (гемы по
-тегам, Ctrl-hover карточка), маркеры своих сделок, стеки/колонки чартов,
-отрыв в отдельные окна, скрин графика в буфер (с вшитой шапкой), избранные
-монеты и временный бан монеты (как в МБ), поиск монеты с вкладками.
+**Chart**: tick trail + candles with TF, history is pulled from the core's
+archives, a “trades only” zone, the order book on the sides (walls + level lines),
+volumes at the bottom (in quote currency), bought/sold volume by the chart,
+volume measure around the cursor, liquidation count, news marks (gems by
+tags, Ctrl-hover card), own-trade markers, chart stacks/columns,
+detach into separate windows, chart screenshot to the clipboard (with the header baked in), favourite
+coins and a temporary coin ban (as in MB), coin search with tabs.
 
-**Детекты**: карточки с настраиваемыми бейджами (свои цвета — HEX-история
-общая, см. «Прочее»), имя сработавшей стратегии, лимит ленты per-tab,
-AddToChart-детекты,
-звуки; цвет ядра (из Подключений) красит строки списка.
+**Detects**: cards with configurable badges (own colours — a shared HEX history,
+see Other), the fired strategy's name, per-tab feed limit,
+AddToChart detects,
+sounds; the core colour (from Connections) paints the list rows.
 
-**Ручная торговля**: группа окон делит видимые Size/TP/SL — ордер уходит
-ровно с видимыми параметрами; SYNC-режим по нескольким ядрам; мунботовские
-жесты и хоткеи (split, sells-to-zone, сдвиг ордеров на %, bulk move к
-цене клика, HotKey-переключатель фигур); Panic Sell; hedge-галка; лимиты
-биржи по монете (минимум в деньгах, потолок ордера и плеча); ручной
-стратегией владеет ядро (MS/Hook-попапы, стоп-правило Мунбота).
+**Manual trading**: the window group shares the visible Size/TP/SL — the order goes out
+exactly with the visible parameters; SYNC mode across several cores; Moonbot
+gestures and hotkeys (split, sells-to-zone, shift orders by %, bulk move to
+click price, HotKey figure switcher); Panic Sell; hedge checkbox; per-coin
+exchange limits (money minimum, order and leverage ceiling); the manual
+strategy is owned by the core (MS/Hook popups, Moonbot's stop rule).
 
-**Отчёты**: полная локальная реплика БД отчётов всех ядер (чекпойнт +
-карта живых строк, переживает обрывы), пересчёт в USDT на момент сделки
-(два режима, COIN-M в BTC), фильтры по всему, мультивыбор строк, пометка
-удалённых, комментарии, лог ядра по сделке.
+**Report**: a full local replica of every core's report DB (checkpoint +
+live-row map, survives drops), USDT valuation at trade time
+(two modes, COIN-M in BTC), filters on everything, multi-select of rows, marking
+deleted, comments, the core log for a trade.
 
-**Аналитика**: KPI-сводка, календарь прибыли (год GitHub-стилем / месяц),
-«Монитор прибыли» живьём (по ядрам/группам, управление запуском ядер прямо
-из таблицы), Тюнер: «что-если» по полям отчёта, Beam-перебор комбинаций,
-оси «по монете» и «по времени» (heatmap-слайдеры недели/дня/часа), проверка
-на отложенных данных, запись порогов обратно в стратегию ядра; история
-версий стратегий с профитом каждой версии; маска имени стратегии везде.
+**Analytics**: KPI summary, profit calendar (year in GitHub style / month),
+live Profit Monitor (by cores/groups, start/stop cores right
+from the table), Tuner: “what-if” on report fields, Beam search over combinations,
+By coin and By time axes (heatmap sliders for week/day/hour), a check
+on held-out data, writing thresholds back into the core's strategy; history of
+strategy versions with each version's profit; a strategy-name mask everywhere.
 
-**Стратегии**: дерево с операциями файлового менеджера, порядок и папки —
-как в ядре, человеческие подписи под мунботовскими именами полей (вкл. по
-умолчанию), правка поля = ядро подтверждает, что реально применило,
-фильтр по бирже, копирование между ядрами.
+**Strategies**: a tree with file-manager operations, order and folders —
+as on the core, human labels under Moonbot field names (on by
+default), editing a field = the core confirms it actually applied,
+filter by exchange, copy between cores.
 
-**Статус ядер**: группировка по серверам/IP, живые графики CPU/RAM/пингов
-(клиент↔ядро и ядро→биржа), тревоги с порогами/историей/звуком и метками
-на торговом графике, вкладка Problems (диагностика ядра + действия),
-«почему ядро не коннектится», сроки API-ключей, квота API-запросов,
-обновление ядер из терминала (мультивыбор, именованный билд).
+**Core status**: grouping by servers/IP, live CPU/RAM/ping charts
+(client↔core and core→exchange), alerts with thresholds/history/sound and marks
+on the trading chart, the Problems tab (core diagnostics + actions),
+“why the core will not connect”, API-key expiry, API-request quota,
+core updates from the terminal (multi-select, a named build).
 
-**Подключения**: ядро = ключ + адрес, цвет ядра, транспорт-режим MoonProto
-per-core (подсказка режима «который работает» по опыту ботов юзера),
-servers.enc привязан к машине, переносится паролем.
+**Connections**: a core = key + address, core colour, MoonProto transport mode
+per-core (a hint for “the one that works” from the user's bots' experience),
+servers.enc bound to the machine, moved with a password.
 
-**Прочее**: Screener (дельты в мунботовских диапазонах), панель новостей
-(per-core лента, тег-фильтры, переход к монете), Log (строки ядра, адреса
-замазаны), Assets (кошельки по биржам, PnL, спотовый Market Sell), Crowd
-(статистика толпы на пустом Main, «громкая монета» как детект), свой
-Telegram-бот (отчёты в чат, навигация, права per-core, Mini App), хоткеи
-(клавиатура + мышь на каждое действие, конфликты подсвечены), темы
-(светлая/тёмная/Graphite + редактор), единый выбор цвета (одна палитра
-везде — ядра, стратегии, линии, фигуры, бейджи, теги новостей; свой HEX
-запоминается на всё приложение, последние 20, сетка прокручивается),
-локали ru/en/es, автообновление
-(проверка раз в 15 мин, без перезапуска), бэкапы настроек и стратегий
-(`backups/`, ежедневные), один экземпляр на папку установки, FireTest
-(`chart-smoke`) — встроенный бенч графика.
+**Other**: Screener (deltas in Moonbot ranges), the news panel
+(per-core feed, tag filters, jump to a coin), Log (core lines, addresses
+redacted), Assets (wallets by exchange, PnL, spot Market Sell), Crowd
+(crowd stats on empty Main, a “loud coin” as a detect), its own
+Telegram bot (reports to chat, navigation, per-core rights, Mini App), hotkeys
+(keyboard + mouse on every action, conflicts highlighted), themes
+(Light/Dark/Graphite + editor), a single colour picker (one palette
+everywhere — cores, strategies, lines, figures, badges, news tags; a custom HEX
+is remembered app-wide, last 20, the grid scrolls),
+locales ru/en/es, self-update
+(a check every 15 min, no restart), Settings and strategy backups
+(`backups/`, daily), one instance per install folder, FireTest
+(`chart-smoke`) — the built-in chart bench.
 
-**Свои звуки**: папка `sounds/` рядом с exe (на macOS — в каталоге данных),
-кладёшь `.wav` — он появляется во всех списках звуков (стратегии, звуки
-сделок, тревоги ядра, алерты); блок «Свои звуки» на вкладке «Звуки сделок»
-показывает папку, что загружено, свои номера и что отклонено (только PCM
-WAV), кнопки «Открыть папку»/«Обновить»; таблица бирж на той вкладке
-скроллится сама, блок прижат к низу. Файл с именем встроенного звука
-(`ding1.wav`) подменяет его. В настройках ядра звуки хранятся НОМЕРОМ: 1–18 —
-встроенные в порядке Moonbot, свой номер задаётся именем файла
-`19_MySound.wav` (номер закреплён за файлом, добавление других файлов его не
-двигает); файл без номера в настройках ядра не выбирается; занятый/зарезервированный
-номер и занятое имя — отклонены с причиной. Синхронизации с ядром нет и не
-будет: ядро звук не играет, файлы на него не уезжают; стратегия из Moonbot с
-именем звука, которого в папке нет, играет `ding1` и показывает тост с именем —
-то же для номера, который никто не держит, и для удалённого файла. Тишина —
-только по явному «Без звука»/`NONE`.
+**Your own sounds**: the `sounds/` folder next to the exe (on macOS — in the data directory),
+drop a `.wav` — it appears in every sound list (strategies, trade
+sounds, core alerts, alerts); the “Your own sounds” block on the Trade sounds tab
+shows the folder, what loaded, own numbers and what was rejected (PCM
+WAV only), the “Open folder”/“Rescan” buttons; the exchange table on that tab
+scrolls on its own, the block is pinned to the bottom. A file named like a built-in sound
+(`ding1.wav`) replaces it. In the core's settings sounds are stored by NUMBER: 1–18 —
+built-ins in Moonbot order, an own number is claimed by the file name
+`19_MySound.wav` (the number is pinned to the file, adding other files does not
+move it); a file without a number cannot be picked in the core's settings; a taken/reserved
+number and a taken name are rejected with a reason. There is no sync with the core and there
+will not be: the core does not play the sound, files do not go to it; a Moonbot strategy with
+a sound name that is not in the folder plays `ding1` and shows a toast with the name —
+the same for a number nobody holds, and for a deleted file. Silence is
+only by an explicit Silent/`NONE`.
 
-## Известные отсутствия (частые хотелки)
+## Known gaps (frequently requested)
 
-Heatmap стакана (#489), профиль объёма по ценам (#487), линейка по % без
-создания фигуры (#485),
-супер-растяжка Ctrl+Shift+колесо (#493). Прежде чем
-отвечать юзеру «нет» или «есть» — сверься с открытыми issues и кодом:
-список пополняется, и что-то из него уже могли сделать.
+Order-book heatmap (#489), a volume profile by price (#487), a % ruler without
+creating a figure (#485),
+super-stretch Ctrl+Shift+wheel (#493). Before
+answering the user “no” or “yes” — check the open issues and the code:
+the list grows, and something on it may already have been done.

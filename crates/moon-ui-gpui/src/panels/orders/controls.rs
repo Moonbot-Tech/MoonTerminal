@@ -27,7 +27,6 @@ impl OrdersPanel {
     pub(super) fn source_combo(&self, cores: &OrderedCores, cx: &Context<Self>) -> AnyElement {
         let scope = self.effective_scope(self.backend.read(cx));
         let workspace_owned = scope.is_workspace_owned();
-        let auto_core = scope.is_auto_core();
         let effective_selection: HashSet<CoreId> = scope.ids().iter().copied().collect();
         let pinned_label = match scope.label() {
             crate::workspace::EffectiveScopeLabel::Overview => {
@@ -57,21 +56,16 @@ impl OrdersPanel {
                 )
                 .label
             });
-            let width = if auto_core {
-                px(MoonDropdown::fitted_trigger_label(
-                    cx,
-                    &label,
-                    MoonButtonSize::density(cx),
-                    crate::controls::CORE_COMBO_TRIGGER_W,
-                    AUTO_CORE_TRIGGER_MAX_W,
-                )
-                .1)
-            } else {
-                px(crate::controls::wrap_fit::action_width(
-                    cx,
-                    crate::controls::CORE_COMBO_TRIGGER_W,
-                ))
-            };
+            // Every pinned label is fitted, not just a live core name: the Overview word is a
+            // localized phrase ("Полная сводка") that the shared width clips to an ellipsis, and a
+            // scope nobody can read is worse than a few pixels of row. The ceiling is what keeps a
+            // long name inside this narrow dock either way.
+            let width = px(crate::controls::pinned_scope_width(
+                cx,
+                &label,
+                crate::controls::CORE_COMBO_TRIGGER_W,
+                AUTO_CORE_TRIGGER_MAX_W,
+            ));
             crate::panels::pinned_scope_host(
                 "orders-source-tip",
                 "orders-source",

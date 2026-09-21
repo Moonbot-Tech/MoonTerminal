@@ -286,6 +286,14 @@ impl Render for ReportScopeControl {
 /// Maximum design-reference width of the pinned AutoCore selector.
 const AUTO_CORE_TRIGGER_MAX_W: f32 = 360.0;
 
+/// Maximum design-reference width of the strategy selector.
+///
+/// Lower than the core ceiling on purpose: this trigger's longest honest content is a localized
+/// "all strategies" phrase or a count, and a single exact strategy name may run far past what the
+/// row can spare — past this it ellipsizes rather than pushing the rest of the filters to a second
+/// line.
+const STRATEGY_TRIGGER_MAX_W: f32 = 200.0;
+
 /// The widths the core selector occupies this frame, full and compact.
 ///
 /// It is the row's only content-sized section — a pinned workspace fits the trigger to a core name
@@ -393,15 +401,22 @@ fn all_strategies_short() -> String {
 ///     cx: Application context supplying the active font scale.
 ///     core_full_w: Rendered width of the core selector at full size, from `core_combo`.
 ///     core_compact_w: Rendered width of the same selector compact, from `compact_trigger_width`.
+///     strategy_full_w: Rendered width of the strategy selector at full size, from
+///         `strategy_full_width` — content-sized like the core one, so the shared constant would
+///         under-state the saving for any summary longer than it.
 ///
 /// Returns:
 ///     The saving in logical pixels, never negative.
-pub(super) fn compact_row_saving(cx: &App, core_full_w: f32, core_compact_w: f32) -> f32 {
+pub(super) fn compact_row_saving(
+    cx: &App,
+    core_full_w: f32,
+    core_compact_w: f32,
+    strategy_full_w: f32,
+) -> f32 {
     let all_short = all_strategies_short();
     let core = core_full_w - core_compact_w;
-    let strategy =
-        crate::controls::wrap_fit::action_width(cx, crate::controls::CORE_COMBO_TRIGGER_W)
-            - crate::controls::wrap_fit::compact_trigger_width(cx, &all_short, &all_short);
+    let strategy = strategy_full_w
+        - crate::controls::wrap_fit::compact_trigger_width(cx, &all_short, &all_short);
     (core + strategy).max(0.0)
 }
 
@@ -476,9 +491,6 @@ impl ReportPanel {
                 backend.session.core_venues(),
             )
         };
-        let auto_core = workspace_scope
-            .as_ref()
-            .is_some_and(EffectiveCoreScope::is_auto_core);
         let pinned_label = workspace_scope
             .as_ref()
             .and_then(|scope| match scope.label() {
@@ -498,21 +510,17 @@ impl ReportPanel {
         } else {
             &self.sel_cores
         };
-        // Only an AutoCore trigger sizes itself to its content; every other state renders the
-        // shared width. Measured through MoonUI's own fitting, so the number the row budgets with is
-        // the number the row draws — the fitted TEXT is deliberately discarded, since it carries the
-        // component's caret and handing it back would draw a second one.
-        let full_w = match pinned_label.as_deref().filter(|_| auto_core) {
-            Some(label) => {
-                MoonDropdown::fitted_trigger_label(
-                    cx,
-                    label,
-                    MoonButtonSize::density(cx),
-                    crate::controls::CORE_COMBO_TRIGGER_W,
-                    AUTO_CORE_TRIGGER_MAX_W,
-                )
-                .1
-            }
+        // EVERY pinned label sizes itself to its content, not only a core name: the Overview word
+        // is a whole localized phrase ("Полная сводка") that the shared width clips to an ellipsis,
+        // and a clipped scope is the one label on this row that must stay readable. The shared
+        // fitter is what keeps the number the row budgets with equal to the number it draws.
+        let full_w = match pinned_label.as_deref() {
+            Some(label) => crate::controls::pinned_scope_width(
+                cx,
+                label,
+                crate::controls::CORE_COMBO_TRIGGER_W,
+                AUTO_CORE_TRIGGER_MAX_W,
+            ),
             // No measurement needed: an unpinned trigger renders the shared width, scaled.
             None => {
                 crate::controls::wrap_fit::action_width(cx, crate::controls::CORE_COMBO_TRIGGER_W)
@@ -638,6 +646,35 @@ impl ReportPanel {
             })
     }
 
+    /// Width the strategy selector occupies at full size, fitted to its own summary.
+    ///
+    /// Resolved here rather than at the two call sites so the rendered trigger and the row's
+    /// compaction budget can never disagree about it — an under-stated saving makes a widening
+    /// drag re-expand into a width the row immediately overflows again.
+    ///
+    /// Args:
+    ///     cx: Application context supplying the active font scale.
+    ///
+    /// Returns:
+    ///     The fitted width in logical pixels, between the shared trigger width and
+    ///     [`STRATEGY_TRIGGER_MAX_W`].
+    pub(super) fn strategy_full_width(&self, cx: &App) -> f32 {
+        let (summary, _) = strategy_selection_summary(
+            &self.available_strategy_keys,
+            self.selected_strategies.as_ref(),
+            &t!("report.all_strategies"),
+            |n| t!("report.strategies_n", n = n).to_string(),
+        );
+        MoonDropdown::fitted_trigger_label(
+            cx,
+            &summary,
+            MoonButtonSize::density(cx),
+            crate::controls::CORE_COMBO_TRIGGER_W,
+            STRATEGY_TRIGGER_MAX_W,
+        )
+        .1
+    }
+
     /// Render the searchable, virtualized strategy selector grouped by core.
     ///
     /// The trigger and popup are asked to look like the `MoonDropdown` filters beside them:
@@ -678,13 +715,10 @@ impl ReportPanel {
         } else {
             (
                 summary.clone(),
-                // The Action scale, like the core selector beside it: `font_w`'s mono body scale
-                // would size the pair differently as soon as the legacy font-delta channel leaves
-                // zero.
-                px(crate::controls::wrap_fit::action_width(
-                    cx,
-                    crate::controls::CORE_COMBO_TRIGGER_W,
-                )),
+                // Content-sized between the shared width and its own ceiling, like the core
+                // selector beside it: "Все стратегии" is longer than the shared constant and was
+                // clipped to "Все стр…" at every dock width, including one with room to spare.
+                px(self.strategy_full_width(cx)),
             )
         };
         div()

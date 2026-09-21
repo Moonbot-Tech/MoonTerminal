@@ -1,48 +1,48 @@
 # Windowing Contract
 
-Док фиксирует текущий контракт окон MoonTerminal поверх MoonUI/GPUI. Это не
-визуальный референс, а инженерное правило: как открывать окна, чтобы не ломать
-taskbar/dock semantics, restore и chart own-pass.
+This document records the current MoonTerminal window contract on top of MoonUI/GPUI. It is not
+a visual reference, but an engineering rule: how to open windows without breaking
+taskbar/dock semantics, restore, and chart own-pass.
 
-## Где создавать окна
+## Where windows are created
 
-Новые окна терминала открывать через `crates/moon-ui-gpui/src/windowing.rs`.
+Open new terminal windows through `crates/moon-ui-gpui/src/windowing.rs`.
 
-Нельзя собирать `gpui::WindowOptions` руками в панелях, настройках или
-редакторе стратегий без явной причины. Иначе легко забыть `app_id`,
-decorations, owner, taskbar policy или min size, и снова получить окно, которое
-ведет себя как отдельное приложение.
+Do not assemble `gpui::WindowOptions` by hand in panels, Settings, or
+the Strategies editor without an explicit reason. Otherwise it is easy to forget `app_id`,
+decorations, owner, taskbar policy or min size, and get a window that
+behaves as a separate application again.
 
-Текущие фабрики:
+Current factories:
 
-- `trading_window_options` - основное окно группы/терминала.
-- `tool_window_options` - owned tool/secondary окна вроде настроек,
-  стратегий и активов.
-- `detached_panel_window_options` - открепленные non-chart панели
+- `trading_window_options` - the main group/terminal window.
+- `tool_window_options` - owned tool/secondary windows such as Settings,
+  Strategies and Assets.
+- `detached_panel_window_options` - detached non-chart panels
   (`Orders`, `Assets`, `Log`, `Report`).
-- `detached_chart_window_options` - открепленные chart windows; намеренно
-  independent от main/group окна.
+- `detached_chart_window_options` - detached chart windows; deliberately
+  independent of the main/group window.
 - `debug_window_options` - debug/perf/chart diagnostic windows.
 - `profit_monitor_window_options` - independent desktop Profit Monitor without its own taskbar
   button; minimizing a Main/group window never minimizes it.
 
-## Auto workspace: rail, dock и окна групп
+## Auto workspace: rail, dock, and group windows
 
-Auto — полноценное рабочее пространство внутри уже существующего группового окна, а не новый тип
-OS-window. У каждой активной группы остаётся свой `Shell`, свой единственный `DockArea` и свои
-локальные panel instances.
+Auto is a full workspace inside an already existing group window, not a new kind of
+OS-window. Each active group keeps its own `Shell`, its own single `DockArea` and its
+local panel instances.
 The left `MoonVirtualList` rail shows every configured application core as an exchange tree.
 Exchange headings follow alphabetical live market metadata order, with unknown exchange first;
 their core leaves retain canonical `core_order::CoreOrder`. Known brand logos appear on exchange
 headings only, never on core rows. Core names do not infer exchange identity. Disabled or
 unavailable rows remain visible with status and reject clicks.
 
-Ядро selectable, когда активны оно и его группа, существует live session и окно группы находится в
-состоянии `Opening` или `Live`. Per-core `show_window` здесь не участвует: headless core доступен
-через общее живое окно своей группы. Клик внутри текущей группы только меняет её Auto scope. Клик
-по ядру другой группы атомарно сохраняет для destination `AutoTrading` + core, передаёт ему
-singleton focus и активирует уже существующее group window; panels между окнами не reparent'ятся и
-новое параллельное окно не создаётся.
+A core is selectable when it and its group are active, a live session exists and the group window is in
+the `Opening` or `Live` state. Per-core `show_window` does not take part here: a headless core is available
+through its group's shared live window. A click inside the current group only changes that group's Auto scope. A click
+on a core of another group atomically saves `AutoTrading` + core for the destination, hands it
+singleton focus and activates the already existing group window; panels are not reparented between windows and
+no new parallel window is created.
 
 The rail has Overview only for its current group, while the header summary counts
 configured/ready/problem across the application. Its `340 px` initial width is stored in
@@ -82,21 +82,21 @@ through deferred
 Dock-event delivery, preventing its `PanelActivated` and `LayoutChanged` events from becoming
 either a tab preference or a shared-topology edit.
 
-Отсутствующий `auto_dock.json` означает первый запуск и разрешает сохранить стартовый preset.
-Нечитаемый или невалидный файл — отдельное recovery-состояние: безопасный preset показывается
-только в памяти и не перезаписывает файл, пока пользователь явно не изменит topology. Запись
-Live-сохранение `layout.toml`, общей Auto topology и пары Classic
-`docks.json`/`detached.json` проходит через один serial persistence worker. GPUI передаёт ему только
-immutable snapshots и опрашивает acknowledgements; файловые open/write/flush/sync не выполняются в
-UI tick. Classic-пара сохраняется как одна логическая транзакция через
-`window-state.pending.json`: journal записывается до обоих public-файлов и удаляется только после
-двух успешных atomic replace. После аварийной остановки startup сначала replay'ит journal целиком.
-После принятого enqueue соответствующий dirty-флаг снимается; новая мутация или failed
-acknowledgement выставляет его снова, поэтому временная ошибка файловой системы повторяется на
-следующем flush вместо тихой потери layout. На quit последний полный snapshot
-ставится за уже выполняющейся записью, worker join'ится, а недоступный или упавший worker получает
-единственный синхронный fallback именно на границе завершения. Повторяющиеся detached-spec с
-одинаковым `(group, panel)` схлопываются до создания native windows.
+A missing `auto_dock.json` means first launch and allows the starting preset to be saved.
+An unreadable or invalid file is a separate recovery state: the safe preset is shown
+only in memory and does not overwrite the file until the user explicitly changes topology. Writing
+Live-saving of `layout.toml`, the shared Auto topology and the Classic pair
+`docks.json`/`detached.json` goes through one serial persistence worker. GPUI hands it only
+immutable snapshots and polls acknowledgements; file open/write/flush/sync do not run in the
+UI tick. The Classic pair is saved as one logical transaction through
+`window-state.pending.json`: the journal is written before both public files and is deleted only after
+two successful atomic replaces. After a crash, startup first replays the journal in full.
+After an accepted enqueue the matching dirty flag is cleared; a new mutation or a failed
+acknowledgement sets it again, so a temporary filesystem error is retried on the
+next flush instead of silently losing the layout. On quit the last full snapshot
+is placed behind the write already in flight, the worker is joined, and an unavailable or crashed worker gets
+the only synchronous fallback exactly at the shutdown boundary. Repeated detached-specs with
+the same `(group, panel)` are collapsed before native windows are created.
 
 If `auto_dock.json` does not exist, the first Auto workspace receives a vertical operations preset:
 the flexible upper tab stack contains pinned-leading `ChartTabs`, `Report`, `Log`, and the other
@@ -122,27 +122,27 @@ and `Alerts` panels remains available for reorder/split/resize. Existing detache
 remain open, but Auto cannot create new ones. `docks.json` and `detached.json` remain exclusively
 Classic authorities and Auto events never rewrite them.
 
-Существующий detached chart может оставаться на другом мониторе как контекст, но каждое его
-торговое действие и переход на Main повторно проверяет актуальный rail-scope группы. График старого
-ядра остаётся видимым, однако не может отправить команду или обойти выбор сервера через левую панель.
+An existing detached chart may stay on another monitor as context, but every one of its
+trading actions and every go-to-Main re-checks the group's current rail-scope. The old core's
+chart stays visible, but cannot send a command or bypass the server choice through the left panel.
 
-Все прежние `Backend::open_on_main` routes остаются действующими. Shell при создании запоминает уже
-существующий request revision, поэтому вкладку `ChartTabs` программно активируют только новые
-revisions, замеченные этим Shell после его создания и адресованные его Auto-группе; request,
-появившийся до окна, не отбирает стартовую вкладку. В Classic reveal не отбирает активную dock tab.
-Флаг request `activate` по-прежнему отдельно решает, поднимать ли OS-window. Перед observer
-signature и consume target core заново разрешается через live session. Group-owned request несёт
-неизменяемую authority исходного окна: если ядро сменило группу, исчезло или вышло из текущего Auto
-scope, request отменяется вместо переноса действия. Только явно unscoped internal/global request
-может следовать за живым ядром в новую группу. Detached chart windows остаются independent по OS
-ownership и не получают owner только из-за Auto.
+All previous `Backend::open_on_main` routes remain in force. On creation the Shell remembers the
+already existing request revision, so the `ChartTabs` tab is programmatically activated only by new
+revisions this Shell noticed after it was created and addressed to its Auto group; a request
+that appeared before the window does not steal the starting tab. In Classic a reveal does not steal the active dock tab.
+The request `activate` flag still separately decides whether to raise the OS-window. Before the observer
+signature and consume, the target core is resolved again through the live session. A group-owned request carries
+the immutable authority of the source window: if the core changed group, vanished, or left the current Auto
+scope, the request is cancelled instead of moving the action. Only an explicitly unscoped internal/global request
+may follow a live core into a new group. Detached chart windows remain independent in OS
+ownership and do not gain an owner just because of Auto.
 
-Конкретный клик по rail становится единственным способом сменить ядро Auto: все scoped panels
-перечитывают effective scope, header показывает тот же core как пассивный indicator, а текущий Main
-chart заменяется или фокусируется без накопления новых вкладок. Рынок сохраняется exact-match,
-затем через match-key/quote fallback; если подходящего рынка нет, chart не меняется. Overview не
-выбирает произвольное ядро и не ретаргетит Main chart. Classic selection и Classic dock при этом не
-меняются.
+A concrete click on the rail becomes the only way to change the Auto core: every scoped panel
+re-reads the effective scope, the header shows the same core as a passive indicator, and the current Main
+chart is replaced or focused without accumulating new tabs. The market is kept by exact-match,
+then through match-key/quote fallback; if there is no matching market, the chart does not change. Overview does not
+pick an arbitrary core and does not retarget the Main chart. Classic selection and the Classic dock are not
+changed.
 
 A group-owned Report applies one contextual column lens to that effective scope. Only `AutoCore`
 makes `core_name` unavailable; Auto Overview, Classic, and standalone Report continue to honor the
@@ -150,189 +150,189 @@ saved preference. The lens never mutates saved visibility, sort, or width state,
 Columns menu, selection copy, and visible-columns export all use it consistently. The explicit
 all-columns export remains the full runtime schema.
 
-Логическое владение singleton scope следует за реальным взаимодействием: native activation
-group window или detached panel обновляет `WorkspaceFocus`. Для detached chart каждое native
-activation делает это без зависимости от inactivity-close настройки, а существующий путь
-активного chart interaction/polling повторно подтверждает группу, пока пользователь работает в
-окне. Для charts это не OS owner/transient relationship — только маршрутизация
-`Analytics`/`Strategies`. Native focus/taskbar behaviour и визуальное попадание трёх responsive
-ступеней требуют ручной проверки в собранном приложении; статические и unit-тесты проверяют лишь
-программные решения и инварианты.
+Logical ownership of singleton scope follows real interaction: native activation of a
+group window or detached panel updates `WorkspaceFocus`. For a detached chart every native
+activation does this without depending on the inactivity-close setting, and the existing
+active chart interaction/polling path re-confirms the group while the user works in
+the window. For charts this is not an OS owner/transient relationship — only routing of
+`Analytics`/`Strategies`. Native focus/taskbar behaviour and the visual hit of the three responsive
+tiers require a manual check in the built application; static and unit tests check only
+programmatic decisions and invariants.
 
 ## MoonUI native contract
 
-В MoonUI `WindowOptions` расширен двумя полями:
+In MoonUI `WindowOptions` is extended with two fields:
 
-- `WindowRelationship` - независимое окно или owned window с owner handle.
-- `WindowTaskbarVisibility` - показывать ли отдельную кнопку taskbar там, где
-  платформа поддерживает per-window taskbar entries.
+- `WindowRelationship` - an independent window or an owned window with an owner handle.
+- `WindowTaskbarVisibility` - whether to show a separate taskbar button where
+  the platform supports per-window taskbar entries.
 
-Default policy: owned windows скрываются из taskbar, independent windows
-показываются.
+Default policy: owned windows are hidden from the taskbar, independent windows
+are shown.
 
 Backend mapping:
 
-- Windows: `WindowRelationship::Owned` превращается в Win32 owned window через
-  owner `HWND`, без modal блокировки parent. Dialog остается отдельной modal
-  логикой. `AppUserModelID` ставится как `MoonTerminal`.
-- macOS: owned floating window добавляется как AppKit child window над owner и
-  исключается из native Windows menu.
-- Wayland: owner превращается в xdg parent.
-- X11: owner превращается в transient parent, а hidden taskbar policy ставит
+- Windows: `WindowRelationship::Owned` becomes a Win32 owned window through
+  the owner `HWND`, without modal blocking of the parent. Dialog remains a separate modal
+  logic. `AppUserModelID` is set to `MoonTerminal`.
+- macOS: an owned floating window is added as an AppKit child window over the owner and
+  is excluded from the native Windows menu.
+- Wayland: the owner becomes an xdg parent.
+- X11: the owner becomes a transient parent, and the hidden taskbar policy sets
   `_NET_WM_STATE_SKIP_TASKBAR`.
 
-## Window chrome: закрытый API
+## Window chrome: the closed API
 
-Финальный контракт: терминал не использует `MoonWindowChrome` напрямую и не
-рисует самодельные `x`, `-`, `[]` в отдельных окнах. Для визуального chrome и
-native hit-зон используется `MoonWindowFrame` из MoonUI.
+Final contract: the terminal does not use `MoonWindowChrome` directly and does not
+draw homemade `x`, `-`, `[]` in individual windows. For visual chrome and
+native hit zones, `MoonWindowFrame` from MoonUI is used.
 
-Старый `MoonWindowChrome` удален из публичного API `moon_ui`. Он был слишком
-низкоуровневым: давал hit-зоны и window-control areas, но не владел визуальной
-семантикой окна - брендом, title cluster, цветами, hover state и тем, какое
-лого допустимо для конкретного типа окна. Именно из-за этого debug/tool окно
-могло снова получить большой wordmark как у главного окна. Теперь экран не
-собирает chrome из частей, а выбирает тип окна через `MoonWindowFrameKind`.
+The old `MoonWindowChrome` is removed from the public `moon_ui` API. It was too
+low-level: it gave hit zones and window-control areas, but did not own the visual
+semantics of a window - brand, title cluster, colours, hover state and which
+logo is allowed for a given window kind. That is why a debug/tool window
+could again get the large wordmark of the main window. Now a screen does not
+assemble chrome from parts; it picks a window kind through `MoonWindowFrameKind`.
 
-`MoonWindowFrame` одновременно задает:
+`MoonWindowFrame` sets all of:
 
-- тип окна: `Main`, `Tool`, `Popup`, `DetachedPanel`, `DetachedChart`, `Debug`;
-- набор window controls: `None`, `Close`, `MinimizeClose`,
+- window kind: `Main`, `Tool`, `Popup`, `DetachedPanel`, `DetachedChart`, `Debug`;
+- window-control set: `None`, `Close`, `MinimizeClose`,
   `MinimizeMaximizeClose`;
-- visual controls: символы, цвета, hover state, размер кнопок из MoonTheme;
+- visual controls: symbols, colours, hover state, button size from MoonTheme;
 - native control areas: `Min`, `Max`, `Close`;
 - drag handle: `WindowControlArea::Drag`, double click -> native titlebar
   double click, mouse down -> native window move;
-- hit overlay для тех окон, где drag-зона должна быть отдельной прозрачной
-  областью поверх header.
+- hit overlay for those windows where the drag zone must be a separate transparent
+  area over the header.
 
-## Визуальные типы окон
+## Visual window kinds
 
-MoonTerminal использует три визуальных класса окон:
+MoonTerminal uses three visual window classes:
 
-- Главное окно: одно основное окно терминала. Только оно имеет полный wordmark
-  `MoonTerminal` в header. В API это `MoonWindowFrameKind::Main`.
-- Tool/secondary окна: настройки, стратегии, debug, detached chart и другие
-  вспомогательные окна. Они имеют маленький mark без надписи Moonbot. В API это
+- Main window: the one primary terminal window. Only it has the full `MoonTerminal`
+  wordmark in the header. In the API this is `MoonWindowFrameKind::Main`.
+- Tool/secondary windows: Settings, Strategies, debug, detached chart and other
+  auxiliary windows. They have a small mark without the Moonbot caption. In the API this is
   `Tool`, `DetachedPanel`, `DetachedChart`, `Debug`.
-- Popup/overlay окна: компактные окна без брендинга. В API это `Popup`.
+- Popup/overlay windows: compact windows with no branding. In the API this is `Popup`.
 
-Экран не выбирает логотип сам. Нельзя напрямую вызывать terminal helpers вроде
-`logo_sized`, `logo_mark` или рисовать SVG/logo руками в titlebar. Branding
-выбирает `MoonWindowFrame` по `MoonWindowFrameKind`:
+A screen does not pick the logo itself. Direct calls to terminal helpers such as
+`logo_sized`, `logo_mark`, or drawing an SVG/logo by hand in the titlebar, are forbidden. Branding
+is chosen by `MoonWindowFrame` from `MoonWindowFrameKind`:
 
 - `Main` -> full logo;
 - `Tool` / `DetachedPanel` / `DetachedChart` / `Debug` -> small mark;
 - `Popup` -> no logo.
 
-Единственное исключение — full logo главного окна: `MoonWindowFrame` рисует свой
-Moonbot-lockup, зашитый в компонент, а продукт называется MoonTerminal. Поэтому
-header главного окна собирает бренд-кластер сам (`chrome/terminal_chrome.rs`):
-drag-зону по-прежнему даёт `MoonWindowFrame::drag_handle()`, а лого и разделитель —
-`design::header_logo` над ассетами `assets/brand/`. Геометрия кластера та же, что у
-`brand_cluster` (`CHROME_GAP`, линейка 16px), но линейку рисует `design::chrome_divider`:
-раз кластер собирает терминал, шов подчиняется тому же контрасту, что и остальные швы
-строки, а не более бледному `border` из MoonUI. Вернуть `brand_cluster` следует ровно
-тогда, когда `MoonWindowFrame` научится принимать чужой lockup. Для mark-окон и popup-ов
-правило ниже действует без изменений.
+The only exception is the main window's full logo: `MoonWindowFrame` draws its own
+Moonbot lockup, baked into the component, and the product is called MoonTerminal. Therefore
+the main window's header assembles the brand cluster itself (`chrome/terminal_chrome.rs`):
+the drag zone is still given by `MoonWindowFrame::drag_handle()`, and the logo and divider by
+`design::header_logo` over the `assets/brand/` assets. Cluster geometry is the same as
+`brand_cluster` (`CHROME_GAP`, a 16px rule), but the rule is drawn by `design::chrome_divider`:
+once the terminal assembles the cluster, the seam follows the same contrast as the other seams
+of the row, not the paler `border` from MoonUI. `brand_cluster` should come back exactly
+when `MoonWindowFrame` learns to accept a foreign lockup. For mark windows and popups
+the rule below holds unchanged.
 
-Для titlebar-зоны использовать:
+For the titlebar zone use:
 
-- `MoonWindowFrame::brand_cluster(cx)` - brand + separator без title;
+- `MoonWindowFrame::brand_cluster(cx)` - brand + separator without title;
 - `MoonWindowFrame::title_cluster(title, cx)` - brand + separator + title;
-- `MoonWindowFrame::visual_controls(cx)` - OS-кнопки;
-- `MoonWindowFrame::drag_handle()` / `hit_overlay()` - native drag/hit зоны.
+- `MoonWindowFrame::visual_controls(cx)` - OS buttons;
+- `MoonWindowFrame::drag_handle()` / `hit_overlay()` - native drag/hit zones.
 
-Правильная композиция:
+Correct composition:
 
-- `windowing.rs` открывает OS-window и задает owner/taskbar/app_id/decorations;
-- header визуально рисует прикладное содержимое окна: brand, title, метрики,
-  кнопки терминала;
-- `MoonWindowFrame::brand_cluster(...)` / `title_cluster(...)` рисуют правильный
-  brand для типа окна;
-- `MoonWindowFrame::visual_controls(...)` рисует OS-кнопки окна;
-- `MoonWindowFrame::drag_handle()` ставится на spacer зоны;
-- `MoonWindowFrame::hit_overlay()` ставится последним child только там, где
-  нужен отдельный прозрачный drag overlay.
+- `windowing.rs` opens the OS-window and sets owner/taskbar/app_id/decorations;
+- the header visually draws the window's application content: brand, title, metrics,
+  terminal buttons;
+- `MoonWindowFrame::brand_cluster(...)` / `title_cluster(...)` draw the correct
+  brand for the window kind;
+- `MoonWindowFrame::visual_controls(...)` draws the window's OS buttons;
+- `MoonWindowFrame::drag_handle()` is placed on the spacer zone;
+- `MoonWindowFrame::hit_overlay()` is placed as the last child only where
+  a separate transparent drag overlay is needed.
 
-Если в экране хочется "просто поставить логотип" или "просто нарисовать x",
-это значит, что в MoonUI не хватает нужного `MoonWindowFrameKind` или helper в
-`MoonWindowFrame`. Исправлять надо MoonUI-контракт, а не конкретный экран.
-Единственное записанное исключение — брендовый lockup главного окна выше: пока в
-`MoonWindowFrame` нет варианта под чужой логотип, его рисует `design::header_logo`
-из `chrome/terminal_chrome.rs`. Оно записано здесь и закреплено тестом, а не
-заведено по месту, — второго такого исключения быть не должно.
+If a screen wants to "just put a logo" or "just draw an x",
+that means MoonUI is missing the needed `MoonWindowFrameKind` or helper on
+`MoonWindowFrame`. Fix the MoonUI contract, not the particular screen.
+The only recorded exception is the main-window brand lockup above: until
+`MoonWindowFrame` has a variant for a foreign logo, `design::header_logo` draws it
+from `chrome/terminal_chrome.rs`. It is recorded here and pinned by a test, not
+introduced in place — there must not be a second such exception.
 
-Прямые использования в terminal UI запрещены:
+Direct uses in the terminal UI are forbidden:
 
 - `MoonWindowChrome::new`;
 - `MoonWindowChromeButton`;
 - `WindowControlArea::Drag`;
 - `start_window_move`;
 - `titlebar_double_click`;
-- `logo_sized` / `logo_mark` вне самого brand/helper слоя;
-- `design::header_logo` вне `chrome/terminal_chrome.rs` и открытие файла по пути
-  `assets/brand/` вне `design.rs` (назвать папку в комментарии можно) — логотип
-  берется у `MoonWindowFrame`, а единственное исключение описано выше;
-- `WindowOptions { ... }` вне `windowing.rs`.
+- `logo_sized` / `logo_mark` outside the brand/helper layer itself;
+- `design::header_logo` outside `chrome/terminal_chrome.rs` and opening a file by the
+  `assets/brand/` path outside `design.rs` (naming the folder in a comment is allowed) — the logo
+  is taken from `MoonWindowFrame`, and the only exception is described above;
+- `WindowOptions { ... }` outside `windowing.rs`.
 
-Запрет закреплен тестом `terminal_windows_use_closed_window_frame_api` в
+The ban is pinned by the test `terminal_windows_use_closed_window_frame_api` in
 `crates/moon-ui-gpui/tests/theme_contract/`.
 
-Если понадобится новый вид окна, например нестандартный круглый titlebar или
-controls в центре, добавлять новый `MoonWindowFrameKind`/layout в MoonUI и
-одну фабрику в `windowing.rs`, а не править отдельные экраны.
+If a new window kind is needed, for example a non-standard round titlebar or
+controls in the centre, add a new `MoonWindowFrameKind`/layout in MoonUI and
+one factory in `windowing.rs`, rather than editing individual screens.
 
-Generic detached panels (`Orders`, `Assets`, `Log`, `Report`) тоже считаются
-`DetachedPanel`, а не "просто отдельным окном с контентом". Они обязаны иметь
-custom titlebar через `MoonWindowFrame::detached_panel(...)` и открываться
-через `detached_panel_window_options(...)`; иначе получаем четвертый
-визуальный/поведенческий тип окна, которого нет в дизайне.
+Generic detached panels (`Orders`, `Assets`, `Log`, `Report`) also count as
+`DetachedPanel`, not "just a separate window with content". They must have a
+custom titlebar through `MoonWindowFrame::detached_panel(...)` and open
+through `detached_panel_window_options(...)`; otherwise we get a fourth
+visual/behavioural window kind that is not in the design.
 
-## Owner и taskbar policy
+## Owner and taskbar policy
 
-Нельзя вызывать `cx.window_handle()` из `Context` view/entity. У
-`gpui::Context<'_, T>` такого API нет, и при restore сохраненных окон текущего
-`Window` физически нет.
+Do not call `cx.window_handle()` from a `Context` view/entity. `gpui::Context<'_, T>`
+has no such API, and on restore of saved windows the current
+`Window` physically does not exist.
 
-Owner используется только для owner-aware типов окон:
+Owner is used only for owner-aware window kinds:
 
 - `tool_window_options`;
 - `debug_window_options`;
 - `detached_panel_window_options`.
 
-Для них правильная схема:
+For them the correct scheme is:
 
-- live UI click: взять `window.window_handle()` в callback, где есть `Window`,
-  и передать `Some(owner)`;
-- restore/startup: сначала попытаться найти живое окно группы через
-  `Backend.group_windows`; если owner не найден, передать `None`.
+- live UI click: take `window.window_handle()` in the callback that has a `Window`,
+  and pass `Some(owner)`;
+- restore/startup: first try to find the live group window through
+  `Backend.group_windows`; if no owner is found, pass `None`.
 
-Если detached panel восстанавливается без owner, `detached::spawn` пытается
-найти окно группы через `Backend.group_windows`. Если owner не найден, окно
-остается independent. Это нормальное поведение для restore.
+If a detached panel is restored without an owner, `detached::spawn` tries to
+find the group window through `Backend.group_windows`. If no owner is found, the window
+stays independent. This is normal restore behaviour.
 
-Detached chart windows - отдельное правило. Они НИКОГДА не owned, даже при
-runtime detach, потому что owned/transient связь ОС поднимает Main/group окно
-при клике по графику. На мультимониторе это выглядит как прыжок основного окна
-на другом экране. Поэтому chart windows открываются только через
-`detached_chart_window_options(...)`: owner в их API отсутствует, окно
-independent, а отдельная taskbar-кнопка подавляется общим механизмом (см. ниже).
+Detached chart windows are a separate rule. They are NEVER owned, even on
+runtime detach, because the OS owned/transient relationship raises the Main/group window
+on a click on the chart. On a multi-monitor setup this looks like the main window jumping
+on another screen. Therefore chart windows open only through
+`detached_chart_window_options(...)`: their API has no owner, the window is
+independent, and the separate taskbar button is suppressed by the shared mechanism (see below).
 
-Итоговая taskbar policy:
+Final taskbar policy:
 
-- `trading_window_options` - видимое основное окно приложения;
+- `trading_window_options` - the visible main application window;
 - `tool_window_options`, `debug_window_options`,
-  `detached_panel_window_options` - hidden из taskbar, когда есть owner; при
-  restore без owner становятся independent и могут получить taskbar entry;
-- `detached_chart_window_options` - always independent, но hidden из taskbar;
-- `profit_monitor_window_options` - та же комбинация: always independent, но hidden из taskbar.
+  `detached_panel_window_options` - hidden from the taskbar when there is an owner; on
+  restore without an owner they become independent and may get a taskbar entry;
+- `detached_chart_window_options` - always independent, but hidden from the taskbar;
+- `profit_monitor_window_options` - the same combination: always independent, but hidden from the taskbar.
 
-Текущие окна `Настройки`, `Стратегии` и `Активы` считаются
-`Tool/secondary`, поэтому открываются через `tool_window_options(...)`. Если
-экран визуально использует `MoonWindowFrame::tool(...)`, но открывается через
-самостоятельную `WindowOptions`-ветку, это архитектурная ошибка: окно выглядит
-как часть терминала, но ОС ведет его как отдельное приложение.
+The current `Settings`, `Strategies` and `Assets` windows count as
+`Tool/secondary`, so they open through `tool_window_options(...)`. If
+a screen visually uses `MoonWindowFrame::tool(...)` but opens through
+a standalone `WindowOptions` branch, that is an architectural error: the window looks
+like part of the terminal, but the OS treats it as a separate application.
 
 Profit Monitor is the deliberate exception to the usual visual-tool ownership rule. It keeps
 `MoonWindowFrame::tool(...)` chrome because it is visually part of MoonTerminal, but its product
@@ -344,43 +344,43 @@ an iconic window) and Alt+Tab, which the window keeps because hidden taskbar vis
 `WS_EX_APPWINDOW` and never applies the tool-window style. Do not copy that OS policy to ordinary
 tool windows.
 
-Обе independent-ветки - detached charts и Profit Monitor - подавляют taskbar-кнопку ОДНИМ
-механизмом: `WindowTaskbarVisibility::Hidden` плюс `hide_window_from_taskbar_soon`.
-`WindowTaskbarVisibility::Hidden` сам по себе гарантии не даёт: он лишь снимает `WS_EX_APPWINDOW`,
-который unowned top-level окну и не нужен, чтобы получить кнопку. `ITaskbarList::DeleteTab` удаляет
-уже существующий элемент и НЕ является постоянным состоянием окна: оболочка публикует элемент чуть
-позже показа окна и заново - при разворачивании свёрнутого окна. Поэтому burst удалений
-взводится при открытии окна и повторно на каждой активации (`observe_window_activation`); прежний
-burst отменяется до запуска нового. COM, sleep и retries выполняются вне GPUI, а bounded burst не
-превращается в постоянную работу.
-Настоящее место для этой логики - Windows-бэкенд форка MoonUI (там доступны wndproc и broadcast
-`TaskbarCreated`); пока `Hidden` там ничего не гарантирует, компенсация живёт здесь.
+Both independent branches - detached charts and Profit Monitor - suppress the taskbar button with ONE
+mechanism: `WindowTaskbarVisibility::Hidden` plus `hide_window_from_taskbar_soon`.
+`WindowTaskbarVisibility::Hidden` by itself is not a guarantee: it only clears `WS_EX_APPWINDOW`,
+which an unowned top-level window does not even need in order to get a button. `ITaskbarList::DeleteTab` removes
+an already existing item and is NOT a permanent window state: the shell publishes the item shortly
+after the window is shown and again on restoring a minimized window. Therefore a deletion burst
+is armed when the window opens and again on every activation (`observe_window_activation`); the previous
+burst is cancelled before the new one starts. COM, sleep and retries run outside GPUI, and the bounded burst does not
+turn into standing work.
+The real home for this logic is the Windows backend of the MoonUI fork (wndproc and the
+`TaskbarCreated` broadcast are available there); until `Hidden` guarantees anything there, the compensation lives here.
 
-Profit Monitor использует один monotonic pending create request: startup restore не активирует
-окно, а пользовательский open может повысить уже ожидающий request до foreground, но не создать
-второе окно. Native create выполняется только после настоящего timer yield и повторной проверки
-shutdown; manual close очищает только совпадающий `WindowId`, сохраняя reopen-флаг во время quit.
+Profit Monitor uses one monotonic pending create request: startup restore does not activate
+the window, and a user open may promote an already pending request to foreground, but does not create
+a second window. Native create runs only after a real timer yield and a repeated
+shutdown check; a manual close clears only the matching `WindowId`, keeping the reopen flag during quit.
 
-## Chart windows и UnderScene
+## Chart windows and UnderScene
 
-Chart не является GPUI UI-компонентом. Он рисуется own-pass в UnderScene через
-chartdx/raw GPU path. Поэтому GPUI оболочка должна выделять место под chart, но
-не должна класть непрозрачный quad поверх plot/body.
+The chart is not a GPUI UI component. It is drawn as an own-pass in UnderScene through
+the chartdx/raw GPU path. Therefore the GPUI shell must reserve space for the chart, but
+must not place an opaque quad over the plot/body.
 
-Правило:
+Rule:
 
 - chart/debug/detached-chart root: `MoonBackgroundPolicy::NoFill`;
-- header/chrome можно красить `.bg(...)`;
-- body вокруг `ChartPanel` нельзя красить `.bg(...)`;
-- обычные non-chart окна/панели могут быть opaque.
+- header/chrome may be painted with `.bg(...)`;
+- the body around `ChartPanel` must not be painted with `.bg(...)`;
+- ordinary non-chart windows/panels may be opaque.
 
-Если покрасить body вокруг `ChartPanel`, на macOS/Linux native chart может
-работать по логам и counters, но визуально быть пустым: GPUI background
-закрывает own-pass.
+If the body around `ChartPanel` is painted, on macOS/Linux the native chart may
+work by logs and counters but be visually empty: the GPUI background
+covers the own-pass.
 
-Контракт закреплен тестом `crates/moon-ui-gpui/tests/theme_contract/`.
+The contract is pinned by the test `crates/moon-ui-gpui/tests/theme_contract/`.
 
 ## Debug artifacts
 
-Скриншоты, временные логи и live-test артефакты не класть в `docs`.
-Для этого использовать `tmp/`; папка должна оставаться ignored.
+Do not put screenshots, temporary logs, or live-test artifacts in `docs`.
+Use `tmp/` for that; the folder must stay ignored.

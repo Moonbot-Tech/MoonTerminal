@@ -1430,7 +1430,8 @@ impl CoreData {
             FeedMsg::Identity { .. }
             | FeedMsg::CoreBase { .. }
             | FeedMsg::MarketDataChanged(_)
-            | FeedMsg::TradeSounds(_) => {}
+            | FeedMsg::TradeSounds(_)
+            | FeedMsg::TradeClosed { .. } => {}
         }
     }
 

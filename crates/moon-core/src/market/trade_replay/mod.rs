@@ -28,8 +28,11 @@
 //! - Everything a caller renders arrives as a TYPE ([`TradeReplayOutcome`]), never as a built
 //!   sentence: `moon-core` has no `rust_i18n` and must not decide the user's wording.
 
+pub mod coverage;
 pub mod gate;
 pub mod rest;
+pub(crate) mod tick_tiles;
+pub mod trade_cache;
 pub mod venue_caps;
 pub mod worker;
 
@@ -37,6 +40,9 @@ use crate::feed::types::Tick;
 use crate::market::candles::ChartCandle;
 use crate::market::{CandleReadParams, ChartHistoryBuffers, ChartHistoryRead};
 use crate::venue::{Brand, Venue};
+pub use coverage::Coverage;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Milliseconds in one minute, the only timeframe a replay is fetched at.
 const MINUTE_MS: i64 = 60_000;
@@ -71,8 +77,43 @@ const MAX_SPAN_MS: i64 = 7 * 24 * 60 * MINUTE_MS;
 /// exit — so a window clipped exactly to the position would answer the wrong question.
 const CONTEXT_FRACTION: f64 = 0.5;
 
-/// Detailed history includes five minutes before entry and after exit; wider context stays bars.
-const FOCUS_MARGIN_MS: i64 = 5 * MINUTE_MS;
+/// Live value of `[trade_replay] margin_min` — how many minutes of prints a window asks for
+/// around a trade, per end ([`ReplayWindow::margin_ms`]); the Storage tab moves it.
+static MARGIN_MIN: AtomicU32 = AtomicU32::new(crate::config::storage::DEFAULT_TRADE_MARGIN_MIN);
+static MARGIN_INIT: OnceLock<()> = OnceLock::new();
+
+/// The configured margin, in milliseconds — what every new [`ReplayWindow`] and every close-time
+/// capture is built with. Read once from `storage.toml` on first use, then from the live cell.
+pub fn margin_ms() -> i64 {
+    MARGIN_INIT.get_or_init(|| {
+        let cfg = crate::config::storage::load();
+        MARGIN_MIN.store(cfg.trade_replay.margin_min, Ordering::Relaxed);
+    });
+    i64::from(MARGIN_MIN.load(Ordering::Relaxed)) * MINUTE_MS
+}
+
+/// Move the live margin; the Storage tab writes `storage.toml` beside this. Windows already open
+/// keep the margin they were built with; the next one asks for the new stretch, and the tile
+/// store hands back what earlier windows already fetched of it.
+pub fn set_margin_min(minutes: u32) {
+    // Initialise first, or the file's value would land on top of this one on the first read.
+    let _ = margin_ms();
+    MARGIN_MIN.store(
+        minutes.min(crate::config::storage::MAX_TRADE_MARGIN_MIN),
+        Ordering::Relaxed,
+    );
+}
+
+/// A position held longer than this asks for ticks only around its entry and its exit
+/// ([`ReplayWindow::focus_spans`]), each end getting the window's margin centred on it; the
+/// middle stays bars.
+///
+/// A meaning bound, not a resource one: the page budget already caps what a walk can fetch, but
+/// on a multi-hour position it burned out ~40 minutes after the entry and the exit came back as
+/// bars — while at the zoom such a position is viewed at, the chart draws bars for the middle
+/// anyway. One hour is the developer's call (2026-09-20): past it the ticks between the ends
+/// are a ribbon nobody reads, and what matters is how the entry and the exit printed.
+const LONG_POSITION_MS: i64 = 60 * MINUTE_MS;
 
 /// Bound each tick tile so completed groups can be shown during a long position's replay.
 const TICK_SLICE_MS: i64 = 10 * MINUTE_MS;
@@ -223,6 +264,11 @@ pub struct ReplayWindow {
     ///
     /// Millisecond-exact when the core supplied a millisecond column, whole seconds otherwise.
     pub close_ms: i64,
+    /// How many milliseconds of prints are asked for around the position, per end — the
+    /// `[trade_replay] margin_min` setting at the moment the window was built. A short position
+    /// gets this much before the entry and after the exit ([`Self::focus`]); a long one gets it
+    /// centred on each end ([`Self::focus_spans`]). Zero is the position alone.
+    pub margin_ms: i64,
     /// Whether this window is WIDER than [`MAX_SPAN_MS`] because its floors demanded it.
     ///
     /// Renamed from `clipped`, and the rename is the point: the field used to mean "half the
@@ -248,9 +294,11 @@ impl ReplayWindow {
         }
     }
 
-    /// The only interval requested as ticks: the position plus five minutes on each side.
+    /// The hull of what is requested as ticks: the position plus [`Self::margin_ms`] on each side.
     ///
-    /// Both native archive reads and public REST use this interval. Wider history remains candles.
+    /// Native archive reads bracket this interval whole; public REST walks
+    /// [`Self::focus_spans`], which is this interval on a short position and only its two ends
+    /// on a long one. Wider history remains candles either way.
     ///
     /// Returns:
     ///     `(left, right)` inclusive, clamped into `[Self::from_ms, Self::to_ms]` on both ends —
@@ -259,15 +307,46 @@ impl ReplayWindow {
     ///     inverted `(left, right)` rather than a usable focus (no guard here — that state is
     ///     unreachable today, per house style).
     pub(crate) fn focus(self) -> (i64, i64) {
-        let left = (self.open_ms - FOCUS_MARGIN_MS)
+        let margin = self.margin_ms.max(0);
+        let left = self
+            .open_ms
+            .saturating_sub(margin)
             .max(self.from_ms)
             .min(self.to_ms);
-        let right = (self.close_ms + FOCUS_MARGIN_MS)
+        let right = self
+            .close_ms
+            .saturating_add(margin)
             .min(self.to_ms)
             .max(self.from_ms);
         (left, right)
     }
-    /// Detailed points cover only the position plus five minutes on each side; context stays bars.
+    /// The stretches actually requested as ticks: the whole [`Self::focus`] on a position held up
+    /// to [`LONG_POSITION_MS`]; on a longer one, [`Self::margin_ms`] centred on the entry and on
+    /// the exit — half before each end, half after — two spans with the middle left to bars.
+    ///
+    /// Returns:
+    ///     One or two spans, each clamped into `[Self::from_ms, Self::to_ms]`. The two of a long
+    ///     position coalesce into one when the margin reaches the position's own length, which
+    ///     is then the whole focus again — the same picture a short position gets.
+    pub fn focus_spans(self) -> Coverage {
+        let (left, right) = self.focus();
+        if self.close_ms.saturating_sub(self.open_ms) <= LONG_POSITION_MS {
+            return Coverage::one((left, right));
+        }
+        let half = self.margin_ms.max(0) / 2;
+        let clamp = |from: i64, to: i64| (from.max(left).min(right), to.min(right).max(left));
+        let mut spans = Coverage::one(clamp(
+            self.open_ms.saturating_sub(half),
+            self.open_ms.saturating_add(half),
+        ));
+        spans.add(clamp(
+            self.close_ms.saturating_sub(half),
+            self.close_ms.saturating_add(half),
+        ));
+        spans
+    }
+
+    /// Detailed points cover only [`Self::focus`]; context stays bars.
     pub(crate) fn tick_window(self) -> Self {
         let (from_ms, to_ms) = self.focus();
         Self {
@@ -292,10 +371,12 @@ impl ReplayWindow {
 /// Args:
 ///     open_ms: Position open, in Unix milliseconds.
 ///     close_ms: Position close, in Unix milliseconds.
+///     margin_ms: Prints asked for around the position, per end — [`margin_ms`] for a live
+///         window; see [`ReplayWindow::margin_ms`].
 ///
 /// Returns:
 ///     The window to fetch, or `None` when the stamps cannot describe one.
-pub fn replay_window_ms(open_ms: i64, close_ms: i64) -> Option<ReplayWindow> {
+pub fn replay_window_ms(open_ms: i64, close_ms: i64, margin_ms: i64) -> Option<ReplayWindow> {
     // A close at the SAME INSTANT as the open is a real trade: a scalp that filled and closed
     // inside one millisecond. Only a close BEFORE the open, or a non-positive stamp, is
     // unusable. A zero-length position needs no special handling downstream: its proportional
@@ -338,6 +419,7 @@ pub fn replay_window_ms(open_ms: i64, close_ms: i64) -> Option<ReplayWindow> {
         to_ms,
         open_ms,
         close_ms,
+        margin_ms: margin_ms.max(0),
         over_budget,
     })
 }
@@ -417,23 +499,27 @@ pub fn time_slices(window: ReplayWindow, max_span_ms: Option<i64>) -> Vec<(i64, 
     out
 }
 
-/// Contiguous tick-fetch tiles. Every completed prefix can be published as one covered span.
+/// Tick-fetch tiles in fetch order. Every completed prefix of one focus span is contiguous, so
+/// its coverage is one stretch; a long position's plan holds two such groups (see
+/// [`ReplayWindow::focus_spans`]), and the walk's coverage is then two stretches.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TickPlan {
     /// Trade tiles first, then adjoining margins; distant candle context is excluded.
     pub slices: Vec<(i64, i64)>,
     /// Leading tiles containing only the retained entry..exit interval, given extended budgets.
     pub trade_len: usize,
-    /// How many leading entries of [`Self::slices`] cover [`ReplayWindow::focus`].
+    /// How many leading entries of [`Self::slices`] cover [`ReplayWindow::focus_spans`].
     pub focus_len: usize,
 }
 
-/// Tile only the position and its five-minute margins, leaving wider context as candles.
+/// Tile only the focus spans, leaving wider context as candles.
 ///
-/// Retention clips this narrow range before paging. Split at entry and exit so a backward
-/// route starts at exit and a forward route at entry, spending nothing on optional margins
-/// until the trade is complete. Completed prefixes remain contiguous, including long trades
-/// spanning several tiles and the later switch to the opposite margin.
+/// Retention clips this narrow range before paging. Within each focus span the trade's own part
+/// comes first and its margins after, so a backward route starts at the exit and a forward route
+/// at the entry, spending nothing on optional margins until the trade is complete. On a long
+/// position the two spans' trade parts both precede any margin: the exit's first on a backward
+/// route, the entry's first on a forward one. Completed prefixes of one span remain contiguous,
+/// including long trades spanning several tiles and the later switch to the opposite margin.
 ///
 /// Args:
 ///     window: The trade and its candle context.
@@ -451,7 +537,7 @@ pub(crate) fn tick_plan(
         Some(cap) if cap > 0 => TICK_SLICE_MS.min(cap),
         _ => TICK_SLICE_MS,
     };
-    let (focus_from, focus_to) = window.focus();
+    let (_, focus_to) = window.focus();
 
     // The trade itself is the one thing worth fetching; a route whose retention does not even
     // reach the trade has nothing this plan can usefully prioritise.
@@ -489,22 +575,37 @@ pub(crate) fn tick_plan(
         }
         slices
     };
-    let mut slices = tiles(
-        window.open_ms.max(focus_from),
-        window.close_ms.min(focus_to),
-        backward,
-    );
+    // Each focus span splits into its trade part and the margins outside the position; a span
+    // that holds only one end of a long position simply has an empty margin on the other side.
+    let mut focus: Vec<(i64, i64)> = window.focus_spans().spans().to_vec();
+    if backward {
+        focus.reverse();
+    }
+    let mut slices = Vec::new();
+    for &(focus_from, focus_to) in &focus {
+        slices.extend(tiles(
+            window.open_ms.max(focus_from),
+            window.close_ms.min(focus_to),
+            backward,
+        ));
+    }
     let trade_len = slices.len();
-    let lead = tiles(
-        focus_from,
-        window.open_ms.saturating_sub(1).min(focus_to),
-        true,
-    );
-    let trail = tiles(
-        window.close_ms.saturating_add(1).max(focus_from),
-        focus_to,
-        false,
-    );
+    // The margins keep the single-focus order — a backward route walks the lead before the
+    // trail, a forward one the trail before the lead — across both spans of a long position.
+    let mut lead = Vec::new();
+    let mut trail = Vec::new();
+    for &(focus_from, focus_to) in &focus {
+        lead.extend(tiles(
+            focus_from,
+            window.open_ms.saturating_sub(1).min(focus_to),
+            true,
+        ));
+        trail.extend(tiles(
+            window.close_ms.saturating_add(1).max(focus_from),
+            focus_to,
+            false,
+        ));
+    }
     if backward {
         slices.extend(lead);
         slices.extend(trail);
@@ -727,19 +828,21 @@ pub struct TradeReplaySeries {
     /// thinned into [`Self::ticks`] — the band's data, which the thinned prints cannot supply.
     /// Empty when there were no ticks.
     pub side_slots: Vec<crate::market::source::SideSlot>,
-    /// The inclusive span [`Self::ticks`] is guaranteed EXHAUSTIVE over, or `None` when there was
-    /// no tick walk at all ([`TradeReplaySource::Klines1m`]).
+    /// The stretches [`Self::ticks`] is guaranteed EXHAUSTIVE over — empty when there was no
+    /// tick walk at all ([`TradeReplaySource::Klines1m`]); one span on a position fetched around
+    /// as a whole; two on a long one, around its entry and its exit
+    /// ([`ReplayWindow::focus_spans`]), with bars between them.
     ///
     /// Carried straight from `worker::TickHarvest::covered`, the walk's own answer, and NOT
-    /// re-derived from the rows: clipping proves every row is inside the span, never that the
+    /// re-derived from the rows: clipping proves every row is inside a span, never that the
     /// first and last rows ARE its edges. A completed boundary slice whose opening minute simply
     /// saw no trade is exhaustively covered while carrying no point there, and only this field
     /// knows it — which is what lets [`Self::read_into`] withhold that minute's bar instead of
     /// leaving one stray candle floating inside the tick trace.
     ///
-    /// [`Self::partial`] is the BOOLEAN read of this same span against [`Self::window`]; this is
-    /// the span itself.
-    pub covered: Option<(i64, i64)>,
+    /// [`Self::partial`] is the BOOLEAN read of this same coverage against [`Self::window`]; this
+    /// is the coverage itself.
+    pub covered: Coverage,
 }
 
 impl TradeReplaySeries {
@@ -821,9 +924,9 @@ impl TradeReplaySeries {
         // No slots — no prints, or a contract size this build does not know — means the bars
         // stand in everywhere, the covered span included: a covered second with no slot would
         // otherwise draw nothing where the bars say something traded.
-        let covered = match self.side_slots.is_empty() {
-            true => None,
-            false => self.covered,
+        let covered: &[(i64, i64)] = match self.side_slots.is_empty() {
+            true => &[],
+            false => self.covered.spans(),
         };
         *out = crate::market::source::replay_sides(
             &self.side_slots,
@@ -880,10 +983,12 @@ impl TradeReplaySeries {
         // so the tick upgrade's revision would equal the one the pane already shipped and
         // `candles_changed` below would stay false forever. See `tick_identity_salt`.
         let mut salted_identity = self.identity ^ tick_identity_salt(self.source);
-        if let Some((from, to)) = self.covered {
+        if !self.covered.is_empty() {
             // Successive progressive snapshots share the window identity but change which
             // candles must remain visible. Their coverage must invalidate the candle upload.
-            salted_identity ^= (from as u64).rotate_left(17) ^ (to as u64).rotate_left(37);
+            for &(from, to) in self.covered.spans() {
+                salted_identity ^= (from as u64).rotate_left(17) ^ (to as u64).rotate_left(37);
+            }
             salted_identity ^= self.ticks.len() as u64;
         }
         let revision = replay_revision(
@@ -948,16 +1053,17 @@ impl TradeReplaySeries {
                 // `Self::covered` is what the tick stage proved exhaustive, while the extrema of
                 // the points are merely a subset of it — a covered minute the venue happened to
                 // publish no trade in would keep its bar under a row-derived rule and read as a
-                // stray candle floating inside the trace. `None` there is a `Klines1m` series,
+                // stray candle floating inside the trace. Empty there is a `Klines1m` series,
                 // which is what keeps a still-loading window whole: the bar-only stage walked no
-                // ticks, so nothing is hidden until the upgrade lands.
+                // ticks, so nothing is hidden until the upgrade lands. Per SPAN, never over the
+                // hull: a long position's two stretches keep the middle's bars drawn.
                 //
                 // Applied AFTER the aggregation above so one rule covers both paths, and to the
                 // OUTPUT timeframe, which is the width the caller actually draws. `candle_tf_ms`
                 // is never filled on this path, so there is no parallel array to desync.
-                if let Some(covered) = self.covered {
+                if !self.covered.is_empty() {
                     out.candles
-                        .retain(|c| !bar_inside(c.t_open_ms, tf_ms, covered));
+                        .retain(|c| !bar_inside(c.t_open_ms, tf_ms, &self.covered));
                 }
                 read.candles_changed = true;
             }
@@ -981,7 +1087,7 @@ impl TradeReplaySeries {
     }
 }
 
-/// Whether one bar lies WHOLLY inside a covered span.
+/// Whether one bar lies WHOLLY inside one covered span.
 ///
 /// A bar that STRADDLES an edge stays drawn: half of it is over ground the points never reached,
 /// so it is context rather than an overlay, and dropping it would leave a gap the user reads as
@@ -991,16 +1097,16 @@ impl TradeReplaySeries {
 /// Args:
 ///     t_open_ms: The bar's opening stamp; a non-finite one is never inside anything.
 ///     tf_ms: The bar's width, at the timeframe it is DRAWN at.
-///     covered: Inclusive span from [`TradeReplaySeries::covered`].
+///     covered: [`TradeReplaySeries::covered`].
 ///
 /// Returns:
-///     `true` when the whole bar sits inside the span.
-fn bar_inside(t_open_ms: f64, tf_ms: i64, covered: (i64, i64)) -> bool {
+///     `true` when the whole bar sits inside one span.
+fn bar_inside(t_open_ms: f64, tf_ms: i64, covered: &Coverage) -> bool {
     if !t_open_ms.is_finite() {
         return false;
     }
     let open = t_open_ms as i64;
-    open >= covered.0 && open.saturating_add(tf_ms.max(1)) - 1 <= covered.1
+    covered.contains((open, open.saturating_add(tf_ms.max(1)) - 1))
 }
 
 /// Lowest and highest finite positive price across a run of trade points.

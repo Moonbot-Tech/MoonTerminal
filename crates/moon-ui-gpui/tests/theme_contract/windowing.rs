@@ -508,7 +508,7 @@ fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
             && !firetest.contains("fs::read_to_string")
             && !firetest.contains("run_ui_overlay_contract")
             && !firetest.contains("PRE_CHART_TESTS"),
-        "FireTest не должен читать исходники; статические архитектурные проверки живут в tests/theme_contract.rs"
+        "FireTest must not read the sources; static architectural checks live in tests/theme_contract.rs"
     );
     assert!(
         firetest.contains("\"chart-smoke\" => Script::ChartSmoke")
@@ -518,7 +518,7 @@ fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
         "new UI/chart checks must be added to chart-smoke stages, not separate debug scripts"
     );
     assert!(
-        docs.contains("находит реальные bounds графика")
+        docs.contains("resolves the chart's real bounds")
             && docs.contains("stage=idle_floor")
             && docs.contains("stage=command_error_contract")
             && docs.contains("stage=tool_windows_open")
@@ -529,11 +529,11 @@ fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
             && docs.contains("stage=price_scale_50")
             && docs.contains("stage=price_scale_20")
             && docs.contains("stage=price_scale_auto")
-            && docs.contains("настоящий оконный input path")
-            && docs.contains("FireTest проверяет поведение и нагрузку")
+            && docs.contains("a real windowed input path")
+            && docs.contains("FireTest checks behaviour and load")
             && !docs.contains("include_str!")
             && !docs.contains("source contract"),
-        "docs/FIRETEST.md должен описывать FireTest как runtime/perf сценарий, а не статическую проверку исходников"
+        "docs/FIRETEST.md must describe FireTest as a runtime/perf scenario, not a static check over the source text"
     );
 }
 
@@ -838,6 +838,22 @@ fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
         !trade_window.contains("set_orderbook_enabled("),
         "the trade window must not directly re-enable the historical chart's live controls"
     );
+    // #608: the window-local hotkey filter must stay a closed set of view actions. A wildcard
+    // arm forwarding to `hotkeys::apply`/`pre_dispatch`, or a direct call to a hovered-chart order
+    // or figure route, would let a key pressed over a frozen REPLAY act on the LIVE market under
+    // the cursor in another window (plan finding 0.4).
+    for forbidden in [
+        "hotkeys::apply(",
+        "hotkeys::pre_dispatch(",
+        "place_order_at_hovered_chart(",
+        "cancel_hovered_order(",
+        "undo_last_figure(",
+    ] {
+        assert!(
+            !trade_window.contains(forbidden),
+            "the trade window must never route a trading or figure action through `{forbidden}`"
+        );
+    }
     let opener = code_only(braced_body(
         &trade_window,
         "pub(crate) fn open_trade_window(",
@@ -864,6 +880,48 @@ fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
         code_only(braced_body(&settings, "pub(super) fn pinned_candle_view("))
             .contains("tf_min = PINNED_TF_MIN"),
         "pinned_candle_view must pin the timeframe unconditionally"
+    );
+}
+
+/// #608: the capture-phase Escape handler must keep running AHEAD of the new bubble-phase hotkey
+/// route, and its own settings-then-window order must survive the listeners added beside it.
+///
+/// Plausible breakage: Escape moves onto the same bubble listener as the new hotkeys
+/// (`trade_window/render.rs`), or a future author drops the `modifiers.modified()` guard so a
+/// modified Escape starts closing the window, or `settings_open` gets checked after
+/// `remove_window()` so an open popup no longer eats the key.
+#[test]
+fn trade_window_escape_is_captured_ahead_of_hotkeys() {
+    let render = code_only(&read_src("trade_window/render.rs"));
+    assert!(
+        render.contains(".capture_key_down(") && render.contains("this.on_key(ev, window, cx)"),
+        "the trade window root must keep Escape on a CAPTURE-phase listener"
+    );
+    assert!(
+        render.contains(".on_key_down(") && render.contains("this.on_hotkey(ev, window, cx)"),
+        "the window-local hotkeys must resolve on a BUBBLE-phase listener, after Escape"
+    );
+    let mod_rs = code_only(&read_src("trade_window/mod.rs"));
+    let on_key = braced_body(&mod_rs, "fn on_key(");
+    let guard_at = on_key
+        .find("if event.keystroke.key != \"escape\" || event.keystroke.modifiers.modified()")
+        .expect("on_key must keep the exact bare-Escape guard");
+    let stop_at = on_key
+        .find("cx.stop_propagation();")
+        .expect("on_key must stop propagation once past the guard");
+    assert!(
+        guard_at < stop_at,
+        "the Escape guard must run before propagation is stopped"
+    );
+    let settings_at = on_key
+        .find("settings_open")
+        .expect("on_key must still check settings_open before closing the window");
+    let remove_at = on_key
+        .find("remove_window()")
+        .expect("on_key must still close the window through remove_window()");
+    assert!(
+        settings_at < remove_at,
+        "an open settings popup must close before the window does"
     );
 }
 

@@ -810,7 +810,10 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
         ".font_family(design::mono())",
         ".cleanable(false)",
         ".render_trigger(",
-        "crate::controls::CORE_COMBO_TRIGGER_W",
+        // Content-sized between the shared trigger width and its own ceiling, through the one
+        // helper the row's compaction budget reads as well: a fixed width here clipped the
+        // localized "all strategies" phrase at every dock width.
+        "self.strategy_full_width(cx)",
         "report.strategies_n",
         "report.search_strategies",
     ] {
@@ -819,6 +822,13 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
             "the large strategy selector must retain MoonUI's virtual searchable path via {needle:?}"
         );
     }
+    let strategy_width = braced_body(&report_controls, "pub(super) fn strategy_full_width(");
+    assert!(
+        strategy_width.contains("crate::controls::CORE_COMBO_TRIGGER_W")
+            && strategy_width.contains("STRATEGY_TRIGGER_MAX_W")
+            && strategy_width.contains("MoonDropdown::fitted_trigger_label("),
+        "the strategy trigger must fit its own summary between the shared width and its ceiling"
+    );
     assert!(
         !strategy_combo.contains("self.strategies.iter()")
             && !strategy_combo.contains("MoonDropdown::new"),
@@ -971,9 +981,10 @@ fn auto_report_mask_and_grouped_toolbar_stay_scope_safe() {
     for needle in [
         "backend.group_cores(&self.group)",
         "selected_auto_core_name(core, &live_cores, &cores)",
-        // The measurement the row budgets with: the pinned name fits between the shared width and
-        // the Auto ceiling, bounding what the shared host below is handed as `width`.
-        "MoonDropdown::fitted_trigger_label(",
+        // The measurement the row budgets with: EVERY pinned label — the Auto Overview phrase as
+        // well as a core name — fits between the shared width and the Auto ceiling through the one
+        // shared fitter, bounding what the shared host below is handed as `width`.
+        "crate::controls::pinned_scope_width(",
         "AUTO_CORE_TRIGGER_MAX_W",
         // The pinned arm no longer builds its own fitted dropdown or wires its own tooltip — both
         // moved into the shared chip host, which is what keeps this and every other pinned-scope

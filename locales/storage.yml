@@ -1,4 +1,5 @@
-# Storage tab of the Settings window: local databases for reports, strategies, and the kline cache.
+# Storage tab of the Settings window: local databases for reports, strategies, the kline cache
+# and the trade prints of replays.
 # rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
 _version: 2
 
@@ -90,6 +91,47 @@ storage.klines_hint:
   ru: "Восстановимый кэш истории свечей: можно удалить файл при закрытом терминале."
   en: "Recoverable kline history cache: the file can be deleted while the terminal is closed."
   es: "Caché recuperable del historial de velas: el archivo puede borrarse con el terminal cerrado."
+
+storage.trades_title:
+  ru: "Трейды сделок — trades.sqlite"
+  en: "Trade prints — trades.sqlite"
+  es: "Operaciones de las posiciones — trades.sqlite"
+storage.trades_enabled:
+  ru: "Сохранять трейды сделок"
+  en: "Keep trade prints"
+  es: "Guardar las operaciones"
+storage.trades_enabled_hint:
+  ru: "Трейды биржи, скачанные окном сделки, остаются на диске: соседняя сделка и следующий запуск берут их отсюда, а не с биржи. Применяется сразу. Выключено — держатся в памяти до закрытия терминала."
+  en: "Prints a trade window fetched stay on disk: the neighbouring trade and the next launch take them from here, not from the venue. Applies immediately. Off, they are kept in memory until the terminal closes."
+  es: "Las operaciones descargadas por una ventana de posición quedan en disco: la posición vecina y el próximo arranque las toman de aquí, no de la bolsa. Se aplica al instante. Apagado, se guardan en memoria hasta cerrar el terminal."
+storage.trades_max_mb:
+  ru: "Лимит файла"
+  en: "File limit"
+  es: "Límite del archivo"
+storage.trades_mb:
+  ru: "%{mb} МБ"
+  en: "%{mb} MB"
+  es: "%{mb} MB"
+storage.trades_max_mb_hint:
+  ru: "Сверх лимита перезаписываются самые старые по записи трейды; 0 — хранить всё, без срока. Применяется при следующей записи."
+  en: "Past the limit the prints written longest ago are overwritten first; 0 keeps everything, with no age limit. Applies on the next write."
+  es: "Superado el límite se sobrescriben primero las operaciones escritas hace más tiempo; 0 conserva todo, sin límite de antigüedad. Se aplica en la próxima escritura."
+storage.trades_margin:
+  ru: "Трейды вокруг сделки"
+  en: "Prints around a trade"
+  es: "Operaciones alrededor de una posición"
+storage.trades_min:
+  ru: "%{min} мин"
+  en: "%{min} min"
+  es: "%{min} min"
+storage.trades_margin_hint:
+  ru: "Сколько минут трейдов брать с каждого конца сделки: у короткой — до входа и после выхода, у долгой (дольше часа) — столько же вокруг входа и вокруг выхода, середина свечами. 0 — только сама сделка, не больше 120."
+  en: "Minutes of prints taken at each end of a trade: before the entry and after the exit of a short one; the same amount centred on the entry and on the exit of a long one (over an hour), candles between. 0 is the position alone, 120 at most."
+  es: "Minutos de operaciones tomados en cada extremo de una posición: antes de la entrada y después de la salida en una corta; la misma cantidad centrada en la entrada y en la salida en una larga (más de una hora), velas entre ambas. 0 es solo la posición, 120 como máximo."
+storage.trades_hint:
+  ru: "Трейды закрытых сделок из кольца ядра и докачки; срока хранения нет — только лимит файла. Удалить файл можно при закрытом терминале."
+  en: "Prints of closed trades from the core's ring and from fetches; no age limit, only the file limit. The file can be deleted while the terminal is closed."
+  es: "Operaciones de posiciones cerradas del anillo del núcleo y de descargas; sin límite de antigüedad, solo el límite del archivo. El archivo puede borrarse con el terminal cerrado."
 
 storage.compact:
   ru: "Сжать"

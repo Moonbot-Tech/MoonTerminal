@@ -1,10 +1,14 @@
 use super::*;
 
+/// The margin every test window is built with — the five minutes the module shipped with, so
+/// the numbers in the assertions below stay what they were.
+const MARGIN_MS: i64 = 5 * MINUTE_MS;
+
 /// Tracks fake-server intervals to verify that published snapshots never cover unfetched time.
 #[derive(Default)]
 struct CoverageObserver {
     fetched: std::rc::Rc<std::cell::RefCell<Vec<(i64, i64)>>>,
-    snapshots: Vec<(i64, i64)>,
+    snapshots: Vec<Coverage>,
     paces: usize,
 }
 
@@ -20,20 +24,21 @@ impl worker::TickObserver for CoverageObserver {
     }
 
     /// A snapshot must be exhaustive and may only extend its predecessor.
-    fn progress(&mut self, ticks: &[Tick], covered: (i64, i64)) {
-        assert_fetched_span(&self.fetched.borrow(), covered);
-        if let Some(&(from, to)) = self.snapshots.last() {
-            assert!(
-                covered.0 <= from && covered.1 >= to,
-                "progress cannot shrink"
-            );
+    fn progress(&mut self, ticks: &[Tick], covered: &Coverage) {
+        assert_fetched(&self.fetched.borrow(), covered);
+        if let Some(last) = self.snapshots.last() {
+            assert!(covered.covers(last), "progress cannot shrink");
         }
-        assert!(
-            ticks
-                .iter()
-                .any(|t| t.time_ms >= covered.0 as f64 && t.time_ms <= covered.1 as f64)
-        );
-        self.snapshots.push(covered);
+        assert!(ticks.iter().any(|t| covered.contains_ms(t.time_ms as i64)));
+        self.snapshots.push(covered.clone());
+    }
+}
+
+/// Every stretch of `covered` must be paid for; see [`assert_fetched_span`].
+fn assert_fetched(fetched: &[(i64, i64)], covered: &Coverage) {
+    assert!(!covered.is_empty(), "a snapshot covers something");
+    for &span in covered.spans() {
+        assert_fetched_span(fetched, span);
     }
 }
 
@@ -110,7 +115,8 @@ fn trade_first_paging_protects_position_from_soft_page_and_deadline_stops() {
     for route in [OkxHistoryTrades, BitgetMixFills, BinanceUsdMAggTrades] {
         for soft_deadline in [false, true] {
             for duration in [0, 120_000, 1_260_000] {
-                let window = replay_window_ms(100_000_000, 100_000_000 + duration).unwrap();
+                let window =
+                    replay_window_ms(100_000_000, 100_000_000 + duration, MARGIN_MS).unwrap();
                 let plan = tick_plan(window, route, None);
                 let mut observer = CoverageObserver::default();
                 let fetched = observer.fetched.clone();
@@ -143,9 +149,12 @@ fn trade_first_paging_protects_position_from_soft_page_and_deadline_stops() {
                 let worker::TickVerdict::Ready(harvest) = verdict else {
                     panic!("trade must be served")
                 };
-                assert_eq!(harvest.covered, (window.open_ms, window.close_ms));
+                assert_eq!(
+                    harvest.covered,
+                    Coverage::one((window.open_ms, window.close_ms))
+                );
                 assert!(!harvest.complete, "optional margins were not fetched");
-                assert_fetched_span(&fetched.borrow(), harvest.covered);
+                assert_fetched(&fetched.borrow(), &harvest.covered);
                 assert!(
                     harvest
                         .ticks
@@ -168,7 +177,7 @@ fn trade_first_paging_still_obeys_hard_stops_cancellation_and_venue_errors() {
     use venue_caps::TradeRoute::*;
     for route in [OkxHistoryTrades, BinanceUsdMAggTrades] {
         for stop in ["pages", "deadline", "cancel", "venue"] {
-            let window = replay_window_ms(100_000_000, 100_120_000).unwrap();
+            let window = replay_window_ms(100_000_000, 100_120_000, MARGIN_MS).unwrap();
             let plan = tick_plan(window, route, None);
             let mut observer = CoverageObserver::default();
             let fetched = observer.fetched.clone();
@@ -202,8 +211,8 @@ fn trade_first_paging_still_obeys_hard_stops_cancellation_and_venue_errors() {
             assert_eq!(calls.get(), if stop == "pages" { 240 } else { 2 });
             assert!(!harvest.complete);
             assert_eq!(harvest.venue_refused, stop == "venue");
-            assert_fetched_span(&fetched.borrow(), harvest.covered);
-            assert!(harvest.covered.0 > window.open_ms || harvest.covered.1 < window.close_ms);
+            assert_fetched(&fetched.borrow(), &harvest.covered);
+            assert!(!harvest.covered.contains((window.open_ms, window.close_ms)));
         }
     }
 }
@@ -214,7 +223,7 @@ fn trade_first_paging_still_obeys_hard_stops_cancellation_and_venue_errors() {
 fn trade_first_paging_keeps_progress_contiguous_across_both_margins_and_retention() {
     use venue_caps::TradeRoute::*;
     for route in [OkxHistoryTrades, BitgetMixFills, BinanceUsdMAggTrades] {
-        let window = replay_window_ms(100_000_000, 100_120_000).unwrap();
+        let window = replay_window_ms(100_000_000, 100_120_000, MARGIN_MS).unwrap();
         for earliest in [
             None,
             Some(99_850_000),
@@ -249,9 +258,9 @@ fn trade_first_paging_keeps_progress_contiguous_across_both_margins_and_retentio
             assert!(harvest.complete);
             assert_eq!(
                 harvest.covered,
-                (earliest.unwrap_or(99_700_000).max(99_700_000), 100_420_000)
+                Coverage::one((earliest.unwrap_or(99_700_000).max(99_700_000), 100_420_000))
             );
-            assert_fetched_span(&fetched.borrow(), harvest.covered);
+            assert_fetched(&fetched.borrow(), &harvest.covered);
             assert_eq!(observer.snapshots.last(), Some(&harvest.covered));
         }
     }
@@ -264,7 +273,7 @@ fn trade_first_paging_partial_margins_never_expand_past_fetched_coverage() {
     use venue_caps::TradeRoute::*;
     for route in [OkxHistoryTrades, BitgetMixFills, BinanceUsdMAggTrades] {
         for budget in [6, 16] {
-            let window = replay_window_ms(100_000_000, 100_120_000).unwrap();
+            let window = replay_window_ms(100_000_000, 100_120_000, MARGIN_MS).unwrap();
             let plan = tick_plan(window, route, None);
             let mut observer = CoverageObserver::default();
             let fetched = observer.fetched.clone();
@@ -283,8 +292,8 @@ fn trade_first_paging_partial_margins_never_expand_past_fetched_coverage() {
             };
             assert!(!harvest.complete);
             assert_eq!(observer.paces, budget);
-            assert_fetched_span(&fetched.borrow(), harvest.covered);
-            assert!(harvest.covered.0 <= window.open_ms && harvest.covered.1 >= window.close_ms);
+            assert_fetched(&fetched.borrow(), &harvest.covered);
+            assert!(harvest.covered.contains((window.open_ms, window.close_ms)));
             assert_eq!(observer.snapshots.last(), Some(&harvest.covered));
         }
     }
@@ -293,7 +302,7 @@ fn trade_first_paging_partial_margins_never_expand_past_fetched_coverage() {
 /// Wide candle context must never expand either native or REST tick requests past five minutes.
 #[test]
 fn detailed_tick_window_excludes_wide_candle_context() {
-    let window = replay_window_ms(100_000_000, 100_060_000).expect("one-minute trade");
+    let window = replay_window_ms(100_000_000, 100_060_000, MARGIN_MS).expect("one-minute trade");
     let narrow = window.tick_window();
     assert_eq!((narrow.from_ms, narrow.to_ms), (99_700_000, 100_360_000));
     let plan = tick_plan(window, venue_caps::TradeRoute::BinanceUsdMAggTrades, None);
@@ -316,7 +325,7 @@ fn detailed_tick_window_excludes_wide_candle_context() {
 fn growing_tick_coverage_invalidates_candle_upload() {
     let mut series = bars_only_series();
     series.source = TradeReplaySource::Ticks;
-    series.covered = Some((0, MINUTE_MS - 1));
+    series.covered = Coverage::one((0, MINUTE_MS - 1));
     let mut out = ChartHistoryBuffers::default();
     let first = series.read_into(
         0.0,
@@ -325,7 +334,7 @@ fn growing_tick_coverage_invalidates_candle_upload() {
         Some(&candle_params(0)),
         &mut out,
     );
-    series.covered = Some((0, 2 * MINUTE_MS - 1));
+    series.covered = Coverage::one((0, 2 * MINUTE_MS - 1));
     let next = series.read_into(
         0.0,
         0.0,
@@ -434,6 +443,7 @@ fn bars_only_series() -> TradeReplaySeries {
             to_ms: 2 * MINUTE_MS,
             open_ms: 0,
             close_ms: 2 * MINUTE_MS,
+            margin_ms: MARGIN_MS,
             over_budget: false,
         },
         tf_ms: MINUTE_MS,
@@ -448,7 +458,7 @@ fn bars_only_series() -> TradeReplaySeries {
         side_slots: Vec::new(),
         bucket_ms: 0,
         partial: false,
-        covered: None,
+        covered: Coverage::none(),
     }
 }
 
@@ -575,7 +585,7 @@ fn replay_repeat_keeps_candle_range_after_bars_are_already_shipped() {
 fn replay_ticks_keep_both_straddling_edge_candles() {
     let mut series = bars_only_series();
     series.source = TradeReplaySource::Ticks;
-    series.covered = Some((MINUTE_MS / 2, 5 * MINUTE_MS / 2));
+    series.covered = Coverage::one((MINUTE_MS / 2, 5 * MINUTE_MS / 2));
     let mut out = ChartHistoryBuffers::default();
 
     series.read_into(
@@ -630,6 +640,7 @@ fn cache_coverage_rejects_prefixes_and_oversized_holes() {
         to_ms: 5 * MINUTE_MS,
         open_ms: 0,
         close_ms: 5 * MINUTE_MS,
+        margin_ms: MARGIN_MS,
         over_budget: false,
     };
     let exact = [0, 1, 2, 3, 4, 5]
@@ -671,7 +682,8 @@ fn cache_coverage_rejects_prefixes_and_oversized_holes() {
 /// floors, reject reversed or non-positive stamps, and retain a pre-epoch trade at the Unix epoch.
 #[test]
 fn replay_window_accepts_same_second_stamps_and_rejects_invalid_inputs() {
-    let same_second = replay_window_ms(100_000_000, 100_000_000).expect("same-second trade");
+    let same_second =
+        replay_window_ms(100_000_000, 100_000_000, MARGIN_MS).expect("same-second trade");
     assert_eq!(
         (same_second.from_ms, same_second.to_ms),
         (78_400_000, 107_200_000),
@@ -682,17 +694,17 @@ fn replay_window_accepts_same_second_stamps_and_rejects_invalid_inputs() {
         "the floor-only same-second window stays inside the replay budget"
     );
     assert_eq!(
-        replay_window_ms(101_000, 100_000),
+        replay_window_ms(101_000, 100_000, MARGIN_MS),
         None,
         "replay_window accepting an exit before its open would request an impossible chart"
     );
     assert_eq!(
-        replay_window_ms(0, 100_000),
+        replay_window_ms(0, 100_000, MARGIN_MS),
         None,
         "replay_window accepting a non-positive open would send an invalid venue request"
     );
 
-    let pre_epoch = replay_window_ms(1_000, 2_000).expect("short positive trade");
+    let pre_epoch = replay_window_ms(1_000, 2_000, MARGIN_MS).expect("short positive trade");
     assert_eq!(
         pre_epoch.from_ms, 0,
         "replay_window must not send a negative start time to a venue"
@@ -711,7 +723,8 @@ fn replay_window_uses_maximum_floors_and_proportional_context() {
     let open_ms = open_s * 1_000;
     for (held_hours, lead_hours, trail_hours) in [(0, 6, 2), (4, 6, 2), (16, 8, 8), (32, 16, 16)] {
         let close_s = open_s + held_hours * 60 * 60;
-        let window = replay_window_ms(open_s * 1_000, close_s * 1_000).expect("valid trade");
+        let window =
+            replay_window_ms(open_s * 1_000, close_s * 1_000, MARGIN_MS).expect("valid trade");
         assert_eq!(
             open_ms - window.from_ms,
             lead_hours * 60 * MINUTE_MS,
@@ -738,7 +751,8 @@ fn replay_window_keeps_trade_and_floors_when_trimming_the_budget() {
     let close_s = open_s + 8 * 24 * 60 * 60;
     let open_ms = open_s * 1_000;
     let close_ms = close_s * 1_000;
-    let long = replay_window_ms(open_s * 1_000, close_s * 1_000).expect("valid eight-day trade");
+    let long = replay_window_ms(open_s * 1_000, close_s * 1_000, MARGIN_MS)
+        .expect("valid eight-day trade");
 
     assert!(
         long.from_ms <= open_ms,
@@ -764,9 +778,9 @@ fn replay_window_keeps_trade_and_floors_when_trimming_the_budget() {
     let threshold_ms = 7 * 24 * 60 * MINUTE_MS - 8 * 60 * MINUTE_MS;
     let just_under_s = threshold_ms / 1_000 - 60;
     let just_over_s = threshold_ms / 1_000 + 60;
-    let just_under = replay_window_ms(open_s * 1_000, (open_s + just_under_s) * 1_000)
+    let just_under = replay_window_ms(open_s * 1_000, (open_s + just_under_s) * 1_000, MARGIN_MS)
         .expect("valid under-budget trade");
-    let just_over = replay_window_ms(open_s * 1_000, (open_s + just_over_s) * 1_000)
+    let just_over = replay_window_ms(open_s * 1_000, (open_s + just_over_s) * 1_000, MARGIN_MS)
         .expect("valid over-budget trade");
 
     assert!(
@@ -832,6 +846,7 @@ fn time_slices_keeps_unbounded_windows_whole_and_bounded_windows_gap_free() {
         to_ms: 7_200_999,
         open_ms: 1_000,
         close_ms: 7_200_999,
+        margin_ms: MARGIN_MS,
         over_budget: false,
     };
 
@@ -869,8 +884,8 @@ fn time_slices_keeps_unbounded_windows_whole_and_bounded_windows_gap_free() {
 /// spends the budget on lead context and makes a partial replay omit the trade itself.
 #[test]
 fn tick_plan_prioritizes_focus_and_keeps_every_prefix_contiguous_after_clipping() {
-    let window =
-        replay_window_ms(100_000_000, 100_000_000).expect("a same-second scalp has floor context");
+    let window = replay_window_ms(100_000_000, 100_000_000, MARGIN_MS)
+        .expect("a same-second scalp has floor context");
     let earliest_ms = window.from_ms + 20 * MINUTE_MS;
     let plan = tick_plan(
         window,
@@ -990,5 +1005,146 @@ fn kline_tick_statuses_keep_the_same_chart_revision_while_ticks_change_it() {
         read_revision(&pending),
         read_revision(&tick_upgrade),
         "a tick upgrade must have its own revision so the pane uploads its new points"
+    );
+}
+
+/// A position held up to `LONG_POSITION_MS` keeps one focus; past it the focus is two
+/// neighbourhoods — the margin centred on each end, half before and half after — clamped into
+/// the window like the whole one.
+#[test]
+fn focus_spans_split_only_a_long_position() {
+    let short =
+        replay_window_ms(100_000_000, 100_000_000 + LONG_POSITION_MS, MARGIN_MS).expect("window");
+    assert_eq!(short.focus_spans(), Coverage::one(short.focus()));
+
+    let open_ms = 100_000_000;
+    let close_ms = open_ms + LONG_POSITION_MS + 1;
+    let long = replay_window_ms(open_ms, close_ms, MARGIN_MS).expect("window");
+    let spans = long.focus_spans();
+    let half = MARGIN_MS / 2;
+    assert_eq!(
+        spans.spans(),
+        &[
+            (open_ms - half, open_ms + half),
+            (close_ms - half, close_ms + half),
+        ]
+    );
+    let (left, right) = long.focus();
+    assert!(left >= long.from_ms && right <= long.to_ms);
+    assert!(spans.hull().is_some_and(|(a, b)| a >= left && b <= right));
+    // Zero margin: the position alone, and a long one only its two end stamps.
+    let bare = replay_window_ms(open_ms, close_ms, 0).expect("window");
+    assert_eq!(bare.focus(), (open_ms, close_ms));
+    assert_eq!(
+        bare.focus_spans().spans(),
+        &[(open_ms, open_ms), (close_ms, close_ms)]
+    );
+    // A margin whose halves reach the position's own length folds the two ends into one
+    // stretch — still half the margin past each end, not the whole of it as on a short one.
+    let length = close_ms - open_ms;
+    let wide = replay_window_ms(open_ms, close_ms, 2 * length).expect("window");
+    assert_eq!(
+        wide.focus_spans(),
+        Coverage::one((open_ms - length, close_ms + length))
+    );
+}
+
+/// A long position's plan tiles only the two neighbourhoods: the trade parts of both first (the
+/// exit's first on a backward route, the entry's on a forward one), then the outside margins,
+/// and nothing between them.
+#[test]
+fn tick_plan_of_a_long_position_tiles_the_entry_and_the_exit_only() {
+    use venue_caps::TradeRoute::*;
+    let open_ms = 100_000_000;
+    let close_ms = open_ms + 8 * 60 * MINUTE_MS;
+    let window = replay_window_ms(open_ms, close_ms, MARGIN_MS).expect("window");
+    for route in [BinanceUsdMAggTrades, OkxHistoryTrades] {
+        let plan = tick_plan(window, route, None);
+        let backward = route == OkxHistoryTrades;
+        let half = MARGIN_MS / 2;
+        let entry_trade = (open_ms, open_ms + half);
+        let exit_trade = (close_ms - half, close_ms);
+        let lead = (open_ms - half, open_ms - 1);
+        let trail = (close_ms + 1, close_ms + half);
+        let expected = if backward {
+            vec![exit_trade, entry_trade, lead, trail]
+        } else {
+            vec![entry_trade, exit_trade, trail, lead]
+        };
+        assert_eq!(plan.slices, expected, "{route:?}");
+        assert_eq!(plan.trade_len, 2);
+        assert_eq!(plan.focus_len, 4);
+        assert!(
+            plan.slices
+                .iter()
+                .all(|&s| s.1 < open_ms + MARGIN_MS || s.0 > close_ms - MARGIN_MS),
+            "no tile inside the middle of the position"
+        );
+    }
+}
+
+/// Walking a long position's plan proves two stretches, never a hull over the unwalked hours
+/// between them; each snapshot is paid for and the middle stays out of coverage.
+#[test]
+fn paginating_a_long_position_covers_two_stretches_and_never_the_middle() {
+    use venue_caps::TradeRoute::*;
+    let open_ms = 100_000_000;
+    let close_ms = open_ms + 8 * 60 * MINUTE_MS;
+    let window = replay_window_ms(open_ms, close_ms, MARGIN_MS).expect("window");
+    for route in [BinanceUsdMAggTrades, OkxHistoryTrades] {
+        let plan = tick_plan(window, route, None);
+        let mut observer = CoverageObserver::default();
+        let fetched = observer.fetched.clone();
+        let verdict = worker::paginate_ticks(
+            route,
+            &plan,
+            usize::MAX,
+            usize::MAX,
+            || false,
+            |_| false,
+            &mut observer,
+            |from, to, cursor| dense_page(route, from, to, cursor, 30_000, &fetched),
+        );
+        let worker::TickVerdict::Ready(harvest) = verdict else {
+            panic!("served")
+        };
+        assert!(harvest.complete);
+        let half = MARGIN_MS / 2;
+        assert_eq!(
+            harvest.covered.spans(),
+            &[
+                (open_ms - half, open_ms + half),
+                (close_ms - half, close_ms + half),
+            ],
+            "{route:?}"
+        );
+        assert_fetched(&fetched.borrow(), &harvest.covered);
+        assert!(!harvest.covered.contains_ms(open_ms + 60 * MINUTE_MS));
+        assert_eq!(observer.snapshots.last(), Some(&harvest.covered));
+    }
+}
+
+/// Bars inside EACH covered stretch step aside; bars between the two stretches stay drawn, since
+/// nothing proved them exhaustively told by ticks.
+#[test]
+fn replay_with_split_coverage_keeps_the_middle_bars() {
+    let mut series = bars_only_series();
+    series.source = TradeReplaySource::Ticks;
+    series.covered = Coverage::from_spans([(0, MINUTE_MS - 1), (2 * MINUTE_MS, 3 * MINUTE_MS - 1)]);
+    let mut out = ChartHistoryBuffers::default();
+    series.read_into(
+        0.0,
+        0.0,
+        (2 * MINUTE_MS) as f32,
+        Some(&candle_params(0)),
+        &mut out,
+    );
+    assert_eq!(
+        out.candles
+            .iter()
+            .map(|candle| candle.t_open_ms as i64)
+            .collect::<Vec<_>>(),
+        vec![MINUTE_MS],
+        "the first and third minutes are covered by ticks; the middle minute stays a bar"
     );
 }

@@ -248,6 +248,11 @@ impl RenderState {
                 } else {
                     volume_band_h
                 },
+                corner_strip_h: if self.panes[idx].corner_buttons {
+                    crate::design::CHART_CORNER_STRIP_H
+                } else {
+                    0.0
+                },
             };
             readout_metrics_changed |=
                 self.draw_pane_captions(ctx, idx, caption_input, caption_fg)?;

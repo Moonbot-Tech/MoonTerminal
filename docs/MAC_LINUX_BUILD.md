@@ -1,12 +1,12 @@
 # macOS / Linux Build Notes
 
-Дата актуализации: 2026-06-24.
+Last updated: 2026-06-24.
 
-Этот файл описывает текущий публичный стек: `MoonTerminal` + `Moonbot-Tech/MoonUI`.
+This file describes the current public stack: `MoonTerminal` + `Moonbot-Tech/MoonUI`.
 
-## Общие Правила
+## General rules
 
-Публичные зависимости в `Cargo.toml` должны оставаться git-зависимостями:
+Public dependencies in `Cargo.toml` must remain git dependencies:
 
 ```toml
 gpui = { package = "moon-gpui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
@@ -14,17 +14,17 @@ gpui_platform = { package = "moon-gpui-platform", git = "https://github.com/Moon
 moon-ui = { package = "moon-ui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
 ```
 
-`Cargo.lock` коммитится: сторонние версии сдвигаются только осознанным коммитом. MoonUI при этом
-остаётся rolling — CI обновляет его пин на каждом прогоне, локально это `make update-moon-ui`. Для
-диагностики проверяй build stamp в логе:
+`Cargo.lock` is committed: third-party versions move only by a deliberate commit. MoonUI
+stays rolling — CI updates its pin on every run; locally that is `make update-moon-ui`. For
+diagnosis check the build stamp in the log:
 
 ```text
 build: moonterminal=<git-sha>[+dirty] moonui=<git-sha|local:git-sha>[+dirty]
 ```
 
-Сборка воспроизводима по сторонним зависимостям в любой момент; свежесть MoonUI — отдельный шаг.
+The build is reproducible for third-party dependencies at any moment; MoonUI freshness is a separate step.
 
-Локальная разработка через соседний checkout `MoonUI` делается только через ignored
+Local development through a neighbouring `MoonUI` checkout is done only through the ignored
 `.cargo/config.toml`:
 
 ```toml
@@ -37,10 +37,10 @@ moon-ui = { path = "../MoonUI/crates/moon-ui" }
 moonproto = { path = "../MoonProtoBeta" }
 ```
 
-Не использовать top-level `paths`: это меняет форму зависимостей и Cargo уже предупреждает, что
-такой override станет ошибкой.
+Do not use top-level `paths`: that changes the shape of the dependencies and Cargo already warns that
+such an override will become an error.
 
-Проверка, откуда реально взяты зависимости:
+Check where the dependencies actually came from:
 
 ```bash
 git rev-parse HEAD
@@ -50,28 +50,28 @@ cargo tree -i moon-ui
 
 ## macOS
 
-Нужен полный Xcode или установленный Metal toolchain, где работает:
+A full Xcode or an installed Metal toolchain is needed, where this works:
 
 ```bash
 xcode-select -p
 xcrun --find metal
 ```
 
-Одних Command Line Tools недостаточно: `moon-gpui-macos` компилирует GPUI Metal shaders через
+Command Line Tools alone are not enough: `moon-gpui-macos` compiles GPUI Metal shaders through
 `xcrun metal`.
 
 ### Canonical Mac Check
 
-Это основной путь для нормального Mac-стенда и release/stabilization. Он проверяет build-script
-компиляцию GPUI Metal shaders через настоящий `metal`:
+This is the main path for a normal Mac stand and release/stabilization. It checks build-script
+compilation of GPUI Metal shaders through a real `metal`:
 
 ```bash
 TOOLCHAINS=com.apple.dt.toolchain.Metal \
 cargo check -p moon-ui-gpui --bin moonterminal
 ```
 
-Для live-проверки лучше запускать `.app`, а не голый бинарь из SSH/CLI: macOS Keychain привязывает
-доступ к бинарю/bundle identity, и удалённая CLI-сессия легко упирается в
+For a live check it is better to launch the `.app`, not a bare binary from SSH/CLI: macOS Keychain binds
+access to the binary/bundle identity, and a remote CLI session easily hits
 `User interaction is not allowed`.
 
 ```bash
@@ -82,41 +82,41 @@ FEATURES=debug-tools \
 open -n target/macos/MoonTerminal.app
 ```
 
-`scripts/macos-bundle.sh` делает release build, `.app`, stable bundle id `pro.moonbot.terminal`,
-ad-hoc подпись по умолчанию и `codesign --verify --deep --strict`.
+`scripts/macos-bundle.sh` does a release build, `.app`, stable bundle id `pro.moonbot.terminal`,
+an ad-hoc signature by default and `codesign --verify --deep --strict`.
 
-Это **локальный dev-бандл, а не то, что уезжает в Releases**: он собирается под архитектуру самой
-машины, с bundle id `pro.moonbot.terminal` и `LSMinimumSystemVersion 13.0`. Дистрибутив делает CI —
-`.github/scripts/make-dmg.sh` в джобе `macOS .dmg (universal)`: universal binary (`arm64` +
-`x86_64`, склейка через `lipo`), bundle id `com.moonbot.moonterminal`, минимум macOS 11. Сами
-слайсы компилируются раньше, в матричном джобе `macOS slice (arm64|x86_64)`, и приезжают в
-упаковку артефактами: раннер приезжает с 40 ГиБ свободного диска, и две `--release` сборки в одном
-джобе однажды не оставили места самому `hdiutil`. Перед сборкой каждый слайс ещё прогоняет
-`.github/scripts/free-macos-disk.sh` — сносит лишние Xcode и симуляторы, освобождая ~100 ГиБ. Каталог
-данных при этом ОДИН на оба бандла: `paths.rs` держит `APP_ID` зашитой константой
-`com.moonbot.moonterminal` и `CFBundleIdentifier` не читает — расходится только идентичность
-самого бандла, которую видят Keychain и Launch Services. Universal-сборку локально никто не
-повторяет — это прогон релизного workflow.
+This is **a local dev bundle, not what goes to Releases**: it is built for the machine's own
+architecture, with bundle id `pro.moonbot.terminal` and `LSMinimumSystemVersion 13.0`. The distribution is made by CI —
+`.github/scripts/make-dmg.sh` in the `macOS .dmg (universal)` job: a universal binary (`arm64` +
+`x86_64`, glued with `lipo`), bundle id `com.moonbot.moonterminal`, minimum macOS 11. The
+slices themselves are compiled earlier, in the matrix job `macOS slice (arm64|x86_64)`, and arrive at
+packaging as artifacts: the runner arrives with 40 GiB of free disk, and two `--release` builds in one
+job once left no room for `hdiutil` itself. Before the build each slice also runs
+`.github/scripts/free-macos-disk.sh` — it removes extra Xcode and simulators, freeing ~100 GiB. The
+data directory is ONE for both bundles: `paths.rs` holds `APP_ID` as a baked-in constant
+`com.moonbot.moonterminal` and does not read `CFBundleIdentifier` — only the identity
+of the bundle itself diverges, which Keychain and Launch Services see. Nobody repeats a universal build
+locally — that is a run of the release workflow.
 
 ### Fresh Mac Live Smoke
 
-Первичная миграция старого `config.toml` читает файл из current working directory, а новые
-`servers.enc/settings.toml` пишутся рядом с executable. Поэтому на свежем Mac первый live-run с
-legacy `config.toml` делай из `Contents/MacOS`, через GUI session:
+The first migration of an old `config.toml` reads the file from the current working directory, and the new
+`servers.enc/settings.toml` are written next to the executable. Therefore on a fresh Mac the first live-run with
+a legacy `config.toml` is done from `Contents/MacOS`, through a GUI session:
 
 ```bash
 cd "$HOME/MoonTerminal/target/macos/MoonTerminal.app/Contents/MacOS"
 MOON_RENDER_DIAG=1 ./MoonTerminal
 ```
 
-Если macOS показывает Keychain prompt `MoonTerminal wants to access key "moon-terminal"`:
+If macOS shows the Keychain prompt `MoonTerminal wants to access key "moon-terminal"`:
 
 ```text
 Password: <login password>
 Button: Always Allow
 ```
 
-После этого должны появиться:
+After that these should appear:
 
 ```text
 servers.enc
@@ -125,44 +125,44 @@ theme.toml
 orders.toml
 ```
 
-Дальше штатный packaging smoke:
+Then the ordinary packaging smoke:
 
 ```bash
 open -n "$HOME/MoonTerminal/target/macos/MoonTerminal.app"
 ```
 
-Для env-driven debug smoke (`MOON_RENDER_DIAG_OPEN_10_BTC=1`) на арендованных Mac проще снова
-запустить бинарь из GUI Terminal/`.command`; `launchctl asuser ... setenv` может быть запрещён
-провайдером. SSH-run не считается валидным Keychain/live smoke: он может падать с
-`User interaction is not allowed`, хотя `.app` в GUI работает.
+For env-driven debug smoke (`MOON_RENDER_DIAG_OPEN_10_BTC=1`) on rented Macs it is simpler to
+launch the binary again from GUI Terminal/`.command`; `launchctl asuser ... setenv` may be forbidden
+by the provider. An SSH-run is not a valid Keychain/live smoke: it can fail with
+`User interaction is not allowed` even though the `.app` works in the GUI.
 
 ### CLT / Rented Mac Fallback
 
-Некоторые арендованные Mac дают только Command Line Tools без рабочего `xcrun metal`. Такой стенд
-годится для проверки Rust/Metal backend кода, но НЕ заменяет canonical Mac check выше.
+Some rented Macs give only Command Line Tools without a working `xcrun metal`. Such a stand
+is good for checking the Rust/Metal backend code, but does NOT replace the canonical Mac check above.
 
-Fallback-команды:
+Fallback commands:
 
 ```bash
 cargo check -p moon-ui-gpui --bin moonterminal --features gpui_platform/runtime_shaders
 cargo build -p moon-ui-gpui --bin moonterminal --features gpui_platform/runtime_shaders
 ```
 
-Что этот fallback закрывает:
-- компиляцию terminal + MoonUI на macOS target;
-- типы Metal backend, `RawGpuAccess::Metal`, command buffer / encoder path;
-- линковку macOS dependencies.
+What this fallback covers:
+- compilation of terminal + MoonUI on the macOS target;
+- Metal backend types, `RawGpuAccess::Metal`, command buffer / encoder path;
+- linking of macOS dependencies.
 
-Что он НЕ закрывает:
-- build-script компиляцию GPUI Metal shaders через `xcrun metal`;
+What it does NOT cover:
+- build-script compilation of GPUI Metal shaders through `xcrun metal`;
 - `.app` packaging/codesign;
 - Keychain GUI ACL;
-- визуальную live-проверку графика глазами.
+- a visual live check of the chart with your eyes.
 
 ### Fast Remote Dev Loop
 
-Для проверки локальных незапушенных `MoonTerminal` + `MoonUI` на удалённом Mac копируй оба дерева
-рядом и сохраняй ignored `.cargo/config.toml`, чтобы terminal брал локальный `../MoonUI`:
+To check local unpushed `MoonTerminal` + `MoonUI` on a remote Mac copy both trees
+side by side and keep the ignored `.cargo/config.toml`, so the terminal takes the local `../MoonUI`:
 
 ```bash
 rm -rf "$HOME/MoonTerminal" "$HOME/MoonUI"
@@ -171,12 +171,12 @@ cd "$HOME/MoonTerminal"
 cargo check -p moon-ui-gpui --bin moonterminal --features gpui_platform/runtime_shaders
 ```
 
-Если Mac имеет полный Metal toolchain, вместо fallback-команды запускать canonical command с
-`TOOLCHAINS=com.apple.dt.toolchain.Metal`, а для live smoke запускать `.app` через GUI session.
+If the Mac has a full Metal toolchain, run the canonical command with
+`TOOLCHAINS=com.apple.dt.toolchain.Metal` instead of the fallback command, and for live smoke launch the `.app` through a GUI session.
 
 ## Linux
 
-Минимальный набор для Ubuntu/Debian:
+Minimum set for Ubuntu/Debian:
 
 ```bash
 sudo apt update && sudo apt install -y \
@@ -185,22 +185,22 @@ sudo apt update && sudo apt install -y \
   dbus-user-session gnome-keyring libsecret-tools
 ```
 
-Сборка:
+Build:
 
 ```bash
 cargo check -p moon-ui-gpui --bin moonterminal
 cargo build --release -p moon-ui-gpui --bin moonterminal --features debug-tools
 ```
 
-Encrypted config на Linux требует Secret Service backend в той же GUI/DBus-сессии, где запускается
-терминал. Без него будет ошибка вида:
+Encrypted config on Linux needs a Secret Service backend in the same GUI/DBus session where the
+terminal is launched. Without it there will be an error of the form:
 
 ```text
 keyring get: Platform secure storage failure:
 DBus error: The name org.freedesktop.secrets was not provided by any .service files
 ```
 
-Для headless/Xvfb тестовой сессии:
+For a headless/Xvfb test session:
 
 ```bash
 eval "$(dbus-launch --sh-syntax)"
@@ -211,9 +211,9 @@ secret-tool lookup service moon-terminal-test key ping
 openbox --sm-disable &
 ```
 
-Если `secret-tool store` поднимает `org.gnome.keyring.SystemPrompter` или висит на GUI password
-prompt, значит текущий keyring пользователя не разблокирован этим паролем. Для одноразового
-тестового VPS, где старые secrets не нужны, проще сбросить keyring пользователя и создать новый:
+If `secret-tool store` raises `org.gnome.keyring.SystemPrompter` or hangs on a GUI password
+prompt, the current user keyring is not unlocked with this password. For a one-off
+test VPS where old secrets are not needed, it is simpler to reset the user keyring and create a new one:
 
 ```bash
 mv ~/.local/share/keyrings ~/.local/share/keyrings.bak.$(date +%s) 2>/dev/null || true
@@ -231,18 +231,18 @@ dbus-run-session -- bash -lc '
 '
 ```
 
-На Linux терминал должен показывать только нашу шапку окна. Проверка X11:
+On Linux the terminal must show only our window header. X11 check:
 
 ```bash
 xwininfo -root -tree | grep -i MoonTerminal
 ```
 
-Wayland проверять отдельным live/perf прогоном в настоящей Wayland session: кодовый путь использует
-`gpu_canvas_frame_timer`, но итоговые числа зависят от compositor/driver/session.
+Check Wayland with a separate live/perf run in a real Wayland session: the code path uses
+`gpu_canvas_frame_timer`, but the resulting numbers depend on compositor/driver/session.
 
 ## Perf / Smoke
 
-Для кроссплатформенного smoke использовать release + debug-tools:
+For a cross-platform smoke use release + debug-tools:
 
 ```bash
 MOON_RENDER_DIAG=1 \
@@ -250,8 +250,8 @@ MOON_RENDER_DIAG_OPEN_10_BTC=1 \
 ./target/release/moonterminal
 ```
 
-Смотреть `logs/render_diag.log` (рядом с остальными логами приложения; путь больше не зависит от
-рабочего каталога). Хорошие признаки:
+Look at `logs/render_diag.log` (next to the application's other logs; the path no longer depends on
+the working directory). Good signs:
 
 ```text
 orders_render and shell_render do not jump to monitor/mouse rate
@@ -259,5 +259,5 @@ chart_present is active during live scroll / cursor movement
 chart_input_notify stays near zero during pure mousemove
 ```
 
-Для runtime-регрессий использовать встроенный FireTest: `docs/FIRETEST.md`.
-Фактические perf-результаты стендов держать в issue/PR/check artifacts, а не в этом build guide.
+For runtime regressions use the built-in FireTest: `docs/FIRETEST.md`.
+Keep actual stand perf results in issue/PR/check artifacts, not in this build guide.

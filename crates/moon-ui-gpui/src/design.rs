@@ -535,6 +535,15 @@ pub const CHART_LOGO_SLOT_SHARE: f32 = 0.28 * LOGO_PORT_SCALE;
 pub const CHART_LOGO_MIN_W: f32 = 180.0 * LOGO_PORT_SCALE;
 pub const CHART_LOGO_MAX_W: f32 = 280.0 * LOGO_PORT_SCALE;
 
+/// Y offset of the chart's top-left corner buttons — pin, compare lock, broom — from the plot's
+/// top edge, in logical pixels.
+pub const CHART_CORNER_BTN_TOP: f32 = 3.0;
+/// Side of one such square corner button, in logical pixels.
+pub const CHART_CORNER_BTN_SIZE: f32 = 15.0;
+/// Height the top-left button strip occupies below the plot's top edge. The left-aligned
+/// `ChartTop` captions start below this, so a caption is never painted under a button.
+pub const CHART_CORNER_STRIP_H: f32 = CHART_CORNER_BTN_TOP + CHART_CORNER_BTN_SIZE;
+
 /// Header lockup width: the header strip is height-constrained, so the longer wordmark has to buy
 /// its room in width, or the mark shrinks inside a row whose height cannot follow it.
 const HEADER_LOGO_W: f32 = 86.0 * LOGO_PORT_SCALE;

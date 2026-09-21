@@ -1418,6 +1418,22 @@ pub enum FeedMsg {
         report_uid: i64,
         outcome: super::report_traces::ReportTracesOutcome,
     },
+    /// A report row of this core just CLOSED, read off the same `RowUpsert` the replica gets.
+    ///
+    /// Carries what the session needs to file the trade's prints from the core's retained
+    /// archive while the archive still holds them (`market::trade_replay::worker::capture`):
+    /// the row's own coin token and the core's quote setting — the two inputs of the
+    /// coin-to-market rule — and both stamps as the core wrote them, core-local, for the
+    /// session's time axis to lift. A closing upsert is partial and rarely carries the coin or
+    /// the entry itself; the feed completes it from the open row it saw earlier
+    /// (`live::capture`), and announces each row once. A close it cannot complete is not a
+    /// trade this can locate and is not sent.
+    TradeClosed {
+        coin: String,
+        quote: String,
+        buy: crate::db::ReportStamp,
+        close: crate::db::ReportStamp,
+    },
     /// Core-built strategy-filter rows for one or more markets, from `Event::ChartText`.
     ///
     /// These are ready strings, not typed skip codes. The UI paints them; it does not recompute
