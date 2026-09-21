@@ -39,7 +39,8 @@ fn viewer_empty_or_unavailable_scope_never_becomes_global() {
         INSERT INTO orders_rep VALUES (1,'Client',1,150,7,100,0),(2,'Private',1,150,900,100,0);").unwrap();
     for ids in [vec![], vec![99], vec![1]] {
         let mut request = ReportRequest::new(Period::Today, false);
-        if ids == vec![1] {
+        let viewer_core = ids == vec![1];
+        if viewer_core {
             request.scope = moon_core::telegram::report::ReportScope::Venue(
                 moon_core::feed::ExchangeId::new(6),
             );
@@ -56,7 +57,21 @@ fn viewer_empty_or_unavailable_scope_never_becomes_global() {
         .unwrap();
         assert_eq!(page.total.orders, 0);
         assert!(page.rows.is_empty());
-        assert!(page.drilldowns.is_empty());
+        if viewer_core {
+            assert_eq!(
+                page.drilldowns.len(),
+                1,
+                "the viewer's own exchanges stay on the keyboard"
+            );
+            assert_ne!(
+                page.drilldowns[0].1,
+                moon_core::telegram::report::ReportScope::Venue(moon_core::feed::ExchangeId::new(
+                    6
+                ))
+            );
+        } else {
+            assert!(page.drilldowns.is_empty());
+        }
     }
 }
 
@@ -294,6 +309,135 @@ fn daily_pages_include_partial_day_after_zone_change() {
     assert_eq!(page.rows.last().unwrap().1.orders, 1);
 }
 
+/// A month of daily rows and a handful of exchanges fit one message; cores still page at six.
+#[test]
+fn breakdown_views_render_every_row_until_the_rich_message_limit() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, newrecid INTEGER, closedate INTEGER, profitbtc REAL, spentbtc REAL, basecurrency INTEGER);").unwrap();
+    let mut daily = ReportRequest::dates("2026-01-01", "2026-01-31").unwrap();
+    daily.daily = true;
+    daily.by_exchange = false;
+    let (from, to) = daily.bounds(0, chrono_tz::UTC).unwrap();
+    for day in 0..31 {
+        let closedate = from + day * 86_400 + 3_600;
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (1,'Fixture',?1,?2,1,100,0)",
+            rusqlite::params![day + 1, closedate],
+        )
+        .unwrap();
+    }
+    let page = super::read_page_on(&conn, daily, from, to, chrono_tz::UTC, |_| {
+        (Default::default(), super::TelegramReportAccess::Owner)
+    })
+    .unwrap();
+    assert_eq!(page.rows.len(), 31);
+    assert_eq!(page.pages, 1);
+    let Response::Rich { html, keyboard, .. } = render(&page) else {
+        panic!("expected rich report")
+    };
+    assert!(
+        super::rich_message_fits(&html),
+        "chars={} blocks={}",
+        html.chars().count(),
+        super::rich_message_blocks(&html)
+    );
+    assert!(!html.contains(&rust_i18n::t!("telegram.report_page").to_string()));
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = keyboard else {
+        panic!("expected inline navigation")
+    };
+    assert!(markup.inline_keyboard.iter().flatten().all(|button| {
+        ReportRequest::parse_callback(button.callback_data.as_deref().unwrap())
+            .unwrap()
+            .page
+            == 0
+    }));
+
+    conn.execute("DELETE FROM orders_rep", []).unwrap();
+    let codes = [2_u8, 3, 4, 5, 6, 7];
+    let mut venues = std::collections::HashMap::new();
+    for (index, code) in codes.into_iter().enumerate() {
+        let id = (index as u64) + 1;
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (?1,?2,1,150,1,100,0)",
+            rusqlite::params![id as i64, format!("core-{id}")],
+        )
+        .unwrap();
+        venues.insert(id, moon_core::venue::CoreVenue::identify(code, "", None));
+    }
+    let request = ReportRequest::new(Period::Today, false);
+    let page = super::read_page_on(&conn, request, 100, 200, chrono_tz::UTC, |_| {
+        (venues.clone(), super::TelegramReportAccess::Owner)
+    })
+    .unwrap();
+    assert_eq!(page.rows.len(), 6);
+    assert_eq!(page.pages, 1);
+    let Response::Rich { html, keyboard, .. } = render(&page) else {
+        panic!("expected rich report")
+    };
+    assert!(
+        super::rich_message_fits(&html),
+        "chars={} blocks={}",
+        html.chars().count(),
+        super::rich_message_blocks(&html)
+    );
+    assert!(!html.contains(&rust_i18n::t!("telegram.report_page").to_string()));
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = keyboard else {
+        panic!("expected inline navigation")
+    };
+    assert!(markup.inline_keyboard.iter().flatten().all(|button| {
+        !button
+            .callback_data
+            .as_deref()
+            .and_then(ReportRequest::parse_callback)
+            .is_some_and(|request| request.page > 0)
+    }));
+}
+
+/// A year of daily rows exceeds Telegram's 500-block cap, so the six-row page size remains.
+#[test]
+fn oversized_daily_report_still_pages() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, newrecid INTEGER, closedate INTEGER, profitbtc REAL, spentbtc REAL, basecurrency INTEGER);").unwrap();
+    let mut request = ReportRequest::dates("2026-01-01", "2026-06-30").unwrap();
+    request.daily = true;
+    request.by_exchange = false;
+    let (from, to) = request.bounds(0, chrono_tz::UTC).unwrap();
+    let days = ((to - from) / 86_400) + 1;
+    for day in 0..days {
+        let closedate = from + day * 86_400 + 3_600;
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (1,'Fixture',?1,?2,1,100,0)",
+            rusqlite::params![day + 1, closedate.min(to)],
+        )
+        .unwrap();
+    }
+    let page = super::read_page_on(&conn, request, from, to, chrono_tz::UTC, |_| {
+        (Default::default(), super::TelegramReportAccess::Owner)
+    })
+    .unwrap();
+    assert!(
+        page.pages > 1,
+        "expected paging after {} active days, got {} pages / {} rows",
+        days,
+        page.pages,
+        page.rows.len()
+    );
+    assert_eq!(page.rows.len(), 6);
+    let Response::Rich { html, keyboard, .. } = render(&page) else {
+        panic!("expected rich report")
+    };
+    assert!(html.contains(&rust_i18n::t!("telegram.report_page").to_string()));
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = keyboard else {
+        panic!("expected inline navigation")
+    };
+    assert!(markup.inline_keyboard.iter().flatten().any(|button| {
+        ReportRequest::parse_callback(button.callback_data.as_deref().unwrap())
+            .unwrap()
+            .page
+            == 1
+    }));
+}
+
 /// Small native averages must retain significant digits and exclude uncounted entries.
 #[test]
 fn native_average_keeps_small_btc_amount_visible() {
@@ -420,6 +564,98 @@ fn rich_report_escapes_names_and_bounds_long_labels() {
     assert!(html.contains("&lt;b&gt;&amp;"));
     assert!(!html.contains("<b>&xxxx"));
     assert!(html.len() < 10_000);
+}
+
+/// Collapsed markup is one row of Exchanges + All cores; expanding shows today's list plus Back.
+#[test]
+fn collapsed_keyboard_hides_exchanges_until_opened() {
+    let _locale = crate::test_locale::force("ru");
+    let mut request = ReportRequest::new(Period::Today, false);
+    request.window = Some((0, 1));
+    let binance =
+        moon_core::telegram::report::ReportScope::Venue(moon_core::feed::ExchangeId::new(2));
+    let bybit =
+        moon_core::telegram::report::ReportScope::Venue(moon_core::feed::ExchangeId::new(6));
+    let page = Page {
+        request: request.clone(),
+        from: 0,
+        to: 1,
+        zone: chrono_tz::UTC,
+        total: QuoteBreakdown::default(),
+        rows: Vec::new(),
+        pages: 1,
+        drilldowns: vec![("Binance".into(), binance), ("Bybit".into(), bybit)],
+        scope_label: None,
+    };
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::keyboard(&page) else {
+        panic!("expected inline navigation")
+    };
+    assert_eq!(
+        markup.inline_keyboard.len(),
+        1,
+        "today has no extra view row"
+    );
+    assert_eq!(markup.inline_keyboard[0].len(), 2);
+    assert!(
+        markup.inline_keyboard[0][0].text.starts_with(&format!(
+            "{} \u{25be}",
+            rust_i18n::t!("telegram.report_exchanges_menu")
+        )),
+        "{}",
+        markup.inline_keyboard[0][0].text
+    );
+    let opened = ReportRequest::parse_callback(
+        markup.inline_keyboard[0][0]
+            .callback_data
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(opened.exchanges_open);
+    assert_eq!(opened.period, Period::Today);
+    let cores = ReportRequest::parse_callback(
+        markup.inline_keyboard[0][1]
+            .callback_data
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(!cores.by_exchange);
+    assert!(!cores.daily);
+    assert!(!cores.exchanges_open);
+
+    let mut expanded = page;
+    expanded.request.exchanges_open = true;
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::keyboard(&expanded) else {
+        panic!("expected inline navigation")
+    };
+    assert_eq!(markup.inline_keyboard[0].len(), 2, "two exchanges per row");
+    assert!(markup.inline_keyboard[0][0].text.contains("Binance"));
+    let picked = ReportRequest::parse_callback(
+        markup.inline_keyboard[0][0]
+            .callback_data
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        picked.exchanges_open,
+        "picking an exchange must keep the list open"
+    );
+    assert_eq!(picked.scope, binance);
+    let back = markup
+        .inline_keyboard
+        .iter()
+        .flatten()
+        .find(|button| {
+            button
+                .text
+                .contains(&rust_i18n::t!("telegram.report_exchanges_back").to_string())
+        })
+        .expect("expanded list has Back");
+    let closed = ReportRequest::parse_callback(back.callback_data.as_deref().unwrap()).unwrap();
+    assert!(!closed.exchanges_open);
+    assert_eq!(closed.period, Period::Today);
 }
 
 /// Single-day navigation omits daily aggregation while longer periods still expose it.

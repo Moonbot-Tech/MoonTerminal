@@ -1290,6 +1290,16 @@ impl ChartDataHandle {
         self.inner.strong_count() > 0
     }
 
+    /// Whether this engine draws a closed interval rather than the live market.
+    ///
+    /// Trade windows are historical; they do not count toward "all live charts closed" and must
+    /// not stamp the idle auto-return clock.
+    pub fn is_historical(&self) -> bool {
+        self.inner
+            .upgrade()
+            .is_some_and(|inner| inner.borrow().historical)
+    }
+
     pub fn sync_orders_if_visible(&self, session: &SessionManager, force: bool) -> bool {
         let Some(inner) = self.inner.upgrade() else {
             return false;

@@ -1,6 +1,6 @@
 //! Regression coverage for chart view initialization, navigation, and scale behavior.
 
-use super::ChartView;
+use super::{ChartView, initial_window_ms, should_return_to_live};
 
 /// Return how much live history remains left of the future margin after default initialization.
 ///
@@ -1019,4 +1019,236 @@ fn center_on_price_waits_for_a_price_and_then_snaps_once() {
         "a plain tick snapped instead of easing: {}",
         view.center_price
     );
+}
+
+/// Six hours of history plus a 10% future margin is 24_000_000 ms. Returning the six-hour
+/// history figure itself, or treating a missing memory as zero, must fail: the first chart of a
+/// run would then open shorter than today's default.
+#[test]
+fn a_missing_zoom_memory_keeps_the_built_in_opening_window() {
+    const SIX_HOUR_WINDOW_MS: f32 = 24_000_000.0;
+    assert_eq!(initial_window_ms(None), SIX_HOUR_WINDOW_MS);
+    assert_eq!(initial_window_ms(Some(f32::NAN)), SIX_HOUR_WINDOW_MS);
+    assert_eq!(initial_window_ms(Some(0.0)), SIX_HOUR_WINDOW_MS);
+    assert_eq!(initial_window_ms(Some(-60_000.0)), SIX_HOUR_WINDOW_MS);
+}
+
+/// Dropping the clamp to the 30-second plain floor must fail: a remembered 3s super-zoom
+/// window would open the next chart below the floor a plain wheel is allowed to use.
+#[test]
+fn a_remembered_width_is_clamped_to_the_plain_floor_and_the_max_window() {
+    assert_eq!(initial_window_ms(Some(1_000.0)), 30_000.0);
+    assert_eq!(initial_window_ms(Some(3_000.0)), 30_000.0);
+    assert_eq!(initial_window_ms(Some(10_000.0)), 30_000.0);
+    assert_eq!(initial_window_ms(Some(30_000.0)), 30_000.0);
+    assert_eq!(initial_window_ms(Some(120_000.0)), 120_000.0);
+    assert_eq!(initial_window_ms(Some(40_000_000_000.0)), 31_536_000_000.0);
+}
+
+/// Seeding a new view from a remembered two-minute window must open that amount of history, not
+/// the six-hour built-in default. Skipping `apply_opening_window` would leave every new chart at
+/// 24_000_000 ms regardless of what the user just zoomed to.
+#[test]
+fn a_remembered_width_opens_a_new_chart_at_that_history() {
+    const WIDTH: f32 = 1000.0;
+    const REMEMBERED_MS: f32 = 120_000.0;
+    let mut view = ChartView::new(0.0);
+    view.apply_opening_window(Some(REMEMBERED_MS));
+    view.ensure_default_window(WIDTH, 60.0, None);
+    view.resume_live(0.0);
+    let (_, window_ms) = view.visible_x(WIDTH);
+    assert!(
+        window_ms >= REMEMBERED_MS,
+        "opening window {window_ms} ms is shorter than the remembered {REMEMBERED_MS} ms"
+    );
+    assert!(
+        window_ms < REMEMBERED_MS + 60_000.0,
+        "opening window {window_ms} ms overshot the remembered width toward the six-hour default"
+    );
+}
+
+/// A super-zoom memory of 3s must open the next chart at the 30-second plain floor, not at 3s.
+/// Opening below that floor would put a chart the user has not super-zoomed into the super-zoom
+/// band, where a later plain wheel cannot use the 30-second floor as its in-stop.
+#[test]
+fn a_super_zoom_memory_opens_at_the_plain_wheel_floor() {
+    const WIDTH: f32 = 1000.0;
+    let mut view = ChartView::new(0.0);
+    view.apply_opening_window(Some(3_000.0));
+    view.ensure_default_window(WIDTH, 60.0, None);
+    let (_, window_ms) = view.visible_x(WIDTH);
+    assert!(
+        window_ms >= 30_000.0,
+        "super-zoom memory opened below the plain floor at {window_ms} ms"
+    );
+    assert!(
+        window_ms < 30_000.0 + 5_000.0,
+        "super-zoom memory overshot the plain floor toward the six-hour default ({window_ms} ms)"
+    );
+    view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, 0.0, false);
+    let (_, after_plain) = view.visible_x(WIDTH);
+    assert!(
+        (after_plain - 30_000.0).abs() < 1.0,
+        "plain wheel in-stop on the opened chart was {after_plain} ms, not 30s"
+    );
+    for _ in 0..8 {
+        view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, 0.0, true);
+    }
+    let (_, after_super) = view.visible_x(WIDTH);
+    assert!(
+        (after_super - 3_000.0).abs() < 1.0,
+        "super-zoom on the opened chart did not reach 3s ({after_super} ms)"
+    );
+}
+
+/// Shift+middle-click ppm is an explicit per-window scale and must still win over a remembered
+/// width during initialization. Dropping that branch would make a zoom on another chart discard
+/// the scale the user synced onto this window.
+#[test]
+fn a_saved_x_scale_still_wins_over_a_remembered_width() {
+    let width = 1200.0;
+    let saved_ppm = width / 180_000.0;
+    let mut view = ChartView::new(0.0);
+    view.apply_opening_window(Some(60_000.0));
+    view.ensure_default_window(width, 60.0, Some(saved_ppm));
+    assert!((view.px_per_ms - saved_ppm).abs() < 1e-9);
+}
+
+/// Applying a remembered width after the first prepared frame must leave the chart alone.
+/// Honouring it on every prepare would jump an already-open default-scale chart the moment the
+/// user zoomed a different coin.
+#[test]
+fn a_later_zoom_memory_does_not_jump_an_already_open_chart() {
+    const WIDTH: f32 = 1000.0;
+    const SIX_HOURS_MS: f32 = 6.0 * 60.0 * 60.0 * 1000.0;
+    let mut view = ChartView::new(0.0);
+    view.ensure_default_window(WIDTH, 60.0, None);
+    view.apply_opening_window(Some(60_000.0));
+    view.ensure_default_window(1600.0, 60.0, None);
+    view.resume_live(0.0);
+    let (left, _) = view.visible_x(1600.0);
+    assert!(
+        -left >= SIX_HOURS_MS,
+        "an already-open chart jumped to the later memory: history {} ms",
+        -left
+    );
+}
+
+/// Three minutes of wall time, the idle auto-return the product asked for. Named here rather than
+/// read from the production constant so a drift of that constant turns these tests red.
+const THREE_MINUTES_MS: f64 = 3.0 * 60.0 * 1000.0;
+
+/// A live chart must stay live: auto-return is a leave-Live repair, not a heartbeat.
+///
+/// Breakage: dropping the `follow` early-return in `should_return_to_live` would flip Live on
+/// every idle tick even when the user is already following.
+#[test]
+fn a_live_view_does_not_auto_return() {
+    assert!(!should_return_to_live(
+        Some(0.0),
+        THREE_MINUTES_MS,
+        true,
+        false,
+        1
+    ));
+}
+
+/// A pan-parked chart returns to Live at three idle minutes and not one millisecond sooner.
+///
+/// Breakage: shrinking `AUTO_RESUME_LIVE_MS` would yank a parked chart back while the user is
+/// still reading it; dropping the idle check would leave it frozen until they press Live.
+#[test]
+fn a_pan_parked_view_returns_after_three_idle_minutes() {
+    let last = 1_000.0;
+    assert!(!should_return_to_live(
+        Some(last),
+        last + THREE_MINUTES_MS - 1.0,
+        false,
+        false,
+        1,
+    ));
+    assert!(should_return_to_live(
+        Some(last),
+        last + THREE_MINUTES_MS,
+        false,
+        false,
+        1,
+    ));
+}
+
+/// A later pan or zoom restarts the three-minute clock, so Live does not jump under the hand.
+///
+/// Breakage: comparing against the first stamp instead of the newest would auto-return while the
+/// user is still navigating.
+#[test]
+fn a_later_interaction_restarts_the_idle_timer() {
+    let first = 1_000.0;
+    let second = first + THREE_MINUTES_MS;
+    assert!(!should_return_to_live(
+        Some(second),
+        second + THREE_MINUTES_MS - 1.0,
+        false,
+        false,
+        1,
+    ));
+}
+
+/// The toolbar/Space Pause must not be undone by the idle timer while any chart is still open.
+///
+/// Breakage: ignoring `manual_persistent` would turn Live back on under a user who parked on
+/// purpose.
+#[test]
+fn a_deliberate_pause_is_not_revived_while_charts_remain() {
+    assert!(!should_return_to_live(
+        Some(0.0),
+        THREE_MINUTES_MS,
+        false,
+        true,
+        1,
+    ));
+}
+
+/// Closing every live chart drops leftover Pause, even a deliberate one, so the next open starts Live.
+///
+/// Breakage: keeping `follow == false` across an empty population would open the next chart paused.
+#[test]
+fn closing_every_chart_drops_stale_not_live_state() {
+    assert!(should_return_to_live(Some(0.0), 0.0, false, true, 0));
+    assert!(should_return_to_live(None, 0.0, false, false, 0));
+    assert!(!should_return_to_live(None, 0.0, true, false, 0));
+}
+
+/// A parked chart with no gesture stamp is not timer-resumed: that leave cannot be proven a pan.
+///
+/// Breakage: treating `None` as "idle since forever" would revive a chart whose Pause origin is
+/// unknown.
+#[test]
+fn a_park_without_an_interaction_stamp_does_not_timer_resume() {
+    assert!(!should_return_to_live(
+        None,
+        THREE_MINUTES_MS,
+        false,
+        false,
+        1
+    ));
+}
+
+/// Pan, zoom and Y-drag are the gestures that count as "reading this chart"; a tick is not.
+///
+/// Breakage: dropping `note_interaction` from those methods would leave the idle clock stuck at
+/// the first pan, so a later zoom would not postpone auto-return.
+#[test]
+fn pan_zoom_and_y_drag_count_as_chart_interaction() {
+    let mut view = live_view(NOW, WIDTH);
+    view.pan_x_px(WIDTH, NOW, WIDTH);
+    assert_eq!(view.last_interaction_ms, Some(NOW));
+
+    view.zoom_x_at(0.5, WIDTH, WIDTH / 2.0, NOW + 10.0, false);
+    assert_eq!(view.last_interaction_ms, Some(NOW + 10.0));
+
+    view.pan_y_px(8.0, NOW + 20.0);
+    assert_eq!(view.last_interaction_ms, Some(NOW + 20.0));
+
+    view.rmb_zoom(100.0, 10.0, 20.0, NOW + 30.0);
+    assert_eq!(view.last_interaction_ms, Some(NOW + 30.0));
 }

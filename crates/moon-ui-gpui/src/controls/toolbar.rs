@@ -1135,7 +1135,7 @@ pub fn toolbar(
                 )
                 .on_click(move |_, _, cx| {
                     backend_live.update(cx, |b, bcx| {
-                        b.follow = !b.follow;
+                        b.toggle_follow();
                         bcx.notify();
                     });
                 })

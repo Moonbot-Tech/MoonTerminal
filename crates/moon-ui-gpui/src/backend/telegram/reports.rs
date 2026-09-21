@@ -16,8 +16,12 @@ use moon_core::{
 use rust_i18n::t;
 use std::sync::mpsc::SyncSender;
 
-/// Short pages keep the native table readable on phones and bound per-request query work.
+/// Core lists are unbounded, so they still page; breakdown views try to show every row first.
 const PAGE_SIZE: usize = 6;
+/// Telegram `sendRichMessage` cap: 32768 UTF-8 characters in the rich message text.
+const RICH_MESSAGE_CHAR_LIMIT: usize = 32_768;
+/// Telegram `sendRichMessage` cap: 500 blocks, including nested blocks and table rows.
+const RICH_MESSAGE_BLOCK_LIMIT: usize = 500;
 
 /// A complete page plus a full-period total, all read in one SQLite snapshot.
 struct Page {
@@ -136,6 +140,7 @@ fn read_page_on(
     if let TelegramReportAccess::Viewer(allowed) = &access {
         cores.retain(|(id, _)| allowed.contains(id));
     }
+    let accessible = cores.clone();
     let scope_label = (request.scope != ReportScope::All).then(|| {
         cores
             .iter()
@@ -226,20 +231,43 @@ fn read_page_on(
             active.push((name, total, scope));
         }
     }
-    let pages = active.len().div_ceil(PAGE_SIZE).max(1);
-    request.page = request.page.min(pages - 1);
-    let mut rows = Vec::new();
-    let mut drilldowns = Vec::new();
-    for (name, total, scope) in active
-        .into_iter()
-        .skip(request.page * PAGE_SIZE)
-        .take(PAGE_SIZE)
-    {
-        if let Some(scope) = scope {
-            drilldowns.push((name.clone(), scope));
+    let drilldowns = exchange_drilldowns(&snap, &accessible, &venues, &filter)?;
+    let breakdown = request.daily || request.by_exchange;
+    let take =
+        |active: &[(String, QuoteBreakdown, Option<ReportScope>)], page: usize, size: usize| {
+            active
+                .iter()
+                .skip(page * size)
+                .take(size)
+                .map(|(name, total, _)| (name.clone(), total.clone()))
+                .collect::<Vec<_>>()
+        };
+    let (rows, pages) = if breakdown {
+        let all = take(&active, 0, active.len().max(1));
+        let probe = Page {
+            request: request.clone(),
+            from,
+            to,
+            zone,
+            total: total.clone(),
+            rows: all.clone(),
+            pages: 1,
+            drilldowns: drilldowns.clone(),
+            scope_label: scope_label.clone(),
+        };
+        if rich_message_fits(&report_html(&probe)) {
+            request.page = 0;
+            (all, 1)
+        } else {
+            let pages = active.len().div_ceil(PAGE_SIZE).max(1);
+            request.page = request.page.min(pages - 1);
+            (take(&active, request.page, PAGE_SIZE), pages)
         }
-        rows.push((name, total));
-    }
+    } else {
+        let pages = active.len().div_ceil(PAGE_SIZE).max(1);
+        request.page = request.page.min(pages - 1);
+        (take(&active, request.page, PAGE_SIZE), pages)
+    };
     Ok(Page {
         request,
         from,
@@ -251,6 +279,30 @@ fn read_page_on(
         drilldowns,
         scope_label,
     })
+}
+
+/// Exchange buttons always list every active venue the chat can see, including from a scoped view.
+fn exchange_drilldowns(
+    snap: &rusqlite::Transaction<'_>,
+    cores: &[(u64, String)],
+    venues: &std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+    filter: &ReportFilter,
+) -> db::ReadResult<Vec<(String, ReportScope)>> {
+    let mut drilldowns = Vec::new();
+    for (venue, members) in crate::core_order::exchange_sections(
+        cores
+            .iter()
+            .enumerate()
+            .map(|(index, (id, _))| (index, venues.get(id))),
+    ) {
+        let mut group = filter.clone();
+        group.core_uids = members.iter().map(|&index| cores[index].0).collect();
+        let total = db::query_totals(snap, &group)?.quotes;
+        if total.orders > 0 {
+            drilldowns.push((crate::controls::venue_section_label(venue), scope_of(venue)));
+        }
+    }
+    Ok(drilldowns)
 }
 
 /// Escape all external text before inserting it into Telegram's restricted rich HTML.
@@ -291,8 +343,41 @@ fn native(total: &QuoteBreakdown) -> String {
         .join("; ")
 }
 
+/// Telegram counts UTF-8 characters and nested blocks on the `sendRichMessage` path.
+fn rich_message_fits(html: &str) -> bool {
+    html.chars().count() <= RICH_MESSAGE_CHAR_LIMIT
+        && rich_message_blocks(html) <= RICH_MESSAGE_BLOCK_LIMIT
+}
+
+/// Table rows, paragraphs, details and tables are the blocks this report actually emits.
+fn rich_message_blocks(html: &str) -> usize {
+    html.matches("<tr").count()
+        + html.matches("<p>").count()
+        + html.matches("<details").count()
+        + html.matches("<table").count()
+}
+
 /// Compose a compact headline, three-column table, and optional per-bot accounting details.
 fn render(page: &Page) -> Response {
+    let html = report_html(page);
+    if !rich_message_fits(&html) {
+        return Response::Text {
+            text: t!("telegram.report_delivery_failed").to_string(),
+            keyboard: Some(keyboard(page)),
+        };
+    }
+    Response::Rich {
+        html,
+        keyboard: keyboard(page),
+        navigation: (
+            t!("telegram.report_navigation_hint").to_string(),
+            super::navigation_keyboard(),
+        ),
+    }
+}
+
+/// HTML for one report page; the caller decides whether it fits Telegram's rich-message caps.
+fn report_html(page: &Page) -> String {
     let heading = if page.request.daily {
         t!("telegram.report_days")
     } else if page.request.by_exchange {
@@ -415,20 +500,7 @@ fn render(page: &Page) -> Response {
             page.pages
         ));
     }
-    if html.chars().count() > 30_000 {
-        return Response::Text {
-            text: t!("telegram.report_delivery_failed").to_string(),
-            keyboard: Some(keyboard(page)),
-        };
-    }
-    Response::Rich {
-        html,
-        keyboard: keyboard(page),
-        navigation: (
-            t!("telegram.report_navigation_hint").to_string(),
-            super::navigation_keyboard(),
-        ),
-    }
+    html
 }
 
 /// Help is disposable rich content; a separate permanent message owns persistent navigation.
@@ -525,28 +597,49 @@ fn keyboard(page: &Page) -> ReplyMarkup {
             "telegram.report_back" | "telegram.report_prev" => "\u{2b05}\u{fe0f}",
             "telegram.report_next" => "\u{27a1}\u{fe0f}",
             "telegram.report_all_cores" | "telegram.report_cores_scope" => "\u{1f9e9}",
+            "telegram.report_exchanges_back" => "\u{2190}",
             _ => "\u{1f4c5}",
         };
         InlineKeyboardButton::callback(format!("{icon} {}", t!(key)), request.callback())
     };
     let mut rows = Vec::new();
-    for chunk in page.drilldowns.chunks(2) {
-        rows.push(
-            chunk
-                .iter()
-                .map(|(name, scope)| {
-                    let mut next = request.clone();
-                    next.scope = *scope;
-                    next.by_exchange = false;
-                    next.daily = false;
-                    next.page = 0;
-                    InlineKeyboardButton::callback(
-                        format!("{} {}", exchange_icon(*scope), compact_label(name)),
-                        next.callback(),
-                    )
-                })
-                .collect(),
-        );
+    if request.exchanges_open {
+        for chunk in page.drilldowns.chunks(2) {
+            rows.push(
+                chunk
+                    .iter()
+                    .map(|(name, scope)| {
+                        let mut next = request.clone();
+                        next.scope = *scope;
+                        next.by_exchange = false;
+                        next.daily = false;
+                        next.page = 0;
+                        next.exchanges_open = true;
+                        InlineKeyboardButton::callback(
+                            format!("{} {}", exchange_icon(*scope), compact_label(name)),
+                            next.callback(),
+                        )
+                    })
+                    .collect(),
+            );
+        }
+        let mut closed = request.clone();
+        closed.exchanges_open = false;
+        rows.push(vec![button("telegram.report_exchanges_back", closed)]);
+    } else {
+        let mut open = request.clone();
+        open.exchanges_open = true;
+        let mut cores = request.clone();
+        cores.by_exchange = false;
+        cores.daily = false;
+        cores.page = 0;
+        rows.push(vec![
+            InlineKeyboardButton::callback(
+                format!("{} \u{25be}", t!("telegram.report_exchanges_menu")),
+                open.callback(),
+            ),
+            button("telegram.report_all_cores", cores),
+        ]);
     }
     let mut views = Vec::new();
     for (key, exchanges, daily) in [
@@ -572,6 +665,8 @@ fn keyboard(page: &Page) -> ReplyMarkup {
     ] {
         if (daily && request.period == Period::Today)
             || (request.by_exchange == exchanges && request.daily == daily)
+            // The collapsed top row already carries All cores; do not repeat it below.
+            || (!request.exchanges_open && !exchanges && !daily)
         {
             continue;
         }

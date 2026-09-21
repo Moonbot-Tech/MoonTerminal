@@ -610,7 +610,7 @@ impl DetachedChartHost {
             }
             HotkeyAction::ToggleLive => {
                 self.backend.update(cx, |b, bcx| {
-                    b.follow = !b.follow;
+                    b.toggle_follow();
                     bcx.notify();
                 });
                 true

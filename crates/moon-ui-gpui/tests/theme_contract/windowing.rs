@@ -925,14 +925,14 @@ fn trade_window_escape_is_captured_ahead_of_hotkeys() {
     );
 }
 
-/// #557: a pane with NO order zone — separate zones, book hidden, "Order zone with the book hidden"
-/// off — takes no order gesture of any kind, so a double click there can only open the coin on Main.
+/// #557: a pane with NO order zone — book hidden, "Order zone with the book hidden" off — takes
+/// no order gesture of any kind, so a double click there can only open the coin on Main.
 /// Two anchors keep that true. Every line interaction (drag, cancel cross, hover cursor, order menu,
 /// Tab/Del cancel) resolves through `hit_order_line`, whose FIRST statement is the gate; and both
-/// click placements pick their pane through `glass_pane_at` under separate zones, which finds
-/// nothing inside the zero-width zone `order_zone_in` returns there. A placement that picked its
-/// pane another way, or a line hit test added beside `hit_order_line`, would trade again on a pane
-/// the user declared order-free.
+/// click placements pick their pane through `glass_pane_at`, which finds nothing inside the
+/// zero-width zone `order_zone_in` returns there. A placement that picked its pane another way,
+/// or a line hit test added beside `hit_order_line`, would trade again on a pane the user
+/// declared order-free. The Settings toggle no longer opens a whole-pane trading mode.
 #[test]
 fn order_free_pane_takes_no_order_gesture() {
     let trade = read_src("panels/chart/trade.rs");
@@ -951,22 +951,22 @@ fn order_free_pane_takes_no_order_gesture() {
     ] {
         let body = code_only(braced_body(&trade, signature));
         assert!(
-            body.contains("self.separate_zones(cx)") && body.contains("self.glass_pane_at(pos)"),
-            "{name} must pick its pane through glass_pane_at under separate zones"
+            body.contains("self.glass_pane_at(pos)") && !body.contains("self.separate_zones"),
+            "{name} must pick its pane through glass_pane_at with no whole-pane fallback"
         );
     }
     let geom = code_only(&read_src("panels/chart/geom.rs"));
     let allowed = braced_body(&geom, "pub(super) fn order_gestures_allowed(");
-    for term in [
-        "self.separate_zones(cx)",
-        "self.orderbook_drawn()",
-        "self.show_zone",
-    ] {
+    for term in ["self.orderbook_drawn()", "self.show_zone"] {
         assert!(
             allowed.contains(term),
-            "order_gestures_allowed must read {term}: the zone exists iff separate && (book || toggle)"
+            "order_gestures_allowed must read {term}: the zone exists iff book || reserved strip"
         );
     }
+    assert!(
+        !allowed.contains("separate_zones") && !allowed.contains("separate_control_zones"),
+        "order_gestures_allowed must not reopen whole-pane trading from the Settings toggle"
+    );
     // The strip's width is decided by the toggle alone; that the other branch is zero width is the
     // unit test's claim (`panels/chart/geom/tests.rs`), which measures the rectangle rather than
     // grepping for a literal that `.max(0.0)` would satisfy as well.
@@ -974,6 +974,43 @@ fn order_free_pane_takes_no_order_gesture() {
     assert!(
         zone.contains("if reserve_strip {"),
         "order_zone_in must reserve the strip only while the toggle is on"
+    );
+}
+
+/// The Settings toggle now grants left-drag pan inside the book zone; it does not reopen
+/// whole-pane trading. Add tabs read the same setting (no `num.is_some()` force), wheel routing
+/// stays on `window_pos_in_glass_zone`, and a book-zone miss waits for movement before placing.
+///
+/// Plausible breakage: restoring `if self.num.is_some() { return true }` on the pan helper so Add
+/// tabs ignore the toggle; or firing `try_place_order_click` on mouse-down inside the book while
+/// pan is granted, so a drag places instead of panning.
+#[test]
+fn chart_pan_in_book_zone_is_the_toggle_and_orders_wait_for_a_still_click() {
+    let geom = code_only(&read_src("panels/chart/geom.rs"));
+    let pan = braced_body(&geom, "pub(super) fn chart_pan_in_book_zone(");
+    assert!(
+        pan.contains("separate_control_zones")
+            && pan.contains("self.orderbook_only")
+            && !pan.contains("self.num.is_some()"),
+        "the pan grant must read the setting on every tab, including Add and detached, and refuse a broom pane"
+    );
+    let control = braced_body(&geom, "pub(crate) fn window_pos_in_control_zone(");
+    assert!(
+        !control.contains("chart_pan_in_book_zone") && !control.contains("separate_control_zones"),
+        "the control-zone test stays a trading-surface hit, not the pan grant"
+    );
+    let input = code_only(&read_src("panels/chart/render_input.rs"));
+    let left = braced_body(&input, "pub(super) fn mouse_down_left(");
+    assert!(
+        left.contains("defer_book_click")
+            && left.contains("chart_pan_in_book_zone")
+            && left.contains("book_zone_press"),
+        "a book-zone miss under the pan grant must park the press instead of placing"
+    );
+    let wheel = braced_body(&input, "pub(super) fn scroll_wheel(");
+    assert!(
+        wheel.contains("window_pos_in_glass_zone"),
+        "the wheel over the book must stay with the stack / book, not become chart zoom"
     );
 }
 

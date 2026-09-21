@@ -1806,3 +1806,57 @@ fn chart_strip_tooltip_keys_ship_in_three_languages() {
         assert_locale_key_in_three_languages("shell.yml", key);
     }
 }
+
+/// Issue #675: while Sells-to-zone is armed, the cursor badge must read as a MODE — its own
+/// accent and its own draw helper — and stay below-right of the crosshair, outside the
+/// crosshair-label switch.
+///
+/// Breakage: routing it through `draw_label_text(..., readout)` again paints one small grey
+/// glyph in the readout cluster, which is the failure the issue reported.
+#[test]
+fn sells_zone_cursor_badge_does_not_inherit_the_readout_style() {
+    let prepare = read_src("chartdx/text/prepare.rs");
+    let start = prepare
+        .find("Sells-to-zone mode marker")
+        .expect("prepare.rs must still host the Sells-to-zone cursor badge");
+    let rest = &prepare[start..];
+    let end = rest
+        .find("A per-tab \"crosshair label\"")
+        .expect("the badge must sit before the crosshair-label switch");
+    let block = &rest[..end];
+    assert!(
+        block.contains("self.draw_cursor_badge_text(")
+            && block.contains("self.measure_cursor_badge_text("),
+        "the badge must use its own draw/measure helpers, not the readout ones"
+    );
+    assert!(
+        block.contains("self.ui_palette.accent"),
+        "the badge must take the live palette accent, not readout_label"
+    );
+    assert!(
+        !block.contains("draw_label_text") && !block.contains(", readout)"),
+        "the badge must not inherit draw_label_text(..., readout)"
+    );
+    assert!(
+        block.contains("CURSOR_BADGE_DX") && block.contains("CURSOR_BADGE_DY"),
+        "placement stays below-right of the crosshair"
+    );
+    assert!(
+        prepare.contains("Deliberately NOT behind the crosshair-label switch"),
+        "the badge must keep surviving the crosshair-label switch"
+    );
+    let engine = code_only(&read_src("chartdx/engine.rs"));
+    let upload = braced_body(&engine, "pub fn set_ui_palette(");
+    assert!(
+        upload.contains("ui_palette.accent"),
+        "set_ui_palette must watch accent so a theme swap still reaches the badge"
+    );
+    let size = code_only(braced_body(
+        &read_src("chartdx/text/mod.rs"),
+        "fn cursor_badge_font_px(",
+    ));
+    assert!(
+        size.contains("BODY_TEXT") && size.contains("CURSOR_BADGE_TIER_STEP"),
+        "badge size must go through the control-tier body plus the t_body_lg step"
+    );
+}

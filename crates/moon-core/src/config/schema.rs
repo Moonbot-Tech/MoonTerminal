@@ -334,8 +334,9 @@ pub struct SettingsFile {
     /// Height of one chart in logical pixels in scroll mode. Defaults to 360.
     #[serde(default = "default_chart_stack_height")]
     pub chart_stack_height: u16,
-    /// Separate control zones: true allows placing orders and moving lines ONLY in the order-book
-    /// area; false allows it across the whole chart. Defaults to true.
+    /// When true, a left drag that misses every order line pans the chart from inside the
+    /// order-book zone. When false, that zone is orders only (no pan, no zoom). Order gestures
+    /// are always confined to the book zone regardless. Defaults to true.
     #[serde(default = "servers::default_true")]
     pub separate_control_zones: bool,
     /// Auto-close delay for Main charts when the window is inactive, in seconds. 0 disables it.

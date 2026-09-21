@@ -283,7 +283,8 @@ pub struct AppConfig {
     pub charts_stack_compress: bool,
     /// Height of one chart in the scroll stack, in logical pixels. Defaults to 360.
     pub chart_stack_height: u16,
-    /// Separate control zones: orders/lines only in the order-book area (settings.toml). Defaults to true.
+    /// When true, a left drag that misses every order line pans the chart from inside the
+    /// order-book zone (settings.toml). Order gestures always stay in that zone. Defaults to true.
     pub separate_control_zones: bool,
     /// Main-chart auto-close delay for window inactivity, in seconds (settings.toml). 0 disables it.
     /// Inactive means either unfocused or focused with no mouse movement. Each chart closes after

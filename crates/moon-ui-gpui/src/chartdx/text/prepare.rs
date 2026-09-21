@@ -670,7 +670,7 @@ impl RenderState {
                 let inside = (plot_left..=plot_right).contains(&cx_log)
                     && (plot_top..=plot_bottom).contains(&cy_log);
                 if inside {
-                    let metrics = self.measure_label_text(ctx, text);
+                    let metrics = self.measure_cursor_badge_text(ctx, text);
                     let (bw, bh) = (metrics.width.as_f32(), metrics.line_height.as_f32());
                     // Below-right of the crosshair, then pulled back inside the plot so a cursor at
                     // the right or bottom edge does not push the badge over the order book or off
@@ -686,7 +686,18 @@ impl RenderState {
                         plot_top,
                         plot_bottom - bh - READOUT_PAD_Y,
                     );
-                    self.draw_label_text(ctx, text, x, y, 0.0, 0.0, readout)?;
+                    // Palette accent, not `readout_label`: this is a MODE, and the neighbouring
+                    // price/time figures already use that grey. `ui_palette` is the live Moon
+                    // palette uploaded on each GPUI render, so light/dark already swap it.
+                    self.draw_cursor_badge_text(
+                        ctx,
+                        text,
+                        x,
+                        y,
+                        0.0,
+                        0.0,
+                        color(self.ui_palette.accent),
+                    )?;
                     // Same opaque backdrop the cursor's own values get, and for the same reason:
                     // this sits over candles. `placed` feeds the backing plates in
                     // `render_state.rs`, which is all it is for.

@@ -75,7 +75,7 @@ fn optional_f64_order(
 
 /// Apply the selected header comparator or the legacy primary/newest menu order.
 ///
-/// [`OrdersPanel::rebuild_cache`] subsequently applies the stable Main lift over this order.
+/// [`apply_main_lift`] then stably lifts Main-associated rows unless `view.header_sort` is set.
 pub(super) fn sort_entries(
     entries: &mut [OrderEntry],
     view: &OrdersViewState,
@@ -192,6 +192,40 @@ pub(super) fn sort_entries(
             })
             .then_with(|| a.core.cmp(&b.core))
     });
+}
+
+/// Stably lift Main-associated rows over the comparator order unless an explicit header sort
+/// is active.
+///
+/// `view.header_sort` is the persisted header-click override (`table_persist` per `ctx_id`).
+/// When it is `Some`, the user asked for that column order and the passive Main-on-top default
+/// does not run. Highlighting is computed separately and is unchanged by this function.
+///
+/// Args:
+///     entries: Rows already ordered by [`sort_entries`].
+///     view: Current table view, including `header_sort` and `main_on_top`.
+///     highlight: `(core, uid)` of the first base-sorted row for each Main-open pair.
+///     main_open: `(core, market)` pairs open in the group's Main stack.
+pub(super) fn apply_main_lift(
+    entries: &mut [OrderEntry],
+    view: &OrdersViewState,
+    highlight: &std::collections::HashSet<(CoreId, u64)>,
+    main_open: &std::collections::HashSet<(CoreId, String)>,
+) {
+    if view.header_sort.is_some() {
+        return;
+    }
+    match view.main_on_top {
+        MainOnTop::Off => {}
+        MainOnTop::Highlighted => {
+            entries.sort_by_key(|e| u8::from(!highlight.contains(&(e.core, e.row.uid))));
+        }
+        MainOnTop::AllTicker => {
+            let markets: std::collections::HashSet<&str> =
+                main_open.iter().map(|(_, m)| m.as_str()).collect();
+            entries.sort_by_key(|e| u8::from(!markets.contains(e.row.market.as_str())));
+        }
+    }
 }
 
 /// Return the allocation-free lexicographic rank of the exact displayed side label.

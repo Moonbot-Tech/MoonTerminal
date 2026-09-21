@@ -19,7 +19,7 @@ mod table;
 mod view;
 
 pub(crate) use sort::executed;
-use sort::sort_entries;
+use sort::{apply_main_lift, sort_entries};
 use view::{ALL_COLUMNS_MASK, MainOnTop, OrdCol, OrderKind, OrdersViewState, PrimarySort};
 
 use std::collections::HashSet;
@@ -509,18 +509,9 @@ impl OrdersPanel {
                 highlight.insert((e.core, e.row.uid));
             }
         }
-        // Stably lift Main-associated rows over the base order, preserving order within each group.
-        match key.view.main_on_top {
-            MainOnTop::Off => {}
-            MainOnTop::Highlighted => {
-                entries.sort_by_key(|e| u8::from(!highlight.contains(&(e.core, e.row.uid))));
-            }
-            MainOnTop::AllTicker => {
-                let markets: HashSet<&str> =
-                    self.main_open.iter().map(|(_, m)| m.as_str()).collect();
-                entries.sort_by_key(|e| u8::from(!markets.contains(e.row.market.as_str())));
-            }
-        }
+        // Stably lift Main-associated rows over the base order, preserving order within each group,
+        // unless an explicit header sort is active.
+        apply_main_lift(&mut entries, &key.view, &highlight, &self.main_open);
         self.highlight = Rc::new(highlight);
         self.cached_entries = Rc::new(entries);
         self.cache_key = Some(key);

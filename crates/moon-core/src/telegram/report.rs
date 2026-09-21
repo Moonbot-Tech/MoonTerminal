@@ -33,6 +33,8 @@ pub struct ReportRequest {
     pub page: usize,
     /// Frozen UTC bounds for paging; explicit refresh clears these before resolving a preset.
     pub window: Option<(i64, i64)>,
+    /// Inline exchange list is expanded; a missing or unknown flag stays collapsed.
+    pub exchanges_open: bool,
 }
 
 impl ReportRequest {
@@ -45,6 +47,7 @@ impl ReportRequest {
             scope: ReportScope::All,
             page: 0,
             window: None,
+            exchanges_open: false,
         }
     }
 
@@ -70,7 +73,8 @@ impl ReportRequest {
             ReportScope::Unidentified => "u".into(),
             ReportScope::Venue(id) => format!("{:x}.{:x}", id.code, id.dex),
         };
-        let mut encoded = format!("r:{view}{scope}:{period}:{}", self.page);
+        let open = if self.exchanges_open { "k" } else { "" };
+        let mut encoded = format!("r:{view}{scope}{open}:{period}:{}", self.page);
         if let Some((from, to)) = self.window {
             encoded.push_str(&format!(":x{from:x},{to:x}"));
         }
@@ -86,13 +90,18 @@ impl ReportRequest {
         if !(4..=5).contains(&parts.len()) || parts[0] != "r" {
             return None;
         }
-        let (view, scope) = parts[1].split_at_checked(1)?;
+        let (view, rest) = parts[1].split_at_checked(1)?;
         let daily = match view {
             "d" => true,
             "c" | "e" => false,
             _ => return None,
         };
-        let scope = match scope {
+        // A trailing `k` is the expanded exchange list; any other suffix stays collapsed.
+        let (scope_src, exchanges_open) = match rest.strip_suffix('k') {
+            Some(stripped) => (stripped, true),
+            None => (rest, false),
+        };
+        let scope = match scope_src {
             "" => ReportScope::All,
             "u" => ReportScope::Unidentified,
             value => {
@@ -141,6 +150,7 @@ impl ReportRequest {
             scope,
             page,
             window,
+            exchanges_open,
         })
     }
 

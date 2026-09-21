@@ -387,18 +387,15 @@ fn status_text(status: &TelegramStatus) -> String {
 /// Global navigation owns periods and help; report actions remain inline.
 fn navigation_keyboard() -> ReplyMarkup {
     let locale = rust_i18n::locale();
-    let buttons: Vec<_> = navigation_buttons()
-        .iter()
-        .map(|(name, icon)| {
-            let key = format!("telegram.button_{name}");
-            KeyboardButton {
-                text: format!("{icon} {}", t!(&key, locale = locale.as_ref())),
-                style: None,
-            }
-        })
-        .collect();
+    let [today, yesterday, month, lastmonth, help] = navigation_buttons().map(|(name, icon)| {
+        let key = format!("telegram.button_{name}");
+        KeyboardButton {
+            text: format!("{icon} {}", t!(&key, locale = locale.as_ref())),
+            style: None,
+        }
+    });
     ReplyMarkup::Reply(ReplyKeyboardMarkup {
-        keyboard: buttons.chunks(2).map(|row| row.to_vec()).collect(),
+        keyboard: vec![vec![today, yesterday, help], vec![month, lastmonth]],
         resize_keyboard: true,
         is_persistent: true,
     })

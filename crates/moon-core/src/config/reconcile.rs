@@ -36,7 +36,8 @@ pub struct Merged {
     pub charts_stack_compress: bool,
     /// Height of one chart in the scroll stack, in logical pixels.
     pub chart_stack_height: u16,
-    /// Separate control zones, restricting orders/lines to the order-book area.
+    /// When true, a left drag that misses every order line pans the chart from inside the
+    /// order-book zone. Order gestures always stay in that zone.
     pub separate_control_zones: bool,
     /// Main-chart auto-close delay for window inactivity, in seconds (0 = disabled).
     pub main_idle_close_secs: u32,

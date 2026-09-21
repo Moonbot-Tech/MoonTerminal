@@ -81,3 +81,34 @@ fn toolbar_strip_text_uses_rendered_text_metrics() {
         "controls/toolbar.rs:strip_text must use rendered text metrics"
     );
 }
+
+/// Settings sliders keep a bounded track so a wide window does not stretch them edge to edge.
+///
+/// Breakage: dropping `.max_w(` or `flex_1()` either fills the window again or refuses to shrink
+/// on a narrow Settings pane; a bare `.width(px(N))` reintroduces the hard-coded pixel regression.
+#[test]
+fn settings_slider_row_caps_the_track_through_tier_adapters() {
+    let common = read_src("settings/common.rs");
+    let body = code_only(braced_body(&common, "pub(super) fn slider_row("));
+    for needle in [
+        ".flex_1()",
+        ".min_w(px(scale_w))",
+        ".max_w(px(track_max))",
+        ".max_w(px(row_max))",
+        "slider_track_max_w(",
+        "design::ui_text_width_zoomed(",
+        "design::ui_value(cx, 22.0)",
+        "design::ui_value(cx, 10.0)",
+        "design::font_w(cx, 76.0)",
+        "design::fit_h_px(cx, 28.0, 14.0, 7.0)",
+    ] {
+        assert!(
+            body.contains(needle),
+            "slider_row must keep {needle:?} so the track stays tier-derived and shrinks"
+        );
+    }
+    assert!(
+        !body.contains(".width("),
+        "slider_row must not pin a hard-coded .width("
+    );
+}

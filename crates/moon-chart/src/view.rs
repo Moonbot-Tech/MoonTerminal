@@ -3,8 +3,9 @@
 //!             determined spatially: a pan or zoom that brings the right edge within the
 //!             rejoin radius of now ([`ChartView::live_rejoin_px`]) re-anchors to now on
 //!             that very step, pinning it there. Panning into HISTORY leaves the chart
-//!             where the user put it until they drag back into that radius or press Live;
-//!             the toolbar's Pause is the same permanence, plus it refuses the pull-back.
+//!             where the user put it until they drag back into that radius, press Live, or
+//!             sit idle for [`AUTO_RESUME_LIVE_MS`]; the toolbar's Pause is the same
+//!             permanence, plus it refuses both the pull-back and that idle return.
 //!             A pan never walks past the live edge into the future; only a framed interval
 //!             can sit ahead of now, and `clamp_future_anchor` keeps its live edge on screen.
 //!             WHICH drag may leave live at all is the input layer's call (a fast flick).
@@ -140,6 +141,46 @@ pub fn admit_order_band(
     Some((clo.min(olo.max(clo - slack)), chi.max(ohi.min(chi + slack))))
 }
 
+/// Whether Live should come back given the last chart interaction, the current flag, and how many
+/// live charts are open.
+///
+/// Already-live state stays live. An empty population restores Live so a later chart does not
+/// inherit a stale Pause — including a deliberate one. A toolbar/hotkey Pause (`manual_persistent`)
+/// is never revived while any chart remains. A pan/zoom leave returns after [`AUTO_RESUME_LIVE_MS`]
+/// with no further interaction. A missing interaction stamp never timer-resumes: that is the
+/// conservative reading when the leave cannot be proven to be a gesture.
+///
+/// Args:
+///     last_interaction_ms: Newest pan/zoom/Y-drag stamp across open live charts, Unix ms.
+///     now_ms: Current Unix time in milliseconds.
+///     follow: Whether Live is on.
+///     manual_persistent: Whether Live was turned off by the toolbar or `ToggleLive`.
+///     charts_open: Count of live (non-historical) charts, including detached windows.
+///
+/// Returns:
+///     `true` when the application-wide Live flag should be raised.
+pub fn should_return_to_live(
+    last_interaction_ms: Option<f64>,
+    now_ms: f64,
+    follow: bool,
+    manual_persistent: bool,
+    charts_open: usize,
+) -> bool {
+    if follow {
+        return false;
+    }
+    if charts_open == 0 {
+        return true;
+    }
+    if manual_persistent {
+        return false;
+    }
+    match last_interaction_ms {
+        Some(t) if now_ms.is_finite() && t.is_finite() => (now_ms - t) >= AUTO_RESUME_LIVE_MS,
+        _ => false,
+    }
+}
+
 /// Rectangle in pixels (top-left origin).
 #[derive(Clone, Copy)]
 pub struct Rect {
@@ -171,6 +212,11 @@ const LIVE_REJOIN_FRAC: f32 = 0.05;
 /// Pixel floor under [`LIVE_REJOIN_FRAC`], so a narrow pane still has a pull-back worth feeling:
 /// 5% of a 300 px stack pane is 15 px, which a drag crosses without noticing it.
 const LIVE_REJOIN_MIN_PX: f32 = 40.0;
+/// How long a pan/zoom-parked chart may sit with no view-changing gesture before Live returns.
+///
+/// Three minutes, fixed. A setting here would hand the idle policy back to the user. Ticks,
+/// repaints and price motion do not count; only pan, zoom and Y-drag stamp the clock.
+pub const AUTO_RESUME_LIVE_MS: f64 = 180_000.0;
 /// Maximum visible time window in ms. It used to be 6 hours (Delphi MaxTimeRange=360 min)
 /// for a tick chart; candles (deep history from the core, with timeframes up to one day) need
 /// a MUCH larger window: 365 days (about 365 daily candles). Trades do not become more
@@ -200,6 +246,70 @@ const DEFAULT_WINDOW_MS: f32 = DEFAULT_HISTORY_MS / (1.0 - DEFAULT_RIGHT_MARGIN_
 const MIN_WINDOW_MS: f32 = 30_000.0;
 /// Ctrl+Shift+wheel and super-zoom hotkeys allow a three-second plot window.
 const SUPER_MIN_WINDOW_MS: f32 = 3_000.0;
+
+thread_local! {
+    /// Last time-window width a zoom gesture settled on in this process, in milliseconds.
+    ///
+    /// Thread-local so unit tests cannot race each other, and because chart input and prepare
+    /// share the UI thread. Restarting the terminal drops it; nothing writes it to `cfg/`.
+    static LAST_ZOOM_WINDOW_MS: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Reject non-finite or non-positive widths and clamp to the zoom floors.
+///
+/// Args:
+///     window_ms: Candidate visible time-window width in milliseconds.
+///
+/// Returns:
+///     The clamped width, or `None` when the candidate cannot be a plot window.
+fn sanitize_window_ms(window_ms: f32) -> Option<f32> {
+    if window_ms.is_finite() && window_ms > 0.0 {
+        Some(window_ms.clamp(SUPER_MIN_WINDOW_MS, MAX_WINDOW_MS))
+    } else {
+        None
+    }
+}
+
+/// Choose the time-window width a newly opened chart should start with.
+///
+/// Args:
+///     remembered: Width the user last reached by a time-zoom gesture, if any.
+///
+/// Returns:
+///     `remembered` clamped to the plain 30-second floor and the maximum window, or the
+///     built-in default when the value is missing or unusable. A super-zoom width below 30s
+///     opens at 30s: a new chart is not a super-zoom gesture, and a later plain wheel must
+///     still be able to use the 30-second floor. [`ChartView::zoom_x_at`] keeps its own
+///     two-tier floor for gestures on the open chart.
+pub fn initial_window_ms(remembered: Option<f32>) -> f32 {
+    remembered
+        .and_then(sanitize_window_ms)
+        .map(|w| w.max(MIN_WINDOW_MS))
+        .unwrap_or(DEFAULT_WINDOW_MS)
+}
+
+/// Remember the time-window width a zoom gesture just settled on, for this process only.
+///
+/// Args:
+///     window_ms: Visible window in milliseconds after the gesture. Invalid values are ignored
+///         so a garbage scale cannot poison every subsequently opened chart.
+///
+/// Returns:
+///     Nothing; the value is stored in memory and is never persisted.
+pub fn record_zoom_window(window_ms: f32) {
+    let Some(window_ms) = sanitize_window_ms(window_ms) else {
+        return;
+    };
+    LAST_ZOOM_WINDOW_MS.set(Some(window_ms));
+}
+
+/// Return the last zoomed time-window width in this process, if any.
+///
+/// Returns:
+///     The remembered width in milliseconds, or `None` before the first zoom of the run.
+pub fn remembered_zoom_window() -> Option<f32> {
+    LAST_ZOOM_WINDOW_MS.get()
+}
 
 /// Narrowest plot a framing request will accept as REAL, in pixels.
 ///
@@ -282,6 +392,10 @@ pub struct ChartView {
     /// Whether zoom has not yet been fitted to the default window (done once using the
     /// actual chart-area width on the first frame).
     x_init_pending: bool,
+    /// Opening time-window width in milliseconds. Built-in default until a remembered zoom
+    /// width is applied; frozen after the first prepared frame so a later zoom elsewhere
+    /// cannot jump a chart already on screen.
+    seed_window_ms: f32,
     last_phase_area_w: f32,
     last_phase_present_hz: f32,
     phase_default_px_per_ms: f32,
@@ -290,8 +404,11 @@ pub struct ChartView {
     last_update_ms: f64,
     /// Whether following was turned off EXPLICITLY — [`Self::set_manual_persistent`], which is what
     /// the toolbar's Live button reaches — so that a later pan may not rejoin via the pull-back
-    /// that a plain drag still uses.
+    /// that a plain drag still uses. The idle auto-return also refuses this mark.
     manual_persistent: bool,
+    /// Last pan, zoom or Y-drag on this view, Unix milliseconds. [`should_return_to_live`] reads
+    /// the newest stamp across open charts; a tick or a repaint never writes it.
+    last_interaction_ms: Option<f64>,
     /// Interval this view has been asked to frame, retained until a user gesture overrides it.
     frame_request: Option<FrameRequest>,
     /// Put the NEXT known price at the centre outright instead of easing toward it.
@@ -330,11 +447,13 @@ impl ChartView {
             marker_half_px: 3.5, // 7 px cross (Moonbot NormalX).
             x_default_scale: true,
             x_init_pending: true,
+            seed_window_ms: DEFAULT_WINDOW_MS,
             last_phase_area_w: f32::NAN,
             last_phase_present_hz: f32::NAN,
             phase_default_px_per_ms: 0.0,
             last_update_ms: 0.0,
             manual_persistent: false,
+            last_interaction_ms: None,
             frame_request: None,
             center_snap_pending: false,
         }
@@ -345,34 +464,52 @@ impl ChartView {
     /// Args:
     ///     area_w: Plot width in logical pixels.
     ///     present_hz: Current display refresh estimate.
+    ///     window_ms: Target visible time-window width in milliseconds.
     ///
     /// Returns:
     ///     Pixels per millisecond, rounded outward to whole pixels per frame or frames per pixel.
-    fn phase_clean_default_px_per_ms(area_w: f32, present_hz: f32) -> f32 {
+    fn phase_clean_default_px_per_ms(area_w: f32, present_hz: f32, window_ms: f32) -> f32 {
         let area_w = area_w.max(1.0);
+        let window_ms = window_ms.max(SUPER_MIN_WINDOW_MS);
         let dt_ms = 1000.0 / present_hz.max(1.0);
-        let s0 = area_w * dt_ms / DEFAULT_WINDOW_MS;
+        let s0 = area_w * dt_ms / window_ms;
         let shift_px = if s0 >= 1.0 {
             s0.floor().max(1.0)
         } else {
             let n = (1.0 / s0.max(1e-9)).ceil().max(1.0);
             1.0 / n
         };
-        let target_scale = area_w / DEFAULT_WINDOW_MS;
+        let target_scale = area_w / window_ms;
         let mut scale = (shift_px / dt_ms).max(1e-9).min(target_scale);
         // Division can round the reconstructed f32 window a few milliseconds below the target.
         // Move one positive finite scale ULP outward when that happens.
-        if area_w / scale < DEFAULT_WINDOW_MS {
+        if area_w / scale < window_ms {
             scale = f32::from_bits(scale.to_bits().saturating_sub(1));
         }
         scale
     }
 
-    /// Fits the default time window to a phase-clean point with at least six hours of live history:
-    /// an integer number of px/frame or 1 px every N frames. Recalculated only while
-    /// the scale remains default/reset-to-live, on the first frame, resize, or present change.
+    /// Seed this view's opening time window from the last zoomed width, if any.
+    ///
+    /// Args:
+    ///     remembered: Width in milliseconds from [`remembered_zoom_window`], or `None` to keep
+    ///         the built-in six-hour-history default.
+    ///
+    /// Returns:
+    ///     Nothing. After the first prepared frame the seed is frozen so a later zoom on another
+    ///     chart cannot jump a chart the user is already looking at.
+    pub fn apply_opening_window(&mut self, remembered: Option<f32>) {
+        if self.x_init_pending {
+            self.seed_window_ms = initial_window_ms(remembered);
+        }
+    }
+
+    /// Fits the opening time window to a phase-clean point: an integer number of px/frame or
+    /// 1 px every N frames. Recalculated only while the scale remains default/reset-to-live, on
+    /// the first frame, resize, or present change. The target width is the built-in six-hour
+    /// history default until [`Self::apply_opening_window`] replaces it.
     /// `default_ppm` is the saved user X scale ([Shift+MMB] sync): a new chart starts
-    /// with it instead of the built-in six-hour-history default.
+    /// with it instead of either time-window default.
     ///
     /// Args:
     ///     area_w: Plot width in logical pixels.
@@ -391,7 +528,8 @@ impl ChartView {
             return;
         }
         let present_hz = present_hz.max(1.0);
-        let default_px_per_ms = Self::phase_clean_default_px_per_ms(area_w, present_hz);
+        let default_px_per_ms =
+            Self::phase_clean_default_px_per_ms(area_w, present_hz, self.seed_window_ms);
         let area_delta = area_w - self.last_phase_area_w;
         // Every shrink matters for the six-hour lower bound; sub-pixel growth can safely retain
         // the previous scale because it only increases the visible history.
@@ -435,6 +573,7 @@ impl ChartView {
         if !(ppm.is_finite() && ppm > 0.0) {
             return false;
         }
+        self.note_interaction(now_ms);
         let ppm = ppm.clamp(MIN_PX_PER_MS, 100.0);
         if (self.px_per_ms - ppm).abs() <= self.px_per_ms * 1e-6 {
             return false;
@@ -455,6 +594,13 @@ impl ChartView {
     pub fn is_live(&self, now_ms: f64) -> bool {
         let _ = now_ms;
         self.follow
+    }
+
+    /// Stamp a view-changing gesture. Ticks, repaints and price motion never call this.
+    fn note_interaction(&mut self, now_ms: f64) {
+        if now_ms.is_finite() {
+            self.last_interaction_ms = Some(now_ms);
+        }
     }
 
     /// Latest time the right anchor may hold. A pan never goes past `now`, so this bounds only a view
@@ -815,6 +961,7 @@ impl ChartView {
     /// the drag rather than after the button comes up. A step AWAY from now never rejoins — that is
     /// the hysteresis that lets a drag leave the radius it starts in.
     pub fn pan_x_px(&mut self, dx: f32, now_ms: f64, area_w: f32) {
+        self.note_interaction(now_ms);
         self.clear_frame_request();
         let before = self.right_time_ms;
         let dt_ms = dx as f64 / self.px_per_ms.max(MIN_PX_PER_MS) as f64;
@@ -831,7 +978,7 @@ impl ChartView {
     /// chart pressed mid-drag is overridden by the very next drag delta, and the snap must go with
     /// it rather than fire later on whatever next leaves the manual view.
     pub fn pan_y_px(&mut self, dy: f32, now_ms: f64) {
-        let _ = now_ms;
+        self.note_interaction(now_ms);
         self.center_price += dy / self.px_per_price.max(1e-6);
         self.manual_price = true;
         self.center_snap_pending = false;
@@ -868,6 +1015,7 @@ impl ChartView {
         if !(factor.is_finite() && factor > 0.0) {
             return;
         }
+        self.note_interaction(now_ms);
         self.clear_frame_request();
         let right_before = self.right_time_ms;
         let old_px = self.px_per_ms.max(MIN_PX_PER_MS);
@@ -911,6 +1059,7 @@ impl ChartView {
 
     /// Zooms Y by RMB drag from the press-time snapshot. Up=zoom out, down=zoom in.
     pub fn rmb_zoom(&mut self, start_center: f32, start_range: f32, cum_dy: f32, now_ms: f64) {
+        self.note_interaction(now_ms);
         let factor = 2f32.powf(-cum_dy / YSCALE_PX_PER_2X);
         let r = (start_range * factor).clamp(start_range * 0.25, start_range * 4.0);
         self.center_price = start_center;

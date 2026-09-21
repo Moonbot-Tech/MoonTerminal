@@ -90,6 +90,16 @@ telegram.report_exchanges:
   en: "Exchanges"
   es: "Exchanges"
 
+telegram.report_exchanges_menu:
+  ru: "Биржи"
+  en: "Exchanges"
+  es: "Exchanges"
+
+telegram.report_exchanges_back:
+  ru: "Назад"
+  en: "Back"
+  es: "Atrás"
+
 telegram.report_exchange:
   ru: "Биржа"
   en: "Exchange"

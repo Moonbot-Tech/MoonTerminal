@@ -1350,3 +1350,72 @@ fn right_clicking_a_strategy_row_does_not_move_the_selection() {
         );
     }
 }
+
+/// The filter suggestion status must stay readable, and every fact it states must reach the tooltip.
+///
+/// The Parameters card is a fixed 470-unit column. Sharing leftover with "Search all" /
+/// "Compose set" is what clipped `step 2 · option…` mid-word at ordinary Analytics width. The
+/// status therefore sits on its own band and degrades like the Report footer: a never-clipped
+/// head, one `overflow_hidden` tail, tooltip from the same facts. The controls row keeps the
+/// buttons `flex_none` and never wraps.
+///
+/// Breakage: putting `.truncate()` back on a single status string beside the buttons, or
+/// wrapping an intermediate `h_flex` around truncated segments, which collapses the whole line
+/// to "…".
+#[test]
+fn the_filter_search_status_degrades_by_priority_on_its_own_band() {
+    let shell = read_src("analytics/tuner/shell.rs");
+    let row = braced_body(&shell, "fn filter_config_row(");
+    let band = braced_body(&shell, "fn filter_search_status_band(");
+    let facts = braced_body(&shell, "fn status_facts(");
+    let tooltip = braced_body(&shell, "fn status_tooltip(");
+
+    assert!(
+        row.contains("filter_search_status_band(") && row.contains("v_flex()"),
+        "the status band must be a sibling of the controls, not a truncated leftover in the row"
+    );
+    for anchor in [
+        "status_facts(search_status_view(&self.tuner.sugg))",
+        "status_tooltip(&facts)",
+        "facts.essential",
+        "facts.tail",
+        ".overflow_hidden()",
+        "tun-suggest-status-f",
+    ] {
+        assert!(
+            band.contains(anchor),
+            "the status band must be assembled through {anchor}"
+        );
+    }
+    assert!(
+        tooltip.contains(".join(\" · \")"),
+        "the tooltip must be built from the same facts the band renders"
+    );
+    for key in [
+        "analytics.tuner.compose_progress_step",
+        "analytics.tuner.compose_progress_option",
+        "analytics.tuner.compose_started",
+        "analytics.tuner.sugg_progress",
+    ] {
+        assert!(
+            facts.contains(key),
+            "{key} must reach the band through status_facts, not as an inline chip"
+        );
+        assert!(
+            !band.contains(key) && !row.contains(key),
+            "{key} must not be formatted beside the buttons"
+        );
+    }
+    assert!(
+        !band.contains(".truncate()") && !row.contains(".truncate()"),
+        "ellipsis-truncate on a single string is what ate the option count"
+    );
+    assert!(
+        !row.contains(".flex_wrap()"),
+        "the controls row stays one line so Stop / Search never wrap under the status"
+    );
+    assert!(
+        row.contains("div().flex_none().child("),
+        "Stop and Search must not shrink: they are the row's priority"
+    );
+}

@@ -4,8 +4,8 @@
 //! Both facts already existed in the tree, scattered and unattached. The surface lives as runtime
 //! predicates inside the routers — `Shell::on_hotkey` resolves a target as "the chart under the
 //! pointer if it belongs to this window's group, else the window's main chart"
-//! (`shell/actions.rs::select_hotkey_target`), `ChartPanel::place_order_at_pos` picks the book strip
-//! or the whole pane. The travel side lives as the presence or absence of one mapping arm in
+//! (`shell/actions.rs::select_hotkey_target`), `ChartPanel::place_order_at_pos` picks the book
+//! strip. The travel side lives as the presence or absence of one mapping arm in
 //! `settings::hotkeys::pull`'s action-to-slot map and
 //! `moon_core::config::moonbot_import::plan::action_target`.
 //! Neither was ever a property of the slot, so the settings page could not say "this one stays
@@ -31,9 +31,9 @@ use rust_i18n::t;
 ///
 /// A set because a slot's surface is genuinely plural. Two reasons, both from the routers: a
 /// keyboard action that reads a target gets the chart under the POINTER when that chart belongs to
-/// the window's group and the window's own chart otherwise, so both are true of it; and the trading
-/// gestures read the order-book strip when "separate control zones" is on and the whole chart pane
-/// when it is off. An overlap test that saw only one half would call a real collision safe.
+/// the window's group and the window's own chart otherwise, so both are true of it; and a few
+/// slots still name two pointer places (cursor and figure) that really are both live. An overlap
+/// test that saw only one half would call a real collision safe.
 ///
 /// [`Self::BOOK`], [`Self::PLOT`] and [`Self::FIGURE`] are narrower forms of [`Self::CURSOR`] —
 /// each names a place the pointer has to be — and [`Self::APP`] contains everything. The conflict
@@ -54,9 +54,10 @@ impl Scope {
     pub const CURSOR: Self = Self(1 << 2);
     /// The selected figure, wherever it was drawn (`Backend::fig_selected`).
     pub const SELECTION: Self = Self(1 << 3);
-    /// The order-book strip — the trading surface while "separate control zones" is on.
+    /// The order-book strip — the trading surface for order gestures on every tab.
     pub const BOOK: Self = Self(1 << 4);
-    /// The chart's price field, which is the trading surface while separate zones are off.
+    /// The chart's price field. Order gestures do not act here; a click on the plot never
+    /// places, moves or cancels an order.
     pub const PLOT: Self = Self(1 << 5);
     /// A figure under the pointer, within the hit threshold.
     pub const FIGURE: Self = Self(1 << 6);
@@ -85,11 +86,11 @@ impl Scope {
     /// The surfaces of a row that carries two slots — the union, read through the containment the
     /// constants document.
     ///
-    /// [`Self::or`] is the raw union and the right thing for ONE slot's two alternatives (`BOOK`
-    /// or `PLOT`, whichever the zones setting picks). A row that joins a key acting on the cursor
-    /// with a gesture acting on the figure under it is a different case: "cursor / figure" names
-    /// the same place twice, in a column with no room to. So a set that already says `CURSOR` drops
-    /// the places the pointer could be, and a set that says `APP` says only that.
+    /// [`Self::or`] is the raw union and the right thing for ONE slot's two alternatives. A row
+    /// that joins a key acting on the cursor with a gesture acting on the figure under it is a
+    /// different case: "cursor / figure" names the same place twice, in a column with no room to.
+    /// So a set that already says `CURSOR` drops the places the pointer could be, and a set that
+    /// says `APP` says only that.
     pub fn join(self, other: Self) -> Self {
         let both = self.or(other);
         if both.intersects(Self::APP) {
@@ -107,19 +108,12 @@ impl Scope {
         self.0 & other.0 != 0
     }
 
-    /// Narrow the pair that "separate control zones" decides, but only when one answer is true of
-    /// EVERY chart.
+    /// Narrow BOOK+PLOT to BOOK: order gestures always live in the book zone, on every tab.
     ///
-    /// The setting is not the whole rule: `ChartPanel::separate_zones` returns true unconditionally
-    /// for a numbered AddToChart or Custom panel, which always keeps its book on the right. So with
-    /// the setting ON the book is the trading surface everywhere and the row can say so; with it OFF
-    /// a Main chart trades from the whole pane while those panels still trade from the book, and
-    /// naming one of them would be a lie about the other.
-    ///
-    /// The SET is what the model keeps regardless — the setting can be flipped, and a conflict rule
-    /// has to see both halves. Every other set is left alone.
-    pub fn resolved(self, separate_zones: bool) -> Self {
-        if separate_zones && self.intersects(Self::BOOK) && self.intersects(Self::PLOT) {
+    /// The SET on a slot that still carries both is what a conflict rule would see; the row's
+    /// label names the surface that is actually live. Every other set is left alone.
+    pub fn resolved(self) -> Self {
+        if self.intersects(Self::BOOK) && self.intersects(Self::PLOT) {
             return self.without(Self::PLOT);
         }
         self
@@ -179,7 +173,7 @@ const fn meta(origin: Origin, scope: Scope) -> SlotMeta {
 
 /// The mirror switch's facts. Not a slot either, and the widest blast radius on the page: a pull
 /// writes it, and it decides whether the four short rows follow the long ones at all.
-pub const SAME_FOR_MOVE: SlotMeta = meta(Origin::Shared, Scope::BOOK.or(Scope::PLOT));
+pub const SAME_FOR_MOVE: SlotMeta = meta(Origin::Shared, Scope::BOOK);
 
 /// The two facts about one keyboard slot.
 ///
@@ -213,10 +207,9 @@ pub fn key_slot_meta(slot: KeySlot) -> SlotMeta {
         // Both split slots resolve to the SAME `HotkeyAction::SplitOrder` (`hotkeys.rs`), which
         // `pre_dispatch` offers to the hovered ORDER before any market-level split.
         S::SplitOrder | S::SplitOrderX => meta(Shared, AIMED),
-        // Placed at the pointer's price, and refused unless the pointer is inside the trading
-        // surface — the book strip with separate control zones on, the whole pane with it off
-        // (`ChartPanel::place_order_at_pos`).
-        S::NewLong | S::NewShort => meta(Shared, Scope::BOOK.or(Scope::PLOT)),
+        // Placed at the pointer's price, and refused unless the pointer is inside the order-book
+        // zone (`ChartPanel::place_order_at_pos`).
+        S::NewLong | S::NewShort => meta(Shared, Scope::BOOK),
         // Addresses the core, not a chart: every market of the window's active core at once.
         S::CancelAllBuys => meta(Shared, Scope::WINDOW),
         // Group-owned: the group's charts and the group's price scale.
@@ -257,8 +250,7 @@ pub fn key_slot_meta(slot: KeySlot) -> SlotMeta {
 ///
 /// The twelve trading gestures travel: the core carries them in `feed::GestureSettings` and
 /// `settings::hotkeys::pull_gestures` reads them into this terminal's one layout, so a pull
-/// overwrites these rows exactly as it overwrites a key. Their surface is the trading surface: the
-/// book strip under "separate control zones" and the whole pane without it.
+/// overwrites these rows exactly as it overwrites a key. Their surface is the order-book zone.
 ///
 /// A key half acts wherever its key acts — it performs the same action through the same dispatch —
 /// and nothing writes it: Moonbot has no gesture for these, so a paste and a pull leave the table
@@ -278,7 +270,7 @@ pub fn gesture_slot_meta(slot: GestureSlot) -> SlotMeta {
         | S::ShortBuyMove
         | S::ShortSellMove
         | S::ShortBuyMove2
-        | S::ShortSellMove2 => meta(Origin::Shared, Scope::BOOK.or(Scope::PLOT)),
+        | S::ShortSellMove2 => meta(Origin::Shared, Scope::BOOK),
         // The one gesture with no counterpart anywhere: `feed::GestureSettings` carries the twelve
         // order gestures and no figure gesture at all, so there is nothing to import.
         S::FigDelete => meta(Origin::Local, Scope::FIGURE),

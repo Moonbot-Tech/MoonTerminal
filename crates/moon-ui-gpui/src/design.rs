@@ -690,6 +690,9 @@ pub const DESIGN_FONT_DELTA: f32 = 3.0;
 /// [`t_body`], [`t_body_lg`] and [`t_title`] are this plus their step.
 pub const BODY_TEXT: f32 = CONTROL_TIER.control_metrics().font_size;
 
+/// Unscaled step [`t_body_lg`] adds on [`BODY_TEXT`] so a mark reads above its neighbours.
+pub const BODY_LG_STEP: f32 = 1.0;
+
 /// The `MoonInput` size the terminal's fixed-small inputs carry: `Small` (22/10/13), the size the
 /// reviewed design measured every such field at.
 pub const INPUT_SIZE: MoonInputSize = MoonInputSize::Small;
@@ -849,7 +852,7 @@ pub fn t_body(cx: &App) -> Pixels {
 /// Returns:
 ///     15 design px.
 pub fn t_body_lg(cx: &App) -> Pixels {
-    t_body_step_px(cx, 1.0)
+    t_body_step_px(cx, BODY_LG_STEP)
 }
 
 /// Return the title size for raw GPUI headings and large accents.

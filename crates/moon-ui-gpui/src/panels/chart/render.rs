@@ -243,20 +243,16 @@ impl Render for ChartPanel {
         } else {
             Vec::new()
         };
-        // With separate zones and a hidden order book, shade the right-side order control zone so
-        // users can distinguish order-placement clicks from chart double-clicks that open Main.
-        // A visible book already marks this area, so do not duplicate it. Neither does a book-only
-        // broom pane, whose book covers the whole slot: there is no boundary left to draw, and a
-        // strip on the right would name one where the whole pane trades. Tuple fields are
+        // With a hidden order book, shade the right-side order control zone so users can distinguish
+        // order-placement clicks from chart double-clicks that open Main. A visible book already
+        // marks this area, so do not duplicate it. Neither does a book-only broom pane, whose book
+        // covers the whole slot: there is no boundary left to draw. Tuple fields are
         // (idx, logical left, logical top, logical width, logical height), converted from axis_panes
         // device pixels by dividing by the window's factor `sf`, like the close buttons.
         // `!self.historical` for the reason the strip exists at all: it marks where an
         // order-placement click lands, and a historical viewer places no orders. Shading a strip
         // for a gesture that was just removed would leave the window still saying "trading here".
-        let show_zone_marker = self.show_zone
-            && !self.historical
-            && self.separate_zones(cx)
-            && !self.orderbook_drawn();
+        let show_zone_marker = self.show_zone && !self.historical && !self.orderbook_drawn();
         let zone_markers: Vec<(usize, f32, f32, f32, f32)> = if show_zone_marker {
             axis_panes
                 .iter()

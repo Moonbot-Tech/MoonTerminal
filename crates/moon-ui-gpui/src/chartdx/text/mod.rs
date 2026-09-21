@@ -25,6 +25,12 @@ const HVOL_CAPTION_PAD: f32 = 4.0;
 /// the amounts a reader is comparing digit by digit. It follows the label-size slider like every
 /// other chart readout; this is a fixed step on top of it, not a second setting.
 pub(super) const READOUT_FONT_BUMP: f32 = 1.5;
+/// How much larger the Sells-to-zone mode badge is than the cursor readout it sits among.
+///
+/// Same unscaled step [`crate::design::t_body_lg`] adds on [`crate::design::BODY_TEXT`]: one
+/// density-tier step above neighbouring figures, without taking the UI-zoom channel the chart
+/// text path strips out.
+pub(super) const CURSOR_BADGE_TIER_STEP: f32 = crate::design::BODY_LG_STEP;
 const READOUT_PAD_X: f32 = 5.0;
 const READOUT_PAD_Y: f32 = 2.5;
 const READOUT_INSET: f32 = 2.0;
@@ -196,6 +202,14 @@ fn label_font_px(label_font_delta: f32) -> f32 {
 /// [`label_font_px`] exists to hold.
 fn readout_font_px(label_font_delta: f32) -> f32 {
     (label_font_px(label_font_delta) + READOUT_FONT_BUMP).clamp(6.0, 40.0)
+}
+
+/// Size of the Sells-to-zone mode badge: the larger of the control-tier body and the cursor
+/// readout, then one [`CURSOR_BADGE_TIER_STEP`] on top so it still reads as a mode among the
+/// neighbouring figures when the label slider is turned up.
+fn cursor_badge_font_px(label_font_delta: f32) -> f32 {
+    (readout_font_px(label_font_delta).max(crate::design::BODY_TEXT) + CURSOR_BADGE_TIER_STEP)
+        .clamp(6.0, 40.0)
 }
 
 /// Whether a reference line at `frac` of a `band`-tall band has room for its own label.
@@ -451,6 +465,57 @@ fn draw_readout_text_run(
         fp + 4.0,
         FontWeight::NORMAL,
     )
+}
+
+/// Draw the Sells-to-zone mode badge: UI face, control-tier size, not the mono readout style.
+fn draw_cursor_badge_text_run(
+    runs: &mut Vec<GpuCanvasTextRun>,
+    cursor: &mut usize,
+    ctx: &mut GpuCanvasTextContext<'_>,
+    label_font_delta: f32,
+    text: &str,
+    x: f32,
+    y: f32,
+    ax: f32,
+    ay: f32,
+    color: Hsla,
+) -> anyhow::Result<GpuCanvasTextMetrics> {
+    let fp = cursor_badge_font_px(label_font_delta);
+    ensure_text_run(runs, *cursor);
+    let run = &mut runs[*cursor];
+    *cursor += 1;
+    let metrics = run.draw_aligned(
+        ctx,
+        point(content_px(ctx, x), content_px(ctx, y)),
+        text,
+        gpui::font(crate::design::ui_font()),
+        content_px(ctx, fp),
+        content_px(ctx, fp + 4.0),
+        color,
+        ax,
+        ay,
+    )?;
+    Ok(chart_metrics(ctx, metrics))
+}
+
+/// Measure the Sells-to-zone mode badge with the same UI face and size used for drawing.
+fn measure_cursor_badge_text_run(
+    runs: &mut Vec<GpuCanvasTextRun>,
+    cursor: usize,
+    ctx: &GpuCanvasTextContext<'_>,
+    label_font_delta: f32,
+    text: &str,
+) -> GpuCanvasTextMetrics {
+    let fp = cursor_badge_font_px(label_font_delta);
+    ensure_text_run(runs, cursor);
+    let metrics = runs[cursor].measure(
+        ctx,
+        text,
+        gpui::font(crate::design::ui_font()),
+        content_px(ctx, fp),
+        content_px(ctx, fp + 4.0),
+    );
+    chart_metrics(ctx, metrics)
 }
 
 /// Measure the enlarged volume readout using its draw path's font and line height.

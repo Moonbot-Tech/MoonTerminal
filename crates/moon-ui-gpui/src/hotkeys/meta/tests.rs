@@ -55,35 +55,41 @@ fn the_figure_delete_key_admits_its_order_cancelling_fallback() {
     assert_eq!(key_slot_meta(KeySlot::FigAlert).scope, Scope::SELECTION);
 }
 
-/// A slot whose surface depends on the "separate control zones" setting holds BOTH surfaces, so an
-/// overlap test cannot miss the half that is currently switched off.
+/// Order gestures live in the book zone on every tab, so the row names that surface alone.
+///
+/// Plausible breakage: putting `PLOT` back on BuySet / NewLong after the whole-pane trading
+/// mode was removed, so the settings page would claim a click on the plot still places.
 #[test]
-fn a_trading_gesture_holds_both_of_its_possible_surfaces() {
+fn a_trading_gesture_names_the_book_zone() {
     for scope in [
         gesture_slot_meta(GestureSlot::BuySet).scope,
         gesture_slot_meta(GestureSlot::BuyMove).scope,
-        // The manual order keys are placed through the same gate, so they answer the same way.
         key_slot_meta(KeySlot::NewLong).scope,
     ] {
         assert!(scope.intersects(Scope::BOOK));
-        assert!(scope.intersects(Scope::PLOT));
+        assert!(
+            !scope.intersects(Scope::PLOT),
+            "a click on the plot no longer places, moves or cancels"
+        );
     }
 }
 
-/// Both surfaces reach the label, and the label is real text rather than a missing-key echo.
+/// A leftover BOOK+PLOT pair still displays as the book: the plot is never a trading surface.
+#[test]
+fn resolved_names_the_book_when_both_surfaces_are_present() {
+    assert_eq!(Scope::BOOK.or(Scope::PLOT).resolved(), Scope::BOOK);
+}
+
+/// Surface labels are real text rather than a missing-key echo.
 ///
 /// The echo matters: rust-i18n answers an unknown key with `"<locale>.<key>"`, which still contains
-/// a slash and still contains each part, so a laxer assertion here would pass with every new locale
-/// entry deleted.
+/// the key, so a laxer assertion here would pass with every new locale entry deleted.
 #[test]
-fn a_two_surface_label_names_both_surfaces_in_words() {
+fn surface_labels_are_real_words() {
     let _locale = crate::test_locale::force("en");
     assert_eq!(Scope::BOOK.label(), "book");
     assert_eq!(Scope::PLOT.label(), "plot");
-    assert_eq!(
-        gesture_slot_meta(GestureSlot::BuySet).scope.label(),
-        "book / plot"
-    );
+    assert_eq!(gesture_slot_meta(GestureSlot::BuySet).scope.label(), "book");
 }
 
 /// Joining two slots' surfaces reads the containment the constants document, so a two-editor row

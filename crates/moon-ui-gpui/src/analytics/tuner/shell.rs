@@ -7,6 +7,8 @@
 //! acquire a Stop button that stops nothing. On the filter row only the restart count stays
 //! inline, because the card is laid out at a fixed narrow width and a row that cannot wrap has to
 //! spend its space on the controls used every run — the rest sit behind the ⚙ settings popover.
+//! Live search status sits on its own band above those controls so the progress line can stay
+//! readable without shrinking them.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -267,7 +269,8 @@ impl AnalyticsView {
             .font_family(design::ui_font())
     }
 
-    /// The "By filter" suggestion row: restarts, the settings gear, live status, Stop, Search.
+    /// The "By filter" suggestion row: restarts, the settings gear, Stop, Search, and the
+    /// full-width status band above them.
     ///
     /// Only the restart count stays inline. The rest sit behind the gear because this card is
     /// laid out at a fixed narrow width, and a row that cannot wrap has to spend its space on the
@@ -285,7 +288,7 @@ impl AnalyticsView {
             .sugg
             .joint_run()
             .map(|(handle, _)| handle.is_cancelled());
-        let (status, status_color) = self.filter_search_status(p);
+        let status = self.filter_search_status_band(p, cx);
         let it_input =
             self.shell_cfg_input(TunerKind::Filter, CfgInput::Restarts, "100", window, cx);
         // `MoonPopover` holds its content eagerly, so building it while the popover is shut costs
@@ -293,7 +296,8 @@ impl AnalyticsView {
         // repaints several times a second for the whole of a running search. Closed, the gear is
         // all there is to draw.
         let settings = self.filter_search_settings(p, window, cx);
-        self.config_row_frame(cx)
+        let controls = self
+            .config_row_frame(cx)
             .child(cfg_label(t!("analytics.tuner.iters").to_string(), p))
             .child(
                 div()
@@ -307,135 +311,125 @@ impl AnalyticsView {
                     ),
             )
             .child(settings)
-            // The status takes the free space and truncates, so a long failure message cannot
-            // push the buttons off a narrow dock.
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(moon(status_color))
-                    .child(status),
-            )
+            // Yields so the controls keep their intrinsic width. Status lives on its own band
+            // above this row; a flex spacer here only keeps Stop / Search pinned right.
+            .child(div().flex_1())
             .when_some(stopping, |el, stopping| {
                 el.child(
-                    MoonButton::new(SharedString::from("tun-suggest-stop-f"))
-                        .variant(MoonButtonVariant::Soft)
-                        .label(if stopping {
-                            t!("analytics.tuner.stopping").to_string()
-                        } else {
-                            t!("analytics.tuner.stop").to_string()
-                        })
-                        .disabled(stopping)
-                        .on_click(cx.listener(|this, _, _, cx| this.stop_suggest_into_v1(cx)))
-                        .render(),
+                    div().flex_none().child(
+                        MoonButton::new(SharedString::from("tun-suggest-stop-f"))
+                            .variant(MoonButtonVariant::Soft)
+                            .label(if stopping {
+                                t!("analytics.tuner.stopping").to_string()
+                            } else {
+                                t!("analytics.tuner.stop").to_string()
+                            })
+                            .disabled(stopping)
+                            .on_click(cx.listener(|this, _, _, cx| this.stop_suggest_into_v1(cx)))
+                            .render(),
+                    ),
                 )
             })
             // The suggestion buttons are ALWAYS visible — a suggestion can be run over the
             // current scope (no selected strategy = over everything shown). The result can only
             // be written into a selected strategy (that gate sits on Copy/Save in the toolbar).
             .child(
-                MoonButton::new(SharedString::from("tun-suggest-one-f"))
-                    .variant(MoonButtonVariant::Soft)
-                    .label(t!("analytics.tuner.suggest_one").to_string())
-                    .disabled(running)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if !this.tuner.sugg.is_running() {
-                            this.suggest_one_into_v1(cx);
-                            cx.notify();
-                        }
-                    }))
-                    .render(),
+                div().flex_none().child(
+                    MoonButton::new(SharedString::from("tun-suggest-one-f"))
+                        .variant(MoonButtonVariant::Soft)
+                        .label(t!("analytics.tuner.suggest_one").to_string())
+                        .disabled(running)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if !this.tuner.sugg.is_running() {
+                                this.suggest_one_into_v1(cx);
+                                cx.notify();
+                            }
+                        }))
+                        .render(),
+                ),
             )
             .child(
-                MoonButton::new(SharedString::from("tun-suggest-run-f"))
-                    .variant(MoonButtonVariant::Blue)
-                    // The label carries the mode, because the two searches answer different
-                    // questions and take very different amounts of time. One button whose
-                    // meaning is silently switched by a checkbox two clicks away is how a user
-                    // ends up waiting minutes for what usually took half a second.
-                    .label(if self.tuner.compose {
-                        t!("analytics.tuner.compose_run").to_string()
-                    } else {
-                        t!("analytics.tuner.suggest_run").to_string()
-                    })
-                    .disabled(running)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if !this.tuner.sugg.is_running() {
-                            this.suggest_into_v1(cx);
-                            cx.notify();
-                        }
-                    }))
-                    .render(),
-            )
+                div().flex_none().child(
+                    MoonButton::new(SharedString::from("tun-suggest-run-f"))
+                        .variant(MoonButtonVariant::Blue)
+                        // The label carries the mode, because the two searches answer different
+                        // questions and take very different amounts of time. One button whose
+                        // meaning is silently switched by a checkbox two clicks away is how a user
+                        // ends up waiting minutes for what usually took half a second.
+                        .label(if self.tuner.compose {
+                            t!("analytics.tuner.compose_run").to_string()
+                        } else {
+                            t!("analytics.tuner.suggest_run").to_string()
+                        })
+                        .disabled(running)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if !this.tuner.sugg.is_running() {
+                                this.suggest_into_v1(cx);
+                                cx.notify();
+                            }
+                        }))
+                        .render(),
+                ),
+            );
+        v_flex()
+            .w_full()
+            .flex_none()
+            .children(status)
+            .child(controls)
             .into_any_element()
     }
 
-    /// One line describing what the "By filter" search is doing, with the colour to draw it in.
+    /// The live search-status band of the "By filter" suggestion row.
     ///
-    /// An empty string is the idle state: the row simply shows nothing rather than a placeholder.
+    /// Idle and the blocking single-field overlay render nothing, so the controls keep the height
+    /// they already had. Every other state is a full-width band: the Parameters card is a fixed
+    /// 470-unit column, and sharing leftover with "Подобрать состав" is what clipped
+    /// `шаг 2 · вариант…` mid-word at ordinary Analytics width.
+    ///
+    /// Head facts are `flex_none` children of this band; the tail is one `overflow_hidden` box.
+    /// LTR clipping is the priority order. The tooltip is built from the same facts, so a clipped
+    /// tail stays recoverable.
     ///
     /// Args:
     ///     p: Active MoonUI palette.
+    ///     cx: Analytics view context, for density-tier sizes.
     ///
     /// Returns:
-    ///     Localized status text and its palette color.
-    fn filter_search_status(&self, p: MoonPalette) -> (String, u32) {
-        match &self.tuner.sugg {
-            SuggestState::Idle => (String::new(), p.text_muted),
-            // The blocking overlay is this one's progress feedback, so the row stays quiet.
-            SuggestState::Running(SuggestJob::SingleField) => (String::new(), p.text_muted),
-            SuggestState::Running(SuggestJob::AllFields { handle, total }) => (
-                t!(
-                    "analytics.tuner.sugg_progress",
-                    done = handle.completed(),
-                    total = total
-                )
-                .to_string(),
-                p.text_soft,
-            ),
-            // Composition reports where it is, not how far along: how many candidates it will
-            // weigh is decided by what it finds, so there is no honest denominator to show. Until
-            // the first step publishes one, it says only that it is working.
-            SuggestState::Running(SuggestJob::Compose { handle }) => (
-                match handle.stage() {
-                    Some((step, done, total)) => t!(
-                        "analytics.tuner.compose_progress",
-                        step = step,
-                        done = done + 1,
-                        total = total
-                    )
-                    .to_string(),
-                    None => t!("analytics.tuner.compose_started").to_string(),
-                },
-                p.text_soft,
-            ),
-            SuggestState::Done {
-                work,
-                stopped: true,
-                ..
-            } => (search_caption(*work, true), p.orange),
-            // A search that ran to the end with nothing to give did not fail: the scope simply
-            // holds fewer trades than the minimum a suggestion must retain. Saying "done" here
-            // would read as "these are your thresholds", which is the one thing it is not.
-            SuggestState::Done { split: None, .. } => {
-                (t!("analytics.tuner.sugg_small").to_string(), p.text_soft)
-            }
-            SuggestState::Done { work, .. } => (search_caption(*work, false), p.text_muted),
-            // A failed read must not read as "found nothing", so it is said in the danger colour
-            // with the database's own words rather than left to the log alone.
-            SuggestState::Failed(ReadFail::NotReady) => (
-                t!("common.db_not_ready").to_string(),
-                design::danger_color(p),
-            ),
-            SuggestState::Failed(ReadFail::IncomparableQuote) => {
-                (t!("common.incomparable_quote").to_string(), p.orange)
-            }
-            SuggestState::Failed(e) => (
-                format!("{}: {e}", t!("analytics.tuner.sugg_failed")),
-                design::danger_color(p),
-            ),
+    ///     The status band, or `None` while the row should stay quiet.
+    fn filter_search_status_band(&self, p: MoonPalette, cx: &Context<Self>) -> Option<AnyElement> {
+        let facts = status_facts(search_status_view(&self.tuner.sugg));
+        if facts.essential.is_empty() && facts.tail.is_empty() {
+            return None;
         }
+        let color = status_tone_color(facts.tone, p);
+        let tip = status_tooltip(&facts);
+        let chip = |text: String| div().flex_none().child(text);
+        Some(
+            h_flex()
+                .id("tun-suggest-status-f")
+                .w_full()
+                .min_w_0()
+                .overflow_hidden()
+                .px(design::ui_px(cx, 12.0))
+                .pb(design::ui_px(cx, 4.0))
+                .items_center()
+                .gap(design::ui_px(cx, 6.0))
+                .text_size(design::t_caption(cx))
+                .text_color(moon(color))
+                .font_family(design::ui_font())
+                .tooltip(crate::panels::common::text_tooltip(tip))
+                .children(facts.essential.into_iter().map(chip))
+                .child(
+                    h_flex()
+                        .min_w_0()
+                        .flex_1()
+                        .overflow_hidden()
+                        .items_center()
+                        .gap(design::ui_px(cx, 6.0))
+                        .children(facts.tail.into_iter().map(chip)),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The "By filter" search settings popover: the knobs that are set once and then left alone.
@@ -1023,6 +1017,219 @@ impl AnalyticsView {
     }
 }
 
+/// Colour role of the suggestion-row status, resolved against the palette at render time.
+///
+/// Kept as a role rather than a resolved colour so [`status_facts`] stays free of the active
+/// theme, which is what makes the priority order unit-testable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StatusTone {
+    /// Running progress and a finished search that found nothing to retain.
+    Soft,
+    /// A completed search, and the idle/silent states that render no band.
+    Muted,
+    /// A stopped run, or a quote the figures cannot compare.
+    Warn,
+    /// A failed read.
+    Danger,
+}
+
+/// One suggestion-row status split by what may disappear on a narrow card.
+struct StatusFacts {
+    /// Never clipped: the step of a composition, a short "started" line, all-fields progress.
+    essential: Vec<String>,
+    /// Clipped from the right; earlier entries survive longer.
+    tail: Vec<String>,
+    /// Colour role of the whole band.
+    tone: StatusTone,
+}
+
+/// GPUI-free view of [`SuggestState`] for the status band.
+///
+/// Pulling the numbers off the handle here keeps [`status_facts`] free of search machinery, so
+/// the priority order can be asserted without constructing a running job.
+#[derive(Clone)]
+enum SearchStatusView {
+    /// Nothing to draw.
+    Idle,
+    /// Joint all-fields search: completed restarts of a known total.
+    AllFields { done: usize, total: usize },
+    /// Composition before the first stage is published.
+    ComposeStarted,
+    /// Composition at a published stage. `option` is 1-based, matching the locale string.
+    Compose {
+        step: usize,
+        option: usize,
+        total: usize,
+    },
+    /// A stoppable search finished after cancellation abandoned part of the work.
+    Stopped(SuggestWork),
+    /// Finished with no suggestion because the scope held fewer trades than the minimum.
+    DoneEmpty,
+    /// Finished to the end with a caption.
+    Done(SuggestWork),
+    /// The report database is not ready.
+    NotReady,
+    /// Quoted money is not comparable as one figure.
+    IncomparableQuote,
+    /// Any other failed read; the string is the database's own words.
+    Failed(String),
+}
+
+/// Map a live suggestion state onto the GPUI-free status view.
+///
+/// Args:
+///     sugg: Current "By filter" suggestion state.
+///
+/// Returns:
+///     The numbers and kind the status band will format.
+fn search_status_view(sugg: &SuggestState) -> SearchStatusView {
+    match sugg {
+        SuggestState::Idle => SearchStatusView::Idle,
+        // The blocking overlay is this one's progress feedback, so the row stays quiet.
+        SuggestState::Running(SuggestJob::SingleField) => SearchStatusView::Idle,
+        SuggestState::Running(SuggestJob::AllFields { handle, total }) => {
+            SearchStatusView::AllFields {
+                done: handle.completed(),
+                total: *total,
+            }
+        }
+        // Composition reports where it is, not how far along: how many candidates it will weigh
+        // is decided by what it finds, so there is no honest denominator to show. Until the first
+        // step publishes one, it says only that it is working. `done` is 0-based inside the
+        // handle; the locale counts options from one.
+        SuggestState::Running(SuggestJob::Compose { handle }) => match handle.stage() {
+            Some((step, done, total)) => SearchStatusView::Compose {
+                step,
+                option: done + 1,
+                total,
+            },
+            None => SearchStatusView::ComposeStarted,
+        },
+        SuggestState::Done {
+            work,
+            stopped: true,
+            ..
+        } => SearchStatusView::Stopped(*work),
+        // A search that ran to the end with nothing to give did not fail: the scope simply holds
+        // fewer trades than the minimum a suggestion must retain. Saying "done" here would read as
+        // "these are your thresholds", which is the one thing it is not.
+        SuggestState::Done { split: None, .. } => SearchStatusView::DoneEmpty,
+        SuggestState::Done { work, .. } => SearchStatusView::Done(*work),
+        SuggestState::Failed(ReadFail::NotReady) => SearchStatusView::NotReady,
+        SuggestState::Failed(ReadFail::IncomparableQuote) => SearchStatusView::IncomparableQuote,
+        SuggestState::Failed(e) => SearchStatusView::Failed(e.to_string()),
+    }
+}
+
+/// Assemble the status band: which facts it states, and the order in which they may clip.
+///
+/// Args:
+///     view: GPUI-free description of the current suggestion state.
+///
+/// Returns:
+///     The essential head and the clip-ordered tail.
+fn status_facts(view: SearchStatusView) -> StatusFacts {
+    match view {
+        SearchStatusView::Idle => StatusFacts {
+            essential: Vec::new(),
+            tail: Vec::new(),
+            tone: StatusTone::Muted,
+        },
+        SearchStatusView::AllFields { done, total } => StatusFacts {
+            essential: vec![
+                t!("analytics.tuner.sugg_progress", done = done, total = total).to_string(),
+            ],
+            tail: Vec::new(),
+            tone: StatusTone::Soft,
+        },
+        SearchStatusView::ComposeStarted => StatusFacts {
+            essential: vec![t!("analytics.tuner.compose_started").to_string()],
+            tail: Vec::new(),
+            tone: StatusTone::Soft,
+        },
+        SearchStatusView::Compose {
+            step,
+            option,
+            total,
+        } => StatusFacts {
+            essential: vec![t!("analytics.tuner.compose_progress_step", step = step).to_string()],
+            tail: vec![
+                t!(
+                    "analytics.tuner.compose_progress_option",
+                    done = option,
+                    total = total
+                )
+                .to_string(),
+            ],
+            tone: StatusTone::Soft,
+        },
+        SearchStatusView::Stopped(work) => StatusFacts {
+            essential: Vec::new(),
+            tail: vec![search_caption(work, true)],
+            tone: StatusTone::Warn,
+        },
+        SearchStatusView::DoneEmpty => StatusFacts {
+            essential: Vec::new(),
+            tail: vec![t!("analytics.tuner.sugg_small").to_string()],
+            tone: StatusTone::Soft,
+        },
+        SearchStatusView::Done(work) => StatusFacts {
+            essential: Vec::new(),
+            tail: vec![search_caption(work, false)],
+            tone: StatusTone::Muted,
+        },
+        SearchStatusView::NotReady => StatusFacts {
+            essential: Vec::new(),
+            tail: vec![t!("common.db_not_ready").to_string()],
+            tone: StatusTone::Danger,
+        },
+        SearchStatusView::IncomparableQuote => StatusFacts {
+            essential: Vec::new(),
+            tail: vec![t!("common.incomparable_quote").to_string()],
+            tone: StatusTone::Warn,
+        },
+        SearchStatusView::Failed(detail) => StatusFacts {
+            essential: Vec::new(),
+            tail: vec![format!("{}: {detail}", t!("analytics.tuner.sugg_failed"))],
+            tone: StatusTone::Danger,
+        },
+    }
+}
+
+/// Build the recovery text for the whole status band from the facts the row will render.
+///
+/// Args:
+///     facts: The head and tail the band is about to render.
+///
+/// Returns:
+///     The rendered order, essential first, joined by the same middle-dot the locales use.
+fn status_tooltip(facts: &StatusFacts) -> String {
+    facts
+        .essential
+        .iter()
+        .chain(&facts.tail)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// Resolve a status tone against the active palette.
+///
+/// Args:
+///     tone: Colour role from [`status_facts`].
+///     p: Active MoonUI palette.
+///
+/// Returns:
+///     Palette colour the band draws in.
+fn status_tone_color(tone: StatusTone, p: MoonPalette) -> u32 {
+    match tone {
+        StatusTone::Soft => p.text_soft,
+        StatusTone::Muted => p.text_muted,
+        StatusTone::Warn => p.orange,
+        StatusTone::Danger => design::danger_color(p),
+    }
+}
+
 /// The status caption of a finished search, naming the restart information its mode exposes.
 ///
 /// A plain search has one number and always had it. A composition has TWO, and used to show
@@ -1105,3 +1312,6 @@ fn compose_budget_labels(
         .to_string(),
     ]
 }
+
+#[cfg(test)]
+mod tests;
