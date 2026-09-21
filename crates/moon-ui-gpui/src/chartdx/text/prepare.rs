@@ -781,19 +781,21 @@ impl RenderState {
                     let price = y_min + (plot_bottom - cy_log) / price_to_px.max(1e-6);
                     let total = moon_chart::hvol::row_at(&self.panes[idx].hvol_samples, price)
                         .map_or(0.0, |r| r.buy_quote.max(0.0) + r.sell_quote.max(0.0));
-                    let zone_left = hvol_zone[0] / sf;
-                    let zone_right = (hvol_zone[0] + hvol_zone[2]) / sf;
-                    let (x, ax) = if self.panes[idx].hvol_readout_left {
-                        (zone_left + HVOL_CAPTION_PAD, 0.0)
-                    } else {
-                        (zone_right - HVOL_CAPTION_PAD, 1.0)
-                    };
-                    // Half the zone: a label wider than that would cover the rows it describes.
-                    let available = (zone_right - zone_left) * 0.5;
-                    if let Some(label) = super::volume_scale_label(
+                    // Named on every level the line crosses. The scale's width gate used to drop
+                    // the longer tiers here and leave the line bare; placement lives in
+                    // `hvol_value_caption`.
+                    let zone = [
+                        hvol_zone[0] / sf,
+                        hvol_zone[1] / sf,
+                        hvol_zone[2] / sf,
+                        hvol_zone[3] / sf,
+                    ];
+                    if let Some(caption) = super::hvol_value_caption(
+                        zone,
+                        cy_log,
                         total,
                         &self.panes[idx].quote,
-                        available,
+                        self.panes[idx].hvol_readout_left,
                         |text| {
                             super::measure_sized_text_run(
                                 &mut self.text_runs,
@@ -808,16 +810,21 @@ impl RenderState {
                             .as_f32()
                         },
                     ) {
-                        // Sits ON the crosshair line, above it, as the book's readout does.
-                        let y = cy_log - 1.0;
-                        let metrics =
-                            self.draw_volume_scale_text(ctx, &label, x, y, ax, 1.0, hvol_ink)?;
+                        let metrics = self.draw_volume_scale_text(
+                            ctx,
+                            &caption.text,
+                            caption.x,
+                            caption.y,
+                            caption.ax,
+                            caption.ay,
+                            hvol_ink,
+                        )?;
                         if hvol_plates {
                             placed.push(PlacedLabel {
-                                x,
-                                y,
-                                ax,
-                                ay: 1.0,
+                                x: caption.x,
+                                y: caption.y,
+                                ax: caption.ax,
+                                ay: caption.ay,
                                 w: metrics.width.as_f32(),
                                 h: metrics.line_height.as_f32(),
                                 solid: true,

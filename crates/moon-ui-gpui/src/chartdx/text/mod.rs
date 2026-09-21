@@ -141,6 +141,27 @@ fn fmt_amount(v: f32) -> String {
     moon_core::util::fmt::compact_si(v as f64)
 }
 
+/// The scale's quote-turnover spelling, with no layout opinion.
+///
+/// Args:
+///     value: Turnover in the quote currency.
+///     quote: The market's quote asset. Empty means the unit is not known yet.
+///
+/// Returns:
+///     `None` when `quote` is empty — a unitless figure would read as a coin count.
+///     Otherwise the scale format (`compact_scale`: `1.6 k$`, `875.3 m BTC`).
+fn quote_turnover_label(value: f32, quote: &str) -> Option<String> {
+    if quote.is_empty() {
+        return None;
+    }
+    let amount = moon_core::util::fmt::compact_scale(f64::from(value));
+    Some(if moon_core::symbol::is_usd_stable(quote) {
+        format!("{amount}$")
+    } else {
+        format!("{amount} {quote}")
+    })
+}
+
 /// Build a complete quote-turnover label within the available logical width.
 ///
 /// Uses the pane's market quote, as the cursor tooltip does. Unknown units and labels wider
@@ -150,22 +171,104 @@ fn fmt_amount(v: f32) -> String {
 /// The figure is the scale's own format (`compact_scale`: `1.6 k$`, `875.3 m BTC`), not the
 /// caption/cursor `compact_si` — the two labels on one bracket are compared by eye, so they print
 /// at one density (issue #579). The cursor readout in the band stays exact and is untouched.
+/// The horizontal-volume crosshair does not use this gate: its line is already on screen, and
+/// dropping the longer tiers left that line bare. See [`hvol_value_caption`].
 fn volume_scale_label(
     value: f32,
     quote: &str,
     available_width: f32,
     measure_width: impl FnOnce(&str) -> f32,
 ) -> Option<String> {
-    if quote.is_empty() {
+    let label = quote_turnover_label(value, quote)?;
+    (measure_width(&label) <= available_width).then_some(label)
+}
+
+/// Where one horizontal-volume crosshair value is drawn.
+struct HvolValueCaption {
+    /// Scale spelling of the turnover at this level, including its unit.
+    text: String,
+    /// Anchor x in logical pixels.
+    x: f32,
+    /// Anchor y in logical pixels.
+    y: f32,
+    /// Horizontal alignment: `0` left, `1` right.
+    ax: f32,
+    /// Vertical alignment: `0` top, `1` bottom.
+    ay: f32,
+}
+
+/// The value caption for the horizontal-volume line at one price level.
+///
+/// The crosshair draws that line across the zone whether or not a caption follows. The
+/// bottom-band scale omits a label that does not fit its bracket; reusing that omission here
+/// dropped the longer tiers (`0.50 k$`, `875.3 m$`) on a narrow zone while `23 k$` still fitted,
+/// so some stretches showed a bare line. The caption is emitted for every finite turnover whose
+/// quote can name the unit. Width only chooses the edge: a right-edge readout wider than the zone
+/// anchors on the left so the digits stay inside the pane instead of sliding off it.
+///
+/// Vertical placement sits just above the line, and drops below it when the line is close enough
+/// to the zone top that the caption would fall outside the chart's text clip. The zone box is the
+/// one the layout already resolved, so a carved strip and an overlay strip are the same decision.
+///
+/// Args:
+///     zone: Zone rectangle in logical pixels, `[x, y, w, h]`.
+///     level_y: The crosshair line's y, in the same space.
+///     value: Bought plus sold turnover at that price, quote currency.
+///     quote: The market's quote asset.
+///     readout_left: Draw at the zone's left edge. Otherwise the right edge.
+///     measure_width: Width of the scale face. Consulted only for a right-edge readout.
+///
+/// Returns:
+///     The caption and where to anchor it, or `None` when the zone is absent, the line does not
+///     cross it, the turnover is not finite, or the quote cannot name a unit.
+fn hvol_value_caption(
+    zone: [f32; 4],
+    level_y: f32,
+    value: f32,
+    quote: &str,
+    readout_left: bool,
+    measure_width: impl FnOnce(&str) -> f32,
+) -> Option<HvolValueCaption> {
+    let (zone_w, zone_h) = (zone[2], zone[3]);
+    if !(zone_w >= 1.0 && zone_h >= 1.0 && level_y.is_finite() && value.is_finite()) {
         return None;
     }
-    let amount = moon_core::util::fmt::compact_scale(f64::from(value));
-    let label = if moon_core::symbol::is_usd_stable(quote) {
-        format!("{amount}$")
+    let zone_left = zone[0];
+    let zone_top = zone[1];
+    let zone_right = zone_left + zone_w;
+    let zone_bottom = zone_top + zone_h;
+    if !(zone_left.is_finite() && zone_top.is_finite())
+        || level_y < zone_top
+        || level_y > zone_bottom
+    {
+        return None;
+    }
+    let text = quote_turnover_label(value, quote)?;
+    let (x, ax) = if readout_left {
+        (zone_left + HVOL_CAPTION_PAD, 0.0)
     } else {
-        format!("{amount} {quote}")
+        let inner = zone_w - 2.0 * HVOL_CAPTION_PAD;
+        if measure_width(&text) > inner {
+            (zone_left + HVOL_CAPTION_PAD, 0.0)
+        } else {
+            (zone_right - HVOL_CAPTION_PAD, 1.0)
+        }
     };
-    (measure_width(&label) <= available_width).then_some(label)
+    // One pixel off the line, matching the gap the readout has always used. Above the line
+    // unless that would put the caption outside the zone — the chart clips text to the pane,
+    // and the zone's top is the pane's top.
+    let above = level_y - 1.0;
+    let (y, ay) = if above - VOLUME_SCALE_LINE_H >= zone_top {
+        (above, 1.0)
+    } else {
+        let below = level_y + 1.0;
+        if below + VOLUME_SCALE_LINE_H <= zone_bottom {
+            (below, 0.0)
+        } else {
+            (zone_top, 0.0)
+        }
+    };
+    Some(HvolValueCaption { text, x, y, ax, ay })
 }
 
 /// Formats a prospective order size with compact lowercase SI suffixes for the cursor label.
