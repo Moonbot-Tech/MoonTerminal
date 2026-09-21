@@ -1,6 +1,6 @@
 //! Shared coin-menu value and delayed workspace-authority regressions.
 
-use super::{blacklist_add, blacklist_contains};
+use super::{blacklist_add, blacklist_contains, blacklist_edit, blacklist_remove};
 
 #[test]
 fn add_to_empty() {
@@ -19,6 +19,57 @@ fn dedup_case_insensitive() {
     assert_eq!(blacklist_add("BTC,ada", "ADA"), "BTC,ada");
     assert!(blacklist_contains("BTC, ada , ETH", "ADA"));
     assert!(!blacklist_contains("BTC,ETH", "ADA"));
+}
+
+/// Lifting a listed token must drop only that token so a checked menu row can un-blacklist a
+/// coin without rewriting the rest of the list.
+///
+/// Mutation: make `blacklist_remove` return the original string (the old add-only path). Pressing
+/// a checked permanent-blacklist row would then re-send the same list and leave the coin banned.
+#[test]
+fn remove_drops_only_the_matched_token() {
+    assert_eq!(blacklist_remove("BTC,ETH,ADA", "ADA"), "BTC,ETH");
+    assert_eq!(blacklist_remove("ADA,BTC,ETH", "ADA"), "BTC,ETH");
+    assert_eq!(blacklist_remove("BTC,ADA,ETH", "ADA"), "BTC,ETH");
+    assert_eq!(blacklist_remove("BTC,ada,ETH", "ADA"), "BTC,ETH");
+    assert_eq!(blacklist_remove("ADA", "ADA"), "");
+    assert_eq!(blacklist_remove("  ADA  ", "ADA"), "");
+    assert_eq!(blacklist_remove("BTC,ETH", "ADA"), "BTC,ETH");
+    assert_eq!(blacklist_remove("", "ADA"), "");
+}
+
+/// Remaining entries keep their original order, inner spacing, and unrecognized spellings; only
+/// the matched token is dropped.
+///
+/// Mutation: trim or rejoin the surviving list. A core whose blacklist held `BTC_RP` or padded
+/// tokens would then be sent a rewritten string that is not "that one token removed".
+#[test]
+fn remove_preserves_remaining_entries_verbatim() {
+    assert_eq!(
+        blacklist_remove(" BTC_RP, 1kBONKPERP ,ADA", "ADA"),
+        " BTC_RP, 1kBONKPERP "
+    );
+    assert_eq!(blacklist_remove("BTC, ada , ETH", "ADA"), "BTC, ETH");
+    assert_eq!(blacklist_remove("BTC,ADA,", "ADA"), "BTC,");
+}
+
+/// Adding then lifting a token restores the previous list; lifting a listed token then adding it
+/// back appends, which is the same add path an unchecked row already uses.
+///
+/// Mutation: leave `blacklist_edit(..., lift = true)` as `blacklist_add`. The checked row would
+/// keep the coin on the list and still pay a settings write.
+#[test]
+fn edit_is_a_toggle_in_both_directions() {
+    assert_eq!(blacklist_edit("", "ADA", false), "ADA");
+    assert_eq!(blacklist_edit("ADA", "ADA", true), "");
+
+    let added = blacklist_edit("BTC,ETH", "ADA", false);
+    assert_eq!(added, "BTC,ETH,ADA");
+    assert_eq!(blacklist_edit(&added, "ADA", true), "BTC,ETH");
+
+    let lifted = blacklist_edit("BTC,ADA,ETH", "ADA", true);
+    assert_eq!(lifted, "BTC,ETH");
+    assert_eq!(blacklist_edit(&lifted, "ADA", false), "BTC,ETH,ADA");
 }
 
 /// Every mutating callback in `coin_menu.rs:build_items` must validate current workspace authority
@@ -111,6 +162,29 @@ fn blacklist_rows_revalidate_before_they_write() {
     }
 }
 
+/// Selected-cores must lift or add as one action: a mixed group adds, a fully listed group lifts.
+///
+/// Mutation: call `write_core_blacklist` with a per-core contains check instead of one `lift` for
+/// the whole target set. Clicking "Selected cores (N)" on a mixed set would then remove the coin
+/// from cores that already listed it while adding it to the rest.
+#[test]
+fn selected_cores_share_one_lift_decision() {
+    let source = include_str!("blacklist.rs");
+    let writer = source
+        .split_once("fn core_blacklist_writer(")
+        .expect("core_blacklist_writer must exist")
+        .1;
+    let compact: String = writer.chars().filter(|ch| !ch.is_whitespace()).collect();
+    assert!(
+        compact.contains(".all(|&core|blacklist_contains("),
+        "the group writer must decide lift from every target before writing any"
+    );
+    assert!(
+        compact.contains("write_core_blacklist(b,core,&coin,lift)"),
+        "every core must receive the same lift flag"
+    );
+}
+
 /// The strategy row must re-read the schema inside its own write, not only when the menu is built;
 /// removing that check sends a stale field edit after the strategy is gone, which the view editor
 /// discards without a word.
@@ -125,7 +199,7 @@ fn strategy_blacklist_row_revalidates_live_identity_and_schema() {
         .find("strategy_has_blacklist_field(b, core, sid)")
         .expect("the write must revalidate the exact strategy schema");
     let effect = row
-        .find("add_to_strategy_blacklist(b, core, sid")
+        .find("write_strategy_blacklist(b, core, sid")
         .expect("the write must retain its intended edit");
 
     assert!(schema_guard < effect);

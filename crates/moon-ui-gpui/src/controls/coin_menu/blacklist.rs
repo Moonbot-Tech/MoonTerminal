@@ -19,9 +19,9 @@ use moon_core::config::TempBanSpan;
 use moon_core::session::CoreId;
 
 use super::{
-    CoinMenuCtx, add_to_core_blacklist, add_to_strategy_blacklist, blacklist_contains,
-    core_blacklist, strategy_blacklist, strategy_has_blacklist_field,
-    workspace_action_allows_cores,
+    CoinMenuCtx, blacklist_contains, core_blacklist, strategy_blacklist,
+    strategy_has_blacklist_field, workspace_action_allows_cores, write_core_blacklist,
+    write_strategy_blacklist,
 };
 use crate::Backend;
 use crate::display_text::fmt_ban_left;
@@ -87,7 +87,8 @@ pub(super) fn permanent_blacklist_item(
                         // Re-checked inside the click for the same reason the workspace is:
                         // the schema can change between the menu opening and the press.
                         if strategy_has_blacklist_field(b, core, sid) {
-                            add_to_strategy_blacklist(b, core, sid, &coin);
+                            let lift = blacklist_contains(&strategy_blacklist(b, core, sid), &coin);
+                            write_strategy_blacklist(b, core, sid, &coin, lift);
                         }
                     }
                 }
@@ -209,11 +210,18 @@ pub(super) fn temp_blacklist_item(
 }
 
 /// The write both core-blacklist rows perform, differing only in the cores they are handed.
+///
+/// Direction is decided once for the whole target set: a fully listed set lifts the coin from
+/// every core; otherwise every core takes the add path. A per-core toggle would mix add and lift
+/// on a mixed selected-cores row.
 fn core_blacklist_writer(coin: &str) -> impl Fn(&mut Backend, &[CoreId]) + 'static {
     let coin = coin.to_string();
     move |b, cores| {
+        let lift = cores
+            .iter()
+            .all(|&core| blacklist_contains(&core_blacklist(b, core).1, &coin));
         for &core in cores {
-            add_to_core_blacklist(b, core, &coin);
+            write_core_blacklist(b, core, &coin, lift);
         }
     }
 }
@@ -262,7 +270,8 @@ fn hour_rows(
         .collect()
 }
 
-/// One blacklist target row: a checkmark for what is already listed, and a click that revalidates.
+/// One blacklist target row: a checkmark when the coin is already listed, and a click that
+/// revalidates workspace authority then adds or lifts that token.
 fn target_row(
     key: &'static str,
     label: String,
