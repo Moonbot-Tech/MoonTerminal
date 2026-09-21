@@ -2,7 +2,9 @@
 //!
 //! Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`
 //! would shadow the built-in `#[test]` attribute and make it expand recursively (CONTRIBUTING.md).
-use crate::chartdx::text::{cursor_ref_price, fmt_prospective_order_size, volume_scale_label};
+use crate::chartdx::text::{
+    cursor_ref_price, fmt_prospective_order_size, hvol_value_caption, volume_scale_label,
+};
 
 /// Removing the suffix would again present quote turnover as a bare coin count (issue #486).
 /// The figure is the scale's own tiered format (issue #579): lowercase `k` after a space, one
@@ -50,6 +52,161 @@ fn volume_scale_label_requires_room_for_the_complete_currency() {
     );
     assert!(volume_scale_label(1_800.0, "LONGQUOTE", 111.0, measure).is_none());
     assert!(volume_scale_label(1_800.0, "", 200.0, |_| 0.0).is_none());
+}
+
+/// An 80px zone used to offer the caption only 40px. `23 k$` fits in that half and `0.50 k$`
+/// does not, which is the bare line on the quieter stretches. Restoring the half-zone width
+/// argument on `volume_scale_label` drops this caption again.
+#[test]
+fn hvol_value_on_a_narrow_zone_still_names_the_longer_tier() {
+    let caption = hvol_value_caption([0.0, 10.0, 80.0, 400.0], 200.0, 500.0, "USDT", true, |_| {
+        panic!("a left-edge readout must not consult width")
+    })
+    .expect("the longer tier is still a value");
+    assert_eq!(caption.text, "0.50 k$");
+    assert_eq!((caption.x, caption.ax), (4.0, 0.0));
+    assert_eq!((caption.y, caption.ay), (199.0, 1.0));
+}
+
+/// The tier the trader could already read stays just above the line, on the edge they picked.
+#[test]
+fn hvol_value_short_tier_stays_above_the_line() {
+    let caption = hvol_value_caption(
+        [0.0, 10.0, 80.0, 400.0],
+        200.0,
+        23_000.0,
+        "USDT",
+        true,
+        |_| panic!("a left-edge readout must not consult width"),
+    )
+    .expect("23 k$");
+    assert_eq!(caption.text, "23 k$");
+    assert_eq!(
+        (caption.x, caption.y, caption.ax, caption.ay),
+        (4.0, 199.0, 0.0, 1.0)
+    );
+}
+
+/// A right-edge readout that fits the zone stays on that edge. One wider than the zone moves
+/// to the left edge: anchored on the right it would run off the pane and the digits would clip.
+#[test]
+fn hvol_value_right_edge_moves_inside_when_wider_than_the_zone() {
+    let fits = hvol_value_caption(
+        [0.0, 10.0, 80.0, 400.0],
+        200.0,
+        23_000.0,
+        "USDT",
+        false,
+        |text| {
+            assert_eq!(text, "23 k$");
+            20.0
+        },
+    )
+    .expect("fits");
+    assert_eq!((fits.x, fits.ax), (76.0, 1.0));
+
+    let wide = hvol_value_caption(
+        [0.0, 10.0, 80.0, 400.0],
+        200.0,
+        500.0,
+        "USDT",
+        false,
+        |text| {
+            assert_eq!(text, "0.50 k$");
+            90.0
+        },
+    )
+    .expect("wider than the zone, still shown");
+    assert_eq!(wide.text, "0.50 k$");
+    assert_eq!((wide.x, wide.ax), (4.0, 0.0));
+}
+
+/// The zone top is the pane top, and chart text is clipped to the pane. A caption placed above
+/// a line on that edge used to land entirely outside the clip. Scale line box is 17px
+/// (`11.5 + 1.5 + 4`); room above needs `level - 1 - 17 >= zone top`.
+#[test]
+fn hvol_value_on_the_zone_top_stays_inside_the_zone() {
+    let zone = [12.0, 100.0, 160.0, 400.0];
+    let on_the_edge = hvol_value_caption(zone, 100.0, 23_000.0, "USDT", true, |_| {
+        panic!("a left-edge readout must not consult width")
+    })
+    .expect("top level");
+    assert_eq!(on_the_edge.text, "23 k$");
+    assert_eq!((on_the_edge.y, on_the_edge.ay), (101.0, 0.0));
+
+    // Boundary: 118 leaves the 17px box touching the zone top from inside; 117 does not.
+    let still_above =
+        hvol_value_caption(zone, 118.0, 23_000.0, "USDT", true, |_| 0.0).expect("above");
+    assert_eq!((still_above.y, still_above.ay), (117.0, 1.0));
+    let flips = hvol_value_caption(zone, 117.0, 23_000.0, "USDT", true, |_| 0.0).expect("below");
+    assert_eq!((flips.y, flips.ay), (118.0, 0.0));
+}
+
+/// Carved, the zone is the pane's left strip. Overlaid, it is the plot's left strip, inset by
+/// whatever the axis gutter took. Both are the same caption decision on different boxes.
+#[test]
+fn hvol_value_carved_and_overlay_zones_both_name_the_level() {
+    let level = 250.0;
+    let carved = hvol_value_caption(
+        [0.0, 0.0, 160.0, 500.0],
+        level,
+        875_300_000.0,
+        "USDT",
+        true,
+        |_| panic!("a left-edge readout must not consult width"),
+    )
+    .expect("carved");
+    let overlay = hvol_value_caption(
+        [48.0, 0.0, 160.0, 500.0],
+        level,
+        875_300_000.0,
+        "USDT",
+        true,
+        |_| panic!("a left-edge readout must not consult width"),
+    )
+    .expect("overlay");
+    assert_eq!(carved.text, "875.3 m$");
+    assert_eq!(overlay.text, carved.text);
+    assert_eq!(carved.x, 4.0);
+    assert_eq!(overlay.x, 52.0);
+    assert_eq!((carved.y, carved.ay), (249.0, 1.0));
+    assert_eq!(overlay.y, carved.y);
+}
+
+/// No zone, a line that does not cross it, a non-finite turnover, or a quote that cannot name
+/// a unit: there is nothing honest to print. An empty quote stays blank rather than a unitless
+/// number; that is not the bare-line bug, which had a unit and dropped the longer spelling.
+#[test]
+fn hvol_value_without_a_zone_or_a_unit_has_no_caption() {
+    let refuse = |_: &str| panic!("no caption is measured");
+    assert!(
+        hvol_value_caption([0.0, 0.0, 0.0, 400.0], 10.0, 23_000.0, "USDT", true, refuse).is_none()
+    );
+    assert!(
+        hvol_value_caption(
+            [0.0, 40.0, 80.0, 100.0],
+            10.0,
+            23_000.0,
+            "USDT",
+            true,
+            refuse
+        )
+        .is_none()
+    );
+    assert!(
+        hvol_value_caption(
+            [0.0, 0.0, 80.0, 100.0],
+            50.0,
+            f32::NAN,
+            "USDT",
+            true,
+            refuse
+        )
+        .is_none()
+    );
+    assert!(
+        hvol_value_caption([0.0, 0.0, 80.0, 100.0], 50.0, 23_000.0, "", true, refuse).is_none()
+    );
 }
 
 const LAST: f32 = 100.0;
