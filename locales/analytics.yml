@@ -504,6 +504,14 @@ analytics.tuner.compose_progress:
   ru: "шаг %{step} · вариант %{done} из %{total}"
   en: "step %{step} · option %{done} of %{total}"
   es: "paso %{step} · opción %{done} de %{total}"
+analytics.tuner.compose_progress_step:
+  ru: "шаг %{step}"
+  en: "step %{step}"
+  es: "paso %{step}"
+analytics.tuner.compose_progress_option:
+  ru: "вариант %{done} из %{total}"
+  en: "option %{done} of %{total}"
+  es: "opción %{done} de %{total}"
 analytics.tuner.compose_set:
   ru: "состав"
   en: "set"
