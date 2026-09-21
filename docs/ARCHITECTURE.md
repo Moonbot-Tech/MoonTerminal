@@ -1,6 +1,6 @@
 # MoonTerminal Architecture
 
-Last updated: 2026-08-09.
+Last updated: 2026-09-21.
 
 This document describes the terminal's current public architecture and deliberately omits old
 experimental migration plans.
@@ -533,6 +533,37 @@ of operations rests on one rule: **only the transaction that applied the map wri
   the last ACK, `DbMsg::SyncComplete` and `DbMsg::AliveMap` go in one FIFO to one writer.
   Rolling back a batch moves neither the checkpoint nor the published start state — the next
   connection simply repeats catch-up.
+
+### Report readers
+
+Query reads go through `open_reader` / `open_reader_with` and come back as a `ReportReader`. A
+process-wide permit (`db::reader_budget`) allows eight at once. The connection field is declared
+before the permit, so the descriptors close before the slot returns. The permit owns the budget:
+`read_snapshot` borrows a transaction from the caller's connection, so a shared worker cannot sit
+in its place. A reader that finds every slot taken waits up to three seconds. If one frees, the
+open continues. If the wait expires, the open fails as `FailKind::Exhausted`. A wait cancelled
+because the request was superseded is `FailKind::Other`, not exhaustion.
+
+`SQLITE_CANTOPEN` is classified as `Exhausted` too, separately from that synthetic budget
+timeout. The class is retryable — the descriptor budget, or something else holding the file —
+and it is not an empty period and not a damaged replica. The uid-floor probe (`open_readonly`)
+and the background integrity scan open a bare read-only connection and do not take a slot.
+
+Which companion databases are attached is a property of the query (`AttachSet`), chosen before
+the snapshot because SQLite refuses `ATTACH` inside a transaction. `open_reader()` is
+`AttachSet::ALL` (strategies and the valuation cache). Chart trade history never references the
+valuation schema and uses `AttachSet::STRATEGIES_ONLY` (`CHART_TRADE_HISTORY_ATTACH`). A missing
+strategies file, or a missing or unhealthy valuation cache, attaches nothing for that companion
+and the open still returns. When every requested database does attach, one reader holds nine
+descriptors for `ALL` and six for strategies only: each database in WAL is the file plus `-wal`
+and `-shm`.
+
+On Unix, `startup::open_file_limit::raise_to_hard_limit` runs once after the logger is installed
+and before the install's locks, migrations, and database opens. It raises the soft
+`RLIMIT_NOFILE` to the hard limit. macOS caps the request at Darwin `OPEN_MAX` (10240), because
+`setrlimit` returns `EINVAL` above that even when the hard limit is infinity. A failed raise is
+logged and does not stop startup. A `--fixture` run can open the relocated replica during
+bootstrap, which is earlier than this raise. Windows has no such limit.
 
 ### The order-trace archive (`order_traces.sqlite`)
 
