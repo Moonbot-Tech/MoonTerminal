@@ -738,7 +738,7 @@ fn core_selector(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    // The pill follows the density-tier ordinary-control height so it shares one top/bottom edge
+    // The pill follows the control-tier ordinary-control height so it shares one top/bottom edge
     // with the neighbouring buttons; its content width is still capped below so a long
     // user-defined name cannot displace the header's right-hand readouts.
     let b = backend.read(cx);
@@ -798,7 +798,7 @@ fn core_selector(
         &raw_active_name,
         design::font_w(cx, design::HEADER_LABEL_MAX_W),
         design::ui_value(cx, 44.0),
-        |text| design::ui_text_width_zoomed(cx, text, design::tier_font_size(cx), 500.0, true),
+        |text| design::ui_text_width_zoomed(cx, text, design::BODY_TEXT, 500.0, true),
     );
     let trigger_h = design::action_control_h_value(cx);
     // `MoonSelectorPill` takes `height` and `radius` in DESIGN units and scales them by
@@ -871,7 +871,7 @@ fn core_selector(
                     MoonSelectorSegment::new(active_name)
                         .color(p.text)
                         .weight(500.0)
-                        .font_size(design::tier_font_base(cx, 0.0)),
+                        .font_size(design::body_font_base(cx, 0.0)),
                 )
                 .render(),
         );

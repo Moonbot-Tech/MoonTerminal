@@ -164,7 +164,7 @@ impl SettingsView {
                         MoonInput::new("tg-chat-name")
                             .state(&self.telegram.name)
                             .placeholder(t!("telegram.access_name_placeholder").to_string())
-                            .size(design::input_tier(cx)),
+                            .size(design::INPUT_SIZE),
                     );
                 if !owner {
                     card = card.child(self.telegram_core_access(chat, cx));
@@ -298,7 +298,7 @@ impl SettingsView {
             .child(
                 MoonInput::new("tg-core-search")
                     .state(&self.telegram.search)
-                    .size(design::input_tier(cx))
+                    .size(design::INPUT_SIZE)
                     .placeholder(t!("telegram.access_search").to_string()),
             )
             .child(

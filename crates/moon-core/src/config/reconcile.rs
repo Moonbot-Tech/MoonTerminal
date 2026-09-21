@@ -10,7 +10,7 @@ use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
 use super::schema::{
     COREID_UID_VERSION, SCHEMA_VERSION, ServerEntry, ServerMeta, ServersFile, SettingsFile,
-    TelegramConfig, UiDensity, UiThemeMode, clamp_chart_memory_percent, clamp_chart_stack_height,
+    TelegramConfig, UiThemeMode, clamp_chart_memory_percent, clamp_chart_stack_height,
     repair_ui_scale,
 };
 use super::servers::{self, CoreSortMode};
@@ -44,8 +44,6 @@ pub struct Merged {
     pub log_to_file: bool,
     /// Log-file retention period in days (0 = keep everything).
     pub log_retention_days: u32,
-    /// Explicit interface density, or Standard when the key is absent.
-    pub ui_density: UiDensity,
     /// Dark/light MoonUI theme.
     pub ui_theme_mode: UiThemeMode,
     /// Overall UI geometry scale.
@@ -87,9 +85,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     let mut next_uid = next_free_uid(&sf, &meta, uid_floor);
     // A counter that had to be raised is written back, so the repair survives a later boot on
     // which the stores cannot be read.
-    let mut dirty = meta.version < SCHEMA_VERSION
-        || next_uid.get() > meta.next_uid
-        || meta.ui_density.is_none();
+    let mut dirty = meta.version < SCHEMA_VERSION || next_uid.get() > meta.next_uid;
     // Before v11, runtime CoreId was positional, so charts.json contains positional ids.
     let chart_core_remap_needed = meta.version < COREID_UID_VERSION;
     let language = meta.language;
@@ -102,7 +98,6 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     let main_idle_close_secs = meta.main_idle_close_secs;
     let log_to_file = meta.log_to_file;
     let log_retention_days = meta.log_retention_days;
-    let ui_density = meta.resolved_ui_density();
     let ui_theme_mode = meta.ui_theme_mode;
     let ui_scale = repair_ui_scale(meta.ui_scale);
     let chart_memory_percent = clamp_chart_memory_percent(meta.chart_memory_percent);
@@ -217,7 +212,6 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
         main_idle_close_secs,
         log_to_file,
         log_retention_days,
-        ui_density,
         ui_theme_mode,
         ui_scale,
         chart_memory_percent,
@@ -236,7 +230,8 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
 /// Server connection keys go to `ServersFile`; server metadata, server-group settings, saved core
 /// groups, and presentation preferences go to `SettingsFile`. Saved core groups are copied as
 /// supplied because the caller owns sanitizing the runtime list before persistence.
-/// Density is always written explicitly; the retired font adjustment is never written.
+/// The retired `ui_density` and `ui_font_delta` keys are never written: a file that still carries
+/// them loses them on its next save.
 #[allow(clippy::too_many_arguments)]
 pub fn split(
     servers: &[ServerConfig],
@@ -252,7 +247,6 @@ pub fn split(
     main_idle_close_secs: u32,
     log_to_file: bool,
     log_retention_days: u32,
-    ui_density: UiDensity,
     ui_theme_mode: UiThemeMode,
     ui_scale: f32,
     chart_memory_percent: u16,
@@ -284,7 +278,6 @@ pub fn split(
         main_idle_close_secs,
         log_to_file,
         log_retention_days,
-        ui_density: Some(ui_density),
         ui_theme_mode,
         ui_scale,
         chart_memory_percent: clamp_chart_memory_percent(chart_memory_percent),

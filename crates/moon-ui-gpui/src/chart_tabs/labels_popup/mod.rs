@@ -93,7 +93,7 @@ pub(super) fn content_width(cx: &App) -> Pixels {
 ///     The rendered pixels available to the label, never negative.
 pub(super) fn name_budget(cx: &App) -> f32 {
     (design::font_w(cx, NAME_W)
-        - 2.0 * design::ui_value(cx, design::button_tier(cx).control_metrics().pad_x))
+        - 2.0 * design::ui_value(cx, design::CONTROL_TIER.control_metrics().pad_x))
     .max(0.0)
 }
 

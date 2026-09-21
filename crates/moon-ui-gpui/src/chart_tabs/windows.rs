@@ -227,12 +227,14 @@ impl ChartTabs {
         } else {
             crate::window::windowing::cascade_origin_on(origin, display_id, cx)
         };
+        // A first-open size is design pixels; the window API takes the platform's.
+        let zoom = moon_ui::MoonTheme::content_zoom(cx);
         let fallback = crate::window::windowing::detached_fallback_bounds(
             owner,
             display_id,
             size(
-                px(FIRST_DETACH_GEOM.w as f32),
-                px(FIRST_DETACH_GEOM.h as f32),
+                px(FIRST_DETACH_GEOM.w as f32 * zoom),
+                px(FIRST_DETACH_GEOM.h as f32 * zoom),
             ),
             cx,
         );

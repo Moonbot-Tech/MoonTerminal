@@ -198,17 +198,13 @@ fn fail_to_start(error: anyhow::Error, cx: &mut App) {
 /// Install the interface theme for a window shown before the configuration is available.
 ///
 /// Reads the same plaintext `settings.toml` values the shell uses, so the login window matches the
-/// user's theme choice and font size instead of flashing defaults and then re-themeing.
+/// user's theme choice and UI scale instead of flashing defaults and then re-themeing.
 fn install_login_theme(cx: &mut App) {
     let prefs = moon_core::config::presentation_prefs();
     // The mapping itself lives once, beside the shell's own call site.
     rust_i18n::set_locale(prefs.language.code());
     moon_ui::MoonTheme::install_config(
-        super::moon_theme_config_for_presentation(
-            prefs.ui_theme_mode,
-            prefs.ui_density,
-            prefs.ui_scale,
-        ),
+        super::moon_theme_config_for_presentation(prefs.ui_theme_mode, prefs.ui_scale),
         cx,
     );
 }

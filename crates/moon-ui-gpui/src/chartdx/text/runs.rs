@@ -1,6 +1,6 @@
 //! `RenderState` draw/measure helpers, FireTest text, and ghost-crosshair labels.
 
-use gpui::{GpuCanvasTextMetrics, Hsla, point, px};
+use gpui::{GpuCanvasTextMetrics, Hsla, point};
 
 use super::*;
 
@@ -218,13 +218,21 @@ impl RenderState {
                         cold += 1;
                     }
                     builder.set_label_id(i as u32);
+                    let (origin, font_size, line_h) = {
+                        let ctx = builder.context();
+                        (
+                            point(content_px(ctx, x), content_px(ctx, y)),
+                            content_px(ctx, FIRETEST_TEXT_FONT_SIZE),
+                            content_px(ctx, FIRETEST_TEXT_LINE_H),
+                        )
+                    };
                     run.draw(
                         builder.context(),
-                        point(px(x), px(y)),
+                        origin,
                         self.firetest_text_labels[i].as_str(),
                         font.clone(),
-                        px(FIRETEST_TEXT_FONT_SIZE),
-                        px(FIRETEST_TEXT_LINE_H),
+                        font_size,
+                        line_h,
                         color,
                     )?;
                     drawn += 1;

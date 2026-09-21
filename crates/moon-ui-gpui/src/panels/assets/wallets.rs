@@ -377,7 +377,7 @@ impl AssetsView {
                         body = body.child(
                             MoonInput::new("transfer-amount")
                                 .state(&input)
-                                .size(design::input_tier(cx))
+                                .size(design::INPUT_SIZE)
                                 .mono(true),
                         );
                     }

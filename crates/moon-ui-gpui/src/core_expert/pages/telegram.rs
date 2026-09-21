@@ -265,7 +265,7 @@ pub(super) fn body(
                 .child(
                     div()
                         .flex_1()
-                        .children(field(store, "exp-tlg-add-channel", true, cx)),
+                        .children(field(store, "exp-tlg-add-channel", true)),
                 ),
         )
         .child(

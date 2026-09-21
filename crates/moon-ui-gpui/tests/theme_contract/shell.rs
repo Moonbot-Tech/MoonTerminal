@@ -1172,7 +1172,7 @@ fn leverage_presets_only_stage_values_until_apply() {
     );
 }
 
-/// `controls/toolbar.rs:row_fit` must budget the Profit Monitor launcher; changing its density-tier
+/// `controls/toolbar.rs:row_fit` must budget the Profit Monitor launcher; changing its control-tier
 /// glyph multiplier back to four makes this assertion red and lets the trailing launcher clip at narrow
 /// Main-window widths.
 #[test]
@@ -1255,7 +1255,7 @@ fn toolbar_launcher_labels_are_measured_and_all_or_none() {
     let button = fn_body(&text, "fn open_window_button(");
 
     assert!(measure.contains("design::ui_text_width_zoomed("));
-    assert!(measure.contains("design::tier_font_size(cx)"));
+    assert!(measure.contains("design::BODY_TEXT"));
     assert!(measure.contains("TOOLBAR_LAUNCHER_TEXT_WEIGHT"));
     assert!(
         measure.contains("false,"),

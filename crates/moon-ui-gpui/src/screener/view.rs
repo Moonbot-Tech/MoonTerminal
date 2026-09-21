@@ -638,7 +638,7 @@ impl ScreenerView {
                 div().w(px(90.0)).child(
                     MoonInput::new("scr-coin")
                         .state(&self.coin_input)
-                        .size(design::input_tier(cx))
+                        .size(design::INPUT_SIZE)
                         .cleanable(true),
                 ),
             )
@@ -647,7 +647,7 @@ impl ScreenerView {
                 div().w(px(90.0)).child(
                     MoonInput::new("scr-dvol")
                         .state(&self.dvol_input)
-                        .size(design::input_tier(cx))
+                        .size(design::INPUT_SIZE)
                         .cleanable(true),
                 ),
             )

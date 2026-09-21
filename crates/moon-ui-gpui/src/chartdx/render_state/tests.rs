@@ -86,6 +86,7 @@ fn frame_info() -> GpuFrameInfo {
         now: Instant::now(),
         bounds: Bounds::new(point(px(0.0), px(0.0)), size(px(320.0), px(200.0))),
         scale_factor: 1.0,
+        content_zoom: 1.0,
         presentable: true,
     }
 }

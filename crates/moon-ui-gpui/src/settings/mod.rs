@@ -644,7 +644,6 @@ fn settings_sig(b: &Backend) -> u64 {
     cfg.chart_stack_height.hash(&mut h);
     cfg.log_to_file.hash(&mut h);
     cfg.log_retention_days.hash(&mut h);
-    cfg.ui_density.hash(&mut h);
     cfg.ui_theme_mode.hash(&mut h);
     cfg.ui_scale.to_bits().hash(&mut h);
     cfg.hotkeys.hash(&mut h);
@@ -862,7 +861,6 @@ fn draft_sig(cfg: &AppConfig) -> u64 {
     cfg.log_to_file.hash(&mut h);
     cfg.log_retention_days.hash(&mut h);
     cfg.chart_memory_percent.hash(&mut h);
-    cfg.ui_density.hash(&mut h);
     cfg.ui_scale.to_bits().hash(&mut h);
 
     h.finish()

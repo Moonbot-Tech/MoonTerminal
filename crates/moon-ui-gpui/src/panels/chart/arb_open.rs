@@ -18,15 +18,26 @@ use super::ChartPanel;
 use crate::controls::coin_search;
 
 impl ChartPanel {
-    /// Where the chart slot sits in the window, in LOGICAL pixels, and the scale it draws at.
+    /// Where the chart slot sits in the window, in the CHART's logical pixels, the scale it draws
+    /// at, and the window's content zoom.
     ///
-    /// THE one place the two coordinate systems meet: the caption pass works in window logical
-    /// pixels, the panel's own input and layout in slot ones. Both the press and the cursor zones
-    /// go through this, so they cannot drift apart again.
-    pub(super) fn chart_origin_logical(&self) -> Option<((f32, f32), f32)> {
+    /// THE one place the coordinate systems meet: the caption pass works in the chart's logical
+    /// pixels (the platform's, so the chart keeps device density under UI zoom), the panel's own
+    /// input in slot device pixels, and GPUI overlays in the window's content pixels — the chart's
+    /// divided by the zoom. Both the press and the cursor zones go through this, so they cannot
+    /// drift apart again.
+    pub(super) fn chart_origin_logical(&self) -> Option<((f32, f32), f32, f32)> {
         let (bounds, sf, _) = self.chart.slot_geometry()?;
         let sf = sf.max(0.1);
-        Some(((f32::from(bounds.origin.x), f32::from(bounds.origin.y)), sf))
+        let zoom = self.chart.slot_content_zoom().max(0.1);
+        Some((
+            (
+                f32::from(bounds.origin.x) * zoom,
+                f32::from(bounds.origin.y) * zoom,
+            ),
+            sf,
+            zoom,
+        ))
     }
 
     /// Transparent zones over the venue names, so the pointer changes over a clickable one.
@@ -42,13 +53,14 @@ impl ChartPanel {
     /// Lay one transparent pointing-hand zone over every rectangle a pane published.
     ///
     /// The shared half of the two overlays — the arbitrage names and the market buttons — because
-    /// what differs between them is only which rectangles they ask for. Both work in the WINDOW's
-    /// logical pixels while this overlay is laid out inside the chart SLOT, so the slot's own
-    /// position comes off here: the exact inverse of what a press does, from the same helper, which
-    /// is what keeps the cursor and the click on the same rectangle.
+    /// what differs between them is only which rectangles they ask for. Both work in the CHART's
+    /// logical pixels while this overlay is laid out inside the chart SLOT in content pixels, so
+    /// the slot's own position comes off and the zoom divides here: the exact inverse of what a
+    /// press does, from the same helper, which is what keeps the cursor and the click on the same
+    /// rectangle.
     ///
     /// Args:
-    ///     rects: What one pane offers, in the window's logical pixels.
+    ///     rects: What one pane offers, in the chart's logical pixels.
     ///
     /// Returns:
     ///     One absolutely-placed zone per rectangle, carrying no handlers.
@@ -57,7 +69,7 @@ impl ChartPanel {
         rects: impl Fn(usize) -> Vec<(f32, f32, f32, f32)>,
     ) -> Vec<Div> {
         let mut out = Vec::new();
-        let Some((origin, _)) = self.chart_origin_logical() else {
+        let Some((origin, _, zoom)) = self.chart_origin_logical() else {
             return out;
         };
         for pane in 0..self.chart.pane_count() {
@@ -68,10 +80,10 @@ impl ChartPanel {
                 out.push(
                     div()
                         .absolute()
-                        .left(px(x - origin.0))
-                        .top(px(y - origin.1))
-                        .w(px(w))
-                        .h(px(h))
+                        .left(px((x - origin.0) / zoom))
+                        .top(px((y - origin.1) / zoom))
+                        .w(px(w / zoom))
+                        .h(px(h / zoom))
                         .cursor(CursorStyle::PointingHand),
                 );
             }
@@ -121,7 +133,7 @@ impl ChartPanel {
         // this point is in the SLOT's device pixels. So the conversion is both: scale down, then
         // add where the slot sits in the window. Missing the origin put every hit off by exactly
         // the panel's position, which on a chart under a header and a toolbar is a long way down.
-        let Some((origin, sf)) = self.chart_origin_logical() else {
+        let Some((origin, sf, _)) = self.chart_origin_logical() else {
             return false;
         };
         let (lx, ly) = (pos.0 / sf + origin.0, pos.1 / sf + origin.1);

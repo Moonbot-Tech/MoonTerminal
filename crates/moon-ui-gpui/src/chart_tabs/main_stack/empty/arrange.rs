@@ -262,14 +262,14 @@ fn row(
         .items_center()
         .gap(design::ui_px(cx, ROW_GAP))
         .child(
-            // The face a density-selected checkbox gives its label — its size, soft text — so this row and
+            // The face a control-tier checkbox gives its label — its size, soft text — so this row and
             // the rule's switch under it read as one list rather than as a heading over a note.
             div()
                 .flex_1()
                 .min_w_0()
                 .text_size(design::ui_px(
                     cx,
-                    crate::panels::common::checkbox_metrics(cx).font,
+                    crate::panels::common::CHECKBOX_METRICS.font,
                 ))
                 .text_color(rgb(palette.text_soft))
                 .child(t!(block_label(block)).to_string()),

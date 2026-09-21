@@ -80,6 +80,7 @@ impl ChartDataState {
             present_rate_candidate_hz: 0.0,
             present_rate_candidate_hits: 0,
             last_ppp: 1.0,
+            content_zoom: 1.0,
             slot_bounds: None,
             last_order_sig: u64::MAX,
             last_prepared_market_sig: u64::MAX,
@@ -316,11 +317,18 @@ impl ChartDataState {
     /// Applies slot geometry from logical-pixel canvas bounds to the engine's size, origin, and
     /// pixel scale. `frame()` synchronously obtains it from the fork's `GpuFrameInfo`, keeping the
     /// own pass in the current slot.
+    ///
+    /// Two factors, on purpose. The slot is `bounds` content pixels times the frame's effective
+    /// factor in device pixels, so the target and its origin use that. The chart's own geometry —
+    /// line widths, candle outlines, axis gutters, captions — is sized by the platform factor
+    /// alone, so that UI zoom scales the chrome around the chart while the chart keeps the
+    /// monitor's density inside whatever slot remains.
     fn apply_slot_geometry(&mut self, info: &GpuFrameInfo) {
         if info.bounds.is_empty() {
             return;
         }
         let sf = info.scale_factor.max(0.1);
+        let zoom = info.content_zoom.max(0.1);
         let w = (f32::from(info.bounds.size.width) * sf).round().max(1.0) as u32;
         let h = (f32::from(info.bounds.size.height) * sf).round().max(1.0) as u32;
         let ox = f32::from(info.bounds.origin.x) * sf;
@@ -334,11 +342,13 @@ impl ChartDataState {
             self.origin = (ox, oy);
             self.mark_view_dirty();
         }
-        self.last_ppp = sf;
+        let ppp = (sf / zoom).max(0.1);
+        self.last_ppp = ppp;
+        self.content_zoom = zoom;
         self.slot_bounds = Some(info.bounds);
         let mut st = self.render.borrow_mut();
         st.set_slot_origin(ox, oy); // The setter dirties and presents only when the value changes.
-        st.set_pixel_scale(sf);
+        st.set_pixel_scale(ppp);
     }
 
     pub(crate) fn set_market_source(&mut self, source: Option<MarketDataSource>) -> bool {

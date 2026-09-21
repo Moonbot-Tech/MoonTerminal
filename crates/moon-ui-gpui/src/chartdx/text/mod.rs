@@ -222,6 +222,29 @@ fn ensure_text_run(runs: &mut Vec<GpuCanvasTextRun>, cursor: usize) {
 }
 
 /// Draw the volume scale and cursor readout with their explicit size and weight.
+/// Where the chart's text crosses into GPUI.
+///
+/// The chart lays its text out in its own logical pixels — the platform's, so the chart keeps
+/// device density under UI zoom — while GPUI shapes and places text in the window's content
+/// pixels, which are those divided by the window's content zoom. Sizes and origins cross here on
+/// the way in and measured widths cross back through [`chart_metrics`]; nothing else in the text
+/// layer knows the zoom.
+pub(in crate::chartdx) fn content_px(ctx: &GpuCanvasTextContext<'_>, chart_px: f32) -> Pixels {
+    px(chart_px / ctx.content_zoom().max(0.1))
+}
+
+/// The inverse of [`content_px`] for what GPUI measured, back into the chart's logical pixels.
+pub(in crate::chartdx) fn chart_metrics(
+    ctx: &GpuCanvasTextContext<'_>,
+    metrics: GpuCanvasTextMetrics,
+) -> GpuCanvasTextMetrics {
+    let zoom = ctx.content_zoom().max(0.1);
+    GpuCanvasTextMetrics {
+        width: metrics.width * zoom,
+        line_height: metrics.line_height * zoom,
+    }
+}
+
 fn draw_sized_text_run(
     runs: &mut Vec<GpuCanvasTextRun>,
     cursor: &mut usize,
@@ -239,17 +262,18 @@ fn draw_sized_text_run(
     ensure_text_run(runs, *cursor);
     let run = &mut runs[*cursor];
     *cursor += 1;
-    run.draw_aligned(
+    let metrics = run.draw_aligned(
         ctx,
-        point(px(x), px(y)),
+        point(content_px(ctx, x), content_px(ctx, y)),
         text,
         mono_font(weight),
-        px(size),
-        px(line_h),
+        content_px(ctx, size),
+        content_px(ctx, line_h),
         color,
         ax,
         ay,
-    )
+    )?;
+    Ok(chart_metrics(ctx, metrics))
 }
 
 /// The measuring partner of [`draw_sized_text_run`], taking the same size and weight.
@@ -263,7 +287,14 @@ fn measure_sized_text_run(
     weight: FontWeight,
 ) -> GpuCanvasTextMetrics {
     ensure_text_run(runs, cursor);
-    runs[cursor].measure(ctx, text, mono_font(weight), px(size), px(line_h))
+    let metrics = runs[cursor].measure(
+        ctx,
+        text,
+        mono_font(weight),
+        content_px(ctx, size),
+        content_px(ctx, line_h),
+    );
+    chart_metrics(ctx, metrics)
 }
 
 /// Draw ordinary chart text without the volume-specific size or weight adjustment.
@@ -281,17 +312,18 @@ fn draw_text_run(
     ensure_text_run(runs, *cursor);
     let run = &mut runs[*cursor];
     *cursor += 1;
-    run.draw_aligned(
+    let metrics = run.draw_aligned(
         ctx,
-        point(px(x), px(y)),
+        point(content_px(ctx, x), content_px(ctx, y)),
         text,
         gpui::font(crate::design::mono()),
-        px(FONT_SIZE),
-        px(LINE_H),
+        content_px(ctx, FONT_SIZE),
+        content_px(ctx, LINE_H),
         color,
         ax,
         ay,
-    )
+    )?;
+    Ok(chart_metrics(ctx, metrics))
 }
 
 /// Measure ordinary chart text using the same metrics as its draw path.
@@ -302,13 +334,14 @@ fn measure_text_run(
     text: &str,
 ) -> GpuCanvasTextMetrics {
     ensure_text_run(runs, cursor);
-    runs[cursor].measure(
+    let metrics = runs[cursor].measure(
         ctx,
         text,
         gpui::font(crate::design::mono()),
-        px(FONT_SIZE),
-        px(LINE_H),
-    )
+        content_px(ctx, FONT_SIZE),
+        content_px(ctx, LINE_H),
+    );
+    chart_metrics(ctx, metrics)
 }
 
 /// One bottom-volume scale label, one step larger and SEMIBOLD; see [`VOLUME_SCALE_FONT_SIZE`].
@@ -356,17 +389,18 @@ fn draw_label_text_run(
     ensure_text_run(runs, *cursor);
     let run = &mut runs[*cursor];
     *cursor += 1;
-    run.draw_aligned(
+    let metrics = run.draw_aligned(
         ctx,
-        point(px(x), px(y)),
+        point(content_px(ctx, x), content_px(ctx, y)),
         text,
         gpui::font(crate::design::mono()),
-        px(fp),
-        px(fp + 4.0),
+        content_px(ctx, fp),
+        content_px(ctx, fp + 4.0),
         color,
         ax,
         ay,
-    )
+    )?;
+    Ok(chart_metrics(ctx, metrics))
 }
 
 /// Measure ordinary order labels with the same mono face and size used for drawing.
@@ -379,13 +413,14 @@ fn measure_label_text_run(
 ) -> GpuCanvasTextMetrics {
     let fp = label_font_px(label_font_delta);
     ensure_text_run(runs, cursor);
-    runs[cursor].measure(
+    let metrics = runs[cursor].measure(
         ctx,
         text,
         gpui::font(crate::design::mono()),
-        px(fp),
-        px(fp + 4.0),
-    )
+        content_px(ctx, fp),
+        content_px(ctx, fp + 4.0),
+    );
+    chart_metrics(ctx, metrics)
 }
 
 /// The cursor volume readout's own size, above the order-line label size by a fixed step.
@@ -512,14 +547,12 @@ pub(in crate::chartdx) use labels::{
 /// the size the caller actually draws at — truncating against a narrower font would underestimate
 /// the width and overflow anyway.
 fn measure_run_width(ctx: &GpuCanvasTextContext<'_>, text: &str, size: f32) -> f32 {
-    GpuCanvasTextRun::default()
-        .measure(
-            ctx,
-            text,
-            gpui::font(crate::design::mono()),
-            px(size),
-            px(size + 4.0),
-        )
-        .width
-        .as_f32()
+    let metrics = GpuCanvasTextRun::default().measure(
+        ctx,
+        text,
+        gpui::font(crate::design::mono()),
+        content_px(ctx, size),
+        content_px(ctx, size + 4.0),
+    );
+    chart_metrics(ctx, metrics).width.as_f32()
 }

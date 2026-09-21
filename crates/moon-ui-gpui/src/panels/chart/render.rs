@@ -46,10 +46,16 @@ impl Render for ChartPanel {
         self.chart.set_scene_visible(true);
         self.chart
             .set_market_source(Some(self.backend.read(cx).session.market_source()));
-        let ppp = window.scale_factor();
+        // The chart keeps the monitor's density under UI zoom: its sizes go through the platform
+        // factor alone, which is the window's effective factor with the content zoom taken out.
+        let ppp = window.scale_factor() / window.content_zoom();
         // Cache DPI for the data-prepare path, which has no Window. DPI changes infrequently.
         self.last_ppp = ppp;
         self.chart.set_last_ppp(ppp);
+        // Device pixels per content pixel: what the engine's device-pixel geometry is divided
+        // by to place a GPUI overlay in the slot. `ppp` above would land it at `zoom` times the
+        // distance under UI zoom.
+        let sf = window.scale_factor();
         let palette = MoonPalette::active(cx);
         self.chart.set_ui_palette(palette);
         // Bootstrap only: chartdx refines this from real `gpu_canvas.frame()` cadence,
@@ -185,7 +191,7 @@ impl Render for ChartPanel {
         // and collect these positions once for the overlay list.
         let close_btns: Vec<(usize, f32, f32)> = axis_panes
             .iter()
-            .map(|(idx, rect, _)| (*idx, (rect.x + rect.w) / ppp, rect.y / ppp))
+            .map(|(idx, rect, _)| (*idx, (rect.x + rect.w) / sf, rect.y / sf))
             .collect();
         // Cursor-only motion is handled by the chart-slot hitbox below. It updates retained
         // gpu_canvas cursor/readout directly and does not notify the GPUI tree.
@@ -210,8 +216,8 @@ impl Render for ChartPanel {
                 (
                     *idx,
                     self.chart.pane_pinned(*idx),
-                    rect.x / ppp + axis_off,
-                    rect.y / ppp,
+                    rect.x / sf + axis_off,
+                    rect.y / sf,
                 )
             })
             .collect();
@@ -223,7 +229,7 @@ impl Render for ChartPanel {
         let lock_btns: Vec<(usize, f32, f32)> = if self.compare_eligible {
             axis_panes
                 .iter()
-                .map(|(idx, rect, _)| (*idx, rect.x / ppp + axis_off, rect.y / ppp))
+                .map(|(idx, rect, _)| (*idx, rect.x / sf + axis_off, rect.y / sf))
                 .collect()
         } else {
             Vec::new()
@@ -233,7 +239,7 @@ impl Render for ChartPanel {
         let broom_btns: Vec<(usize, f32, f32)> = if self.compare_eligible && compare_anchor {
             axis_panes
                 .iter()
-                .map(|(idx, rect, _)| (*idx, rect.x / ppp + axis_off, rect.y / ppp))
+                .map(|(idx, rect, _)| (*idx, rect.x / sf + axis_off, rect.y / sf))
                 .collect()
         } else {
             Vec::new()
@@ -244,7 +250,7 @@ impl Render for ChartPanel {
         // broom pane, whose book covers the whole slot: there is no boundary left to draw, and a
         // strip on the right would name one where the whole pane trades. Tuple fields are
         // (idx, logical left, logical top, logical width, logical height), converted from axis_panes
-        // device pixels by dividing by ppp, like the close buttons.
+        // device pixels by dividing by the window's factor `sf`, like the close buttons.
         // `!self.historical` for the reason the strip exists at all: it marks where an
         // order-placement click lands, and a historical viewer places no orders. Shading a strip
         // for a gesture that was just removed would leave the window still saying "trading here".
@@ -259,7 +265,7 @@ impl Render for ChartPanel {
                     // The rectangle the CLICKS use, converted to logical pixels — shading anything
                     // else would promise a boundary the hit test does not honour.
                     let zone = self.control_zone_of(*rect);
-                    (*idx, zone.x / ppp, zone.y / ppp, zone.w / ppp, zone.h / ppp)
+                    (*idx, zone.x / sf, zone.y / sf, zone.w / sf, zone.h / sf)
                 })
                 .collect()
         } else {
@@ -275,16 +281,16 @@ impl Render for ChartPanel {
         // pointer events, so a mark can slide out from under a resting cursor.
         let news_ctrl = window.modifiers().secondary();
         self.revalidate_news_hover(cx);
-        let news_card = self.news_card(ppp, news_ctrl, palette, cx);
+        let news_card = self.news_card(sf, news_ctrl, palette, cx);
         // Warning badges: same re-validate (the chart scrolls between events); the card is Ctrl-gated
         // like the news card, reusing the same live modifier state.
         self.revalidate_warn_hover(cx);
-        let warn_card = self.warn_card(ppp, news_ctrl, palette, cx);
+        let warn_card = self.warn_card(sf, news_ctrl, palette, cx);
         // Trade arrows: same re-validate, and for a stronger reason — an arrow is anchored to a
         // PRICE, so it slides out from under a resting cursor on a Y auto-fit as well as on a
         // scroll. This card needs no modifier (see `trade_history_hover`).
         self.revalidate_trade_hover(cx);
-        let trade_card = self.trade_hover_card(ppp, palette, cx);
+        let trade_card = self.trade_hover_card(sf, palette, cx);
         // Per-figure settings panel, opened from a right-click on a figure. Rendered here beside
         // the other overlays rather than as a context menu: it holds swatches and switches, which
         // a menu of text items cannot draw.
@@ -335,7 +341,7 @@ impl Render for ChartPanel {
 
         // Placeholder lockup width for this pane. The share and its bounds are brand geometry, so
         // they live with the artwork in `design`, not as three literals in a panel.
-        let logo_w = ((slot_w as f32 / ppp) * crate::design::CHART_LOGO_SLOT_SHARE).clamp(
+        let logo_w = ((slot_w as f32 / sf) * crate::design::CHART_LOGO_SLOT_SHARE).clamp(
             crate::design::CHART_LOGO_MIN_W,
             crate::design::CHART_LOGO_MAX_W,
         );
@@ -462,16 +468,21 @@ impl Render for ChartPanel {
                 canvas(
                     move |bounds, _, _| bounds,
                     move |bounds, _, window, cx| {
-                        let sf = window.scale_factor();
+                        // The probe is platform space: the storms add its rectangle to the
+                        // window's screen origin or scale it by its factor, so content-space
+                        // bounds go in multiplied by the content zoom, with the zoom taken out
+                        // of the factor.
+                        let zoom = window.content_zoom();
+                        let platform_sf = window.scale_factor() / zoom;
                         let firetest_probe = crate::firetest::ChartProbe::new(
                             crate::window::windowing::window_hwnd(window),
                             f32::from(window.window_bounds().get_bounds().origin.x),
                             f32::from(window.window_bounds().get_bounds().origin.y),
-                            f32::from(bounds.origin.x),
-                            f32::from(bounds.origin.y),
-                            f32::from(bounds.size.width),
-                            f32::from(bounds.size.height),
-                            sf,
+                            f32::from(bounds.origin.x) * zoom,
+                            f32::from(bounds.origin.y) * zoom,
+                            f32::from(bounds.size.width) * zoom,
+                            f32::from(bounds.size.height) * zoom,
+                            platform_sf,
                         );
                         if is_main {
                             if let Some(probe) = firetest_probe {

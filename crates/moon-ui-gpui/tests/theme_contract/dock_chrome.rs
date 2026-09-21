@@ -109,13 +109,13 @@ fn pinned_scope_host_keeps_its_tooltip() {
 
 /// `design::action_control_h_value` and `design::glyph_btn_w` must read the SAME upstream MoonUI
 /// metric — `glyph_btn_w` now delegates straight to `action_control_h_value`, which itself reads
-/// the density tier's `control_metrics().height` rather than a hand-copied literal. Source vs
+/// the control tier's `control_metrics().height` rather than a hand-copied literal. Source vs
 /// source, not a constant compared against its own literal: this is the one oracle available for
 /// either, since neither can be checked against the private `MoonButtonMetrics` directly.
 ///
 /// Mutation: re-fork them — give `glyph_btn_w` its own literal instead of delegating, or have
-/// `action_control_h_value` stop reading `button_tier(cx).control_metrics().height`. Consequence:
-/// the pinned chip (sized off `glyph_btn_w`) stops matching the density-tier controls standing
+/// `action_control_h_value` stop reading `CONTROL_TIER.control_metrics().height`. Consequence:
+/// the pinned chip (sized off `glyph_btn_w`) stops matching the control-tier controls standing
 /// beside it in the same row — a drift neither function's own body would ever reveal by itself.
 #[test]
 fn action_control_h_value_agrees_with_glyph_btn_w() {
@@ -123,9 +123,9 @@ fn action_control_h_value_agrees_with_glyph_btn_w() {
     let action = braced_body(&design, "fn action_control_h_value(");
     let glyph = braced_body(&design, "fn glyph_btn_w(");
     assert!(
-        action.contains("button_tier(cx).control_metrics().height")
+        action.contains("CONTROL_TIER.control_metrics().height")
             && glyph.contains("action_control_h_value(cx)"),
-        "glyph_btn_w must delegate to action_control_h_value, which must read the density \
+        "glyph_btn_w must delegate to action_control_h_value, which must read the control \
          tier's own control_metrics — anything else re-forks the two Action metrics this goal \
          exists to unify"
     );

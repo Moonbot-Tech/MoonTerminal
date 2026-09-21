@@ -320,7 +320,7 @@ impl Render for ReportPanel {
                 div().w(design::ui_px(cx, 90.0)).child(
                     MoonInput::new("rep-coin")
                         .state(&self.coin)
-                        .size(design::input_tier(cx))
+                        .size(design::INPUT_SIZE)
                         .cleanable(true),
                 ),
             )

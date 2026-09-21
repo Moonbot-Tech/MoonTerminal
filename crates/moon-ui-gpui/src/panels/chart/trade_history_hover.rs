@@ -256,7 +256,7 @@ impl ChartPanel {
     /// its card sits on a fixed axis row; a price-anchored card can be pushed against any edge.
     ///
     /// Args:
-    ///     ppp: Device pixels per logical pixel for the current window.
+    ///     sf: Device pixels per content pixel — the window's effective factor, UI zoom included.
     ///     palette: Active theme colours.
     ///     cx: Application context used for scaled design tokens and translated labels.
     ///
@@ -264,16 +264,16 @@ impl ChartPanel {
     ///     The positioned card, or `None` when no hovered trade can be displayed.
     pub(super) fn trade_hover_card(
         &self,
-        ppp: f32,
+        sf: f32,
         palette: MoonPalette,
         cx: &App,
     ) -> Option<AnyElement> {
         let hover = self.trade_hover.hover.as_ref()?;
         let (cursor_x, cursor_y) = self.input.cursor?;
-        let ppp = ppp.max(0.1);
+        let sf = sf.max(0.1);
         let slot = self.chart.slot_dev_size();
-        let slot_w = slot.0 as f32 / ppp;
-        let slot_h = slot.1 as f32 / ppp;
+        let slot_w = slot.0 as f32 / sf;
+        let slot_h = slot.1 as f32 / sf;
         let gap = f32::from(design::ui_px(cx, CARD_GAP));
         // Insets have to fit before they can be honoured: on a pane narrower than two insets, a
         // fixed inset would leave a negative width. The slot always wins over the preferred size.
@@ -321,8 +321,8 @@ impl ChartPanel {
 
         // Device pixels → the slot's logical pixels the overlay is laid out in. Prefer the side of
         // the cursor with room, so the card never covers the arrow the user is pointing at.
-        let cursor_x = cursor_x / ppp;
-        let cursor_y = cursor_y / ppp;
+        let cursor_x = cursor_x / sf;
+        let cursor_y = cursor_y / sf;
         let left = if cursor_x + gap + card_w + inset <= slot_w {
             cursor_x + gap
         } else {

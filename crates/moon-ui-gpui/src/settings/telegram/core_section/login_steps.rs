@@ -658,7 +658,7 @@ impl SettingsView {
     ) -> impl IntoElement {
         let mut input = MoonInput::new(id)
             .state(state)
-            .size(design::input_tier(cx))
+            .size(design::INPUT_SIZE)
             .mono(true);
         if masked {
             input = input.mask_toggle();

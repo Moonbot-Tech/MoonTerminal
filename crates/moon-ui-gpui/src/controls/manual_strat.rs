@@ -110,7 +110,7 @@ const REDUCED_PILL_MAX_W: f32 = 120.0;
 /// `chrome::quiet::header_quiet_width`, which reads the new metrics on its own.
 const HEADER_OTHER_SECTIONS_W: f32 = 806.0;
 
-/// Width of the "MS" toggle (track, gap and label) at the density-default tier.
+/// Width of the "MS" toggle (track, gap and label) at the control tier.
 ///
 /// The label is measured in the mono family because the MS toggle sets no `.mono()` and
 /// `MoonToggle` defaults `mono: true`.
@@ -230,14 +230,14 @@ pub fn manual_strategy_controls(
                 let name_w = design::ui_text_width_zoomed(
                     cx,
                     name_label,
-                    design::tier_font_size(cx),
+                    design::BODY_TEXT,
                     BTN_TEXT_WEIGHT,
                     true,
                 );
                 let numeric_w = design::ui_text_width_zoomed(
                     cx,
                     numeric_label,
-                    design::tier_font_size(cx),
+                    design::BODY_TEXT,
                     BTN_TEXT_WEIGHT,
                     true,
                 );
@@ -251,7 +251,7 @@ pub fn manual_strategy_controls(
             + design::fit_text(
                 &full_pill_text,
                 design::font_w(cx, design::HEADER_LABEL_MAX_W),
-                |s| design::ui_text_width_zoomed(cx, s, design::tier_font_size(cx), 500.0, true),
+                |s| design::ui_text_width_zoomed(cx, s, design::BODY_TEXT, 500.0, true),
             )
             .1;
         // The parameter summary sits at the END of this cluster and is measured like the buttons
@@ -322,7 +322,7 @@ pub fn manual_strategy_controls(
         design::font_w(cx, design::HEADER_LABEL_MAX_W)
     };
     let display = design::fit_text(&full_pill_text, pill_cap, |s| {
-        design::ui_text_width_zoomed(cx, s, design::tier_font_size(cx), 500.0, true)
+        design::ui_text_width_zoomed(cx, s, design::BODY_TEXT, 500.0, true)
     })
     .0;
     let dot_color = if on && sel_row.is_some() {
@@ -428,7 +428,7 @@ pub fn manual_strategy_controls(
                             MoonSelectorSegment::new(display)
                                 .color(if on { p.text } else { p.text_soft })
                                 .weight(500.0)
-                                .font_size(design::tier_font_base(cx, 0.0)),
+                                .font_size(design::body_font_base(cx, 0.0)),
                         )
                         .render()
                 })
@@ -474,13 +474,8 @@ pub fn manual_strategy_controls(
             // An explicit width, so the caption sits inside the button's own padding instead of
             // against its border. Measured through the same helper the fit ladder used, so the
             // budget and the rendered button cannot disagree.
-            let label_w = design::ui_text_width_zoomed(
-                cx,
-                &label,
-                design::tier_font_size(cx),
-                BTN_TEXT_WEIGHT,
-                true,
-            );
+            let label_w =
+                design::ui_text_width_zoomed(cx, &label, design::BODY_TEXT, BTN_TEXT_WEIGHT, true);
             let btn_w = design::ui_value(cx, BTN_CHROME_W) + label_w;
 
             let mut btn = MoonButton::new(SharedString::from(format!("ms-btn-{i}")))

@@ -736,10 +736,13 @@ pub(crate) fn window_geom_rect(window: &Window, cx: &App) -> moon_core::config::
 
 /// The logical width a window currently OCCUPIES, for responsive chrome.
 ///
-/// `bounds()`, not `window_bounds()`: the latter is the RESTORE rectangle, which for a maximized
-/// or fullscreen window names the size it will return to rather than the width being laid out.
-/// One home for that distinction, because five surfaces ask the same question and a window that
-/// now OPENS maximized would lay out against the wrong number from its very first frame.
+/// `viewport_size()`, not `window_bounds()`: the latter is the RESTORE rectangle, which for a
+/// maximized or fullscreen window names the size it will return to rather than the width being
+/// laid out. And the viewport rather than `bounds()`, because layout happens in content space:
+/// under UI zoom the window has fewer content pixels than screen pixels, and the thresholds must
+/// compare against the width the row is actually laid out in. One home for that distinction,
+/// because five surfaces ask the same question and a window that now OPENS maximized would lay
+/// out against the wrong number from its very first frame.
 ///
 /// # Arguments
 ///
@@ -747,9 +750,9 @@ pub(crate) fn window_geom_rect(window: &Window, cx: &App) -> moon_core::config::
 ///
 /// # Returns
 ///
-/// The width in logical pixels.
+/// The width in content pixels.
 pub(crate) fn responsive_width(window: &Window) -> f32 {
-    f32::from(window.bounds().size.width)
+    f32::from(window.viewport_size().width)
 }
 
 /// Turn remembered window-state flags into the bounds a window should open with.

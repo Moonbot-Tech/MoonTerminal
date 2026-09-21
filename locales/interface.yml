@@ -38,30 +38,14 @@ iface.sec_font:
   ru: "График: шрифт подписей"
   en: "Chart: label font"
   es: "Gráfico: fuente de etiquetas"
-iface.density:
-  ru: "Плотность"
-  en: "Density"
-  es: "Densidad"
-iface.density_compact:
-  ru: "Компакт"
-  en: "Compact"
-  es: "Compacta"
-iface.density_standard:
-  ru: "Стандарт"
-  en: "Standard"
-  es: "Estándar"
-iface.density_large:
-  ru: "Крупно"
-  en: "Large"
-  es: "Grande"
-iface.density_hint:
-  ru: "Размер элементов и текста интерфейса. Меняется сразу."
-  en: "Interface control and text size. Applies instantly."
-  es: "Tamaño de controles y texto de la interfaz. Se aplica al instante."
 iface.ui_zoom:
   ru: "Масштаб интерфейса"
   en: "UI zoom"
   es: "Zoom de la interfaz"
+iface.ui_zoom_hint:
+  ru: "Масштабирует весь интерфейс пропорционально; график остаётся в своём масштабе. Применяется, когда ползунок отпущен."
+  en: "Scales the whole interface proportionally; the chart keeps its own scale. Applies when the slider is released."
+  es: "Escala toda la interfaz proporcionalmente; el gráfico conserva su propia escala. Se aplica al soltar el control."
 iface.label_font_delta:
   ru: "Коррекция размера подписей линий и курсора (px)"
   en: "Order-line & cursor label size adjustment (px)"

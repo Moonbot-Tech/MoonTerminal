@@ -384,7 +384,7 @@ impl AnalyticsView {
                 div().flex_none().child(
                     MoonCheckbox::new("tt-en-all")
                         .checked(self.time_tuner.enabled.iter().all(|&e| e))
-                        .size(design::choice_tier(cx))
+                        .size(design::CONTROL_TIER)
                         .on_change({
                             let view = cx.entity();
                             move |ch: &bool, _w, app| {
@@ -529,7 +529,7 @@ impl AnalyticsView {
             .child(
                 MoonCheckbox::new(SharedString::from(format!("tt-en-{field}")))
                     .checked(enabled)
-                    .size(design::choice_tier(cx))
+                    .size(design::CONTROL_TIER)
                     .on_change({
                         let view = cx.entity();
                         move |ch: &bool, _w, app| {
@@ -603,7 +603,7 @@ impl AnalyticsView {
                                 "tt-in-{vi}-{field}-{is_to}"
                             )))
                             .state(&input)
-                            .size(design::input_tier(cx)),
+                            .size(design::INPUT_SIZE),
                         ),
                 );
             }

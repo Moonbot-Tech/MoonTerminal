@@ -168,7 +168,7 @@ fn brand_cuts_match_their_geometry_and_scheme() {
 // `theme_contract` toggle-tone check instead).
 
 use super::{CHROME_RULE_H, HEADER_TOP_H, TOOLBAR_H, chrome_toggle_tone, readout_color};
-use moon_core::config::{UiDensity, UiThemeMode};
+use moon_core::config::UiThemeMode;
 use moon_ui::MoonPalette;
 
 /// `design::readout_color` is the ONE place a toolbar readout decides muted-vs-present.
@@ -197,67 +197,43 @@ fn readout_color_is_muted_when_absent_and_full_strength_when_present() {
     );
 }
 
-/// `CHROME_RULE_H` must stay strictly under the shorter of the header and toolbar bands at EVERY
-/// density-derived font delta, or the seam
-/// `design::chrome_divider` draws paints outside the chrome strip and over the dock border below
-/// it — and since `chrome_divider` has ~11 consumers app-wide, that lands in every one of them at
-/// once.
+/// `CHROME_RULE_H` must stay strictly under the shorter of the header and toolbar bands, or the
+/// seam `design::chrome_divider` draws paints outside the chrome strip and over the dock border
+/// below it — and since `chrome_divider` has ~11 consumers app-wide, that lands in every one of
+/// them at once.
 ///
 /// Breakage this pins: raising `CHROME_RULE_H` to make the seam more visible without checking the
-/// narrowest band (at Compact density both bands are 28px; the token is 20).
+/// bands (the token is 20; both bands are 35 at the design's font delta).
 ///
-/// Computed directly against `MoonThemeTokens::fit_band` and `tier_band_base` rather than through
+/// Computed directly against `MoonThemeTokens::fit_band` rather than through
 /// `design::header_height`/`design::toolbar_height`, because those two need a live `App` this
-/// unit test does not have. Those are the exact pure token calls both adapters delegate to, so the
-/// test measures their rendered band values rather than the superseded legacy fit-height triples.
+/// unit test does not have. That is the exact pure token call both adapters delegate to.
 #[test]
-fn chrome_rule_h_stays_under_both_chrome_bands_at_every_font_delta() {
-    for density in [UiDensity::Compact, UiDensity::Standard, UiDensity::Large] {
-        let tokens =
-            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, density, 1.0)
-                .dark;
-        let delta = tokens.scale.font_delta;
-        let header = tokens.fit_band(tokens.tier_band_base(HEADER_TOP_H, |m| m.height), 14.0);
-        let toolbar = tokens.fit_band(tokens.tier_band_base(TOOLBAR_H, |m| m.height), 13.0);
-        assert!(
-            CHROME_RULE_H < header.min(toolbar),
-            "font delta {delta}: CHROME_RULE_H {CHROME_RULE_H} must stay under header {header} \
-             and toolbar {toolbar}"
-        );
-    }
+fn chrome_rule_h_stays_under_both_chrome_bands() {
+    let tokens = crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0).dark;
+    let header = tokens.fit_band(HEADER_TOP_H, 14.0);
+    let toolbar = tokens.fit_band(TOOLBAR_H, 13.0);
+    assert!(
+        CHROME_RULE_H < header.min(toolbar),
+        "CHROME_RULE_H {CHROME_RULE_H} must stay under header {header} and toolbar {toolbar}"
+    );
 }
 
-/// Catches the compact-band rebase moving the frozen Standard or Large rendered dimensions,
-/// which would change table and chrome geometry outside the user-selected Compact density.
+/// Catches moving the design's fixed size system — `design::CONTROL_TIER`,
+/// `design::DESIGN_FONT_DELTA` or the band bases — which would move every table row and both
+/// chrome bands away from the reviewed Standard design.
 #[test]
-fn density_band_tokens_keep_standard_and_large_rendered_values() {
-    let values = [
-        (UiDensity::Compact, (21.0, 22.0, 28.0, 28.0)),
-        (UiDensity::Standard, (28.0, 29.0, 35.0, 35.0)),
-        (UiDensity::Large, (31.0, 32.0, 38.0, 38.0)),
-    ];
-    let mut previous: Option<(f32, f32, f32, f32)> = None;
-    for (density, expected) in values {
-        let tokens =
-            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, density, 1.0)
-                .dark;
-        let actual = (
+fn design_band_tokens_render_the_reviewed_standard_values() {
+    let tokens = crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0).dark;
+    assert_eq!(
+        (
             tokens.table_row_height(),
             tokens.table_header_height(),
-            tokens.fit_band(tokens.tier_band_base(HEADER_TOP_H, |m| m.height), 14.0),
-            tokens.fit_band(tokens.tier_band_base(TOOLBAR_H, |m| m.height), 13.0),
-        );
-        assert_eq!(actual, expected);
-        if let Some(before) = previous {
-            assert!(
-                before.0 < actual.0
-                    && before.1 < actual.1
-                    && before.2 < actual.2
-                    && before.3 < actual.3
-            );
-        }
-        previous = Some(actual);
-    }
+            tokens.fit_band(HEADER_TOP_H, 14.0),
+            tokens.fit_band(TOOLBAR_H, 13.0),
+        ),
+        (28.0, 29.0, 35.0, 35.0)
+    );
 }
 
 /// `design::chrome_toggle_tone` is the one truth table every chrome toggle (Sleep, own-trade, SL)
@@ -340,161 +316,122 @@ fn a_degenerate_scale_answers_the_target_itself() {
     assert_eq!(invert_font_scale(12.0, 12.0, 14.0), 14.0);
 }
 
-// --- MoonButton density tier: dense strips vs ordinary rows ------------------------------------
+// --- Dense strips vs ordinary rows -------------------------------------------------------------
 
 /// `design::micro_control_h_value` is PINNED to `MoonSize::Xs` while `design::action_control_h_value`
-/// FOLLOWS the app's density tier through [`super::button_tier`] — the whole point of splitting a
-/// dense strip's height from an ordinary control row's.
+/// reads [`super::CONTROL_TIER`] — the whole point of splitting a dense strip's height from an
+/// ordinary control row's.
 ///
-/// Breakage this pins: swapping the two helpers' bodies. That inversion — dense strips growing
-/// with density while ordinary rows stop growing — is the single most damaging way this goal can
-/// be silently undone, and nothing else in either repo catches it.
+/// Breakage this pins: swapping the two helpers' bodies, or moving `CONTROL_TIER` off `Sm`. That
+/// inversion — dense strips as tall as ordinary rows — is the single most damaging way this split
+/// can be silently undone, and nothing else in either repo catches it.
 #[gpui::test]
-fn micro_control_h_value_stays_pinned_while_action_follows_density(cx: &mut gpui::TestAppContext) {
-    for (density, expected_action) in [
-        (UiDensity::Compact, 20.0),
-        (UiDensity::Standard, 24.0),
-        (UiDensity::Large, 32.0),
-    ] {
-        cx.update(|cx| {
-            moon_ui::MoonTheme::install_config(
-                crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, density, 1.0),
-                cx,
-            );
-        });
-        let (micro, action) = cx.update(|cx| {
-            (
-                super::micro_control_h_value(cx),
-                super::action_control_h_value(cx),
-            )
-        });
-        assert_eq!(
-            micro, 20.0,
-            "{density:?}: micro_control_h_value must stay pinned to MoonSize::Xs, got {micro}"
+fn micro_control_h_value_stays_below_the_control_row(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            cx,
         );
-        assert_eq!(
-            action, expected_action,
-            "{density:?}: action_control_h_value must follow the density tier, got {action}"
-        );
-    }
+    });
+    let (micro, action) = cx.update(|cx| {
+        (
+            super::micro_control_h_value(cx),
+            super::action_control_h_value(cx),
+        )
+    });
+    assert_eq!(
+        micro, 20.0,
+        "micro_control_h_value must stay pinned to MoonSize::Xs, got {micro}"
+    );
+    assert_eq!(
+        action, 24.0,
+        "action_control_h_value must read CONTROL_TIER (Sm), got {action}"
+    );
 }
 
-// --- Compact density: one size system -------------------------------------
+// --- One size system ---------------------------------------------------------------------------
 
-use super::{font_w, line_px, t_body, t_body_lg, t_caption, t_title, tier_font_base, ui_px};
+use super::{body_font_base, font_w, line_px, t_body, t_body_lg, t_caption, t_title, ui_px};
 use gpui::px;
 
-/// `design.rs:tier_text_value` must preserve Standard's legacy results after the tier rebase.
+/// `design.rs:t_body` and its siblings must render what MoonUI's font channel rendered for the
+/// reviewed design: the text sizes the rest of the interface was measured against.
 ///
-/// Breakage: restoring `font_delta` as the tier step, or changing the caption/body/title steps,
-/// shifts roughly 400 Standard text call sites even though Standard was promised unchanged.
+/// Breakage: changing `BODY_TEXT`, `DESIGN_FONT_DELTA` or the caption/body/title steps shifts
+/// roughly 400 text call sites away from the design.
 #[gpui::test]
-fn standard_text_is_unchanged_by_the_rebase(cx: &mut gpui::TestAppContext) {
-    for zoom in [0.75, 1.0, 1.25, 1.5] {
-        cx.update(|cx| {
-            moon_ui::MoonTheme::install_config(
-                crate::startup::moon_theme_config_for_presentation(
-                    UiThemeMode::Dark,
-                    UiDensity::Standard,
-                    zoom,
-                ),
-                cx,
-            );
-        });
-        let (body, caption, body_lg, title, line, legacy) = cx.update(|cx| {
-            let tokens = moon_ui::MoonTheme::active_tokens(cx);
-            (
-                t_body(cx),
-                t_caption(cx),
-                t_body_lg(cx),
-                t_title(cx),
-                line_px(cx, 14.0),
-                (
-                    px(tokens.font(11.0)),
-                    px(tokens.font(9.0)),
-                    px(tokens.font(12.0)),
-                    px(tokens.font(14.0)),
-                    px(tokens.line_height(14.0)),
-                ),
-            )
-        });
-        assert_eq!(
-            (body, caption, body_lg, title, line),
-            legacy,
-            "Standard zoom {zoom}"
+fn body_text_matches_the_legacy_font_channel_at_the_design(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            cx,
         );
-    }
+    });
+    let (body, caption, body_lg, title, line, legacy) = cx.update(|cx| {
+        let tokens = moon_ui::MoonTheme::active_tokens(cx);
+        (
+            t_body(cx),
+            t_caption(cx),
+            t_body_lg(cx),
+            t_title(cx),
+            line_px(cx, 14.0),
+            (
+                px(tokens.font(11.0)),
+                px(tokens.font(9.0)),
+                px(tokens.font(12.0)),
+                px(tokens.font(14.0)),
+                px(tokens.line_height(14.0)),
+            ),
+        )
+    });
+    assert_eq!((body, caption, body_lg, title, line), legacy);
 }
 
-/// `design.rs:t_body` and its sibling tiers must render from MoonUI's density control metric.
+/// `design.rs:BODY_TEXT` is the control tier's own font, and the `t_*` helpers and `font_w` derive
+/// from it, so text sits on the same size system as the controls beside it.
 ///
-/// Breakage: pinning a `t_*` helper to a literal or leaving `font_w` on the legacy width scale
-/// makes Compact text disagree with the controls it sits beside.
+/// Breakage: pinning a `t_*` helper to a literal, or leaving `font_w` on another width scale,
+/// makes text disagree with the controls it sits beside.
 #[gpui::test]
-fn t_body_is_the_tier_font_at_every_density(cx: &mut gpui::TestAppContext) {
-    for (density, expected_font) in [
-        (UiDensity::Compact, 12.0),
-        (UiDensity::Standard, 14.0),
-        (UiDensity::Large, 16.0),
-    ] {
-        for zoom in [0.75, 1.0, 1.5] {
-            cx.update(|cx| {
-                moon_ui::MoonTheme::install_config(
-                    crate::startup::moon_theme_config_for_presentation(
-                        UiThemeMode::Dark,
-                        density,
-                        zoom,
-                    ),
-                    cx,
-                );
-            });
-            let (body, caption, title, width, expected) = cx.update(|cx| {
-                (
-                    t_body(cx),
-                    t_caption(cx),
-                    t_title(cx),
-                    font_w(cx, 11.0),
-                    (
-                        ui_px(cx, expected_font),
-                        ui_px(cx, expected_font - 2.0),
-                        ui_px(cx, expected_font + 3.0),
-                    ),
-                )
-            });
-            assert_eq!(body, expected.0, "{density:?} zoom {zoom}: body");
-            assert_eq!(caption, expected.1, "{density:?} zoom {zoom}: caption");
-            assert_eq!(title, expected.2, "{density:?} zoom {zoom}: title");
-            assert_eq!(
-                width,
-                f32::from(body),
-                "{density:?} zoom {zoom}: body width"
-            );
-        }
-    }
+fn t_body_is_the_control_tiers_font(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            cx,
+        );
+    });
+    let (body, caption, title, width, expected) = cx.update(|cx| {
+        (
+            t_body(cx),
+            t_caption(cx),
+            t_title(cx),
+            font_w(cx, 11.0),
+            (ui_px(cx, 14.0), ui_px(cx, 12.0), ui_px(cx, 17.0)),
+        )
+    });
+    assert_eq!(body, expected.0, "body");
+    assert_eq!(caption, expected.1, "caption");
+    assert_eq!(title, expected.2, "title");
+    assert_eq!(width, f32::from(body), "body width");
 }
 
-/// `design.rs:tier_font_base` must invert MoonUI's font channel at each supported density.
+/// `design.rs:body_font_base` must invert MoonUI's font channel.
 ///
 /// Breakage: clamping MoonUI's font transform or dropping the helper's UI-value wrapping puts
-/// table cells and header pills back off-tier without changing their call sites.
+/// table cells and header pills off the body size without changing their call sites.
 #[gpui::test]
-fn tier_font_base_round_trips_through_the_font_channel(cx: &mut gpui::TestAppContext) {
-    for density in [UiDensity::Compact, UiDensity::Standard, UiDensity::Large] {
-        cx.update(|cx| {
-            moon_ui::MoonTheme::install_config(
-                crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, density, 1.0),
-                cx,
-            );
-        });
-        let (rendered, body) = cx.update(|cx| {
-            (
-                moon_ui::MoonTheme::active_tokens(cx).font(tier_font_base(cx, 0.0)),
-                f32::from(t_body(cx)),
-            )
-        });
-        assert!(
-            (rendered - body).abs() < 0.01,
-            "{density:?}: {rendered} != {body}"
+fn body_font_base_round_trips_through_the_font_channel(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            cx,
         );
-    }
+    });
+    let (rendered, body) = cx.update(|cx| {
+        (
+            moon_ui::MoonTheme::active_tokens(cx).font(body_font_base(cx, 0.0)),
+            f32::from(t_body(cx)),
+        )
+    });
+    assert!((rendered - body).abs() < 0.01, "{rendered} != {body}");
 }

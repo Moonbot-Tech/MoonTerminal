@@ -136,7 +136,7 @@ pub(crate) const PINNED_SCOPE_TRIGGER_MAX_W: f32 = 250.0;
 pub(crate) fn pinned_scope_width(cx: &gpui::App, label: &str, min_w: f32, max_w: f32) -> f32 {
     // The chip's own text channel: the button tier's font size, mono, regular weight — the three
     // `pinned_scope_label` sets on the element it measures here.
-    let font_size = crate::design::button_tier(cx).control_metrics().font_size;
+    let font_size = crate::design::CONTROL_TIER.control_metrics().font_size;
     let text_w = |text: &str| crate::design::ui_text_width_zoomed(cx, text, font_size, 400.0, true);
     let chrome = text_w(crate::design::PINNED_SCOPE_GLYPH)
         + crate::design::ui_value(cx, crate::design::PINNED_SCOPE_GAP)

@@ -27,7 +27,11 @@ impl RenderState {
         ctx: &mut GpuCanvasTextContext<'_>,
     ) -> anyhow::Result<()> {
         self.text_run_cursor = 0;
-        let sf = ctx.scale_factor().max(0.1);
+        // The text layer lays out in the chart's own logical pixels — the platform's, with the
+        // window's content zoom taken out of the frame's factor — so its captions keep device
+        // density under UI zoom like the rest of the chart. `content_px` crosses into GPUI's
+        // content pixels at the draw and measure calls.
+        let sf = (ctx.scale_factor() / ctx.content_zoom().max(0.1)).max(0.1);
         let ink = color(self.axis_label);
         let readout = color(self.readout_label);
         let label_neutral = color(self.label_neutral);

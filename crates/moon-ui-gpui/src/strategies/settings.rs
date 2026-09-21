@@ -12,8 +12,8 @@ use moon_core::config::layout::{
     STRATEGIES_TREE_TEXT_STEP_MIN, WindowLayout, clamp_strategies_tree_text_step,
 };
 use moon_ui::{
-    MoonCheckbox, MoonGroupBox, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize,
-    MoonStepper, MoonTheme, h_flex, v_flex,
+    MoonCheckbox, MoonGroupBox, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonStepper,
+    MoonTheme, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -367,25 +367,16 @@ fn settings_content_width(cx: &App) -> f32 {
         .fold(0.0_f32, f32::max);
     let checkbox_leading = f32::from(design::ui_px(
         cx,
-        crate::panels::common::checkbox_metrics(cx).mark
-            + crate::panels::common::checkbox_metrics(cx).gap,
+        crate::panels::common::CHECKBOX_METRICS.mark + crate::panels::common::CHECKBOX_METRICS.gap,
     ));
     let text_step_label_width = checkbox_face_width(cx, &t!("strat.settings.text_step"), 400.0);
-    // Reserve the density tier's full stepper width; buttons and value cell share UI zoom.
-    let tier = tokens
-        .tier()
-        .nearest(&[MoonSize::Xs, MoonSize::Sm, MoonSize::Md]);
-    let height = tier.control_metrics().height;
-    // Match the stepper's compact/normal value-width ratios; all widths follow UI zoom. The
-    // gap between the checkbox mark and its label follows the density tier as well.
-    let ratio = if tier == MoonSize::Md {
-        64.0 / 26.0
-    } else {
-        52.0 / 22.0
-    };
-    let stepper_reserve_px = tokens.ui(height * 2.0
-        + (height * ratio).round()
-        + crate::panels::common::checkbox_metrics(cx).gap);
+    // Reserve the stepper's full width at the control tier; buttons and value cell share UI zoom.
+    let height = design::CONTROL_TIER.control_metrics().height;
+    // Match the stepper's value-width ratio at that tier; all widths follow UI zoom. The gap
+    // between the checkbox mark and its label is the control tier's as well.
+    let ratio = 52.0 / 22.0;
+    let stepper_reserve_px = tokens
+        .ui(height * 2.0 + (height * ratio).round() + crate::panels::common::CHECKBOX_METRICS.gap);
     settings_content_width_value(
         title_width,
         group_width,
@@ -420,10 +411,10 @@ fn popup_text_width(cx: &App, text: &str, base_size: f32, weight: f32) -> f32 {
     design::ui_text_width(cx, text, base_size, weight, false)
 }
 
-/// Measure text set in the density-selected checkbox label's face, in the popup's proportional family.
+/// Measure text set in the control-tier checkbox label's face, in the popup's proportional family.
 ///
 /// That face follows the UI zoom but not the legacy font-delta channel (see
-/// [`crate::panels::common::checkbox_metrics`]), so it is measured apart from
+/// [`crate::panels::common::CHECKBOX_METRICS`]), so it is measured apart from
 /// [`popup_text_width`], which adds that delta.
 ///
 /// Args:
@@ -437,7 +428,7 @@ fn checkbox_face_width(cx: &App, text: &str, weight: f32) -> f32 {
     design::ui_text_width_zoomed(
         cx,
         text,
-        crate::panels::common::checkbox_metrics(cx).font,
+        crate::panels::common::CHECKBOX_METRICS.font,
         weight,
         false,
     )
@@ -477,7 +468,7 @@ fn settings_content_width_value(
     title_w.max(group_content + group_inset_px)
 }
 
-/// Build the tree text-step row: its label, then a density-sized stepper.
+/// Build the tree text-step row: its label, then a control-tier stepper.
 ///
 /// A sibling of [`pref_group`]'s checkbox rows rather than a member of [`POPUP_ROWS`] — the
 /// preference is numeric, not boolean, so it cannot share `PrefRow`'s bool-typed function
@@ -507,7 +498,7 @@ fn tree_text_step_row(
                 .truncate()
                 .text_size(design::ui_px(
                     cx,
-                    crate::panels::common::checkbox_metrics(cx).font,
+                    crate::panels::common::CHECKBOX_METRICS.font,
                 ))
                 .child(t!("strat.settings.text_step").to_string()),
         )

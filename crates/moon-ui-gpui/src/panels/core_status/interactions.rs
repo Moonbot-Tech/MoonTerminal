@@ -1223,7 +1223,7 @@ impl CoreStatusView {
                                         .child(
                                             MoonInput::new("core-status-fleet-named-input")
                                                 .state(&field)
-                                                .size(design::input_tier(cx)),
+                                                .size(design::INPUT_SIZE),
                                         )
                                         .child(
                                             div()

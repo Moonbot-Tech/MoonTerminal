@@ -857,6 +857,32 @@ FireTest does not read sources and does not check architecture statically. The b
 native input, counters/CPU/GPU/RAM. Static bans of the form "do not render a menu as a panel
 child" live in `tests/theme_contract/`, not inside the runtime scenario.
 
+### UI scale
+
+One user scale (`ui_scale`, Settings → General → "UI zoom", 50–200 %) is installed as the window's
+content zoom: `startup::moon_theme_config_for_presentation` puts it into `MoonScale::zoom`, and each
+window's `MoonRoot` applies it through `Window::set_content_zoom`. The zoom folds into the window's
+`scale_factor`, so every pixel scales — text, geometry, images, hit areas, persisted dock sizes —
+without the components taking part. MoonUI's tokens stay at the design's own scale:
+`scale.ui == scale.font == 1.0`, `tier = Sm`, `font_delta = 3`; `design::ui_px` is an identity
+adapter over the tokens, and `design::CONTROL_TIER` / `BODY_TEXT` / `INPUT_SIZE` are the one size
+system that controls, text and chrome bands derive from. There is no density setting (Compact /
+Standard / Large) any more: stepping MoonUI tiers substituted a different design instead of scaling
+the reviewed one, and did not keep its proportions.
+
+The chart does not take part in the zoom. `chartdx` sizes its render target by the full
+`scale_factor` (the slot really is `bounds × factor` device pixels) and its own sizes — line
+widths, candles, axes, captions — by `scale_factor / content_zoom`, the platform DPI. Three spaces
+meet at the chart and each crossing has one home: a content-space pointer reaches device pixels
+through `ChartEngine::slot_scale_factor` (the window's factor); the engine's geometry and the input
+container use `last_ppp` (the chart-design factor); the chart's text layer lives in its own logical
+pixels and crosses into GPUI's content pixels only in `chartdx::text::content_px` /
+`chart_metrics`; and GPUI overlays over chart geometry divide device pixels by the window's factor
+(`panels/chart/render.rs`) or go through `chart_origin_logical` (`arb_open.rs`,
+`market_actions.rs`). Screen coordinates (`window.bounds()`, window placement, the FireTest probe,
+first-open window sizes) stay in the platform's pixels; `windowing::responsive_width` reads
+`viewport_size()`, which is content pixels.
+
 ## Windows
 
 The terminal uses its own header and borderless/CSD behaviour. Check separately:

@@ -285,10 +285,10 @@ impl StrategiesView {
     fn pane_footer_label_width(&mut self, staged: usize, cx: &App) -> f32 {
         let locale = rust_i18n::locale();
         let locale: &str = &locale;
-        let font_size = design::button_tier(cx).control_metrics().font_size;
-        // Fold the density tier (via its control font) and the UI-zoom size the measurement
-        // actually uses: `text_metrics_key` is the font channel, so without the `ui()` bits a
-        // density or zoom change would keep a stale width for every already-cached row.
+        let font_size = design::CONTROL_TIER.control_metrics().font_size;
+        // Fold the control tier's font and the UI-zoom size the measurement actually uses:
+        // `text_metrics_key` is the font channel, so without the `ui()` bits a font or zoom
+        // change would keep a stale width for every already-cached row.
         let metrics = design::text_metrics_key(cx, font_size, FOOTER_LABEL_WEIGHT, false)
             ^ u64::from(design::ui_value(cx, font_size).to_bits());
         // Compared field by field rather than against a freshly built key: owning the locale means
@@ -397,7 +397,7 @@ fn footer_label_width(cx: &App, staged: usize) -> f32 {
         design::ui_text_width_zoomed(
             cx,
             label,
-            design::button_tier(cx).control_metrics().font_size,
+            design::CONTROL_TIER.control_metrics().font_size,
             FOOTER_LABEL_WEIGHT,
             false,
         )
@@ -410,7 +410,7 @@ fn footer_label_width(cx: &App, staged: usize) -> f32 {
         width += design::ui_text_width_zoomed(
             cx,
             &t!("strat.staged", n = staged),
-            design::button_tier(cx).control_metrics().font_size,
+            design::CONTROL_TIER.control_metrics().font_size,
             FOOTER_LABEL_WEIGHT,
             true,
         );

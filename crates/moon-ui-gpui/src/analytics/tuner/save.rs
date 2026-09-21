@@ -828,7 +828,7 @@ impl AnalyticsView {
                             div().flex_1().min_w_0().child(
                                 MoonInput::new("tun-copy-name")
                                     .state(input)
-                                    .size(design::input_tier(cx)),
+                                    .size(design::INPUT_SIZE),
                             ),
                         ),
                 );

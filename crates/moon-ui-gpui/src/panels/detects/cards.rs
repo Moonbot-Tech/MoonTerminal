@@ -310,7 +310,7 @@ fn core_badge(it: &DetectItem, color: u32) -> MoonBadge {
 fn coin_text(it: &DetectItem, p: MoonPalette, cx: &App) -> MoonText {
     MoonText::new(it.base.clone())
         .color(p.text)
-        .rendered_metrics(design::tier_text_metrics(cx, 0.0, 15.0))
+        .rendered_metrics(design::text_metrics(cx, 0.0, 15.0))
         .weight(600.0)
         .mono(true)
         .uppercase(false)
@@ -320,7 +320,7 @@ fn coin_text(it: &DetectItem, p: MoonPalette, cx: &App) -> MoonText {
 fn muted(text: String, p: MoonPalette, cx: &App) -> MoonText {
     MoonText::new(text)
         .color(p.text_muted)
-        .rendered_metrics(design::tier_text_metrics(cx, -2.0, 11.0))
+        .rendered_metrics(design::text_metrics(cx, -2.0, 11.0))
         .mono(true)
         .uppercase(false)
 }
@@ -329,7 +329,7 @@ fn muted(text: String, p: MoonPalette, cx: &App) -> MoonText {
 fn soft(text: String, p: MoonPalette, cx: &App) -> MoonText {
     MoonText::new(text)
         .color(p.text_soft)
-        .rendered_metrics(design::tier_text_metrics(cx, -2.0, 11.0))
+        .rendered_metrics(design::text_metrics(cx, -2.0, 11.0))
         .mono(true)
         .uppercase(false)
 }
@@ -350,7 +350,7 @@ fn delta_chip(val: f32, over: bool, decimals: usize, p: MoonPalette, cx: &App) -
     };
     let text = MoonText::new(label)
         .color(col)
-        .rendered_metrics(design::tier_text_metrics(cx, -2.0, 11.0))
+        .rendered_metrics(design::text_metrics(cx, -2.0, 11.0))
         .weight(700.0)
         .mono(true)
         .uppercase(false);

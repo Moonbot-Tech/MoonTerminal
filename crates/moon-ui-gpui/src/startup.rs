@@ -254,50 +254,36 @@ pub(crate) fn moon_theme_config_for_mode(mode: UiThemeMode) -> MoonThemeConfig {
     theme
 }
 
-/// Map persisted density onto MoonUI's tier and remaining non-tier text metrics.
+/// Map the persisted presentation onto MoonUI's theme: the palette by `mode`, the design's own
+/// tier and text delta fixed, and `ui_scale` installed as the window content zoom.
 ///
-/// UI zoom scales geometry, text and the density's font delta proportionally. Standard retains
-/// its +3 logical pixels at 100% zoom. The login window and shell share this mapping.
+/// The zoom scales every window as a whole — text, geometry, images, hit areas — so both token
+/// multipliers stay at 1.0 and every design value reaches MoonUI unscaled; see
+/// [`crate::design::CONTROL_TIER`]. MoonUI replaces an impossible zoom with 1.0 itself. The login
+/// window and the shell share this mapping.
 ///
 /// Args:
 ///     mode: Interface palette to use.
-///     density: Control tier and unscaled font delta.
-///     ui_scale: Zoom multiplier; non-finite or non-positive values fall back to 1.0.
+///     ui_scale: Window content zoom; non-finite or non-positive values fall back to 1.0.
 ///
 /// Returns:
-///     A theme with matching geometry and text zoom on both palettes.
+///     A theme carrying the zoom on both palettes.
 pub(crate) fn moon_theme_config_for_presentation(
     mode: UiThemeMode,
-    density: moon_core::config::UiDensity,
     ui_scale: f32,
 ) -> MoonThemeConfig {
-    use moon_core::config::UiDensity;
-    use moon_ui::MoonSize;
-    let ui_scale = if ui_scale.is_finite() && ui_scale > 0.0 {
-        ui_scale
-    } else {
-        1.0
-    };
-    let (tier, font_delta) = match density {
-        UiDensity::Compact => (MoonSize::Xs, 0.0),
-        UiDensity::Standard => (MoonSize::Sm, 3.0),
-        UiDensity::Large => (MoonSize::Md, 6.0),
-    };
-    let mut theme = moon_theme_config_for_mode(mode)
-        .with_tier(tier)
-        .with_font_delta(font_delta * ui_scale)
-        .with_ui_scale(ui_scale);
-    theme.dark.scale.font = ui_scale;
-    theme.light.scale.font = ui_scale;
-    theme
+    moon_theme_config_for_mode(mode)
+        .with_tier(crate::design::CONTROL_TIER)
+        .with_font_delta(crate::design::DESIGN_FONT_DELTA)
+        .with_zoom(ui_scale)
 }
 
-/// Return the theme for the full configuration, including density and UI zoom.
+/// Return the theme for the full configuration, including the UI scale.
 pub(crate) fn moon_theme_config_for(cfg: &AppConfig) -> MoonThemeConfig {
-    moon_theme_config_for_presentation(cfg.ui_theme_mode, cfg.ui_density, cfg.ui_scale)
+    moon_theme_config_for_presentation(cfg.ui_theme_mode, cfg.ui_scale)
 }
 
-/// Install the configured palette, density and zoom into the active MoonUI theme.
+/// Install the configured palette and UI scale into the active MoonUI theme.
 pub(crate) fn install_moon_theme_for_config(cfg: &AppConfig, cx: &mut App) {
     MoonTheme::install_config(moon_theme_config_for(cfg), cx);
 }

@@ -1167,7 +1167,7 @@ fn coin_cell(
             el.child(
                 MoonText::new("SELL")
                     .color(MoonTone::Info.color(p))
-                    .rendered_metrics(design::tier_text_metrics(cx, -2.0, 14.0))
+                    .rendered_metrics(design::text_metrics(cx, -2.0, 14.0))
                     .weight(600.0)
                     .mono(true)
                     .uppercase(false)

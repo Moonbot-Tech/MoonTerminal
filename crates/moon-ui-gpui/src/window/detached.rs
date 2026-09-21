@@ -676,10 +676,12 @@ pub fn spawn(
             Bounds { origin, ..bounds }
         }
     };
+    // A first-open size is design pixels; the window API takes the platform's.
+    let zoom = moon_ui::MoonTheme::content_zoom(app);
     let fallback = crate::window::windowing::detached_fallback_bounds(
         owner,
         display_id,
-        size(px(1100.0), px(520.0)),
+        size(px(1100.0 * zoom), px(520.0 * zoom)),
         app,
     );
     let bounds =

@@ -42,6 +42,9 @@ by this flag.
 - `MOON_FIXTURE_DIR` — where to look for sets, if they are not next to the exe and not in the repository root.
 - `MOON_FIXTURE_FIGURES=0` — do not put figures on the stand. This is a switch for an A/B measurement: a run with
   figures and without them differs only by that, so the difference in counters is the cost of the figures themselves.
+- `MOON_FIXTURE_LAYOUT` / `MOON_FIXTURE_SETTINGS` — a `layout.toml` / `settings.toml` copied into the stand
+  before the configuration is read, so a run opens with a chosen layout or, for example, at
+  `ui_scale = 1.5` to check input and overlays under UI zoom.
 
 Details of the set's layout and regeneration are in the internal documentation.
 

@@ -467,14 +467,18 @@ pub(crate) fn open(
     cx: &mut App,
     done: impl FnOnce(LoginOutcome, &mut App) + 'static,
 ) -> Option<WindowHandle<Root>> {
+    // The prompt's size is design pixels; the window API takes the platform's, so the content
+    // zoom the theme already carries multiplies in, or a 200 % prompt would open at half its
+    // designed room every launch.
+    let zoom = moon_ui::MoonTheme::content_zoom(cx);
     let bounds = Bounds {
         origin: point(px(240.0), px(180.0)),
-        size: size(px(460.0), px(320.0)),
+        size: size(px(460.0 * zoom), px(320.0 * zoom)),
     };
     let opts = crate::window::windowing::login_window_options(
         t!("login.window_title").to_string(),
         WindowBounds::Windowed(bounds),
-        Some(size(px(380.0), px(260.0))),
+        Some(size(px(380.0 * zoom), px(260.0 * zoom))),
     );
     let mut done = Some(Box::new(done) as LoginDone);
     let opened = cx.open_window(opts, |window, cx| {

@@ -1,6 +1,5 @@
 use super::super::schema::{
-    SCHEMA_VERSION, ServersFile, SettingsFile, TelegramConfig, UiDensity, UiThemeMode,
-    default_ui_scale,
+    SCHEMA_VERSION, ServersFile, SettingsFile, TelegramConfig, UiThemeMode, default_ui_scale,
 };
 use super::{Merged, merge, split};
 use crate::config::{CoreGroup, DEFAULT_ORDER_SIZES_USD, GroupConfig, Language};
@@ -57,35 +56,36 @@ fn an_unusual_but_usable_scale_survives_the_load() {
 }
 
 /// Restoring legacy delta mapping during merge would resize upgraded users.
-/// Every upgraded user starts at Standard regardless of their retired slider value: the
-/// `ui_font_delta` key of an old file has no field any more and must stay inert on load.
+/// The retired `ui_font_delta` and `ui_density` keys of an old file have no field any more and
+/// must stay inert on load: the zoom beside them is what the interface uses.
 #[test]
-fn legacy_font_delta_is_ignored_during_merge() {
+fn retired_keys_are_ignored_during_merge() {
     for legacy in [
-        "-2.0", "0.0", "0.01", "3.0", "3.01", "6.0", "inf", "-inf", "nan",
+        "ui_font_delta = -2.0",
+        "ui_font_delta = nan",
+        "ui_density = \"compact\"",
+        "ui_density = \"large\"\nui_font_delta = 6.0",
     ] {
-        let settings: SettingsFile =
-            toml::from_str(&format!("ui_scale = 1.0\nui_font_delta = {legacy}")).unwrap();
+        let settings: SettingsFile = toml::from_str(&format!("ui_scale = 1.0\n{legacy}")).unwrap();
         let merged = merge(ServersFile::default(), settings, None);
-        assert_eq!(merged.ui_density, UiDensity::Standard);
+        assert_eq!(merged.ui_scale, 1.0, "`{legacy}` must not touch the scale");
     }
 }
 
-/// Catches removing the density migration dirty bit or losing the choice in split.
-/// Every upgraded user starts at Standard; a current-version file must write that choice
-/// once and then stop migrating, without changing the independently stored zoom.
+/// Catches a retired key regaining a migration dirty bit or a serialized field: a
+/// current-version file that still carries them is not rewritten for their sake, and when it
+/// is saved for another reason they are gone, with the zoom beside them intact.
 #[test]
-fn density_migrates_through_the_persistence_pipeline_once() {
+fn retired_keys_leave_the_persistence_pipeline_quietly() {
     let settings: SettingsFile = toml::from_str(&format!(
-        "version = {SCHEMA_VERSION}\nnext_uid = 1\nui_font_delta = 6.0\nui_scale = 1.25"
+        "version = {SCHEMA_VERSION}\nnext_uid = 1\nui_density = \"large\"\nui_font_delta = 6.0\nui_scale = 1.25"
     ))
     .unwrap();
     let merged = merge(ServersFile::default(), settings, None);
     assert!(
-        merged.dirty,
-        "density migration must request a write even at the current schema"
+        !merged.dirty,
+        "a retired key is not a reason to rewrite a current-version file"
     );
-    assert_eq!(merged.ui_density, UiDensity::Standard);
     let (servers, settings) = split(
         &merged.servers,
         &merged.groups,
@@ -100,7 +100,6 @@ fn density_migrates_through_the_persistence_pipeline_once() {
         merged.main_idle_close_secs,
         merged.log_to_file,
         merged.log_retention_days,
-        merged.ui_density,
         merged.ui_theme_mode,
         merged.ui_scale,
         merged.chart_memory_percent,
@@ -111,13 +110,9 @@ fn density_migrates_through_the_persistence_pipeline_once() {
     );
     let saved = toml::to_string(&settings).unwrap();
     assert!(!saved.contains("ui_font_delta"));
-    assert!(saved.contains("ui_density = \"standard\""));
+    assert!(!saved.contains("ui_density"));
     let reloaded = merge(servers, toml::from_str(&saved).unwrap(), None);
-    assert!(
-        !reloaded.dirty,
-        "saved density must not trigger migration again"
-    );
-    assert_eq!(reloaded.ui_density, UiDensity::Standard);
+    assert!(!reloaded.dirty, "a clean save reloads clean");
     assert_eq!(reloaded.ui_scale, 1.25);
 }
 
@@ -367,7 +362,6 @@ fn a_clean_core_group_list_round_trips_through_merge_and_split() {
         version: SCHEMA_VERSION,
         next_uid: 1,
         core_groups: groups.clone(),
-        ui_density: Some(UiDensity::Standard),
         ..Default::default()
     };
 
@@ -392,7 +386,6 @@ fn a_clean_core_group_list_round_trips_through_merge_and_split() {
         merged.main_idle_close_secs,
         merged.log_to_file,
         merged.log_retention_days,
-        merged.ui_density,
         merged.ui_theme_mode,
         merged.ui_scale,
         merged.chart_memory_percent,
@@ -477,7 +470,6 @@ fn the_transport_survives_a_split() {
         0,
         true,
         14,
-        UiDensity::default(),
         UiThemeMode::default(),
         default_ui_scale(),
         100,
@@ -540,7 +532,6 @@ id = 2981",
         0,
         true,
         14,
-        UiDensity::default(),
         UiThemeMode::default(),
         default_ui_scale(),
         100,

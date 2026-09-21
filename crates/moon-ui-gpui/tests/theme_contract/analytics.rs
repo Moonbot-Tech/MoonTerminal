@@ -1085,7 +1085,7 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
     let body = braced_body(&toolbar, "pub(super) fn tabs_bar(");
     for needle in [
         "let title = t.title();",
-        "design::button_tier(cx).control_metrics().pad_x",
+        "design::CONTROL_TIER.control_metrics().pad_x",
         ".max(design::ui_value(cx, 72.0))",
         ".width(tab_width)",
         ".label(title)",
@@ -1097,7 +1097,7 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
     }
     assert!(
         body.contains("design::ui_text_width_zoomed(")
-            && body.contains("design::tier_font_size(cx)")
+            && body.contains("design::BODY_TEXT")
             && body.contains("div().font_family(design::ui_font()).child("),
         "Analytics tab widths must measure UI-family captions and host each tab button in that same UI family"
     );
@@ -1126,7 +1126,7 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
         toolbar.contains("crate::controls::CORE_COMBO_TRIGGER_W")
             && core_combo.contains(".trigger_width_scaled(CORE_COMBO_TRIGGER_W)")
             && body.contains(
-                "let font_size = design::button_tier(cx).control_metrics().font_size.max(1.0);"
+                "let font_size = design::CONTROL_TIER.control_metrics().font_size.max(1.0);"
             )
             && body.contains("design::ui_value(cx, font_size) / font_size")
             && body.contains("* action_trigger_scale"),

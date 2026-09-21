@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use moon_core::config::{CoreGroup, UiDensity, UiThemeMode};
+use moon_core::config::{CoreGroup, UiThemeMode};
 use moon_core::db::analytics::UndatedCloses;
 use moon_core::db::{QuoteBreakdown, QuoteCurrency, QuoteTotal, ReadFail};
 
@@ -16,14 +16,14 @@ use super::{
     analytics_core_filter_ids, presets_row_fits, sole_core_name, undated_banner_state,
 };
 
-/// Read the font deltas from the same density mapping used when installing the UI theme.
-fn density_font_deltas() -> [f32; 3] {
-    [UiDensity::Compact, UiDensity::Standard, UiDensity::Large].map(|density| {
-        crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, density, 1.0)
+/// Read the font delta from the same presentation mapping used when installing the UI theme.
+fn presentation_font_deltas() -> [f32; 1] {
+    [
+        crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0)
             .dark
             .scale
-            .font_delta
-    })
+            .font_delta,
+    ]
 }
 
 /// `analytics/toolbar.rs:presets_row_fits` must keep the inline presets at the exact available
@@ -69,8 +69,8 @@ fn every_preset_label_fits_its_fitted_cell_without_truncation(cx: &mut gpui::Tes
     }
 
     // Every preset except the pre-existing, out-of-scope Week overflow must survive the supported
-    // density-derived font deltas, which is the failure class this regression is meant to catch.
-    for delta in density_font_deltas() {
+    // presentation font delta, which is the failure class this regression is meant to catch.
+    for delta in presentation_font_deltas() {
         let ceiling = cx.update(|cx| {
             moon_ui::MoonTheme::global_mut(cx).scale.font_delta = delta;
             moon_ui::MoonTheme::active_tokens(cx).font_width(super::PRESET_CELL_MAX_W)
@@ -126,7 +126,7 @@ fn captioned_filter_labels_fit_without_ellipsis_in_every_locale(cx: &mut gpui::T
         ),
     ] {
         let _locale = crate::test_locale::force(locale);
-        for delta in density_font_deltas() {
+        for delta in presentation_font_deltas() {
             cx.update(|cx| moon_ui::MoonTheme::global_mut(cx).scale.font_delta = delta);
             for (label, width) in labels {
                 let fitted = cx.update(|cx| {

@@ -639,7 +639,7 @@ impl ReportPanel {
                     .child(
                         MoonInput::new("rep-strategy-mask")
                             .state(&self.strategy_name_mask_input)
-                            .size(design::input_tier(cx))
+                            .size(design::INPUT_SIZE)
                             .cleanable(true),
                     )
                     .into_any_element()

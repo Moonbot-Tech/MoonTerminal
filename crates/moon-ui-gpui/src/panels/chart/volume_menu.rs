@@ -88,7 +88,7 @@ impl ChartPanel {
         // The caption pass places its blocks in the WINDOW's logical pixels while this point is in
         // the slot's device pixels — the same conversion the arbitrage click documents, and getting
         // it wrong opens the menu for whatever block sits under the mis-scaled point.
-        let Some((origin, sf)) = self.chart_origin_logical() else {
+        let Some((origin, sf, _)) = self.chart_origin_logical() else {
             return false;
         };
         let (lx, ly) = (local_pos.0 / sf + origin.0, local_pos.1 / sf + origin.1);

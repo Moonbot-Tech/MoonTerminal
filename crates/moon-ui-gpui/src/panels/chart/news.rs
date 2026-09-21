@@ -281,7 +281,7 @@ impl ChartPanel {
     /// GPUI repaints at a fraction of that, so a mark-anchored card would visibly lag behind it.
     pub(super) fn news_card(
         &self,
-        ppp: f32,
+        sf: f32,
         ctrl: bool,
         palette: MoonPalette,
         cx: &App,
@@ -291,14 +291,15 @@ impl ChartPanel {
         }
         let hover = self.news.hover.as_ref()?;
         let (cursor_x, _) = self.input.cursor?;
-        let ppp = ppp.max(0.1);
+        let sf = sf.max(0.1);
         let slot = self.chart.slot_dev_size();
-        let slot_w = slot.0 as f32 / ppp;
-        let slot_h = slot.1 as f32 / ppp;
+        let slot_w = slot.0 as f32 / sf;
+        let slot_h = slot.1 as f32 / sf;
         let card_w = f32::from(design::ui_px(cx, CARD_W));
-        // Device pixels → the slot's logical pixels the overlay is laid out in. Keep the card fully
-        // inside the slot, centred on the cursor when there is room.
-        let left = (cursor_x / ppp - card_w * 0.5).clamp(0.0, (slot_w - card_w).max(0.0));
+        // Device pixels → the slot's content pixels the overlay is laid out in, through the
+        // window's effective factor. Keep the card fully inside the slot, centred on the cursor
+        // when there is room.
+        let left = (cursor_x / sf - card_w * 0.5).clamp(0.0, (slot_w - card_w).max(0.0));
         // Sit above the marks' row: the axis gutter, then the gem at its HOVERED size, then a gap.
         // Derived from the same constants the geometry uses, so the card cannot drift from the marks.
         let axis_h = if self.time_axis_visible {

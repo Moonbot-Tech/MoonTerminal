@@ -287,7 +287,7 @@ impl SettingsView {
                                 div().w(design::font_w_px(cx, TOKEN_FIELD_W)).child(
                                     MoonInput::new("telegram-token")
                                         .state(&self.telegram.token)
-                                        .size(design::input_tier(cx))
+                                        .size(design::INPUT_SIZE)
                                         .mono(true)
                                         .mask_toggle(),
                                 ),

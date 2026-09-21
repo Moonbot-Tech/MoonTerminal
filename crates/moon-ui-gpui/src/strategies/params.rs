@@ -1132,7 +1132,7 @@ impl StrategiesView {
                             .child(
                                 MoonInput::new("strat-list-tokens")
                                     .state(&content_input)
-                                    .size(design::input_tier(cx)),
+                                    .size(design::INPUT_SIZE),
                             ),
                     )
                 })
@@ -1899,7 +1899,7 @@ impl StrategiesView {
                 );
                 let mut input = MoonInput::new(SharedString::from(format!("field-input-{row_id}")))
                     .state(&state)
-                    .size(design::input_tier(cx))
+                    .size(design::INPUT_SIZE)
                     .tone(MoonTone::Warning)
                     .selected(dirty || differ)
                     .disabled(!active);
@@ -2049,7 +2049,7 @@ impl StrategiesView {
                     let mut input =
                         MoonInput::new(SharedString::from(format!("field-input-{row_id}")))
                             .state(&state)
-                            .size(design::input_tier(cx))
+                            .size(design::INPUT_SIZE)
                             // No colour case here: a colour field draws its own input in the arm
                             // above, so this one only ever renders free text.
                             .tone(if rejected {

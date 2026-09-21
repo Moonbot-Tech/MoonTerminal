@@ -190,7 +190,7 @@ impl StrategiesView {
                                 div().flex_1().min_w(design::ui_px(cx, SEARCH_MIN_W)).child(
                                     MoonInput::new("strat-search")
                                         .state(&self.search)
-                                        .size(design::input_tier(cx))
+                                        .size(design::INPUT_SIZE)
                                         .cleanable(true),
                                 ),
                             )
