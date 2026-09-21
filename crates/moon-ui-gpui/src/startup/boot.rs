@@ -709,8 +709,11 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                         }
                     }
                     b.tick_telegram(cx);
-                    // The tape autoload of the tuner's Entry/Exit axis: a switch read and a
-                    // clock compare on every tick, a background pass when one is due.
+                    // The startup cleanup of the trade tape, then the tape autoload of the
+                    // tuner's Entry/Exit axis — in that order, the autoload waits for the
+                    // cleanup: a switch read and a clock compare each on every tick, a
+                    // background pass when one is due.
+                    crate::settings::trades_cleanup_startup::tick(b, cx);
                     crate::analytics::tape_autoload::tick(b, cx);
                     // A core removed from the session cannot answer what was asked of it; the
                     // drain edge does not fire for a removal, so the slow tick settles those.

@@ -42,7 +42,10 @@ use crate::market::candles::ChartCandle;
 use crate::market::{CandleReadParams, ChartHistoryBuffers, ChartHistoryRead};
 use crate::venue::{Brand, Venue};
 pub use coverage::Coverage;
-pub use settings::{margin_ms, model_margin_ms, set_margin_s, set_tape_autoload, tape_autoload};
+pub use settings::{
+    cleanup_at_startup, long_position_ms, margin_ms, model_margin_ms, set_cleanup_at_startup,
+    set_long_position_min, set_margin_s, set_tape_autoload, tape_autoload,
+};
 pub use worker::{TickAnswer, TickQuery, query_held};
 
 /// Milliseconds in one minute, the only timeframe a replay is fetched at.
@@ -78,24 +81,24 @@ const MAX_SPAN_MS: i64 = 7 * 24 * 60 * MINUTE_MS;
 /// exit — so a window clipped exactly to the position would answer the wrong question.
 const CONTEXT_FRACTION: f64 = 0.5;
 
-/// A position held longer than this asks for ticks only around its entry and its exit
-/// ([`ReplayWindow::focus_spans`]), each end getting the window's margin centred on it; the
-/// middle stays bars.
-///
-/// A meaning bound, not a resource one: the page budget already caps what a walk can fetch, but
-/// on a multi-hour position it burned out ~40 minutes after the entry and the exit came back as
-/// bars — while at the zoom such a position is viewed at, the chart draws bars for the middle
-/// anyway. Five minutes is the developer's call (2026-09-21; an hour the day before): past it
-/// the ticks between the ends are a ribbon nobody reads, and what matters is how the entry and
-/// the exit printed. The tuner's model runs a long position on that two-end tape as it is —
-/// also the developer's call, the same day: an exit that really happened in the unwalked
-/// middle is a miss in the replay, and the deal table's "held" column shows how far the tape
-/// reaches on each side.
-///
-/// Public because the tuner's fetch clusters several trades of one market into one request
-/// whose open is the first entry and whose close is the last exit: a cluster longer than this
-/// would be walked as two ends, and the trades in between would go without their tape.
-pub const LONG_POSITION_MS: i64 = 5 * MINUTE_MS;
+// A position held longer than `[trade_replay] long_position_min` ([`long_position_ms`]) asks
+// for ticks only around its entry and its exit ([`ReplayWindow::focus_spans`]), each end
+// getting the window's margin centred on it; the middle stays bars.
+//
+// A meaning bound, not a resource one: the page budget already caps what a walk can fetch, but
+// on a multi-hour position it burned out ~40 minutes after the entry and the exit came back as
+// bars — while at the zoom such a position is viewed at, the chart draws bars for the middle
+// anyway. Five minutes was the developer's call as a constant (2026-09-21; an hour the day
+// before) and is the default now that the Storage tab moves it: past it the ticks between the
+// ends are a ribbon nobody reads, and what matters is how the entry and the exit printed. The
+// tuner's model runs a long position on that two-end tape as it is — also the developer's
+// call, the same day: an exit that really happened in the unwalked middle is a miss in the
+// replay, and the deal table's "held" column shows how far the tape reaches on each side.
+//
+// The tuner's fetch clusters several trades of one market into one request whose open is the
+// first entry and whose close is the last exit, and keeps the cluster within the same
+// threshold: a longer one would be walked as two ends, and the trades in between would go
+// without their tape.
 
 /// How far before the entry and past the exit a MODEL's request treats the tape as part of the
 /// trade itself (walked under the trade budget, never cut short by the normal page ceiling):
@@ -388,11 +391,9 @@ impl ReplayWindow {
         (left, right)
     }
     /// The stretches actually requested as ticks: the whole [`Self::focus`] on a position held up
-    /// to [`Self::long_position_ms`]; on a longer one, [`Self::margin_ms`] on both sides of the
-    /// entry and of the exit — two spans with the middle left to bars. Both sides, not half the
-    /// margin each: the stretch before the entry and past the exit is what the tuner's run-up
-    /// and exit horizon are, and a long position must get the same margin there as a short one
-    /// (the developer's call, 2026-09-23; the margin was centred on each end before).
+    /// to [`Self::long_position_ms`]; on a longer one, [`Self::margin_ms`] centred on the entry
+    /// and on the exit — half before each end, half after — two spans with the middle left to
+    /// bars.
     ///
     /// Returns:
     ///     One or two spans, each clamped into `[Self::from_ms, Self::to_ms]`. The two of a long

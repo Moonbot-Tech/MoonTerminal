@@ -13,6 +13,11 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 static MARGIN_S: AtomicU32 = AtomicU32::new(crate::config::storage::DEFAULT_TRADE_MARGIN_S);
 /// Live value of `[trade_replay] autoload_missing`.
 static TAPE_AUTOLOAD: AtomicBool = AtomicBool::new(false);
+/// Live value of `[trade_replay] long_position_min`.
+static LONG_POSITION_MIN: AtomicU32 =
+    AtomicU32::new(crate::config::storage::DEFAULT_LONG_POSITION_MIN);
+/// Live value of `[trade_replay] cleanup_at_startup`.
+static CLEANUP_AT_STARTUP: AtomicBool = AtomicBool::new(false);
 static INIT: OnceLock<()> = OnceLock::new();
 
 /// Load the file into the cells once; every setter calls it first, or the file's value would
@@ -22,11 +27,15 @@ fn init() {
         let cfg = crate::config::storage::load();
         MARGIN_S.store(cfg.trade_replay.margin_s, Ordering::Relaxed);
         TAPE_AUTOLOAD.store(cfg.trade_replay.autoload_missing, Ordering::Relaxed);
+        LONG_POSITION_MIN.store(cfg.trade_replay.long_position_min, Ordering::Relaxed);
+        CLEANUP_AT_STARTUP.store(cfg.trade_replay.cleanup_at_startup, Ordering::Relaxed);
         // Once per launch, so a file migrated from `margin_min` shows what it was read as.
         log::info!(
-            "[x] trade-replay settings: margin {} s, tape autoload {}",
+            "[x] trade-replay settings: margin {} s, long position from {} min, tape autoload {}, cleanup at startup {}",
             cfg.trade_replay.margin_s,
-            cfg.trade_replay.autoload_missing
+            cfg.trade_replay.long_position_min,
+            cfg.trade_replay.autoload_missing,
+            cfg.trade_replay.cleanup_at_startup
         );
     });
 }
@@ -72,4 +81,37 @@ pub fn tape_autoload() -> bool {
 pub fn set_tape_autoload(on: bool) {
     init();
     TAPE_AUTOLOAD.store(on, Ordering::Relaxed);
+}
+
+/// How long a position must be held to be walked as its two ends — `[trade_replay]
+/// long_position_min`, in milliseconds. Captured where a window is built
+/// ([`super::replay_window_ms`] → [`super::ReplayWindow::long_position_ms`]) and read from the
+/// window from then on, like the margin: a request is clustered, walked, judged and drawn at
+/// different moments, and every one of them must split it the same way.
+pub fn long_position_ms() -> i64 {
+    init();
+    i64::from(LONG_POSITION_MIN.load(Ordering::Relaxed)) * 60_000
+}
+
+/// Move the live threshold; the Storage tab writes `storage.toml` beside this. Bounded like
+/// the file is on load.
+pub fn set_long_position_min(minutes: u32) {
+    init();
+    LONG_POSITION_MIN.store(
+        crate::config::storage::clamp_long_position_min(minutes),
+        Ordering::Relaxed,
+    );
+}
+
+/// Whether the terminal runs the trade-tape cleanup on its own once the cores are up —
+/// `[trade_replay] cleanup_at_startup`.
+pub fn cleanup_at_startup() -> bool {
+    init();
+    CLEANUP_AT_STARTUP.load(Ordering::Relaxed)
+}
+
+/// Move the live startup-cleanup switch; the Storage tab writes the file beside this.
+pub fn set_cleanup_at_startup(on: bool) {
+    init();
+    CLEANUP_AT_STARTUP.store(on, Ordering::Relaxed);
 }

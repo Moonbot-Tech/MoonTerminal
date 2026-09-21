@@ -7,12 +7,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{
-    ClaimStamps, Inventory, KeepMap, Margins, OWNER_SLACK_S, ReportAxis, ReportStamp, TapeOwner,
-    build_keep, read_tape_owners, stamps, trade_cache,
+    Inventory, KeepMap, Margins, OWNER_SLACK_S, ReportAxis, ReportStamp, TapeOwner, build_keep,
+    read_tape_owners, stamps, trade_cache,
 };
 
 const MARGINS: Margins = Margins {
-    margin_ms: 60_000,
+    model_ms: 60_000,
     long_position_ms: 5 * 60_000,
 };
 
@@ -24,7 +24,6 @@ fn owner(core_uid: u64, coin: &str, buy_ms: i64, close_ms: i64, kind: &str) -> T
         close: ReportStamp::Millis(close_ms),
         strategy_id: 42,
         sell_reason: "Sell Price".into(),
-        buy_set_ms: None,
         kind: kind.into(),
     }
 }
@@ -48,10 +47,10 @@ fn spans(keep: &KeepMap, k: &(String, String)) -> Vec<(i64, i64)> {
     keep.get(k).map(|c| c.spans().to_vec()).unwrap_or_default()
 }
 
-/// A row the catalog names claims its window's focus at the margin, on the market the catalog
-/// named.
+/// A row the catalog names claims its window's focus at the model's margin, on the market the
+/// catalog named.
 #[test]
-fn a_live_row_claims_at_the_margin() {
+fn a_live_row_claims_at_the_model_margin() {
     let inv = inventory(&[("4:0", "ACEUSDT")]);
     let ace = owner(1, "ACE", 1_000_000, 1_010_000, "MoonShot");
     let ben = owner(1, "BEN", 5_000_000, 5_010_000, "MoonShot");
@@ -98,45 +97,7 @@ fn overlapping_claims_are_one_stretch() {
     );
 }
 
-/// A row that carries its entry order's creation claims from there, as the tuner fetches it
-/// (`model_window_at`) — for every kind the tuner runs on, a model or none; one whose creation
-/// and position together outrun the long-position threshold claims from its fill, as before.
-#[test]
-fn a_row_with_its_orders_creation_claims_from_the_creation() {
-    let inv = inventory(&[("4:0", "ACEUSDT")]);
-    let mut hook = owner(1, "ACE", 1_000_000, 1_010_000, "MoonHook");
-    hook.buy_set_ms = Some(1_000_000 - 120_000);
-    let (keep, _) = build_keep(
-        &inv,
-        &[&hook],
-        &ReportAxis::default(),
-        &quotes(),
-        MARGINS,
-        |_| Some(key("4:0", "ACEUSDT")),
-    );
-    assert_eq!(
-        spans(&keep, &key("4:0", "ACEUSDT")),
-        vec![(1_000_000 - 120_000 - 60_000, 1_010_000 + 60_000)]
-    );
-    let mut long = owner(1, "ACE", 1_000_000, 1_000_000 + 4 * 60_000, "MoonShot");
-    long.buy_set_ms = Some(1_000_000 - 120_000);
-    let (keep, _) = build_keep(
-        &inv,
-        &[&long],
-        &ReportAxis::default(),
-        &quotes(),
-        MARGINS,
-        |_| Some(key("4:0", "ACEUSDT")),
-    );
-    assert_eq!(
-        spans(&keep, &key("4:0", "ACEUSDT"))[0].0,
-        1_000_000 - 60_000,
-        "creation to close outruns five minutes: the window opens at the fill"
-    );
-}
-
-/// A position held longer than five minutes claims its two ends, the margin on both sides of
-/// each, not its middle.
+/// A position held longer than five minutes claims its two ends, not its middle.
 #[test]
 fn a_long_position_claims_its_two_ends() {
     let inv = inventory(&[("4:0", "ACEUSDT")]);
@@ -152,8 +113,8 @@ fn a_long_position_claims_its_two_ends() {
     assert_eq!(
         spans(&keep, &key("4:0", "ACEUSDT")),
         vec![
-            (1_000_000 - 60_000, 1_000_000 + 60_000),
-            (4_600_000 - 60_000, 4_600_000 + 60_000)
+            (1_000_000 - 30_000, 1_000_000 + 30_000),
+            (4_600_000 - 30_000, 4_600_000 + 30_000)
         ]
     );
 }
@@ -228,16 +189,10 @@ fn a_row_off_the_file_is_unresolved() {
 /// the window and the capture use, and the raw one the tuner's fetch uses.
 #[test]
 fn stamps_claim_both_clocks_when_they_differ() {
-    let mut row = owner(1, "ACE", 1_000_000, 1_010_000, "");
-    row.buy_set_ms = Some(990_000);
-    let claim = |buy_ms, close_ms, buy_set_ms| ClaimStamps {
-        buy_ms,
-        close_ms,
-        buy_set_ms,
-    };
+    let row = owner(1, "ACE", 1_000_000, 1_010_000, "");
     assert_eq!(
         stamps(&ReportAxis::default(), &row),
-        vec![claim(1_000_000, 1_010_000, Some(990_000))]
+        vec![(1_000_000, 1_010_000)]
     );
     let axis = ReportAxis::from_measured(
         HashMap::from([(
@@ -249,40 +204,32 @@ fn stamps_claim_both_clocks_when_they_differ() {
         )]),
         chrono_tz::UTC,
     );
-    let (buy, close) = axis.stamp_pair_to_utc_ms(row.buy, row.close, 1);
-    assert_ne!((buy, close), (1_000_000, 1_010_000));
-    // The creation moves with the entry's clock.
-    assert_eq!(
-        stamps(&axis, &row),
-        vec![
-            claim(buy, close, Some(990_000 + (buy - 1_000_000))),
-            claim(1_000_000, 1_010_000, Some(990_000))
-        ]
-    );
+    let lifted = axis.stamp_pair_to_utc_ms(row.buy, row.close, 1);
+    assert_ne!(lifted, (1_000_000, 1_010_000));
+    assert_eq!(stamps(&axis, &row), vec![lifted, (1_000_000, 1_010_000)]);
     let seconds = TapeOwner {
         buy: ReportStamp::Seconds(1_000),
         close: ReportStamp::Seconds(1_010),
-        buy_set_ms: None,
         ..row
     };
     assert_eq!(
         stamps(&ReportAxis::default(), &seconds),
-        vec![claim(1_000_000, 1_010_000, None)]
+        vec![(1_000_000, 1_010_000)]
     );
 }
 
-/// The replica is read as far past the file's range as a claim reaches — the margin and an entry
-/// order's longest replayed wait — rounded up to whole seconds.
+/// The replica is read as far past the file's range as the wider margin reaches, rounded up
+/// to whole seconds.
 #[test]
-fn the_reach_is_the_margin_and_the_orders_wait_in_whole_seconds() {
-    assert_eq!(MARGINS.reach_s(), 661);
+fn the_reach_is_the_wider_margin_in_whole_seconds() {
+    assert_eq!(MARGINS.reach_s(), 61);
     assert_eq!(
         Margins {
-            margin_ms: 7_200_000,
+            model_ms: 7_200_000,
             long_position_ms: 60_000
         }
         .reach_s(),
-        7_801
+        7_201
     );
 }
 
@@ -343,8 +290,8 @@ fn probe_a_copied_data_dir() {
         .map(|o| (o.core_uid, "USDT".to_string()))
         .collect();
     println!(
-        "[probe] margin: {} ms, long position from {} ms",
-        margins.margin_ms,
+        "[probe] margin: model {} ms, long position from {} ms",
+        margins.model_ms,
         moon_core::market::trade_replay::long_position_ms()
     );
     for apply in [false, true] {

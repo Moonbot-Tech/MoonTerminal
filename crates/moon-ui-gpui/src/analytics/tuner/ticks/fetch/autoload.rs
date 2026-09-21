@@ -20,6 +20,11 @@
 //!    again every [`RETRY`] for up to [`MAX_ATTEMPTS`]: the cores come up one by one after the
 //!    terminal, and the catalog a little after each core.
 //!
+//! The first pass yields to the startup cleanup of the trade tape
+//! (`settings::trades_cleanup_startup`, behind `[trade_replay] cleanup_at_startup`): the
+//! cleanup cuts the file to what the tuner's rows claim, this then fetches what they still
+//! lack — the other order would fetch first and cut second.
+//!
 //! The read and the resolution run on the background executor; the tick only decides whether
 //! one is due. "Stop" on the axis' button cancels what remains ([`cancel`]); flipping the
 //! switch off and on again re-arms it.
@@ -124,11 +129,14 @@ pub(crate) fn tick(backend: &Backend, cx: &App) {
                 attempts: 0,
             };
         }
+        // The first pass also waits for the startup cleanup
+        // (`settings::trades_cleanup_startup`): what it removes must not be what this pass
+        // just fetched. A retry pass has the same guard for free — the cleanup is done by then.
         Phase::Waiting {
             due,
             left,
             attempts,
-        } if due <= now => {
+        } if due <= now && crate::settings::trades_cleanup_startup::clear_for_autoload() => {
             st.phase = Phase::Running;
             st.generation += 1;
             let generation = st.generation;

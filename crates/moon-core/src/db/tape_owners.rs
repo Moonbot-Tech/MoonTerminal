@@ -22,10 +22,6 @@ pub struct TapeOwner {
     pub buy: ReportStamp,
     /// Exit stamp, same caveat.
     pub close: ReportStamp,
-    /// The entry order's creation (`buysetdatems`), core-local milliseconds like the entry's —
-    /// the tuner fetches a trade's tape from there (`tuner::ticks::model_window_at`), so the
-    /// cleanup must claim from there too. `None` on rows and replicas that do not carry it.
-    pub buy_set_ms: Option<i64>,
     pub strategy_id: i64,
     /// `sellreason` as the core wrote it.
     pub sell_reason: String,
@@ -91,13 +87,11 @@ fn read_rows(
         }
     };
     let sql = format!(
-        "SELECT core_uid, coin, buydate, closedate, {buy_ms}, {close_ms}, strategyid, sellreason,
-                {buy_set_ms}
+        "SELECT core_uid, coin, buydate, closedate, {buy_ms}, {close_ms}, strategyid, sellreason
          FROM {table}
          WHERE closedate > 0 AND closedate >= ?1 AND buydate <= ?2",
         buy_ms = column("buydatems"),
         close_ms = column("closedatems"),
-        buy_set_ms = column("buysetdatems"),
         table = rep::TABLE,
     );
     let fail = |e: rusqlite::Error| super::read_fail::read_fail(CTX, e);
@@ -115,7 +109,6 @@ fn read_rows(
                 close: ReportStamp::resolve(close_s, close_ms),
                 strategy_id: r.get::<_, Option<i64>>(6)?.unwrap_or(0),
                 sell_reason: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
-                buy_set_ms: r.get::<_, Option<i64>>(8)?.filter(|&set| set > 0),
                 kind: String::new(),
             })
         })

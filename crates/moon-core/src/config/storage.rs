@@ -62,8 +62,8 @@ pub struct TradeReplayStoreCfg {
     /// longest ago go first. `0` keeps everything, with no age limit.
     pub max_mb: u32,
     /// Seconds of prints kept around a trade, per end: a short position gets this much before
-    /// its entry and after its exit; a long one (over an hour) gets this much centred on each
-    /// end, half before and half after, with bars between. It sizes what a trade window fetches,
+    /// its entry and after its exit; a long one ([`Self::long_position_min`] or longer) gets
+    /// this much centred on each end, half before and half after, with bars between. It sizes what a trade window fetches,
     /// what a close copies out of the core's ring, and what the file keeps. One of
     /// [`TRADE_MARGIN_STEPS_S`]: a hand-edited value is snapped to the nearest step on load.
     pub margin_s: u32,
@@ -72,6 +72,16 @@ pub struct TradeReplayStoreCfg {
     /// missed because the terminal was not running. Off by default: it spends the venues' public
     /// request budget without being asked. A file written before the field reads as off.
     pub autoload_missing: bool,
+    /// Minutes a position must be held to count as LONG — walked as its two ends with bars
+    /// between, both by a trade window and by the tuner's fetch, whose clusters stay within it.
+    /// Bounded to [`LONG_POSITION_MIN_RANGE`] on load; a file written before the field reads
+    /// as the default, which is what the threshold was while it was a constant.
+    pub long_position_min: u32,
+    /// Whether the terminal runs the Storage tab's cleanup on its own once the cores are up —
+    /// before the tape autoload, so what the cleanup removes is not what the autoload just
+    /// fetched. Off by default: it rewrites the file unasked. A file written before the field
+    /// reads as off.
+    pub cleanup_at_startup: bool,
 }
 
 /// Default minutes of [`TradeReplayStoreCfg::long_position_min`]: the five minutes the
@@ -111,6 +121,8 @@ impl Default for TradeReplayStoreCfg {
             max_mb: DEFAULT_TRADES_MAX_MB,
             margin_s: DEFAULT_TRADE_MARGIN_S,
             autoload_missing: false,
+            long_position_min: DEFAULT_LONG_POSITION_MIN,
+            cleanup_at_startup: false,
         }
     }
 }
@@ -126,6 +138,8 @@ struct TradeReplayStoreRaw {
     margin_s: Option<u32>,
     margin_min: Option<u32>,
     autoload_missing: bool,
+    long_position_min: u32,
+    cleanup_at_startup: bool,
 }
 
 impl Default for TradeReplayStoreRaw {
@@ -137,6 +151,8 @@ impl Default for TradeReplayStoreRaw {
             margin_s: None,
             margin_min: None,
             autoload_missing: d.autoload_missing,
+            long_position_min: d.long_position_min,
+            cleanup_at_startup: d.cleanup_at_startup,
         }
     }
 }
@@ -152,8 +168,18 @@ impl From<TradeReplayStoreRaw> for TradeReplayStoreCfg {
             max_mb: raw.max_mb,
             margin_s,
             autoload_missing: raw.autoload_missing,
+            long_position_min: raw.long_position_min,
+            cleanup_at_startup: raw.cleanup_at_startup,
         }
     }
+}
+
+/// [`LONG_POSITION_MIN_RANGE`] applied to a value from the file or the tab.
+pub fn clamp_long_position_min(minutes: u32) -> u32 {
+    minutes.clamp(
+        *LONG_POSITION_MIN_RANGE.start(),
+        *LONG_POSITION_MIN_RANGE.end(),
+    )
 }
 
 /// The step of [`TRADE_MARGIN_STEPS_S`] nearest to `secs` — the lower one when `secs` sits
@@ -234,10 +260,13 @@ pub fn load() -> StorageCfg {
     sanitize(toml_io::load_or_default(&path, "storage.toml", |_| {}))
 }
 
-/// Bound what a hand-edited file may carry: the margin is snapped onto [`TRADE_MARGIN_STEPS_S`],
+/// Bound what a hand-edited file may carry: the long-position threshold is clamped to
+/// [`LONG_POSITION_MIN_RANGE`], and the margin is snapped onto [`TRADE_MARGIN_STEPS_S`],
 /// which also caps it at [`MAX_TRADE_MARGIN_S`].
 fn sanitize(mut cfg: StorageCfg) -> StorageCfg {
     cfg.trade_replay.margin_s = snap_trade_margin_s(cfg.trade_replay.margin_s);
+    cfg.trade_replay.long_position_min =
+        clamp_long_position_min(cfg.trade_replay.long_position_min);
     cfg
 }
 

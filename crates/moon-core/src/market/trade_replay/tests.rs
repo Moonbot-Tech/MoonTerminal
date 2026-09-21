@@ -115,11 +115,11 @@ fn trade_first_paging_protects_position_from_soft_page_and_deadline_stops() {
     for route in [OkxHistoryTrades, BitgetMixFills, BinanceUsdMAggTrades] {
         for soft_deadline in [false, true] {
             // Up to the longest position still walked as one stretch: past
-            // `LONG_POSITION_MS` the plan tiles the two ends only, which the plan's own test
+            // `long_position_ms()` the plan tiles the two ends only, which the plan's own test
             // covers. With the threshold under `TICK_SLICE_MS` no short position spans two
             // trade tiles any more, so the multi-tile trade prefix this loop once ran (21 min,
             // three tiles, under the hour-long threshold) is unreachable here by construction.
-            for duration in [0, 120_000, LONG_POSITION_MS - MINUTE_MS] {
+            for duration in [0, 120_000, long_position_ms() - MINUTE_MS] {
                 let window =
                     replay_window_ms(100_000_000, 100_000_000 + duration, MARGIN_MS).unwrap();
                 let plan = tick_plan(window, route, None, ReplayIntent::Chart);
@@ -1086,14 +1086,13 @@ fn kline_tick_statuses_keep_the_same_chart_revision_while_ticks_change_it() {
 }
 
 /// A position held up to `long_position_ms()` keeps one focus; past it the focus is two
-/// neighbourhoods — the whole margin on both sides of each end, so the run-up before the entry
-/// and the tail past the exit are the margin, as on a short position — clamped into the window
-/// like the whole one.
+/// neighbourhoods — the margin centred on each end, half before and half after — clamped into
+/// the window like the whole one.
 #[test]
 fn focus_spans_split_only_a_long_position() {
     // A margin well under the position's length, so the two ends of a long one stay apart:
     // halves that reach each other fold into one stretch, which the end of this test pins.
-    const MARGIN_MS: i64 = LONG_POSITION_MS / 5;
+    let margin_ms: i64 = long_position_ms() / 5;
     let short =
         replay_window_ms(100_000_000, 100_000_000 + long_position_ms(), margin_ms).expect("window");
     assert_eq!(short.focus_spans(), Coverage::one(short.focus()));
@@ -1102,6 +1101,7 @@ fn focus_spans_split_only_a_long_position() {
     let close_ms = open_ms + long_position_ms() + 1;
     let long = replay_window_ms(open_ms, close_ms, margin_ms).expect("window");
     let spans = long.focus_spans();
+    let half = margin_ms / 2;
     assert_eq!(
         spans.spans(),
         &[

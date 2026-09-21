@@ -516,6 +516,7 @@ impl SessionManager {
                 // venue for the seconds the ring held for free. A chart margin under the pads
                 // (5 s is the default) never reaches that far.
                 margin_ms: crate::market::trade_replay::model_margin_ms(),
+                long_position_ms: crate::market::trade_replay::long_position_ms(),
             },
         );
     }

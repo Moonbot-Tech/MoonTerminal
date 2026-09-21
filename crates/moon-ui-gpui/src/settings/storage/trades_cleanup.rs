@@ -34,10 +34,11 @@ use crate::design;
 use moon_core::db::ReportAxis;
 use moon_core::db::ReportStamp;
 use moon_core::db::tape_owners::{TapeOwner, read_tape_owners};
-use moon_core::db::tuner::ticks::{ORDER_WAIT_CAP_MS, model_window_at, order_open_at};
 use moon_core::market::MarketDataSource;
 use moon_core::market::trade_replay::trade_cache::{self, Inventory, KeepMap, TrimReport};
-use moon_core::market::trade_replay::{Coverage, long_position_ms, margin_ms, worker};
+use moon_core::market::trade_replay::{
+    Coverage, long_position_ms, model_margin_ms, replay_window_ms, worker,
+};
 use moon_core::symbol::Exchange;
 
 /// What one pass found — the preview's numbers, or the apply's.
@@ -71,30 +72,28 @@ pub(super) struct CleanupContext {
 
 /// What a claim is sized with, read once per pass so every row of it is judged alike whatever
 /// the Storage tab does meanwhile: the margin the tuner's fetch and the close-time capture ask
-/// for (`[trade_replay] margin_s`, whose floor is the model's pad), and the length from which a
-/// position is walked as its two ends.
+/// for (the chart's `[trade_replay] margin_s` floored to the model's two pads), and the length
+/// from which a position is walked as its two ends.
 #[derive(Clone, Copy, Debug)]
 struct Margins {
-    margin_ms: i64,
+    model_ms: i64,
     long_position_ms: i64,
 }
 
 impl Margins {
     fn live() -> Self {
         Self {
-            margin_ms: margin_ms(),
+            model_ms: model_margin_ms(),
             long_position_ms: long_position_ms(),
         }
     }
 
-    /// How far, in seconds, a row's claim can reach past its own stamps — the margin, and before
-    /// the entry the entry order's life on top of it (`ORDER_WAIT_CAP_MS`), rounded up. A row
-    /// that opened this much after the file's last print still claims prints inside the file, so
-    /// the replica is read that much wider than the file's range. The order's life reaches only
-    /// before the entry: on the other bound the reach is wider than any claim, and the few rows
-    /// it adds claim nothing.
+    /// How far, in seconds, a row's claim can reach past its own stamps — the margin, rounded
+    /// up. A row that opened this much after the file's last print, or closed this much before
+    /// its first, still claims prints inside the file, so the replica is read that much wider
+    /// than the file's range.
     fn reach_s(self) -> i64 {
-        (self.margin_ms + ORDER_WAIT_CAP_MS).div_euclid(1_000) + 1
+        self.model_ms.div_euclid(1_000) + 1
     }
 }
 
@@ -232,19 +231,12 @@ fn build_keep(
         if *by_name_only {
             preview.by_name += 1;
         }
-        for stamp in stamps(axis, owner) {
-            // The tuner's own window (`model_window_at`): from the entry order's creation where
-            // the row carries it, so the lead the tuner fetched for the order's life is claimed
-            // with the trade — split by the pass's own threshold, not one read a moment later.
-            let Some(window) = model_window_at(
-                order_open_at(stamp.buy_ms, stamp.buy_set_ms),
-                stamp.buy_ms,
-                stamp.close_ms,
-                margins.margin_ms,
-                margins.long_position_ms,
-            ) else {
+        for (open_ms, close_ms) in stamps(axis, owner) {
+            let Some(mut window) = replay_window_ms(open_ms, close_ms, margins.model_ms) else {
                 continue;
             };
+            // The pass's own snapshot, not what `replay_window_ms` read a moment later.
+            window.long_position_ms = margins.long_position_ms;
             let focus = window.focus_spans();
             for key in keys.iter() {
                 let coverage = keep.entry(key.clone()).or_insert_with(Coverage::none);
@@ -261,42 +253,17 @@ fn build_keep(
 /// for the catalog.
 type Addresses = HashMap<(u64, String), (Vec<(String, String)>, bool)>;
 
-/// One claim's stamps on one clock: the entry, the exit, and the entry order's creation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ClaimStamps {
-    buy_ms: i64,
-    close_ms: i64,
-    buy_set_ms: Option<i64>,
-}
-
-/// The row's stamps on the file's clock: through the core's measured offset, the way the trade
-/// window and the close-time capture stamp their requests — and, when both stamps are
-/// milliseconds, the raw values too, the way the tuner's fetch stamps its. Two claims where the
-/// clocks disagree, so neither path's tape is cut as the other's excess. The order's creation is
-/// a millisecond stamp on the entry's clock and moves with it.
-fn stamps(axis: &ReportAxis, owner: &TapeOwner) -> Vec<ClaimStamps> {
-    let (buy_ms, close_ms) = axis.stamp_pair_to_utc_ms(owner.buy, owner.close, owner.core_uid);
-    let raw_buy_ms = match owner.buy {
-        ReportStamp::Millis(buy) => Some(buy),
-        ReportStamp::Seconds(_) => None,
-    };
-    let lifted = ClaimStamps {
-        buy_ms,
-        close_ms,
-        buy_set_ms: owner
-            .buy_set_ms
-            .zip(raw_buy_ms)
-            .map(|(set, raw)| set + (buy_ms - raw)),
-    };
+/// The row's entry and exit on the file's clock: through the core's measured offset, the way
+/// the trade window and the close-time capture stamp their requests — and, when both stamps
+/// are milliseconds, the raw values too, the way the tuner's fetch stamps its. Two claims where
+/// the clocks disagree, so neither path's tape is cut as the other's excess.
+fn stamps(axis: &ReportAxis, owner: &TapeOwner) -> Vec<(i64, i64)> {
+    let lifted = axis.stamp_pair_to_utc_ms(owner.buy, owner.close, owner.core_uid);
     let mut out = vec![lifted];
     if let (ReportStamp::Millis(buy), ReportStamp::Millis(close)) = (owner.buy, owner.close)
-        && (buy, close) != (buy_ms, close_ms)
+        && (buy, close) != lifted
     {
-        out.push(ClaimStamps {
-            buy_ms: buy,
-            close_ms: close,
-            buy_set_ms: owner.buy_set_ms,
-        });
+        out.push((buy, close));
     }
     out
 }

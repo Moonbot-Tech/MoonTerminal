@@ -7,7 +7,7 @@ use super::{
     ClusterKey, MAX_CONTINUATIONS, MAX_IN_FLIGHT, continues, pick_cluster, pick_dispatchable,
     retry_wait, split_by_key,
 };
-use moon_core::market::trade_replay::{LONG_POSITION_MS, TickStatus};
+use moon_core::market::trade_replay::TickStatus;
 
 /// Only a gate refusal on a still-uncovered row is asked again, with the gate's own number;
 /// a row the tiles covered anyway, and every other status, is final here (a venue's own
@@ -133,10 +133,12 @@ fn a_row_continues_while_a_short_walk_gains_tape() {
 
 /// A cluster is the seed plus every row of the same market whose margined window overlaps the
 /// hull — through a bridge row — never another market or exchange, and never past
-/// `LONG_POSITION_MS` from the first entry to the last exit.
+/// the long-position threshold from the first entry to the last exit.
 #[test]
 fn a_cluster_takes_the_overlapping_rows_of_one_market_within_a_long_position() {
     const SEC: i64 = 1_000;
+    /// The threshold as this test hands it in: the default five minutes.
+    const LONG_POSITION_MS: i64 = 5 * 60 * SEC;
     let key = |exchange_key, market, buy_ms, close_ms| ClusterKey {
         exchange_key,
         market,
@@ -159,13 +161,13 @@ fn a_cluster_takes_the_overlapping_rows_of_one_market_within_a_long_position() {
         // 5: same market name on another exchange — never joins.
         key("gate", "AKEUSDT", base, base + 10 * SEC),
     ];
-    assert!(
+    const _: () = assert!(
         140 * SEC + 30 * SEC < LONG_POSITION_MS,
         "the cluster stays short"
     );
-    assert_eq!(pick_cluster(&rows, 3), vec![1, 2, 3]);
+    assert_eq!(pick_cluster(&rows, 3, LONG_POSITION_MS), vec![1, 2, 3]);
     assert_eq!(
-        pick_cluster(&rows, 0),
+        pick_cluster(&rows, 0, LONG_POSITION_MS),
         vec![0],
         "a lone row is its own cluster"
     );
@@ -184,7 +186,9 @@ fn a_cluster_takes_the_overlapping_rows_of_one_market_within_a_long_position() {
             base + LONG_POSITION_MS + 60 * SEC,
         ),
     ];
-    assert_eq!(pick_cluster(&long, 0), vec![0]);
+    assert_eq!(pick_cluster(&long, 0, LONG_POSITION_MS), vec![0]);
+    // A wider threshold takes the same two rows as one cluster.
+    assert_eq!(pick_cluster(&long, 0, 2 * LONG_POSITION_MS), vec![0, 1]);
 }
 
 /// A deferral takes every queued row of the refused venue, in queue order, and leaves the

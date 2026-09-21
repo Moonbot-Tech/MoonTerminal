@@ -225,6 +225,21 @@ impl SettingsView {
         }
     }
 
+    /// Moves the minutes a position must be held to count as long, clamped to
+    /// `LONG_POSITION_MIN_RANGE`, and updates live state and storage.toml. The cleanup's count
+    /// moves with it: a long position claims its two ends, a short one its whole length.
+    fn adjust_long_position_min(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let current = self.storage.cfg.trade_replay.long_position_min as i32;
+        let v = storage_cfg::clamp_long_position_min((current + delta).max(0) as u32);
+        if self.storage.cfg.trade_replay.long_position_min != v {
+            self.storage.cfg.trade_replay.long_position_min = v;
+            moon_core::market::trade_replay::set_long_position_min(v);
+            storage_cfg::save(&self.storage.cfg);
+            self.storage_cleanup_refresh(cx);
+            cx.notify();
+        }
+    }
+
     /// The stepper's label for a margin: whole seconds under a minute, whole minutes from
     /// there — every step of `TRADE_MARGIN_STEPS_S` is one or the other.
     fn trades_margin_label(secs: u32) -> String {
@@ -252,6 +267,8 @@ impl SettingsView {
         let trades_max_mb = self.storage.cfg.trade_replay.max_mb;
         let trades_margin_s = self.storage.cfg.trade_replay.margin_s;
         let autoload_missing = self.storage.cfg.trade_replay.autoload_missing;
+        let long_position_min = self.storage.cfg.trade_replay.long_position_min;
+        let cleanup_at_startup = self.storage.cfg.trade_replay.cleanup_at_startup;
 
         let size_line = |sz: Option<(u64, u64)>| -> String {
             match sz {
@@ -503,6 +520,27 @@ impl SettingsView {
                     )),
             )
             .child(hint(t!("storage.trades_margin_hint").to_string()))
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap(design::ui_px(cx, 8.0))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(rgba_from(p.text, 1.0))
+                            .child(t!("storage.trades_long_position").to_string()),
+                    )
+                    .child(self.stepper_controls(
+                        cx,
+                        "trades-long-position-min",
+                        true,
+                        t!("storage.trades_min", min = long_position_min).to_string(),
+                        1,
+                        5,
+                        Self::adjust_long_position_min,
+                    )),
+            )
+            .child(hint(t!("storage.trades_long_position_hint").to_string()))
             // The Entry/Exit axis' tape autoload: a live cell in moon-core, read by the
             // coordination tick, so a flip needs no restart.
             .child(
@@ -520,6 +558,24 @@ impl SettingsView {
                         }
                     })),
             )
+            // The startup cleanup: read once per launch by the coordination tick, so the flip
+            // takes effect at the next launch — which is what "at startup" says.
+            .child(
+                moon_ui::MoonCheckbox::new("trades-cleanup-at-startup")
+                    .checked(cleanup_at_startup)
+                    .label(t!("storage.trades_cleanup_at_startup").to_string())
+                    .description(t!("storage.trades_cleanup_at_startup_hint").to_string())
+                    .on_change(cx.listener(|this, v: &bool, _, cx| {
+                        let v = *v;
+                        if this.storage.cfg.trade_replay.cleanup_at_startup != v {
+                            this.storage.cfg.trade_replay.cleanup_at_startup = v;
+                            moon_core::market::trade_replay::set_cleanup_at_startup(v);
+                            storage_cfg::save(&this.storage.cfg);
+                            cx.notify();
+                        }
+                    })),
+            )
+            .child(self.trades_cleanup_controls(cx, p, busy))
             .child(
                 h_flex()
                     .flex_wrap()

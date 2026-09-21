@@ -15,8 +15,8 @@
 //! A request is a CLUSTER: the next pending row of a free key — a row the user is looking at
 //! first ([`prioritize`]), else the oldest — plus every pending row of the
 //! same market whose window overlaps it, as long as the first entry and the last exit stay
-//! within a long position's length ([`LONG_POSITION_MS`], past which the worker walks only
-//! the two ends). One walk of the whole stretch serves them all — a pumped coin closes dozens
+//! within a long position's length (`[trade_replay] long_position_min`, past which the worker
+//! walks only the two ends). One walk of the whole stretch serves them all — a pumped coin closes dozens
 //! of trades in minutes, and asked one by one each of them re-walked the same seconds and paid the same page
 //! budget, and on a venue with small pages (OKX, 100 prints) each of them died on that budget
 //! in turn. Every row of the cluster is then replayed off the tiles on its own and answered on
@@ -41,8 +41,8 @@ use moon_core::market::ReplayAddress;
 use moon_core::market::trade_replay::venue_caps::TickValue;
 use moon_core::market::trade_replay::worker::{self, TradeReplayRequest};
 use moon_core::market::trade_replay::{
-    Coverage, LONG_POSITION_MS, ReplayIntent, ReplayWindow, TickStatus, TradeReplayEmpty,
-    TradeReplayFailure, TradeReplayOutcome, replay_window_ms,
+    Coverage, ReplayIntent, ReplayWindow, TickStatus, TradeReplayEmpty, TradeReplayFailure,
+    TradeReplayOutcome, replay_window_ms,
 };
 
 /// The wait after a venue's own refusal mid-walk, when the gate names no number: the gate's own
@@ -436,16 +436,22 @@ pub(super) struct ClusterKey<'a> {
 
 /// The rows that go out with the seed in one request: every pending row of the seed's market
 /// whose margined window overlaps the cluster's hull, taken while the hull's first entry and
-/// last exit stay within [`LONG_POSITION_MS`]. Grows until nothing more joins — a row that
-/// joins can bridge to the next one.
+/// last exit stay within `long_position_ms` — the seed's own threshold, captured when its window
+/// was built (`ReplayWindow::long_position_ms`), past which the worker walks a stretch as its
+/// two ends. Grows until nothing more joins — a row that joins can bridge to the next one.
 ///
 /// Args:
 ///     rows: The pending rows' keys, in queue order.
 ///     seed: The index of the row the dispatcher picked.
+///     long_position_ms: The longest hull, first entry to last exit, walked as one stretch.
 ///
 /// Returns:
 ///     The indices of the cluster, the seed included, ascending.
-pub(super) fn pick_cluster(rows: &[ClusterKey<'_>], seed: usize) -> Vec<usize> {
+pub(super) fn pick_cluster(
+    rows: &[ClusterKey<'_>],
+    seed: usize,
+    long_position_ms: i64,
+) -> Vec<usize> {
     let anchor = rows[seed];
     let mut taken = vec![seed];
     let (mut first_buy, mut last_close) = (anchor.buy_ms, anchor.close_ms);
@@ -464,7 +470,7 @@ pub(super) fn pick_cluster(rows: &[ClusterKey<'_>], seed: usize) -> Vec<usize> {
                     >= first_buy.saturating_sub(anchor.margin_ms);
             let hull_from = first_buy.min(row.buy_ms);
             let hull_to = last_close.max(row.close_ms);
-            if overlaps && hull_to.saturating_sub(hull_from) <= LONG_POSITION_MS {
+            if overlaps && hull_to.saturating_sub(hull_from) <= long_position_ms {
                 taken.push(index);
                 first_buy = hull_from;
                 last_close = hull_to;
@@ -545,7 +551,9 @@ fn run(job: &'static Job) {
                     margin_ms: row.window.margin_ms,
                 })
                 .collect();
-            let indices = pick_cluster(&keys, index);
+            // The seed's own threshold, captured when its window was built — the same one
+            // the walk and the post-walk check judge the row by.
+            let indices = pick_cluster(&keys, index, st.pending[index].window.long_position_ms);
             // Removed from the back, so each index still names the row it was picked for.
             let mut rows: Vec<QueuedRow> = indices
                 .iter()
@@ -629,7 +637,8 @@ fn serve_cluster(
     let uids: Vec<i64> = rows.iter().map(|r| r.deal.report_uid).collect();
     let first = &rows[0];
     // The hull: the first entry to the last exit, with the seed's margin — what
-    // `pick_cluster` kept within `LONG_POSITION_MS`, so the worker walks it as one stretch.
+    // `pick_cluster` kept within the long-position threshold, so the worker walks it as one
+    // stretch.
     let first_buy = rows
         .iter()
         .map(|r| r.deal.buy_ms)
@@ -640,8 +649,14 @@ fn serve_cluster(
         .map(|r| r.deal.close_ms)
         .max()
         .unwrap_or(first.deal.close_ms);
-    let window =
-        replay_window_ms(first_buy, last_close, first.window.margin_ms).unwrap_or(first.window);
+    let window = replay_window_ms(first_buy, last_close, first.window.margin_ms)
+        .map(|hull| ReplayWindow {
+            // The seed's threshold, not a fresh read: the hull was clustered by it, and the
+            // walk and the post-walk check must split it the same way.
+            long_position_ms: first.window.long_position_ms,
+            ..hull
+        })
+        .unwrap_or(first.window);
     let (reply, rx) = mpsc::channel();
     let started = Instant::now();
     worker::request(TradeReplayRequest {
@@ -713,7 +728,7 @@ fn serve_cluster(
             entry_start: None,
             held: None,
         };
-        replay_row(&mut answer, defaults, lines);
+        replay_row(&mut answer, defaults, lines, row.window.long_position_ms);
         let mut wait = retry_wait(status, answer.tape).map(|s| Duration::from_secs(u64::from(s)));
         // Back to the end of the venue's turn, for the next walk to continue from where the
         // tiles end — see [`continues`]; the ceiling, no gain, or any other word is final.

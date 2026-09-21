@@ -282,7 +282,10 @@ impl AnalyticsView {
             false,
             cx,
             move || {
-                let mut tapes = held_tapes(&targets);
+                // One threshold for the whole table, read once: every row of one load splits
+                // its window the same way.
+                let long_position_ms = moon_core::market::trade_replay::long_position_ms();
+                let mut tapes = held_tapes(&targets, long_position_ms);
                 let mut rows: Vec<DealRow> = targets
                     .into_iter()
                     .map(|(deal, address)| DealRow {
@@ -332,7 +335,7 @@ impl AnalyticsView {
                             .get(&row.deal.report_uid)
                             .cloned()
                             .unwrap_or_default();
-                        replay_row(row, &defaults, lines);
+                        replay_row(row, &defaults, lines, long_position_ms);
                     }
                 }
                 rows
@@ -365,7 +368,10 @@ impl AnalyticsView {
 
 /// The held tape of every target, asked from the worker in one batch and collected in order.
 /// A query the worker did not answer in time, or one cancelled by a scope change, is absent.
-fn held_tapes(targets: &[(Deal, Arc<RowAddress>)]) -> HashMap<i64, HeldTape> {
+fn held_tapes(
+    targets: &[(Deal, Arc<RowAddress>)],
+    long_position_ms: i64,
+) -> HashMap<i64, HeldTape> {
     let deadline = std::time::Instant::now() + HELD_ANSWER_WAIT;
     let asked: Vec<(
         i64,
@@ -374,7 +380,7 @@ fn held_tapes(targets: &[(Deal, Arc<RowAddress>)]) -> HashMap<i64, HeldTape> {
     )> = targets
         .iter()
         .filter_map(|(deal, address)| {
-            let (rx, spans) = ask_held(address, deal)?;
+            let (rx, spans) = ask_held(address, deal, long_position_ms)?;
             Some((deal.report_uid, rx, spans))
         })
         .collect();
@@ -403,14 +409,18 @@ fn held_tapes(targets: &[(Deal, Arc<RowAddress>)]) -> HashMap<i64, HeldTape> {
 }
 
 /// One held query sent, with the spans it asked for; the answer arrives on the receiver.
+/// `long_position_ms` is the caller's — a queued row's own window's, or one read for a whole
+/// table — so the split is the one every other stage of that row used.
 fn ask_held(
     address: &RowAddress,
     deal: &Deal,
+    long_position_ms: i64,
 ) -> Option<(
     mpsc::Receiver<moon_core::market::trade_replay::TickAnswer>,
     Coverage,
 )> {
-    let window = replay_window_ms(deal.buy_ms, deal.close_ms, model_margin_ms())?;
+    let mut window = replay_window_ms(deal.buy_ms, deal.close_ms, model_margin_ms())?;
+    window.long_position_ms = long_position_ms;
     let spans = window.focus_spans();
     let (reply, rx) = mpsc::channel();
     query_held(TickQuery {
@@ -503,8 +513,12 @@ type HeldTape = (Vec<Tick>, Coverage, Coverage);
 
 /// The held prints of one deal's window, through the worker. `None` when the worker did not
 /// answer in time.
-pub(super) fn held_tape(address: &RowAddress, deal: &Deal) -> Option<HeldTape> {
-    let (rx, spans) = ask_held(address, deal)?;
+pub(super) fn held_tape(
+    address: &RowAddress,
+    deal: &Deal,
+    long_position_ms: i64,
+) -> Option<HeldTape> {
+    let (rx, spans) = ask_held(address, deal, long_position_ms)?;
     let answer = rx.recv_timeout(HELD_ANSWER_WAIT).ok()?;
     Some((answer.ticks, answer.covered, spans))
 }
@@ -527,12 +541,18 @@ fn unservable_status(address: &RowAddress, deal: &Deal, now_ms: i64) -> Option<T
 }
 
 /// Run the model on one row, from what the worker holds — asked here, one query; a row
-/// without an address is left as it is.
-pub(super) fn replay_row(row: &mut DealRow, defaults: &HashMap<String, f64>, lines: ArchivedLines) {
+/// without an address is left as it is. `long_position_ms` is the row's own threshold — see
+/// [`ask_held`].
+pub(super) fn replay_row(
+    row: &mut DealRow,
+    defaults: &HashMap<String, f64>,
+    lines: ArchivedLines,
+    long_position_ms: i64,
+) {
     let tape = row
         .address
         .as_ref()
-        .and_then(|address| held_tape(address, &row.deal));
+        .and_then(|address| held_tape(address, &row.deal, long_position_ms));
     replay_row_with(row, defaults, lines, tape);
 }
 

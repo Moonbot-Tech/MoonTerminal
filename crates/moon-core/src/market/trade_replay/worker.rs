@@ -287,6 +287,8 @@ enum Inbound {
     /// A lane armed a native follow-up for a request it answered; the coordinator polls it.
     /// Boxed for the same reason as [`Job::Native`].
     NativeWait(Box<(TradeReplayRequest, NativeWait)>),
+    /// Drop every held tile and remembered answer — see [`forget_tiles`].
+    ForgetTiles,
 }
 
 /// One unit of a lane's own queue: the venue calls of one request.
@@ -590,6 +592,17 @@ pub fn query_held(query: TickQuery) {
     send(Inbound::Held(query));
 }
 
+/// Drop every tile the worker holds in memory, and every remembered answer with them.
+///
+/// For the Storage tab, after it cut `trades.sqlite` down: the disk is the tile store's memory
+/// and the two must not disagree about what is held — a held-data query reads the tiles first,
+/// and would go on answering "held" for prints the file no longer has until the process
+/// restarted. Emptied, the tiles fill again from the trimmed disk on the next ask. Returns at
+/// once; a lane mid-walk files what it fetched into the emptied store as it always did.
+pub fn forget_tiles() {
+    send(Inbound::ForgetTiles);
+}
+
 fn send(inbound: Inbound) {
     let worker = WORKER.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<Inbound>();
@@ -652,6 +665,17 @@ fn enqueue(
             queue.push_back(Job::Capture(request, spans, false));
         }
         Inbound::Held(query) => queue.push_back(Job::Held(query)),
+        Inbound::ForgetTiles => {
+            // Straight here, not through the queue: nothing queued behind it may keep
+            // answering from tiles the disk has already lost.
+            *lock_tiles(&shared.tiles) = TickTileStore::default();
+            shared
+                .cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clear();
+            log::info!("[x] trade-replay tiles and remembered answers dropped after a trim");
+        }
     }
 }
 

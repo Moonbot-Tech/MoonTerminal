@@ -19,6 +19,43 @@ max_mb = 512
     // The autoload switch came after the margin and reads as OFF from a file without it: it
     // spends the venues' budget, and may not switch itself on.
     assert!(!cfg.trade_replay.autoload_missing);
+    // The long-position threshold came later still and reads as the five minutes it was as a
+    // constant; the startup cleanup, like the autoload, may not switch itself on.
+    assert_eq!(
+        cfg.trade_replay.long_position_min,
+        DEFAULT_LONG_POSITION_MIN
+    );
+    assert!(!cfg.trade_replay.cleanup_at_startup);
+}
+
+/// The long-position threshold round-trips through the file and is bounded where `load`
+/// bounds it: a hand-edited zero — every trade "long" — becomes the floor, an hour past the
+/// ceiling becomes the ceiling.
+#[test]
+fn long_position_min_round_trips_and_is_clamped_on_load() {
+    let mut cfg = StorageCfg::default();
+    cfg.trade_replay.long_position_min = 15;
+    cfg.trade_replay.cleanup_at_startup = true;
+    let text = toml::to_string(&cfg).expect("serialises");
+    assert!(text.contains("long_position_min = 15"), "{text}");
+    assert!(text.contains("cleanup_at_startup = true"), "{text}");
+    let back: StorageCfg = toml::from_str(&text).expect("parses");
+    assert_eq!(back.trade_replay.long_position_min, 15);
+    assert!(back.trade_replay.cleanup_at_startup);
+    let zero: StorageCfg = toml::from_str(
+        "[trade_replay]
+long_position_min = 0
+",
+    )
+    .expect("parses");
+    assert_eq!(sanitize(zero).trade_replay.long_position_min, 1);
+    let huge: StorageCfg = toml::from_str(
+        "[trade_replay]
+long_position_min = 180
+",
+    )
+    .expect("parses");
+    assert_eq!(sanitize(huge).trade_replay.long_position_min, 120);
 }
 
 /// A file written while the margin was `margin_min` (minutes) — what every terminal installed
