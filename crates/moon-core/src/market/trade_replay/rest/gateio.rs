@@ -247,28 +247,7 @@ pub(super) fn fetch_trades(
         true => "contract",
         false => "currency_pair",
     };
-    // A futures walk is paged back by TIME: the next page ends at the second of the oldest
-    // row seen (one past it, as `trade_window_seconds` widens every `to`), and the rows of
-    // that second the page before already took are dropped by id in `parse_futures_trades`.
-    // A second too dense for a page is drained by `offset` with `from`/`to` pinned to it
-    // (`TradeCursor::Within`) — the one use of `offset`. One `from` and one `to` in the query,
-    // decided here: `query` appends, and a second `to` would leave the venue to pick either.
-    let (from_s, to_s, offset) = match (futures, cursor) {
-        (true, Some(TradeCursor::Before { boundary_ms, .. })) => {
-            let (from_s, to_s) = trade_window_seconds(from_ms, boundary_ms.min(to_ms));
-            (from_s, to_s, None)
-        }
-        (
-            true,
-            Some(TradeCursor::Within {
-                second_s, offset, ..
-            }),
-        ) => (second_s, second_s + 1, Some(offset)),
-        _ => {
-            let (from_s, to_s) = trade_window_seconds(from_ms, to_ms);
-            (from_s, to_s, None)
-        }
-    };
+    let (from_s, to_s) = trade_window_seconds(from_ms, to_ms);
     let mut request = agent
         .get(route.url())
         .query(market_param, market)
@@ -407,21 +386,9 @@ fn parse_spot_trade_row(row: &Value) -> Option<Tick> {
 /// where spot's `docs/Trade.md` types it `str` — and the recorded response agrees. Spot's
 /// `create_time_ms` is a millisecond string; the two parsers are deliberately not shared.
 ///
-/// A FULL page is NEVER accepted as complete: this endpoint truncates SILENTLY at `limit` with
-/// no error, so a full page means "ask again", never "that was all" — see
-/// [`super::super::rest::TradePage::next`]'s own doc for why that rule is frozen.
-///
-/// # Paged by time and id; one second at a time by `offset`
-///
-/// The next page is asked up to the second of this page's OLDEST row ([`TradeCursor::Before`]),
-/// so it holds that second again: the rows of it this page took are told apart by trade id —
-/// every row at or above the oldest id taken is dropped, and on a continuation page a row
-/// with no id is dropped too, or it would be taken again on every page — and the rest are
-/// new. A full page that brought NOTHING new is a second holding more prints than a page,
-/// which `to` in whole seconds cannot enter: the walk drains that one second by `offset`
-/// ([`TradeCursor::Within`]) until a short page, then goes back to time up to the second's
-/// own start. A drain page that brought nothing new and is full still moves the offset — the
-/// rows behind it are the venue's, and the page budget bounds the walk.
+/// A FULL page is ALWAYS treated as incomplete regardless of any other signal: this endpoint
+/// truncates SILENTLY at `limit` with no error, so a full page means "ask again", never "that was
+/// all" — see [`super::super::rest::TradePage::next`]'s own doc for why that rule is frozen.
 ///
 /// Args:
 ///     body: Decoded response.
@@ -439,32 +406,9 @@ pub(super) fn parse_futures_trades(
     let rows = body.as_array().ok_or_else(|| {
         FetchError::Transient("gate: futures response is not an array".to_string())
     })?;
-    let full = rows.len() >= max_rows;
-    // Rows the page before already took: at or above the oldest id it held.
-    let below_id = match cursor {
-        Some(TradeCursor::Before { below_id, .. } | TradeCursor::Within { below_id, .. }) => {
-            below_id
-        }
-        _ => u64::MAX,
-    };
-    let continuing = matches!(
-        cursor,
-        Some(TradeCursor::Before { .. } | TradeCursor::Within { .. })
-    );
-    let raw_len = rows.len();
-    let rows: Vec<&Value> = rows
-        .iter()
-        .filter(|row| match futures_row_id(row) {
-            Some(id) => id < below_id,
-            None => !continuing,
-        })
-        .collect();
-    // The `size: 0` rows a small contract prints between real fills are split off first — the
-    // rule of `split_no_fill`, over the rows kept; this is the route they were recorded on.
-    let (fills, empty): (Vec<&Value>, Vec<&Value>) = rows
-        .iter()
-        .partition(|row| row.get("size").and_then(cell_number) != Some(0.0));
-    let no_fill = empty.len();
+    // The `size: 0` rows a small contract prints between real fills are split off first — see
+    // `split_no_fill`; this is the route they were recorded on.
+    let (fills, no_fill) = split_no_fill(rows, "size");
     let ticks: Vec<Tick> = fills
         .iter()
         .filter_map(|row| parse_futures_trade_row(row))
