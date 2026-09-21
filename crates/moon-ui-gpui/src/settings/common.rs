@@ -57,13 +57,38 @@ pub(super) fn hsla_u8(h: Hsla) -> [u8; 3] {
     ]
 }
 
+/// How many slider-heights of travel a settings track needs to read as a knob.
+///
+/// Twelve 22 design-px heights is 264, sitting beside the General tab's widest labeled select
+/// (260 design units). The multiple is the control's own size, not a monitor-specific pixel guess.
+const SLIDER_TRACK_HEIGHTS: f32 = 12.0;
+
+/// Upper bound for the settings slider track: captions-plus-gap, or a run of slider heights.
+///
+/// The floor is the two endpoint captions so they cannot collide. The ceiling is twelve times the
+/// slider's own height so a wide Settings window cannot stretch the track across the pane. `flex_1`
+/// still shrinks the track between those two on a narrow window.
+///
+/// Args:
+///     scale_w: Width reserved by the two endpoint captions and their gap, in layout pixels.
+///     slider_h: The slider's own height in the same pixel space as `scale_w`.
+///
+/// Returns:
+///     The larger of `scale_w` and twelve slider heights.
+fn slider_track_max_w(scale_w: f32, slider_h: f32) -> f32 {
+    scale_w.max(slider_h * SLIDER_TRACK_HEIGHTS)
+}
+
 /// Build a labeled slider row with a scale below the track and a fixed-width current value.
 ///
-/// The full-width label avoids clipping at large font sizes. The caller supplies the slider range
-/// because pinned MoonUI keeps it private, plus one formatter so both endpoints and the current
-/// value use the field's unit and rounding contract. The track yields width to the value column
-/// at narrow window sizes, including when a colour picker shares its parent row. Its minimum
-/// reserves only the two endpoint captions and their gap, not a fixed track length.
+/// The caller supplies the slider range because pinned MoonUI keeps it private, plus one formatter
+/// so both endpoints and the current value use the field's unit and rounding contract. The track
+/// yields width to the value column at narrow window sizes, including when a colour picker shares
+/// its parent row. Its minimum reserves only the two endpoint captions and their gap; its maximum
+/// is [`slider_track_max_w`], so a wide window keeps the track, captions and value as one
+/// left-aligned group. The bound uses the slider's own height and the caption measure, not the
+/// live zoom value, so dragging the interface-scale slider does not move the control under the
+/// pointer.
 ///
 /// Args:
 ///     label: Localized caption displayed above the slider.
@@ -88,12 +113,18 @@ pub(super) fn slider_row(
     let max = format(*range.end());
     let val = format(val);
     let endpoint_font = design::BODY_TEXT - 2.0;
+    let caption_gap = design::ui_value(cx, 10.0);
     let scale_w = design::ui_text_width_zoomed(cx, &min, endpoint_font, 400.0, true)
         + design::ui_text_width_zoomed(cx, &max, endpoint_font, 400.0, true)
-        + design::ui_value(cx, 10.0);
+        + caption_gap;
+    let slider_h = design::ui_value(cx, 22.0);
+    let value_w = design::font_w(cx, 76.0);
+    let track_max = slider_track_max_w(scale_w, slider_h);
+    let row_max = track_max + caption_gap + value_w;
     v_flex()
         .w_full()
         .min_w_0()
+        .max_w(px(row_max))
         .child(
             div()
                 .text_color(rgba_from(p.text_soft, 1.0))
@@ -103,13 +134,14 @@ pub(super) fn slider_row(
             h_flex()
                 .w_full()
                 .min_h(design::fit_h_px(cx, 28.0, 14.0, 7.0))
-                .gap(design::ui_px(cx, 10.0))
+                .gap(px(caption_gap))
                 .items_center()
                 .child(
                     v_flex()
                         .flex_1()
                         .min_w(px(scale_w))
-                        .child(MoonSlider::new(st).height(design::ui_value(cx, 22.0)))
+                        .max_w(px(track_max))
+                        .child(MoonSlider::new(st).height(slider_h))
                         .child(
                             h_flex()
                                 .w_full()
@@ -123,7 +155,7 @@ pub(super) fn slider_row(
                 )
                 .child(
                     div()
-                        .w(design::font_w_px(cx, 76.0))
+                        .w(px(value_w))
                         .flex_none()
                         .font_family(design::mono())
                         .text_align(TextAlign::Right)
@@ -278,3 +310,6 @@ pub(super) fn draft_slider_on(
     .detach();
     st
 }
+
+#[cfg(test)]
+mod tests;
