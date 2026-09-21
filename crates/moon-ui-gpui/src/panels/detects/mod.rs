@@ -2,7 +2,8 @@
 //! for which `sound_alert || is_alert`. A row routed to a chart tab (`add_to_chart > 0`) is an
 //! ordinary detect in every respect and joins the feed as well once `show_add_to_chart` is on;
 //! while it is off, chart tabs show such rows alone, as they always did. Each `(core, market)` card
-//! remains for `max(keep_alert_secs, 1)` seconds.
+//! remains for its strategy `KeepAlert` seconds, or the Alerts panel duration when a figure
+//! alert carries no strategy.
 //! Left-click requests the market on Main without raising its window, while right-click requests a
 //! custom comparison tab.
 //!
@@ -45,8 +46,8 @@ use crate::workspace::scope_marker::ScopeMarker;
 
 use crowd::DetectOrigin;
 use rules::{
-    crowd_card_yields, detect_expired, detection_core_visible, detection_route_visible,
-    detects_sig, empty_feed_text,
+    crowd_card_yields, detect_card_ttl_ms, detect_expired, detection_core_visible,
+    detection_route_visible, detects_sig, empty_feed_text,
 };
 
 /// Number of latest five-minute OHLC buckets retained for a card's candle chart, approximately two
@@ -398,7 +399,8 @@ impl DetectsPanel {
                 if det.add_to_chart > 0 && !show_add_to_chart {
                     continue;
                 }
-                let ttl = (det.keep_alert_secs.max(1) as f64) * 1000.0;
+                let ttl =
+                    detect_card_ttl_ms(det.keep_alert_secs, det.is_alert, b.alert_duration_s());
                 // Drop a row whose card would be pruned on this very pass. A core's ring holds
                 // thousands of rows and is walked whole whenever cursors are empty — a panel just
                 // built, or the setting above just turned on — and each row accepted below pays

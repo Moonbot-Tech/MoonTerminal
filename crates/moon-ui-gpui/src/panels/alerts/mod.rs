@@ -89,8 +89,6 @@ pub struct AlertsPanel {
     /// The figure whose settings popover is open, if any. Owned here rather than left to each
     /// popover's own state so only ONE can be open, and so the table can mark that row.
     pub(super) settings_for: Option<crate::figstyle::FigStyleTarget>,
-    duration_s: u32,
-    repeat: u32,
     /// Retained table state holding column order and widths.
     table_state: Entity<MoonDataTableState>,
     /// Last persisted column order, so a resize or selection notification does not dump the dock
@@ -239,8 +237,6 @@ impl AlertsPanel {
             query: String::new(),
             alert_strategies: Rc::new(HashMap::new()),
             settings_for: None,
-            duration_s: 20,
-            repeat: 2,
             table_state,
             col_order_cache: Vec::new(),
             widths_id,

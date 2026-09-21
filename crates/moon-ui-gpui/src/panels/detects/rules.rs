@@ -105,6 +105,35 @@ pub(super) fn detection_core_visible(core: Option<CoreId>, visible: &[CoreId]) -
     core.is_none_or(|core| visible.contains(&core))
 }
 
+/// Card lifetime in milliseconds for one Detects-feed row.
+///
+/// A detect whose strategy named `KeepAlert` keeps that many seconds. A figure alert with no
+/// strategy (`keep_alert_secs == 0`) uses the Alerts panel duration instead of the old 1-second
+/// floor. Any other zero-KeepAlert detect still lasts one second, so a non-alert card is not
+/// dropped on the ingest pass that built it.
+///
+/// Args:
+///     keep_alert_secs: Strategy `KeepAlert`, or 0 when no strategy produced this row.
+///     is_alert: Whether this row is a drawn-figure alert firing.
+///     figure_duration_s: Resolved Alerts panel duration, used only for strategy-less alerts.
+///
+/// Returns:
+///     Lifetime in milliseconds, always positive.
+pub(super) fn detect_card_ttl_ms(
+    keep_alert_secs: u32,
+    is_alert: bool,
+    figure_duration_s: u32,
+) -> f64 {
+    let secs = if keep_alert_secs > 0 {
+        keep_alert_secs
+    } else if is_alert {
+        figure_duration_s
+    } else {
+        1
+    };
+    (secs as f64) * 1000.0
+}
+
 /// Return whether a detection has outlived its `KeepAlert` window.
 ///
 /// One rule for both readers: `prune` drops the cards that reach it, and ingestion refuses to build

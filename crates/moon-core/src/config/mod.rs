@@ -92,10 +92,12 @@ pub use key_endpoint::endpoint_from_key;
 pub(crate) use key_endpoint::endpoint_from_network;
 pub use lang::Language;
 pub use layout::{
-    AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT, AUTO_WORKSPACE_RAIL_WIDTH_MAX,
+    ALERT_DURATION_S_DEFAULT, ALERT_DURATION_S_MAX, ALERT_DURATION_S_MIN, ALERT_REPEAT_DEFAULT,
+    ALERT_REPEAT_MAX, AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT, AUTO_WORKSPACE_RAIL_WIDTH_MAX,
     AUTO_WORKSPACE_RAIL_WIDTH_MIN, ChartGraphicsCfg, DetachedLayout, GeomRect, GroupLayout,
     HVOL_TF_MAX_S, HvolSide, ReportFilterPrefs, TableSortPreference, TradeHistoryStyle,
-    WindowLayout, WorkspaceMode, clamp_auto_workspace_rail_width,
+    WindowLayout, WorkspaceMode, clamp_auto_workspace_rail_width, resolve_alert_duration_s,
+    resolve_alert_repeat,
 };
 pub use news_tags::NewsTagSettings;
 pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};

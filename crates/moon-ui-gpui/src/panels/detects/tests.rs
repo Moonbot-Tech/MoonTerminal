@@ -3,8 +3,8 @@
 use super::cards::{self, strategy_chip_text};
 use super::crowd::crowd_chip_text;
 use super::rules::{
-    crowd_card_yields, detect_expired, detection_core_visible, detection_route_visible,
-    empty_feed_text,
+    crowd_card_yields, detect_card_ttl_ms, detect_expired, detection_core_visible,
+    detection_route_visible, empty_feed_text,
 };
 use crate::workspace::scope_marker::ScopeMarker;
 use moon_core::config::WorkspaceMode;
@@ -159,6 +159,30 @@ fn expired_rows_are_dropped_before_paying_for_a_snapshot() {
         expiry < snapshot,
         "an expired row still pays for a snapshot"
     );
+    assert!(
+        ingest.contains("detect_card_ttl_ms("),
+        "ingest must resolve TTL through detect_card_ttl_ms so a strategy-less alert is not clamped to 1 s"
+    );
+    assert!(
+        !ingest.contains("keep_alert_secs.max(1)"),
+        "the 1-second floor must not return for a strategy-less figure alert"
+    );
+}
+
+/// A figure alert with no strategy takes the Alerts panel duration; one with a strategy keeps
+/// that strategy's `KeepAlert`. Ordinary detects still use the 1-second floor when KeepAlert is 0.
+///
+/// Mutation: `max(keep_alert_secs, 1)` for every row. A strategy-less figure alert flashes for a
+/// second regardless of the duration stepper. Mutation: apply the panel duration to a detect that
+/// already carries KeepAlert. An Alerts strategy's KeepAlert would no longer reach the card.
+#[test]
+fn figure_alert_ttl_uses_strategy_keep_alert_or_the_panel_duration() {
+    assert_eq!(detect_card_ttl_ms(60, true, 30), 60_000.0);
+    assert_eq!(detect_card_ttl_ms(10, true, 30), 10_000.0);
+    assert_eq!(detect_card_ttl_ms(0, true, 30), 30_000.0);
+    assert_eq!(detect_card_ttl_ms(0, true, 20), 20_000.0);
+    assert_eq!(detect_card_ttl_ms(0, false, 30), 1_000.0);
+    assert_eq!(detect_card_ttl_ms(45, false, 30), 45_000.0);
 }
 
 /// Detect cards must validate Main/Compare authority before removing their retained card.

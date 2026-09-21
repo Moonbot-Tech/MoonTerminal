@@ -27,6 +27,40 @@ impl Backend {
         }
     }
 
+    /// Seconds a strategy-less figure-alert card stays on the Detects feed.
+    ///
+    /// Returns:
+    ///     The Alerts panel duration, or MoonBot's 30 s `KeepTime` while none was stored.
+    pub(crate) fn alert_duration_s(&self) -> u32 {
+        moon_core::config::resolve_alert_duration_s(self.layout.alert_duration_s)
+    }
+
+    /// Stores the Alerts panel duration, marking the layout for its next save.
+    pub(crate) fn set_alert_duration_s(&mut self, secs: u32) {
+        let secs = moon_core::config::resolve_alert_duration_s(Some(secs));
+        if self.layout.alert_duration_s != Some(secs) {
+            self.layout.alert_duration_s = Some(secs);
+            self.layout_dirty = true;
+        }
+    }
+
+    /// How many times the player enqueues a figure-alert clip.
+    ///
+    /// Returns:
+    ///     The Alerts panel repeat, or 2 while none was stored.
+    pub(crate) fn alert_repeat(&self) -> u32 {
+        moon_core::config::resolve_alert_repeat(self.layout.alert_repeat)
+    }
+
+    /// Stores the Alerts panel repeat, marking the layout for its next save.
+    pub(crate) fn set_alert_repeat(&mut self, n: u32) {
+        let n = moon_core::config::resolve_alert_repeat(Some(n));
+        if self.layout.alert_repeat != Some(n) {
+            self.layout.alert_repeat = Some(n);
+            self.layout_dirty = true;
+        }
+    }
+
     /// Plays the most recent eligible new detect sound for each core. The `last_detect_seq` cursor
     /// prevents duplicates and startup bursts: the first visit seeds the cursor without playback.
     ///
@@ -88,21 +122,24 @@ impl Backend {
                         return None;
                     }
                     match &d.sound_name {
-                        Some(name) => Some(name.clone()),
+                        Some(name) => Some((name.clone(), d.is_alert)),
                         // Use the default for an alert firing without a strategy snapshot. An
                         // ordinary detect with SoundKind=NONE stays silent and gets no default.
-                        None if d.is_alert => Some(default_sound.clone()),
+                        None if d.is_alert => Some((default_sound.clone(), true)),
                         None => None,
                     }
                 });
             self.last_detect_seq.insert(core, cur_max);
-            if let Some(name) = sound {
+            if let Some((name, is_alert)) = sound {
                 moon_core::detect_diag::line(&format!(
                     "[sound] core={} play={name}",
                     moon_core::feed::core_label(core)
                 ));
-                crate::media::sound::play(&name);
-                played = true;
+                let plays = detect_sound_plays(is_alert, self.alert_repeat());
+                for _ in 0..plays {
+                    crate::media::sound::play(&name);
+                }
+                played = plays > 0;
             } else {
                 // Quiet mode is named explicitly: without it, a silenced night reads as "no
                 // detect asked for a sound", which is a different bug entirely.
@@ -121,3 +158,21 @@ impl Backend {
         played
     }
 }
+
+/// How many times the detect player should enqueue this clip.
+///
+/// A figure alert (`DETECT_KIND_ALERT`) uses the Alerts panel repeat, including zero (silence).
+/// An ordinary detect still plays once: `SoundAlert=Yes` is not this control.
+///
+/// Args:
+///     is_alert: Whether the selected row is a drawn-figure alert firing.
+///     figure_repeat: Resolved Alerts panel repeat.
+///
+/// Returns:
+///     Enqueue count for this pass.
+fn detect_sound_plays(is_alert: bool, figure_repeat: u32) -> u32 {
+    if is_alert { figure_repeat } else { 1 }
+}
+
+#[cfg(test)]
+mod tests;

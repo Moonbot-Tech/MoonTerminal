@@ -2171,3 +2171,79 @@ fn a_file_without_the_sides_key_leaves_the_style_to_decide() {
     assert!(!old.chart_graphics.candle_volume_sides);
     assert!(ChartGraphicsCfg::default().candle_volume_sides);
 }
+
+/// Protects `layout.rs:WindowLayout::{alert_duration_s,alert_repeat}` across a restart.
+///
+/// Breakage this pins: dropping the fields, marking them `#[serde(skip)]`, or leaving them as
+/// panel-local integers. The Alerts steppers would still move a number on screen, then reset on
+/// rebuild and on every launch, which is the bug that made the controls look hardcoded.
+#[test]
+fn figure_alert_duration_and_repeat_survive_toml_round_trip() {
+    let mut layout = WindowLayout::default();
+    assert_eq!(layout.alert_duration_s, None);
+    assert_eq!(layout.alert_repeat, None);
+    assert_eq!(
+        resolve_alert_duration_s(layout.alert_duration_s),
+        ALERT_DURATION_S_DEFAULT
+    );
+    assert_eq!(
+        resolve_alert_repeat(layout.alert_repeat),
+        ALERT_REPEAT_DEFAULT
+    );
+
+    layout.alert_duration_s = Some(45);
+    layout.alert_repeat = Some(4);
+    let encoded = toml::to_string(&layout).expect("WindowLayout must serialize to TOML");
+    let decoded: WindowLayout =
+        toml::from_str(&encoded).expect("serialized WindowLayout must deserialize");
+    assert_eq!(decoded.alert_duration_s, Some(45));
+    assert_eq!(decoded.alert_repeat, Some(4));
+    assert_eq!(resolve_alert_duration_s(decoded.alert_duration_s), 45);
+    assert_eq!(resolve_alert_repeat(decoded.alert_repeat), 4);
+}
+
+/// A hand-edited duration or repeat must not take the rest of `layout.toml` with it, and an
+/// absent pair must keep the MoonBot defaults rather than the old 1-second floor.
+///
+/// Mutation: drop `deserialize_with = "de_lenient_u32"`. A quoted `"45"` would fail the whole
+/// document. Mutation: resolve a missing key as 0 or 1. A strategy-less figure alert would flash
+/// for a second again on every profile that never stored the field.
+#[test]
+fn a_hand_written_figure_alert_setting_cannot_discard_the_saved_layout() {
+    let empty: WindowLayout = toml::from_str("alert_sound = \"ding1\"\n").expect("absent keys");
+    assert_eq!(empty.alert_duration_s, None);
+    assert_eq!(empty.alert_repeat, None);
+    assert_eq!(
+        resolve_alert_duration_s(empty.alert_duration_s),
+        ALERT_DURATION_S_DEFAULT
+    );
+    assert_eq!(
+        resolve_alert_repeat(empty.alert_repeat),
+        ALERT_REPEAT_DEFAULT
+    );
+    assert_eq!(empty.alert_sound, "ding1");
+
+    for (written, duration, repeat) in [
+        ("alert_duration_s = 45", Some(45), None),
+        ("alert_repeat = \"3\"", None, Some(3)),
+        ("alert_repeat = 0", None, Some(0)),
+        ("alert_duration_s = 0.7", None, None),
+        ("alert_repeat = true", None, None),
+        ("alert_duration_s = -5", None, None),
+    ] {
+        let doc = format!("alert_sound = \"ding1\"\n{written}\n");
+        let decoded: WindowLayout = toml::from_str(&doc)
+            .unwrap_or_else(|e| panic!("{written:?} must not fail the whole document: {e}"));
+        assert_eq!(decoded.alert_duration_s, duration, "{written:?}: duration");
+        assert_eq!(decoded.alert_repeat, repeat, "{written:?}: repeat");
+        assert_eq!(
+            decoded.alert_sound, "ding1",
+            "{written:?} discarded a neighbouring setting"
+        );
+    }
+
+    assert_eq!(resolve_alert_duration_s(Some(0)), ALERT_DURATION_S_MIN);
+    assert_eq!(resolve_alert_duration_s(Some(9_999)), ALERT_DURATION_S_MAX);
+    assert_eq!(resolve_alert_repeat(Some(0)), 0);
+    assert_eq!(resolve_alert_repeat(Some(9_999)), ALERT_REPEAT_MAX);
+}
