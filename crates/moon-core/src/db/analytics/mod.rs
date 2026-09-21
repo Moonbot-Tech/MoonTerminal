@@ -577,7 +577,8 @@ fn strategy_base_on(
 ///     Comparable or empty Summary data, split totals, or a classified read failure.
 pub fn summary(q: &Query) -> ReadResult<ProfitScope<Summary>> {
     let conn = super::open_reader()?;
-    // `open_reader` has already attached it (a second ATTACH under the same alias fails).
+    // These readers are opened with `AttachSet::ALL`, so it is already attached
+    // (a second ATTACH under the same alias fails).
     let has_strat_names = strategies_attached(&conn);
     // One snapshot for the whole summary. Current rows share one stream, while quote
     // preflight, the comparison period, metadata, and optional lens-neutral money are

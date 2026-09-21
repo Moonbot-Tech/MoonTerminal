@@ -37,7 +37,6 @@ use moon_core::feed::{ConnStatus, StrategyRow};
 use moon_ui::{
     MoonAlert, MoonButton, MoonButtonVariant, MoonPalette, MoonWindowExt as _, h_flex, v_flex,
 };
-use rusqlite::Connection;
 use rust_i18n::t;
 
 use super::AnalyticsView;
@@ -330,9 +329,12 @@ fn deletable_folder_after(
 /// describe two different committed states — the dialog would otherwise promise a number that was
 /// never true at any instant.
 fn read_purge_rows(
-    reader: Option<Connection>,
+    reader: Option<db::ReportReader>,
     key: db::ReportStrategyKey,
-) -> (Option<Connection>, db::ReadResult<db::StrategyPurgeRows>) {
+) -> (
+    Option<db::ReportReader>,
+    db::ReadResult<db::StrategyPurgeRows>,
+) {
     let conn = match reader {
         Some(conn) => conn,
         None => match db::open_reader() {
@@ -358,7 +360,7 @@ struct PurgeRun {
     sid: u64,
     key: db::ReportStrategyKey,
     exact_rec_ids: Vec<i64>,
-    reader: Option<Connection>,
+    reader: Option<db::ReportReader>,
 }
 
 impl PurgeRun {

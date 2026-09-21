@@ -29,6 +29,10 @@ pub enum FailKind {
     ReplicaAccessDenied,
     /// Lock contention past `busy_timeout`; retrying may succeed.
     Busy,
+    /// A process-level resource ran out — open file descriptors, or this process's own
+    /// reader budget. This usually clears once other readers finish, so retrying is the
+    /// correct first response; a CANTOPEN can also come from something else holding the file.
+    Exhausted,
     /// The database image is malformed / not a database. Never self-heals.
     Corrupt,
     /// Filesystem errors, SQLite misuse, and all other read failures.
@@ -313,27 +317,64 @@ fn cancelled_read(error: &rusqlite::Error) -> Option<ReadFail> {
         rusqlite::Error::SqliteFailure(failure, _)
             if failure.code == ErrorCode::OperationInterrupted
     );
-    (interrupted && super::read_cancel::take_requested_interrupt()).then(|| {
-        ReadFail::failed(
-            FailKind::Other,
-            "database read superseded",
-            paths::reports_db_path(),
-            "read superseded",
-            sqlite_code(error),
-        )
-    })
+    (interrupted && super::read_cancel::take_requested_interrupt())
+        .then(|| superseded_read(sqlite_code(error)))
+}
+
+/// Silent ordinary failure for a read that was superseded on purpose.
+///
+/// Args:
+///     code: SQLite (or other) code from the interrupted call, or `None` when
+///     no SQLite call was made.
+///
+/// Returns:
+///     `FailKind::Other` — not a resource failure, so it must not feed the
+///     retry ladders.
+pub(super) fn superseded_read(code: FailCode) -> ReadFail {
+    ReadFail::failed(
+        FailKind::Other,
+        "database read superseded",
+        paths::reports_db_path(),
+        "read superseded",
+        code,
+    )
+}
+
+/// Saturation of the process-wide report-reader budget.
+///
+/// Logs through [`log_throttled`] so the line is collapsed per `(ctx, kind)` and
+/// carries the descriptor-count suffix.
+///
+/// Args:
+///     ctx: Static operation label for diagnostics and throttling.
+///
+/// Returns:
+///     `FailKind::Exhausted` for the reports replica path.
+pub(super) fn budget_fail(ctx: &'static str) -> ReadFail {
+    let path = paths::reports_db_path();
+    let msg = "report reader budget exhausted";
+    log_throttled(
+        ctx,
+        FailKind::Exhausted,
+        &msg,
+        path.to_string_lossy().as_ref(),
+        FailCode::None,
+    );
+    ReadFail::failed(FailKind::Exhausted, msg, path, ctx, FailCode::None)
 }
 
 /// Map a SQLite error onto the granularity the UI branches on.
 ///
 /// NOTE: corruption reaching us as an extended I/O code (`SQLITE_IOERR_*`)
 /// lands in `Other`, not `Corrupt` — it is still a hard failure and still
-/// surfaces, it just does not get the permanent-failure hint.
+/// surfaces, it just does not get the permanent-failure hint. `SQLITE_CANTOPEN`
+/// now lands in `Exhausted`.
 pub(super) fn classify(e: &rusqlite::Error) -> FailKind {
     match e {
         rusqlite::Error::SqliteFailure(err, _) => match err.code {
             ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase => FailKind::Corrupt,
             ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked => FailKind::Busy,
+            ErrorCode::CannotOpen => FailKind::Exhausted,
             _ => FailKind::Other,
         },
         _ => FailKind::Other,
@@ -380,6 +421,27 @@ fn os_code(e: &std::io::Error) -> FailCode {
 /// Display form of a replica path stored on `ReadFail`.
 fn path_text(path: &Path) -> Arc<str> {
     Arc::from(path.to_string_lossy().as_ref())
+}
+
+/// Descriptor-count suffix for an Exhausted log line.
+///
+/// Args:
+///     kind: Classified failure.
+///     count: Probe result, or `None` when the probe could not run.
+///
+/// Returns:
+///     ASCII ` descriptors=N`, ` descriptors=N+` when the probe saturated, or
+///     ` descriptors=unknown` for `Exhausted`; empty for every other kind.
+///     The leading space appends directly after `code=…`.
+fn descriptor_suffix(kind: FailKind, count: Option<crate::metrics::DescriptorCount>) -> String {
+    if kind != FailKind::Exhausted {
+        return String::new();
+    }
+    match count {
+        Some(probe) if probe.saturated => format!(" descriptors={}+", probe.count),
+        Some(probe) => format!(" descriptors={}", probe.count),
+        None => " descriptors=unknown".to_string(),
+    }
 }
 
 /// One throttled warning line: operation, driver sentence, path and numeric code.
@@ -429,7 +491,15 @@ fn log_throttled(
     *last = Some(now);
     let n = std::mem::replace(suppressed, 0);
     drop(seen); // do not hold the global lock while the log sink runs
-    log::warn!("{}", warn_line(ctx, e, path, code, n));
+    let suffix = descriptor_suffix(
+        kind,
+        if kind == FailKind::Exhausted {
+            crate::metrics::open_descriptor_count()
+        } else {
+            None
+        },
+    );
+    log::warn!("{}{}", warn_line(ctx, e, path, code, n), suffix);
 }
 
 #[cfg(test)]

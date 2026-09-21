@@ -27,6 +27,7 @@ pub mod order_traces;
 mod quote;
 mod read_cancel;
 pub(crate) mod read_fail;
+mod reader_budget;
 mod rep;
 pub mod report_axis;
 mod report_read;
@@ -46,17 +47,18 @@ pub use quote::{
 };
 pub use read_cancel::{ReadCancellation, with_read_cancellation};
 pub use read_fail::{FailCode, FailKind, ReadFail, ReadResult};
+pub use reader_budget::ReportReader;
 pub(crate) use rep::ReportStart;
 pub use rep::{DbMsg, ReportSink};
 pub use report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS, OffsetSegment, ReportAxis, ReportStamp};
 pub(crate) use report_read::max_core_uid_in;
 pub use report_read::{
-    COLUMNS_ADDED_SINCE_V2, ChartTradeHistory, ChartTradeRecord, DISPLAY_COLUMNS,
-    PROFIT_PERCENT_COLUMN, ProfitMetric, ReportFilter, ReportStrategy, ReportStrategyKey,
-    ReportTable, ReportTotals, RowScope, SideFilter, StrategyPurgeRows, VALUATION_PROFIT_COLUMN,
-    VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN, display_columns, distinct_cores,
-    distinct_strategies, max_core_uid, open_rows_for_bound, query_chart_trade_history,
-    query_reports, query_totals, strategy_purge_rows,
+    CHART_TRADE_HISTORY_ATTACH, COLUMNS_ADDED_SINCE_V2, ChartTradeHistory, ChartTradeRecord,
+    DISPLAY_COLUMNS, PROFIT_PERCENT_COLUMN, ProfitMetric, ReportFilter, ReportStrategy,
+    ReportStrategyKey, ReportTable, ReportTotals, RowScope, SideFilter, StrategyPurgeRows,
+    VALUATION_PROFIT_COLUMN, VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN, display_columns,
+    distinct_cores, distinct_strategies, max_core_uid, open_rows_for_bound,
+    query_chart_trade_history, query_reports, query_totals, strategy_purge_rows,
 };
 pub use trade_meta::{TradeMeta, query_trade_meta};
 
@@ -942,9 +944,10 @@ fn metadata_gate(path: &std::path::Path, ctx: &'static str) -> ReadResult<()> {
 /// quote preflight, comparison, and optional lens-neutral work on the same snapshot,
 /// so retaining their recently visited index and table pages still matters.
 ///
-/// The budget is per connection, and concurrent readers are not bounded. Peak
-/// page-cache memory therefore scales as 16 MiB times the number of overlapping
-/// reads; raising this constant raises that peak proportionally.
+/// The budget is per connection. Concurrent readers are capped at
+/// [`reader_budget::READER_BUDGET`], so peak page-cache memory is a hard
+/// ceiling of 8 × 16 MiB; raising this constant raises that ceiling
+/// proportionally.
 const READER_CACHE_KIB: i64 = -16_384;
 
 /// Apply the shared tuning of a read-only report connection.
@@ -954,8 +957,8 @@ const READER_CACHE_KIB: i64 = -16_384;
 ///
 /// Intentionally omitted:
 /// - `temp_store = MEMORY` would keep the sorter's temporary b-tree off disk, but
-///   with unbounded concurrent readers it converts a successful file spill into an
-///   out-of-memory kill — a behaviour change, which is exactly what this must not be.
+///   a spill to disk still beats an out-of-memory kill even with readers now
+///   bounded — a behaviour change, which is exactly what this must not be.
 /// - `mmap_size` would serve pages through a memory mapping, where truncation can
 ///   surface as an OS-level fault instead of an `SQLITE_IOERR`/`SQLITE_CORRUPT`
 ///   that [`read_fail`] can classify and present with repair guidance.
@@ -967,15 +970,84 @@ fn tune_reader(conn: &Connection) {
     let _ = conn.pragma_update(None, "cache_size", READER_CACHE_KIB);
 }
 
-/// Open a reader while distinguishing an absent replica from a SQLite failure.
+/// Companion databases a report reader attaches.
 ///
-/// A genuinely absent file maps to `NotReady`; metadata and SQLite open errors
-/// map to `Failed` so callers cannot present them as an empty period. Access also
-/// fails with a typed denial when the lease/recovery preflight did not authorize access.
+/// A query that reaches `valuation::projection`, `valuation::is_attached`, or
+/// `with_valuation_fallback` MUST be opened with valuation attached, because
+/// those degrade silently to native money when the schema is absent rather than
+/// failing. Construct only through the named constants; there is no public
+/// constructor and no `MAIN_ONLY` combination.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttachSet {
+    /// Attach the strategies database as `strat`.
+    strategies: bool,
+    /// Attach the valuation cache.
+    valuation: bool,
+}
+
+impl AttachSet {
+    /// Strategies and valuation — the default for Analytics and Report queries.
+    pub const ALL: AttachSet = AttachSet {
+        strategies: true,
+        valuation: true,
+    };
+
+    /// Strategies only: chart trade history never references the valuation schema.
+    pub const STRATEGIES_ONLY: AttachSet = AttachSet {
+        strategies: true,
+        valuation: false,
+    };
+
+    /// Whether this set attaches the strategies database.
+    pub(crate) fn strategies(self) -> bool {
+        self.strategies
+    }
+
+    /// Whether this set attaches the valuation cache.
+    pub(crate) fn valuation(self) -> bool {
+        self.valuation
+    }
+}
+
+/// Attach the companion databases this query asked for.
+///
+/// ATTACH cannot run inside a transaction, so this runs before any snapshot.
+///
+/// Args:
+///     conn: Freshly opened report connection.
+///     attach: Companion databases this query needs.
 ///
 /// Returns:
-///     Tuned report connection for the sole current process.
-pub fn open_reader() -> ReadResult<Connection> {
+///     `Ok(())` after the requested attaches, or a fail-closed valuation error.
+fn attach_databases(conn: &Connection, attach: AttachSet) -> ReadResult<()> {
+    if attach.strategies() {
+        // The strategy database rides along on EVERY reader.
+        //
+        // `unified_from` is shared by Analytics readers, so attaching where the connection is born
+        // keeps strategy-aware filtering consistent across all of them. It must happen before any
+        // transaction is opened because SQLite does not allow ATTACH inside a transaction.
+        analytics::attach_strategies(conn);
+    }
+    if attach.valuation() {
+        // Historical valuations are derived but correctness-sensitive: an existing unreadable cache
+        // is a read failure, never silently interpreted as zero coverage. Startup initializes the file
+        // before report-derived views can open readers; an absent file remains a normal not-ready state.
+        let _ = valuation::attach(conn)?;
+    }
+    Ok(())
+}
+
+/// Open a reader with a chosen companion-database attach set.
+///
+/// Same readiness and access rules as [`open_reader`]. The attach set is a
+/// property of the query: valuation-touching reads must use [`AttachSet::ALL`].
+///
+/// Args:
+///     attach: Companion databases this query needs.
+///
+/// Returns:
+///     Tuned report connection whose descriptors are held under the reader budget.
+pub fn open_reader_with(attach: AttachSet) -> ReadResult<ReportReader> {
     let path = paths::reports_db_path();
     report_recovery::ensure_access().map_err(|error| {
         ReadFail::failed(
@@ -987,24 +1059,44 @@ pub fn open_reader() -> ReadResult<Connection> {
         )
     })?;
     metadata_gate(&path, "отчёты(reader): доступ к файлу")?;
+    if read_cancel::current_is_cancelled() {
+        return Err(read_fail::superseded_read(FailCode::None));
+    }
+    let permit = match reader_budget::acquire_with_cancellation(reader_budget::READER_WAIT, &|| {
+        read_cancel::current_is_cancelled()
+    }) {
+        reader_budget::AcquireOutcome::Permit(permit) => permit,
+        reader_budget::AcquireOutcome::Cancelled => {
+            return Err(read_fail::superseded_read(FailCode::None));
+        }
+        reader_budget::AcquireOutcome::Timeout => {
+            return Err(read_fail::budget_fail("reports: reader budget"));
+        }
+    };
     let conn =
         Connection::open(&path).map_err(|e| read_fail::read_fail_at("отчёты(reader)", &path, e))?;
     // Before the ATTACH below: `cache_size` applies to one schema, and `main` is the
     // one every period scan reads.
     tune_reader(&conn);
-    // The strategy database rides along on EVERY reader.
-    //
-    // `unified_from` is shared by Analytics readers, so attaching where the connection is born
-    // keeps strategy-aware filtering consistent across all of them. It must happen before any
-    // transaction is opened because SQLite does not allow ATTACH inside a transaction.
-    analytics::attach_strategies(&conn);
-    // Historical valuations are derived but correctness-sensitive: an existing unreadable cache
-    // is a read failure, never silently interpreted as zero coverage. Startup initializes the file
-    // before report-derived views can open readers; an absent file remains a normal not-ready state.
-    let _ = valuation::attach(&conn)?;
+    attach_databases(&conn, attach)?;
     read_cancel::install_current(&conn)?;
     trace::install_on(&conn);
-    Ok(conn)
+    Ok(ReportReader {
+        conn,
+        _permit: permit,
+    })
+}
+
+/// Open a reader while distinguishing an absent replica from a SQLite failure.
+///
+/// A genuinely absent file maps to `NotReady`; metadata and SQLite open errors
+/// map to `Failed` so callers cannot present them as an empty period. Access also
+/// fails with a typed denial when the lease/recovery preflight did not authorize access.
+///
+/// Returns:
+///     Tuned report connection for the sole current process.
+pub fn open_reader() -> ReadResult<ReportReader> {
+    open_reader_with(AttachSet::ALL)
 }
 
 /// Pin one WAL snapshot for a multi-statement read.
@@ -1280,6 +1372,8 @@ fn read_sources_res(conn: &Connection) -> ReadResult<Vec<ReadSource>> {
 }
 
 /// Open the replica strictly read-only, for a probe that must not own the file.
+///
+/// Not budgeted: this runs before the writer exists as a single pre-window probe.
 ///
 /// [`open_reader`] opens read-WRITE despite its name, which is harmless for its own callers
 /// because the writer connection is alive by then. A probe that runs BEFORE `spawn_writer` would

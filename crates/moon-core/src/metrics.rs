@@ -16,6 +16,8 @@
 mod cpu_watch;
 mod resource_watch;
 
+pub(crate) use resource_watch::{DescriptorCount, open_descriptor_count};
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

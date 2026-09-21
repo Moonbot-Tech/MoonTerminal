@@ -413,3 +413,83 @@ pub(super) fn platform_counts() -> (Option<u32>, Option<u32>, Option<u32>) {
 pub(super) fn platform_counts() -> (Option<u32>, Option<u32>, Option<u32>) {
     (None, None, None)
 }
+
+/// Upper bound of the Unix `fcntl` scan. A count equal to this cap is a floor,
+/// not an exact total, and the log suffix marks it with `+`.
+#[cfg(unix)]
+const DESCRIPTOR_SCAN_CAP: u64 = 65_536;
+
+/// Open-descriptor probe result. `saturated` is true only when the probe itself
+/// hit its scan cap, never when an uncapped API happens to return that number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DescriptorCount {
+    /// Descriptors (or kernel handles) counted.
+    pub count: u64,
+    /// True when the probe's own scan cap was hit; the count is then a floor.
+    pub saturated: bool,
+}
+
+/// Open descriptors this process currently holds (kernel handles on Windows).
+///
+/// Returns:
+///     The count with `saturated: false` — `GetProcessHandleCount` is exact —
+///     or `None` when the call fails.
+#[cfg(windows)]
+pub(crate) fn open_descriptor_count() -> Option<DescriptorCount> {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessHandleCount};
+    let mut count = 0u32;
+    // SAFETY: `GetCurrentProcess` returns a pseudo-handle that need not be closed.
+    // `GetProcessHandleCount` writes a single `u32` we exclusively own.
+    let ok = unsafe { GetProcessHandleCount(GetCurrentProcess(), &mut count) } != 0;
+    ok.then_some(DescriptorCount {
+        count: u64::from(count),
+        saturated: false,
+    })
+}
+
+/// Open descriptors this process currently holds.
+///
+/// Counts with `fcntl(F_GETFD)` over `0..soft_rlimit` (capped at
+/// [`DESCRIPTOR_SCAN_CAP`]). That is
+/// a kernel query per fd and allocates no descriptor, so it still answers at
+/// the open-file cliff.
+///
+/// Returns:
+///     The count, with `saturated` when the scan hit the cap, or `None` when
+///     `getrlimit` fails.
+#[cfg(unix)]
+pub(crate) fn open_descriptor_count() -> Option<DescriptorCount> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `limit` is a stack `rlimit` we exclusively own. `getrlimit` only
+    // writes those two fields, and `RLIMIT_NOFILE` is a defined resource.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+        return None;
+    }
+    let cap = std::cmp::min(limit.rlim_cur, DESCRIPTOR_SCAN_CAP as libc::rlim_t);
+    let mut count = 0u64;
+    for fd in 0..cap {
+        // SAFETY: `F_GETFD` on an integer file-descriptor number is a kernel
+        // query. It neither allocates a descriptor nor dereferences userspace
+        // memory; a closed or unused number returns -1.
+        let rc = unsafe { libc::fcntl(fd as libc::c_int, libc::F_GETFD) };
+        if rc != -1 {
+            count += 1;
+        }
+    }
+    Some(DescriptorCount {
+        count,
+        saturated: count == DESCRIPTOR_SCAN_CAP,
+    })
+}
+
+/// Open descriptors this process currently holds.
+///
+/// Returns:
+///     Always `None` on platforms with no probe.
+#[cfg(not(any(windows, unix)))]
+pub(crate) fn open_descriptor_count() -> Option<DescriptorCount> {
+    None
+}

@@ -170,10 +170,12 @@ pub(super) enum CatchUpOutcome {
 
 /// Classify a failed read into [`CatchUpOutcome::Transient`] or [`CatchUpOutcome::Settled`].
 ///
-/// Only `Busy` is transient: it is the sole failure kind the bounded retry actually clears.
-/// `NotReady` is a completed absence rather than proof of momentariness (see the module docs).
+/// `Busy` and `Exhausted` are transient: lock contention is the kind the bounded
+/// retry already clears, and `Exhausted` joins because the next read succeeds
+/// once other readers finish. `NotReady` is a completed absence rather than
+/// proof of momentariness (see the module docs).
 fn classify_fail(error: &ReadFail) -> CatchUpOutcome {
-    if error.kind() == Some(FailKind::Busy) {
+    if matches!(error.kind(), Some(FailKind::Busy | FailKind::Exhausted)) {
         CatchUpOutcome::Transient
     } else {
         CatchUpOutcome::Settled

@@ -266,3 +266,54 @@ fn filesystem_failure_carries_path_and_os_code() {
         "log line must keep the operation, got {line}"
     );
 }
+
+/// `read_fail/mod.rs::classify` must map `SQLITE_CANTOPEN` to `FailKind::Exhausted`.
+///
+/// Folding `ErrorCode::CannotOpen` into `_ => Other` makes Analytics treat CANTOPEN as
+/// `Settled` again, so the descriptor-exhaustion retry from #667 never fires.
+#[test]
+fn cannot_open_is_exhausted() {
+    let error = rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error {
+            code: ErrorCode::CannotOpen,
+            extended_code: 14,
+        },
+        None,
+    );
+    assert_eq!(classify(&error), FailKind::Exhausted);
+    assert_eq!(
+        read_fail("cantopen-classify", error).kind(),
+        Some(FailKind::Exhausted)
+    );
+}
+
+/// `read_fail/mod.rs::descriptor_suffix` must stay empty off Exhausted and mark a saturated
+/// probe with `+`.
+///
+/// Dropping the `kind != Exhausted` early return probes every logged failure; collapsing the
+/// saturated branch prints a capped count as exact.
+#[test]
+fn descriptor_suffix_only_marks_exhausted_and_saturation() {
+    let exact = crate::metrics::DescriptorCount {
+        count: 12,
+        saturated: false,
+    };
+    let floor = crate::metrics::DescriptorCount {
+        count: 65536,
+        saturated: true,
+    };
+    assert_eq!(descriptor_suffix(FailKind::Busy, Some(exact)), "");
+    assert_eq!(descriptor_suffix(FailKind::Other, Some(floor)), "");
+    assert_eq!(
+        descriptor_suffix(FailKind::Exhausted, Some(exact)),
+        " descriptors=12"
+    );
+    assert_eq!(
+        descriptor_suffix(FailKind::Exhausted, Some(floor)),
+        " descriptors=65536+"
+    );
+    assert_eq!(
+        descriptor_suffix(FailKind::Exhausted, None),
+        " descriptors=unknown"
+    );
+}
