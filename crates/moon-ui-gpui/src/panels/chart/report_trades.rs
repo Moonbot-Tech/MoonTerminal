@@ -4,11 +4,13 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::*;
-use moon_core::db::{self, ChartTradeHistory, ReadFail, ReportFilter};
+use moon_core::db::{self, ChartTradeHistory, FailKind, ReadFail, ReportFilter};
 use moon_core::session::CoreId;
+use rust_i18n::t;
 
 use super::ChartPanel;
 use crate::backend::ChartHistoryScope;
+use crate::load_state::{db_read_failed_hint, db_read_failed_retryable};
 
 /// Maximum durable rows drawn for one Main chart.
 const HISTORY_LIMIT: usize = 1_000;
@@ -41,6 +43,13 @@ const HISTORY_LIVE_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 /// second. The foreground chart does not share this bound — see [`HISTORY_LIVE_REFRESH_INTERVAL`].
 const HISTORY_REFRESH_INTERVAL_BACKGROUND: Duration = Duration::from_secs(30);
 
+/// In-process Busy retries before the overlay names a failure.
+///
+/// Matches `moon_core::db::rep::table_cols_for_init`: three attempts, 250 ms times the attempt
+/// number between them. A momentary lock must not cost the user his trade markers.
+const BUSY_READ_ATTEMPTS: u32 = 3;
+const BUSY_READ_BACKOFF_MS: u64 = 250;
+
 /// Visible durable-history load state for a Main chart.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum ReportTradesStatus {
@@ -59,7 +68,50 @@ pub(super) enum ReportTradesStatus {
     /// The report replica or selected core catalog is not ready.
     NotReady,
     /// The durable read failed without disabling the live chart.
-    Failed,
+    ///
+    /// Carries the classified cause so the overlay can name it and hide Retry when
+    /// retrying cannot help (`Corrupt`, `ReplicaAccessDenied`).
+    Failed(FailKind),
+}
+
+impl ReportTradesStatus {
+    /// Overlay copy for states the user can act on.
+    ///
+    /// A settled read is already visible as the arrows themselves, so Ready/Empty
+    /// stay silent. Failed uses the shared reports-replica guidance, not a single
+    /// collapsed sentence.
+    ///
+    /// Returns:
+    ///     Localized badge text, or `None` when the row should not be stated.
+    pub(super) fn overlay_label(self) -> Option<String> {
+        match self {
+            Self::Idle | Self::Ready | Self::Empty => None,
+            Self::Loading => Some(t!("chart.trade_history.loading").to_string()),
+            Self::NotReady => Some(t!("chart.trade_history.not_ready").to_string()),
+            Self::Failed(kind) => Some(db_read_failed_hint(kind)),
+        }
+    }
+
+    /// Whether the overlay offers Retry for this status.
+    ///
+    /// Returns:
+    ///     `true` for NotReady and for the two Failed kinds a later read can still clear.
+    pub(super) fn offers_retry(self) -> bool {
+        match self {
+            Self::NotReady => true,
+            Self::Failed(kind) => db_read_failed_retryable(kind),
+            Self::Idle | Self::Loading | Self::Ready | Self::Empty => false,
+        }
+    }
+
+    /// Whether this Failed overlay should wake itself without a report commit.
+    ///
+    /// Returns:
+    ///     `true` only for retryable Failed kinds. NotReady already retries through
+    ///     detect re-adds; Corrupt and lease denial never recover on a timer.
+    fn auto_retries(self) -> bool {
+        matches!(self, Self::Failed(kind) if db_read_failed_retryable(kind))
+    }
 }
 
 /// The wait a generation-triggered refresh owes before its next durable read.
@@ -78,10 +130,26 @@ pub(super) enum ReportTradesStatus {
 ///     The minimum spacing the next generation-triggered refresh must respect.
 fn generation_refresh_interval(status: ReportTradesStatus, fast: bool) -> Duration {
     match status {
-        ReportTradesStatus::NotReady | ReportTradesStatus::Failed => HISTORY_RETRY_BACKOFF,
+        ReportTradesStatus::NotReady | ReportTradesStatus::Failed(_) => HISTORY_RETRY_BACKOFF,
         _ if fast => HISTORY_LIVE_REFRESH_INTERVAL,
         _ => HISTORY_REFRESH_INTERVAL_BACKGROUND,
     }
+}
+
+/// Backoff after a Busy durable-history attempt, or `None` when retries are exhausted.
+///
+/// Args:
+///     attempt: 1-based attempt that just returned Busy.
+///
+/// Returns:
+///     Sleep before the next read, or `None` after [`BUSY_READ_ATTEMPTS`].
+fn busy_read_backoff(attempt: u32) -> Option<Duration> {
+    if attempt == 0 || attempt >= BUSY_READ_ATTEMPTS {
+        return None;
+    }
+    Some(Duration::from_millis(
+        BUSY_READ_BACKOFF_MS * u64::from(attempt),
+    ))
 }
 
 /// Request token, exact target, and visible status owned by one chart panel.
@@ -295,9 +363,37 @@ impl ChartPanel {
         crate::diag::bump(&crate::diag::CHART_TRADE_HISTORY_READS);
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
-            let result = executor
-                .spawn(async move { load_history(core, exact_coins, filter) })
-                .await;
+            let mut last_busy = None;
+            let mut result = None;
+            for attempt in 1..=BUSY_READ_ATTEMPTS {
+                let exact_coins = exact_coins.clone();
+                let filter = filter.clone();
+                let outcome = executor
+                    .spawn(async move { load_history(core, exact_coins, filter) })
+                    .await;
+                match outcome {
+                    Ok(history) => {
+                        result = Some(Ok(history));
+                        break;
+                    }
+                    Err(error) if error.kind() == Some(FailKind::Busy) => {
+                        log::warn!(
+                            "chart trade history read busy ({error}) - attempt {attempt} of {BUSY_READ_ATTEMPTS}"
+                        );
+                        last_busy = Some(error);
+                        if let Some(wait) = busy_read_backoff(attempt) {
+                            executor.timer(wait).await;
+                        }
+                    }
+                    Err(error) => {
+                        result = Some(Err(error));
+                        break;
+                    }
+                }
+            }
+            let result = result
+                .or_else(|| last_busy.map(Err))
+                .expect("the busy-retry loop always stores an outcome");
             cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     if !history_result_is_current(
@@ -339,10 +435,13 @@ impl ChartPanel {
                         Err(error) => {
                             log::warn!("chart trade history read failed: {error}");
                             this.report_trades.last_refresh_start = Some(Instant::now());
-                            this.report_trades.status = ReportTradesStatus::Failed;
+                            this.report_trades.status = ReportTradesStatus::Failed(
+                                error.kind().unwrap_or(FailKind::Other),
+                            );
                             if replace_visible {
                                 this.publish_trade_history(Rc::new(Vec::new()), cx);
                             }
+                            this.schedule_failed_history_retry(cx);
                         }
                     }
                     this.view_dirty = true;
@@ -429,7 +528,7 @@ impl ChartPanel {
             ReportTradesStatus::Loading | ReportTradesStatus::Ready | ReportTradesStatus::Empty => {
                 true
             }
-            ReportTradesStatus::NotReady | ReportTradesStatus::Failed => self
+            ReportTradesStatus::NotReady | ReportTradesStatus::Failed(_) => self
                 .report_trades
                 .last_refresh_start
                 .is_some_and(|started| started.elapsed() < HISTORY_RETRY_BACKOFF),
@@ -461,6 +560,12 @@ impl ChartPanel {
         if self.report_trades.last_admitted_any == Some(false) {
             return;
         }
+        if matches!(
+            self.report_trades.status,
+            ReportTradesStatus::Failed(kind) if !db_read_failed_retryable(kind)
+        ) {
+            return;
+        }
         let interval = generation_refresh_interval(self.report_trades.status, self.fast);
         let elapsed = self
             .report_trades
@@ -471,10 +576,18 @@ impl ChartPanel {
             self.refresh_trade_history(cx);
             return;
         }
+        self.arm_history_refresh_timer(interval.saturating_sub(elapsed), cx);
+    }
+
+    /// Arm one trailing durable-history timer, replacing none that is already waiting.
+    ///
+    /// Args:
+    ///     wait: Remaining backoff before the next `requery_trade_history_on_generation`.
+    ///     cx: Panel context used to spawn the timer.
+    fn arm_history_refresh_timer(&mut self, wait: Duration, cx: &mut Context<Self>) {
         if self.report_trades.refresh_timer_armed {
             return;
         }
-        let wait = interval.saturating_sub(elapsed);
         self.report_trades.refresh_timer_armed = true;
         self.report_trades.refresh_timer_token =
             self.report_trades.refresh_timer_token.wrapping_add(1);
@@ -499,6 +612,17 @@ impl ChartPanel {
             });
         })
         .detach();
+    }
+
+    /// Wake a retryable Failed overlay on its own timer, without waiting for a report commit.
+    ///
+    /// Args:
+    ///     cx: Panel context used to arm the trailing retry.
+    fn schedule_failed_history_retry(&mut self, cx: &mut Context<Self>) {
+        if !self.report_trades.status.auto_retries() {
+            return;
+        }
+        self.arm_history_refresh_timer(HISTORY_RETRY_BACKOFF, cx);
     }
 
     /// Re-read durable history when the graphics popup changes which trade kinds are drawn.

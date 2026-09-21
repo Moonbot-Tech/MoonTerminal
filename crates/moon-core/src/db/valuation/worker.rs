@@ -1774,10 +1774,13 @@ fn reconciliation_batch(
         return Ok(None);
     }
     if !super::is_attached(conn) {
-        return Err(ReadFail::Failed {
-            kind: FailKind::Other,
-            msg: Arc::from("valuation cache is not attached to this reader"),
-        });
+        return Err(ReadFail::failed(
+            FailKind::Other,
+            "valuation cache is not attached to this reader",
+            crate::config::paths::reports_db_path(),
+            "valuation: attach",
+            crate::db::FailCode::None,
+        ));
     }
     let spent = if columns.contains("spentbtc") {
         &format!(

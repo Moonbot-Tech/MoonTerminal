@@ -7,7 +7,6 @@
 //! failure are distinguished honestly rather than folded into the same empty result.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use rusqlite::Connection;
 
@@ -212,12 +211,13 @@ pub fn load_all(conn: &Connection) -> ReadResult<HashMap<u64, Vec<OffsetSegment>
 ///     A corruption-classified read failure carrying the invariant detail.
 fn inconsistent(detail: &str) -> ReadFail {
     log::warn!("отчёты(core_time_offset): реплика самопротиворечива ({detail})");
-    ReadFail::Failed {
-        kind: FailKind::Corrupt,
-        msg: Arc::from(format!(
-            "core_time_offset replica is self-inconsistent: {detail}"
-        )),
-    }
+    crate::db::ReadFail::failed(
+        FailKind::Corrupt,
+        format!("core_time_offset replica is self-inconsistent: {detail}"),
+        crate::config::paths::reports_db_path(),
+        "core_time_offset: load_all",
+        crate::db::FailCode::None,
+    )
 }
 
 #[cfg(test)]

@@ -590,6 +590,27 @@ pub fn hotkeys_path() -> PathBuf {
     cfg_dir().join("hotkeys.toml")
 }
 
+/// Database directory path with no create or migrate side effects.
+///
+/// [`db_dir`] also creates the folder and runs the one-time layout migration. A
+/// UI string that only needs to NAME the folder must not do that: the migration
+/// `OnceLock` latches the first `data_dir()` it sees, so a later
+/// [`set_data_dir_override`] in the same process would open a folder that was
+/// never created.
+///
+/// Returns:
+///     The same path [`db_dir`] would return, without touching the filesystem.
+pub fn db_dir_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        data_dir().join("data")
+    }
+    #[cfg(not(windows))]
+    {
+        data_dir()
+    }
+}
+
 /// Database directory (reports/klines). On Windows, use `data/` beside the exe to avoid
 /// cluttering the portable root with large files. On macOS/Linux, `data_dir` is already a
 /// dedicated application directory (Application Support/.config), so databases live there.
@@ -599,10 +620,7 @@ pub fn hotkeys_path() -> PathBuf {
 /// Returns:
 ///     Canonical database directory after the one-time layout migration attempt.
 pub fn db_dir() -> PathBuf {
-    #[cfg(windows)]
-    let dir = data_dir().join("data");
-    #[cfg(not(windows))]
-    let dir = data_dir();
+    let dir = db_dir_path();
     static MIGRATED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     MIGRATED.get_or_init(|| {
         if let Err(e) = std::fs::create_dir_all(&dir) {

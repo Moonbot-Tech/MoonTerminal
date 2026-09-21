@@ -1,7 +1,5 @@
 //! Profit load-state publication tests.
 
-use std::sync::Arc;
-
 use moon_core::db::{FailKind, ProfitScope, ProfitUnit, QuoteBreakdown, ReadFail};
 
 use super::ProfitLoadState;
@@ -111,16 +109,20 @@ fn failed_reads_retain_every_failure_kind_and_message() {
         (FailKind::Other, "reports unavailable"),
     ] {
         let mut state = ProfitLoadState::<u64>::default();
-        state.apply(Err(ReadFail::Failed {
+        state.apply(Err(ReadFail::failed(
             kind,
-            msg: Arc::from(message),
-        }));
+            message,
+            "reports.sqlite",
+            "test",
+            moon_core::db::FailCode::None,
+        )));
 
         assert!(matches!(
             &state,
             ProfitLoadState::Failed(ReadFail::Failed {
                 kind: actual,
                 msg,
+                ..
             }) if *actual == kind && msg.as_ref() == message
         ));
         assert!(matches!(
@@ -128,6 +130,7 @@ fn failed_reads_retain_every_failure_kind_and_message() {
             Err(Note::Failed {
                 kind: actual,
                 msg,
+                ..
             }) if actual == kind && msg.as_ref() == message
         ));
     }

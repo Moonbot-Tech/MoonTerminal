@@ -173,10 +173,13 @@ fn read_page_on(
             // Validate rather than silently dropping dates from a complete-period headline.
             let days = (end - date).num_days();
             if !(0..370).contains(&days) {
-                return Err(db::ReadFail::Failed {
-                    kind: db::FailKind::Other,
-                    msg: "telegram report calendar range is invalid".into(),
-                });
+                return Err(db::ReadFail::failed(
+                    db::FailKind::Other,
+                    "telegram report calendar range is invalid",
+                    moon_core::config::paths::reports_db_path(),
+                    "telegram: calendar range",
+                    db::FailCode::None,
+                ));
             }
             for _ in 0..=days {
                 let Some(next) = date.checked_add_days(Days::new(1)) else {

@@ -339,7 +339,14 @@ pub(super) fn undated_banner_state(
     expanded: bool,
 ) -> UndatedBanner {
     if let Some(error) = error {
-        return UndatedBanner::Failed(t!("common.db_read_failed").to_string(), error.to_string());
+        let body = match (error.path(), error.operation(), error.code()) {
+            (Some(path), Some(operation), Some(code)) => format!(
+                "{error}\n{}",
+                crate::load_state::db_read_failed_detail(path, operation, code)
+            ),
+            _ => error.to_string(),
+        };
+        return UndatedBanner::Failed(t!("common.db_read_failed").to_string(), body);
     }
     let Some(u) = undated else {
         return UndatedBanner::None;

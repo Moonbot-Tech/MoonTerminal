@@ -45,7 +45,7 @@ pub use quote::{
     ValuationCoverage,
 };
 pub use read_cancel::{ReadCancellation, with_read_cancellation};
-pub use read_fail::{FailKind, ReadFail, ReadResult};
+pub use read_fail::{FailCode, FailKind, ReadFail, ReadResult};
 pub(crate) use rep::ReportStart;
 pub use rep::{DbMsg, ReportSink};
 pub use report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS, OffsetSegment, ReportAxis, ReportStamp};
@@ -929,7 +929,7 @@ fn metadata_gate(path: &std::path::Path, ctx: &'static str) -> ReadResult<()> {
     match std::fs::metadata(path) {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(ReadFail::NotReady),
-        Err(e) => Err(read_fail::io_fail(ctx, &e)),
+        Err(e) => Err(read_fail::io_fail(ctx, path, &e)),
     }
 }
 
@@ -976,13 +976,19 @@ fn tune_reader(conn: &Connection) {
 /// Returns:
 ///     Tuned report connection for the sole current process.
 pub fn open_reader() -> ReadResult<Connection> {
-    report_recovery::ensure_access().map_err(|error| ReadFail::Failed {
-        kind: FailKind::ReplicaAccessDenied,
-        msg: Arc::from(error.to_string()),
-    })?;
     let path = paths::reports_db_path();
+    report_recovery::ensure_access().map_err(|error| {
+        ReadFail::failed(
+            FailKind::ReplicaAccessDenied,
+            error.to_string(),
+            &path,
+            "reports: access",
+            FailCode::None,
+        )
+    })?;
     metadata_gate(&path, "отчёты(reader): доступ к файлу")?;
-    let conn = Connection::open(&path).map_err(|e| read_fail("отчёты(reader)", e))?;
+    let conn =
+        Connection::open(&path).map_err(|e| read_fail::read_fail_at("отчёты(reader)", &path, e))?;
     // Before the ATTACH below: `cache_size` applies to one schema, and `main` is the
     // one every period scan reads.
     tune_reader(&conn);
@@ -1289,7 +1295,7 @@ pub fn open_readonly() -> ReadResult<Connection> {
         &path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .map_err(|e| read_fail("отчёты(ro)", e))?;
+    .map_err(|e| read_fail::read_fail_at("отчёты(ro)", &path, e))?;
     trace::install_on(&conn);
     Ok(conn)
 }

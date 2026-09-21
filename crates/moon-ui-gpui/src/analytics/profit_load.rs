@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use moon_core::db::{FailKind, ProfitScope, ProfitUnit, QuoteBreakdown, ReadFail, ReadResult};
+use moon_core::db::{ProfitScope, ProfitUnit, QuoteBreakdown, ReadFail, ReadResult};
 
 use crate::load_state::Note;
 
@@ -92,10 +92,7 @@ impl<T> ProfitLoadState<T> {
             Self::NotReady => Err(Note::NotReady),
             Self::Failed(ReadFail::IncomparableQuote) => Err(Note::IncomparableQuote),
             Self::Failed(ReadFail::PeriodOutOfRange) => Err(Note::PeriodOutOfRange),
-            Self::Failed(error) => Err(Note::Failed {
-                msg: error.to_string().into(),
-                kind: error.kind().unwrap_or(FailKind::Other),
-            }),
+            Self::Failed(error) => Err(crate::load_state::failed_note(error)),
         }
     }
 

@@ -16,9 +16,14 @@ use crate::load_state::{LoadState, Note};
 /// "no previous period" KPI instead of the database error.
 #[test]
 fn current_and_previous_failures_remain_visible() {
-    let failure = || ReadFail::Failed {
-        kind: FailKind::Corrupt,
-        msg: Arc::from("broken calendar"),
+    let failure = || {
+        ReadFail::failed(
+            FailKind::Corrupt,
+            "broken calendar",
+            "reports.sqlite",
+            "test",
+            moon_core::db::FailCode::None,
+        )
     };
     let mut days = ProfitLoadState::<Vec<DayCell>>::default();
     let mut previous = LoadState::<Option<moon_core::db::analytics::CellTotals>>::default();
@@ -60,10 +65,13 @@ fn report_catch_up_failure_preserves_current_and_previous_calendar_snapshots() {
         .data()
         .expect("settled previous-period total")
         .clone();
-    let failure = ReadFail::Failed {
-        kind: FailKind::Busy,
-        msg: Arc::from("busy calendar"),
-    };
+    let failure = ReadFail::failed(
+        FailKind::Busy,
+        "busy calendar",
+        "reports.sqlite",
+        "test",
+        moon_core::db::FailCode::None,
+    );
 
     assert!(
         apply_calendar_results(&mut days, &mut previous, Err(failure), true, true),

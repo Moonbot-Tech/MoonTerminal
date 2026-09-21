@@ -13,7 +13,6 @@ use rust_i18n::t;
 use moon_chart::paint::now_unix_ms;
 
 use super::render_input;
-use super::report_trades::ReportTradesStatus;
 use super::{ChartPanel, chart_bootstrap_present_rate_hz};
 
 /// Fixed clearance for the chart's top-left control strip, so the status row never competes with
@@ -320,20 +319,12 @@ impl Render for ChartPanel {
         // exactly where it does not fit — a stack slot a few centimetres wide, showing a dozen
         // markets, whose badge would sit on top of the price.
         let status_fits = self.chart.slot_dev_size().0 >= HISTORY_STATUS_MIN_SLOT_W;
-        let trade_status = match self.report_trades.status {
-            _ if !status_fits => None,
-            ReportTradesStatus::Idle | ReportTradesStatus::Ready | ReportTradesStatus::Empty => {
-                None
-            }
-            ReportTradesStatus::Loading => Some(t!("chart.trade_history.loading").to_string()),
-            ReportTradesStatus::NotReady => Some(t!("chart.trade_history.not_ready").to_string()),
-            ReportTradesStatus::Failed => Some(t!("chart.trade_history.failed").to_string()),
+        let trade_status = if status_fits {
+            self.report_trades.status.overlay_label()
+        } else {
+            None
         };
-        let trade_retry = status_fits
-            && matches!(
-                self.report_trades.status,
-                ReportTradesStatus::NotReady | ReportTradesStatus::Failed
-            );
+        let trade_retry = status_fits && self.report_trades.status.offers_retry();
         let (slot_w, _) = self.chart.slot_dev_size();
         // Live open-order figures for the chart's active pane, assembled beside the closed-trade
         // badge above. The two share a row but nothing else: this reads the live session store,
