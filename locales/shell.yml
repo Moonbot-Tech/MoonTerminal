@@ -1266,6 +1266,10 @@ chart.fig.sells_zone:
   ru: "Продажа в зону"
   en: "Sells to zone"
   es: "Ventas a zona"
+chart.fig.sells_zone_tip:
+  ru: "«Продажа в зону» включена: каждая пара Ctrl-кликов на графике задаёт зону. Ctrl+ЛКМ зарезервирован, поэтому торговый жест, привязанный к нему (по умолчанию Move TP), приостановлен, пока не выйдешь из режима; любой другой клик торгует как обычно, в том числе в стакане. Выход — повтор горячей клавиши, Escape или другой инструмент."
+  en: "Sells-to-zone is on: each pair of Ctrl-clicks on the chart names a band. Ctrl+click is reserved while the mode runs, so a trading gesture bound to it (Move TP by default) is paused until you leave the mode; every other click trades as usual, including in the order book. Leave by pressing the hotkey again, Escape, or picking another tool."
+  es: "«Ventas a zona» está activo: cada par de Ctrl-clics en el gráfico define una banda. El Ctrl+clic izq. está reservado, así que un gesto de trading ligado a él (Move TP por defecto) se pausa hasta que salgas del modo; cualquier otro clic opera como de costumbre, también en el libro de órdenes. Salir: pulsar el atajo de nuevo, Escape u otra herramienta."
 chart.fig.tool_settings:
   ru: "Настройки инструмента: цвет, толщина, тип линии, заливка и части фигуры. Те же, что по ПКМ на нарисованной фигуре."
   en: "Tool settings: colour, thickness, line kind, fill and the figure's parts. The same panel a right-click on a drawn figure opens."

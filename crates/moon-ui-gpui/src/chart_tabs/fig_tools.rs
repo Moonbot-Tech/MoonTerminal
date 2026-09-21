@@ -144,8 +144,13 @@ impl ChartTabs {
         // only place the Ctrl gesture is written down now that the pencil's tooltip is gone.
         let picker = div()
             .id("fig-tool-tip")
-            .tooltip(|_window, cx| {
-                cx.new(|_| moon_ui::MoonTooltipView::new(t!("chart.fig.draw_tip").to_string()))
+            .tooltip(move |_window, cx| {
+                let tip = if sells_zone {
+                    t!("chart.fig.sells_zone_tip")
+                } else {
+                    t!("chart.fig.draw_tip")
+                };
+                cx.new(|_| moon_ui::MoonTooltipView::new(tip.to_string()))
                     .into()
             })
             .child(picker);

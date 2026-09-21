@@ -176,6 +176,45 @@ fn wheel_mode(modifiers: Modifiers) -> input::WheelMode {
     }
 }
 
+/// Whether this LEFT press is the one a Sells-to-zone band is drawn with.
+///
+/// Called only from `mouse_down_left`, so the button is Left by construction.
+///
+/// `armed` is the mode. `modifiers.secondary()` is the modifier the band press requires: Ctrl on
+/// Windows/Linux and Command on macOS.
+///
+/// There is no pane test: the band can only be DRAWN on chart space (`figures/mod.rs` refuses
+/// outside `chart_gesture_pane_at`), but the press that misses chart space is the one that needs
+/// guarding most — under the default `separate_control_zones = true` the order book abuts the
+/// plot's right edge, and a Ctrl press aimed at the plot that lands in the book would otherwise
+/// fire the default `sell_move_click = LeftCtrl` Move TP against live orders. The mode owns the
+/// secondary-modifier left press everywhere, or it owns it nowhere safely.
+///
+/// The function withholds a left press carrying either the raw `control` bit or the platform's
+/// `secondary()` modifier. `secondary()` alone is not enough: `gesture_matches` reads
+/// `modifiers.control` directly and never `platform`, and on macOS
+/// `set_macos_control_click_as_secondary(false)` (`startup.rs:768`) delivers a genuine Ctrl+Left
+/// as Left with `control: true`. So on macOS both Cmd+Left (the band press) and Ctrl+Left
+/// (which matches the default `LeftCtrl` bindings) are withheld while armed; on Windows/Linux
+/// the two bits are the same key, so the disjunction is a no-op.
+///
+/// Precedent: `figures/erase.rs` disables the LEFT-bound figure delete while armed with no surface
+/// test either — `button == Left && self.sells_zone_armed(cx)`. This function is that same rule,
+/// narrowed to the presses that carry the band's modifier.
+///
+/// Args:
+///     armed: Whether Sells-to-zone mode is on.
+///     modifiers: The press modifiers. `secondary()` is the band's own press; `control`
+///         is the same key off macOS and a trading-only safety net on macOS, where
+///         `gesture_matches` still keys `LeftCtrl` off the raw bit.
+///
+/// Returns:
+///     `true` when this left press either belongs to the band or must be withheld from
+///         trading anyway.
+fn sells_zone_claims_press(armed: bool, modifiers: Modifiers) -> bool {
+    armed && (modifiers.control || modifiers.secondary())
+}
+
 /// Routes a wheel event to chart zoom/pan or leaves it for the surrounding stack to scroll.
 pub(super) fn scroll_wheel(
     this: &mut ChartPanel,
@@ -326,6 +365,7 @@ pub(super) fn mouse_down_left(
     }
     let sells_zone_mode = this.sells_zone_armed(cx);
     let starting_band = sells_zone_mode && this.fig_draft.is_none();
+    let band_claims = sells_zone_claims_press(sells_zone_mode, e.modifiers);
     if within
         && (e.click_count <= 1 || starting_band)
         && this.try_fig_click(
@@ -380,10 +420,10 @@ pub(super) fn mouse_down_left(
     }
     // The click halves of the keyboard slots, before the trading gestures on every button: a bound
     // action is the user's deliberate choice, and a collision with a placement or move gesture is
-    // captioned on the settings page rather than settled here by one silently winning. Off in the
-    // Sells-to-zone mode for the same reason the trading gestures below are.
+    // captioned on the settings page rather than settled here by one silently winning. Off only
+    // for the band's own press (`sells_zone_claims_press`), same as the trading gestures below.
     if within
-        && !sells_zone_mode
+        && !band_claims
         && clicks.is_some_and(|count| {
             this.try_action_click(TradeMouseButton::Left, e.modifiers, count, window, cx)
         })
@@ -391,14 +431,14 @@ pub(super) fn mouse_down_left(
         cx.stop_propagation();
         return;
     }
-    // Second, the TRADING gestures are off while the Sells-to-zone mode is armed: the mode is a
-    // drawing posture — the badge and the tool picker both say so — and a press meant for a band
-    // must not place or cancel an order instead. That covers the order book too, whose click also
-    // reaches `try_place_order_click`. Deliberately narrower than swallowing the press outright:
-    // panning and the open-on-Main double click keep working, so reaching the part of the chart the
-    // next band belongs on does not need leaving the mode.
+    // Second, only the band's own press is withheld (`sells_zone_claims_press`): a press meant
+    // for a band must not place or cancel an order instead. The order book, the reserved strip
+    // and a broom pane trade as usual because no band can be drawn there, and on the plot every
+    // unmodified, Shift and Alt press trades as before. Deliberately narrower than swallowing
+    // the press outright: panning and the open-on-Main double click keep working, so reaching
+    // the part of the chart the next band belongs on does not need leaving the mode.
     if within
-        && !sells_zone_mode
+        && !band_claims
         && clicks.is_some_and(|count| {
             this.try_place_order_click(TradeMouseButton::Left, e.modifiers, count, pos, cx)
         })
@@ -410,7 +450,7 @@ pub(super) fn mouse_down_left(
     // beside placement above because it is the same kind of gesture — the press names a price, not
     // a line — and before the cancel and drag paths, which are about the line under the pointer.
     if within
-        && !sells_zone_mode
+        && !band_claims
         && clicks.is_some_and(|count| {
             this.try_move_orders_click(TradeMouseButton::Left, e.modifiers, count, pos, cx)
         })
@@ -421,7 +461,7 @@ pub(super) fn mouse_down_left(
     // Clicking the start cross of an unfilled entry cancels it before drag handling, so dragging
     // never starts from that cross.
     if within
-        && !sells_zone_mode
+        && !band_claims
         && clicks.is_some()
         && e.click_count <= 1
         && this.try_cancel_order_click(pos, cx)
@@ -432,11 +472,8 @@ pub(super) fn mouse_down_left(
     }
     // The built-in grab: the plain single left press, whatever modifiers ride along with it. Its
     // own gate lives in `try_start_order_drag`, which is why the native click count is passed on
-    // rather than checked here.
-    if within
-        && !sells_zone_mode
-        && grab_order_line(this, TradeMouseButton::Left, e, clicks, pos, cx)
-    {
+    // rather than checked here. Withheld only for the band press.
+    if within && !band_claims && grab_order_line(this, TradeMouseButton::Left, e, clicks, pos, cx) {
         return;
     }
     // With separate zones, left clicks in the control area (book/reserved strip) are trading-only.
