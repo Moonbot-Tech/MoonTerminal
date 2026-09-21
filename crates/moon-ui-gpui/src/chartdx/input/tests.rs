@@ -257,3 +257,87 @@ fn super_zoom_starts_a_fresh_wheel_accumulator() {
     assert_eq!(view.px_per_ms, before);
     assert!(view.right_time_ms < anchor);
 }
+
+/// An unmodified wheel notch at mid-plot must keep a live chart on the live edge. The same
+/// notch as Ctrl+wheel must let go.
+///
+/// Breakage: `x_zoom` mapping `WheelMode::Zoom` to anything but `XZoom::Plain`, or mapping
+/// `WheelMode::CtrlZoom` to Plain, either flips the header to Pause on one plain notch or
+/// pins Live when the user zoomed into an old move.
+#[test]
+fn plain_wheel_keeps_live_and_ctrl_wheel_lets_go() {
+    use crate::chartdx::pane::ContainerKind;
+
+    let rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 900.0,
+        h: 500.0,
+    };
+    let mut input = ChartInput {
+        hovered_pane: Some(0),
+        pane_rects: vec![(0, rect)],
+        ..Default::default()
+    };
+    let plot = input.areas_of(&rect, 1.0).plot;
+    input.last_ptr = (plot.x + plot.w * 0.5, plot.y + plot.h * 0.5);
+    let (plot_w, cursor_x) = input.plot_metrics_for(Some(0), 900.0, 1.0);
+    assert!(
+        (cursor_x - plot_w * 0.5).abs() < 1.0,
+        "the pointer is not at mid-plot ({cursor_x} vs {})",
+        plot_w * 0.5
+    );
+
+    let mut container = Container::new(ContainerKind::Main);
+    container.open_manual(42, "TESTUSDT", now_unix_ms());
+    let now = now_unix_ms();
+    {
+        let view = container.view_mut(0).unwrap();
+        view.ensure_default_window(plot_w, 60.0, None);
+        view.resume_live(now);
+    }
+    let before = container.view_mut(0).unwrap().visible_x(plot_w).1;
+    assert!(input.wheel(
+        3.0,
+        false,
+        WheelMode::Zoom,
+        true,
+        &mut container,
+        900.0,
+        1.0
+    ));
+    let view = container.view_mut(0).unwrap();
+    let after = view.visible_x(plot_w).1;
+    assert!(
+        (after - before / 2.0).abs() < 1.0,
+        "plain wheel did not halve the window: {before} -> {after}"
+    );
+    assert!(view.follow, "plain wheel dropped Live");
+    assert!(
+        (view.right_time_ms - now_unix_ms()).abs() < 2_000.0,
+        "plain wheel moved the live edge to {}",
+        view.right_time_ms
+    );
+
+    let mut ctrl_input = ChartInput {
+        hovered_pane: Some(0),
+        pane_rects: vec![(0, rect)],
+        last_ptr: input.last_ptr,
+        ..Default::default()
+    };
+    let mut ctrl = Container::new(ContainerKind::Main);
+    ctrl.open_manual(42, "TESTUSDT", now_unix_ms());
+    {
+        let view = ctrl.view_mut(0).unwrap();
+        view.ensure_default_window(plot_w, 60.0, None);
+        view.resume_live(now_unix_ms());
+    }
+    assert!(ctrl_input.wheel(3.0, false, WheelMode::CtrlZoom, true, &mut ctrl, 900.0, 1.0));
+    let view = ctrl.view_mut(0).unwrap();
+    assert!(!view.follow, "ctrl wheel at mid-plot kept Live");
+    assert!(
+        view.right_time_ms < now_unix_ms() - 1_000.0,
+        "ctrl wheel left the anchor at {}",
+        view.right_time_ms
+    );
+}
