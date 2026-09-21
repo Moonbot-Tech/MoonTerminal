@@ -1,10 +1,10 @@
 //! Regression tests for Orders header and legacy sorting.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use moon_core::feed::OrderRow;
 
-use super::sort_entries;
+use super::{apply_main_lift, sort_entries};
 use crate::panels::orders::{OrdCol, OrderEntry, OrdersViewState};
 
 /// Build one sortable order with only the fields relevant to these comparator tests varied later.
@@ -199,5 +199,49 @@ fn missing_header_override_keeps_the_legacy_default() {
     assert_eq!(
         rows.iter().map(|row| row.row.uid).collect::<Vec<_>>(),
         vec![1, 2]
+    );
+}
+
+/// `orders/sort.rs:apply_main_lift` must keep comparator order while a header sort is active,
+/// and lift highlighted Main rows when it is not.
+///
+/// Mutation: drop the `header_sort.is_some()` gate. A PNL header sort would lift a Main row
+/// out of comparator order, and the first assertion reddens.
+/// Mutation: skip the Highlighted lift entirely. The default Main-on-top list would leave the
+/// non-Main row first, and the last assertion reddens.
+#[test]
+fn explicit_header_sort_outranks_the_main_lift() {
+    let highlighted = HashSet::from([(1u64, 2u64)]);
+    let main_open = HashSet::from([(1u64, "BBBUSDT".to_string())]);
+    // Comparator order: extreme PNL first (uid 1), highlighted Main row second (uid 2).
+    let comparator_order = [entry(1, 1, "AAA", 10.0), entry(1, 2, "BBB", 1.0)];
+
+    let view_header = OrdersViewState {
+        header_sort: Some((OrdCol::Pnl, false)),
+        ..OrdersViewState::default()
+    };
+    let mut with_header = comparator_order.clone();
+    apply_main_lift(&mut with_header, &view_header, &highlighted, &main_open);
+    assert_eq!(
+        with_header
+            .iter()
+            .map(|row| row.row.uid)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+
+    let mut without_header = comparator_order;
+    apply_main_lift(
+        &mut without_header,
+        &OrdersViewState::default(),
+        &highlighted,
+        &main_open,
+    );
+    assert_eq!(
+        without_header
+            .iter()
+            .map(|row| row.row.uid)
+            .collect::<Vec<_>>(),
+        vec![2, 1]
     );
 }
