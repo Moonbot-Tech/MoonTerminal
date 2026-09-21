@@ -1456,7 +1456,7 @@ impl MainChartStack {
                 let panel = panel_for_event.read(app);
                 if !event.modifiers.modified()
                     && panel.window_pos_allows_main_stack_toggle(event.position)
-                    && !panel.window_pos_in_control_zone(event.position, app)
+                    && !panel.window_pos_in_control_zone(event.position)
                     && !panel.rmb_was_moved()
                 {
                     entity.update(app, |this, cx| this.toggle_from_chart(ix, cx));

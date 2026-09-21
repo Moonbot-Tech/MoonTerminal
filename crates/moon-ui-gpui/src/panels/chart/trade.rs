@@ -281,7 +281,7 @@ impl ChartPanel {
     /// left drag that grabs one line and keeps working exactly as before.
     ///
     /// The price and the market come from the pane under the pointer, exactly as a placement click
-    /// takes them, so separate-zone mode restricts this to the order book on the same terms.
+    /// takes them, restricted to the order book on the same terms.
     ///
     /// Args:
     ///     button: Physical button of the press.
@@ -316,12 +316,8 @@ impl ChartPanel {
         let Some(command) = command else {
             return false;
         };
-        // In separate-zone mode the book is the trading surface, as it is for placement.
-        let pane = if self.separate_zones(cx) {
-            self.glass_pane_at(pos)
-        } else {
-            self.input.pane_at(pos.0, pos.1)
-        };
+        // The book is the trading surface, as it is for placement.
+        let pane = self.glass_pane_at(pos);
         let Some(pane) = pane else {
             return false;
         };
@@ -442,18 +438,13 @@ impl ChartPanel {
         cx: &mut Context<Self>,
     ) -> bool {
         let Placement { short, pending } = intent;
-        // In separate-zone mode place only from the order-book zone; otherwise accept any pane area.
-        let separate = self.separate_zones(cx);
-        let pane = if separate {
-            self.glass_pane_at(pos)
-        } else {
-            self.input.pane_at(pos.0, pos.1)
-        };
+        // Place only from the order-book zone; a click on the plot never sends an order.
+        let pane = self.glass_pane_at(pos);
         let Some(pane) = pane else {
-            // The likeliest refusal of the lot, and the one a user cannot see: with separate zones
-            // the pointer has to sit inside the order-book strip on the right, which a HOTKEY gives
-            // no reason to expect — nothing was clicked. The zone's own bounds go in the line, or
-            // the reader is left holding a coordinate and no idea how far off it was.
+            // The likeliest refusal of the lot, and the one a user cannot see: the pointer has to
+            // sit inside the order-book strip on the right, which a HOTKEY gives no reason to
+            // expect — nothing was clicked. The zone's own bounds go in the line, or the reader
+            // is left holding a coordinate and no idea how far off it was.
             let zone = self
                 .input
                 .pane_at(pos.0, pos.1)
@@ -462,16 +453,15 @@ impl ChartPanel {
                 "manual order refused: ({:.1}, {:.1}) is outside {}",
                 pos.0,
                 pos.1,
-                match (separate, zone) {
+                match zone {
                     // The zone `order_zone_in` parks at the right edge with no width: the book is
-                    // hidden and the zone toggle is off, so this pane takes no order at all.
-                    (true, Some(z)) if z.w <= 0.0 =>
+                    // hidden and the reserved-strip toggle is off, so this pane takes no order.
+                    Some(z) if z.w <= 0.0 =>
                         "any order zone: the book is hidden and the zone toggle is off, so this \
                          pane is chart edge to edge"
                             .to_string(),
-                    (true, Some(z)) => format!(
-                        "the order-book zone x={:.0}..{:.0}, y={:.0}..{:.0} (separate control \
-                         zones are on)",
+                    Some(z) => format!(
+                        "the order-book zone x={:.0}..{:.0}, y={:.0}..{:.0}",
                         z.x,
                         z.x + z.w,
                         z.y,
@@ -480,9 +470,7 @@ impl ChartPanel {
                     // Either no pane holds the pointer, or the one that does reports no control
                     // zone at all — a book enabled but measured to zero width. Stated as the one
                     // fact both share: there was no zone to be inside of.
-                    (true, None) =>
-                        "the order-book zone, which resolved to nothing here".to_string(),
-                    (false, _) => "every pane".to_string(),
+                    None => "the order-book zone, which resolved to nothing here".to_string(),
                 }
             );
             return false;
@@ -625,17 +613,17 @@ impl ChartPanel {
 
     /// Hit-test interactive order lines under the cursor.
     ///
-    /// `OrderHitMode::Drag` is the pointer's own grab. With `cross_only` it applies outside the
-    /// order book in separate-zone mode, where the only target is an unfilled Buy line's
-    /// click-to-cancel start cross: it scans only Buy lines and gates on the cross's X range
-    /// before computing unnecessary distances for all draggable kinds, as in Delphi. Without
-    /// `cross_only` it scans every draggable kind. `OrderHitMode::EntryCancel` is the Tab/Del
-    /// route: the whole ENTRY line, in any zone, at any fill.
+    /// `OrderHitMode::Drag` is the pointer's own grab. With `cross_only` it applies on the plot,
+    /// where the only target is an unfilled Buy line's click-to-cancel start cross: it scans only
+    /// Buy lines and gates on the cross's X range before computing unnecessary distances for all
+    /// draggable kinds, as in Delphi. Without `cross_only` it scans every draggable kind.
+    /// `OrderHitMode::EntryCancel` is the Tab/Del route: the whole ENTRY line, in any zone, at
+    /// any fill.
     ///
-    /// On a pane with NO order zone — separate zones, book hidden, zone toggle off — nothing is a
-    /// hit in any mode: the pane is chart edge to edge, and a line drawn across it is a picture,
-    /// not a control. Every line interaction reaches this one function, so the gate here retires
-    /// the drag, the cancel cross, the hover cursor, the order menu and the keyboard cancel at once.
+    /// On a pane with NO order zone — book hidden, zone toggle off — nothing is a hit in any mode:
+    /// the pane is chart edge to edge, and a line drawn across it is a picture, not a control.
+    /// Every line interaction reaches this one function, so the gate here retires the drag, the
+    /// cancel cross, the hover cursor, the order menu and the keyboard cancel at once.
     fn hit_order_line(
         &self,
         pos: (f32, f32),
@@ -821,9 +809,9 @@ impl ChartPanel {
 
     /// Cancel an unfilled entry by left-clicking its start cross, matching Moonbot.
     ///
-    /// The precise cross target remains active in the chart area under separate-zone mode, unlike
-    /// dragging, which is restricted to the order book — as long as the pane HAS an order zone;
-    /// `hit_order_line` answers nothing on one that has none. Returns whether the click was consumed.
+    /// The precise cross target remains active in the chart area, unlike dragging, which is
+    /// restricted to the order book — as long as the pane HAS an order zone; `hit_order_line`
+    /// answers nothing on one that has none. Returns whether the click was consumed.
     pub(super) fn try_cancel_order_click(
         &mut self,
         pos: (f32, f32),
@@ -833,9 +821,9 @@ impl ChartPanel {
         if self.historical {
             return false;
         }
-        // Use the hover gate in separate-zone chart space so only the start cross competes. A nearer
-        // Sell line must not shadow a cross that was presented with the pointer cursor.
-        let cross_only = self.separate_zones(cx) && self.chart_gesture_pane_at(pos).is_some();
+        // On the plot only the start cross competes: a nearer Sell line must not shadow a cross
+        // that was presented with the pointer cursor. Full line hits belong to the book zone.
+        let cross_only = self.chart_gesture_pane_at(pos).is_some();
         let Some(hit) = self.hit_order_line(pos, OrderHitMode::Drag { cross_only }, cx) else {
             return false;
         };
@@ -1262,9 +1250,9 @@ impl ChartPanel {
             return false;
         }
         self.order_hover_probe = Some(pos);
-        // In separate-zone mode, full line interaction belongs to the order book. In chart space,
-        // use the reduced hit test for the click-to-cancel start cross only.
-        let cross_only = self.separate_zones(cx) && self.chart_gesture_pane_at(pos).is_some();
+        // Full line interaction belongs to the order book. In chart space, use the reduced hit
+        // test for the click-to-cancel start cross only.
+        let cross_only = self.chart_gesture_pane_at(pos).is_some();
         let next = self
             .hit_order_line(pos, OrderHitMode::Drag { cross_only }, cx)
             .map(|hit| OrderHoverKey {
@@ -1311,8 +1299,8 @@ impl ChartPanel {
         if button != TradeMouseButton::Left || click_count > 1 || !native_single {
             return false;
         }
-        // Separate-zone mode permits order-line dragging only inside the order book.
-        if self.separate_zones(cx) && self.chart_gesture_pane_at(pos).is_some() {
+        // Order-line dragging belongs to the order book; a press on the plot never grabs a line.
+        if self.chart_gesture_pane_at(pos).is_some() {
             return false;
         }
         let Some(hit) = self.hit_order_line(pos, OrderHitMode::Drag { cross_only: false }, cx)

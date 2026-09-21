@@ -134,9 +134,8 @@ fn muted_line(text: String, p: &MoonPalette, cx: &App) -> impl IntoElement {
 /// locale, and a wider window no longer has to be asked for it.
 ///
 /// Measured from the UNRESOLVED labels: `Scope::resolved` only ever drops a surface, so the
-/// widest resolved label is never wider than this, and flipping the separate-zones setting cannot
-/// move the column. Per-glyph cached in `design::ui_text_width`, so one Settings render costs a
-/// hash lookup per character, not a shaping call.
+/// widest resolved label is never wider than this. Per-glyph cached in `design::ui_text_width`,
+/// so one Settings render costs a hash lookup per character, not a shaping call.
 fn scope_column_px(cx: &App) -> Pixels {
     let width =
         |text: &str| design::ui_text_width_zoomed(cx, text, design::BODY_TEXT, 400.0, false);
@@ -429,15 +428,6 @@ impl SettingsView {
     ///     The rendered row.
     fn table_row(&self, row: TableRow, scope_w: Pixels, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
-        // The surface a row's two-way set resolves to right now, rather than the disjunction: the
-        // reader wants the answer for the terminal in front of them.
-        let separate_zones = {
-            let b = self.backend.read(cx);
-            b.preview
-                .as_ref()
-                .unwrap_or(&b.config)
-                .separate_control_zones
-        };
         let cell = |content: Option<AnyElement>, width: f32| match content {
             Some(content) => sized_cell(content, width, cx),
             None => empty_cell(width, cx),
@@ -495,7 +485,7 @@ impl SettingsView {
             )
             .child(match row.meta {
                 Some(m) => div().flex_none().w(scope_w).child(muted_line(
-                    m.scope.resolved(separate_zones).label(),
+                    m.scope.resolved().label(),
                     &p,
                     cx,
                 )),

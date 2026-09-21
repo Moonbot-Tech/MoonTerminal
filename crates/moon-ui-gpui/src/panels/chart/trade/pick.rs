@@ -64,8 +64,8 @@ impl OrderCandidate {
 /// filter.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum OrderHitMode {
-    /// The pointer's own grab: `cross_only` is separate-zone chart space, where the only target
-    /// is an unfilled entry's start cross.
+    /// The pointer's own grab: `cross_only` is chart space, where the only target is an
+    /// unfilled entry's start cross.
     Drag { cross_only: bool },
     /// The Tab/Del route: the whole ENTRY line, in any zone, at any fill.
     EntryCancel,

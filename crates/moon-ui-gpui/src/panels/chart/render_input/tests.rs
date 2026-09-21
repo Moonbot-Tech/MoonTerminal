@@ -2,6 +2,7 @@
 // which would shadow the built-in `#[test]`.
 use gpui::Modifiers;
 
+use super::book_zone_press_is_pan;
 use super::sells_zone_claims_press;
 use super::wheel_delta;
 
@@ -47,9 +48,25 @@ fn super_zoom_routes_windows_shift_delta_before_pan() {
     assert_eq!(wheel_mode(Modifiers::default()), WheelMode::Zoom);
 }
 
+/// A still book-zone press stays an order click; travel of 4 px (the same start as
+/// right-button zoom) is a chart pan. The oracle is the distance, not a modifier.
+///
+/// Plausible breakage: treating any mouse-move as a pan, so a click with 1 px of
+/// jitter places nothing and nudges the chart instead.
+#[test]
+fn a_book_zone_press_pans_only_past_the_click_threshold() {
+    let origin = (100.0, 100.0);
+    assert!(!book_zone_press_is_pan(origin, origin));
+    assert!(!book_zone_press_is_pan(origin, (103.0, 100.0)));
+    assert!(!book_zone_press_is_pan(origin, (100.0, 103.0)));
+    assert!(book_zone_press_is_pan(origin, (104.0, 100.0)));
+    assert!(book_zone_press_is_pan(origin, (100.0, 104.0)));
+    assert!(book_zone_press_is_pan(origin, (103.0, 103.0)));
+}
+
 /// Sells-to-zone left-press withholding is (armed, modifiers) only. A pane argument
-/// would let a Ctrl+Left that missed the plot — the order book under the default
-/// `separate_control_zones = true` — fall through to `sell_move_click = LeftCtrl`
+/// would let a Ctrl+Left that missed the plot — the order book abutting the plot —
+/// fall through to `sell_move_click = LeftCtrl`
 /// and reprice live orders.
 ///
 /// Plausible breakage: adding a pane/surface parameter to `sells_zone_claims_press`.

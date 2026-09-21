@@ -77,12 +77,17 @@ impl ChartPanel {
         self.chart.chart_local_from_window_pos(pos)
     }
 
-    /// Returns whether trading controls are confined to the order-book zone. Numbered AddToChart and
-    /// Custom panels, including detached ones, always separate the book on the right from chart
-    /// navigation on the left. The Settings toggle controls only Main, where `num` is `None`.
-    pub(super) fn separate_zones(&self, cx: &App) -> bool {
-        if self.num.is_some() {
-            return true;
+    /// Returns whether a left drag that misses every order line may pan the chart from inside the
+    /// order-book zone.
+    ///
+    /// This is the current meaning of `SettingsFile.separate_control_zones`. Order gestures stay in
+    /// the book on every tab; the toggle only grants this extra chart gesture inside that same
+    /// rectangle. Numbered AddToChart and Custom panels, including detached ones, read the setting
+    /// too — a book zone exists there the same way it does on Main. A book-only broom pane has no
+    /// plot to pan, so the toggle has no say there.
+    pub(super) fn chart_pan_in_book_zone(&self, cx: &App) -> bool {
+        if self.orderbook_only {
+            return false;
         }
         let b = self.backend.read(cx);
         b.preview
@@ -116,20 +121,15 @@ impl ChartPanel {
         })
     }
 
-    /// Returns whether a window position is closed to chart gestures — pan, zoom, the open-on-Main
-    /// double click, fullscreen toggling — because it belongs to trading instead.
+    /// Returns whether a window position is closed to chart gestures — zoom, the open-on-Main
+    /// double click, fullscreen toggling, right-button price zoom — because it belongs to trading.
     ///
     /// Two different reasons answer yes, and they are separate questions. A book-only broom pane
     /// says yes over ALL of it: there is no plot on it to pan or open, so nothing there can mean
-    /// chart, and the Settings toggle has no say — it governs whether to split a pane that HAS
-    /// both. An ordinary pane says yes inside its control zone while that toggle is on, where
-    /// trading actions, order dragging, order menus and hotkeys stay live.
-    pub(crate) fn window_pos_in_control_zone(&self, pos: Point<Pixels>, cx: &App) -> bool {
-        // Cheapest first: an ordinary pane under unified zones answers no without touching geometry,
-        // and that is the common case on Main.
-        if !self.orderbook_only && !self.separate_zones(cx) {
-            return false;
-        }
+    /// chart, and the Settings toggle has no say. An ordinary pane says yes inside its control
+    /// zone, where order gestures live. Left-drag panning of the chart from inside that zone is a
+    /// different question, answered by [`Self::chart_pan_in_book_zone`] on the left-press path.
+    pub(crate) fn window_pos_in_control_zone(&self, pos: Point<Pixels>) -> bool {
         let Some((local, within)) = self.chart_local(pos) else {
             return false;
         };
@@ -320,15 +320,15 @@ impl ChartPanel {
     /// Whether ANY order gesture may act on this panel: click placement, the bulk move clicks,
     /// the cursor hotkeys, line dragging, the cancel cross, the order menu and the Tab/Del cancel.
     ///
-    /// Under unified zones the whole pane trades. Under separate zones trading lives in the order
-    /// zone, so it exists exactly when that zone does: a drawn book, or the strip reserved for a
-    /// hidden one while the zone toggle is on. With the book hidden AND the toggle off there is no
-    /// zone anywhere on the pane, and the pane is chart from edge to edge — the state a user picks
-    /// on a detect preview so that a double click can only ever open the coin on Main, never send
-    /// an order (#557). Every order route reads this one answer or the zero-width zone it implies,
-    /// so a gesture added later cannot keep trading on a pane the user declared order-free.
-    pub(super) fn order_gestures_allowed(&self, cx: &App) -> bool {
-        !self.separate_zones(cx) || self.orderbook_drawn() || self.show_zone
+    /// Trading lives in the order zone, so it exists exactly when that zone does: a drawn book, or
+    /// the strip reserved for a hidden one while the zone toggle is on. With the book hidden AND
+    /// the toggle off there is no zone anywhere on the pane, and the pane is chart from edge to
+    /// edge — the state a user picks on a detect preview so that a double click can only ever open
+    /// the coin on Main, never send an order (#557). Every order route reads this one answer or
+    /// the zero-width zone it implies, so a gesture added later cannot keep trading on a pane the
+    /// user declared order-free.
+    pub(super) fn order_gestures_allowed(&self, _cx: &App) -> bool {
+        self.orderbook_drawn() || self.show_zone
     }
 
     pub(super) fn control_zone_rect(&self, pane: usize) -> Option<moon_chart::view::Rect> {

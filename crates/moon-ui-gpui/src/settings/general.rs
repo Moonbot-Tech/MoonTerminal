@@ -229,7 +229,7 @@ impl SettingsView {
             .child(btn("+large", ">>", large))
     }
 
-    /// Build the General tab for UI theme and zoom, locale, chart grouping, control zones,
+    /// Build the General tab for UI theme and zoom, locale, chart grouping, book-zone pan,
     /// Main-window idle closing, and file-log retention settings.
     ///
     /// Args:
@@ -333,7 +333,7 @@ impl SettingsView {
                 &t!("general.charts_split_by_core_hint"),
             ))
             .child(super::separator(p, cx))
-            // Restrict order and line controls to the order-book control zone.
+            // Grant chart panning inside the order-book zone; order gestures stay in that zone.
             .child(checkbox_with_hint(
                 self.draft_checkbox(cx, "separate-zones", scz, |p, v| {
                     if p.separate_control_zones != v {

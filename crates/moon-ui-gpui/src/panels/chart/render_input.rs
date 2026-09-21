@@ -215,6 +215,64 @@ fn sells_zone_claims_press(armed: bool, modifiers: Modifiers) -> bool {
     armed && (modifiers.control || modifiers.secondary())
 }
 
+/// Device-pixel travel that turns a book-zone left press into a chart pan rather than an order
+/// click. Same magnitude as the right-button zoom start, so a still click stays a click.
+const BOOK_ZONE_PAN_START_PX: f32 = 4.0;
+
+/// A left press in the book zone waiting to see whether it pans or fires as an order click.
+pub(super) struct BookZonePress {
+    origin: (f32, f32),
+    modifiers: Modifiers,
+    click_count: usize,
+}
+
+/// Whether the pointer has moved far enough from a book-zone press origin to pan the chart.
+fn book_zone_press_is_pan(origin: (f32, f32), now: (f32, f32)) -> bool {
+    let dx = now.0 - origin.0;
+    let dy = now.1 - origin.1;
+    dx * dx + dy * dy >= BOOK_ZONE_PAN_START_PX * BOOK_ZONE_PAN_START_PX
+}
+
+/// Replay the order-click gestures a book-zone press deferred until it proved not to be a pan.
+///
+/// Same order as `mouse_down_left`: action click, placement, then the bulk move. The line grab
+/// and the start-cross cancel already ran on the press itself.
+fn replay_book_zone_order_click(
+    this: &mut ChartPanel,
+    press: BookZonePress,
+    window: &mut Window,
+    cx: &mut Context<ChartPanel>,
+) -> bool {
+    this.input.last_ptr = press.origin;
+    this.input.cursor = Some(press.origin);
+    this.input.hovered_pane = this.input.pane_at(press.origin.0, press.origin.1);
+    if this.try_action_click(
+        TradeMouseButton::Left,
+        press.modifiers,
+        press.click_count,
+        window,
+        cx,
+    ) {
+        return true;
+    }
+    if this.try_place_order_click(
+        TradeMouseButton::Left,
+        press.modifiers,
+        press.click_count,
+        press.origin,
+        cx,
+    ) {
+        return true;
+    }
+    this.try_move_orders_click(
+        TradeMouseButton::Left,
+        press.modifiers,
+        press.click_count,
+        press.origin,
+        cx,
+    )
+}
+
 /// Routes a wheel event to chart zoom/pan or leaves it for the surrounding stack to scroll.
 pub(super) fn scroll_wheel(
     this: &mut ChartPanel,
@@ -301,6 +359,7 @@ pub(super) fn mouse_down_left(
     if cx.has_active_drag() {
         return;
     }
+    this.book_zone_press = None;
     // Count the press against the series THIS panel saw before a trading gesture reads it as a
     // double click; `e.click_count` pairs presses per window, blind to which chart received them.
     // The `<= 1` gates below stay on the NATIVE count: their question is "is this the second press
@@ -418,12 +477,22 @@ pub(super) fn mouse_down_left(
         cx.stop_propagation();
         return;
     }
+    // When the toggle grants chart pan inside the book, a miss on every order line waits to see
+    // whether the press moves: movement pans, a still release is the order click. The action,
+    // place and move layers therefore skip the press here and run from `mouse_up_left` if it
+    // stayed still. The line grab and the start-cross cancel still fire on the press — they
+    // already know the pointer is on a line.
+    let defer_book_click = within
+        && !band_claims
+        && this.chart_pan_in_book_zone(cx)
+        && this.window_pos_in_control_zone(e.position);
     // The click halves of the keyboard slots, before the trading gestures on every button: a bound
     // action is the user's deliberate choice, and a collision with a placement or move gesture is
     // captioned on the settings page rather than settled here by one silently winning. Off only
     // for the band's own press (`sells_zone_claims_press`), same as the trading gestures below.
     if within
         && !band_claims
+        && !defer_book_click
         && clicks.is_some_and(|count| {
             this.try_action_click(TradeMouseButton::Left, e.modifiers, count, window, cx)
         })
@@ -439,6 +508,7 @@ pub(super) fn mouse_down_left(
     // the part of the chart the next band belongs on does not need leaving the mode.
     if within
         && !band_claims
+        && !defer_book_click
         && clicks.is_some_and(|count| {
             this.try_place_order_click(TradeMouseButton::Left, e.modifiers, count, pos, cx)
         })
@@ -451,6 +521,7 @@ pub(super) fn mouse_down_left(
     // a line — and before the cancel and drag paths, which are about the line under the pointer.
     if within
         && !band_claims
+        && !defer_book_click
         && clicks.is_some_and(|count| {
             this.try_move_orders_click(TradeMouseButton::Left, e.modifiers, count, pos, cx)
         })
@@ -476,9 +547,20 @@ pub(super) fn mouse_down_left(
     if within && !band_claims && grab_order_line(this, TradeMouseButton::Left, e, clicks, pos, cx) {
         return;
     }
-    // With separate zones, left clicks in the control area (book/reserved strip) are trading-only.
-    // Do not route normal chart pan or the "open on Main" double-click through this area.
-    if this.window_pos_in_control_zone(e.position, cx) {
+    // Left clicks in the control area (book/reserved strip) do not open-on-Main. When the toggle
+    // grants pan inside that zone, park the press: a later move starts pan, a still release is
+    // the order click. Off, the zone is orders only and the press ends here.
+    if this.window_pos_in_control_zone(e.position) {
+        if defer_book_click {
+            if let Some(count) = clicks {
+                this.book_zone_press = Some(BookZonePress {
+                    origin: pos,
+                    modifiers: e.modifiers,
+                    click_count: count,
+                });
+            }
+            cx.stop_propagation();
+        }
         return;
     }
     // On AddToChart tabs, double-clicking the CHART opens its coin on fullscreen Main.
@@ -520,7 +602,7 @@ pub(super) fn mouse_down_left(
 pub(super) fn mouse_up_left(
     this: &mut ChartPanel,
     e: &MouseUpEvent,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<ChartPanel>,
 ) {
     // Before every early return below: the release ends the gesture whichever branch takes it.
@@ -532,17 +614,29 @@ pub(super) fn mouse_up_left(
             this.update_fig_pointer(pos, within, true, e.modifiers.secondary(), cx);
         }
         if this.try_fig_release(pos, e.modifiers.secondary(), cx) {
+            this.book_zone_press = None;
             cx.notify();
             cx.stop_propagation();
             return;
         }
     }
     if this.finish_fig_drag(cx) {
+        this.book_zone_press = None;
         cx.notify();
         cx.stop_propagation();
         return;
     }
     if release_order_drag(this, TradeMouseButton::Left, cx) {
+        this.book_zone_press = None;
+        return;
+    }
+    if let Some(press) = this.book_zone_press.take() {
+        if replay_book_zone_order_click(this, press, window, cx) {
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+        // A still press that matched no order gesture is a click, not a pan.
         return;
     }
     // Chart-design factor: the input container lays the panes out with the engine's geometry,
@@ -679,9 +773,9 @@ pub(super) fn mouse_down_right(
         cx.stop_propagation();
         return;
     }
-    // With separate zones, right clicks in the control area are only for trading/order menus.
-    // Suppress normal chart right-button pan/zoom there; main_stack.rs owns fullscreen toggling.
-    if this.window_pos_in_control_zone(e.position, cx) {
+    // Right clicks in the control area are only for trading/order menus. Suppress chart
+    // right-button pan/zoom there; main_stack.rs owns fullscreen toggling.
+    if this.window_pos_in_control_zone(e.position) {
         return;
     }
     let fb = this.chart.slot_dev_width();
@@ -714,7 +808,7 @@ pub(super) fn mouse_up_right(
         cx.stop_propagation();
         return;
     }
-    if this.window_pos_in_control_zone(e.position, cx) {
+    if this.window_pos_in_control_zone(e.position) {
         return;
     }
     // Chart-design factor: the input container lays the panes out with the engine's geometry,
@@ -824,6 +918,7 @@ pub(super) fn mouse_move(
     };
     crate::diag::bump(&crate::diag::CHART_MOUSE_MOVE);
     if e.pressed_button.is_none() {
+        this.book_zone_press = None;
         if this.order_drag.take().is_some() {
             this.apply_order_visual(cx);
             this.sync_native_cursor(cx);
@@ -942,6 +1037,20 @@ pub(super) fn mouse_move(
         this.update_order_drag(pos, cx);
         cx.stop_propagation();
         return;
+    }
+    if this
+        .book_zone_press
+        .as_ref()
+        .is_some_and(|press| book_zone_press_is_pan(press.origin, pos))
+    {
+        this.book_zone_press = None;
+        let fb = this.chart.slot_dev_width();
+        let _ = {
+            let input = &mut this.input;
+            this.chart.with_container_mut(|container| {
+                input.mouse_button(input::Btn::Left, true, true, false, container, sf, fb)
+            })
+        };
     }
     let prev_cursor = this.input.cursor;
     let prev_hovered = this.input.hovered_pane;

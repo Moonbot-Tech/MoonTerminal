@@ -208,9 +208,9 @@ pub struct ChartPanel {
     /// that owns the tab spec. See `volume_menu` for why the write cannot happen here.
     pending_labels: Option<moon_core::config::ChartLabelsCfg>,
     /// Whether a hidden order book still leaves an order zone — the reserved strip along the right
-    /// edge, dim-filled as a marker — when zones are separate. Off, together with a hidden book, the
-    /// pane has no order zone at all and no order gesture acts on it (`order_gestures_allowed`).
-    /// Per window/tab, enabled by default.
+    /// edge, dim-filled as a marker. Off, together with a hidden book, the pane has no order zone
+    /// at all and no order gesture acts on it (`order_gestures_allowed`). Per window/tab, enabled
+    /// by default.
     show_zone: bool,
     /// Whether a successful long or short order automatically pins its chart. Per window/tab and
     /// disabled by default.
@@ -314,6 +314,12 @@ pub struct ChartPanel {
     ttl_timer_armed: bool,
     order_drag: Option<OrderDrag>,
     pending_order_drag: Option<PendingOrderDrag>,
+    /// A left press in the book zone that has not yet become a chart pan or an order click.
+    ///
+    /// Held only while `chart_pan_in_book_zone` is on and the press missed every order line. A
+    /// move past the pan threshold starts chart navigation and clears this; a still release
+    /// replays the order-click gestures at the origin.
+    book_zone_press: Option<render_input::BookZonePress>,
     order_hover: Option<OrderHoverKey>,
     /// Point of the most recent order-line hover hit-test. The Delphi-style movement threshold keeps
     /// subpixel raw mouse movement from scanning the lines again.
@@ -711,6 +717,7 @@ impl ChartPanel {
             ttl_timer_armed: false,
             order_drag: None,
             pending_order_drag: None,
+            book_zone_press: None,
             order_hover: None,
             order_hover_probe: None,
             drag_notify_at: None,
@@ -911,6 +918,7 @@ impl ChartPanel {
             ttl_timer_armed: false,
             order_drag: None,
             pending_order_drag: None,
+            book_zone_press: None,
             order_hover: None,
             order_hover_probe: None,
             drag_notify_at: None,
