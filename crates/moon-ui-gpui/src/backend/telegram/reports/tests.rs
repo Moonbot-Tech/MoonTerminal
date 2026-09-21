@@ -39,7 +39,8 @@ fn viewer_empty_or_unavailable_scope_never_becomes_global() {
         INSERT INTO orders_rep VALUES (1,'Client',1,150,7,100,0),(2,'Private',1,150,900,100,0);").unwrap();
     for ids in [vec![], vec![99], vec![1]] {
         let mut request = ReportRequest::new(Period::Today, false);
-        if ids == vec![1] {
+        let viewer_core = ids == vec![1];
+        if viewer_core {
             request.scope = moon_core::telegram::report::ReportScope::Venue(
                 moon_core::feed::ExchangeId::new(6),
             );
@@ -56,7 +57,21 @@ fn viewer_empty_or_unavailable_scope_never_becomes_global() {
         .unwrap();
         assert_eq!(page.total.orders, 0);
         assert!(page.rows.is_empty());
-        assert!(page.drilldowns.is_empty());
+        if viewer_core {
+            assert_eq!(
+                page.drilldowns.len(),
+                1,
+                "the viewer's own exchanges stay on the keyboard"
+            );
+            assert_ne!(
+                page.drilldowns[0].1,
+                moon_core::telegram::report::ReportScope::Venue(moon_core::feed::ExchangeId::new(
+                    6
+                ))
+            );
+        } else {
+            assert!(page.drilldowns.is_empty());
+        }
     }
 }
 
@@ -420,6 +435,98 @@ fn rich_report_escapes_names_and_bounds_long_labels() {
     assert!(html.contains("&lt;b&gt;&amp;"));
     assert!(!html.contains("<b>&xxxx"));
     assert!(html.len() < 10_000);
+}
+
+/// Collapsed markup is one row of Exchanges + All cores; expanding shows today's list plus Back.
+#[test]
+fn collapsed_keyboard_hides_exchanges_until_opened() {
+    let _locale = crate::test_locale::force("ru");
+    let mut request = ReportRequest::new(Period::Today, false);
+    request.window = Some((0, 1));
+    let binance =
+        moon_core::telegram::report::ReportScope::Venue(moon_core::feed::ExchangeId::new(2));
+    let bybit =
+        moon_core::telegram::report::ReportScope::Venue(moon_core::feed::ExchangeId::new(6));
+    let page = Page {
+        request: request.clone(),
+        from: 0,
+        to: 1,
+        zone: chrono_tz::UTC,
+        total: QuoteBreakdown::default(),
+        rows: Vec::new(),
+        pages: 1,
+        drilldowns: vec![("Binance".into(), binance), ("Bybit".into(), bybit)],
+        scope_label: None,
+    };
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::keyboard(&page) else {
+        panic!("expected inline navigation")
+    };
+    assert_eq!(
+        markup.inline_keyboard.len(),
+        1,
+        "today has no extra view row"
+    );
+    assert_eq!(markup.inline_keyboard[0].len(), 2);
+    assert!(
+        markup.inline_keyboard[0][0].text.starts_with(&format!(
+            "{} \u{25be}",
+            rust_i18n::t!("telegram.report_exchanges_menu")
+        )),
+        "{}",
+        markup.inline_keyboard[0][0].text
+    );
+    let opened = ReportRequest::parse_callback(
+        markup.inline_keyboard[0][0]
+            .callback_data
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(opened.exchanges_open);
+    assert_eq!(opened.period, Period::Today);
+    let cores = ReportRequest::parse_callback(
+        markup.inline_keyboard[0][1]
+            .callback_data
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(!cores.by_exchange);
+    assert!(!cores.daily);
+    assert!(!cores.exchanges_open);
+
+    let mut expanded = page;
+    expanded.request.exchanges_open = true;
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::keyboard(&expanded) else {
+        panic!("expected inline navigation")
+    };
+    assert_eq!(markup.inline_keyboard[0].len(), 2, "two exchanges per row");
+    assert!(markup.inline_keyboard[0][0].text.contains("Binance"));
+    let picked = ReportRequest::parse_callback(
+        markup.inline_keyboard[0][0]
+            .callback_data
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        picked.exchanges_open,
+        "picking an exchange must keep the list open"
+    );
+    assert_eq!(picked.scope, binance);
+    let back = markup
+        .inline_keyboard
+        .iter()
+        .flatten()
+        .find(|button| {
+            button
+                .text
+                .contains(&rust_i18n::t!("telegram.report_exchanges_back").to_string())
+        })
+        .expect("expanded list has Back");
+    let closed = ReportRequest::parse_callback(back.callback_data.as_deref().unwrap()).unwrap();
+    assert!(!closed.exchanges_open);
+    assert_eq!(closed.period, Period::Today);
 }
 
 /// Single-day navigation omits daily aggregation while longer periods still expose it.

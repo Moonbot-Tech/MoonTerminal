@@ -13,9 +13,41 @@ fn scoped_custom_callback_preserves_exchange_and_dates() {
         dex: u32::MAX,
     });
     request.page = 10000;
+    request.exchanges_open = true;
     let encoded = request.callback();
     assert!(encoded.len() <= 64, "{encoded}");
     assert_eq!(ReportRequest::parse_callback(&encoded), Some(request));
+}
+
+/// The exchange-list bit round-trips; a missing or unknown flag stays collapsed.
+#[test]
+fn callback_exchange_list_flag_defaults_to_collapsed() {
+    let mut request = ReportRequest::new(Period::Today, false);
+    assert!(!request.exchanges_open);
+    assert_eq!(request.callback(), "r:e:t:0");
+    assert_eq!(
+        ReportRequest::parse_callback("r:e:t:0")
+            .unwrap()
+            .exchanges_open,
+        false
+    );
+    request.exchanges_open = true;
+    assert_eq!(request.callback(), "r:ek:t:0");
+    assert_eq!(
+        ReportRequest::parse_callback(&request.callback()),
+        Some(request)
+    );
+    assert_eq!(
+        ReportRequest::parse_callback("r:eX:t:0"),
+        None,
+        "an unknown scope is still rejected"
+    );
+    assert!(
+        !ReportRequest::parse_callback("r:e:t:0")
+            .unwrap()
+            .exchanges_open,
+        "legacy callbacks without the flag stay collapsed"
+    );
 }
 
 /// Paging an old Yesterday report must not silently move to a new day at midnight.

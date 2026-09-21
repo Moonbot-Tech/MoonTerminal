@@ -136,6 +136,7 @@ fn read_page_on(
     if let TelegramReportAccess::Viewer(allowed) = &access {
         cores.retain(|(id, _)| allowed.contains(id));
     }
+    let accessible = cores.clone();
     let scope_label = (request.scope != ReportScope::All).then(|| {
         cores
             .iter()
@@ -229,17 +230,14 @@ fn read_page_on(
     let pages = active.len().div_ceil(PAGE_SIZE).max(1);
     request.page = request.page.min(pages - 1);
     let mut rows = Vec::new();
-    let mut drilldowns = Vec::new();
-    for (name, total, scope) in active
+    for (name, total, _) in active
         .into_iter()
         .skip(request.page * PAGE_SIZE)
         .take(PAGE_SIZE)
     {
-        if let Some(scope) = scope {
-            drilldowns.push((name.clone(), scope));
-        }
         rows.push((name, total));
     }
+    let drilldowns = exchange_drilldowns(&snap, &accessible, &venues, &filter)?;
     Ok(Page {
         request,
         from,
@@ -251,6 +249,30 @@ fn read_page_on(
         drilldowns,
         scope_label,
     })
+}
+
+/// Exchange buttons always list every active venue the chat can see, including from a scoped view.
+fn exchange_drilldowns(
+    snap: &rusqlite::Transaction<'_>,
+    cores: &[(u64, String)],
+    venues: &std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+    filter: &ReportFilter,
+) -> db::ReadResult<Vec<(String, ReportScope)>> {
+    let mut drilldowns = Vec::new();
+    for (venue, members) in crate::core_order::exchange_sections(
+        cores
+            .iter()
+            .enumerate()
+            .map(|(index, (id, _))| (index, venues.get(id))),
+    ) {
+        let mut group = filter.clone();
+        group.core_uids = members.iter().map(|&index| cores[index].0).collect();
+        let total = db::query_totals(snap, &group)?.quotes;
+        if total.orders > 0 {
+            drilldowns.push((crate::controls::venue_section_label(venue), scope_of(venue)));
+        }
+    }
+    Ok(drilldowns)
 }
 
 /// Escape all external text before inserting it into Telegram's restricted rich HTML.
@@ -525,28 +547,49 @@ fn keyboard(page: &Page) -> ReplyMarkup {
             "telegram.report_back" | "telegram.report_prev" => "\u{2b05}\u{fe0f}",
             "telegram.report_next" => "\u{27a1}\u{fe0f}",
             "telegram.report_all_cores" | "telegram.report_cores_scope" => "\u{1f9e9}",
+            "telegram.report_exchanges_back" => "\u{2190}",
             _ => "\u{1f4c5}",
         };
         InlineKeyboardButton::callback(format!("{icon} {}", t!(key)), request.callback())
     };
     let mut rows = Vec::new();
-    for chunk in page.drilldowns.chunks(2) {
-        rows.push(
-            chunk
-                .iter()
-                .map(|(name, scope)| {
-                    let mut next = request.clone();
-                    next.scope = *scope;
-                    next.by_exchange = false;
-                    next.daily = false;
-                    next.page = 0;
-                    InlineKeyboardButton::callback(
-                        format!("{} {}", exchange_icon(*scope), compact_label(name)),
-                        next.callback(),
-                    )
-                })
-                .collect(),
-        );
+    if request.exchanges_open {
+        for chunk in page.drilldowns.chunks(2) {
+            rows.push(
+                chunk
+                    .iter()
+                    .map(|(name, scope)| {
+                        let mut next = request.clone();
+                        next.scope = *scope;
+                        next.by_exchange = false;
+                        next.daily = false;
+                        next.page = 0;
+                        next.exchanges_open = true;
+                        InlineKeyboardButton::callback(
+                            format!("{} {}", exchange_icon(*scope), compact_label(name)),
+                            next.callback(),
+                        )
+                    })
+                    .collect(),
+            );
+        }
+        let mut closed = request.clone();
+        closed.exchanges_open = false;
+        rows.push(vec![button("telegram.report_exchanges_back", closed)]);
+    } else {
+        let mut open = request.clone();
+        open.exchanges_open = true;
+        let mut cores = request.clone();
+        cores.by_exchange = false;
+        cores.daily = false;
+        cores.page = 0;
+        rows.push(vec![
+            InlineKeyboardButton::callback(
+                format!("{} \u{25be}", t!("telegram.report_exchanges_menu")),
+                open.callback(),
+            ),
+            button("telegram.report_all_cores", cores),
+        ]);
     }
     let mut views = Vec::new();
     for (key, exchanges, daily) in [
@@ -572,6 +615,8 @@ fn keyboard(page: &Page) -> ReplyMarkup {
     ] {
         if (daily && request.period == Period::Today)
             || (request.by_exchange == exchanges && request.daily == daily)
+            // The collapsed top row already carries All cores; do not repeat it below.
+            || (!request.exchanges_open && !exchanges && !daily)
         {
             continue;
         }
