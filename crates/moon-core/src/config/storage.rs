@@ -88,16 +88,18 @@ pub const LONG_POSITION_MIN_RANGE: std::ops::RangeInclusive<u32> = 1..=120;
 pub const DEFAULT_TRADES_MAX_MB: u32 = 256;
 
 /// The values [`TradeReplayStoreCfg::margin_s`] may take, ascending: the Storage tab steps
-/// through this list rather than by a fixed amount, so the short end is fine-grained (10 s for a
-/// scalp) and the long end coarse. The floor is 10 s — "the position alone" is gone: a window
+/// through this list rather than by a fixed amount, so the short end is fine-grained (5 s for a
+/// scalp) and the long end coarse. The floor is 5 s — "the position alone" is gone: a window
 /// with no prints outside the position has nothing to show around the entry. The ceiling is two
 /// hours: the bar context after an exit is two hours at least, and prints past the bars would
 /// have nowhere to draw.
-pub const TRADE_MARGIN_STEPS_S: &[u32] = &[10, 30, 60, 180, 300, 600, 900, 1800, 3600, 7200];
+pub const TRADE_MARGIN_STEPS_S: &[u32] = &[5, 10, 30, 60, 180, 300, 600, 900, 1800, 3600, 7200];
 
-/// Default seconds of prints around a trade, per end — 15 minutes (the developer's call,
-/// 2026-09-20).
-pub const DEFAULT_TRADE_MARGIN_S: u32 = 900;
+/// Default seconds of prints around a trade, per end — 5 s (the developer's call, 2026-09-21;
+/// 15 minutes before that). The tuner's model window and the close-time capture both pad this
+/// to at least the model's own run-up and tail (`trade_replay::model_margin_ms`), so the short
+/// default shapes the chart's windows, not what the tuner is served.
+pub const DEFAULT_TRADE_MARGIN_S: u32 = 5;
 
 /// Ceiling on [`TradeReplayStoreCfg::margin_s`] — the last of [`TRADE_MARGIN_STEPS_S`].
 pub const MAX_TRADE_MARGIN_S: u32 = 7200;

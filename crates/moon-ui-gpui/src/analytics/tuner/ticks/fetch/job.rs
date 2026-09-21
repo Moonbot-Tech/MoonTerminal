@@ -15,9 +15,9 @@
 //! A request is a CLUSTER: the next pending row of a free key — a row the user is looking at
 //! first ([`prioritize`]), else the oldest — plus every pending row of the
 //! same market whose window overlaps it, as long as the first entry and the last exit stay
-//! within one hour ([`LONG_POSITION_MS`], past which the worker walks only the two ends). One
-//! walk of the whole stretch serves them all — a pumped coin closes dozens of trades in an
-//! hour, and asked one by one each of them re-walked the same minutes and paid the same page
+//! within a long position's length ([`LONG_POSITION_MS`], past which the worker walks only
+//! the two ends). One walk of the whole stretch serves them all — a pumped coin closes dozens
+//! of trades in minutes, and asked one by one each of them re-walked the same seconds and paid the same page
 //! budget, and on a venue with small pages (OKX, 100 prints) each of them died on that budget
 //! in turn. Every row of the cluster is then replayed off the tiles on its own and answered on
 //! its own. A venue that refuses (the gate's backoff, or its own error mid-walk) puts its rows
@@ -629,7 +629,7 @@ fn serve_cluster(
     let uids: Vec<i64> = rows.iter().map(|r| r.deal.report_uid).collect();
     let first = &rows[0];
     // The hull: the first entry to the last exit, with the seed's margin — what
-    // `pick_cluster` kept within an hour, so the worker walks it as one stretch.
+    // `pick_cluster` kept within `LONG_POSITION_MS`, so the worker walks it as one stretch.
     let first_buy = rows
         .iter()
         .map(|r| r.deal.buy_ms)

@@ -31,8 +31,8 @@ fn init() {
     });
 }
 
-/// The configured margin, in milliseconds — what every new [`super::ReplayWindow`] and every
-/// close-time capture is built with.
+/// The configured margin, in milliseconds — what every new chart [`super::ReplayWindow`] is
+/// built with. A model's window and the close-time capture take [`model_margin_ms`] instead.
 pub fn margin_ms() -> i64 {
     init();
     i64::from(MARGIN_S.load(Ordering::Relaxed)) * 1_000

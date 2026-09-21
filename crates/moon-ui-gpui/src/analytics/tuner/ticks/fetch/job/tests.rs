@@ -132,45 +132,58 @@ fn a_row_continues_while_a_short_walk_gains_tape() {
 }
 
 /// A cluster is the seed plus every row of the same market whose margined window overlaps the
-/// hull — through a bridge row — never another market or exchange, and never past an hour
-/// from the first entry to the last exit.
+/// hull — through a bridge row — never another market or exchange, and never past
+/// `LONG_POSITION_MS` from the first entry to the last exit.
 #[test]
-fn a_cluster_takes_the_overlapping_rows_of_one_market_within_an_hour() {
-    const MIN: i64 = 60_000;
+fn a_cluster_takes_the_overlapping_rows_of_one_market_within_a_long_position() {
+    const SEC: i64 = 1_000;
     let key = |exchange_key, market, buy_ms, close_ms| ClusterKey {
         exchange_key,
         market,
         buy_ms,
         close_ms,
-        margin_ms: 5 * MIN,
+        margin_ms: 30 * SEC,
     };
-    let base = 1_000_000 * MIN;
+    let base = 1_000_000 * SEC;
     let rows = [
         // 0: another market, same minute — never joins.
-        key("binance", "BTCUSDT", base, base + MIN),
-        // 1: the seed's market, 8 min after the seed's close: joins through the margins.
-        key("binance", "AKEUSDT", base + 10 * MIN, base + 11 * MIN),
-        // 2: joins only through row 1 (19 min after the seed, 8 after row 1).
-        key("binance", "AKEUSDT", base + 19 * MIN, base + 20 * MIN),
+        key("binance", "BTCUSDT", base, base + 10 * SEC),
+        // 1: the seed's market, 50 s after the seed's close: joins through the margins.
+        key("binance", "AKEUSDT", base + 70 * SEC, base + 80 * SEC),
+        // 2: joins only through row 1 (140 s after the seed, 50 after row 1).
+        key("binance", "AKEUSDT", base + 130 * SEC, base + 140 * SEC),
         // 3: the seed.
-        key("binance", "AKEUSDT", base, base + 2 * MIN),
-        // 4: same market, but 40 min after row 2 — no overlap, stays.
-        key("binance", "AKEUSDT", base + 60 * MIN, base + 61 * MIN),
+        key("binance", "AKEUSDT", base, base + 20 * SEC),
+        // 4: same market, but four minutes after row 2 — no overlap, stays.
+        key("binance", "AKEUSDT", base + 400 * SEC, base + 410 * SEC),
         // 5: same market name on another exchange — never joins.
-        key("gate", "AKEUSDT", base, base + MIN),
+        key("gate", "AKEUSDT", base, base + 10 * SEC),
     ];
+    assert!(
+        140 * SEC + 30 * SEC < LONG_POSITION_MS,
+        "the cluster stays short"
+    );
     assert_eq!(pick_cluster(&rows, 3), vec![1, 2, 3]);
     assert_eq!(
         pick_cluster(&rows, 0),
         vec![0],
         "a lone row is its own cluster"
     );
-    // Overlapping rows past the hour from the first entry: the hull stops growing.
+    // Overlapping rows whose hull would pass a long position's length: the hull stops growing.
     let long = [
-        key("okx", "ONE-USDT-SWAP", base, base + 50 * MIN),
-        key("okx", "ONE-USDT-SWAP", base + 52 * MIN, base + 70 * MIN),
+        key(
+            "okx",
+            "ONE-USDT-SWAP",
+            base,
+            base + LONG_POSITION_MS - 30 * SEC,
+        ),
+        key(
+            "okx",
+            "ONE-USDT-SWAP",
+            base + LONG_POSITION_MS - 20 * SEC,
+            base + LONG_POSITION_MS + 60 * SEC,
+        ),
     ];
-    assert!(70 * MIN > LONG_POSITION_MS);
     assert_eq!(pick_cluster(&long, 0), vec![0]);
 }
 

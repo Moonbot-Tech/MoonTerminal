@@ -210,7 +210,7 @@ impl SettingsView {
     }
 
     /// Moves the prints kept around a trade, per end, `delta` steps along
-    /// `TRADE_MARGIN_STEPS_S` (10 s … 120 min, not a fixed amount), and updates live state and
+    /// `TRADE_MARGIN_STEPS_S` (5 s … 120 min, not a fixed amount), and updates live state and
     /// storage.toml.
     fn adjust_trades_margin_step(&mut self, delta: i32, cx: &mut Context<Self>) {
         let v = storage_cfg::step_trade_margin_s(self.storage.cfg.trade_replay.margin_s, delta);

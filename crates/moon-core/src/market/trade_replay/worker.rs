@@ -239,8 +239,9 @@ pub struct CaptureRequest {
     pub open_ms: i64,
     /// The trade's exit, true-UTC milliseconds.
     pub close_ms: i64,
-    /// Prints to copy around the trade, per end — [`super::margin_ms`] at close time, whose
-    /// floor is the tuner's run-up and tail; see [`ReplayWindow::margin_ms`].
+    /// Prints to copy around the trade, per end — [`super::model_margin_ms`] at close time,
+    /// so the tile holds the tuner's run-up and tail whatever the chart's margin is; see
+    /// [`ReplayWindow::margin_ms`].
     pub margin_ms: i64,
     /// The long-position threshold at close time ([`super::long_position_ms`]): carried so the
     /// capture's first pass and its settle pass file the same shape whatever the Storage tab

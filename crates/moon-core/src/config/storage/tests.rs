@@ -86,7 +86,9 @@ fn snap_and_step_walk_the_step_list() {
         TRADE_MARGIN_STEPS_S.last().copied(),
         Some(MAX_TRADE_MARGIN_S)
     );
-    assert_eq!(snap_trade_margin_s(0), 10);
+    assert_eq!(snap_trade_margin_s(0), 5);
+    assert_eq!(snap_trade_margin_s(7), 5, "nearer to 5 than to 10");
+    assert_eq!(snap_trade_margin_s(8), 10);
     assert_eq!(snap_trade_margin_s(19), 10);
     assert_eq!(snap_trade_margin_s(20), 10, "tie goes to the lower step");
     assert_eq!(snap_trade_margin_s(21), 30);
@@ -100,7 +102,7 @@ fn snap_and_step_walk_the_step_list() {
         7200,
         "the top absorbs the rest"
     );
-    assert_eq!(step_trade_margin_s(10, -1), 10, "so does the bottom");
+    assert_eq!(step_trade_margin_s(5, -1), 5, "so does the bottom");
     assert_eq!(
         step_trade_margin_s(2700, 1),
         3600,

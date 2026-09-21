@@ -85,13 +85,17 @@ const CONTEXT_FRACTION: f64 = 0.5;
 /// A meaning bound, not a resource one: the page budget already caps what a walk can fetch, but
 /// on a multi-hour position it burned out ~40 minutes after the entry and the exit came back as
 /// bars — while at the zoom such a position is viewed at, the chart draws bars for the middle
-/// anyway. One hour is the developer's call (2026-09-20): past it the ticks between the ends
-/// are a ribbon nobody reads, and what matters is how the entry and the exit printed.
+/// anyway. Five minutes is the developer's call (2026-09-21; an hour the day before): past it
+/// the ticks between the ends are a ribbon nobody reads, and what matters is how the entry and
+/// the exit printed. The tuner's model runs a long position on that two-end tape as it is —
+/// also the developer's call, the same day: an exit that really happened in the unwalked
+/// middle is a miss in the replay, and the deal table's "held" column shows how far the tape
+/// reaches on each side.
 ///
 /// Public because the tuner's fetch clusters several trades of one market into one request
 /// whose open is the first entry and whose close is the last exit: a cluster longer than this
 /// would be walked as two ends, and the trades in between would go without their tape.
-pub const LONG_POSITION_MS: i64 = 60 * MINUTE_MS;
+pub const LONG_POSITION_MS: i64 = 5 * MINUTE_MS;
 
 /// How far before the entry and past the exit a MODEL's request treats the tape as part of the
 /// trade itself (walked under the trade budget, never cut short by the normal page ceiling):
