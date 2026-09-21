@@ -31,10 +31,17 @@
 //! the exchange `latency_ms` later, as the entry's does: a spike through the OLD level in that
 //! gap fills there. The line's replacements are recorded so the model can be held against the
 //! archived Exit line of the trade.
+//!
+//! The rules move an UNROUNDED line — the archive shows the core chaining its PriceDown steps
+//! off the exact value, not the placed price — and only what goes to the exchange is rounded
+//! to the nearest step of the market's price grid (a sell limit is placed on the grid). The
+//! rounding is what decides a print AT the level: on ARX (2026-09-21) the
+//! `PriceDownAllowedDrop` floor computed to 0.196445, the core's order stood at 0.1964, and
+//! the tape's high was exactly 0.1964 — the unrounded line was never reached.
 
 use super::exit::ExitParams;
 use super::mshot::FAST_ALGO_WINDOW_MS;
-use super::{Deal, Exit, ExitKind, Fill, reaches};
+use super::{Deal, Exit, ExitKind, Fill, reaches, round_to_step};
 use crate::feed::types::Tick;
 
 /// The terminal's own floor on a step delay of zero: the FAQ's "0.33 s internal minimum".
@@ -119,18 +126,45 @@ fn step_ms(seconds: f64) -> i64 {
 ///     take: The take level the line starts at (see `ExitModel::take_level`).
 ///     params: The sell-line rules.
 pub fn walk(deal: &Deal, ticks: &[Tick], fill: Fill, take: f64, params: &ExitParams) -> LineWalk {
+    walk_held(deal, ticks, fill, take, params, None)
+}
+
+/// [`walk`] with the sell HELD — no print fills it — until `hold_until_ms`: the rules keep
+/// moving the line, so its level at that moment is known whatever print the model would have
+/// sold on before it. The stop is not held: it is a market order and fires as it does. The
+/// verdict on a fact reads the line this way, at the close.
+///
+/// Args:
+///     hold_until_ms: `None` walks as [`walk`] does.
+pub fn walk_held(
+    deal: &Deal,
+    ticks: &[Tick],
+    fill: Fill,
+    take: f64,
+    params: &ExitParams,
+    hold_until_ms: Option<i64>,
+) -> LineWalk {
     let side = Side {
         long: deal.is_long(),
     };
     let latency_ms = params.latency_ms.max(0.0) as i64;
     let armed_at = fill.t_ms + params.sell_delay_ms.max(0.0) as i64;
+    // What the exchange is given: the level on the price grid.
+    let placed = |level: f64| match deal.tick {
+        Some(tick) => round_to_step(level, tick),
+        None => level,
+    };
+    let take_placed = placed(take);
     let mut points = vec![LinePoint {
         t_ms: armed_at,
-        price: take,
+        price: take_placed,
     }];
-    // The exchange's level (what fills) and the core's (what the rules move); a move the
-    // exchange has not seen yet is `pending`.
-    let mut exch_line = take;
+    // The exchange's level (what fills, on the grid) and the core's (what the rules move,
+    // unrounded); a move the exchange has not seen yet is `pending`.
+    let mut exch_line = take_placed;
+    // Whether a move has reached the exchange: what tells a fill at the take from a fill at
+    // a level a rule moved the line to — not the price, which a moved line can round back onto.
+    let mut exch_moved = false;
     let mut core_line = take;
     let mut pending: Option<(i64, f64)> = None;
     let mut place = |t_ms: i64, level: f64, core: &mut f64, pending: &mut Option<(i64, f64)>| {
@@ -138,6 +172,7 @@ pub fn walk(deal: &Deal, ticks: &[Tick], fill: Fill, take: f64, params: &ExitPar
             return;
         }
         *core = level;
+        let level = placed(level);
         *pending = Some((t_ms + latency_ms, level));
         points.push(LinePoint {
             t_ms: t_ms + latency_ms,
@@ -255,6 +290,7 @@ pub fn walk(deal: &Deal, ticks: &[Tick], fill: Fill, take: f64, params: &ExitPar
         }
         if let Some((_, level)) = pending.filter(|(apply_at, _)| t_ms >= *apply_at) {
             exch_line = level;
+            exch_moved = true;
             pending = None;
         }
         // The stop is a market order the core fires on the print; the sell is a limit the
@@ -269,13 +305,19 @@ pub fn walk(deal: &Deal, ticks: &[Tick], fill: Fill, take: f64, params: &ExitPar
                 points,
             };
         }
-        if t_ms > armed_at && reaches(price, exch_line, !side.long) {
+        // A print AT the level fills the sell — the optimistic reading the spec states (§7:
+        // the queue standing at the level is not modelled; COOL 2026-09-21 printed 31
+        // contracts at the level against a sell of 18 000 and the core's line stood). The
+        // verdict on the fact does not lean on this: `verify` judges the line by where it
+        // STOOD at the close, not by which print the model sold on.
+        let held = hold_until_ms.is_some_and(|until| t_ms <= until);
+        if t_ms > armed_at && !held && reaches(price, exch_line, !side.long) {
             return LineWalk {
                 exit: Exit {
                     t_ms,
                     price: exch_line,
                     // What the print met: the take as placed, or a level a rule moved it to.
-                    kind: if exch_line == take {
+                    kind: if !exch_moved {
                         ExitKind::Take
                     } else {
                         ExitKind::Line

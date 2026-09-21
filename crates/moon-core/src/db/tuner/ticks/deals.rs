@@ -112,7 +112,8 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
     let sql = format!(
         "SELECT o.\"reportuid\", o.\"core_uid\", o.\"strategyid\", o.\"coin\",
                 o.\"buydatems\", o.\"closedatems\", o.\"buyprice\", o.\"sellprice\",
-                o.\"spentbtc\", o.\"isshort\", o.\"sellreason\", COALESCE(o.pnl, 0), {deltas}
+                o.\"spentbtc\", o.\"isshort\", o.\"sellreason\", COALESCE(o.pnl, 0), {deltas},
+                o.\"core_name\"
          FROM {src}"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
@@ -172,6 +173,10 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
         out.deals.push(Deal {
             report_uid,
             core_uid: int(1)? as u64,
+            core_name: r
+                .get::<_, Option<String>>(12 + DELTA_COLS.len())
+                .map_err(fail)?
+                .unwrap_or_default(),
             strategy_id,
             kind: String::new(),
             coin: r
@@ -190,6 +195,8 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             profit: None,
             deltas,
             tick: None,
+            pre_spike_ask: None,
+            archived_take: None,
         });
         order.push((close_ms, report_uid));
     }

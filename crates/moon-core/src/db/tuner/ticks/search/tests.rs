@@ -22,6 +22,7 @@ fn prepared(uid: i64, peak: f64) -> PreparedDeal {
     let deal = Deal {
         report_uid: uid,
         core_uid: 1,
+        core_name: String::new(),
         strategy_id: 1,
         kind: "Spread".into(),
         coin: "ACE".into(),
@@ -36,6 +37,8 @@ fn prepared(uid: i64, peak: f64) -> PreparedDeal {
         profit: None,
         deltas: Deltas::default(),
         tick: None,
+        pre_spike_ask: None,
+        archived_take: None,
     };
     let t0 = deal.buy_ms;
     let ticks: Vec<Tick> = vec![
@@ -48,7 +51,7 @@ fn prepared(uid: i64, peak: f64) -> PreparedDeal {
     PreparedDeal {
         deal,
         ticks: Arc::from(ticks),
-        entry_start: None,
+        entry_line: None,
         trail_ms: 0,
     }
 }

@@ -38,7 +38,7 @@ pub mod verify;
 
 pub use deals::{DealsRead, read_deals};
 pub use entry::{EntryModel, entry_model_for};
-pub use exit::{ExitModel, ExitParams};
+pub use exit::{ExitModel, ExitParams, archived_pre_spike_ask, archived_take, take_model_for};
 pub use mshot::{MshotEntry, MshotParams, UsePrice};
 pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};
 pub use scope::{is_service_row, is_tunable};
@@ -71,6 +71,43 @@ pub fn reaches(price: f64, level: f64, from_below: bool) -> bool {
     } else {
         price >= level * (1.0 - PRICE_EPS)
     }
+}
+
+/// A level snapped to the market's price grid: down to the step below when `down`, up to the
+/// step above otherwise — the entry's placement, which the core rounds AWAY from the price. A
+/// level already on the grid stays — the quotient is read with [`PRICE_EPS`] of slack, so
+/// `0.3379` computed as `0.33789999` does not lose a step. A non-positive step snaps nothing.
+///
+/// Args:
+///     level: The price to snap.
+///     tick: The price step.
+///     down: Whether to round toward zero (a long's buy sits below the price) or away from it
+///         (a short's sits above).
+pub fn snap_to_step(level: f64, tick: f64, down: bool) -> f64 {
+    if tick <= 0.0 || tick.is_nan() || !level.is_finite() {
+        return level;
+    }
+    let steps = level / tick;
+    let snapped = if down {
+        (steps + PRICE_EPS).floor()
+    } else {
+        (steps - PRICE_EPS).ceil()
+    };
+    snapped * tick
+}
+
+/// A level rounded to the NEAREST step of the price grid — the sell line's placement: the
+/// archived Exit lines round both ways (2026-09-21, 458 deals: a floor lost 5 exits the
+/// nearest step keeps, ARX's four levels agree with both). A non-positive step rounds nothing.
+///
+/// Args:
+///     level: The price to round.
+///     tick: The price step.
+pub fn round_to_step(level: f64, tick: f64) -> f64 {
+    if tick <= 0.0 || tick.is_nan() || !level.is_finite() {
+        return level;
+    }
+    (level / tick).round() * tick
 }
 
 /// The report-side deltas the MoonShot modifiers read, as of the BUY of the trade.
@@ -107,6 +144,9 @@ pub struct Deal {
     /// `reportuid` — the key of the order-trace archive and of the coverage map.
     pub report_uid: i64,
     pub core_uid: u64,
+    /// The core's name as the report row carries it (`core_name`) — the table's core column;
+    /// the uid is the key, the name is what the user knows the core by.
+    pub core_name: String,
     pub strategy_id: i64,
     /// Strategy kind as the strategy list names it (`"MoonShot"`, `"Spread"`, …); selects the
     /// entry model through [`entry_model_for`].
@@ -142,6 +182,21 @@ pub struct Deal {
     /// Price step of the market, when the caller could resolve it (the live catalog, or
     /// [`infer_tick`] over the window). `None` disables the step-bound rules and rounds nothing.
     pub tick: Option<f64>,
+    /// The book's ASK the core read `MShotSellAtLastPrice` off — "the 4-second-old ASK, before
+    /// the spike" — when the caller could recover it: the archived Exit line's first point is
+    /// the take as placed, and dividing out the trade's own `MShotSellPriceAdjust` gives the
+    /// ask back. `None` leaves the model to its own reading of the tape (the last print at
+    /// least [`mshot::PRE_SPIKE_LOOKBACK_MS`] before the fill), which sits below the ask on a
+    /// dump by 0.1–0.5 % (B2/CELR 2026-09-20, GSTOCKBSC 2026-09-21) and shifts every level
+    /// the sell line then steps down from.
+    pub pre_spike_ask: Option<f64>,
+    /// The take as the core placed it — the archived Exit line's first point — when the
+    /// archive holds it. The one take rule the model has is MoonShot's (`SellPrice` lifted by
+    /// `MShotSellAtLastPrice`); every other kind places its take by a rule of its own
+    /// (MoonHook's buffer, Spread's level), and for those the archive is where the line
+    /// starts. FLOCK 2026-09-21 (HookN0, short): the model's `SellPrice` take at −1.0 %, the
+    /// core's at −2.2 %, every PriceDown step then a different level.
+    pub archived_take: Option<f64>,
 }
 
 impl Deal {
@@ -263,22 +318,23 @@ pub fn required_spans(deal: &Deal, spans: &Coverage) -> Coverage {
 ///     ticks: Prints of the window, ascending.
 ///     entry: Entry model parameters, or the fact.
 ///     exit: Sell-line parameters.
-///     entry_start: The `(t_ms, price)` the real entry line was first seen at, when the order
-///         archive holds it. The model then starts its order there rather than at the window's
-///         first print, which is the one thing about the order's history the tape cannot tell.
+///     entry_line: The archived points of the real entry line, when the order archive holds
+///         it. The model then starts its order where the archive says it stood when the tape
+///         begins, rather than at the window's first print — the one thing about the order's
+///         history the tape cannot tell (see [`mshot`] for what else the line gives).
 pub fn simulate(
     deal: &Deal,
     ticks: &[Tick],
     entry: &EntryParams,
     exit: &ExitParams,
-    entry_start: Option<(i64, f64)>,
+    entry_line: Option<&[(i64, f64)]>,
 ) -> Outcome {
     let fill = match entry {
         EntryParams::Fact => Some(Fill {
             t_ms: deal.buy_ms,
             price: deal.buy_price,
         }),
-        EntryParams::MoonShot(params) => MshotEntry::new(params).fill(deal, ticks, entry_start),
+        EntryParams::MoonShot(params) => MshotEntry::new(params).fill(deal, ticks, entry_line),
     };
     let Some(fill) = fill else {
         return Outcome {

@@ -40,8 +40,9 @@ pub struct PreparedDeal {
     pub deal: Deal,
     /// The window's prints, ascending; shared, never copied per evaluation.
     pub ticks: Arc<[Tick]>,
-    /// The archived first point of the entry line, when the archive holds it.
-    pub entry_start: Option<(i64, f64)>,
+    /// The archived points of the entry line, when the archive holds it; shared like the
+    /// tape.
+    pub entry_line: Option<Arc<[(i64, f64)]>>,
     /// How far past the close the HELD COVERAGE of this deal's window reaches, in
     /// milliseconds — the caller's word from the tile store, not the last print's stamp: a
     /// quiet market prints nothing for seconds, and a tail measured by its last print would
@@ -196,7 +197,7 @@ fn tally_and_spent(deals: &[PreparedDeal], entry: &EntryParams, exit: &ExitParam
     let results: Vec<Option<(f64, f64)>> = deals
         .par_iter()
         .map(|d| {
-            simulate(&d.deal, &d.ticks, entry, exit, d.entry_start)
+            simulate(&d.deal, &d.ticks, entry, exit, d.entry_line.as_deref())
                 .profit_money(&d.deal)
                 .map(|money| (money, d.deal.spent))
         })

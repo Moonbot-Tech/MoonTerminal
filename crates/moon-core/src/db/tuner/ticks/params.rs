@@ -422,5 +422,6 @@ pub fn exit_params(v: &StrategyValues<'_>) -> ExitParams {
         stop_loss_pct: v.num("StopLoss", base.stop_loss_pct),
         stop_loss_delay_s: v.num("StopLossDelay", base.stop_loss_delay_s),
         latency_ms: base.latency_ms,
+        take_from_archive: base.take_from_archive,
     }
 }

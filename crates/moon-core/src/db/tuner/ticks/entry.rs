@@ -23,9 +23,9 @@ pub trait EntryModel {
     /// Args:
     ///     deal: The report row; the model reads its deltas, side and price step.
     ///     ticks: The window's prints, ascending by time.
-    ///     start: `(t_ms, price)` the real order was first seen at, from the order archive,
-    ///         when known — the model starts there instead of at the tape's first print.
-    fn fill(&self, deal: &Deal, ticks: &[Tick], start: Option<(i64, f64)>) -> Option<Fill>;
+    ///     line: The archived points of the real entry line, when known — the model starts
+    ///         where the order stood at the tape's first print instead of placing off it.
+    fn fill(&self, deal: &Deal, ticks: &[Tick], line: Option<&[(i64, f64)]>) -> Option<Fill>;
 }
 
 /// Whether the kind has an entry model at all — the UI's "Entry group available" test.
@@ -37,7 +37,7 @@ pub fn entry_model_for(kind: &str) -> bool {
 }
 
 impl EntryModel for MshotEntry<'_> {
-    fn fill(&self, deal: &Deal, ticks: &[Tick], start: Option<(i64, f64)>) -> Option<Fill> {
-        self.run(deal, ticks, start)
+    fn fill(&self, deal: &Deal, ticks: &[Tick], line: Option<&[(i64, f64)]>) -> Option<Fill> {
+        self.run(deal, ticks, line)
     }
 }

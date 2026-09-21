@@ -30,8 +30,22 @@
 //! The core keeps its own idea of where the order is; the exchange learns about a move
 //! `latency_ms` later. A print in between fills at the OLD level. That is the one interleaving
 //! the model has to get right, and it is why the state carries two levels.
+//!
+//! What the order archive adds, when it holds the trade's entry line: where the order stood
+//! when the tape begins (the last archived level at or before the first print — the tape
+//! cannot tell where an order placed minutes earlier was), and the core's first moves inside
+//! the model's BLIND WINDOW — the first `MShotRaiseWait` / `MShotReplaceDelay` seconds of the
+//! tape, where a wait the core started before the tape began expires at a moment the tape
+//! gives no way to compute. A move archived in that window is taken as archived, moment and
+//! level both: the level is the core's own reference at work, and on a coarse grid the model's
+//! reference off the prints lands a step away often enough to turn the fill into a miss
+//! (2026-09-21, 458 deals: 4 entries lost to a modelled level, none gained by it). Seen on
+//! ARX the same day: the core re-placed 0.3 s into the tape after a wait of 30 s, and the model
+//! waiting its own 30 s put the order one step too deep for the spike. Past the window the
+//! model is on its own, and the archive is what it is held against.
 
-use super::{Deal, Deltas, Fill, reaches};
+use super::verify::archived_replacements;
+use super::{Deal, Deltas, Fill, reaches, snap_to_step};
 use crate::feed::types::{Side, Tick};
 
 /// Which price the order keeps its distance from (`MShotUsePrice`).
@@ -202,12 +216,7 @@ impl<'a> MshotEntry<'a> {
                     level.max(reference + keep_off)
                 };
             }
-            let steps = level / tick;
-            level = if deal.is_long() {
-                steps.floor() * tick
-            } else {
-                steps.ceil() * tick
-            };
+            level = snap_to_step(level, tick, deal.is_long());
         }
         level
     }
@@ -227,12 +236,19 @@ impl<'a> MshotEntry<'a> {
         signed / reference * 100.0
     }
 
-    /// The tape replay — see the module doc for the two-level bookkeeping.
+    /// The tape replay — see the module doc for the two-level bookkeeping and for what the
+    /// archived entry line contributes.
+    ///
+    /// Args:
+    ///     deal: The report row.
+    ///     ticks: The window's prints, ascending.
+    ///     line: The archived points of the trade's own entry line, in the archive's order,
+    ///         when the archive holds it.
     pub(super) fn run(
         &self,
         deal: &Deal,
         ticks: &[Tick],
-        start: Option<(i64, f64)>,
+        line: Option<&[(i64, f64)]>,
     ) -> Option<Fill> {
         if ticks.is_empty() {
             return None;
@@ -248,8 +264,42 @@ impl<'a> MshotEntry<'a> {
             deal.is_long(),
         );
 
-        // Where the tape starts for the order: at the archive's first point, or at the first
-        // print. Prints before the start only feed the reference.
+        // The archive's moves, and where the order stood when the tape begins: the last
+        // archived level at or before the first print, else the archive's first point (an
+        // order placed inside the tape starts at its own moment), else nothing.
+        let first_print_ms = ticks[0].time_ms as i64;
+        let moves: Vec<(i64, f64)> = line
+            .filter(|l| !l.is_empty())
+            .map(archived_replacements)
+            .unwrap_or_default();
+        let start: Option<(i64, f64)> = moves
+            .iter()
+            .filter(|(t, _)| *t <= first_print_ms)
+            .max_by_key(|(t, _)| *t)
+            .or(moves.first())
+            .copied();
+        // The blind window: the core's moves archived inside it are applied as archived,
+        // because the wait behind each began before the tape did. Only moves after the start
+        // and before the fill count.
+        let blind_until_ms = first_print_ms + raise_wait_ms.max(replace_delay_ms) as i64;
+        let mut hints: Vec<(i64, f64)> = moves
+            .iter()
+            .filter(|(t, p)| {
+                start.is_none_or(|(s, _)| *t > s)
+                    && *t > first_print_ms
+                    && *t < blind_until_ms
+                    && *t < deal.buy_ms
+                    && *p > 0.0
+            })
+            .copied()
+            .collect();
+        // The archive files a move as the old level's end and the new one's start, a few
+        // milliseconds apart and not always in that order; the hints are walked in time.
+        hints.sort_by_key(|(t, _)| *t);
+        let mut hints = hints.into_iter().peekable();
+
+        // Where the tape starts for the order: at the archived start, or at the first print.
+        // Prints before the start only feed the reference.
         let start_ms = start.map(|(t, _)| t);
         let mut index = 0;
         if let Some(start_ms) = start_ms {
@@ -280,6 +330,13 @@ impl<'a> MshotEntry<'a> {
             let price = f64::from(tick.price);
             if !price.is_finite() || price <= 0.0 {
                 continue;
+            }
+            // An archived move due by this print happened before it; the exchange learns of
+            // it after the latency, like any move.
+            while let Some((hint_ms, level)) = hints.next_if(|(h, _)| *h <= t_ms) {
+                core_level = level;
+                pending = Some((hint_ms + latency_ms as i64, level));
+                breach = None;
             }
             if let Some((_, level)) = pending.filter(|(apply_at, _)| t_ms >= *apply_at) {
                 exch_level = level;

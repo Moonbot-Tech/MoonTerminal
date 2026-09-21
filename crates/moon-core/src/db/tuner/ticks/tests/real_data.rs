@@ -7,8 +7,8 @@
 //! deal's prints through the worker's held-data query (`query_held`, the path the table's
 //! coverage column uses) and its entry line from `order_traces.sqlite`, runs [`verify`] on the
 //! parameters as of the buy, and prints one line per deal plus the ✓ share per group. The
-//! environment variable is read HERE only, in a test a developer runs by hand; the application
-//! never moves its data root on a variable.
+//! environment variables are read HERE only, in a test a developer runs by hand (`MOON_TICKS_COIN`
+//! narrows the run to one coin); the application never moves its data root on a variable.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -29,11 +29,11 @@ use crate::feed::report_traces::ArchivedLineKind;
 use crate::market::trade_replay::{Coverage, TickQuery, query_held, replay_window_ms};
 use crate::symbol::{coin_match_key, coin_of_market};
 
-/// The archived first point of an entry line and every point of an exit line.
-type ArchivedLines = (Option<(i64, f64)>, Option<Vec<(i64, f64)>>);
+/// Every point of an archived entry line and of an exit line.
+type ArchivedLines = (Option<Vec<(i64, f64)>>, Option<Vec<(i64, f64)>>);
 
-/// The archived first point of the deal's own entry line and every point of its own exit
-/// line, when the archive holds them.
+/// The points of the deal's own entry line and of its own exit line, when the archive holds
+/// them.
 fn archived_lines(deal: &Deal) -> ArchivedLines {
     let Ok(entries) = read_many(deal.core_uid, &[deal.report_uid]) else {
         return (None, None);
@@ -43,7 +43,7 @@ fn archived_lines(deal: &Deal) -> ArchivedLines {
             let entry = lines
                 .iter()
                 .find(|l| l.own && l.kind == ArchivedLineKind::Entry)
-                .and_then(|l| l.points.first().map(|&(t, p)| (t as i64, p)));
+                .map(|l| l.points.iter().map(|&(t, p)| (t as i64, p)).collect());
             let exit = lines
                 .iter()
                 .find(|l| l.own && l.kind == ArchivedLineKind::Exit)
@@ -124,8 +124,16 @@ fn real_data_reproduction() {
     let mut kinds_seen: HashMap<String, usize> = HashMap::new();
     for mut deal in read.deals {
         *kinds_seen.entry(deal.kind.clone()).or_default() += 1;
-        if !entry_model_for(&deal.kind) {
+        // Every kind the axis takes, as the table does: a kind without an entry model replays
+        // its exit from the factual entry.
+        if !is_tunable(&deal.kind, &deal.sell_reason) {
             continue;
+        }
+        // One coin, when a single deal is under the glass: `MOON_TICKS_COIN=ARX`.
+        if let Ok(only) = std::env::var("MOON_TICKS_COIN") {
+            if deal.coin != only {
+                continue;
+            }
         }
         let Some(values) =
             strategy_values_at(deal.strategy_id, Some(deal.core_uid), deal.buy_ms, &keys)
@@ -158,16 +166,22 @@ fn real_data_reproduction() {
         }
         with_tape += 1;
         deal.tick = infer_tick(&ticks);
-        let (entry_start, exit_points) = archived_lines(&deal);
+        let (entry_line, exit_points) = archived_lines(&deal);
         let sv = StrategyValues {
             values: &values,
             defaults: &defaults,
         };
-        let entry = EntryParams::MoonShot(mshot_params(&sv, DEFAULT_LATENCY_MS));
+        let entry = if entry_model_for(&deal.kind) {
+            EntryParams::MoonShot(mshot_params(&sv, DEFAULT_LATENCY_MS))
+        } else {
+            EntryParams::Fact
+        };
         let exit = exit_params(&sv);
+        deal.pre_spike_ask = archived_pre_spike_ask(exit_points.as_deref(), &exit, deal.is_short);
+        deal.archived_take = archived_take(exit_points.as_deref());
         // The modelled line beside the archive's moves, for the eye.
         if let (Some(fill), Some(moves)) = (
-            simulate(&deal, &ticks, &entry, &exit, entry_start).fill,
+            simulate(&deal, &ticks, &entry, &exit, entry_line.as_deref()).fill,
             exit_points.as_deref().map(verify::archived_replacements),
         ) {
             let modelled = ExitModel::new(&exit).walk(&deal, &ticks, fill);
@@ -188,20 +202,21 @@ fn real_data_reproduction() {
             &ticks,
             &entry,
             &exit,
-            entry_start,
+            entry_line.as_deref(),
             exit_points.as_deref(),
         );
         eprintln!(
-            "{uid} {coin:<8} buy {buy:.6} | plain fill {fill:?} dev {dev:?} ✓{ok:?} | \
+            "{uid} {coin:<8} {kind:<8} buy {buy:.6} | plain fill {fill:?} dev {dev:?} ✓{ok:?} | \
              archived start {start:?} fill {fill2:?} dev {dev2:?} ✓{ok2:?} | \
              exit {exit_kind:?} ✓{exit_ok:?} dev {exit_dev:?} line {line:?} | {reason} | ticks {n} step {tick:?}",
             uid = deal.report_uid,
             coin = deal.coin,
+            kind = deal.kind,
             buy = deal.buy_price,
             fill = plain.fill.map(|f| f.price),
             dev = round3(plain.entry_dev_pct),
             ok = plain.entry,
-            start = entry_start,
+            start = entry_line.as_ref().and_then(|l| l.first()),
             fill2 = archived.fill.map(|f| f.price),
             dev2 = round3(archived.entry_dev_pct),
             ok2 = archived.entry,
@@ -213,7 +228,7 @@ fn real_data_reproduction() {
             n = ticks.len(),
             tick = deal.tick,
         );
-        let best = if entry_start.is_some() {
+        let best = if entry_line.is_some() {
             archived
         } else {
             plain

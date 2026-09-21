@@ -31,6 +31,7 @@ fn deal() -> Deal {
     Deal {
         report_uid: 1,
         core_uid: 7,
+        core_name: String::new(),
         strategy_id: 42,
         kind: "MoonShot".into(),
         coin: "ACE".into(),
@@ -45,6 +46,8 @@ fn deal() -> Deal {
         profit: None,
         deltas: Deltas::default(),
         tick: None,
+        pre_spike_ask: None,
+        archived_take: None,
     }
 }
 
@@ -103,10 +106,99 @@ fn the_archived_start_places_the_order_where_the_core_did() {
     // The tape says 100 at t=0, but the archive says the order stood at 98.5 from t=200.
     let ticks = tape(&[(0, 100.0), (300, 99.0), (600, 98.5)]);
     let fill = MshotEntry::new(&mshot())
-        .fill(&deal(), &ticks, Some((200, 98.5)))
+        .fill(&deal(), &ticks, Some(&[(200, 98.5)]))
         .expect("filled");
     assert_eq!(fill.t_ms, 600);
     assert!((fill.price - 98.5).abs() < 1e-9);
+}
+
+#[test]
+fn the_archived_level_at_the_tape_start_is_the_last_one_before_it() {
+    // The archive: 97 from t=-500, moved to 98.5 at t=-100; the tape begins at t=0. The order
+    // stands at 98.5, not at the archive's first level: the prints at 99.2 and 99 leave it
+    // inside the 1 % / 0.5 % corridor, and the print at 98.5 fills it. Started at 97 it would
+    // be 2.2 % off the first print, re-placed at once to 98.2, and never reached.
+    let ticks = tape(&[(0, 99.2), (300, 99.0), (600, 98.5)]);
+    let fill = MshotEntry::new(&mshot())
+        .fill(&deal(), &ticks, Some(&[(-500, 97.0), (-100, 98.5)]))
+        .expect("filled");
+    assert_eq!(fill.t_ms, 600);
+    assert!((fill.price - 98.5).abs() < 1e-9);
+    assert_eq!(
+        MshotEntry::new(&mshot()).fill(&deal(), &ticks, Some(&[(-500, 97.0)])),
+        None,
+        "from the first level the order is re-placed below the tape"
+    );
+}
+
+#[test]
+fn the_archived_level_is_the_latest_by_time_whatever_the_archive_order() {
+    // The archive files a move as two points a few milliseconds apart, not always in time
+    // order: here the 98.5 level's point precedes the 97 level's in the slice while following
+    // it in time. The start is the latest by time, 98.5.
+    let ticks = tape(&[(0, 99.2), (300, 99.0), (600, 98.5)]);
+    let fill = MshotEntry::new(&mshot())
+        .fill(&deal(), &ticks, Some(&[(-100, 98.5), (-131, 97.0)]))
+        .expect("filled");
+    assert_eq!(fill.t_ms, 600);
+    assert!((fill.price - 98.5).abs() < 1e-9);
+}
+
+#[test]
+fn a_move_archived_inside_the_blind_window_is_applied_as_archived() {
+    // Raise wait 30 s. The archive: 97 from t=-60 000 (the price ran away long before the
+    // tape), re-placed at 99 at t=300 — 0.3 s into the tape, a wait the model cannot see the
+    // start of. The print at 99 at t=1000 fills the archived level; on its own the model would
+    // wait 30 s from the first print and never fill (the tape ends first).
+    let params = MshotParams {
+        raise_wait_s: 30.0,
+        ..mshot()
+    };
+    let ticks = tape(&[(0, 100.0), (500, 100.0), (1_000, 99.0), (2_000, 100.0)]);
+    let line = [(-60_000, 97.0), (300, 99.0)];
+    let fill = MshotEntry::new(&params)
+        .fill(&deal(), &ticks, Some(&line))
+        .expect("filled at the archived move");
+    assert_eq!(fill.t_ms, 1_000);
+    assert!((fill.price - 99.0).abs() < 1e-9);
+    assert_eq!(
+        MshotEntry::new(&params).fill(&deal(), &ticks, Some(&line[..1])),
+        None,
+        "without the move the model waits its 30 s"
+    );
+}
+
+#[test]
+fn a_move_archived_past_the_blind_window_is_not_applied() {
+    // The same, but the archived move sits at t=31 000 — past the 30 s the model can account
+    // for on its own; it is left to the model, which by then has re-placed by its own rule
+    // (Retreat since the first print, at t=30 000: off the reference 100, level 99, effective
+    // at 30 100) — the print at 98 at t=31 500 fills THAT level, not the archived 97.5.
+    let params = MshotParams {
+        raise_wait_s: 30.0,
+        ..mshot()
+    };
+    let ticks = tape(&[(0, 100.0), (30_000, 100.0), (31_500, 98.0)]);
+    let line = [(-60_000, 96.0), (31_000, 97.5)];
+    let fill = MshotEntry::new(&params)
+        .fill(&deal(), &ticks, Some(&line))
+        .expect("filled");
+    assert!((fill.price - 99.0).abs() < 1e-9, "{fill:?}");
+}
+
+#[test]
+fn snap_to_step_keeps_a_level_already_on_the_grid() {
+    // 0.3379 / 0.0001 evaluates to 3378.9999999999995: a plain floor loses the step.
+    assert!((snap_to_step(0.3379, 0.0001, true) - 0.3379).abs() < 1e-12);
+    assert!((snap_to_step(0.33795, 0.0001, true) - 0.3379).abs() < 1e-12);
+    assert!((snap_to_step(0.33795, 0.0001, false) - 0.3380).abs() < 1e-12);
+    assert_eq!(
+        snap_to_step(0.33795, 0.0, true),
+        0.33795,
+        "no step, no snap"
+    );
+    assert!((round_to_step(0.196445, 0.0001) - 0.1964).abs() < 1e-12);
+    assert!((round_to_step(0.19646, 0.0001) - 0.1965).abs() < 1e-12);
 }
 
 // ---- entry: the corridor, the waits and the latency race ----------------------------------
@@ -642,7 +734,9 @@ fn verify_marks_a_missed_entry_and_judges_the_exit_from_the_fact() {
     // take off the fact's 99.0 is reached at t=20000.
     assert_eq!(v.exit, Some(true));
 
-    // Fact entry, take never reached: the exit is the fact and answers nothing.
+    // Fact entry, and no print reaches the take: the line still STOOD at 99.99 when the core
+    // sold at 100.0 — which print would have filled it is the queue's business, not the
+    // verdict's — so the exit is reproduced.
     let ticks = tape(&[
         (9_000, 100.0),
         (10_000, 99.0),
@@ -658,13 +752,21 @@ fn verify_marks_a_missed_entry_and_judges_the_exit_from_the_fact() {
         None,
     );
     assert_eq!(v.entry, None);
-    // The core did close it and the model never did: the exit group missed.
+    assert_eq!(v.exit, Some(true));
+    assert_eq!(v.exit_kind, Some(ExitKind::Take));
+    // A sell delay that outlives the trade leaves no line at the close: a miss.
+    let late = ExitParams {
+        sell_delay_ms: 30_000.0,
+        ..ExitParams::default()
+    };
+    let v = verify(&deal(), &ticks, &EntryParams::Fact, &late, None, None);
     assert_eq!(v.exit, Some(false));
     assert_eq!(v.exit_kind, Some(ExitKind::OpenAtWindowEnd));
 }
 
 #[test]
 fn verify_reports_the_deviation_of_an_entry_off_the_fact() {
+    // The 1 % / 0.5 % corridor is 0.5 % wide: a fill 1.02 % off the fact is another order.
     let mut d = deal();
     d.buy_price = 98.0;
     let ticks = tape(&[(0, 100.0), (10_000, 99.0)]);
@@ -679,6 +781,41 @@ fn verify_reports_the_deviation_of_an_entry_off_the_fact() {
     assert_eq!(v.entry, Some(false));
     let dev = v.entry_dev_pct.unwrap();
     assert!((dev - 99.0 / 98.0 * 100.0 + 100.0).abs() < 1e-6, "{dev}");
+}
+
+#[test]
+fn verify_holds_the_entry_to_the_corridors_width() {
+    // The same 0.5 %-wide corridor: a fill 0.3 % off the fact is the same order re-placed off
+    // a neighbouring print, and passes; the floor is the 0.05 % step for a corridor narrower
+    // than it.
+    let mut d = deal();
+    d.buy_price = 99.0 / 1.003;
+    let ticks = tape(&[(0, 100.0), (10_000, 99.0), (20_000, 100.0)]);
+    let v = verify(
+        &d,
+        &ticks,
+        &EntryParams::MoonShot(mshot()),
+        &ExitParams::default(),
+        None,
+        None,
+    );
+    assert_eq!(v.entry, Some(true), "{:?}", v.entry_dev_pct);
+    assert!((verify::entry_tolerance_pct(&mshot(), &d) - 0.5).abs() < 1e-9);
+    let narrow = MshotParams {
+        price_pct: 1.0,
+        price_min_pct: 0.99,
+        ..mshot()
+    };
+    assert!((verify::entry_tolerance_pct(&narrow, &d) - 0.05).abs() < 1e-9);
+    let v = verify(
+        &d,
+        &ticks,
+        &EntryParams::MoonShot(narrow),
+        &ExitParams::default(),
+        None,
+        None,
+    );
+    assert_eq!(v.entry, Some(false), "0.3 % off on a 0.01 % corridor");
 }
 
 #[test]
@@ -699,6 +836,86 @@ fn verify_leaves_a_take_unanswered_against_a_fact_another_rule_closed() {
     assert_eq!(v.exit_kind, Some(ExitKind::Take));
     assert_eq!(v.exit, None);
     assert_eq!(v.exit_dev_pct, None);
+}
+
+#[test]
+fn verify_takes_a_limits_better_fill_and_ignores_the_archived_fill_point() {
+    // Fact: buy 99.0, a 1 % take at 99.99 placed and never moved, sold at 100.2 — a gap fill
+    // 0.21 % ABOVE the limit. The archive files the take and then the fill itself at the
+    // close; the fill is not a move the model has to make.
+    let mut d = deal();
+    d.sell_price = 100.2;
+    d.close_ms = 20_000;
+    let ticks = tape(&[(0, 100.0), (10_000, 99.0), (20_000, 100.2)]);
+    let archived = [
+        (10_000, 99.99),
+        (20_000, 99.99),
+        (19_990, 100.2),
+        (20_000, 100.2),
+    ];
+    let v = verify(
+        &d,
+        &ticks,
+        &EntryParams::MoonShot(mshot()),
+        &ExitParams::default(),
+        None,
+        Some(&archived),
+    );
+    assert_eq!(v.exit_kind, Some(ExitKind::Take));
+    assert_eq!(v.exit, Some(true), "{v:?}");
+    assert_eq!(v.line_points, Some((1, 1)), "the fill point is not a move");
+    // The same better fill without the archive to say the line was the same line: not taken.
+    let v = verify(
+        &d,
+        &ticks,
+        &EntryParams::MoonShot(mshot()),
+        &ExitParams::default(),
+        None,
+        None,
+    );
+    assert_eq!(
+        v.exit,
+        Some(false),
+        "a better fill needs the archive behind it"
+    );
+    // A fact far beyond the level is another exit, not a better fill of this one — with the
+    // archive corroborating the line, so it is the bound that refuses it.
+    d.sell_price = 100.5;
+    let ticks = tape(&[(0, 100.0), (10_000, 99.0), (20_000, 100.5)]);
+    let archived = [
+        (10_000, 99.99),
+        (20_000, 99.99),
+        (19_990, 100.5),
+        (20_000, 100.5),
+    ];
+    let v = verify(
+        &d,
+        &ticks,
+        &EntryParams::MoonShot(mshot()),
+        &ExitParams::default(),
+        None,
+        Some(&archived),
+    );
+    assert_eq!(v.line_points, Some((1, 1)));
+    assert_eq!(v.exit, Some(false), "0.51 % beyond the level, {v:?}");
+    // Worse than the level is never a fill of it, archive or not — the sign, not the bound.
+    d.sell_price = 99.9;
+    let archived = [
+        (10_000, 99.99),
+        (20_000, 99.99),
+        (19_990, 99.9),
+        (20_000, 99.9),
+    ];
+    let v = verify(
+        &d,
+        &ticks,
+        &EntryParams::MoonShot(mshot()),
+        &ExitParams::default(),
+        None,
+        Some(&archived),
+    );
+    assert_eq!(v.line_points, Some((1, 1)));
+    assert_eq!(v.exit, Some(false), "{v:?}");
 }
 
 #[test]

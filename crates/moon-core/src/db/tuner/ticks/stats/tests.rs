@@ -5,6 +5,7 @@ fn deal(pnl: f64, spent: f64) -> Deal {
     Deal {
         report_uid: 1,
         core_uid: 7,
+        core_name: String::new(),
         strategy_id: 42,
         kind: "MoonShot".into(),
         coin: "ACE".into(),
@@ -19,6 +20,8 @@ fn deal(pnl: f64, spent: f64) -> Deal {
         profit: None,
         deltas: Deltas::default(),
         tick: None,
+        pre_spike_ask: None,
+        archived_take: None,
     }
 }
 

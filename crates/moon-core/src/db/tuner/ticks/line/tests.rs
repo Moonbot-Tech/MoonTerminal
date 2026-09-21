@@ -1,7 +1,7 @@
 //! The sell line's rules on synthetic tapes: one rule at a time, then the mirror.
 
 use super::*;
-use crate::db::tuner::ticks::exit::ExitModel;
+use crate::db::tuner::ticks::exit::{ExitModel, archived_pre_spike_ask};
 use crate::db::tuner::ticks::{Deltas, EntryParams, verify};
 use crate::feed::types::Side as TickSide;
 
@@ -22,6 +22,7 @@ fn deal(short: bool) -> Deal {
     Deal {
         report_uid: 1,
         core_uid: 7,
+        core_name: String::new(),
         strategy_id: 42,
         kind: "MoonShot".into(),
         coin: "ACE".into(),
@@ -36,6 +37,8 @@ fn deal(short: bool) -> Deal {
         profit: None,
         deltas: Deltas::default(),
         tick: None,
+        pre_spike_ask: None,
+        archived_take: None,
     }
 }
 
@@ -52,6 +55,52 @@ fn params() -> ExitParams {
         latency_ms: 0.0,
         ..ExitParams::default()
     }
+}
+
+// ---- the take off the archive ----------------------------------------------------------------
+
+/// `MShotSellAtLastPrice` reads the book's ask, which the tape has not; the archive's first
+/// Exit point gives it back with the trade's own adjustment divided out, and a caller that
+/// recovered it gets a take the tape alone would have put 0.5 % lower.
+#[test]
+fn the_archived_ask_sets_the_take_where_the_core_placed_it() {
+    let p = ExitParams {
+        sell_price_pct: 1.5,
+        sell_at_last_price: true,
+        sell_price_adjust_pct: 0.2,
+        ..params()
+    };
+    // GSTOCKBSC, 2026-09-21: the take as placed, 0.031603, is the ask 0.0316663 less 0.2 %.
+    let ask = archived_pre_spike_ask(Some(&[(0, 0.031603), (1_266, 0.030910)]), &p, false)
+        .expect("the rule was on");
+    assert!((ask - 0.031603 / 0.998).abs() < 1e-12);
+    let mut d = deal(false);
+    d.buy_price = 0.029292;
+    d.pre_spike_ask = Some(ask);
+    let f = Fill {
+        t_ms: 0,
+        price: 0.029292,
+    };
+    // The tape's own pre-spike print sits 0.5 % under the ask.
+    let ticks = tape(&[(-5_000, 0.031506), (1_000, 0.0300)]);
+    let take = ExitModel::new(&p).take_level(&d, &ticks, f);
+    assert!((take - 0.031603).abs() < 1e-9, "{take}");
+    d.pre_spike_ask = None;
+    let from_tape = ExitModel::new(&p).take_level(&d, &ticks, f);
+    assert!((from_tape - 0.031506 * 0.998).abs() < 1e-7, "{from_tape}");
+    // With the rule off the archive says nothing about the ask.
+    let off = ExitParams {
+        sell_at_last_price: false,
+        ..p.clone()
+    };
+    assert_eq!(
+        archived_pre_spike_ask(Some(&[(0, 0.031603)]), &off, false),
+        None
+    );
+    assert_eq!(archived_pre_spike_ask(None, &p, false), None);
+    // A short's take is the ask adjusted UP toward the entry: divide the other way.
+    let short_ask = archived_pre_spike_ask(Some(&[(0, 0.031603)]), &p, true).expect("on");
+    assert!((short_ask - 0.031603 / 1.002).abs() < 1e-12);
 }
 
 // ---- PriceDown -------------------------------------------------------------------------------
@@ -87,6 +136,77 @@ fn price_down_steps_the_line_toward_the_buy_on_the_timer() {
     // The print at 100.2 at t=5000 crosses the line at 100.1.
     assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Line, 5_000));
     assert!((w.exit.price - 100.1).abs() < 1e-9);
+}
+
+#[test]
+fn the_placed_level_is_rounded_to_the_step_and_the_chain_is_not() {
+    // ARX, 2026-09-21, step 0.0001: take 0.197802 goes to the book as 0.1978; the 20 %
+    // relative steps chain off the exact values (0.19714 → 0.196612, not off 0.1971), and the
+    // floor at +1 % (0.196445) is placed at 0.1964 — which is why the print AT 0.1964 sells.
+    let p = ExitParams {
+        price_down_timer_s: 3.0,
+        price_down_pct: 20.0,
+        price_down_delay_s: 10.0,
+        price_down_relative: true,
+        price_down_allowed_drop_pct: 1.0,
+        ..params()
+    };
+    let mut d = deal(false);
+    d.buy_price = 0.1945;
+    d.tick = Some(0.0001);
+    let fill = Fill {
+        t_ms: 0,
+        price: 0.1945,
+    };
+    let ticks = tape(&[
+        (1_000, 0.1950),
+        (4_000, 0.1950),
+        (14_000, 0.1950),
+        (24_000, 0.1950),
+        (34_000, 0.1950),
+        (40_000, 0.1964),
+    ]);
+    let w = walk(&d, &ticks, fill, 0.197802, &p);
+    let levels: Vec<f64> = w.points.iter().map(|pt| pt.price).collect();
+    let on_grid = |v: f64| (v / 0.0001).round() * 0.0001;
+    assert_eq!(levels.len(), 4, "{levels:?}");
+    for (level, want) in levels.iter().zip([0.1978, 0.1971, 0.1966, 0.1964]) {
+        assert!((level - want).abs() < 1e-9, "{levels:?}");
+        assert!(
+            (level - on_grid(*level)).abs() < 1e-9,
+            "off the grid: {level}"
+        );
+    }
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Line, 40_000));
+    assert!(
+        (w.exit.price - 0.1964).abs() < 1e-9,
+        "sold at the placed level"
+    );
+}
+
+#[test]
+fn without_a_step_the_placed_level_is_the_exact_one() {
+    let p = ExitParams {
+        price_down_timer_s: 3.0,
+        price_down_pct: 20.0,
+        price_down_delay_s: 10.0,
+        price_down_relative: true,
+        price_down_allowed_drop_pct: 1.0,
+        ..params()
+    };
+    let mut d = deal(false);
+    d.buy_price = 0.1945;
+    let fill = Fill {
+        t_ms: 0,
+        price: 0.1945,
+    };
+    let ticks = tape(&[(1_000, 0.1950), (40_000, 0.1964)]);
+    let w = walk(&d, &ticks, fill, 0.197802, &p);
+    assert_eq!(
+        w.exit.kind,
+        ExitKind::OpenAtWindowEnd,
+        "0.196445 is above the tape's high"
+    );
 }
 
 #[test]
