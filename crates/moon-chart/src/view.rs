@@ -201,6 +201,70 @@ const MIN_WINDOW_MS: f32 = 30_000.0;
 /// Ctrl+Shift+wheel and super-zoom hotkeys allow a three-second plot window.
 const SUPER_MIN_WINDOW_MS: f32 = 3_000.0;
 
+thread_local! {
+    /// Last time-window width a zoom gesture settled on in this process, in milliseconds.
+    ///
+    /// Thread-local so unit tests cannot race each other, and because chart input and prepare
+    /// share the UI thread. Restarting the terminal drops it; nothing writes it to `cfg/`.
+    static LAST_ZOOM_WINDOW_MS: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Reject non-finite or non-positive widths and clamp to the zoom floors.
+///
+/// Args:
+///     window_ms: Candidate visible time-window width in milliseconds.
+///
+/// Returns:
+///     The clamped width, or `None` when the candidate cannot be a plot window.
+fn sanitize_window_ms(window_ms: f32) -> Option<f32> {
+    if window_ms.is_finite() && window_ms > 0.0 {
+        Some(window_ms.clamp(SUPER_MIN_WINDOW_MS, MAX_WINDOW_MS))
+    } else {
+        None
+    }
+}
+
+/// Choose the time-window width a newly opened chart should start with.
+///
+/// Args:
+///     remembered: Width the user last reached by a time-zoom gesture, if any.
+///
+/// Returns:
+///     `remembered` clamped to the plain 30-second floor and the maximum window, or the
+///     built-in default when the value is missing or unusable. A super-zoom width below 30s
+///     opens at 30s: a new chart is not a super-zoom gesture, and a later plain wheel must
+///     still be able to use the 30-second floor. [`ChartView::zoom_x_at`] keeps its own
+///     two-tier floor for gestures on the open chart.
+pub fn initial_window_ms(remembered: Option<f32>) -> f32 {
+    remembered
+        .and_then(sanitize_window_ms)
+        .map(|w| w.max(MIN_WINDOW_MS))
+        .unwrap_or(DEFAULT_WINDOW_MS)
+}
+
+/// Remember the time-window width a zoom gesture just settled on, for this process only.
+///
+/// Args:
+///     window_ms: Visible window in milliseconds after the gesture. Invalid values are ignored
+///         so a garbage scale cannot poison every subsequently opened chart.
+///
+/// Returns:
+///     Nothing; the value is stored in memory and is never persisted.
+pub fn record_zoom_window(window_ms: f32) {
+    let Some(window_ms) = sanitize_window_ms(window_ms) else {
+        return;
+    };
+    LAST_ZOOM_WINDOW_MS.set(Some(window_ms));
+}
+
+/// Return the last zoomed time-window width in this process, if any.
+///
+/// Returns:
+///     The remembered width in milliseconds, or `None` before the first zoom of the run.
+pub fn remembered_zoom_window() -> Option<f32> {
+    LAST_ZOOM_WINDOW_MS.get()
+}
+
 /// Narrowest plot a framing request will accept as REAL, in pixels.
 ///
 /// Not a cosmetic threshold: the caller's width comes from a layout whose own chart-width
@@ -282,6 +346,10 @@ pub struct ChartView {
     /// Whether zoom has not yet been fitted to the default window (done once using the
     /// actual chart-area width on the first frame).
     x_init_pending: bool,
+    /// Opening time-window width in milliseconds. Built-in default until a remembered zoom
+    /// width is applied; frozen after the first prepared frame so a later zoom elsewhere
+    /// cannot jump a chart already on screen.
+    seed_window_ms: f32,
     last_phase_area_w: f32,
     last_phase_present_hz: f32,
     phase_default_px_per_ms: f32,
@@ -330,6 +398,7 @@ impl ChartView {
             marker_half_px: 3.5, // 7 px cross (Moonbot NormalX).
             x_default_scale: true,
             x_init_pending: true,
+            seed_window_ms: DEFAULT_WINDOW_MS,
             last_phase_area_w: f32::NAN,
             last_phase_present_hz: f32::NAN,
             phase_default_px_per_ms: 0.0,
@@ -345,34 +414,52 @@ impl ChartView {
     /// Args:
     ///     area_w: Plot width in logical pixels.
     ///     present_hz: Current display refresh estimate.
+    ///     window_ms: Target visible time-window width in milliseconds.
     ///
     /// Returns:
     ///     Pixels per millisecond, rounded outward to whole pixels per frame or frames per pixel.
-    fn phase_clean_default_px_per_ms(area_w: f32, present_hz: f32) -> f32 {
+    fn phase_clean_default_px_per_ms(area_w: f32, present_hz: f32, window_ms: f32) -> f32 {
         let area_w = area_w.max(1.0);
+        let window_ms = window_ms.max(SUPER_MIN_WINDOW_MS);
         let dt_ms = 1000.0 / present_hz.max(1.0);
-        let s0 = area_w * dt_ms / DEFAULT_WINDOW_MS;
+        let s0 = area_w * dt_ms / window_ms;
         let shift_px = if s0 >= 1.0 {
             s0.floor().max(1.0)
         } else {
             let n = (1.0 / s0.max(1e-9)).ceil().max(1.0);
             1.0 / n
         };
-        let target_scale = area_w / DEFAULT_WINDOW_MS;
+        let target_scale = area_w / window_ms;
         let mut scale = (shift_px / dt_ms).max(1e-9).min(target_scale);
         // Division can round the reconstructed f32 window a few milliseconds below the target.
         // Move one positive finite scale ULP outward when that happens.
-        if area_w / scale < DEFAULT_WINDOW_MS {
+        if area_w / scale < window_ms {
             scale = f32::from_bits(scale.to_bits().saturating_sub(1));
         }
         scale
     }
 
-    /// Fits the default time window to a phase-clean point with at least six hours of live history:
-    /// an integer number of px/frame or 1 px every N frames. Recalculated only while
-    /// the scale remains default/reset-to-live, on the first frame, resize, or present change.
+    /// Seed this view's opening time window from the last zoomed width, if any.
+    ///
+    /// Args:
+    ///     remembered: Width in milliseconds from [`remembered_zoom_window`], or `None` to keep
+    ///         the built-in six-hour-history default.
+    ///
+    /// Returns:
+    ///     Nothing. After the first prepared frame the seed is frozen so a later zoom on another
+    ///     chart cannot jump a chart the user is already looking at.
+    pub fn apply_opening_window(&mut self, remembered: Option<f32>) {
+        if self.x_init_pending {
+            self.seed_window_ms = initial_window_ms(remembered);
+        }
+    }
+
+    /// Fits the opening time window to a phase-clean point: an integer number of px/frame or
+    /// 1 px every N frames. Recalculated only while the scale remains default/reset-to-live, on
+    /// the first frame, resize, or present change. The target width is the built-in six-hour
+    /// history default until [`Self::apply_opening_window`] replaces it.
     /// `default_ppm` is the saved user X scale ([Shift+MMB] sync): a new chart starts
-    /// with it instead of the built-in six-hour-history default.
+    /// with it instead of either time-window default.
     ///
     /// Args:
     ///     area_w: Plot width in logical pixels.
@@ -391,7 +478,8 @@ impl ChartView {
             return;
         }
         let present_hz = present_hz.max(1.0);
-        let default_px_per_ms = Self::phase_clean_default_px_per_ms(area_w, present_hz);
+        let default_px_per_ms =
+            Self::phase_clean_default_px_per_ms(area_w, present_hz, self.seed_window_ms);
         let area_delta = area_w - self.last_phase_area_w;
         // Every shrink matters for the six-hour lower bound; sub-pixel growth can safely retain
         // the previous scale because it only increases the visible history.

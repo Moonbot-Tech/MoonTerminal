@@ -334,6 +334,8 @@ impl ChartDataState {
             let (chart_area, glass_area, hvol_area) = (areas.plot, areas.glass, areas.hvol);
             let plot_h = chart_area.h;
             pane.view
+                .apply_opening_window(moon_chart::view::remembered_zoom_window());
+            pane.view
                 .ensure_default_window(chart_area.w, self.present_rate_hz, self.default_x_ppm);
             // A framing request asked for outside a prepared frame lands HERE, at the first width
             // that is real, and lands again whenever that width changes. `chart_area.w` is the same

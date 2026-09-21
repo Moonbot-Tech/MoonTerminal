@@ -144,6 +144,65 @@ fn super_zoom_wheel_and_hotkey_share_the_plot_floor() {
     assert!(!input.super_zoom(true, &mut container, 900.0, 1.0));
 }
 
+/// A time-axis wheel zoom must publish its settled width so the next chart can open at it. A pan
+/// must not, because it never changes how much history is on screen.
+#[test]
+fn time_zoom_records_the_window_and_a_pan_does_not() {
+    use crate::chartdx::pane::ContainerKind;
+    use moon_chart::view::{record_zoom_window, remembered_zoom_window};
+    let mut container = Container::new(ContainerKind::Main);
+    container.open_manual(42, "TESTUSDT", now_unix_ms());
+    let mut input = ChartInput {
+        hovered_pane: Some(0),
+        pane_rects: vec![(
+            0,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 900.0,
+                h: 500.0,
+            },
+        )],
+        ..Default::default()
+    };
+    let width = 900.0;
+    container
+        .view_mut(0)
+        .unwrap()
+        .ensure_default_window(width, 60.0, None);
+    record_zoom_window(99_000.0);
+    assert!(input.wheel(
+        -60.0,
+        true,
+        WheelMode::Pan,
+        true,
+        &mut container,
+        900.0,
+        1.0
+    ));
+    assert_eq!(remembered_zoom_window(), Some(99_000.0));
+    assert!(input.wheel(
+        3.0,
+        false,
+        WheelMode::Zoom,
+        true,
+        &mut container,
+        900.0,
+        1.0
+    ));
+    let recorded = remembered_zoom_window().expect("wheel zoom must remember a width");
+    assert!(
+        (recorded - 99_000.0).abs() > 1.0,
+        "wheel zoom left the sentinel width in place ({recorded})"
+    );
+    let (plot_w, _) = input.plot_metrics_for(Some(0), 900.0, 1.0);
+    let view_window = container.view_mut(0).unwrap().visible_x(plot_w).1;
+    assert!(
+        (recorded - view_window).abs() < 1.0,
+        "remembered {recorded} ms does not match the view window {view_window} ms"
+    );
+}
+
 /// Reusing ordinary-wheel accumulated lines makes the first super-zoom notch fire too early.
 #[test]
 fn super_zoom_starts_a_fresh_wheel_accumulator() {

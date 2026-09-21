@@ -1,6 +1,6 @@
 //! Regression coverage for chart view initialization, navigation, and scale behavior.
 
-use super::ChartView;
+use super::{ChartView, initial_window_ms};
 
 /// Return how much live history remains left of the future margin after default initialization.
 ///
@@ -1018,5 +1018,118 @@ fn center_on_price_waits_for_a_price_and_then_snaps_once() {
         view.center_price > 1000.0 && view.center_price < 1100.0,
         "a plain tick snapped instead of easing: {}",
         view.center_price
+    );
+}
+
+/// Six hours of history plus a 10% future margin is 24_000_000 ms. Returning the six-hour
+/// history figure itself, or treating a missing memory as zero, must fail: the first chart of a
+/// run would then open shorter than today's default.
+#[test]
+fn a_missing_zoom_memory_keeps_the_built_in_opening_window() {
+    const SIX_HOUR_WINDOW_MS: f32 = 24_000_000.0;
+    assert_eq!(initial_window_ms(None), SIX_HOUR_WINDOW_MS);
+    assert_eq!(initial_window_ms(Some(f32::NAN)), SIX_HOUR_WINDOW_MS);
+    assert_eq!(initial_window_ms(Some(0.0)), SIX_HOUR_WINDOW_MS);
+    assert_eq!(initial_window_ms(Some(-60_000.0)), SIX_HOUR_WINDOW_MS);
+}
+
+/// Dropping the clamp to the 30-second plain floor must fail: a remembered 3s super-zoom
+/// window would open the next chart below the floor a plain wheel is allowed to use.
+#[test]
+fn a_remembered_width_is_clamped_to_the_plain_floor_and_the_max_window() {
+    assert_eq!(initial_window_ms(Some(1_000.0)), 30_000.0);
+    assert_eq!(initial_window_ms(Some(3_000.0)), 30_000.0);
+    assert_eq!(initial_window_ms(Some(10_000.0)), 30_000.0);
+    assert_eq!(initial_window_ms(Some(30_000.0)), 30_000.0);
+    assert_eq!(initial_window_ms(Some(120_000.0)), 120_000.0);
+    assert_eq!(initial_window_ms(Some(40_000_000_000.0)), 31_536_000_000.0);
+}
+
+/// Seeding a new view from a remembered two-minute window must open that amount of history, not
+/// the six-hour built-in default. Skipping `apply_opening_window` would leave every new chart at
+/// 24_000_000 ms regardless of what the user just zoomed to.
+#[test]
+fn a_remembered_width_opens_a_new_chart_at_that_history() {
+    const WIDTH: f32 = 1000.0;
+    const REMEMBERED_MS: f32 = 120_000.0;
+    let mut view = ChartView::new(0.0);
+    view.apply_opening_window(Some(REMEMBERED_MS));
+    view.ensure_default_window(WIDTH, 60.0, None);
+    view.resume_live(0.0);
+    let (_, window_ms) = view.visible_x(WIDTH);
+    assert!(
+        window_ms >= REMEMBERED_MS,
+        "opening window {window_ms} ms is shorter than the remembered {REMEMBERED_MS} ms"
+    );
+    assert!(
+        window_ms < REMEMBERED_MS + 60_000.0,
+        "opening window {window_ms} ms overshot the remembered width toward the six-hour default"
+    );
+}
+
+/// A super-zoom memory of 3s must open the next chart at the 30-second plain floor, not at 3s.
+/// Opening below that floor would put a chart the user has not super-zoomed into the super-zoom
+/// band, where a later plain wheel cannot use the 30-second floor as its in-stop.
+#[test]
+fn a_super_zoom_memory_opens_at_the_plain_wheel_floor() {
+    const WIDTH: f32 = 1000.0;
+    let mut view = ChartView::new(0.0);
+    view.apply_opening_window(Some(3_000.0));
+    view.ensure_default_window(WIDTH, 60.0, None);
+    let (_, window_ms) = view.visible_x(WIDTH);
+    assert!(
+        window_ms >= 30_000.0,
+        "super-zoom memory opened below the plain floor at {window_ms} ms"
+    );
+    assert!(
+        window_ms < 30_000.0 + 5_000.0,
+        "super-zoom memory overshot the plain floor toward the six-hour default ({window_ms} ms)"
+    );
+    view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, 0.0, false);
+    let (_, after_plain) = view.visible_x(WIDTH);
+    assert!(
+        (after_plain - 30_000.0).abs() < 1.0,
+        "plain wheel in-stop on the opened chart was {after_plain} ms, not 30s"
+    );
+    for _ in 0..8 {
+        view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, 0.0, true);
+    }
+    let (_, after_super) = view.visible_x(WIDTH);
+    assert!(
+        (after_super - 3_000.0).abs() < 1.0,
+        "super-zoom on the opened chart did not reach 3s ({after_super} ms)"
+    );
+}
+
+/// Shift+middle-click ppm is an explicit per-window scale and must still win over a remembered
+/// width during initialization. Dropping that branch would make a zoom on another chart discard
+/// the scale the user synced onto this window.
+#[test]
+fn a_saved_x_scale_still_wins_over_a_remembered_width() {
+    let width = 1200.0;
+    let saved_ppm = width / 180_000.0;
+    let mut view = ChartView::new(0.0);
+    view.apply_opening_window(Some(60_000.0));
+    view.ensure_default_window(width, 60.0, Some(saved_ppm));
+    assert!((view.px_per_ms - saved_ppm).abs() < 1e-9);
+}
+
+/// Applying a remembered width after the first prepared frame must leave the chart alone.
+/// Honouring it on every prepare would jump an already-open default-scale chart the moment the
+/// user zoomed a different coin.
+#[test]
+fn a_later_zoom_memory_does_not_jump_an_already_open_chart() {
+    const WIDTH: f32 = 1000.0;
+    const SIX_HOURS_MS: f32 = 6.0 * 60.0 * 60.0 * 1000.0;
+    let mut view = ChartView::new(0.0);
+    view.ensure_default_window(WIDTH, 60.0, None);
+    view.apply_opening_window(Some(60_000.0));
+    view.ensure_default_window(1600.0, 60.0, None);
+    view.resume_live(0.0);
+    let (left, _) = view.visible_x(1600.0);
+    assert!(
+        -left >= SIX_HOURS_MS,
+        "an already-open chart jumped to the later memory: history {} ms",
+        -left
     );
 }

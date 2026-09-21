@@ -7,7 +7,7 @@
 
 use crate::chartdx::pane::Container;
 use moon_chart::paint::now_unix_ms;
-use moon_chart::view::{ChartView, Rect};
+use moon_chart::view::{ChartView, Rect, record_zoom_window};
 use moon_core::session::CoreId;
 
 /// Mouse button subset used by chart navigation instead of `winit::MouseButton`.
@@ -260,6 +260,7 @@ impl ChartInput {
                 self.wheel_accum = 0.0;
                 let factor = 2f32.powf(dy / WHEEL_PX_PER_2X);
                 view.zoom_x_at(factor, plot_w, cursor_x, now, mode == WheelMode::SuperZoom);
+                record_zoom_window(view.visible_x(plot_w).1);
             } else {
                 // Accumulate discrete wheel lines and apply the step at the threshold.
                 self.wheel_accum += dy * 40.0;
@@ -270,6 +271,7 @@ impl ChartInput {
                 let factor = 2f32.powf(self.wheel_accum.signum());
                 self.wheel_accum = 0.0;
                 view.zoom_x_at(factor, plot_w, cursor_x, now, mode == WheelMode::SuperZoom);
+                record_zoom_window(view.visible_x(plot_w).1);
             }
             return true;
         }
@@ -299,6 +301,7 @@ impl ChartInput {
                     now_unix_ms(),
                     true,
                 );
+                record_zoom_window(view.visible_x(width).1);
                 changed = true;
             }
         }
