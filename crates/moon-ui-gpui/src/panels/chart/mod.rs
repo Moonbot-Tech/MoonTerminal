@@ -312,9 +312,6 @@ pub struct ChartPanel {
     /// AddToChart or Custom panel. Custom panes are normally pinned after population. Time-based
     /// expiry must not depend on backend data observations.
     ttl_timer_armed: bool,
-    /// Whether the one-shot auto-live timer is armed after a pan. Prepare does not tick while idle,
-    /// so the own-pass camera must return to live on a wall-clock timer.
-    auto_live_timer_armed: bool,
     order_drag: Option<OrderDrag>,
     pending_order_drag: Option<PendingOrderDrag>,
     order_hover: Option<OrderHoverKey>,
@@ -712,7 +709,6 @@ impl ChartPanel {
             last_adaptive_notify_at: None,
             last_ppp: 1.0,
             ttl_timer_armed: false,
-            auto_live_timer_armed: false,
             order_drag: None,
             pending_order_drag: None,
             order_hover: None,
@@ -913,7 +909,6 @@ impl ChartPanel {
             last_adaptive_notify_at: None,
             last_ppp: 1.0,
             ttl_timer_armed: false,
-            auto_live_timer_armed: false,
             order_drag: None,
             pending_order_drag: None,
             order_hover: None,
@@ -1884,8 +1879,6 @@ impl ChartPanel {
             });
         }
         self.view_dirty = true;
-        // If the input moved a pane into manual mode, arm its wall-clock return to live.
-        self.arm_auto_live_timer(cx);
     }
 
     /// Returns the tab caption. Numbered AddToChart and Custom panels use `N · market`, falling back

@@ -1,6 +1,6 @@
 //! Regression coverage for chart view initialization, navigation, and scale behavior.
 
-use super::{ChartView, MANUAL_HOLD_MS};
+use super::ChartView;
 
 /// Return how much live history remains left of the future margin after default initialization.
 ///
@@ -172,7 +172,7 @@ fn a_manual_zoom_survives_later_default_window_preparation() {
 }
 
 /// Resetting `right_time_ms` inside `view.rs:ensure_default_window` must fail; otherwise preparing
-/// a panned chart jumps the user back to the live edge before the normal hold timer expires.
+/// a panned chart jumps the user back to the live edge they just left.
 #[test]
 fn a_manual_pan_position_survives_default_window_preparation() {
     let now = 100_000_000.0;
@@ -188,34 +188,24 @@ fn a_manual_pan_position_survives_default_window_preparation() {
     assert!(!view.follow);
 }
 
+/// Dropping follow on a pan and then arming a timed return must fail: a user who dragged into
+/// history to inspect a spike would be yanked back to the live edge without asking.
 #[test]
-fn pan_then_hold_auto_returns_to_live() {
-    let now = 100_000.0;
-    let mut view = ChartView::new(0.0);
-    view.ensure_default_window(1000.0, 60.0, None);
-    view.resume_live(now);
+fn a_pan_detaches_until_the_user_rejoins() {
+    let mut view = live_view(NOW, WIDTH);
+    view.pan_x_px(WIDTH * 0.2, NOW, WIDTH);
+    assert!(!view.follow, "a pan into history did not leave live");
+    let parked = view.right_time_ms;
+    assert!(parked < NOW, "the pan did not move the anchor into history");
 
-    view.pan_x_px(50.0, now, 1000.0);
-    assert!(!view.follow);
-    // Live does not resume within the hold window.
-    assert!(!view.tick_auto_live(now + 1000.0));
-    assert!(!view.follow);
-    // Live resumes automatically after the hold expires.
-    assert!(view.tick_auto_live(now + MANUAL_HOLD_MS + 1.0));
-    assert!(view.follow);
-}
+    // Time passing is not a gesture. The old 3 s hold used to call resume_live from a timer.
+    view.follow_edge(NOW + 10_000.0, NOW + 10_000.0);
+    assert!(!view.follow, "follow_edge restored live without a rejoin pan");
+    assert_eq!(view.right_time_ms, parked);
 
-/// Persistent-manual (a framed trade window) must never auto-return to live after a pan.
-/// `resume_live` would yank the closed trade off-screen.
-#[test]
-fn tick_auto_live_does_not_resume_a_persistent_manual_view() {
-    let now = 100_000.0;
-    let mut view = ChartView::new(0.0);
-    view.ensure_default_window(1000.0, 60.0, None);
-    view.set_manual_persistent();
-    view.pan_x_px(50.0, now, 1000.0);
-    assert!(!view.tick_auto_live(now + MANUAL_HOLD_MS + 1.0));
-    assert!(!view.follow);
+    // Dragging back onto the live edge still rejoins — the other half of the request.
+    view.pan_x_px(-WIDTH, NOW, WIDTH);
+    assert!(view.follow, "a pan back onto the live edge did not rejoin");
 }
 
 /// A framed trade window is persistent-manual. Zooming out until `now` sits near the right
@@ -407,8 +397,7 @@ fn an_explicit_live_off_is_not_undone_by_a_pan() {
     view.pan_x_px(WIDTH * 0.2, NOW, WIDTH);
 
     assert!(view.right_time_ms < NOW, "the pan did not reach history");
-    assert_eq!(view.auto_live_deadline_ms(), None);
-    assert!(!view.tick_auto_live(NOW + MANUAL_HOLD_MS * 100.0));
+    assert!(!view.follow);
 }
 
 /// Restoring the signed comparison in `view.rs:snap_to_live_if_near` must fail: `now - right` is
@@ -712,8 +701,7 @@ fn explicit_follow_off_has_no_auto_return() {
     // Explicitly disabling Live does not schedule a delayed return.
     view.set_manual_persistent();
     assert!(!view.follow);
-    assert!(view.auto_live_deadline_ms().is_none());
-    assert!(!view.tick_auto_live(now + 10_000.0));
+    view.follow_edge(now + 10_000.0, now + 10_000.0);
     assert!(!view.follow);
 }
 
@@ -847,7 +835,6 @@ fn frame_requests_wait_for_real_width_reframe_on_resize_and_yield_to_user_naviga
     let mut view = ChartView::new(epoch);
     assert!(view.request_time_range(start, end, 0.0));
     assert!(!view.follow);
-    assert_eq!(view.auto_live_deadline_ms(), None);
     assert!(!view.apply_frame_request(1.0));
     assert!(view.apply_frame_request(900.0));
     let (_, span_900) = view.visible_x(900.0);
@@ -923,7 +910,6 @@ fn center_on_price_snaps_a_dragged_paused_chart_back_in_one_frame() {
 
     assert!(!view.manual_price, "the manual Y view survived the return");
     assert!(view.follow, "the explicit pause survived the return");
-    assert!(view.auto_live_deadline_ms().is_none());
     assert!(
         (view.render_center - 1000.0).abs() < 1e-3,
         "the centre eased instead of jumping: {}",

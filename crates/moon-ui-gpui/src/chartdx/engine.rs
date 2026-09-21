@@ -1415,33 +1415,6 @@ impl ChartEngine {
         changed
     }
 
-    /// Returns the nearest pane deadline for automatically rejoining live, used to arm the timer.
-    pub fn next_auto_live_deadline_ms(&self) -> Option<f64> {
-        self.container
-            .borrow()
-            .panes()
-            .iter()
-            .filter_map(|p| p.view.auto_live_deadline_ms())
-            .reduce(f64::min)
-    }
-
-    /// Processes automatic live rejoin by anchoring panes whose manual hold expired to now. Returns
-    /// true if any pane resumed live and therefore requires a frame and notification.
-    pub fn tick_auto_live(&mut self, now_ms: f64) -> bool {
-        if self.data.borrow().historical {
-            return false;
-        }
-        let mut resumed = false;
-        for p in self.container.borrow_mut().panes_mut() {
-            resumed |= p.view.tick_auto_live(now_ms);
-        }
-        if resumed {
-            self.data.borrow_mut().mark_view_dirty();
-            self.sync_follow_from_views();
-        }
-        resumed
-    }
-
     pub fn sync_follow_from_views(&mut self) -> bool {
         let container = self.container.borrow();
         let follow = if container.is_empty() {
