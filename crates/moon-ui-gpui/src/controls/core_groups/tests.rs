@@ -93,6 +93,7 @@ fn saved_group_cores_filters_against_configured_and_materializes_implicit_all() 
 /// show a spurious "· N missing" on every group row, even one with no dead member.
 #[test]
 fn group_facts_appends_the_dead_warning_only_when_present() {
+    let _locale = crate::test_locale::force("en");
     let clean = group_facts("3 cores".to_string(), 0);
     assert_eq!(
         clean, "3 cores",

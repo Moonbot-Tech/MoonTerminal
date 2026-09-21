@@ -144,6 +144,7 @@ fn inline_buttons_keep_the_current_period() {
 /// Even an unavailable average must disclose that all entries were excluded.
 #[test]
 fn unavailable_average_keeps_nonzero_exclusion_disclosure() {
+    let _locale = crate::test_locale::force("en");
     let total = QuoteBreakdown::from_groups([(Some(0), 0.1, 2)]);
     assert!(total.average_order_return().is_none());
     let page = Page {
@@ -382,6 +383,7 @@ use moon_core::{
 /// Missing valuation must never display a native BTC subtotal as USDT or invent a zero.
 #[test]
 fn unvalued_and_unknown_money_is_not_a_usdt_total() {
+    let _locale = crate::test_locale::force("en");
     let total = QuoteBreakdown::from_groups([(Some(0), 2.0, 1)]);
     assert_eq!(profit(&total), rust_i18n::t!("telegram.report_unvalued"));
     let total = QuoteBreakdown::from_groups([(None, 2.0, 1)]).with_valuation(ValuationCoverage {

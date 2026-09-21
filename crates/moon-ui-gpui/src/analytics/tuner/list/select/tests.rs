@@ -190,6 +190,8 @@ fn drawn_order_stops_at_the_rows_the_list_actually_drew() {
 /// on whether it was Ctrl-clicked or shift-ranged — including in the save dialog's heading.
 #[test]
 fn drawn_order_labels_rows_exactly_as_the_row_renderer_does() {
+    // Both sides resolve through t!(), and the locale is process-wide. See `crate::test_locale`.
+    let _locale = crate::test_locale::force("en");
     let all = vec![g("0"), g("alpha")];
     let visible = vec![0, 1];
 

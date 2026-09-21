@@ -20,6 +20,7 @@ fn from_membership_returns_none_without_a_preset() {
 /// shown cores out of two instead of two out of three.
 #[test]
 fn from_membership_counts_shown_against_the_whole_universe() {
+    let _locale = crate::test_locale::force("en");
     let marker = ScopeMarker::from_membership(Some(WorkspaceMode::Classic), [true, false, true])
         .expect("a resolved preset produces a marker");
 
@@ -94,6 +95,7 @@ fn the_footer_tail_is_empty_when_nothing_is_hidden() {
 /// row fact, reorders it, or omits the closing hint.
 #[test]
 fn the_footer_tooltip_repeats_the_row_then_closes_with_the_hint() {
+    let _locale = crate::test_locale::force("en");
     let marker = ScopeMarker::new(Some(WorkspaceMode::AutoTrading), 1, 3);
     let footer = scope_footer("figures".to_string(), Some(&marker));
     let tooltip = scope_footer_tooltip(&footer, Some(&marker));
@@ -141,6 +143,7 @@ fn line_joins_the_footer_facts_without_a_leading_separator() {
 /// that only some are hidden, so the recovery text contradicts the empty surface.
 #[test]
 fn tooltip_uses_the_all_hidden_hint_only_when_every_core_is_hidden() {
+    let _locale = crate::test_locale::force("en");
     let partially_hidden = ScopeMarker::new(Some(WorkspaceMode::Classic), 1, 3);
     let all_hidden = ScopeMarker::new(Some(WorkspaceMode::Classic), 0, 3);
 
@@ -183,6 +186,7 @@ fn the_footer_tooltip_is_empty_without_a_hiding_marker() {
 /// surface claim that every core is hidden.
 #[test]
 fn the_empty_text_switches_only_when_every_core_is_hidden() {
+    let _locale = crate::test_locale::force("en");
     let genuine = t!("screener.empty_no_data").to_string();
     let all_hidden = ScopeMarker::new(Some(WorkspaceMode::AutoTrading), 0, 5);
     let partially_hidden = ScopeMarker::new(Some(WorkspaceMode::AutoTrading), 2, 5);

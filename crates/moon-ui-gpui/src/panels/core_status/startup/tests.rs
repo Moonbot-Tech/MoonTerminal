@@ -104,6 +104,7 @@ fn an_absent_upstream_value_contributes_no_fact_line() {
 /// the tooltip still carries one line per fact.
 #[test]
 fn present_upstream_values_each_add_exactly_one_fact_line() {
+    let _locale = crate::test_locale::force("en");
     let without = CoreStartupStatus {
         state: CoreStartupState::Connecting,
         round_trip_ms: None,
@@ -137,6 +138,7 @@ fn present_upstream_values_each_add_exactly_one_fact_line() {
 /// inputs add exactly one line each without taking over the Sliced-byte `Received` label.
 #[test]
 fn local_udp_ports_add_three_distinct_optional_fact_lines() {
+    let _locale = crate::test_locale::force("en");
     let without = CoreStartupStatus {
         state: CoreStartupState::Connecting,
         ..Default::default()

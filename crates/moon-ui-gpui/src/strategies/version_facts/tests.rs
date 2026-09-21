@@ -25,6 +25,7 @@ fn populated_version() -> VersionInfo {
 /// in that order; swapping two tail pushes makes a clipped row hide a more useful fact first.
 #[test]
 fn version_row_facts_keep_the_tail_clip_priority() {
+    let _locale = crate::test_locale::force("en");
     let facts = version_row_facts(
         &populated_version(),
         VersionSlot::InEffect,
@@ -61,6 +62,7 @@ fn version_row_facts_keep_the_tail_clip_priority() {
 /// shows less financial context than the available narrow-pane width permits.
 #[test]
 fn version_row_facts_degrade_money_before_adding_or_shortening_lines() {
+    let _locale = crate::test_locale::force("en");
     let version = populated_version();
     let full = t!("strat.version_profit", amount = "+12.50", n = 3).to_string();
     let compact = "+12.50$".to_string();

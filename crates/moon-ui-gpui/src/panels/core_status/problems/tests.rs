@@ -29,6 +29,7 @@ fn scope(cores: usize, silent: usize) -> ProblemsScope {
 /// indistinguishable from a clean bill unless the count of silent cores decides the wording.
 #[test]
 fn an_empty_list_reads_as_clean_only_when_every_core_answered() {
+    let _locale = crate::test_locale::force("en");
     // Asserted against the KEYS, not against each other: two strings merely differing would still
     // pass with the branch inverted, which is the exact failure this guards.
     let clean = t!("core_status.problems_empty").to_string();
@@ -72,6 +73,7 @@ fn an_unknown_category_is_shown_as_its_raw_byte() {
 /// the fleet had never answered — the exact conflation the feature exists to prevent.
 #[test]
 fn the_silent_core_notice_does_not_depend_on_an_empty_table() {
+    let _locale = crate::test_locale::force("en");
     let silent = notice_text(&scope(200, 199)).expect("199 silent cores must be stated");
     assert!(
         silent.contains("199"),
@@ -206,6 +208,7 @@ fn the_channel_test_opens_only_for_one_connected_core() {
 /// greyed button with no reason are the same defect from opposite sides.
 #[test]
 fn the_fleet_actions_state_their_own_refusals() {
+    let _locale = crate::test_locale::force("en");
     let no_cores = fleet_refusal(0, false, 0).expect("an empty scope refuses");
     assert_eq!(
         no_cores,
