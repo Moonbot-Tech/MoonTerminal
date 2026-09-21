@@ -16,8 +16,12 @@ use moon_core::{
 use rust_i18n::t;
 use std::sync::mpsc::SyncSender;
 
-/// Short pages keep the native table readable on phones and bound per-request query work.
+/// Core lists are unbounded, so they still page; breakdown views try to show every row first.
 const PAGE_SIZE: usize = 6;
+/// Telegram `sendRichMessage` cap: 32768 UTF-8 characters in the rich message text.
+const RICH_MESSAGE_CHAR_LIMIT: usize = 32_768;
+/// Telegram `sendRichMessage` cap: 500 blocks, including nested blocks and table rows.
+const RICH_MESSAGE_BLOCK_LIMIT: usize = 500;
 
 /// A complete page plus a full-period total, all read in one SQLite snapshot.
 struct Page {
@@ -227,17 +231,43 @@ fn read_page_on(
             active.push((name, total, scope));
         }
     }
-    let pages = active.len().div_ceil(PAGE_SIZE).max(1);
-    request.page = request.page.min(pages - 1);
-    let mut rows = Vec::new();
-    for (name, total, _) in active
-        .into_iter()
-        .skip(request.page * PAGE_SIZE)
-        .take(PAGE_SIZE)
-    {
-        rows.push((name, total));
-    }
     let drilldowns = exchange_drilldowns(&snap, &accessible, &venues, &filter)?;
+    let breakdown = request.daily || request.by_exchange;
+    let take =
+        |active: &[(String, QuoteBreakdown, Option<ReportScope>)], page: usize, size: usize| {
+            active
+                .iter()
+                .skip(page * size)
+                .take(size)
+                .map(|(name, total, _)| (name.clone(), total.clone()))
+                .collect::<Vec<_>>()
+        };
+    let (rows, pages) = if breakdown {
+        let all = take(&active, 0, active.len().max(1));
+        let probe = Page {
+            request: request.clone(),
+            from,
+            to,
+            zone,
+            total: total.clone(),
+            rows: all.clone(),
+            pages: 1,
+            drilldowns: drilldowns.clone(),
+            scope_label: scope_label.clone(),
+        };
+        if rich_message_fits(&report_html(&probe)) {
+            request.page = 0;
+            (all, 1)
+        } else {
+            let pages = active.len().div_ceil(PAGE_SIZE).max(1);
+            request.page = request.page.min(pages - 1);
+            (take(&active, request.page, PAGE_SIZE), pages)
+        }
+    } else {
+        let pages = active.len().div_ceil(PAGE_SIZE).max(1);
+        request.page = request.page.min(pages - 1);
+        (take(&active, request.page, PAGE_SIZE), pages)
+    };
     Ok(Page {
         request,
         from,
@@ -313,8 +343,41 @@ fn native(total: &QuoteBreakdown) -> String {
         .join("; ")
 }
 
+/// Telegram counts UTF-8 characters and nested blocks on the `sendRichMessage` path.
+fn rich_message_fits(html: &str) -> bool {
+    html.chars().count() <= RICH_MESSAGE_CHAR_LIMIT
+        && rich_message_blocks(html) <= RICH_MESSAGE_BLOCK_LIMIT
+}
+
+/// Table rows, paragraphs, details and tables are the blocks this report actually emits.
+fn rich_message_blocks(html: &str) -> usize {
+    html.matches("<tr").count()
+        + html.matches("<p>").count()
+        + html.matches("<details").count()
+        + html.matches("<table").count()
+}
+
 /// Compose a compact headline, three-column table, and optional per-bot accounting details.
 fn render(page: &Page) -> Response {
+    let html = report_html(page);
+    if !rich_message_fits(&html) {
+        return Response::Text {
+            text: t!("telegram.report_delivery_failed").to_string(),
+            keyboard: Some(keyboard(page)),
+        };
+    }
+    Response::Rich {
+        html,
+        keyboard: keyboard(page),
+        navigation: (
+            t!("telegram.report_navigation_hint").to_string(),
+            super::navigation_keyboard(),
+        ),
+    }
+}
+
+/// HTML for one report page; the caller decides whether it fits Telegram's rich-message caps.
+fn report_html(page: &Page) -> String {
     let heading = if page.request.daily {
         t!("telegram.report_days")
     } else if page.request.by_exchange {
@@ -437,20 +500,7 @@ fn render(page: &Page) -> Response {
             page.pages
         ));
     }
-    if html.chars().count() > 30_000 {
-        return Response::Text {
-            text: t!("telegram.report_delivery_failed").to_string(),
-            keyboard: Some(keyboard(page)),
-        };
-    }
-    Response::Rich {
-        html,
-        keyboard: keyboard(page),
-        navigation: (
-            t!("telegram.report_navigation_hint").to_string(),
-            super::navigation_keyboard(),
-        ),
-    }
+    html
 }
 
 /// Help is disposable rich content; a separate permanent message owns persistent navigation.

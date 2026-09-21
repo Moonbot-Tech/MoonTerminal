@@ -309,6 +309,135 @@ fn daily_pages_include_partial_day_after_zone_change() {
     assert_eq!(page.rows.last().unwrap().1.orders, 1);
 }
 
+/// A month of daily rows and a handful of exchanges fit one message; cores still page at six.
+#[test]
+fn breakdown_views_render_every_row_until_the_rich_message_limit() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, newrecid INTEGER, closedate INTEGER, profitbtc REAL, spentbtc REAL, basecurrency INTEGER);").unwrap();
+    let mut daily = ReportRequest::dates("2026-01-01", "2026-01-31").unwrap();
+    daily.daily = true;
+    daily.by_exchange = false;
+    let (from, to) = daily.bounds(0, chrono_tz::UTC).unwrap();
+    for day in 0..31 {
+        let closedate = from + day * 86_400 + 3_600;
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (1,'Fixture',?1,?2,1,100,0)",
+            rusqlite::params![day + 1, closedate],
+        )
+        .unwrap();
+    }
+    let page = super::read_page_on(&conn, daily, from, to, chrono_tz::UTC, |_| {
+        (Default::default(), super::TelegramReportAccess::Owner)
+    })
+    .unwrap();
+    assert_eq!(page.rows.len(), 31);
+    assert_eq!(page.pages, 1);
+    let Response::Rich { html, keyboard, .. } = render(&page) else {
+        panic!("expected rich report")
+    };
+    assert!(
+        super::rich_message_fits(&html),
+        "chars={} blocks={}",
+        html.chars().count(),
+        super::rich_message_blocks(&html)
+    );
+    assert!(!html.contains(&rust_i18n::t!("telegram.report_page").to_string()));
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = keyboard else {
+        panic!("expected inline navigation")
+    };
+    assert!(markup.inline_keyboard.iter().flatten().all(|button| {
+        ReportRequest::parse_callback(button.callback_data.as_deref().unwrap())
+            .unwrap()
+            .page
+            == 0
+    }));
+
+    conn.execute("DELETE FROM orders_rep", []).unwrap();
+    let codes = [2_u8, 3, 4, 5, 6, 7];
+    let mut venues = std::collections::HashMap::new();
+    for (index, code) in codes.into_iter().enumerate() {
+        let id = (index as u64) + 1;
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (?1,?2,1,150,1,100,0)",
+            rusqlite::params![id as i64, format!("core-{id}")],
+        )
+        .unwrap();
+        venues.insert(id, moon_core::venue::CoreVenue::identify(code, "", None));
+    }
+    let request = ReportRequest::new(Period::Today, false);
+    let page = super::read_page_on(&conn, request, 100, 200, chrono_tz::UTC, |_| {
+        (venues.clone(), super::TelegramReportAccess::Owner)
+    })
+    .unwrap();
+    assert_eq!(page.rows.len(), 6);
+    assert_eq!(page.pages, 1);
+    let Response::Rich { html, keyboard, .. } = render(&page) else {
+        panic!("expected rich report")
+    };
+    assert!(
+        super::rich_message_fits(&html),
+        "chars={} blocks={}",
+        html.chars().count(),
+        super::rich_message_blocks(&html)
+    );
+    assert!(!html.contains(&rust_i18n::t!("telegram.report_page").to_string()));
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = keyboard else {
+        panic!("expected inline navigation")
+    };
+    assert!(markup.inline_keyboard.iter().flatten().all(|button| {
+        !button
+            .callback_data
+            .as_deref()
+            .and_then(ReportRequest::parse_callback)
+            .is_some_and(|request| request.page > 0)
+    }));
+}
+
+/// A year of daily rows exceeds Telegram's 500-block cap, so the six-row page size remains.
+#[test]
+fn oversized_daily_report_still_pages() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, newrecid INTEGER, closedate INTEGER, profitbtc REAL, spentbtc REAL, basecurrency INTEGER);").unwrap();
+    let mut request = ReportRequest::dates("2026-01-01", "2026-06-30").unwrap();
+    request.daily = true;
+    request.by_exchange = false;
+    let (from, to) = request.bounds(0, chrono_tz::UTC).unwrap();
+    let days = ((to - from) / 86_400) + 1;
+    for day in 0..days {
+        let closedate = from + day * 86_400 + 3_600;
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (1,'Fixture',?1,?2,1,100,0)",
+            rusqlite::params![day + 1, closedate.min(to)],
+        )
+        .unwrap();
+    }
+    let page = super::read_page_on(&conn, request, from, to, chrono_tz::UTC, |_| {
+        (Default::default(), super::TelegramReportAccess::Owner)
+    })
+    .unwrap();
+    assert!(
+        page.pages > 1,
+        "expected paging after {} active days, got {} pages / {} rows",
+        days,
+        page.pages,
+        page.rows.len()
+    );
+    assert_eq!(page.rows.len(), 6);
+    let Response::Rich { html, keyboard, .. } = render(&page) else {
+        panic!("expected rich report")
+    };
+    assert!(html.contains(&rust_i18n::t!("telegram.report_page").to_string()));
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = keyboard else {
+        panic!("expected inline navigation")
+    };
+    assert!(markup.inline_keyboard.iter().flatten().any(|button| {
+        ReportRequest::parse_callback(button.callback_data.as_deref().unwrap())
+            .unwrap()
+            .page
+            == 1
+    }));
+}
+
 /// Small native averages must retain significant digits and exclude uncounted entries.
 #[test]
 fn native_average_keeps_small_btc_amount_visible() {

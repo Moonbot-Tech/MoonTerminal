@@ -12,7 +12,9 @@ Period choices are not duplicated inline. Button glyphs distinguish those action
 Mini App and its tunnel are not needed. Keep MoonTerminal running for history synchronization.
 
 Groups without trades are hidden before pagination. Zero-profit trades remain visible.
-Pages contain at most six active rows. Core names span the table width;
+By-exchange and by-day views list every active row in one message; pagination appears only
+when the rendered rich message would exceed Telegram's 32768-character or 500-block limit.
+Core lists still use six-row pages because that roster is unbounded. Core names span the table width;
 native currency amounts and averages are in an expandable two-column table. Dollar-denominated amounts
 use two decimals; crypto-denominated amounts retain up to eight. Calculation guidance is in Help; average-coverage counts remain in the monetary details only
 when rows were excluded.
