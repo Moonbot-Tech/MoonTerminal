@@ -1,18 +1,21 @@
 //! Classified load-state presentation regression tests.
 
 use super::{
-    DbReadFailedNotice, LoadState, Note, db_read_failed_hint, db_read_failed_hint_key,
-    db_read_failed_retryable,
+    DbReadFailedNotice, LoadState, Note, db_read_failed_detail, db_read_failed_hint,
+    db_read_failed_hint_key, db_read_failed_retryable,
 };
-use moon_core::db::{FailKind, ReadFail};
+use moon_core::db::{FailCode, FailKind, ReadFail};
 use std::sync::Arc;
 
 /// Construct a classified read failure without coupling tests to a rendered error message.
 fn failure(kind: FailKind) -> ReadFail {
-    ReadFail::Failed {
+    ReadFail::failed(
         kind,
-        msg: Arc::from("test failure"),
-    }
+        "test failure",
+        "reports.sqlite",
+        "test",
+        FailCode::None,
+    )
 }
 
 /// `load_state.rs:LoadState::apply_or_keep` must retain only a settled stale snapshot when a
@@ -118,24 +121,49 @@ fn db_read_failed_retryable_only_for_busy_and_other() {
 /// Collapsing every kind onto `chart.trade_history.failed` is the badge the user reported.
 #[test]
 fn db_read_failed_hint_names_the_cause_in_english_and_russian() {
-    for (locale, busy, corrupt, other, denial_title) in [
+    let data_dir = moon_core::config::paths::db_dir_path()
+        .display()
+        .to_string();
+    for (locale, busy_needles, corrupt, other, denial_title) in [
         (
             "en",
-            "The reports database is busy right now. Retry — the period will recompute.",
+            &[
+                "The reports database is busy right now. Retry — the period will recompute.",
+                "another process may be holding the file",
+                "cloud sync over",
+                "antivirus",
+                "second copy of the terminal",
+            ][..],
             "The database file is damaged — retrying will not help. See the Log tab.",
             "This is a read error, not an absence of trades. See the Log tab for details.",
             "Access to the reports replica is unavailable.",
         ),
         (
             "ru",
-            "База отчётов сейчас занята. Повторите — период пересчитается.",
+            &[
+                "База отчётов сейчас занята. Повторите — период пересчитается.",
+                "файл может держать другой процесс",
+                "облачная синхронизация папки",
+                "антивирус",
+                "вторая копия терминала",
+            ][..],
             "Файл базы повреждён — повтор не поможет. Подробности во вкладке «Лог».",
             "Это ошибка чтения, а не отсутствие сделок. Подробности — во вкладке «Лог».",
             "Доступ к реплике отчётов закрыт.",
         ),
     ] {
         let _locale = crate::test_locale::force(locale);
-        assert_eq!(db_read_failed_hint(FailKind::Busy), busy);
+        let busy = db_read_failed_hint(FailKind::Busy);
+        for needle in busy_needles {
+            assert!(
+                busy.contains(needle),
+                "{locale}: Busy hint must contain {needle:?}, got {busy}"
+            );
+        }
+        assert!(
+            busy.contains(&data_dir),
+            "{locale}: Busy hint must name the data folder {data_dir}, got {busy}"
+        );
         assert_eq!(db_read_failed_hint(FailKind::Corrupt), corrupt);
         assert_eq!(db_read_failed_hint(FailKind::Other), other);
         let denial = db_read_failed_hint(FailKind::ReplicaAccessDenied);
@@ -146,5 +174,54 @@ fn db_read_failed_hint_names_the_cause_in_english_and_russian() {
         assert_ne!(busy, corrupt);
         assert_ne!(busy, other);
         assert_ne!(corrupt, other);
+    }
+}
+
+/// `load_state.rs:db_read_failed_detail` must name the file, the operation and the numeric
+/// code for every FailKind and for both a SQLite and a filesystem failure. Dropping any
+/// field is the banner users reported: a driver sentence with nothing to paste into chat.
+#[test]
+fn db_read_failed_detail_names_file_operation_and_code() {
+    let path = r"C:\Users\trader\data\reports.sqlite";
+    let operation = "reports(reader)";
+    let sqlite = FailCode::Sqlite {
+        primary: 5,
+        extended: 5,
+    };
+    let ioerr = FailCode::Sqlite {
+        primary: 10,
+        extended: 266,
+    };
+    let os = FailCode::Os(5);
+
+    for (locale, file_word, op_word, code_word) in [
+        ("en", "File:", "Operation:", "Code:"),
+        ("ru", "Файл:", "Операция:", "Код:"),
+        ("es", "Archivo:", "Operación:", "Código:"),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        for kind in [
+            FailKind::Busy,
+            FailKind::Corrupt,
+            FailKind::Other,
+            FailKind::ReplicaAccessDenied,
+        ] {
+            let _ = kind;
+            for (code, token) in [(sqlite, "5/5"), (ioerr, "10/266"), (os, "os 5")] {
+                let line = db_read_failed_detail(path, operation, code);
+                assert!(
+                    line.contains(file_word) && line.contains(path),
+                    "{locale}: detail must name the file, got {line}"
+                );
+                assert!(
+                    line.contains(op_word) && line.contains(operation),
+                    "{locale}: detail must name the operation, got {line}"
+                );
+                assert!(
+                    line.contains(code_word) && line.contains(token),
+                    "{locale}: detail must carry {token}, got {line}"
+                );
+            }
+        }
     }
 }

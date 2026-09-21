@@ -24,9 +24,29 @@ common.db_read_failed_other:
   en: "This is a read error, not an absence of trades. See the Log tab for details."
   es: "Es un error de lectura, no una ausencia de operaciones. Consulte la pestaña Registro."
 common.db_read_failed_retry:
-  ru: "База отчётов сейчас занята. Повторите — период пересчитается."
-  en: "The reports database is busy right now. Retry — the period will recompute."
-  es: "La base de datos de informes está ocupada. Reinténtelo — el período se recalculará."
+  ru: "База отчётов сейчас занята. Повторите — период пересчитается. Если это повторяется, файл может держать другой процесс — облачная синхронизация папки %{data_dir}, антивирус, вторая копия терминала или внешняя программа для БД."
+  en: "The reports database is busy right now. Retry — the period will recompute. If this keeps happening, another process may be holding the file — cloud sync over %{data_dir}, antivirus, a second copy of the terminal, or an external DB tool."
+  es: "La base de datos de informes está ocupada. Reinténtelo — el período se recalculará. Si se repite, otro proceso puede estar reteniendo el archivo: sincronización en la nube de %{data_dir}, antivirus, una segunda copia del terminal o una herramienta externa de BD."
+common.db_read_failed_detail:
+  ru: "Файл: %{path}  Операция: %{operation}  Код: %{code}"
+  en: "File: %{path}  Operation: %{operation}  Code: %{code}"
+  es: "Archivo: %{path}  Operación: %{operation}  Código: %{code}"
+common.db_read_failed_file:
+  ru: "Файл"
+  en: "File"
+  es: "Archivo"
+common.db_read_failed_operation:
+  ru: "Операция"
+  en: "Operation"
+  es: "Operación"
+common.db_read_failed_code:
+  ru: "Код"
+  en: "Code"
+  es: "Código"
+common.db_read_failed_copy:
+  ru: "Копировать"
+  en: "Copy"
+  es: "Copiar"
 common.db_read_failed_short:
   ru: "Ошибка чтения БД"
   en: "DB read error"

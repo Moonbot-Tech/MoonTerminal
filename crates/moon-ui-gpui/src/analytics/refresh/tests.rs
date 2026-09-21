@@ -11,14 +11,16 @@ use crate::analytics::Tab;
 use moon_core::db::{
     FailKind, ProfitScope, ProfitUnit, QuoteBreakdown, ReadFail, ValuationCoverage,
 };
-use std::sync::Arc;
 
 /// Construct a classified database failure without depending on display text.
 fn failure(kind: FailKind) -> ReadFail {
-    ReadFail::Failed {
+    ReadFail::failed(
         kind,
-        msg: Arc::from("test failure"),
-    }
+        "test failure",
+        "reports.sqlite",
+        "test",
+        moon_core::db::FailCode::None,
+    )
 }
 
 /// `analytics/refresh.rs:preserve_on_catch_up` must preserve only a transient result covered by a

@@ -109,26 +109,44 @@ fn trade_history_retry_is_offered_only_when_a_later_read_can_help() {
 /// the user reported.
 #[test]
 fn trade_history_failed_overlay_names_the_cause_in_english_and_russian() {
-    for (locale, busy, corrupt, other) in [
+    let data_dir = moon_core::config::paths::db_dir_path()
+        .display()
+        .to_string();
+    for (locale, busy_needles, corrupt, other) in [
         (
             "en",
-            "The reports database is busy right now. Retry — the period will recompute.",
+            &[
+                "The reports database is busy right now. Retry — the period will recompute.",
+                "another process may be holding the file",
+                "cloud sync over",
+            ][..],
             "The database file is damaged — retrying will not help. See the Log tab.",
             "This is a read error, not an absence of trades. See the Log tab for details.",
         ),
         (
             "ru",
-            "База отчётов сейчас занята. Повторите — период пересчитается.",
+            &[
+                "База отчётов сейчас занята. Повторите — период пересчитается.",
+                "файл может держать другой процесс",
+                "облачная синхронизация папки",
+            ][..],
             "Файл базы повреждён — повтор не поможет. Подробности во вкладке «Лог».",
             "Это ошибка чтения, а не отсутствие сделок. Подробности — во вкладке «Лог».",
         ),
     ] {
         let _locale = crate::test_locale::force(locale);
-        assert_eq!(
-            ReportTradesStatus::Failed(FailKind::Busy)
-                .overlay_label()
-                .as_deref(),
-            Some(busy)
+        let busy = ReportTradesStatus::Failed(FailKind::Busy)
+            .overlay_label()
+            .expect("Busy overlay must name the cause");
+        for needle in busy_needles {
+            assert!(
+                busy.contains(needle),
+                "{locale}: Busy overlay must contain {needle:?}, got {busy}"
+            );
+        }
+        assert!(
+            busy.contains(&data_dir),
+            "{locale}: Busy overlay must name the data folder {data_dir}, got {busy}"
         );
         assert_eq!(
             ReportTradesStatus::Failed(FailKind::Corrupt)

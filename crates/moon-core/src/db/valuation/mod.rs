@@ -1392,7 +1392,11 @@ fn attach_store(conn: &Connection, path: &Path) -> ReadResult<bool> {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => {
-            return Err(read_fail::io_fail("valuation: database metadata", &error));
+            return Err(read_fail::io_fail(
+                "valuation: database metadata",
+                path,
+                &error,
+            ));
         }
     }
     let uri = sqlite_read_only_uri(path);
@@ -1402,7 +1406,7 @@ fn attach_store(conn: &Connection, path: &Path) -> ReadResult<bool> {
             mark_unhealthy(&error);
             return Ok(false);
         }
-        return Err(read_fail::read_fail("valuation: attach", error));
+        return Err(read_fail::read_fail_at("valuation: attach", path, error));
     }
     match validate_attachment(conn) {
         Ok(()) => Ok(true),
@@ -1410,8 +1414,9 @@ fn attach_store(conn: &Connection, path: &Path) -> ReadResult<bool> {
             let _ = conn.execute(&format!("DETACH DATABASE {SCHEMA}"), []);
             Ok(false)
         }
-        Err(error) => Err(read_fail::read_fail(
+        Err(error) => Err(read_fail::read_fail_at(
             "valuation: validate attachment",
+            path,
             error,
         )),
     }

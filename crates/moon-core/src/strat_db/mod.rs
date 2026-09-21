@@ -341,7 +341,7 @@ pub fn max_core_uid() -> crate::db::ReadResult<Option<u64>> {
         // The writer is lazy — no strategy snapshot has arrived yet on a fresh install.
         return Ok(None);
     }
-    let conn = open_ro(&path).map_err(|e| crate::db::read_fail::read_fail(CTX, e))?;
+    let conn = open_ro(&path).map_err(|e| crate::db::read_fail::read_fail_at(CTX, &path, e))?;
     let mut max: Option<u64> = None;
     for table in CORE_UID_TABLES {
         max = max.max(crate::db::max_core_uid_in(&conn, table, CTX)?);

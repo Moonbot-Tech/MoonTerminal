@@ -174,3 +174,95 @@ fn repeated_failures_are_throttled() {
         .expect("ключ (ctx, kind) зарегистрирован");
     assert_eq!(*suppressed, 50, "все повторы в окне должны быть подавлены");
 }
+
+/// A SQLite failure keeps the replica path, the `ctx` operation and both result codes.
+///
+/// Formatting only `{error}` drops every field the user needs to tell a lock from I/O.
+#[test]
+fn sqlite_failure_carries_path_operation_and_codes() {
+    let _state = super::super::integrity::test_state_guard();
+    super::super::integrity::reset_test_state();
+    let failure = read_fail(
+        "reports(reader)",
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: ErrorCode::DatabaseBusy,
+                extended_code: 5,
+            },
+            Some("database is locked".into()),
+        ),
+    );
+    let expected_path = crate::config::paths::reports_db_path()
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(failure.kind(), Some(FailKind::Busy));
+    assert_eq!(failure.operation(), Some("reports(reader)"));
+    assert_eq!(failure.path(), Some(expected_path.as_str()));
+    assert_eq!(
+        failure.code(),
+        Some(FailCode::Sqlite {
+            primary: 5,
+            extended: 5
+        })
+    );
+    assert_eq!(failure.to_string(), "database is locked");
+    super::super::integrity::reset_test_state();
+}
+
+/// Corruption arriving as `SQLITE_IOERR_READ` (extended 266) stays `Other` and still
+/// exposes 10/266 — the raw pair is the only remaining clue once classify maps it away
+/// from `Corrupt`.
+#[test]
+fn ioerr_extended_code_stays_on_the_failure() {
+    let failure = read_fail(
+        "reports: snapshot",
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: ErrorCode::SystemIoFailure,
+                extended_code: 266,
+            },
+            Some("disk I/O error".into()),
+        ),
+    );
+    assert_eq!(failure.kind(), Some(FailKind::Other));
+    assert_eq!(
+        failure.code(),
+        Some(FailCode::Sqlite {
+            primary: 10,
+            extended: 266
+        })
+    );
+}
+
+/// A filesystem refusal keeps the file it could not stat and the OS error number.
+///
+/// `std::fs::metadata` does not put the path on its own error, which is why Access Denied
+/// used to render as `Access is denied. (os error 5)` with no file.
+#[test]
+fn filesystem_failure_carries_path_and_os_code() {
+    let path = std::path::Path::new("C:/data/reports.sqlite");
+    let failure = io_fail(
+        "reports(reader): file access",
+        path,
+        &std::io::Error::from_raw_os_error(5),
+    );
+    assert_eq!(failure.kind(), Some(FailKind::Other));
+    assert_eq!(failure.operation(), Some("reports(reader): file access"));
+    assert_eq!(failure.path(), Some(path.to_string_lossy().as_ref()));
+    assert_eq!(failure.code(), Some(FailCode::Os(5)));
+    let line = warn_line(
+        "reports(reader): file access",
+        &failure,
+        path.to_string_lossy().as_ref(),
+        FailCode::Os(5),
+        0,
+    );
+    assert!(
+        line.contains("path=") && line.contains("code=os 5"),
+        "log line must carry path and OS code, got {line}"
+    );
+    assert!(
+        line.contains("reports(reader): file access"),
+        "log line must keep the operation, got {line}"
+    );
+}
