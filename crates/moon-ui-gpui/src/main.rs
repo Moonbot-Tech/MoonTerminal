@@ -671,7 +671,7 @@ struct Backend {
     /// Detached windows must not repin while exiting, or their detached state would be cleared and
     /// not restored on the next start; the repin drain checks this flag.
     quitting: bool,
-    /// Coin-menu strategy edits awaiting resolution, since `add_to_strategy_blacklist` has
+    /// Coin-menu strategy edits awaiting resolution, since `write_strategy_blacklist` has
     /// no window of its own to report from. Drained by `Shell::drain_strategy_edit_toasts`.
     strategy_edit_watches: Vec<backend::PendingStrategyEditWatch>,
     /// Per-core `StrategyEditNote` read cursor for `strategy_edit_watches`. Keyed by core because

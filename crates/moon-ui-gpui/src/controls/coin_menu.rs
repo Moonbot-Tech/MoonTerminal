@@ -5,11 +5,12 @@
 //! cores.
 //!
 //! MoonProto has no add-one-token command for any of these lists. The PERMANENT ones are therefore
-//! rewritten whole: each action reads the current list, appends the token with deduplication, and
-//! sends all of it, for the core-wide list via `set_blacklist` and for the strategy list stored in
-//! `CoinsBlackList` via `edit_strategies`. The TEMPORARY list cannot be written that way — the core
-//! adds rows to it itself — so it travels as a delta the feed merges at send time; see
-//! [`blacklist`] and `moon_core::feed::CoreCmd::SetTempBlacklist`.
+//! rewritten whole: each action reads the current list, appends the token or drops it when the coin
+//! is already listed, and sends all of it, for the core-wide list via `set_blacklist` and for the
+//! strategy list stored in `CoinsBlackList` via `edit_strategies`. Adding a token also enables the
+//! core-wide flag; lifting one leaves that flag alone. The TEMPORARY list cannot be written that
+//! way — the core adds rows to it itself — so it travels as a delta the feed merges at send time;
+//! see [`blacklist`] and `moon_core::feed::CoreCmd::SetTempBlacklist`.
 
 use gpui::*;
 use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonTone, MoonWindowExt as _};
@@ -383,15 +384,30 @@ fn core_blacklist(b: &Backend, core: CoreId) -> (bool, String) {
         .unwrap_or((false, String::new()))
 }
 
-/// Appends a token to the core-wide blacklist and enables it. Enabling is required for the addition
-/// to affect trading because the command sends the flag and text together. This is idempotent: an
-/// existing token keeps the same text, while the blacklist is still enabled.
-fn add_to_core_blacklist(b: &Backend, core: CoreId, coin: &str) {
-    let (_, text) = core_blacklist(b, core);
-    let new = blacklist_add(&text, coin);
-    if let Err(err) = b.session.set_blacklist(core, true, new) {
+/// Writes one token onto or off a core-wide blacklist.
+///
+/// Adding enables the list so the new entry affects trading: the command sends the flag and text
+/// together. Lifting drops only that token and leaves the enable flag unchanged, because turning
+/// the whole feature off is a bigger statement than un-listing one coin. A lift that would not
+/// change the text is skipped so a checked row cannot pay a no-op settings write.
+///
+/// Args:
+///     b: Session used to read the current list and send `set_blacklist`.
+///     core: Core whose list is rewritten.
+///     coin: Token to insert or drop, compared case-insensitively.
+///     lift: When true, drop `coin`; when false, append it and enable the list.
+fn write_core_blacklist(b: &Backend, core: CoreId, coin: &str, lift: bool) {
+    let (enabled, text) = core_blacklist(b, core);
+    let new = blacklist_edit(&text, coin, lift);
+    if lift && new == text {
+        return;
+    }
+    let flag = if lift { enabled } else { true };
+    if let Err(err) = b.session.set_blacklist(core, flag, new) {
+        let action = if lift { "lift" } else { "add" };
+        let prep = if lift { "from" } else { "to" };
         log::warn!(
-            "coin_menu: add {coin} to core {} blacklist failed: {err:#}",
+            "coin_menu: {action} {coin} {prep} core {} blacklist failed: {err:#}",
             moon_core::feed::core_label(core)
         );
     }
@@ -436,19 +452,33 @@ fn strategy_has_blacklist_field(b: &Backend, core: CoreId, sid: u64) -> bool {
         })
 }
 
-/// Appends a token to the strategy's `CoinsBlackList` through the shared field editor.
+/// Writes one token onto or off the strategy's `CoinsBlackList` through the shared field editor.
 ///
 /// The coin menu has no window of its own, so it cannot report a non-clean outcome directly: a
 /// successful submission registers a watch instead, and `Shell::drain_strategy_edit_toasts` is
-/// the only place that later becomes a toast.
-fn add_to_strategy_blacklist(b: &mut Backend, core: CoreId, sid: u64, coin: &str) {
+/// the only place that later becomes a toast. A click that would not change the text is skipped.
+///
+/// Args:
+///     b: Backend that sends the field edit and registers the outcome watch.
+///     core: Core that owns the strategy.
+///     sid: Strategy whose `CoinsBlackList` field is rewritten.
+///     coin: Token to insert or drop, compared case-insensitively.
+///     lift: When true, drop `coin`; when false, append it.
+fn write_strategy_blacklist(b: &mut Backend, core: CoreId, sid: u64, coin: &str, lift: bool) {
     let cur = strategy_blacklist(b, core, sid);
-    let new = blacklist_add(&cur, coin);
+    let new = blacklist_edit(&cur, coin, lift);
+    if new == cur {
+        return;
+    }
     let edits = vec![(sid, vec![(FIELD_COINS_BLACK_LIST.to_string(), new)])];
     match b.session.edit_strategies(core, edits) {
         Ok(()) => b.watch_strategy_edit(core, sid, coin.to_string()),
         Err(err) => {
-            log::warn!("coin_menu: add {coin} to strategy {sid}@{core} blacklist failed: {err:#}");
+            let action = if lift { "lift" } else { "add" };
+            log::warn!(
+                "coin_menu: {action} {coin} {} strategy {sid}@{core} blacklist failed: {err:#}",
+                if lift { "from" } else { "to" }
+            );
         }
     }
 }
@@ -482,6 +512,48 @@ fn blacklist_add(text: &str, coin: &str) -> String {
         coin.to_string()
     } else {
         format!("{base},{coin}")
+    }
+}
+
+/// Drops one token from a comma-separated list, keeping every other entry verbatim.
+///
+/// Matching is the same case-insensitive trim as [`blacklist_contains`]. Remaining tokens keep
+/// their original order, inner spacing, and any spelling this menu does not recognise. A token
+/// that is not present leaves the string unchanged, including its exact bytes.
+///
+/// Args:
+///     text: Current comma-separated blacklist.
+///     coin: Token to drop.
+///
+/// Returns:
+///     The list without `coin`, or `text` unchanged when `coin` was not listed.
+fn blacklist_remove(text: &str, coin: &str) -> String {
+    if !blacklist_contains(text, coin) {
+        return text.to_string();
+    }
+    text.split(',')
+        .filter(|s| !s.trim().eq_ignore_ascii_case(coin))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Inserts or drops one token in a comma-separated blacklist.
+///
+/// This is the pure list edit both permanent-blacklist writers send: `lift` drops the token,
+/// otherwise it is appended with the same case-insensitive dedup as [`blacklist_add`].
+///
+/// Args:
+///     text: Current comma-separated blacklist.
+///     coin: Token to insert or drop.
+///     lift: When true, drop `coin`; when false, append it.
+///
+/// Returns:
+///     The rewritten list. Remaining entries keep their original order and spacing.
+fn blacklist_edit(text: &str, coin: &str, lift: bool) -> String {
+    if lift {
+        blacklist_remove(text, coin)
+    } else {
+        blacklist_add(text, coin)
     }
 }
 
