@@ -1086,3 +1086,72 @@ fn probe_one_slice_against_the_venue() {
         &gaps[..gaps.len().min(5)]
     );
 }
+
+/// `worker.rs:file_core_into_tiles` answering a tiles reader from the ring instead of filing it
+/// leaves the model's held query empty and the walk's residual whole: the ring's stretch is
+/// paid to the venue again, or — when the ring answered in place of the walk — never fetched
+/// at all, and the row stays missing on every fetch (19 of 925 rows on 2026-09-21).
+#[test]
+fn a_tiles_reader_gets_the_ring_as_core_tiles_the_walk_no_longer_asks_for() {
+    let history =
+        crate::market::source::MarketDataSource::new(crate::market::MarketStore::shared(0.0));
+    let venue = crate::venue::venue(3).expect("Binance spot");
+    let address = ReplayAddress {
+        history,
+        venue,
+        exchange_key: "3:00000000".into(),
+        cache: None,
+    };
+    let key: TileKey = (address.exchange_key.clone(), "BTCUSDT".into());
+    let (open_ms, close_ms) = (100_000_000, 100_120_000);
+    let window = super::super::replay_window_ms(open_ms, close_ms, 60_000).expect("window");
+    let focus = window.focus_spans();
+    let (focus_from, focus_to) = focus.hull().expect("one focus");
+    let tiles = Mutex::new(TickTileStore::default());
+    let asked = std::cell::RefCell::new(Vec::new());
+    // The ring holds the position and a little after it, not the lead before the entry.
+    let ring = (open_ms - 5_000, close_ms + 30_000);
+    let filed = file_core_into_tiles(&address, "BTCUSDT", &focus, &tiles, |span| {
+        asked.borrow_mut().push(span);
+        let from = span.0.max(ring.0);
+        let to = span.1.min(ring.1);
+        (from <= to).then(|| crate::market::source::CoreReplayTicks {
+            ticks: vec![tick(from, 1.0), tick(to, 2.0)],
+            covered: (from, to),
+        })
+    });
+    assert_eq!(
+        asked.borrow().as_slice(),
+        focus.spans(),
+        "one read per focus span"
+    );
+    assert_eq!(filed, vec![(ring.0.max(focus_from), ring.1.min(focus_to))]);
+
+    // What the walk still owes the venue is exactly what the ring did not hold.
+    let route = TradeRoute::BinanceSpotAggTrades;
+    let plan = tick_plan(window, route, None, ReplayIntent::Model);
+    let residual = residual_plan(&plan, &lock_tiles(&tiles), &key);
+    let residual_ms: i64 = residual.slices.iter().map(|(a, b)| b - a + 1).sum();
+    let plan_ms: i64 = plan.slices.iter().map(|(a, b)| b - a + 1).sum();
+    assert!(
+        residual_ms < plan_ms,
+        "the ring's stretch left the residual"
+    );
+    assert!(
+        residual
+            .slices
+            .iter()
+            .all(|&(a, b)| b < ring.0 || a > ring.1),
+        "nothing inside the filed stretch is asked again: {:?}",
+        residual.slices
+    );
+    // And the tiles say who answered.
+    let store = lock_tiles(&tiles);
+    let held = held_coverage(&store, &key, &focus, Coverage::none());
+    assert!(held.contains((ring.0.max(focus_from), ring.1.min(focus_to))));
+    drop(store);
+
+    // A chart keeps the ring as an answer; a model never takes it in place of the walk.
+    assert!(!ReplayIntent::Chart.files_core());
+    assert!(ReplayIntent::Model.files_core());
+}

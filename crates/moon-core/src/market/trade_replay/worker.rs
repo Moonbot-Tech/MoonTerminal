@@ -193,9 +193,7 @@ pub(crate) struct TickStage {
     /// the stage asks nothing and serves what the tile store and its disk already hold for the
     /// focus (a capture from the core's archive, filed when the trade closed — or, for a tiles
     /// reader, filed by this stage itself out of the ring, see [`ReplayIntent::files_core`]),
-    /// or prints [`TickStatus::NoRoute`] as before when they hold nothing. A route whose
-    /// retention the whole focus is past is served the same way, printing
-    /// [`TickStatus::OutOfRetention`] instead.
+    /// or prints [`TickStatus::NoRoute`] as before when they hold nothing.
     route: Option<TradeRoute>,
     /// The ring key this stage's answer replaces on success.
     key: OutcomeKey,
@@ -1581,8 +1579,35 @@ fn serve_ticks(
     let key: TileKey = (request.address.exchange_key.clone(), request.market.clone());
     let focus = request.window.focus_spans();
     let persisted = super::trade_cache::handle();
+    // A requester that reads the tiles gets the ring THROUGH them: what the ring holds inside
+    // the focus is filed as `Core` tiles before the stage decides what is left to fetch, so a
+    // trade the close-time capture missed costs the venue only what the ring does not hold.
+    // Run after the disk hydrate on either branch below, and only for a focus the store does
+    // not already hold whole: the ring copy scans the donor's whole retained ring, and a
+    // retry of a row the disk answered would pay it for nothing.
+    let file_ring = || {
+        if !request.intent.files_core() {
+            return;
+        }
+        let held_whole = {
+            let store = lock_tiles(tiles);
+            held_coverage(&store, &key, &focus, Coverage::none()).covers(&focus)
+        };
+        if held_whole {
+            return;
+        }
+        file_core_into_tiles(&request.address, &request.market, &focus, tiles, |span| {
+            request.address.history.capture_core_span(
+                &request.address,
+                &request.market,
+                span.0,
+                span.1,
+            )
+        });
+    };
     let Some(route) = stage.route else {
         hydrate(tiles, persisted.as_ref(), &key, &focus);
+        file_ring();
         // No venue to ask: the focus is served from what the tiles hold inside it — a capture
         // from the core's archive — or the window prints that there is no route, as before.
         let (covered, runs) = {
@@ -1640,6 +1665,7 @@ fn serve_ticks(
     }
     // After the retention refusal, which is free: a window too old for the route pays no read.
     hydrate(tiles, persisted.as_ref(), &key, &focus);
+    file_ring();
     let residual = residual_plan(&plan, &lock_tiles(tiles), &key);
     // The one line that tells a neighbouring window apart from a reopen: the focus is the
     // window's own, the spans are what the store made of it. In milliseconds, not slices — a

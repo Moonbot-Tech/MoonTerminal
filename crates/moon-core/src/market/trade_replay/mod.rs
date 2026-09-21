@@ -284,6 +284,18 @@ impl ReplayIntent {
         matches!(self, Self::Chart)
     }
 
+    /// Whether what the core's ring holds of the window is FILED into the tiles rather than
+    /// answered from. A model's requester reads the tiles, not the answer: an answer straight
+    /// from the ring — the candle stage's core-first, the tick stage's own read, the mid-walk
+    /// upgrade — reached nobody, since none of them files a tile and the close-time capture that
+    /// would have filed it never ran for a trade that closed while the terminal was down (the
+    /// autoload's rows). Filed, the ring's stretch is what the walk no longer asks the venue
+    /// for, and the held query finds it. A chart keeps the ring as an answer: its window shows
+    /// the series it is sent.
+    pub(crate) fn files_core(self) -> bool {
+        matches!(self, Self::Model)
+    }
+
     /// Whether the remembered-answer ring is read and written for this request. A model's
     /// request does neither: the ring is keyed by the window alone, so a chart's answer that
     /// stopped on the page budget before its lead would be served to the model with no run-up,
