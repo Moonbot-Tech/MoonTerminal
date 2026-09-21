@@ -393,6 +393,11 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
         option_env!("MOONTERMINAL_RELEASE_BASE").unwrap_or("unknown"),
         option_env!("MOONUI_GIT_REV").unwrap_or("unknown")
     );
+    // GUI processes on macOS inherit a 256-file soft limit. Raise it to the hard
+    // limit before any database or window work so the Log tab records before/hard/after
+    // and later opens inherit the wider budget. A failed raise is not fatal.
+    #[cfg(unix)]
+    open_file_limit::raise_to_hard_limit();
     // A resumed update becomes accepted before any portable storage migration or open. Rolling
     // the executable back after a newer schema touched cfg/data would be unsafe for the old build.
     crate::update::acknowledge_healthy(startup_update.as_ref())?;
@@ -790,6 +795,8 @@ mod fixture;
 mod graphics_migration;
 mod instance;
 mod lines_migration;
+#[cfg(any(unix, test))]
+mod open_file_limit;
 mod path_visibility_migration;
 mod strategy_filters_migration;
 mod unlock;
