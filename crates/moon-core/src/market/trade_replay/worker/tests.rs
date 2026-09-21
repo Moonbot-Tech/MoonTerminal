@@ -1155,3 +1155,93 @@ fn a_tiles_reader_gets_the_ring_as_core_tiles_the_walk_no_longer_asks_for() {
     assert!(!ReplayIntent::Chart.files_core());
     assert!(ReplayIntent::Model.files_core());
 }
+
+/// The real pager over the real venue, by hand: `MOON_TICKS_PROBE=GateFuturesTrades,GSTOCKBSC_USDT,<from_ms>,<to_ms>`
+/// walks that one slice and prints what came back — rows, distinct prints, the largest holes —
+/// so a hole or a duplicate in the store can be told apart from one the pager makes today.
+#[test]
+#[ignore = "asks the venue over the network; run by hand"]
+fn probe_one_slice_against_the_venue() {
+    let Ok(spec) = std::env::var("MOON_TICKS_PROBE") else {
+        eprintln!("MOON_TICKS_PROBE is not set; nothing to do");
+        return;
+    };
+    let parts: Vec<&str> = spec.split(',').collect();
+    let [route, market, from_ms, to_ms] = parts[..] else {
+        panic!("MOON_TICKS_PROBE=<route>,<market>,<from_ms>,<to_ms>");
+    };
+    let route = match route {
+        "GateFuturesTrades" => TradeRoute::GateFuturesTrades,
+        "GateSpotTrades" => TradeRoute::GateSpotTrades,
+        "OkxHistoryTrades" => TradeRoute::OkxHistoryTrades,
+        "BinanceUsdMAggTrades" => TradeRoute::BinanceUsdMAggTrades,
+        other => panic!("unknown route {other}"),
+    };
+    let (from_ms, to_ms): (i64, i64) = (from_ms.parse().unwrap(), to_ms.parse().unwrap());
+    let plan = TickPlan {
+        slices: vec![(from_ms, to_ms)],
+        trade_len: 1,
+        focus_len: 1,
+    };
+    let agent = rest::agent();
+    let mut observer = FakeObserver::default();
+    let verdict = paginate_ticks(
+        route,
+        &plan,
+        TICK_BUDGET,
+        TICK_PAGE_BUDGET,
+        || false,
+        |_| false,
+        &mut observer,
+        |from, to, cursor| {
+            let page = rest::fetch_trades(&agent, route, market, from, to, cursor);
+            if let Ok(page) = &page {
+                let (lo, hi) = page.ticks.iter().fold((i64::MAX, i64::MIN), |(lo, hi), t| {
+                    (lo.min(t.time_ms as i64), hi.max(t.time_ms as i64))
+                });
+                eprintln!(
+                    "PROBE page cursor={cursor:?} rows={} t=+{}..+{} ms next={:?}",
+                    page.ticks.len(),
+                    lo.saturating_sub(from_ms),
+                    hi.saturating_sub(from_ms),
+                    page.next
+                );
+            }
+            page
+        },
+    );
+    let TickVerdict::Ready(harvest) = verdict else {
+        panic!("abandoned: {verdict:?}");
+    };
+    let mut keys: Vec<(i64, u32, u32, u8)> = harvest
+        .ticks
+        .iter()
+        .map(|t| {
+            (
+                t.time_ms as i64,
+                t.price.to_bits(),
+                t.qty.to_bits(),
+                t.side as u8,
+            )
+        })
+        .collect();
+    let rows = keys.len();
+    keys.sort_unstable();
+    keys.dedup();
+    let mut times: Vec<i64> = keys.iter().map(|k| k.0).collect();
+    times.dedup();
+    let mut gaps: Vec<(i64, i64)> = times
+        .windows(2)
+        .map(|w| (w[1] - w[0], w[0] - from_ms))
+        .collect();
+    gaps.sort_unstable_by(|a, b| b.cmp(a));
+    eprintln!(
+        "PROBE {market}: pages={} rows={rows} distinct={} covered={} complete={} stop={:?}\nPROBE largest gaps (ms, at +ms): {:?}",
+        observer.paces,
+        keys.len(),
+        harvest.covered,
+        harvest.complete,
+        harvest.stop,
+        &gaps[..gaps.len().min(5)]
+    );
+}

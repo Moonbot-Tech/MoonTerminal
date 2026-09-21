@@ -395,17 +395,154 @@ fn gate_futures_trades_skip_a_zero_size_row_without_refusing_the_page() {
 }
 
 /// `rest/gateio.rs:parse_futures_trades` on a FULL page of nothing but `size: 0` rows: the
-/// route never accepts a full page as complete, so the cursor must still advance by the
-/// venue's row count — a dead stretch on a small contract is walked through, not refused and
-/// not mistaken for the end of the tape.
+/// route never accepts a full page as complete, so the cursor must still move onto the page's
+/// oldest row — a dead stretch on a small contract is walked through, not refused and not
+/// mistaken for the end of the tape.
 #[test]
 fn gate_futures_page_of_only_zero_size_rows_is_empty_and_still_pages_on() {
     let mut body = fixture("futures_trades_zero_size");
     for row in body.as_array_mut().expect("array") {
         row["size"] = serde_json::json!(0);
     }
-    let page = parse_futures_trades(&body, 6, Some(TradeCursor::Offset(6)))
-        .expect("a page of zero-size rows parses");
+    let rows = body.as_array().expect("array");
+    let oldest_id = rows
+        .iter()
+        .map(|r| r["id"].as_u64().unwrap())
+        .min()
+        .unwrap();
+    let page = parse_futures_trades(
+        &body,
+        6,
+        Some(TradeCursor::Before {
+            boundary_ms: i64::MAX,
+            below_id: u64::MAX,
+        }),
+    )
+    .expect("a page of zero-size rows parses");
     assert!(page.ticks.is_empty());
-    assert_eq!(page.next, Some(TradeCursor::Offset(12)));
+    assert!(
+        matches!(page.next, Some(TradeCursor::Before { below_id, .. }) if below_id == oldest_id)
+    );
+}
+
+/// A full page hands back a `Before` cursor at its OLDEST row (time and id), and the next page
+/// — asked up to that row's second, so it holds that second again — drops every row at or
+/// above that id and keeps the rest. Three rows against a cap of three is a full page.
+#[test]
+fn gate_futures_full_page_pages_back_by_time_and_drops_the_rows_already_taken() {
+    let body = fixture("futures_trades");
+    let page = parse_futures_trades(&body, 3, None).expect("full page parses");
+    assert_eq!(page.ticks.len(), 3);
+    let Some(TradeCursor::Before {
+        boundary_ms,
+        below_id,
+    }) = page.next
+    else {
+        panic!("a full page pages on: {:?}", page.next);
+    };
+    assert_eq!(boundary_ms, 1_789_726_950_929, "the oldest row's stamp");
+    assert_eq!(below_id, 29202, "the oldest row's id");
+    // The next page, as the venue answers `to=1789726951`: the two rows of that second again
+    // (ids 29203, 29202 — already held) plus one older row.
+    let next_body = serde_json::json!([
+        {"id": 29203, "contract": "CATE_USDT", "create_time": 1789726950.929, "create_time_ms": 1789726950.929, "size": 1, "price": "0.09102"},
+        {"id": 29202, "contract": "CATE_USDT", "create_time": 1789726950.929, "create_time_ms": 1789726950.929, "size": 1, "price": "0.09102"},
+        {"id": 29201, "contract": "CATE_USDT", "create_time": 1789726948.100, "create_time_ms": 1789726948.100, "size": -2, "price": "0.09100"}
+    ]);
+    let next = parse_futures_trades(&next_body, 3, page.next).expect("next page parses");
+    assert_eq!(
+        next.ticks.len(),
+        1,
+        "only the row below the id already held"
+    );
+    assert_eq!(next.ticks[0].time_ms, 1_789_726_948_100.0);
+    assert!(
+        matches!(
+            next.next,
+            Some(TradeCursor::Before {
+                below_id: 29201,
+                boundary_ms: 1_789_726_948_100
+            })
+        ),
+        "{:?}",
+        next.next
+    );
+    // A full page whose every row is already held is a second denser than a page: the walk
+    // drains that second by offset, from its start.
+    let dense = serde_json::json!([
+        {"id": 29203, "contract": "CATE_USDT", "create_time": 1789726950.929, "create_time_ms": 1789726950.929, "size": 1, "price": "0.09102"},
+        {"id": 29202, "contract": "CATE_USDT", "create_time": 1789726950.929, "create_time_ms": 1789726950.929, "size": 1, "price": "0.09102"},
+        {"id": 29204, "contract": "CATE_USDT", "create_time": 1789726954.306, "create_time_ms": 1789726954.306, "size": -1, "price": "0.09058"}
+    ]);
+    let drain = parse_futures_trades(&dense, 3, page.next).expect("parses");
+    assert!(drain.ticks.is_empty());
+    assert_eq!(
+        drain.next,
+        Some(TradeCursor::Within {
+            second_s: 1_789_726_950,
+            offset: 0,
+            below_id: 29202,
+            low_id: 29202
+        })
+    );
+    // A full drain page moves the offset by the venue's row count and keeps only the new
+    // rows; the boundary id follows the oldest new row.
+    let drain_page = serde_json::json!([
+        {"id": 29202, "contract": "CATE_USDT", "create_time": 1789726950.929, "create_time_ms": 1789726950.929, "size": 1, "price": "0.09102"},
+        {"id": 29200, "contract": "CATE_USDT", "create_time": 1789726950.500, "create_time_ms": 1789726950.500, "size": 3, "price": "0.09101"},
+        {"id": 29199, "contract": "CATE_USDT", "create_time": 1789726950.400, "create_time_ms": 1789726950.400, "size": 3, "price": "0.09101"}
+    ]);
+    let drained = parse_futures_trades(&drain_page, 3, drain.next).expect("parses");
+    assert_eq!(drained.ticks.len(), 2);
+    assert_eq!(
+        drained.next,
+        Some(TradeCursor::Within {
+            second_s: 1_789_726_950,
+            offset: 3,
+            below_id: 29202,
+            low_id: 29199
+        }),
+        "the boundary stays, the low id follows the drain"
+    );
+    // Oldest-first inside the second would not lose a row: the boundary does not follow.
+    let ascending = serde_json::json!([
+        {"id": 29195, "contract": "CATE_USDT", "create_time": 1789726950.050, "create_time_ms": 1789726950.050, "size": 1, "price": "0.09100"},
+        {"id": 29196, "contract": "CATE_USDT", "create_time": 1789726950.060, "create_time_ms": 1789726950.060, "size": 1, "price": "0.09100"},
+        {"id": 29197, "contract": "CATE_USDT", "create_time": 1789726950.070, "create_time_ms": 1789726950.070, "size": 1, "price": "0.09100"}
+    ]);
+    let asc = parse_futures_trades(&ascending, 3, drained.next).expect("parses");
+    assert_eq!(asc.ticks.len(), 3);
+    // A short drain page ends the second: back to time, up to the second's own start, so the
+    // next `to` is the second itself and the rows of it are not asked a third time.
+    let tail = serde_json::json!([
+        {"id": 29198, "contract": "CATE_USDT", "create_time": 1789726950.100, "create_time_ms": 1789726950.100, "size": 1, "price": "0.09100"}
+    ]);
+    let ended = parse_futures_trades(&tail, 3, drained.next).expect("parses");
+    assert_eq!(ended.ticks.len(), 1);
+    assert_eq!(
+        ended.next,
+        Some(TradeCursor::Before {
+            boundary_ms: 1_789_726_949_999,
+            below_id: 29198
+        })
+    );
+    assert_eq!(trade_window_seconds(0, 1_789_726_949_999).1, 1_789_726_950);
+    // On a continuation page a row without an id is dropped, not taken again.
+    let no_id = serde_json::json!([
+        {"contract": "CATE_USDT", "create_time": 1789726948.100, "create_time_ms": 1789726948.100, "size": -2, "price": "0.09100"}
+    ]);
+    let short = parse_futures_trades(&no_id, 3, page.next).expect("parses");
+    assert!(short.ticks.is_empty());
+    assert_eq!(short.next, None);
+    let first = parse_futures_trades(&no_id, 3, None).expect("parses");
+    assert_eq!(first.ticks.len(), 1, "a first page keeps it");
+}
+
+/// `rest/gateio.rs:fetch_trades` sends the cursor's boundary as `to`, one second past the
+/// boundary's own second, and never an `offset`.
+#[test]
+fn gate_futures_before_cursor_moves_to_onto_the_boundary_second() {
+    // `trade_window_seconds` is the one rule for `to`; the cursor reuses it on its boundary.
+    let (_, to) = trade_window_seconds(0, 1_789_726_950_929);
+    assert_eq!(to, 1_789_726_951);
 }
