@@ -838,15 +838,16 @@ impl ChartView {
         self.render_center = self.center_price;
     }
 
-    /// Zooms X. In live mode, preserves the live anchor (as in WebGame/Moonbot); in manual
-    /// X view, preserves the time under the cursor and may re-anchor to live after a discrete step.
+    /// Zooms X, keeping the time under the cursor fixed. Follow is then re-decided spatially:
+    /// zooming at the live edge stays live, zooming into history lets go, the same
+    /// [`Self::snap_to_live_if_near`] rule a pan already uses. An explicit Pause is left alone.
     ///
     /// Args:
     ///     super_zoom: Allow the three-second floor instead of the plain 30-second floor.
     ///         Plain input preserves a narrower current window instead of snapping back.
     ///     factor: Multiplicative zoom step.
     ///     area_w: Plot width in logical pixels.
-    ///     cursor_x: Cursor coordinate within the plot.
+    ///     cursor_x: Cursor coordinate within the plot. Hotkeys pass the plot centre.
     ///     now_ms: Current Unix time in milliseconds.
     ///
     /// Returns:
@@ -868,7 +869,6 @@ impl ChartView {
             return;
         }
         self.clear_frame_request();
-        let was_follow = self.follow;
         let right_before = self.right_time_ms;
         let old_px = self.px_per_ms.max(MIN_PX_PER_MS);
         let cursor_x = cursor_x.clamp(0.0, area_w.max(1.0));
@@ -891,11 +891,8 @@ impl ChartView {
         let hi = (area_w.max(1.0) / effective_floor).max(lo);
         self.px_per_ms = next.clamp(lo, hi);
         self.x_default_scale = (self.px_per_ms - self.phase_default_px_per_ms).abs() <= 1e-9;
-        if was_follow {
-            self.right_time_ms = now_ms;
-            self.follow = true;
-            return;
-        }
+        // Drop follow so the spatial rejoin below can decide; an explicit Pause still refuses it.
+        self.follow = false;
         let new_window = area_w / self.px_per_ms.max(MIN_PX_PER_MS);
         let left = cursor_time - self.epoch_ms - cursor_x as f64 / self.px_per_ms as f64;
         // Zoom's OWN rule: it must not SCROLL the chart. Anywhere left of the right margin the cursor

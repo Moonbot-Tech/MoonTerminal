@@ -108,9 +108,11 @@ fn zoom_in_is_clamped_to_min_window_30s() {
     let width = 1000.0;
     let mut view = ChartView::new(0.0);
     view.ensure_default_window(width, 60.0, None);
+    view.resume_live(now);
+    let live_x = width * (1.0 - view.right_margin_frac);
 
     for _ in 0..20 {
-        view.zoom_x_at(2.0, width, width * 0.5, now, false);
+        view.zoom_x_at(2.0, width, live_x, now, false);
     }
 
     let (_, window_ms) = view.visible_x(width);
@@ -118,7 +120,7 @@ fn zoom_in_is_clamped_to_min_window_30s() {
         (window_ms - 30_000.0).abs() < 1.0,
         "minimum window was {window_ms} ms"
     );
-    assert!(view.follow);
+    assert!(view.follow, "zoom at the live edge must keep follow");
 }
 
 /// Removing the `default_ppm` initialization branch in `view.rs:ensure_default_window` must fail;
@@ -641,10 +643,11 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
     let mut view = ChartView::new(0.0);
     view.ensure_default_window(area, 60.0, None);
     view.resume_live(now);
+    let live_x = area * (1.0 - view.right_margin_frac);
 
     // Zoom out until clamped (min ppm = area / MAX_WINDOW_MS, about 4e-8 < 1e-6).
     for _ in 0..40 {
-        view.zoom_x_at(0.5, area, area * 0.5, now, false);
+        view.zoom_x_at(0.5, area, live_x, now, false);
     }
     let lo = area / super::MAX_WINDOW_MS;
     assert!(
@@ -657,7 +660,7 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
         view.px_per_ms < 1e-6,
         "test must cover values below the historical floor"
     );
-    assert!(view.follow, "live zoom must preserve follow");
+    assert!(view.follow, "zoom at the live edge must keep follow");
 
     // The old floor does NOT cap the window: it equals area/ppm (365 days), not area/1e-6.
     view.follow_edge(now, now);
@@ -682,7 +685,7 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
     // Repeated zoom attempts at the limit do not shift the view (no leftward drift).
     let (left_before, _) = view.visible_x(area);
     for _ in 0..5 {
-        view.zoom_x_at(0.5, area, area * 0.3, now, false);
+        view.zoom_x_at(0.5, area, live_x, now, false);
     }
     let (left_after, _) = view.visible_x(area);
     assert!(
@@ -889,6 +892,52 @@ fn super_zoom_preserves_manual_cursor_time() {
     let after = view.visible_x(width).0 + width * 0.4 / view.px_per_ms;
     assert!((after - before).abs() < 1.0);
     assert!(!view.is_live(now));
+}
+
+/// Super-zoom (and the plain wheel, which shares this function) used to pin a live chart to the
+/// live edge and throw the cursor away. Zooming into a spike a minute old then needed a Pause
+/// click first. The cursor time must hold, and Live must drop, the way a pan already does.
+#[test]
+fn zoom_on_a_live_chart_keeps_the_cursor_time_and_lets_go() {
+    let width = 900.0;
+    let now = 1_700_000_000_000.0;
+    let mut view = ChartView::new(now - 100_000.0);
+    view.ensure_default_window(width, 60.0, None);
+    view.resume_live(now);
+    assert!(view.follow);
+
+    let cursor_x = width * 0.4;
+    let before = view.visible_x(width).0 + cursor_x / view.px_per_ms;
+    view.zoom_x_at(2.0, width, cursor_x, now, true);
+    let after = view.visible_x(width).0 + cursor_x / view.px_per_ms;
+    assert!(
+        (after - before).abs() < 1.0,
+        "super zoom moved the time under the cursor by {} ms",
+        after - before
+    );
+    assert!(!view.follow, "super zoom at the cursor kept Live");
+    assert!(!view.is_live(now));
+}
+
+/// Zooming with the pointer on the live edge must stay live: that is the no-regression half of
+/// letting go when the pointer is in history.
+#[test]
+fn zoom_at_the_live_edge_stays_live() {
+    let mut view = live_view(NOW, WIDTH);
+    let live_x = WIDTH * (1.0 - view.right_margin_frac);
+    view.zoom_x_at(2.0, WIDTH, live_x, NOW, true);
+    assert!(view.follow, "super zoom at the live edge dropped Live");
+    view.zoom_x_at(0.5, WIDTH, live_x, NOW, false);
+    assert!(view.follow, "plain zoom at the live edge dropped Live");
+}
+
+/// The super-zoom hotkey has no pointer, so it zooms at the plot centre. On a live chart that
+/// centre is in history, and Live must drop the same way the wheel does.
+#[test]
+fn zoom_at_the_plot_centre_on_a_live_chart_lets_go() {
+    let mut view = live_view(NOW, WIDTH);
+    view.zoom_x_at(2.0, WIDTH, WIDTH * 0.5, NOW, true);
+    assert!(!view.follow, "a centre-anchored super zoom kept Live");
 }
 
 /// Moonbot's Ctrl+Right: a dragged, paused chart comes back to the price in ONE frame, on the scale
