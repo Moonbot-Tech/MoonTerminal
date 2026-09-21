@@ -13,7 +13,10 @@
 //! cannot drift apart: a control added for a figure appears here by existing.
 
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, h_flex};
+use moon_ui::{
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize,
+    MoonTheme, h_flex,
+};
 
 use moon_core::figures::{FigureTool, ToolDef};
 use rust_i18n::t;
@@ -27,6 +30,110 @@ use crate::design;
 /// longest name it has to hold is two short words, and the field sat half empty.
 const PICKER_W: f32 = 134.0;
 
+/// MoonUI popup padding on each side (`dropdown/layout.rs` `MENU_PADDING`). UI-scaled.
+const MENU_PAD: f32 = 4.0;
+/// MoonUI draws the menu border at `px(1.0)` per side and does not pass it through `tokens.ui`.
+const MENU_BORDER_PX: f32 = 1.0;
+/// MoonUI check column (`MENU_CHECK_WIDTH`). UI-scaled.
+const MENU_CHECK: f32 = 12.0;
+/// Gaps a row with no trailing mark pays: one before the label, one after the check column.
+const MENU_ITEM_GAPS: f32 = 2.0;
+/// Weight MoonUI's own row measurement uses, which is also what a checked row renders at.
+const MENU_LABEL_WEIGHT: f32 = 600.0;
+
+/// Glyph, the two spaces the rows are built with, then the localized name.
+///
+/// Args:
+///     glyph: The tool's menu mark.
+///     name: Localized tool name.
+///
+/// Returns:
+///     The label string a menu row and the width measurement both use.
+fn fig_menu_label(glyph: &str, name: impl std::fmt::Display) -> String {
+    format!("{glyph}  {name}")
+}
+
+/// Every figure-tool menu label in the active locale, in row order, separators omitted.
+///
+/// Returns:
+///     Cursor, Sells-to-zone, then each registry tool. Same strings the rows render.
+fn fig_tool_menu_labels() -> Vec<String> {
+    let mut labels = Vec::with_capacity(moon_core::figures::tools::REGISTRY.len() + 2);
+    labels.push(fig_menu_label("↖", t!("chart.fig.cursor")));
+    labels.push(fig_menu_label("✎", t!("chart.fig.sells_zone")));
+    labels.extend(
+        moon_core::figures::tools::REGISTRY
+            .iter()
+            .map(|def| fig_menu_label(def.glyph, t!(def.locale_key))),
+    );
+    labels
+}
+
+/// Design-reference outer width for [`MoonDropdown::menu_width_scaled`].
+///
+/// That setter multiplies by UI zoom (`tokens.ui(1.0)` for a density-tier menu) and then
+/// ellipsizes any row that still sticks out. `content_px` is already rendered pixels, so the
+/// zoom is divided back out. The result is at least [`PICKER_W`], the trigger's own design
+/// width, so a short locale cannot open a menu narrower than the button. One rendered pixel
+/// of slack is included in `content_px` by the caller: MoonUI truncates when the scaled width
+/// compares strictly under the measured row.
+///
+/// Args:
+///     content_px: Rendered width of the widest label plus the menu's own chrome, plus slack.
+///     ui_scale: Active UI zoom, the factor `menu_width_scaled` applies. Non-finite or
+///         sub-minimum values use MoonUI's own `tokens.ui` floor of 0.25.
+///
+/// Returns:
+///     Design-reference outer menu width.
+fn fig_tool_menu_design_width(content_px: f32, ui_scale: f32) -> f32 {
+    let scale = if ui_scale.is_finite() {
+        ui_scale.max(0.25)
+    } else {
+        0.25
+    };
+    let content = (content_px / scale).ceil();
+    content.max(PICKER_W)
+}
+
+/// Outer menu width, in design px, for the figure-tool dropdown's active locale.
+///
+/// Measures the widest row at the menu tier's UI-zoomed size (mono, weight 600 — the dropdown
+/// forces a monospaced menu and measures checked rows at 600), adds MoonUI's padding, border
+/// and check column, and floors the result at the trigger's design width. Passed to
+/// `menu_width_scaled`, which scales design px by UI zoom; the measurement is divided back by
+/// that same zoom so the label is not scaled twice.
+///
+/// Args:
+///     cx: Application context providing the theme, the density tier and the text system.
+///
+/// Returns:
+///     Design-reference width for [`MoonDropdown::menu_width_scaled`].
+fn fig_tool_menu_width(cx: &App) -> f32 {
+    let tokens = MoonTheme::active_tokens(cx);
+    let tier = match MoonMenuSize::from_theme(&tokens) {
+        MoonMenuSize::Tier(tier) => tier,
+        // `from_theme` only returns a tier. A custom size would measure on the font channel,
+        // which this menu does not use.
+        MoonMenuSize::Custom { .. } => design::CONTROL_TIER.nearest(&MoonMenuSize::SUPPORTED_TIERS),
+    };
+    let row = tier.control_metrics();
+    let widest = fig_tool_menu_labels()
+        .iter()
+        .map(|label| {
+            design::ui_text_width_zoomed(cx, label, row.font_size, MENU_LABEL_WEIGHT, true)
+        })
+        .fold(0.0_f32, f32::max);
+    // Row chrome matches `menu_width_requirements` for an item with no trailing label:
+    // horizontal padding, the check column, and two gaps. Outer chrome matches
+    // `menu_outer_chrome`: UI-scaled padding plus the unscaled 1px border on each side.
+    let chrome = design::ui_value(cx, MENU_PAD) * 2.0
+        + MENU_BORDER_PX * 2.0
+        + design::ui_value(cx, row.pad_x) * 2.0
+        + design::ui_value(cx, MENU_CHECK)
+        + design::ui_value(cx, row.gap) * MENU_ITEM_GAPS;
+    fig_tool_menu_design_width((widest + chrome).ceil() + 1.0, design::ui_value(cx, 1.0))
+}
+
 /// One tool's entry in the picker: its glyph and its name, checked when it is the current one.
 fn tool_item(
     def: &'static ToolDef,
@@ -36,7 +143,7 @@ fn tool_item(
     let tool = def.tool;
     MoonMenuItem::with_key(
         SharedString::new_static(def.key),
-        SharedString::from(format!("{}  {}", def.glyph, t!(def.locale_key))),
+        SharedString::from(fig_menu_label(def.glyph, t!(def.locale_key))),
     )
     .checked(current == Some(tool))
     .on_click(move |_, _, app| {
@@ -70,7 +177,7 @@ impl ChartTabs {
         let mut items = vec![
             MoonMenuItem::with_key(
                 SharedString::new_static("cursor"),
-                SharedString::from(format!("↖  {}", t!("chart.fig.cursor"))),
+                SharedString::from(fig_menu_label("↖", t!("chart.fig.cursor"))),
             )
             .checked(current.is_none() && !sells_zone)
             .on_click(move |_, _, app| {
@@ -87,7 +194,7 @@ impl ChartTabs {
             // only way out, and a ticked entry is what says "this is what a click does now".
             MoonMenuItem::with_key(
                 SharedString::new_static("sells-zone"),
-                SharedString::from(format!("✎  {}", t!("chart.fig.sells_zone"))),
+                SharedString::from(fig_menu_label("✎", t!("chart.fig.sells_zone"))),
             )
             .checked(sells_zone)
             .on_click(move |_, _, app| {
@@ -138,7 +245,7 @@ impl ChartTabs {
             })
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(PICKER_W)
-            .menu_width_scaled(180.0)
+            .menu_width_scaled(fig_tool_menu_width(cx))
             .items(items);
         // `MoonDropdown` carries no tooltip of its own, so the hint hangs on a wrapper. It is the
         // only place the Ctrl gesture is written down now that the pencil's tooltip is gone.
@@ -208,3 +315,6 @@ impl ChartTabs {
         )
     }
 }
+
+#[cfg(test)]
+mod tests;
