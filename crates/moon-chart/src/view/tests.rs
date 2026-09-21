@@ -202,7 +202,10 @@ fn a_pan_detaches_until_the_user_rejoins() {
 
     // Time passing is not a gesture. The old 3 s hold used to call resume_live from a timer.
     view.follow_edge(NOW + 10_000.0, NOW + 10_000.0);
-    assert!(!view.follow, "follow_edge restored live without a rejoin pan");
+    assert!(
+        !view.follow,
+        "follow_edge restored live without a rejoin pan"
+    );
     assert_eq!(view.right_time_ms, parked);
 
     // Dragging back onto the live edge still rejoins — the other half of the request.

@@ -736,6 +736,14 @@ hotkeys.center_chart_hint:
   ru: "Вернуть ВСЕ графики к текущей цене и живому краю: снимает ручной сдвиг/зум по цене (вертикальная протяжка, ПКМ-зум) и Паузу, масштабы не меняет. В поле ввода перебивает переход по слову. Moonbot-дефолт: Ctrl+→."
   en: "Bring EVERY chart back to the current price and the live edge: clears the manual price pan/zoom (vertical drag, right-button zoom) and Pause, leaves both scales alone. Overrides the word jump inside a text field. Moonbot default: Ctrl+Right."
   es: "Devuelve TODOS los gráficos al precio actual y al borde en vivo: quita el desplazamiento/zoom manual de precio (arrastre vertical, zoom con botón derecho) y la Pausa, sin tocar las escalas. Dentro de un campo de texto anula el salto por palabra. Valor por defecto de Moonbot: Ctrl+Derecha."
+hotkeys.toggle_live:
+  ru: "Live / Пауза"
+  en: "Live / Pause"
+  es: "Live / Pausa"
+hotkeys.toggle_live_hint:
+  ru: "Переключить автопрокрутку графика — та же кнопка Live/Пауза на панели. По умолчанию: Пробел. В поле ввода печатает пробел."
+  en: "Toggle chart auto-scroll — the same Live/Pause toolbar button. Default: Space. Types a space inside a text field."
+  es: "Activa o pausa el auto-desplazamiento del grafico, el mismo boton Live/Pausa de la barra. Por defecto: Espacio. En un campo de texto escribe un espacio."
 hotkeys.builtin.wheel_super_zoom:
   ru: "[Ctrl+Shift + Колёсико] супер-зум по времени до 3 секунд"
   en: "[Ctrl+Shift + Wheel] super zooms time down to 3 seconds"

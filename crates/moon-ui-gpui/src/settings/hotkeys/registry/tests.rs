@@ -330,3 +330,17 @@ fn center_chart_is_a_local_application_wide_chart_row() {
     );
     assert!(!slots_the_pull_writes().contains(&KeySlot::CenterChart));
 }
+
+/// Live/Pause is Terminal-only: reading it as imported would let the pull overwrite the user's
+/// Space binding with nothing, and a window scope would hide that the flag is application-wide.
+#[test]
+fn toggle_live_is_a_local_application_wide_chart_row() {
+    let row = slots()
+        .find(|row| row.key() == Some(KeySlot::ToggleLive))
+        .expect("toggle live row");
+    assert_eq!(row.group, HotkeyGroup::Chart);
+    assert_eq!(row.meta().origin, Origin::Local);
+    assert_eq!(row.meta().scope, Scope::APP);
+    assert_eq!(HotkeysConfig::default().key(KeySlot::ToggleLive), "space");
+    assert!(!slots_the_pull_writes().contains(&KeySlot::ToggleLive));
+}

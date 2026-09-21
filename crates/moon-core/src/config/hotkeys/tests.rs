@@ -132,6 +132,43 @@ fn generation_6_keeps_center_chart_on_a_file_that_never_used_it() {
     assert_eq!(existing_file.center_chart, "ctrl-right");
 }
 
+/// Pins `hotkeys.rs::clear_generation_7_collisions`: the arriving Space default must yield to a
+/// user who had already given that keystroke away.
+///
+/// Plausible breakage: the chart keys resolve ABOVE the trading actions, so a duplicated Space
+/// would silently turn an order-sending key into Live/Pause — and the file's own generation gate
+/// would never look at it again.
+#[test]
+fn generation_7_yields_toggle_live_to_an_existing_binding() {
+    let mut existing_file = HotkeysConfig {
+        schema: 6,
+        new_short: "space".into(),
+        ..HotkeysConfig::default()
+    };
+
+    existing_file.fill_unbound_slots();
+
+    assert_eq!(existing_file.new_short, "space");
+    assert!(
+        existing_file.toggle_live.is_empty(),
+        "the new toggle-live default must yield to the user's existing binding"
+    );
+    assert_eq!(existing_file.schema, SCHEMA);
+}
+
+/// A file that has NOT given Space away keeps the shipped default.
+#[test]
+fn generation_7_keeps_toggle_live_on_a_file_that_never_used_it() {
+    let mut existing_file = HotkeysConfig {
+        schema: 6,
+        ..HotkeysConfig::default()
+    };
+
+    existing_file.fill_unbound_slots();
+
+    assert_eq!(existing_file.toggle_live, "space");
+}
+
 /// Every tool takes part in the switch-figure cycle until one is switched off, including in a file
 /// written before the exclusion list existed.
 ///

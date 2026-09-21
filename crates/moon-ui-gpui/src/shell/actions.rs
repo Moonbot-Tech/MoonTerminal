@@ -360,6 +360,15 @@ impl Shell {
                 });
                 true
             }
+            // Same flip as the toolbar Live/Pause button: every live chart applies it through
+            // `ChartEngine::set_follow` on the next present.
+            HotkeyAction::ToggleLive => {
+                self.backend.update(cx, |b, bcx| {
+                    b.follow = !b.follow;
+                    bcx.notify();
+                });
+                true
+            }
             // Advance this group's active fullscreen Main chart through a dedicated group revision.
             // Keeping it separate from the scale revision prevents switching and zooming from
             // consuming each other's signals.

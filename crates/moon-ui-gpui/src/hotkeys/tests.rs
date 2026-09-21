@@ -412,3 +412,31 @@ fn the_default_center_chart_binding_resolves_even_while_typing() {
         Some(HotkeyAction::CenterChart)
     );
 }
+
+/// Space is the shipped Live/Pause key, and a focused text field must still type a space.
+///
+/// Plausible breakage: `belongs_to_the_field` stops treating an unmodified Space as field input,
+/// so a caret in coin search inserts nothing and the chart behind it flips Live; or the default
+/// binding is lost and the settings row ships empty.
+#[test]
+fn the_default_toggle_live_binding_is_space_and_types_inside_a_field() {
+    use super::{HotkeyAction, resolve};
+    use moon_core::config::KeySlot;
+    let config = HotkeysConfig::default();
+    assert_eq!(config.key(KeySlot::ToggleLive), "space");
+    let event = gpui::KeyDownEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    };
+    assert_eq!(
+        resolve(&event, &config, false),
+        Some(HotkeyAction::ToggleLive)
+    );
+    let typing = gpui::KeyDownEvent {
+        keystroke: Keystroke::parse("space").unwrap().with_simulated_ime(),
+        is_held: false,
+        prefer_character_input: false,
+    };
+    assert_eq!(resolve(&typing, &config, true), None);
+}

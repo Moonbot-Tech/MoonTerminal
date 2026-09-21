@@ -172,6 +172,9 @@ pub enum HotkeyAction {
     /// because Moonbot's key hits all charts, and because the toolbar's Live flag the return
     /// re-raises is application-wide already.
     CenterChart,
+    /// Toggle the toolbar Live/Pause flag (`Backend::follow`), which every live chart applies
+    /// through `ChartEngine::set_follow`. Space by default; a focused text field still types one.
+    ToggleLive,
     /// Copy an image of the active chart to the system clipboard - Moonbot's "make shot".
     ///
     /// The caller executes this because it needs the OS window behind the chart and the
@@ -531,6 +534,7 @@ impl HotkeyAction {
                 | Self::FigTool(_)
                 | Self::SwitchFigure
                 | Self::ChartShot
+                | Self::ToggleLive
         )
     }
 }
@@ -634,6 +638,7 @@ pub const DISPATCH: &[Step] = &[
     Step::Slot(KeySlot::SuperZoomIn),
     Step::Slot(KeySlot::SuperZoomOut),
     Step::Slot(KeySlot::CenterChart),
+    Step::Slot(KeySlot::ToggleLive),
     Step::Slot(KeySlot::ChartShot),
     Step::Slot(KeySlot::OrderSize(0)),
     Step::Slot(KeySlot::OrderSize(1)),
@@ -733,6 +738,7 @@ pub fn action_of(slot: KeySlot, hk: &HotkeysConfig) -> HotkeyAction {
         KeySlot::SuperZoomIn => A::SuperZoomIn,
         KeySlot::SuperZoomOut => A::SuperZoomOut,
         KeySlot::CenterChart => A::CenterChart,
+        KeySlot::ToggleLive => A::ToggleLive,
         KeySlot::SwitchFigure => A::SwitchFigure,
         KeySlot::ChartShot => A::ChartShot,
         KeySlot::DrawHline => A::FigTool(FigureTool::HLine),
@@ -1200,6 +1206,7 @@ pub fn apply(
         | A::SuperZoomIn
         | A::SuperZoomOut
         | A::CenterChart
+        | A::ToggleLive
         | A::NewLong
         | A::NewShort
         | A::FigUndo

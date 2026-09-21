@@ -608,6 +608,13 @@ impl DetachedChartHost {
                 });
                 true
             }
+            HotkeyAction::ToggleLive => {
+                self.backend.update(cx, |b, bcx| {
+                    b.follow = !b.follow;
+                    bcx.notify();
+                });
+                true
+            }
             // Place a manual order at the cursor price through the hovered chart.
             HotkeyAction::NewLong | HotkeyAction::NewShort => {
                 crate::hotkeys::place_order_at_hovered_chart(

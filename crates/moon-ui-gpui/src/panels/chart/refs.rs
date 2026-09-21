@@ -190,5 +190,4 @@ impl ChartPanel {
         })
         .detach();
     }
-
 }
