@@ -199,6 +199,7 @@ fn auto_core_all_toggle_preserves_the_dormant_core_name_preference() {
 /// layout silently on upgrade and the table resets.
 #[test]
 fn report_columns_key_stays_the_raw_name_while_the_title_is_the_label() {
+    let _locale = crate::test_locale::force("en");
     let cols = vec!["profitbtc".to_string(), "coin".to_string()];
     let vis = vec![0usize, 1usize];
     let widths: HashMap<String, f32> = HashMap::new();

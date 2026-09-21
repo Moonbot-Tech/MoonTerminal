@@ -80,11 +80,12 @@ fn flattening_is_idempotent() {
 /// A caller has one line for a duration, so the formatter must fall back to coarser units instead
 /// of growing. A third unit, or a zero second unit, overflows the cell it renders into.
 ///
-/// Built from the same keys the formatter reads rather than from English literals: the locale is a
-/// GLOBAL in `rust_i18n`, other tests in this binary switch it while these run, and a test that
-/// hard-coded "45s" would pass or fail depending on which one got there first.
+/// Built from the same keys the formatter reads rather than from English literals. The locale is
+/// process-wide, so this test holds `crate::test_locale::force` across both sides — otherwise a
+/// neighbour can switch language between the two `t!()` calls and they disagree.
 #[test]
 fn duration_shows_at_most_two_units() {
+    let _locale = crate::test_locale::force("en");
     let (s, m, h, d) = (
         rust_i18n::t!("analytics.cal.dur_s"),
         rust_i18n::t!("analytics.cal.dur_m"),

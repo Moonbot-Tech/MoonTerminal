@@ -987,6 +987,7 @@ fn expect(key: &str, value: &str) -> String {
 
 #[test]
 fn the_background_deltas_print_with_their_sign() {
+    let _locale = crate::test_locale::force("en");
     let inputs = LabelInputs {
         context: Some(ctx()),
         ..Default::default()
@@ -1018,6 +1019,7 @@ fn a_market_without_funding_prints_nothing() {
 
 #[test]
 fn the_funding_countdown_states_hours_and_minutes() {
+    let _locale = crate::test_locale::force("en");
     let at = |remaining_ms: i64| LabelInputs {
         context: Some(ctx()),
         now_ms: FUNDING_AT_MS - remaining_ms,
@@ -1460,6 +1462,7 @@ const TF_5M: i64 = 5 * 60_000;
 /// would claim a candle that closes and never reopens.
 #[test]
 fn a_candle_countdown_on_a_boundary_states_the_full_period() {
+    let _locale = crate::test_locale::force("en");
     let inputs = LabelInputs {
         now_ms: 0,
         chart_tf_ms: TF_5M,
@@ -1478,6 +1481,7 @@ fn a_candle_countdown_on_a_boundary_states_the_full_period() {
 /// hour out and minutes alone are useless in the last one.
 #[test]
 fn the_candle_countdown_steps_from_hours_down_to_seconds() {
+    let _locale = crate::test_locale::force("en");
     let at = |remaining_ms: i64, tf_ms: i64| {
         let inputs = LabelInputs {
             // A boundary minus the remainder: the bucket grid starts at the epoch.
@@ -1511,6 +1515,7 @@ fn the_candle_countdown_steps_from_hours_down_to_seconds() {
 /// zero for a whole second, which reads as a stopped chart.
 #[test]
 fn the_candle_countdown_rounds_a_part_second_up() {
+    let _locale = crate::test_locale::force("en");
     let inputs = LabelInputs {
         now_ms: TF_5M - 1,
         chart_tf_ms: TF_5M,
@@ -1525,6 +1530,7 @@ fn the_candle_countdown_rounds_a_part_second_up() {
 /// and printing the word `Авто` would name the setting rather than the period it currently means.
 #[test]
 fn the_candle_countdown_prefix_names_the_resolved_timeframe() {
+    let _locale = crate::test_locale::force("en");
     let auto = ChartLabelPart::new(ChartLabelField::TfCloseIn);
     let hour = ChartLabelPart {
         tf: moon_core::config::LabelTf::H1,
@@ -1563,6 +1569,7 @@ fn the_candle_countdown_prefix_names_the_resolved_timeframe() {
 /// depending on which OTHER caption shares its chart is a caption nobody can trust.
 #[test]
 fn a_candle_countdown_reads_the_same_on_either_clock_step() {
+    let _locale = crate::test_locale::force("en");
     let day: i64 = 24 * 3_600_000;
     // Ten hours and thirty seconds before the daily candle closes, on a boundary-anchored grid.
     let now: i64 = day - (10 * 3_600_000 + 30_000);
@@ -1586,6 +1593,7 @@ fn a_candle_countdown_reads_the_same_on_either_clock_step() {
 /// than sharpening it — the caption reads its own minute regardless of which step is in force.
 #[test]
 fn the_funding_countdown_ignores_the_finer_shared_clock() {
+    let _locale = crate::test_locale::force("en");
     let at = |now_ms: i64| {
         one_field(
             ChartLabelField::FundingIn,

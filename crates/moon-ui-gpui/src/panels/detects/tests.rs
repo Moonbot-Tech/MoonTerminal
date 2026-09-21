@@ -272,6 +272,7 @@ fn name_budget_follows_the_space_a_card_actually_has() {
 /// preset hid it instead of explaining that no core in the group can currently detect.
 #[test]
 fn empty_feed_no_available_cores_outrank_retained_cards() {
+    let _locale = crate::test_locale::force("en");
     let hidden_marker = ScopeMarker::new(Some(WorkspaceMode::Classic), 0, 3);
 
     assert_eq!(
@@ -286,6 +287,7 @@ fn empty_feed_no_available_cores_outrank_retained_cards() {
 /// would incorrectly say that the preset hid every core instead of saying no detects have fired.
 #[test]
 fn empty_feed_all_hidden_preset_does_not_rewrite_an_unretained_feed() {
+    let _locale = crate::test_locale::force("en");
     let hidden_marker = ScopeMarker::new(Some(WorkspaceMode::Classic), 0, 3);
 
     assert_eq!(empty_feed_text(&hidden_marker, 0, 3), t!("detects.empty"));
@@ -297,6 +299,7 @@ fn empty_feed_all_hidden_preset_does_not_rewrite_an_unretained_feed() {
 /// part of the preset would lose the explanation that the active scope is withholding it.
 #[test]
 fn empty_feed_partial_preset_with_retained_cards_reports_filtered_state() {
+    let _locale = crate::test_locale::force("en");
     let partial_marker = ScopeMarker::new(Some(WorkspaceMode::Classic), 1, 3);
 
     assert_eq!(
