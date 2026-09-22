@@ -1,5 +1,7 @@
 //! Unit tests for persisted filter-tuner controls.
 
+use std::sync::Arc;
+
 use super::{
     DEFAULT_EDGES, DEFAULT_ITERS, DEFAULT_TRAIN, SuggestJob, SuggestState, TRAIN_OPTIONS,
     TunerState, canonical_iters, edge_options, edge_options_upto, fmt_bound, iters_of, parse_num,
@@ -136,6 +138,7 @@ fn report_staleness_preserves_filter_drafts_and_the_running_search() {
     let handle = SearchHandle::new();
     state.sugg = SuggestState::Running(SuggestJob::Compose {
         handle: handle.clone(),
+        axis_moved: false,
     });
     let (seq, hist_seq, sugg_seq, dialog_seq) =
         (state.seq, state.hist_seq, state.sugg_seq, state.dialog_seq);
@@ -199,6 +202,7 @@ fn retiring_a_suggestion_stops_the_search_behind_it() {
     state.sugg = SuggestState::Running(SuggestJob::AllFields {
         handle: handle.clone(),
         total: 100,
+        axis_moved: false,
     });
 
     state.invalidate_suggest();
@@ -669,4 +673,288 @@ fn a_field_missing_from_the_saved_list_opens_unchecked() {
         unlisted_mapped.iter().all(|(_, on)| !**on),
         "a mapped field absent from the saved list must stay unchecked"
     );
+}
+
+/// `filter/state.rs:TunerState::invalidate_for_axis` must keep a live joint search and mark it.
+///
+/// Breakage: the method, or `analytics/mod.rs:observe_report_axis`, going back to
+/// `invalidate_suggest()`. The `SearchHandle` is cancelled, `sugg_seq` advances, and the
+/// completion guard drops the result. A minutes-long "Pick the set" run then vanishes with no
+/// error and no caption.
+#[test]
+fn an_axis_move_keeps_a_live_joint_search_and_marks_it() {
+    for compose in [true, false] {
+        let (job, handle) = joint_job(compose);
+        let mut state = prepared_axis_state(job);
+        let (seq, hist_seq, sugg_seq, dialog_seq) =
+            (state.seq, state.hist_seq, state.sugg_seq, state.dialog_seq);
+        assert!(
+            !state.needs_reload(),
+            "precondition: settled reads, so reload demand has to come from this call"
+        );
+        assert!(
+            !state.staged_ignore.is_empty() && state.save_dialog.is_some(),
+            "precondition: a draft and a save dialog are open"
+        );
+
+        state.invalidate_for_axis();
+
+        assert!(
+            !handle.is_cancelled(),
+            "a report-axis move must not cancel a live joint search"
+        );
+        assert!(
+            state.sugg.is_running(),
+            "the row must keep reporting that search as running"
+        );
+        assert_eq!(
+            state.sugg_seq, sugg_seq,
+            "the search's own result must still be publishable when it lands"
+        );
+        assert!(
+            state.sugg.axis_moved(),
+            "the kept run must carry the mark the caption reads"
+        );
+        assert_ne!(state.seq, seq, "KPI identity must still retire");
+        assert_ne!(
+            state.hist_seq, hist_seq,
+            "histogram identity must still retire"
+        );
+        assert_ne!(
+            state.dialog_seq, dialog_seq,
+            "a pending Save dialog must no longer match the retired draft"
+        );
+        assert!(
+            state.staged_ignore.is_empty(),
+            "unsaved ignore edits belong to the retired draft"
+        );
+        assert!(
+            state.save_dialog.is_none(),
+            "the open Save dialog belongs to the retired draft"
+        );
+        assert!(
+            state.needs_reload(),
+            "retired KPI and histogram reads must be reloadable"
+        );
+    }
+}
+
+/// `filter/state.rs:TunerState::invalidate_for_axis` falls through to `invalidate` when nothing
+/// joint is running.
+///
+/// Breakage: treating `SuggestJob::SingleField`, `Idle`, or a finished `Done` like a joint run
+/// and leaving `sugg_seq` alone. The single-field sweep has no caption that can carry the mark,
+/// and a finished result fitted on the old axis would stay on screen as if it still applied.
+/// The "SingleField is deliberately not kept" rule was previously only a docstring.
+#[test]
+fn an_axis_move_with_no_joint_run_is_a_plain_invalidation() {
+    for label in ["idle", "done", "single-field"] {
+        let mut state = TunerState::load(None, None, None, None, None, false);
+        state.sugg = match label {
+            "idle" => SuggestState::Idle,
+            "done" => SuggestState::Done {
+                work: super::SuggestWork::Plain { completed: 2 },
+                stopped: false,
+                split: None,
+                axis_moved: false,
+            },
+            "single-field" => SuggestState::Running(SuggestJob::SingleField),
+            _ => unreachable!(),
+        };
+        let sugg_seq = state.sugg_seq;
+
+        state.invalidate_for_axis();
+
+        assert_ne!(
+            state.sugg_seq, sugg_seq,
+            "{label}: with no live joint run the suggestion generation must retire"
+        );
+        assert!(
+            !state.sugg.is_running(),
+            "{label}: with no live joint run the row must not stay running"
+        );
+    }
+}
+
+/// `filter/state.rs:TunerState::invalidate` must still cancel a live joint search.
+///
+/// Breakage: extracting `retire_reads_and_drafts` and dropping the `invalidate_suggest()` call
+/// from `invalidate`. A scope change would leave the old search running and let its result
+/// publish into the new scope.
+#[test]
+fn a_scope_change_still_stops_a_live_search() {
+    let mut state = TunerState::load(None, None, None, None, None, false);
+    let (job, handle) = joint_job(false);
+    state.sugg = SuggestState::Running(job);
+
+    state.invalidate();
+
+    assert!(
+        handle.is_cancelled(),
+        "a scope change must still tell the running search to stop"
+    );
+    assert!(
+        !state.sugg.is_running(),
+        "and the row must no longer read as running"
+    );
+}
+
+/// Calling `invalidate_for_axis` again on the same live joint run must not undo the mark.
+///
+/// `analytics/mod.rs:observe_report_axis` fires on every report generation while a minutes-long
+/// composition is in flight. Breakage: the mark as a toggle or a counter, or the second call
+/// falling through to `invalidate_suggest()`. The handle would cancel, or the caption would
+/// disappear, halfway through a run the user is still watching.
+#[test]
+fn a_repeated_axis_move_keeps_the_mark_and_does_not_cancel() {
+    for compose in [true, false] {
+        let (job, handle) = joint_job(compose);
+        let mut state = TunerState::load(None, None, None, None, None, false);
+        state.sugg = SuggestState::Running(job);
+        let sugg_seq = state.sugg_seq;
+
+        state.invalidate_for_axis();
+        let sugg_seq_after_first = state.sugg_seq;
+        state.invalidate_for_axis();
+
+        assert!(
+            state.sugg.axis_moved(),
+            "a second observation must leave the mark set"
+        );
+        assert!(
+            !handle.is_cancelled(),
+            "a second observation must not cancel the search"
+        );
+        assert_eq!(
+            sugg_seq_after_first, sugg_seq,
+            "the first observation must not advance sugg_seq"
+        );
+        assert_eq!(
+            state.sugg_seq, sugg_seq,
+            "the second observation must not advance sugg_seq either"
+        );
+        assert!(state.sugg.is_running());
+    }
+}
+
+/// Every `sugg_seq` advance must settle `sugg` in the same function, and an axis move must not
+/// be one of those advances.
+///
+/// Breakage: a new site that does `sugg_seq.wrapping_add(1)` without assigning
+/// `SuggestState`. The completion closures at `filter/actions.rs` return when
+/// `sugg_seq` no longer matches, so the result is dropped and whatever state was on screen
+/// stays there. `invalidate_for_axis` deliberately does not take that route: there is no new
+/// runtime guard. `suggest_into_v1` must also start both joint jobs with `axis_moved: false`
+/// exactly twice — a third literal false is a copied mark being thrown away at launch.
+#[test]
+fn every_suggest_generation_advance_settles_the_state() {
+    let state_src = code_lines(include_str!("../state.rs"));
+    let actions_src = code_lines(include_str!("../actions.rs"));
+    let mut sites = 0usize;
+    for (label, source) in [("state.rs", &state_src), ("actions.rs", &actions_src)] {
+        for chunk in source.split("\n    }\n") {
+            if !chunk.contains("sugg_seq.wrapping_add(1)") {
+                continue;
+            }
+            sites += 1;
+            assert!(
+                chunk.contains("sugg = SuggestState::"),
+                "{label} advances sugg_seq without settling sugg; the completion would be dropped"
+            );
+        }
+    }
+    assert!(
+        sites >= 3,
+        "the three existing suggest-generation advances must still be visible, saw {sites}"
+    );
+
+    let axis = state_src
+        .split_once("fn invalidate_for_axis(")
+        .expect("invalidate_for_axis")
+        .1
+        .split("\n    }\n")
+        .next()
+        .expect("invalidate_for_axis body");
+    assert!(
+        !axis.contains("sugg_seq"),
+        "invalidate_for_axis must not advance sugg_seq"
+    );
+
+    let suggest = actions_src
+        .split_once("fn suggest_into_v1(")
+        .expect("suggest_into_v1")
+        .1
+        .split("\n    }\n")
+        .next()
+        .expect("suggest_into_v1 body");
+    assert_eq!(
+        suggest.matches("axis_moved: false").count(),
+        2,
+        "suggest_into_v1 must start both joint jobs unmarked and hardcode false nowhere else"
+    );
+}
+
+/// Strip comments so a substring ban cannot be satisfied by the prose that names it.
+fn code_lines(source: &str) -> String {
+    source
+        .replace("\r\n", "\n")
+        .lines()
+        .map(|line| match line.find("//") {
+            Some(at) => &line[..at],
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn joint_job(compose: bool) -> (SuggestJob, SearchHandle) {
+    let handle = SearchHandle::new();
+    let job = if compose {
+        SuggestJob::Compose {
+            handle: handle.clone(),
+            axis_moved: false,
+        }
+    } else {
+        SuggestJob::AllFields {
+            handle: handle.clone(),
+            total: 100,
+            axis_moved: false,
+        }
+    };
+    (job, handle)
+}
+
+/// Settled reads plus an open draft, so retirement assertions are transitions.
+fn prepared_axis_state(job: SuggestJob) -> TunerState {
+    let mut state = TunerState::load(None, None, None, None, None, false);
+    state.stats.apply(Ok(Vec::new()));
+    state.dirty = false;
+    state.hist_dirty = false;
+    state.staged_ignore.insert("IgnoreFilters", true);
+    state.save_dialog = Some(parked_save_dialog());
+    state.sugg = SuggestState::Running(job);
+    state
+}
+
+fn parked_save_dialog() -> Arc<super::super::super::shared::SaveDialog> {
+    use super::super::super::shared::{SaveAuthority, SaveDialog, SaveTarget};
+    Arc::new(SaveDialog {
+        authority: SaveAuthority {
+            dialog_seq: 1,
+            workspace_generation: None,
+            workspace_cores: None,
+            targets: Vec::new(),
+        },
+        targets: vec![SaveTarget {
+            sid: 1,
+            core: None,
+            name: "anchor".into(),
+        }],
+        changes: vec![("bound".into(), "1".into())],
+        olds: vec![None],
+        copy: false,
+        warns: Vec::new(),
+        per_target: None,
+        notes: vec![None],
+    })
 }

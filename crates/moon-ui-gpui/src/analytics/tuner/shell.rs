@@ -397,7 +397,8 @@ impl AnalyticsView {
     /// Returns:
     ///     The status band, or `None` while the row should stay quiet.
     fn filter_search_status_band(&self, p: MoonPalette, cx: &Context<Self>) -> Option<AnyElement> {
-        let facts = status_facts(search_status_view(&self.tuner.sugg));
+        let mut facts = status_facts(search_status_view(&self.tuner.sugg));
+        note_axis_move(&mut facts, &self.tuner.sugg);
         if facts.essential.is_empty() && facts.tail.is_empty() {
             return None;
         }
@@ -1087,7 +1088,7 @@ fn search_status_view(sugg: &SuggestState) -> SearchStatusView {
         SuggestState::Idle => SearchStatusView::Idle,
         // The blocking overlay is this one's progress feedback, so the row stays quiet.
         SuggestState::Running(SuggestJob::SingleField) => SearchStatusView::Idle,
-        SuggestState::Running(SuggestJob::AllFields { handle, total }) => {
+        SuggestState::Running(SuggestJob::AllFields { handle, total, .. }) => {
             SearchStatusView::AllFields {
                 done: handle.completed(),
                 total: *total,
@@ -1097,7 +1098,7 @@ fn search_status_view(sugg: &SuggestState) -> SearchStatusView {
         // is decided by what it finds, so there is no honest denominator to show. Until the first
         // step publishes one, it says only that it is working. `done` is 0-based inside the
         // handle; the locale counts options from one.
-        SuggestState::Running(SuggestJob::Compose { handle }) => match handle.stage() {
+        SuggestState::Running(SuggestJob::Compose { handle, .. }) => match handle.stage() {
             Some((step, done, total)) => SearchStatusView::Compose {
                 step,
                 option: done + 1,
@@ -1193,6 +1194,24 @@ fn status_facts(view: SearchStatusView) -> StatusFacts {
             tail: vec![format!("{}: {detail}", t!("analytics.tuner.sugg_failed"))],
             tone: StatusTone::Danger,
         },
+    }
+}
+
+/// Append the axis-move note when a finished run was live under a re-adopted report axis.
+///
+/// A running search appends nothing: its progress caption already owns the band, and a note
+/// there would fight the spinner for width. The note goes last on the tail, so it clips first;
+/// [`status_tooltip`] joins that tail back in when the band clips it.
+///
+/// Args:
+///     facts: Status band about to be drawn.
+///     sugg: The suggestion that band is captioning.
+fn note_axis_move(facts: &mut StatusFacts, sugg: &SuggestState) {
+    if sugg.axis_moved() && matches!(sugg, SuggestState::Done { .. }) {
+        facts
+            .tail
+            .push(t!("analytics.tuner.sugg_axis_moved").to_string());
+        facts.tone = StatusTone::Warn;
     }
 }
 

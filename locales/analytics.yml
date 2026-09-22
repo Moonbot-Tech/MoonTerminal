@@ -609,6 +609,10 @@ analytics.tuner.sugg_stopped:
   ru: "остановлено, попыток: %{rounds}"
   en: "stopped, restarts: %{rounds}"
   es: "parado, intentos: %{rounds}"
+analytics.tuner.sugg_axis_moved:
+  ru: "шкала времени сдвинулась"
+  en: "report time axis shifted"
+  es: "el eje de tiempo cambió"
 analytics.tuner.sugg_small:
   ru: "сделок меньше минимума"
   en: "fewer trades than the minimum"

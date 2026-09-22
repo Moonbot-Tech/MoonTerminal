@@ -243,6 +243,10 @@ pub(in crate::analytics::tuner) enum SuggestState {
         /// On an uninterrupted search, no answer means the scope held fewer trades than the
         /// minimum demanded of a suggestion.
         split: Option<SearchSplit>,
+        /// The report axis was re-adopted while this run was live; copied off the job.
+        ///
+        /// Why the run is kept: [`TunerState::note_axis_moved`].
+        axis_moved: bool,
     },
     /// The last search could not read the report.
     Failed(ReadFail),
@@ -302,6 +306,10 @@ pub(in crate::analytics::tuner) enum SuggestJob {
         handle: SearchHandle,
         /// Restarts requested for the run.
         total: usize,
+        /// The report axis was re-adopted while this run was live.
+        ///
+        /// Why the run is kept: [`TunerState::note_axis_moved`].
+        axis_moved: bool,
     },
     /// Composition: many searches behind one handle, choosing the field set before refitting it.
     ///
@@ -311,6 +319,10 @@ pub(in crate::analytics::tuner) enum SuggestJob {
     Compose {
         /// Cancellation and progress for this run.
         handle: SearchHandle,
+        /// The report axis was re-adopted while this run was live.
+        ///
+        /// Why the run is kept: [`TunerState::note_axis_moved`].
+        axis_moved: bool,
     },
 }
 
@@ -327,11 +339,27 @@ impl SuggestState {
     /// a sequence of them whose length depends on what it finds.
     pub(in crate::analytics::tuner) fn joint_run(&self) -> Option<(&SearchHandle, Option<usize>)> {
         match self {
-            SuggestState::Running(SuggestJob::AllFields { handle, total }) => {
+            SuggestState::Running(SuggestJob::AllFields { handle, total, .. }) => {
                 Some((handle, Some(*total)))
             }
-            SuggestState::Running(SuggestJob::Compose { handle }) => Some((handle, None)),
+            SuggestState::Running(SuggestJob::Compose { handle, .. }) => Some((handle, None)),
             _ => None,
+        }
+    }
+
+    /// Whether the report axis was re-adopted while this run was live.
+    ///
+    /// True only when a joint run, or the result copied off one, carries the mark. Idle, a
+    /// failed read and a single-field sweep have nothing that can say so.
+    ///
+    /// Returns:
+    ///     Whether the carried mark is set.
+    pub(in crate::analytics::tuner) fn axis_moved(&self) -> bool {
+        match self {
+            SuggestState::Running(SuggestJob::AllFields { axis_moved, .. })
+            | SuggestState::Running(SuggestJob::Compose { axis_moved, .. })
+            | SuggestState::Done { axis_moved, .. } => *axis_moved,
+            _ => false,
         }
     }
 }
@@ -485,19 +513,51 @@ impl TunerState {
     ///
     /// Current data remains until recomputation completes to avoid a loading
     /// flash; a completed non-data result clears it. Recompute on mode entry or
-    /// an explicit reload.
+    /// an explicit reload. It is the user-driven query-changed path, where cancelling the
+    /// running search is correct because the query genuinely differs — which is why the axis
+    /// has its own path below.
     ///
     /// The method has no return value; callers start or defer replacement reads.
     pub(in crate::analytics) fn invalidate(&mut self) {
+        self.retire_reads_and_drafts();
+        self.invalidate_suggest();
+    }
+
+    /// Drop KPI and histogram read identities and unsaved filter drafts.
+    ///
+    /// Shared by [`Self::invalidate`] and [`Self::invalidate_for_axis`]. The suggestion
+    /// generation stays put here: cancelling a search is the caller's decision.
+    ///
+    /// The method has no return value.
+    fn retire_reads_and_drafts(&mut self) {
         self.dirty = true;
         self.hist_dirty = true;
         self.seq = self.seq.wrapping_add(1);
         self.hist_seq = self.hist_seq.wrapping_add(1);
         self.hist_loading = false;
-        self.invalidate_suggest();
         self.mark_dialog_draft_changed();
         self.save_dialog = None;
         self.staged_ignore.clear();
+    }
+
+    /// Retire read identities after a report-axis adoption, keeping a live joint search.
+    ///
+    /// The axis is exempt from cancelling that search. The suggest search runs through
+    /// `spawn_db`, which installs no read-cancellation token, so it is not one of the lanes
+    /// `cancel_latest_reads` cancels — no interrupt, therefore no fake `Settled`. Why the run
+    /// is kept is [`Self::note_axis_moved`]. [`SuggestJob::SingleField`]
+    /// is deliberately not kept: a sub-second sweep under the blocking overlay, with no caption
+    /// that could carry the mark, so keeping it would break "kept implies marked". With no live
+    /// joint run this falls through to [`Self::invalidate`].
+    ///
+    /// On the keep path the method never advances `sugg_seq` and never replaces `sugg` beyond
+    /// the mark [`Self::note_axis_moved`] sets.
+    pub(in crate::analytics) fn invalidate_for_axis(&mut self) {
+        if !self.note_axis_moved() {
+            self.invalidate();
+            return;
+        }
+        self.retire_reads_and_drafts();
     }
 
     /// Retire asynchronous Save-dialog preparation after a user scope or draft change.
@@ -566,12 +626,41 @@ impl TunerState {
         }
     }
 
+    /// Record that the report axis was re-adopted under a live joint search.
+    ///
+    /// The mark lives on the job, and is copied onto the result, rather than in a field of its
+    /// own on [`TunerState`], so it cannot outlive what it describes — the same reasoning
+    /// [`Self::compose_support`] gives. The run is kept: its query bounds were snapshotted when
+    /// the search started, and the rows of that in-memory sample do not change while it runs;
+    /// the axis shift is a core-time-offset nudge at 15-minute bucket granularity against a
+    /// fitting window of weeks to months; and [`Self::mark_report_stale`] already decided that
+    /// a committed report row — a strictly larger change — must not retire a manually started
+    /// search.
+    ///
+    /// Only [`SuggestJob::AllFields`] and [`SuggestJob::Compose`] can carry the mark. Idle, a
+    /// finished result, a failure and a single-field sweep are left unchanged.
+    ///
+    /// Returns:
+    ///     Whether a live joint run was there to mark.
+    pub(in crate::analytics::tuner) fn note_axis_moved(&mut self) -> bool {
+        match &mut self.sugg {
+            SuggestState::Running(SuggestJob::AllFields { axis_moved, .. })
+            | SuggestState::Running(SuggestJob::Compose { axis_moved, .. }) => {
+                *axis_moved = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Mark KPI and histogram calculations stale while preserving tuner drafts and suggestions.
     ///
     /// Report generations can advance throughout a minutes-long field-set composition. Retiring
     /// the suggestion on every advance could repeatedly cancel a manually started search before
     /// it finishes, so search-input and destination changes invalidate it through
-    /// [`Self::invalidate`] or [`Self::invalidate_suggest`] instead.
+    /// [`Self::invalidate`] or [`Self::invalidate_suggest`] instead. A report-axis adoption is
+    /// the third route, [`Self::invalidate_for_axis`]: it keeps a live joint run and otherwise
+    /// invalidates exactly as [`Self::invalidate`] does.
     pub(in crate::analytics) fn mark_report_stale(&mut self) {
         self.dirty = true;
         self.hist_dirty = true;
