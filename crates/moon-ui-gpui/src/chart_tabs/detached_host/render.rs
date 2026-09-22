@@ -98,7 +98,8 @@ impl Render for DetachedChartHost {
                     .size(design::INPUT_SIZE),
             );
         // A press on either control group beside the field ends an open search, and only while
-        // there is one to end; see `common::coin_toolbar_press_handler`. Coverage here is the
+        // there is one to end; see `common::coin_toolbar_press_handler`. The all-cores section
+        // between the field and the icon run is not one of those two groups. Coverage here is the
         // groups themselves, so the row's own gaps are not in it — the dividers, the padding, and
         // the band above and below the centred sections — and this window's dismiss layer starts
         // BELOW the header, so a press there leaves the list up. The title cluster cannot be
@@ -199,8 +200,19 @@ impl Render for DetachedChartHost {
                 },
             )
         };
-        // Only detached tab windows have this header; the main dock does not. Scale is on the left,
+        // Only detached tab windows have this header; the main dock does not. The all-cores
+        // mode stands left of the icon run when Auto Overview shows it, scale leads that run,
         // and "close all charts" is on the right.
+        // Section and divider share one Option, so a chart outside Auto Overview never gains an
+        // empty group or a second rule between the coin field and the icons.
+        let all_cores_group = all_cores_btn.map(|btn| {
+            h_flex()
+                .flex_none()
+                .items_center()
+                .gap(design::ui_px(cx, design::CHROME_GAP))
+                .child(design::chrome_section(cx).child(btn))
+                .child(design::chrome_divider(cx, p))
+        });
         v_flex()
             .size_full()
             .relative()
@@ -247,6 +259,7 @@ impl Render for DetachedChartHost {
                     .child(design::chrome_divider(cx, p))
                     .child(design::chrome_section(cx).child(coin_search_el))
                     .child(design::chrome_divider(cx, p))
+                    .children(all_cores_group)
                     .child(
                         design::chrome_section(cx)
                             .when_some(ends_search.clone(), |this, end| {
@@ -314,7 +327,6 @@ impl Render for DetachedChartHost {
                                     .render(),
                                 cx,
                             ))
-                            .children(all_cores_btn)
                             // The labels button edits THIS window's chart captions.
                             .child(labels_popup::labels_popup_host(
                                 self,
