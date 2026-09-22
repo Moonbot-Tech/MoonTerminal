@@ -15,7 +15,7 @@ use rust_i18n::t;
 use super::candle_popup;
 use super::common;
 use super::common::LayoutPopupHost as _;
-use super::graphics_popup;
+use super::graphics_popup::{self, GraphicsPopupHost as _};
 use super::history_popup;
 use super::labels_popup;
 use super::popup_slot::ChartPopup;
@@ -286,6 +286,22 @@ impl Render for ChartTabs {
                 .render(),
             cx,
         );
+        // Shown only in Auto Overview. Outside that state the history stays single-core whatever
+        // the stored flag says, so a hidden button is the control the user does not have.
+        // `write_cfg` is the popups' persistence path, including apply-to-all, so a detached
+        // window and this strip edit one flag.
+        let all_cores_btn = self
+            .backend
+            .read(cx)
+            .is_auto_overview_scope(&self.group)
+            .then(|| {
+                graphics_popup::all_cores_toggle_button(
+                    &cx.entity(),
+                    "chart-history-all-cores",
+                    self.graphics_cfg(cx).history_all_cores,
+                )
+                .render()
+            });
         // The labels button beside the history one edits the ACTIVE TAB's chart captions.
         let labels_popup_open = self.popup_shows(ChartPopup::Labels);
         let labels_btn = labels_popup::labels_popup_host(
@@ -447,21 +463,34 @@ impl Render for ChartTabs {
         // below reads `cx` again.
         let fig_tools = self.render_fig_tools(cx).into_any_element();
 
-        // Right cluster, read left to right as three groups of one job each: what you DRAW on the
-        // chart, what you PUT on it, and how you VIEW it. The groups are `chrome_section`s with a
-        // `chrome_divider` standing between them, so the boundary comes from the rule rather than
-        // from wider spacing — the same block idiom the terminal header and the trading toolbar use.
+        // Right cluster, read left to right: what you DRAW on the chart, what you PUT on it,
+        // the all-cores history mode when Auto Overview shows it, and how you VIEW it. The
+        // groups are `chrome_section`s with a `chrome_divider` standing between them, so the
+        // boundary comes from the rule rather than from wider spacing — the same block idiom
+        // the terminal header and the trading toolbar use. The all-cores section and the
+        // divider after it are one element, present only when the button is.
         // Both settings buttons carry their own anchored popovers, so nothing here positions a popup.
         //
-        // Both groups AROUND the market field end an open search on press; see
-        // `common::coin_toolbar_press_handler`. Built only while there IS a search to end, because
-        // the listener is not free: it makes each `chrome_section` carry a hitbox that every
-        // mouse-down in the window then walks. A frame always lands between the two states and the
-        // next press — opening the list notifies, and taking the focus refreshes past the view
-        // cache — so nothing a user can do slips through the gate.
+        // The draw group and the view group end an open search on press; see
+        // `common::coin_toolbar_press_handler`. The all-cores section is left out of that pair:
+        // both toolbars stay at exactly two such listeners. Built only while there IS a search
+        // to end, because the listener is not free: it makes each `chrome_section` carry a
+        // hitbox that every mouse-down in the window then walks. A frame always lands between
+        // the two states and the next press — opening the list notifies, and taking the focus
+        // refreshes past the view cache — so nothing a user can do slips through the gate.
         let coin_search_live = self.popup_shows(ChartPopup::Coin)
             || self.coin_input.read(cx).focus_handle(cx).is_focused(window);
         let ends_search = coin_search_live.then(|| common::coin_toolbar_press_handler(cx));
+        // Section and divider share one Option, so an ordinary chart never gets an empty
+        // group or a second rule between the coin field and the view icons.
+        let all_cores_group = all_cores_btn.map(|btn| {
+            h_flex()
+                .flex_none()
+                .items_center()
+                .gap(design::ui_px(cx, design::CHROME_GAP))
+                .child(design::chrome_section(cx).child(btn))
+                .child(design::chrome_divider(cx, p_strip))
+        });
         let right_cluster = h_flex()
             .flex_none()
             .items_center()
@@ -477,6 +506,7 @@ impl Render for ChartTabs {
             .child(design::chrome_divider(cx, p_strip))
             .child(design::chrome_section(cx).child(coin_search_el))
             .child(design::chrome_divider(cx, p_strip))
+            .children(all_cores_group)
             .child(
                 design::chrome_section(cx)
                     .when_some(ends_search, |this, end| this.capture_any_mouse_down(end))

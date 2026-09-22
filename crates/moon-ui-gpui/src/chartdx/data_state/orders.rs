@@ -54,6 +54,12 @@ impl ChartDataState {
         // here, beside the configuration it overrides, because both answers must hold for the whole
         // sync — a shot arming halfway through would otherwise caption some panes and not others.
         let shot = st.shot_caption_active();
+        // A wide admitted set prints the exchange in the core-name caption, so that pane needs a
+        // venue whether or not the user asked for a venue caption — the same reason a shot does.
+        let history_wide = self
+            .trade_history_cores
+            .as_ref()
+            .is_some_and(|cores| cores.admitted.len() > 1);
         // Whether this ENGINE draws a frozen picture rather than a live market. Engine-level, not
         // per-pane: the answer belongs to the engine a trade window owns, so it is the same for
         // every pane it holds and is resolved once for the whole sync. One predicate, shared with
@@ -62,7 +68,8 @@ impl ChartDataState {
         // Both caption gates are answered ONCE for the sync, not per pane: they read the
         // configuration, which cannot change inside a sync, and a walk over sixteen rows of eight
         // captions per pane per order revision is real work for an answer that never differs.
-        let wants_venue_cfg = shot || labels_cfg.any_drawn(|f| f == ChartLabelField::Venue);
+        let wants_venue_cfg =
+            shot || history_wide || labels_cfg.any_drawn(|f| f == ChartLabelField::Venue);
         // `!frozen` for the same reason the order lines below are emptied: these captions read the
         // core's CURRENT open position and the strategy behind it. Printed over a trade that closed
         // hours ago they are not stale, they are about a different thing entirely — and a caption
@@ -115,6 +122,17 @@ impl ChartDataState {
                 .unwrap_or_default();
             if pr.core_name != core_name {
                 pr.core_name = core_name;
+                pixels_changed = true;
+            }
+            // Same foreign-admission test as `pane_admits_record`: this pane owns the history
+            // request and the admitted set holds more than the owner. A compare pane that does
+            // not own the request keeps its own name.
+            let all_cores_count = self.trade_history_cores.as_ref().and_then(|cores| {
+                (cores.owner == pane.core && cores.admitted.len() > 1)
+                    .then_some(cores.admitted.len())
+            });
+            if pr.all_cores_count != all_cores_count {
+                pr.all_cores_count = all_cores_count;
                 pixels_changed = true;
             }
             // Caption inputs that only the SESSION can answer: the venue behind the core, the open

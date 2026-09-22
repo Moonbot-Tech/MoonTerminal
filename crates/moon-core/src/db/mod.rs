@@ -58,7 +58,8 @@ pub use report_read::{
     ReportStrategyKey, ReportTable, ReportTotals, RowScope, SideFilter, StrategyPurgeRows,
     VALUATION_PROFIT_COLUMN, VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN, display_columns,
     distinct_cores, distinct_strategies, max_core_uid, open_rows_for_bound,
-    query_chart_trade_history, query_reports, query_totals, strategy_purge_rows,
+    query_chart_trade_history, query_chart_trade_history_for_cores, query_reports, query_totals,
+    strategy_purge_rows,
 };
 pub use trade_meta::{TradeMeta, query_trade_meta};
 

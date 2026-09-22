@@ -5,7 +5,7 @@ use rusqlite::{Connection, params};
 
 use super::{
     QuoteCurrency, ReportFilter, ReportStrategyKey, RowScope, SideFilter, distinct_strategies,
-    query_chart_trade_history, query_reports, query_totals,
+    query_chart_trade_history, query_chart_trade_history_for_cores, query_reports, query_totals,
 };
 
 /// Removing the exact core, exact coin, or inclusive close-date predicate from
@@ -2802,5 +2802,172 @@ fn chart_history_preserves_optional_millisecond_columns_and_legacy_rows() {
             .iter()
             .all(|record| record.buy_ms.is_none() && record.close_ms.is_none()),
         "missing optional columns must project NULL for every legacy row"
+    );
+}
+
+thread_local! {
+    static CHART_HISTORY_SQL: std::cell::RefCell<Vec<String>> =
+        std::cell::RefCell::new(Vec::new());
+}
+
+/// Keep expanded chart-history SELECTs so the test can `EXPLAIN` the statement the function prepared.
+///
+/// Args:
+///     event: One SQLite trace event from the connection under test.
+///
+/// Returns:
+///     Nothing. Matching statements are copied into the thread-local buffer.
+fn capture_chart_history_sql(event: rusqlite::trace::TraceEvent<'_>) {
+    let rusqlite::trace::TraceEvent::Stmt(statement, _) = event else {
+        return;
+    };
+    let Some(sql) = statement.expanded_sql() else {
+        return;
+    };
+    let folded = sql.to_ascii_uppercase();
+    if folded.contains("FROM") && folded.contains("ORDERS_REP") && folded.contains("CORE_UID") {
+        CHART_HISTORY_SQL.with(|slot| slot.borrow_mut().push(sql));
+    }
+}
+
+/// `report_read.rs:query_chart_trade_history_for_cores` must map an empty `core_uids` slice to
+/// `NO_MATCH_CORE_UID`. Deleting the `if core_uids.is_empty()` arm and assigning
+/// `core_uids.to_vec()` unconditionally makes a present-but-empty chart scope read every core in
+/// the replica, so the chart draws the whole fleet's arrows with no error.
+///
+/// The row oracle is the fixture's own record ids and close stamps. The plan oracle is SQLite's
+/// `EXPLAIN QUERY PLAN` of the SELECT this function actually prepared, which must search
+/// `idx_rep_core_close` rather than scan `orders_rep`.
+#[test]
+fn chart_history_empty_core_set_matches_nothing_and_multi_core_uses_index() {
+    let conn = Connection::open_in_memory().expect("open chart-history core-set fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL,
+             newrecid INTEGER NOT NULL,
+             coin TEXT,
+             buydate INTEGER,
+             closedate INTEGER,
+             buyprice REAL,
+             sellprice REAL,
+             quantity REAL,
+             isshort INTEGER
+         );
+         INSERT INTO orders_rep VALUES
+             (7, 11, 'BTCUSDT', 40, 100, 10.0, 11.0, 1.0, 0),
+             (7, 12, 'BTCUSDT', 50, 250, 10.0, 11.0, 1.0, 0),
+             (8, 22, 'BTCUSDT', 60, 300, 10.0, 11.0, 1.0, 0),
+             (9, 33, 'BTCUSDT', 70, 200, 10.0, 11.0, 1.0, 0);",
+    )
+    .expect("seed three cores on one market");
+    let seeded: i64 = conn
+        .query_row("SELECT COUNT(*) FROM orders_rep", [], |row| row.get(0))
+        .expect("count seeded chart rows");
+    assert_eq!(
+        seeded, 4,
+        "the fixture must hold four trades before the query"
+    );
+
+    let coins = ["BTCUSDT".to_string()];
+    let empty = query_chart_trade_history_for_cores(&conn, &[], &coins, None, 10)
+        .expect("an empty core set is a successful no-match");
+    assert!(
+        empty.records.is_empty(),
+        "empty core_uids must return no chart rows, got {:?}",
+        empty
+            .records
+            .iter()
+            .map(|record| record.record_id)
+            .collect::<Vec<_>>()
+    );
+
+    let multi = query_chart_trade_history_for_cores(&conn, &[7, 8], &coins, None, 10)
+        .expect("query cores 7 and 8");
+    assert_eq!(
+        multi
+            .records
+            .iter()
+            .map(|record| (record.record_id, record.core_uid, record.close_date))
+            .collect::<Vec<_>>(),
+        vec![(22, 8, 300), (12, 7, 250), (11, 7, 100)],
+        "cores 7 and 8 must both appear, newest close first, and core 9 must stay out"
+    );
+
+    let plan_conn = Connection::open_in_memory().expect("open chart-history plan fixture");
+    plan_conn
+        .execute_batch(
+            "CREATE TABLE orders_rep (
+                 core_uid INTEGER NOT NULL,
+                 newrecid INTEGER NOT NULL,
+                 coin TEXT,
+                 buydate INTEGER,
+                 closedate INTEGER,
+                 buyprice REAL,
+                 sellprice REAL,
+                 quantity REAL,
+                 isshort INTEGER
+             );
+             CREATE INDEX idx_rep_closedate ON orders_rep(closedate);
+             CREATE INDEX idx_rep_core_close ON orders_rep(core_uid, closedate);",
+        )
+        .expect("create chart-history plan schema");
+    {
+        let mut insert = plan_conn
+            .prepare(
+                "INSERT INTO orders_rep
+                 (core_uid, newrecid, coin, buydate, closedate, buyprice, sellprice, quantity, isshort)
+                 VALUES (?1, ?2, 'BTCUSDT', ?3, ?3, 10.0, 11.0, 1.0, 0)",
+            )
+            .expect("prepare plan-fixture insert");
+        // Cores 7 and 8 are a thin slice of a much larger third core. A balanced
+        // three-way split makes `core_uid IN (7, 8)` look cheaper as a scan.
+        for index in 0..8_080 {
+            let core = if index < 40 {
+                7
+            } else if index < 80 {
+                8
+            } else {
+                9
+            };
+            let close = 1_700_000_000 + index;
+            insert
+                .execute(rusqlite::params![core, index + 1, close])
+                .expect("insert plan-fixture row");
+        }
+    }
+    plan_conn
+        .execute_batch("ANALYZE")
+        .expect("analyze chart-history plan fixture");
+    CHART_HISTORY_SQL.with(|slot| slot.borrow_mut().clear());
+    plan_conn.trace_v2(
+        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+        Some(capture_chart_history_sql),
+    );
+    let window = ReportFilter {
+        date_from: Some(1_700_000_000),
+        date_to: Some(1_700_008_080),
+        ..ReportFilter::default()
+    };
+    query_chart_trade_history_for_cores(&plan_conn, &[7, 8], &coins, Some(&window), 10)
+        .expect("query the indexed multi-core window");
+    plan_conn.trace_v2(rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT, None);
+    let sql = CHART_HISTORY_SQL.with(|slot| slot.borrow().last().cloned());
+    let sql = sql.expect("the multi-core chart query must prepare a SELECT");
+    let mut explained = plan_conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+        .unwrap_or_else(|error| panic!("explain failed: {error}; sql: {sql}"));
+    let plan = explained
+        .query_map([], |row| row.get::<_, String>(3))
+        .expect("read the query plan")
+        .map(|row| row.expect("plan row"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        plan.contains("idx_rep_core_close"),
+        "multi-core chart history must search idx_rep_core_close: {plan}; sql: {sql}"
+    );
+    assert!(
+        !plan.contains("SCAN orders_rep") && !plan.contains("SCAN TABLE orders_rep"),
+        "multi-core chart history scanned orders_rep: {plan}"
     );
 }

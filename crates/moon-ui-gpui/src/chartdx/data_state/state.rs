@@ -65,6 +65,7 @@ impl ChartDataState {
             news_marks: std::rc::Rc::new(Vec::new()),
             news_hovered: None,
             trade_history: std::rc::Rc::new(Vec::new()),
+            trade_history_cores: None,
             report_axis: moon_core::db::ReportAxis::identity_core_local(),
             trade_history_revision: 0,
             archived_lines: Rc::new(HashMap::new()),

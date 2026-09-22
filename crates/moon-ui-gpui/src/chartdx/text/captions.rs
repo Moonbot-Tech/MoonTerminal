@@ -36,6 +36,7 @@ use moon_core::config::{
     ROW_NAME_PART, ROW_RUN_STRIDE, ResolvedLabelStyle, WRAP_PART_BASE,
 };
 use moon_core::util::fmt::DeltaSign;
+use rust_i18n::t;
 
 use super::caption::{CaptionBox, CaptionGeom, caption_geom};
 use super::labels::{LabelAction, LabelText};
@@ -1598,22 +1599,32 @@ impl RenderState {
             .zip(pr.cached_last_price)
             .filter(|(r, l)| *r > 0.0 && *l > 0.0)
             .map(|(r, l)| (l - r) / r * 100.0);
-        // A shot is in flight: this pane's core-name caption names the EXCHANGE instead. The
-        // substitution happens HERE, at the one place the caption's inputs are assembled, so that
-        // nothing below — the caption resolution, the truncation, the measuring, the plate geometry —
-        // learns that a shot is happening. Only which string arrives changes.
+        // The core-name caption is substituted HERE, at the one place its inputs are assembled,
+        // so nothing below — resolution, truncation, measuring, plate geometry — learns why the
+        // string changed. Only which string arrives changes.
         //
-        // The core name is the user's own free text, an account label such as `SUB ACC No 38`, and
-        // these pictures get shared publicly. `venue` is never empty while a shot is armed: the
-        // order sync resolves it through the shared label helper, which answers with the "not
-        // identified" wording for a core that cannot be named.
+        // A pane drawing more than its own core's trades names the exchange and the count. That
+        // wins over a shot: the shot exists to keep an account label out of a shared picture, and
+        // this string has none. Otherwise a shot in flight names the exchange alone. The core name
+        // is the user's own free text, an account label such as `SUB ACC No 38`. `venue` is never
+        // empty while a shot is armed: the order sync resolves it through the shared label helper,
+        // which answers with the "not identified" wording for a core that cannot be named.
         let shot = self.shot_caption_active();
+        let core_name = if let Some(n) = pr.all_cores_count {
+            t!(
+                "chart.history.all_cores.caption",
+                venue = pr.venue.as_str(),
+                n = n
+            )
+            .to_string()
+        } else if shot {
+            pr.venue.clone()
+        } else {
+            pr.core_name.clone()
+        };
         let inputs = super::LabelInputs {
             ticker: pr.ticker.clone(),
-            core_name: match shot {
-                true => pr.venue.clone(),
-                false => pr.core_name.clone(),
-            },
+            core_name,
             venue: pr.venue.clone(),
             quote: pr.quote.clone(),
             strategy: pr.label_strategy.clone(),

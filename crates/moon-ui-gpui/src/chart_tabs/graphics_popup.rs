@@ -23,7 +23,10 @@
 
 use gpui::*;
 use moon_core::config::ChartGraphicsCfg;
-use moon_ui::{MoonCheckbox, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex};
+use moon_ui::{
+    MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonPopover,
+    MoonPopoverPlacement, MoonSize, h_flex, v_flex,
+};
 use rust_i18n::t;
 
 use super::common::{LayoutPopupHost, StackSetting, seg_row};
@@ -134,6 +137,42 @@ pub(super) fn flag_cb<T: GraphicsPopupHost>(
         .on_change(move |ch: &bool, _w, app| {
             let v = *ch;
             write_cfg(&entity, app, |c| set(c, v));
+        })
+}
+
+/// Build the Auto Overview toggle that widens closed-trade history to every same-exchange core.
+///
+/// Host-generic so the docked strip and a detached window share one button, the way
+/// [`flag_cb`] shares one checkbox. The element id stays per host: the two toolbars are on
+/// screen together and a repeated id is a real GPUI collision.
+///
+/// Args:
+///     entity: Popup host whose graphics config the click writes.
+///     id: Element id, unique to this host.
+///     active: Whether the stored flag is currently on.
+///
+/// Returns:
+///     The icon-only button, not yet rendered.
+pub(super) fn all_cores_toggle_button<T: GraphicsPopupHost>(
+    entity: &Entity<T>,
+    id: &str,
+    active: bool,
+) -> MoonButton {
+    let entity = entity.clone();
+    MoonButton::new(SharedString::from(id.to_string()))
+        .leading_icon(MoonButtonIconSlot::new("icons/network.svg"))
+        .tooltip(t!("chart.history.all_cores.tip").to_string())
+        .size(MoonSize::Xs)
+        .variant(if active {
+            MoonButtonVariant::Blue
+        } else {
+            MoonButtonVariant::Ghost
+        })
+        .selected(active)
+        .on_click(move |_, _w, app| {
+            write_cfg(&entity, app, |c| {
+                c.history_all_cores = !c.history_all_cores;
+            });
         })
 }
 

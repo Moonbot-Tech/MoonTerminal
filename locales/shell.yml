@@ -1018,6 +1018,14 @@ chart.history.tip:
   ru: "Настройки истории сделок"
   en: "Trade history settings"
   es: "Ajustes del historial de operaciones"
+chart.history.all_cores.tip:
+  ru: "Сделки всех ядер сводки на этой бирже"
+  en: "Full summary: trades of every core on this exchange"
+  es: "Operaciones de todos los núcleos del Resumen completo en este exchange"
+chart.history.all_cores.caption:
+  ru: "%{venue} · все ядра (%{n})"
+  en: "%{venue} · all cores (%{n})"
+  es: "%{venue} · todos los núcleos (%{n})"
 chart.history.frame_closed_orders:
   ru: "Закрытые ордера"
   en: "Closed orders"
