@@ -1135,14 +1135,24 @@ impl AnalyticsView {
     /// every period bound moves. But the SCOPE (period, filters) does not, so this is a
     /// writer-driven catch-up, not a user reload: the visible snapshot stays on screen, with no
     /// blocking overlay, until the replacement lands. The observer retires EVERY in-flight read
-    /// identity for the old axis — `seq`, `cal_seq`, `cancel_latest_reads`, plus `tuner`,
-    /// `time_tuner`, `coins` and `coin_lists` `invalidate()` for the axes that keep their own
-    /// request generations — because a cancelled read is not silently dropped: the DB layer
-    /// raises a real SQLite interrupt that gets classified as a durable `Settled` failure, so a
-    /// read whose identity was not retired would pass its own `seq != req` guard and publish that
-    /// failure as if it were a real result. Retiring the tuner's identity here also clears any
+    /// identity for the old axis — `seq`, `cal_seq`, `cancel_latest_reads`, plus `time_tuner`,
+    /// `coins` and `coin_lists` `invalidate()` for the axes that keep their own request
+    /// generations — because a cancelled read is not silently dropped: the DB layer raises a
+    /// real SQLite interrupt that gets classified as a durable `Settled` failure, so a read
+    /// whose identity was not retired would pass its own `seq != req` guard and publish that
+    /// failure as if it were a real result. Retiring the tuner's read identities still clears any
     /// unsaved filter draft, matching this observer's behavior before it stopped calling
     /// `reload()` for axis changes.
+    ///
+    /// The "By filter" joint suggestion is the one exception. It runs through `spawn_db`, which
+    /// installs no read-cancellation token, so it is not among the lanes `cancel_latest_reads`
+    /// retires — no interrupt can reach it, and therefore no fake `Settled` can be published for
+    /// it. A live joint run finishes on the axis it started on, and its result is captioned as
+    /// fitted across the move. A minutes-long composition is the most expensive thing this window
+    /// does, and a report generation advance — a strictly larger change — already does not retire
+    /// it (`TunerState::mark_report_stale`). `TunerState::invalidate_for_axis` is that path. With
+    /// no joint run live the tuner is invalidated exactly as before: drafts cleared, every
+    /// identity retired.
     ///
     /// Args:
     ///     cx: Analytics window context used to schedule a catch-up only when the axis moved.
@@ -1159,7 +1169,7 @@ impl AnalyticsView {
         self.seq = self.seq.wrapping_add(1);
         self.cal_seq = self.cal_seq.wrapping_add(1);
         self.cancel_latest_reads();
-        self.tuner.invalidate();
+        self.tuner.invalidate_for_axis();
         self.time_tuner.invalidate();
         self.coins.invalidate();
         self.coin_lists.invalidate();

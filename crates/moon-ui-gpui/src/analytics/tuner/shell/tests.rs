@@ -3,7 +3,13 @@
 //! Explicit imports throughout: the parent re-exports `gpui::*`, whose own `test` shadows the
 //! built-in attribute and makes `#[test]` expand recursively.
 
-use super::{SearchStatusView, StatusTone, SuggestWork, status_facts, status_tooltip};
+use super::super::filter::state::{SearchSplit, SuggestJob, SuggestState};
+use super::{
+    SearchStatusView, StatusTone, SuggestWork, note_axis_move, search_status_view, status_facts,
+    status_tooltip,
+};
+use moon_core::db::metrics::Tally;
+use moon_core::db::tuner::threshold_search::SearchHandle;
 use rust_i18n::t;
 
 /// Hold English for the whole assertion so a parallel locale switch cannot split the two sides.
@@ -164,4 +170,119 @@ fn finished_captions_yield_and_stay_in_the_tooltip() {
         empty.tail,
         vec![t!("analytics.tuner.sugg_small").to_string()]
     );
+}
+
+/// `shell.rs:note_axis_move` appends the axis caption only on a finished marked run.
+///
+/// Breakage: dropping the `SuggestState::Done` match, so a finished composition never says the
+/// report time axis shifted, or appending the note while the search is still running, where it
+/// fights the progress caption for the fixed-width band. With the mark clear, the facts the
+/// band already built must stay byte for byte the same.
+#[test]
+fn a_result_fitted_across_an_axis_move_says_so_and_warns() {
+    let _locale = en();
+    let note = t!("analytics.tuner.sugg_axis_moved").to_string();
+    let work = SuggestWork::Plain { completed: 4 };
+
+    let mut marked = status_facts(SearchStatusView::Done(work));
+    let kept_head = marked.tail.clone();
+    assert!(
+        !kept_head.is_empty(),
+        "precondition: a finished caption already occupies the tail"
+    );
+    note_axis_move(&mut marked, &done_state(false, true, true));
+    assert_eq!(marked.tone, StatusTone::Warn);
+    assert_eq!(marked.tail.len(), kept_head.len() + 1);
+    assert_eq!(&marked.tail[..kept_head.len()], kept_head.as_slice());
+    assert_eq!(marked.tail.last().map(String::as_str), Some(note.as_str()));
+
+    let mut unmarked = status_facts(SearchStatusView::Done(work));
+    let essential = unmarked.essential.clone();
+    let tail = unmarked.tail.clone();
+    let tone = unmarked.tone;
+    note_axis_move(&mut unmarked, &done_state(false, false, true));
+    assert_eq!(unmarked.essential, essential);
+    assert_eq!(unmarked.tail, tail);
+    assert_eq!(unmarked.tone, tone);
+
+    let mut running_facts = status_facts(SearchStatusView::ComposeStarted);
+    let running_tail = running_facts.tail.clone();
+    let running_tone = running_facts.tone;
+    let running = SuggestState::Running(SuggestJob::Compose {
+        handle: SearchHandle::new(),
+        axis_moved: true,
+    });
+    note_axis_move(&mut running_facts, &running);
+    assert_eq!(running_facts.tail, running_tail);
+    assert_eq!(running_facts.tone, running_tone);
+}
+
+/// A run the user stopped already warns. The axis caption must not be what flips that colour.
+///
+/// Accepted trade, not a defect: `SearchStatusView::Stopped` in `status_facts` already sets
+/// `StatusTone::Warn`, so `note_axis_move` is a no-op on the tone when `Done` is both
+/// `stopped` and `axis_moved`. The two cases share a tone and differ only by the extra tail
+/// entry. A finished run that was not stopped does move `Muted` to `Warn`, and an empty
+/// finished run moves `Soft` to `Warn`, which is why the stopped case can stay colour-stable.
+#[test]
+fn a_stopped_run_warns_either_way_and_only_the_caption_changes() {
+    let _locale = en();
+    let note = t!("analytics.tuner.sugg_axis_moved").to_string();
+    let (essential_still, tail_still, tone_still) = captioned(&done_state(true, false, false));
+    let (essential_moved, tail_moved, tone_moved) = captioned(&done_state(true, true, false));
+    assert_eq!(tone_still, StatusTone::Warn);
+    assert_eq!(tone_moved, tone_still);
+    assert_eq!(essential_moved, essential_still);
+    let mut expected = tail_still.clone();
+    expected.push(note.clone());
+    assert_eq!(tail_moved, expected);
+
+    let (_, _, fitted_tone) = captioned(&done_state(false, false, true));
+    assert_eq!(fitted_tone, StatusTone::Muted);
+    let (_, fitted_tail, fitted_moved_tone) = captioned(&done_state(false, true, true));
+    assert_eq!(fitted_moved_tone, StatusTone::Warn);
+    assert_eq!(fitted_tail.last().map(String::as_str), Some(note.as_str()));
+
+    let (_, _, empty_tone) = captioned(&done_state(false, false, false));
+    assert_eq!(empty_tone, StatusTone::Soft);
+    let (_, empty_tail, empty_moved_tone) = captioned(&done_state(false, true, false));
+    assert_eq!(empty_moved_tone, StatusTone::Warn);
+    assert_eq!(empty_tail.last().map(String::as_str), Some(note.as_str()));
+}
+
+/// `locales/analytics.yml:analytics.tuner.sugg_axis_moved` must be a real string in ru, en, and es.
+///
+/// Breakage: deleting one language. `rust_i18n` echoes the missing key, so the status band would
+/// show `analytics.tuner.sugg_axis_moved` instead of the axis-shift caption.
+#[test]
+fn sugg_axis_moved_is_translated_for_every_shipped_locale() {
+    for code in ["ru", "en", "es"] {
+        let _locale = crate::test_locale::force(code);
+        let text = t!("analytics.tuner.sugg_axis_moved").to_string();
+        assert_ne!(
+            text, "analytics.tuner.sugg_axis_moved",
+            "{code} must not echo the key"
+        );
+        assert!(!text.is_empty(), "{code} caption must not be empty");
+    }
+}
+
+fn done_state(stopped: bool, axis_moved: bool, with_split: bool) -> SuggestState {
+    SuggestState::Done {
+        work: SuggestWork::Plain { completed: 4 },
+        stopped,
+        split: with_split.then(|| SearchSplit {
+            train: Tally::default(),
+            holdout: None,
+            composed: None,
+            compose_skipped: None,
+        }),
+        axis_moved,
+    }
+}
+
+fn captioned(sugg: &SuggestState) -> (Vec<String>, Vec<String>, StatusTone) {
+    let mut facts = status_facts(search_status_view(sugg));
+    note_axis_move(&mut facts, sugg);
+    (facts.essential, facts.tail, facts.tone)
 }

@@ -82,11 +82,13 @@ impl AnalyticsView {
         self.tuner.sugg = SuggestState::Running(if compose {
             SuggestJob::Compose {
                 handle: handle.clone(),
+                axis_moved: false,
             }
         } else {
             SuggestJob::AllFields {
                 handle: handle.clone(),
                 total: restarts,
+                axis_moved: false,
             }
         });
         self.poll_suggest_progress(handle.clone(), cx);
@@ -123,6 +125,9 @@ impl AnalyticsView {
                 // comparing it against ONE run's restart count would call almost every completed
                 // composition a stop and refuse to offer its seed.
                 let stopped = handle.abandoned();
+                // Copied off the live job before it is replaced. A failed read fits nothing and
+                // stays unmarked.
+                let axis_moved = this.tuner.sugg.axis_moved();
                 let found = match sugg {
                     Ok(found) => found,
                     // A failed read must not look like "found nothing": the button would just
@@ -166,6 +171,7 @@ impl AnalyticsView {
                         composed: res.composed.clone(),
                         compose_skipped: res.compose_skipped,
                     }),
+                    axis_moved,
                 };
                 // Offer the seed for pinning only after a COMPLETE run. A stopped search finishes
                 // an arbitrary subset of restart indices, not the first N, so rerunning its seed
@@ -208,11 +214,12 @@ impl AnalyticsView {
                     );
                     log::info!(
                         "analytics: smart suggestion — in sample {:+.2} over {}, \
-                         out of sample {holdout}, restarts {completed}, seed {}{decision}{}",
+                         out of sample {holdout}, restarts {completed}, seed {}{decision}{}{}",
                         res.train.profit,
                         res.train.n,
                         res.seed,
-                        if stopped { " (stopped)" } else { "" }
+                        if stopped { " (stopped)" } else { "" },
+                        if axis_moved { " (axis moved)" } else { "" }
                     );
                     let by_field: HashMap<&str, _> =
                         res.fields.into_iter().map(|f| (f.field, f)).collect();
