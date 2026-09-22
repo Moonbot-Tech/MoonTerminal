@@ -414,6 +414,12 @@ struct PaneRender {
     market: String,
     /// Core name for the chart corner label, resolved from `SessionManager` during order sync.
     core_name: String,
+    /// Admitted-core count for that same caption, or `None` when the pane draws only its own core.
+    ///
+    /// `Some(n)` means this pane owns the history request and `n` cores were admitted — the same
+    /// test `pane_admits_record` uses before it will draw a foreign trade. The caption string is
+    /// built from this in `refresh_pane_labels`, not here.
+    all_cores_count: Option<usize>,
     /// Ticker for that same caption (`BEAT-USDT`), resolved from the core's catalog in
     /// `sync_from_market_source` and cached here.
     ///
@@ -870,6 +876,7 @@ impl PaneRender {
             core: None,
             market: String::new(),
             core_name: String::new(),
+            all_cores_count: None,
             ticker: String::new(),
             ticker_catalog_key: 0,
             ticker_resolved: false,

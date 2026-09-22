@@ -489,11 +489,18 @@ impl ChartPanel {
         self.report_trades.last_refresh_start = Some(Instant::now());
         // Before the early return and before the re-read: toggling OFF narrows the drawn set
         // immediately, and toggling ON widens a filter whose current records are still one core.
-        self.chart
+        // The corner name is rebuilt by the order sync, and this set is not an order revision.
+        // Force that sync the way a changed record list does, so the name moves with the arrows
+        // instead of waiting for an unrelated order.
+        if self
+            .chart
             .set_trade_history_cores(Some(Rc::new(TradeHistoryCores {
                 owner: core,
                 admitted: cores.clone(),
-            })));
+            })))
+        {
+            self.sync_orders_if_visible(cx, true);
+        }
         if !draws_any_kind {
             // Both checkboxes are clear, so nothing would be drawn from this set: skip the round
             // trip entirely. The visible set is cleared whatever `replace_visible` says — the user
@@ -882,7 +889,11 @@ impl ChartPanel {
         self.report_trades.last_admitted_any = None;
         self.report_trades.cores.clear();
         self.report_trades.exact_coins.clear();
-        self.chart.set_trade_history_cores(None);
+        // Same wake as a set installed by a load: clearing the set is not an order revision,
+        // and the corner name would otherwise keep naming every core until one moved.
+        if self.chart.set_trade_history_cores(None) {
+            self.sync_orders_if_visible(cx, true);
+        }
         self.report_trades.status = ReportTradesStatus::Idle;
         // Bump the sequence so a read still in flight for that market cannot land afterwards.
         self.report_trades.sequence = self.report_trades.sequence.wrapping_add(1);
