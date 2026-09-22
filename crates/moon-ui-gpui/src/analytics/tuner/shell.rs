@@ -388,7 +388,9 @@ impl AnalyticsView {
     ///
     /// Head facts are `flex_none` children of this band; the tail is one `overflow_hidden` box.
     /// LTR clipping is the priority order. The tooltip is built from the same facts, so a clipped
-    /// tail stays recoverable.
+    /// tail stays recoverable. A finished joint run that was live across a report-axis adoption
+    /// appends that note and takes the warning tone. A running search does not: its progress
+    /// caption already owns the band.
     ///
     /// Args:
     ///     p: Active MoonUI palette.

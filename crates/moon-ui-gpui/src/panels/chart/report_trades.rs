@@ -419,6 +419,10 @@ impl ChartPanel {
 
     /// Start one exact-target durable read, optionally replacing visible state and refocusing.
     ///
+    /// The admitted core set is stored on the chart before any early return. Turning the flag off
+    /// therefore drops foreign arrows immediately, and turning it on widens the draw filter while
+    /// the rows still on screen belong to the previous core.
+    ///
     /// Args:
     ///     core: Exact runtime core captured by the producer.
     ///     market: Catalog-verified canonical market.
@@ -676,6 +680,10 @@ impl ChartPanel {
     }
 
     /// Whether a history request for this target would repeat work already done or under way.
+    ///
+    /// `cores` is the admitted set, the chart's own core first. It is compared with the set
+    /// already stored, in that order, so a wider or narrower admission is not the same request.
+    /// Alias spelling is a separate wake ([`Self::requery_trade_history_on_core_scope`]).
     ///
     /// `Loading | Ready | Empty` are settled: the answer is either in hand or on its way. The two
     /// FAILURE states are not settled — they must be retried — but not on demand: an unavailable

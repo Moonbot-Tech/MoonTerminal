@@ -124,9 +124,9 @@ impl ChartDataState {
                 pr.core_name = core_name;
                 pixels_changed = true;
             }
-            // Same foreign-admission test as `pane_admits_record`: this pane owns the history
-            // request and the admitted set holds more than the owner. A compare pane that does
-            // not own the request keeps its own name.
+            // Owner pane of a widened set: the same `owner == pane` gate `pane_admits_record`
+            // uses before a foreign trade may draw, and the set holds more than the owner. A
+            // compare pane that does not own the request keeps its own name.
             let all_cores_count = self.trade_history_cores.as_ref().and_then(|cores| {
                 (cores.owner == pane.core && cores.admitted.len() > 1)
                     .then_some(cores.admitted.len())

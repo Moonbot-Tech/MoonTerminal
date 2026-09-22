@@ -1147,19 +1147,19 @@ impl AnalyticsView {
     /// The "By filter" joint suggestion is the one exception. It runs through `spawn_db`, which
     /// installs no read-cancellation token, so it is not among the lanes `cancel_latest_reads`
     /// retires — no interrupt can reach it, and therefore no fake `Settled` can be published for
-    /// it. A live joint run finishes on the axis it started on, and its result is captioned as
-    /// fitted across the move. A minutes-long composition is the most expensive thing this window
-    /// does, and a report generation advance — a strictly larger change — already does not retire
-    /// it (`TunerState::mark_report_stale`). `TunerState::invalidate_for_axis` is that path. With
-    /// no joint run live the tuner is invalidated exactly as before: drafts cleared, every
-    /// identity retired.
+    /// it. Once that run has materialized its sample, an adoption does not rescan it; the result
+    /// is captioned as fitted across the move. A minutes-long composition is the most expensive
+    /// thing this window does, and a report generation advance — a strictly larger change —
+    /// already does not retire it (`TunerState::mark_report_stale`).
+    /// `TunerState::invalidate_for_axis` is that path. With no joint run live the tuner is
+    /// invalidated exactly as before: drafts cleared, every identity retired.
     ///
     /// Args:
     ///     cx: Analytics window context used to schedule a catch-up only when the axis moved.
     ///
     /// Returns:
-    ///     Nothing; an axis change retires every in-flight read identity and schedules a
-    ///     writer-driven catch-up.
+    ///     Nothing; an axis change retires in-flight read identities other than a live joint
+    ///     suggestion, and schedules a writer-driven catch-up.
     fn observe_report_axis(&mut self, cx: &mut Context<Self>) {
         let axis = self.backend.read(cx).report_axis(self.display_zone);
         if axis == self.axis {
