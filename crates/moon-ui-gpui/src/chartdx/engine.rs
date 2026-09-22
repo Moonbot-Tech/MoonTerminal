@@ -561,6 +561,20 @@ impl ChartEngine {
         self.data.borrow_mut().set_trade_history(records)
     }
 
+    /// Replace the admitted core set those markers may widen to.
+    ///
+    /// Args:
+    ///     cores: The panel's admitted set, or `None` for own-core only.
+    ///
+    /// Returns:
+    ///     Whether the set changed.
+    pub(crate) fn set_trade_history_cores(
+        &mut self,
+        cores: Option<std::rc::Rc<super::trade_history_sync::TradeHistoryCores>>,
+    ) -> bool {
+        self.data.borrow_mut().set_trade_history_cores(cores)
+    }
+
     /// Hand this engine the archived lines of its closed trades, for the "Moonbot lines" style.
     ///
     /// Args:
@@ -678,6 +692,18 @@ impl ChartEngine {
         read: impl FnOnce(&[moon_core::db::ChartTradeRecord]) -> R,
     ) -> R {
         read(&self.data.borrow().trade_history)
+    }
+
+    /// The admitted core set published with the durable history, if the panel handed one.
+    ///
+    /// `None` means own-core only. The `Rc` is cloned; the set is not.
+    ///
+    /// Returns:
+    ///     The published set, or `None` when the panel never handed one.
+    pub(crate) fn trade_history_cores(
+        &self,
+    ) -> Option<std::rc::Rc<super::trade_history_sync::TradeHistoryCores>> {
+        self.data.borrow().trade_history_cores.clone()
     }
 
     /// Read the report axis this engine's closed-trade stamps are currently corrected on.

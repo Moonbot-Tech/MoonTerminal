@@ -1593,6 +1593,11 @@ struct ChartDataState {
     news_hovered: Option<usize>,
     /// Durable closed trades for this exact Main chart target.
     trade_history: std::rc::Rc<Vec<moon_core::db::ChartTradeRecord>>,
+    /// Cores the panel admitted for `trade_history`, or `None` when no set was handed over.
+    ///
+    /// `None` is every panel that was never handed a set — every panel today, and the frozen
+    /// Trade window always — and `None` means own-core only.
+    trade_history_cores: Option<std::rc::Rc<trade_history_sync::TradeHistoryCores>>,
     /// The time axis this engine's replicated closed-trade stamps are corrected on.
     ///
     /// The replica stores `buydate`/`closedate` on the CORE's own wall clock, while the chart

@@ -1,4 +1,8 @@
 //! Runtime durable closed-trade loading for one exact Main-chart target.
+//!
+//! With `history_all_cores` on, and only while the panel's group is in Auto Overview, the read
+//! widens to every core of that overview on the chart core's own exchange. The stored flag alone
+//! never widens: the gate is applied here, where the request is built.
 
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -9,8 +13,12 @@ use moon_core::session::CoreId;
 use rust_i18n::t;
 
 use super::ChartPanel;
+use crate::Backend;
 use crate::backend::ChartHistoryScope;
+use crate::chartdx::trade_history_sync::TradeHistoryCores;
+use crate::core_order::{ExchangeSection, section_of};
 use crate::load_state::{db_read_failed_hint, db_read_failed_retryable};
+use crate::workspace::RetainedCoreScope;
 
 /// Maximum durable rows drawn for one Main chart.
 const HISTORY_LIMIT: usize = 1_000;
@@ -169,6 +177,19 @@ pub(super) struct ReportTradesState {
     /// trip — and "something is drawn", which needs the set that was never fetched. Remembering the
     /// single boolean is what makes that re-read fire on that transition and on nothing else.
     last_admitted_any: Option<bool>,
+    /// Cores the current history request was made for, the chart's own core first.
+    ///
+    /// Remembered beside [`Self::last_admitted_any`] so a later wake can tell a changed admitted
+    /// set from the one already loaded. Empty means no request has settled. A different set is a
+    /// different request: the redundancy check compares it, or a wider read would be swallowed
+    /// as the same target.
+    cores: Vec<CoreId>,
+    /// Coin aliases the last history read was built from, in query order.
+    ///
+    /// A sibling can already sit in [`Self::cores`] while its catalog still spells the coin as a
+    /// name fallback. The catalog wake does not change the ids, only this spelling, and the read
+    /// is the only place the aliases are rebuilt — so the wake has to compare this too.
+    exact_coins: Vec<String>,
     pub(super) status: ReportTradesStatus,
 }
 
@@ -188,10 +209,62 @@ fn draws_any_trade_kind(graphics: &moon_core::config::ChartGraphicsCfg) -> bool 
     graphics.show_real_trades || graphics.show_emulator_trades
 }
 
+/// Cores whose closed trades this chart may draw, the chart's own core first.
+///
+/// One answer for the query and the draw filter, so the two cannot drift. Every early exit is
+/// `vec![core]`: the flag off, a panel with no window group, anything that is not Auto Overview,
+/// and a core whose venue nothing can name. That last one does not join other cores — an unnamed
+/// venue matches nobody — so the chart stays on its own core rather than widening into the
+/// unidentified bucket.
+///
+/// The owner is moved to element 0 even when the display order already contains it later. Keying
+/// catalog readiness on `cores[0]` would otherwise treat a sibling's empty label as the chart's
+/// own and, on a Default scope, clear the arrows.
+///
+/// Args:
+///     b: Backend holding the session venues and the workspace scope.
+///     group: The panel's window group, or `None` for a diagnostics or historical panel.
+///     core: The chart's own core.
+///     all_cores: The stored `history_all_cores` flag. Off never widens.
+///
+/// Returns:
+///     Admitted cores, the owner at element 0. One element is today's picture.
+pub(super) fn admitted_history_cores(
+    b: &Backend,
+    group: Option<&str>,
+    core: CoreId,
+    all_cores: bool,
+) -> Vec<CoreId> {
+    if !all_cores {
+        return vec![core];
+    }
+    let Some(group) = group else {
+        return vec![core];
+    };
+    if !b.is_auto_overview_scope(group) {
+        return vec![core];
+    }
+    // Cloned so the scope call below can borrow `b` again. The map is one entry per core.
+    let venues = b.session.core_venues().clone();
+    let own = section_of(venues.get(&core));
+    if own == ExchangeSection::Unidentified {
+        return vec![core];
+    }
+    let mut admitted: Vec<CoreId> = b
+        .effective_workspace_scope(group, RetainedCoreScope::All)
+        .ids()
+        .iter()
+        .copied()
+        .filter(|candidate| *candidate != core && section_of(venues.get(candidate)) == own)
+        .collect();
+    admitted.insert(0, core);
+    admitted
+}
+
 /// Read one durable history snapshot without touching GPUI state.
 ///
 /// Args:
-///     core: Exact runtime core that owns the chart.
+///     cores: Explicit runtime cores, the chart's own core first.
 ///     exact_coins: Case-insensitive exact database coin identities for the market.
 ///     filter: Optional published Report filter refinement.
 ///
@@ -201,15 +274,15 @@ fn draws_any_trade_kind(graphics: &moon_core::config::ChartGraphicsCfg) -> bool 
 /// Errors:
 ///     Propagates report-replica readiness, snapshot, schema, and SQL failures.
 fn load_history(
-    core: CoreId,
+    cores: Vec<CoreId>,
     exact_coins: Vec<String>,
     filter: Option<ReportFilter>,
 ) -> db::ReadResult<ChartTradeHistory> {
     let conn = db::open_reader_with(db::CHART_TRADE_HISTORY_ATTACH)?;
     let snapshot = db::read_snapshot(&conn)?;
-    db::query_chart_trade_history(
+    db::query_chart_trade_history_for_cores(
         &snapshot,
-        core,
+        &cores,
         &exact_coins,
         filter.as_ref(),
         HISTORY_LIMIT,
@@ -236,6 +309,91 @@ fn history_result_is_current(
 }
 
 impl ChartPanel {
+    /// The admitted core set for one chart core under this panel's flag and window group.
+    ///
+    /// The wakes that compare a request share this call, so a later edit cannot change one of
+    /// them and leave the others on the old arguments. `load_history_scope` does not use it: that
+    /// path already holds the graphics value and must not read the settings a second time.
+    ///
+    /// Args:
+    ///     core: The chart's own core.
+    ///     cx: Application context used to read the backend and the effective graphics.
+    ///
+    /// Returns:
+    ///     Admitted cores, the owner first.
+    fn admitted_cores_for(&self, core: CoreId, cx: &App) -> Vec<CoreId> {
+        admitted_history_cores(
+            self.backend.read(cx),
+            self.workspace_group.as_deref(),
+            core,
+            self.effective_chart_graphics(cx).history_all_cores,
+        )
+    }
+
+    /// Coin aliases one history read queries, in the order the SQL sees them.
+    ///
+    /// The market name comes first, then each admitted core's catalog label, then a Report
+    /// scope's exact coin. An empty label is skipped. The catalog wake rebuilds this same list
+    /// so a spelling change is visible even when the core ids are not.
+    ///
+    /// Args:
+    ///     core: The chart's own core. Its label is the catalog-ready one, not `cores[0]`.
+    ///     market: Canonical market the chart is showing.
+    ///     cores: Admitted cores, the owner first.
+    ///     scope: Default or published Report history scope.
+    ///     cx: Application context used to read each core's market label.
+    ///
+    /// Returns:
+    ///     Deduplicated aliases, case-insensitive.
+    fn history_exact_coins(
+        &self,
+        core: CoreId,
+        market: &str,
+        cores: &[CoreId],
+        scope: &ChartHistoryScope,
+        cx: &App,
+    ) -> Vec<String> {
+        let owner_label = self
+            .backend
+            .read(cx)
+            .session
+            .market_source()
+            .market_label(core, market)
+            .coin;
+        let mut exact_coins = vec![market.to_string()];
+        for admitted in cores {
+            let label = if *admitted == core {
+                owner_label.clone()
+            } else {
+                self.backend
+                    .read(cx)
+                    .session
+                    .market_source()
+                    .market_label(*admitted, market)
+                    .coin
+            };
+            if label.is_empty()
+                || exact_coins
+                    .iter()
+                    .any(|coin| coin.eq_ignore_ascii_case(&label))
+            {
+                continue;
+            }
+            exact_coins.push(label);
+        }
+        if let ChartHistoryScope::Report { exact_coin, .. } = scope {
+            let report_coin = exact_coin.clone();
+            if !report_coin.trim().is_empty()
+                && !exact_coins
+                    .iter()
+                    .any(|coin| coin.eq_ignore_ascii_case(&report_coin))
+            {
+                exact_coins.push(report_coin);
+            }
+        }
+        exact_coins
+    }
+
     /// Install durable markers and force the shared userdata union to rebuild while visible.
     ///
     /// Args:
@@ -278,39 +436,9 @@ impl ChartPanel {
         replace_visible: bool,
         cx: &mut Context<Self>,
     ) {
-        let mut exact_coins = vec![market.clone()];
-        let label_coin = self
-            .backend
-            .read(cx)
-            .session
-            .market_source()
-            .market_label(core, &market)
-            .coin;
-        let catalog_ready = !label_coin.is_empty();
-        let default_needs_catalog = matches!(scope, ChartHistoryScope::Default);
-        if catalog_ready
-            && !exact_coins
-                .iter()
-                .any(|coin| coin.eq_ignore_ascii_case(&label_coin))
-        {
-            exact_coins.push(label_coin);
-        }
-        let (filter, report_coin) = match &scope {
-            ChartHistoryScope::Default => (None, None),
-            ChartHistoryScope::Report {
-                filter, exact_coin, ..
-            } => (Some(filter.clone()), Some(exact_coin.clone())),
-        };
-        if let Some(report_coin) = report_coin.filter(|coin| !coin.trim().is_empty())
-            && !exact_coins
-                .iter()
-                .any(|coin| coin.eq_ignore_ascii_case(&report_coin))
-        {
-            exact_coins.push(report_coin);
-        }
-
         // THIS panel's effective settings: the popup is per tab, so two tabs on the same market can
-        // legitimately draw different sets.
+        // legitimately draw different sets. Hoisted above the alias block so the admitted set and
+        // the "draw anything" check share one read.
         //
         // The trade-kind checkboxes deliberately do NOT narrow this query — see
         // `ChartTradeRecord::emulator`: the row cap is applied after the predicate, so filtering
@@ -321,17 +449,51 @@ impl ChartPanel {
         // in `chartdx/trade_history_sync.rs` is the one place that reads them. The Report scope's
         // own `filter.emulator` is a different thing and travels untouched: it says which rows the
         // user asked to see, not how they are drawn.
-        let draws_any_kind = {
-            let graphics = self.effective_chart_graphics(cx);
-            draws_any_trade_kind(&graphics)
+        let graphics = self.effective_chart_graphics(cx);
+        let draws_any_kind = draws_any_trade_kind(&graphics);
+        let backend = self.backend.read(cx);
+        let cores = admitted_history_cores(
+            backend,
+            self.workspace_group.as_deref(),
+            core,
+            graphics.history_all_cores,
+        );
+        // The OWNER's label, never `cores[0]`. `admitted_history_cores` already moves the owner to
+        // the front; keying readiness on the owner by name is the second guard, so a sibling with
+        // an empty label cannot make this read NotReady and clear the chart's own arrows.
+        let owner_label = self
+            .backend
+            .read(cx)
+            .session
+            .market_source()
+            .market_label(core, &market)
+            .coin;
+        let catalog_ready = !owner_label.is_empty();
+        let default_needs_catalog = matches!(scope, ChartHistoryScope::Default);
+        // One alias per admitted core. In PerCore each core has its own catalog, so two cores on
+        // one exchange can spell the coin differently; several distinct aliases are the right
+        // result, not a bug. An empty label contributes nothing and does not fail the read.
+        let exact_coins = self.history_exact_coins(core, &market, &cores, &scope, cx);
+        let filter = match &scope {
+            ChartHistoryScope::Default => None,
+            ChartHistoryScope::Report { filter, .. } => Some(filter.clone()),
         };
 
         self.report_trades.sequence = self.report_trades.sequence.wrapping_add(1);
         let sequence = self.report_trades.sequence;
         self.report_trades.target = Some((core, market.clone()));
         self.report_trades.scope = scope.clone();
+        self.report_trades.cores = cores.clone();
+        self.report_trades.exact_coins = exact_coins.clone();
         self.report_trades.last_admitted_any = Some(draws_any_kind);
         self.report_trades.last_refresh_start = Some(Instant::now());
+        // Before the early return and before the re-read: toggling OFF narrows the drawn set
+        // immediately, and toggling ON widens a filter whose current records are still one core.
+        self.chart
+            .set_trade_history_cores(Some(Rc::new(TradeHistoryCores {
+                owner: core,
+                admitted: cores.clone(),
+            })));
         if !draws_any_kind {
             // Both checkboxes are clear, so nothing would be drawn from this set: skip the round
             // trip entirely. The visible set is cleared whatever `replace_visible` says — the user
@@ -368,8 +530,9 @@ impl ChartPanel {
             for attempt in 1..=BUSY_READ_ATTEMPTS {
                 let exact_coins = exact_coins.clone();
                 let filter = filter.clone();
+                let cores = cores.clone();
                 let outcome = executor
-                    .spawn(async move { load_history(core, exact_coins, filter) })
+                    .spawn(async move { load_history(cores, exact_coins, filter) })
                     .await;
                 match outcome {
                     Ok(history) => {
@@ -469,7 +632,8 @@ impl ChartPanel {
         scope: ChartHistoryScope,
         cx: &mut Context<Self>,
     ) {
-        if self.history_request_is_redundant(core, &market, &scope) {
+        let cores = self.admitted_cores_for(core, cx);
+        if self.history_request_is_redundant(core, &market, &scope, &cores) {
             return;
         }
         self.load_history_scope(core, market, scope, true, cx);
@@ -497,7 +661,8 @@ impl ChartPanel {
         cx: &mut Context<Self>,
     ) {
         let scope = ChartHistoryScope::Default;
-        if self.history_request_is_redundant(core, &market, &scope) {
+        let cores = self.admitted_cores_for(core, cx);
+        if self.history_request_is_redundant(core, &market, &scope, &cores) {
             return;
         }
         self.load_history_scope(core, market, scope, true, cx);
@@ -515,13 +680,14 @@ impl ChartPanel {
         core: CoreId,
         market: &str,
         scope: &ChartHistoryScope,
+        cores: &[CoreId],
     ) -> bool {
         let same_target = self
             .report_trades
             .target
             .as_ref()
             .is_some_and(|target| target.0 == core && target.1 == market);
-        if !same_target || &self.report_trades.scope != scope {
+        if !same_target || &self.report_trades.scope != scope || self.report_trades.cores != cores {
             return false;
         }
         match self.report_trades.status {
@@ -656,6 +822,42 @@ impl ChartPanel {
         self.refresh_trade_history(cx);
     }
 
+    /// Re-read durable history when the admitted core set changes.
+    ///
+    /// The set is the chart's own core, plus — only in Auto Overview, and only while the flag is
+    /// on — every other core of that overview on the same exchange. A settings change, a workspace
+    /// revision, and a sibling catalog arriving are the wakes, and each is rare. This is not on
+    /// the coalesced Backend path: that one fires four times a second, and a scope walk there
+    /// would be three orders of magnitude off the background refresh budget.
+    ///
+    /// Args:
+    ///     cx: Panel context used to start a non-clearing refresh.
+    ///
+    /// Returns:
+    ///     Nothing; idle panels and an unchanged set do no work.
+    pub(super) fn requery_trade_history_on_core_scope(&mut self, cx: &mut Context<Self>) {
+        let Some((core, market)) = self.report_trades.target.clone() else {
+            return;
+        };
+        let cores = self.admitted_cores_for(core, cx);
+        // A single core's catalog is already retried by `catalog_ready`. More than one core
+        // can be admitted by venue before its catalog spells the stored coin, and that
+        // spelling change does not move `cores`.
+        let aliases = if cores.len() > 1 {
+            Some(self.history_exact_coins(core, &market, &cores, &self.report_trades.scope, cx))
+        } else {
+            None
+        };
+        let same_aliases = match &aliases {
+            None => true,
+            Some(aliases) => aliases == &self.report_trades.exact_coins,
+        };
+        if self.report_trades.cores == cores && same_aliases {
+            return;
+        }
+        self.refresh_trade_history(cx);
+    }
+
     /// Drop the history target when this panel no longer shows the market it belongs to.
     ///
     /// A stale target is not inert: every refresh edge — a report generation, a trade-kind change —
@@ -678,6 +880,9 @@ impl ChartPanel {
         self.report_trades.target = None;
         self.report_trades.scope = ChartHistoryScope::Default;
         self.report_trades.last_admitted_any = None;
+        self.report_trades.cores.clear();
+        self.report_trades.exact_coins.clear();
+        self.chart.set_trade_history_cores(None);
         self.report_trades.status = ReportTradesStatus::Idle;
         // Bump the sequence so a read still in flight for that market cannot land afterwards.
         self.report_trades.sequence = self.report_trades.sequence.wrapping_add(1);

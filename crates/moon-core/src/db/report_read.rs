@@ -2164,7 +2164,13 @@ pub fn query_reports(
 /// and never references the `valuation` schema, so it does not pay for it.
 pub const CHART_TRADE_HISTORY_ATTACH: super::AttachSet = super::AttachSet::STRATEGIES_ONLY;
 
-/// Read a bounded newest-first closed-trade history for one exact chart core and coin identity set.
+/// Read a bounded newest-first closed-trade history for one exact chart market on an explicit
+/// core set.
+///
+/// `core_uids` is the chart's own core first, then every other core the caller admitted. An empty
+/// slice means no core and is mapped to [`crate::config::NO_MATCH_CORE_UID`], not to every core:
+/// [`ReportFilter::core_uids`] empty means the whole fleet, so a present-but-empty set must name
+/// the sentinel or the read widens.
 ///
 /// The caller may provide a published Report filter to retain its date, side, emulator, deletion,
 /// and strategy predicates. This boundary always overwrites the core, substring coin, exact coin,
@@ -2174,7 +2180,7 @@ pub const CHART_TRADE_HISTORY_ATTACH: super::AttachSet = super::AttachSet::STRAT
 ///
 /// Args:
 ///     conn: Open report reader or pinned snapshot.
-///     core_uid: Exact runtime core that owns the chart.
+///     core_uids: Explicit runtime cores, the chart's own core first. Empty matches nothing.
 ///     exact_coins: Case-insensitive stored coin identities accepted for the canonical market.
 ///     filter: Optional published Report scope; `None` selects all durable closed trades.
 ///     limit: Maximum returned records; one additional row detects truncation.
@@ -2184,9 +2190,9 @@ pub const CHART_TRADE_HISTORY_ATTACH: super::AttachSet = super::AttachSet::STRAT
 ///
 /// Errors:
 ///     Propagates replica readiness, schema, SQL, and row-conversion failures.
-pub fn query_chart_trade_history(
+pub fn query_chart_trade_history_for_cores(
     conn: &Connection,
-    core_uid: u64,
+    core_uids: &[u64],
     exact_coins: &[String],
     filter: Option<&ReportFilter>,
     limit: usize,
@@ -2203,7 +2209,11 @@ pub fn query_chart_trade_history(
         "isshort",
     ];
     let mut scope = filter.cloned().unwrap_or_default();
-    scope.core_uids = vec![core_uid];
+    scope.core_uids = if core_uids.is_empty() {
+        vec![crate::config::NO_MATCH_CORE_UID]
+    } else {
+        core_uids.to_vec()
+    };
     scope.coin.clear();
     scope.exact_coins = Some(exact_coins.to_vec());
     scope.rows = RowScope::Closed;
@@ -2410,6 +2420,30 @@ pub fn query_chart_trade_history(
     let truncated = records.len() > limit;
     records.truncate(limit);
     Ok(ChartTradeHistory { records, truncated })
+}
+
+/// Single-core form of [`query_chart_trade_history_for_cores`]: one chart core, not a set.
+///
+/// Args:
+///     conn: Open report reader or pinned snapshot.
+///     core_uid: Exact runtime core that owns the chart.
+///     exact_coins: Case-insensitive stored coin identities accepted for the canonical market.
+///     filter: Optional published Report scope; `None` selects all durable closed trades.
+///     limit: Maximum returned records; one additional row detects truncation.
+///
+/// Returns:
+///     Parsed chart records and whether older matches were truncated.
+///
+/// Errors:
+///     Propagates replica readiness, schema, SQL, and row-conversion failures.
+pub fn query_chart_trade_history(
+    conn: &Connection,
+    core_uid: u64,
+    exact_coins: &[String],
+    filter: Option<&ReportFilter>,
+    limit: usize,
+) -> ReadResult<ChartTradeHistory> {
+    query_chart_trade_history_for_cores(conn, &[core_uid], exact_coins, filter, limit)
 }
 
 /// Convert one generic Report value to an integer without accepting lossy non-integral reals.

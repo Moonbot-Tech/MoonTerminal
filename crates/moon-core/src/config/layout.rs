@@ -1543,6 +1543,15 @@ pub struct ChartGraphicsCfg {
     /// keeps the picture it had.
     #[serde(default, deserialize_with = "de_trade_history_style")]
     pub trade_history_style: TradeHistoryStyle,
+    /// Draw the closed trades of every Auto-Overview core on the chart core's own exchange,
+    /// not only the chart's own core.
+    ///
+    /// OFF by default: an absent value keeps today's single-core picture, and ON would silently
+    /// add other cores' arrows to every existing Overview chart. The stored flag alone never
+    /// widens a read. The runtime gate (Auto + Overview, same exchange) is applied where the
+    /// request is built, so a stored `true` read outside Auto Overview still draws one core.
+    #[serde(default, deserialize_with = "de_lenient_false")]
+    pub history_all_cores: bool,
     /// Whether a CLOSED order hides its sell-price line. Live orders always keep theirs.
     ///
     /// On by default: after an order closes, its blue sell line stays on the chart at
@@ -1731,6 +1740,7 @@ impl Default for ChartGraphicsCfg {
             show_real_trades: true,
             show_emulator_trades: true,
             trade_history_style: TradeHistoryStyle::Marks,
+            history_all_cores: false,
             hide_closed_sell_line: true,
             hide_order_move_history: false,
             hide_entry_fill_arrow: false,

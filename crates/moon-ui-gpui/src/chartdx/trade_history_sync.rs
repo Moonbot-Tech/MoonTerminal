@@ -5,7 +5,8 @@
 //! integration suite cannot import this binary crate's items (hence the static text contracts in
 //! `tests/theme_contract/`). A `src/**/tests.rs` sibling unit-test module, like this file's own,
 //! compiles and runs normally and is where a private free function belongs. What stays here is
-//! only what needs the chart's own state: filtering to the pane's core, rebasing timestamps onto
+//! only what needs the chart's own state: filtering each pane to its own core and, when that pane
+//! owns the history request, to the admitted set, rebasing timestamps onto
 //! the chart epoch, resolving theme colours, publishing hover state, and retaining the exact
 //! cluster snapshot uploaded for hit-testing.
 
@@ -56,6 +57,39 @@ pub(super) fn trade_kind_visible(
     }
 }
 
+/// Whether one closed-trade record may draw on this pane.
+///
+/// A panel's `trade_history` is ONE list loaded for ONE `(core, market)` target, and a multi-pane
+/// panel (the Compare kind) draws that same list on every pane. Only the pane whose core OWNS the
+/// request may widen to the admitted set; every other pane keeps today's own-core rule, or a
+/// Compare pane would draw the anchor pane's foreign trades. That is why `owner == pane` is
+/// load-bearing.
+///
+/// Once the panel is handed a widened set, a non-owner Compare pane begins drawing ITS OWN core's
+/// rows out of that shared list, where today it draws nothing — today the list holds only the
+/// owner's rows. That is deliberate and strictly flag-gated: with the toggle off the admitted set
+/// is just the owner, so a follower pane draws nothing exactly as it does now. `owner == pane`
+/// still stops a follower from drawing OTHER cores' trades.
+///
+/// `None` is own-core only. That is a panel which has not loaded a target yet, and the frozen
+/// Trade window, which publishes records but never hands over a core set. A loaded panel stores
+/// `Some` even when the flag is off and the set is just the owner; that set draws the same rows
+/// `None` would.
+///
+/// Args:
+///     pane: The pane's own core.
+///     record: The record's core.
+///     cores: The set the panel was handed, or `None` when it never handed one.
+///
+/// Returns:
+///     Whether the record draws on this pane.
+fn pane_admits_record(pane: CoreId, record: CoreId, cores: Option<&TradeHistoryCores>) -> bool {
+    if record == pane {
+        return true;
+    }
+    matches!(cores, Some(c) if c.owner == pane && c.admitted.contains(&record))
+}
+
 /// Lift a record's core-local entry/exit stamps onto the chart's true-UTC millisecond axis.
 ///
 /// The conversion (correct the seconds part once, re-attach any sub-second remainder) lives
@@ -98,6 +132,18 @@ fn trade_mark_with(
     }
 }
 
+/// The cores one panel's trade-history list was loaded for.
+///
+/// `owner` is the core whose `(core, market)` request loaded that list. `admitted` is the full
+/// set the request was made for, the owner first.
+#[derive(Debug, PartialEq)]
+pub(crate) struct TradeHistoryCores {
+    /// Core whose request loaded the panel's record list.
+    pub(crate) owner: CoreId,
+    /// Every core that request covered, `owner` first.
+    pub(crate) admitted: Vec<CoreId>,
+}
+
 /// Everything a pane must retain about the trade arrows it currently has on the GPU.
 ///
 /// The two halves travel together because neither is usable alone: the clusters say WHERE the
@@ -110,11 +156,14 @@ pub(crate) struct TradeGeometry {
     pub clusters: Vec<TradeCluster>,
     /// For each entry of this pane's FILTERED mark list, its index in the panel's record list.
     ///
-    /// A pane draws only the trades of its OWN core, so its mark indices — which is what
-    /// `TradeCluster::members` holds — are not the panel's indices. Two panes on two cores
-    /// therefore disagree about what "member 3" means, and the hover card would show the wrong
-    /// trades without this map. Carrying the map rather than a record id also sidesteps the legacy
-    /// rows whose id column collapses to `0`, which cannot tell two trades apart at all.
+    /// A pane draws its own core's trades and, when it owns the history request and the panel was
+    /// handed an admitted set, that set's trades. Its mark indices — which is what
+    /// `TradeCluster::members` holds — stay per pane, so they are not the panel's indices: two
+    /// panes filter the same list differently and disagree about what "member 3" means, and the
+    /// hover card would show the wrong trades without this map. `sources` still sends those
+    /// indices back to the panel's record list. Carrying the map rather than a record id also
+    /// sidesteps the legacy rows whose id column collapses to `0`, which cannot tell two trades
+    /// apart at all.
     pub sources: Vec<usize>,
 }
 
@@ -122,8 +171,8 @@ impl ChartDataState {
     /// Mark every pane's trade-history geometry dirty and request a present.
     ///
     /// The shared body of every setter here that invalidates the userdata pass rather than a
-    /// single pane: `set_trade_history`, `set_trade_hover`, and `set_report_axis` all need
-    /// exactly this.
+    /// single pane: `set_trade_history`, `set_trade_history_cores`, `set_trade_hover`, and
+    /// `set_report_axis` all need exactly this.
     fn dirty_all_trade_panes(&mut self) {
         let mut render = self.render.borrow_mut();
         for pane in &mut render.panes {
@@ -154,6 +203,28 @@ impl ChartDataState {
         true
     }
 
+    /// Replace the admitted core set the trade-history filter may widen to.
+    ///
+    /// `None` is own-core only: every panel until one hands a set, and the frozen Trade window
+    /// always. A real change bumps `trade_history_revision` and dirties every pane, because
+    /// `trade_history_sig` is what decides whether a pane rebuilds its geometry — a set that
+    /// changed without moving that signature would leave the old arrows on screen.
+    ///
+    /// Args:
+    ///     cores: The panel's admitted set, or `None` for own-core only.
+    ///
+    /// Returns:
+    ///     Whether the set changed.
+    pub(super) fn set_trade_history_cores(&mut self, cores: Option<Rc<TradeHistoryCores>>) -> bool {
+        if self.trade_history_cores == cores {
+            return false;
+        }
+        self.trade_history_cores = cores;
+        self.trade_history_revision = self.trade_history_revision.wrapping_add(1);
+        self.dirty_all_trade_panes();
+        true
+    }
+
     /// Replace the report axis this engine's closed-trade stamps are corrected on.
     ///
     /// Args:
@@ -172,7 +243,8 @@ impl ChartDataState {
 
     /// Replace the hovered arrow and invalidate userdata only on a real change.
     ///
-    /// The hover is qualified by PANE, not merely by mark: each pane draws only its own core's
+    /// The hover is qualified by PANE, not merely by mark: a pane draws its own core's trades and,
+    /// when it owns the history request and the panel was handed an admitted set, that set's
     /// trades, so a bare index names a different trade on every pane and would grow an unrelated
     /// marker on all the others. It is also a MARK rather than a cluster index, so that the
     /// rebuild this very call triggers cannot move the highlight onto a neighbouring arrow — see
@@ -234,11 +306,22 @@ impl ChartDataState {
         if sig == u64::MAX { 0 } else { sig }
     }
 
-    /// Append entry/exit arrows and their connectors for records owned by this exact pane core.
+    /// Append entry/exit arrows and their connectors for the trades this pane may draw.
+    ///
+    /// A pane draws its own core's trades and, when it owns the history request and the panel was
+    /// handed an admitted set, that set's trades. Mark indices stay per pane, and `sources` maps
+    /// them back to the panel's record list.
+    ///
+    /// In the Moonbot-lines style an admitted record the pane does not own keeps both arrows.
+    /// The archived exit line is built only for the pane's own core, while a lined end loses its
+    /// arrow, so treating a foreign trade as lined would hide its exit. Own-core trades stay
+    /// lines; foreign admitted trades stay arrows. Widening the archived-line layer is outside
+    /// this feature.
     ///
     /// Args:
     ///     pane: Index of the pane being composed, which decides whether it owns the hovered arrow.
-    ///     core: Exact pane core; records from other cores are ignored.
+    ///     core: The pane's own core. A foreign record draws only when this pane owns the history
+    ///         request and the record's core is in the admitted set.
     ///     view: The pane's own view, supplying the epoch and the scale clustering works in.
     ///     markers: Existing order/figure/news marker union to extend.
     ///     lines_drawn: `Some` when this pane's order pass draws the archived lines, so the
@@ -264,13 +347,15 @@ impl ChartDataState {
             return TradeGeometry::default();
         }
         // When the order pass draws the closed trades as lines, an END drawn as a line loses its
-        // arrow, which would sit on top of it: one or the other, per end. The EXIT is always a
-        // line — from the archive or from the row itself — so its arrow never draws in that
-        // style; the ENTRY is a line only when the core archived its own entry line (it archives
-        // only a line its chart gave a point, so a market entry usually has none) and keeps its
-        // arrow otherwise. The CALLER says whether the lines are drawn — a pane without a core
-        // runs no order pass at all, and its arrows stay — and names the trades that closed this
-        // session, which the live store draws whole: no arrow for either of their ends.
+        // arrow, which would sit on top of it: one or the other, per end. For the pane's OWN core
+        // the EXIT is a line — from the archive or from the row itself — so its arrow never draws
+        // in that style; the ENTRY is a line only when the core archived its own entry line (it
+        // archives only a line its chart gave a point, so a market entry usually has none) and
+        // keeps its arrow otherwise. A record the pane admits but does not own is not lined: the
+        // archived exit line is never built for a foreign core, and dropping its arrow would hide
+        // the exit. The CALLER says whether the lines are drawn — a pane without a core runs no
+        // order pass at all, and its arrows stay — and names the trades that closed this session,
+        // which the live store draws whole: no arrow for either of their ends.
         let epoch_ms = view.epoch_ms;
         let mut sources = Vec::new();
         // The replica stores seconds and, when the core supplied them, milliseconds; every other
@@ -279,18 +364,28 @@ impl ChartDataState {
             .trade_history
             .iter()
             .enumerate()
-            .filter(|(_, record)| record.core_uid == core)
+            .filter(|(_, record)| {
+                pane_admits_record(core, record.core_uid, self.trade_history_cores.as_deref())
+            })
             .filter(|(_, record)| trade_kind_visible(&self.chart_graphics, record.emulator))
             .filter_map(|(index, record)| {
                 // On a live chart a twin of a live closed order draws both its lines from the
                 // session store; on a frozen viewer the list names what the frozen store draws,
-                // and the ends are decided per trade — see `archived_line_ends`.
-                let (entry_lined, exit_lined) = match lines_drawn {
-                    Some(twins) if self.draws_live_market() && self.is_live_twin(record, twins) => {
-                        (true, true)
+                // and the ends are decided per trade — see `archived_line_ends`. A record this
+                // pane admits but does not own never reaches that: it keeps both arrows.
+                let owned = record.core_uid == core;
+                let (entry_lined, exit_lined) = if owned {
+                    match lines_drawn {
+                        Some(twins)
+                            if self.draws_live_market() && self.is_live_twin(record, twins) =>
+                        {
+                            (true, true)
+                        }
+                        Some(drawn) => self.archived_line_ends(record, drawn),
+                        None => (false, false),
                     }
-                    Some(drawn) => self.archived_line_ends(record, drawn),
-                    None => (false, false),
+                } else {
+                    (false, false)
                 };
                 if entry_lined && exit_lined {
                     return None;

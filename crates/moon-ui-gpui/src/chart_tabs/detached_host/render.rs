@@ -14,7 +14,7 @@ use rust_i18n::t;
 use super::super::candle_popup;
 use super::super::common;
 use super::super::common::LayoutPopupHost as _;
-use super::super::graphics_popup;
+use super::super::graphics_popup::{self, GraphicsPopupHost as _};
 use super::super::history_popup;
 use super::super::labels_popup;
 use super::super::popup_slot::ChartPopup;
@@ -107,6 +107,21 @@ impl Render for DetachedChartHost {
         let coin_search_live = self.popup_shows(ChartPopup::Coin)
             || self.coin_input.read(cx).focus_handle(cx).is_focused(window);
         let ends_search = coin_search_live.then(|| common::coin_toolbar_press_handler(cx));
+        // Same toggle as the docked strip, and required here: apply-to-all can widen this window
+        // while it is the only chart on screen, and without the button the user cannot turn that
+        // off. Hidden outside Auto Overview, where the read stays single-core anyway.
+        let all_cores_btn = self
+            .backend
+            .read(cx)
+            .is_auto_overview_scope(&self.group)
+            .then(|| {
+                graphics_popup::all_cores_toggle_button(
+                    &cx.entity(),
+                    "detached-history-all-cores",
+                    self.graphics_cfg(cx).history_all_cores,
+                )
+                .render()
+            });
         // The one button in this row that keeps a glyph: MoonUI ships no bin icon (its `delete.svg`
         // is a backspace key), and an X would read as "close the window" beside the real window
         // controls. So it is squared the way the column selectors are — a rendered width equal to
@@ -299,6 +314,7 @@ impl Render for DetachedChartHost {
                                     .render(),
                                 cx,
                             ))
+                            .children(all_cores_btn)
                             // The labels button edits THIS window's chart captions.
                             .child(labels_popup::labels_popup_host(
                                 self,

@@ -79,8 +79,9 @@ pub(super) struct TradeHoverState {
 /// snapshot that may already have been rebuilt under a different filter.
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct TradeHover {
-    /// Pane the arrow belongs to. Every pane draws only its own core's trades, so the mark index
-    /// below is meaningless without it.
+    /// Pane the arrow belongs to. A pane draws its own core's trades and, when it owns the
+    /// history request, the admitted set, so the mark index below is still per pane and
+    /// meaningless without it.
     pane: usize,
     /// The hovered ACTION as `(mark index in this pane's filtered numbering, buy)`.
     ///
@@ -284,6 +285,25 @@ impl ChartPanel {
         let card_w = f32::from(design::ui_px(cx, CARD_W)).min((slot_w - inset * 2.0).max(1.0));
 
         let now_ms = now_unix_ms_i64();
+        // The admitted set, not the records currently on screen: a caption that followed the
+        // visible rows would appear and disappear between reads.
+        let show_core = self
+            .chart
+            .trade_history_cores()
+            .is_some_and(|cores| cores.admitted.len() > 1);
+        // Copied out before the chart borrow: the name is the session's, and a missing session
+        // falls back to the uid's digits rather than a blank.
+        let session_names: Vec<(moon_core::session::CoreId, String)> = if show_core {
+            self.backend
+                .read(cx)
+                .session
+                .sessions()
+                .iter()
+                .map(|session| (session.id, session.name.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let rows = self.chart.with_report_axis(|axis| {
             self.chart.with_trade_records(|records| {
                 let mut shown = hover
@@ -291,25 +311,31 @@ impl ChartPanel {
                     .iter()
                     .filter_map(|&index| records.get(index))
                     .collect::<Vec<_>>();
-                // Chronological, so a cluster reads as the sequence it actually traded in. The
-                // record order is the query's (newest first) and the indices are sorted, so
-                // neither is it.
-                //
-                // NO axis correction here: `hover.trades` are indices into ONE pane's records,
-                // and a pane draws only its own core. Within one core, `Backend::report_axis`
-                // yields exactly one segment, so `to_utc` is the strictly monotonic map
-                // `x -> x - k` — order-preserving, so corrected order equals raw order.
-                // Correcting here would be pure cost.
+                // Chronological on the chart's true-UTC axis. Two admitted cores can sit on
+                // different clock offsets, so raw `buy_date` order is not the order the axis
+                // draws. The close stamp is the same tie-break as before, corrected the same way.
                 shown.sort_by(|left, right| {
-                    left.buy_date
-                        .cmp(&right.buy_date)
-                        .then(left.close_date.cmp(&right.close_date))
+                    axis.stamp_to_utc_ms(left.buy_stamp(), left.core_uid)
+                        .cmp(&axis.stamp_to_utc_ms(right.buy_stamp(), right.core_uid))
+                        .then(
+                            axis.stamp_to_utc_ms(left.close_stamp(), left.core_uid)
+                                .cmp(&axis.stamp_to_utc_ms(right.close_stamp(), right.core_uid)),
+                        )
                 });
                 let hidden = shown.len().saturating_sub(CARD_MAX_ITEMS);
                 let rows = shown
                     .into_iter()
                     .take(CARD_MAX_ITEMS)
-                    .map(|record| trade_row(record, axis, now_ms, palette, cx))
+                    .map(|record| {
+                        let core_name = show_core.then(|| {
+                            session_names
+                                .iter()
+                                .find(|(id, _)| *id == record.core_uid)
+                                .map(|(_, name)| name.clone())
+                                .unwrap_or_else(|| record.core_uid.to_string())
+                        });
+                        trade_row(record, axis, now_ms, palette, core_name, cx)
+                    })
                     .collect::<Vec<_>>();
                 (rows, hidden)
             })
@@ -430,6 +456,8 @@ fn profit_text(record: &ChartTradeRecord) -> Option<(String, fmt::DeltaSign)> {
 ///         true-UTC axis the clock formatter expects.
 ///     now_ms: Current Unix time in milliseconds for dated clock formatting.
 ///     p: Active theme palette.
+///     core_name: Session name of the record's core, when more than one core can contribute.
+///         `None` leaves the row as it was for a single-core card.
 ///     cx: Application context used for scaled design tokens and translations.
 ///
 /// Returns:
@@ -439,6 +467,7 @@ fn trade_row(
     axis: &moon_core::db::ReportAxis,
     now_ms: i64,
     p: MoonPalette,
+    core_name: Option<String>,
     cx: &App,
 ) -> AnyElement {
     let side_color = if record.is_short { p.red } else { p.green };
@@ -489,7 +518,26 @@ fn trade_row(
                     clock(record.buy_stamp()),
                     clock(record.close_stamp())
                 )),
-        );
+        )
+        .when_some(core_name, |this, name| {
+            // Direct child of the head row: a flex wrapper around `.truncate()` collapses
+            // the whole line to one ellipsis. The remaining width is the bound, and the
+            // tooltip keeps the tail a narrow card would otherwise hide.
+            this.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "chart-hover-core-{}-{}-{}",
+                        record.core_uid, record.record_id, record.buy_date
+                    )))
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text_muted))
+                    .tooltip(crate::panels::common::text_tooltip(name.clone()))
+                    .child(name),
+            )
+        });
     let prices = h_flex()
         .w_full()
         .items_center()

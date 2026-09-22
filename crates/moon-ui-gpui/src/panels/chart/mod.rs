@@ -591,6 +591,19 @@ impl ChartPanel {
             this.sync_trace_lines(false, cx);
         })
         .detach();
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _revision, cx| {
+            this.requery_trade_history_on_core_scope(cx);
+        })
+        .detach();
+        let market_data_revision = backend.read(cx).market_data_revision();
+        cx.observe(&market_data_revision, |this, _revision, cx| {
+            // A sibling's catalog can become resolvable without a Backend notification or a
+            // workspace change. In PerCore that catalog is its own, so the admitted aliases have
+            // to be collected again or that sibling never enters the read.
+            this.requery_trade_history_on_core_scope(cx);
+        })
+        .detach();
         // Notify for setting changes and infrequent axis text. Frequent market data bypasses GPUI
         // notification because `gpu_canvas.frame()` reads MarketDataSource directly. A local
         // one-shot timer handles time-based pane TTL independently of backend observations.
@@ -620,6 +633,7 @@ impl ChartPanel {
                 // place such a panel hears about it, so the trade-kind re-query hangs here too; it
                 // returns immediately unless that pair actually moved.
                 this.requery_trade_history_on_trade_kinds(cx);
+                this.requery_trade_history_on_core_scope(cx);
                 // ...and the trade style lives beside them: a default flipped to lines elsewhere
                 // has to start resolving here too.
                 this.request_trace_lines(true, cx);
@@ -805,6 +819,19 @@ impl ChartPanel {
             this.sync_trace_lines(false, cx);
         })
         .detach();
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _revision, cx| {
+            this.requery_trade_history_on_core_scope(cx);
+        })
+        .detach();
+        let market_data_revision = backend.read(cx).market_data_revision();
+        cx.observe(&market_data_revision, |this, _revision, cx| {
+            // A sibling's catalog can become resolvable without a Backend notification or a
+            // workspace change. In PerCore that catalog is its own, so the admitted aliases have
+            // to be collected again or that sibling never enters the read.
+            this.requery_trade_history_on_core_scope(cx);
+        })
+        .detach();
         cx.observe(&backend, |this, backend, cx| {
             let now = Instant::now();
             let (sig, settings_sig, panic_rev, fav_rev) = {
@@ -829,6 +856,7 @@ impl ChartPanel {
                 // own hears a ⧉ press from another group window only here, and the durable history
                 // query was narrowed by the previous trade-kind pair.
                 this.requery_trade_history_on_trade_kinds(cx);
+                this.requery_trade_history_on_core_scope(cx);
                 // ...and the trade style lives beside them: a default flipped to lines elsewhere
                 // has to start resolving here too.
                 this.request_trace_lines(true, cx);
@@ -1457,6 +1485,7 @@ impl ChartPanel {
             )
         };
         self.requery_trade_history_on_trade_kinds(cx);
+        self.requery_trade_history_on_core_scope(cx);
         // The style may have flipped to lines: resolve and hand over what is already resolved.
         // The engine's own graphics update happens on render, before its next order pass.
         self.request_trace_lines(true, cx);
@@ -1788,8 +1817,12 @@ impl ChartPanel {
         self.settings_sig = settings_sig;
         self.view_dirty = true;
         // For the reason the backend observer does it: the durable trade-history query is narrowed
-        // by the drawn trade kinds, and those live in the graphics settings this just changed.
+        // by the drawn trade kinds, and the admitted core set follows the kind's stored
+        // `history_all_cores`. Both live in the graphics settings this just changed. This method
+        // stamps `settings_sig` itself, so the observer branch that would have re-read them does
+        // not run.
         self.requery_trade_history_on_trade_kinds(cx);
+        self.requery_trade_history_on_core_scope(cx);
         // The style may have flipped to lines: resolve and hand over what is already resolved.
         // The engine's own graphics update happens on render, before its next order pass.
         self.request_trace_lines(true, cx);
