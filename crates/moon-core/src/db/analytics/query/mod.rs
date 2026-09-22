@@ -502,6 +502,9 @@ const UNIFIED_COLS: &[&str] = &[
     // with `quote_rate` below before it meets a projected sum. `lev` is NOT listed: it already
     // arrives through `tuner::FIELDS`, and naming it twice would project two identical columns.
     "boughtq",
+    // Beside `boughtq` so a reader can tell a sale that moved MORE coins than the entry bought
+    // — a spot position topped up from the wallet balance — from an ordinary one.
+    "quantity",
     "buyprice",
     "sellprice",
     // Funding is booked as a pseudo-order (`buydate == closedate`, entry price == exit price,

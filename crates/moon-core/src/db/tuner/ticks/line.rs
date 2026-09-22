@@ -39,7 +39,7 @@
 //! `PriceDownAllowedDrop` floor computed to 0.196445, the core's order stood at 0.1964, and
 //! the tape's high was exactly 0.1964 — the unrounded line was never reached.
 
-use super::exit::ExitParams;
+use super::exit::{ExitParams, stop_pct};
 use super::mshot::FAST_ALGO_WINDOW_MS;
 use super::{Deal, Exit, ExitKind, Fill, reaches, round_to_step};
 use crate::feed::types::Tick;
@@ -229,8 +229,15 @@ pub fn walk_held(
     let mut ss_breach: Option<(bool, i64)> = None;
 
     // --- StopLoss ---
-    let stop_on = params.stop_loss_pct != 0.0;
-    let stop_level = side.over(fill.price, params.stop_loss_pct);
+    // The ADJUSTED distance decides both whether there is a stop and where it stands —
+    // reading the raw `stop_loss_pct` for the first and the adjusted one for the second would
+    // arm a stop the adjustment had cancelled, at the fill price itself, where the next print
+    // fires it. `over` mirrors the sign for a short, so only the distance is adjusted here; the
+    // level is NOT snapped to the price grid, unlike every level that reaches the exchange —
+    // a stop is the core's own trigger for a market sell, and nothing about it is ever placed.
+    let stop = stop_pct(params, deal);
+    let stop_on = stop != 0.0;
+    let stop_level = side.over(fill.price, stop);
     let stop_from = fill.t_ms + (params.stop_loss_delay_s.max(0.0) * 1000.0) as i64;
 
     let mut last_t = fill.t_ms;

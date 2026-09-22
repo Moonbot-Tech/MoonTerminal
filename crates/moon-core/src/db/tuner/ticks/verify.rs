@@ -10,6 +10,14 @@
 //! it is not modelled; an exit the core closed by a rule the model does not have is not a miss
 //! of the rules it does. An exit the model never reached at all IS a miss.
 //!
+//! The same holds for the LEVEL the exit is judged against. `SellPrice` is the take of every
+//! kind the core has but one, so this bites on MoonHook alone: with no archived line to read the
+//! level off, and no detect depth or `HookSellLevel` to compute it from (or with `HookSellFixed`,
+//! whose branch is not modelled), the sell line stands somewhere the model invented, and
+//! everything downstream of it — where PriceDown stepped to, whether a level stood at the close —
+//! is invented with it. That answers `None`, whatever the deviation says
+//! ([`ExitModel::take_known`]). A stop is exempt: it fires off `StopLoss`, not off the take.
+//!
 //! The entry is held to the CORRIDOR, not to a price step: a MoonShot order chasing a falling
 //! price is re-placed off whichever print left the corridor, and the core's print and the
 //! model's differ by a second and a fraction of a per cent on every such chase (GSTOCKBSC
@@ -176,7 +184,12 @@ pub fn verify(
             }
         }
     };
-    let (exit_ok, exit_dev, line_points) = if closed.kind == ExitKind::OpenAtWindowEnd {
+    // Where the take itself is not modelled for this trade, the line under it is not the
+    // model's answer but its guess — see the module doc.
+    let take_known = ExitModel::new(&fact_exit).take_known(deal);
+    let (exit_ok, exit_dev, line_points) = if !take_known && closed.kind != ExitKind::Stop {
+        (None, None, None)
+    } else if closed.kind == ExitKind::OpenAtWindowEnd {
         // No line stood at the close: a miss of the exit group, not an unanswered question.
         (Some(false), None, None)
     } else if exit_rule_matches(closed.kind, &deal.sell_reason) {

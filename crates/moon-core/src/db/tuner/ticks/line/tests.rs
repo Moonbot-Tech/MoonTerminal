@@ -39,6 +39,8 @@ fn deal(short: bool) -> Deal {
         tick: None,
         pre_spike_ask: None,
         archived_take: None,
+        hook_depth_pct: None,
+        hook_stated_take_pct: None,
     }
 }
 

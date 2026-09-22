@@ -99,6 +99,9 @@ fn real_data_reproduction() {
     };
     let read = read_deals(&scope).expect("deals");
     eprintln!(
+        "NOTE: no core schema here, so `defaults` is empty — a field the strategy dump omits          (it is at the core default) reads as the model's own fallback, not as the core's.          The application passes the live schema (`strategy_field_defaults`)."
+    );
+    eprintln!(
         "deals with ms stamps: {} · without: {}",
         read.deals.len(),
         read.without_ms
@@ -208,7 +211,7 @@ fn real_data_reproduction() {
         eprintln!(
             "{uid} {coin:<8} {kind:<8} buy {buy:.6} | plain fill {fill:?} dev {dev:?} ✓{ok:?} | \
              archived start {start:?} fill {fill2:?} dev {dev2:?} ✓{ok2:?} | \
-             exit {exit_kind:?} ✓{exit_ok:?} dev {exit_dev:?} line {line:?} | {reason} | ticks {n} step {tick:?}",
+             exit {exit_kind:?} ✓{exit_ok:?} dev {exit_dev:?} line {line:?} | {reason} | ticks {n} step {tick:?}              | hook depth {hook_depth:?} core {hook_stated:?} model {hook_model:?}",
             uid = deal.report_uid,
             coin = deal.coin,
             kind = deal.kind,
@@ -227,6 +230,14 @@ fn real_data_reproduction() {
             reason = deal.sell_reason,
             n = ticks.len(),
             tick = deal.tick,
+            hook_depth = round3(deal.hook_depth_pct),
+            hook_stated = round3(deal.hook_stated_take_pct),
+            // The formula against the core's own number, for the same trade — the check that
+            // keeps `docs-internal/STRATEGY_FORMULAS/moonhook.md` honest over time.
+            hook_model = round3(
+                deal.hook_depth_pct
+                    .map(|d| super::super::hook::hook_take_pct(d, exit.hook_sell_level_pct))
+            ),
         );
         let best = if entry_line.is_some() {
             archived

@@ -25,6 +25,8 @@ fn deal(uid: i64, buy_ms: i64, buy: f64, sell: f64, short: bool) -> Deal {
         tick: None,
         pre_spike_ask: None,
         archived_take: None,
+        hook_depth_pct: None,
+        hook_stated_take_pct: None,
     }
 }
 
@@ -79,8 +81,8 @@ fn state() -> TicksState {
     rows[0].held = Some((60_000, 30_000));
     rows[1].held = Some((60_000, 60_000));
     let mut state = TicksState::default();
-    // The sorts are exercised over every row; the "tunable only" switch has its own test.
-    state.only_tunable = false;
+    // The sorts are exercised over every row; the "with tape only" switch has its own test.
+    state.only_with_tape = false;
     state.data.apply(Ok(TicksData {
         rows,
         ..TicksData::default()
@@ -106,27 +108,27 @@ fn the_default_order_is_newest_entry_first() {
 }
 
 #[test]
-fn the_tunable_switch_keeps_only_covered_rows_the_model_reproduced() {
+fn the_tape_switch_keeps_the_covered_rows_whatever_the_model_said() {
     // Row 2: covered, both groups ✓. Row 1: no tape. Row 3: refused, and the entry a miss.
     let mut state = state();
-    assert!(TicksState::default().only_tunable, "on by default");
-    state.only_tunable = true;
+    assert!(
+        !TicksState::default().only_with_tape,
+        "off by default: the rows without tape are what the fetch button is for"
+    );
+    state.only_with_tape = true;
     assert_eq!(uids(&mut state), [2]);
-    assert_eq!(state.data.data().unwrap().tunable(), 1);
-    // A group the model does not answer is not a miss.
-    state.data.data_mut().unwrap().rows[1].verdict = Some(verdict(None, Some(true)));
+    // The verdict is the "model" column, never a filter: a covered row the model missed
+    // stays in the table, and a sample narrowed to what the model already fits would be
+    // fitted on itself.
+    state.data.data_mut().unwrap().rows[1].verdict = Some(verdict(Some(false), Some(false)));
     state.rows_rev += 1;
     assert_eq!(uids(&mut state), [2]);
-    // Nothing answered is nothing reproduced.
-    state.data.data_mut().unwrap().rows[1].verdict = Some(verdict(None, None));
+    // A covered row with no verdict at all is in the sample too — the search replays it.
+    state.data.data_mut().unwrap().rows[1].verdict = None;
     state.rows_rev += 1;
-    assert_eq!(uids(&mut state), Vec::<i64>::new());
-    // A group it got wrong is.
-    state.data.data_mut().unwrap().rows[1].verdict = Some(verdict(Some(true), Some(false)));
-    state.rows_rev += 1;
-    assert_eq!(uids(&mut state), Vec::<i64>::new());
+    assert_eq!(uids(&mut state), [2]);
     // Flipping the switch alone rebuilds the order: the cache keys on it.
-    state.only_tunable = false;
+    state.only_with_tape = false;
     assert_eq!(uids(&mut state), [1, 3, 2]);
 }
 

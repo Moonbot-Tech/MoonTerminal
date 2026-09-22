@@ -22,6 +22,8 @@ fn deal(pnl: f64, spent: f64) -> Deal {
         tick: None,
         pre_spike_ask: None,
         archived_take: None,
+        hook_depth_pct: None,
+        hook_stated_take_pct: None,
     }
 }
 

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use super::exit::pre_spike_price;
+use super::exit::stop_pct as moon_core_stop_pct;
 use super::mshot::{DEFAULT_LATENCY_MS, Modifiers, PRE_SPIKE_LOOKBACK_MS};
 use super::params::{StrategyValues, exit_params, mshot_params, param_keys, params_for};
 use super::verify::share;
@@ -48,6 +49,8 @@ fn deal() -> Deal {
         tick: None,
         pre_spike_ask: None,
         archived_take: None,
+        hook_depth_pct: None,
+        hook_stated_take_pct: None,
     }
 }
 
@@ -1003,11 +1006,36 @@ fn the_descriptor_keys_every_field_the_builders_read_and_splits_the_groups() {
         "MShotSellAtLastPrice",
         "MShotSellPriceAdjust",
         "SellDelay",
+        // Read by the builders, not shown in the grid — and just as fatal when unfetched: an
+        // absent key reads as the model's fallback, silently.
+        "HookSellLevel",
+        "HookSellFixed",
+        "SellModifier",
+        "MaxModifier",
+        "Add5minDelta",
+        "AddHourlyDelta",
+        "AddBTC1mDelta",
     ] {
         assert!(
             keys.iter().any(|k| k == key),
-            "{key} missing from TICK_PARAMS"
+            "{key} missing from the keys the models read"
         );
+    }
+    // The allowlist above cannot see a field that is missing from BOTH lists, which is exactly
+    // how `SellShotPriceDown`/`SellShotPriceDownDelay` ran on their fallback from the day the
+    // axis was written. So the builders' own source is the authority: every strategy field
+    // `mshot_params`/`exit_params` reads must be a key the load asks the database for.
+    let source = include_str!("params.rs");
+    for call in [".num(\"", ".bool(\"", ".text(\""] {
+        let mut rest = source;
+        while let Some(at) = rest.find(call) {
+            rest = &rest[at + call.len()..];
+            let key = &rest[..rest.find('"').expect("a closing quote")];
+            assert!(
+                keys.iter().any(|k| k == key),
+                "{key} is read by a builder but never fetched: add it to TICK_PARAMS or to                  MODEL_ONLY_KEYS, or it silently reads as the model's fallback"
+            );
+        }
     }
     assert!(params_for(ParamGroup::Entry, "Spread").next().is_none());
     assert!(params_for(ParamGroup::Entry, "MoonShot").count() > 10);
@@ -1032,4 +1060,425 @@ fn infer_tick_reads_the_grid_and_snaps_float_noise() {
     assert!((step - 0.0001).abs() < 1e-12, "{step}");
     assert_eq!(infer_tick(&tape(&[(0, 1.0), (1, 1.0)])), None);
     assert_eq!(infer_tick(&[]), None);
+}
+
+// ---- MoonHook: the take is a share of the detect depth, not `SellPrice` -------------------
+
+/// A hook deal: 4 % detect depth, bought at 100, the core's own take stated at 2 %.
+fn hook_deal() -> Deal {
+    Deal {
+        kind: KIND_MOONHOOK.into(),
+        buy_price: 100.0,
+        hook_depth_pct: Some(4.0),
+        hook_stated_take_pct: Some(2.0),
+        ..deal()
+    }
+}
+
+/// `HookSellLevel` = 50 of a 4 % depth is a 2 % take — and `SellPrice` is not consulted at all.
+#[test]
+fn a_hook_takes_a_share_of_its_detect_depth() {
+    let params = ExitParams {
+        sell_price_pct: 1.0,
+        hook_sell_level_pct: 50.0,
+        ..ExitParams::default()
+    };
+    let fill = Fill {
+        t_ms: 10_000,
+        price: 100.0,
+    };
+    let take = ExitModel::new(&params).take_level(&hook_deal(), &[], fill);
+    assert!((take - 102.0).abs() < 1e-9, "{take}");
+    // The level scales with the parameter — that is what makes it searchable.
+    let doubled = ExitParams {
+        hook_sell_level_pct: 100.0,
+        ..params.clone()
+    };
+    let take = ExitModel::new(&doubled).take_level(&hook_deal(), &[], fill);
+    assert!((take - 104.0).abs() < 1e-9, "{take}");
+}
+
+/// A short hook sells below the entry, by the same share.
+#[test]
+fn a_short_hook_takes_below_the_entry() {
+    let params = ExitParams {
+        hook_sell_level_pct: 50.0,
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        is_short: true,
+        ..hook_deal()
+    };
+    let fill = Fill {
+        t_ms: 10_000,
+        price: 100.0,
+    };
+    let take = ExitModel::new(&params).take_level(&d, &[], fill);
+    assert!((take - 98.0).abs() < 1e-9, "{take}");
+}
+
+/// Without a depth (or without a level) the rule cannot be computed — the model still needs a
+/// line to walk, so it falls back, but it must SAY that it does not know.
+#[test]
+fn a_hook_without_its_depth_is_not_a_known_take() {
+    let params = ExitParams {
+        hook_sell_level_pct: 50.0,
+        ..ExitParams::default()
+    };
+    let model = ExitModel::new(&params);
+    assert!(model.take_known(&hook_deal()));
+    let no_depth = Deal {
+        hook_depth_pct: None,
+        ..hook_deal()
+    };
+    assert!(!model.take_known(&no_depth));
+    let no_level = ExitParams {
+        hook_sell_level_pct: 0.0,
+        ..params.clone()
+    };
+    assert!(!ExitModel::new(&no_level).take_known(&hook_deal()));
+    // `HookSellFixed` is the other branch of the rule, and it is not modelled.
+    let fixed = ExitParams {
+        hook_sell_fixed: true,
+        ..params.clone()
+    };
+    assert!(!ExitModel::new(&fixed).take_known(&hook_deal()));
+    // Every other kind takes by `SellPrice`, which the model has — with or without an archive.
+    assert!(model.take_known(&deal()), "MoonShot");
+    for kind in ["Spread", "PumpsDetection", "Combo"] {
+        let d = Deal {
+            kind: kind.into(),
+            ..deal()
+        };
+        assert!(model.take_known(&d), "{kind} takes by SellPrice");
+    }
+    // An archived level answers for a hook the formula cannot reach.
+    assert!(model.take_known(&Deal {
+        archived_take: Some(101.0),
+        ..no_depth
+    }));
+}
+
+/// A modifier deep enough to drive the distance negative must not put the take on the losing
+/// side of the entry — the line steps DOWN from the take, and a take below the fill inverts it.
+#[test]
+fn a_negative_modifier_cannot_push_the_take_through_the_fill() {
+    let mut mods = Modifiers::default();
+    mods.add_1h = 1.0;
+    let params = ExitParams {
+        sell_price_pct: 1.0,
+        sell_modifier: 1.0,
+        sell_mods: mods,
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        deltas: Deltas {
+            d1h: -50.0,
+            ..Deltas::default()
+        },
+        ..deal()
+    };
+    let fill = Fill {
+        t_ms: 10_000,
+        price: 100.0,
+    };
+    let take = ExitModel::new(&params).take_level(&d, &[], fill);
+    assert!(
+        (take - 100.0).abs() < 1e-9,
+        "floored at the fill, got {take}"
+    );
+}
+
+/// The grid must not offer a knob that moves nothing: `SellPrice` is not a MoonHook's take.
+#[test]
+fn the_grid_hides_sell_price_from_a_hook_and_offers_its_own_level() {
+    let hook: Vec<&str> = params_for(ParamGroup::Exit, KIND_MOONHOOK)
+        .map(|p| p.key)
+        .collect();
+    assert!(!hook.contains(&"SellPrice"), "the hook has no such field");
+    assert!(hook.contains(&"HookSellLevel"));
+    assert!(
+        !hook.contains(&"HookSellFixed"),
+        "read, but not modelled — so not a knob"
+    );
+    let spread: Vec<&str> = params_for(ParamGroup::Exit, "Spread")
+        .map(|p| p.key)
+        .collect();
+    assert!(spread.contains(&"SellPrice"));
+    assert!(!spread.contains(&"HookSellLevel"), "a hook-only field");
+}
+
+/// The verdict on a take it cannot place is nothing, not a miss — the whole point of the
+/// exercise: data we hold must not be filed as "the model was wrong".
+#[test]
+fn an_unknown_take_leaves_the_exit_unanswered() {
+    let ticks = tape(&[(10_000, 100.0), (15_000, 101.0), (20_000, 102.0)]);
+    let params = ExitParams {
+        hook_sell_level_pct: 50.0,
+        take_from_archive: true,
+        ..ExitParams::default()
+    };
+    let known = verify(
+        &hook_deal(),
+        &ticks,
+        &EntryParams::Fact,
+        &params,
+        None,
+        None,
+    );
+    assert!(
+        known.exit.is_some(),
+        "a depth is a level the model can place"
+    );
+    let blind = Deal {
+        hook_depth_pct: None,
+        ..hook_deal()
+    };
+    let v = verify(&blind, &ticks, &EntryParams::Fact, &params, None, None);
+    assert_eq!(v.exit, None, "no level, no verdict");
+    assert_eq!(v.exit_dev_pct, None);
+    // A stop is judged all the same: it fires off `StopLoss`, not off the take.
+    let stopped = Deal {
+        sell_reason: "StopLoss Market Sell".into(),
+        sell_price: 97.0,
+        ..blind
+    };
+    let stop_params = ExitParams {
+        stop_loss_pct: -2.0,
+        ..params.clone()
+    };
+    let down = tape(&[(10_000, 100.0), (15_000, 97.9), (20_000, 97.0)]);
+    let v = verify(
+        &stopped,
+        &down,
+        &EntryParams::Fact,
+        &stop_params,
+        None,
+        None,
+    );
+    assert!(v.exit.is_some(), "the stop does not depend on the take");
+}
+
+// ---- the stop and its modifier -------------------------------------------------------------
+
+/// The core's own log line, verbatim: `StopLoss adjusted [-2.00% - (0.20*1.86=0.37%) => -2.37%]`.
+/// 136 such lines were read off this machine's cores and every one obeys this arithmetic.
+#[test]
+fn the_stop_modifier_deepens_the_stop_by_the_summed_deltas() {
+    let mut mods = Modifiers::default();
+    mods.add_1h = 1.0;
+    let params = ExitParams {
+        stop_loss_pct: -2.0,
+        stop_loss_modifier: 0.2,
+        sell_mods: mods,
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        deltas: Deltas {
+            d1h: 1.86,
+            ..Deltas::default()
+        },
+        ..deal()
+    };
+    let pct = moon_core_stop_pct(&params, &d);
+    assert!((pct - -2.372).abs() < 1e-9, "{pct}");
+    // No coefficient, no movement; no stop, nothing to move.
+    let off = ExitParams {
+        stop_loss_modifier: 0.0,
+        ..params.clone()
+    };
+    assert_eq!(moon_core_stop_pct(&off, &d), -2.0);
+    let no_stop = ExitParams {
+        stop_loss_pct: 0.0,
+        ..params.clone()
+    };
+    assert_eq!(moon_core_stop_pct(&no_stop, &d), 0.0);
+    // `MaxModifier` caps the sum before the coefficient, as it does for the sell.
+    let capped = ExitParams {
+        max_modifier: 1.0,
+        ..params
+    };
+    assert!((moon_core_stop_pct(&capped, &d) - -2.2).abs() < 1e-9);
+}
+
+/// The adjustment may pull the stop toward the entry — live strategies carry a negative
+/// `StopLossModifier` — but one that pulls it THROUGH the entry leaves no stop at all, rather
+/// than one a hair from the entry that the next print would trip.
+#[test]
+fn an_adjustment_through_the_entry_leaves_no_stop() {
+    let mut mods = Modifiers::default();
+    mods.add_1h = 1.0;
+    let base = ExitParams {
+        stop_loss_pct: -2.0,
+        stop_loss_modifier: -0.3,
+        sell_mods: mods,
+        ..ExitParams::default()
+    };
+    let far = Deal {
+        deltas: Deltas {
+            d1h: 70.0,
+            ..Deltas::default()
+        },
+        ..deal()
+    };
+    // −2 − 70·(−0.3) = +19 unguarded: a "stop" nineteen per cent in profit.
+    assert_eq!(
+        moon_core_stop_pct(&base, &far),
+        0.0,
+        "no stop, not a near one"
+    );
+    // A negative delta sum with a positive coefficient reaches the same place from the other
+    // side.
+    let other = ExitParams {
+        stop_loss_modifier: 0.3,
+        ..base.clone()
+    };
+    let down = Deal {
+        deltas: Deltas {
+            d1h: -70.0,
+            ..Deltas::default()
+        },
+        ..deal()
+    };
+    assert_eq!(moon_core_stop_pct(&other, &down), 0.0);
+    // A modifier that only moves the stop within its own side is applied as it is.
+    let mild = Deal {
+        deltas: Deltas {
+            d1h: 2.0,
+            ..Deltas::default()
+        },
+        ..deal()
+    };
+    assert!((moon_core_stop_pct(&base, &mild) - -1.4).abs() < 1e-9);
+    // A stop the strategy itself put on the profit side stays where it put it — that is its own
+    // setting, not something the adjustment did.
+    let positive = ExitParams {
+        stop_loss_pct: 1.0,
+        stop_loss_modifier: 0.3,
+        ..base.clone()
+    };
+    let up = Deal {
+        deltas: Deltas {
+            d1h: 2.0,
+            ..Deltas::default()
+        },
+        ..deal()
+    };
+    assert!((moon_core_stop_pct(&positive, &up) - 0.4).abs() < 1e-9);
+}
+
+/// An adjustment that exactly cancels the stop must not leave one armed at the fill price,
+/// where the next print fires it.
+#[test]
+fn a_cancelled_stop_does_not_fire_at_the_entry() {
+    let mut mods = Modifiers::default();
+    mods.add_1h = 1.0;
+    let params = ExitParams {
+        stop_loss_pct: -2.0,
+        stop_loss_modifier: 0.2,
+        sell_price_pct: 5.0,
+        sell_mods: mods,
+        ..ExitParams::default()
+    };
+    // Σ = −10, so −2 − (−10·0.2) = 0 exactly without the clamp.
+    let d = Deal {
+        deltas: Deltas {
+            d1h: -10.0,
+            ..Deltas::default()
+        },
+        ..deal()
+    };
+    // The adjustment cancels the stop exactly, so there is none — and the print below the
+    // entry must not read as one.
+    assert_eq!(moon_core_stop_pct(&params, &d), 0.0);
+    let walk = ExitModel::new(&params).walk(
+        &d,
+        // A real move down, not float noise: without the guard the stop sits ON the entry and
+        // this print trips it.
+        &tape(&[(10_000, 100.0), (11_000, 99.99), (12_000, 100.02)]),
+        Fill {
+            t_ms: 10_000,
+            price: 100.0,
+        },
+    );
+    assert_ne!(
+        walk.exit.kind,
+        ExitKind::Stop,
+        "a print a hundredth of a per cent away is not a stop: {:?}",
+        walk.exit
+    );
+}
+
+/// A short's stop sits ABOVE the entry, and the same distance mirrors there.
+#[test]
+fn a_short_stop_mirrors_with_the_modifier() {
+    let mut mods = Modifiers::default();
+    mods.add_1h = 1.0;
+    let params = ExitParams {
+        stop_loss_pct: -2.0,
+        stop_loss_modifier: 0.2,
+        sell_mods: mods,
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        deltas: Deltas {
+            d1h: 5.0,
+            ..Deltas::default()
+        },
+        ..short_deal()
+    };
+    // −2 − 0.2·5 = −3 per cent, and a short's stop is that far ABOVE the fill.
+    let walk = ExitModel::new(&params).walk(
+        &d,
+        &tape(&[(10_000, 100.0), (15_000, 103.5)]),
+        Fill {
+            t_ms: 10_000,
+            price: 100.0,
+        },
+    );
+    assert_eq!(walk.exit.kind, ExitKind::Stop, "the price crossed 103");
+    assert!((walk.exit.price - 103.5).abs() < 1e-9, "{:?}", walk.exit);
+}
+
+// ---- the sell-side delta modifiers ---------------------------------------------------------
+
+/// FAQ: a summed delta of 5 % with `SellModifier = 0.2` places the sell 1 % higher.
+#[test]
+fn sell_modifiers_lift_the_take_by_the_faq_example() {
+    let mut mods = Modifiers::default();
+    mods.add_1h = 1.0;
+    let params = ExitParams {
+        sell_price_pct: 1.0,
+        sell_modifier: 0.2,
+        sell_mods: mods,
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        deltas: Deltas {
+            d1h: 5.0,
+            ..Deltas::default()
+        },
+        ..deal()
+    };
+    let fill = Fill {
+        t_ms: 10_000,
+        price: 100.0,
+    };
+    // 1 % of SellPrice plus 5 % * 0.2 = 2 % in all.
+    let take = ExitModel::new(&params).take_level(&d, &[], fill);
+    assert!((take - 102.0).abs() < 1e-9, "{take}");
+    // `MaxModifier` caps the SUM before the coefficient: min(2, 5) * 0.2 = 0.4.
+    let capped = ExitParams {
+        max_modifier: 2.0,
+        ..params.clone()
+    };
+    let take = ExitModel::new(&capped).take_level(&d, &[], fill);
+    assert!((take - 101.4).abs() < 1e-9, "{take}");
+    // No coefficient, no movement — whatever the deltas.
+    let off = ExitParams {
+        sell_modifier: 0.0,
+        ..params
+    };
+    let take = ExitModel::new(&off).take_level(&d, &[], fill);
+    assert!((take - 101.0).abs() < 1e-9, "{take}");
 }

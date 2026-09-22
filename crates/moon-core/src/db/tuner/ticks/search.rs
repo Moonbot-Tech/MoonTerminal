@@ -187,6 +187,10 @@ fn varied<'a>(p: &SearchParams<'a>) -> Vec<&'static super::params::TickParam> {
             ParamGroup::Exit => p.vary_exit,
         })
         .filter(|f| f.kinds.is_empty() || f.kinds.contains(&p.kind))
+        // The same gate the grid applies: a field this kind's model does not read would be
+        // varied for nothing, land in a variant column the grid cannot show, and be written by
+        // Save all the same.
+        .filter(|f| !f.not_kinds.contains(&p.kind))
         .filter(|f| !p.locked.contains(f.key))
         .collect()
 }

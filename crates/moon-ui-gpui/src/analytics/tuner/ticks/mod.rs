@@ -3,9 +3,11 @@
 //!
 //! Left, under the strategy list: the deal table — one row per closed trade with millisecond
 //! stamps, what came of it, whether the terminal holds its tape, and whether the model
-//! reproduces the fact; a double-click opens the trade window on it. By default it shows only
-//! the rows the tuner counts (tape held, fact reproduced), and its status line says how many
-//! that is out of the scope. Right: the shared "Fact vs …" matrix (the whole scope, the
+//! reproduces the fact; a double-click opens the trade window on it. Every row of the scope is
+//! shown; the switch under the table narrows it to the rows whose tape covers the window — the
+//! sample the variants and the search run on — and the status line says how many that is out of
+//! the scope. The model's verdict is a COLUMN, never a filter. Right: the shared "Fact vs …"
+//! matrix (the whole scope, the
 //! replayable subset captioned with the ✓ shares, the variant columns), and the parameter grid
 //! with the strategies' values, the two variant columns and the search row.
 //!
@@ -53,9 +55,9 @@ impl AnalyticsView {
         let scope = self.scope_label();
         // The order is settled before the data is viewed: both live in `ticks`, and the sort
         // cache needs the mutable half. It is the SHOWN rows: with the switch on, only the
-        // ones the tuner counts.
+        // ones whose tape covers the window.
         let drawn = rows::order_for(&mut self.ticks).len();
-        let only_tunable = self.ticks.only_tunable;
+        let only_with_tape = self.ticks.only_with_tape;
         // The rows the scope holds but the table does not show, for the caption and for the
         // empty state: a period entirely before the millisecond stamps is not an empty period,
         // and the table must say which it is rather than draw the shared "no trades".
@@ -71,10 +73,9 @@ impl AnalyticsView {
                 d.covered(),
                 d.fetchable().count(),
                 d.without_ms,
-                d.tunable(),
             )
         });
-        let (body, total, covered, fetchable, without_ms, tunable) = match summary {
+        let (body, total, covered, fetchable, without_ms) = match summary {
             Err(crate::load_state::Note::Empty) if left_out != (0, 0, 0) => (
                 crate::load_state::muted(
                     t!(
@@ -92,7 +93,6 @@ impl AnalyticsView {
                 0usize,
                 0usize,
                 left_out.0,
-                0usize,
             ),
             Err(note) => (
                 super::super::note_el("an-ticks-note", note, 10.0, p, cx),
@@ -100,17 +100,16 @@ impl AnalyticsView {
                 0usize,
                 0usize,
                 0usize,
-                0usize,
             ),
             // Rows loaded, none shown: the switch hid every one. Said in words, with the
             // count, rather than drawn as a blank list — while the tape stage still reads,
-            // the verdicts are not in yet and the note says that instead.
-            Ok((total, covered, fetchable, without_ms, tunable)) if drawn == 0 => (
+            // no row is covered yet and the note says that instead.
+            Ok((total, covered, fetchable, without_ms)) if drawn == 0 => (
                 crate::load_state::muted(
                     if self.ticks.tape_reading {
                         t!("analytics.ticks.fetch_reading").to_string()
                     } else {
-                        t!("analytics.ticks.none_tunable", hidden = total).to_string()
+                        t!("analytics.ticks.none_with_tape", hidden = total).to_string()
                     },
                     10.0,
                     p,
@@ -120,9 +119,8 @@ impl AnalyticsView {
                 covered,
                 fetchable,
                 without_ms,
-                tunable,
             ),
-            Ok((total, covered, fetchable, without_ms, tunable)) => {
+            Ok((total, covered, fetchable, without_ms)) => {
                 let weak = cx.entity().downgrade();
                 let row_h = deal_row_h(cx);
                 let list =
@@ -145,7 +143,7 @@ impl AnalyticsView {
                     .radius(0.0)
                     .scrollbar_visibility(MoonScrollbarVisibility::Hover)
                     .into_any_element();
-                (list, total, covered, fetchable, without_ms, tunable)
+                (list, total, covered, fetchable, without_ms)
             }
         };
         // The batch is the process's (`fetch::job`), not this window's: the caption reads its
@@ -191,32 +189,26 @@ impl AnalyticsView {
         } else {
             String::new()
         };
-        // The status line: the honest size of the sample — how many rows the tuner counts,
-        // how many have their tape, out of how many — with what the scope holds beyond the
-        // table, and the switch that hides the rest.
-        let status = {
-            let mut line = t!("analytics.ticks.tunable_n", n = tunable).to_string();
-            line.push_str(" · ");
-            line.push_str(&coverage_caption(
-                covered, total, without_ms, left_out.1, left_out.2,
-            ));
-            line
-        };
-        let only_tip = t!("analytics.ticks.only_tunable_tip").to_string();
+        // The status line: the honest size of the sample — how many rows have their tape,
+        // out of how many — with what the scope holds beyond the table, and the switch that
+        // hides the rest. How well the MODEL does on that sample is the KPI caption's ✓
+        // shares (`ticks_kpi`), not a size.
+        let status = coverage_caption(covered, total, without_ms, left_out.1, left_out.2);
+        let only_tip = t!("analytics.ticks.only_with_tape_tip").to_string();
         let only_switch = div()
-            .id("an-ticks-only-tunable-box")
+            .id("an-ticks-only-tape-box")
             .flex_none()
             .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(only_tip.clone())).into())
             .child(
-                MoonCheckbox::new("an-ticks-only-tunable")
-                    .label(t!("analytics.ticks.only_tunable").to_string())
-                    .checked(only_tunable)
+                MoonCheckbox::new("an-ticks-only-tape")
+                    .label(t!("analytics.ticks.only_with_tape").to_string())
+                    .checked(only_with_tape)
                     .on_change({
                         let view = cx.entity();
                         move |on: &bool, _w, app| {
                             let on = *on;
                             view.update(app, |this, cx| {
-                                this.ticks.only_tunable = on;
+                                this.ticks.only_with_tape = on;
                                 // The cached order is a permutation of the SHOWN rows.
                                 this.ticks.order = None;
                                 cx.notify();

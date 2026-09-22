@@ -1720,26 +1720,22 @@ analytics.ticks.coverage_untunable:
   ru: "вне тюнинга %{n}"
   en: "outside tuning %{n}"
   es: "fuera del ajuste %{n}"
-analytics.ticks.tunable_n:
-  ru: "годных для тюнера %{n}"
-  en: "tunable %{n}"
-  es: "aptas para el ajuste %{n}"
-analytics.ticks.only_tunable:
-  ru: "только годные"
-  en: "tunable only"
-  es: "solo aptas"
-analytics.ticks.only_tunable_tip:
-  ru: "Показывать только сделки, по которым тюнер считает: лента покрывает окно, и модель воспроизводит вход и выход"
-  en: "Show only the trades the tuner counts: the tape covers the window, and the model reproduces the entry and the exit"
-  es: "Mostrar solo las operaciones que el ajuste cuenta: la cinta cubre la ventana y el modelo reproduce la entrada y la salida"
-analytics.ticks.none_tunable:
-  ru: "Годных для тюнера сделок пока нет — %{hidden} скрыто галкой «только годные»"
-  en: "No tunable trades yet — %{hidden} hidden by \"tunable only\""
-  es: "Aún no hay operaciones aptas — %{hidden} ocultas por «solo aptas»"
+analytics.ticks.only_with_tape:
+  ru: "только с лентой"
+  en: "with tape only"
+  es: "solo con cinta"
+analytics.ticks.only_with_tape_tip:
+  ru: "Показывать только сделки, чьё окно покрыто лентой, — это и есть выборка, по которой считаются варианты и идёт подбор. Воспроизводит ли модель сделку, показывает колонка «модель»; выборку это не сужает"
+  en: "Show only the trades whose window the tape covers — that is the sample the variants and the search run on. Whether the model reproduces a trade is the \"model\" column; it does not narrow the sample"
+  es: "Mostrar solo las operaciones cuya ventana cubre la cinta: esa es la muestra sobre la que se calculan las variantes y el ajuste. Si el modelo reproduce la operación lo indica la columna «modelo»; no reduce la muestra"
+analytics.ticks.none_with_tape:
+  ru: "Сделок с лентой пока нет — %{hidden} скрыто галкой «только с лентой»"
+  en: "No trades with tape yet — %{hidden} hidden by \"with tape only\""
+  es: "Aún no hay operaciones con cinta — %{hidden} ocultas por «solo con cinta»"
 analytics.ticks.empty_left_out:
-  ru: "В периоде нет сделок, по которым ось может считать: без мс-штампа %{without} (старые строки реплики или ядро до штампов — лента по ним не восстанавливается), служебных %{service} (фандинг, ликвидации, объединённые продажи, без стратегии), вне тюнинга %{untunable} (ручные продажи, стратегии без торгового правила)."
-  en: "The period holds no trade the axis can read: %{without} without millisecond stamps (older replica rows, or a core before the stamps — no tape can be tied to them), %{service} service rows (funding, liquidations, joined sells, no strategy), %{untunable} outside tuning (manual sells, strategies without a trading rule)."
-  es: "El periodo no tiene operaciones que el eje pueda leer: %{without} sin marcas de milisegundos (filas antiguas de la réplica o un núcleo anterior a las marcas — no hay cinta que atar), %{service} filas de servicio (funding, liquidaciones, ventas unidas, sin estrategia), %{untunable} fuera del ajuste (ventas manuales, estrategias sin regla de trading)."
+  ru: "В периоде нет сделок, по которым ось может считать: без мс-штампа %{without} (старые строки реплики или ядро до штампов — лента по ним не восстанавливается), служебных %{service} (фандинг, ликвидации, объединённые продажи, без стратегии, продажа сверх купленного количества), вне тюнинга %{untunable} (ручные продажи, стратегии без торгового правила)."
+  en: "The period holds no trade the axis can read: %{without} without millisecond stamps (older replica rows, or a core before the stamps — no tape can be tied to them), %{service} service rows (funding, liquidations, joined sells, no strategy, a sale bigger than its entry), %{untunable} outside tuning (manual sells, strategies without a trading rule)."
+  es: "El periodo no tiene operaciones que el eje pueda leer: %{without} sin marcas de milisegundos (filas antiguas de la réplica o un núcleo anterior a las marcas — no hay cinta que atar), %{service} filas de servicio (funding, liquidaciones, ventas unidas, sin estrategia, una venta mayor que su entrada), %{untunable} fuera del ajuste (ventas manuales, estrategias sin regla de trading)."
 analytics.ticks.fetch_btn:
   ru: "Прогрузить трейды"
   en: "Fetch trades"

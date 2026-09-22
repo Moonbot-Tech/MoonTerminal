@@ -86,6 +86,9 @@ pub struct Modifiers {
     pub add_pricebug: f64,
     pub add_btc_1h: f64,
     pub add_btc_5m: f64,
+    /// `AddBTC1mDelta` of the Delta Modifiers tab; the `MShotAdd*` family has no such field
+    /// and leaves it at zero.
+    pub add_btc_1m: f64,
     pub add_market_1h: f64,
     /// `MShotAddDistance` — per cent by which the far bound's addition exceeds the near one's.
     pub distance_pct: f64,
@@ -105,6 +108,7 @@ impl Modifiers {
             + self.add_mark * d.dmark
             + self.add_btc_1h * d.btc1h
             + self.add_btc_5m * d.btc5m
+            + self.add_btc_1m * d.btc1m
             + self.add_market_1h * d.market1h
             + self.add_pricebug * d.pricebug
     }

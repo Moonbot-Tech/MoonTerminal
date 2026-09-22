@@ -43,9 +43,15 @@ pub struct TickParam {
     pub kind: ParamKind,
     /// Strategy kinds whose grid shows this parameter; empty means every kind.
     pub kinds: &'static [&'static str],
+    /// Strategy kinds the parameter is HIDDEN from, whatever `kinds` says — a field the core
+    /// has but this kind's model does not read, so varying it would move no column. `SellPrice`
+    /// against a MoonHook is the case it exists for: the field is there, and the hook's take
+    /// comes from `HookSellLevel` instead.
+    pub not_kinds: &'static [&'static str],
 }
 
 const MSHOT: &[&str] = &["MoonShot"];
+const HOOK: &[&str] = &[super::hook::KIND_MOONHOOK];
 const ANY: &[&str] = &[];
 
 const GRID_PRICE: &[f64] = &[
@@ -65,16 +71,25 @@ const GRID_ADD: &[f64] = &[
     0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.12, 0.14, 0.16, 0.18, 0.2,
 ];
 const GRID_DISTANCE: &[f64] = &[0.0, 25.0, 50.0, 100.0, 200.0];
+/// Measured against the 1 713 live strategies that set it (2026-09-22): median 1 %, and 300 of
+/// them sit outside 0.2…5 — up to 11 % — so the tail is covered rather than clipped.
 const GRID_SELL_PRICE: &[f64] = &[
     0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5,
-    5.0,
+    5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0,
 ];
 const GRID_SELL_DELAY_MS: &[f64] = &[0.0, 100.0, 250.0, 500.0, 1000.0];
+/// `HookSellLevel`, per cent of the detect depth: 100 sells at the top the move started from,
+/// 50 in the middle. The live strategies on this machine use 50 and 100.
+const GRID_HOOK_LEVEL: &[f64] = &[
+    10.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 90.0, 100.0,
+];
 const GRID_PD_TIMER_S: &[f64] = &[
     0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 60.0, 120.0,
 ];
+/// 1 865 live strategies set it; 121 of them below 5 %, which the old floor cut off.
 const GRID_PD_PCT: &[f64] = &[
-    5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 70.0, 80.0, 90.0, 100.0,
+    1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 70.0,
+    80.0, 90.0, 100.0,
 ];
 const GRID_PD_DELAY_S: &[f64] = &[0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 30.0, 60.0];
 const GRID_DROP: &[f64] = &[
@@ -92,8 +107,10 @@ const GRID_SS_WAIT_S: &[f64] = &[0.0, 0.1, 0.2, 0.5, 1.0, 2.0];
 const GRID_SS_BOUND: &[f64] = &[
     -1.0, -0.5, -0.2, -0.1, 0.0, 0.2, 0.4, 0.5, 1.0, 2.0, 5.0, 10.0,
 ];
+/// Live values run to −15 (29 of 1 869 strategies sit outside the old −10 floor).
 const GRID_STOP: &[f64] = &[
-    -10.0, -7.0, -5.0, -4.0, -3.0, -2.5, -2.0, -1.5, -1.0, -0.75, -0.5, -0.3, -0.2, -0.1,
+    -15.0, -12.0, -10.0, -7.0, -5.0, -4.0, -3.0, -2.5, -2.0, -1.5, -1.0, -0.75, -0.5, -0.3, -0.2,
+    -0.1,
 ];
 const GRID_STOP_DELAY_S: &[f64] = &[0.0, 1.0, 2.0, 4.0, 6.0, 10.0, 20.0, 30.0];
 
@@ -104,6 +121,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_PRICE },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotPriceMin",
@@ -112,102 +130,119 @@ pub const TICK_PARAMS: &[TickParam] = &[
             grid: GRID_PRICE_MIN,
         },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotUsePrice",
         group: ParamGroup::Entry,
         kind: ParamKind::Enum(&["Trade", "ASK", "BID"]),
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotRaiseWait",
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_WAIT_S },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotReplaceDelay",
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_WAIT_S },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotMinusSatoshi",
         group: ParamGroup::Entry,
         kind: ParamKind::Bool,
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "FastShotAlgo",
         group: ParamGroup::Entry,
         kind: ParamKind::Bool,
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotAddHourlyDelta",
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotAdd3hDelta",
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotAdd15minDelta",
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotAdd5minDelta",
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotAdd1minDelta",
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotAdd24hDelta",
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotAddMarkDelta",
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotAddMarketDelta",
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotAddBTCDelta",
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotAddBTC5mDelta",
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotAddPriceBug",
         group: ParamGroup::Entry,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotAddDistance",
@@ -216,6 +251,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
             grid: GRID_DISTANCE,
         },
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "SellPrice",
@@ -224,18 +260,31 @@ pub const TICK_PARAMS: &[TickParam] = &[
             grid: GRID_SELL_PRICE,
         },
         kinds: ANY,
+        // A MoonHook carries no `SellPrice` at all — `HookSellLevel` below is its take.
+        not_kinds: HOOK,
     },
     TickParam {
         key: "MShotSellAtLastPrice",
         group: ParamGroup::Exit,
         kind: ParamKind::Bool,
         kinds: MSHOT,
+        not_kinds: &[],
     },
     TickParam {
         key: "MShotSellPriceAdjust",
         group: ParamGroup::Exit,
         kind: ParamKind::Num { grid: GRID_ADJUST },
         kinds: MSHOT,
+        not_kinds: &[],
+    },
+    TickParam {
+        key: "HookSellLevel",
+        group: ParamGroup::Exit,
+        kind: ParamKind::Num {
+            grid: GRID_HOOK_LEVEL,
+        },
+        kinds: HOOK,
+        not_kinds: &[],
     },
     TickParam {
         key: "SellDelay",
@@ -244,6 +293,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
             grid: GRID_SELL_DELAY_MS,
         },
         kinds: ANY,
+        not_kinds: &[],
     },
     exit_num("PriceDownTimer", GRID_PD_TIMER_S),
     exit_num("PriceDownPercent", GRID_PD_PCT),
@@ -278,6 +328,7 @@ const fn exit_num(key: &'static str, grid: &'static [f64]) -> TickParam {
         group: ParamGroup::Exit,
         kind: ParamKind::Num { grid },
         kinds: ANY,
+        not_kinds: &[],
     }
 }
 
@@ -288,6 +339,7 @@ const fn exit_bool(key: &'static str) -> TickParam {
         group: ParamGroup::Exit,
         kind: ParamKind::Bool,
         kinds: ANY,
+        not_kinds: &[],
     }
 }
 
@@ -296,14 +348,57 @@ pub fn params_for<'k>(
     group: ParamGroup,
     kind: &'k str,
 ) -> impl Iterator<Item = &'static TickParam> + 'k {
-    TICK_PARAMS
-        .iter()
-        .filter(move |p| p.group == group && (p.kinds.is_empty() || p.kinds.contains(&kind)))
+    TICK_PARAMS.iter().filter(move |p| {
+        p.group == group
+            && (p.kinds.is_empty() || p.kinds.contains(&kind))
+            && !p.not_kinds.contains(&kind)
+    })
 }
 
-/// The field names of [`TICK_PARAMS`], for a `strategy_current_values` read.
+/// Strategy fields the models READ but the grid does not offer as knobs.
+///
+/// They still have to be fetched: `param_keys` is what a `strategy_values_at` read asks for, so
+/// a field missing from this list reads as absent and the builder silently takes its fallback —
+/// which is how the delta modifiers went unapplied through a whole measurement run on 2026-09-22
+/// while every test passed.
+///
+/// `HookSellFixed` is here because it is not a knob (the branch it selects is not modelled) but
+/// its value decides whether the take is known at all; the `Add*` family and its two
+/// coefficients are here because they move the level of every kind, and none of them is
+/// something the search should turn.
+const MODEL_ONLY_KEYS: &[&str] = &[
+    "HookSellFixed",
+    // Read by `exit_params` and acted on by the SellShot walk, never a grid knob — and absent
+    // from both lists until 2026-09-22, so the decay of the sell-shot distance has been running
+    // on its fallback since the axis was written.
+    "SellShotPriceDown",
+    "SellShotPriceDownDelay",
+    "SellModifier",
+    "MaxModifier",
+    "StopLossModifier",
+    "Add1minDelta",
+    "Add5minDelta",
+    "Add15minDelta",
+    "AddHourlyDelta",
+    "Add3hDelta",
+    "Add24hDelta",
+    "AddMarkDelta",
+    "AddPriceBug",
+    "AddBTCDelta",
+    "AddBTC1mDelta",
+    "AddBTC5mDelta",
+    "AddMarketDelta",
+];
+
+/// Every field name the models read — [`TICK_PARAMS`] plus [`MODEL_ONLY_KEYS`] — for a
+/// `strategy_current_values` read.
 pub fn param_keys() -> Vec<String> {
-    TICK_PARAMS.iter().map(|p| p.key.to_string()).collect()
+    TICK_PARAMS
+        .iter()
+        .map(|p| p.key)
+        .chain(MODEL_ONLY_KEYS.iter().copied())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Strategy values as `strategy_current_values` hands them (strings, `YES`/`NO` booleans) plus
@@ -374,6 +469,8 @@ pub fn mshot_params(v: &StrategyValues<'_>, latency_ms: f64) -> MshotParams {
             add_mark: v.num("MShotAddMarkDelta", 0.0),
             add_pricebug: v.num("MShotAddPriceBug", 0.0),
             add_btc_1h: v.num("MShotAddBTCDelta", 0.0),
+            // MoonShot's corridor family has no 1-minute BTC term; the Delta Modifiers tab does.
+            add_btc_1m: 0.0,
             add_btc_5m: v.num("MShotAddBTC5mDelta", 0.0),
             add_market_1h: v.num("MShotAddMarketDelta", 0.0),
             distance_pct: v.num("MShotAddDistance", 0.0),
@@ -390,6 +487,29 @@ pub fn exit_params(v: &StrategyValues<'_>) -> ExitParams {
         sell_at_last_price: v.bool("MShotSellAtLastPrice", base.sell_at_last_price),
         sell_price_adjust_pct: v.num("MShotSellPriceAdjust", base.sell_price_adjust_pct),
         sell_delay_ms: v.num("SellDelay", base.sell_delay_ms),
+        hook_sell_level_pct: v.num("HookSellLevel", base.hook_sell_level_pct),
+        hook_sell_fixed: v.bool("HookSellFixed", base.hook_sell_fixed),
+        sell_modifier: v.num("SellModifier", base.sell_modifier),
+        max_modifier: v.num("MaxModifier", base.max_modifier),
+        stop_loss_modifier: v.num("StopLossModifier", base.stop_loss_modifier),
+        // The Delta Modifiers tab's own family — not `MShotAdd*`, which moves the entry
+        // corridor; a strategy can carry both, and reading one for the other would move the
+        // sell by the buy's coefficients.
+        sell_mods: Modifiers {
+            add_1m: v.num("Add1minDelta", 0.0),
+            add_5m: v.num("Add5minDelta", 0.0),
+            add_15m: v.num("Add15minDelta", 0.0),
+            add_1h: v.num("AddHourlyDelta", 0.0),
+            add_3h: v.num("Add3hDelta", 0.0),
+            add_24h: v.num("Add24hDelta", 0.0),
+            add_mark: v.num("AddMarkDelta", 0.0),
+            add_pricebug: v.num("AddPriceBug", 0.0),
+            add_btc_1h: v.num("AddBTCDelta", 0.0),
+            add_btc_1m: v.num("AddBTC1mDelta", 0.0),
+            add_btc_5m: v.num("AddBTC5mDelta", 0.0),
+            add_market_1h: v.num("AddMarketDelta", 0.0),
+            distance_pct: 0.0,
+        },
         price_down_timer_s: v.num("PriceDownTimer", base.price_down_timer_s),
         price_down_pct: v.num("PriceDownPercent", base.price_down_pct),
         price_down_delay_s: v.num("PriceDownDelay", base.price_down_delay_s),

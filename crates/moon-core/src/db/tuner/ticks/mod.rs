@@ -28,6 +28,7 @@ use crate::market::trade_replay::Coverage;
 pub mod deals;
 pub mod entry;
 pub mod exit;
+pub mod hook;
 pub mod line;
 pub mod mshot;
 pub mod params;
@@ -39,6 +40,7 @@ pub mod verify;
 pub use deals::{DealsRead, read_deals};
 pub use entry::{EntryModel, entry_model_for};
 pub use exit::{ExitModel, ExitParams, archived_pre_spike_ask, archived_take, take_model_for};
+pub use hook::{HookDetect, KIND_MOONHOOK, hook_take_pct, parse_hook_detect};
 pub use mshot::{MshotEntry, MshotParams, UsePrice};
 pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};
 pub use scope::{is_service_row, is_tunable};
@@ -133,6 +135,9 @@ pub struct Deltas {
     pub btc1h: f64,
     /// BTC 5-minute delta (`btc5mdelta`).
     pub btc5m: f64,
+    /// BTC 1-minute delta (`dbtc1m`) — read by the sell side's `AddBTC1mDelta`; MoonShot's
+    /// corridor family has no term for it.
+    pub btc1m: f64,
     /// Exchange-wide 1-hour delta (`exchange1hdelta`).
     pub market1h: f64,
 }
@@ -197,6 +202,17 @@ pub struct Deal {
     /// starts. FLOCK 2026-09-21 (HookN0, short): the model's `SellPrice` take at −1.0 %, the
     /// core's at −2.2 %, every PriceDown step then a different level.
     pub archived_take: Option<f64>,
+    /// The detect depth of a MoonHook trade, per cent, as the core wrote it into the report's
+    /// `comment` — the base of that kind's take rule ([`hook::hook_take_pct`]). `None` for
+    /// every other kind, and for a hook row whose comment the scan could not read.
+    pub hook_depth_pct: Option<f64>,
+    /// The take the core actually placed on a hook trade, per cent from the buy, as the same
+    /// comment states it. Never an input of the model, and nothing asserts it: the ignored
+    /// `tests::real_data` harness prints it beside the formula's own number so a developer can
+    /// see the two drift apart on real trades. It could not stand in for the formula anyway —
+    /// a variant asks about a level the core never used, and this number answers only for the
+    /// one it did.
+    pub hook_stated_take_pct: Option<f64>,
 }
 
 impl Deal {

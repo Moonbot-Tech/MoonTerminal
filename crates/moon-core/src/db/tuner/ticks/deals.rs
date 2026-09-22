@@ -14,7 +14,8 @@ use std::collections::HashMap;
 
 use rusqlite::Connection;
 
-use super::scope::{is_service_row, is_tunable};
+use super::hook::parse_hook_detect;
+use super::scope::{is_service_row, is_tunable, sold_more_than_bought};
 use super::{Deal, Deltas};
 use crate::db::analytics::Query;
 use crate::db::read_fail::read_fail_on;
@@ -29,8 +30,8 @@ pub struct DealsRead {
     /// Rows the scope holds that carry no millisecond stamp — older replicas, or a core that
     /// predates the stamps. In the "Fact" column, not in the replay.
     pub without_ms: usize,
-    /// Service rows with stamps — funding, liquidations, joined sells, no strategy — left out;
-    /// see [`scope`].
+    /// Service rows with stamps — funding, liquidations, joined sells, no strategy, and a sale
+    /// that moved more coins than the entry bought — left out; see [`scope`].
     pub service: usize,
     /// Trades with stamps the tuner cannot be run on — a container or unresolved kind, a manual
     /// exit — left out; see [`is_tunable`].
@@ -39,7 +40,7 @@ pub struct DealsRead {
 
 /// The delta columns in the order [`Deltas`] is filled below; every one is a `FIELDS` column,
 /// so the unified source projects it (NULL when the replica lacks it).
-const DELTA_COLS: [&str; 12] = [
+const DELTA_COLS: [&str; 13] = [
     "d5s",
     "d1m",
     "d5m",
@@ -52,6 +53,7 @@ const DELTA_COLS: [&str; 12] = [
     "btc1hdelta",
     "btc5mdelta",
     "exchange1hdelta",
+    "dbtc1m",
 ];
 
 /// Read the scope's closed trades as deals: the trades the tuner can be run on
@@ -69,6 +71,7 @@ pub fn read_deals(q: &Query) -> ReadResult<DealsRead> {
     // change unit with the scope's quote, and the scan's `profitbtc` would.
     let mut read = crate::db::tuner::read_tuner_rows(q, |conn, q, src| {
         let mut read = read_on(conn, q, src)?;
+        overlay_hook_detect(conn, q, &mut read.deals)?;
         match crate::db::tuner::tuner_source_usdt_on(conn, q)? {
             Some(usdt_src) => overlay_usdt_profit(conn, q, &usdt_src, &mut read.deals)?,
             None => log::info!(
@@ -113,7 +116,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
         "SELECT o.\"reportuid\", o.\"core_uid\", o.\"strategyid\", o.\"coin\",
                 o.\"buydatems\", o.\"closedatems\", o.\"buyprice\", o.\"sellprice\",
                 o.\"spentbtc\", o.\"isshort\", o.\"sellreason\", COALESCE(o.pnl, 0), {deltas},
-                o.\"core_name\"
+                o.\"core_name\", o.\"quantity\", o.\"boughtq\"
          FROM {src}"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
@@ -151,8 +154,16 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             out.service += 1;
             continue;
         }
+        // A sale the core topped up from the wallet balance moved coins this trade never
+        // bought, so its price is an average of something else — counted with the service rows
+        // rather than replayed (`scope::sold_more_than_bought`).
+        let name_at = 12 + DELTA_COLS.len();
+        if sold_more_than_bought(num(name_at + 1)?, num(name_at + 2)?) {
+            out.service += 1;
+            continue;
+        }
         let mut deltas = Deltas::default();
-        let slots: [&mut f64; 12] = [
+        let slots: [&mut f64; 13] = [
             &mut deltas.d5s,
             &mut deltas.d1m,
             &mut deltas.d5m,
@@ -165,6 +176,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             &mut deltas.btc1h,
             &mut deltas.btc5m,
             &mut deltas.market1h,
+            &mut deltas.btc1m,
         ];
         for (offset, slot) in slots.into_iter().enumerate() {
             *slot = num(12 + offset)?;
@@ -174,7 +186,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             report_uid,
             core_uid: int(1)? as u64,
             core_name: r
-                .get::<_, Option<String>>(12 + DELTA_COLS.len())
+                .get::<_, Option<String>>(name_at)
                 .map_err(fail)?
                 .unwrap_or_default(),
             strategy_id,
@@ -197,6 +209,9 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             tick: None,
             pre_spike_ask: None,
             archived_take: None,
+            // Filled by `overlay_hook_detect` off the raw report row's comment.
+            hook_depth_pct: None,
+            hook_stated_take_pct: None,
         });
         order.push((close_ms, report_uid));
     }
@@ -206,6 +221,86 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
     index.sort_by_key(|&i| order[i]);
     out.deals = index.into_iter().map(|i| out.deals[i].clone()).collect();
     Ok(out)
+}
+
+/// Fill the hook numbers of every deal the core wrote a detect for — [`Deal::hook_depth_pct`]
+/// and [`Deal::hook_stated_take_pct`], out of the report row's `comment`.
+///
+/// Read from the RAW report tables rather than through the unified source: `comment` is a long
+/// text column, the unified projection is what every other axis scans, and widening it for one
+/// rule of one kind would put that text into every analytics query. The scan is bounded by the
+/// same period the deals were read with and by the `Depth:` marker, and only the uids already
+/// scanned are kept, so nothing grows with the size of the replica but the rows the axis holds.
+///
+/// Keyed by `(core_uid, reportuid)`, never by the uid alone: a report uid is unique WITHIN a
+/// core — the order-trace archive keys its own rows by the pair, and this scan can hold several
+/// cores at once, where one core's detect would otherwise be pinned onto another core's trade.
+/// A source without all three columns (the legacy table) contributes nothing, and so does a
+/// failure to read one: a hook trade then simply has no depth, which the model reads as "the
+/// take rule of this kind is unknown here" rather than guessing a level.
+///
+/// Args:
+///     conn: The snapshot the scan ran in.
+///     q: The floored query the scan ran with — its period bounds are the parameters.
+///     deals: The scanned deals, filled in place.
+fn overlay_hook_detect(conn: &Connection, q: &Query, deals: &mut [Deal]) -> ReadResult<()> {
+    const CTX: &str = "tuner: ticks deals (hook detect)";
+    if deals.is_empty() {
+        return Ok(());
+    }
+    let wanted: std::collections::HashSet<(u64, i64)> =
+        deals.iter().map(|d| (d.core_uid, d.report_uid)).collect();
+    let mut found: HashMap<(u64, i64), super::HookDetect> = HashMap::new();
+    for src in crate::db::read_sources_res(conn)? {
+        if !src.cols.contains("reportuid")
+            || !src.cols.contains("comment")
+            || !src.cols.contains("core_uid")
+        {
+            continue;
+        }
+        let sql = format!(
+            "SELECT \"core_uid\", \"reportuid\", \"comment\" FROM \"{}\"
+             WHERE \"closedate\" BETWEEN ?1 AND ?2 AND \"comment\" LIKE '%Depth:%'",
+            src.table
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
+        let mut rows = stmt
+            .query(rusqlite::params![q.from, q.to])
+            .map_err(|e| read_fail_on(conn, CTX, e))?;
+        while let Some(r) = rows.next().map_err(|e| read_fail_on(conn, CTX, e))? {
+            let key = (
+                r.get::<_, Option<i64>>(0)
+                    .map_err(|e| read_fail_on(conn, CTX, e))?
+                    .unwrap_or(0) as u64,
+                r.get::<_, Option<i64>>(1)
+                    .map_err(|e| read_fail_on(conn, CTX, e))?
+                    .unwrap_or(0),
+            );
+            if !wanted.contains(&key) {
+                continue;
+            }
+            let comment = r
+                .get::<_, Option<String>>(2)
+                .map_err(|e| read_fail_on(conn, CTX, e))?
+                .unwrap_or_default();
+            if let Some(detect) = parse_hook_detect(&comment) {
+                found.entry(key).or_insert(detect);
+            }
+        }
+    }
+    for deal in deals.iter_mut() {
+        if let Some(detect) = found.get(&(deal.core_uid, deal.report_uid)) {
+            deal.hook_depth_pct = Some(detect.depth_pct);
+            deal.hook_stated_take_pct = detect.stated_take_pct;
+        }
+    }
+    log::info!(
+        target: crate::diagnostics::TICKS_AXIS_TARGET,
+        "[x] ticks deals: hook detect read for {} of {} deal(s)",
+        found.len(),
+        deals.len()
+    );
+    Ok(())
 }
 
 /// Fill [`Deal::profit`] of every deal with the row's `profitbtc` off the USDT-valued source
@@ -225,27 +320,35 @@ fn overlay_usdt_profit(
     deals: &mut [Deal],
 ) -> ReadResult<()> {
     const CTX: &str = "tuner: ticks deals (USDT money)";
-    let sql = format!("SELECT o.\"reportuid\", COALESCE(o.\"profitbtc\", 0) FROM {usdt_src}");
+    // Keyed by the pair, like the hook overlay above: a report uid is unique only WITHIN a
+    // core, and this scan routinely holds several.
+    let sql = format!(
+        "SELECT o.\"core_uid\", o.\"reportuid\", COALESCE(o.\"profitbtc\", 0) FROM {usdt_src}"
+    );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let mut rows = stmt
         .query(rusqlite::params![q.from, q.to])
         .map_err(|e| read_fail_on(conn, CTX, e))?;
-    let mut money: HashMap<i64, f64> = HashMap::new();
+    let mut money: HashMap<(u64, i64), f64> = HashMap::new();
     while let Some(r) = rows.next().map_err(|e| read_fail_on(conn, CTX, e))? {
-        let uid = r
-            .get::<_, Option<i64>>(0)
-            .map_err(|e| read_fail_on(conn, CTX, e))?
-            .unwrap_or(0);
+        let key = (
+            r.get::<_, Option<i64>>(0)
+                .map_err(|e| read_fail_on(conn, CTX, e))?
+                .unwrap_or(0) as u64,
+            r.get::<_, Option<i64>>(1)
+                .map_err(|e| read_fail_on(conn, CTX, e))?
+                .unwrap_or(0),
+        );
         let profit = r
-            .get::<_, Option<f64>>(1)
+            .get::<_, Option<f64>>(2)
             .map_err(|e| read_fail_on(conn, CTX, e))?
             .filter(|v| v.is_finite())
             .unwrap_or(0.0);
-        money.insert(uid, profit);
+        money.insert(key, profit);
     }
     let mut unpriced = 0usize;
     for deal in deals.iter_mut() {
-        deal.profit = money.get(&deal.report_uid).copied();
+        deal.profit = money.get(&(deal.core_uid, deal.report_uid)).copied();
         if deal.profit.is_none() {
             unpriced += 1;
         }
