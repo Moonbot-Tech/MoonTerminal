@@ -199,6 +199,44 @@ fn real_data_reproduction() {
             eprintln!("    model line: {}", fmt(&mine));
             eprintln!("    archive   : {}", fmt(&moves));
         }
+        // The walk the verdict itself judges — the factual entry, the archived take, the sell
+        // held through the close — with every archived move beside the nearest modelled one,
+        // so a miss on one point shows WHICH point and by how much.
+        {
+            let fact_exit = ExitParams {
+                take_from_archive: true,
+                ..exit.clone()
+            };
+            let fact_fill = Fill {
+                t_ms: deal.buy_ms,
+                price: deal.buy_price,
+            };
+            let held =
+                ExitModel::new(&fact_exit).walk_held(&deal, &ticks, fact_fill, deal.close_ms);
+            eprintln!(
+                "    held exit {:?} at {:+}ms of close · stop {:.3}% · model pts {}",
+                held.exit.kind,
+                held.exit.t_ms - deal.close_ms,
+                super::super::exit::stop_pct(&exit, &deal),
+                held.points.len()
+            );
+            if let Some(points) = exit_points.as_deref() {
+                for (t, p) in verify::archived_replacements(points) {
+                    let near = held
+                        .points
+                        .iter()
+                        .min_by_key(|m| (m.t_ms - t).abs())
+                        .map(|m| (m.t_ms - t, (m.price - p) / p * 100.0));
+                    eprintln!(
+                        "    arch {:+}ms {:.8} (close {:+}ms) near {:?}",
+                        t - deal.buy_ms,
+                        p,
+                        t - deal.close_ms,
+                        near.map(|(dt, dp)| (dt, (dp * 1000.0).round() / 1000.0))
+                    );
+                }
+            }
+        }
         let plain = verify(&deal, &ticks, &entry, &exit, None, None);
         let archived = verify(
             &deal,

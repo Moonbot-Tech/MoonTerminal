@@ -376,6 +376,10 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "SellModifier",
     "MaxModifier",
     "StopLossModifier",
+    // The stop's switch and its trigger (see `ExitParams::fast_stop_loss`).
+    "UseStopLoss",
+    "FastStopLoss",
+    "StopLossEMA",
     "Add1minDelta",
     "Add5minDelta",
     "Add15minDelta",
@@ -539,8 +543,21 @@ pub fn exit_params(v: &StrategyValues<'_>) -> ExitParams {
         sell_shot_allowed_up_pct: v.num("SellShotAllowedUp", base.sell_shot_allowed_up_pct),
         sell_shot_allowed_down_pct: v.num("SellShotAllowedDown", base.sell_shot_allowed_down_pct),
         sell_shot_delay_s: v.num("SellShotDelay", base.sell_shot_delay_s),
-        stop_loss_pct: v.num("StopLoss", base.stop_loss_pct),
+        // `StopLoss` means nothing with `UseStopLoss` off (param_deps.toml: every stop field
+        // hangs on it), and the value stays in the dump when the switch goes off. A dump that
+        // omits the switch keeps the stop, as the model did before it read the switch: 2 of
+        // 1 422 live strategies omit it, and nothing says which way their core defaults.
+        stop_loss_pct: if v.bool("UseStopLoss", true) {
+            v.num("StopLoss", base.stop_loss_pct)
+        } else {
+            0.0
+        },
         stop_loss_delay_s: v.num("StopLossDelay", base.stop_loss_delay_s),
+        // Absent means the core default, NO: every live stop of a strategy that omits the field
+        // closed as "StopLoss AutoActivated on price drop: BID = …" (173 of 184 with a tape),
+        // the book-watching stop, never as the fast stop's "StopLoss Market Sell".
+        fast_stop_loss: v.bool("FastStopLoss", false),
+        stop_loss_ema: v.num("StopLossEMA", base.stop_loss_ema),
         latency_ms: base.latency_ms,
         take_from_archive: base.take_from_archive,
     }

@@ -921,6 +921,44 @@ fn verify_takes_a_limits_better_fill_and_ignores_the_archived_fill_point() {
     assert_eq!(v.exit, Some(false), "{v:?}");
 }
 
+/// A level placed THROUGH the market is taken at once by the book: the archive files the fill
+/// a moment after the move, at the sale price and better than the level, and up to a second
+/// before `closedatems` — the report books the close later. The fill is not a move, and the
+/// improvement is the book's, not another exit's.
+#[test]
+fn verify_takes_a_level_placed_through_the_market() {
+    let mut d = deal();
+    d.sell_price = 100.5;
+    d.close_ms = 10_500;
+    let ticks = tape(&[(0, 100.0), (10_000, 99.0), (10_030, 100.5)]);
+    // The take at 99.99 placed at the fill; the core's fill point 30 ms later at 100.5, 470 ms
+    // before the close — past the latency window the close stamp alone allowed.
+    let archived = [(10_000, 99.99), (10_030, 100.5)];
+    let v = verify(
+        &d,
+        &ticks,
+        &EntryParams::Fact,
+        &ExitParams::default(),
+        None,
+        Some(&archived),
+    );
+    assert_eq!(v.line_points, Some((1, 1)), "the fill point is not a move");
+    assert_eq!(v.exit, Some(true), "{v:?}");
+    // Worse than the level it follows is never its fill: a move the model did not make.
+    d.sell_price = 99.5;
+    let archived = [(10_000, 99.99), (10_030, 99.5)];
+    let v = verify(
+        &d,
+        &ticks,
+        &EntryParams::Fact,
+        &ExitParams::default(),
+        None,
+        Some(&archived),
+    );
+    assert_eq!(v.line_points, Some((1, 2)));
+    assert_eq!(v.exit, Some(false), "{v:?}");
+}
+
 #[test]
 fn share_counts_only_answered_verdicts() {
     assert_eq!(share([Some(true), None, Some(false), Some(true)]), (2, 3));
@@ -987,6 +1025,54 @@ fn exit_params_read_the_sell_fields() {
     assert!((p.sell_price_pct - 0.8).abs() < 1e-9);
     assert!(!p.sell_at_last_price);
     assert!((p.sell_price_adjust_pct - 1.0).abs() < 1e-9);
+}
+
+/// The stop's switch and trigger: `StopLoss` stays in the dump of a strategy whose stop is off,
+/// and a dump without `FastStopLoss` is at the core's default — the book-watching stop.
+#[test]
+fn exit_params_read_the_stop_switch_and_trigger() {
+    let defaults = HashMap::new();
+    let read = |pairs: &[(&str, &str)]| {
+        let v = values(pairs);
+        exit_params(&StrategyValues {
+            values: &v,
+            defaults: &defaults,
+        })
+    };
+    let off = read(&[("UseStopLoss", "NO"), ("StopLoss", "-2")]);
+    assert_eq!(off.stop_loss_pct, 0.0, "a switched-off stop arms nothing");
+    let on = read(&[
+        ("UseStopLoss", "YES"),
+        ("StopLoss", "-2"),
+        ("StopLossEMA", "3"),
+    ]);
+    assert_eq!(on.stop_loss_pct, -2.0);
+    assert!(!on.fast_stop_loss, "absent is the core default, NO");
+    assert_eq!(on.stop_loss_ema, 3.0);
+    let unswitched = read(&[("StopLoss", "-2"), ("FastStopLoss", "YES")]);
+    assert_eq!(unswitched.stop_loss_pct, -2.0, "no switch keeps the stop");
+    assert!(unswitched.fast_stop_loss);
+}
+
+#[test]
+fn the_stated_stop_level_is_read_only_when_it_is_a_usable_price() {
+    use super::verify::stated_stop_level;
+    let reason = "StopLoss AutoActivated on price drop: BID = 0.025326 ASK: 0.025999 \
+                  (strategy <HookTestN1>); StopLoss fixed: 0.025334 Allow";
+    assert_eq!(stated_stop_level(reason), Some(0.025334));
+    // A zero, or a level printed too coarsely for its price.
+    assert_eq!(
+        stated_stop_level("StopLoss fixed: 0.00000 AllowedDrop"),
+        None
+    );
+    assert_eq!(
+        stated_stop_level("StopLoss fixed: 0.00012 AllowedDrop"),
+        None
+    );
+    // Cut off by the column's length — live reasons end on `0.` — the digits are incomplete.
+    assert_eq!(stated_stop_level("StopLoss fixed: 0."), None);
+    assert_eq!(stated_stop_level("StopLoss fixed: 0.0253"), None);
+    assert_eq!(stated_stop_level("StopLoss Market Sell"), None);
 }
 
 #[test]

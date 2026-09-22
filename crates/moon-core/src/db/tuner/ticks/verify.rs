@@ -33,13 +33,21 @@
 //! [`PRICE_TOLERANCE`]. A model that lands on the right price by a different path has not
 //! reproduced the rule. Which PRINT the model would have sold on is not judged: that is the
 //! queue at the level (the spec's §7), which the tape does not carry — a print at the level
-//! sold the core's line on ARX and left it standing on COOL the same day. A stop is the one
-//! exit judged by its firing: it is a market order on the print, not a resting line.
+//! sold the core's line on ARX and left it standing on COOL the same day. The archive's own
+//! record of the fill — its last point, at the sale price — is not a move ([`is_fill_point`]).
+//!
+//! A stop is judged by its firing, not by a resting line: the fast stop by its price, a
+//! market order on the print; the book-watching stop, whose sale is a panic sell walked
+//! through a book the tape does not carry, by the level the core printed into its reason and
+//! the moment it activated ([`verify_stop`]). A stop the core fired and the model never did is
+//! a miss.
 
-use super::exit::ExitModel;
+use super::exit::{ExitModel, stop_pct};
 use super::line::LinePoint;
 use super::mshot::MshotParams;
-use super::{Deal, EntryParams, Exit, ExitKind, ExitParams, Fill, PRICE_TOLERANCE, simulate};
+use super::{
+    Deal, EntryParams, Exit, ExitKind, ExitParams, Fill, PRICE_TOLERANCE, reaches, simulate,
+};
 use crate::feed::types::Tick;
 
 /// How far apart a modelled and an archived replacement may be in time and still be the same
@@ -71,10 +79,12 @@ pub struct Verdict {
     /// Exit reproduced — the line's level at the close against the price the core sold at,
     /// and every archived move re-placed; `None` when the core closed by a rule other than the
     /// one the model's line was under at the close (a take against an "Auto Price Down"
-    /// fact, a line against a stop the model never fired) — the two prices are not comparable
-    /// then. `Some(false)` when no level stood at the close at all.
+    /// fact) — the two prices are not comparable then. `Some(false)` when no level stood at
+    /// the close at all, and when the core's exit was a stop the model — holding a stop of its
+    /// own — never fired.
     pub exit: Option<bool>,
-    /// Modelled exit against the fact, per cent of the fact.
+    /// Modelled exit against the fact, per cent of the fact — for a book-watching stop, the
+    /// modelled stop LEVEL against the level the core printed (see [`verify_stop`]).
     pub exit_dev_pct: Option<f64>,
     /// The modelled fill, for the tooltip.
     pub fill: Option<Fill>,
@@ -187,50 +197,69 @@ pub fn verify(
     // Where the take itself is not modelled for this trade, the line under it is not the
     // model's answer but its guess — see the module doc.
     let take_known = ExitModel::new(&fact_exit).take_known(deal);
-    let (exit_ok, exit_dev, line_points) = if !take_known && closed.kind != ExitKind::Stop {
+    // A stop the core fired and the model, holding a stop of its own, never did — the book
+    // proxy of a non-fast stop can stay short of the level to the tape's end — is a miss of
+    // the stop, whatever the line was doing: not a question about another rule.
+    let missed_stop =
+        fact_stopped && closed.kind != ExitKind::Stop && stop_pct(&fact_exit, deal) != 0.0;
+    let (exit_ok, exit_dev, line_points) = if missed_stop {
+        (Some(false), None, None)
+    } else if !take_known && closed.kind != ExitKind::Stop {
         (None, None, None)
     } else if closed.kind == ExitKind::OpenAtWindowEnd {
         // No line stood at the close: a miss of the exit group, not an unanswered question.
         (Some(false), None, None)
+    } else if closed.kind == ExitKind::Stop && exit_rule_matches(closed.kind, &deal.sell_reason) {
+        verify_stop(deal, &fact_exit, &walked.points, closed, exit_points)
     } else if exit_rule_matches(closed.kind, &deal.sell_reason) {
         let dev = deviation_pct(closed.price, deal.sell_price);
-        let tolerance = if closed.kind == ExitKind::Stop {
-            STOP_PRICE_TOLERANCE
-        } else {
-            PRICE_TOLERANCE
-        };
+        let tolerance = PRICE_TOLERANCE;
         // Within the tolerance either way, or a limit's fill on the better side of its level:
         // `dev` is the model against the fact, so a fact above the modelled sell (a long) or
         // below the modelled buy-back (a short) reads as a negative deviation of the model.
-        let improved = |d: f64| match closed.kind {
-            ExitKind::Stop => false,
-            _ => {
-                let better = if deal.is_long() { -d } else { d };
-                better > 0.0 && better <= FILL_IMPROVEMENT_TOLERANCE * 100.0
-            }
+        let better_by = |d: f64| if deal.is_long() { -d } else { d };
+        let improved = |d: f64| {
+            let better = better_by(d);
+            better > 0.0 && better <= FILL_IMPROVEMENT_TOLERANCE * 100.0
         };
-        // The archive's last point AT the sale — within the model's latency of the close, at
-        // the price the core sold at (GUN 2026-09-21: 31 ms before it, at the average fill)
-        // — is the fill filed as a point, not a move of the line; a re-placement any earlier,
-        // or at another price, is a move the model has to have made.
-        let fill_window_ms = exit.latency_ms.max(0.0) as i64;
+        let mut archived_fill: Option<(i64, f64)> = None;
+        let mut archived_level: Option<(i64, f64)> = None;
         let points = exit_points.filter(|p| !p.is_empty()).map(|archived| {
             let mut moves = archived_replacements(archived);
             if moves.len() > 1
-                && moves.last().is_some_and(|&(t, p)| {
-                    (t - deal.close_ms).abs() <= fill_window_ms
-                        && deviation_pct(p, deal.sell_price)
-                            .is_some_and(|d| d.abs() <= PRICE_TOLERANCE * 100.0)
-                })
+                && moves
+                    .last()
+                    .is_some_and(|&last| is_fill_point(deal, exit, last, moves[moves.len() - 2]))
             {
-                moves.pop();
+                archived_fill = moves.pop();
             }
+            archived_level = moves.last().copied();
             (matched_points(&walked.points, &moves), moves.len())
         });
         let line_ok = points.is_none_or(|(matched, total)| matched == total);
         let corroborated = points.is_some_and(|(matched, total)| matched == total);
-        let price_ok =
-            dev.is_some_and(|d| d.abs() <= tolerance * 100.0 || (corroborated && improved(d)));
+        // A level placed THROUGH the market: the archive filed the fill as a point of its own
+        // within a moment of the last move, the model re-placed at every move before it, and
+        // the line stood where that last move put it. The rule is reproduced, and how far past
+        // the level the fill landed is the book's — a marketable limit takes the best bid:
+        // INDEX 2026-09-22, the line at 0.03460 bought back 16 ms later at 0.0343988, 0.6 %
+        // better, the model on every one of the nine moves before it; live fills of this shape
+        // follow their move by a median 31 ms. A level that RESTED before its fill keeps the
+        // `FILL_IMPROVEMENT_TOLERANCE` bound — a fill far past a resting level is another exit.
+        // Held only on the better side: a limit never fills worse than its price.
+        let level_reproduced = corroborated
+            && archived_fill
+                .zip(archived_level)
+                .is_some_and(|(fill, level)| {
+                    fill.0 - level.0 <= POINT_TIME_TOLERANCE_MS
+                        && deviation_pct(closed.price, level.1)
+                            .is_some_and(|d| d.abs() <= PRICE_TOLERANCE * 100.0)
+                });
+        let price_ok = dev.is_some_and(|d| {
+            d.abs() <= tolerance * 100.0
+                || (corroborated && improved(d))
+                || (level_reproduced && better_by(d) >= -tolerance * 100.0)
+        });
         (Some(price_ok && line_ok), dev, points)
     } else {
         (None, None, None)
@@ -244,6 +273,139 @@ pub fn verify(
         exit_kind: Some(closed.kind),
         line_points,
     }
+}
+
+/// Whether the archive's last move is the FILL filed as a point rather than a move of the
+/// line: at the price the core sold at, and either within the model's latency of the close
+/// (GUN 2026-09-21: 31 ms before it) or on the fill side of the level before it — a limit
+/// fills at its price or better, and no rule moves a sell line the instant after placing it.
+///
+/// The close stamp alone missed most of them. On the live sample (2026-09-22) the fill point
+/// sat a median 250 ms before `closedatems` and up to a second — the report stamps the close
+/// when the core books it — so 145 "Auto Price Down" trades failed on that one point alone,
+/// the model having re-placed at every move before it. 447 archived lines end on the better
+/// side of their last level, at the sale price, most within 100 ms of it.
+///
+/// Args:
+///     deal: The report row — its sale price, close and side.
+///     exit: The parameters, for the model's latency.
+///     last: The archive's last move.
+///     prev: The move before it.
+fn is_fill_point(deal: &Deal, exit: &ExitParams, last: (i64, f64), prev: (i64, f64)) -> bool {
+    let (t, p) = last;
+    let at_sale =
+        deviation_pct(p, deal.sell_price).is_some_and(|d| d.abs() <= PRICE_TOLERANCE * 100.0);
+    if !at_sale {
+        return false;
+    }
+    let at_close = (t - deal.close_ms).abs() <= exit.latency_ms.max(0.0) as i64;
+    // Not worse than the level it was filed against: at or above a long's sell, at or below a
+    // short's buy-back — `reaches` with the long's side reads "at or above".
+    let fill_side = reaches(p, prev.1, !deal.is_long());
+    at_close || fill_side
+}
+
+/// The stop's verdict. Two stops, told apart by what the core wrote:
+///
+/// - **With its level in the reason** — `StopLoss AutoActivated on price drop: BID = … StopLoss
+///   fixed: X` — the book-watching stop (`FastStopLoss` off). The core then runs a panic sell:
+///   a limit through the book stepped by `StopLossSpread` down to `AllowedDrop` (FAQ), which is
+///   where the sale price comes from, and the tape has no book. So the rule is judged by what
+///   it decided — the modelled stop level against the core's own `X`, and the moment it fired
+///   against the activation — never by the fill. Live sample (2026-09-22): 0 of 173 such stops
+///   passed on the sale price, the fills sitting 1–3 % past the level while the core's `X`
+///   agreed with the model's level within 0.3 % on 144 of 183. When the stored reason cut the
+///   level off, the moment and the line are what is left to judge.
+/// - **Without it** — `StopLoss Market Sell`, the fast stop — a market order on the print,
+///   judged by its price against the sale as before.
+///
+/// The level tolerance is [`STOP_PRICE_TOLERANCE`] rather than the line's: the modelled level
+/// carries `StopLossModifier` over the report's ONE snapshot of the deltas, which the core
+/// re-reads live (see `exit::modifier_sum`), and the residual sits right there.
+///
+/// Archived moves from the activation on — the first move past the stop level — are the panic
+/// sell, not the line the rules moved, and are not held against the model.
+///
+/// Args:
+///     deal: The report row.
+///     exit: The parameters the fact is replayed with.
+///     modelled: Every level the modelled line stood at.
+///     closed: The modelled stop.
+///     exit_points: The archived Exit line, when the archive holds it.
+fn verify_stop(
+    deal: &Deal,
+    exit: &ExitParams,
+    modelled: &[LinePoint],
+    closed: Exit,
+    exit_points: Option<&[(i64, f64)]>,
+) -> (Option<bool>, Option<f64>, Option<(usize, usize)>) {
+    let stop = stop_pct(exit, deal);
+    let level = if deal.is_long() {
+        deal.buy_price * (1.0 + stop / 100.0)
+    } else {
+        deal.buy_price * (1.0 - stop / 100.0)
+    };
+    let stated = stated_stop_level(&deal.sell_reason);
+    let panic_at = stated.unwrap_or(level);
+    let mut activation: Option<i64> = None;
+    let points = exit_points.filter(|p| !p.is_empty()).map(|archived| {
+        let mut moves = archived_replacements(archived);
+        if let Some(i) = moves
+            .iter()
+            .position(|&(t, p)| t >= deal.buy_ms && reaches(p, panic_at, deal.is_long()))
+        {
+            activation = Some(moves[i].0);
+            moves.truncate(i);
+        }
+        (matched_points(modelled, &moves), moves.len())
+    });
+    let line_ok = points.is_none_or(|(matched, total)| matched == total);
+    let on_time =
+        (closed.t_ms - activation.unwrap_or(deal.close_ms)).abs() <= POINT_TIME_TOLERANCE_MS;
+    match stated {
+        Some(stated) => {
+            let dev = deviation_pct(level, stated);
+            let level_ok = dev.is_some_and(|d| d.abs() <= STOP_PRICE_TOLERANCE * 100.0);
+            (Some(level_ok && on_time && line_ok), dev, points)
+        }
+        // A book-watching stop whose level the stored reason cut off (28 of 206 live): its sale
+        // is still the panic sell, which never passes on price (0 of 173), so what is left to
+        // judge is the moment and the line — not a sale price that would fail every one.
+        None if is_book_stop_reason(&deal.sell_reason) => (Some(on_time && line_ok), None, points),
+        None => {
+            let dev = deviation_pct(closed.price, deal.sell_price);
+            let price_ok = dev.is_some_and(|d| d.abs() <= STOP_PRICE_TOLERANCE * 100.0);
+            (Some(price_ok && line_ok), dev, points)
+        }
+    }
+}
+
+/// Whether a stop's `sellreason` is the book-watching stop's — `StopLoss AutoActivated on price
+/// drop: BID = …` — rather than the fast stop's `StopLoss Market Sell`. The prefix survives the
+/// column's truncation, which cuts the text's end.
+fn is_book_stop_reason(reason: &str) -> bool {
+    reason.trim().starts_with("StopLoss AutoActivated")
+}
+
+/// The stop level the core printed into a book-watching stop's reason — `StopLoss fixed: X` —
+/// when it is a usable price: positive, not cut off by the column's length, and printed finely
+/// enough that its rounding sits inside [`PRICE_TOLERANCE`]. The reason is stored truncated,
+/// and the level sits near its end: 28 of the 206 live reasons that carry it end inside the
+/// number (`StopLoss fixed: 0.`), which would read as a stop at zero — so a number running
+/// into the end of the text answers `None`, and [`verify_stop`] judges that stop by its moment
+/// and its line alone.
+pub fn stated_stop_level(reason: &str) -> Option<f64> {
+    const MARKER: &str = "StopLoss fixed:";
+    let at = reason.find(MARKER)? + MARKER.len();
+    let rest = reason[at..].trim_start();
+    let len = rest
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .filter(|&len| len > 0)?;
+    let token = &rest[..len];
+    let value: f64 = token.parse().ok()?;
+    let decimals = token.split_once('.').map_or(0, |(_, frac)| frac.len());
+    let half_unit = 0.5 * 10f64.powi(-(decimals as i32));
+    (value.is_finite() && value > 0.0 && half_unit / value <= PRICE_TOLERANCE).then_some(value)
 }
 
 /// How far a modelled entry may sit from the fact and still be the same order, per cent: the

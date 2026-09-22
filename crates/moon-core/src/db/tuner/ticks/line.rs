@@ -24,8 +24,13 @@
 //!   distance by that much per second past `SellShotPriceDownDelay`; the line stays between
 //!   `SellShotAllowedDown` and `SellShotAllowedUp` per cent over the buy.
 //! - **StopLoss** — `StopLoss` per cent from the buy (negative: a loss), armed
-//!   `StopLossDelay` seconds after the buy; the first print through it is a market exit at
-//!   the print's own price.
+//!   `StopLossDelay` seconds after the buy. With `FastStopLoss` the first print through it is
+//!   a market exit at the print's own price. Without it — the core's default — the core
+//!   watches the book's BID (a short's ASK) averaged over `StopLossEMA` samples, and the walk
+//!   reads a proxy of that: the last print on that side of the book (a taker sell prints at the
+//!   BID), sampled every [`STOP_SAMPLE_MS`], averaged the same way; the exit is at the sample,
+//!   at the proxy's price. Where the core's panic sell then fills is the book's business — see
+//!   [`super::verify`] for how the fact is judged.
 //!
 //! Every rule is written for a long and mirrored for a short by [`Side`]. A replacement reaches
 //! the exchange `latency_ms` later, as the entry's does: a spike through the OLD level in that
@@ -46,6 +51,17 @@ use crate::feed::types::Tick;
 
 /// The terminal's own floor on a step delay of zero: the FAQ's "0.33 s internal minimum".
 pub const STEP_FLOOR_MS: i64 = 330;
+
+/// How often the non-fast stop's BID proxy is sampled. The core's own cadence is not in the
+/// FAQ and the tape has no book, so this is a CALIBRATION, not the core's constant: against
+/// the activation the order archive records (the sell line's jump past the stop), on 199 live
+/// book-watching stops (2026-09-22), the first print through the level fired a median 3.9 s
+/// early with `StopLossEMA` at 3 and 0.6 s with it off; sampling the proxy every 2 s and
+/// averaging the samples brings both medians within 0.4 s and puts 64 of 98 (EMA off) and 35
+/// of 101 (EMA 3) within a second, against 53 and 25. Faster sampling left the EMA-3 stops
+/// seconds early, 3 s left the rest a second late. What the proxy still cannot see is the book
+/// itself, and the EMA-3 stops are where that shows.
+pub const STOP_SAMPLE_MS: i64 = 2_000;
 
 /// Which way the position profits, folding every "above/below the buy" into one sign.
 #[derive(Clone, Copy)]
@@ -94,6 +110,60 @@ impl Side {
             reference - level
         };
         signed / reference * 100.0
+    }
+}
+
+/// The book-watching stop's state: a BID proxy — the last print on the stop's side of the
+/// book — sampled every [`STOP_SAMPLE_MS`] and averaged over `StopLossEMA` samples.
+struct BookStop {
+    long: bool,
+    level: f64,
+    /// The end of `StopLossDelay`: a sample before it is averaged but cannot fire.
+    armed_at: i64,
+    /// The EMA weight, `2 / (StopLossEMA + 1)`; 1 without averaging.
+    alpha: f64,
+    proxy: Option<f64>,
+    avg: Option<f64>,
+    next_sample: i64,
+}
+
+impl BookStop {
+    /// Take every sample due strictly before `until` — the prints before it are all the
+    /// proxy has seen — and answer the first one whose average is past the level: the stop,
+    /// at the sample's moment and the proxy's price.
+    fn sample_before(&mut self, until: i64) -> Option<Exit> {
+        while self.next_sample < until {
+            let at = self.next_sample;
+            self.next_sample += STOP_SAMPLE_MS;
+            let Some(bid) = self.proxy else {
+                continue;
+            };
+            let avg = self
+                .avg
+                .map_or(bid, |a| self.alpha * bid + (1.0 - self.alpha) * a);
+            self.avg = Some(avg);
+            if at >= self.armed_at && reaches(avg, self.level, self.long) {
+                return Some(Exit {
+                    t_ms: at,
+                    price: bid,
+                    kind: ExitKind::Stop,
+                });
+            }
+        }
+        None
+    }
+
+    /// Read a print into the proxy: a taker sell prints at the BID — a long's stop side; a
+    /// short's stop watches the ASK, where a taker buy prints.
+    fn see(&mut self, tick: &Tick) {
+        let stop_side = if self.long {
+            crate::feed::types::Side::Sell
+        } else {
+            crate::feed::types::Side::Buy
+        };
+        if tick.side == stop_side {
+            self.proxy = Some(f64::from(tick.price));
+        }
     }
 }
 
@@ -239,6 +309,18 @@ pub fn walk_held(
     let stop_on = stop != 0.0;
     let stop_level = side.over(fill.price, stop);
     let stop_from = fill.t_ms + (params.stop_loss_delay_s.max(0.0) * 1000.0) as i64;
+    // The non-fast stop's BID proxy: the last print on the stop's side of the book, sampled on
+    // its own clock and averaged over `StopLossEMA` samples (see `STOP_SAMPLE_MS`).
+    let book_stop = stop_on && !params.fast_stop_loss;
+    let mut book = book_stop.then(|| BookStop {
+        long: side.long,
+        level: stop_level,
+        armed_at: stop_from,
+        alpha: 2.0 / (params.stop_loss_ema.max(1.0) + 1.0),
+        proxy: None,
+        avg: None,
+        next_sample: fill.t_ms + STOP_SAMPLE_MS,
+    });
 
     let mut last_t = fill.t_ms;
     for (index, tick) in ticks.iter().enumerate() {
@@ -300,9 +382,18 @@ pub fn walk_held(
             exch_moved = true;
             pending = None;
         }
-        // The stop is a market order the core fires on the print; the sell is a limit the
+        // The book-watching stop samples between prints: every sample due BEFORE this print
+        // reads the proxy the earlier prints left, and one past the level fires at its own
+        // moment, ahead of anything this print does.
+        if let Some(book) = book.as_mut() {
+            if let Some(exit) = book.sample_before(t_ms) {
+                return LineWalk { exit, points };
+            }
+            book.see(tick);
+        }
+        // The fast stop is a market order the core fires on the print; the sell is a limit the
         // print reaches. Both come before the print-driven rule below moves anything.
-        if stop_on && t_ms >= stop_from && reaches(price, stop_level, side.long) {
+        if stop_on && !book_stop && t_ms >= stop_from && reaches(price, stop_level, side.long) {
             return LineWalk {
                 exit: Exit {
                     t_ms,
@@ -384,9 +475,14 @@ pub fn walk_held(
             }
         }
     }
+    let tail = ticks.last().map(|t| t.time_ms as i64).unwrap_or(last_t);
+    // The book stop's samples up to the tape's end — the one AT the last print included — read
+    // the proxy the last prints left; the loop only ever reaches the samples before a print.
+    if let Some(exit) = book.as_mut().and_then(|book| book.sample_before(tail + 1)) {
+        return LineWalk { exit, points };
+    }
     // Nothing closed it inside the tape. Not the report's own exit: a variant that never
     // closes is not a trade, whatever the core's rules did, and the caption counts it.
-    let tail = ticks.last().map(|t| t.time_ms as i64).unwrap_or(last_t);
     LineWalk {
         exit: Exit {
             t_ms: tail,

@@ -347,6 +347,121 @@ fn the_stop_fires_on_the_print_after_its_delay() {
     assert!((w.exit.price - 98.7).abs() < 1e-4);
 }
 
+fn sold(t_ms: i64, price: f64) -> Tick {
+    Tick {
+        side: TickSide::Sell,
+        ..tick(t_ms, price)
+    }
+}
+
+/// The book-watching stop (`FastStopLoss` off) reads the BID through the prints that hit it —
+/// taker sells — on its own sample clock, not every print through the level.
+#[test]
+fn the_book_stop_fires_on_a_sample_of_the_bid_not_on_a_print() {
+    let book = ExitParams {
+        stop_loss_pct: -1.0,
+        fast_stop_loss: false,
+        ..params()
+    };
+    // A taker BUY through the level says nothing about the BID; the taker sell at 98.8 does,
+    // and the next sample after it — 4 s — fires, at the proxy's price.
+    let ticks = vec![
+        tick(1_000, 98.5),
+        sold(1_500, 99.5),
+        sold(2_500, 98.8),
+        tick(5_000, 100.0),
+    ];
+    let w = walk(&deal(false), &ticks, fill(), 101.0, &book);
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 4_000));
+    assert!((w.exit.price - 98.8).abs() < 1e-4);
+    // The fast stop takes the first print through the level, whichever side it hit.
+    let fast = ExitParams {
+        fast_stop_loss: true,
+        ..book.clone()
+    };
+    let w = walk(&deal(false), &ticks, fill(), 101.0, &fast);
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 1_000));
+}
+
+/// A sample due exactly at the tape's last print reads that print — the loop only reaches the
+/// samples before a print, so the tape's end is where it must not be forgotten.
+#[test]
+fn the_book_stop_takes_the_sample_at_the_last_print() {
+    let book = ExitParams {
+        stop_loss_pct: -1.0,
+        fast_stop_loss: false,
+        ..params()
+    };
+    let w = walk(&deal(false), &[sold(2_000, 98.8)], fill(), 101.0, &book);
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 2_000));
+    // A sample the tape ends before is not taken: nothing is known past the last print.
+    let w = walk(&deal(false), &[sold(1_500, 98.8)], fill(), 101.0, &book);
+    assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd);
+}
+
+/// `StopLossEMA` averages the samples, so a BID just past the level fires only once the
+/// average is past it too.
+#[test]
+fn the_stop_ema_waits_for_the_average() {
+    let ticks = vec![sold(1_500, 99.5), sold(2_500, 98.9), sold(9_000, 98.9)];
+    let plain = ExitParams {
+        stop_loss_pct: -1.0,
+        fast_stop_loss: false,
+        ..params()
+    };
+    let w = walk(&deal(false), &ticks, fill(), 101.0, &plain);
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 4_000));
+    // Samples 99.5, 98.9, 98.9, 98.9 at 2, 4, 6, 8 s: the EMA over 3 (α = 0.5) reads 99.5,
+    // 99.2, 99.05, 98.975 — past 99 at the fourth.
+    let smoothed = ExitParams {
+        stop_loss_ema: 3.0,
+        ..plain
+    };
+    let w = walk(&deal(false), &ticks, fill(), 101.0, &smoothed);
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 8_000));
+}
+
+/// A book stop's sale is a panic sell walked through the book: the verdict holds the model's
+/// stop level against the one the core printed, and the moment against the close — never the
+/// sale price. A stop the core fired and the model never did is a miss.
+#[test]
+fn verify_judges_a_book_stop_by_its_level_and_moment() {
+    let book = ExitParams {
+        stop_loss_pct: -1.0,
+        fast_stop_loss: false,
+        ..params()
+    };
+    let mut d = deal(false);
+    d.sell_reason = "StopLoss AutoActivated on price drop: BID = 98.800 ASK: 98.900 \
+                     (strategy <S>); StopLoss fixed: 99.000 AllowedDrop: BUY -15.0%"
+        .into();
+    d.sell_price = 97.0;
+    d.close_ms = 4_050;
+    let ticks = vec![sold(1_500, 99.5), sold(2_500, 98.8), tick(5_000, 100.0)];
+    let v = verify(&d, &ticks, &EntryParams::Fact, &book, None, None);
+    assert_eq!(v.exit_kind, Some(ExitKind::Stop));
+    assert_eq!(v.exit, Some(true), "{v:?}");
+    assert!(v.exit_dev_pct.is_some_and(|dev| dev.abs() < 1e-9));
+    // The stored reason cut inside the level: still the book stop, judged by its moment.
+    let full = d.sell_reason.clone();
+    d.sell_reason = full[..full.find("99.000").expect("level") + 3].to_string();
+    let v = verify(&d, &ticks, &EntryParams::Fact, &book, None, None);
+    assert_eq!(v.exit, Some(true), "{v:?}");
+    d.close_ms = 9_000;
+    let v = verify(&d, &ticks, &EntryParams::Fact, &book, None, None);
+    assert_eq!(v.exit, Some(false), "five seconds off the moment, {v:?}");
+    d.close_ms = 4_050;
+    d.sell_reason = full;
+    // The core's level elsewhere: not this stop.
+    d.sell_reason = d.sell_reason.replace("99.000", "98.000");
+    let v = verify(&d, &ticks, &EntryParams::Fact, &book, None, None);
+    assert_eq!(v.exit, Some(false), "{v:?}");
+    // A tape whose BID never reaches the level: the core stopped, the model did not.
+    let calm = vec![sold(1_500, 99.5), tick(5_000, 100.0)];
+    let v = verify(&d, &calm, &EntryParams::Fact, &book, None, None);
+    assert_eq!(v.exit, Some(false), "{v:?}");
+}
+
 // ---- the mirror and the archive -------------------------------------------------------------
 
 #[test]

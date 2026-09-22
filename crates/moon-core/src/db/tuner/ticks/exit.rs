@@ -98,8 +98,21 @@ pub struct ExitParams {
     pub sell_shot_allowed_down_pct: f64,
     pub sell_shot_delay_s: f64,
     // Stops
+    /// `StopLoss`, already zeroed by [`super::params::exit_params`] when `UseStopLoss` is off —
+    /// the field keeps its value in a strategy whose stop is switched off, and the core then
+    /// arms nothing.
     pub stop_loss_pct: f64,
     pub stop_loss_delay_s: f64,
+    /// `FastStopLoss` — what the stop watches. YES: the trades ("crosses", FAQ), so the first
+    /// print through the level fires it. NO — the core's default: the book's BID (the ASK for a
+    /// short), averaged over `StopLossEMA` of its own samples, which the trade tape does not
+    /// carry; the walk then reads a sampled proxy of it (see [`super::line`]).
+    pub fast_stop_loss: bool,
+    /// `StopLossEMA` — how many of the core's samples the non-fast stop averages (FAQ: 0 off,
+    /// 3/5/10 "the last 3, 5, 10 ticks", so that a single spike through the line does not start
+    /// the panic sell). Ignored by a fast stop — the FAQ's own distinction, and the live
+    /// activations agree: 48 fast stops with it at 3 fire as promptly as 81 without it.
+    pub stop_loss_ema: f64,
     /// Model parameter: how long a replacement of the sell takes to reach the book.
     pub latency_ms: f64,
     /// Verdict-only: start the line at the archived take (`Deal::archived_take`) for a kind
@@ -150,6 +163,10 @@ impl Default for ExitParams {
             sell_shot_delay_s: 0.0,
             stop_loss_pct: 0.0,
             stop_loss_delay_s: 0.0,
+            // The trigger the tape itself carries; `exit_params` reads the strategy's own, and
+            // its absence there is the core's default, NO.
+            fast_stop_loss: true,
+            stop_loss_ema: 0.0,
             latency_ms: DEFAULT_LATENCY_MS,
             take_from_archive: false,
         }
