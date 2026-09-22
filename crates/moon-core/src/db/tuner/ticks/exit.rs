@@ -97,6 +97,12 @@ pub struct ExitParams {
     pub sell_shot_allowed_up_pct: f64,
     pub sell_shot_allowed_down_pct: f64,
     pub sell_shot_delay_s: f64,
+    // PumpMove (PumpsDetection)
+    /// `PumpMoveTimer` — seconds after the take before the one pump move; 0 never moves.
+    pub pump_move_timer_s: f64,
+    /// `PumpMovePersent` (the core's spelling) — per cent of the peak-to-buy distance the move
+    /// stops short of the peak.
+    pub pump_move_pct: f64,
     // Stops
     /// `StopLoss`, already zeroed by [`super::params::exit_params`] when `UseStopLoss` is off —
     /// the field keeps its value in a strategy whose stop is switched off, and the core then
@@ -161,6 +167,8 @@ impl Default for ExitParams {
             sell_shot_allowed_up_pct: 10.0,
             sell_shot_allowed_down_pct: -100.0,
             sell_shot_delay_s: 0.0,
+            pump_move_timer_s: 0.0,
+            pump_move_pct: 0.0,
             stop_loss_pct: 0.0,
             stop_loss_delay_s: 0.0,
             // The trigger the tape itself carries; `exit_params` reads the strategy's own, and

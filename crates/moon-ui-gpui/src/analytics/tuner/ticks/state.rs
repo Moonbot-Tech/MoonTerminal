@@ -72,6 +72,28 @@ pub(in crate::analytics::tuner) struct DealRow {
     pub(in crate::analytics::tuner) held: Option<(i64, i64)>,
 }
 
+impl DealRow {
+    /// Take everything a replay learned about this row from its answer: the tape's word, the
+    /// verdict, the model inputs derived for the deal (the price step, the archived pre-spike
+    /// ask and take, the core's step lag), the prints, the entry line and the held coverage.
+    /// Every fold of a replay answer goes through here: the variants replay the STORED row
+    /// (`prepared_deals`), so a take lifted to the archive's pre-spike ask in the verdict but
+    /// read off the tape in the variants puts the two on different levels, and a row folded
+    /// without its held coverage reads a trail of 0 and clips every variant tape at its close
+    /// (`common_horizon_ms` is the shortest trail of the sample).
+    pub(in crate::analytics::tuner) fn take_replay(&mut self, answer: DealRow) {
+        self.tape = answer.tape;
+        self.verdict = answer.verdict;
+        self.deal.tick = answer.deal.tick;
+        self.deal.pre_spike_ask = answer.deal.pre_spike_ask;
+        self.deal.archived_take = answer.deal.archived_take;
+        self.deal.step_lag_ms = answer.deal.step_lag_ms;
+        self.ticks = answer.ticks;
+        self.entry_line = answer.entry_line;
+        self.held = answer.held;
+    }
+}
+
 /// Where a deal's prints live, as the replay worker keys them, plus what a fetch needs.
 #[derive(Clone, Debug)]
 pub(in crate::analytics::tuner) struct RowAddress {
@@ -457,12 +479,7 @@ impl TicksState {
             if stale {
                 continue;
             }
-            slot.tape = answer.tape;
-            slot.verdict = answer.verdict;
-            slot.deal.tick = answer.deal.tick;
-            slot.ticks = answer.ticks;
-            slot.entry_line = answer.entry_line;
-            slot.held = answer.held;
+            slot.take_replay(answer);
         }
         data.retain_within_cap();
         data.refresh_summary();

@@ -25,6 +25,7 @@
 use crate::feed::types::Tick;
 use crate::market::trade_replay::Coverage;
 
+pub mod calibrate;
 pub mod deals;
 pub mod entry;
 pub mod exit;
@@ -213,6 +214,10 @@ pub struct Deal {
     /// a variant asks about a level the core never used, and this number answers only for the
     /// one it did.
     pub hook_stated_take_pct: Option<f64>,
+    /// How much later than `PriceDownDelay` the deal's CORE makes the next PriceDown step after
+    /// one that moved the order, milliseconds — its replace round trip, calibrated by the caller
+    /// off the core's own archived lines ([`calibrate`]); 0 runs the steps on the plain schedule.
+    pub step_lag_ms: f64,
 }
 
 impl Deal {

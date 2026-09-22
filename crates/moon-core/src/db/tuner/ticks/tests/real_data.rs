@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags};
 
+use super::super::calibrate;
 use super::super::exit::ExitModel;
 use super::super::mshot::DEFAULT_LATENCY_MS;
 use super::super::params::{StrategyValues, exit_params, mshot_params, param_keys};
@@ -69,6 +70,139 @@ fn held_ticks(exchange_key: &str, market: &str, spans: &Coverage) -> (Vec<Tick>,
         .unwrap_or_default()
 }
 
+/// One deal as the verdict saw it, for an analysis outside the probe: a JSON line in
+/// `<dir>/deals.jsonl` (the row, the strategy's raw values, the held walk's points, the archived
+/// Exit line) and its prints as `t,price,qty,side` in `<dir>/ticks/<uid>.csv`.
+fn dump_deal(
+    dir: &str,
+    deal: &Deal,
+    values: &HashMap<String, String>,
+    ticks: &[Tick],
+    held: &super::super::line::LineWalk,
+    exit_points: Option<&[(i64, f64)]>,
+    entry_points: Option<&[(i64, f64)]>,
+) {
+    use std::io::Write;
+    let dir = PathBuf::from(dir);
+    let _ = std::fs::create_dir_all(dir.join("ticks"));
+    let row = serde_json::json!({
+        "uid": deal.report_uid,
+        "core": deal.core_name,
+        "coin": deal.coin,
+        "kind": deal.kind,
+        "short": deal.is_short,
+        "buy_ms": deal.buy_ms,
+        "close_ms": deal.close_ms,
+        "buy": deal.buy_price,
+        "sell": deal.sell_price,
+        "reason": deal.sell_reason,
+        "tick": deal.tick,
+        "values": values,
+        "held_exit": [held.exit.t_ms, held.exit.price, format!("{:?}", held.exit.kind)],
+        "held_points": held.points.iter().map(|p| (p.t_ms, p.price)).collect::<Vec<_>>(),
+        "archive": exit_points,
+        "entry": entry_points,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("deals.jsonl"))
+    {
+        let _ = writeln!(f, "{row}");
+    }
+    let mut csv = String::with_capacity(ticks.len() * 32);
+    for t in ticks {
+        let side = if t.side == crate::feed::types::Side::Buy {
+            'B'
+        } else {
+            'S'
+        };
+        csv.push_str(&format!(
+            "{},{},{},{side}\n",
+            t.time_ms as i64, t.price, t.qty
+        ));
+    }
+    let _ = std::fs::write(
+        dir.join("ticks").join(format!("{}.csv", deal.report_uid)),
+        csv,
+    );
+}
+
+/// Each core's exchange key — `<code>:<dex as 8 hex digits>`, the tape's own spelling — off the
+/// `core N «name» identity: … -> ExchangeId { code: C, dex: D }` lines the application logs when
+/// a core connects, since the report does not carry the venue and no core is connected here.
+/// Reading a coin under every exchange that stores it instead mixed venues into one tape (AKE
+/// sat under five), and judged a deal of a venue without a tape of its own — BB1 is Bybit, and
+/// its tape is not in the store — on another venue's prints. Guessing the venue from where the
+/// entry fill printed does not work either: a liquid coin prints the same price on Binance and
+/// Bybit within a second, and BB1 "voted" Binance 49 to 36.
+fn core_venues() -> HashMap<u64, String> {
+    let mut out = HashMap::new();
+    let Ok(dir) = std::fs::read_dir(paths::logs_dir_no_create()) else {
+        return out;
+    };
+    for entry in dir.flatten() {
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        for line in text
+            .lines()
+            .filter(|l| l.contains("identity: exchange_code="))
+        {
+            let core = line
+                .split_once("core ")
+                .and_then(|(_, rest)| rest.split_whitespace().next())
+                .and_then(|n| n.parse::<u64>().ok());
+            let id = line
+                .split_once("ExchangeId { code: ")
+                .and_then(|(_, rest)| {
+                    let (code, rest) = rest.split_once(", dex: ")?;
+                    let dex = rest.split_once(' ')?.0;
+                    Some((code.parse::<u8>().ok()?, dex.parse::<u32>().ok()?))
+                });
+            if let (Some(core), Some((code, dex))) = (core, id) {
+                out.insert(core, format!("{code}:{dex:08x}"));
+            }
+        }
+    }
+    out
+}
+
+/// Each core's PriceDown step lag off its own archived Exit lines, the way the axis calibrates
+/// it (`calibrate::step_lag_samples` over the deals it loaded, the median per core).
+fn core_step_lags(
+    deals: &[Deal],
+    keys: &[String],
+    defaults: &HashMap<String, f64>,
+) -> HashMap<u64, f64> {
+    let mut samples: HashMap<u64, Vec<i64>> = HashMap::new();
+    for deal in deals {
+        if !is_tunable(&deal.kind, &deal.sell_reason) {
+            continue;
+        }
+        let (_, Some(points)) = archived_lines(deal) else {
+            continue;
+        };
+        let Some(values) =
+            strategy_values_at(deal.strategy_id, Some(deal.core_uid), deal.buy_ms, keys)
+        else {
+            continue;
+        };
+        let exit = exit_params(&StrategyValues {
+            values: &values,
+            defaults,
+        });
+        samples
+            .entry(deal.core_uid)
+            .or_default()
+            .extend(calibrate::step_lag_samples(deal, &exit, &points));
+    }
+    samples
+        .into_iter()
+        .filter_map(|(core, mut v)| calibrate::median_step_lag(&mut v).map(|lag| (core, lag)))
+        .collect()
+}
+
 fn round3(v: Option<f64>) -> Option<f64> {
     v.map(|d| (d * 1000.0).round() / 1000.0)
 }
@@ -107,8 +241,8 @@ fn real_data_reproduction() {
         read.without_ms
     );
 
-    // Every (exchange, market) pair the tape holds — the deal's exchange key is not in the
-    // report, so a coin is tried under each exchange and market spelling that stores it.
+    // Every (exchange, market) pair the tape holds — the deal's market spelling is not in the
+    // report, so a coin is tried under each market of its core's exchange that stores it.
     let spans_db =
         Connection::open_with_flags(paths::trades_db_path(), OpenFlags::SQLITE_OPEN_READ_ONLY)
             .expect("trades.sqlite");
@@ -120,9 +254,13 @@ fn real_data_reproduction() {
         .flatten()
         .collect();
     let margin_ms = crate::market::trade_replay::model_margin_ms();
+    let venue_of_core = core_venues();
+    eprintln!("core venues (from the identity lines of the logs): {venue_of_core:?}");
 
     let keys = param_keys();
     let defaults = HashMap::new();
+    let core_lags = core_step_lags(&read.deals, &keys, &defaults);
+    eprintln!("PriceDown step lag per core: {core_lags:?}");
     let (mut entry_hits, mut entry_n, mut exit_hits, mut exit_n, mut with_tape) = (0, 0, 0, 0, 0);
     let mut kinds_seen: HashMap<String, usize> = HashMap::new();
     for mut deal in read.deals {
@@ -152,9 +290,15 @@ fn real_data_reproduction() {
         let spans = window.focus_spans();
         let mut ticks: Vec<Tick> = Vec::new();
         let mut covered = Coverage::none();
+        // The core's own venue only: a coin the tape holds under several exchanges is not one
+        // tape, and the axis reads the deal's own (`RowAddress::exchange_key`). A core the logs
+        // never named is skipped rather than replayed on a mixture.
+        let Some(venue) = venue_of_core.get(&deal.core_uid) else {
+            continue;
+        };
         for (exchange, market) in pairs
             .iter()
-            .filter(|(_, m)| coin_match_key(coin_of_market(m)) == coin_key)
+            .filter(|(e, m)| e == venue && coin_match_key(coin_of_market(m)) == coin_key)
         {
             let (held, held_covered) = held_ticks(exchange, market, &spans);
             ticks.extend(held);
@@ -180,6 +324,7 @@ fn real_data_reproduction() {
             EntryParams::Fact
         };
         let exit = exit_params(&sv);
+        deal.step_lag_ms = core_lags.get(&deal.core_uid).copied().unwrap_or(0.0);
         deal.pre_spike_ask = archived_pre_spike_ask(exit_points.as_deref(), &exit, deal.is_short);
         deal.archived_take = archived_take(exit_points.as_deref());
         // The modelled line beside the archive's moves, for the eye.
@@ -207,12 +352,20 @@ fn real_data_reproduction() {
                 take_from_archive: true,
                 ..exit.clone()
             };
-            let fact_fill = Fill {
-                t_ms: deal.buy_ms,
-                price: deal.buy_price,
-            };
+            let fact_fill = verify::fact_sell_start(&deal, &exit, exit_points.as_deref());
             let held =
                 ExitModel::new(&fact_exit).walk_held(&deal, &ticks, fact_fill, deal.close_ms);
+            if let Ok(dir) = std::env::var("MOON_TICKS_DUMP") {
+                dump_deal(
+                    &dir,
+                    &deal,
+                    &values,
+                    &ticks,
+                    &held,
+                    exit_points.as_deref(),
+                    entry_line.as_deref(),
+                );
+            }
             eprintln!(
                 "    held exit {:?} at {:+}ms of close · stop {:.3}% · model pts {}",
                 held.exit.kind,
@@ -277,16 +430,21 @@ fn real_data_reproduction() {
                     .map(|d| super::super::hook::hook_take_pct(d, exit.hook_sell_level_pct))
             ),
         );
-        let best = if entry_line.is_some() {
-            archived
+        // Counted as the axis counts it (`load.rs::replay_row_with` passes both archived lines
+        // whenever it has them): the entry off its archived line when there is one — without it
+        // the two verdicts are the same call — and the exit ALWAYS against the archived Exit
+        // line. Taking the plain verdict's exit for a deal without an Entry line judged it with
+        // no archive at all, which is not what the table shows.
+        let entry_verdict = if entry_line.is_some() {
+            archived.entry
         } else {
-            plain
+            plain.entry
         };
-        if let Some(ok) = best.entry {
+        if let Some(ok) = entry_verdict {
             entry_n += 1;
             entry_hits += usize::from(ok);
         }
-        if let Some(ok) = best.exit {
+        if let Some(ok) = archived.exit {
             exit_n += 1;
             exit_hits += usize::from(ok);
         }

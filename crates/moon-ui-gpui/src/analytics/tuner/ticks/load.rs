@@ -299,6 +299,8 @@ impl AnalyticsView {
                     })
                     .collect();
                 let mut traces = archived_lines(&rows);
+                // Before any row is replayed: each core's step lag, off these rows' archives.
+                super::lags::calibrate_from(&rows, &traces, &defaults);
                 let now_ms = moon_core::util::now_unix_ms_i64();
                 for row in &mut rows {
                     let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
@@ -620,6 +622,8 @@ pub(super) fn replay_row_with(
     );
     row.deal.archived_take =
         moon_core::db::tuner::ticks::archived_take(lines.exit_points.as_deref());
+    // The core's own clock for its PriceDown steps, as the last load calibrated it.
+    row.deal.step_lag_ms = super::lags::step_lag_of(row.deal.core_uid);
     row.verdict = Some(verify(
         &row.deal,
         &ticks,

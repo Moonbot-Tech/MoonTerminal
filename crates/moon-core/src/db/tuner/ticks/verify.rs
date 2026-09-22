@@ -139,11 +139,9 @@ pub fn verify(
     // have yet (phase 2), and it stays unanswered until it does.
     // The exit group is judged from the FACTUAL entry, whatever the entry group modelled: the
     // sell rules measure from the buy, and a fill the model placed a few ticks off would shift
-    // every level of a correctly reproduced line. The entry group has its own verdict above.
-    let fact_fill = Fill {
-        t_ms: deal.buy_ms,
-        price: deal.buy_price,
-    };
+    // every level of a correctly reproduced line — and their timers from the moment the core
+    // placed the take (`fact_sell_start`). The entry group has its own verdict above.
+    let fact_fill = fact_sell_start(deal, exit, exit_points);
     // The line is walked HELD through the close: its levels are what is judged, and a print
     // that would have sold the model's line earlier is the queue's business, not the rule's.
     // A kind without a take rule of its own starts at the core's archived take.
@@ -160,6 +158,18 @@ pub fn verify(
     // by then, the model's own latency allowed for — and the rule is the take when no move
     // had reached the exchange, the moving line otherwise.
     let fact_stopped = reason_starts_with(deal.sell_reason.trim(), REASON_STOP);
+    // The archive's own record of the sell: its moves, and the fill it filed as a point.
+    let archive = exit_points
+        .filter(|p| !p.is_empty())
+        .map(|archived| ArchivedExit::of(deal, exit, archived));
+    // When the fact filled: the archive's own record of the fill when it filed one, else the
+    // close. The report books the close when the core does, which can be seconds after the
+    // fill — FATCOIN 2026-09-22 filled 15 ms after the line's third move and closed 1.8 s later,
+    // long enough for the model's line to take a fourth step the core's never took.
+    let filled_at = archive
+        .as_ref()
+        .and_then(|a| a.fill)
+        .map_or(deal.close_ms, |(t, _)| t.min(deal.close_ms));
     let closed = match walked.exit.kind {
         ExitKind::Stop
             if walked.exit.t_ms <= deal.close_ms + POINT_TIME_TOLERANCE_MS || fact_stopped =>
@@ -167,21 +177,25 @@ pub fn verify(
             walked.exit
         }
         _ => {
-            // A point the model stamps up to its own latency after the close is a move due
-            // before it — the core's stamp is its moment, the model's the print plus latency.
-            let mut placed: Vec<&LinePoint> = walked
-                .points
-                .iter()
-                .filter(|p| p.t_ms <= deal.close_ms + exit.latency_ms.max(0.0) as i64)
-                .collect();
             // In time order: the take is stamped when it is armed, after any timer step
             // that fell due inside the sell delay.
-            placed.sort_by_key(|p| p.t_ms);
-            match placed.last() {
+            let mut modelled: Vec<&LinePoint> = walked.points.iter().collect();
+            modelled.sort_by_key(|p| p.t_ms);
+            // A point the model stamps up to its own latency after the fill is a move due
+            // before it — the core's stamp is its moment, the model's the print plus latency.
+            let horizon = filled_at + exit.latency_ms.max(0.0) as i64;
+            let level = archive
+                .as_ref()
+                .and_then(|a| level_on_archive_clock(&modelled, a, horizon))
+                .or_else(|| modelled.iter().rev().find(|p| p.t_ms <= horizon).copied());
+            match level {
                 Some(level) => Exit {
                     t_ms: deal.close_ms,
                     price: level.price,
-                    kind: if placed.len() > 1 {
+                    kind: if modelled
+                        .first()
+                        .is_some_and(|first| first.t_ms < level.t_ms)
+                    {
                         ExitKind::Line
                     } else {
                         ExitKind::Take
@@ -222,20 +236,11 @@ pub fn verify(
             let better = better_by(d);
             better > 0.0 && better <= FILL_IMPROVEMENT_TOLERANCE * 100.0
         };
-        let mut archived_fill: Option<(i64, f64)> = None;
-        let mut archived_level: Option<(i64, f64)> = None;
-        let points = exit_points.filter(|p| !p.is_empty()).map(|archived| {
-            let mut moves = archived_replacements(archived);
-            if moves.len() > 1
-                && moves
-                    .last()
-                    .is_some_and(|&last| is_fill_point(deal, exit, last, moves[moves.len() - 2]))
-            {
-                archived_fill = moves.pop();
-            }
-            archived_level = moves.last().copied();
-            (matched_points(&walked.points, &moves), moves.len())
-        });
+        let archived_fill = archive.as_ref().and_then(|a| a.fill);
+        let archived_level = archive.as_ref().and_then(|a| a.moves.last().copied());
+        let points = archive
+            .as_ref()
+            .map(|a| (matched_points(&walked.points, &a.moves), a.moves.len()));
         let line_ok = points.is_none_or(|(matched, total)| matched == total);
         let corroborated = points.is_some_and(|(matched, total)| matched == total);
         // A level placed THROUGH the market: the archive filed the fill as a point of its own
@@ -273,6 +278,126 @@ pub fn verify(
         exit_kind: Some(closed.kind),
         line_points,
     }
+}
+
+/// The entry the fact's sell rules count from: the buy price, at the moment the core placed
+/// its take — the archived Exit line's first point, less `SellDelay` — when that is later than
+/// `buydatems`, else at `buydatems`.
+///
+/// The report stamps the buy at its first fill; the core starts the sell, and every timer of
+/// it, when it books the buy done. On the live sample (2026-09-22) 32 archived lines placed the
+/// take more than 0.3 s after `buydatems` — up to 32 s, a limit buy filling in parts — and on
+/// every one from 0.5 s up the first PriceDown step came `PriceDownTimer` after the TAKE, not
+/// after the buy (MORPHO: take +2 135 ms, first step +32 155 ms on a 30 s timer). Below half a
+/// second both happen — a Spread's take stamped 317 ms late still stepped off the buy — and
+/// holding the take-anchored reading back under a threshold of 0.5 s cost two verdicts more than
+/// it saved on the same sample.
+///
+/// `SellDelay` keeps the relation the walk already has: the timers run from the booked buy and
+/// the take goes up `SellDelay` after it. Every one of the 1 613 live deals ran it at 0, so which
+/// moment the core's timers count from when it is not is unchecked.
+///
+/// Args:
+///     deal: The report row.
+///     exit: The parameters, for `SellDelay`.
+///     exit_points: The archived Exit line, when the archive holds it.
+pub fn fact_sell_start(deal: &Deal, exit: &ExitParams, exit_points: Option<&[(i64, f64)]>) -> Fill {
+    let booked = exit_points
+        .and_then(|points| points.first())
+        .map(|&(t, _)| t - exit.sell_delay_ms.max(0.0) as i64);
+    Fill {
+        t_ms: booked.map_or(deal.buy_ms, |t| t.max(deal.buy_ms)),
+        price: deal.buy_price,
+    }
+}
+
+/// An archived Exit line as the verdict reads it: the moves the core made with its sell, and
+/// the fill when the archive filed it as a point of its own ([`is_fill_point`]).
+pub(super) struct ArchivedExit {
+    pub(super) moves: Vec<(i64, f64)>,
+    pub(super) fill: Option<(i64, f64)>,
+}
+
+impl ArchivedExit {
+    pub(super) fn of(deal: &Deal, exit: &ExitParams, archived: &[(i64, f64)]) -> Self {
+        let mut moves = archived_replacements(archived);
+        let fill = match moves.as_slice() {
+            [.., prev, last] if is_fill_point(deal, exit, *last, *prev) => moves.pop(),
+            _ => None,
+        };
+        Self { moves, fill }
+    }
+}
+
+/// The modelled level at the fill read on the ARCHIVE's clock: when the model re-placed at
+/// every archived move, the level is the model's own point for the core's last move before the
+/// fill — unless the model moved again, with no archived move to match, more than
+/// [`POINT_TIME_TOLERANCE_MS`] before `horizon`: that is a step the core never took, and its
+/// level is what the model is held to. `None` — read the model's own clock instead — when a
+/// move went unmatched.
+///
+/// The fill point counts as the core's last move when the model made that move too: a line
+/// that stepped onto the level it then filled at is filed as ONE point — the step and the fill
+/// at the same price, which [`is_fill_point`] reads as the fill because it came within the
+/// latency of the close (AKE 2026-09-22: the fourth step 94 ms before the close, sold at it).
+///
+/// The model's timing is good to the point tolerance and no better, and the level at the fill
+/// is the one place the verdict read it to the millisecond: a fill 15 ms after the core's move
+/// (a level placed through the market) failed whenever the model stamped that same move a
+/// little later, and a step the model took a few hundred ms before a fill the core took before
+/// ITS step failed the other way. On the live sample (2026-09-22) timing the steps by each
+/// core's own replace lag won 48 verdicts and lost 35 of exactly these two shapes.
+///
+/// Args:
+///     modelled: The model's points, in time order.
+///     archive: The archived line — its moves and its fill point.
+///     horizon: The fill, plus the model's own latency.
+fn level_on_archive_clock<'a>(
+    modelled: &[&'a LinePoint],
+    archive: &ArchivedExit,
+    horizon: i64,
+) -> Option<&'a LinePoint> {
+    let same = |m: &LinePoint, (t, p): (i64, f64)| {
+        (m.t_ms - t).abs() <= POINT_TIME_TOLERANCE_MS
+            && deviation_pct(m.price, p).is_some_and(|d| d.abs() <= PRICE_TOLERANCE * 100.0)
+    };
+    // A line the archive holds as its take alone says nothing about when the core stepped
+    // (MUSEBOOK 2026-09-22 — "Auto Price Down", the archive one point long, sold 1.2 s after
+    // the take); a take and a fill point is a line, the step filed as the fill.
+    let filed = archive.moves.len() + usize::from(archive.fill.is_some());
+    if filed < 2 || matched_points_of(modelled, &archive.moves) != archive.moves.len() {
+        return None;
+    }
+    let own_of = |mv: (i64, f64)| {
+        modelled
+            .iter()
+            .filter(|m| same(m, mv))
+            .min_by_key(|m| (m.t_ms - mv.0).abs())
+            .copied()
+    };
+    // The latest archived point before the fill the model re-placed at: the fill point when
+    // the model made that move too, the last move otherwise (matched, as every move is here).
+    let own = archive
+        .moves
+        .iter()
+        .chain(archive.fill.iter())
+        .rev()
+        .filter(|(t, _)| *t <= horizon)
+        .find_map(|&mv| own_of(mv))?;
+    let stray = modelled
+        .iter()
+        .rev()
+        .find(|m| {
+            m.t_ms > own.t_ms
+                && m.t_ms <= horizon - POINT_TIME_TOLERANCE_MS
+                && !archive
+                    .moves
+                    .iter()
+                    .chain(archive.fill.iter())
+                    .any(|&mv| same(m, mv))
+        })
+        .copied();
+    Some(stray.unwrap_or(own))
 }
 
 /// Whether the archive's last move is the FILL filed as a point rather than a move of the
@@ -436,6 +561,12 @@ pub fn archived_replacements(points: &[(i64, f64)]) -> Vec<(i64, f64)> {
 
 /// How many archived moves the modelled line re-placed at, within the tolerances.
 fn matched_points(modelled: &[LinePoint], archived: &[(i64, f64)]) -> usize {
+    let modelled: Vec<&LinePoint> = modelled.iter().collect();
+    matched_points_of(&modelled, archived)
+}
+
+/// [`matched_points`] over borrowed points.
+fn matched_points_of(modelled: &[&LinePoint], archived: &[(i64, f64)]) -> usize {
     archived
         .iter()
         .filter(|&&(t, p)| {

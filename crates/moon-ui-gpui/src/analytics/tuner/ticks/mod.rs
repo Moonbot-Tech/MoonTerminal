@@ -38,6 +38,7 @@ use state::{DealRow, TapeStatus};
 pub(in crate::analytics::tuner) mod columns;
 pub(crate) mod fetch;
 mod grid;
+mod lags;
 mod load;
 pub(in crate::analytics::tuner) mod rows;
 pub(in crate::analytics) mod state;

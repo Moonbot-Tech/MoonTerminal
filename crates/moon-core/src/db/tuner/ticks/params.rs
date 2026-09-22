@@ -380,6 +380,10 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "UseStopLoss",
     "FastStopLoss",
     "StopLossEMA",
+    // PumpsDetection's one sell move (see `line::PUMP_MOVE_LAG_MS`); `PumpMovePersent` is the
+    // core's own spelling of the field.
+    "PumpMoveTimer",
+    "PumpMovePersent",
     "Add1minDelta",
     "Add5minDelta",
     "Add15minDelta",
@@ -543,6 +547,8 @@ pub fn exit_params(v: &StrategyValues<'_>) -> ExitParams {
         sell_shot_allowed_up_pct: v.num("SellShotAllowedUp", base.sell_shot_allowed_up_pct),
         sell_shot_allowed_down_pct: v.num("SellShotAllowedDown", base.sell_shot_allowed_down_pct),
         sell_shot_delay_s: v.num("SellShotDelay", base.sell_shot_delay_s),
+        pump_move_timer_s: v.num("PumpMoveTimer", base.pump_move_timer_s),
+        pump_move_pct: v.num("PumpMovePersent", base.pump_move_pct),
         // `StopLoss` means nothing with `UseStopLoss` off (param_deps.toml: every stop field
         // hangs on it), and the value stays in the dump when the switch goes off. A dump that
         // omits the switch keeps the stop, as the model did before it read the switch: 2 of

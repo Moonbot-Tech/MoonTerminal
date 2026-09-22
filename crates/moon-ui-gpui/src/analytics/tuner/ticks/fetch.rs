@@ -306,13 +306,7 @@ impl AnalyticsView {
             job::JobEvent::Started(_) => {}
             job::JobEvent::Row(answer) => {
                 let uid = answer.deal.report_uid;
-                self.ticks.update_row(uid, |slot| {
-                    slot.tape = answer.tape;
-                    slot.verdict = answer.verdict;
-                    slot.deal.tick = answer.deal.tick;
-                    slot.ticks = answer.ticks;
-                    slot.entry_line = answer.entry_line;
-                });
+                self.ticks.update_row(uid, |slot| slot.take_replay(*answer));
                 // A row joined the replayable set: the variant columns are due a rescore.
                 self.arm_ticks_variants(cx);
             }

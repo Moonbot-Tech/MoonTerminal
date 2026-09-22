@@ -51,6 +51,7 @@ fn deal() -> Deal {
         archived_take: None,
         hook_depth_pct: None,
         hook_stated_take_pct: None,
+        step_lag_ms: 0.0,
     }
 }
 
@@ -1157,6 +1158,7 @@ fn hook_deal() -> Deal {
         buy_price: 100.0,
         hook_depth_pct: Some(4.0),
         hook_stated_take_pct: Some(2.0),
+        step_lag_ms: 0.0,
         ..deal()
     }
 }

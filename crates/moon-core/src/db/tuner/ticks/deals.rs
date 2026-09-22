@@ -212,6 +212,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             // Filled by `overlay_hook_detect` off the raw report row's comment.
             hook_depth_pct: None,
             hook_stated_take_pct: None,
+            step_lag_ms: 0.0,
         });
         order.push((close_ms, report_uid));
     }

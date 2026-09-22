@@ -23,6 +23,10 @@
 //!   after `SellShotReplaceDelay` when moving toward it; `SellShotPriceDown` narrows the
 //!   distance by that much per second past `SellShotPriceDownDelay`; the line stays between
 //!   `SellShotAllowedDown` and `SellShotAllowedUp` per cent over the buy.
+//! - **PumpMove** (PumpsDetection's own tab; `PumpMoveTimer` non-zero) — once, `PumpMoveTimer`
+//!   seconds after the take is placed, the sell moves to `PumpMovePersent` per cent of the way
+//!   from the pump's peak back to the buy (FAQ: "учитывается процент между пиковой ценой и ценой
+//!   покупки"), the peak read over [`PUMP_PEAK_LOOKBACK_MS`] before the take up to the move.
 //! - **StopLoss** — `StopLoss` per cent from the buy (negative: a loss), armed
 //!   `StopLossDelay` seconds after the buy. With `FastStopLoss` the first print through it is
 //!   a market exit at the print's own price. Without it — the core's default — the core
@@ -37,10 +41,10 @@
 //! gap fills there. The line's replacements are recorded so the model can be held against the
 //! archived Exit line of the trade.
 //!
-//! The rules move an UNROUNDED line — the archive shows the core chaining its PriceDown steps
-//! off the exact value, not the placed price — and only what goes to the exchange is rounded
-//! to the nearest step of the market's price grid (a sell limit is placed on the grid). The
-//! rounding is what decides a print AT the level: on ARX (2026-09-21) the
+//! What goes to the exchange is rounded to the nearest step of the market's price grid (a sell
+//! limit is placed on the grid), and the rules carry on from the ORDER's price once a move
+//! reached the book — from the computed value while rounding kept the order where it was
+//! ([`advance`]). The rounding is what decides a print AT the level: on ARX (2026-09-21) the
 //! `PriceDownAllowedDrop` floor computed to 0.196445, the core's order stood at 0.1964, and
 //! the tape's high was exactly 0.1964 — the unrounded line was never reached.
 
@@ -62,6 +66,20 @@ pub const STEP_FLOOR_MS: i64 = 330;
 /// seconds early, 3 s left the rest a second late. What the proxy still cannot see is the book
 /// itself, and the EMA-3 stops are where that shows.
 pub const STOP_SAMPLE_MS: i64 = 2_000;
+
+/// How far past `PumpMoveTimer` the core's pump move lands, less the model's own placement
+/// latency: over 32 archived PumpsDetection lines (2026-09-22, every live Pump strategy runs
+/// `PumpMoveTimer` 2 with `PumpMovePersent` 1) the move came 575–704 ms past the timer, a
+/// median of 610 ms — counted from the take, not from the buy's report stamp: one take placed
+/// 32 s after `buydatems` still moved 2.6 s after itself.
+pub const PUMP_MOVE_LAG_MS: i64 = 500;
+
+/// How far before the take the pump's peak is looked for. The FAQ counts the peak from the
+/// detect, which the report does not stamp on older rows, and the peak itself is the print that
+/// triggered it — a median 70 ms before the buy, up to 6 s when the buy order waited for the
+/// retrace. Over the same 32 lines a window from 10 s before the take reproduces the moved level
+/// on 31; from the buy it reproduces 1, from 4 s before the take 27.
+pub const PUMP_PEAK_LOOKBACK_MS: i64 = 10_000;
 
 /// Which way the position profits, folding every "above/below the buy" into one sign.
 #[derive(Clone, Copy)]
@@ -181,8 +199,36 @@ pub struct LineWalk {
     pub points: Vec<LinePoint>,
 }
 
+/// One step of the core's sell price: `level` is what a rule computed, `order` that level on
+/// the price grid. When the order lands on a new price, the move goes to the book and the core
+/// carries on from the ORDER's price; when rounding keeps it where it was, nothing is sent and
+/// the core carries on from the computed value, so the next step can still cross a grid line.
+/// Answers whether the order moved.
+///
+/// Read off the archived Exit lines (2026-09-22): every step of INDEX's twelve (Gate, relative
+/// PriceDown 10 %) lands only when chained off the placed price — off the exact value the second
+/// already rounds a step short — and FATCOIN's one-step-per-tick lines climb past a step that
+/// rounds back onto the order only when that step's exact value carries into the next. Over
+/// 1 421 archived PriceDown lines the rule reproduces every level of 997, against 647 for the
+/// exact chain and 949 for the placed price alone.
+///
+/// Args:
+///     core: The core's sell price, advanced in place.
+///     last_sent: The order's price as last sent, advanced when the order moves.
+///     level: The level a rule computed.
+///     order: `level` on the price grid.
+fn advance(core: &mut f64, last_sent: &mut f64, level: f64, order: f64) -> bool {
+    if (order - *last_sent).abs() <= f64::EPSILON * last_sent.abs() {
+        *core = level;
+        return false;
+    }
+    *core = order;
+    *last_sent = order;
+    true
+}
+
 /// Seconds to milliseconds, with the terminal's floor for a zero delay.
-fn step_ms(seconds: f64) -> i64 {
+pub(super) fn step_ms(seconds: f64) -> i64 {
     let ms = (seconds * 1000.0) as i64;
     if ms <= 0 { STEP_FLOOR_MS } else { ms }
 }
@@ -229,25 +275,34 @@ pub fn walk_held(
         t_ms: armed_at,
         price: take_placed,
     }];
-    // The exchange's level (what fills, on the grid) and the core's (what the rules move,
-    // unrounded); a move the exchange has not seen yet is `pending`.
+    // The exchange's level (what fills, on the grid) and the core's (what the rules move from);
+    // a move the exchange has not seen yet is `pending`.
     let mut exch_line = take_placed;
     // Whether a move has reached the exchange: what tells a fill at the take from a fill at
     // a level a rule moved the line to — not the price, which a moved line can round back onto.
     let mut exch_moved = false;
-    let mut core_line = take;
+    // The core's sell price: the ORDER's price once a move reached the book, the computed value
+    // while rounding kept the order where it was — see [`advance`]. The take is an order too.
+    let mut core_line = take_placed;
+    // The last level sent to the book, pending or not: what a new level must differ from to
+    // be a move at all.
+    let mut last_sent = take_placed;
     let mut pending: Option<(i64, f64)> = None;
+    // Answers whether the order moved — a replace went to the book.
     let mut place = |t_ms: i64, level: f64, core: &mut f64, pending: &mut Option<(i64, f64)>| {
         if (level - *core).abs() <= f64::EPSILON * core.abs() {
-            return;
+            return false;
         }
-        *core = level;
-        let level = placed(level);
-        *pending = Some((t_ms + latency_ms, level));
+        let order = placed(level);
+        if !advance(core, &mut last_sent, level, order) {
+            return false;
+        }
+        *pending = Some((t_ms + latency_ms, order));
         points.push(LinePoint {
             t_ms: t_ms + latency_ms,
-            price: level,
+            price: order,
         });
+        true
     };
 
     // --- PriceDown ---
@@ -258,6 +313,10 @@ pub fn walk_held(
         None
     };
     let pd_floor = side.over(fill.price, params.price_down_allowed_drop_pct);
+
+    // --- PumpMove --- one move, timed off the take (see `PUMP_MOVE_LAG_MS`).
+    let mut pm_next = (params.pump_move_timer_s > 0.0)
+        .then(|| armed_at + (params.pump_move_timer_s * 1000.0) as i64 + PUMP_MOVE_LAG_MS);
 
     // --- SellLevel ---
     let sl_on = params.sell_level_delay_s != 0.0
@@ -334,8 +393,32 @@ pub fn walk_held(
         // step due by this print happened BEFORE it, and a step that also reached the book
         // before it is what this print meets.
         //
-        // PriceDown steps, one per due moment.
-        while let Some(due) = pd_next.filter(|due| t_ms >= *due) {
+        // PriceDown steps, one per due moment, and the pump move, in the order they fell due:
+        // each step chains off where the one before it left the line.
+        loop {
+            let pd_due = pd_next.filter(|due| t_ms >= *due);
+            let pm_due = pm_next.filter(|due| t_ms >= *due);
+            if let Some(due) = pm_due.filter(|pm| pd_due.is_none_or(|pd| *pm <= pd)) {
+                pm_next = None;
+                let from = armed_at - PUMP_PEAK_LOOKBACK_MS;
+                let peak = side.extreme(
+                    ticks[..=index]
+                        .iter()
+                        .filter(|t| {
+                            let tt = t.time_ms as i64;
+                            tt >= from && tt <= due && t.price > 0.0
+                        })
+                        .map(|t| f64::from(t.price)),
+                );
+                if let Some(peak) = peak {
+                    let next = peak + (fill.price - peak) * params.pump_move_pct / 100.0;
+                    place(due, next, &mut core_line, &mut pending);
+                }
+                continue;
+            }
+            let Some(due) = pd_due else {
+                break;
+            };
             let next = if params.price_down_relative {
                 core_line - (core_line - fill.price) * params.price_down_pct / 100.0
             } else {
@@ -344,10 +427,19 @@ pub fn walk_held(
             let next = side.farther(next, pd_floor);
             if (next - core_line).abs() <= f64::EPSILON * core_line.abs() {
                 pd_next = None;
-                break;
+                continue;
             }
-            place(due, next, &mut core_line, &mut pending);
-            pd_next = Some(due + step_ms(params.price_down_delay_s));
+            // The core times the next step from this one's going through (`Deal::step_lag_ms`);
+            // a step rounding kept in place sent nothing and waits for nothing — over the
+            // archived GateF lines two delays with such a step between them run 32 ms over,
+            // against 47 ms for one real step.
+            let moved = place(due, next, &mut core_line, &mut pending);
+            let lag_ms = if moved {
+                deal.step_lag_ms.max(0.0) as i64
+            } else {
+                0
+            };
+            pd_next = Some(due + step_ms(params.price_down_delay_s) + lag_ms);
         }
         // SellLevel: to the high of the look-back, adjusted.
         while let Some(due) = sl_next.filter(|due| t_ms >= *due) {
