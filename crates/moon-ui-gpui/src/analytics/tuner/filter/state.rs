@@ -637,8 +637,10 @@ impl TunerState {
     /// a committed report row — a strictly larger change — must not retire a manually started
     /// search.
     ///
-    /// Only [`SuggestJob::AllFields`] and [`SuggestJob::Compose`] can carry the mark. Idle, a
-    /// finished result, a failure and a single-field sweep are left unchanged.
+    /// Only a live [`SuggestJob::AllFields`] or [`SuggestJob::Compose`] is marked here. Idle, a
+    /// failure and a single-field sweep are left unchanged. A finished [`SuggestState::Done`]
+    /// already carries the copy taken when the job was replaced, and this function does not
+    /// write it again.
     ///
     /// Returns:
     ///     Whether a live joint run was there to mark.

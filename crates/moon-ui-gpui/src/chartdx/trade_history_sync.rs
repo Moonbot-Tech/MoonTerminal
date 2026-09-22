@@ -59,17 +59,16 @@ pub(super) fn trade_kind_visible(
 
 /// Whether one closed-trade record may draw on this pane.
 ///
-/// A panel's `trade_history` is ONE list loaded for ONE `(core, market)` target, and a multi-pane
-/// panel (the Compare kind) draws that same list on every pane. Only the pane whose core OWNS the
-/// request may widen to the admitted set; every other pane keeps today's own-core rule, or a
-/// Compare pane would draw the anchor pane's foreign trades. That is why `owner == pane` is
-/// load-bearing.
+/// A panel's `trade_history` is one list for one `(core, market)` request, and a multi-pane panel
+/// (the Compare kind) draws that same list on every pane. A record whose core is this pane's core
+/// draws. A foreign record draws only when this pane owns the request (`owner == pane`) and the
+/// record's core is in `admitted`; otherwise a Compare follower would draw the anchor pane's
+/// foreign trades.
 ///
-/// Once the panel is handed a widened set, a non-owner Compare pane begins drawing ITS OWN core's
-/// rows out of that shared list, where today it draws nothing — today the list holds only the
-/// owner's rows. That is deliberate and strictly flag-gated: with the toggle off the admitted set
-/// is just the owner, so a follower pane draws nothing exactly as it does now. `owner == pane`
-/// still stops a follower from drawing OTHER cores' trades.
+/// With the flag off the admitted set is only the owner, so the list holds only that core's rows
+/// and a follower pane draws nothing. With the flag on the list holds every admitted core, and a
+/// follower draws its own core's rows from it. `owner == pane` still stops that follower from
+/// drawing any other core.
 ///
 /// `None` is own-core only. That is a panel which has not loaded a target yet, and the frozen
 /// Trade window, which publishes records but never hands over a core set. A loaded panel stores

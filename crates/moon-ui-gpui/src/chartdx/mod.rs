@@ -414,11 +414,12 @@ struct PaneRender {
     market: String,
     /// Core name for the chart corner label, resolved from `SessionManager` during order sync.
     core_name: String,
-    /// Admitted-core count for that same caption, or `None` when the pane draws only its own core.
+    /// Admitted-core count for that same caption, or `None` when this pane does not name a
+    /// widened set.
     ///
-    /// `Some(n)` means this pane owns the history request and `n` cores were admitted — the same
-    /// test `pane_admits_record` uses before it will draw a foreign trade. The caption string is
-    /// built from this in `refresh_pane_labels`, not here.
+    /// `Some(n)` means this pane owns the history request and `n` cores were admitted. A foreign
+    /// trade draws only on that owner pane (`pane_admits_record`); a follower keeps `None` and its
+    /// own name. The caption string is built from this in `refresh_pane_labels`, not here.
     all_cores_count: Option<usize>,
     /// Ticker for that same caption (`BEAT-USDT`), resolved from the core's catalog in
     /// `sync_from_market_source` and cached here.
@@ -1602,8 +1603,9 @@ struct ChartDataState {
     trade_history: std::rc::Rc<Vec<moon_core::db::ChartTradeRecord>>,
     /// Cores the panel admitted for `trade_history`, or `None` when no set was handed over.
     ///
-    /// `None` is every panel that was never handed a set — every panel today, and the frozen
-    /// Trade window always — and `None` means own-core only.
+    /// `None` draws own-core only: no history load has published a set, the target was cleared, or
+    /// this is the frozen Trade window, which publishes records and never hands a set over. A chart
+    /// load stores `Some` even when the flag is off and the set is only the owner.
     trade_history_cores: Option<std::rc::Rc<trade_history_sync::TradeHistoryCores>>,
     /// The time axis this engine's replicated closed-trade stamps are corrected on.
     ///
