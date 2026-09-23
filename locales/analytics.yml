@@ -1709,9 +1709,9 @@ analytics.ticks.title:
   en: "Trades"
   es: "Operaciones"
 analytics.ticks.coverage:
-  ru: "с лентой %{covered} из %{total} · без мс-штампа %{without}"
-  en: "tape for %{covered} of %{total} · no ms stamp %{without}"
-  es: "cinta en %{covered} de %{total} · sin marca ms %{without}"
+  ru: "с лентой %{covered} из %{total} · годных %{fit} · без мс-штампа %{without}"
+  en: "tape for %{covered} of %{total} · reproduced %{fit} · no ms stamp %{without}"
+  es: "cinta en %{covered} de %{total} · reproducidas %{fit} · sin marca ms %{without}"
 analytics.ticks.coverage_service:
   ru: "служебных %{n}"
   en: "service rows %{n}"
@@ -1720,18 +1720,18 @@ analytics.ticks.coverage_untunable:
   ru: "вне тюнинга %{n}"
   en: "outside tuning %{n}"
   es: "fuera del ajuste %{n}"
-analytics.ticks.only_with_tape:
-  ru: "только с лентой"
-  en: "with tape only"
-  es: "solo con cinta"
-analytics.ticks.only_with_tape_tip:
-  ru: "Показывать только сделки, чьё окно покрыто лентой, — это и есть выборка, по которой считаются варианты и идёт подбор. Воспроизводит ли модель сделку, показывает колонка «модель»; выборку это не сужает"
-  en: "Show only the trades whose window the tape covers — that is the sample the variants and the search run on. Whether the model reproduces a trade is the \"model\" column; it does not narrow the sample"
-  es: "Mostrar solo las operaciones cuya ventana cubre la cinta: esa es la muestra sobre la que se calculan las variantes y el ajuste. Si el modelo reproduce la operación lo indica la columna «modelo»; no reduce la muestra"
-analytics.ticks.none_with_tape:
-  ru: "Сделок с лентой пока нет — %{hidden} скрыто галкой «только с лентой»"
-  en: "No trades with tape yet — %{hidden} hidden by \"with tape only\""
-  es: "Aún no hay operaciones con cinta — %{hidden} ocultas por «solo con cinta»"
+analytics.ticks.only_fit:
+  ru: "только годные"
+  en: "reproduced only"
+  es: "solo reproducidas"
+analytics.ticks.only_fit_tip:
+  ru: "Показывать только выборку, по которой считаются варианты и идёт подбор: окно сделки покрыто лентой, и модель воспроизводит сделку на её собственных настройках (✓ в колонке «модель», вход — ✓ или не моделируется). Сделку, которую модель не воспроизводит, — стоп по стакану, правило, которого у модели нет, тейк без записи ядра, — подбор не берёт: ответ модели для её варианта не ответ"
+  en: "Show only the sample the variants and the search run on: the tape covers the trade's window, and the model reproduces the trade on its own settings (✓ in the \"model\" column, the entry ✓ or not modelled). A trade the model does not reproduce — a stop on the book, a rule the model does not have, a take the core left no record of — is out of the search: what the model answers for a variant of it is not an answer"
+  es: "Mostrar solo la muestra sobre la que se calculan las variantes y el ajuste: la cinta cubre la ventana de la operación y el modelo la reproduce con sus propios ajustes (✓ en la columna «modelo», la entrada ✓ o no modelada). Una operación que el modelo no reproduce — un stop por el libro, una regla que el modelo no tiene, un take sin registro del núcleo — queda fuera del ajuste: lo que el modelo responde para una variante suya no es una respuesta"
+analytics.ticks.none_fit:
+  ru: "Годных сделок пока нет — %{hidden} скрыто галкой «только годные»"
+  en: "No reproduced trades yet — %{hidden} hidden by \"reproduced only\""
+  es: "Aún no hay operaciones reproducidas — %{hidden} ocultas por «solo reproducidas»"
 analytics.ticks.empty_left_out:
   ru: "В периоде нет сделок, по которым ось может считать: без мс-штампа %{without} (старые строки реплики или ядро до штампов — лента по ним не восстанавливается), служебных %{service} (фандинг, ликвидации, объединённые продажи, без стратегии, продажа сверх купленного количества), вне тюнинга %{untunable} (ручные продажи, стратегии без торгового правила)."
   en: "The period holds no trade the axis can read: %{without} without millisecond stamps (older replica rows, or a core before the stamps — no tape can be tied to them), %{service} service rows (funding, liquidations, joined sells, no strategy, a sale bigger than its entry), %{untunable} outside tuning (manual sells, strategies without a trading rule)."
@@ -1821,13 +1821,13 @@ analytics.ticks.model_tip:
   en: "Entry: model vs fact %{entry} · Exit: %{exit}"
   es: "Entrada: modelo vs hecho %{entry} · Salida: %{exit}"
 analytics.ticks.subset:
-  ru: "Факт · с лентой"
-  en: "Fact · with tape"
-  es: "Hecho · con cinta"
+  ru: "Факт · годные"
+  en: "Fact · reproduced"
+  es: "Hecho · reproducidas"
 analytics.ticks.subset_sub:
-  ru: "по %{n} из %{m} · вход ✓ %{entry} · выход ✓ %{exit}"
-  en: "%{n} of %{m} · entry ✓ %{entry} · exit ✓ %{exit}"
-  es: "%{n} de %{m} · entrada ✓ %{entry} · salida ✓ %{exit}"
+  ru: "по %{n} из %{m} с лентой · вход ✓ %{entry} · выход ✓ %{exit}"
+  en: "%{n} of %{m} with tape · entry ✓ %{entry} · exit ✓ %{exit}"
+  es: "%{n} de %{m} con cinta · entrada ✓ %{entry} · salida ✓ %{exit}"
 analytics.ticks.horizon:
   ru: " · выход ≤ %{h} после закрытия"
   en: " · exit ≤ %{h} past the close"
@@ -1877,9 +1877,9 @@ analytics.ticks.var_n:
   en: "V%{n}"
   es: "V%{n}"
 analytics.ticks.var_sub:
-  ru: "по %{n} из %{m} с лентой"
-  en: "%{n} of %{m} with tape"
-  es: "%{n} de %{m} con cinta"
+  ru: "по %{n} из %{m} годных"
+  en: "%{n} of %{m} reproduced"
+  es: "%{n} de %{m} reproducidas"
 analytics.ticks.holdout:
   ru: "holdout: %{n} сделок, %{profit}"
   en: "holdout: %{n} trades, %{profit}"

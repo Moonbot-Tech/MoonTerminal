@@ -10,13 +10,15 @@
 //! it is not modelled; an exit the core closed by a rule the model does not have is not a miss
 //! of the rules it does. An exit the model never reached at all IS a miss.
 //!
-//! The same holds for the LEVEL the exit is judged against. `SellPrice` is the take of every
-//! kind the core has but one, so this bites on MoonHook alone: with no archived line to read the
-//! level off, and no detect depth or `HookSellLevel` to compute it from (or with `HookSellFixed`,
-//! whose branch is not modelled), the sell line stands somewhere the model invented, and
-//! everything downstream of it — where PriceDown stepped to, whether a level stood at the close —
-//! is invented with it. That answers `None`, whatever the deviation says
-//! ([`ExitModel::take_known`]). A stop is exempt: it fires off `StopLoss`, not off the take.
+//! The same holds for the LEVEL the exit is judged against, as a VARIANT would place it: a hook
+//! without its detect depth or `HookSellLevel` (or with `HookSellFixed`, whose branch is not
+//! modelled), a Spread without the take the core recorded, a MoonShot lifted to a pre-spike ask
+//! the record did not keep — the sell line a variant walks stands somewhere the model invented,
+//! and everything downstream of it — where PriceDown stepped to, whether a level stood at the
+//! close — is invented with it. That answers `None`, whatever the deviation says
+//! ([`ExitModel::take_known`]), and a stopped trade is no exception: its stop may be judged
+//! right, but a variant of it sells on the invented take first (2026-09-23: 30 of 88 stopped
+//! MoonShot trades).
 //!
 //! The entry is held to the CORRIDOR, not to a price step: a MoonShot order chasing a falling
 //! price is re-placed off whichever print left the corridor, and the core's print and the
@@ -36,11 +38,9 @@
 //! sold the core's line on ARX and left it standing on COOL the same day. The archive's own
 //! record of the fill — its last point, at the sale price — is not a move ([`is_fill_point`]).
 //!
-//! A stop is judged by its firing, not by a resting line: the fast stop by its price, a
-//! market order on the print; the book-watching stop, whose sale is a panic sell walked
-//! through a book the tape does not carry, by the level the core printed into its reason and
-//! the moment it activated ([`verify_stop`]). A stop the core fired and the model never did is
-//! a miss.
+//! A stop is judged by its firing, not by a resting line, and not by its sale either — a panic
+//! sell or a market order walked through a book the tape does not carry: by the level the core
+//! fixed, when the stored reason keeps it, and the moment it activated ([`verify_stop`]). A stop the core fired and the model never did is a miss.
 
 use super::exit::{ExitModel, stop_pct};
 use super::line::LinePoint;
@@ -54,9 +54,9 @@ use crate::feed::types::Tick;
 /// move: the archive stamps the core's own moment, the model the print that triggered it.
 pub const POINT_TIME_TOLERANCE_MS: i64 = 1_000;
 
-/// Tolerance on a STOP's price: the core's stop is a market order, and the report's
-/// `sellprice` is what the book gave for it, while the model knows only the print that
-/// fired it. Measured on the live tape (2026-09-20): 0.16–0.28 % between the two on a spike.
+/// Tolerance on a STOP's level: the modelled level against the one the core fixed carries
+/// `StopLossModifier` over the report's ONE snapshot of the deltas, which the core re-reads live
+/// (`exit::modifier_sum`), and the residual sits right there.
 pub const STOP_PRICE_TOLERANCE: f64 = 0.003;
 
 /// How much BETTER than the modelled level the fact's fill may be and still be that level's
@@ -123,6 +123,9 @@ pub fn verify(
     entry_line: Option<&[(i64, f64)]>,
     exit_points: Option<&[(i64, f64)]>,
 ) -> Verdict {
+    // The model is what is tested: what the fact proves (the stop's firing, the entry's own
+    // fill) is the variants' to lean on, never the verdict's.
+    let deal = &super::record::unanchored(deal);
     let outcome = simulate(deal, ticks, entry, exit, entry_line);
     let (entry_ok, entry_dev) = match (entry, outcome.fill) {
         (EntryParams::Fact, _) => (None, None),
@@ -208,17 +211,23 @@ pub fn verify(
             }
         }
     };
-    // Where the take itself is not modelled for this trade, the line under it is not the
-    // model's answer but its guess — see the module doc.
-    let take_known = ExitModel::new(&fact_exit).take_known(deal);
+    // Where a variant could not place this trade's take, the line under it is not the model's
+    // answer but its guess — see the module doc. Asked with the trade's OWN parameters as a
+    // variant runs them (`exit`, not `fact_exit`): the fact's replay starts at the recorded
+    // take, a variant does not.
+    let take_known = ExitModel::new(exit).take_known(deal);
     // A stop the core fired and the model, holding a stop of its own, never did — the book
     // proxy of a non-fast stop can stay short of the level to the tape's end — is a miss of
     // the stop, whatever the line was doing: not a question about another rule.
     let missed_stop =
         fact_stopped && closed.kind != ExitKind::Stop && stop_pct(&fact_exit, deal) != 0.0;
-    let (exit_ok, exit_dev, line_points) = if missed_stop {
+    let (exit_ok, exit_dev, line_points) = if exit.unmodelled.is_some() {
+        // A rule the model does not have was on: whatever the walk made of the trade is not
+        // an answer about it (see `ExitParams::unmodelled`).
+        (None, None, None)
+    } else if missed_stop {
         (Some(false), None, None)
-    } else if !take_known && closed.kind != ExitKind::Stop {
+    } else if !take_known {
         (None, None, None)
     } else if closed.kind == ExitKind::OpenAtWindowEnd {
         // No line stood at the close: a miss of the exit group, not an unanswered question.
@@ -430,19 +439,19 @@ fn is_fill_point(deal: &Deal, exit: &ExitParams, last: (i64, f64), prev: (i64, f
     at_close || fill_side
 }
 
-/// The stop's verdict. Two stops, told apart by what the core wrote:
+/// The stop's verdict: by what it DECIDED, never by what its sale fetched.
 ///
-/// - **With its level in the reason** — `StopLoss AutoActivated on price drop: BID = … StopLoss
-///   fixed: X` — the book-watching stop (`FastStopLoss` off). The core then runs a panic sell:
-///   a limit through the book stepped by `StopLossSpread` down to `AllowedDrop` (FAQ), which is
-///   where the sale price comes from, and the tape has no book. So the rule is judged by what
-///   it decided — the modelled stop level against the core's own `X`, and the moment it fired
-///   against the activation — never by the fill. Live sample (2026-09-22): 0 of 173 such stops
-///   passed on the sale price, the fills sitting 1–3 % past the level while the core's `X`
-///   agreed with the model's level within 0.3 % on 144 of 183. When the stored reason cut the
-///   level off, the moment and the line are what is left to judge.
-/// - **Without it** — `StopLoss Market Sell`, the fast stop — a market order on the print,
-///   judged by its price against the sale as before.
+/// Every stop's sale is walked through a book the tape does not carry. Without `UseMarketOrder`
+/// the core runs a panic sell — a limit through the book stepped by `StopLossSpread` down to
+/// `AllowedDrop` (FAQ) — whose fills sit 1–3 % past the level (0 of 173 passed on the sale
+/// price, 2026-09-22); with it (`StopLoss Market Sell`, 149 of 149 such trades) a market order
+/// sweeps our size into the bids.
+///
+/// So the rule is judged by the modelled stop LEVEL against the one the core fixed — the stored
+/// reason's `StopLoss fixed: X`, which a panic sell carries and which is cut off one time in
+/// seven — and by the moment it fired against the activation — the archive's jump past the
+/// level, else the close. The core's `X` agreed with the model's level within 0.3 % on 144 of
+/// 183 (2026-09-22). With no level on record, the moment and the line are what is left to judge.
 ///
 /// The level tolerance is [`STOP_PRICE_TOLERANCE`] rather than the line's: the modelled level
 /// carries `StopLossModifier` over the report's ONE snapshot of the deltas, which the core
@@ -475,10 +484,7 @@ fn verify_stop(
     let mut activation: Option<i64> = None;
     let points = exit_points.filter(|p| !p.is_empty()).map(|archived| {
         let mut moves = archived_replacements(archived);
-        if let Some(i) = moves
-            .iter()
-            .position(|&(t, p)| t >= deal.buy_ms && reaches(p, panic_at, deal.is_long()))
-        {
+        if let Some(i) = stop_jump(deal, &moves, panic_at) {
             activation = Some(moves[i].0);
             moves.truncate(i);
         }
@@ -493,23 +499,38 @@ fn verify_stop(
             let level_ok = dev.is_some_and(|d| d.abs() <= STOP_PRICE_TOLERANCE * 100.0);
             (Some(level_ok && on_time && line_ok), dev, points)
         }
-        // A book-watching stop whose level the stored reason cut off (28 of 206 live): its sale
-        // is still the panic sell, which never passes on price (0 of 173), so what is left to
-        // judge is the moment and the line — not a sale price that would fail every one.
-        None if is_book_stop_reason(&deal.sell_reason) => (Some(on_time && line_ok), None, points),
-        None => {
-            let dev = deviation_pct(closed.price, deal.sell_price);
-            let price_ok = dev.is_some_and(|d| d.abs() <= STOP_PRICE_TOLERANCE * 100.0);
-            (Some(price_ok && line_ok), dev, points)
-        }
+        // No level on record — a book-watching stop whose stored reason cut it off (28 of 206
+        // live), or a market stop, whose reason never carries one: the sale is a panic sell or a
+        // market order swept through a book the tape does not carry, so what is left to judge
+        // is the moment and the line, never the price. On the live sample (2026-09-23) 18 market
+        // stops fired on time and failed on the sweep alone; a variant keeping the stop sells at
+        // the fact's own price (`record::StopAnchor`).
+        None => (Some(on_time && line_ok), None, points),
     }
 }
 
-/// Whether a stop's `sellreason` is the book-watching stop's — `StopLoss AutoActivated on price
-/// drop: BID = …` — rather than the fast stop's `StopLoss Market Sell`. The prefix survives the
-/// column's truncation, which cuts the text's end.
-fn is_book_stop_reason(reason: &str) -> bool {
-    reason.trim().starts_with("StopLoss AutoActivated")
+/// Where the stop took over an archived line: the first move at or after the buy that stands at
+/// or past the stop level — the panic sell's first price, or the market order's.
+fn stop_jump(deal: &Deal, moves: &[(i64, f64)], level: f64) -> Option<usize> {
+    moves
+        .iter()
+        .position(|&(t, p)| t >= deal.buy_ms && reaches(p, level, deal.is_long()))
+}
+
+/// The moment the core's own Exit line jumped past the stop level — the stop's activation as the
+/// line records it — or `None` when the line holds no such move.
+///
+/// Args:
+///     deal: The trade.
+///     level: The stop level: the one the core printed when it did, else the model's.
+///     exit_points: The core's own Exit line.
+pub(super) fn archived_stop_jump(
+    deal: &Deal,
+    level: f64,
+    exit_points: Option<&[(i64, f64)]>,
+) -> Option<i64> {
+    let moves = archived_replacements(exit_points?);
+    stop_jump(deal, &moves, level).map(|i| moves[i].0)
 }
 
 /// The stop level the core printed into a book-watching stop's reason — `StopLoss fixed: X` —
@@ -604,7 +625,7 @@ fn exit_rule_matches(kind: ExitKind, sell_reason: &str) -> bool {
 /// Whether a `sellreason` starts with an ASCII prefix, case-insensitively — on characters,
 /// never bytes: the reason is database text, and a slice at a byte inside a multi-byte
 /// character would panic.
-fn reason_starts_with(reason: &str, prefix: &str) -> bool {
+pub(super) fn reason_starts_with(reason: &str, prefix: &str) -> bool {
     reason
         .get(..prefix.len())
         .is_some_and(|head| head.eq_ignore_ascii_case(prefix))

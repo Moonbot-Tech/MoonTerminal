@@ -18,7 +18,7 @@ use moon_core::db::tuner::VarStats;
 use moon_core::db::tuner::threshold_search::SearchHandle;
 use moon_core::db::tuner::ticks::params::ParamGroup;
 use moon_core::db::tuner::ticks::search::SearchResult;
-use moon_core::db::tuner::ticks::{Deal, Verdict};
+use moon_core::db::tuner::ticks::{Deal, Verdict, fit_for_search};
 use moon_core::feed::types::Tick;
 use moon_core::market::trade_replay::TickStatus;
 
@@ -73,9 +73,16 @@ pub(in crate::analytics::tuner) struct DealRow {
 }
 
 impl DealRow {
+    /// Whether the variants and the search run on this row: its tape covers the window and the
+    /// model reproduced it (`fit_for_search`). The table shows every row; this is the sample.
+    pub(in crate::analytics::tuner) fn fit(&self) -> bool {
+        self.tape == TapeStatus::Covered && self.verdict.as_ref().is_some_and(fit_for_search)
+    }
+
     /// Take everything a replay learned about this row from its answer: the tape's word, the
     /// verdict, the model inputs derived for the deal (the price step, the archived pre-spike
-    /// ask and take, the core's step lag), the prints, the entry line and the held coverage.
+    /// ask and take, the core's step lag, what the fact proves about the stop, the entry the
+    /// trade ran with), the prints, the entry line and the held coverage.
     /// Every fold of a replay answer goes through here: the variants replay the STORED row
     /// (`prepared_deals`), so a take lifted to the archive's pre-spike ask in the verdict but
     /// read off the tape in the variants puts the two on different levels, and a row folded
@@ -88,6 +95,8 @@ impl DealRow {
         self.deal.pre_spike_ask = answer.deal.pre_spike_ask;
         self.deal.archived_take = answer.deal.archived_take;
         self.deal.step_lag_ms = answer.deal.step_lag_ms;
+        self.deal.stop_anchor = answer.deal.stop_anchor;
+        self.deal.own_entry = answer.deal.own_entry;
         self.ticks = answer.ticks;
         self.entry_line = answer.entry_line;
         self.held = answer.held;
@@ -130,7 +139,7 @@ pub(in crate::analytics::tuner) struct TicksData {
     /// the Fact column, not in the table.
     pub(in crate::analytics::tuner) untunable: usize,
     /// Column 0: the whole scope (the same SQL as every axis' "Fact", stamps or not); column
-    /// 1: the rows the tape covers.
+    /// 1: the rows fit for the search ([`DealRow::fit`]) — the sample the variants replay.
     pub(in crate::analytics::tuner) kpi: Vec<VarStats>,
     /// `(hits, answered)` of the entry group over the covered rows.
     pub(in crate::analytics::tuner) entry_share: (usize, usize),
@@ -168,11 +177,16 @@ impl TicksData {
             .filter(|r| r.tape == TapeStatus::Missing && r.address.is_some())
     }
 
-    /// Covered rows whose tape is in memory — what the variants and the search replay.
+    /// Rows fit for the search ([`DealRow::fit`]), tape in memory or not.
+    pub(in crate::analytics::tuner) fn fit(&self) -> usize {
+        self.rows.iter().filter(|r| r.fit()).count()
+    }
+
+    /// Fit rows whose tape is in memory — what the variants and the search replay. A row the
+    /// model does not reproduce is out whatever its tape: what the model answers for a variant
+    /// of it is not an answer (`fit_for_search`).
     pub(in crate::analytics::tuner) fn replayable(&self) -> impl Iterator<Item = &DealRow> {
-        self.rows
-            .iter()
-            .filter(|r| r.tape == TapeStatus::Covered && r.ticks.is_some())
+        self.rows.iter().filter(|r| r.fit() && r.ticks.is_some())
     }
 
     /// The share gate per group: whether the model reproduces enough of the fact to be
@@ -273,13 +287,18 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) dirty: bool,
     /// `(column key, descending)` of the deal table.
     pub(in crate::analytics::tuner) sort: Option<(String, bool)>,
-    /// The table shows only the rows whose tape covers the window — the sample the variants
-    /// and the search actually run on ([`TicksData::replayable`]). Off by default: the rows
-    /// without their tape are the ones the fetch button exists for, and a filter that hides
-    /// them hides the work to be done. Whether the MODEL reproduces a row is not a filter —
-    /// it is the "model" column and the search gate (`SHARE_GATE`); a sample narrowed to what
-    /// the model already fits would be fitted on itself.
-    pub(in crate::analytics::tuner) only_with_tape: bool,
+    /// The table shows only the rows fit for the search ([`DealRow::fit`]) — the sample the
+    /// variants and the search actually run on: tape covering the window, and the model
+    /// reproducing the trade. Off by default: the rows without their tape are the ones the
+    /// fetch button exists for, and a filter that hides them hides the work to be done.
+    ///
+    /// The model's verdict became part of the sample on the developer's call (2026-09-23): a
+    /// trade the model cannot reproduce on its own settings — a book it has no copy of, a rule
+    /// it does not have, an input the record did not keep — answers nothing true for a variant.
+    /// The worry that held this back before — a sample narrowed to what the model already fits
+    /// is fitted on itself — is why the cut is the verdict on the trade's OWN settings, taken
+    /// once per load, never the variant's.
+    pub(in crate::analytics::tuner) only_fit: bool,
     /// The sorted row order, cached against `rows_rev` and the sort.
     pub(in crate::analytics::tuner) order: Option<super::rows::OrderCache>,
     /// Bumped whenever `data` changes, so the cached order is rebuilt.
@@ -322,7 +341,7 @@ impl Default for TicksState {
             seq: 0,
             dirty: true,
             sort: Some((super::columns::COL_TIME.to_string(), true)),
-            only_with_tape: false,
+            only_fit: false,
             order: None,
             rows_rev: 0,
             entry_open: true,
@@ -525,15 +544,13 @@ impl TicksData {
         }
     }
 
-    /// Recompute the covered-subset KPI (column 1) and the ✓ shares from the rows — after a
-    /// fetch changed one of them. Column 0, the whole scope, comes from the same SQL every
-    /// axis' "Fact" comes from and is left as loaded.
+    /// Recompute the fit-subset KPI (column 1) and the ✓ shares from the rows — after a fetch
+    /// changed one of them. Column 0, the whole scope, comes from the same SQL every axis'
+    /// "Fact" comes from and is left as loaded. The shares stay over every covered row: they are
+    /// how much of the tape the model reproduces, which is what the fit subset is cut from.
     pub(in crate::analytics::tuner) fn refresh_summary(&mut self) {
         let subset = moon_core::db::tuner::ticks::fact_stats(
-            self.rows
-                .iter()
-                .filter(|r| r.tape == TapeStatus::Covered)
-                .map(|r| &r.deal),
+            self.rows.iter().filter(|r| r.fit()).map(|r| &r.deal),
         );
         match self.kpi.get_mut(1) {
             Some(slot) => *slot = subset,

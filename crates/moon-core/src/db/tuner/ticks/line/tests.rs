@@ -42,6 +42,8 @@ fn deal(short: bool) -> Deal {
         hook_depth_pct: None,
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,
+        stop_anchor: None,
+        own_entry: None,
     }
 }
 
@@ -462,6 +464,43 @@ fn verify_judges_a_book_stop_by_its_level_and_moment() {
     let calm = vec![sold(1_500, 99.5), tick(5_000, 100.0)];
     let v = verify(&d, &calm, &EntryParams::Fact, &book, None, None);
     assert_eq!(v.exit, Some(false), "{v:?}");
+}
+
+/// The take is an order like every move: on the book `latency_ms` after the core placed it. The
+/// spike's own tail, printed in the milliseconds after the fill, cannot fill it.
+#[test]
+fn the_take_is_on_the_book_only_after_the_latency() {
+    let p = ExitParams {
+        latency_ms: 100.0,
+        ..ExitParams::default()
+    };
+    let ticks = tape(&[(9, 101.5), (150, 101.2)]);
+    let w = walk(&deal(false), &ticks, fill(), 101.0, &p);
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Take, 150));
+}
+
+/// A market stop's sale sweeps our size through the book: with no level on record — its reason
+/// never carries one — the verdict holds the moment it fired, never the sweep's price.
+#[test]
+fn verify_judges_a_market_stop_without_a_level_by_its_moment() {
+    let fast = ExitParams {
+        stop_loss_pct: -1.0,
+        fast_stop_loss: true,
+        ..params()
+    };
+    let mut d = deal(false);
+    d.sell_reason = "StopLoss Market Sell".into();
+    // 1.4 % past the print that fired it: the sweep, which no print on the tape shows.
+    d.sell_price = 97.5;
+    d.close_ms = 3_100;
+    let ticks = tape(&[(1_000, 99.5), (3_000, 98.9), (5_000, 99.0)]);
+    let v = verify(&d, &ticks, &EntryParams::Fact, &fast, None, None);
+    assert_eq!(v.exit_kind, Some(ExitKind::Stop));
+    assert_eq!(v.exit, Some(true), "{v:?}");
+    assert_eq!(v.exit_dev_pct, None);
+    d.close_ms = 9_000;
+    let v = verify(&d, &ticks, &EntryParams::Fact, &fast, None, None);
+    assert_eq!(v.exit, Some(false), "six seconds off the moment, {v:?}");
 }
 
 // ---- the mirror and the archive -------------------------------------------------------------

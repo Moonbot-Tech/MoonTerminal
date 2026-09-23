@@ -16,7 +16,7 @@ fn tick(t_ms: i64, price: f64) -> Tick {
     }
 }
 
-/// A Spread deal (entry from the fact) bought at 100 whose tape peaks at `peak` after the
+/// A PumpsDetection deal (entry from the fact, take by `SellPrice`) bought at 100 whose tape peaks at `peak` after the
 /// fill, then falls back to the fact's exit.
 fn prepared(uid: i64, peak: f64) -> PreparedDeal {
     let deal = Deal {
@@ -24,7 +24,7 @@ fn prepared(uid: i64, peak: f64) -> PreparedDeal {
         core_uid: 1,
         core_name: String::new(),
         strategy_id: 1,
-        kind: "Spread".into(),
+        kind: "PumpsDetection".into(),
         coin: "ACE".into(),
         buy_ms: 1_000 * uid,
         close_ms: 1_000 * uid + 900,
@@ -42,6 +42,8 @@ fn prepared(uid: i64, peak: f64) -> PreparedDeal {
         hook_depth_pct: None,
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,
+        stop_anchor: None,
+        own_entry: None,
     };
     let t0 = deal.buy_ms;
     let ticks: Vec<Tick> = vec![
@@ -89,7 +91,7 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
     let params = SearchParams {
         base: &base,
         defaults: &defaults,
-        kind: "Spread",
+        kind: "PumpsDetection",
         vary_entry: false,
         vary_exit: true,
         locked: &locked,
@@ -115,7 +117,14 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
     assert!(result.holdout.is_none());
     assert_eq!(handle.completed(), 3);
     // The same values through the variant column.
-    let (tally, spent) = variant_tally(&deals, &base, &defaults, "Spread", &result.values, 0.0);
+    let (tally, spent) = variant_tally(
+        &deals,
+        &base,
+        &defaults,
+        "PumpsDetection",
+        &result.values,
+        0.0,
+    );
     assert!((tally.profit - 80.0).abs() < 1e-6);
     assert!((spent - 8_000.0).abs() < 1e-6);
 }
@@ -135,7 +144,7 @@ fn the_holdout_is_scored_but_never_fitted_on() {
     let params = SearchParams {
         base: &base,
         defaults: &defaults,
-        kind: "Spread",
+        kind: "PumpsDetection",
         vary_entry: false,
         vary_exit: true,
         locked: &locked,
@@ -162,7 +171,7 @@ fn a_cancelled_run_answers_nothing_and_nothing_varied_answers_nothing() {
     let params = SearchParams {
         base: &base,
         defaults: &defaults,
-        kind: "Spread",
+        kind: "PumpsDetection",
         vary_entry: true,
         vary_exit: true,
         locked: &all,

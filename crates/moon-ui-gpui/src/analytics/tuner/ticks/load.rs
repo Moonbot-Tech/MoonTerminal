@@ -27,7 +27,8 @@ use crate::analytics::refresh::{CatchUpOutcome, report_result_is_stale};
 use moon_core::db::ReadFail;
 use moon_core::db::order_traces::{TraceEntry, read_many};
 use moon_core::db::tuner::ticks::{
-    Deal, DealsRead, EntryParams, entry_model_for, infer_tick, params, required_spans, verify,
+    Deal, DealsRead, EntryParams, entry_model_for, infer_tick, params, prepare_deal,
+    required_spans, verify,
 };
 use moon_core::db::tuner::{VarStats, Variant, strategy_current_values, strategy_values_at};
 use moon_core::feed::report_traces::ArchivedLineKind;
@@ -560,6 +561,9 @@ pub(super) fn replay_row(
 
 /// Run the model on one row from a tape already asked for. A covered row keeps its tape and
 /// its archived entry start for the variants; a row without an address is left as it is.
+///
+/// The model inputs read off the order archive go through `prepare_deal`, the same call the
+/// `real_data` bench makes, so what it measures is what this table shows.
 pub(super) fn replay_row_with(
     row: &mut DealRow,
     defaults: &HashMap<String, f64>,
@@ -614,14 +618,9 @@ pub(super) fn replay_row_with(
         EntryParams::Fact
     };
     let exit = params::exit_params(&sv);
-    // The ask the core lifted its take to, off the archive — the tape has no book.
-    row.deal.pre_spike_ask = moon_core::db::tuner::ticks::archived_pre_spike_ask(
-        lines.exit_points.as_deref(),
-        &exit,
-        row.deal.is_short,
-    );
-    row.deal.archived_take =
-        moon_core::db::tuner::ticks::archived_take(lines.exit_points.as_deref());
+    // What the core's own record fixes: the ask its take was lifted to, the take as placed,
+    // what the fact proves about the stop, the entry the trade ran with.
+    prepare_deal(&mut row.deal, &entry, &exit, lines.exit_points.as_deref());
     // The core's own clock for its PriceDown steps, as the last load calibrated it.
     row.deal.step_lag_ms = super::lags::step_lag_of(row.deal.core_uid);
     row.verdict = Some(verify(

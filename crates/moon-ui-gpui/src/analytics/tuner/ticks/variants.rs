@@ -2,9 +2,13 @@
 //! debounced rescore over the replayable rows, the search that fills В1, and the write of В1
 //! through the shared confirmation dialog.
 //!
-//! Every score here is a replay — `variant_tally` over the rows whose tape is in memory — so
-//! the columns describe the SAME subset the "Fact · with tape" column describes, never the
-//! whole scope. The captions say "by N" for that reason.
+//! Every score here is a replay — `variant_tally` over the fit rows whose tape is in memory
+//! (`TicksData::replayable`) — so the columns describe the SAME subset the "Fact · fit" column
+//! describes, never the whole scope. The captions say "by N" for that reason.
+//!
+//! A replay leans on what each trade's own record proves wherever a variant keeps the trade's
+//! own settings: the entry fills where the report says, and the stop fires when and where the
+//! core's did (`record::StopAnchor`) — the book the tape does not carry, answered by the fact.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;

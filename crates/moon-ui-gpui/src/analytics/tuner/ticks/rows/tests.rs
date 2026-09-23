@@ -28,6 +28,8 @@ fn deal(uid: i64, buy_ms: i64, buy: f64, sell: f64, short: bool) -> Deal {
         hook_depth_pct: None,
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,
+        stop_anchor: None,
+        own_entry: None,
     }
 }
 
@@ -82,8 +84,8 @@ fn state() -> TicksState {
     rows[0].held = Some((60_000, 30_000));
     rows[1].held = Some((60_000, 60_000));
     let mut state = TicksState::default();
-    // The sorts are exercised over every row; the "with tape only" switch has its own test.
-    state.only_with_tape = false;
+    // The sorts are exercised over every row; the "fit only" switch has its own test.
+    state.only_fit = false;
     state.data.apply(Ok(TicksData {
         rows,
         ..TicksData::default()
@@ -109,27 +111,37 @@ fn the_default_order_is_newest_entry_first() {
 }
 
 #[test]
-fn the_tape_switch_keeps_the_covered_rows_whatever_the_model_said() {
+fn the_sample_switch_keeps_the_covered_rows_the_model_reproduced() {
     // Row 2: covered, both groups ✓. Row 1: no tape. Row 3: refused, and the entry a miss.
     let mut state = state();
     assert!(
-        !TicksState::default().only_with_tape,
+        !TicksState::default().only_fit,
         "off by default: the rows without tape are what the fetch button is for"
     );
-    state.only_with_tape = true;
+    state.only_fit = true;
     assert_eq!(uids(&mut state), [2]);
-    // The verdict is the "model" column, never a filter: a covered row the model missed
-    // stays in the table, and a sample narrowed to what the model already fits would be
-    // fitted on itself.
-    state.data.data_mut().unwrap().rows[1].verdict = Some(verdict(Some(false), Some(false)));
+    // A kind without an entry model answers the entry with nothing: the exit's ✓ is enough.
+    state.data.data_mut().unwrap().rows[1].verdict = Some(verdict(None, Some(true)));
     state.rows_rev += 1;
     assert_eq!(uids(&mut state), [2]);
-    // A covered row with no verdict at all is in the sample too — the search replays it.
+    // A covered row the model does not reproduce is out of the sample (the developer's call,
+    // 2026-09-23): what the model answers for a variant of it is not an answer. The table
+    // still shows it with the switch off, with its verdict in the "model" column.
+    for missed in [
+        verdict(Some(false), Some(true)),
+        verdict(Some(true), Some(false)),
+        verdict(Some(true), None),
+    ] {
+        state.data.data_mut().unwrap().rows[1].verdict = Some(missed);
+        state.rows_rev += 1;
+        assert!(uids(&mut state).is_empty(), "{missed:?}");
+    }
+    // A covered row the model has not run on yet is not in the sample either.
     state.data.data_mut().unwrap().rows[1].verdict = None;
     state.rows_rev += 1;
-    assert_eq!(uids(&mut state), [2]);
+    assert!(uids(&mut state).is_empty());
     // Flipping the switch alone rebuilds the order: the cache keys on it.
-    state.only_with_tape = false;
+    state.only_fit = false;
     assert_eq!(uids(&mut state), [1, 3, 2]);
 }
 

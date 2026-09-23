@@ -1,5 +1,5 @@
-//! The deal table's row order — a permutation over the loaded rows, filtered by the "with tape
-//! only" switch and cached against the data generation, the sort and the switch, so a repaint
+//! The deal table's row order — a permutation over the loaded rows, filtered by the "fit only"
+//! switch and cached against the data generation, the sort and the switch, so a repaint
 //! that changed none of them reuses it instead of sorting hundreds of deals per frame.
 
 use super::columns::*;
@@ -9,23 +9,20 @@ use super::state::{DealRow, TapeStatus, TicksState};
 pub(in crate::analytics::tuner) struct OrderCache {
     pub(in crate::analytics::tuner) rows_rev: u64,
     pub(in crate::analytics::tuner) sort: Option<(String, bool)>,
-    pub(in crate::analytics::tuner) only_with_tape: bool,
+    pub(in crate::analytics::tuner) only_fit: bool,
     /// Indices into `TicksData::rows` — the shown rows only, when the switch hides the rest.
     pub(in crate::analytics::tuner) order: Vec<usize>,
 }
 
-/// The current order, rebuilt only when the rows, the sort or the "with tape only" switch
-/// changed.
+/// The current order, rebuilt only when the rows, the sort or the "fit only" switch changed.
 pub(in crate::analytics::tuner) fn order_for(state: &mut TicksState) -> &[usize] {
     let fresh = state.order.as_ref().is_some_and(|c| {
-        c.rows_rev == state.rows_rev
-            && c.sort == state.sort
-            && c.only_with_tape == state.only_with_tape
+        c.rows_rev == state.rows_rev && c.sort == state.sort && c.only_fit == state.only_fit
     });
     if !fresh {
         let rows: &[DealRow] = state.data.data().map(|d| d.rows.as_slice()).unwrap_or(&[]);
         let mut order: Vec<usize> = (0..rows.len())
-            .filter(|&i| !state.only_with_tape || rows[i].tape == TapeStatus::Covered)
+            .filter(|&i| !state.only_fit || rows[i].fit())
             .collect();
         if let Some((key, desc)) = &state.sort {
             sort_indices(rows, &mut order, key, *desc);
@@ -33,7 +30,7 @@ pub(in crate::analytics::tuner) fn order_for(state: &mut TicksState) -> &[usize]
         state.order = Some(OrderCache {
             rows_rev: state.rows_rev,
             sort: state.sort.clone(),
-            only_with_tape: state.only_with_tape,
+            only_fit: state.only_fit,
             order,
         });
     }

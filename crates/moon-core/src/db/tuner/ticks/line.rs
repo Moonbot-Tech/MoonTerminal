@@ -143,6 +143,9 @@ struct BookStop {
     proxy: Option<f64>,
     avg: Option<f64>,
     next_sample: i64,
+    /// Up to when the fact proves this stop did not fire (`record::StopAnchor`): a sample by
+    /// then is averaged but cannot fire. `i64::MIN` when the walk is not the trade's own stop.
+    quiet_until: i64,
 }
 
 impl BookStop {
@@ -160,7 +163,7 @@ impl BookStop {
                 .avg
                 .map_or(bid, |a| self.alpha * bid + (1.0 - self.alpha) * a);
             self.avg = Some(avg);
-            if at >= self.armed_at && reaches(avg, self.level, self.long) {
+            if at >= self.armed_at && at > self.quiet_until && reaches(avg, self.level, self.long) {
                 return Some(Exit {
                     t_ms: at,
                     price: bid,
@@ -265,6 +268,9 @@ pub fn walk_held(
     };
     let latency_ms = params.latency_ms.max(0.0) as i64;
     let armed_at = fill.t_ms + params.sell_delay_ms.max(0.0) as i64;
+    // When the take is on the book: placed at `armed_at`, there after the same latency as any
+    // move of the line.
+    let take_live_at = armed_at + latency_ms;
     // What the exchange is given: the level on the price grid.
     let placed = |level: f64| match deal.tick {
         Some(tick) => round_to_step(level, tick),
@@ -368,6 +374,13 @@ pub fn walk_held(
     let stop_on = stop != 0.0;
     let stop_level = side.over(fill.price, stop);
     let stop_from = fill.t_ms + (params.stop_loss_delay_s.max(0.0) * 1000.0) as i64;
+    // What the fact proves about the stop when this walk runs the trade's own
+    // (`record::StopAnchor`): it fired when the core's did, at the price the core sold at, and
+    // not a moment before — nor before the close, on a trade it never stopped. The book the
+    // stop watches is not on the tape; the fact is the book's own answer.
+    let anchor = deal.stop_anchor.filter(|a| a.holds(deal, fill, params));
+    let quiet_until = anchor.map_or(i64::MIN, |a| a.quiet_until_ms);
+    let fired = anchor.and_then(|a| a.fired);
     // The non-fast stop's BID proxy: the last print on the stop's side of the book, sampled on
     // its own clock and averaged over `StopLossEMA` samples (see `STOP_SAMPLE_MS`).
     let book_stop = stop_on && !params.fast_stop_loss;
@@ -379,7 +392,16 @@ pub fn walk_held(
         proxy: None,
         avg: None,
         next_sample: fill.t_ms + STOP_SAMPLE_MS,
+        quiet_until,
     });
+    let anchored_stop = |at: i64, price: f64, points: Vec<LinePoint>| LineWalk {
+        exit: Exit {
+            t_ms: at,
+            price,
+            kind: ExitKind::Stop,
+        },
+        points,
+    };
 
     let mut last_t = fill.t_ms;
     for (index, tick) in ticks.iter().enumerate() {
@@ -389,6 +411,11 @@ pub fn walk_held(
             continue;
         }
         last_t = t_ms;
+        // The fact's own stop fired between the last print and this one: ahead of anything
+        // this print does, and after everything the prints before it did.
+        if let Some((at, sold)) = fired.filter(|(at, _)| t_ms >= *at) {
+            return anchored_stop(at, sold, points);
+        }
         // The timer-driven rules moved the line at their own moments, between prints; every
         // step due by this print happened BEFORE it, and a step that also reached the book
         // before it is what this print meets.
@@ -485,7 +512,12 @@ pub fn walk_held(
         }
         // The fast stop is a market order the core fires on the print; the sell is a limit the
         // print reaches. Both come before the print-driven rule below moves anything.
-        if stop_on && !book_stop && t_ms >= stop_from && reaches(price, stop_level, side.long) {
+        if stop_on
+            && !book_stop
+            && t_ms >= stop_from
+            && t_ms > quiet_until
+            && reaches(price, stop_level, side.long)
+        {
             return LineWalk {
                 exit: Exit {
                     t_ms,
@@ -500,8 +532,15 @@ pub fn walk_held(
         // contracts at the level against a sell of 18 000 and the core's line stood). The
         // verdict on the fact does not lean on this: `verify` judges the line by where it
         // STOOD at the close, not by which print the model sold on.
+        //
+        // The take is an order like every move, and reaches the book `latency_ms` after the
+        // core placed it: the spike's own tail, printed in the milliseconds after the fill, is
+        // not a print the take was there for. Filling on it turned 30 of 88 stopped MoonShot
+        // trades into wins on the live sample (2026-09-23), the take "touched" 9 ms after the
+        // buy by the pump it was bought on.
         let held = hold_until_ms.is_some_and(|until| t_ms <= until);
-        if t_ms > armed_at && !held && reaches(price, exch_line, !side.long) {
+        if t_ms > armed_at && t_ms >= take_live_at && !held && reaches(price, exch_line, !side.long)
+        {
             return LineWalk {
                 exit: Exit {
                     t_ms,
@@ -568,6 +607,10 @@ pub fn walk_held(
         }
     }
     let tail = ticks.last().map(|t| t.time_ms as i64).unwrap_or(last_t);
+    // The fact's own stop, past the last print: the tape went quiet, the core did not.
+    if let Some((at, sold)) = fired {
+        return anchored_stop(at, sold, points);
+    }
     // The book stop's samples up to the tape's end — the one AT the last print included — read
     // the proxy the last prints left; the loop only ever reaches the samples before a print.
     if let Some(exit) = book.as_mut().and_then(|book| book.sample_before(tail + 1)) {

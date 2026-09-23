@@ -27,6 +27,8 @@ fn deal() -> Deal {
         hook_depth_pct: None,
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,
+        stop_anchor: None,
+        own_entry: None,
     }
 }
 

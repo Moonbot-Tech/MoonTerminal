@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use super::exit::ExitParams;
+use super::exit::{ExitParams, UnmodelledRule};
 use super::mshot::{Modifiers, MshotParams, UsePrice};
 
 /// Which group of the grid a parameter belongs to.
@@ -52,6 +52,9 @@ pub struct TickParam {
 
 const MSHOT: &[&str] = &["MoonShot"];
 const HOOK: &[&str] = &[super::hook::KIND_MOONHOOK];
+/// The kinds whose take `SellPrice` does not place: MoonHook's is `HookSellLevel`, Spread's the
+/// edge of the spread it detected (`exit::take_is_recorded`).
+const NOT_SELL_PRICE: &[&str] = &[super::hook::KIND_MOONHOOK, super::exit::KIND_SPREAD];
 const ANY: &[&str] = &[];
 
 const GRID_PRICE: &[f64] = &[
@@ -260,8 +263,9 @@ pub const TICK_PARAMS: &[TickParam] = &[
             grid: GRID_SELL_PRICE,
         },
         kinds: ANY,
-        // A MoonHook carries no `SellPrice` at all — `HookSellLevel` below is its take.
-        not_kinds: HOOK,
+        // A MoonHook carries no `SellPrice` at all — `HookSellLevel` below is its take — and a
+        // Spread's take is the spread it detected, whatever the field says.
+        not_kinds: NOT_SELL_PRICE,
     },
     TickParam {
         key: "MShotSellAtLastPrice",
@@ -380,6 +384,11 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "UseStopLoss",
     "FastStopLoss",
     "StopLossEMA",
+    // The switches of the sell rules the model does not have: a trade under one is not
+    // modelled (`exit::UnmodelledRule`).
+    "UseTrailing",
+    "UseSecondStop",
+    "UseStopLoss3",
     // PumpsDetection's one sell move (see `line::PUMP_MOVE_LAG_MS`); `PumpMovePersent` is the
     // core's own spelling of the field.
     "PumpMoveTimer",
@@ -564,7 +573,24 @@ pub fn exit_params(v: &StrategyValues<'_>) -> ExitParams {
         // the book-watching stop, never as the fast stop's "StopLoss Market Sell".
         fast_stop_loss: v.bool("FastStopLoss", false),
         stop_loss_ema: v.num("StopLossEMA", base.stop_loss_ema),
+        unmodelled: unmodelled_rule(v),
         latency_ms: base.latency_ms,
         take_from_archive: base.take_from_archive,
+    }
+}
+
+/// The first sell rule the strategy switched on that the model does not have, if any.
+///
+/// Read by the switch, never by its fields: the fields stay in a strategy's dump with the switch
+/// off (`assets/param_deps.toml`). On this machine's reports (2026-09-23) the trailing stop was
+/// on for the strategies of 44 trades of 2 042 and the stop ladder for 2; `SellSpread` and the EMA exit
+/// were on for none, and are left out until a strategy turns them on.
+fn unmodelled_rule(v: &StrategyValues<'_>) -> Option<UnmodelledRule> {
+    if v.bool("UseTrailing", false) {
+        Some(UnmodelledRule::Trailing)
+    } else if v.bool("UseSecondStop", false) || v.bool("UseStopLoss3", false) {
+        Some(UnmodelledRule::StopLadder)
+    } else {
+        None
     }
 }

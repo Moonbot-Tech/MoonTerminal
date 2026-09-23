@@ -263,6 +263,12 @@ fn real_data_reproduction() {
     eprintln!("PriceDown step lag per core: {core_lags:?}");
     let (mut entry_hits, mut entry_n, mut exit_hits, mut exit_n, mut with_tape) = (0, 0, 0, 0, 0);
     let mut kinds_seen: HashMap<String, usize> = HashMap::new();
+    let mut unfit: HashMap<String, usize> = HashMap::new();
+    // Deals whose core no identity line named: skipped, and counted, so an empty `logs/` folder
+    // reads as that in the summary rather than as a scope without tape.
+    let mut no_venue = 0usize;
+    let (mut fit_n, mut own_n, mut own_close) = (0usize, 0usize, 0usize);
+    let (mut own_sum, mut fact_sum) = (0.0f64, 0.0f64);
     for mut deal in read.deals {
         *kinds_seen.entry(deal.kind.clone()).or_default() += 1;
         // Every kind the axis takes, as the table does: a kind without an entry model replays
@@ -294,6 +300,7 @@ fn real_data_reproduction() {
         // tape, and the axis reads the deal's own (`RowAddress::exchange_key`). A core the logs
         // never named is skipped rather than replayed on a mixture.
         let Some(venue) = venue_of_core.get(&deal.core_uid) else {
+            no_venue += 1;
             continue;
         };
         for (exchange, market) in pairs
@@ -325,8 +332,7 @@ fn real_data_reproduction() {
         };
         let exit = exit_params(&sv);
         deal.step_lag_ms = core_lags.get(&deal.core_uid).copied().unwrap_or(0.0);
-        deal.pre_spike_ask = archived_pre_spike_ask(exit_points.as_deref(), &exit, deal.is_short);
-        deal.archived_take = archived_take(exit_points.as_deref());
+        prepare_deal(&mut deal, &entry, &exit, exit_points.as_deref());
         // The modelled line beside the archive's moves, for the eye.
         if let (Some(fill), Some(moves)) = (
             simulate(&deal, &ticks, &entry, &exit, entry_line.as_deref()).fill,
@@ -353,8 +359,12 @@ fn real_data_reproduction() {
                 ..exit.clone()
             };
             let fact_fill = verify::fact_sell_start(&deal, &exit, exit_points.as_deref());
-            let held =
-                ExitModel::new(&fact_exit).walk_held(&deal, &ticks, fact_fill, deal.close_ms);
+            let held = ExitModel::new(&fact_exit).walk_held(
+                &super::super::record::unanchored(&deal),
+                &ticks,
+                fact_fill,
+                deal.close_ms,
+            );
             if let Ok(dir) = std::env::var("MOON_TICKS_DUMP") {
                 dump_deal(
                     &dir,
@@ -430,6 +440,41 @@ fn real_data_reproduction() {
                     .map(|d| super::super::hook::hook_take_pct(d, exit.hook_sell_level_pct))
             ),
         );
+        // Which trades the search may run on, and — for those — how the trade's own settings
+        // replay against the fact, with everything the fact proves in hand: the check that a
+        // variant column counts the same money the "Fact" column does.
+        let fit = fit_for_search(&archived);
+        let own = simulate(&deal, &ticks, &entry, &exit, entry_line.as_deref());
+        let fact = profit_pct(&deal, deal.buy_price, deal.sell_price);
+        eprintln!(
+            "    fit {fit} · own {:?} {:?} at {:?} · fact {:?}",
+            own.exit.map(|e| e.kind),
+            round3(own.profit_pct),
+            own.exit.map(|e| e.t_ms - deal.close_ms),
+            round3(fact),
+        );
+        if fit {
+            fit_n += 1;
+            if let (Some(own), Some(fact)) = (own.profit_pct, fact) {
+                own_sum += own;
+                fact_sum += fact;
+                own_close += usize::from((own - fact).abs() <= 0.05);
+                own_n += 1;
+            }
+        } else {
+            let why = if archived.entry == Some(false) {
+                "entry ✗".to_string()
+            } else if exit.unmodelled.is_some() {
+                format!("rule not modelled ({:?})", exit.unmodelled)
+            } else if archived.exit.is_none() {
+                "exit not judged".to_string()
+            } else {
+                let reason = deal.sell_reason.trim();
+                let reason = reason.get(..reason.len().min(22)).unwrap_or(reason);
+                format!("exit ✗ {reason}")
+            };
+            *unfit.entry(why).or_default() += 1;
+        }
         // Counted as the axis counts it (`load.rs::replay_row_with` passes both archived lines
         // whenever it has them): the entry off its archived line when there is one — without it
         // the two verdicts are the same call — and the exit ALWAYS against the archived Exit
@@ -451,6 +496,15 @@ fn real_data_reproduction() {
     }
     eprintln!("kinds: {kinds_seen:?}");
     eprintln!(
-        "with tape: {with_tape} · entry ✓ {entry_hits}/{entry_n} · exit ✓ {exit_hits}/{exit_n}"
+        "with tape: {with_tape} · entry ✓ {entry_hits}/{entry_n} · exit ✓ {exit_hits}/{exit_n} · \
+         skipped, core venue unknown: {no_venue}"
+    );
+    let mut unfit: Vec<(String, usize)> = unfit.into_iter().collect();
+    unfit.sort_by_key(|u| std::cmp::Reverse(u.1));
+    eprintln!("fit for the search: {fit_n} of {with_tape} · left out: {unfit:?}");
+    eprintln!(
+        "own settings replayed on the fit trades: {own_n} closed, mean {:.3} % against the fact's {:.3} %, within 0.05 pp on {own_close}",
+        own_sum / own_n.max(1) as f64,
+        fact_sum / own_n.max(1) as f64,
     );
 }

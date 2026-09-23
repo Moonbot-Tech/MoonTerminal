@@ -33,6 +33,7 @@ pub mod hook;
 pub mod line;
 pub mod mshot;
 pub mod params;
+pub mod record;
 pub mod scope;
 pub mod search;
 pub mod stats;
@@ -44,6 +45,7 @@ pub use exit::{ExitModel, ExitParams, archived_pre_spike_ask, archived_take, tak
 pub use hook::{HookDetect, KIND_MOONHOOK, hook_take_pct, parse_hook_detect};
 pub use mshot::{MshotEntry, MshotParams, UsePrice};
 pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};
+pub use record::{StopAnchor, fit_for_search, prepare_deal};
 pub use scope::{is_service_row, is_tunable};
 pub use search::{PreparedDeal, SearchParams, SearchResult, suggest, variant_tally};
 pub use stats::{fact_stats, stats_of};
@@ -218,6 +220,13 @@ pub struct Deal {
     /// one that moved the order, milliseconds — its replace round trip, calibrated by the caller
     /// off the core's own archived lines ([`calibrate`]); 0 runs the steps on the plain schedule.
     pub step_lag_ms: f64,
+    /// What the fact proves about the stop, for a variant that runs the same one
+    /// ([`record::StopAnchor`]); filled with the rest of the model inputs, `None` before.
+    pub stop_anchor: Option<StopAnchor>,
+    /// The entry parameters the trade itself ran with. A variant that runs exactly these has
+    /// nothing to model on the entry side: the fill is the report's ([`simulate`]). `None`
+    /// until the model inputs are filled, and in the verdict, which exists to test the model.
+    pub own_entry: Option<EntryParams>,
 }
 
 impl Deal {
@@ -350,11 +359,15 @@ pub fn simulate(
     exit: &ExitParams,
     entry_line: Option<&[(i64, f64)]>,
 ) -> Outcome {
+    let fact_fill = Fill {
+        t_ms: deal.buy_ms,
+        price: deal.buy_price,
+    };
     let fill = match entry {
-        EntryParams::Fact => Some(Fill {
-            t_ms: deal.buy_ms,
-            price: deal.buy_price,
-        }),
+        EntryParams::Fact => Some(fact_fill),
+        // The trade's own entry settings filled where the report says; the model is for the
+        // entries the core never ran.
+        EntryParams::MoonShot(_) if deal.own_entry.as_ref() == Some(entry) => Some(fact_fill),
         EntryParams::MoonShot(params) => MshotEntry::new(params).fill(deal, ticks, entry_line),
     };
     let Some(fill) = fill else {

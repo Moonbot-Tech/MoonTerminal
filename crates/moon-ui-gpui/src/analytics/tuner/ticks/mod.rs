@@ -4,12 +4,12 @@
 //! Left, under the strategy list: the deal table — one row per closed trade with millisecond
 //! stamps, what came of it, whether the terminal holds its tape, and whether the model
 //! reproduces the fact; a double-click opens the trade window on it. Every row of the scope is
-//! shown; the switch under the table narrows it to the rows whose tape covers the window — the
-//! sample the variants and the search run on — and the status line says how many that is out of
-//! the scope. The model's verdict is a COLUMN, never a filter. Right: the shared "Fact vs …"
-//! matrix (the whole scope, the
-//! replayable subset captioned with the ✓ shares, the variant columns), and the parameter grid
-//! with the strategies' values, the two variant columns and the search row.
+//! shown; the switch under the table narrows it to the sample the variants and the search run
+//! on — the rows whose tape covers the window AND which the model reproduces (`DealRow::fit`) —
+//! and the status line says how many that is out of the scope. Right: the shared "Fact vs …"
+//! matrix (the whole scope, the fit subset captioned with the ✓ shares, the variant columns),
+//! and the parameter grid with the strategies' values, the two variant columns and the search
+//! row.
 //!
 //! The model itself is `moon_core::db::tuner::ticks`; this module only feeds it and draws
 //! what it says.
@@ -56,9 +56,11 @@ impl AnalyticsView {
         let scope = self.scope_label();
         // The order is settled before the data is viewed: both live in `ticks`, and the sort
         // cache needs the mutable half. It is the SHOWN rows: with the switch on, only the
-        // ones whose tape covers the window.
+        // sample the variants run on.
         let drawn = rows::order_for(&mut self.ticks).len();
-        let only_with_tape = self.ticks.only_with_tape;
+        let only_fit = self.ticks.only_fit;
+        // The sample the variants and the search run on, for the status line.
+        let fit = self.ticks.data.data().map(|d| d.fit()).unwrap_or(0);
         // The rows the scope holds but the table does not show, for the caption and for the
         // empty state: a period entirely before the millisecond stamps is not an empty period,
         // and the table must say which it is rather than draw the shared "no trades".
@@ -110,7 +112,7 @@ impl AnalyticsView {
                     if self.ticks.tape_reading {
                         t!("analytics.ticks.fetch_reading").to_string()
                     } else {
-                        t!("analytics.ticks.none_with_tape", hidden = total).to_string()
+                        t!("analytics.ticks.none_fit", hidden = total).to_string()
                     },
                     10.0,
                     p,
@@ -194,22 +196,22 @@ impl AnalyticsView {
         // out of how many — with what the scope holds beyond the table, and the switch that
         // hides the rest. How well the MODEL does on that sample is the KPI caption's ✓
         // shares (`ticks_kpi`), not a size.
-        let status = coverage_caption(covered, total, without_ms, left_out.1, left_out.2);
-        let only_tip = t!("analytics.ticks.only_with_tape_tip").to_string();
+        let status = coverage_caption(covered, fit, total, without_ms, left_out.1, left_out.2);
+        let only_tip = t!("analytics.ticks.only_fit_tip").to_string();
         let only_switch = div()
             .id("an-ticks-only-tape-box")
             .flex_none()
             .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(only_tip.clone())).into())
             .child(
                 MoonCheckbox::new("an-ticks-only-tape")
-                    .label(t!("analytics.ticks.only_with_tape").to_string())
-                    .checked(only_with_tape)
+                    .label(t!("analytics.ticks.only_fit").to_string())
+                    .checked(only_fit)
                     .on_change({
                         let view = cx.entity();
                         move |on: &bool, _w, app| {
                             let on = *on;
                             view.update(app, |this, cx| {
-                                this.ticks.only_with_tape = on;
+                                this.ticks.only_fit = on;
                                 // The cached order is a permutation of the SHOWN rows.
                                 this.ticks.order = None;
                                 cx.notify();
@@ -434,18 +436,19 @@ impl AnalyticsView {
             .into_any_element()
     }
 
-    /// "Fact vs …": the whole scope, the rows the tape covers (captioned with the ✓ shares of
-    /// both groups — the model's own account of itself), then the variant columns, each over
-    /// the replayable rows and captioned with how many.
+    /// "Fact vs …": the whole scope, the rows fit for the search (captioned with how many of the
+    /// covered ones that is, and the ✓ shares of both groups — the model's own account of
+    /// itself), then the variant columns, each over the replayable rows and captioned with how
+    /// many.
     fn ticks_kpi(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        let (covered, total, entry, exit, replayable, horizon) = self
+        let (fit, covered, entry, exit, replayable, horizon) = self
             .ticks
             .data
             .data()
             .map(|d| {
                 (
+                    d.fit(),
                     d.covered(),
-                    d.rows.len(),
                     d.entry_share,
                     d.exit_share,
                     d.replayable().count(),
@@ -464,8 +467,8 @@ impl AnalyticsView {
         // replayable rows hold past their close (`prepared_deals`).
         let mut subset_sub = t!(
             "analytics.ticks.subset_sub",
-            n = covered,
-            m = total,
+            n = fit,
+            m = covered,
             entry = share(entry),
             exit = share(exit)
         )
@@ -759,11 +762,13 @@ fn coin_cell(scale: f32) -> Div {
     div().flex_1().min_w(px(DEAL_COIN_MIN_W * scale)).truncate()
 }
 
-/// The status line's coverage part: how many rows have their tape, out of how many, and what
-/// the scope holds beyond the table — rows without millisecond stamps always, the service rows
-/// and the untunable ones only when there are any.
+/// The status line's coverage part: how many rows have their tape, out of how many, how many of
+/// those the model reproduces — the sample the variants and the search run on — and what the
+/// scope holds beyond the table: rows without millisecond stamps always, the service rows and the
+/// untunable ones only when there are any.
 fn coverage_caption(
     covered: usize,
+    fit: usize,
     total: usize,
     without_ms: usize,
     service: usize,
@@ -773,6 +778,7 @@ fn coverage_caption(
         "analytics.ticks.coverage",
         covered = covered,
         total = total,
+        fit = fit,
         without = without_ms
     )
     .to_string();

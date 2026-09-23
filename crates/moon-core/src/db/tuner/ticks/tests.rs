@@ -52,6 +52,8 @@ fn deal() -> Deal {
         hook_depth_pct: None,
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,
+        stop_anchor: None,
+        own_entry: None,
     }
 }
 
@@ -1126,10 +1128,15 @@ fn the_descriptor_keys_every_field_the_builders_read_and_splits_the_groups() {
     }
     assert!(params_for(ParamGroup::Entry, "Spread").next().is_none());
     assert!(params_for(ParamGroup::Entry, "MoonShot").count() > 10);
-    let exit_any: Vec<_> = params_for(ParamGroup::Exit, "Spread")
+    let exit_any: Vec<_> = params_for(ParamGroup::Exit, "PumpsDetection")
         .map(|p| p.key)
         .collect();
     assert!(exit_any.starts_with(&["SellPrice", "SellDelay", "PriceDownTimer"]));
+    // A Spread's take is the spread it detected, not `SellPrice` (`exit::take_is_recorded`).
+    let spread: Vec<_> = params_for(ParamGroup::Exit, "Spread")
+        .map(|p| p.key)
+        .collect();
+    assert!(spread.starts_with(&["SellDelay", "PriceDownTimer"]));
     assert!(
         !exit_any.contains(&"MShotSellAtLastPrice"),
         "a MoonShot-only field"
@@ -1159,6 +1166,8 @@ fn hook_deal() -> Deal {
         hook_depth_pct: Some(4.0),
         hook_stated_take_pct: Some(2.0),
         step_lag_ms: 0.0,
+        stop_anchor: None,
+        own_entry: None,
         ..deal()
     }
 }
@@ -1231,20 +1240,68 @@ fn a_hook_without_its_depth_is_not_a_known_take() {
         ..params.clone()
     };
     assert!(!ExitModel::new(&fixed).take_known(&hook_deal()));
-    // Every other kind takes by `SellPrice`, which the model has — with or without an archive.
+    // The kinds that take by `SellPrice` have it — with or without an archive.
     assert!(model.take_known(&deal()), "MoonShot");
-    for kind in ["Spread", "PumpsDetection", "Combo"] {
+    for kind in ["PumpsDetection", "Combo"] {
         let d = Deal {
             kind: kind.into(),
             ..deal()
         };
         assert!(model.take_known(&d), "{kind} takes by SellPrice");
     }
-    // An archived level answers for a hook the formula cannot reach.
-    assert!(model.take_known(&Deal {
+    // A variant runs the hook's FORMULA: the level the core recorded is the fact's answer, and
+    // a variant of a hook whose depth is unknown has nowhere to put its take.
+    assert!(!model.take_known(&Deal {
         archived_take: Some(101.0),
         ..no_depth
     }));
+}
+
+/// The take of a Spread is the spread it detected, a level the core recorded, not a rule: the
+/// record or nothing, for the fact and for every variant — and never `SellPrice`.
+#[test]
+fn a_spread_takes_the_level_its_core_recorded() {
+    let spread = Deal {
+        kind: "Spread".into(),
+        archived_take: Some(102.3),
+        ..deal()
+    };
+    let far = ExitParams {
+        sell_price_pct: 5.0,
+        ..ExitParams::default()
+    };
+    let model = ExitModel::new(&far);
+    let fill = Fill {
+        t_ms: 10_000,
+        price: 100.0,
+    };
+    assert!(model.take_known(&spread));
+    assert!((model.take_level(&spread, &[], fill) - 102.3).abs() < 1e-9);
+    let unrecorded = Deal {
+        archived_take: None,
+        ..spread
+    };
+    assert!(!model.take_known(&unrecorded));
+}
+
+/// A MoonShot lifted to the pre-spike ask places its take off the ask the core's record gives
+/// back; a variant with nothing but the tape's print would place it lower, and on a stopped
+/// trade sell there before the stop (30 of 88 live, 2026-09-23).
+#[test]
+fn a_moonshot_lifted_to_the_ask_needs_the_recorded_ask() {
+    let lifted = ExitParams {
+        sell_at_last_price: true,
+        sell_price_adjust_pct: 0.1,
+        ..ExitParams::default()
+    };
+    let model = ExitModel::new(&lifted);
+    assert!(!model.take_known(&deal()));
+    assert!(model.take_known(&Deal {
+        pre_spike_ask: Some(103.0),
+        ..deal()
+    }));
+    // Without the lift the take is `SellPrice`, known either way.
+    assert!(ExitModel::new(&ExitParams::default()).take_known(&deal()));
 }
 
 /// A modifier deep enough to drive the distance negative must not put the take on the losing
@@ -1289,11 +1346,16 @@ fn the_grid_hides_sell_price_from_a_hook_and_offers_its_own_level() {
         !hook.contains(&"HookSellFixed"),
         "read, but not modelled — so not a knob"
     );
+    let pump: Vec<&str> = params_for(ParamGroup::Exit, "PumpsDetection")
+        .map(|p| p.key)
+        .collect();
+    assert!(pump.contains(&"SellPrice"));
+    assert!(!pump.contains(&"HookSellLevel"), "a hook-only field");
+    // Nor is `SellPrice` a Spread's take: the core places it on the spread it detected.
     let spread: Vec<&str> = params_for(ParamGroup::Exit, "Spread")
         .map(|p| p.key)
         .collect();
-    assert!(spread.contains(&"SellPrice"));
-    assert!(!spread.contains(&"HookSellLevel"), "a hook-only field");
+    assert!(!spread.contains(&"SellPrice"));
 }
 
 /// The verdict on a take it cannot place is nothing, not a miss — the whole point of the
@@ -1325,11 +1387,13 @@ fn an_unknown_take_leaves_the_exit_unanswered() {
     let v = verify(&blind, &ticks, &EntryParams::Fact, &params, None, None);
     assert_eq!(v.exit, None, "no level, no verdict");
     assert_eq!(v.exit_dev_pct, None);
-    // A stop is judged all the same: it fires off `StopLoss`, not off the take.
+    // A stopped trade is no exception: its stop may fire right, but a variant of it walks a line
+    // off a take it cannot place, and on live trades sold there before the stop (2026-09-23,
+    // 30 of 88 stopped MoonShot trades) — not a trade the search can run.
     let stopped = Deal {
         sell_reason: "StopLoss Market Sell".into(),
         sell_price: 97.0,
-        ..blind
+        ..blind.clone()
     };
     let stop_params = ExitParams {
         stop_loss_pct: -2.0,
@@ -1344,13 +1408,29 @@ fn an_unknown_take_leaves_the_exit_unanswered() {
         None,
         None,
     );
-    assert!(v.exit.is_some(), "the stop does not depend on the take");
+    assert_eq!(
+        v.exit, None,
+        "a stop on an unknown take is still an unknown take"
+    );
+    // With the depth the take is placeable and the stop is judged as a stop.
+    let v = verify(
+        &Deal {
+            hook_depth_pct: hook_deal().hook_depth_pct,
+            ..stopped
+        },
+        &down,
+        &EntryParams::Fact,
+        &stop_params,
+        None,
+        None,
+    );
+    assert!(v.exit.is_some(), "{v:?}");
 }
 
 // ---- the stop and its modifier -------------------------------------------------------------
 
-/// The core's own log line, verbatim: `StopLoss adjusted [-2.00% - (0.20*1.86=0.37%) => -2.37%]`.
-/// 136 such lines were read off this machine's cores and every one obeys this arithmetic.
+/// The core's FAQ spells the stop's adjustment as `StopLoss adjusted [-1.00% - (10.00*0.98=9.75%)
+/// => -10.75%]`: the configured stop, deepened by `StopLossModifier · Σ`.
 #[test]
 fn the_stop_modifier_deepens_the_stop_by_the_summed_deltas() {
     let mut mods = Modifiers::default();
