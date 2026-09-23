@@ -253,17 +253,22 @@ fn gate_futures_trade_falls_back_to_second_timestamps() {
 /// the next page to a row other than the oldest one it holds, either stops a silently
 /// truncated page or skips the prints between the two rows.
 #[test]
-fn gate_futures_trade_full_page_continues_by_row_count() {
-    let row = serde_json::json!({"price": "3", "size": 1, "create_time_ms": 10.0});
-    let one = serde_json::json!([row]);
-    let exact = parse_futures_trades(&one, 1, Some(TradeCursor::Offset(10))).expect("exact page");
-    assert_eq!(exact.next, Some(TradeCursor::Offset(11)));
+fn gate_futures_trade_full_page_continues_from_its_oldest_row() {
+    let one = serde_json::json!([{"id": 7, "price": "3", "size": 1, "create_time_ms": 10.5}]);
+    let exact = parse_futures_trades(&one, 1, None).expect("exact page");
+    assert_eq!(
+        exact.next,
+        Some(TradeCursor::Before {
+            boundary_ms: 10_500,
+            below_id: 7
+        })
+    );
     assert_eq!(exact.ticks.len(), 1);
 
     // Newest first, as the venue answers.
     let two = serde_json::json!([
-        {"price": "3", "size": 1, "create_time_ms": 10.0},
-        {"price": "4", "size": 2, "create_time_ms": 11.0}
+        {"id": 8, "price": "4", "size": 2, "create_time_ms": 11.0},
+        {"id": 7, "price": "3", "size": 1, "create_time_ms": 10.0}
     ]);
     let over = parse_futures_trades(&two, 1, None).expect("over-full");
     assert_eq!(
