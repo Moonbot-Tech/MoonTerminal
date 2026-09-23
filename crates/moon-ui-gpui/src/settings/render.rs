@@ -1,5 +1,5 @@
-//! Renders the Settings window: tab strip, scrollable active-tab body, Save/status footer, and
-//! window header (`settings_header`).
+//! Renders the Settings window: tab strip, the Interface and General inner switch, the active
+//! page, the Save/status footer, and the window header (`settings_header`).
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -10,6 +10,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use super::groups::TabGroup;
 use super::{SETTINGS_HEADER_H, SettingsView, Tab};
 use crate::design;
 
@@ -43,9 +44,10 @@ impl Render for SettingsView {
             .bg(rgba_from(p.shell_high, 1.0))
             .border_b_1()
             .border_color(rgba_from(p.border, 1.0));
-        for row in Tab::ALL.chunks(capacity) {
+        for row in TabGroup::ALL.chunks(capacity) {
             tabs = tabs.child(self.tab_strip_row(row, row_h, tab_w, cx));
         }
+        let subgroup = self.subgroup_switch(chrome_width, cx);
 
         // ── Active tab body ─────────────────────────────────────────────────
         let content = match self.active {
@@ -87,7 +89,7 @@ impl Render for SettingsView {
                 .when(self.active == Tab::Connections, |el| {
                     el.font_family(design::mono())
                 })
-                .child(content)
+                .child(page_with_switch(subgroup, content, true, cx))
                 .into_any_element()
         } else {
             let scroll = window
@@ -98,7 +100,11 @@ impl Render for SettingsView {
                 .relative()
                 .size_full()
                 .bg(rgba_from(p.shell, 1.0))
-                .child(scrollable_tab_content(content, &scroll, cx))
+                .child(scrollable_tab_content(
+                    page_with_switch(subgroup, content, false, cx),
+                    &scroll,
+                    cx,
+                ))
                 .children(moon_scrollbar_overlay_with_palette(
                     "settings-body-scrollbar",
                     &scroll,
@@ -265,7 +271,7 @@ impl SettingsView {
     /// Build one tab-strip row of font-scaled tab buttons.
     ///
     /// Args:
-    ///     tabs: Slice of tabs to render in this row, in `Tab::ALL` order.
+    ///     tabs: Slice of strip buttons to render in this row, in [`TabGroup::ALL`] order.
     ///     row_h: Fitted row height matching the previous single-row strip.
     ///     tab_w: Font-scaled tab button width, shared with the wrap threshold.
     ///     cx: Settings context used for click handlers.
@@ -274,7 +280,7 @@ impl SettingsView {
     ///     One full-width tab row.
     fn tab_strip_row(
         &self,
-        tabs: &[Tab],
+        tabs: &[TabGroup],
         row_h: Pixels,
         tab_w: f32,
         cx: &mut Context<Self>,
@@ -286,10 +292,10 @@ impl SettingsView {
             .gap(design::ui_px(cx, 6.0))
             .px(design::ui_px(cx, 8.0))
             .bg(rgba_from(p.shell_high, 1.0));
-        for t in tabs.iter().copied() {
-            let on = self.active == t;
+        for group in tabs.iter().copied() {
+            let on = self.active.group() == group;
             row = row.child(
-                MoonButton::new(t.id())
+                MoonButton::new(group.id())
                     .variant(if on {
                         MoonButtonVariant::Blue
                     } else {
@@ -298,21 +304,80 @@ impl SettingsView {
                     .size(MoonButtonSize::density(cx))
                     .width(tab_w)
                     .selected(on)
-                    .label(t.title())
+                    .label(group.title())
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.active = t;
-                        // A row of the Hotkeys page hovered when the page went away gets no
-                        // leave event; without this its popup would be back on return.
-                        this.hotkeys_hover_row = None;
-                        if t == Tab::Telegram {
-                            this.telegram_tab_activated(cx);
-                        }
-                        cx.notify();
+                        this.show_group(group, cx);
                     }))
                     .render(),
             );
         }
         row
+    }
+
+    /// Show the page this strip button remembers, or its only page.
+    ///
+    /// Args:
+    ///     group: The button that was pressed.
+    ///     cx: Settings context notified after the page changes.
+    fn show_group(&mut self, group: TabGroup, cx: &mut Context<Self>) {
+        self.show_page(self.subpages.page(group), cx);
+    }
+
+    /// Show `page` and remember it when it belongs to a grouped button.
+    ///
+    /// A Hotkeys row hovered when that page goes away gets no leave event; the hover is cleared
+    /// on every page change so the popup cannot reappear on return. Opening Telegram still
+    /// refreshes the picked core.
+    ///
+    /// Args:
+    ///     page: The page to show.
+    ///     cx: Settings context notified after the page changes.
+    fn show_page(&mut self, page: Tab, cx: &mut Context<Self>) {
+        self.subpages.remember(page);
+        self.active = page;
+        self.hotkeys_hover_row = None;
+        if page == Tab::Telegram {
+            self.telegram_tab_activated(cx);
+        }
+        cx.notify();
+    }
+
+    /// Inner switch for the active group, drawn with the same control as the Telegram tab.
+    ///
+    /// Args:
+    ///     width: Viewport width passed through to the shared segment fitter.
+    ///     cx: Settings context used to build the control and its click handler.
+    ///
+    /// Returns:
+    ///     The switch when Interface or General is showing, otherwise nothing.
+    fn subgroup_switch(&mut self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let group = self.active.group();
+        if !group.has_switch() {
+            return None;
+        }
+        let pages = group.pages();
+        let labels: Vec<String> = pages.iter().copied().map(Tab::segment_title).collect();
+        let selected = pages
+            .iter()
+            .position(|page| *page == self.active)
+            .unwrap_or(0);
+        let view = cx.entity();
+        Some(
+            super::segment::settings_segment(
+                group.segment_id(),
+                &labels,
+                selected,
+                width,
+                move |index, _, _, app| {
+                    let Some(page) = group.pages().get(index).copied() else {
+                        return;
+                    };
+                    view.update(app, |this, cx| this.show_page(page, cx));
+                },
+                cx,
+            )
+            .into_any_element(),
+        )
     }
 }
 
@@ -346,6 +411,43 @@ fn settings_header(p: MoonPalette, cx: &App) -> impl IntoElement {
                     .visual_controls(cx),
             )
         })
+}
+
+/// Place the inner switch above a page, using the Telegram tab's 16-unit gap.
+///
+/// A bounded page (Trade sounds) needs the column to take the height the host already gave the
+/// page, so the exchange table still receives a finite height. A scrolling page keeps the
+/// column at its intrinsic height so the switch scrolls with the page, as Telegram's own
+/// switch does.
+///
+/// Args:
+///     switch: The inner switch, or `None` when this page's button has no sub-pages.
+///     content: The unchanged page body.
+///     fill: Whether the column must take the remaining height of a bounded host.
+///     cx: Application context used to scale the gap.
+///
+/// Returns:
+///     `content` unchanged when there is no switch, otherwise the switch stacked above it.
+fn page_with_switch(
+    switch: Option<AnyElement>,
+    content: AnyElement,
+    fill: bool,
+    cx: &App,
+) -> AnyElement {
+    let Some(switch) = switch else {
+        return content;
+    };
+    let mut column = v_flex()
+        .w_full()
+        .gap(design::ui_px(cx, 16.0))
+        .child(switch)
+        .child(content);
+    column = if fill {
+        column.flex_1().min_h(px(0.0))
+    } else {
+        column.flex_none()
+    };
+    column.into_any_element()
 }
 
 /// Measure the whole padded tab at intrinsic height inside a fixed scroll viewport.

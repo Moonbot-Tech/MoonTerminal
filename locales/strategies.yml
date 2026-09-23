@@ -483,9 +483,9 @@ strat.note_forgotten:
   en: "Forgotten forever: %{n} strategies, %{versions} versions"
   es: "Olvidadas para siempre: %{n} estrategias, %{versions} versiones"
 strat.note_forget_disabled:
-  ru: "Хранилище стратегий выключено: Настройки → Хранилище"
-  en: "Strategy storage is disabled: Settings -> Storage"
-  es: "El almacenamiento de estrategias está desactivado: Ajustes -> Almacenamiento"
+  ru: "Хранилище стратегий выключено: Настройки → Общие → Хранилище"
+  en: "Strategy storage is disabled: Settings -> General -> Storage"
+  es: "El almacenamiento de estrategias está desactivado: Ajustes -> General -> Almacenamiento"
 strat.note_forget_pending:
   ru: "Хранилище ещё занято — результат появится сам"
   en: "The store is still busy — the result will appear on its own"

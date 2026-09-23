@@ -6,8 +6,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonAccent, MoonButton, MoonGroupBox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette,
-    MoonSegmentItem, MoonSegmentedControl, h_flex, rgba_from, v_flex,
+    MoonButton, MoonGroupBox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex,
+    rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -141,22 +141,21 @@ impl SettingsView {
     /// Render session-only sub-tabs fitted to the window width, with their own intro and content.
     pub(super) fn telegram_tab(&self, width: f32, cx: &Context<Self>) -> impl IntoElement {
         let selected = self.telegram.segment;
-        // Divide the padded viewport between two cells, converting pixels to font-scaled units.
-        let cell_max = ((width - design::ui_value(cx, 36.0)) / design::font_w(cx, 2.0)).min(220.0);
+        let labels = [
+            t!("telegram.segment_terminal_bot").to_string(),
+            t!("telegram.segment_core_reader").to_string(),
+        ];
+        let selected_index = match selected {
+            TelegramSegment::TerminalBot => 0,
+            TelegramSegment::CoreReader => 1,
+        };
         let view = cx.entity();
-        let navigation = MoonSegmentedControl::new("telegram-segments")
-            .accent(MoonAccent::Blue)
-            .items([
-                MoonSegmentItem::new("", t!("telegram.segment_terminal_bot").to_string())
-                    .fit_width(cx, 110.0, cell_max)
-                    .tooltip(t!("telegram.segment_terminal_bot").to_string())
-                    .selected(selected == TelegramSegment::TerminalBot),
-                MoonSegmentItem::new("", t!("telegram.segment_core_reader").to_string())
-                    .fit_width(cx, 110.0, cell_max)
-                    .tooltip(t!("telegram.segment_core_reader").to_string())
-                    .selected(selected == TelegramSegment::CoreReader),
-            ])
-            .on_click(move |index, _, _, app| {
+        let navigation = super::segment::settings_segment(
+            "telegram-segments",
+            &labels,
+            selected_index,
+            width,
+            move |index, _, _, app| {
                 view.update(app, |this, cx| {
                     this.telegram.select_segment(if index == 0 {
                         TelegramSegment::TerminalBot
@@ -165,8 +164,9 @@ impl SettingsView {
                     });
                     cx.notify();
                 });
-            })
-            .render();
+            },
+            cx,
+        );
         let content = match selected {
             TelegramSegment::TerminalBot => self.terminal_bot_segment(cx).into_any_element(),
             TelegramSegment::CoreReader => v_flex()

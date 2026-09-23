@@ -1051,9 +1051,9 @@ chart.graphics.hide_closed_sell:
   en: "Hide the sell-price line of closed orders"
   es: "Ocultar la línea de venta de las órdenes cerradas"
 chart.graphics.hide_closed_sell_hint:
-  ru: "Только ордера, закрытые в этом сеансе, и только в стиле «Метки»; яркость — ползунок закрытых в Настройки → Линии"
-  en: "Only orders closed this session, and only in the Marks style; brightness is the closed-orders slider in Settings → Lines"
-  es: "Solo las órdenes cerradas en esta sesión y solo en el estilo «Marcas»; el brillo es el control de órdenes cerradas en Ajustes → Líneas"
+  ru: "Только ордера, закрытые в этом сеансе, и только в стиле «Метки»; яркость — ползунок закрытых в Настройки → Интерфейс → Линии"
+  en: "Only orders closed this session, and only in the Marks style; brightness is the closed-orders slider in Settings → Interface → Lines"
+  es: "Solo las órdenes cerradas en esta sesión y solo en el estilo «Marcas»; el brillo es el control de órdenes cerradas en Ajustes → Interfaz → Líneas"
 chart.graphics.hide_move_history:
   ru: "Скрывать историю переносов"
   en: "Hide the repricing trail"
