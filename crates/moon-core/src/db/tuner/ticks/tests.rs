@@ -28,7 +28,7 @@ fn tape(points: &[(i64, f64)]) -> Vec<Tick> {
     points.iter().map(|&(t, p)| tick(t, p, Side::Buy)).collect()
 }
 
-fn deal() -> Deal {
+pub(super) fn deal() -> Deal {
     Deal {
         report_uid: 1,
         core_uid: 7,
@@ -53,6 +53,7 @@ fn deal() -> Deal {
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,
         stop_anchor: None,
+        delta_track: None,
         own_entry: None,
         buy_set_ms: None,
         corridor: None,
@@ -486,6 +487,35 @@ fn price_bug_deepens_the_order() {
     };
     let (_, far) = params.bounds_pct(&d);
     assert!((far - 1.4).abs() < 1e-9, "{far}");
+}
+
+#[test]
+fn the_sell_family_reads_the_market_as_a_magnitude_and_the_corridor_with_its_sign() {
+    // FAQ :1171, :1172 — AddMarketDelta / AddMarket24Delta "по модулю"; MShotAddMarketDelta has
+    // no such word.
+    let d = Deltas {
+        market1h: -2.0,
+        market24h: -3.0,
+        ..Deltas::default()
+    };
+    let values: HashMap<String, String> = [
+        ("AddMarketDelta", "0.1"),
+        ("AddMarket24Delta", "0.1"),
+        ("MShotAddMarketDelta", "0.1"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    let defaults = HashMap::new();
+    let sv = StrategyValues {
+        values: &values,
+        defaults: &defaults,
+    };
+    let sell = exit_params(&sv).sell_mods;
+    assert!((sell.near_addition(&d) - 0.5).abs() < 1e-9);
+    let corridor = mshot_params(&sv, DEFAULT_LATENCY_MS).modifiers;
+    assert!((corridor.near_addition(&d) - -0.2).abs() < 1e-9);
+    assert!(param_keys().iter().any(|k| k == "AddMarket24Delta"));
 }
 
 #[test]
@@ -1287,6 +1317,7 @@ fn hook_deal() -> Deal {
         hook_stated_take_pct: Some(2.0),
         step_lag_ms: 0.0,
         stop_anchor: None,
+        delta_track: None,
         own_entry: None,
         buy_set_ms: None,
         corridor: None,
@@ -1571,25 +1602,25 @@ fn the_stop_modifier_deepens_the_stop_by_the_summed_deltas() {
         },
         ..deal()
     };
-    let pct = moon_core_stop_pct(&params, &d);
+    let pct = moon_core_stop_pct(&params, &d, d.buy_ms);
     assert!((pct - -2.372).abs() < 1e-9, "{pct}");
     // No coefficient, no movement; no stop, nothing to move.
     let off = ExitParams {
         stop_loss_modifier: 0.0,
         ..params.clone()
     };
-    assert_eq!(moon_core_stop_pct(&off, &d), -2.0);
+    assert_eq!(moon_core_stop_pct(&off, &d, d.buy_ms), -2.0);
     let no_stop = ExitParams {
         stop_loss_pct: 0.0,
         ..params.clone()
     };
-    assert_eq!(moon_core_stop_pct(&no_stop, &d), 0.0);
+    assert_eq!(moon_core_stop_pct(&no_stop, &d, d.buy_ms), 0.0);
     // `MaxModifier` caps the sum before the coefficient, as it does for the sell.
     let capped = ExitParams {
         max_modifier: 1.0,
         ..params
     };
-    assert!((moon_core_stop_pct(&capped, &d) - -2.2).abs() < 1e-9);
+    assert!((moon_core_stop_pct(&capped, &d, d.buy_ms) - -2.2).abs() < 1e-9);
 }
 
 /// The adjustment may pull the stop toward the entry — live strategies carry a negative
@@ -1614,7 +1645,7 @@ fn an_adjustment_through_the_entry_leaves_no_stop() {
     };
     // −2 − 70·(−0.3) = +19 unguarded: a "stop" nineteen per cent in profit.
     assert_eq!(
-        moon_core_stop_pct(&base, &far),
+        moon_core_stop_pct(&base, &far, far.buy_ms),
         0.0,
         "no stop, not a near one"
     );
@@ -1631,7 +1662,7 @@ fn an_adjustment_through_the_entry_leaves_no_stop() {
         },
         ..deal()
     };
-    assert_eq!(moon_core_stop_pct(&other, &down), 0.0);
+    assert_eq!(moon_core_stop_pct(&other, &down, down.buy_ms), 0.0);
     // A modifier that only moves the stop within its own side is applied as it is.
     let mild = Deal {
         deltas: Deltas {
@@ -1640,7 +1671,7 @@ fn an_adjustment_through_the_entry_leaves_no_stop() {
         },
         ..deal()
     };
-    assert!((moon_core_stop_pct(&base, &mild) - -1.4).abs() < 1e-9);
+    assert!((moon_core_stop_pct(&base, &mild, mild.buy_ms) - -1.4).abs() < 1e-9);
     // A stop the strategy itself put on the profit side stays where it put it — that is its own
     // setting, not something the adjustment did.
     let positive = ExitParams {
@@ -1655,7 +1686,7 @@ fn an_adjustment_through_the_entry_leaves_no_stop() {
         },
         ..deal()
     };
-    assert!((moon_core_stop_pct(&positive, &up) - 0.4).abs() < 1e-9);
+    assert!((moon_core_stop_pct(&positive, &up, up.buy_ms) - 0.4).abs() < 1e-9);
 }
 
 /// An adjustment that exactly cancels the stop must not leave one armed at the fill price,
@@ -1681,7 +1712,7 @@ fn a_cancelled_stop_does_not_fire_at_the_entry() {
     };
     // The adjustment cancels the stop exactly, so there is none — and the print below the
     // entry must not read as one.
-    assert_eq!(moon_core_stop_pct(&params, &d), 0.0);
+    assert_eq!(moon_core_stop_pct(&params, &d, d.buy_ms), 0.0);
     let walk = ExitModel::new(&params).walk(
         &d,
         // A real move down, not float noise: without the guard the stop sits ON the entry and

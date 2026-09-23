@@ -29,6 +29,7 @@ fn deal(uid: i64, buy_ms: i64, buy: f64, sell: f64, short: bool) -> Deal {
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,
         stop_anchor: None,
+        delta_track: None,
         own_entry: None,
         buy_set_ms: None,
         corridor: None,

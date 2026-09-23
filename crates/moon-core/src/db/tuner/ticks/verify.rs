@@ -55,8 +55,9 @@ use crate::feed::types::Tick;
 pub const POINT_TIME_TOLERANCE_MS: i64 = 1_000;
 
 /// Tolerance on a STOP's level: the modelled level against the one the core fixed carries
-/// `StopLossModifier` over the report's ONE snapshot of the deltas, which the core re-reads live
-/// (`exit::modifier_sum`), and the residual sits right there.
+/// `StopLossModifier` over deltas the model only partly re-reads live — the coin's ranges where
+/// the deal has a track, the BTC, market, mark and price-bug terms as the report's one snapshot
+/// (`exit::modifier_sum`) — and the residual sits right there.
 pub const STOP_PRICE_TOLERANCE: f64 = 0.003;
 
 /// How much BETTER than the modelled level the fact's fill may be and still be that level's
@@ -219,8 +220,9 @@ pub fn verify(
     // A stop the core fired and the model, holding a stop of its own, never did — the book
     // proxy of a non-fast stop can stay short of the level to the tape's end — is a miss of
     // the stop, whatever the line was doing: not a question about another rule.
-    let missed_stop =
-        fact_stopped && closed.kind != ExitKind::Stop && stop_pct(&fact_exit, deal) != 0.0;
+    let missed_stop = fact_stopped
+        && closed.kind != ExitKind::Stop
+        && stop_pct(&fact_exit, deal, deal.buy_ms) != 0.0;
     let (exit_ok, exit_dev, line_points) = if exit.unmodelled.is_some() {
         // A rule the model does not have was on: whatever the walk made of the trade is not
         // an answer about it (see `ExitParams::unmodelled`).
@@ -454,8 +456,8 @@ fn is_fill_point(deal: &Deal, exit: &ExitParams, last: (i64, f64), prev: (i64, f
 /// 183 (2026-09-22). With no level on record, the moment and the line are what is left to judge.
 ///
 /// The level tolerance is [`STOP_PRICE_TOLERANCE`] rather than the line's: the modelled level
-/// carries `StopLossModifier` over the report's ONE snapshot of the deltas, which the core
-/// re-reads live (see `exit::modifier_sum`), and the residual sits right there.
+/// carries `StopLossModifier` over deltas the model only partly re-reads live (see
+/// `exit::modifier_sum`), and the residual sits right there.
 ///
 /// Archived moves from the activation on — the first move past the stop level — are the panic
 /// sell, not the line the rules moved, and are not held against the model.
@@ -473,7 +475,7 @@ fn verify_stop(
     closed: Exit,
     exit_points: Option<&[(i64, f64)]>,
 ) -> (Option<bool>, Option<f64>, Option<(usize, usize)>) {
-    let stop = stop_pct(exit, deal);
+    let stop = stop_pct(exit, deal, deal.buy_ms);
     let level = if deal.is_long() {
         deal.buy_price * (1.0 + stop / 100.0)
     } else {
@@ -555,10 +557,10 @@ pub fn stated_stop_level(reason: &str) -> Option<f64> {
 }
 
 /// How far a modelled entry may sit from the fact and still be the same order, per cent: the
-/// corridor's own width (`MShotPrice − MShotPriceMin` with the trade's modifiers), floored at
-/// [`PRICE_TOLERANCE`] — see the module doc.
+/// corridor's own width (`MShotPrice − MShotPriceMin` with the trade's modifiers, as they stood
+/// at the fill), floored at [`PRICE_TOLERANCE`] — see the module doc.
 pub fn entry_tolerance_pct(params: &MshotParams, deal: &Deal) -> f64 {
-    let (near, far) = params.bounds_pct(&deal.deltas);
+    let (near, far) = params.bounds_pct(&deal.deltas_at(deal.buy_ms));
     (far - near).max(PRICE_TOLERANCE * 100.0)
 }
 

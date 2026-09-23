@@ -27,6 +27,7 @@ use crate::db::analytics::Query;
 use crate::db::order_traces::{TraceEntry, read_many};
 use crate::db::tuner::strategy_values_at;
 use crate::feed::report_traces::ArchivedLineKind;
+use crate::market::kline_cache::KlineCache;
 use crate::market::trade_replay::{Coverage, TickQuery, long_position_ms, query_held};
 use crate::symbol::{coin_match_key, coin_of_market};
 
@@ -112,7 +113,7 @@ fn dump_deal(
         "corridor": deal.corridor,
         "mshot": match entry {
             EntryParams::MoonShot(p) => {
-                let (near, far) = p.bounds_pct(&deal.deltas);
+                let (near, far) = p.bounds_pct(&deal.deltas_at(deal.buy_ms));
                 serde_json::json!({
                     "near": near,
                     "far": far,
@@ -231,6 +232,78 @@ fn round3(v: Option<f64>) -> Option<f64> {
     v.map(|d| (d * 1000.0).round() / 1000.0)
 }
 
+/// How closely the live deltas, evaluated WITHOUT the anchor, reproduce the report's own snapshot
+/// at the moment it was stamped — the check that the windows are the core's. Per field of
+/// `deltas::CoinDeltas`: live answers, exact ones (1e-6 pp), ones within 0.1 pp, the errors.
+#[derive(Default)]
+struct DeltaFidelity {
+    tracks: usize,
+    no_stamp: usize,
+    n: [usize; 6],
+    exact: [usize; 6],
+    close: [usize; 6],
+    errors: [Vec<f64>; 6],
+}
+
+impl DeltaFidelity {
+    fn observe(
+        &mut self,
+        deal: &Deal,
+        cache: &KlineCache,
+        exchange: &str,
+        market: &str,
+        ticks: &[Tick],
+        covered: &Coverage,
+    ) {
+        let Some(at) = deltas::snapshot_ms(deal) else {
+            self.no_stamp += 1;
+            return;
+        };
+        let bars = deltas::read_bars(cache, exchange, market, covered);
+        let Some(track) =
+            deltas::DeltaTrack::build(&bars, ticks, covered.spans(), deltas::eval_span(deal), None)
+        else {
+            return;
+        };
+        self.tracks += 1;
+        let Some((est, live)) = track.at(at) else {
+            return;
+        };
+        let d = &deal.deltas;
+        let report = [d.d1m, d.d5m, d.d15m, d.d1h, d.d3h, d.d24h];
+        let model = [est.d1m, est.d5m, est.d15m, est.d1h, est.d3h, est.d24h];
+        for field in 0..6 {
+            if !live[field] || report[field] == 0.0 {
+                continue;
+            }
+            let err = (model[field] - report[field]).abs();
+            self.n[field] += 1;
+            self.exact[field] += usize::from(err <= 1e-6);
+            self.close[field] += usize::from(err <= 0.1);
+            self.errors[field].push(err);
+        }
+    }
+
+    fn report(&mut self) {
+        eprintln!(
+            "live deltas against the report's snapshot at its stamp (no anchor): {} tracks, {} deals with no stamp",
+            self.tracks, self.no_stamp
+        );
+        for (field, name) in ["d1m", "d5m", "d15m", "d1h", "d3h", "d24h"]
+            .iter()
+            .enumerate()
+        {
+            let errors = &mut self.errors[field];
+            errors.sort_by(f64::total_cmp);
+            let median = errors.get(errors.len() / 2).copied().unwrap_or(f64::NAN);
+            eprintln!(
+                "  {name:5} live {:4} · exact {:4} · within 0.1 pp {:4} · median |err| {median:.4} pp",
+                self.n[field], self.exact[field], self.close[field]
+            );
+        }
+    }
+}
+
 #[test]
 #[ignore = "needs a live data root in MOON_TICKS_DATA_DIR"]
 fn real_data_reproduction() {
@@ -284,6 +357,22 @@ fn real_data_reproduction() {
     let keys = param_keys();
     let defaults = HashMap::new();
     let core_lags = core_step_lags(&read.deals, &keys, &defaults);
+    // The live deltas' history bars (`deltas::track_for`), off this data root's kline cache —
+    // opened on a COPY of the data root: opening prunes past the retention, as the app does.
+    // `MOON_TICKS_SNAPSHOT_DELTAS=1` runs the model on the report's snapshot, for the A/B.
+    let snapshot_only = std::env::var_os("MOON_TICKS_SNAPSHOT_DELTAS").is_some();
+    let klines = KlineCache::open(paths::klines_db_path());
+    eprintln!(
+        "deltas: {}",
+        if snapshot_only {
+            "the report's snapshot"
+        } else if klines.is_some() {
+            "live track"
+        } else {
+            "no kline cache — snapshot"
+        }
+    );
+    let mut fidelity = DeltaFidelity::default();
     eprintln!("PriceDown step lag per core: {core_lags:?}");
     let (mut entry_hits, mut entry_n, mut exit_hits, mut exit_n, mut with_tape) = (0, 0, 0, 0, 0);
     let mut kinds_seen: HashMap<String, usize> = HashMap::new();
@@ -325,6 +414,7 @@ fn real_data_reproduction() {
         let spans = window.focus_spans();
         let mut ticks: Vec<Tick> = Vec::new();
         let mut covered = Coverage::none();
+        let mut address: Option<(String, String)> = None;
         // The core's own venue only: a coin the tape holds under several exchanges is not one
         // tape, and the axis reads the deal's own (`RowAddress::exchange_key`). A core the logs
         // never named is skipped rather than replayed on a mixture.
@@ -337,6 +427,9 @@ fn real_data_reproduction() {
             .filter(|(e, m)| e == venue && coin_match_key(coin_of_market(m)) == coin_key)
         {
             let (held, held_covered) = held_ticks(exchange, market, &spans);
+            if address.is_none() && !held.is_empty() {
+                address = Some((exchange.clone(), market.clone()));
+            }
             ticks.extend(held);
             for &span in held_covered.spans() {
                 covered.add(span);
@@ -367,12 +460,24 @@ fn real_data_reproduction() {
             defaults: &defaults,
         };
         let entry = if entry_model_for(&deal.kind) {
-            EntryParams::MoonShot(mshot_params(&sv, DEFAULT_LATENCY_MS))
+            // `MOON_TICKS_LATENCY_MS=<ms>` replays the entry with another replacement latency.
+            let latency = std::env::var("MOON_TICKS_LATENCY_MS")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(DEFAULT_LATENCY_MS);
+            EntryParams::MoonShot(mshot_params(&sv, latency))
         } else {
             EntryParams::Fact
         };
         let exit = exit_params(&sv);
         deal.step_lag_ms = core_lags.get(&deal.core_uid).copied().unwrap_or(0.0);
+        if let (Some(cache), Some((exchange, market))) = (klines.as_ref(), address.as_ref()) {
+            fidelity.observe(&deal, cache, exchange, market, &ticks, &covered);
+            if !snapshot_only {
+                deal.delta_track =
+                    deltas::track_for(cache, exchange, market, &deal, &ticks, &covered);
+            }
+        }
         prepare_deal(
             &mut deal,
             &entry,
@@ -386,7 +491,7 @@ fn real_data_reproduction() {
         // The corridor the core saved against the model's band, `near` … `2 · far − near` off one
         // reference (`mshot`): the ratio of its edges is the band's width whatever the reference.
         if let (Some((down, up)), EntryParams::MoonShot(params)) = (deal.corridor, &entry) {
-            let (near, far) = params.bounds_pct(&deal.deltas);
+            let (near, far) = params.bounds_pct(&deal.deltas_at(deal.buy_ms));
             let (a, b) = (near / 100.0, (2.0 * far - near) / 100.0);
             let predicted = if deal.is_long() {
                 (1.0 - a) / (1.0 - b)
@@ -445,7 +550,7 @@ fn real_data_reproduction() {
                 "    held exit {:?} at {:+}ms of close · stop {:.3}% · model pts {}",
                 held.exit.kind,
                 held.exit.t_ms - deal.close_ms,
-                super::super::exit::stop_pct(&exit, &deal),
+                super::super::exit::stop_pct(&exit, &deal, deal.buy_ms),
                 held.points.len()
             );
             if let Some(points) = exit_points.as_deref() {
@@ -579,6 +684,7 @@ fn real_data_reproduction() {
         "entry from the order's creation: ✓ {created_hits}/{created_n} · stamped entries {stamped}"
     );
     eprintln!("saved corridors the model's band matches to 0.05 %: {corridor_hits}/{corridor_n}");
+    fidelity.report();
     let mut unfit: Vec<(String, usize)> = unfit.into_iter().collect();
     unfit.sort_by_key(|u| std::cmp::Reverse(u.1));
     eprintln!("fit for the search: {fit_n} of {with_tape} · left out: {unfit:?}");

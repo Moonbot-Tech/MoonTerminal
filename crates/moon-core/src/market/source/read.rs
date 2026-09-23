@@ -324,6 +324,16 @@ impl MarketDataSource {
         })
     }
 
+    /// The ONE open kline cache, or `None` before the terminal supplied its path — for a reader
+    /// that needs history bars without a replay address (the tuner's live deltas).
+    pub fn kline_cache(&self) -> Option<crate::market::kline_cache::KlineCache> {
+        self.inner
+            .read()
+            .expect("market source poisoned")
+            .kline_cache
+            .clone()
+    }
+
     /// The catalog-verified market a report row's `coin` names on `core`, or `None`.
     ///
     /// Supports both historical formats of the stored value: a base (`M`) and an already complete

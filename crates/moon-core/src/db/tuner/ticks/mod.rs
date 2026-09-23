@@ -27,6 +27,7 @@ use crate::market::trade_replay::{Coverage, ReplayWindow, replay_window_ms};
 
 pub mod calibrate;
 pub mod deals;
+pub mod deltas;
 pub mod entry;
 pub mod exit;
 pub mod hook;
@@ -115,11 +116,14 @@ pub fn round_to_step(level: f64, tick: f64) -> f64 {
     (level / tick).round() * tick
 }
 
-/// The report-side deltas the MoonShot modifiers read, as of the BUY of the trade.
+/// The report-side deltas the delta modifiers read (`MShotAdd*` on the entry corridor, `Add*`
+/// on the sell and the stop).
 ///
-/// The report stamps them once, at the buy; the model treats them as constant over the window,
-/// which is a stated assumption — on a 5-minute window a 1-hour delta barely moves, a 1-minute
-/// delta can. All values are per cent, exactly as `orders_rep` stores them.
+/// The report stamps them once — at the buy for MoonShot, at the detect and the order's
+/// placement for every other kind (FAQ :423) — while the core re-reads them live. The coin's
+/// own ranges (`d1m … d24h`) are re-evaluated along the window where the caller could build a
+/// [`deltas::DeltaTrack`] for the deal ([`Deal::deltas_at`]); the rest stay this snapshot. All
+/// values are per cent, exactly as `orders_rep` stores them.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Deltas {
     /// The last five seconds' move (`d5s`) — the spike itself; shown, not a modifier input.
@@ -141,8 +145,14 @@ pub struct Deltas {
     /// BTC 1-minute delta (`dbtc1m`) — read by the sell side's `AddBTC1mDelta`; MoonShot's
     /// corridor family has no term for it.
     pub btc1m: f64,
-    /// Exchange-wide 1-hour delta (`exchange1hdelta`).
+    /// Exchange-wide 1-hour delta (`exchange1hdelta`), signed.
     pub market1h: f64,
+    /// Exchange-wide 24-hour delta (`exchange24hdelta`), signed — read by `AddMarket24Delta`.
+    pub market24h: f64,
+    /// The hour's rise from the price an hour ago to its high (`pump1h`) — read by `AddPump1h`.
+    pub pump1h: f64,
+    /// The hour's fall from the price an hour ago to its low (`dump1h`) — read by `AddDump1h`.
+    pub dump1h: f64,
 }
 
 /// One closed trade as the model needs it — the report row narrowed to the fields the tape
@@ -197,7 +207,13 @@ pub struct Deal {
     /// profit column alone reads it — the KPI stays in the scope's own unit through
     /// `fact_pnl` and `spent`.
     pub profit: Option<f64>,
+    /// The report's snapshot of the deltas; read through [`Deal::deltas_at`], never directly by a
+    /// model, so the live track applies wherever the deal has one.
     pub deltas: Deltas,
+    /// The coin's own deltas along the window, as the core re-evaluated them
+    /// ([`deltas::track_for`]); filled by the caller that holds the tape, before the other model
+    /// inputs (the stop anchor reads the stop through it). `None` keeps the snapshot everywhere.
+    pub delta_track: Option<std::sync::Arc<deltas::DeltaTrack>>,
     /// Price step of the market, when the caller could resolve it (the live catalog, or
     /// [`infer_tick`] over the window). `None` disables the step-bound rules and rounds nothing.
     pub tick: Option<f64>,
@@ -253,6 +269,15 @@ impl Deal {
     /// When the entry order's life began, for a model that replays it whole ([`order_open_at`]).
     pub fn order_open_ms(&self) -> Option<i64> {
         order_open_at(self.buy_ms, self.buy_set_ms)
+    }
+
+    /// The deltas as the core held them at a moment: the live track's coin ranges where the
+    /// deal has one, the report's snapshot for everything else.
+    pub fn deltas_at(&self, t_ms: i64) -> Deltas {
+        match &self.delta_track {
+            Some(track) => track.apply(t_ms, &self.deltas),
+            None => self.deltas,
+        }
     }
 }
 

@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use super::exit::{ExitParams, UnmodelledRule};
-use super::mshot::{Modifiers, MshotParams, UsePrice};
+use super::mshot::{MarketSign, Modifiers, MshotParams, UsePrice};
 
 /// Which group of the grid a parameter belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -405,6 +405,9 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "AddBTC1mDelta",
     "AddBTC5mDelta",
     "AddMarketDelta",
+    "AddMarket24Delta",
+    "AddPump1h",
+    "AddDump1h",
 ];
 
 /// Every field name the models read — [`TICK_PARAMS`] plus [`MODEL_ONLY_KEYS`] — for a
@@ -490,6 +493,11 @@ pub fn mshot_params(v: &StrategyValues<'_>, latency_ms: f64) -> MshotParams {
             add_btc_1m: 0.0,
             add_btc_5m: v.num("MShotAddBTC5mDelta", 0.0),
             add_market_1h: v.num("MShotAddMarketDelta", 0.0),
+            // The corridor family has none of the three (the exe's `MShotAdd*` list).
+            add_market_24h: 0.0,
+            add_pump_1h: 0.0,
+            add_dump_1h: 0.0,
+            market_sign: MarketSign::Signed,
             distance_pct: v.num("MShotAddDistance", 0.0),
         },
         latency_ms,
@@ -525,6 +533,10 @@ pub fn exit_params(v: &StrategyValues<'_>) -> ExitParams {
             add_btc_1m: v.num("AddBTC1mDelta", 0.0),
             add_btc_5m: v.num("AddBTC5mDelta", 0.0),
             add_market_1h: v.num("AddMarketDelta", 0.0),
+            add_market_24h: v.num("AddMarket24Delta", 0.0),
+            add_pump_1h: v.num("AddPump1h", 0.0),
+            add_dump_1h: v.num("AddDump1h", 0.0),
+            market_sign: MarketSign::Magnitude,
             distance_pct: 0.0,
         },
         price_down_timer_s: v.num("PriceDownTimer", base.price_down_timer_s),

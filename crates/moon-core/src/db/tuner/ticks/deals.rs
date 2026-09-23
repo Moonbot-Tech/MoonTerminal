@@ -40,7 +40,7 @@ pub struct DealsRead {
 
 /// The delta columns in the order [`Deltas`] is filled below; every one is a `FIELDS` column,
 /// so the unified source projects it (NULL when the replica lacks it).
-const DELTA_COLS: [&str; 13] = [
+const DELTA_COLS: [&str; 16] = [
     "d5s",
     "d1m",
     "d5m",
@@ -54,6 +54,9 @@ const DELTA_COLS: [&str; 13] = [
     "btc5mdelta",
     "exchange1hdelta",
     "dbtc1m",
+    "exchange24hdelta",
+    "pump1h",
+    "dump1h",
 ];
 
 /// Read the scope's closed trades as deals: the trades the tuner can be run on
@@ -164,7 +167,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             continue;
         }
         let mut deltas = Deltas::default();
-        let slots: [&mut f64; 13] = [
+        let slots: [&mut f64; 16] = [
             &mut deltas.d5s,
             &mut deltas.d1m,
             &mut deltas.d5m,
@@ -178,6 +181,9 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             &mut deltas.btc5m,
             &mut deltas.market1h,
             &mut deltas.btc1m,
+            &mut deltas.market24h,
+            &mut deltas.pump1h,
+            &mut deltas.dump1h,
         ];
         for (offset, slot) in slots.into_iter().enumerate() {
             *slot = num(12 + offset)?;
@@ -213,6 +219,8 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             // Filled by `overlay_usdt_profit` off the USDT source, when there is one.
             profit: None,
             deltas,
+            // Filled by the caller that holds the tape (`deltas::track_for`).
+            delta_track: None,
             tick: None,
             pre_spike_ask: None,
             archived_take: None,

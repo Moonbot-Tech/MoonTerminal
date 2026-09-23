@@ -27,12 +27,13 @@ use crate::analytics::refresh::{CatchUpOutcome, report_result_is_stale};
 use moon_core::db::ReadFail;
 use moon_core::db::order_traces::{TraceEntry, read_many};
 use moon_core::db::tuner::ticks::{
-    Deal, DealsRead, EntryParams, OwnLines, entry_model_for, infer_tick, model_window, params,
-    prepare_deal, required_spans, verify,
+    Deal, DealsRead, EntryParams, OwnLines, deltas, entry_model_for, infer_tick, model_window,
+    params, prepare_deal, required_spans, verify,
 };
 use moon_core::db::tuner::{VarStats, Variant, strategy_current_values, strategy_values_at};
 use moon_core::feed::report_traces::ArchivedLineKind;
 use moon_core::feed::types::Tick;
+use moon_core::market::kline_cache::KlineCache;
 use moon_core::market::trade_replay::venue_caps::trade_route;
 use moon_core::market::trade_replay::worker::inside_retention;
 use moon_core::market::trade_replay::{
@@ -273,6 +274,8 @@ impl AnalyticsView {
             return;
         }
         let defaults = self.filter_defaults(cx);
+        // The kline cache the live deltas read their history bars off (`deltas::track_for`).
+        let klines = self.backend.read(cx).session.market_source().kline_cache();
         self.ticks.tape_reading = true;
         // The fetch job may answer rows while this stage reads them; the ones it answered after
         // this instant are read again at the end, or the stage would fold the tape it read
@@ -307,7 +310,7 @@ impl AnalyticsView {
                     let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
                     let tape = tapes.remove(&row.deal.report_uid);
                     let answered = tape.is_some();
-                    replay_row_with(row, &defaults, lines, tape);
+                    replay_row_with(row, &defaults, lines, tape, klines.as_ref());
                     // Said at load, not after a walk: a row the venue cannot serve is not
                     // "missing" — it would only ever come back refused. The fetch job's own
                     // path (`replay_row` after a walk) is NOT given this: its retries and its
@@ -338,7 +341,7 @@ impl AnalyticsView {
                             .get(&row.deal.report_uid)
                             .cloned()
                             .unwrap_or_default();
-                        replay_row(row, &defaults, lines, long_position_ms);
+                        replay_row(row, &defaults, lines, long_position_ms, klines.as_ref());
                     }
                 }
                 rows
@@ -553,28 +556,32 @@ pub(super) fn replay_row(
     defaults: &HashMap<String, f64>,
     lines: ArchivedLines,
     long_position_ms: i64,
+    klines: Option<&KlineCache>,
 ) {
     let tape = row
         .address
         .as_ref()
         .and_then(|address| held_tape(address, &row.deal, long_position_ms));
-    replay_row_with(row, defaults, lines, tape);
+    replay_row_with(row, defaults, lines, tape, klines);
 }
 
 /// Run the model on one row from a tape already asked for. A covered row keeps its tape and
 /// its archived entry start for the variants; a row without an address is left as it is.
 ///
-/// The model inputs read off the order archive go through `prepare_deal`, the same call the
-/// `real_data` bench makes, so what it measures is what this table shows.
+/// The model inputs read off the order archive go through `prepare_deal`, and the live deltas
+/// through `deltas::track_for` — the same calls the `real_data` bench makes, so what it measures
+/// is what this table shows. Without the kline cache the deal keeps the report's snapshot.
 pub(super) fn replay_row_with(
     row: &mut DealRow,
     defaults: &HashMap<String, f64>,
     lines: ArchivedLines,
     tape: Option<HeldTape>,
+    klines: Option<&KlineCache>,
 ) {
     row.ticks = None;
     row.entry_line = lines.entry_points.clone();
     row.held = None;
+    row.deal.delta_track = None;
     let Some(address) = row.address.clone() else {
         return;
     };
@@ -620,6 +627,18 @@ pub(super) fn replay_row_with(
         EntryParams::Fact
     };
     let exit = params::exit_params(&sv);
+    // The coin's deltas along the window, before the record's inputs: the stop anchor reads the
+    // stop through them.
+    row.deal.delta_track = klines.and_then(|cache| {
+        deltas::track_for(
+            cache,
+            &address.exchange_key,
+            &address.market,
+            &row.deal,
+            &ticks,
+            &covered,
+        )
+    });
     // What the core's own record fixes: the ask its take was lifted to, the take as placed,
     // where the entry order was placed, what the fact proves about the stop, the entry the
     // trade ran with.

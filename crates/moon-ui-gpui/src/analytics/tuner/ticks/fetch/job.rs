@@ -729,7 +729,13 @@ fn serve_cluster(
             entry_line: None,
             held: None,
         };
-        replay_row(&mut answer, defaults, lines, row.window.long_position_ms);
+        replay_row(
+            &mut answer,
+            defaults,
+            lines,
+            row.window.long_position_ms,
+            row.replay_address.cache.as_ref(),
+        );
         let mut wait = retry_wait(status, answer.tape).map(|s| Duration::from_secs(u64::from(s)));
         // Back to the end of the venue's turn, for the next walk to continue from where the
         // tiles end — see [`continues`]; the ceiling, no gain, or any other word is final.

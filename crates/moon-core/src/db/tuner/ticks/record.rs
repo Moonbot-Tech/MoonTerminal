@@ -54,7 +54,7 @@ impl StopAnchor {
     ///     exit: The sell parameters of the fact.
     ///     exit_points: The archived Exit line, when the archive holds it.
     pub fn of(deal: &Deal, exit: &ExitParams, exit_points: Option<&[(i64, f64)]>) -> Self {
-        let pct = stop_pct(exit, deal);
+        let pct = stop_pct(exit, deal, deal.buy_ms);
         // The verdict's own test of a stopped fact (`verify::reason_starts_with`), not a copy.
         let stopped = reason_starts_with(deal.sell_reason.trim(), REASON_STOP);
         let fired = stopped.then(|| {
@@ -87,9 +87,11 @@ impl StopAnchor {
     ///     fill: The walk's entry.
     ///     params: The walk's sell parameters.
     pub fn holds(&self, deal: &Deal, fill: Fill, params: &ExitParams) -> bool {
+        // The stop the fact ran is the one its own fill placed: read at the fact's moment, a
+        // walk filling a few milliseconds off it is still the same stop.
         fill.price == self.entry_price
             && (fill.t_ms - self.entry_ms).abs() <= POINT_TIME_TOLERANCE_MS
-            && stop_pct(params, deal) == self.stop_pct
+            && stop_pct(params, deal, self.entry_ms) == self.stop_pct
             && params.stop_loss_delay_s == self.delay_s
             && params.fast_stop_loss == self.fast
             && params.stop_loss_ema == self.ema

@@ -370,7 +370,7 @@ pub fn walk_held(
     // fires it. `over` mirrors the sign for a short, so only the distance is adjusted here; the
     // level is NOT snapped to the price grid, unlike every level that reaches the exchange —
     // a stop is the core's own trigger for a market sell, and nothing about it is ever placed.
-    let stop = stop_pct(params, deal);
+    let stop = stop_pct(params, deal, fill.t_ms);
     let stop_on = stop != 0.0;
     let stop_level = side.over(fill.price, stop);
     let stop_from = fill.t_ms + (params.stop_loss_delay_s.max(0.0) * 1000.0) as i64;

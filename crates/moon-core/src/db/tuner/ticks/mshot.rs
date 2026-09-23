@@ -60,7 +60,7 @@
 //! which is what a search over `MShotPrice` asks about.
 
 use super::verify::archived_replacements;
-use super::{Deal, Deltas, EntryParams, Fill, reaches, snap_to_step};
+use super::{Deal, Deltas, EntryParams, Fill, deltas, reaches, snap_to_step};
 use crate::feed::types::{Side, Tick};
 
 /// Which price the order keeps its distance from (`MShotUsePrice`).
@@ -87,8 +87,19 @@ impl UsePrice {
     }
 }
 
-/// The `MShotAdd*` modifiers — per-cent added to the corridor bounds per one per cent of the
-/// matching delta at the buy.
+/// How a family of modifiers reads the market-wide deltas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MarketSign {
+    /// With the sign the report carries — `MShotAddMarketDelta` ("аналогично", FAQ :1289).
+    #[default]
+    Signed,
+    /// As a magnitude — the Delta Modifiers tab's `AddMarketDelta` and `AddMarket24Delta`, "по
+    /// модулю, то есть всегда положительный" (FAQ :1171, :1172).
+    Magnitude,
+}
+
+/// A family of delta modifiers — `MShotAdd*` on the entry corridor, the Delta Modifiers tab's
+/// `Add*` on the sell and the stop: per cent added per one per cent of the matching delta.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Modifiers {
     pub add_1m: f64,
@@ -105,6 +116,15 @@ pub struct Modifiers {
     /// and leaves it at zero.
     pub add_btc_1m: f64,
     pub add_market_1h: f64,
+    /// `AddMarket24Delta` of the Delta Modifiers tab (56 live strategies, 2026-09-23); the
+    /// `MShotAdd*` family has no such field and leaves it at zero.
+    pub add_market_24h: f64,
+    /// `AddPump1h` / `AddDump1h` of the Delta Modifiers tab — FAQ :1177, :1178; no live strategy
+    /// sets them (2026-09-23), read so that one that does is not silently unmodified.
+    pub add_pump_1h: f64,
+    pub add_dump_1h: f64,
+    /// How the family reads the market-wide deltas.
+    pub market_sign: MarketSign,
     /// `MShotAddDistance` — per cent by which the far bound's addition exceeds the near one's.
     pub distance_pct: f64,
 }
@@ -112,8 +132,13 @@ pub struct Modifiers {
 impl Modifiers {
     /// The addition to the NEAR bound, in per cent, for these deltas — `Σ k · δ`, every delta
     /// with its own sign, so a coin that went up gets a deeper order (the module doc has the
-    /// FAQ example and the live check behind the sign).
+    /// FAQ example and the live check behind the sign), the market-wide ones as the family reads
+    /// them ([`MarketSign`]).
     pub fn near_addition(&self, d: &Deltas) -> f64 {
+        let market = |delta: f64| match self.market_sign {
+            MarketSign::Signed => delta,
+            MarketSign::Magnitude => delta.abs(),
+        };
         self.add_1m * d.d1m
             + self.add_5m * d.d5m
             + self.add_15m * d.d15m
@@ -124,7 +149,10 @@ impl Modifiers {
             + self.add_btc_1h * d.btc1h
             + self.add_btc_5m * d.btc5m
             + self.add_btc_1m * d.btc1m
-            + self.add_market_1h * d.market1h
+            + self.add_market_1h * market(d.market1h)
+            + self.add_market_24h * market(d.market24h)
+            + self.add_pump_1h * d.pump1h
+            + self.add_dump_1h * d.dump1h
             + self.add_pricebug * d.pricebug
     }
 
@@ -254,17 +282,18 @@ impl<'a> MshotEntry<'a> {
     ///
     /// Args:
     ///     deal: The report row, with its model inputs.
-    ///     far_pct: These parameters' far bound for the deal.
+    ///     created_ms: The order's creation, where both far bounds are read.
+    ///     far_pct: These parameters' far bound for the deal at the creation.
     ///
     /// Returns:
     ///     The level, or `None` when the record proves no placement or no reference can be read
     ///     back from it.
-    fn placement_at_creation(&self, deal: &Deal, far_pct: f64) -> Option<f64> {
+    fn placement_at_creation(&self, deal: &Deal, created_ms: i64, far_pct: f64) -> Option<f64> {
         let fact_level = deal.entry_placed.filter(|l| l.is_finite() && *l > 0.0)?;
         let Some(EntryParams::MoonShot(own)) = deal.own_entry.as_ref() else {
             return Some(fact_level);
         };
-        let (_, fact_far_pct) = own.bounds_pct(&deal.deltas);
+        let (_, fact_far_pct) = own.bounds_pct(&deal.deltas_at(created_ms));
         if fact_far_pct == far_pct {
             return Some(fact_level);
         }
@@ -314,11 +343,7 @@ impl<'a> MshotEntry<'a> {
         if ticks.is_empty() {
             return None;
         }
-        let (near_pct, far_pct) = self.params.bounds_pct(&deal.deltas);
-        // The corridor's far edge: a run-away re-places the order only past it (module doc).
-        // Where the bounds meet after the modifiers (`bounds_pct` lifts far to near) the band has
-        // no width: every move off the placement re-places, as before.
-        let retreat_pct = 2.0 * far_pct - near_pct;
+        let mut bounds = LiveBounds::new(self.params, deal);
         let raise_wait_ms = (self.params.raise_wait_s * 1000.0).max(0.0);
         let replace_delay_ms = (self.params.replace_delay_s * 1000.0).max(0.0);
         let latency_ms = self.params.latency_ms.max(0.0);
@@ -333,10 +358,17 @@ impl<'a> MshotEntry<'a> {
         let mut index = 0;
         let mut hints: Vec<(i64, f64)> = Vec::new();
         // The whole life of the order, when the tape reaches back to its creation.
-        let created = deal
+        let created = match deal
             .order_open_ms()
             .filter(|&created_ms| first_print_ms <= created_ms)
-            .and_then(|created_ms| Some((created_ms, self.placement_at_creation(deal, far_pct)?)));
+        {
+            Some(created_ms) => {
+                let (_, far_pct) = bounds.at(created_ms);
+                self.placement_at_creation(deal, created_ms, far_pct)
+                    .map(|level| (created_ms, level))
+            }
+            None => None,
+        };
         // The exchange's level (what fills; `None` until the order reaches the book) and the
         // core's (what the corridor is measured against); `pending` is a move the core made that
         // the exchange has not seen yet.
@@ -399,6 +431,7 @@ impl<'a> MshotEntry<'a> {
                         let first = ticks.get(index)?;
                         reference.observe(first);
                         index += 1;
+                        let (_, far_pct) = bounds.at(first.time_ms as i64);
                         self.place(reference.price()?, far_pct, deal)
                     }
                 };
@@ -432,6 +465,11 @@ impl<'a> MshotEntry<'a> {
             let Some(reference) = reference.price() else {
                 continue;
             };
+            let (near_pct, far_pct) = bounds.at(t_ms);
+            // The corridor's far edge: a run-away re-places the order only past it (module doc).
+            // Where the bounds meet after the modifiers (`bounds_pct` lifts far to near) the band
+            // has no width: every move off the placement re-places, as before.
+            let retreat_pct = 2.0 * far_pct - near_pct;
             let distance = Self::distance_pct(reference, core_level, deal);
             let now = if distance < near_pct {
                 Some(Breach::Approach)
@@ -463,6 +501,42 @@ impl<'a> MshotEntry<'a> {
             }
         }
         None
+    }
+}
+
+/// The corridor's `(near, far)` bounds as the core held them while the order lived: the core
+/// moves the corridor when a delta moves ("Дельта меняется — ордер переставляется", FAQ :1289),
+/// so the bounds are re-read off the deal's live deltas ([`Deal::deltas_at`]) once per refresh
+/// step of the track ([`deltas::STEP_MS`]) — the deltas hold still inside one — and once for a
+/// deal without a track, whose deltas are the snapshot throughout.
+struct LiveBounds<'a> {
+    params: &'a MshotParams,
+    deal: &'a Deal,
+    /// The step the bounds were last read for.
+    step: Option<i64>,
+    bounds: (f64, f64),
+}
+
+impl<'a> LiveBounds<'a> {
+    fn new(params: &'a MshotParams, deal: &'a Deal) -> Self {
+        Self {
+            params,
+            deal,
+            step: None,
+            bounds: (0.0, 0.0),
+        }
+    }
+
+    fn at(&mut self, t_ms: i64) -> (f64, f64) {
+        let step = match self.deal.delta_track {
+            Some(_) => t_ms.div_euclid(deltas::STEP_MS),
+            None => 0,
+        };
+        if self.step != Some(step) {
+            self.bounds = self.params.bounds_pct(&self.deal.deltas_at(t_ms));
+            self.step = Some(step);
+        }
+        self.bounds
     }
 }
 

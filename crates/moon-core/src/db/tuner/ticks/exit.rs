@@ -228,7 +228,7 @@ impl<'a> ExitModel<'a> {
         // inside out. The rules that legitimately sell below the entry are the moving ones
         // (`PriceDownAllowedDrop`, a negative `SellShotDistance`), and they get there by
         // stepping down from the take, not by starting underneath it.
-        let pct = (self.base_take_pct(deal) + self.modifier_pct(deal)).max(0.0);
+        let pct = (self.base_take_pct(deal) + self.modifier_pct(deal, fill.t_ms)).max(0.0);
         let by_pct = fill.price * pct / 100.0;
         let mut take = if deal.is_long() {
             fill.price + by_pct
@@ -268,9 +268,9 @@ impl<'a> ExitModel<'a> {
     }
 
     /// What the delta modifiers add to the sell level, per cent — the capped sum times
-    /// `SellModifier`, per the FAQ.
-    fn modifier_pct(&self, deal: &Deal) -> f64 {
-        modifier_sum(self.params, deal) * self.params.sell_modifier
+    /// `SellModifier`, per the FAQ — as the deltas stood when the sell was placed, at `at_ms`.
+    fn modifier_pct(&self, deal: &Deal, at_ms: i64) -> f64 {
+        modifier_sum(self.params, deal, at_ms) * self.params.sell_modifier
     }
 
     /// Whether a walk under these parameters knows where the trade's take stands — the level
@@ -344,17 +344,19 @@ impl<'a> ExitModel<'a> {
 /// One sum, two consumers — the sell level through `SellModifier` and the stop through
 /// `StopLossModifier` — because the core computes it once and spends it on both (FAQ).
 ///
-/// Off the report it cannot be exact: the coefficients are the strategy's, but the deltas are
-/// the ONE snapshot the report stores per trade, while the core re-evaluates them live. On the
-/// stop the verdict absorbs the residual in its level tolerance (`verify::STOP_PRICE_TOLERANCE`);
-/// on the sell level it is a limit of the input, and a take it moves too far fails its verdict
-/// and keeps the trade out of the search.
+/// The core sums the deltas as they stand when it places the sell: on 121 of its printed sums
+/// (2026-09-22) the report's snapshot, stamped at the entry order's placement for every kind but
+/// MoonShot, drifted from the core's number the more, the longer the entry order waited. So the
+/// sum is read at `at_ms` through the deal's live coin deltas ([`Deal::deltas_at`]); the BTC,
+/// market, mark and price-bug terms stay the snapshot, and on the stop the verdict absorbs their
+/// residual in its level tolerance (`verify::STOP_PRICE_TOLERANCE`).
 ///
 /// Args:
 ///     params: The sell parameters, for the coefficients and the ceiling.
 ///     deal: The trade, for its deltas.
-pub fn modifier_sum(params: &ExitParams, deal: &Deal) -> f64 {
-    let sum = params.sell_mods.near_addition(&deal.deltas);
+///     at_ms: When the sell was placed — the fill.
+pub fn modifier_sum(params: &ExitParams, deal: &Deal, at_ms: i64) -> f64 {
+    let sum = params.sell_mods.near_addition(&deal.deltas_at(at_ms));
     if params.max_modifier > 0.0 {
         sum.min(params.max_modifier)
     } else {
@@ -379,11 +381,13 @@ pub fn modifier_sum(params: &ExitParams, deal: &Deal) -> f64 {
 /// Args:
 ///     params: The sell parameters.
 ///     deal: The trade, for its deltas.
-pub fn stop_pct(params: &ExitParams, deal: &Deal) -> f64 {
+///     at_ms: When the sell was placed — the fill; see [`modifier_sum`].
+pub fn stop_pct(params: &ExitParams, deal: &Deal, at_ms: i64) -> f64 {
     if params.stop_loss_pct == 0.0 || params.stop_loss_modifier == 0.0 {
         return params.stop_loss_pct;
     }
-    let adjusted = params.stop_loss_pct - modifier_sum(params, deal) * params.stop_loss_modifier;
+    let adjusted =
+        params.stop_loss_pct - modifier_sum(params, deal, at_ms) * params.stop_loss_modifier;
     // Same side as configured, or nothing at all.
     if adjusted == 0.0 || adjusted.is_sign_negative() != params.stop_loss_pct.is_sign_negative() {
         return 0.0;
