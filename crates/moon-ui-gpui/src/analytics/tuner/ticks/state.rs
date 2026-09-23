@@ -18,7 +18,7 @@ use moon_core::db::tuner::VarStats;
 use moon_core::db::tuner::threshold_search::SearchHandle;
 use moon_core::db::tuner::ticks::params::ParamGroup;
 use moon_core::db::tuner::ticks::search::SearchResult;
-use moon_core::db::tuner::ticks::{Deal, Verdict, fit_for_search};
+use moon_core::db::tuner::ticks::{Deal, EntryMethod, Verdict, fit_for_search};
 use moon_core::feed::types::Tick;
 use moon_core::market::trade_replay::TickStatus;
 
@@ -273,6 +273,9 @@ pub(in crate::analytics) struct TicksState {
     /// Which groups the search may vary.
     pub(in crate::analytics::tuner) vary_entry: bool,
     pub(in crate::analytics::tuner) vary_exit: bool,
+    /// How a MoonShot variant's entry is replayed, by the search and by the variant columns alike.
+    /// No control sets it yet: the corridor model, as before the choice existed.
+    pub(in crate::analytics::tuner) entry_method: EntryMethod,
     /// Fields held at their base value by the search.
     pub(in crate::analytics::tuner) locked: HashSet<String>,
     /// The search settings, as typed.
@@ -335,6 +338,7 @@ impl Default for TicksState {
             inputs: HashMap::new(),
             vary_entry: true,
             vary_exit: true,
+            entry_method: EntryMethod::default(),
             locked: HashSet::new(),
             iters: String::new(),
             min_trades: String::new(),

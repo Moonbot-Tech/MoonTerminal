@@ -592,6 +592,82 @@ fn an_ask_reference_follows_buy_side_prints_only() {
     assert!((fill.price - 99.99).abs() < 1e-9, "{}", fill.price);
 }
 
+/// The fact's own parameters, as a prepared deal carries them, and a variant of them replayed by
+/// the shift.
+fn shifted_variant(price_pct: f64) -> (Deal, MshotParams) {
+    let deal = Deal {
+        own_entry: Some(EntryParams::MoonShot(mshot())),
+        ..deal()
+    };
+    let variant = MshotParams {
+        price_pct,
+        method: EntryMethod::Shift,
+        ..mshot()
+    };
+    (deal, variant)
+}
+
+/// The shift keeps the fact's order where it stood at the spike — 99, one per cent under 100 —
+/// and moves it by the variant's far bound: 1.5 % puts it at 98.5, which the spike's 98.4 fills
+/// and a spike to 98.6 does not; 0.5 % puts it at 99.5, filled on the way down by the fact's own
+/// fill print. A print past the spike's window fills nothing.
+#[test]
+fn the_shift_moves_the_facts_order_by_the_variants_far_bound() {
+    let (d, deeper) = shifted_variant(1.5);
+    let spike = tape(&[(9_000, 100.0), (10_000, 99.0), (10_200, 98.4)]);
+    let fill = fill_of(&d, &spike, &deeper).expect("the spike reached 98.5");
+    assert_eq!(fill.t_ms, 10_200);
+    assert!((fill.price - 98.5).abs() < 1e-9, "{fill:?}");
+    let shallow_spike = tape(&[(9_000, 100.0), (10_000, 99.0), (10_200, 98.6)]);
+    assert_eq!(fill_of(&d, &shallow_spike, &deeper), None);
+    let late = tape(&[(9_000, 100.0), (10_000, 99.0), (12_500, 98.0)]);
+    assert_eq!(fill_of(&d, &late, &deeper), None, "past the spike's window");
+    let (d, shallower) = shifted_variant(0.5);
+    let fill = fill_of(&d, &spike, &shallower).expect("reached on the way down");
+    assert_eq!(fill.t_ms, 10_000);
+    assert!((fill.price - 99.5).abs() < 1e-9, "{fill:?}");
+}
+
+/// The short mirror: 101 is one per cent over 100, and 1.5 % puts the order at 101.5.
+#[test]
+fn a_short_shift_mirrors() {
+    let d = Deal {
+        own_entry: Some(EntryParams::MoonShot(mshot())),
+        ..short_deal()
+    };
+    let (_, deeper) = shifted_variant(1.5);
+    let spike = tape(&[(9_000, 100.0), (10_000, 101.0), (10_300, 101.6)]);
+    let fill = fill_of(&d, &spike, &deeper).expect("the spike reached 101.5");
+    assert!((fill.price - 101.5).abs() < 1e-9, "{fill:?}");
+}
+
+/// The trade's own settings take the fact's fill whichever way a variant is replayed; without
+/// the fact's parameters to shift from, the shift falls back to the model.
+#[test]
+fn the_shift_keeps_the_fact_and_needs_it() {
+    let (d, _) = shifted_variant(1.0);
+    let own_by_shift = EntryParams::MoonShot(MshotParams {
+        method: EntryMethod::Shift,
+        ..mshot()
+    });
+    let spike = tape(&[(9_000, 100.0), (10_000, 99.0), (10_200, 98.4)]);
+    let out = simulate(&d, &spike, &own_by_shift, &ExitParams::default(), None);
+    assert_eq!(out.fill.map(|f| (f.t_ms, f.price)), Some((10_000, 99.0)));
+    let (_, deeper) = shifted_variant(1.5);
+    let bare = deal();
+    assert_eq!(
+        fill_of(&bare, &spike, &deeper),
+        fill_of(
+            &bare,
+            &spike,
+            &MshotParams {
+                method: EntryMethod::Model,
+                ..deeper.clone()
+            }
+        ),
+    );
+}
+
 /// The corridor is measured from the current print, whatever `FastShotAlgo` is; a re-placed
 /// order goes off the lowest print of the last 100 ms, not off the print that decided the move
 /// (the core developer, 2026-09-23).

@@ -9,8 +9,8 @@
 //! `Hook*` fields) is the first candidate for a second implementation; it adds one arm to
 //! [`entry_model_for`] and nothing to the UI.
 
-use super::mshot::MshotEntry;
-use super::{Deal, Fill};
+use super::mshot::{EntryMethod, MshotEntry};
+use super::{Deal, EntryParams, Fill};
 use crate::feed::types::Tick;
 
 /// The kind name of MoonShot as the strategy list spells it (`feed::strategies` ordinal 6).
@@ -37,7 +37,14 @@ pub fn entry_model_for(kind: &str) -> bool {
 }
 
 impl EntryModel for MshotEntry<'_> {
+    /// By the parameters' [`EntryMethod`]: the corridor model, or the fact shifted — which needs
+    /// the fact's own parameters ([`Deal::own_entry`]), and without them falls back to the model.
     fn fill(&self, deal: &Deal, ticks: &[Tick], line: Option<&[(i64, f64)]>) -> Option<Fill> {
-        self.run(deal, ticks, line)
+        match (self.method(), deal.own_entry.as_ref()) {
+            (EntryMethod::Shift, Some(EntryParams::MoonShot(own))) => {
+                self.shifted_fill(deal, ticks, own, line)
+            }
+            _ => self.run(deal, ticks, line),
+        }
     }
 }

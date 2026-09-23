@@ -104,6 +104,7 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
         seed: Some(7),
         train_frac: 1.0,
         latency_ms: 0.0,
+        entry_method: EntryMethod::Model,
     };
     let handle = SearchHandle::new();
     let result = suggest(&deals, &params, &handle).expect("a result");
@@ -128,6 +129,7 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
         "PumpsDetection",
         &result.values,
         0.0,
+        EntryMethod::Model,
     );
     assert!((tally.profit - 80.0).abs() < 1e-6);
     assert!((spent - 8_000.0).abs() < 1e-6);
@@ -157,6 +159,7 @@ fn the_holdout_is_scored_but_never_fitted_on() {
         seed: Some(1),
         train_frac: 0.75,
         latency_ms: 0.0,
+        entry_method: EntryMethod::Model,
     };
     let handle = SearchHandle::new();
     let result = suggest(&deals, &params, &handle).expect("a result");
@@ -184,6 +187,7 @@ fn a_cancelled_run_answers_nothing_and_nothing_varied_answers_nothing() {
         seed: Some(1),
         train_frac: 1.0,
         latency_ms: 0.0,
+        entry_method: EntryMethod::Model,
     };
     let handle = SearchHandle::new();
     assert!(

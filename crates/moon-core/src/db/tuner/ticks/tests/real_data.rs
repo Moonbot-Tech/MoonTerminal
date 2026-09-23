@@ -321,6 +321,133 @@ impl PathTally {
     }
 }
 
+/// The shifts of `MShotPrice` the two entry methods are compared on, per cent points.
+const PRICE_SHIFTS: [f64; 5] = [-0.3, -0.15, 0.0, 0.15, 0.3];
+
+/// The two ways to replay a MoonShot variant ([`EntryMethod`]), side by side for one shift of
+/// `MShotPrice`.
+#[derive(Default)]
+struct MethodTally {
+    deals: usize,
+    /// Fills per method: model, shift.
+    filled: [usize; 2],
+    /// Deals the two agree on — both unfilled, or both filled within 0.05 %.
+    agree: usize,
+    /// Fill price against the fact's buy, per cent, summed over the filled, per method.
+    dev_sum: [f64; 2],
+    /// Fills landing on the fact's own buy (within 0.05 %), per method — the shift of 0 checks it.
+    on_fact: [usize; 2],
+}
+
+impl MethodTally {
+    fn add(&mut self, deal: &Deal, fills: [Option<Fill>; 2]) {
+        let same = |a: Option<Fill>, b: Option<Fill>| match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => (a.price - b.price).abs() <= a.price.abs() * 5e-4,
+            _ => false,
+        };
+        self.deals += 1;
+        self.agree += usize::from(same(fills[0], fills[1]));
+        for (i, fill) in fills.iter().enumerate() {
+            if let Some(fill) = fill {
+                self.filled[i] += 1;
+                let dev = (fill.price - deal.buy_price) / deal.buy_price * 100.0;
+                self.dev_sum[i] += if deal.is_long() { dev } else { -dev };
+                self.on_fact[i] += usize::from(dev.abs() <= 0.05);
+            }
+        }
+    }
+}
+
+/// One MoonShot fill as the cross-core check reads it.
+struct CrossRow {
+    venue: String,
+    coin: String,
+    short: bool,
+    core: u64,
+    buy_ms: i64,
+    /// Where the order stood at the spike (`MshotEntry::fact_anchor`).
+    level: f64,
+    /// The far bound it stood at, per cent.
+    far: f64,
+    /// The spike's extreme on the order's side from the fact's last move to 2 s past the buy.
+    extreme: f64,
+    /// The corridor model's own fill of this trade under its own parameters, off the buy, per
+    /// cent — what the model gets wrong on the same spike; `None` when it never filled.
+    model_err: Option<f64>,
+}
+
+impl CrossRow {
+    fn reference(&self) -> f64 {
+        if self.short {
+            self.level / (1.0 + self.far / 100.0)
+        } else {
+            self.level / (1.0 - self.far / 100.0)
+        }
+    }
+}
+
+/// Another core's MoonShot fill, to be predicted from this trade's tape: its entry parameters
+/// with its corridor as it stood at its own fill (the modifiers folded in), and where it filled.
+struct Partner {
+    core: u64,
+    venue: String,
+    coin: String,
+    short: bool,
+    buy_ms: i64,
+    buy_price: f64,
+    params: MshotParams,
+}
+
+/// The two methods' predictions of partners' real fills.
+#[derive(Default)]
+struct PartnerTally {
+    pairs: usize,
+    /// Fills per method: model, shift.
+    filled: [usize; 2],
+    /// |fill − partner's buy| per cent, per method.
+    errors: [Vec<f64>; 2],
+}
+
+/// Every MoonShot trade's partner record, where its core's venue and its strategy are known.
+fn partners_of(
+    deals: &[Deal],
+    venues: &HashMap<u64, String>,
+    keys: &[String],
+    defaults: &HashMap<String, f64>,
+) -> Vec<Partner> {
+    deals
+        .iter()
+        .filter(|d| entry_model_for(&d.kind))
+        .filter_map(|d| {
+            let venue = venues.get(&d.core_uid)?.clone();
+            let values = strategy_values_at(d.strategy_id, Some(d.core_uid), d.buy_ms, keys)?;
+            let own = mshot_params(
+                &StrategyValues {
+                    values: &values,
+                    defaults,
+                },
+                DEFAULT_LATENCY_MS,
+            );
+            let (near, far) = own.bounds_pct(&d.deltas);
+            Some(Partner {
+                core: d.core_uid,
+                venue,
+                coin: coin_match_key(&d.coin),
+                short: d.is_short,
+                buy_ms: d.buy_ms,
+                buy_price: d.buy_price,
+                params: MshotParams {
+                    price_pct: far,
+                    price_min_pct: near,
+                    modifiers: Default::default(),
+                    ..own
+                },
+            })
+        })
+        .collect()
+}
+
 /// Each core's replace round trip off its archived Entry lines
 /// (`calibrate::replace_round_trip_samples`, the median per core).
 fn core_round_trips(deals: &[Deal]) -> HashMap<u64, f64> {
@@ -498,6 +625,14 @@ fn real_data_reproduction() {
     let (mut corridor_n, mut corridor_hits) = (0usize, 0usize);
     // The order's path from its creation against the archived entry line.
     let mut path = PathTally::default();
+    // The three entry methods per shift of `MShotPrice`, and the cross-core rows.
+    let mut methods: Vec<MethodTally> = PRICE_SHIFTS
+        .iter()
+        .map(|_| MethodTally::default())
+        .collect();
+    let mut cross: Vec<CrossRow> = Vec::new();
+    let partners = partners_of(&read.deals, &venue_of_core, &keys, &defaults);
+    let mut partner_tally = PartnerTally::default();
     let (mut own_sum, mut fact_sum) = (0.0f64, 0.0f64);
     for mut deal in read.deals {
         *kinds_seen.entry(deal.kind.clone()).or_default() += 1;
@@ -634,6 +769,114 @@ fn real_data_reproduction() {
             corridor_n += 1;
             corridor_hits +=
                 usize::from((down.max(up) / down.min(up) / predicted - 1.0).abs() <= 0.0005);
+        }
+        // The two ways to replay a variant, on shifts of the trade's own `MShotPrice` — through
+        // the entry model as the search calls it. At no shift the model is the fact itself
+        // (`simulate`); the shift is replayed anyway, as the check of its anchor.
+        if let EntryParams::MoonShot(own) = &entry {
+            for (shift, tally) in PRICE_SHIFTS.iter().zip(methods.iter_mut()) {
+                let variant = |method| MshotParams {
+                    price_pct: (own.price_pct + shift).max(own.price_min_pct),
+                    method,
+                    ..own.clone()
+                };
+                let (model, shifted_params) =
+                    (variant(EntryMethod::Model), variant(EntryMethod::Shift));
+                let full = if *shift == 0.0 {
+                    Some(Fill {
+                        t_ms: deal.buy_ms,
+                        price: deal.buy_price,
+                    })
+                } else {
+                    MshotEntry::new(&model).fill(&deal, &ticks, entry_line.as_deref())
+                };
+                let shifted =
+                    MshotEntry::new(&shifted_params).fill(&deal, &ticks, entry_line.as_deref());
+                if *shift == 0.0 && std::env::var_os("MOON_TICKS_METHOD_DEBUG").is_some() {
+                    let on_fact = |f: Option<Fill>| {
+                        f.is_some_and(|f| (f.price - deal.buy_price).abs() <= deal.buy_price * 5e-4)
+                    };
+                    if !on_fact(shifted) {
+                        let (since, level) = MshotEntry::fact_anchor(&deal, entry_line.as_deref());
+                        let near: Vec<String> = ticks
+                            .iter()
+                            .filter(|t| {
+                                let tt = t.time_ms as i64;
+                                (deal.buy_ms - 300..=deal.buy_ms + 300).contains(&tt)
+                            })
+                            .take(8)
+                            .map(|t| format!("{:+}:{}", t.time_ms as i64 - deal.buy_ms, t.price))
+                            .collect();
+                        eprintln!(
+                            "    method miss {} {} buy {} anchor {:+}ms {} shifted {:?} prints {:?}",
+                            deal.coin,
+                            deal.core_name,
+                            deal.buy_price,
+                            since - deal.buy_ms,
+                            level,
+                            shifted.map(|f| (f.t_ms - deal.buy_ms, f.price)),
+                            near,
+                        );
+                    }
+                }
+                tally.add(&deal, [full, shifted]);
+            }
+            // Other cores' fills on the same spike, predicted from this trade's tape both ways.
+            if let Some((venue, _)) = address.as_ref() {
+                for p in partners.iter().filter(|p| {
+                    p.core != deal.core_uid
+                        && &p.venue == venue
+                        && p.coin == coin_key
+                        && p.short == deal.is_short
+                        && (p.buy_ms - deal.buy_ms).abs() <= 3_000
+                }) {
+                    let shift = MshotParams {
+                        method: EntryMethod::Shift,
+                        ..p.params.clone()
+                    };
+                    let predictions = [
+                        MshotEntry::new(&p.params).fill(&deal, &ticks, entry_line.as_deref()),
+                        MshotEntry::new(&shift).fill(&deal, &ticks, entry_line.as_deref()),
+                    ];
+                    partner_tally.pairs += 1;
+                    for (i, fill) in predictions.iter().enumerate() {
+                        if let Some(fill) = fill {
+                            partner_tally.filled[i] += 1;
+                            partner_tally.errors[i]
+                                .push(((fill.price - p.buy_price) / p.buy_price * 100.0).abs());
+                        }
+                    }
+                }
+            }
+            let (since, level) = MshotEntry::fact_anchor(&deal, entry_line.as_deref());
+            let (_, far) = own.bounds_pct(&deal.deltas_at(deal.buy_ms));
+            let side = ticks
+                .iter()
+                .filter(|t| {
+                    let tt = t.time_ms as i64;
+                    tt >= since && tt <= deal.buy_ms + super::super::mshot::SHIFT_WINDOW_MS
+                })
+                .map(|t| f64::from(t.price));
+            let extreme = if deal.is_long() {
+                side.reduce(f64::min)
+            } else {
+                side.reduce(f64::max)
+            };
+            if let (Some(extreme), Some((venue, _))) = (extreme, address.as_ref()) {
+                cross.push(CrossRow {
+                    venue: venue.clone(),
+                    coin: coin_key.clone(),
+                    short: deal.is_short,
+                    core: deal.core_uid,
+                    buy_ms: deal.buy_ms,
+                    level,
+                    far,
+                    extreme,
+                    model_err: MshotEntry::new(own)
+                        .fill(&deal, &ticks, entry_line.as_deref())
+                        .map(|f| ((f.price - deal.buy_price) / deal.buy_price * 100.0).abs()),
+                });
+            }
         }
         // The order's path from its creation, where the model replays the whole of it.
         if let (EntryParams::MoonShot(params), Some(line)) = (&entry, entry_line.as_deref()) {
@@ -876,6 +1119,74 @@ fn real_data_reproduction() {
             q(0.5),
             q(0.75),
             errors.iter().filter(|e| **e > 0.0).count()
+        );
+    }
+    for (shift, t) in PRICE_SHIFTS.iter().zip(&methods) {
+        let mean = |i: usize| t.dev_sum[i] / t.filled[i].max(1) as f64;
+        eprintln!(
+            "entry methods, MShotPrice {shift:+.2} pp: {} deals · filled model {} shift {} · agree {} · mean fill vs fact (+ deeper) model {:.3} shift {:.3} % · on the fact's buy model {} shift {}",
+            t.deals,
+            t.filled[0],
+            t.filled[1],
+            t.agree,
+            -mean(0),
+            -mean(1),
+            t.on_fact[0],
+            t.on_fact[1],
+        );
+    }
+    // Different cores on the same spike: one core's level at the spike, shifted by the other's
+    // far bound, against where the other's order really stood — and whether the first core's
+    // spike reached the predicted level (the other's order did fill).
+    let (mut pairs, mut reached, mut ref_err, mut level_err) = (0usize, 0usize, vec![], vec![]);
+    let (mut model_err, mut model_unfilled) = (vec![], 0usize);
+    for a in &cross {
+        for b in cross.iter().filter(|b| {
+            b.core != a.core
+                && b.venue == a.venue
+                && b.coin == a.coin
+                && b.short == a.short
+                && (b.buy_ms - a.buy_ms).abs() <= 3_000
+                && (b.far - a.far).abs() > 1e-9
+        }) {
+            pairs += 1;
+            let predicted = if b.short {
+                a.reference() * (1.0 + b.far / 100.0)
+            } else {
+                a.reference() * (1.0 - b.far / 100.0)
+            };
+            reached += usize::from(reaches(a.extreme, predicted, !b.short));
+            ref_err.push(((a.reference() - b.reference()) / b.reference() * 100.0).abs());
+            level_err.push(((predicted - b.level) / b.level * 100.0).abs());
+            match b.model_err {
+                Some(e) => model_err.push(e),
+                None => model_unfilled += 1,
+            }
+        }
+    }
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v.get(v.len() / 2).copied()
+    };
+    let within = |v: &[f64], tol: f64| v.iter().filter(|e| **e <= tol).count();
+    eprintln!(
+        "cross-core same spike: {pairs} pairs · the first core's spike reached the second's predicted level {reached} · reference |err| median {:?} % · shift from the first core: level |err| median {:?} %, within 0.1 % {} · the model on the second's own tape: fill |err| median {:?} %, within 0.1 % {}, unfilled {model_unfilled}",
+        median(&mut ref_err),
+        median(&mut level_err),
+        within(&level_err, 0.1),
+        median(&mut model_err),
+        within(&model_err, 0.1),
+    );
+    for (i, name) in ["model", "shift"].iter().enumerate() {
+        let errors = &mut partner_tally.errors[i];
+        eprintln!(
+            "cross-core fill of the other core, {name}: {} pairs · filled {} · |err| median {:?} % · within 0.05 % {} · within 0.1 % {} · within 0.3 % {}",
+            partner_tally.pairs,
+            partner_tally.filled[i],
+            median(errors),
+            within(errors, 0.05),
+            within(errors, 0.1),
+            within(errors, 0.3),
         );
     }
     print_delta_quality(&tracks, no_track);

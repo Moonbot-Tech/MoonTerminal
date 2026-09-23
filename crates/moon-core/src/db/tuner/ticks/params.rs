@@ -470,7 +470,9 @@ fn parse_num(s: &str) -> Option<f64> {
         .filter(|v| v.is_finite())
 }
 
-/// MoonShot entry parameters out of a strategy's values; `latency_ms` is the model's own.
+/// MoonShot entry parameters out of a strategy's values; `latency_ms` is the model's own, and
+/// the entry is replayed by the corridor model ([`super::mshot::EntryMethod::Model`]) unless the
+/// caller sets another.
 pub fn mshot_params(v: &StrategyValues<'_>, latency_ms: f64) -> MshotParams {
     let base = MshotParams::default();
     MshotParams {
@@ -504,6 +506,7 @@ pub fn mshot_params(v: &StrategyValues<'_>, latency_ms: f64) -> MshotParams {
             distance_pct: v.num("MShotAddDistance", 0.0),
         },
         latency_ms,
+        method: base.method,
     }
 }
 

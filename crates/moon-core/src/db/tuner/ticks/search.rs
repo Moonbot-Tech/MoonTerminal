@@ -14,6 +14,10 @@
 //! trade and drops out of `n`; the caller prints "by N of M" beside the column so a variant
 //! that wins by trading less is visible as such.
 //!
+//! A MoonShot variant's entry is replayed the way the caller picks ([`EntryMethod`]): the corridor
+//! model from the order's creation, or the fact's order shifted at the spike. The trade's own
+//! settings take the fact's fill either way.
+//!
 //! Chronological order is kept on purpose: the train/holdout cut and the drawdown read the
 //! SEQUENCE, and the deals arrive sorted by close from `read_deals`.
 
@@ -22,6 +26,7 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
+use super::mshot::{EntryMethod, MshotParams};
 use super::params::{
     ParamGroup, ParamKind, StrategyValues, TICK_PARAMS, exit_params, mshot_params,
 };
@@ -109,6 +114,8 @@ pub struct SearchParams<'a> {
     pub train_frac: f64,
     /// Replacement latency of the model, milliseconds.
     pub latency_ms: f64,
+    /// How a MoonShot variant's entry is replayed.
+    pub entry_method: EntryMethod,
 }
 
 /// What the search found.
@@ -134,6 +141,7 @@ fn params_of(
     point: &Point,
     kind: &str,
     latency_ms: f64,
+    entry_method: EntryMethod,
 ) -> (EntryParams, ExitParams) {
     let mut values = base.clone();
     for (key, value) in point {
@@ -144,7 +152,10 @@ fn params_of(
         defaults,
     };
     let entry = if entry_model_for(kind) {
-        EntryParams::MoonShot(mshot_params(&sv, latency_ms))
+        EntryParams::MoonShot(MshotParams {
+            method: entry_method,
+            ..mshot_params(&sv, latency_ms)
+        })
     } else {
         EntryParams::Fact
     };
@@ -284,6 +295,7 @@ pub fn suggest(
             point,
             params.kind,
             params.latency_ms,
+            params.entry_method,
         );
         tally(train, &entry, &exit)
     };
@@ -374,6 +386,7 @@ pub fn suggest(
             &point,
             params.kind,
             params.latency_ms,
+            params.entry_method,
         );
         tally(&deals[train_n..], &entry, &exit)
     });
@@ -395,6 +408,7 @@ pub fn suggest(
 ///     kind: The strategy kind.
 ///     values: The variant's changes over the base, in strategy spelling.
 ///     latency_ms: Replacement latency of the model.
+///     entry_method: How a MoonShot variant's entry is replayed.
 pub fn variant_tally(
     deals: &[PreparedDeal],
     base: &HashMap<String, String>,
@@ -402,6 +416,7 @@ pub fn variant_tally(
     kind: &str,
     values: &[(String, String)],
     latency_ms: f64,
+    entry_method: EntryMethod,
 ) -> (Tally, f64) {
     let mut point = Point::new();
     for (key, value) in values {
@@ -409,7 +424,7 @@ pub fn variant_tally(
             point.insert(field.key, value.clone());
         }
     }
-    let (entry, exit) = params_of(base, defaults, &point, kind, latency_ms);
+    let (entry, exit) = params_of(base, defaults, &point, kind, latency_ms, entry_method);
     install(|| tally_and_spent(deals, &entry, &exit))
 }
 

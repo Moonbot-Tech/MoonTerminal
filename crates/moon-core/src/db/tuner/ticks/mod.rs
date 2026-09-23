@@ -44,7 +44,7 @@ pub use deals::{DealsRead, read_deals};
 pub use entry::{EntryModel, entry_model_for};
 pub use exit::{ExitModel, ExitParams, archived_pre_spike_ask, archived_take, take_model_for};
 pub use hook::{HookDetect, KIND_MOONHOOK, hook_take_pct, parse_hook_detect};
-pub use mshot::{MshotEntry, MshotParams, UsePrice};
+pub use mshot::{EntryMethod, MshotEntry, MshotParams, UsePrice};
 pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};
 pub use record::{OwnLines, StopAnchor, entry_placement, fit_for_search, prepare_deal};
 pub use scope::{is_service_row, is_tunable};
@@ -485,9 +485,18 @@ pub fn simulate(
     };
     let fill = match entry {
         EntryParams::Fact => Some(fact_fill),
-        // The trade's own entry settings filled where the report says; the model is for the
-        // entries the core never ran.
-        EntryParams::MoonShot(_) if deal.own_entry.as_ref() == Some(entry) => Some(fact_fill),
+        // The trade's own entry settings filled where the report says, whichever way and with
+        // whatever latency a variant would be replayed — both are the model's, not the
+        // strategy's; the models are for the entries the core never ran. (The verdict replays
+        // the own settings through the model on purpose, and does it with `own_entry` cleared.)
+        EntryParams::MoonShot(params)
+            if matches!(
+                deal.own_entry.as_ref(),
+                Some(EntryParams::MoonShot(own)) if own.same_strategy(params)
+            ) =>
+        {
+            Some(fact_fill)
+        }
         EntryParams::MoonShot(params) => MshotEntry::new(params).fill(deal, ticks, entry_line),
     };
     let Some(fill) = fill else {

@@ -66,6 +66,10 @@
 //! window and no archived move taken as given. A VARIANT is placed off the same reference by its
 //! own bounds ([`MshotEntry::placement_at_creation`]) instead of inheriting the fact's level,
 //! which is what a search over `MShotPrice` asks about.
+//!
+//! All of the above is the corridor MODEL. A variant can instead be replayed as a SHIFT of the
+//! fact ([`EntryMethod`]): the fact's order where it stood at the spike, moved by the variant's
+//! far bound, with no path of its own.
 
 use super::verify::archived_replacements;
 use super::{Deal, Deltas, EntryParams, Fill, deltas, reaches, snap_to_step};
@@ -93,6 +97,27 @@ impl UsePrice {
             _ => Self::Trade,
         }
     }
+}
+
+/// How a MoonShot variant's entry is replayed — a setting of the search, not a strategy field.
+///
+/// Measured on 2026-09-23 against the one real counterfactual the history holds — 273 pairs of
+/// cores with different `MShotPrice` filled on the same spike — predicting the second core's
+/// fill from the first's tape and record: the model placed it a median 0.156 % off (99 within
+/// 0.1 %) and filled 264; the shift 0.078 % off (141 within 0.1 %) and filled 250.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EntryMethod {
+    /// The corridor model from the order's creation ([`MshotEntry::fill`] via `run`): the whole
+    /// path the variant's order would have walked. The one that answers for `MShotRaiseWait`,
+    /// `MShotReplaceDelay`, `MShotUsePrice` and `FastShotAlgo`, which change the path.
+    #[default]
+    Model,
+    /// The fact's order at the spike, shifted by the variant's far bound
+    /// ([`MshotEntry::shifted_fill`]): the path before the spike is the fact's, so only the
+    /// depth parameters — `MShotPrice`, `MShotPriceMin` through the modifiers' floor,
+    /// `MShotMinusSatoshi`, `MShotAdd*`, `MShotAddDistance` — move the entry; the waits and the
+    /// reference do not.
+    Shift,
 }
 
 /// How a family of modifiers reads the market-wide deltas.
@@ -181,6 +206,10 @@ const BOUND_FLOOR_PCT: f64 = 0.02;
 /// Default replacement latency, milliseconds — see the module doc.
 pub const DEFAULT_LATENCY_MS: f64 = 100.0;
 
+/// How far past the fact's fill a shifted order ([`MshotEntry::shifted_fill`]) may still be
+/// reached by the same spike.
+pub const SHIFT_WINDOW_MS: i64 = 2_000;
+
 /// The seconds the FAQ's "4-second-old ASK" of `MShotSellAtLastPrice` looks back.
 pub const PRE_SPIKE_LOOKBACK_MS: i64 = 4_000;
 
@@ -212,6 +241,21 @@ pub struct MshotParams {
     pub modifiers: Modifiers,
     /// Model parameter, not a strategy field: how long a replacement takes to reach the book.
     pub latency_ms: f64,
+    /// Model parameter, not a strategy field: how a variant's entry is replayed.
+    pub method: EntryMethod,
+}
+
+impl MshotParams {
+    /// Whether two parameter sets are the same strategy — every strategy field equal, whatever
+    /// the model parameters (`latency_ms`, `method`) say.
+    pub fn same_strategy(&self, other: &Self) -> bool {
+        *self
+            == Self {
+                latency_ms: self.latency_ms,
+                method: self.method,
+                ..other.clone()
+            }
+    }
 }
 
 impl Default for MshotParams {
@@ -228,6 +272,7 @@ impl Default for MshotParams {
             fast_algo: false,
             modifiers: Modifiers::default(),
             latency_ms: DEFAULT_LATENCY_MS,
+            method: EntryMethod::Model,
         }
     }
 }
@@ -258,6 +303,11 @@ pub struct MshotEntry<'a> {
 impl<'a> MshotEntry<'a> {
     pub fn new(params: &'a MshotParams) -> Self {
         Self { params }
+    }
+
+    /// How these parameters want a variant's entry replayed.
+    pub fn method(&self) -> EntryMethod {
+        self.params.method
     }
 
     /// Where the order would stand for a reference price: the far bound away, kept two steps
@@ -313,18 +363,93 @@ impl<'a> MshotEntry<'a> {
         if fact_far_pct == far_pct {
             return Some(fact_level);
         }
-        // The fact's level is its placement snapped AWAY from the reference (`place`): the level
-        // before the snap lay within one step of it toward the price, half a step on average, and
-        // the reference is read back from there — off the snapped level itself it would sit a
-        // half step too far and every variant with it. (`MShotMinusSatoshi` binds only on a
-        // corridor narrower than two steps and is not undone.)
+        Self::reference_of(fact_level, fact_far_pct, deal).map(|r| self.place(r, far_pct, deal))
+    }
+
+    /// The reference a placed level stood off, read back from the level and the far bound it was
+    /// placed with.
+    ///
+    /// The level is the placement snapped AWAY from the reference (`place`): before the snap it
+    /// lay within one step of it toward the price, half a step on average, and the reference is
+    /// read back from there — off the snapped level itself it would sit a half step too far and
+    /// every variant with it. (`MShotMinusSatoshi` binds only on a corridor narrower than two
+    /// steps and is not undone.)
+    fn reference_of(level: f64, far_pct: f64, deal: &Deal) -> Option<f64> {
         let half_step = deal.tick.filter(|t| *t > 0.0).map_or(0.0, |t| t / 2.0);
         let reference = if deal.is_long() {
-            (fact_level + half_step) / (1.0 - fact_far_pct / 100.0)
+            (level + half_step) / (1.0 - far_pct / 100.0)
         } else {
-            (fact_level - half_step) / (1.0 + fact_far_pct / 100.0)
+            (level - half_step) / (1.0 + far_pct / 100.0)
         };
-        (reference.is_finite() && reference > 0.0).then(|| self.place(reference, far_pct, deal))
+        (reference.is_finite() && reference > 0.0).then_some(reference)
+    }
+
+    /// Where the fact's order stood when the spike came: the archive's last move of the entry line
+    /// at or before the buy, and its moment; else the buy price, standing since the order's
+    /// creation (the core files a line only when the order moved) or, without a stamp, since the
+    /// run-up before the buy.
+    pub(super) fn fact_anchor(deal: &Deal, line: Option<&[(i64, f64)]>) -> (i64, f64) {
+        line.map(archived_replacements)
+            .and_then(|moves| {
+                moves
+                    .into_iter()
+                    .filter(|&(t, p)| t <= deal.buy_ms && p > 0.0)
+                    .max_by_key(|&(t, _)| t)
+            })
+            .unwrap_or_else(|| {
+                let since = deal
+                    .order_open_ms()
+                    .unwrap_or(deal.buy_ms - super::RUN_UP_MS);
+                (since, deal.buy_price)
+            })
+    }
+
+    /// The level these parameters would have held where the fact's order stood at `level`: the
+    /// same reference, this variant's far bound — both far bounds read off the deltas as they
+    /// stood when the fact's order was placed there, the moment its far bound was computed (the
+    /// report's snapshot where the deal has no live track). The fact's own far bound gives the
+    /// level back.
+    ///
+    /// Args:
+    ///     deal: The trade.
+    ///     own: The trade's own entry parameters.
+    ///     (placed_ms, level): When and where the fact's order was placed ([`Self::fact_anchor`]).
+    fn anchored_level(
+        &self,
+        deal: &Deal,
+        own: &MshotParams,
+        (placed_ms, level): (i64, f64),
+    ) -> Option<f64> {
+        let deltas = deal.deltas_at(placed_ms);
+        let (_, fact_far) = own.bounds_pct(&deltas);
+        let (_, far) = self.params.bounds_pct(&deltas);
+        if fact_far == far {
+            return Some(level);
+        }
+        Self::reference_of(level, fact_far, deal).map(|r| self.place(r, far, deal))
+    }
+
+    /// The entry as a SHIFT of the fact: the variant's order at [`Self::anchored_level`] from the
+    /// moment the fact's order last moved — standing where the fact's stood, one far bound deeper
+    /// or shallower, since the same moment — filled by the first print that reaches it by
+    /// [`SHIFT_WINDOW_MS`] past the buy: the same spike. Nothing about the corridor is modelled:
+    /// the order is taken to stand still through the spike, as the fact's did.
+    pub(super) fn shifted_fill(
+        &self,
+        deal: &Deal,
+        ticks: &[Tick],
+        own: &MshotParams,
+        line: Option<&[(i64, f64)]>,
+    ) -> Option<Fill> {
+        let (since, fact_level) = Self::fact_anchor(deal, line);
+        let level = self.anchored_level(deal, own, (since, fact_level))?;
+        ticks
+            .iter()
+            .map(|t| (t.time_ms as i64, f64::from(t.price)))
+            .filter(|&(t, p)| t >= since && p > 0.0)
+            .take_while(|&(t, _)| t <= deal.buy_ms + SHIFT_WINDOW_MS)
+            .find(|&(_, p)| reaches(p, level, deal.is_long()))
+            .map(|(t_ms, _)| Fill { t_ms, price: level })
     }
 
     /// Distance from the reference to the level, per cent, positive when the level is on the
@@ -373,6 +498,8 @@ impl<'a> MshotEntry<'a> {
         (fill, moves)
     }
 
+    /// Args (beyond [`Self::run`]'s):
+    ///     moves: Where to record every move, when asked.
     fn run_traced(
         &self,
         deal: &Deal,

@@ -117,6 +117,7 @@ impl AnalyticsView {
         let changes: Vec<Vec<(String, String)>> =
             (0..N_VAR).map(|i| self.ticks.variant_changes(i)).collect();
         let defaults = self.filter_defaults(cx);
+        let entry_method = self.ticks.entry_method;
         let n = deals.len();
         self.spawn_latest_db(
             &[ReadLane::TicksVariants],
@@ -136,6 +137,7 @@ impl AnalyticsView {
                             &kind,
                             values,
                             DEFAULT_LATENCY_MS,
+                            entry_method,
                         );
                         Some(stats_of(tally, spent))
                     })
@@ -244,6 +246,7 @@ impl AnalyticsView {
             .ok()
             .filter(|n| *n > 0);
         let train_frac = super::super::filter::state::train_frac(self.ticks.train_pct);
+        let entry_method = self.ticks.entry_method;
         let handle = SearchHandle::new();
         self.ticks.sugg = SuggState::Running {
             handle: handle.clone(),
@@ -269,6 +272,7 @@ impl AnalyticsView {
                     seed: None,
                     train_frac,
                     latency_ms: DEFAULT_LATENCY_MS,
+                    entry_method,
                 };
                 suggest(&deals, &params, &handle)
             },
