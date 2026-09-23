@@ -69,7 +69,7 @@ use moon_core::market::trade_replay::{
 use moon_core::session::CoreId;
 use moon_core::venue::Brand;
 
-pub(crate) use window::{TradeSeed, open_trade_window};
+pub(crate) use window::{TradeSeed, embedded_trade_view, open_trade_window};
 
 /// Where a trade view lives.
 pub(crate) enum Host {
@@ -84,10 +84,6 @@ pub(crate) enum Host {
         cascade_px: f32,
     },
     /// A pane inside another view — the tuner's deal table. See the module doc.
-    #[expect(
-        dead_code,
-        reason = "the tuner's Entry/Exit axis, its consumer, lands separately"
-    )]
     Embedded,
 }
 
@@ -606,10 +602,6 @@ impl TradeWindowView {
     ///     trades: The modelled trades, in Unix UTC ms.
     ///     corridor: Their corridors, shaded while the MoonShot zone switch is on.
     ///     cx: View context.
-    #[expect(
-        dead_code,
-        reason = "the tuner's Entry/Exit axis, its consumer, lands separately"
-    )]
     pub(crate) fn set_model_trades(
         &mut self,
         trades: Vec<moon_chart::frozen_overlay::OverlayTrade>,

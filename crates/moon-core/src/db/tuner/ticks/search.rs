@@ -28,11 +28,12 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
+use super::mshot::{CorridorStep, EntryMethod, MshotEntry};
 use super::params::{
     ParamGroup, ParamKind, StrategyValues, TICK_PARAMS, exit_params, mshot_params,
 };
 use super::settings::ModelSettings;
-use super::{Deal, EntryParams, ExitParams, entry_model_for, simulate};
+use super::{Deal, EntryParams, ExitParams, Outcome, entry_model_for, simulate};
 use crate::db::metrics::Tally;
 use crate::db::tuner::threshold_search::search::{install, restart_seed};
 use crate::db::tuner::threshold_search::{SearchHandle, train_split};
@@ -403,14 +404,125 @@ pub fn variant_tally(
     values: &[(String, String)],
     model: ModelSettings,
 ) -> (Tally, f64) {
+    let (entry, exit) = variant_params(base, defaults, kind, values, model);
+    install(|| tally_and_spent(deals, &entry, &exit))
+}
+
+/// One variant on one deal, as the tuner's trade pane draws it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VariantPicture {
+    /// Where the entry filled and the exit closed.
+    pub outcome: Outcome,
+    /// The order's corridor as the model walked it, placement by placement — a MoonShot variant
+    /// replayed by the corridor model only; empty for a shift and for a kind without an entry
+    /// model, which walk no corridor of their own.
+    pub corridor: Vec<CorridorStep>,
+}
+
+/// One variant replayed on ONE deal — what the tuner's trade pane draws beside the fact: where
+/// the variant's entry filled and where its exit closed, by the same parameters and the same
+/// replay [`variant_tally`] scores the column with, and the corridor its order walked.
+///
+/// Args:
+///     deal: The deal with its tape, cut at the sample's horizon as the column's are.
+///     base, defaults, kind, values, model: As for [`variant_tally`].
+///
+/// Returns:
+///     The modelled outcome and corridor.
+pub fn variant_picture(
+    deal: &PreparedDeal,
+    base: &HashMap<String, String>,
+    defaults: &HashMap<String, f64>,
+    kind: &str,
+    values: &[(String, String)],
+    model: ModelSettings,
+) -> VariantPicture {
+    let (entry, exit) = variant_params(base, defaults, kind, values, model);
+    let line = deal.entry_line.as_deref();
+    let outcome = simulate(&deal.deal, &deal.ticks, &entry, &exit, line);
+    // A variant that keeps the trade's own entry fills where the report says (`simulate`), and
+    // the fact's own line is already on the chart: a modelled path beside it would end somewhere
+    // else than the fill it is drawn with.
+    let own = |params: &super::MshotParams| {
+        matches!(
+            deal.deal.own_entry.as_ref(),
+            Some(EntryParams::MoonShot(own)) if own.same_strategy(params)
+        )
+    };
+    let corridor = match &entry {
+        EntryParams::MoonShot(params)
+            if params.model.entry_method == EntryMethod::Model && !own(params) =>
+        {
+            MshotEntry::new(params)
+                .corridor(&deal.deal, &deal.ticks, line)
+                .1
+        }
+        _ => Vec::new(),
+    };
+    VariantPicture { outcome, corridor }
+}
+
+/// Each deal's `(report_uid, (money, per cent))` under one variant, in the deals' order; `None`
+/// where the variant makes no trade of the deal.
+pub type DealResults = Vec<(i64, Option<(f64, f64)>)>;
+
+/// Every deal's result under one variant — `(money, per cent)`, money in the sample's unit —
+/// what the deal table's plan column shows. `None` where the variant makes no trade of the deal
+/// (no fill, or still open where the tape ends): the same rule that leaves the deal out of
+/// [`variant_tally`].
+///
+/// Args:
+///     deals, base, defaults, kind, values, model: As for [`variant_tally`].
+///
+/// Returns:
+///     The tally, the spent sum, and each deal's result ([`DealResults`]).
+pub fn variant_tally_by_deal(
+    deals: &[PreparedDeal],
+    base: &HashMap<String, String>,
+    defaults: &HashMap<String, f64>,
+    kind: &str,
+    values: &[(String, String)],
+    model: ModelSettings,
+) -> (Tally, f64, DealResults) {
+    let (entry, exit) = variant_params(base, defaults, kind, values, model);
+    install(|| {
+        let money: DealResults = deals
+            .par_iter()
+            .map(|d| {
+                let outcome = simulate(&d.deal, &d.ticks, &entry, &exit, d.entry_line.as_deref());
+                let result = outcome.profit_money(&d.deal).zip(outcome.profit_pct);
+                (d.deal.report_uid, result)
+            })
+            .collect();
+        let mut tally = Tally::default();
+        let mut spent = 0.0;
+        for (deal, (_, value)) in deals.iter().zip(&money) {
+            if let Some((value, _)) = value {
+                tally.push(*value);
+                spent += deal.deal.spent;
+            }
+        }
+        (tally, spent, money)
+    })
+}
+
+/// The entry and exit parameters of a variant's changes laid over the base — the one reading
+/// [`variant_tally`], [`variant_tally_by_deal`] and [`variant_picture`] take, so a column, its
+/// per-deal share and a picture cannot differ.
+fn variant_params(
+    base: &HashMap<String, String>,
+    defaults: &HashMap<String, f64>,
+    kind: &str,
+    values: &[(String, String)],
+    model: ModelSettings,
+) -> (EntryParams, ExitParams) {
     let mut point = Point::new();
     for (key, value) in values {
         if let Some(field) = TICK_PARAMS.iter().find(|f| f.key == key) {
             point.insert(field.key, value.clone());
         }
     }
-    let (entry, exit) = params_of(base, defaults, &point, kind, model.sanitized());
-    install(|| tally_and_spent(deals, &entry, &exit))
+    params_of(base, defaults, &point, kind, model.sanitized())
 }
 
 #[cfg(test)]

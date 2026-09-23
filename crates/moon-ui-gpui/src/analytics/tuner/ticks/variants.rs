@@ -25,7 +25,7 @@ use moon_core::db::tuner::ticks::TICK_PARAMS;
 use moon_core::db::tuner::ticks::params::ParamGroup;
 use moon_core::db::tuner::ticks::search::{
     DEFAULT_MAX_PASSES, PreparedDeal, SearchParams, clip_to_horizon, common_horizon_ms, suggest,
-    variant_tally,
+    variant_tally_by_deal,
 };
 use moon_core::db::tuner::ticks::stats_of;
 
@@ -54,7 +54,7 @@ pub(super) fn passes_of(text: &str) -> usize {
 }
 
 /// The base every variant is laid over: the fields the selected strategies agree on.
-fn base_of(now: &HashMap<String, NowValue>) -> HashMap<String, String> {
+pub(super) fn base_of(now: &HashMap<String, NowValue>) -> HashMap<String, String> {
     now.iter()
         .filter_map(|(key, value)| match value {
             NowValue::Same(v) if !v.is_empty() => Some((key.clone(), v.clone())),
@@ -100,6 +100,9 @@ impl AnalyticsView {
         // replay — a fetch over hundreds of rows re-arms this once per row.
         if (0..N_VAR).all(|i| self.ticks.variant_changes(i).is_empty()) {
             self.ticks.var_stats = Default::default();
+            self.set_ticks_plan(Default::default());
+            // The trade pane's modelled trades go with the columns.
+            self.ticks_refresh_model_trades(cx);
             return;
         }
         let req = self.ticks.var_seq;
@@ -140,9 +143,13 @@ impl AnalyticsView {
                         if values.is_empty() || deals.is_empty() {
                             return None;
                         }
-                        let (tally, spent) =
-                            variant_tally(&deals, &base, &defaults, &kind, values, model);
-                        Some(stats_of(tally, spent))
+                        let (tally, spent, money) =
+                            variant_tally_by_deal(&deals, &base, &defaults, &kind, values, model);
+                        let plan: HashMap<i64, (f64, f64)> = money
+                            .into_iter()
+                            .filter_map(|(uid, value)| Some((uid, value?)))
+                            .collect();
+                        Some((stats_of(tally, spent), plan))
                     })
                     .collect::<Vec<_>>()
             },
@@ -150,13 +157,39 @@ impl AnalyticsView {
                 if this.ticks.var_seq != req {
                     return;
                 }
-                for (slot, value) in this.ticks.var_stats.iter_mut().zip(stats) {
-                    *slot = value;
+                let mut plan: [HashMap<i64, (f64, f64)>; N_VAR] = Default::default();
+                for ((slot, value), plan) in this
+                    .ticks
+                    .var_stats
+                    .iter_mut()
+                    .zip(stats)
+                    .zip(plan.iter_mut())
+                {
+                    *slot = value.map(|(stats, deals)| {
+                        *plan = deals;
+                        stats
+                    });
                 }
+                this.set_ticks_plan(plan);
                 this.ticks.var_n = n;
+                // The trade pane draws what the columns now count.
+                this.ticks_refresh_model_trades(cx);
                 cx.notify();
             },
         );
+    }
+
+    /// Take the variants' per-deal results; a table sorted by the plan column is re-sorted.
+    fn set_ticks_plan(&mut self, plan: [HashMap<i64, (f64, f64)>; N_VAR]) {
+        self.ticks.plan = plan;
+        if self
+            .ticks
+            .sort
+            .as_ref()
+            .is_some_and(|(key, _)| key == super::columns::COL_PLAN)
+        {
+            self.ticks.order = None;
+        }
     }
 
     /// One cell of a variant changed: store it and rescore.
@@ -193,6 +226,7 @@ impl AnalyticsView {
     ) {
         self.ticks.variants[index].clear();
         self.ticks.var_stats[index] = None;
+        self.ticks.plan[index].clear();
         self.ticks_reset_inputs_of(index);
         self.arm_ticks_variants(cx);
         cx.notify();

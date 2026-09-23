@@ -113,6 +113,36 @@ pub(crate) fn open_trade_record(
     cx: &mut App,
 ) {
     let backend = backend.clone();
+    resolve_trade_record(axis, target, cx, move |seed, cx| {
+        let Some(seed) = seed else {
+            return;
+        };
+        let super::TradeSeed {
+            record,
+            meta,
+            history,
+            market,
+            stamps,
+        } = seed;
+        super::open_trade_window(&backend, record, meta, history, market, stamps, cx);
+    });
+}
+
+/// Read a target's trade off the replica, off the UI thread, and hand it to `done` on it — the
+/// one read both the window and the tuner's trade pane are built from.
+///
+/// Args:
+///     axis: Time axis the captions render on; see [`open_trade_record`].
+///     target: The already-resolved row.
+///     cx: Application context.
+///     done: Called once on the UI thread with the resolved trade, or `None` when the replica
+///         could not resolve it.
+pub(crate) fn resolve_trade_record(
+    axis: db::ReportAxis,
+    target: RecordTarget,
+    cx: &mut App,
+    done: impl FnOnce(Option<super::TradeSeed>, &mut App) + 'static,
+) {
     let RecordTarget {
         core,
         coin,
@@ -128,14 +158,20 @@ pub(crate) fn open_trade_record(
             .spawn(async move { load_trade(core, coin, record, filter) })
             .await;
         cx.update(|cx| {
-            let Some((record, meta, history)) = found else {
-                return;
-            };
-            let stamps = (
-                stamp(&axis, core, record.buy_stamp()),
-                stamp(&axis, core, record.close_stamp()),
-            );
-            super::open_trade_window(&backend, record, meta, history, market, stamps, cx);
+            let seed = found.map(|(record, meta, history)| {
+                let stamps = (
+                    stamp(&axis, core, record.buy_stamp()),
+                    stamp(&axis, core, record.close_stamp()),
+                );
+                super::TradeSeed {
+                    record,
+                    meta,
+                    history,
+                    market,
+                    stamps,
+                }
+            });
+            done(seed, cx);
         });
     })
     .detach();

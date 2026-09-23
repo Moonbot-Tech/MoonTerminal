@@ -304,6 +304,21 @@ impl MshotParams {
     }
 }
 
+/// One placement of a modelled order and the corridor around it, until the next placement.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CorridorStep {
+    /// When the core placed or re-placed the order, Unix ms.
+    pub t_ms: i64,
+    /// The order's level.
+    pub level: f64,
+    /// The corridor as the core saves it — a band of ORDER prices off the reference the level
+    /// stood from: `R·(1 − near)` … `R·(1 − retreat)` for a long, mirrored for a short, with
+    /// `retreat` = `2 · far − near` where `near ≥ far / 2` ([`retreat_pct`]). The same band the
+    /// report's `BuyCorridorDown` / `BuyCorridorUp` hold for the fact, in the near-edge,
+    /// retreat-edge order.
+    pub band: (f64, f64),
+}
+
 /// Which way the price left the corridor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Breach {
@@ -515,6 +530,34 @@ impl<'a> MshotEntry<'a> {
         let mut moves = Vec::new();
         let fill = self.run_traced(deal, ticks, line, Some(&mut moves));
         (fill, moves)
+    }
+
+    /// [`Self::trace`], each move with the corridor it stood in — what the tuner's trade pane
+    /// draws as a variant's corridor. A move whose reference cannot be read back from its level
+    /// is left out.
+    pub fn corridor(
+        &self,
+        deal: &Deal,
+        ticks: &[Tick],
+        line: Option<&[(i64, f64)]>,
+    ) -> (Option<Fill>, Vec<CorridorStep>) {
+        let (fill, moves) = self.trace(deal, ticks, line);
+        let mut bounds = LiveBounds::new(self.params, deal);
+        let sign = if deal.is_long() { -1.0 } else { 1.0 };
+        let steps = moves
+            .into_iter()
+            .filter_map(|(t_ms, level)| {
+                let (near_pct, far_pct) = bounds.at(t_ms);
+                let reference = Self::reference_of(level, far_pct, deal)?;
+                let edge = |pct: f64| reference * (1.0 + sign * pct / 100.0);
+                Some(CorridorStep {
+                    t_ms,
+                    level,
+                    band: (edge(near_pct), edge(retreat_pct(near_pct, far_pct))),
+                })
+            })
+            .collect();
+        (fill, steps)
     }
 
     /// Args (beyond [`Self::run`]'s):

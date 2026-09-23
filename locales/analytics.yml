@@ -1752,6 +1752,30 @@ analytics.ticks.deltas_tip_market:
   ru: "снимок отчёта — средняя по всем рынкам биржи"
   en: "the report's snapshot — an average over every market of the exchange"
   es: "la instantánea del informe — un promedio de todos los mercados del exchange"
+analytics.ticks.trade_expand:
+  ru: "Показать окно сделки — клик по строке покажет её здесь"
+  en: "Show the trade pane — a click on a row shows it here"
+  es: "Mostrar el panel de la operación — un clic en una fila la muestra aquí"
+analytics.ticks.trade_collapse:
+  ru: "Свернуть окно сделки"
+  en: "Collapse the trade pane"
+  es: "Contraer el panel de la operación"
+analytics.ticks.trade_legend:
+  ru: "факт — сплошные, В1 — штрих, В2 — пунктир"
+  en: "fact solid, V1 dashed, V2 dotted"
+  es: "real continuo, V1 a trazos, V2 punteado"
+analytics.ticks.trade_pick:
+  ru: "Выберите сделку в таблице"
+  en: "Pick a trade in the table"
+  es: "Elija una operación en la tabla"
+analytics.ticks.trade_loading:
+  ru: "Загружаю сделку…"
+  en: "Loading the trade…"
+  es: "Cargando la operación…"
+analytics.ticks.trade_missing:
+  ru: "Сделка не найдена в отчёте"
+  en: "The trade is not in the report"
+  es: "La operación no está en el informe"
 analytics.ticks.only_fit:
   ru: "только годные"
   en: "reproduced only"
@@ -1788,6 +1812,18 @@ analytics.ticks.fetch_waiting:
   ru: "трейды: %{done}/%{total} · ждём биржу"
   en: "trades: %{done}/%{total} · waiting for the venue"
   es: "trades: %{done}/%{total} · esperando al exchange"
+analytics.ticks.col.kind:
+  ru: "тип"
+  en: "kind"
+  es: "tipo"
+analytics.ticks.col.plan:
+  ru: "план В1"
+  en: "plan V1"
+  es: "plan V1"
+analytics.ticks.plan_tip:
+  ru: "что вариант даёт этой сделке — как её считает колонка варианта, без комиссий; прочерк — вариант её не торгует или она вне выборки"
+  en: "what the variant makes of this trade — as the variant's column counts it, before fees; a dash — the variant makes no trade of it, or it is outside the sample"
+  es: "lo que la variante obtiene de esta operación — como la cuenta la columna de la variante, sin comisiones; un guion — la variante no la opera o queda fuera de la muestra"
 analytics.ticks.col.result:
   ru: "%"
   en: "%"

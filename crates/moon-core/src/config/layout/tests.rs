@@ -2211,6 +2211,8 @@ fn trade_window_fit_and_hide_rail_default_off_and_round_trip() {
     assert_eq!(off.trade_window_ticks, Some(false));
 }
 
+/// The corridor switch reads absent as OFF, the tuner pane's rail reads absent as HIDDEN, and
+/// both survive a round trip without touching the window's own rail switch.
 #[test]
 fn the_corridor_and_the_tuner_panes_rail_read_their_own_defaults() {
     let old: WindowLayout = toml::from_str("").expect("legacy layout");
@@ -2325,6 +2327,7 @@ fn the_ticks_axis_settings_round_trip_and_never_cost_the_layout() {
         analytics_ticks: Some(TicksAxisLayout {
             iters: Some(40),
             locked: vec!["SellPrice".to_string()],
+            trade_open: true,
             model: crate::db::tuner::ticks::ModelSettings {
                 latency_ms: 250.0,
                 entry_method: crate::db::tuner::ticks::EntryMethod::Shift,

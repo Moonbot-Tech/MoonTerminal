@@ -25,7 +25,7 @@ pub(in crate::analytics::tuner) fn order_for(state: &mut TicksState) -> &[usize]
             .filter(|&i| !state.only_fit || rows[i].fit())
             .collect();
         if let Some((key, desc)) = &state.sort {
-            sort_indices(rows, &mut order, key, *desc);
+            sort_indices(rows, &state.plan[0], &mut order, key, *desc);
         }
         state.order = Some(OrderCache {
             rows_rev: state.rows_rev,
@@ -77,7 +77,13 @@ fn model_rank(row: &DealRow) -> u8 {
     }
 }
 
-fn sort_indices(rows: &[DealRow], order: &mut [usize], key: &str, desc: bool) {
+fn sort_indices(
+    rows: &[DealRow],
+    plan: &std::collections::HashMap<i64, (f64, f64)>,
+    order: &mut [usize],
+    key: &str,
+    desc: bool,
+) {
     let by_f64 = |f: &dyn Fn(&DealRow) -> f64, order: &mut [usize]| {
         order.sort_by(|&a, &b| {
             let (x, y) = (f(&rows[a]), f(&rows[b]));
@@ -90,6 +96,10 @@ fn sort_indices(rows: &[DealRow], order: &mut [usize], key: &str, desc: bool) {
             let c = rows[a].deal.coin.cmp(&rows[b].deal.coin);
             if desc { c.reverse() } else { c }
         }),
+        COL_KIND => order.sort_by(|&a, &b| {
+            let c = rows[a].deal.kind.cmp(&rows[b].deal.kind);
+            if desc { c.reverse() } else { c }
+        }),
         COL_CORE => order.sort_by(|&a, &b| {
             let c = rows[a].deal.core_name.cmp(&rows[b].deal.core_name);
             if desc { c.reverse() } else { c }
@@ -97,6 +107,21 @@ fn sort_indices(rows: &[DealRow], order: &mut [usize], key: &str, desc: bool) {
         COL_RESULT => by_f64(&result_pct, order),
         // Unpriced sorts as the smallest.
         COL_PROFIT => by_f64(&|r| r.deal.profit.unwrap_or(f64::MIN), order),
+        // By the number the cell shows — per cent in percent mode, money otherwise; a deal В1
+        // makes no trade of sorts as the smallest, like an unpriced one.
+        COL_PLAN => {
+            let pct = crate::analytics::pnl_is_pct();
+            by_f64(
+                &|r| {
+                    plan.get(&r.deal.report_uid)
+                        .map_or(
+                            f64::MIN,
+                            |(money, percent)| if pct { *percent } else { *money },
+                        )
+                },
+                order,
+            )
+        }
         COL_DURATION => by_f64(&|r| (r.deal.close_ms - r.deal.buy_ms) as f64, order),
         // By the trail — the half the exit horizon is taken from; nothing held is the shortest.
         COL_HELD => by_f64(

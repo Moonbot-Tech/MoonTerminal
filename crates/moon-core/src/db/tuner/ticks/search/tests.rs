@@ -138,6 +138,45 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
     );
     assert!((tally.profit - 80.0).abs() < 1e-6);
     assert!((spent - 8_000.0).abs() < 1e-6);
+    // And one deal of it as the trade pane draws it: the same parameters, the same replay — the
+    // entry at the fact, the take at 1 % on the peak.
+    let picture = variant_picture(
+        &deals[0],
+        &base,
+        &defaults,
+        "PumpsDetection",
+        &result.values,
+        ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+    );
+    assert!(picture.corridor.is_empty(), "no entry model, no corridor");
+    let outcome = picture.outcome;
+    assert_eq!(outcome.fill.map(|f| f.t_ms), Some(deals[0].deal.buy_ms));
+    let exit = outcome.exit.expect("an exit");
+    assert_eq!(exit.kind, crate::db::tuner::ticks::ExitKind::Take);
+    assert!((exit.price - 101.0).abs() < 1e-6, "{exit:?}");
+    assert!((outcome.profit_pct.expect("a trade") - 1.0).abs() < 1e-6);
+    // And the deal table's plan column: every deal's money, summing to the column's tally.
+    let (by_tally, by_spent, money) = variant_tally_by_deal(
+        &deals,
+        &base,
+        &defaults,
+        "PumpsDetection",
+        &result.values,
+        ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+    );
+    assert_eq!(by_tally.n, tally.n);
+    assert!((by_tally.profit - tally.profit).abs() < 1e-9);
+    assert!((by_spent - spent).abs() < 1e-9);
+    assert_eq!(money.len(), 8);
+    assert!(money.iter().all(|(_, m)| {
+        m.is_some_and(|(money, pct)| (money - 10.0).abs() < 1e-6 && (pct - 1.0).abs() < 1e-6)
+    }));
 }
 
 #[test]

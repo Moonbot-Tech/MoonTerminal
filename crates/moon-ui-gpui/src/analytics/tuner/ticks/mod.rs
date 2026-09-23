@@ -7,7 +7,9 @@
 //! shown; the switch under the table narrows it to the sample the variants and the search run
 //! on — the rows whose tape covers the window AND which the model reproduces (`DealRow::fit`) —
 //! and the status line says how many that is out of the scope; the table's head opens the model's
-//! settings (`cfg.rs`), which decide its ✓ column. Right: the shared KPI matrix over the fit rows
+//! settings (`cfg.rs`), which decide its ✓ column. Under the table, behind a rail, the trade pane
+//! (`trade_pane.rs`): the selected deal as its trade window draws it, with the variants' trades
+//! beside the fact. Right: the shared KPI matrix over the fit rows
 //! (captioned with the ✓ shares) and the two variant columns, and the parameter grid laid out as
 //! the "By filter" one — the strategies' values, the variant columns, the search row with its
 //! settings popover.
@@ -43,6 +45,7 @@ mod load;
 pub(in crate::analytics) mod model_cfg;
 pub(in crate::analytics::tuner) mod rows;
 pub(in crate::analytics) mod state;
+mod trade_pane;
 mod variants;
 
 impl AnalyticsView {
@@ -139,7 +142,19 @@ impl AnalyticsView {
                                 let order = view.ticks.order.as_ref()?;
                                 let row =
                                     view.ticks.data.data()?.rows.get(*order.order.get(ix)?)?;
-                                Some(deal_row(row, weak.clone(), p, scale, row_h, app))
+                                let selected = view.ticks.trade.open
+                                    && view.ticks.trade.uid == Some(row.deal.report_uid);
+                                let plan = PlanCell::of(&view.ticks, row.deal.report_uid);
+                                Some(deal_row(
+                                    row,
+                                    selected,
+                                    plan,
+                                    weak.clone(),
+                                    p,
+                                    scale,
+                                    row_h,
+                                    app,
+                                ))
                             })
                             .unwrap_or_else(|| div().into_any_element())
                     })
@@ -355,17 +370,28 @@ impl AnalyticsView {
     ///     report_uid: The row's `ReportUID` — the core's own key for the trade, not the replica's row id.
     ///     cx: View context.
     fn open_deal_window(&mut self, report_uid: i64, cx: &mut Context<Self>) {
-        let Some(row) = self
+        let Some((target, axis)) = self.deal_target(report_uid) else {
+            return;
+        };
+        crate::trade_window::open_record::open_trade_record(&self.backend, axis, target, cx);
+    }
+
+    /// The replica row one deal of the table names, with the axis its captions render on — for
+    /// the trade window and for the trade pane alike. `None` when the row is not in the table or
+    /// has no address.
+    fn deal_target(
+        &self,
+        report_uid: i64,
+    ) -> Option<(
+        crate::trade_window::open_record::RecordTarget,
+        moon_core::db::ReportAxis,
+    )> {
+        let row = self
             .ticks
             .data
             .data()
-            .and_then(|d| d.rows.iter().find(|r| r.deal.report_uid == report_uid))
-        else {
-            return;
-        };
-        let Some(address) = row.address.as_ref() else {
-            return;
-        };
+            .and_then(|d| d.rows.iter().find(|r| r.deal.report_uid == report_uid))?;
+        let address = row.address.as_ref()?;
         let q = self.query();
         // The window's neighbours are the core's other trades of this coin over the axis's
         // period — the Query's bounds are true UTC and `to` is exclusive, as the filter's
@@ -386,7 +412,7 @@ impl AnalyticsView {
             market: address.market.clone(),
             filter,
         };
-        crate::trade_window::open_record::open_trade_record(&self.backend, q.axis, target, cx);
+        Some((target, q.axis))
     }
 
     /// The table's heading row: every column sortable, the arrow on the active one. Each
@@ -397,11 +423,14 @@ impl AnalyticsView {
         let sortable =
             |id: SharedString, title: String, key: &'static str, col: Option<&DealCol>| {
                 let arrow = sort_arrow_of(&self.ticks.sort, key);
+                let tip = title.clone();
                 match col {
                     Some(col) => deal_cell(col, scale),
                     None => coin_cell(scale),
                 }
                 .id(id)
+                // The heading is cut to its column like a cell; the whole of it on hover.
+                .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tip.clone())).into())
                 .cursor_pointer()
                 .text_color(if arrow.is_empty() {
                     moon(p.text_soft)
@@ -576,15 +605,77 @@ impl AnalyticsView {
     }
 }
 
-/// The heading of one column. The profit column names its unit — the cells are bare numbers,
-/// and `Deal::profit` is USDT whatever the scope's own quote or metric (the ticker is
-/// language-neutral, see locales/README.md).
+/// The heading of one column. The two money columns name their unit — the cells are bare
+/// numbers: `Deal::profit` is USDT whatever the scope's own quote or metric (the ticker is
+/// language-neutral, see locales/README.md); the plan follows the active metric — per cent in
+/// percent mode, else the sample's money under its ticker (`PlanCell::render` prints the same
+/// choice).
 fn column_title(col: &DealCol) -> String {
     let title = t!(col.label).to_string();
-    if col.key == COL_PROFIT {
-        format!("{title}, USDT")
-    } else {
-        title
+    match col.key {
+        COL_PROFIT => format!("{title}, USDT"),
+        COL_PLAN => match crate::analytics::pnl_unit_label() {
+            "" => title,
+            unit => format!("{title}, {unit}"),
+        },
+        _ => title,
+    }
+}
+
+/// What the plan column shows for one deal: each variant's `(money, per cent)` where the variant
+/// was scored, `None` in an outer slot for a variant not scored at all.
+#[derive(Clone, Copy)]
+struct PlanCell([Option<Option<(f64, f64)>>; 2]);
+
+impl PlanCell {
+    /// The deal's plan under both variants, from the state the columns were scored into.
+    fn of(state: &state::TicksState, uid: i64) -> Self {
+        Self(std::array::from_fn(|i| {
+            state
+                .var_stats
+                .get(i)
+                .and_then(|s| s.as_ref())
+                .map(|_| state.plan[i].get(&uid).copied())
+        }))
+    }
+
+    /// The cell's text, colour and tooltip: В1's result — per cent in percent mode, the
+    /// sample's money otherwise, as the heading says — a dash where В1 makes no trade of the
+    /// deal, nothing while В1 is untouched.
+    fn render(self, p: MoonPalette) -> (String, u32, Option<String>) {
+        let pct = crate::analytics::pnl_is_pct();
+        let pick = |(money, percent): (f64, f64)| if pct { percent } else { money };
+        let money = |value: Option<(f64, f64)>| match value {
+            Some(v) => super::super::summary::fmt_signed(pick(v)),
+            None => "—".to_string(),
+        };
+        let tip = || {
+            let parts: Vec<String> = self
+                .0
+                .iter()
+                .enumerate()
+                .filter_map(|(i, v)| {
+                    v.map(|v| format!("{} {}", t!("analytics.ticks.var_n", n = i + 1), money(v)))
+                })
+                .collect();
+            (!parts.is_empty())
+                .then(|| format!("{} · {}", parts.join(" · "), t!("analytics.ticks.plan_tip")))
+        };
+        match self.0[0] {
+            None => (String::new(), p.text_muted, tip()),
+            Some(None) => ("—".to_string(), p.text_muted, tip()),
+            Some(Some(v)) => (
+                money(Some(v)),
+                if pick(v) > 0.0 {
+                    p.green
+                } else if pick(v) < 0.0 {
+                    p.red
+                } else {
+                    p.text_muted
+                },
+                tip(),
+            ),
+        }
     }
 }
 
@@ -725,9 +816,13 @@ fn model_mark(row: &DealRow) -> (String, String) {
     )
 }
 
-/// One deal row. A double-click opens the trade window on it, as a Report row does.
+/// One deal row. A click shows it in the trade pane, while the pane is open; a double-click
+/// opens the trade window on it, as a Report row does.
+#[allow(clippy::too_many_arguments)]
 fn deal_row(
     row: &DealRow,
+    selected: bool,
+    plan: PlanCell,
     view: WeakEntity<AnalyticsView>,
     p: MoonPalette,
     scale: f32,
@@ -759,12 +854,14 @@ fn deal_row(
         .px(design::ui_px(cx, DEAL_ROW_PAD_X))
         .gap(design::ui_px(cx, DEAL_ROW_GAP))
         .items_center()
-        .bg(moon(p.table_body))
+        .bg(moon(if selected { p.panel_high } else { p.table_body }))
         .border_t_1()
         .border_color(moon_alpha(p.border, 0.5))
         .child(coin_cell(scale).child(d.coin.clone()));
     for col in DEAL_COLS {
         let (value, color, tip) = match col.key {
+            COL_KIND => (d.kind.clone(), p.text_muted, Some(d.kind.clone())),
+            COL_PLAN => plan.render(p),
             // The core by the name the report carries; a row that carries none names it by
             // its uid, which is still an address.
             COL_CORE => (
@@ -846,11 +943,13 @@ fn deal_row(
     el = el
         .hover(move |s| s.bg(moon_alpha(p.panel_high, 0.9)))
         .on_click(move |ev: &ClickEvent, _window, app| {
-            if ev.click_count() < 2 {
-                return;
-            }
             // The view may already be gone; a dropped window is not an error here.
-            let _ = view.update(app, |this, cx| this.open_deal_window(uid, cx));
+            let _ = view.update(app, |this, cx| match ev.click_count() {
+                // The first click of a double-click lands here too: the pane shows the deal the
+                // window then opens on.
+                1 => this.ticks_select_deal(uid, cx),
+                _ => this.open_deal_window(uid, cx),
+            });
         });
     el.into_any_element()
 }

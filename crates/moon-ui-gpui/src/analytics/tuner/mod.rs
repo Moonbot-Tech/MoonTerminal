@@ -679,8 +679,16 @@ impl AnalyticsView {
             // The coin table sits UNDER the list, where the histogram sits in "Filters":
             // both are "the detail behind the selected strategy".
             StratMode::Coins => left = left.children(coins_card),
-            // The deal table, in the same slot: the trades behind the selected strategy.
-            StratMode::Ticks => left = left.children(ticks_card),
+            // The deal table, in the same slot: the trades behind the selected strategy — and
+            // under it, behind a rail of its own, the pane drawing the selected deal.
+            StratMode::Ticks => {
+                left = left
+                    .children(ticks_card)
+                    .child(self.ticks_trade_rail(p, cx));
+                if self.ticks.trade.open {
+                    left = left.child(self.ticks_trade_pane(p, cx));
+                }
+            }
             StratMode::Time => unreachable!("Time mode returns early above"),
         }
 

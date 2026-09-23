@@ -346,17 +346,24 @@ pub(in crate::analytics) struct TicksState {
     /// Whether that task is still in its loop — it ends with the batch, and the next batch
     /// attaches a fresh one.
     pub(in crate::analytics::tuner) fetch_listening: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Generation of the tape stage in flight; an older stage's answer is dropped (`load.rs`).
+    pub(in crate::analytics::tuner) tape_seq: u64,
     /// The model settings every judged row of the table was judged under, when one set is known
     /// — what lets a reload carry a row's verdict instead of replaying it (`load.rs`, stage B).
     /// `None` until a tape stage has judged the table, and from a change of the settings until
     /// the stage that re-judges it has folded.
-    /// Generation of the tape stage in flight; an older stage's answer is dropped (`load.rs`).
-    pub(in crate::analytics::tuner) tape_seq: u64,
     pub(in crate::analytics::tuner) judged_under:
         Option<moon_core::db::tuner::ticks::ModelSettings>,
     /// Whether the tape stage of a load is still reading the rows' tape off the worker: until
     /// it folds, every addressed row reads "missing" without meaning it.
     pub(in crate::analytics::tuner) tape_reading: bool,
+    /// The trade pane under the table (`trade_pane.rs`).
+    pub(in crate::analytics::tuner) trade: super::trade_pane::TradePane,
+    /// Each variant's result per deal, by `ReportUID`, as `(money in the sample's unit, per cent)`
+    /// — what the column counted for that deal (`variant_tally_by_deal`). A deal absent is one the variant makes
+    /// no trade of, or one outside the replayed sample. Scored with the columns, cleared with
+    /// them.
+    pub(in crate::analytics::tuner) plan: [HashMap<i64, (f64, f64)>; N_VAR],
 }
 
 impl Default for TicksState {
@@ -396,6 +403,8 @@ impl Default for TicksState {
             tape_reading: false,
             judged_under: None,
             tape_seq: 0,
+            trade: Default::default(),
+            plan: Default::default(),
         }
     }
 }
@@ -424,6 +433,7 @@ impl TicksState {
         self.passes = saved.passes.map(|n| n.to_string()).unwrap_or_default();
         self.gate_pct = saved.gate_pct.map(|n| n.to_string()).unwrap_or_default();
         self.locked = saved.locked.iter().cloned().collect();
+        self.trade.open = saved.trade_open;
     }
 
     /// The axis' settings as the layout persists them, the model's from their process-wide
@@ -440,6 +450,7 @@ impl TicksState {
             gate_pct: number(&self.gate_pct),
             locked,
             model: super::model_cfg::current(),
+            trade_open: self.trade.open,
         }
     }
 
@@ -460,6 +471,7 @@ impl TicksState {
         self.var_seq = self.var_seq.wrapping_add(1);
         self.var_task = None;
         self.var_stats = Default::default();
+        self.plan = Default::default();
         self.stop_search();
         // A note about the previous scope's search says nothing about this one.
         self.sugg_note = None;

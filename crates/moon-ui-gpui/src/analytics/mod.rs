@@ -624,6 +624,11 @@ pub struct AnalyticsView {
     /// user left inside it. Forcing either value here would destroy a choice they made on
     /// purpose and persisted.
     side_collapsed: bool,
+    /// The shell colour the window's clear colour was last set to. The window paints no
+    /// background of its own (`MoonBackgroundPolicy::NoFill`) so the chart of the tuner's trade
+    /// pane — drawn UNDER the GPUI scene — shows through; the clear colour stands in for the
+    /// root's fill and follows the palette from `render`, set only when it moved.
+    clear_shell: Option<u32>,
     /// Threshold tuner (Filters mode), with its state defined in its own module.
     tuner: tuner::TunerState,
     /// The "By coin" mode: the table's view controls, the picked coins that define
@@ -1074,6 +1079,7 @@ impl AnalyticsView {
             kpi_collapsed: saved_kpi_collapsed,
             hist_collapsed: saved_hist_collapsed,
             side_collapsed: saved_side_collapsed,
+            clear_shell: None,
             tuner: tuner::TunerState::load(
                 saved_tuner_iters,
                 saved_tuner_edges,
@@ -2375,7 +2381,10 @@ pub fn open(
     if let Ok(handle) = cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| AnalyticsView::new(b, window, cx));
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
+        // NoFill: the tuner's trade pane draws a chart UNDER the GPUI scene, and an opaque root
+        // (or any fill above the pane) hides it whole. The clear colour is the shell's, the fill
+        // the root used to paint; `AnalyticsView::render` keeps it on the palette.
+        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::NoFill))
     }) {
         backend.update(cx, |bk, _| bk.analytics_window = Some(handle));
         crate::window::windowing::activate_new_window(handle.into(), cx);

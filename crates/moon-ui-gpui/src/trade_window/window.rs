@@ -186,10 +186,6 @@ pub(crate) struct TradeSeed {
 ///
 /// Returns:
 ///     The view, for the host to render and to hand modelled trades to.
-#[expect(
-    dead_code,
-    reason = "the tuner's Entry/Exit axis, its consumer, lands separately"
-)]
 pub(crate) fn embedded_trade_view(
     backend: &Entity<Backend>,
     seed: TradeSeed,

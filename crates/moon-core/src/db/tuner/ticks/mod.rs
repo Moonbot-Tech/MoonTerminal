@@ -45,7 +45,7 @@ pub use deals::{DealsRead, read_deals};
 pub use entry::{EntryModel, entry_model_for};
 pub use exit::{ExitModel, ExitParams, archived_pre_spike_ask, archived_take, take_model_for};
 pub use hook::{HookDetect, KIND_MOONHOOK, hook_take_pct, parse_hook_detect};
-pub use mshot::{EntryMethod, MshotEntry, MshotParams, UsePrice};
+pub use mshot::{CorridorStep, EntryMethod, MshotEntry, MshotParams, UsePrice};
 pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};
 pub use record::{OwnLines, StopAnchor, entry_placement, fit_for_search, prepare_deal};
 pub use scope::{is_service_row, is_tunable};

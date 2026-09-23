@@ -645,6 +645,8 @@ pub struct TicksAxisLayout {
     pub locked: Vec<String>,
     /// The model's own settings.
     pub model: crate::db::tuner::ticks::ModelSettings,
+    /// Whether the trade pane under the deal table is open.
+    pub trade_open: bool,
 }
 
 /// Complete window layout.

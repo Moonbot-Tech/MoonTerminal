@@ -26,12 +26,15 @@ pub(in crate::analytics::tuner) enum Align {
 }
 
 pub(in crate::analytics::tuner) const COL_COIN: &str = "coin";
+pub(in crate::analytics::tuner) const COL_KIND: &str = "kind";
 pub(in crate::analytics::tuner) const COL_CORE: &str = "core";
 /// The entry time — the table's default order (newest first), not a column: a deal is found
 /// by its coin and core, and the time is one double-click away in the trade window.
 pub(in crate::analytics::tuner) const COL_TIME: &str = "time";
 pub(in crate::analytics::tuner) const COL_RESULT: &str = "result";
 pub(in crate::analytics::tuner) const COL_PROFIT: &str = "profit";
+/// What В1 makes of the deal, in the sample's money — the per-deal share of the В1 column.
+pub(in crate::analytics::tuner) const COL_PLAN: &str = "plan";
 pub(in crate::analytics::tuner) const COL_DURATION: &str = "duration";
 pub(in crate::analytics::tuner) const COL_HELD: &str = "held";
 pub(in crate::analytics::tuner) const COL_REASON: &str = "reason";
@@ -48,13 +51,20 @@ const fn col(key: &'static str, label: &'static str, w: f32, min_w: f32, align: 
     }
 }
 
-/// The columns after the coin, in reading order: whose core, what came of it (per cent and
-/// money), how long it was held, how much tape the terminal holds around it, why it closed,
+/// The columns after the coin, in reading order: the strategy kind, whose core, what came of it
+/// (per cent and money) and what В1 would make of it, how long it was held, how much tape the terminal holds around it, why it closed,
 /// and the two marks of this axis. The prices and the market deltas were dropped on
 /// 2026-09-20, the entry time on 2026-09-21: this table is the axis's SAMPLE — which trades
 /// have their tape and how the model does on them — and every other figure is one
 /// double-click away in the trade window.
 pub(in crate::analytics::tuner) const DEAL_COLS: &[DealCol] = &[
+    col(
+        COL_KIND,
+        "analytics.ticks.col.kind",
+        76.0,
+        52.0,
+        Align::Left,
+    ),
     col(COL_CORE, "analytics.col.core", 72.0, 48.0, Align::Left),
     col(
         COL_RESULT,
@@ -66,8 +76,15 @@ pub(in crate::analytics::tuner) const DEAL_COLS: &[DealCol] = &[
     col(
         COL_PROFIT,
         "analytics.ticks.col.profit",
-        72.0,
-        56.0,
+        96.0,
+        60.0,
+        Align::Right,
+    ),
+    col(
+        COL_PLAN,
+        "analytics.ticks.col.plan",
+        104.0,
+        60.0,
         Align::Right,
     ),
     col(
@@ -82,7 +99,7 @@ pub(in crate::analytics::tuner) const DEAL_COLS: &[DealCol] = &[
         "analytics.ticks.col.held",
         76.0,
         60.0,
-        Align::Right,
+        Align::Center,
     ),
     col(
         COL_REASON,

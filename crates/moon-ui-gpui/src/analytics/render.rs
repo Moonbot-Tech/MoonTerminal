@@ -27,6 +27,12 @@ impl Render for AnalyticsView {
             self.sync_period_pickers(window, cx);
         }
         let p = MoonPalette::active(cx);
+        // The window's background is its clear colour (see `clear_shell`): re-set only when the
+        // palette moved it.
+        if self.clear_shell != Some(p.shell) {
+            self.clear_shell = Some(p.shell);
+            crate::window::windowing::configure_shell_clear_color(window, cx);
+        }
         let (unit, split) = match self.tab {
             Tab::Summary => (self.data.unit(), self.data.split().cloned()),
             Tab::Strategies => (
@@ -61,7 +67,8 @@ impl Render for AnalyticsView {
         v_flex()
             .size_full()
             .relative()
-            .bg(moon(p.shell))
+            // No fill here: the clear colour is the shell (`clear_shell`), and a fill would cover
+            // the trade pane's chart, which draws under the scene.
             .text_color(moon(p.text))
             .font_family(design::mono())
             .text_size(design::t_body(cx))
