@@ -82,6 +82,14 @@ tab.badges:
   ru: "Бейджи"
   en: "Badges"
   es: "Insignias"
+tab.interface_colors:
+  ru: "Цвета"
+  en: "Colors"
+  es: "Colores"
+tab.general_main:
+  ru: "Основное"
+  en: "Main"
+  es: "Principal"
 
 # --- Badges tab (detect types) ---
 badges.title:

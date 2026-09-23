@@ -5,22 +5,26 @@
 //! Save writes to disk through `AppConfig::save`; the shared daily scheduler independently owns
 //! recovery copies in `backups/settings/`.
 //!
-//! The window is split into tabs like the egui original. This module owns the `SettingsView`
-//! state and `open`; tab state and `impl SettingsView` blocks live in submodules. [`render`] owns
-//! the tab bar, header, body, and Save footer, [`apply`] owns persistence and activation, and
-//! [`common`] provides the shared UI and draft-binding helpers re-exported below.
+//! The window is split into pages like the egui original. Five strip buttons reach them:
+//! Connections, Telegram, Hotkeys, Interface, and General. Interface and General each open an
+//! inner switch over the pages that used to be their own buttons. This module owns the
+//! `SettingsView` state and `open`; tab state and `impl SettingsView` blocks live in submodules.
+//! [`render`] owns the tab bar, header, body, and Save footer, [`apply`] owns persistence and
+//! activation, and [`common`] provides the shared UI and draft-binding helpers re-exported below.
 
 mod apply;
 mod badges;
 mod common;
 mod connections;
 mod general;
+mod groups;
 mod hotkeys;
 mod import_preview;
 mod interface;
 mod lines;
 mod render;
 mod security;
+mod segment;
 mod share;
 mod sound_folder;
 mod storage;
@@ -57,8 +61,11 @@ use lines::Lines;
 
 const SETTINGS_HEADER_H: f32 = 30.0;
 
-/// Settings categories, including immediate preferences outside the config draft.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// One Settings page, including immediate preferences outside the config draft.
+///
+/// The strip does not draw one button per page. [`groups::TabGroup`] is the button, and
+/// Interface and General each cover three of these pages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Tab {
     Connections,
     General,
@@ -72,17 +79,6 @@ pub(crate) enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 9] = [
-        Tab::Connections,
-        Tab::Telegram,
-        Tab::General,
-        Tab::Hotkeys,
-        Tab::Interface,
-        Tab::Lines,
-        Tab::Badges,
-        Tab::Storage,
-        Tab::TradeSounds,
-    ];
     /// Returns the stable, deliberately untranslated tab ID used by `MoonButton::new` and keys.
     fn id(self) -> &'static str {
         match self {
@@ -111,6 +107,15 @@ impl Tab {
             Tab::TradeSounds => t!("trade_sounds.tab"),
         }
         .to_string()
+    }
+    /// Returns the caption inside a group's inner switch. A group's lead page gets its own
+    /// name there, so the switch never repeats the strip button above it.
+    fn segment_title(self) -> String {
+        match self {
+            Tab::Interface => t!("tab.interface_colors").to_string(),
+            Tab::General => t!("tab.general_main").to_string(),
+            _ => self.title(),
+        }
     }
 }
 
@@ -168,6 +173,8 @@ pub(crate) enum StatusMsg {
 pub struct SettingsView {
     backend: Entity<Backend>,
     active: Tab,
+    /// Interface and General sub-page last chosen in this window. Not persisted.
+    subpages: groups::SubpageMemory,
     /// Save status as `(message, is_error)`.
     status: Option<(StatusMsg, bool)>,
     iface: Iface,
@@ -587,6 +594,7 @@ impl SettingsView {
             conn_hint_armed: false,
             backend,
             active: tab,
+            subpages: groups::SubpageMemory::for_initial(tab),
             status: None,
             iface,
             lines,

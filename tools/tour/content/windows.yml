@@ -38,5 +38,5 @@ windows:
     ru: Настройки
     en: Settings
   body:
-    ru: 'Семь вкладок: Подключения, Общие, Хоткеи, Интерфейс, Линии, Бейджи, Хранилище.'
-    en: 'Seven tabs: Connections, General, Hotkeys, Interface, Lines, Badges, Storage.'
+    ru: 'Пять вкладок: Подключения, Telegram, Хоткеи, Интерфейс (внутри — Линии и Бейджи), Общие (внутри — Хранилище и Звуки сделок).'
+    en: 'Five tabs: Connections, Telegram, Hotkeys, Interface (holding Lines and Badges), General (holding Storage and Trade sounds).'
