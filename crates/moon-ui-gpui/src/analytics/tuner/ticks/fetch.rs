@@ -20,7 +20,7 @@ use super::state::{RowAddress, TapeStatus};
 use crate::Backend;
 use moon_core::db::tuner::ticks::{Deal, model_window};
 use moon_core::market::MarketDataSource;
-use moon_core::market::trade_replay::{long_position_ms, model_margin_ms};
+use moon_core::market::trade_replay::{long_position_ms, margin_ms};
 
 pub(crate) mod autoload;
 pub(in crate::analytics::tuner) mod job;
@@ -99,7 +99,7 @@ impl FetchResolver {
         deal: Deal,
         address: Arc<RowAddress>,
     ) -> Option<job::QueuedRow> {
-        let window = model_window(&deal, model_margin_ms(), long_position_ms())?;
+        let window = model_window(&deal, margin_ms(), long_position_ms())?;
         let replay_address = self.source.replay_address(address.core_uid).ok()?;
         let terms = self
             .source

@@ -12,7 +12,7 @@ use super::{
 };
 
 const MARGINS: Margins = Margins {
-    model_ms: 60_000,
+    margin_ms: 60_000,
     long_position_ms: 5 * 60_000,
 };
 
@@ -48,10 +48,10 @@ fn spans(keep: &KeepMap, k: &(String, String)) -> Vec<(i64, i64)> {
     keep.get(k).map(|c| c.spans().to_vec()).unwrap_or_default()
 }
 
-/// A row the catalog names claims its window's focus at the model's margin, on the market the
-/// catalog named.
+/// A row the catalog names claims its window's focus at the margin, on the market the catalog
+/// named.
 #[test]
-fn a_live_row_claims_at_the_model_margin() {
+fn a_live_row_claims_at_the_margin() {
     let inv = inventory(&[("4:0", "ACEUSDT")]);
     let ace = owner(1, "ACE", 1_000_000, 1_010_000, "MoonShot");
     let ben = owner(1, "BEN", 5_000_000, 5_010_000, "MoonShot");
@@ -135,7 +135,8 @@ fn a_row_with_its_orders_creation_claims_from_the_creation() {
     );
 }
 
-/// A position held longer than five minutes claims its two ends, not its middle.
+/// A position held longer than five minutes claims its two ends, the margin on both sides of
+/// each, not its middle.
 #[test]
 fn a_long_position_claims_its_two_ends() {
     let inv = inventory(&[("4:0", "ACEUSDT")]);
@@ -151,8 +152,8 @@ fn a_long_position_claims_its_two_ends() {
     assert_eq!(
         spans(&keep, &key("4:0", "ACEUSDT")),
         vec![
-            (1_000_000 - 30_000, 1_000_000 + 30_000),
-            (4_600_000 - 30_000, 4_600_000 + 30_000)
+            (1_000_000 - 60_000, 1_000_000 + 60_000),
+            (4_600_000 - 60_000, 4_600_000 + 60_000)
         ]
     );
 }
@@ -277,7 +278,7 @@ fn the_reach_is_the_margin_and_the_orders_wait_in_whole_seconds() {
     assert_eq!(MARGINS.reach_s(), 661);
     assert_eq!(
         Margins {
-            model_ms: 7_200_000,
+            margin_ms: 7_200_000,
             long_position_ms: 60_000
         }
         .reach_s(),
@@ -342,8 +343,8 @@ fn probe_a_copied_data_dir() {
         .map(|o| (o.core_uid, "USDT".to_string()))
         .collect();
     println!(
-        "[probe] margin: model {} ms, long position from {} ms",
-        margins.model_ms,
+        "[probe] margin: {} ms, long position from {} ms",
+        margins.margin_ms,
         moon_core::market::trade_replay::long_position_ms()
     );
     for apply in [false, true] {

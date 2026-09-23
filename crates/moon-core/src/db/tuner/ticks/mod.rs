@@ -289,7 +289,7 @@ pub fn model_window(deal: &Deal, margin_ms: i64, long_position_ms: i64) -> Optio
 /// The replay window of a trade as the model needs it: from the entry order's creation
 /// ([`order_open_at`]) through the close, one stretch. Where that stretch would be walked as its
 /// two ends — the order's life plus the position outrun `long_position_ms` — the window opens at
-/// the fill as before: an entry end centred on the creation would leave the fill itself between
+/// the fill as before: an entry end around the creation would leave the fill itself between
 /// the ends, where nothing is fetched. The tape cleanup claims by this same rule
 /// (`trades_cleanup`), so what the tuner fetched is what it keeps.
 ///
@@ -297,7 +297,7 @@ pub fn model_window(deal: &Deal, margin_ms: i64, long_position_ms: i64) -> Optio
 ///     order_open_ms: The order's creation where a replay may start there ([`order_open_at`]).
 ///     buy_ms: The fill of the entry.
 ///     close_ms: The close.
-///     margin_ms: The model's margin (`trade_replay::model_margin_ms`).
+///     margin_ms: The margin setting (`trade_replay::margin_ms`).
 ///     long_position_ms: The threshold the window is split by — the caller's, so every stage
 ///         of one row splits it the same way.
 ///
@@ -402,14 +402,16 @@ pub const TAIL_MS: i64 = crate::market::trade_replay::MODEL_PAD_MS;
 
 /// The part of a deal's window the model cannot do without: the run-up before the window's open
 /// — the entry order's creation where [`model_window`] opened there, else the buy — through the
-/// tail after the close, clipped to what the window asks for at all (a long position asks only
-/// around its two ends; a model's window is built with a margin of at least the pads, see
-/// `trade_replay::model_margin_ms`). Read off the window rather than the deal: the worker walks
-/// the pads around the window's own open as part of the trade, and a requirement reaching past
-/// them would name prints nobody was sure to fetch. The rest of the window — the trail beyond
-/// the tail, the lead beyond the run-up — is served as far as the tape goes: a venue's page
-/// budget runs out on the trail of a pumped coin long before the margin, and a variant that
-/// outlives the tape is marked open at the window's end.
+/// tail after the close, clipped to what the window asks for at all — a long position asks only
+/// around its two ends, and of each end the model is owed the pads, not the margin. The margin
+/// on both sides of a long position's end is the window's context: owed in full, a wider setting
+/// turned a trade the model already had into a missing one, and one past the venue's retention
+/// could never be covered again (2026-09-23). Read off the window rather than the deal: the
+/// worker walks the pads around the window's own open as part of the trade, and a requirement
+/// reaching past them would name prints nobody was sure to fetch. The rest of the window — the
+/// trail beyond the tail, the lead beyond the run-up — is served as far as the tape goes: a
+/// venue's page budget runs out on the trail of a pumped coin long before the margin, and a
+/// variant that outlives the tape is marked open at the window's end.
 ///
 /// Args:
 ///     window: The deal's window, as asked from the worker.
@@ -417,11 +419,15 @@ pub const TAIL_MS: i64 = crate::market::trade_replay::MODEL_PAD_MS;
 /// Returns:
 ///     The spans the held coverage must include for the deal to count as covered.
 pub fn required_spans(window: &ReplayWindow) -> Coverage {
+    let pads = ReplayWindow {
+        margin_ms: window.margin_ms.min(RUN_UP_MS.max(TAIL_MS)),
+        ..*window
+    };
     Coverage::one((
         window.open_ms.saturating_sub(RUN_UP_MS),
         window.close_ms.saturating_add(TAIL_MS),
     ))
-    .clip(&window.focus_spans())
+    .clip(&pads.focus_spans())
 }
 
 /// Run one trade through the entry and the exit model.

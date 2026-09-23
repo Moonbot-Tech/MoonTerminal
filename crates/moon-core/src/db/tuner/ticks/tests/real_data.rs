@@ -73,7 +73,9 @@ fn held_ticks(exchange_key: &str, market: &str, spans: &Coverage) -> (Vec<Tick>,
 
 /// One deal as the verdict saw it, for an analysis outside the probe: a JSON line in
 /// `<dir>/deals.jsonl` (the row, the strategy's raw values, the held walk's points, the archived
-/// Exit line) and its prints as `t,price,qty,side` in `<dir>/ticks/<uid>.csv`.
+/// Entry and Exit lines, the entry order's creation, placement and saved corridor, the MoonShot
+/// bounds) and its prints as `t,price,qty,side` in `<dir>/ticks/<uid>.csv`.
+#[allow(clippy::too_many_arguments)]
 fn dump_deal(
     dir: &str,
     deal: &Deal,
@@ -82,6 +84,7 @@ fn dump_deal(
     held: &super::super::line::LineWalk,
     exit_points: Option<&[(i64, f64)]>,
     entry_points: Option<&[(i64, f64)]>,
+    entry: &EntryParams,
 ) {
     use std::io::Write;
     let dir = PathBuf::from(dir);
@@ -103,6 +106,26 @@ fn dump_deal(
         "held_points": held.points.iter().map(|p| (p.t_ms, p.price)).collect::<Vec<_>>(),
         "archive": exit_points,
         "entry": entry_points,
+        "buy_set_ms": deal.buy_set_ms,
+        "order_open_ms": deal.order_open_ms(),
+        "entry_placed": deal.entry_placed,
+        "corridor": deal.corridor,
+        "mshot": match entry {
+            EntryParams::MoonShot(p) => {
+                let (near, far) = p.bounds_pct(&deal.deltas);
+                serde_json::json!({
+                    "near": near,
+                    "far": far,
+                    "use_price": format!("{:?}", p.use_price),
+                    "raise_wait_s": p.raise_wait_s,
+                    "replace_delay_s": p.replace_delay_s,
+                    "minus_satoshi": p.minus_satoshi,
+                    "fast_algo": p.fast_algo,
+                    "latency_ms": p.latency_ms,
+                })
+            }
+            _ => serde_json::Value::Null,
+        },
     });
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -254,7 +277,7 @@ fn real_data_reproduction() {
         .expect("pairs")
         .flatten()
         .collect();
-    let margin_ms = crate::market::trade_replay::model_margin_ms();
+    let margin_ms = crate::market::trade_replay::margin_ms();
     let venue_of_core = core_venues();
     eprintln!("core venues (from the identity lines of the logs): {venue_of_core:?}");
 
@@ -323,6 +346,18 @@ fn real_data_reproduction() {
         ticks.dedup_by(|a, b| a.time_ms == b.time_ms && a.price == b.price && a.qty == b.qty);
         if ticks.is_empty() || !covered.covers(&required_spans(&window)) {
             continue;
+        }
+        // What the verdict comes to on a shorter tape: `MOON_TICKS_CLIP_MS=5000` keeps only that
+        // much before the window's open and past the close, as a margin setting that low would.
+        if let Some(clip_ms) = std::env::var("MOON_TICKS_CLIP_MS")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+        {
+            let (from_ms, to_ms) = (window.open_ms - clip_ms, window.close_ms + clip_ms);
+            ticks.retain(|t| (from_ms..=to_ms).contains(&(t.time_ms as i64)));
+            if ticks.is_empty() {
+                continue;
+            }
         }
         with_tape += 1;
         deal.tick = infer_tick(&ticks);
@@ -403,6 +438,7 @@ fn real_data_reproduction() {
                     &held,
                     exit_points.as_deref(),
                     entry_line.as_deref(),
+                    &entry,
                 );
             }
             eprintln!(

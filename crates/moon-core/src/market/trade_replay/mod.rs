@@ -43,8 +43,8 @@ use crate::market::{CandleReadParams, ChartHistoryBuffers, ChartHistoryRead};
 use crate::venue::{Brand, Venue};
 pub use coverage::Coverage;
 pub use settings::{
-    cleanup_at_startup, long_position_ms, margin_ms, model_margin_ms, set_cleanup_at_startup,
-    set_long_position_min, set_margin_s, set_tape_autoload, tape_autoload,
+    cleanup_at_startup, long_position_ms, margin_ms, set_cleanup_at_startup, set_long_position_min,
+    set_margin_s, set_tape_autoload, tape_autoload,
 };
 pub use worker::{TickAnswer, TickQuery, query_held};
 
@@ -83,7 +83,7 @@ const CONTEXT_FRACTION: f64 = 0.5;
 
 // A position held longer than `[trade_replay] long_position_min` ([`long_position_ms`]) asks
 // for ticks only around its entry and its exit ([`ReplayWindow::focus_spans`]), each end
-// getting the window's margin centred on it; the middle stays bars.
+// getting the window's margin on both sides of it; the middle stays bars.
 //
 // A meaning bound, not a resource one: the page budget already caps what a walk can fetch, but
 // on a multi-hour position it burned out ~40 minutes after the entry and the exit came back as
@@ -326,11 +326,10 @@ pub struct ReplayWindow {
     /// Millisecond-exact when the core supplied a millisecond column, whole seconds otherwise.
     pub close_ms: i64,
     /// How many milliseconds of prints are asked for around the position, per end — the
-    /// `[trade_replay] margin_s` setting at the moment the window was built (floored for a
-    /// model's window, see `model_margin_ms`). A short position
-    /// gets this much before the entry and after the exit ([`Self::focus`]); a long one gets it
-    /// centred on each end ([`Self::focus_spans`]). Zero is the position alone — a value the
-    /// setting no longer offers, but one a hand-built window may still carry.
+    /// `[trade_replay] margin_s` setting at the moment the window was built ([`margin_ms`]).
+    /// A short position gets this much before the entry and after the exit ([`Self::focus`]);
+    /// a long one gets it on both sides of each end ([`Self::focus_spans`]). Zero is the position
+    /// alone — a value the setting no longer offers, but one a hand-built window may still carry.
     pub margin_ms: i64,
     /// How long a position must be held to be walked as its two ends — the `[trade_replay]
     /// long_position_min` setting at the moment the window was built ([`long_position_ms`]),
@@ -391,9 +390,11 @@ impl ReplayWindow {
         (left, right)
     }
     /// The stretches actually requested as ticks: the whole [`Self::focus`] on a position held up
-    /// to [`Self::long_position_ms`]; on a longer one, [`Self::margin_ms`] centred on the entry
-    /// and on the exit — half before each end, half after — two spans with the middle left to
-    /// bars.
+    /// to [`Self::long_position_ms`]; on a longer one, [`Self::margin_ms`] on both sides of the
+    /// entry and of the exit — two spans with the middle left to bars. Both sides, not half the
+    /// margin each: the stretch before the entry and past the exit is what the tuner's run-up
+    /// and exit horizon are, and a long position must get the same margin there as a short one
+    /// (the developer's call, 2026-09-23; the margin was centred on each end before).
     ///
     /// Returns:
     ///     One or two spans, each clamped into `[Self::from_ms, Self::to_ms]`. The two of a long

@@ -40,22 +40,14 @@ fn init() {
     });
 }
 
-/// The configured margin, in milliseconds — what every new chart [`super::ReplayWindow`] is
-/// built with. A model's window and the close-time capture take [`model_margin_ms`] instead.
+/// The configured margin, in milliseconds — what every new [`super::ReplayWindow`] is built
+/// with: a chart's, a tuner's, the close-time capture's, and the cleanup's claims. Its floor is
+/// the model's pad ([`super::MODEL_PAD_MS`], `config::storage::TRADE_MARGIN_STEPS_S`), so every
+/// position carries the whole run-up and tail — a long one gets the margin on both sides of each
+/// end ([`super::ReplayWindow::focus_spans`]).
 pub fn margin_ms() -> i64 {
     init();
     i64::from(MARGIN_S.load(Ordering::Relaxed)) * 1_000
-}
-
-/// The margin a MODEL's window is built with: the chart's margin, but never less than TWICE
-/// the model's own pad ([`super::MODEL_PAD_MS`]). The plan's trade tiles and the model's
-/// required span are both clipped to the window's focus, so a chart margin under the pad —
-/// 10 s is a valid setting — would otherwise leave the model without its
-/// run-up and its tail and never say so. Twice, because a long position's focus centres the
-/// margin on each end ([`super::ReplayWindow::focus_spans`]): half of it lies outside the
-/// position, and that half must still be a whole pad.
-pub fn model_margin_ms() -> i64 {
-    margin_ms().max(2 * super::MODEL_PAD_MS)
 }
 
 /// Move the live margin; the Storage tab writes `storage.toml` beside this. Windows already open

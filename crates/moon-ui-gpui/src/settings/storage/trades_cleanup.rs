@@ -37,7 +37,7 @@ use moon_core::db::tape_owners::{TapeOwner, read_tape_owners};
 use moon_core::db::tuner::ticks::{ORDER_WAIT_CAP_MS, model_window_at, order_open_at};
 use moon_core::market::MarketDataSource;
 use moon_core::market::trade_replay::trade_cache::{self, Inventory, KeepMap, TrimReport};
-use moon_core::market::trade_replay::{Coverage, long_position_ms, model_margin_ms, worker};
+use moon_core::market::trade_replay::{Coverage, long_position_ms, margin_ms, worker};
 use moon_core::symbol::Exchange;
 
 /// What one pass found — the preview's numbers, or the apply's.
@@ -71,18 +71,18 @@ pub(super) struct CleanupContext {
 
 /// What a claim is sized with, read once per pass so every row of it is judged alike whatever
 /// the Storage tab does meanwhile: the margin the tuner's fetch and the close-time capture ask
-/// for (the chart's `[trade_replay] margin_s` floored to the model's two pads), and the length
-/// from which a position is walked as its two ends.
+/// for (`[trade_replay] margin_s`, whose floor is the model's pad), and the length from which a
+/// position is walked as its two ends.
 #[derive(Clone, Copy, Debug)]
 struct Margins {
-    model_ms: i64,
+    margin_ms: i64,
     long_position_ms: i64,
 }
 
 impl Margins {
     fn live() -> Self {
         Self {
-            model_ms: model_margin_ms(),
+            margin_ms: margin_ms(),
             long_position_ms: long_position_ms(),
         }
     }
@@ -94,7 +94,7 @@ impl Margins {
     /// before the entry: on the other bound the reach is wider than any claim, and the few rows
     /// it adds claim nothing.
     fn reach_s(self) -> i64 {
-        (self.model_ms + ORDER_WAIT_CAP_MS).div_euclid(1_000) + 1
+        (self.margin_ms + ORDER_WAIT_CAP_MS).div_euclid(1_000) + 1
     }
 }
 
@@ -240,7 +240,7 @@ fn build_keep(
                 order_open_at(stamp.buy_ms, stamp.buy_set_ms),
                 stamp.buy_ms,
                 stamp.close_ms,
-                margins.model_ms,
+                margins.margin_ms,
                 margins.long_position_ms,
             ) else {
                 continue;

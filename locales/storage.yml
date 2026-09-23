@@ -129,9 +129,9 @@ storage.trades_min:
   en: "%{min} min"
   es: "%{min} min"
 storage.trades_margin_hint:
-  ru: "С каждого края сделки; у долгой — вокруг входа и вокруг выхода, середина свечами. Тюнер берёт не меньше 30 с."
-  en: "At each end of a trade; on a long one, around the entry and around the exit, candles between. The tuner takes at least 30 s."
-  es: "En cada extremo de una posición; en una larga, alrededor de la entrada y de la salida, velas entre ambas. El afinador toma al menos 30 s."
+  ru: "С каждого края сделки; у долгой — вокруг входа и вокруг выхода, середина свечами. Не меньше 30 с — столько нужно тюнеру."
+  en: "At each end of a trade; on a long one, around the entry and around the exit, candles between. At least 30 s — what the tuner needs."
+  es: "En cada extremo de una posición; en una larga, alrededor de la entrada y de la salida, velas entre ambas. Al menos 30 s: lo que necesita el afinador."
 storage.trades_long_position:
   ru: "Долгая сделка от"
   en: "Long trade from"

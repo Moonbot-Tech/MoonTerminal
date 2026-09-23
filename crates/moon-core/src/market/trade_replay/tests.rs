@@ -1086,12 +1086,14 @@ fn kline_tick_statuses_keep_the_same_chart_revision_while_ticks_change_it() {
 }
 
 /// A position held up to `long_position_ms()` keeps one focus; past it the focus is two
-/// neighbourhoods — the margin centred on each end, half before and half after — clamped into
-/// the window like the whole one.
+/// neighbourhoods — the whole margin on both sides of each end, so the run-up before the entry
+/// and the tail past the exit are the margin, as on a short position — clamped into the window
+/// like the whole one.
 #[test]
 fn focus_spans_split_only_a_long_position() {
     // A margin well under the position's length, so the two ends of a long one stay apart:
-    // halves that reach each other fold into one stretch, which the end of this test pins.
+    // neighbourhoods that reach each other fold into one stretch, which the end of this test
+    // pins.
     let margin_ms: i64 = long_position_ms() / 5;
     let short =
         replay_window_ms(100_000_000, 100_000_000 + long_position_ms(), margin_ms).expect("window");
@@ -1101,7 +1103,6 @@ fn focus_spans_split_only_a_long_position() {
     let close_ms = open_ms + long_position_ms() + 1;
     let long = replay_window_ms(open_ms, close_ms, margin_ms).expect("window");
     let spans = long.focus_spans();
-    let half = margin_ms / 2;
     assert_eq!(
         spans.spans(),
         &[

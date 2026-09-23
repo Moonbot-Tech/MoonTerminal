@@ -36,7 +36,7 @@ use moon_core::feed::types::Tick;
 use moon_core::market::trade_replay::venue_caps::trade_route;
 use moon_core::market::trade_replay::worker::inside_retention;
 use moon_core::market::trade_replay::{
-    Coverage, ReplayWindow, TickQuery, TickStatus, long_position_ms, model_margin_ms, query_held,
+    Coverage, ReplayWindow, TickQuery, TickStatus, long_position_ms, margin_ms, query_held,
 };
 
 /// How long a held query waits for the worker's answer. The coordinator answers held queries
@@ -423,7 +423,7 @@ fn ask_held(
     mpsc::Receiver<moon_core::market::trade_replay::TickAnswer>,
     ReplayWindow,
 )> {
-    let window = model_window(deal, model_margin_ms(), long_position_ms)?;
+    let window = model_window(deal, margin_ms(), long_position_ms)?;
     let (reply, rx) = mpsc::channel();
     query_held(TickQuery {
         exchange_key: address.exchange_key.clone(),
@@ -538,7 +538,7 @@ fn unservable_status(address: &RowAddress, deal: &Deal, now_ms: i64) -> Option<T
     let Some(route) = trade_route(address.venue) else {
         return Some(TapeStatus::Refused(TickStatus::NoRoute));
     };
-    let window = model_window(deal, model_margin_ms(), long_position_ms())?;
+    let window = model_window(deal, margin_ms(), long_position_ms())?;
     let retention_ms = route.retention_ms()?;
     (!inside_retention(route, window, now_ms)).then_some(TapeStatus::Refused(
         TickStatus::OutOfRetention { retention_ms },

@@ -193,7 +193,9 @@ pub(crate) struct TickStage {
     /// the stage asks nothing and serves what the tile store and its disk already hold for the
     /// focus (a capture from the core's archive, filed when the trade closed — or, for a tiles
     /// reader, filed by this stage itself out of the ring, see [`ReplayIntent::files_core`]),
-    /// or prints [`TickStatus::NoRoute`] as before when they hold nothing.
+    /// or prints [`TickStatus::NoRoute`] as before when they hold nothing. A route whose
+    /// retention the whole focus is past is served the same way, printing
+    /// [`TickStatus::OutOfRetention`] instead.
     route: Option<TradeRoute>,
     /// The ring key this stage's answer replaces on success.
     key: OutcomeKey,
@@ -237,9 +239,8 @@ pub struct CaptureRequest {
     pub open_ms: i64,
     /// The trade's exit, true-UTC milliseconds.
     pub close_ms: i64,
-    /// Prints to copy around the trade, per end — [`super::model_margin_ms`] at close time,
-    /// so the tile holds the tuner's run-up and tail whatever the chart's margin is; see
-    /// [`ReplayWindow::margin_ms`].
+    /// Prints to copy around the trade, per end — [`super::margin_ms`] at close time, whose
+    /// floor is the tuner's run-up and tail; see [`ReplayWindow::margin_ms`].
     pub margin_ms: i64,
     /// The long-position threshold at close time ([`super::long_position_ms`]): carried so the
     /// capture's first pass and its settle pass file the same shape whatever the Storage tab
@@ -1530,10 +1531,10 @@ fn tick_stage_for(
 /// trade held ~10 h and closed 40 h ago (retention 48 h) was refused outright although its
 /// exit's ticks were comfortably inside retention.
 ///
-/// Free, and evaluated BEFORE any request is spent — see [`tick_stage_for`]. Public for the
-/// tuner's startup autoload, which asks it before queueing a row at all, so a row the stage
-/// would refuse anyway does not pay the candle page ahead of the refusal — the ONE rule, not a
-/// second one beside it.
+/// Free. Not a gate of the tick stage — a window past the retention is still served from the
+/// tiles ([`tick_stage_for`]) — but of the tuner's fetch: its startup autoload asks it before
+/// queueing a row at all, and its load before calling a row it holds no tape for fetchable, so a
+/// row the venue would refuse anyway pays no candle page ahead of the refusal.
 ///
 /// Args:
 ///     route: The trade route in question.
@@ -1629,11 +1630,13 @@ fn serve_ticks(
             )
         });
     };
-    let Some(route) = stage.route else {
+    // No venue to ask — none has a route, or the focus is past the route's retention: the focus
+    // is served from what the tiles hold inside it — a capture from the core's archive, the
+    // tuner's fetch, an earlier window — or the window prints `none`, the reason there is no
+    // venue to ask.
+    let serve_held = |none: TickStatus| {
         hydrate(tiles, persisted.as_ref(), &key, &focus);
         file_ring();
-        // No venue to ask: the focus is served from what the tiles hold inside it — a capture
-        // from the core's archive — or the window prints that there is no route, as before.
         let (covered, runs) = {
             let store = lock_tiles(tiles);
             let covered = held_coverage(&store, &key, &focus, Coverage::none());
@@ -1687,7 +1690,6 @@ fn serve_ticks(
             retention_ms: route.retention_ms().unwrap_or(0),
         });
     }
-    // After the retention refusal, which is free: a window too old for the route pays no read.
     hydrate(tiles, persisted.as_ref(), &key, &focus);
     file_ring();
     let residual = residual_plan(&plan, &lock_tiles(tiles), &key);

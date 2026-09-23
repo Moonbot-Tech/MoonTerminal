@@ -32,6 +32,29 @@ fn short_deal_requires_the_run_up_through_the_tail_only() {
     assert!(!ends_at_close.covers(&required), "neither is the tail");
 }
 
+/// A long position owes the model its run-up and tail at each end — the pads — whatever the
+/// margin: the margin is what the window asks for, and a wider setting must not turn a trade the
+/// model already has into a missing one. A long trade held at 30 s a side went missing the moment
+/// the setting moved to 3 min, and one past the venue's retention could never be covered again
+/// (2026-09-23).
+#[test]
+fn a_long_position_owes_only_the_pads_whatever_the_margin() {
+    let buy = 100 * MINUTE_MS;
+    let close = buy + 60 * MINUTE_MS;
+    for margin in [RUN_UP_MS, 3 * MINUTE_MS, 10 * MINUTE_MS] {
+        let window = replay_window_ms(buy, close, margin).expect("window");
+        assert!(window.focus_spans().is_split(), "margin {margin}");
+        assert_eq!(
+            required_spans(&window).spans(),
+            &[
+                (buy - RUN_UP_MS, buy + RUN_UP_MS),
+                (close - TAIL_MS, close + TAIL_MS)
+            ],
+            "margin {margin}"
+        );
+    }
+}
+
 /// A long position's window asks only around its two ends, so the requirement is clipped to
 /// them: the unwalked hours in the middle are not owed. A zero margin asks for the position
 /// alone, and the requirement shrinks to it.
@@ -44,12 +67,11 @@ fn long_position_and_zero_margin_require_only_what_the_window_asks() {
     let spans = window.focus_spans();
     assert!(spans.is_split());
     let required = required_spans(&window);
-    let half = margin / 2;
     assert_eq!(
         required.spans(),
         &[
-            (buy - RUN_UP_MS, buy + half),
-            (close - half, close + TAIL_MS)
+            (buy - RUN_UP_MS, buy + RUN_UP_MS),
+            (close - TAIL_MS, close + TAIL_MS)
         ]
     );
     assert!(spans.covers(&required));

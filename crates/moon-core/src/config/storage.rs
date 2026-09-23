@@ -63,8 +63,8 @@ pub struct TradeReplayStoreCfg {
     pub max_mb: u32,
     /// Seconds of prints kept around a trade, per end: a short position gets this much before
     /// its entry and after its exit; a long one ([`Self::long_position_min`] or longer) gets
-    /// this much centred on each end, half before and half after, with bars between. It sizes what a trade window fetches,
-    /// what a close copies out of the core's ring, and what the file keeps. One of
+    /// this much on both sides of each end, with bars between. It sizes what a trade window
+    /// fetches, what a close copies out of the core's ring, and what the file keeps. One of
     /// [`TRADE_MARGIN_STEPS_S`]: a hand-edited value is snapped to the nearest step on load.
     pub margin_s: u32,
     /// Whether the terminal fetches, once the cores are up, the tape of every recent closed
@@ -98,18 +98,21 @@ pub const LONG_POSITION_MIN_RANGE: std::ops::RangeInclusive<u32> = 1..=120;
 pub const DEFAULT_TRADES_MAX_MB: u32 = 256;
 
 /// The values [`TradeReplayStoreCfg::margin_s`] may take, ascending: the Storage tab steps
-/// through this list rather than by a fixed amount, so the short end is fine-grained (5 s for a
-/// scalp) and the long end coarse. The floor is 5 s — "the position alone" is gone: a window
-/// with no prints outside the position has nothing to show around the entry. The ceiling is two
-/// hours: the bar context after an exit is two hours at least, and prints past the bars would
-/// have nowhere to draw.
-pub const TRADE_MARGIN_STEPS_S: &[u32] = &[5, 10, 30, 60, 180, 300, 600, 900, 1800, 3600, 7200];
+/// through this list rather than by a fixed amount, so the short end is fine-grained and the
+/// long end coarse. The floor is 30 s — the tuner's run-up and tail
+/// (`trade_replay::MODEL_PAD_MS`): one setting sizes the chart's window, the close-time capture,
+/// the tuner's fetch and the cleanup alike, and none of them pads it behind the tab's back (the
+/// developer's call, 2026-09-23; the steps started at 5 s before that, and the tuner lifted
+/// them to a minute on its own). 65 s is a step so the default survives the snap; it is not
+/// the floor. The ceiling is two hours: the bar context after an exit is two hours at least,
+/// and prints past the bars would have nowhere to draw.
+pub const TRADE_MARGIN_STEPS_S: &[u32] = &[30, 60, 65, 180, 300, 600, 900, 1800, 3600, 7200];
 
-/// Default seconds of prints around a trade, per end — 5 s (the developer's call, 2026-09-21;
-/// 15 minutes before that). The tuner's model window and the close-time capture both pad this
-/// to at least the model's own run-up and tail (`trade_replay::model_margin_ms`), so the short
-/// default shapes the chart's windows, not what the tuner is served.
-pub const DEFAULT_TRADE_MARGIN_S: u32 = 5;
+/// Default seconds of prints around a trade, per end. 65 s (the user's call, 2026-09-26;
+/// 30 s from 2026-09-23, 5 s from 2026-09-21, 15 minutes before that). Not the floor of
+/// [`TRADE_MARGIN_STEPS_S`]: 30 s stays the tuner's pad and a step, so a file that already
+/// stores 30 keeps 30. A file with no margin key at all takes this default.
+pub const DEFAULT_TRADE_MARGIN_S: u32 = 65;
 
 /// Ceiling on [`TradeReplayStoreCfg::margin_s`] — the last of [`TRADE_MARGIN_STEPS_S`].
 pub const MAX_TRADE_MARGIN_S: u32 = 7200;
