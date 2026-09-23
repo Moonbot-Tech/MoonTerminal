@@ -627,13 +627,14 @@ pub(super) fn replay_row_with(
         EntryParams::Fact
     };
     let exit = params::exit_params(&sv);
-    // The coin's deltas along the window, before the record's inputs: the stop anchor reads the
-    // stop through them.
+    // The deltas along the window, before the record's inputs: the stop anchor reads the stop
+    // through them.
     row.deal.delta_track = klines.and_then(|cache| {
         deltas::track_for(
             cache,
             &address.exchange_key,
             &address.market,
+            address.btc_market.as_deref(),
             &row.deal,
             &ticks,
             &covered,

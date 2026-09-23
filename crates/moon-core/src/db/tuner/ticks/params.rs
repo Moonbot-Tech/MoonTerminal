@@ -408,6 +408,8 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "AddMarket24Delta",
     "AddPump1h",
     "AddDump1h",
+    // The corridor family's one modifier the grid does not offer (no live strategy sets it).
+    "MShotAdd5sDelta",
 ];
 
 /// Every field name the models read — [`TICK_PARAMS`] plus [`MODEL_ONLY_KEYS`] — for a
@@ -480,6 +482,7 @@ pub fn mshot_params(v: &StrategyValues<'_>, latency_ms: f64) -> MshotParams {
         minus_satoshi: v.bool("MShotMinusSatoshi", base.minus_satoshi),
         fast_algo: v.bool("FastShotAlgo", base.fast_algo),
         modifiers: Modifiers {
+            add_5s: v.num("MShotAdd5sDelta", 0.0),
             add_1m: v.num("MShotAdd1minDelta", 0.0),
             add_5m: v.num("MShotAdd5minDelta", 0.0),
             add_15m: v.num("MShotAdd15minDelta", 0.0),
@@ -521,6 +524,7 @@ pub fn exit_params(v: &StrategyValues<'_>) -> ExitParams {
         // corridor; a strategy can carry both, and reading one for the other would move the
         // sell by the buy's coefficients.
         sell_mods: Modifiers {
+            add_5s: 0.0,
             add_1m: v.num("Add1minDelta", 0.0),
             add_5m: v.num("Add5minDelta", 0.0),
             add_15m: v.num("Add15minDelta", 0.0),

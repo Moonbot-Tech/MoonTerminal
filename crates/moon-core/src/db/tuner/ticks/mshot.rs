@@ -102,6 +102,9 @@ pub enum MarketSign {
 /// `Add*` on the sell and the stop: per cent added per one per cent of the matching delta.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Modifiers {
+    /// `MShotAdd5sDelta` (the exe's `MShotAdd*` list; no FAQ entry, no live strategy sets it on
+    /// 2026-09-23); the Delta Modifiers tab has no such field and leaves it at zero.
+    pub add_5s: f64,
     pub add_1m: f64,
     pub add_5m: f64,
     pub add_15m: f64,
@@ -139,7 +142,8 @@ impl Modifiers {
             MarketSign::Signed => delta,
             MarketSign::Magnitude => delta.abs(),
         };
-        self.add_1m * d.d1m
+        self.add_5s * d.d5s
+            + self.add_1m * d.d1m
             + self.add_5m * d.d5m
             + self.add_15m * d.d15m
             + self.add_1h * d.d1h

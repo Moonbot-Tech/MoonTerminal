@@ -36,6 +36,7 @@ use state::SuggState;
 use state::{DealRow, TapeStatus};
 
 pub(in crate::analytics::tuner) mod columns;
+mod delta_summary;
 pub(crate) mod fetch;
 mod grid;
 mod lags;
@@ -197,6 +198,20 @@ impl AnalyticsView {
         // hides the rest. How well the MODEL does on that sample is the KPI caption's ✓
         // shares (`ticks_kpi`), not a size.
         let status = coverage_caption(covered, fit, total, without_ms, left_out.1, left_out.2);
+        // How many rows read live deltas, and — in the tooltip — how well each one's history
+        // reproduces the core (`delta_summary`).
+        let deltas = self
+            .ticks
+            .data
+            .data()
+            .and_then(|d| delta_summary::delta_summary(&d.rows))
+            .map(|(caption, tip)| {
+                div()
+                    .id("an-ticks-deltas")
+                    .flex_none()
+                    .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tip.clone())).into())
+                    .child(caption)
+            });
         let only_tip = t!("analytics.ticks.only_fit_tip").to_string();
         let only_switch = div()
             .id("an-ticks-only-tape-box")
@@ -315,6 +330,7 @@ impl AnalyticsView {
                     .text_size(design::t_caption(cx))
                     .text_color(moon(p.text_muted))
                     .child(div().flex_1().min_w_0().truncate().child(status))
+                    .children(deltas)
                     .child(only_switch),
             )
             .into_any_element()

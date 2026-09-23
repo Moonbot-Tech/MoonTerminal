@@ -1720,6 +1720,38 @@ analytics.ticks.coverage_untunable:
   ru: "вне тюнинга %{n}"
   en: "outside tuning %{n}"
   es: "fuera del ajuste %{n}"
+analytics.ticks.deltas_caption:
+  ru: "дельты: живые у %{tracked} из %{covered}"
+  en: "deltas: live on %{tracked} of %{covered}"
+  es: "deltas: vivas en %{tracked} de %{covered}"
+analytics.ticks.deltas_tip_head:
+  ru: "Дельты пересчитываются вдоль окна сделки так, как их считает ядро, — по ленте и свечам монеты и BTC той же биржи, по той истории, что есть, — и в момент снимка отчёта ставятся ровно на отчёт. У сделки без отметки момента снимка (до 21.09, кроме MoonShot) дельты остаются снимком. Ниже по каждой дельте: у скольких сделок она живая, какую долю окна покрыла история и насколько пересчёт совпал с отчётом в момент снимка ДО привязки — это мера того, насколько верны её движения в остальные моменты."
+  en: "Deltas are re-evaluated along the trade's window the way the core computes them — off the tape and the bars of the coin and of BTC on the same exchange, over whatever history there is — and put exactly on the report at the moment it was stamped. A trade without that stamp (before 21.09, MoonShot aside) keeps the snapshot. Per delta below: on how many trades it is live, how much of its window the history covered, and how close the evaluation came to the report at the stamp BEFORE the anchor — the measure of how right its moves are at every other moment."
+  es: "Los deltas se recalculan a lo largo de la ventana de la operación como los calcula el núcleo — con la cinta y las velas de la moneda y del BTC del mismo exchange, sobre el historial que haya — y en el momento de la instantánea del informe se ajustan exactamente al informe. Una operación sin esa marca (antes del 21.09, salvo MoonShot) conserva la instantánea. Por cada delta: en cuántas operaciones está viva, qué parte de su ventana cubrió el historial y cuánto coincidió el cálculo con el informe en la instantánea ANTES del ajuste — la medida de cuán correctos son sus movimientos en los demás momentos."
+analytics.ticks.deltas_tip_field:
+  ru: "%{name}: живая у %{live} · окно покрыто на %{coverage}% · в снимке ≤0,1 п.п. у %{reproduced} из %{checked}, медиана %{error} п.п."
+  en: "%{name}: live on %{live} · window covered %{coverage}% · at the stamp ≤0.1 pp on %{reproduced} of %{checked}, median %{error} pp"
+  es: "%{name}: viva en %{live} · ventana cubierta %{coverage}% · en la instantánea ≤0,1 pp en %{reproduced} de %{checked}, mediana %{error} pp"
+analytics.ticks.deltas_tip_none:
+  ru: "%{name}: не живая ни у одной сделки — снимок отчёта"
+  en: "%{name}: live on no trade — the report's snapshot"
+  es: "%{name}: no está viva en ninguna operación — la instantánea del informe"
+analytics.ticks.deltas_tip_btc_note:
+  ru: " (по свечам BTC из кеша; на 5-минутных свечах 1m — размах свечи)"
+  en: " (off BTC's cached bars; on five-minute bars 1m is a bar's range)"
+  es: " (con las velas de BTC en caché; con velas de 5 minutos, 1m es el rango de una vela)"
+analytics.ticks.deltas_tip_mark:
+  ru: "снимок отчёта — истории цены маркировки нет"
+  en: "the report's snapshot — there is no history of the mark price"
+  es: "la instantánea del informe — no hay historial del precio de marca"
+analytics.ticks.deltas_tip_pricebug:
+  ru: "снимок отчёта — это собственная мера лага ядра"
+  en: "the report's snapshot — the core's own lag measure"
+  es: "la instantánea del informe — la medida propia de retraso del núcleo"
+analytics.ticks.deltas_tip_market:
+  ru: "снимок отчёта — средняя по всем рынкам биржи"
+  en: "the report's snapshot — an average over every market of the exchange"
+  es: "la instantánea del informe — un promedio de todos los mercados del exchange"
 analytics.ticks.only_fit:
   ru: "только годные"
   en: "reproduced only"

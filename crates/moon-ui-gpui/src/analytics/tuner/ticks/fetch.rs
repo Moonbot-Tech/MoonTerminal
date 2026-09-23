@@ -39,6 +39,8 @@ pub(in crate::analytics::tuner) struct FetchResolver {
     /// Per distinct `(core, coin)`, what it resolved to — a table of one coin's trades asks
     /// the catalog once.
     addresses: HashMap<(u64, String), Option<Arc<RowAddress>>>,
+    /// Per core, BTC's market on its exchange — the BTC deltas are read off it.
+    btc_markets: HashMap<u64, Option<String>>,
 }
 
 impl FetchResolver {
@@ -52,6 +54,7 @@ impl FetchResolver {
                 .map(|s| (s.id, s.market.clone()))
                 .collect(),
             addresses: HashMap::new(),
+            btc_markets: HashMap::new(),
         }
     }
 
@@ -68,6 +71,12 @@ impl FetchResolver {
             .get(&deal.core_uid)
             .map(String::as_str)
             .unwrap_or_default();
+        let source = &self.source;
+        let btc_market = self
+            .btc_markets
+            .entry(deal.core_uid)
+            .or_insert_with(|| source.resolve_market(deal.core_uid, quote, "BTC"))
+            .clone();
         let address = self
             .source
             .replay_address(deal.core_uid)
@@ -82,6 +91,7 @@ impl FetchResolver {
                     venue: address.venue,
                     exchange_key: address.exchange_key,
                     market,
+                    btc_market,
                     tick,
                 }))
             });

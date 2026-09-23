@@ -114,6 +114,9 @@ pub(in crate::analytics::tuner) struct RowAddress {
     pub(in crate::analytics::tuner) venue: moon_core::venue::Venue,
     pub(in crate::analytics::tuner) exchange_key: String,
     pub(in crate::analytics::tuner) market: String,
+    /// BTC's market on the same exchange, as the catalog spells it — the BTC deltas are read off
+    /// its bars; `None` when the catalog names none, and those deltas keep the snapshot.
+    pub(in crate::analytics::tuner) btc_market: Option<String>,
     /// The market's price step from the live catalog, when the core reports it.
     pub(in crate::analytics::tuner) tick: Option<f64>,
 }
