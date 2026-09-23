@@ -9,11 +9,11 @@
 //!
 //! - every coin delta is a RANGE, `(max / min − 1) · 100` over a window — never negative;
 //! - the long ones run over the core's five-minute candles, stamped at their END and kept while
-//!   younger than the window, so a window reaches up to one candle past its name: d15m, d1h, and
-//!   "d3h" over candles younger than four hours (the FAQ counts that "3ч55м"; the oldest candle
-//!   began up to 4h05m ago, and on 52 MoonShot trades the report exceeded the range of 3h55m + one
-//!   candle five times, of 4h + one candle twice) and "d24h" over twenty-five, both never under
-//!   d1h;
+//!   younger than the window, so a window reaches up to one candle past its name: d15m and d1h
+//!   over the closed candles and the open one; "d3h" and "d24h" over CLOSED candles younger than
+//!   four hours and twenty-five (the FAQ counts the first "3ч55м"; the core developer,
+//!   2026-09-23), both never under d1h — the open candle reaches them only through it (see
+//!   `coin::REACH` for the phase and what it measured);
 //! - the short ones, d1m and d5m, run over five-second buckets of trades;
 //! - the core refreshes them on those five-second buckets. A value holds from one bucket boundary
 //!   to the next and is computed over what printed BEFORE the boundary: the MoonShot report's
@@ -68,13 +68,14 @@ const MINUTE_MS: i64 = 60_000;
 /// How far a window over the core's candles reaches past its name: one candle.
 const CANDLE_MS: i64 = 5 * MINUTE_MS;
 
-/// How far before a window the widest coin delta reaches: "d24h", twenty-five hours of candles
-/// plus one.
+/// How far before a window the widest coin delta reaches: "d24h", twenty-five hours of closed
+/// candles counted back from the last close, which lies up to one candle before the moment.
 pub const LOOKBACK_MS: i64 = 25 * 60 * MINUTE_MS + CANDLE_MS;
 
-/// How far before a window BTC's history is read: the hour average forgets a price in about
-/// fifty minutes (weight 0.01 every thirty seconds), and four hours of it leave nothing of the
-/// seed.
+/// How far before a window BTC's history is read: the hour average is re-seeded off the last
+/// hour's candles at every close (see `btc`), and the five-minute range looks back five minutes,
+/// so an hour and a candle is what any moment needs; four hours leave room for a window that
+/// opens on a hole in the history.
 const BTC_LOOKBACK_MS: i64 = 4 * 60 * MINUTE_MS;
 
 /// One bar of history: what printed over `[from_ms, to_ms)`.
@@ -116,8 +117,9 @@ impl Segment {
 pub struct StampCheck {
     /// The share of each field's window the history covered at the stamp, 0 … 1.
     pub coverage: [f64; DeltaField::COUNT],
-    /// `|evaluation − report|` at the stamp, per cent points; `None` where the history had
-    /// nothing, or the report never filled the field.
+    /// `evaluation − report` at the stamp, per cent points — positive where the history saw a
+    /// wider move than the core; `None` where the history had nothing, or the report never
+    /// filled the field.
     pub error: [Option<f64>; DeltaField::COUNT],
 }
 
@@ -253,7 +255,7 @@ impl DeltaTrack {
             if !estimate[i].is_finite() || unfilled {
                 continue;
             }
-            self.stamp.error[i] = Some((estimate[i] - report).abs());
+            self.stamp.error[i] = Some(estimate[i] - report);
             self.live[i] = true;
             offset[i] = report - estimate[i];
         }

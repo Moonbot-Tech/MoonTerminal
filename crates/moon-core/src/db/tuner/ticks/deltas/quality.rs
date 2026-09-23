@@ -58,7 +58,7 @@ pub fn summarize<'a>(tracks: impl IntoIterator<Item = &'a DeltaTrack>) -> DeltaQ
             live[i] += 1;
             coverage[i].push(stamp.coverage[i]);
             if let Some(error) = stamp.error[i] {
-                errors[i].push(error);
+                errors[i].push(error.abs());
             }
         }
     }

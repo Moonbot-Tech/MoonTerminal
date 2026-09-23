@@ -96,6 +96,23 @@ fn a_candle_window_reaches_one_candle_past_its_name() {
     }
 }
 
+/// "d3h" and "d24h" read closed candles only, younger than their window by the last close: a
+/// spike in a bar that ended 4 h 4 min before T0 — whose last close was 200 s before it — is out
+/// of d3h, where a window reaching 4 h 5 min back from the moment took it.
+#[test]
+fn the_long_ranges_read_closed_candles_only() {
+    let mut bars = day_of_bars();
+    for b in &mut bars {
+        if b.to_ms == T0 - 4 * 60 * MINUTE_MS - 4 * MINUTE_MS {
+            b.high = 120.0;
+        }
+    }
+    let ticks = [tick(T0 + 1_000, 100.0)];
+    let track = raw(&bars, &ticks, (T0, T0 + 60_000), (T0, T0 + 60_000));
+    assert!(close(track.value(T0, DeltaField::D3h).unwrap(), 0.0));
+    assert!(close(track.value(T0, DeltaField::D24h).unwrap(), 20.0));
+}
+
 #[test]
 fn a_window_is_read_over_whatever_history_it_has() {
     // Six hours of bars, with a hole in them: every window answers off what is there, and the
@@ -133,10 +150,12 @@ fn a_window_is_read_over_whatever_history_it_has() {
     );
     let d1h = stamp.coverage[DeltaField::D1h.index()];
     assert!(d1h > 0.8 && d1h < 0.9, "a ten-minute hole in 65: {d1h}");
-    // The six hours' range against the report's twelve: the error before the anchor.
-    let range = (105.0 / 95.0 - 1.0) * 100.0;
+    // The six hours' range against the report's twelve: the error before the anchor, negative
+    // where the history saw the narrower move. The 105 printed in the open candle, which reaches
+    // d24h only through d1h: the closed candles' 100 / 95 is the wider of the two.
+    let range = (100.0 / 95.0 - 1.0) * 100.0;
     let error = stamp.error[DeltaField::D24h.index()].unwrap();
-    assert!(close(error, 12.0 - range), "{error}");
+    assert!(close(error, range - 12.0), "{error}");
     assert!(close(track.apply(T0 + 5_000, &snapshot).d24h, 12.0));
 }
 
@@ -192,7 +211,8 @@ fn the_anchor_puts_the_track_on_the_report_at_its_stamp() {
         "a field the report never filled: {later:?}"
     );
     assert!(!track.is_live(DeltaField::D15m));
-    assert_eq!(track.stamp().error[DeltaField::D1m.index()], Some(1.0));
+    // Signed: the evaluation saw 0 where the report said 1.
+    assert_eq!(track.stamp().error[DeltaField::D1m.index()], Some(-1.0));
 }
 
 #[test]
@@ -314,8 +334,10 @@ fn btc_reads_its_own_market() {
     .unwrap();
     assert!(close(track.value(T0, DeltaField::Btc1m).unwrap(), 1.0));
     assert!(close(track.value(T0, DeltaField::Btc5m).unwrap(), 1.0));
-    // One minute bar is two of the average's steps: it moved 1 − 0.99² of the way up.
-    let average = 50_000.0 + 500.0 * (1.0 - 0.99f64.powi(2));
+    // The average was re-seeded at the last five-minute close, 200 s before T0, off the hour's
+    // flat candles — 50 000 — and stepped six times since toward the price.
+    assert_eq!(T0.rem_euclid(CANDLE_MS), 200_000);
+    let average = 50_000.0 + 500.0 * (1.0 - 0.99f64.powi(6));
     let expected = (50_500.0 - average) / average * 100.0;
     assert!(close(track.value(T0, DeltaField::Btc1h).unwrap(), expected));
     // Without BTC's bars the fields keep the snapshot.

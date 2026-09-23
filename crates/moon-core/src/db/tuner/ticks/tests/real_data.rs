@@ -35,6 +35,9 @@ use crate::market::kline_cache::KlineCache;
 use crate::market::trade_replay::{Coverage, TickQuery, long_position_ms, query_held};
 use crate::symbol::{coin_match_key, coin_of_market};
 
+/// One trade's d1m and d5m errors at the report's stamp (`StampCheck::error`).
+type ShortErrors = (Option<f64>, Option<f64>);
+
 /// Every point of an archived entry line and of an exit line, and whether the core answered
 /// for the deal with lines at all.
 type ArchivedLines = (Option<Vec<(i64, f64)>>, Option<Vec<(i64, f64)>>, bool);
@@ -476,6 +479,9 @@ fn real_data_reproduction() {
     let btc_of_exchange = btc_markets();
     eprintln!("BTC markets: {btc_of_exchange:?}");
     let mut tracks: Vec<std::sync::Arc<deltas::DeltaTrack>> = Vec::new();
+    // Each core's d1m and d5m errors at the stamp — a core whose `DeltasByTrades` is off reads
+    // one point per tick, not every print, and shows as its own error level.
+    let mut per_core_short: HashMap<String, Vec<ShortErrors>> = HashMap::new();
     let mut no_track = 0usize;
     eprintln!("PriceDown step lag per core: {core_lags:?}");
     let (mut entry_hits, mut entry_n, mut exit_hits, mut exit_n, mut with_tape) = (0, 0, 0, 0, 0);
@@ -588,7 +594,17 @@ fn real_data_reproduction() {
             let btc = btc_of_exchange.get(exchange).map(String::as_str);
             let track = deltas::track_for(cache, exchange, market, btc, &deal, &ticks, &covered);
             match &track {
-                Some(track) => tracks.push(track.clone()),
+                Some(track) => {
+                    tracks.push(track.clone());
+                    let error = |field: deltas::DeltaField| track.stamp().error[field.index()];
+                    per_core_short
+                        .entry(deal.core_name.clone())
+                        .or_default()
+                        .push((
+                            error(deltas::DeltaField::D1m),
+                            error(deltas::DeltaField::D5m),
+                        ));
+                }
                 None => no_track += 1,
             }
             if !snapshot_only {
@@ -863,6 +879,33 @@ fn real_data_reproduction() {
         );
     }
     print_delta_quality(&tracks, no_track);
+    let mut cores: Vec<_> = per_core_short.into_iter().collect();
+    cores.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
+    for (core, errors) in cores {
+        // |error| median, how many within 0.1 pp, how many where the history saw the wider move.
+        let median = |pick: fn(&ShortErrors) -> Option<f64>| {
+            let signed: Vec<f64> = errors.iter().filter_map(pick).collect();
+            let mut v: Vec<f64> = signed.iter().map(|e| e.abs()).collect();
+            v.sort_by(f64::total_cmp);
+            let within = v.iter().filter(|e| **e <= 0.1).count();
+            let wider = signed.iter().filter(|e| **e > 0.1).count();
+            let narrower = signed.iter().filter(|e| **e < -0.1).count();
+            (
+                v.get(v.len() / 2).copied(),
+                within,
+                v.len(),
+                wider,
+                narrower,
+            )
+        };
+        let (d1m, d1m_in, d1m_n, d1m_w, d1m_nr) = median(|e| e.0);
+        let (d5m, d5m_in, d5m_n, d5m_w, d5m_nr) = median(|e| e.1);
+        eprintln!(
+            "  core {core:12} d1m median {:?} within 0.1 {d1m_in}/{d1m_n} wider {d1m_w} narrower {d1m_nr} · d5m median {:?} within 0.1 {d5m_in}/{d5m_n} wider {d5m_w} narrower {d5m_nr}",
+            d1m.map(|v| (v * 1000.0).round() / 1000.0),
+            d5m.map(|v| (v * 1000.0).round() / 1000.0),
+        );
+    }
     let mut unfit: Vec<(String, usize)> = unfit.into_iter().collect();
     unfit.sort_by_key(|u| std::cmp::Reverse(u.1));
     eprintln!("fit for the search: {fit_n} of {with_tape} · left out: {unfit:?}");
