@@ -1960,6 +1960,14 @@ analytics.ticks.sugg_none:
   ru: "Подбор ничего не нашёл"
   en: "The search found nothing"
   es: "La búsqueda no encontró nada"
+analytics.ticks.sugg_floor:
+  ru: "Ни один вариант не держит ≥ %{n} сделок"
+  en: "No variant keeps ≥ %{n} trades"
+  es: "Ninguna variante mantiene ≥ %{n} operaciones"
+analytics.ticks.sugg_floor_sample:
+  ru: "Порог %{n} сделок больше выборки: в обучении %{m} сделок с лентой в памяти"
+  en: "A floor of %{n} trades exceeds the sample: %{m} trades with tape in memory to train on"
+  es: "Un mínimo de %{n} operaciones supera la muestra: %{m} con cinta en memoria para entrenar"
 analytics.ticks.closer_warn:
   ru: "MShotPrice ближе фактического: оценка занижена — прострелы, до которых реальный ордер не дотянулся, в отчёте отсутствуют"
   en: "MShotPrice closer than the fact: underestimated — spikes the real order never reached are not in the report"

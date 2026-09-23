@@ -13,13 +13,13 @@ use gpui::Entity;
 use moon_ui::MoonInputState;
 
 use super::super::shared::N_VAR;
+use super::tape::{PackedTape, PendingDeal};
 use crate::load_state::LoadState;
 use moon_core::db::tuner::VarStats;
 use moon_core::db::tuner::threshold_search::SearchHandle;
 use moon_core::db::tuner::ticks::params::ParamGroup;
 use moon_core::db::tuner::ticks::search::SearchResult;
 use moon_core::db::tuner::ticks::{Deal, Verdict, fit_for_search};
-use moon_core::feed::types::Tick;
 use moon_core::market::trade_replay::TickStatus;
 
 /// Share of hits a group needs before it may be searched, per cent, when the search settings do
@@ -27,10 +27,11 @@ use moon_core::market::trade_replay::TickStatus;
 /// better. The spec's proposal, to be tuned by practice (`TicksState::gate_pct`).
 pub(in crate::analytics::tuner) const DEFAULT_GATE_PCT: u32 = 80;
 
-/// Ticks kept in memory across every covered row, for the variants and the search. Past it a
-/// row is still "covered" — the model ran on it — but its tape is let go and the row sits out
-/// of the variant columns; the caption says how many.
-pub(in crate::analytics::tuner) const MAX_RETAINED_TICKS: usize = 4_000_000;
+/// Bytes of tape kept in memory across every fit row, for the variants and the search — what
+/// four million prints took before they were packed ([`PackedTape`]), which now holds three times
+/// as many. Past it a row is still "covered" — the model ran on it — but its tape is let go and
+/// the row sits out of the variant columns; the caption says how many.
+pub(in crate::analytics::tuner) const MAX_RETAINED_BYTES: usize = 4_000_000 * 24;
 
 /// What the terminal holds for one deal's window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,9 +59,9 @@ pub(in crate::analytics::tuner) struct DealRow {
     /// `(exchange_key, market)` of the deal's core, resolved at load time; `None` is
     /// [`TapeStatus::NoAddress`].
     pub(in crate::analytics::tuner) address: Option<Arc<RowAddress>>,
-    /// The window's prints, kept for the variants and the search while the row is covered and
-    /// the memory cap allows; `None` otherwise.
-    pub(in crate::analytics::tuner) ticks: Option<Arc<[Tick]>>,
+    /// The window's prints, packed, kept for the variants and the search while the row is fit
+    /// and the memory cap allows; `None` otherwise.
+    pub(in crate::analytics::tuner) ticks: Option<PackedTape>,
     /// The archived points of the trade's own entry line, when the archive holds it —
     /// where the order stood before the tape begins, and the core's first moves.
     pub(in crate::analytics::tuner) entry_line: Option<Arc<[(i64, f64)]>>,
@@ -77,6 +78,14 @@ impl DealRow {
     /// model reproduced it (`fit_for_search`). The table shows every row; this is the sample.
     pub(in crate::analytics::tuner) fn fit(&self) -> bool {
         self.tape == TapeStatus::Covered && self.verdict.as_ref().is_some_and(fit_for_search)
+    }
+
+    /// Whether the row is fit but holds no tape — one the memory cap let go under a wider scope.
+    /// Carried into a new scope it would stay tapeless: stage C reads only the rows it was not
+    /// handed, so the narrower selection it now fits in would never get it back. A report reload
+    /// is the same scope, where the cap would only drop it again; a scope reload re-reads it.
+    pub(in crate::analytics::tuner) fn lost_tape(&self) -> bool {
+        self.fit() && self.ticks.is_none()
     }
 
     /// Take everything a replay learned about this row from its answer: the tape's word, the
@@ -156,7 +165,28 @@ pub(in crate::analytics::tuner) struct TicksData {
     pub(in crate::analytics::tuner) kinds: Vec<String>,
     /// The parameter grid's "now" column, by field key.
     pub(in crate::analytics::tuner) now: HashMap<String, NowValue>,
+    /// Each strategy of the rows as it stands now, by `(strategy_id, core_uid)` — the base the
+    /// variants and the search lay their values over on that strategy's deals
+    /// ([`PreparedDeal::own`]). The grid folds these into one "now" cell; a replay must not,
+    /// or a field the strategies disagree on runs every deal at its default.
+    pub(in crate::analytics::tuner) own: OwnValues,
 }
+
+/// What [`TicksData::tape_budget`] counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::analytics::tuner) struct TapeBudget {
+    pub(in crate::analytics::tuner) rows: usize,
+    pub(in crate::analytics::tuner) fit: usize,
+    /// Fit rows with their tape in memory — the sample.
+    pub(in crate::analytics::tuner) replayable: usize,
+    /// Fit rows whose tape the cap let go.
+    pub(in crate::analytics::tuner) dropped: usize,
+    pub(in crate::analytics::tuner) prints: usize,
+    pub(in crate::analytics::tuner) bytes: usize,
+}
+
+/// Strategies' current values by `(strategy_id, core_uid)`, one shared map per strategy.
+pub(in crate::analytics::tuner) type OwnValues = HashMap<(i64, u64), Arc<HashMap<String, String>>>;
 
 impl TicksData {
     /// Rows whose window the tape covers.
@@ -473,6 +503,9 @@ impl TicksState {
         self.var_stats = Default::default();
         self.plan = Default::default();
         self.stop_search();
+        // Nor does the last search's holdout: В1's caption would print it beside a column
+        // rescored over deals it never saw.
+        self.last_result = None;
         // A note about the previous scope's search says nothing about this one.
         self.sugg_note = None;
         if let Some(data) = self.data.data_mut() {
@@ -653,23 +686,63 @@ impl TicksState {
 }
 
 impl TicksData {
-    /// Let go of the tapes past the memory cap, oldest rows first — the newest deals are the
-    /// ones a variant is most likely to be judged on. A row whose tape is dropped stays
-    /// covered; it simply sits out of the variant columns. Run after every change of the
-    /// retained set: the bulk load and each fetched row.
+    /// A row as the variants and the search replay it — its tape, its archived entry line, its
+    /// held trail, its strategy's current values; `None` without a tape in memory. The tape
+    /// stays packed and uncut: the caller unpacks off the UI thread and cuts the sample at its
+    /// one horizon ([`prepare_sample`](super::tape::prepare_sample)).
+    pub(in crate::analytics::tuner) fn prepared(&self, row: &DealRow) -> Option<PendingDeal> {
+        Some(PendingDeal {
+            deal: row.deal.clone(),
+            tape: row.ticks.clone()?,
+            entry_line: row.entry_line.clone(),
+            trail_ms: row.held.map(|(_, trail)| trail).unwrap_or(0),
+            own: self
+                .own
+                .get(&(row.deal.strategy_id, row.deal.core_uid))
+                .cloned()
+                .unwrap_or_default(),
+        })
+    }
+
+    /// Let go of the tapes nothing replays — a row that is not fit is never in the sample — and
+    /// of those past the memory cap, oldest rows first: the newest deals are the ones a variant
+    /// is most likely to be judged on. A row whose tape is dropped stays covered; it simply sits
+    /// out of the variant columns. Run after every change of the retained set: the bulk load
+    /// and each fetched row.
     pub(in crate::analytics::tuner) fn retain_within_cap(&mut self) {
         let mut held = 0usize;
         // Newest first: the rows are chronological, so walk them backwards.
         for row in self.rows.iter_mut().rev() {
-            let Some(ticks) = row.ticks.as_ref() else {
+            let Some(bytes) = row.ticks.as_ref().map(PackedTape::bytes) else {
                 continue;
             };
-            if held + ticks.len() > MAX_RETAINED_TICKS {
+            if !row.fit() || held + bytes > MAX_RETAINED_BYTES {
                 row.ticks = None;
             } else {
-                held += ticks.len();
+                held += bytes;
             }
         }
+    }
+
+    /// What the table holds of its tape, for the load's log line: the rows, the fit ones, the
+    /// fit ones with their tape in memory, those the cap let go, and the prints and bytes held.
+    pub(in crate::analytics::tuner) fn tape_budget(&self) -> TapeBudget {
+        let mut budget = TapeBudget {
+            rows: self.rows.len(),
+            ..TapeBudget::default()
+        };
+        for row in self.rows.iter().filter(|r| r.fit()) {
+            budget.fit += 1;
+            match &row.ticks {
+                Some(tape) => {
+                    budget.replayable += 1;
+                    budget.prints += tape.len();
+                    budget.bytes += tape.bytes();
+                }
+                None => budget.dropped += 1,
+            }
+        }
+        budget
     }
 
     /// Recompute the fit-subset KPI and the ✓ shares from the rows — after a load or a fetch

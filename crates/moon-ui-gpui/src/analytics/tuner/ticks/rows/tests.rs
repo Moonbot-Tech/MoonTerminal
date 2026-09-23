@@ -258,10 +258,20 @@ fn invalidate_stops_the_search_and_drops_the_variant_scores_but_keeps_the_edits(
         handle: handle.clone(),
         total: 3,
     };
+    state.last_result = Some(moon_core::db::tuner::ticks::SearchResult {
+        values: Vec::new(),
+        train: Default::default(),
+        holdout: Some(Default::default()),
+        seed: 1,
+    });
     state.invalidate();
     assert!(handle.is_cancelled());
     assert!(matches!(state.sugg, super::super::state::SuggState::Idle));
     assert!(state.var_stats[0].is_none());
+    assert!(
+        state.last_result.is_none(),
+        "the last search's holdout is of the previous scope's deals"
+    );
     assert!(
         state.has_changes(),
         "the user's edits survive a scope change"
@@ -360,4 +370,80 @@ fn the_fetch_edits_land_in_order_in_one_pass() {
     assert_eq!(row(2).tape, TapeStatus::Covered);
     // The answer was counted: both judged rows are fit now.
     assert_eq!(data.fit(), 2);
+}
+
+/// A packed tape of `n` prints, one a millisecond.
+fn tape_of(n: usize) -> super::super::tape::PackedTape {
+    super::super::tape::PackedTape::pack(
+        (0..n)
+            .map(|i| moon_core::feed::types::Tick {
+                time_ms: 1_000.0 + i as f64,
+                price: 1.0,
+                qty: 1.0,
+                side: moon_core::feed::types::Side::Buy,
+            })
+            .collect(),
+    )
+}
+
+/// Only a fit row is ever replayed: a tape on any other row is let go, and what stays is
+/// counted in bytes, packed.
+#[test]
+fn the_cap_keeps_only_the_fit_rows_tapes_and_counts_them_packed() {
+    let mut data = TicksData {
+        rows: vec![
+            DealRow {
+                deal: deal(1, 1_000, 100.0, 101.0, false),
+                tape: TapeStatus::Covered,
+                verdict: Some(verdict(Some(true), Some(true))),
+                address: None,
+                ticks: Some(tape_of(10)),
+                entry_line: None,
+                held: None,
+            },
+            DealRow {
+                deal: deal(2, 2_000, 100.0, 99.0, false),
+                tape: TapeStatus::Covered,
+                verdict: Some(verdict(Some(false), Some(false))),
+                address: None,
+                ticks: Some(tape_of(10)),
+                entry_line: None,
+                held: None,
+            },
+        ],
+        ..TicksData::default()
+    };
+    assert!(data.rows[0].fit() && !data.rows[1].fit());
+    data.retain_within_cap();
+    assert!(data.rows[0].ticks.is_some());
+    assert!(
+        data.rows[1].ticks.is_none(),
+        "an unfit row's tape is never replayed"
+    );
+    let budget = data.tape_budget();
+    assert_eq!(
+        (budget.rows, budget.fit, budget.replayable, budget.dropped),
+        (2, 1, 1, 0)
+    );
+    assert_eq!((budget.prints, budget.bytes), (10, 80));
+}
+
+/// A fit row the cap left tapeless is what a scope reload must read again; a row that holds
+/// its tape, or one that is not fit, is carried as it is.
+#[test]
+fn a_fit_row_without_its_tape_is_the_one_that_lost_it() {
+    let mut row = DealRow {
+        deal: deal(1, 1_000, 100.0, 101.0, false),
+        tape: TapeStatus::Covered,
+        verdict: Some(verdict(Some(true), Some(true))),
+        address: None,
+        ticks: Some(tape_of(3)),
+        entry_line: None,
+        held: None,
+    };
+    assert!(!row.lost_tape());
+    row.ticks = None;
+    assert!(row.lost_tape());
+    row.verdict = Some(verdict(Some(false), Some(true)));
+    assert!(!row.lost_tape(), "an unfit row keeps no tape by design");
 }

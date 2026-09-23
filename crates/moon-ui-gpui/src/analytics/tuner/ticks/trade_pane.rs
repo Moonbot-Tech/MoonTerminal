@@ -19,7 +19,7 @@ use gpui::*;
 use moon_chart::frozen_overlay::{OverlayBand, OverlayTrade};
 use moon_chart::layers::{SEG_PATTERN_DASH, SEG_PATTERN_DOT};
 use moon_core::db::tuner::ticks::ExitKind;
-use moon_core::db::tuner::ticks::search::{PreparedDeal, clip_to_horizon, variant_picture};
+use moon_core::db::tuner::ticks::search::{clip_to_horizon, variant_picture};
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
@@ -149,23 +149,13 @@ impl AnalyticsView {
             if changes.iter().all(Vec::is_empty) {
                 return None;
             }
-            let mut deal = PreparedDeal {
-                deal: row.deal.clone(),
-                ticks: row.ticks.clone()?,
-                entry_line: row.entry_line.clone(),
-                trail_ms: row.held.map(|(_, trail)| trail).unwrap_or(0),
-            };
-            // The columns' own cut, so the picture shows what the column counted.
-            if let Some(horizon_ms) = data.exit_horizon_ms() {
-                clip_to_horizon(std::slice::from_mut(&mut deal), horizon_ms);
-            }
             Some((
-                deal,
-                super::variants::base_of(&data.now),
+                data.prepared(row)?,
+                data.exit_horizon_ms(),
                 data.single_kind().unwrap_or_default().to_string(),
             ))
         });
-        let Some((deal, base, kind)) = job else {
+        let Some((pending, horizon_ms, kind)) = job else {
             view.update(cx, |view, cx| {
                 view.set_model_trades(Vec::new(), Vec::new(), cx)
             });
@@ -173,17 +163,22 @@ impl AnalyticsView {
         };
         let defaults = self.filter_defaults(cx);
         let model = super::model_cfg::current();
-        let is_short = deal.deal.is_short;
+        let is_short = pending.deal.is_short;
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let pictures = executor
                 .spawn(async move {
+                    // Unpacked here, off the UI thread, and cut as the columns cut it, so the
+                    // picture shows what the column counted.
+                    let mut deal = pending.prepare();
+                    if let Some(horizon_ms) = horizon_ms {
+                        clip_to_horizon(std::slice::from_mut(&mut deal), horizon_ms);
+                    }
                     changes
                         .iter()
                         .map(|values| {
-                            (!values.is_empty()).then(|| {
-                                variant_picture(&deal, &base, &defaults, &kind, values, model)
-                            })
+                            (!values.is_empty())
+                                .then(|| variant_picture(&deal, &defaults, &kind, values, model))
                         })
                         .collect::<Vec<_>>()
                 })

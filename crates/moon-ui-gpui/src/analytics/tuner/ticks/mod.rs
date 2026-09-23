@@ -45,6 +45,7 @@ mod load;
 pub(in crate::analytics) mod model_cfg;
 pub(in crate::analytics::tuner) mod rows;
 pub(in crate::analytics) mod state;
+mod tape;
 mod trade_pane;
 mod variants;
 

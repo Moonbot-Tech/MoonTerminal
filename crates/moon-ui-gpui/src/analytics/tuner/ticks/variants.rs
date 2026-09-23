@@ -6,6 +6,10 @@
 //! (`TicksData::replayable`) — so the columns describe the SAME subset the "Fact · fit" column
 //! describes, never the whole scope. The captions say "by N" for that reason.
 //!
+//! A variant's values are laid over each deal's OWN strategy as it stands now
+//! (`TicksData::own`), not over what the selected strategies agree on: a field they disagree on
+//! and the variant leaves alone runs every deal at its strategy's value.
+//!
 //! A replay leans on what each trade's own record proves wherever a variant keeps the trade's
 //! own settings: the entry fills where the report says, and the stop fires when and where the
 //! core's did (`record::StopAnchor`) — the book the tape does not carry, answered by the fact.
@@ -19,13 +23,13 @@ use rust_i18n::t;
 use super::super::super::AnalyticsView;
 use super::super::shared::N_VAR;
 use super::state::{NowValue, SuggState};
+use super::tape::{PendingDeal, prepare_sample};
 use crate::analytics::bg::ReadLane;
 use moon_core::db::tuner::threshold_search::SearchHandle;
 use moon_core::db::tuner::ticks::TICK_PARAMS;
 use moon_core::db::tuner::ticks::params::ParamGroup;
 use moon_core::db::tuner::ticks::search::{
-    DEFAULT_MAX_PASSES, PreparedDeal, SearchParams, clip_to_horizon, common_horizon_ms, suggest,
-    variant_tally_by_deal,
+    DEFAULT_MAX_PASSES, SearchParams, suggest, train_len, variant_tally_by_deal,
 };
 use moon_core::db::tuner::ticks::stats_of;
 
@@ -53,42 +57,16 @@ pub(super) fn passes_of(text: &str) -> usize {
         .clamp(1, 1_000)
 }
 
-/// The base every variant is laid over: the fields the selected strategies agree on.
-pub(super) fn base_of(now: &HashMap<String, NowValue>) -> HashMap<String, String> {
-    now.iter()
-        .filter_map(|(key, value)| match value {
-            NowValue::Same(v) if !v.is_empty() => Some((key.clone(), v.clone())),
-            _ => None,
-        })
-        .collect()
-}
-
 impl AnalyticsView {
-    /// The replayable rows as the search and the columns take them — every tape cut at the
-    /// sample's one exit horizon (`clip_to_horizon`), so no variant is judged on more tape
-    /// than another.
-    fn prepared_deals(&self) -> Vec<PreparedDeal> {
-        let mut deals: Vec<PreparedDeal> = self
-            .ticks
+    /// The replayable rows as the search and the columns take them, their tapes still packed:
+    /// the caller hands them to [`prepare_sample`] off the UI thread, which unpacks them and
+    /// cuts every tape at the sample's one exit horizon.
+    fn prepared_deals(&self) -> Vec<PendingDeal> {
+        self.ticks
             .data
             .data()
-            .map(|d| {
-                d.replayable()
-                    .filter_map(|row| {
-                        Some(PreparedDeal {
-                            deal: row.deal.clone(),
-                            ticks: row.ticks.clone()?,
-                            entry_line: row.entry_line.clone(),
-                            trail_ms: row.held.map(|(_, trail)| trail).unwrap_or(0),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        if let Some(horizon_ms) = common_horizon_ms(&deals) {
-            clip_to_horizon(&mut deals, horizon_ms);
-        }
-        deals
+            .map(|d| d.replayable().filter_map(|row| d.prepared(row)).collect())
+            .unwrap_or_default()
     }
 
     /// Arm a debounced rescore of the variant columns — every edit of a cell, every row that
@@ -121,22 +99,22 @@ impl AnalyticsView {
 
     /// Score every touched variant over the replayable rows.
     fn run_ticks_variants(&mut self, req: u64, cx: &mut Context<Self>) {
-        let deals = self.prepared_deals();
+        let pending = self.prepared_deals();
         let Some(data) = self.ticks.data.data() else {
             return;
         };
-        let base = base_of(&data.now);
         let kind = data.single_kind().unwrap_or_default().to_string();
         let changes: Vec<Vec<(String, String)>> =
             (0..N_VAR).map(|i| self.ticks.variant_changes(i)).collect();
         let defaults = self.filter_defaults(cx);
         let model = super::model_cfg::current();
-        let n = deals.len();
+        let n = pending.len();
         self.spawn_latest_db(
             &[ReadLane::TicksVariants],
             false,
             cx,
             move || {
+                let deals = prepare_sample(pending);
                 changes
                     .iter()
                     .map(|values| {
@@ -144,7 +122,7 @@ impl AnalyticsView {
                             return None;
                         }
                         let (tally, spent, money) =
-                            variant_tally_by_deal(&deals, &base, &defaults, &kind, values, model);
+                            variant_tally_by_deal(&deals, &defaults, &kind, values, model);
                         let plan: HashMap<i64, (f64, f64)> = money
                             .into_iter()
                             .filter_map(|(uid, value)| Some((uid, value?)))
@@ -275,7 +253,7 @@ impl AnalyticsView {
         if matches!(self.ticks.sugg, SuggState::Running { .. }) {
             return;
         }
-        let deals = self.prepared_deals();
+        let pending = self.prepared_deals();
         let Some(data) = self.ticks.data.data() else {
             return;
         };
@@ -283,7 +261,9 @@ impl AnalyticsView {
             return self.ticks_search_refused("analytics.ticks.sugg_one_kind", cx);
         };
         let model = super::model_cfg::current();
-        let mut base = base_of(&data.now);
+        // Laid over every deal's own strategy before the search's point: nothing for a search
+        // of every field, В1's other fields for a search of one.
+        let mut held: HashMap<String, String> = HashMap::new();
         let (vary_entry, vary_exit, locked) = match only {
             None => (
                 self.ticks_group_searchable(ParamGroup::Entry),
@@ -302,9 +282,7 @@ impl AnalyticsView {
                 }
                 // The other fields as В1 has them: the one field is searched in the variant it
                 // will land in, not in the strategy as it stands.
-                for (k, v) in self.ticks.variant_changes(0) {
-                    base.insert(k, v);
-                }
+                held.extend(self.ticks.variant_changes(0));
                 let locked: HashSet<String> = TICK_PARAMS
                     .iter()
                     .map(|f| f.key)
@@ -321,7 +299,7 @@ impl AnalyticsView {
         if !(vary_entry || vary_exit) {
             return self.ticks_search_refused("analytics.ticks.sugg_nothing", cx);
         }
-        if deals.is_empty() {
+        if pending.is_empty() {
             return self.ticks_search_refused("analytics.ticks.sugg_no_tape", cx);
         }
         let defaults = self.filter_defaults(cx);
@@ -336,6 +314,16 @@ impl AnalyticsView {
             .ok()
             .filter(|n| *n > 0);
         let train_frac = super::super::filter::state::train_frac(self.ticks.train_pct);
+        // A floor over the slice the search fits on no point can keep: say so before a run that
+        // can only come back empty.
+        let closes: Vec<i64> = pending.iter().map(|d| d.deal.close_ms).collect();
+        let train_n = train_len(&closes, train_frac);
+        if let Some(n) = min_n.filter(|n| *n > train_n as i64) {
+            self.ticks.sugg_note =
+                Some(t!("analytics.ticks.sugg_floor_sample", n = n, m = train_n).to_string());
+            cx.notify();
+            return;
+        }
         let handle = SearchHandle::new();
         self.ticks.sugg = SuggState::Running {
             handle: handle.clone(),
@@ -349,8 +337,9 @@ impl AnalyticsView {
             false,
             cx,
             move || {
+                let deals = prepare_sample(pending);
                 let params = SearchParams {
-                    base: &base,
+                    held: &held,
                     defaults: &defaults,
                     kind: &kind,
                     vary_entry,
@@ -392,8 +381,12 @@ impl AnalyticsView {
                         this.ticks.last_result = Some(result);
                         this.arm_ticks_variants(cx);
                     }
+                    // Under a floor, "nothing" is that no point kept it.
                     None => {
-                        this.ticks.sugg_note = Some(t!("analytics.ticks.sugg_none").to_string());
+                        this.ticks.sugg_note = Some(match min_n {
+                            Some(n) => t!("analytics.ticks.sugg_floor", n = n).to_string(),
+                            None => t!("analytics.ticks.sugg_none").to_string(),
+                        });
                     }
                 }
                 cx.notify();
@@ -438,27 +431,34 @@ impl AnalyticsView {
     }
 
     /// The honesty line of a write: a closer `MShotPrice` is UNDERESTIMATED by the sample
-    /// (spikes the real order never reached are not in the report), so the dialog says so.
+    /// (spikes the real order never reached are not in the report), so the dialog says so —
+    /// when the value is closer than ANY strategy's own, not only when they all agree on one.
     fn ticks_change_warnings(&self, changes: &[(String, String)]) -> Vec<String> {
         let mut warns = Vec::new();
-        let base_price = self
-            .ticks
-            .data
-            .data()
-            .and_then(|d| match d.now.get("MShotPrice") {
-                Some(NowValue::Same(v)) => v.replace(',', ".").parse::<f64>().ok(),
+        let parse = |v: &str| v.replace(',', ".").parse::<f64>().ok();
+        let Some(value) = changes
+            .iter()
+            .find(|(k, _)| k == "MShotPrice")
+            .and_then(|(_, v)| parse(v))
+        else {
+            return warns;
+        };
+        let closer = self.ticks.data.data().is_some_and(|d| {
+            let agreed = match d.now.get("MShotPrice") {
+                Some(NowValue::Same(v)) => parse(v),
                 _ => None,
-            });
-        if let (Some(base), Some((_, value))) =
-            (base_price, changes.iter().find(|(k, _)| k == "MShotPrice"))
-        {
-            if value
-                .replace(',', ".")
-                .parse::<f64>()
-                .is_ok_and(|v| v < base)
-            {
-                warns.push(t!("analytics.ticks.closer_warn").to_string());
-            }
+            };
+            agreed
+                .into_iter()
+                .chain(
+                    d.own
+                        .values()
+                        .filter_map(|own| own.get("MShotPrice").and_then(|v| parse(v))),
+                )
+                .any(|base| value < base)
+        });
+        if closer {
+            warns.push(t!("analytics.ticks.closer_warn").to_string());
         }
         warns
     }

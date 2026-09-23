@@ -20,7 +20,8 @@ use std::time::Duration;
 use gpui::*;
 
 use super::super::super::AnalyticsView;
-use super::state::{DealRow, NowValue, RowAddress, TapeStatus, TicksData};
+use super::state::{DealRow, NowValue, OwnValues, RowAddress, TapeStatus, TicksData};
+use super::tape;
 use crate::analytics::bg::ReadLane;
 use crate::analytics::refresh::{CatchUpOutcome, report_result_is_stale};
 use moon_core::db::ReadFail;
@@ -45,7 +46,11 @@ use moon_core::market::trade_replay::{
 const HELD_ANSWER_WAIT: Duration = Duration::from_secs(240);
 
 /// What stage A brings back: the deals and the grid's "now" values.
-type StageA = (Result<DealsRead, ReadFail>, HashMap<String, NowValue>);
+type StageA = (
+    Result<DealsRead, ReadFail>,
+    HashMap<String, NowValue>,
+    OwnValues,
+);
 
 impl AnalyticsView {
     /// Recompute the axis for the current scope.
@@ -75,15 +80,21 @@ impl AnalyticsView {
             ReadLane::Ticks,
             ReadLane::TicksReplay,
             ReadLane::TicksVariants,
-            ReadLane::TicksSearch,
         ]);
         self.ticks.seq = self.ticks.seq.wrapping_add(1);
         // The tape stage the cancel above dropped is not reading any more; the new load's own
         // stage C raises the flag again when it starts.
         self.ticks.tape_reading = false;
-        // A search over the previous deal set answers nothing about the new one; the lane
-        // cancel above does not reach its handle, only this does.
-        self.ticks.stop_search();
+        // A search over a scope the user left answers nothing about the new one; the lane
+        // cancel does not reach its handle, only this does. A report that moved is the SAME
+        // scope with a trade more — a trade closing on any core, every few seconds on a busy
+        // fleet — and the search runs on a copy of the deals: it finishes into В1 and the
+        // columns are rescored over the reloaded rows. Stopped there, a run of a minute never
+        // finished at all, and said nothing.
+        if !after_report {
+            self.latest_reads.cancel(&[ReadLane::TicksSearch]);
+            self.ticks.stop_search();
+        }
         let req = self.ticks.seq;
         let report_req = self.current_report_generation();
         let q = self.tuner_query();
@@ -120,10 +131,14 @@ impl AnalyticsView {
                         q.strategies.len()
                     ),
                 }
-                let now = now_values(&targets, &keys);
-                (deals, now)
+                let own = deals
+                    .as_ref()
+                    .map(|read| own_values(&read.deals, &keys))
+                    .unwrap_or_default();
+                let now = now_values(&targets, &keys, &own);
+                (deals, now, own)
             },
-            move |this, (deals, now): StageA, cx| {
+            move |this, (deals, now, own): StageA, cx| {
                 if this.ticks.seq != req {
                     return;
                 }
@@ -146,7 +161,15 @@ impl AnalyticsView {
                     }
                 };
                 let addresses = this.resolve_addresses(&read.deals, cx);
-                this.start_replay_stage(req, report_req, after_report, read, now, addresses, cx);
+                this.start_replay_stage(
+                    req,
+                    report_req,
+                    after_report,
+                    read,
+                    (now, own),
+                    addresses,
+                    cx,
+                );
             },
         );
     }
@@ -181,7 +204,7 @@ impl AnalyticsView {
         report_req: u64,
         after_report: bool,
         read: DealsRead,
-        now: HashMap<String, NowValue>,
+        (now, own): (HashMap<String, NowValue>, OwnValues),
         addresses: HashMap<(u64, String), Option<Arc<RowAddress>>>,
         cx: &mut Context<Self>,
     ) {
@@ -217,6 +240,7 @@ impl AnalyticsView {
                         let before = judged
                             .get(&deal.report_uid)
                             .filter(|before| address.is_some() && carryable(&before.deal, &deal))
+                            .filter(|before| after_report || !before.lost_tape())
                             .cloned();
                         let mut row = DealRow {
                             deal,
@@ -253,6 +277,7 @@ impl AnalyticsView {
                     exit_share: (0, 0),
                     kinds,
                     now,
+                    own,
                 };
                 data.retain_within_cap();
                 data.refresh_summary();
@@ -337,8 +362,14 @@ impl AnalyticsView {
             .filter_map(|r| Some((r.deal.clone(), r.address.clone()?)))
             .collect();
         if targets.is_empty() {
+            log_tape_budget(data);
             self.ticks.tape_reading = false;
             self.ticks.judged_under = Some(model);
+            // Every row was carried: no fold follows to rescore the variant columns, and the
+            // load's `invalidate` has already dropped their scores and the plan column — a
+            // narrower selection over deals already judged would keep the edits and show
+            // nothing for them.
+            self.arm_ticks_variants(cx);
             return;
         }
         let defaults = self.filter_defaults(cx);
@@ -428,6 +459,9 @@ impl AnalyticsView {
                 this.ticks.tape_reading = false;
                 this.ticks.judged_under = Some(model);
                 this.ticks.update_rows(rows);
+                if let Some(data) = this.ticks.data.data() {
+                    log_tape_budget(data);
+                }
                 // The row the fetch job is out for says so again after the fold.
                 this.mark_fetch_in_flight();
                 // The rows still missing are what the user is looking at: a running batch
@@ -514,11 +548,19 @@ fn ask_held(
 }
 
 /// The grid's "now" column: every selected strategy's current value per field, folded to
-/// one value or "varies".
-fn now_values(targets: &[(i64, Option<u64>)], keys: &[String]) -> HashMap<String, NowValue> {
+/// one value or "varies". A target on a known core that the deals' strategies already read
+/// (`own`, from [`own_values`]) is not read again.
+fn now_values(
+    targets: &[(i64, Option<u64>)],
+    keys: &[String],
+    own: &OwnValues,
+) -> HashMap<String, NowValue> {
     let mut seen: HashMap<String, Vec<Option<String>>> = HashMap::new();
     for &(sid, core) in targets {
-        let values = strategy_current_values(sid, core, keys);
+        let values = match core.and_then(|core| own.get(&(sid, core))) {
+            Some(values) => Arc::clone(values),
+            None => Arc::new(strategy_current_values(sid, core, keys)),
+        };
         for key in keys {
             seen.entry(key.clone())
                 .or_default()
@@ -537,6 +579,24 @@ fn now_values(targets: &[(i64, Option<u64>)], keys: &[String]) -> HashMap<String
             (key, value)
         })
         .collect()
+}
+
+/// Every strategy of `deals` as it stands now, read once per `(strategy_id, core)` — the base
+/// each deal's variants run over ([`TicksData::own`]). A strategy that cannot be read gets an
+/// empty map, and its deals read every field at its default, as the grid's "now" does.
+fn own_values(deals: &[Deal], keys: &[String]) -> OwnValues {
+    let mut out = OwnValues::new();
+    for deal in deals {
+        out.entry((deal.strategy_id, deal.core_uid))
+            .or_insert_with(|| {
+                Arc::new(strategy_current_values(
+                    deal.strategy_id,
+                    Some(deal.core_uid),
+                    keys,
+                ))
+            });
+    }
+    out
 }
 
 /// What the order archive holds of one deal's own lines: the entry line's points, the exit
@@ -738,7 +798,24 @@ pub(super) fn replay_row_with(
         lines.entry_points.as_deref(),
         lines.exit_points.as_deref(),
     ));
-    row.ticks = Some(Arc::from(ticks));
+    row.ticks = Some(tape::PackedTape::pack(ticks));
+}
+
+/// One line per load on what the table holds of its tape — the numbers the memory budget
+/// is judged by, read from the log instead of guessed.
+fn log_tape_budget(data: &TicksData) {
+    let b = data.tape_budget();
+    log::info!(
+        target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+        "[x] ticks tape: {} row(s), {} fit, {} with tape in memory, {} let go by the cap · {} print(s), {:.1} MiB of {:.0} MiB",
+        b.rows,
+        b.fit,
+        b.replayable,
+        b.dropped,
+        b.prints,
+        b.bytes as f64 / 1_048_576.0,
+        super::state::MAX_RETAINED_BYTES as f64 / 1_048_576.0
+    );
 }
 
 /// Whether what the last load judged of a trade still describes the row a reload read for it:

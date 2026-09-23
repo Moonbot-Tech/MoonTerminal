@@ -3,7 +3,9 @@
 //! it — the same shape as `threshold_search`, with the SQL mask replaced by [`simulate`].
 //!
 //! A point is a set of strategy values in the strategy's own spelling, laid over the values
-//! the strategies hold now; the model's parameter structs are built from that overlay through
+//! each deal's OWN strategy holds now ([`PreparedDeal::own`]) — a field the point leaves alone
+//! runs every deal at its strategy's value, never at a default because the selected strategies
+//! disagree on it; the model's parameter structs are built from that overlay through
 //! the same builders the grid's "now" column uses, so what the search varies is exactly what
 //! Save writes. Only the fields of the groups the caller switched on are searched, minus the
 //! ones it locked.
@@ -59,6 +61,11 @@ pub struct PreparedDeal {
     /// sample's horizon from; a covered row holds at least the model's tail
     /// (`required_spans`), so it is never under `TAIL_MS` there.
     pub trail_ms: i64,
+    /// The values the deal's own strategy holds now, in strategy spelling — the base every
+    /// variant and every point of a search is laid over on THIS deal. Shared by the deals of
+    /// one strategy; empty when the strategy could not be read, and then every field reads as
+    /// default.
+    pub own: Arc<HashMap<String, String>>,
 }
 
 /// Cut every deal's tape at the same distance past its close — the exit horizon the whole
@@ -95,10 +102,11 @@ pub fn common_horizon_ms(deals: &[PreparedDeal]) -> Option<i64> {
 
 /// What one search varies and how.
 pub struct SearchParams<'a> {
-    /// The values every selected strategy holds now, in strategy spelling — the base every
-    /// point is laid over. Fields the strategies disagree on are absent and read as default.
-    pub base: &'a HashMap<String, String>,
-    /// Schema defaults for the keys the base leaves out.
+    /// Values held over every deal's own base ([`PreparedDeal::own`]) before the point is laid
+    /// on — the variant's edits when one field is searched in it (the searched field among
+    /// them, which the point then overrides); empty otherwise.
+    pub held: &'a HashMap<String, String>,
+    /// Schema defaults for the keys a deal's base leaves out.
     pub defaults: &'a HashMap<String, f64>,
     /// The strategy kind of the sample, for the fields the grid offers.
     pub kind: &'a str,
@@ -106,7 +114,7 @@ pub struct SearchParams<'a> {
     pub vary_entry: bool,
     /// Whether the Exit group is searched.
     pub vary_exit: bool,
-    /// Field keys held at the base value.
+    /// Field keys held at each deal's base value.
     pub locked: &'a HashSet<String>,
     /// Restart count, at least 1.
     pub restarts: usize,
@@ -125,7 +133,8 @@ pub struct SearchParams<'a> {
 /// What the search found.
 #[derive(Clone, Debug)]
 pub struct SearchResult {
-    /// The winning values, in strategy spelling — only the fields that moved off the base.
+    /// The winning values, in strategy spelling — only the fields that moved off the base of
+    /// at least one deal.
     pub values: Vec<(String, String)>,
     /// What they achieve on the deals they were fitted on.
     pub train: Tally,
@@ -138,15 +147,20 @@ pub struct SearchResult {
 /// One point of the grid: the varied fields' values, in strategy spelling.
 type Point = HashMap<&'static str, String>;
 
-/// The model parameters a point comes to.
+/// The model parameters a point comes to on a deal whose strategy holds `own`, with `held` laid
+/// over it first.
 fn params_of(
-    base: &HashMap<String, String>,
+    own: &HashMap<String, String>,
+    held: &HashMap<String, String>,
     defaults: &HashMap<String, f64>,
     point: &Point,
     kind: &str,
     model: ModelSettings,
 ) -> (EntryParams, ExitParams) {
-    let mut values = base.clone();
+    let mut values = own.clone();
+    for (key, value) in held {
+        values.insert(key.clone(), value.clone());
+    }
     for (key, value) in point {
         values.insert((*key).to_string(), value.clone());
     }
@@ -206,17 +220,89 @@ fn varied<'a>(p: &SearchParams<'a>) -> Vec<&'static super::params::TickParam> {
         .collect()
 }
 
-/// The tally of a point over `deals`, in order, and the spend of the deals it traded.
-fn tally_and_spent(deals: &[PreparedDeal], entry: &EntryParams, exit: &ExitParams) -> (Tally, f64) {
-    // The replay of every deal is independent; the tally is folded in order afterwards.
-    let results: Vec<Option<(f64, f64)>> = deals
+/// The distinct strategy bases of a sample ([`PreparedDeal::own`]) and which one each deal runs
+/// over: a point's parameters are built once per strategy, not once per deal.
+struct Bases<'a> {
+    owns: Vec<&'a HashMap<String, String>>,
+    /// Each deal's index into `owns`, in the deals' order.
+    of_deal: Vec<usize>,
+}
+
+impl<'a> Bases<'a> {
+    fn of(deals: &'a [PreparedDeal]) -> Self {
+        let mut owns: Vec<&'a HashMap<String, String>> = Vec::new();
+        let of_deal = deals
+            .iter()
+            .map(|d| {
+                let own = d.own.as_ref();
+                match owns.iter().position(|o| std::ptr::eq(*o, own) || *o == own) {
+                    Some(index) => index,
+                    None => {
+                        owns.push(own);
+                        owns.len() - 1
+                    }
+                }
+            })
+            .collect();
+        Self { owns, of_deal }
+    }
+
+    /// A point's parameters on every base, in the bases' order.
+    fn params(
+        &self,
+        held: &HashMap<String, String>,
+        defaults: &HashMap<String, f64>,
+        point: &Point,
+        kind: &str,
+        model: ModelSettings,
+    ) -> Vec<(EntryParams, ExitParams)> {
+        self.owns
+            .iter()
+            .map(|own| params_of(own, held, defaults, point, kind, model))
+            .collect()
+    }
+
+    /// Whether `value` of `key` is something at least one base, under `held`, does not hold.
+    fn moves(&self, held: &HashMap<String, String>, key: &str, value: &str) -> bool {
+        self.owns
+            .iter()
+            .any(|own| held.get(key).or_else(|| own.get(key)).map(String::as_str) != Some(value))
+    }
+}
+
+/// Every deal's result under one point, in order — `(money, spent)`, `None` where the point
+/// makes no trade of the deal.
+///
+/// Args:
+///     deals: The deals.
+///     of_deal: Each deal's index into `params` ([`Bases::of_deal`]), as long as `deals`.
+///     params: The point's parameters per base ([`Bases::params`]).
+fn results(
+    deals: &[PreparedDeal],
+    of_deal: &[usize],
+    params: &[(EntryParams, ExitParams)],
+) -> Vec<Option<(f64, f64)>> {
+    deals
         .par_iter()
-        .map(|d| {
+        .zip(of_deal.par_iter())
+        .map(|(d, &base)| {
+            let (entry, exit) = &params[base];
             simulate(&d.deal, &d.ticks, entry, exit, d.entry_line.as_deref())
                 .profit_money(&d.deal)
                 .map(|money| (money, d.deal.spent))
         })
-        .collect();
+        .collect()
+}
+
+/// The tally of a point over `deals`, in order, and the spend of the deals it traded; arguments
+/// as for [`results`].
+fn tally_and_spent(
+    deals: &[PreparedDeal],
+    of_deal: &[usize],
+    params: &[(EntryParams, ExitParams)],
+) -> (Tally, f64) {
+    // The replay of every deal is independent; the tally is folded in order afterwards.
+    let results = results(deals, of_deal, params);
     let mut tally = Tally::default();
     let mut spent = 0.0;
     for (money, size) in results.into_iter().flatten() {
@@ -226,9 +312,9 @@ fn tally_and_spent(deals: &[PreparedDeal], entry: &EntryParams, exit: &ExitParam
     (tally, spent)
 }
 
-/// The tally of a point over `deals`, in order.
-fn tally(deals: &[PreparedDeal], entry: &EntryParams, exit: &ExitParams) -> Tally {
-    tally_and_spent(deals, entry, exit).0
+/// The tally of a point over `deals`, in order; arguments as for [`results`].
+fn tally(deals: &[PreparedDeal], of_deal: &[usize], params: &[(EntryParams, ExitParams)]) -> Tally {
+    tally_and_spent(deals, of_deal, params).0
 }
 
 /// Whether `a` beats `b` under the objective, with the sample floor.
@@ -254,6 +340,17 @@ fn next_random(state: &mut u64) -> u64 {
     x.wrapping_mul(0x2545_F491_4F6C_DD1D)
 }
 
+/// How many deals of a sample, oldest first, the search fits on under `train_frac` — the slice
+/// its `min_n` floor is held on; the rest is the holdout. Taken on the close stamps alone, so a
+/// caller can ask before it has the tapes at hand.
+///
+/// Args:
+///     closes: The sample's close stamps, chronological.
+///     train_frac: [`SearchParams::train_frac`].
+pub fn train_len(closes: &[i64], train_frac: f64) -> usize {
+    train_split(closes, train_frac)
+}
+
 /// Run the search.
 ///
 /// Args:
@@ -262,8 +359,9 @@ fn next_random(state: &mut u64) -> u64 {
 ///     handle: Stop and progress; a fresh one per run.
 ///
 /// Returns:
-///     The best point found, or `None` when the sample is empty, nothing is varied, or the
-///     run was stopped before its first restart finished.
+///     The best point found, or `None` when the sample is empty, nothing is varied, the run
+///     was stopped before its first restart finished, or no point it visited keeps `min_n`
+///     trades — the richest point under the floor is not what the caller asked for.
 pub fn suggest(
     deals: &[PreparedDeal],
     params: &SearchParams<'_>,
@@ -274,7 +372,7 @@ pub fn suggest(
         return None;
     }
     let closes: Vec<i64> = deals.iter().map(|d| d.deal.close_ms).collect();
-    let train_n = train_split(&closes, params.train_frac);
+    let train_n = train_len(&closes, params.train_frac);
     let train = &deals[..train_n];
     let min_n = params
         .min_n
@@ -290,9 +388,11 @@ pub fn suggest(
     let restarts = params.restarts.max(1);
     let max_passes = params.max_passes.max(1);
     let model = params.model.sanitized();
+    let bases = Bases::of(deals);
+    let train_of = &bases.of_deal[..train_n];
     let evaluate = |point: &Point| -> Tally {
-        let (entry, exit) = params_of(params.base, params.defaults, point, params.kind, model);
-        tally(train, &entry, &exit)
+        let per_base = bases.params(params.held, params.defaults, point, params.kind, model);
+        tally(train, train_of, &per_base)
     };
     let best = install(|| {
         (0..restarts)
@@ -367,16 +467,22 @@ pub fn suggest(
             })
     })?;
     let (_, point, train_tally) = best;
-    // The base's own spelling of a field is not a change; only what moved is reported.
+    // `better` ranks a point under the floor below any above it, so a best under it means no
+    // point held the floor at all.
+    if train_tally.n < min_n {
+        return None;
+    }
+    // A field every deal's base already spells so is not a change; only what moved is
+    // reported — a value one strategy holds and another does not is a change for the other.
     let mut values: Vec<(String, String)> = point
         .iter()
-        .filter(|(key, value)| params.base.get(**key) != Some(*value))
+        .filter(|(key, value)| bases.moves(params.held, key, value))
         .map(|(key, value)| ((*key).to_string(), value.clone()))
         .collect();
     values.sort();
     let holdout = (train_n < deals.len()).then(|| {
-        let (entry, exit) = params_of(params.base, params.defaults, &point, params.kind, model);
-        tally(&deals[train_n..], &entry, &exit)
+        let per_base = bases.params(params.held, params.defaults, &point, params.kind, model);
+        tally(&deals[train_n..], &bases.of_deal[train_n..], &per_base)
     });
     Some(SearchResult {
         values,
@@ -390,22 +496,28 @@ pub fn suggest(
 /// the deals it traded.
 ///
 /// Args:
-///     deals: The covered deals, chronological.
-///     base: The strategies' current values.
+///     deals: The covered deals, chronological; each is run over its own strategy's values
+///         ([`PreparedDeal::own`]).
 ///     defaults: Schema defaults.
 ///     kind: The strategy kind.
-///     values: The variant's changes over the base, in strategy spelling.
+///     values: The variant's changes over each deal's base, in strategy spelling.
 ///     model: The model's own settings, the entry method among them.
 pub fn variant_tally(
     deals: &[PreparedDeal],
-    base: &HashMap<String, String>,
     defaults: &HashMap<String, f64>,
     kind: &str,
     values: &[(String, String)],
     model: ModelSettings,
 ) -> (Tally, f64) {
-    let (entry, exit) = variant_params(base, defaults, kind, values, model);
-    install(|| tally_and_spent(deals, &entry, &exit))
+    let bases = Bases::of(deals);
+    let per_base = bases.params(
+        &HashMap::new(),
+        defaults,
+        &point_of(values),
+        kind,
+        model.sanitized(),
+    );
+    install(|| tally_and_spent(deals, &bases.of_deal, &per_base))
 }
 
 /// One variant on one deal, as the tuner's trade pane draws it.
@@ -425,19 +537,25 @@ pub struct VariantPicture {
 ///
 /// Args:
 ///     deal: The deal with its tape, cut at the sample's horizon as the column's are.
-///     base, defaults, kind, values, model: As for [`variant_tally`].
+///     defaults, kind, values, model: As for [`variant_tally`].
 ///
 /// Returns:
 ///     The modelled outcome and corridor.
 pub fn variant_picture(
     deal: &PreparedDeal,
-    base: &HashMap<String, String>,
     defaults: &HashMap<String, f64>,
     kind: &str,
     values: &[(String, String)],
     model: ModelSettings,
 ) -> VariantPicture {
-    let (entry, exit) = variant_params(base, defaults, kind, values, model);
+    let (entry, exit) = params_of(
+        &deal.own,
+        &HashMap::new(),
+        defaults,
+        &point_of(values),
+        kind,
+        model.sanitized(),
+    );
     let line = deal.entry_line.as_deref();
     let outcome = simulate(&deal.deal, &deal.ticks, &entry, &exit, line);
     // A variant that keeps the trade's own entry fills where the report says (`simulate`), and
@@ -472,24 +590,32 @@ pub type DealResults = Vec<(i64, Option<(f64, f64)>)>;
 /// [`variant_tally`].
 ///
 /// Args:
-///     deals, base, defaults, kind, values, model: As for [`variant_tally`].
+///     deals, defaults, kind, values, model: As for [`variant_tally`].
 ///
 /// Returns:
 ///     The tally, the spent sum, and each deal's result ([`DealResults`]).
 pub fn variant_tally_by_deal(
     deals: &[PreparedDeal],
-    base: &HashMap<String, String>,
     defaults: &HashMap<String, f64>,
     kind: &str,
     values: &[(String, String)],
     model: ModelSettings,
 ) -> (Tally, f64, DealResults) {
-    let (entry, exit) = variant_params(base, defaults, kind, values, model);
+    let bases = Bases::of(deals);
+    let per_base = bases.params(
+        &HashMap::new(),
+        defaults,
+        &point_of(values),
+        kind,
+        model.sanitized(),
+    );
     install(|| {
         let money: DealResults = deals
             .par_iter()
-            .map(|d| {
-                let outcome = simulate(&d.deal, &d.ticks, &entry, &exit, d.entry_line.as_deref());
+            .zip(bases.of_deal.par_iter())
+            .map(|(d, &base)| {
+                let (entry, exit) = &per_base[base];
+                let outcome = simulate(&d.deal, &d.ticks, entry, exit, d.entry_line.as_deref());
                 let result = outcome.profit_money(&d.deal).zip(outcome.profit_pct);
                 (d.deal.report_uid, result)
             })
@@ -506,23 +632,17 @@ pub fn variant_tally_by_deal(
     })
 }
 
-/// The entry and exit parameters of a variant's changes laid over the base — the one reading
-/// [`variant_tally`], [`variant_tally_by_deal`] and [`variant_picture`] take, so a column, its
-/// per-deal share and a picture cannot differ.
-fn variant_params(
-    base: &HashMap<String, String>,
-    defaults: &HashMap<String, f64>,
-    kind: &str,
-    values: &[(String, String)],
-    model: ModelSettings,
-) -> (EntryParams, ExitParams) {
+/// A variant's changes as a point — the one reading [`variant_tally`],
+/// [`variant_tally_by_deal`] and [`variant_picture`] take, so a column, its per-deal share and a
+/// picture cannot differ. A key the grid does not know is dropped.
+fn point_of(values: &[(String, String)]) -> Point {
     let mut point = Point::new();
     for (key, value) in values {
         if let Some(field) = TICK_PARAMS.iter().find(|f| f.key == key) {
             point.insert(field.key, value.clone());
         }
     }
-    params_of(base, defaults, &point, kind, model.sanitized())
+    point
 }
 
 #[cfg(test)]

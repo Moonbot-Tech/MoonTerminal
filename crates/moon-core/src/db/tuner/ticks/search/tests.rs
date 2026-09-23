@@ -62,7 +62,20 @@ fn prepared(uid: i64, peak: f64) -> PreparedDeal {
         ticks: Arc::from(ticks),
         entry_line: None,
         trail_ms: 0,
+        own: Arc::new(base()),
     }
+}
+
+/// A deal of `prepared` whose own strategy takes at `take` per cent.
+fn with_take(uid: i64, take: &str) -> PreparedDeal {
+    let mut deal = prepared(uid, 101.0);
+    deal.own = Arc::new(
+        [("SellPrice", take), ("StopLoss", "0")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    );
+    deal
 }
 
 /// The stamp of a tape's last print past the deal's close.
@@ -84,7 +97,7 @@ fn base() -> HashMap<String, String> {
 fn the_search_raises_the_take_to_what_every_tape_reaches() {
     // Every deal peaks at 101.0: a take of 1 % fills on all of them; 1.2 % on none.
     let deals: Vec<PreparedDeal> = (1..=8).map(|uid| prepared(uid, 101.0)).collect();
-    let base = base();
+    let held = HashMap::new();
     let defaults = HashMap::new();
     let mut locked: HashSet<String> = TICK_PARAMS
         .iter()
@@ -93,7 +106,7 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
         .collect();
     locked.remove("SellPrice");
     let params = SearchParams {
-        base: &base,
+        held: &held,
         defaults: &defaults,
         kind: "PumpsDetection",
         vary_entry: false,
@@ -127,7 +140,6 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
     // The same values through the variant column.
     let (tally, spent) = variant_tally(
         &deals,
-        &base,
         &defaults,
         "PumpsDetection",
         &result.values,
@@ -142,7 +154,6 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
     // entry at the fact, the take at 1 % on the peak.
     let picture = variant_picture(
         &deals[0],
-        &base,
         &defaults,
         "PumpsDetection",
         &result.values,
@@ -161,7 +172,6 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
     // And the deal table's plan column: every deal's money, summing to the column's tally.
     let (by_tally, by_spent, money) = variant_tally_by_deal(
         &deals,
-        &base,
         &defaults,
         "PumpsDetection",
         &result.values,
@@ -187,12 +197,12 @@ fn the_holdout_is_scored_but_never_fitted_on() {
         .map(|uid| prepared(uid, 101.0))
         .chain((7..=8).map(|uid| prepared(uid, 100.5)))
         .collect();
-    let base = base();
+    let held = HashMap::new();
     let defaults = HashMap::new();
     let mut locked: HashSet<String> = TICK_PARAMS.iter().map(|f| f.key.to_string()).collect();
     locked.remove("SellPrice");
     let params = SearchParams {
-        base: &base,
+        held: &held,
         defaults: &defaults,
         kind: "PumpsDetection",
         vary_entry: false,
@@ -219,11 +229,11 @@ fn the_holdout_is_scored_but_never_fitted_on() {
 #[test]
 fn a_cancelled_run_answers_nothing_and_nothing_varied_answers_nothing() {
     let deals: Vec<PreparedDeal> = (1..=3).map(|uid| prepared(uid, 101.0)).collect();
-    let base = base();
+    let held = HashMap::new();
     let defaults = HashMap::new();
     let all: HashSet<String> = TICK_PARAMS.iter().map(|f| f.key.to_string()).collect();
     let params = SearchParams {
-        base: &base,
+        held: &held,
         defaults: &defaults,
         kind: "PumpsDetection",
         vary_entry: true,
@@ -318,12 +328,12 @@ fn the_common_horizon_is_the_shortest_held_trail_and_clips_only_the_longer_tapes
 /// the corridor model searches them all.
 #[test]
 fn a_shift_does_not_search_the_path_only_fields() {
-    let base = base();
+    let held = HashMap::new();
     let defaults = HashMap::new();
     let locked = HashSet::new();
     let keys = |method| {
         let params = SearchParams {
-            base: &base,
+            held: &held,
             defaults: &defaults,
             kind: "MoonShot",
             vary_entry: true,
@@ -353,4 +363,121 @@ fn a_shift_does_not_search_the_path_only_fields() {
         assert!(model.contains(&path_only), "{path_only} {model:?}");
     }
     assert!(shift.contains(&"MShotPrice") && shift.contains(&"MShotAddDistance"));
+}
+
+#[test]
+fn a_field_the_strategies_disagree_on_runs_at_each_deals_own_value() {
+    // Two strategies, one take each: 1 % and 0.2 %. A variant that leaves the take alone must
+    // run every deal at its own strategy's take — 10 on the first deal, 2 on the second — and
+    // not at a default for a field no one strategy holds for all.
+    let deals = vec![with_take(1, "1"), with_take(2, "0.2")];
+    let (tally, _, money) = variant_tally_by_deal(
+        &deals,
+        &HashMap::new(),
+        "PumpsDetection",
+        &[("StopLoss".to_string(), "0".to_string())],
+        ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+    );
+    let money: Vec<Option<f64>> = money.iter().map(|(_, m)| m.map(|(v, _)| v)).collect();
+    assert_eq!(tally.n, 2, "{money:?}");
+    assert!(
+        (money[0].unwrap_or(f64::NAN) - 10.0).abs() < 1e-6,
+        "{money:?}"
+    );
+    assert!(
+        (money[1].unwrap_or(f64::NAN) - 2.0).abs() < 1e-6,
+        "{money:?}"
+    );
+}
+
+#[test]
+fn a_search_holds_each_deals_own_value_and_reports_a_value_one_strategy_lacks() {
+    // Two strategies, takes of 1 % and 0.2 %, every tape peaking at 101. Left alone, each deal
+    // keeps its own take: 10 and 2. Searched: 1 % wins on both, and it is a change — the second
+    // strategy does not hold it — even though the first already does.
+    let deals: Vec<PreparedDeal> = (1..=4)
+        .map(|uid| with_take(uid, if uid % 2 == 1 { "1" } else { "0.2" }))
+        .collect();
+    let held = HashMap::new();
+    let defaults = HashMap::new();
+    let mut locked: HashSet<String> = TICK_PARAMS.iter().map(|f| f.key.to_string()).collect();
+    let model = ModelSettings {
+        latency_ms: 0.0,
+        ..ModelSettings::default()
+    };
+    let (tally, _) = variant_tally(&deals, &defaults, "PumpsDetection", &[], model);
+    assert!((tally.profit - 24.0).abs() < 1e-6, "{}", tally.profit);
+    locked.remove("SellPrice");
+    let params = SearchParams {
+        held: &held,
+        defaults: &defaults,
+        kind: "PumpsDetection",
+        vary_entry: false,
+        vary_exit: true,
+        locked: &locked,
+        restarts: 3,
+        min_n: Some(2),
+        seed: Some(7),
+        train_frac: 1.0,
+        max_passes: DEFAULT_MAX_PASSES,
+        model,
+    };
+    let result = suggest(&deals, &params, &SearchHandle::new()).expect("a result");
+    assert_eq!(
+        result.values,
+        vec![("SellPrice".to_string(), "1".to_string())],
+        "{result:?}"
+    );
+    assert!(
+        (result.train.profit - 40.0).abs() < 1e-6,
+        "{}",
+        result.train.profit
+    );
+    // Held over every base, the same take is no change at all.
+    let held: HashMap<String, String> = [("SellPrice".to_string(), "1".to_string())].into();
+    let params = SearchParams {
+        held: &held,
+        ..params
+    };
+    let result = suggest(&deals, &params, &SearchHandle::new()).expect("a result");
+    assert!(result.values.is_empty(), "{result:?}");
+}
+
+/// A floor no point can hold is not an answer: the search says it found nothing rather than
+/// hand back the richest point that trades fewer deals than asked.
+#[test]
+fn a_trade_floor_no_point_keeps_finds_nothing() {
+    let deals: Vec<PreparedDeal> = (1..=8).map(|uid| prepared(uid, 101.0)).collect();
+    let held = HashMap::new();
+    let defaults = HashMap::new();
+    let mut locked: HashSet<String> = TICK_PARAMS.iter().map(|f| f.key.to_string()).collect();
+    locked.remove("SellPrice");
+    let params = SearchParams {
+        held: &held,
+        defaults: &defaults,
+        kind: "PumpsDetection",
+        vary_entry: false,
+        vary_exit: true,
+        locked: &locked,
+        restarts: 3,
+        min_n: Some(9),
+        seed: Some(7),
+        train_frac: 1.0,
+        max_passes: DEFAULT_MAX_PASSES,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+    };
+    let result = suggest(&deals, &params, &SearchHandle::new());
+    assert!(result.is_none(), "{result:?}");
+    // Held by every point, the same search answers.
+    let params = SearchParams {
+        min_n: Some(8),
+        ..params
+    };
+    assert!(suggest(&deals, &params, &SearchHandle::new()).is_some());
 }
