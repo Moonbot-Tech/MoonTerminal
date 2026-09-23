@@ -173,6 +173,11 @@ toolbar.screener:
   ru: "Скринер"
   en: "Screener"
   es: "Screener"
+# Overflow button at the right end of a narrow toolbar: holds the launchers that did not fit.
+toolbar.more_launchers:
+  ru: "Ещё"
+  en: "More"
+  es: "Más"
 # Manual strategy (MS toggle and header picker): the unselected pill.
 header.ms_none:
   ru: "— стратегия —"

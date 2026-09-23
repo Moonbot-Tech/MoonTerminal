@@ -8,8 +8,9 @@ use moon_core::session::CoreId;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonVariant, MoonInputState,
-    MoonPalette, MoonText, MoonTheme, MoonToggle, MoonToggleSize, h_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonVariant,
+    MoonContextMenuWindowExt as _, MoonInputState, MoonMenuItem, MoonPalette, MoonText, MoonTheme,
+    MoonToggle, MoonToggleSize, MoonWindowExt as _, h_flex,
 };
 
 use super::DASH;
@@ -256,6 +257,90 @@ fn label_ladder(available: f32, widths: LabelWidths) -> LabelLadder {
     }
 }
 
+/// One of the trailing window launchers, named in the order they FOLD into the overflow menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Launcher {
+    Settings,
+    Analytics,
+    Strategies,
+    Screener,
+    ProfitMonitor,
+}
+
+/// Fold order: the rightmost launcher goes first, because it is the one that clipped first
+/// before the overflow button existed. The index of a launcher here is its fold rung.
+const LAUNCHER_FOLD_ORDER: [Launcher; 5] = [
+    Launcher::Settings,
+    Launcher::Analytics,
+    Launcher::Strategies,
+    Launcher::Screener,
+    Launcher::ProfitMonitor,
+];
+
+/// Budget inputs of the overflow fold, on top of the label ladder's icon-only row.
+#[derive(Clone, Copy, Debug)]
+struct LauncherFoldWidths {
+    /// Complete row width with every optional label removed and every launcher visible — the
+    /// same figure as [`LabelWidths::icon_only`].
+    icon_only: f32,
+    /// What one icon-only launcher costs the row: its glyph button plus the gap in front of it.
+    launcher: f32,
+    /// What the overflow button costs the row: its glyph button plus the gap in front of it.
+    overflow: f32,
+}
+
+/// How many trailing launchers the row folds into its overflow menu, and the row width it keeps.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LauncherFold {
+    /// Count of launchers folded, taken from the head of [`LAUNCHER_FOLD_ORDER`].
+    folded: usize,
+    /// Budgeted row width after the fold, overflow button included when `folded > 0`.
+    width: f32,
+}
+
+impl LauncherFold {
+    /// Whether `launcher` is drawn on the row rather than listed in the overflow menu.
+    fn shows(self, launcher: Launcher) -> bool {
+        LAUNCHER_FOLD_ORDER
+            .iter()
+            .position(|&l| l == launcher)
+            .is_some_and(|rung| rung >= self.folded)
+    }
+}
+
+/// Resolve the overflow fold without any rendering or theme dependency.
+///
+/// The label ladder runs first and sheds labels only; once even the icon-only row outgrows
+/// `available`, launchers fold one by one in [`LAUNCHER_FOLD_ORDER`] until the row, now carrying
+/// the always-visible overflow button, fits. Nothing folds while the icon-only row fits, so the
+/// overflow button exists only when something is in it. If every launcher is folded and the row
+/// still does not fit, the fold stops there: the rest of the row is trading controls, which never
+/// leave it.
+///
+/// Args:
+///     available: Toolbar width available to the complete row.
+///     widths: Icon-only row width and per-button launcher and overflow costs.
+///
+/// Returns:
+///     The folded launcher count and the resulting budgeted row width.
+fn launcher_fold(available: f32, widths: LauncherFoldWidths) -> LauncherFold {
+    if available >= widths.icon_only {
+        return LauncherFold {
+            folded: 0,
+            width: widths.icon_only,
+        };
+    }
+    let width_at =
+        |folded: usize| widths.icon_only - widths.launcher * folded as f32 + widths.overflow;
+    let folded = (1..=LAUNCHER_FOLD_ORDER.len())
+        .find(|&folded| available >= width_at(folded))
+        .unwrap_or(LAUNCHER_FOLD_ORDER.len());
+    LauncherFold {
+        folded,
+        width: width_at(folded),
+    }
+}
+
 /// Which of the row's optional LABELS fit a window of width `chrome_width`.
 ///
 /// The row's controls do not shrink, so at some width the labels are all that is left to give. This
@@ -376,7 +461,20 @@ fn row_fit(
     } else {
         ladder.size_unit.then(|| SharedString::from(SIZE_UNIT))
     };
+    // Past the last label rung the launchers themselves fold into the overflow button. Each one
+    // costs its glyph and the gap in front of it; a section a fold empties also frees its rule and
+    // root gap, which this deliberately does not credit — the budget errs wide, never short.
+    let launcher_w = design::glyph_btn_w(cx) + gap;
+    let launchers = launcher_fold(
+        chrome_width,
+        LauncherFoldWidths {
+            icon_only: base,
+            launcher: launcher_w,
+            overflow: launcher_w,
+        },
+    );
     RowFit {
+        launchers,
         size_caption,
         sell_caption: ladder.sell.then(|| SharedString::from(SELL_CAPTION)),
         analytics_width: ladder.analytics.then_some(analytics_width),
@@ -391,6 +489,8 @@ fn row_fit(
 /// The optional labels the row renders at the current window width, already resolved to the values
 /// it renders — see [`row_fit`]. `None` means that label does not fit and is not drawn.
 struct RowFit {
+    /// Which trailing launchers are drawn and which sit in the overflow menu.
+    launchers: LauncherFold,
     size_caption: Option<SharedString>,
     sell_caption: Option<SharedString>,
     /// Complete Analytics-button width when its label fits; `None` renders it icon-only.
@@ -1144,100 +1244,176 @@ pub fn toolbar(
     );
     crate::diag::record_us(&crate::diag::TOOLBAR_TRADE_US, phase_us);
     let phase_us = crate::diag::timer();
-    // Trailing edge: Profit Monitor + Screener, then Strategies + Analytics, then Settings.
+    // Trailing edge: Profit Monitor + Screener, then Strategies + Analytics, then Settings. A
+    // launcher the row cannot hold folds into the overflow button at the very end (`row_fit`), so
+    // none of them can be pushed past the window's edge.
+    let folds = fit.launchers;
+    let launch = |launcher: Launcher| -> LaunchTarget {
+        match launcher {
+            Launcher::ProfitMonitor => LaunchTarget {
+                id: "toolbar-profit-monitor",
+                label: t!("toolbar.profit_monitor").to_string(),
+                icon: "icons/trending-up.svg",
+                labeled_width: None,
+                workspace_owner: None,
+                open: crate::analytics::profit_monitor::open,
+            },
+            Launcher::Screener => LaunchTarget {
+                id: "toolbar-screener",
+                label: t!("toolbar.screener").to_string(),
+                icon: "icons/chart-pie.svg",
+                labeled_width: None,
+                workspace_owner: None,
+                open: crate::screener::open,
+            },
+            Launcher::Strategies => LaunchTarget {
+                id: "toolbar-strategies",
+                label: strategies_label.clone(),
+                icon: super::STRATEGIES_ICON,
+                labeled_width: fit.strategies_width,
+                workspace_owner: Some(group.to_string()),
+                open: crate::strategies::open,
+            },
+            Launcher::Analytics => LaunchTarget {
+                id: "toolbar-analytics",
+                label: analytics_label.clone(),
+                icon: "icons/layout-dashboard.svg",
+                labeled_width: fit.analytics_width,
+                workspace_owner: Some(group.to_string()),
+                open: crate::analytics::open,
+            },
+            Launcher::Settings => LaunchTarget {
+                id: "toolbar-settings",
+                label: settings_label.clone(),
+                icon: "icons/settings.svg",
+                labeled_width: fit.settings_width,
+                workspace_owner: None,
+                open: crate::settings::open,
+            },
+        }
+    };
+    let button = |launcher: Launcher| {
+        folds
+            .shows(launcher)
+            .then(|| open_window_button(launch(launcher), backend.clone(), p, cx))
+    };
+    // The first-run hint. TWO conditions, not one: the timer decides how long the ring breathes,
+    // and the saved config decides whether it is still relevant at all -- so the moment a core is
+    // saved the ring is gone on the NEXT FRAME rather than at the end of its timer. Read from
+    // `backend.config`, never from the Settings draft: an unsaved row the user is still typing
+    // into is not a configured core. It rides whichever control opens Settings right now: the
+    // Settings button, or the overflow button while Settings is folded into it.
+    let settings_hint = settings_hint_at
+        .filter(|_| !backend.read(cx).config.core_ever_configured())
+        .and_then(|at| crate::pulse::attention_ring(p.accent, at));
+    let (settings_ring, overflow_ring) = if folds.shows(Launcher::Settings) {
+        (settings_hint, None)
+    } else {
+        (None, settings_hint)
+    };
+    let folded: Vec<LaunchTarget> = LAUNCHER_FOLD_ORDER[..folds.folded]
+        .iter()
+        .rev()
+        .map(|&launcher| launch(launcher))
+        .collect();
+    let shows_any = |set: &[Launcher]| set.iter().any(|&l| folds.shows(l));
     let row = row
         .child(div().flex_1())
+        .when(
+            shows_any(&[Launcher::ProfitMonitor, Launcher::Screener]),
+            |row| {
+                row.child(design::chrome_divider(cx, p)).child(
+                    section()
+                        .children(button(Launcher::ProfitMonitor))
+                        .children(button(Launcher::Screener)),
+                )
+            },
+        )
+        .when(
+            shows_any(&[Launcher::Strategies, Launcher::Analytics]),
+            |row| {
+                row.child(design::chrome_divider(cx, p)).child(
+                    section()
+                        // Launcher captions are control captions, so they read in the UI face. It
+                        // is set on the section rather than per button because `MoonButton` can
+                        // only force MONO on its own segments -- it has no proportional prop, and
+                        // inherits otherwise. Paired with `launcher_label_width`, which measures
+                        // the same family.
+                        .font_family(design::ui_font())
+                        .children(button(Launcher::Strategies))
+                        .children(button(Launcher::Analytics)),
+                )
+            },
+        )
+        // The Settings section always exists: it holds the Settings button, the overflow button,
+        // or both — the overflow button takes the slot Settings vacates when it folds first.
         .child(design::chrome_divider(cx, p))
         .child(
             section()
-                .child(open_window_button(
-                    "toolbar-profit-monitor",
-                    t!("toolbar.profit_monitor").to_string(),
-                    "icons/trending-up.svg",
-                    None,
-                    None,
-                    backend.clone(),
-                    crate::analytics::profit_monitor::open,
-                    p,
-                    cx,
-                ))
-                .child(open_window_button(
-                    "toolbar-screener",
-                    t!("toolbar.screener").to_string(),
-                    "icons/chart-pie.svg",
-                    None,
-                    None,
-                    backend.clone(),
-                    crate::screener::open,
-                    p,
-                    cx,
-                )),
-        )
-        .child(design::chrome_divider(cx, p))
-        .child(
-            section()
-                // Launcher captions are control captions, so they read in the UI face. It is set
-                // on the section rather than per button because `MoonButton` can only force
-                // MONO on its own segments -- it has no proportional prop, and inherits
-                // otherwise. Paired with `launcher_label_width`, which measures the same family.
-                .font_family(design::ui_font())
-                .child(open_window_button(
-                    "toolbar-strategies",
-                    strategies_label,
-                    super::STRATEGIES_ICON,
-                    fit.strategies_width,
-                    Some(group.to_string()),
-                    backend.clone(),
-                    crate::strategies::open,
-                    p,
-                    cx,
-                ))
-                .child(open_window_button(
-                    "toolbar-analytics",
-                    analytics_label,
-                    "icons/layout-dashboard.svg",
-                    fit.analytics_width,
-                    Some(group.to_string()),
-                    backend.clone(),
-                    crate::analytics::open,
-                    p,
-                    cx,
-                )),
-        )
-        .child(design::chrome_divider(cx, p))
-        .child(
-            section().child(
-                // The first-run hint. TWO conditions, not one: the timer decides how long the ring
-                // breathes, and the saved config decides whether it is still relevant at all -- so the
-                // moment a core is saved the ring is gone on the NEXT FRAME rather than at the end of
-                // its timer. Read from `backend.config`, never from the Settings draft: an unsaved row
-                // the user is still typing into is not a configured core.
-                div()
-                    .relative()
-                    // The UI face, as for the other labeled launchers above.
-                    .font_family(design::ui_font())
-                    .child(open_window_button(
-                        "toolbar-settings",
-                        settings_label,
-                        "icons/settings.svg",
-                        fit.settings_width,
-                        None,
-                        backend.clone(),
-                        crate::settings::open,
-                        p,
-                        cx,
-                    ))
-                    // Declared AFTER the button so the ring paints on top of its chrome; it is a
-                    // pointer-transparent overlay and takes no clicks from the control beneath.
-                    .children(
-                        settings_hint_at
-                            .filter(|_| !backend.read(cx).config.core_ever_configured())
-                            .and_then(|at| crate::pulse::attention_ring(p.accent, at)),
-                    ),
-            ),
+                .children(button(Launcher::Settings).map(|settings| {
+                    div()
+                        .relative()
+                        // The UI face, as for the other labeled launchers above.
+                        .font_family(design::ui_font())
+                        .child(settings)
+                        // Declared AFTER the button so the ring paints on top of its chrome; it
+                        // is a pointer-transparent overlay and takes no clicks from the control
+                        // beneath.
+                        .children(settings_ring)
+                }))
+                .when(!folded.is_empty(), |section| {
+                    section.child(
+                        div()
+                            .relative()
+                            .child(overflow_button(folded, backend.clone(), p, cx))
+                            .children(overflow_ring),
+                    )
+                }),
         );
     crate::diag::record_us(&crate::diag::TOOLBAR_LAUNCH_US, phase_us);
     row
+}
+
+/// Singleton-window entry point shared by every trailing launcher.
+type OpenWindow = fn(Entity<Backend>, Option<AnyWindowHandle>, Option<DisplayId>, &mut App);
+
+/// Everything one trailing launcher needs, whether it is drawn on the row or listed in the
+/// overflow menu — one description, so the two places cannot open different things.
+struct LaunchTarget {
+    /// Stable button element identity; doubles as the overflow menu row key.
+    id: &'static str,
+    /// Localized launcher name: visible label, icon tooltip or menu row text.
+    label: String,
+    /// MoonUI asset path for the launcher glyph.
+    icon: &'static str,
+    /// Fixed labeled width, or `None` for an icon-only button.
+    labeled_width: Option<f32>,
+    /// Group to record before opening a workspace-scoped singleton.
+    workspace_owner: Option<String>,
+    /// Singleton-window entry point.
+    open: OpenWindow,
+}
+
+/// Open one launcher's singleton window from `window`, exactly as its toolbar button does.
+fn launch_window(
+    workspace_owner: Option<&str>,
+    open: OpenWindow,
+    backend: &Entity<Backend>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some(group) = workspace_owner {
+        backend.update(cx, |backend, backend_cx| {
+            backend.focus_singleton_owner(group, backend_cx);
+        });
+    }
+    let owner_display = window.display(cx).map(|d| d.id());
+    open(
+        backend.clone(),
+        Some(window.window_handle()),
+        owner_display,
+        cx,
+    );
 }
 
 /// A toolbar button that opens a singleton window, styled like Live
@@ -1246,30 +1422,27 @@ pub fn toolbar(
 /// open signature and deduplicates or focuses its own singleton window.
 ///
 /// Args:
-///     id: Stable button element identity.
-///     label: Localized visible label or icon tooltip.
-///     icon: MoonUI asset path for the launcher glyph.
-///     labeled_width: Fixed labeled width, or `None` for an icon-only button.
-///     workspace_owner: Group to record before opening a workspace-scoped singleton.
+///     target: The launcher's identity, label, glyph, width and destination.
 ///     backend: Shared terminal state passed to the destination.
-///     open: Singleton-window entry point invoked by the click.
 ///     p: Active palette used for icon and text colors.
 ///     cx: Application context used to resolve the control-tier icon-only width.
 ///
 /// Returns:
 ///     One rendered compact launcher button.
-#[allow(clippy::too_many_arguments)]
 fn open_window_button(
-    id: &'static str,
-    label: String,
-    icon: &'static str,
-    labeled_width: Option<f32>,
-    workspace_owner: Option<String>,
+    target: LaunchTarget,
     backend: Entity<Backend>,
-    open: fn(Entity<Backend>, Option<AnyWindowHandle>, Option<DisplayId>, &mut App),
     p: MoonPalette,
     cx: &App,
-) -> impl IntoElement {
+) -> AnyElement {
+    let LaunchTarget {
+        id,
+        label,
+        icon,
+        labeled_width,
+        workspace_owner,
+        open,
+    } = target;
     let mut btn = MoonButton::new(id)
         .width(labeled_width.unwrap_or_else(|| design::glyph_btn_w(cx)))
         .variant(MoonButtonVariant::Soft)
@@ -1281,18 +1454,69 @@ fn open_window_button(
         btn.tooltip(label)
     };
     btn.on_click(move |_, window, cx| {
-        if let Some(group) = workspace_owner.as_deref() {
-            backend.update(cx, |backend, backend_cx| {
-                backend.focus_singleton_owner(group, backend_cx);
-            });
-        }
-        let owner_display = window.display(cx).map(|d| d.id());
-        open(
-            backend.clone(),
-            Some(window.window_handle()),
-            owner_display,
-            cx,
-        );
+        launch_window(workspace_owner.as_deref(), open, &backend, window, cx);
     })
     .render()
+    .into_any_element()
+}
+
+/// Width bounds of the overflow menu, in design pixels; the menu fits its rows inside them.
+const OVERFLOW_MENU_MIN_W: f32 = 120.0;
+/// Upper width bound of the overflow menu, in design pixels.
+const OVERFLOW_MENU_MAX_W: f32 = 280.0;
+
+/// The «⋯» button holding the launchers the row could not fit, in the row's left-to-right order.
+///
+/// Sized like its icon-only neighbours ([`design::glyph_btn_w`]) so [`row_fit`] budgets it as one
+/// more launcher. A click opens a MoonUI Root-owned menu under the pointer whose rows open the
+/// same windows the folded buttons would; the Root owns focus and dismissal, so this row keeps no
+/// open-state of its own.
+///
+/// Args:
+///     folded: The launchers folded into the menu, in display order.
+///     backend: Shared terminal state passed to each destination.
+///     p: Active palette used for the glyph color.
+///     cx: Application context used to resolve the control-tier width.
+///
+/// Returns:
+///     One rendered overflow button.
+fn overflow_button(
+    folded: Vec<LaunchTarget>,
+    backend: Entity<Backend>,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let folded = std::rc::Rc::new(folded);
+    MoonButton::new("toolbar-overflow")
+        .width(design::glyph_btn_w(cx))
+        .variant(MoonButtonVariant::Soft)
+        .leading_icon(MoonButtonIconSlot::new("icons/ellipsis.svg").color(p.text_soft))
+        .tooltip(t!("toolbar.more_launchers").to_string())
+        .on_click(move |_, window, cx| {
+            let items = folded
+                .iter()
+                .map(|target| {
+                    let owner = target.workspace_owner.clone();
+                    let open = target.open;
+                    let backend = backend.clone();
+                    MoonMenuItem::with_key(target.id, target.label.clone()).on_click(
+                        move |_, window, app| {
+                            window.close_context_menu(app);
+                            launch_window(owner.as_deref(), open, &backend, window, app);
+                        },
+                    )
+                })
+                .collect();
+            let at = window.mouse_position();
+            window.open_fitted_moon_context_menu(
+                cx,
+                "toolbar-overflow-menu",
+                at,
+                items,
+                OVERFLOW_MENU_MIN_W,
+                OVERFLOW_MENU_MAX_W,
+            );
+        })
+        .render()
+        .into_any_element()
 }
