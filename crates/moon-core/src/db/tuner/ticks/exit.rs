@@ -10,15 +10,18 @@
 //! raised by `MShotSellAtLastPrice` to
 //! the pre-spike price less `MShotSellPriceAdjust` (the FAQ: "the 4-second-old ASK, i.e. before
 //! the spike"; the model takes the ask the caller recovered from the order archive
-//! (`Deal::pre_spike_ask`), else reads the last print at least [`PRE_SPIKE_LOOKBACK_MS`] before
-//! the fill, since the tape has no book). From there the line moves under the strategy's sell rules
+//! (`Deal::pre_spike_ask`), else reads the last print at least
+//! `ModelSettings::pre_spike_lookback_ms` ([`super::mshot::PRE_SPIKE_LOOKBACK_MS`] by default)
+//! before the fill, since the tape has no book). From there the line moves under the strategy's
+//! sell rules
 //! — `PriceDown*`, `SellLevel*`, `SellShot*` — and the stop fires under `StopLoss*`; see
 //! [`super::line`]. A position nothing closed inside the tape is [`ExitKind::OpenAtWindowEnd`]:
 //! not a trade, whatever the core's exit was.
 
 use super::hook::{KIND_MOONHOOK, hook_take_pct};
 use super::line::{LineWalk, walk, walk_held};
-use super::mshot::{DEFAULT_LATENCY_MS, Modifiers, PRE_SPIKE_LOOKBACK_MS};
+use super::mshot::Modifiers;
+use super::settings::ModelSettings;
 use super::{Deal, Exit, Fill};
 use crate::feed::types::Tick;
 
@@ -127,8 +130,9 @@ pub struct ExitParams {
     /// search (`record::fit_for_search`): a variant's exit there is whatever the missing rule
     /// would have made of it.
     pub unmodelled: Option<UnmodelledRule>,
-    /// Model parameter: how long a replacement of the sell takes to reach the book.
-    pub latency_ms: f64,
+    /// The model's own settings — the sell's replacement latency, the stop's clocks, the
+    /// verdict's tolerances; not strategy fields.
+    pub model: ModelSettings,
     /// Verdict-only: start the line at the archived take (`Deal::archived_take`) for a kind
     /// whose take rule the model does not compute itself. Off for every variant, whose take
     /// comes from the RULES — `SellPrice`, or `HookSellLevel · depth` for a MoonHook — so that
@@ -184,7 +188,7 @@ impl Default for ExitParams {
             fast_stop_loss: true,
             stop_loss_ema: 0.0,
             unmodelled: None,
-            latency_ms: DEFAULT_LATENCY_MS,
+            model: ModelSettings::default(),
             take_from_archive: false,
         }
     }
@@ -248,7 +252,9 @@ impl<'a> ExitModel<'a> {
             let pre = deal
                 .pre_spike_ask
                 .filter(|p| p.is_finite() && *p > 0.0)
-                .or_else(|| pre_spike_price(ticks, fill.t_ms));
+                .or_else(|| {
+                    pre_spike_price(ticks, fill.t_ms, self.params.model.pre_spike_lookback_ms)
+                });
             if let (Some(pre), Some(factor)) = (pre, ask_take_factor(self.params, deal.is_short)) {
                 take = if deal.is_long() {
                     take.max(pre * factor)
@@ -479,10 +485,10 @@ pub fn archived_pre_spike_ask(
     (take.is_finite() && take > 0.0).then_some(take / factor)
 }
 
-/// The last print at least [`PRE_SPIKE_LOOKBACK_MS`] before `at_ms` — the FAQ's "price before
-/// the spike".
-pub fn pre_spike_price(ticks: &[Tick], at_ms: i64) -> Option<f64> {
-    let cutoff = at_ms - PRE_SPIKE_LOOKBACK_MS;
+/// The last print at least `lookback_ms` ([`super::mshot::PRE_SPIKE_LOOKBACK_MS`] by default)
+/// before `at_ms` — the FAQ's "price before the spike".
+pub fn pre_spike_price(ticks: &[Tick], at_ms: i64, lookback_ms: i64) -> Option<f64> {
+    let cutoff = at_ms - lookback_ms;
     ticks
         .iter()
         .rev()

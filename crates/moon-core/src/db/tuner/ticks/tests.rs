@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use super::exit::pre_spike_price;
 use super::exit::stop_pct as moon_core_stop_pct;
-use super::mshot::{DEFAULT_LATENCY_MS, Modifiers, PRE_SPIKE_LOOKBACK_MS};
+use super::mshot::{Modifiers, PRE_SPIKE_LOOKBACK_MS};
 use super::params::{StrategyValues, exit_params, mshot_params, param_keys, params_for};
 use super::verify::share;
 use super::*;
@@ -235,7 +235,10 @@ fn approaching_inside_price_min_moves_the_order_after_the_latency() {
 #[test]
 fn without_latency_the_corridor_is_never_reached_by_a_step_down() {
     let params = MshotParams {
-        latency_ms: 0.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
         ..mshot()
     };
     let ticks = tape(&[(0, 100.0), (1_000, 99.3), (1_000, 99.0)]);
@@ -511,9 +514,9 @@ fn the_sell_family_reads_the_market_as_a_magnitude_and_the_corridor_with_its_sig
         values: &values,
         defaults: &defaults,
     };
-    let sell = exit_params(&sv).sell_mods;
+    let sell = exit_params(&sv, ModelSettings::default()).sell_mods;
     assert!((sell.near_addition(&d) - 0.5).abs() < 1e-9);
-    let corridor = mshot_params(&sv, DEFAULT_LATENCY_MS).modifiers;
+    let corridor = mshot_params(&sv, ModelSettings::default()).modifiers;
     assert!((corridor.near_addition(&d) - -0.2).abs() < 1e-9);
     assert!(param_keys().iter().any(|k| k == "AddMarket24Delta"));
 }
@@ -601,7 +604,10 @@ fn shifted_variant(price_pct: f64) -> (Deal, MshotParams) {
     };
     let variant = MshotParams {
         price_pct,
-        method: EntryMethod::Shift,
+        model: ModelSettings {
+            entry_method: EntryMethod::Shift,
+            ..ModelSettings::default()
+        },
         ..mshot()
     };
     (deal, variant)
@@ -647,7 +653,10 @@ fn a_short_shift_mirrors() {
 fn the_shift_keeps_the_fact_and_needs_it() {
     let (d, _) = shifted_variant(1.0);
     let own_by_shift = EntryParams::MoonShot(MshotParams {
-        method: EntryMethod::Shift,
+        model: ModelSettings {
+            entry_method: EntryMethod::Shift,
+            ..ModelSettings::default()
+        },
         ..mshot()
     });
     let spike = tape(&[(9_000, 100.0), (10_000, 99.0), (10_200, 98.4)]);
@@ -661,7 +670,10 @@ fn the_shift_keeps_the_fact_and_needs_it() {
             &bare,
             &spike,
             &MshotParams {
-                method: EntryMethod::Model,
+                model: ModelSettings {
+                    entry_method: EntryMethod::Model,
+                    ..ModelSettings::default()
+                },
                 ..deeper.clone()
             }
         ),
@@ -677,7 +689,10 @@ fn the_corridor_reads_the_last_print_and_re_places_off_the_windows_low() {
         fast_algo: true,
         raise_wait_s: 30.0,
         replace_delay_s: 0.08,
-        latency_ms: 0.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
         ..mshot()
     };
     // Level 99 off 100. A dip to 99.4 at t=1000 (0.40 % < 0.5 %: an approach) and back to 99.6
@@ -728,7 +743,10 @@ fn the_corridor_reads_the_last_print_and_re_places_off_the_windows_low() {
 #[test]
 fn no_re_place_while_the_last_is_in_flight() {
     let params = MshotParams {
-        latency_ms: 300.0,
+        model: ModelSettings {
+            latency_ms: 300.0,
+            ..ModelSettings::default()
+        },
         ..mshot()
     };
     // Level 99 off 100, on the book at once (placed off the first print). At t=1000 the price
@@ -829,8 +847,14 @@ fn sell_at_last_price_lifts_the_take_to_the_pre_spike_price_less_the_adjustment(
 fn the_pre_spike_price_is_the_last_print_at_least_four_seconds_back() {
     let ticks = tape(&[(0, 100.0), (900, 100.5), (1_000, 101.0), (4_000, 95.0)]);
     let at = 5_000;
-    assert_eq!(pre_spike_price(&ticks, at), Some(101.0));
-    assert_eq!(pre_spike_price(&ticks, PRE_SPIKE_LOOKBACK_MS - 1), None);
+    assert_eq!(
+        pre_spike_price(&ticks, at, PRE_SPIKE_LOOKBACK_MS),
+        Some(101.0)
+    );
+    assert_eq!(
+        pre_spike_price(&ticks, PRE_SPIKE_LOOKBACK_MS - 1, PRE_SPIKE_LOOKBACK_MS),
+        None
+    );
 }
 
 #[test]
@@ -1255,7 +1279,7 @@ fn mshot_params_read_the_strategy_then_the_schema_then_the_model_default() {
             values: &v,
             defaults: &defaults,
         },
-        DEFAULT_LATENCY_MS,
+        ModelSettings::default(),
     );
     assert!((p.price_pct - 1.4).abs() < 1e-9);
     assert!(
@@ -1283,10 +1307,13 @@ fn exit_params_read_the_sell_fields() {
         ("MShotSellPriceAdjust", "1"),
     ]);
     let defaults = HashMap::new();
-    let p = exit_params(&StrategyValues {
-        values: &v,
-        defaults: &defaults,
-    });
+    let p = exit_params(
+        &StrategyValues {
+            values: &v,
+            defaults: &defaults,
+        },
+        ModelSettings::default(),
+    );
     assert!((p.sell_price_pct - 0.8).abs() < 1e-9);
     assert!(!p.sell_at_last_price);
     assert!((p.sell_price_adjust_pct - 1.0).abs() < 1e-9);
@@ -1299,10 +1326,13 @@ fn exit_params_read_the_stop_switch_and_trigger() {
     let defaults = HashMap::new();
     let read = |pairs: &[(&str, &str)]| {
         let v = values(pairs);
-        exit_params(&StrategyValues {
-            values: &v,
-            defaults: &defaults,
-        })
+        exit_params(
+            &StrategyValues {
+                values: &v,
+                defaults: &defaults,
+            },
+            ModelSettings::default(),
+        )
     };
     let off = read(&[("UseStopLoss", "NO"), ("StopLoss", "-2")]);
     assert_eq!(off.stop_loss_pct, 0.0, "a switched-off stop arms nothing");

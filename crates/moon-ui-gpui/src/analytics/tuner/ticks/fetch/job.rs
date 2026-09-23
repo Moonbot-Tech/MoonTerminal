@@ -732,6 +732,7 @@ fn serve_cluster(
         replay_row(
             &mut answer,
             defaults,
+            super::super::model_cfg::current(),
             lines,
             row.window.long_position_ms,
             row.replay_address.cache.as_ref(),

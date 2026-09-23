@@ -4,7 +4,7 @@
 use super::*;
 use crate::db::tuner::ticks::line::walk;
 use crate::db::tuner::ticks::mshot::MshotParams;
-use crate::db::tuner::ticks::{Deltas, ExitKind, simulate, verify};
+use crate::db::tuner::ticks::{Deltas, ExitKind, ModelSettings, simulate, verify};
 use crate::feed::types::{Side, Tick};
 
 fn tick(t_ms: i64, price: f64) -> Tick {
@@ -66,7 +66,10 @@ fn book() -> ExitParams {
     ExitParams {
         stop_loss_pct: -1.0,
         fast_stop_loss: false,
-        latency_ms: 0.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
         ..ExitParams::default()
     }
 }

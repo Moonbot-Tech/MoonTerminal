@@ -14,9 +14,11 @@
 //! trade and drops out of `n`; the caller prints "by N of M" beside the column so a variant
 //! that wins by trading less is visible as such.
 //!
-//! A MoonShot variant's entry is replayed the way the caller picks ([`EntryMethod`]): the corridor
-//! model from the order's creation, or the fact's order shifted at the spike. The trade's own
-//! settings take the fact's fill either way.
+//! A MoonShot variant's entry is replayed the way the caller's model settings pick
+//! ([`super::mshot::EntryMethod`]): the corridor model from the order's creation, or the fact's
+//! order shifted at the spike. The trade's own settings take the fact's fill either way, and a
+//! field the picked method does not read is not searched
+//! ([`super::mshot::EntryMethod::reads`]).
 //!
 //! Chronological order is kept on purpose: the train/holdout cut and the drawdown read the
 //! SEQUENCE, and the deals arrive sorted by close from `read_deals`.
@@ -26,18 +28,19 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
-use super::mshot::{EntryMethod, MshotParams};
 use super::params::{
     ParamGroup, ParamKind, StrategyValues, TICK_PARAMS, exit_params, mshot_params,
 };
+use super::settings::ModelSettings;
 use super::{Deal, EntryParams, ExitParams, entry_model_for, simulate};
 use crate::db::metrics::Tally;
 use crate::db::tuner::threshold_search::search::{install, restart_seed};
 use crate::db::tuner::threshold_search::{SearchHandle, train_split};
 use crate::feed::types::Tick;
 
-/// Passes of coordinate descent one restart may take before it is called converged.
-const MAX_PASSES: usize = 16;
+/// Passes of coordinate descent one restart may take before it is called converged, when the
+/// caller does not say ([`SearchParams::max_passes`]).
+pub const DEFAULT_MAX_PASSES: usize = 16;
 
 /// One deal with its tape, ready to be replayed as often as the search asks.
 #[derive(Clone)]
@@ -112,10 +115,10 @@ pub struct SearchParams<'a> {
     pub seed: Option<u64>,
     /// Share of the period, oldest first, the search may fit on.
     pub train_frac: f64,
-    /// Replacement latency of the model, milliseconds.
-    pub latency_ms: f64,
-    /// How a MoonShot variant's entry is replayed.
-    pub entry_method: EntryMethod,
+    /// Passes of coordinate descent per restart, at least 1.
+    pub max_passes: usize,
+    /// The model's own settings, the entry method among them.
+    pub model: ModelSettings,
 }
 
 /// What the search found.
@@ -140,8 +143,7 @@ fn params_of(
     defaults: &HashMap<String, f64>,
     point: &Point,
     kind: &str,
-    latency_ms: f64,
-    entry_method: EntryMethod,
+    model: ModelSettings,
 ) -> (EntryParams, ExitParams) {
     let mut values = base.clone();
     for (key, value) in point {
@@ -152,16 +154,11 @@ fn params_of(
         defaults,
     };
     let entry = if entry_model_for(kind) {
-        EntryParams::MoonShot(MshotParams {
-            method: entry_method,
-            ..mshot_params(&sv, latency_ms)
-        })
+        EntryParams::MoonShot(mshot_params(&sv, model))
     } else {
         EntryParams::Fact
     };
-    let mut exit = exit_params(&sv);
-    exit.latency_ms = latency_ms;
-    (entry, exit)
+    (entry, exit_params(&sv, model))
 }
 
 /// The spelling of one grid value in the strategy's format.
@@ -202,6 +199,8 @@ fn varied<'a>(p: &SearchParams<'a>) -> Vec<&'static super::params::TickParam> {
         // varied for nothing, land in a variant column the grid cannot show, and be written by
         // Save all the same.
         .filter(|f| !f.not_kinds.contains(&p.kind))
+        // A field the entry method does not read moves nothing either.
+        .filter(|f| p.model.entry_method.reads(f.key))
         .filter(|f| !p.locked.contains(f.key))
         .collect()
 }
@@ -288,15 +287,10 @@ pub fn suggest(
             | 1
     });
     let restarts = params.restarts.max(1);
+    let max_passes = params.max_passes.max(1);
+    let model = params.model.sanitized();
     let evaluate = |point: &Point| -> Tally {
-        let (entry, exit) = params_of(
-            params.base,
-            params.defaults,
-            point,
-            params.kind,
-            params.latency_ms,
-            params.entry_method,
-        );
+        let (entry, exit) = params_of(params.base, params.defaults, point, params.kind, model);
         tally(train, &entry, &exit)
     };
     let best = install(|| {
@@ -318,7 +312,7 @@ pub fn suggest(
                     }
                 }
                 let mut score = evaluate(&point);
-                for _ in 0..MAX_PASSES {
+                for _ in 0..max_passes {
                     let mut improved = false;
                     for field in &fields {
                         if handle.is_cancelled() {
@@ -380,14 +374,7 @@ pub fn suggest(
         .collect();
     values.sort();
     let holdout = (train_n < deals.len()).then(|| {
-        let (entry, exit) = params_of(
-            params.base,
-            params.defaults,
-            &point,
-            params.kind,
-            params.latency_ms,
-            params.entry_method,
-        );
+        let (entry, exit) = params_of(params.base, params.defaults, &point, params.kind, model);
         tally(&deals[train_n..], &entry, &exit)
     });
     Some(SearchResult {
@@ -407,16 +394,14 @@ pub fn suggest(
 ///     defaults: Schema defaults.
 ///     kind: The strategy kind.
 ///     values: The variant's changes over the base, in strategy spelling.
-///     latency_ms: Replacement latency of the model.
-///     entry_method: How a MoonShot variant's entry is replayed.
+///     model: The model's own settings, the entry method among them.
 pub fn variant_tally(
     deals: &[PreparedDeal],
     base: &HashMap<String, String>,
     defaults: &HashMap<String, f64>,
     kind: &str,
     values: &[(String, String)],
-    latency_ms: f64,
-    entry_method: EntryMethod,
+    model: ModelSettings,
 ) -> (Tally, f64) {
     let mut point = Point::new();
     for (key, value) in values {
@@ -424,7 +409,7 @@ pub fn variant_tally(
             point.insert(field.key, value.clone());
         }
     }
-    let (entry, exit) = params_of(base, defaults, &point, kind, latency_ms, entry_method);
+    let (entry, exit) = params_of(base, defaults, &point, kind, model.sanitized());
     install(|| tally_and_spent(deals, &entry, &exit))
 }
 

@@ -103,8 +103,11 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
         min_n: Some(4),
         seed: Some(7),
         train_frac: 1.0,
-        latency_ms: 0.0,
-        entry_method: EntryMethod::Model,
+        max_passes: DEFAULT_MAX_PASSES,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
     };
     let handle = SearchHandle::new();
     let result = suggest(&deals, &params, &handle).expect("a result");
@@ -128,8 +131,10 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
         &defaults,
         "PumpsDetection",
         &result.values,
-        0.0,
-        EntryMethod::Model,
+        ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
     );
     assert!((tally.profit - 80.0).abs() < 1e-6);
     assert!((spent - 8_000.0).abs() < 1e-6);
@@ -158,8 +163,11 @@ fn the_holdout_is_scored_but_never_fitted_on() {
         min_n: Some(3),
         seed: Some(1),
         train_frac: 0.75,
-        latency_ms: 0.0,
-        entry_method: EntryMethod::Model,
+        max_passes: DEFAULT_MAX_PASSES,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
     };
     let handle = SearchHandle::new();
     let result = suggest(&deals, &params, &handle).expect("a result");
@@ -186,8 +194,11 @@ fn a_cancelled_run_answers_nothing_and_nothing_varied_answers_nothing() {
         min_n: None,
         seed: Some(1),
         train_frac: 1.0,
-        latency_ms: 0.0,
-        entry_method: EntryMethod::Model,
+        max_passes: DEFAULT_MAX_PASSES,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
     };
     let handle = SearchHandle::new();
     assert!(
@@ -262,4 +273,45 @@ fn the_common_horizon_is_the_shortest_held_trail_and_clips_only_the_longer_tapes
     let mut odd = long;
     odd.trail_ms = -1;
     assert_eq!(common_horizon_ms(&[odd]), Some(0));
+}
+
+/// A shift replays no path, so the fields that only move the path are not searched under it;
+/// the corridor model searches them all.
+#[test]
+fn a_shift_does_not_search_the_path_only_fields() {
+    let base = base();
+    let defaults = HashMap::new();
+    let locked = HashSet::new();
+    let keys = |method| {
+        let params = SearchParams {
+            base: &base,
+            defaults: &defaults,
+            kind: "MoonShot",
+            vary_entry: true,
+            vary_exit: false,
+            locked: &locked,
+            restarts: 1,
+            min_n: None,
+            seed: Some(1),
+            train_frac: 1.0,
+            max_passes: DEFAULT_MAX_PASSES,
+            model: ModelSettings {
+                entry_method: method,
+                ..ModelSettings::default()
+            },
+        };
+        varied(&params).iter().map(|f| f.key).collect::<Vec<_>>()
+    };
+    let shift = keys(super::super::mshot::EntryMethod::Shift);
+    let model = keys(super::super::mshot::EntryMethod::Model);
+    for path_only in [
+        "MShotRaiseWait",
+        "MShotReplaceDelay",
+        "MShotUsePrice",
+        "FastShotAlgo",
+    ] {
+        assert!(!shift.contains(&path_only), "{path_only} {shift:?}");
+        assert!(model.contains(&path_only), "{path_only} {model:?}");
+    }
+    assert!(shift.contains(&"MShotPrice") && shift.contains(&"MShotAddDistance"));
 }

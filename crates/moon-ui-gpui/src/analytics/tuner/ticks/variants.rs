@@ -21,10 +21,11 @@ use super::super::shared::N_VAR;
 use super::state::{NowValue, SuggState};
 use crate::analytics::bg::ReadLane;
 use moon_core::db::tuner::threshold_search::SearchHandle;
-use moon_core::db::tuner::ticks::mshot::DEFAULT_LATENCY_MS;
+use moon_core::db::tuner::ticks::TICK_PARAMS;
 use moon_core::db::tuner::ticks::params::ParamGroup;
 use moon_core::db::tuner::ticks::search::{
-    PreparedDeal, SearchParams, clip_to_horizon, common_horizon_ms, suggest, variant_tally,
+    DEFAULT_MAX_PASSES, PreparedDeal, SearchParams, clip_to_horizon, common_horizon_ms, suggest,
+    variant_tally,
 };
 use moon_core::db::tuner::ticks::stats_of;
 
@@ -42,6 +43,15 @@ pub(super) fn restarts_of(text: &str) -> usize {
 
 /// Restarts when the box is empty.
 pub(super) const DEFAULT_RESTARTS: usize = 20;
+
+/// Passes per restart the search runs with, out of the box's text: the search's default when
+/// empty or unreadable, clamped to a sane range.
+pub(super) fn passes_of(text: &str) -> usize {
+    text.trim()
+        .parse::<usize>()
+        .unwrap_or(DEFAULT_MAX_PASSES)
+        .clamp(1, 1_000)
+}
 
 /// The base every variant is laid over: the fields the selected strategies agree on.
 fn base_of(now: &HashMap<String, NowValue>) -> HashMap<String, String> {
@@ -117,7 +127,7 @@ impl AnalyticsView {
         let changes: Vec<Vec<(String, String)>> =
             (0..N_VAR).map(|i| self.ticks.variant_changes(i)).collect();
         let defaults = self.filter_defaults(cx);
-        let entry_method = self.ticks.entry_method;
+        let model = super::model_cfg::current();
         let n = deals.len();
         self.spawn_latest_db(
             &[ReadLane::TicksVariants],
@@ -130,15 +140,8 @@ impl AnalyticsView {
                         if values.is_empty() || deals.is_empty() {
                             return None;
                         }
-                        let (tally, spent) = variant_tally(
-                            &deals,
-                            &base,
-                            &defaults,
-                            &kind,
-                            values,
-                            DEFAULT_LATENCY_MS,
-                            entry_method,
-                        );
+                        let (tally, spent) =
+                            variant_tally(&deals, &base, &defaults, &kind, values, model);
                         Some(stats_of(tally, spent))
                     })
                     .collect::<Vec<_>>()
@@ -168,10 +171,16 @@ impl AnalyticsView {
         self.arm_ticks_variants(cx);
     }
 
-    /// Copy В1 into В2, so a found point can be kept while another is tried.
-    pub(in crate::analytics::tuner) fn ticks_copy_v1_to_v2(&mut self, cx: &mut Context<Self>) {
-        self.ticks.variants[1] = self.ticks.variants[0].clone();
-        self.ticks_reset_inputs_of(1);
+    /// Copy one variant column over the other — В1 into В2 keeps a found point while another is
+    /// tried, В2 into В1 brings a kept one back for Save.
+    pub(in crate::analytics::tuner) fn ticks_copy_variant(
+        &mut self,
+        from: usize,
+        to: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.ticks.variants[to] = self.ticks.variants[from].clone();
+        self.ticks_reset_inputs_of(to);
         self.arm_ticks_variants(cx);
         cx.notify();
     }
@@ -195,8 +204,7 @@ impl AnalyticsView {
         self.ticks.inputs.retain(|id, _| !id.starts_with(&prefix));
     }
 
-    /// Whether a group may be searched: the user's switch, the kind's support, and the share
-    /// gate.
+    /// Whether a group may be searched: the kind's support and the share gate.
     pub(in crate::analytics::tuner) fn ticks_group_searchable(&self, group: ParamGroup) -> bool {
         let Some(data) = self.ticks.data.data() else {
             return false;
@@ -205,11 +213,31 @@ impl AnalyticsView {
             ParamGroup::Entry => data.entry_modelled(),
             ParamGroup::Exit => true,
         };
-        supported && data.group_passes(group) == Some(true)
+        supported && data.group_passes(group, self.ticks.gate()) == Some(true)
     }
 
-    /// Run the search into В1.
+    /// "Search all": every ticked field of the groups the gate lets through, into В1.
     pub(in crate::analytics::tuner) fn ticks_suggest(&mut self, cx: &mut Context<Self>) {
+        self.ticks_run_search(None, cx);
+    }
+
+    /// "Search": the selected field alone, the rest of В1 held as it stands; the answer goes
+    /// into that one cell of В1.
+    pub(in crate::analytics::tuner) fn ticks_suggest_one(&mut self, cx: &mut Context<Self>) {
+        if let Some(key) = self.ticks.sel_field {
+            self.ticks_run_search(Some(key), cx);
+        }
+    }
+
+    /// Say why a search did not start.
+    fn ticks_search_refused(&mut self, key: &str, cx: &mut Context<Self>) {
+        self.ticks.sugg_note = Some(t!(key).to_string());
+        cx.notify();
+    }
+
+    /// Run the search into В1: over every ticked field (`only` = `None`), or over one field with
+    /// every other held — at the strategies' value, or at В1's where В1 changes it.
+    fn ticks_run_search(&mut self, only: Option<&'static str>, cx: &mut Context<Self>) {
         if matches!(self.ticks.sugg, SuggState::Running { .. }) {
             return;
         }
@@ -218,26 +246,54 @@ impl AnalyticsView {
             return;
         };
         let Some(kind) = data.single_kind().map(String::from) else {
-            self.ticks.sugg_note = Some(t!("analytics.ticks.sugg_one_kind").to_string());
-            cx.notify();
-            return;
+            return self.ticks_search_refused("analytics.ticks.sugg_one_kind", cx);
         };
-        let vary_entry = self.ticks.vary_entry && self.ticks_group_searchable(ParamGroup::Entry);
-        let vary_exit = self.ticks.vary_exit && self.ticks_group_searchable(ParamGroup::Exit);
+        let model = super::model_cfg::current();
+        let mut base = base_of(&data.now);
+        let (vary_entry, vary_exit, locked) = match only {
+            None => (
+                self.ticks_group_searchable(ParamGroup::Entry),
+                self.ticks_group_searchable(ParamGroup::Exit),
+                self.ticks.locked.clone(),
+            ),
+            Some(key) => {
+                let Some(field) = TICK_PARAMS.iter().find(|f| f.key == key) else {
+                    return;
+                };
+                if !model.entry_method.reads(key) {
+                    return self.ticks_search_refused("analytics.ticks.sugg_not_read", cx);
+                }
+                if !self.ticks_group_searchable(field.group) {
+                    return self.ticks_search_refused("analytics.ticks.sugg_gated", cx);
+                }
+                // The other fields as В1 has them: the one field is searched in the variant it
+                // will land in, not in the strategy as it stands.
+                for (k, v) in self.ticks.variant_changes(0) {
+                    base.insert(k, v);
+                }
+                let locked: HashSet<String> = TICK_PARAMS
+                    .iter()
+                    .map(|f| f.key)
+                    .filter(|k| *k != key)
+                    .map(str::to_string)
+                    .collect();
+                (
+                    field.group == ParamGroup::Entry,
+                    field.group == ParamGroup::Exit,
+                    locked,
+                )
+            }
+        };
         if !(vary_entry || vary_exit) {
-            self.ticks.sugg_note = Some(t!("analytics.ticks.sugg_nothing").to_string());
-            cx.notify();
-            return;
+            return self.ticks_search_refused("analytics.ticks.sugg_nothing", cx);
         }
         if deals.is_empty() {
-            self.ticks.sugg_note = Some(t!("analytics.ticks.sugg_no_tape").to_string());
-            cx.notify();
-            return;
+            return self.ticks_search_refused("analytics.ticks.sugg_no_tape", cx);
         }
-        let base = base_of(&data.now);
         let defaults = self.filter_defaults(cx);
-        let locked: HashSet<String> = self.ticks.locked.clone();
         let restarts = restarts_of(&self.ticks.iters);
+        let max_passes = passes_of(&self.ticks.passes);
+        let seed = self.ticks.seed.trim().parse::<u64>().ok();
         let min_n = self
             .ticks
             .min_trades
@@ -246,7 +302,6 @@ impl AnalyticsView {
             .ok()
             .filter(|n| *n > 0);
         let train_frac = super::super::filter::state::train_frac(self.ticks.train_pct);
-        let entry_method = self.ticks.entry_method;
         let handle = SearchHandle::new();
         self.ticks.sugg = SuggState::Running {
             handle: handle.clone(),
@@ -269,10 +324,10 @@ impl AnalyticsView {
                     locked: &locked,
                     restarts,
                     min_n,
-                    seed: None,
+                    seed,
                     train_frac,
-                    latency_ms: DEFAULT_LATENCY_MS,
-                    entry_method,
+                    max_passes,
+                    model,
                 };
                 suggest(&deals, &params, &handle)
             },
@@ -283,9 +338,23 @@ impl AnalyticsView {
                 this.ticks.sugg = SuggState::Idle;
                 match result {
                     Some(result) => {
-                        this.ticks.variants[0] =
-                            result.values.iter().cloned().collect::<HashMap<_, _>>();
+                        match only {
+                            None => {
+                                this.ticks.variants[0] =
+                                    result.values.iter().cloned().collect::<HashMap<_, _>>();
+                            }
+                            // Only the searched cell moves; one the search left at its base
+                            // keeps what В1 had.
+                            Some(key) => {
+                                if let Some((_, value)) =
+                                    result.values.iter().find(|(k, _)| k == key)
+                                {
+                                    this.ticks.set_variant(0, key, value.clone());
+                                }
+                            }
+                        }
                         this.ticks_reset_inputs_of(0);
+                        this.ticks.last_seed = Some(result.seed);
                         this.ticks.last_result = Some(result);
                         this.arm_ticks_variants(cx);
                     }

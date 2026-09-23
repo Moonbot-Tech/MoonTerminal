@@ -235,11 +235,13 @@ fn variant_edits_fold_to_sorted_changes_and_empty_cells_clear() {
 fn the_share_gate_answers_per_group_and_only_once_something_answered() {
     use moon_core::db::tuner::ticks::params::ParamGroup;
     let mut data = TicksData::default();
-    assert_eq!(data.group_passes(ParamGroup::Entry), None);
+    assert_eq!(data.group_passes(ParamGroup::Entry, 0.8), None);
     data.entry_share = (8, 10);
     data.exit_share = (7, 10);
-    assert_eq!(data.group_passes(ParamGroup::Entry), Some(true));
-    assert_eq!(data.group_passes(ParamGroup::Exit), Some(false));
+    assert_eq!(data.group_passes(ParamGroup::Entry, 0.8), Some(true));
+    assert_eq!(data.group_passes(ParamGroup::Exit, 0.8), Some(false));
+    // The gate is the search settings' own: lowered, the exit group passes too.
+    assert_eq!(data.group_passes(ParamGroup::Exit, 0.7), Some(true));
     data.kinds = vec!["MoonShot".into()];
     assert_eq!(data.single_kind(), Some("MoonShot"));
     data.kinds.push("Spread".into());
@@ -264,4 +266,98 @@ fn invalidate_stops_the_search_and_drops_the_variant_scores_but_keeps_the_edits(
         state.has_changes(),
         "the user's edits survive a scope change"
     );
+}
+
+/// The gate reads the typed per cent, falls back to the default on anything else, and never
+/// goes past the whole.
+#[test]
+fn the_gate_reads_the_typed_percent() {
+    let mut state = TicksState::default();
+    assert_eq!(
+        state.gate(),
+        f64::from(super::super::state::DEFAULT_GATE_PCT) / 100.0
+    );
+    state.gate_pct = "65".into();
+    assert_eq!(state.gate(), 0.65);
+    state.gate_pct = "250".into();
+    assert_eq!(state.gate(), 1.0);
+    state.gate_pct = "abc".into();
+    assert_eq!(state.gate(), 0.8);
+}
+
+/// What the layout keeps of the axis comes back as it went out.
+#[test]
+fn the_axis_settings_restore_what_they_saved() {
+    let mut state = TicksState::default();
+    state.iters = "40".into();
+    state.seed = "123".into();
+    state.passes = "8".into();
+    state.gate_pct = "70".into();
+    state.train_pct = 80;
+    state.locked.insert("SellPrice".into());
+    let saved = state.saved();
+    let mut back = TicksState::default();
+    back.restore(&saved);
+    assert_eq!(back.iters, "40");
+    assert_eq!(back.seed, "123");
+    assert_eq!(back.passes, "8");
+    assert_eq!(back.gate_pct, "70");
+    assert_eq!(back.train_pct, 80);
+    assert!(back.locked.contains("SellPrice"));
+    // A seed that is not a number is not kept.
+    state.seed = "x1".into();
+    assert_eq!(state.saved().seed, None);
+}
+
+/// A reload carries what the last load judged only for the same trade with the same stamps and
+/// prices; a row rewritten under its uid is judged again.
+#[test]
+fn a_reload_carries_only_the_trade_it_judged() {
+    let before = deal(7, 1_000, 100.0, 101.0, false);
+    assert!(super::super::load::carryable(&before, &before.clone()));
+    let mut moved = before.clone();
+    moved.close_ms += 1;
+    assert!(!super::super::load::carryable(&before, &moved));
+    let mut repriced = before.clone();
+    repriced.sell_price = 101.5;
+    assert!(!super::super::load::carryable(&before, &repriced));
+    let other = deal(8, 1_000, 100.0, 101.0, false);
+    assert!(!super::super::load::carryable(&before, &other));
+}
+
+/// The fetch job's words on a hop land in order and in one pass: a mark, then that row's
+/// answer, leaves the answer; a stop unmarks only what is still fetching; a row not in the
+/// table is skipped.
+#[test]
+fn the_fetch_edits_land_in_order_in_one_pass() {
+    use super::super::state::RowEdit;
+    let mut state = state();
+    let answer = DealRow {
+        deal: deal(1, 3_000, 100.0, 101.0, false),
+        tape: TapeStatus::Covered,
+        verdict: Some(verdict(Some(true), Some(true))),
+        address: None,
+        ticks: None,
+        entry_line: None,
+        held: Some((60_000, 60_000)),
+    };
+    state.edit_rows([
+        (1, RowEdit::MarkFetching),
+        (1, RowEdit::Replay(Box::new(answer))),
+        (2, RowEdit::UnmarkFetching),
+        (99, RowEdit::MarkFetching),
+    ]);
+    let data = state.data.data().expect("data");
+    let row = |uid: i64| {
+        data.rows
+            .iter()
+            .find(|r| r.deal.report_uid == uid)
+            .expect("row")
+    };
+    assert_eq!(row(1).tape, TapeStatus::Covered);
+    assert!(row(1).verdict.is_some());
+    // Covered, not fetching: the unmark leaves it alone.
+    assert_eq!(row(2).tape, TapeStatus::Covered);
+    // The answer was counted: both judged rows are fit now.
+    assert_eq!(data.fit(), 2);
 }

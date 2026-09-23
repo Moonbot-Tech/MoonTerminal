@@ -1,10 +1,9 @@
 //! Background loads of the "Entry/Exit" axis, in two stages.
 //!
-//! Stage A reads the scope's deals, the whole-scope "Fact" KPI (the same SQL every axis'
-//! "Fact" comes from) and the grid's "now" values off the database. Its completion resolves,
-//! on the UI thread, where each deal's prints live — the core's exchange key and the coin's
-//! market, which only the live market source knows — and publishes the rows at once, without
-//! their tape (stage B). Stage C then asks the replay worker for the held tape of every row in
+//! Stage A reads the scope's deals and the grid's "now" values off the database. Its
+//! completion resolves, on the UI thread, where each deal's prints live — the core's exchange
+//! key and the coin's market, which only the live market source knows — and publishes the rows
+//! at once, without their tape (stage B). Stage C then asks the replay worker for the held tape of every row in
 //! ONE batch of queries, reads the archived entry lines, runs the model on the parameters as
 //! of the buy, and folds the answers into the published rows. In one batch because it is one
 //! round trip for the table: the worker's coordinator answers held queries off no venue call,
@@ -27,10 +26,10 @@ use crate::analytics::refresh::{CatchUpOutcome, report_result_is_stale};
 use moon_core::db::ReadFail;
 use moon_core::db::order_traces::{TraceEntry, read_many};
 use moon_core::db::tuner::ticks::{
-    Deal, DealsRead, EntryParams, OwnLines, deltas, entry_model_for, infer_tick, model_window,
-    params, prepare_deal, required_spans, verify,
+    Deal, DealsRead, EntryParams, ModelSettings, OwnLines, deltas, entry_model_for, infer_tick,
+    model_window, params, prepare_deal, required_spans, verify,
 };
-use moon_core::db::tuner::{VarStats, Variant, strategy_current_values, strategy_values_at};
+use moon_core::db::tuner::{strategy_current_values, strategy_values_at};
 use moon_core::feed::report_traces::ArchivedLineKind;
 use moon_core::feed::types::Tick;
 use moon_core::market::kline_cache::KlineCache;
@@ -45,12 +44,8 @@ use moon_core::market::trade_replay::{
 /// stalls — past it the rows still unanswered fold as missing, and the log says how many.
 const HELD_ANSWER_WAIT: Duration = Duration::from_secs(240);
 
-/// What stage A brings back: the deals, the "Fact" KPI and the grid's "now" values.
-type StageA = (
-    Result<DealsRead, ReadFail>,
-    Result<Vec<VarStats>, ReadFail>,
-    HashMap<String, NowValue>,
-);
+/// What stage A brings back: the deals and the grid's "now" values.
+type StageA = (Result<DealsRead, ReadFail>, HashMap<String, NowValue>);
 
 impl AnalyticsView {
     /// Recompute the axis for the current scope.
@@ -83,6 +78,9 @@ impl AnalyticsView {
             ReadLane::TicksSearch,
         ]);
         self.ticks.seq = self.ticks.seq.wrapping_add(1);
+        // The tape stage the cancel above dropped is not reading any more; the new load's own
+        // stage C raises the flag again when it starts.
+        self.ticks.tape_reading = false;
         // A search over the previous deal set answers nothing about the new one; the lane
         // cancel above does not reach its handle, only this does.
         self.ticks.stop_search();
@@ -122,17 +120,16 @@ impl AnalyticsView {
                         q.strategies.len()
                     ),
                 }
-                let fact = moon_core::db::tuner::variant_stats(&q, &[Variant::default()]);
                 let now = now_values(&targets, &keys);
-                (deals, fact, now)
+                (deals, now)
             },
-            move |this, (deals, fact, now): StageA, cx| {
+            move |this, (deals, now): StageA, cx| {
                 if this.ticks.seq != req {
                     return;
                 }
-                let (read, fact) = match (deals, fact) {
-                    (Ok(read), Ok(fact)) => (read, fact),
-                    (Err(error), _) | (_, Err(error)) => {
+                let read = match deals {
+                    Ok(read) => read,
+                    Err(error) => {
                         let outcome = CatchUpOutcome::of_read::<()>(&Err(error.clone()));
                         this.ticks.dirty = report_result_is_stale(
                             report_req,
@@ -149,16 +146,7 @@ impl AnalyticsView {
                     }
                 };
                 let addresses = this.resolve_addresses(&read.deals, cx);
-                this.start_replay_stage(
-                    req,
-                    report_req,
-                    after_report,
-                    read,
-                    fact,
-                    now,
-                    addresses,
-                    cx,
-                );
+                this.start_replay_stage(req, report_req, after_report, read, now, addresses, cx);
             },
         );
     }
@@ -178,19 +166,41 @@ impl AnalyticsView {
             .collect()
     }
 
-    /// Stage B: the rows, published at once without their tape; stage C follows.
-    #[allow(clippy::too_many_arguments)]
+    /// Stage B: the rows, published at once — each with what the last load already judged of
+    /// it, when that still holds ([`carryable`]), else without its tape; stage C follows for
+    /// the rest.
+    ///
+    /// A reload comes every time the report moves — a trade closing on any core, every few
+    /// seconds on a busy fleet — and used to publish every row blank and read and replay the
+    /// whole table again: the table and the KPI blinked empty for the length of that, and the
+    /// work grew with the table, not with what changed. A row the model already judged under
+    /// the settings in force keeps its verdict; stage C reads and replays only the others.
     fn start_replay_stage(
         &mut self,
         req: u64,
         report_req: u64,
         after_report: bool,
         read: DealsRead,
-        fact: Vec<VarStats>,
         now: HashMap<String, NowValue>,
         addresses: HashMap<(u64, String), Option<Arc<RowAddress>>>,
         cx: &mut Context<Self>,
     ) {
+        let model = super::model_cfg::current();
+        let judged: HashMap<i64, DealRow> = if self.ticks.judged_under == Some(model) {
+            self.ticks
+                .data
+                .data()
+                .map(|d| {
+                    d.rows
+                        .iter()
+                        .filter(|r| matches!(r.tape, TapeStatus::Covered | TapeStatus::Refused(_)))
+                        .map(|r| (r.deal.report_uid, r.clone()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
         self.spawn_latest_db(
             &[ReadLane::TicksReplay],
             false,
@@ -204,7 +214,11 @@ impl AnalyticsView {
                             .get(&(deal.core_uid, deal.coin.clone()))
                             .cloned()
                             .flatten();
-                        DealRow {
+                        let before = judged
+                            .get(&deal.report_uid)
+                            .filter(|before| address.is_some() && carryable(&before.deal, &deal))
+                            .cloned();
+                        let mut row = DealRow {
                             deal,
                             tape: if address.is_some() {
                                 TapeStatus::Missing
@@ -216,9 +230,16 @@ impl AnalyticsView {
                             ticks: None,
                             entry_line: None,
                             held: None,
+                        };
+                        if let Some(before) = before {
+                            row.take_replay(before);
                         }
+                        row
                     })
                     .collect();
+                let carried = rows
+                    .iter()
+                    .any(|r| matches!(r.tape, TapeStatus::Covered | TapeStatus::Refused(_)));
                 let mut kinds: Vec<String> = rows.iter().map(|r| r.deal.kind.clone()).collect();
                 kinds.sort();
                 kinds.dedup();
@@ -227,7 +248,7 @@ impl AnalyticsView {
                     without_ms: read.without_ms,
                     service: read.service,
                     untunable: read.untunable,
-                    kpi: fact,
+                    kpi: Vec::new(),
                     entry_share: (0, 0),
                     exit_share: (0, 0),
                     kinds,
@@ -235,9 +256,9 @@ impl AnalyticsView {
                 };
                 data.retain_within_cap();
                 data.refresh_summary();
-                data
+                (data, carried)
             },
-            move |this, data, cx| {
+            move |this, (data, carried), cx| {
                 if this.ticks.seq != req {
                     return;
                 }
@@ -249,7 +270,7 @@ impl AnalyticsView {
                 if super::fetch::job::progress().active {
                     this.attach_fetch_listener(cx);
                 }
-                this.start_tape_stage(req, cx);
+                this.start_tape_stage(req, carried.then_some(model), cx);
                 if after_report {
                     this.settle_report_refresh_retry(false, cx);
                 }
@@ -258,19 +279,66 @@ impl AnalyticsView {
         );
     }
 
+    /// The model's settings changed: judge every row again under them — stage C alone, since
+    /// the deals and their tape are what they were. A load still before its stage C reads the
+    /// new settings when it gets there and is left alone: cancelling its lane would drop the
+    /// rows it is about to publish.
+    pub(in crate::analytics::tuner) fn ticks_replay_again(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.ticks.data, crate::load_state::LoadState::Ready(_)) {
+            return;
+        }
+        self.latest_reads.cancel(&[
+            ReadLane::TicksReplay,
+            ReadLane::TicksVariants,
+            ReadLane::TicksSearch,
+        ]);
+        self.ticks.stop_search();
+        // Every verdict of the table is of the old settings now: none may be carried by a
+        // reload until this stage has judged them all again.
+        self.ticks.judged_under = None;
+        let req = self.ticks.seq;
+        self.start_tape_stage(req, None, cx);
+    }
+
     /// Stage C: the held tape of every published row, asked from the worker in one batch, the
     /// archived entry lines, and the model on the parameters as of the buy — folded into the
     /// rows when all of it is in.
-    fn start_tape_stage(&mut self, req: u64, cx: &mut Context<Self>) {
+    ///
+    /// Args:
+    ///     req: The load generation this stage belongs to.
+    ///     carried: The settings the rows stage B carried were judged under, when it carried
+    ///         any: those rows are not read again. `None` reads and replays every row.
+    fn start_tape_stage(
+        &mut self,
+        req: u64,
+        carried: Option<ModelSettings>,
+        cx: &mut Context<Self>,
+    ) {
+        // One set of model settings for the whole stage, read once: every row of a table is
+        // judged by the same rules.
+        let model = super::model_cfg::current();
+        // Rows carried under settings changed since stage B read them are not carried: the
+        // stage reads and replays them too, so the table folds under `model` alone.
+        let carried = carried.filter(|m| *m == model);
+        // This stage's own generation: a stage started after it — a changed setting re-judging
+        // the table under the same load — makes its answer stale, even though a cancelled
+        // stage still hands its partial rows to `store` (`spawn_latest_db`).
+        self.ticks.tape_seq = self.ticks.tape_seq.wrapping_add(1);
+        let tape_req = self.ticks.tape_seq;
         let Some(data) = self.ticks.data.data() else {
             return;
         };
         let targets: Vec<(Deal, Arc<RowAddress>)> = data
             .rows
             .iter()
+            .filter(|r| {
+                carried.is_none() || !matches!(r.tape, TapeStatus::Covered | TapeStatus::Refused(_))
+            })
             .filter_map(|r| Some((r.deal.clone(), r.address.clone()?)))
             .collect();
         if targets.is_empty() {
+            self.ticks.tape_reading = false;
+            self.ticks.judged_under = Some(model);
             return;
         }
         let defaults = self.filter_defaults(cx);
@@ -304,13 +372,13 @@ impl AnalyticsView {
                     .collect();
                 let mut traces = archived_lines(&rows);
                 // Before any row is replayed: each core's step lag, off these rows' archives.
-                super::lags::calibrate_from(&rows, &traces, &defaults);
+                super::lags::calibrate_from(&rows, &traces, &defaults, model);
                 let now_ms = moon_core::util::now_unix_ms_i64();
                 for row in &mut rows {
                     let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
                     let tape = tapes.remove(&row.deal.report_uid);
                     let answered = tape.is_some();
-                    replay_row_with(row, &defaults, lines, tape, klines.as_ref());
+                    replay_row_with(row, &defaults, model, lines, tape, klines.as_ref());
                     // Said at load, not after a walk: a row the venue cannot serve is not
                     // "missing" — it would only ever come back refused. The fetch job's own
                     // path (`replay_row` after a walk) is NOT given this: its retries and its
@@ -341,16 +409,24 @@ impl AnalyticsView {
                             .get(&row.deal.report_uid)
                             .cloned()
                             .unwrap_or_default();
-                        replay_row(row, &defaults, lines, long_position_ms, klines.as_ref());
+                        replay_row(
+                            row,
+                            &defaults,
+                            model,
+                            lines,
+                            long_position_ms,
+                            klines.as_ref(),
+                        );
                     }
                 }
                 rows
             },
             move |this, rows, cx| {
-                if this.ticks.seq != req {
+                if this.ticks.seq != req || this.ticks.tape_seq != tape_req {
                     return;
                 }
                 this.ticks.tape_reading = false;
+                this.ticks.judged_under = Some(model);
                 this.ticks.update_rows(rows);
                 // The row the fetch job is out for says so again after the fold.
                 this.mark_fetch_in_flight();
@@ -554,6 +630,7 @@ fn unservable_status(address: &RowAddress, deal: &Deal, now_ms: i64) -> Option<T
 pub(super) fn replay_row(
     row: &mut DealRow,
     defaults: &HashMap<String, f64>,
+    model: ModelSettings,
     lines: ArchivedLines,
     long_position_ms: i64,
     klines: Option<&KlineCache>,
@@ -562,7 +639,7 @@ pub(super) fn replay_row(
         .address
         .as_ref()
         .and_then(|address| held_tape(address, &row.deal, long_position_ms));
-    replay_row_with(row, defaults, lines, tape, klines);
+    replay_row_with(row, defaults, model, lines, tape, klines);
 }
 
 /// Run the model on one row from a tape already asked for. A covered row keeps its tape and
@@ -574,6 +651,7 @@ pub(super) fn replay_row(
 pub(super) fn replay_row_with(
     row: &mut DealRow,
     defaults: &HashMap<String, f64>,
+    model: ModelSettings,
     lines: ArchivedLines,
     tape: Option<HeldTape>,
     klines: Option<&KlineCache>,
@@ -619,14 +697,11 @@ pub(super) fn replay_row_with(
         defaults,
     };
     let entry = if entry_model_for(&row.deal.kind) {
-        EntryParams::MoonShot(params::mshot_params(
-            &sv,
-            moon_core::db::tuner::ticks::mshot::DEFAULT_LATENCY_MS,
-        ))
+        EntryParams::MoonShot(params::mshot_params(&sv, model))
     } else {
         EntryParams::Fact
     };
-    let exit = params::exit_params(&sv);
+    let exit = params::exit_params(&sv, model);
     // The deltas along the window, before the record's inputs: the stop anchor reads the stop
     // through them.
     row.deal.delta_track = klines.and_then(|cache| {
@@ -664,4 +739,18 @@ pub(super) fn replay_row_with(
         lines.exit_points.as_deref(),
     ));
     row.ticks = Some(Arc::from(ticks));
+}
+
+/// Whether what the last load judged of a trade still describes the row a reload read for it:
+/// the same trade, with the same stamps and prices the model reads. A report row rewritten under
+/// the same uid — a close booked late, a price corrected — is judged afresh.
+pub(super) fn carryable(before: &Deal, now: &Deal) -> bool {
+    before.report_uid == now.report_uid
+        && before.core_uid == now.core_uid
+        && before.strategy_id == now.strategy_id
+        && before.buy_ms == now.buy_ms
+        && before.close_ms == now.close_ms
+        && before.buy_price == now.buy_price
+        && before.sell_price == now.sell_price
+        && before.order_open_ms() == now.order_open_ms()
 }

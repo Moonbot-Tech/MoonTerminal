@@ -39,7 +39,7 @@ pub fn step_lag_samples(deal: &Deal, exit: &ExitParams, exit_points: &[(i64, f64
     // The fill point the way the verdict tells it (`verify::ArchivedExit`): a fill through the
     // market lands well past the sale's tolerance of its level and is still no step.
     let moves = ArchivedExit::of(deal, exit, exit_points).moves;
-    let delay_ms = step_ms(exit.price_down_delay_s);
+    let delay_ms = step_ms(exit.price_down_delay_s, exit.model.step_floor_ms);
     // From the second move on: the first is the take, and the step after it is timed off the
     // take by `PriceDownTimer`, not off a step before it.
     moves

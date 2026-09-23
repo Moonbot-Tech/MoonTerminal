@@ -37,6 +37,7 @@ pub mod params;
 pub mod record;
 pub mod scope;
 pub mod search;
+pub mod settings;
 pub mod stats;
 pub mod verify;
 
@@ -49,6 +50,7 @@ pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};
 pub use record::{OwnLines, StopAnchor, entry_placement, fit_for_search, prepare_deal};
 pub use scope::{is_service_row, is_tunable};
 pub use search::{PreparedDeal, SearchParams, SearchResult, suggest, variant_tally};
+pub use settings::ModelSettings;
 pub use stats::{fact_stats, stats_of};
 pub use verify::{Verdict, verify};
 
@@ -405,6 +407,12 @@ impl Outcome {
 }
 
 /// The entry-side parameters of one variant: the strategy kind's own model, or the fact.
+///
+/// The MoonShot variant is the large one (its parameters carry the model's settings); left
+/// unboxed on purpose — one lives per deal (`Deal::own_entry`) and one per scored point, never
+/// in a collection large enough for the size to matter, and a box would put an allocation on
+/// every point of the search.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum EntryParams {
     /// Take the entry as the report has it — for kinds without a model, and for a variant

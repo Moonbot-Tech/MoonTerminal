@@ -71,6 +71,7 @@
 //! fact ([`EntryMethod`]): the fact's order where it stood at the spike, moved by the variant's
 //! far bound, with no path of its own.
 
+use super::settings::ModelSettings;
 use super::verify::archived_replacements;
 use super::{Deal, Deltas, EntryParams, Fill, deltas, reaches, snap_to_step};
 use crate::feed::types::{Side, Tick};
@@ -105,7 +106,7 @@ impl UsePrice {
 /// cores with different `MShotPrice` filled on the same spike — predicting the second core's
 /// fill from the first's tape and record: the model placed it a median 0.156 % off (99 within
 /// 0.1 %) and filled 264; the shift 0.078 % off (141 within 0.1 %) and filled 250.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EntryMethod {
     /// The corridor model from the order's creation ([`MshotEntry::fill`] via `run`): the whole
     /// path the variant's order would have walked. The one that answers for `MShotRaiseWait`,
@@ -118,6 +119,26 @@ pub enum EntryMethod {
     /// `MShotMinusSatoshi`, `MShotAdd*`, `MShotAddDistance` — move the entry; the waits and the
     /// reference do not.
     Shift,
+}
+
+impl EntryMethod {
+    /// The strategy fields that change only the order's PATH — which a shift does not replay.
+    const PATH_ONLY: [&'static str; 4] = [
+        "MShotUsePrice",
+        "MShotRaiseWait",
+        "MShotReplaceDelay",
+        "FastShotAlgo",
+    ];
+
+    /// Whether a replay by this method reads the strategy field `key` at all: a field it does
+    /// not read moves no column, so the grid greys it out and the search leaves it alone. Every
+    /// field that is not an entry field is read by both.
+    pub fn reads(self, key: &str) -> bool {
+        match self {
+            Self::Model => true,
+            Self::Shift => !Self::PATH_ONLY.contains(&key),
+        }
+    }
 }
 
 /// How a family of modifiers reads the market-wide deltas.
@@ -239,20 +260,18 @@ pub struct MshotParams {
     /// same corridor either way (see the module doc).
     pub fast_algo: bool,
     pub modifiers: Modifiers,
-    /// Model parameter, not a strategy field: how long a replacement takes to reach the book.
-    pub latency_ms: f64,
-    /// Model parameter, not a strategy field: how a variant's entry is replayed.
-    pub method: EntryMethod,
+    /// The model's own settings, not strategy fields: the replacement latency, the replay
+    /// method, the windows.
+    pub model: ModelSettings,
 }
 
 impl MshotParams {
     /// Whether two parameter sets are the same strategy — every strategy field equal, whatever
-    /// the model parameters (`latency_ms`, `method`) say.
+    /// the model's settings say.
     pub fn same_strategy(&self, other: &Self) -> bool {
         *self
             == Self {
-                latency_ms: self.latency_ms,
-                method: self.method,
+                model: self.model,
                 ..other.clone()
             }
     }
@@ -271,8 +290,7 @@ impl Default for MshotParams {
             minus_satoshi: false,
             fast_algo: false,
             modifiers: Modifiers::default(),
-            latency_ms: DEFAULT_LATENCY_MS,
-            method: EntryMethod::Model,
+            model: ModelSettings::default(),
         }
     }
 }
@@ -307,7 +325,7 @@ impl<'a> MshotEntry<'a> {
 
     /// How these parameters want a variant's entry replayed.
     pub fn method(&self) -> EntryMethod {
-        self.params.method
+        self.params.model.entry_method
     }
 
     /// Where the order would stand for a reference price: the far bound away, kept two steps
@@ -432,7 +450,8 @@ impl<'a> MshotEntry<'a> {
     /// The entry as a SHIFT of the fact: the variant's order at [`Self::anchored_level`] from the
     /// moment the fact's order last moved — standing where the fact's stood, one far bound deeper
     /// or shallower, since the same moment — filled by the first print that reaches it by
-    /// [`SHIFT_WINDOW_MS`] past the buy: the same spike. Nothing about the corridor is modelled:
+    /// the shift window past the buy (`ModelSettings::shift_window_ms`, [`SHIFT_WINDOW_MS`] by
+    /// default): the same spike. Nothing about the corridor is modelled:
     /// the order is taken to stand still through the spike, as the fact's did.
     pub(super) fn shifted_fill(
         &self,
@@ -447,7 +466,7 @@ impl<'a> MshotEntry<'a> {
             .iter()
             .map(|t| (t.time_ms as i64, f64::from(t.price)))
             .filter(|&(t, p)| t >= since && p > 0.0)
-            .take_while(|&(t, _)| t <= deal.buy_ms + SHIFT_WINDOW_MS)
+            .take_while(|&(t, _)| t <= deal.buy_ms + self.params.model.shift_window_ms)
             .find(|&(_, p)| reaches(p, level, deal.is_long()))
             .map(|(t_ms, _)| Fill { t_ms, price: level })
     }
@@ -518,9 +537,13 @@ impl<'a> MshotEntry<'a> {
         let mut bounds = LiveBounds::new(self.params, deal);
         let raise_wait_ms = (self.params.raise_wait_s * 1000.0).max(0.0);
         let replace_delay_ms = (self.params.replace_delay_s * 1000.0).max(0.0);
-        let latency_ms = self.params.latency_ms.max(0.0);
+        let latency_ms = self.params.model.latency_ms.max(0.0);
 
-        let mut reference = Reference::new(self.params.use_price, deal.is_long());
+        let mut reference = Reference::new(
+            self.params.use_price,
+            deal.is_long(),
+            self.params.model.replace_window_ms,
+        );
 
         let first_print_ms = ticks[0].time_ms as i64;
         let mut index = 0;
@@ -740,12 +763,15 @@ fn retreat_pct(near_pct: f64, far_pct: f64) -> f64 {
 ///   for both, and a run-away holds for `MShotRaiseWait` exactly when the price stayed away that
 ///   long — the timer in [`MshotEntry::run`]; neither looks at a window.
 /// - [`Self::placement`], what a re-placed order is put off: the extreme of the wanted side's
-///   prints inside the last [`FAST_ALGO_WINDOW_MS`] — the lowest for a long — whatever
-///   `MShotRaiseWait` is. The core takes the minimum of the trades of the last ~75–150 ms, so a
-///   spike's own low prints place the order below it rather than off the rebound.
+///   prints inside the last `window_ms` ([`FAST_ALGO_WINDOW_MS`] by default) — the lowest for a
+///   long — whatever `MShotRaiseWait` is. The core takes the minimum of the trades of the last
+///   ~75–150 ms, so a spike's own low prints place the order below it rather than off the
+///   rebound.
 struct Reference {
     wanted_side: Option<Side>,
     is_long: bool,
+    /// The placement window (`ModelSettings::replace_window_ms`).
+    window_ms: i64,
     last_any: Option<f64>,
     last_side: Option<f64>,
     /// `(t_ms, price)` of the wanted side's prints inside the window, oldest first.
@@ -753,7 +779,7 @@ struct Reference {
 }
 
 impl Reference {
-    fn new(use_price: UsePrice, is_long: bool) -> Self {
+    fn new(use_price: UsePrice, is_long: bool, window_ms: i64) -> Self {
         Self {
             wanted_side: match use_price {
                 UsePrice::Trade => None,
@@ -761,6 +787,7 @@ impl Reference {
                 UsePrice::Bid => Some(Side::Sell),
             },
             is_long,
+            window_ms,
             last_any: None,
             last_side: None,
             recent: std::collections::VecDeque::new(),
@@ -780,7 +807,7 @@ impl Reference {
             while self
                 .recent
                 .front()
-                .is_some_and(|(t, _)| t_ms - *t > FAST_ALGO_WINDOW_MS)
+                .is_some_and(|(t, _)| t_ms - *t > self.window_ms)
             {
                 self.recent.pop_front();
             }
@@ -796,7 +823,7 @@ impl Reference {
     }
 
     /// What a re-placed order is put off, deciding at `now_ms`: the extreme of the wanted side's
-    /// prints of the last [`FAST_ALGO_WINDOW_MS`] before it, else the check price. The window is
+    /// prints of the last `window_ms` before it, else the check price. The window is
     /// pruned only when that side prints, so it is read against the decision's own moment: a
     /// burst an ASK / BID side printed seconds ago is not "the last 100 ms". Its fallback is still
     /// that side's last print, however old — the tape has no book, and the corridor is measured
@@ -805,7 +832,7 @@ impl Reference {
         let prices = self
             .recent
             .iter()
-            .filter(|(t, _)| now_ms - *t <= FAST_ALGO_WINDOW_MS)
+            .filter(|(t, _)| now_ms - *t <= self.window_ms)
             .map(|(_, p)| *p);
         let extreme = if self.is_long {
             prices.reduce(f64::min)

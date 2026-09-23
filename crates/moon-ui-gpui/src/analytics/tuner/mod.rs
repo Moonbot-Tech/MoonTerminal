@@ -660,7 +660,7 @@ impl AnalyticsView {
         // (the lazy search input needs &mut self).
         let coins_card = (mode == StratMode::Coins).then(|| self.coins_card(p, window, cx));
         // "Entry/Exit" likewise: its table settles the sort cache, which needs &mut self.
-        let ticks_card = (mode == StratMode::Ticks).then(|| self.ticks_card(p, cx));
+        let ticks_card = (mode == StratMode::Ticks).then(|| self.ticks_card(p, window, cx));
         // The right column's fold is one flag for every axis, and the rail carrying its caret is
         // built in BOTH states — collapsed, it is the only control left that can bring the column
         // back. The column below is then simply not built: `left` is already `.flex_1()`, so it

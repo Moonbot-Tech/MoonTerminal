@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 use super::exit::{ExitParams, UnmodelledRule};
 use super::mshot::{MarketSign, Modifiers, MshotParams, UsePrice};
+use super::settings::ModelSettings;
 
 /// Which group of the grid a parameter belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -470,10 +471,8 @@ fn parse_num(s: &str) -> Option<f64> {
         .filter(|v| v.is_finite())
 }
 
-/// MoonShot entry parameters out of a strategy's values; `latency_ms` is the model's own, and
-/// the entry is replayed by the corridor model ([`super::mshot::EntryMethod::Model`]) unless the
-/// caller sets another.
-pub fn mshot_params(v: &StrategyValues<'_>, latency_ms: f64) -> MshotParams {
+/// MoonShot entry parameters out of a strategy's values, under the model's own settings.
+pub fn mshot_params(v: &StrategyValues<'_>, model: ModelSettings) -> MshotParams {
     let base = MshotParams::default();
     MshotParams {
         price_pct: v.num("MShotPrice", base.price_pct),
@@ -505,13 +504,12 @@ pub fn mshot_params(v: &StrategyValues<'_>, latency_ms: f64) -> MshotParams {
             market_sign: MarketSign::Signed,
             distance_pct: v.num("MShotAddDistance", 0.0),
         },
-        latency_ms,
-        method: base.method,
+        model,
     }
 }
 
-/// Sell-line parameters out of a strategy's values; `latency_ms` is the model's own.
-pub fn exit_params(v: &StrategyValues<'_>) -> ExitParams {
+/// Sell-line parameters out of a strategy's values, under the model's own settings.
+pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
     let base = ExitParams::default();
     ExitParams {
         sell_price_pct: v.num("SellPrice", base.sell_price_pct),
@@ -593,7 +591,7 @@ pub fn exit_params(v: &StrategyValues<'_>) -> ExitParams {
         fast_stop_loss: v.bool("FastStopLoss", false),
         stop_loss_ema: v.num("StopLossEMA", base.stop_loss_ema),
         unmodelled: unmodelled_rule(v),
-        latency_ms: base.latency_ms,
+        model,
         take_from_archive: base.take_from_archive,
     }
 }

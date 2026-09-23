@@ -90,7 +90,7 @@ impl StopAnchor {
         // The stop the fact ran is the one its own fill placed: read at the fact's moment, a
         // walk filling a few milliseconds off it is still the same stop.
         fill.price == self.entry_price
-            && (fill.t_ms - self.entry_ms).abs() <= POINT_TIME_TOLERANCE_MS
+            && (fill.t_ms - self.entry_ms).abs() <= params.model.point_time_ms
             && stop_pct(params, deal, self.entry_ms) == self.stop_pct
             && params.stop_loss_delay_s == self.delay_s
             && params.fast_stop_loss == self.fast
@@ -148,6 +148,10 @@ pub fn entry_placement(deal: &Deal, lines: OwnLines<'_>) -> Option<f64> {
     let level = match lines.entry.filter(|l| !l.is_empty()) {
         Some(points) => {
             let &(first_ms, price) = points.iter().min_by_key(|(t, _)| *t)?;
+            // Two of the core's own records against each other — its creation stamp and its
+            // archive's first point — not the model against the fact, so the constant and not
+            // the verdict's setting (`ModelSettings::point_time_ms`): what the record says does
+            // not move with how strictly the model is judged.
             ((first_ms - created_ms).abs() <= POINT_TIME_TOLERANCE_MS).then_some(price)?
         }
         None if lines.answered => deal.buy_price,

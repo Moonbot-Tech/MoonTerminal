@@ -150,7 +150,7 @@ fn dump_deal(
                     "replace_delay_s": p.replace_delay_s,
                     "minus_satoshi": p.minus_satoshi,
                     "fast_algo": p.fast_algo,
-                    "latency_ms": p.latency_ms,
+                    "latency_ms": p.model.latency_ms,
                 })
             }
             _ => serde_json::Value::Null,
@@ -241,10 +241,13 @@ fn core_step_lags(
         else {
             continue;
         };
-        let exit = exit_params(&StrategyValues {
-            values: &values,
-            defaults,
-        });
+        let exit = exit_params(
+            &StrategyValues {
+                values: &values,
+                defaults,
+            },
+            ModelSettings::default(),
+        );
         samples
             .entry(deal.core_uid)
             .or_default()
@@ -427,7 +430,7 @@ fn partners_of(
                     values: &values,
                     defaults,
                 },
-                DEFAULT_LATENCY_MS,
+                ModelSettings::default(),
             );
             let (near, far) = own.bounds_pct(&d.deltas);
             Some(Partner {
@@ -716,13 +719,19 @@ fn real_data_reproduction() {
             _ => latency,
         };
         let entry = if entry_model_for(&deal.kind) {
-            EntryParams::MoonShot(mshot_params(&sv, core_latency))
+            EntryParams::MoonShot(mshot_params(
+                &sv,
+                ModelSettings {
+                    latency_ms: core_latency,
+                    ..ModelSettings::default()
+                },
+            ))
         } else {
             EntryParams::Fact
         };
-        let mut exit = exit_params(&sv);
+        let mut exit = exit_params(&sv, ModelSettings::default());
         if std::env::var_os("MOON_TICKS_LATENCY_EXIT").is_some() {
-            exit.latency_ms = core_latency;
+            exit.model.latency_ms = core_latency;
         }
         deal.step_lag_ms = core_lags.get(&deal.core_uid).copied().unwrap_or(0.0);
         if let (Some(cache), Some((exchange, market))) = (klines.as_ref(), address.as_ref()) {
@@ -777,7 +786,10 @@ fn real_data_reproduction() {
             for (shift, tally) in PRICE_SHIFTS.iter().zip(methods.iter_mut()) {
                 let variant = |method| MshotParams {
                     price_pct: (own.price_pct + shift).max(own.price_min_pct),
-                    method,
+                    model: ModelSettings {
+                        entry_method: method,
+                        ..own.model
+                    },
                     ..own.clone()
                 };
                 let (model, shifted_params) =
@@ -831,7 +843,10 @@ fn real_data_reproduction() {
                         && (p.buy_ms - deal.buy_ms).abs() <= 3_000
                 }) {
                     let shift = MshotParams {
-                        method: EntryMethod::Shift,
+                        model: ModelSettings {
+                            entry_method: EntryMethod::Shift,
+                            ..p.params.model
+                        },
                         ..p.params.clone()
                     };
                     let predictions = [

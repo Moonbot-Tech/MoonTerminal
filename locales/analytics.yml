@@ -1853,9 +1853,9 @@ analytics.ticks.model_tip:
   en: "Entry: model vs fact %{entry} · Exit: %{exit}"
   es: "Entrada: modelo vs hecho %{entry} · Salida: %{exit}"
 analytics.ticks.subset:
-  ru: "Факт · годные"
-  en: "Fact · reproduced"
-  es: "Hecho · reproducidas"
+  ru: "Годные"
+  en: "Reproduced"
+  es: "Reproducidas"
 analytics.ticks.subset_sub:
   ru: "по %{n} из %{m} с лентой · вход ✓ %{entry} · выход ✓ %{exit}"
   en: "%{n} of %{m} with tape · entry ✓ %{entry} · exit ✓ %{exit}"
@@ -1868,14 +1868,10 @@ analytics.ticks.params_title:
   ru: "Параметры"
   en: "Parameters"
   es: "Parámetros"
-analytics.ticks.params_sub:
-  ru: "сейчас · варианты · подбор"
-  en: "now · variants · search"
-  es: "ahora · variantes · búsqueda"
 analytics.ticks.assumptions:
-  ru: "Модель не учитывает: стакан и очередь · выход кроме тейка · дельты как константы окна · опора ASK/BID = последний принт стороны · MShotRepeat* · задержка перестановки 100 мс"
-  en: "Not modelled: the book and the queue · exits other than the take · deltas constant over the window · ASK/BID reference = the last print of that side · MShotRepeat* · a 100 ms replacement latency"
-  es: "No modelado: libro y cola · salidas salvo el take · deltas constantes en la ventana · referencia ASK/BID = último print del lado · MShotRepeat* · latencia de reemplazo de 100 ms"
+  ru: "Модель не знает: стакан и очередь на уровне · правила выхода вне модели (трейлинг, лестница стопов) · MShotRepeat* · опора ASK/BID — последний принт своей стороны"
+  en: "The model does not know: the book and the queue at a level · exit rules outside it (trailing, the stop ladder) · MShotRepeat* · the ASK/BID reference is the last print of its side"
+  es: "El modelo no conoce: el libro y la cola en un nivel · reglas de salida fuera de él (trailing, escalera de stops) · MShotRepeat* · la referencia ASK/BID es el último print de su lado"
 analytics.ticks.group_entry:
   ru: "Вход"
   en: "Entry"
@@ -1888,18 +1884,6 @@ analytics.ticks.entry_from_fact:
   ru: "вход для %{kinds} не моделируется — берётся из факта"
   en: "the entry of %{kinds} is not modelled — taken from the fact"
   es: "la entrada de %{kinds} no se modela — se toma del hecho"
-analytics.ticks.group_collapse:
-  ru: "Свернуть группу"
-  en: "Collapse the group"
-  es: "Plegar el grupo"
-analytics.ticks.group_expand:
-  ru: "Развернуть группу"
-  en: "Expand the group"
-  es: "Desplegar el grupo"
-analytics.ticks.now:
-  ru: "сейчас"
-  en: "now"
-  es: "ahora"
 analytics.ticks.no_deals:
   ru: "в выборке нет сделок с мс-штампами"
   en: "no trades with millisecond stamps in the scope"
@@ -1916,18 +1900,6 @@ analytics.ticks.holdout:
   ru: "holdout: %{n} сделок, %{profit}"
   en: "holdout: %{n} trades, %{profit}"
   es: "holdout: %{n} operaciones, %{profit}"
-analytics.ticks.fix:
-  ru: "фикс."
-  en: "fix"
-  es: "fijo"
-analytics.ticks.vary:
-  ru: "перебирать"
-  en: "vary"
-  es: "variar"
-analytics.ticks.vary_tip:
-  ru: "Подбор перебирает поля этой группы (кроме фиксированных)"
-  en: "The search varies this group's fields (except the fixed ones)"
-  es: "La búsqueda varía los campos de este grupo (salvo los fijados)"
 analytics.ticks.vary_gated:
   ru: "Модель воспроизводит факт лишь в %{hits} из %{n} сделок — меньше %{gate} %, подбирать по ней нельзя"
   en: "The model reproduces the fact on only %{hits} of %{n} trades — under %{gate} %, so it cannot be searched over"
@@ -1936,14 +1908,6 @@ analytics.ticks.vary_unknown:
   ru: "Доля воспроизведения ещё не посчитана — нет сделок с лентой"
   en: "The reproduction share is not known yet — no trades with tape"
   es: "La cuota de reproducción aún no se conoce — no hay operaciones con cinta"
-analytics.ticks.v1_to_v2:
-  ru: "В1 → В2"
-  en: "V1 → V2"
-  es: "V1 → V2"
-analytics.ticks.clear_v:
-  ru: "очистить В%{n}"
-  en: "clear V%{n}"
-  es: "limpiar V%{n}"
 analytics.ticks.sugg_one_kind:
   ru: "Подбор — только по стратегиям одного вида"
   en: "The search needs strategies of one kind"
@@ -1964,3 +1928,211 @@ analytics.ticks.closer_warn:
   ru: "MShotPrice ближе фактического: оценка занижена — прострелы, до которых реальный ордер не дотянулся, в отчёте отсутствуют"
   en: "MShotPrice closer than the fact: underestimated — spikes the real order never reached are not in the report"
   es: "MShotPrice más cerca que el hecho: subestimado — los picos que la orden real nunca alcanzó no están en el informe"
+analytics.ticks.var_untouched:
+  ru: "без изменений"
+  en: "unchanged"
+  es: "sin cambios"
+analytics.ticks.not_read:
+  ru: "не читается"
+  en: "not read"
+  es: "no se lee"
+analytics.ticks.suggest_one_tip:
+  ru: "Подобрать только %{field}; остальные поля — как в В1"
+  en: "Search %{field} alone; the other fields as V1 has them"
+  es: "Buscar solo %{field}; los demás campos como en V1"
+analytics.ticks.suggest_one_none:
+  ru: "Выберите поле: щёлкните по его имени в таблице"
+  en: "Pick a field: click its name in the grid"
+  es: "Elija un campo: haga clic en su nombre en la tabla"
+analytics.ticks.sugg_not_read:
+  ru: "Выбранный способ входа это поле не читает — подбирать нечего"
+  en: "The entry method in force does not read this field — nothing to search"
+  es: "El método de entrada activo no lee este campo — nada que buscar"
+analytics.ticks.sugg_gated:
+  ru: "Группа этого поля не проходит порог воспроизводимости — подбор по ней закрыт"
+  en: "This field's group is under the reproduction gate — it cannot be searched"
+  es: "El grupo de este campo está bajo el umbral de reproducción — no se puede buscar"
+analytics.ticks.cfg_passes:
+  ru: "Проходов на перезапуск"
+  en: "Passes per restart"
+  es: "Pasadas por reinicio"
+analytics.ticks.cfg_passes_tip:
+  ru: "Сколько раз спуск обходит все поля, прежде чем перезапуск считается сошедшимся"
+  en: "How many times the descent visits every field before a restart counts as converged"
+  es: "Cuántas veces el descenso recorre todos los campos antes de dar un reinicio por convergido"
+analytics.ticks.cfg_gate:
+  ru: "Порог группы, %"
+  en: "Group gate, %"
+  es: "Umbral del grupo, %"
+analytics.ticks.cfg_gate_tip:
+  ru: "Какая доля сделок должна воспроизводиться моделью, чтобы группу (вход или выход) можно было подбирать"
+  en: "The share of trades the model must reproduce before a group (entry or exit) may be searched"
+  es: "La cuota de operaciones que el modelo debe reproducir para que un grupo (entrada o salida) se pueda buscar"
+analytics.ticks.cfg_entry_section:
+  ru: "Вход варианта"
+  en: "A variant's entry"
+  es: "Entrada de una variante"
+analytics.ticks.cfg_method:
+  ru: "Способ"
+  en: "Method"
+  es: "Método"
+analytics.ticks.method_model:
+  ru: "модель коридора"
+  en: "corridor model"
+  es: "modelo del corredor"
+analytics.ticks.method_model_help:
+  ru: "Весь путь ордера варианта от создания: читает все поля входа. Галки факта считаются так же."
+  en: "The variant's whole order path from its creation: reads every entry field. The fact's ✓ is judged this way too."
+  es: "Todo el camino de la orden de la variante desde su creación: lee todos los campos de entrada. El ✓ del hecho se juzga así también."
+analytics.ticks.method_shift:
+  ru: "сдвиг факта"
+  en: "shift of the fact"
+  es: "desplazamiento del hecho"
+analytics.ticks.method_shift_help:
+  ru: "Ордер факта у сопли, сдвинутый на глубину варианта: MShotRaiseWait, MShotReplaceDelay, MShotUsePrice и FastShotAlgo не читает."
+  en: "The fact's order at the spike, moved by the variant's depth: does not read MShotRaiseWait, MShotReplaceDelay, MShotUsePrice or FastShotAlgo."
+  es: "La orden del hecho en el pico, desplazada por la profundidad de la variante: no lee MShotRaiseWait, MShotReplaceDelay, MShotUsePrice ni FastShotAlgo."
+analytics.ticks.model_btn:
+  ru: "Модель"
+  en: "Model"
+  es: "Modelo"
+analytics.ticks.model_title:
+  ru: "Настройки модели"
+  en: "Model settings"
+  es: "Ajustes del modelo"
+analytics.ticks.model_reset:
+  ru: "По умолчанию"
+  en: "Defaults"
+  es: "Por defecto"
+analytics.ticks.model_sec_entry:
+  ru: "Вход"
+  en: "Entry"
+  es: "Entrada"
+analytics.ticks.model_sec_take:
+  ru: "Тейк"
+  en: "Take"
+  es: "Take"
+analytics.ticks.model_sec_stop:
+  ru: "Стоп по стакану"
+  en: "Book-watching stop"
+  es: "Stop sobre el libro"
+analytics.ticks.model_sec_line:
+  ru: "Линия выхода"
+  en: "Exit line"
+  es: "Línea de salida"
+analytics.ticks.model_sec_verdict:
+  ru: "Сверка с фактом"
+  en: "Judging the fact"
+  es: "Comparación con el hecho"
+analytics.ticks.model_latency:
+  ru: "Задержка перестановки, мс"
+  en: "Replace latency, ms"
+  es: "Latencia de reemplazo, ms"
+analytics.ticks.model_latency_tip:
+  ru: "Сколько перестановка ордера (входа и продажи) идёт до биржи; принт в это время бьёт по старому уровню"
+  en: "How long a re-place (of the entry or of the sell) takes to reach the exchange; a print in between meets the old level"
+  es: "Cuánto tarda un reemplazo (de la entrada o de la venta) en llegar al exchange; un print entretanto encuentra el nivel viejo"
+analytics.ticks.model_replace_window:
+  ru: "Окно цены перестановки, мс"
+  en: "Re-place price window, ms"
+  es: "Ventana de precio del reemplazo, ms"
+analytics.ticks.model_replace_window_tip:
+  ru: "Новый ордер ставится от крайнего принта за это окно (ядро: минимум трейдов за ~75–150 мс)"
+  en: "A re-placed order goes off the extreme print of this window (the core: the minimum trade over ~75–150 ms)"
+  es: "Una orden reemplazada se coloca desde el print extremo de esta ventana (el núcleo: el mínimo de ~75–150 ms)"
+analytics.ticks.model_shift_window:
+  ru: "Окно сдвига, мс"
+  en: "Shift window, ms"
+  es: "Ventana del desplazamiento, ms"
+analytics.ticks.model_shift_window_tip:
+  ru: "Способ «сдвиг»: сколько после налива факта та же сопля ещё может налить сдвинутый ордер"
+  en: "The shift method: how long past the fact's fill the same spike may still fill the shifted order"
+  es: "Método desplazamiento: cuánto tras el llenado del hecho el mismo pico aún puede llenar la orden desplazada"
+analytics.ticks.model_pre_spike:
+  ru: "Цена до сопли, мс"
+  en: "Pre-spike price, ms"
+  es: "Precio antes del pico, ms"
+analytics.ticks.model_pre_spike_tip:
+  ru: "MShotSellAtLastPrice без архива: последний принт не позже этого до налива"
+  en: "MShotSellAtLastPrice without the archive: the last print at least this long before the fill"
+  es: "MShotSellAtLastPrice sin archivo: el último print al menos este tiempo antes del llenado"
+analytics.ticks.model_ticker:
+  ru: "Период тикера, мс"
+  en: "Ticker period, ms"
+  es: "Periodo del ticker, ms"
+analytics.ticks.model_ticker_tip:
+  ru: "Как часто ядро получает BID тикера, который смотрит стоп без FastStopLoss (ядро: ~2–2,3 с)"
+  en: "How often the core gets the ticker BID a stop without FastStopLoss watches (the core: ~2–2.3 s)"
+  es: "Cada cuánto recibe el núcleo el BID del ticker que vigila un stop sin FastStopLoss (el núcleo: ~2–2,3 s)"
+analytics.ticks.model_series:
+  ru: "Шаг ряда цен, мс"
+  en: "Price series tick, ms"
+  es: "Paso de la serie de precios, ms"
+analytics.ticks.model_series_tip:
+  ru: "Шаг ряда цен ядра, по которому ещё срабатывает стоп при StopLossEMA 0"
+  en: "The core's price-series tick a stop at StopLossEMA 0 also fires on"
+  es: "El paso de la serie de precios del núcleo con el que también salta un stop con StopLossEMA 0"
+analytics.ticks.model_step_floor:
+  ru: "Мин. шаг линии, мс"
+  en: "Line step floor, ms"
+  es: "Paso mínimo de la línea, ms"
+analytics.ticks.model_step_floor_tip:
+  ru: "Задержка шага PriceDown / SellLevel при нуле в стратегии (FAQ: 0,33 с)"
+  en: "A PriceDown / SellLevel step delay set to zero in the strategy (FAQ: 0.33 s)"
+  es: "Retardo de paso PriceDown / SellLevel en cero en la estrategia (FAQ: 0,33 s)"
+analytics.ticks.model_pump_lag:
+  ru: "Pump: запаздывание шага, мс"
+  en: "Pump: move lag, ms"
+  es: "Pump: retraso del movimiento, ms"
+analytics.ticks.model_pump_lag_tip:
+  ru: "На сколько после PumpMoveTimer ядро переставляет продажу PumpsDetection"
+  en: "How far past PumpMoveTimer the core moves a PumpsDetection sell"
+  es: "Cuánto después de PumpMoveTimer el núcleo mueve la venta de PumpsDetection"
+analytics.ticks.model_pump_peak:
+  ru: "Pump: окно пика, мс"
+  en: "Pump: peak window, ms"
+  es: "Pump: ventana del pico, ms"
+analytics.ticks.model_pump_peak_tip:
+  ru: "Как далеко до тейка ищется пик пампа"
+  en: "How far before the take the pump's peak is looked for"
+  es: "Cuánto antes del take se busca el pico del bombeo"
+analytics.ticks.model_point_time:
+  ru: "Допуск по времени, мс"
+  en: "Time tolerance, ms"
+  es: "Tolerancia de tiempo, ms"
+analytics.ticks.model_point_time_tip:
+  ru: "Насколько перестановка модели может разойтись во времени с архивной и считаться той же"
+  en: "How far apart in time a modelled and an archived move may be and still count as one"
+  es: "Cuánto pueden separarse en el tiempo un movimiento modelado y uno archivado y seguir contando como uno"
+analytics.ticks.model_book_stop_time:
+  ru: "Допуск стопа по стакану, мс"
+  en: "Book stop time tolerance, ms"
+  es: "Tolerancia del stop sobre el libro, ms"
+analytics.ticks.model_book_stop_time_tip:
+  ru: "Насколько стоп без FastStopLoss может сработать раньше или позже факта"
+  en: "How much earlier or later than the fact a stop without FastStopLoss may fire"
+  es: "Cuánto antes o después del hecho puede saltar un stop sin FastStopLoss"
+analytics.ticks.model_price:
+  ru: "Допуск цены, %"
+  en: "Price tolerance, %"
+  es: "Tolerancia de precio, %"
+analytics.ticks.model_price_tip:
+  ru: "Насколько цена модели может отойти от факта (и нижняя граница допуска входа)"
+  en: "How far a modelled price may sit from the fact (and the entry tolerance's floor)"
+  es: "Cuánto puede alejarse un precio modelado del hecho (y el mínimo de la tolerancia de entrada)"
+analytics.ticks.model_stop_price:
+  ru: "Допуск уровня стопа, %"
+  en: "Stop level tolerance, %"
+  es: "Tolerancia del nivel de stop, %"
+analytics.ticks.model_stop_price_tip:
+  ru: "Насколько уровень стопа модели может отойти от уровня, записанного ядром"
+  en: "How far the modelled stop level may sit from the one the core recorded"
+  es: "Cuánto puede alejarse el nivel de stop modelado del que registró el núcleo"
+analytics.ticks.model_fill_better:
+  ru: "Допуск улучшения налива, %"
+  en: "Fill improvement tolerance, %"
+  es: "Tolerancia de mejora del llenado, %"
+analytics.ticks.model_fill_better_tip:
+  ru: "Насколько лучше уровня модели может налиться лимитка факта"
+  en: "How much better than the modelled level the fact's limit may fill"
+  es: "Cuánto mejor que el nivel modelado puede llenarse el límite del hecho"

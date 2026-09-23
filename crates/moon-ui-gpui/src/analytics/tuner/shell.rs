@@ -871,9 +871,10 @@ impl AnalyticsView {
             (TunerKind::Time, CfgInput::MinTrades) => self.time_tuner.min_trades.clone(),
             (TunerKind::Ticks, CfgInput::Restarts) => self.ticks.iters.clone(),
             (TunerKind::Ticks, CfgInput::MinTrades) => self.ticks.min_trades.clone(),
-            // The time row draws only the minimum-trades box, the tape axis no seed box, and
-            // the coin axis draws no row at all, so none has a value for the rest.
-            (TunerKind::Time, _) | (TunerKind::Coins, _) | (TunerKind::Ticks, _) => String::new(),
+            (TunerKind::Ticks, CfgInput::Seed) => self.ticks.seed.clone(),
+            // The time row draws only the minimum-trades box and the coin axis no row at all,
+            // so neither has a value for the rest.
+            (TunerKind::Time, _) | (TunerKind::Coins, _) => String::new(),
         };
         let ph = placeholder.to_string();
         let state = cx.new(|cx| {
@@ -927,11 +928,18 @@ impl AnalyticsView {
                             this.time_tuner.min_trades = value;
                             this.time_tuner.invalidate_suggest();
                         }
-                        (TunerKind::Ticks, CfgInput::Restarts) => this.ticks.iters = value,
+                        (TunerKind::Ticks, CfgInput::Restarts) => {
+                            this.ticks.iters = value;
+                            this.persist_ticks_settings(cx);
+                        }
                         (TunerKind::Ticks, CfgInput::MinTrades) => {
                             this.ticks.min_trades = value;
                         }
-                        (TunerKind::Time, _) | (TunerKind::Coins, _) | (TunerKind::Ticks, _) => {}
+                        (TunerKind::Ticks, CfgInput::Seed) => {
+                            this.ticks.seed = value;
+                            this.persist_ticks_settings(cx);
+                        }
+                        (TunerKind::Time, _) | (TunerKind::Coins, _) => {}
                     }
                     if !matches!(ev, MoonInputEvent::Change) {
                         cx.notify();
@@ -947,6 +955,18 @@ impl AnalyticsView {
             TunerKind::Coins => None,
         };
         state
+    }
+
+    /// Drop one settings box from its axis' cache, so the next frame builds it from the stored
+    /// value — after the value was set from outside the box.
+    pub(super) fn shell_forget_cfg_input(&mut self, kind: TunerKind, which: CfgInput) {
+        let id = cfg_input_id(kind, which);
+        match kind {
+            TunerKind::Filter => self.tuner.inputs.remove(id),
+            TunerKind::Time => self.time_tuner.inputs.remove(id),
+            TunerKind::Ticks => self.ticks.inputs.remove(id),
+            TunerKind::Coins => None,
+        };
     }
 
     /// Copy the seed the last completed search ran with into the seed box, pinning it.
@@ -974,7 +994,7 @@ impl AnalyticsView {
     ///     cx: GPUI context used to update the backend layout.
     ///     pick: The layout field this setting lives in.
     ///     value: Its normalized value, or `None` where the setting has no usable value.
-    fn persist_setting<T: PartialEq>(
+    pub(super) fn persist_setting<T: PartialEq>(
         &self,
         cx: &mut Context<Self>,
         pick: impl Fn(&mut moon_core::config::WindowLayout) -> &mut T,

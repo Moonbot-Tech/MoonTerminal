@@ -170,6 +170,8 @@ struct BookStop {
     proxy: Option<f64>,
     avg: Option<f64>,
     next_sample: i64,
+    /// The ticker's period (`ModelSettings::ticker_period_ms`), at least a millisecond.
+    period_ms: i64,
     /// Up to when the fact proves this stop did not fire (`record::StopAnchor`): a sample by
     /// then is averaged but cannot fire. `i64::MIN` when the walk is not the trade's own stop.
     quiet_until: i64,
@@ -185,14 +187,17 @@ struct SeriesPoint {
     candidate: Option<f64>,
     /// When the open tick closes; every pending print is before it.
     tick_end: i64,
+    /// The tick's length (`ModelSettings::series_tick_ms`), at least a millisecond.
+    tick_ms: i64,
 }
 
 impl SeriesPoint {
-    fn new(first_ms: i64) -> Self {
+    fn new(first_ms: i64, tick_ms: i64) -> Self {
         Self {
             point: None,
             candidate: None,
-            tick_end: next_series_tick(first_ms),
+            tick_end: next_series_tick(first_ms, tick_ms),
+            tick_ms,
         }
     }
 
@@ -208,10 +213,12 @@ impl SeriesPoint {
     }
 }
 
-/// The end of the series tick a print at `t_ms` falls in: the ticks run on the clock's 250 ms
-/// boundaries, and a print ON a boundary opens the next tick.
-fn next_series_tick(t_ms: i64) -> i64 {
-    (t_ms.div_euclid(SERIES_TICK_MS) + 1) * SERIES_TICK_MS
+/// The end of the series tick a print at `t_ms` falls in: the ticks run on the clock's
+/// `tick_ms` boundaries ([`SERIES_TICK_MS`] by default), and a print ON a boundary opens the next
+/// tick.
+fn next_series_tick(t_ms: i64, tick_ms: i64) -> i64 {
+    let tick_ms = tick_ms.max(1);
+    (t_ms.div_euclid(tick_ms) + 1) * tick_ms
 }
 
 impl BookStop {
@@ -235,8 +242,9 @@ impl BookStop {
     ) -> Self {
         // One period past the fill, and back from there in whole periods: the ticker's phase
         // is on no record, so the fill anchors it, however far back the tape reaches.
-        let anchor = fill_ms + TICKER_PERIOD_MS;
-        let back = (anchor - first_ms).max(0) / TICKER_PERIOD_MS;
+        let period_ms = params.model.ticker_period_ms.max(1);
+        let anchor = fill_ms + period_ms;
+        let back = (anchor - first_ms).max(0) / period_ms;
         Self {
             long,
             level,
@@ -245,9 +253,11 @@ impl BookStop {
             weight: stop_average_weight(params, long),
             proxy: None,
             avg: None,
-            next_sample: anchor - back * TICKER_PERIOD_MS,
+            next_sample: anchor - back * period_ms,
+            period_ms,
             quiet_until,
-            series: (params.stop_loss_ema.abs() < 1e-9).then(|| SeriesPoint::new(first_ms)),
+            series: (params.stop_loss_ema.abs() < 1e-9)
+                .then(|| SeriesPoint::new(first_ms, params.model.series_tick_ms)),
         }
     }
 
@@ -273,7 +283,7 @@ impl BookStop {
     fn samples_before(&mut self, until: i64) -> Option<Exit> {
         while self.next_sample < until {
             let at = self.next_sample;
-            self.next_sample += TICKER_PERIOD_MS;
+            self.next_sample += self.period_ms;
             let Some(bid) = self.proxy else {
                 continue;
             };
@@ -302,7 +312,7 @@ impl BookStop {
             return None;
         }
         let at = series.tick_end;
-        series.tick_end = next_series_tick(until);
+        series.tick_end = next_series_tick(until, series.tick_ms);
         let point = series.candidate.take()?;
         series.point = Some(point);
         let past = if self.long {
@@ -378,10 +388,11 @@ fn advance(core: &mut f64, last_sent: &mut f64, level: f64, order: f64) -> bool 
     true
 }
 
-/// Seconds to milliseconds, with the terminal's floor for a zero delay.
-pub(super) fn step_ms(seconds: f64) -> i64 {
+/// Seconds to milliseconds, with the terminal's floor (`ModelSettings::step_floor_ms`,
+/// [`STEP_FLOOR_MS`] by default) for a zero delay.
+pub(super) fn step_ms(seconds: f64, floor_ms: i64) -> i64 {
     let ms = (seconds * 1000.0) as i64;
-    if ms <= 0 { STEP_FLOOR_MS } else { ms }
+    if ms <= 0 { floor_ms } else { ms }
 }
 
 /// Walk the tape after the fill under `params`, starting from the take `take`.
@@ -414,7 +425,8 @@ pub fn walk_held(
     let side = Side {
         long: deal.is_long(),
     };
-    let latency_ms = params.latency_ms.max(0.0) as i64;
+    let latency_ms = params.model.latency_whole_ms();
+    let floor_ms = params.model.step_floor_ms;
     let armed_at = fill.t_ms + params.sell_delay_ms.max(0.0) as i64;
     // When the take is on the book: placed at `armed_at`, there after the same latency as any
     // move of the line.
@@ -469,15 +481,16 @@ pub fn walk_held(
     let pd_floor = side.over(fill.price, params.price_down_allowed_drop_pct);
 
     // --- PumpMove --- one move, timed off the take (see `PUMP_MOVE_LAG_MS`).
-    let mut pm_next = (params.pump_move_timer_s > 0.0)
-        .then(|| armed_at + (params.pump_move_timer_s * 1000.0) as i64 + PUMP_MOVE_LAG_MS);
+    let mut pm_next = (params.pump_move_timer_s > 0.0).then(|| {
+        armed_at + (params.pump_move_timer_s * 1000.0) as i64 + params.model.pump_move_lag_ms
+    });
 
     // --- SellLevel ---
     let sl_on = params.sell_level_delay_s != 0.0
         && params.sell_level_time_s > 0.0
         && params.sell_level_count > 0;
     let sl_first_ms = if params.sell_level_delay_s < 0.0 {
-        STEP_FLOOR_MS
+        floor_ms
     } else {
         (params.sell_level_delay_s * 1000.0) as i64
     };
@@ -489,9 +502,9 @@ pub fn walk_held(
     let sl_step_ms = if params.sell_level_delay_next_s > 0.0 {
         (params.sell_level_delay_next_s * 1000.0) as i64
     } else if params.sell_level_delay_next_s < 0.0 {
-        STEP_FLOOR_MS
+        floor_ms
     } else {
-        sl_first_ms.max(STEP_FLOOR_MS)
+        sl_first_ms.max(floor_ms)
     };
     let mut sl_left = params.sell_level_count;
     let sl_until = if params.sell_level_work_time_s > 0.0 {
@@ -504,6 +517,9 @@ pub fn walk_held(
     // --- SellShot ---
     let ss_on = !params.ignore_sell_shot && params.sell_shot_distance_pct != 0.0;
     let ss_from = fill.t_ms + (params.sell_shot_delay_s.max(0.0) * 1000.0) as i64;
+    // The core's own floor on the SellShot calculation window — the same 100 ms its fast
+    // algorithm reads, but a rule of the sell, not the entry's re-place window
+    // (`ModelSettings::replace_window_ms`), and not a setting of the model.
     let ss_calc_ms =
         ((params.sell_shot_calc_interval_s.max(0.0) * 1000.0) as i64).max(FAST_ALGO_WINDOW_MS);
     let ss_low = side.over(fill.price, params.sell_shot_allowed_down_pct);
@@ -589,7 +605,7 @@ pub fn walk_held(
             let pm_due = pm_next.filter(|due| t_ms >= *due);
             if let Some(due) = pm_due.filter(|pm| pd_due.is_none_or(|pd| *pm <= pd)) {
                 pm_next = None;
-                let from = armed_at - PUMP_PEAK_LOOKBACK_MS;
+                let from = armed_at - params.model.pump_peak_lookback_ms;
                 let peak = side.extreme(
                     ticks[..=index]
                         .iter()
@@ -628,7 +644,7 @@ pub fn walk_held(
             } else {
                 0
             };
-            pd_next = Some(due + step_ms(params.price_down_delay_s) + lag_ms);
+            pd_next = Some(due + step_ms(params.price_down_delay_s, floor_ms) + lag_ms);
         }
         // SellLevel: to the high of the look-back, adjusted.
         while let Some(due) = sl_next.filter(|due| t_ms >= *due) {

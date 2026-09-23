@@ -6,10 +6,11 @@
 //! reproduces the fact; a double-click opens the trade window on it. Every row of the scope is
 //! shown; the switch under the table narrows it to the sample the variants and the search run
 //! on — the rows whose tape covers the window AND which the model reproduces (`DealRow::fit`) —
-//! and the status line says how many that is out of the scope. Right: the shared "Fact vs …"
-//! matrix (the whole scope, the fit subset captioned with the ✓ shares, the variant columns),
-//! and the parameter grid with the strategies' values, the two variant columns and the search
-//! row.
+//! and the status line says how many that is out of the scope; the table's head opens the model's
+//! settings (`cfg.rs`), which decide its ✓ column. Right: the shared KPI matrix over the fit rows
+//! (captioned with the ✓ shares) and the two variant columns, and the parameter grid laid out as
+//! the "By filter" one — the strategies' values, the variant columns, the search row with its
+//! settings popover.
 //!
 //! The model itself is `moon_core::db::tuner::ticks`; this module only feeds it and draws
 //! what it says.
@@ -23,24 +24,23 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
-use super::kpi::{VarLabel, kpi_matrix_card};
-use super::shared::TunerKind;
-use super::shell::CfgInput;
+use super::kpi::{VarLabel, kpi_matrix_card_over};
 use super::{sort_arrow_of, toggle_sort_key};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use columns::*;
 pub(in crate::analytics::tuner) use fetch::strategy_field_defaults;
 use moon_core::market::trade_replay::TickStatus;
-use state::SuggState;
 use state::{DealRow, TapeStatus};
 
+mod cfg;
 pub(in crate::analytics::tuner) mod columns;
 mod delta_summary;
 pub(crate) mod fetch;
 mod grid;
 mod lags;
 mod load;
+pub(in crate::analytics) mod model_cfg;
 pub(in crate::analytics::tuner) mod rows;
 pub(in crate::analytics) mod state;
 mod variants;
@@ -51,6 +51,7 @@ impl AnalyticsView {
     pub(in crate::analytics::tuner) fn ticks_card(
         &mut self,
         p: MoonPalette,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let scale = design::font_scale(cx);
@@ -239,6 +240,7 @@ impl AnalyticsView {
         } else {
             t!("analytics.ticks.fetch_btn").to_string()
         };
+        let model_settings = self.ticks_model_settings(p, window, cx);
         v_flex()
             .w_full()
             .flex_1()
@@ -310,7 +312,13 @@ impl AnalyticsView {
                                     .render(),
                             ),
                         )
-                    }),
+                    })
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_family(design::ui_font())
+                            .child(model_settings),
+                    ),
             )
             .child(self.deal_header(p, cx))
             // The virtual list owns its own scrolling.
@@ -452,10 +460,11 @@ impl AnalyticsView {
             .into_any_element()
     }
 
-    /// "Fact vs …": the whole scope, the rows fit for the search (captioned with how many of the
-    /// covered ones that is, and the ✓ shares of both groups — the model's own account of
-    /// itself), then the variant columns, each over the replayable rows and captioned with how
-    /// many.
+    /// The KPI matrix: the rows fit for the search as the baseline — captioned with how many of
+    /// the covered ones that is, the ✓ shares of both groups (the model's own account of itself)
+    /// and the exit horizon — then В1 and В2 over the rows whose tape is in memory. The whole
+    /// scope is not a column: the axis works on the fit rows alone. An untouched variant is the
+    /// strategy as it stands, and shows the baseline.
     fn ticks_kpi(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         let (fit, covered, entry, exit, replayable, horizon) = self
             .ticks
@@ -492,20 +501,19 @@ impl AnalyticsView {
         if let Some(horizon) = horizon {
             subset_sub.push_str(&t!("analytics.ticks.horizon", h = duration_text(horizon)));
         }
-        let mut labels = vec![VarLabel::with_sub(
-            t!("analytics.ticks.subset").to_string(),
-            subset_sub,
-        )];
-        // The matrix reads one vector: `[fact, subset]` from the load, then the variants that
-        // were scored. An untouched variant is not a column.
-        let mut stats: Vec<moon_core::db::tuner::VarStats> = self
-            .ticks
-            .kpi
-            .data()
-            .map(|k| k.to_vec())
-            .unwrap_or_default();
+        let base = VarLabel::with_sub(t!("analytics.ticks.subset").to_string(), subset_sub);
+        let baseline: Option<moon_core::db::tuner::VarStats> =
+            self.ticks.kpi.data().and_then(|k| k.first().cloned());
+        let mut labels = Vec::with_capacity(self.ticks.var_stats.len());
+        let mut stats: Vec<moon_core::db::tuner::VarStats> = baseline.iter().cloned().collect();
         for (i, var) in self.ticks.var_stats.iter().enumerate() {
+            let title = t!("analytics.ticks.var_n", n = i + 1).to_string();
             let Some(var) = var else {
+                labels.push(VarLabel::with_sub(
+                    title,
+                    t!("analytics.ticks.var_untouched").to_string(),
+                ));
+                stats.extend(baseline.iter().cloned());
                 continue;
             };
             let mut sub = t!(
@@ -531,13 +539,22 @@ impl AnalyticsView {
                     );
                 }
             }
-            labels.push(VarLabel::with_sub(
-                t!("analytics.ticks.var_n", n = i + 1).to_string(),
-                sub,
-            ));
+            labels.push(VarLabel::with_sub(title, sub));
             stats.push(var.clone());
         }
         let state = match &self.ticks.kpi {
+            crate::load_state::LoadState::NotReady => crate::load_state::LoadState::NotReady,
+            crate::load_state::LoadState::Failed(e) => {
+                crate::load_state::LoadState::Failed(e.clone())
+            }
+            // The matrix reads column 0 in every row: without a baseline there is nothing to
+            // draw yet, whatever else the load state says. Nor while the first tape stage of a
+            // table judges it and no row is fit yet: the baseline would read as a real
+            // "0 trades". A reload carries the judged rows (`load.rs`, stage B), so the numbers
+            // stay on screen while it reads the rest.
+            _ if stats.is_empty() || (self.ticks.tape_reading && fit == 0) => {
+                crate::load_state::LoadState::Loading { stale: None }
+            }
             crate::load_state::LoadState::Ready(_) => {
                 crate::load_state::LoadState::Ready(std::sync::Arc::new(stats))
             }
@@ -546,142 +563,16 @@ impl AnalyticsView {
                     stale: stale.as_ref().map(|_| std::sync::Arc::new(stats)),
                 }
             }
-            crate::load_state::LoadState::NotReady => crate::load_state::LoadState::NotReady,
-            crate::load_state::LoadState::Failed(e) => {
-                crate::load_state::LoadState::Failed(e.clone())
-            }
         };
-        kpi_matrix_card(
+        kpi_matrix_card_over(
             &state,
             self.scope_label(),
+            &base,
             &labels,
             self.kpi_collapsed,
             p,
             cx,
         )
-    }
-
-    /// The search row of the axis: restarts, minimum trades, the train share, the status,
-    /// Stop and "Search".
-    pub(in crate::analytics::tuner) fn ticks_config_row(
-        &mut self,
-        p: MoonPalette,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let running = matches!(self.ticks.sugg, SuggState::Running { .. });
-        let (status, status_color) = match &self.ticks.sugg {
-            // Counted against the restarts the run was launched with, not the box's current
-            // text.
-            SuggState::Running { handle, total } => (
-                t!(
-                    "analytics.tuner.sugg_progress",
-                    done = handle.completed(),
-                    total = total
-                )
-                .to_string(),
-                p.text_soft,
-            ),
-            SuggState::Idle => match &self.ticks.sugg_note {
-                Some(note) => (note.clone(), p.amber),
-                None => (String::new(), p.text_muted),
-            },
-        };
-        let it_placeholder = variants::DEFAULT_RESTARTS.to_string();
-        let it_input = self.shell_cfg_input(
-            TunerKind::Ticks,
-            CfgInput::Restarts,
-            &it_placeholder,
-            window,
-            cx,
-        );
-        let mn_input =
-            self.shell_cfg_input(TunerKind::Ticks, CfgInput::MinTrades, "auto", window, cx);
-        let train_pct = self.ticks.train_pct;
-        let tr_view = cx.entity();
-        let tr_items = crate::panels::radio_items(
-            super::filter::state::TRAIN_OPTIONS.map(|n| {
-                (
-                    n,
-                    SharedString::from(format!("tun-tr-x-{n}")),
-                    SharedString::from(super::shell::train_label(n)),
-                )
-            }),
-            train_pct,
-            crate::panels::RadioMark::Highlight,
-            move |app, n| {
-                tr_view.update(app, |this, cx| {
-                    this.ticks.train_pct = n;
-                    cx.notify();
-                });
-            },
-        );
-        let tr_combo = moon_ui::MoonDropdown::new(SharedString::from("tun-cfg-tr-x"))
-            .label(super::shell::train_label(train_pct))
-            .trigger_caret(true)
-            .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(moon_ui::MoonButtonSize::density(cx))
-            .menu_width_scaled(96.0)
-            .items(tr_items);
-        let input_box = |id: &'static str, state: &Entity<moon_ui::MoonInputState>, w: f32| {
-            div()
-                .w(design::font_w_px(cx, w))
-                .flex_none()
-                .font_family(design::mono())
-                .child(
-                    moon_ui::MoonInput::new(SharedString::from(id))
-                        .state(state)
-                        .size(design::INPUT_SIZE),
-                )
-        };
-        h_flex()
-            .w_full()
-            .flex_none()
-            .px(design::ui_px(cx, 12.0))
-            .pb(design::ui_px(cx, 6.0))
-            .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            .text_size(design::t_caption(cx))
-            .font_family(design::ui_font())
-            .child(
-                div()
-                    .text_color(moon(p.text_muted))
-                    .child(t!("analytics.tuner.iters").to_string()),
-            )
-            .child(input_box("tun-cfg-it-x", &it_input, 46.0))
-            .child(
-                div()
-                    .text_color(moon(p.text_muted))
-                    .child(t!("analytics.tuner.min_trades").to_string()),
-            )
-            .child(input_box("tun-cfg-mn-x", &mn_input, 46.0))
-            .child(tr_combo)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(moon(status_color))
-                    .child(status),
-            )
-            .when(running, |el| {
-                el.child(
-                    MoonButton::new("tun-suggest-stop-x")
-                        .variant(MoonButtonVariant::Soft)
-                        .label(t!("analytics.tuner.stop").to_string())
-                        .on_click(cx.listener(|this, _, _, cx| this.ticks_stop_suggest(cx)))
-                        .render(),
-                )
-            })
-            .child(
-                MoonButton::new("tun-suggest-run-x")
-                    .variant(MoonButtonVariant::Blue)
-                    .label(t!("analytics.tuner.suggest_run").to_string())
-                    .disabled(running)
-                    .on_click(cx.listener(|this, _, _, cx| this.ticks_suggest(cx)))
-                    .render(),
-            )
-            .into_any_element()
     }
 }
 

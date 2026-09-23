@@ -33,10 +33,12 @@ fn lags() -> std::sync::MutexGuard<'static, HashMap<u64, f64>> {
 ///     rows: The rows of the load.
 ///     traces: Their archived lines, by `reportuid`.
 ///     defaults: The strategy-field defaults of the live schema.
+///     model: The model settings the rows are replayed under.
 pub(super) fn calibrate_from(
     rows: &[DealRow],
     traces: &HashMap<i64, ArchivedLines>,
     defaults: &HashMap<String, f64>,
+    model: moon_core::db::tuner::ticks::ModelSettings,
 ) {
     let keys = params::param_keys();
     let mut samples: HashMap<u64, Vec<i64>> = HashMap::new();
@@ -57,10 +59,13 @@ pub(super) fn calibrate_from(
         ) else {
             continue;
         };
-        let exit = params::exit_params(&params::StrategyValues {
-            values: &values,
-            defaults,
-        });
+        let exit = params::exit_params(
+            &params::StrategyValues {
+                values: &values,
+                defaults,
+            },
+            model,
+        );
         samples
             .entry(row.deal.core_uid)
             .or_default()

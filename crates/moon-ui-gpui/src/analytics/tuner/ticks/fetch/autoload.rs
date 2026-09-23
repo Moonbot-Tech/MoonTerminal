@@ -13,9 +13,9 @@
 //! 2. resolve each through the live source, keep the ones the venue still serves by the
 //!    worker's own retention rule (`inside_retention`: the exit inside the route's retention; a
 //!    venue with no route is skipped — nothing to ask), and hand them to the fetch job
-//!    ([`super::job::enqueue`]) — the job asks the
-//!    worker, and the worker serves what the tiles and `trades.sqlite` already hold without a
-//!    request, so a trade the capture DID file costs nothing here;
+//!    ([`super::job::enqueue`]) — minus the ones whose tape `trades.sqlite` already holds
+//!    ([`drop_held`], answered off the span table's bounds, one read per market): those would
+//!    come back from the job served off the disk, one at a time, every launch;
 //! 3. a trade whose core is not connected yet, or whose catalog is not in, is kept and tried
 //!    again every [`RETRY`] for up to [`MAX_ATTEMPTS`]: the cores come up one by one after the
 //!    terminal, and the catalog a little after each core.
@@ -34,13 +34,17 @@ use std::time::{Duration, Instant};
 
 use gpui::App;
 
-use super::job;
+use std::collections::HashMap;
+
+use super::job::{self, QueuedRow};
 use super::{FetchResolver, strategy_field_defaults};
 use crate::Backend;
-use moon_core::db::tuner::ticks::{Deal, model_window};
+use moon_core::db::tuner::ticks::{Deal, model_window, required_spans};
 use moon_core::market::trade_replay::venue_caps::trade_route;
 use moon_core::market::trade_replay::worker::inside_retention;
-use moon_core::market::trade_replay::{long_position_ms, margin_ms};
+use moon_core::market::trade_replay::{
+    Coverage, ReplayWindow, long_position_ms, margin_ms, trade_cache,
+};
 
 /// How far back the autoload looks, whatever the venue documents: the longest retention a
 /// route names is 90 days, and a month of rows is already thousands of walks.
@@ -257,6 +261,19 @@ fn run_pass(
         }
         rows.push(row);
     }
+    let (mut rows, held) = drop_held(
+        rows,
+        |row: &QueuedRow| {
+            (
+                row.address.exchange_key.clone(),
+                row.address.market.clone(),
+                row.window,
+            )
+        },
+        |exchange, market, from_ms, to_ms| {
+            trade_cache::handle()?.held_spans(exchange, market, from_ms, to_ms)
+        },
+    );
     // Newest-first is the job's queue order: it pops from the end, oldest first.
     rows.sort_by_key(|row| std::cmp::Reverse(row.deal.close_ms));
     let offered = rows.len();
@@ -280,12 +297,62 @@ fn run_pass(
     };
     log::info!(
         target: moon_core::diagnostics::TICKS_AXIS_TARGET,
-        "[x] ticks autoload pass {attempt}: {total} deal(s) considered, {queued} queued ({} already in the batch), {no_route} with no route, {out_of_retention} past the venue's retention, {degenerate} with no window, {} unresolved (core not connected or catalog without the coin)",
+        "[x] ticks autoload pass {attempt}: {total} deal(s) considered, {queued} queued ({} already in the batch), {held} already held on disk, {no_route} with no route, {out_of_retention} past the venue's retention, {degenerate} with no window, {} unresolved (core not connected or catalog without the coin)",
         offered - queued,
         unresolved.len()
     );
     unresolved
 }
+
+/// Drop the rows whose tape the disk already holds — every stretch the model needs of the
+/// window (`required_spans`, the rule the axis marks a row covered by) inside the spans
+/// `trades.sqlite` has filed for the market. One bounds read per market, over the stretch its
+/// rows span; a market whose read did not happen keeps every row — the job then asks, as it
+/// always did.
+///
+/// Args:
+///     rows: The candidates.
+///     place: A row's `(exchange key, market, window)`.
+///     held_spans: `(exchange, market, from_ms, to_ms)` → the stored spans' bounds, `None` when
+///         the read did not happen.
+///
+/// Returns:
+///     The rows still worth the job, and how many were dropped as held.
+fn drop_held<T>(
+    rows: Vec<T>,
+    place: impl Fn(&T) -> (String, String, ReplayWindow),
+    held_spans: impl Fn(&str, &str, i64, i64) -> Option<Vec<(i64, i64)>>,
+) -> (Vec<T>, usize) {
+    let mut by_market: HashMap<(String, String), Vec<(T, Coverage)>> = HashMap::new();
+    for row in rows {
+        let (exchange, market, window) = place(&row);
+        by_market
+            .entry((exchange, market))
+            .or_default()
+            .push((row, required_spans(&window)));
+    }
+    let mut kept = Vec::new();
+    let mut held = 0usize;
+    for ((exchange, market), group) in by_market {
+        let bounds = group
+            .iter()
+            .filter_map(|(_, need)| need.hull())
+            .reduce(|(a_from, a_to), (b_from, b_to)| (a_from.min(b_from), a_to.max(b_to)));
+        let stored = bounds
+            .and_then(|(from_ms, to_ms)| held_spans(&exchange, &market, from_ms, to_ms))
+            .map(Coverage::from_spans);
+        for (row, need) in group {
+            match &stored {
+                Some(stored) if !need.is_empty() && stored.covers(&need) => held += 1,
+                _ => kept.push(row),
+            }
+        }
+    }
+    (kept, held)
+}
+
+#[cfg(test)]
+mod tests;
 
 /// The candidates: every closed trade with millisecond stamps of the last [`HORIZON_MS`], on
 /// every core, under the axis' own filters.

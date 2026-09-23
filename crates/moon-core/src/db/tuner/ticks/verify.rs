@@ -31,8 +31,9 @@
 //! The exit is walked from the FACTUAL entry and held against two things: where the
 //! modelled line STOOD at the moment the core sold — against the price it sold at — and, when
 //! the order archive holds the trade's Exit line, every move the core made with its sell,
-//! each of which the model must have made too within [`POINT_TIME_TOLERANCE_MS`] and
-//! [`PRICE_TOLERANCE`]. A model that lands on the right price by a different path has not
+//! each of which the model must have made too within the point and price tolerances
+//! (`settings::ModelSettings` — [`POINT_TIME_TOLERANCE_MS`] and [`PRICE_TOLERANCE`] by
+//! default). A model that lands on the right price by a different path has not
 //! reproduced the rule. Which PRINT the model would have sold on is not judged: that is the
 //! queue at the level (the spec's §7), which the tape does not carry — a print at the level
 //! sold the core's line on ARX and left it standing on COOL the same day. The archive's own
@@ -45,6 +46,7 @@
 use super::exit::{ExitModel, stop_pct};
 use super::line::LinePoint;
 use super::mshot::MshotParams;
+use super::settings::ModelSettings;
 use super::{
     Deal, EntryParams, Exit, ExitKind, ExitParams, Fill, PRICE_TOLERANCE, reaches, simulate,
 };
@@ -182,9 +184,10 @@ pub fn verify(
         .as_ref()
         .and_then(|a| a.fill)
         .map_or(deal.close_ms, |(t, _)| t.min(deal.close_ms));
+    let model = &exit.model;
     let closed = match walked.exit.kind {
         ExitKind::Stop
-            if walked.exit.t_ms <= deal.close_ms + POINT_TIME_TOLERANCE_MS || fact_stopped =>
+            if walked.exit.t_ms <= deal.close_ms + model.point_time_ms || fact_stopped =>
         {
             walked.exit
         }
@@ -195,10 +198,10 @@ pub fn verify(
             modelled.sort_by_key(|p| p.t_ms);
             // A point the model stamps up to its own latency after the fill is a move due
             // before it — the core's stamp is its moment, the model's the print plus latency.
-            let horizon = filled_at + exit.latency_ms.max(0.0) as i64;
+            let horizon = filled_at + model.latency_whole_ms();
             let level = archive
                 .as_ref()
-                .and_then(|a| level_on_archive_clock(&modelled, a, horizon))
+                .and_then(|a| level_on_archive_clock(&modelled, a, horizon, model))
                 .or_else(|| modelled.iter().rev().find(|p| p.t_ms <= horizon).copied());
             match level {
                 Some(level) => Exit {
@@ -246,20 +249,23 @@ pub fn verify(
         verify_stop(deal, &fact_exit, &walked.points, closed, exit_points)
     } else if exit_rule_matches(closed.kind, &deal.sell_reason) {
         let dev = deviation_pct(closed.price, deal.sell_price);
-        let tolerance = PRICE_TOLERANCE;
+        let tolerance = model.price_pct;
         // Within the tolerance either way, or a limit's fill on the better side of its level:
         // `dev` is the model against the fact, so a fact above the modelled sell (a long) or
         // below the modelled buy-back (a short) reads as a negative deviation of the model.
         let better_by = |d: f64| if deal.is_long() { -d } else { d };
         let improved = |d: f64| {
             let better = better_by(d);
-            better > 0.0 && better <= FILL_IMPROVEMENT_TOLERANCE * 100.0
+            better > 0.0 && better <= model.fill_improvement_pct
         };
         let archived_fill = archive.as_ref().and_then(|a| a.fill);
         let archived_level = archive.as_ref().and_then(|a| a.moves.last().copied());
-        let points = archive
-            .as_ref()
-            .map(|a| (matched_points(&walked.points, &a.moves), a.moves.len()));
+        let points = archive.as_ref().map(|a| {
+            (
+                matched_points(&walked.points, &a.moves, model),
+                a.moves.len(),
+            )
+        });
         let line_ok = points.is_none_or(|(matched, total)| matched == total);
         let corroborated = points.is_some_and(|(matched, total)| matched == total);
         // A level placed THROUGH the market: the archive filed the fill as a point of its own
@@ -275,14 +281,14 @@ pub fn verify(
             && archived_fill
                 .zip(archived_level)
                 .is_some_and(|(fill, level)| {
-                    fill.0 - level.0 <= POINT_TIME_TOLERANCE_MS
+                    fill.0 - level.0 <= model.point_time_ms
                         && deviation_pct(closed.price, level.1)
-                            .is_some_and(|d| d.abs() <= PRICE_TOLERANCE * 100.0)
+                            .is_some_and(|d| d.abs() <= model.price_pct)
                 });
         let price_ok = dev.is_some_and(|d| {
-            d.abs() <= tolerance * 100.0
+            d.abs() <= tolerance
                 || (corroborated && improved(d))
-                || (level_reproduced && better_by(d) >= -tolerance * 100.0)
+                || (level_reproduced && better_by(d) >= -tolerance)
         });
         (Some(price_ok && line_ok), dev, points)
     } else {
@@ -350,8 +356,8 @@ impl ArchivedExit {
 
 /// The modelled level at the fill read on the ARCHIVE's clock: when the model re-placed at
 /// every archived move, the level is the model's own point for the core's last move before the
-/// fill — unless the model moved again, with no archived move to match, more than
-/// [`POINT_TIME_TOLERANCE_MS`] before `horizon`: that is a step the core never took, and its
+/// fill — unless the model moved again, with no archived move to match, more than the point
+/// tolerance (`ModelSettings::point_time_ms`) before `horizon`: that is a step the core never took, and its
 /// level is what the model is held to. `None` — read the model's own clock instead — when a
 /// move went unmatched.
 ///
@@ -371,20 +377,19 @@ impl ArchivedExit {
 ///     modelled: The model's points, in time order.
 ///     archive: The archived line — its moves and its fill point.
 ///     horizon: The fill, plus the model's own latency.
+///     model: The model's settings, for the tolerances.
 fn level_on_archive_clock<'a>(
     modelled: &[&'a LinePoint],
     archive: &ArchivedExit,
     horizon: i64,
+    model: &ModelSettings,
 ) -> Option<&'a LinePoint> {
-    let same = |m: &LinePoint, (t, p): (i64, f64)| {
-        (m.t_ms - t).abs() <= POINT_TIME_TOLERANCE_MS
-            && deviation_pct(m.price, p).is_some_and(|d| d.abs() <= PRICE_TOLERANCE * 100.0)
-    };
+    let same = |m: &LinePoint, point: (i64, f64)| same_move(m, point, model);
     // A line the archive holds as its take alone says nothing about when the core stepped
     // (MUSEBOOK 2026-09-22 — "Auto Price Down", the archive one point long, sold 1.2 s after
     // the take); a take and a fill point is a line, the step filed as the fill.
     let filed = archive.moves.len() + usize::from(archive.fill.is_some());
-    if filed < 2 || matched_points_of(modelled, &archive.moves) != archive.moves.len() {
+    if filed < 2 || matched_points_of(modelled, &archive.moves, model) != archive.moves.len() {
         return None;
     }
     let own_of = |mv: (i64, f64)| {
@@ -408,7 +413,7 @@ fn level_on_archive_clock<'a>(
         .rev()
         .find(|m| {
             m.t_ms > own.t_ms
-                && m.t_ms <= horizon - POINT_TIME_TOLERANCE_MS
+                && m.t_ms <= horizon - model.point_time_ms
                 && !archive
                     .moves
                     .iter()
@@ -438,11 +443,11 @@ fn level_on_archive_clock<'a>(
 fn is_fill_point(deal: &Deal, exit: &ExitParams, last: (i64, f64), prev: (i64, f64)) -> bool {
     let (t, p) = last;
     let at_sale =
-        deviation_pct(p, deal.sell_price).is_some_and(|d| d.abs() <= PRICE_TOLERANCE * 100.0);
+        deviation_pct(p, deal.sell_price).is_some_and(|d| d.abs() <= exit.model.price_pct);
     if !at_sale {
         return false;
     }
-    let at_close = (t - deal.close_ms).abs() <= exit.latency_ms.max(0.0) as i64;
+    let at_close = (t - deal.close_ms).abs() <= exit.model.latency_whole_ms();
     // Not worse than the level it was filed against: at or above a long's sell, at or below a
     // short's buy-back — `reaches` with the long's side reads "at or above".
     let fill_side = reaches(p, prev.1, !deal.is_long());
@@ -498,19 +503,19 @@ fn verify_stop(
             activation = Some(moves[i].0);
             moves.truncate(i);
         }
-        (matched_points(modelled, &moves), moves.len())
+        (matched_points(modelled, &moves, &exit.model), moves.len())
     });
     let line_ok = points.is_none_or(|(matched, total)| matched == total);
     let tolerance_ms = if exit.fast_stop_loss {
-        POINT_TIME_TOLERANCE_MS
+        exit.model.point_time_ms
     } else {
-        BOOK_STOP_TIME_TOLERANCE_MS
+        exit.model.book_stop_time_ms
     };
     let on_time = (closed.t_ms - activation.unwrap_or(deal.close_ms)).abs() <= tolerance_ms;
     match stated {
         Some(stated) => {
             let dev = deviation_pct(level, stated);
-            let level_ok = dev.is_some_and(|d| d.abs() <= STOP_PRICE_TOLERANCE * 100.0);
+            let level_ok = dev.is_some_and(|d| d.abs() <= exit.model.stop_price_pct);
             (Some(level_ok && on_time && line_ok), dev, points)
         }
         // No level on record — a book-watching stop whose stored reason cut it off (28 of 206
@@ -570,10 +575,11 @@ pub fn stated_stop_level(reason: &str) -> Option<f64> {
 
 /// How far a modelled entry may sit from the fact and still be the same order, per cent: the
 /// corridor's own width (`MShotPrice − MShotPriceMin` with the trade's modifiers, as they stood
-/// at the fill), floored at [`PRICE_TOLERANCE`] — see the module doc.
+/// at the fill), floored at the price tolerance (`ModelSettings::price_pct`) — see the module
+/// doc.
 pub fn entry_tolerance_pct(params: &MshotParams, deal: &Deal) -> f64 {
     let (near, far) = params.bounds_pct(&deal.deltas_at(deal.buy_ms));
-    (far - near).max(PRICE_TOLERANCE * 100.0)
+    (far - near).max(params.model.price_pct)
 }
 
 /// The replacements an archived line records: its first point and every point whose price
@@ -594,22 +600,28 @@ pub fn archived_replacements(points: &[(i64, f64)]) -> Vec<(i64, f64)> {
     out
 }
 
+/// Whether a modelled point is the archived move `(t, p)`: within the point tolerance in time
+/// and the price tolerance in price.
+fn same_move(m: &LinePoint, (t, p): (i64, f64), model: &ModelSettings) -> bool {
+    (m.t_ms - t).abs() <= model.point_time_ms
+        && deviation_pct(m.price, p).is_some_and(|d| d.abs() <= model.price_pct)
+}
+
 /// How many archived moves the modelled line re-placed at, within the tolerances.
-fn matched_points(modelled: &[LinePoint], archived: &[(i64, f64)]) -> usize {
+fn matched_points(modelled: &[LinePoint], archived: &[(i64, f64)], model: &ModelSettings) -> usize {
     let modelled: Vec<&LinePoint> = modelled.iter().collect();
-    matched_points_of(&modelled, archived)
+    matched_points_of(&modelled, archived, model)
 }
 
 /// [`matched_points`] over borrowed points.
-fn matched_points_of(modelled: &[&LinePoint], archived: &[(i64, f64)]) -> usize {
+fn matched_points_of(
+    modelled: &[&LinePoint],
+    archived: &[(i64, f64)],
+    model: &ModelSettings,
+) -> usize {
     archived
         .iter()
-        .filter(|&&(t, p)| {
-            modelled.iter().any(|m| {
-                (m.t_ms - t).abs() <= POINT_TIME_TOLERANCE_MS
-                    && deviation_pct(m.price, p).is_some_and(|d| d.abs() <= PRICE_TOLERANCE * 100.0)
-            })
-        })
+        .filter(|&&point| modelled.iter().any(|m| same_move(m, point, model)))
         .count()
 }
 

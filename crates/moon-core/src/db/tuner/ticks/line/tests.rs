@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::db::tuner::ticks::exit::{ExitModel, archived_pre_spike_ask};
-use crate::db::tuner::ticks::{Deltas, EntryParams, verify};
+use crate::db::tuner::ticks::{Deltas, EntryParams, ModelSettings, verify};
 use crate::feed::types::Side as TickSide;
 
 fn tick(t_ms: i64, price: f64) -> Tick {
@@ -61,7 +61,10 @@ fn fill() -> Fill {
 /// A 1 % take, no latency, and the rule under test.
 fn params() -> ExitParams {
     ExitParams {
-        latency_ms: 0.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
         ..ExitParams::default()
     }
 }
@@ -597,7 +600,10 @@ fn verify_judges_a_book_stop_by_its_level_and_moment() {
 #[test]
 fn the_take_is_on_the_book_only_after_the_latency() {
     let p = ExitParams {
-        latency_ms: 100.0,
+        model: ModelSettings {
+            latency_ms: 100.0,
+            ..ModelSettings::default()
+        },
         ..ExitParams::default()
     };
     let ticks = tape(&[(9, 101.5), (150, 101.2)]);
@@ -659,7 +665,10 @@ fn a_spike_through_the_old_level_fills_before_a_step_lands() {
     let p = ExitParams {
         price_down_timer_s: 1.0,
         price_down_pct: 50.0,
-        latency_ms: 100.0,
+        model: ModelSettings {
+            latency_ms: 100.0,
+            ..ModelSettings::default()
+        },
         ..params()
     };
     // The step is decided at t=1000 and reaches the book at t=1100; a print at 101 at t=1050
@@ -832,7 +841,10 @@ fn clock_params(take_pct: f64) -> ExitParams {
         price_down_pct: 50.0,
         price_down_delay_s: 1.0,
         price_down_allowed_drop_pct: 0.1,
-        latency_ms: 100.0,
+        model: ModelSettings {
+            latency_ms: 100.0,
+            ..ModelSettings::default()
+        },
         ..params()
     }
 }

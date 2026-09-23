@@ -18,14 +18,14 @@ use moon_core::db::tuner::VarStats;
 use moon_core::db::tuner::threshold_search::SearchHandle;
 use moon_core::db::tuner::ticks::params::ParamGroup;
 use moon_core::db::tuner::ticks::search::SearchResult;
-use moon_core::db::tuner::ticks::{Deal, EntryMethod, Verdict, fit_for_search};
+use moon_core::db::tuner::ticks::{Deal, Verdict, fit_for_search};
 use moon_core::feed::types::Tick;
 use moon_core::market::trade_replay::TickStatus;
 
-/// Share of hits a group needs before it may be searched: a model that cannot reproduce the
-/// fact must not be asked what would have been better. The spec's proposal (80 %), to be tuned
-/// by practice.
-pub(in crate::analytics::tuner) const SHARE_GATE: f64 = 0.8;
+/// Share of hits a group needs before it may be searched, per cent, when the search settings do
+/// not say: a model that cannot reproduce the fact must not be asked what would have been
+/// better. The spec's proposal, to be tuned by practice (`TicksState::gate_pct`).
+pub(in crate::analytics::tuner) const DEFAULT_GATE_PCT: u32 = 80;
 
 /// Ticks kept in memory across every covered row, for the variants and the search. Past it a
 /// row is still "covered" — the model ran on it — but its tape is let go and the row sits out
@@ -144,8 +144,9 @@ pub(in crate::analytics::tuner) struct TicksData {
     /// Trades the tuner cannot be run on — container or unresolved kinds, manual exits — in
     /// the Fact column, not in the table.
     pub(in crate::analytics::tuner) untunable: usize,
-    /// Column 0: the whole scope (the same SQL as every axis' "Fact", stamps or not); column
-    /// 1: the rows fit for the search ([`DealRow::fit`]) — the sample the variants replay.
+    /// One column: the rows fit for the search ([`DealRow::fit`]) — the sample the variants
+    /// replay, and the baseline they are compared with. The whole scope is not shown: the axis
+    /// works on the fit rows only (the developer's call, 2026-09-23).
     pub(in crate::analytics::tuner) kpi: Vec<VarStats>,
     /// `(hits, answered)` of the entry group over the covered rows.
     pub(in crate::analytics::tuner) entry_share: (usize, usize),
@@ -195,14 +196,23 @@ impl TicksData {
         self.rows.iter().filter(|r| r.fit() && r.ticks.is_some())
     }
 
-    /// The share gate per group: whether the model reproduces enough of the fact to be
-    /// searched over. `None` when nothing answered yet.
-    pub(in crate::analytics::tuner) fn group_passes(&self, group: ParamGroup) -> Option<bool> {
-        let (hits, n) = match group {
+    /// The share gate per group: whether the model reproduces at least `gate` (a fraction) of
+    /// the fact to be searched over. `None` when nothing answered yet.
+    pub(in crate::analytics::tuner) fn group_passes(
+        &self,
+        group: ParamGroup,
+        gate: f64,
+    ) -> Option<bool> {
+        let (hits, n) = self.share_of(group);
+        (n > 0).then(|| hits as f64 / n as f64 >= gate)
+    }
+
+    /// `(hits, answered)` of one group over the covered rows.
+    pub(in crate::analytics::tuner) fn share_of(&self, group: ParamGroup) -> (usize, usize) {
+        match group {
             ParamGroup::Entry => self.entry_share,
             ParamGroup::Exit => self.exit_share,
-        };
-        (n > 0).then(|| hits as f64 / n as f64 >= SHARE_GATE)
+        }
     }
 
     /// The one kind of the scope, when there is exactly one; the search needs one to know
@@ -231,6 +241,16 @@ impl TicksData {
             .filter(|k| !moon_core::db::tuner::ticks::entry_model_for(k))
             .collect()
     }
+}
+
+/// One of the fetch job's words on a row ([`TicksState::edit_rows`]).
+pub(in crate::analytics::tuner) enum RowEdit {
+    /// A walk went out for the row: a missing row reads "fetching".
+    MarkFetching,
+    /// The walk was stopped: a fetching row reads "missing" again.
+    UnmarkFetching,
+    /// The row's replay after the walk.
+    Replay(Box<DealRow>),
 }
 
 /// The search of the axis, as far as the row shows it.
@@ -270,18 +290,26 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) var_task: Option<gpui::Task<()>>,
     /// The grid's and the row's input boxes, created lazily and kept across repaints.
     pub(in crate::analytics::tuner) inputs: HashMap<String, Entity<MoonInputState>>,
-    /// Which groups the search may vary.
-    pub(in crate::analytics::tuner) vary_entry: bool,
-    pub(in crate::analytics::tuner) vary_exit: bool,
-    /// How a MoonShot variant's entry is replayed, by the search and by the variant columns alike.
-    /// No control sets it yet: the corridor model, as before the choice existed.
-    pub(in crate::analytics::tuner) entry_method: EntryMethod,
-    /// Fields held at their base value by the search.
+    /// Fields held at their base value by the search — the grid's unticked rows. Persisted.
     pub(in crate::analytics::tuner) locked: HashSet<String>,
-    /// The search settings, as typed.
+    /// The field "Search" on one field varies — the one whose name was clicked last.
+    pub(in crate::analytics::tuner) sel_field: Option<&'static str>,
+    /// The search settings, as typed; all but the minimum trades persist.
     pub(in crate::analytics::tuner) iters: String,
     pub(in crate::analytics::tuner) min_trades: String,
     pub(in crate::analytics::tuner) train_pct: usize,
+    /// Base seed of the restarts; empty draws one per search.
+    pub(in crate::analytics::tuner) seed: String,
+    /// The seed the last completed search ran with, to pin it.
+    pub(in crate::analytics::tuner) last_seed: Option<u64>,
+    /// Passes of coordinate descent per restart; empty = the search's default.
+    pub(in crate::analytics::tuner) passes: String,
+    /// The group gate, per cent of reproduced trades; empty = [`DEFAULT_GATE_PCT`].
+    pub(in crate::analytics::tuner) gate_pct: String,
+    /// Whether the search settings popover is open.
+    pub(in crate::analytics::tuner) sugg_cfg_open: bool,
+    /// Whether the model settings popover is open.
+    pub(in crate::analytics::tuner) model_cfg_open: bool,
     pub(in crate::analytics::tuner) sugg: SuggState,
     pub(in crate::analytics::tuner) sugg_seq: u64,
     /// What the last completed search found, for the holdout caption.
@@ -312,15 +340,20 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) order: Option<super::rows::OrderCache>,
     /// Bumped whenever `data` changes, so the cached order is rebuilt.
     pub(in crate::analytics::tuner) rows_rev: u64,
-    /// Whether the two parameter groups are unfolded.
-    pub(in crate::analytics::tuner) entry_open: bool,
-    pub(in crate::analytics::tuner) exit_open: bool,
     /// The task listening to the process-wide fetch job (`fetch::job`) for this view; `None`
     /// until a batch is started or found running. Dropped with the view, which ends it.
     pub(in crate::analytics::tuner) fetch_task: Option<gpui::Task<()>>,
     /// Whether that task is still in its loop — it ends with the batch, and the next batch
     /// attaches a fresh one.
     pub(in crate::analytics::tuner) fetch_listening: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The model settings every judged row of the table was judged under, when one set is known
+    /// — what lets a reload carry a row's verdict instead of replaying it (`load.rs`, stage B).
+    /// `None` until a tape stage has judged the table, and from a change of the settings until
+    /// the stage that re-judges it has folded.
+    /// Generation of the tape stage in flight; an older stage's answer is dropped (`load.rs`).
+    pub(in crate::analytics::tuner) tape_seq: u64,
+    pub(in crate::analytics::tuner) judged_under:
+        Option<moon_core::db::tuner::ticks::ModelSettings>,
     /// Whether the tape stage of a load is still reading the rows' tape off the worker: until
     /// it folds, every addressed row reads "missing" without meaning it.
     pub(in crate::analytics::tuner) tape_reading: bool,
@@ -336,13 +369,17 @@ impl Default for TicksState {
             var_seq: 0,
             var_task: None,
             inputs: HashMap::new(),
-            vary_entry: true,
-            vary_exit: true,
-            entry_method: EntryMethod::default(),
             locked: HashSet::new(),
+            sel_field: None,
             iters: String::new(),
             min_trades: String::new(),
             train_pct: super::super::filter::state::DEFAULT_TRAIN,
+            seed: String::new(),
+            last_seed: None,
+            passes: String::new(),
+            gate_pct: String::new(),
+            sugg_cfg_open: false,
+            model_cfg_open: false,
             sugg: SuggState::Idle,
             sugg_seq: 0,
             last_result: None,
@@ -354,16 +391,58 @@ impl Default for TicksState {
             only_fit: false,
             order: None,
             rows_rev: 0,
-            entry_open: true,
-            exit_open: true,
             fetch_task: None,
             fetch_listening: Default::default(),
             tape_reading: false,
+            judged_under: None,
+            tape_seq: 0,
         }
     }
 }
 
 impl TicksState {
+    /// The group gate as a fraction: the typed per cent, else [`DEFAULT_GATE_PCT`], within 0–100.
+    pub(in crate::analytics::tuner) fn gate(&self) -> f64 {
+        let pct = self
+            .gate_pct
+            .trim()
+            .parse::<u32>()
+            .unwrap_or(DEFAULT_GATE_PCT)
+            .min(100);
+        f64::from(pct) / 100.0
+    }
+
+    /// Take the persisted settings of the axis (`WindowLayout::analytics_ticks`).
+    pub(in crate::analytics) fn restore(&mut self, saved: &moon_core::config::TicksAxisLayout) {
+        self.iters = saved.iters.map(|n| n.to_string()).unwrap_or_default();
+        self.train_pct = saved
+            .train
+            .map(|n| n as usize)
+            .filter(|n| super::super::filter::state::TRAIN_OPTIONS.contains(n))
+            .unwrap_or(super::super::filter::state::DEFAULT_TRAIN);
+        self.seed = saved.seed.clone().unwrap_or_default();
+        self.passes = saved.passes.map(|n| n.to_string()).unwrap_or_default();
+        self.gate_pct = saved.gate_pct.map(|n| n.to_string()).unwrap_or_default();
+        self.locked = saved.locked.iter().cloned().collect();
+    }
+
+    /// The axis' settings as the layout persists them, the model's from their process-wide
+    /// store.
+    pub(in crate::analytics::tuner) fn saved(&self) -> moon_core::config::TicksAxisLayout {
+        let number = |text: &str| text.trim().parse::<u32>().ok();
+        let mut locked: Vec<String> = self.locked.iter().cloned().collect();
+        locked.sort();
+        moon_core::config::TicksAxisLayout {
+            iters: number(&self.iters),
+            train: Some(self.train_pct as u32),
+            seed: Some(self.seed.trim().to_string()).filter(|s| s.parse::<u64>().is_ok()),
+            passes: number(&self.passes),
+            gate_pct: number(&self.gate_pct),
+            locked,
+            model: super::model_cfg::current(),
+        }
+    }
+
     /// Report-derived numbers are stale; the next entry into the mode reloads them.
     pub(in crate::analytics) fn mark_report_stale(&mut self) {
         self.dirty = true;
@@ -442,29 +521,56 @@ impl TicksState {
         }
     }
 
-    /// Replace one row's replay result in place, after a fetch, keeping the rest.
+    /// Apply the fetch job's word on some rows, by id, in order — then ONE recount. A hop of the
+    /// job's listener brings every answer queued since the last one, and a recount per answer
+    /// is a pass over the whole table each: hundreds of answers served off the disk in a few
+    /// seconds made that a pass over the table hundreds of times. A row not in the table (the
+    /// scope moved on) is skipped.
     ///
     /// Args:
-    ///     report_uid: The row.
-    ///     update: What the fetch learned.
-    pub(in crate::analytics::tuner) fn update_row(
+    ///     edits: `(report_uid, what to do)`, in the order the job said it.
+    pub(in crate::analytics::tuner) fn edit_rows(
         &mut self,
-        report_uid: i64,
-        update: impl FnOnce(&mut DealRow),
+        edits: impl IntoIterator<Item = (i64, RowEdit)>,
     ) {
         let Some(data) = self.data.data_mut() else {
             return;
         };
-        let Some(row) = data
+        let index: HashMap<i64, usize> = data
             .rows
-            .iter_mut()
-            .find(|r| r.deal.report_uid == report_uid)
-        else {
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.deal.report_uid, i))
+            .collect();
+        let mut touched = false;
+        let mut replayed = false;
+        for (uid, edit) in edits {
+            let Some(row) = index.get(&uid).and_then(|&i| data.rows.get_mut(i)) else {
+                continue;
+            };
+            touched = true;
+            match edit {
+                RowEdit::MarkFetching if row.tape == TapeStatus::Missing => {
+                    row.tape = TapeStatus::Fetching;
+                }
+                RowEdit::UnmarkFetching if row.tape == TapeStatus::Fetching => {
+                    row.tape = TapeStatus::Missing;
+                }
+                RowEdit::MarkFetching | RowEdit::UnmarkFetching => {}
+                RowEdit::Replay(answer) => {
+                    row.take_replay(*answer);
+                    replayed = true;
+                }
+            }
+        }
+        if !touched {
             return;
-        };
-        update(row);
-        data.retain_within_cap();
-        data.refresh_summary();
+        }
+        // A mark moves neither the sample nor the shares; only an answer is worth the recount.
+        if replayed {
+            data.retain_within_cap();
+            data.refresh_summary();
+        }
         let kpi = data.kpi.clone();
         // In place as well, so the two load states stay in the same phase: a stale picture
         // edited during a reload stays stale in both, and a reload's outcome lands on both.
@@ -554,18 +660,14 @@ impl TicksData {
         }
     }
 
-    /// Recompute the fit-subset KPI (column 1) and the ✓ shares from the rows — after a fetch
-    /// changed one of them. Column 0, the whole scope, comes from the same SQL every axis'
-    /// "Fact" comes from and is left as loaded. The shares stay over every covered row: they are
-    /// how much of the tape the model reproduces, which is what the fit subset is cut from.
+    /// Recompute the fit-subset KPI and the ✓ shares from the rows — after a load or a fetch
+    /// changed them. The shares stay over every covered row: they are how much of the tape the
+    /// model reproduces, which is what the fit subset is cut from.
     pub(in crate::analytics::tuner) fn refresh_summary(&mut self) {
         let subset = moon_core::db::tuner::ticks::fact_stats(
             self.rows.iter().filter(|r| r.fit()).map(|r| &r.deal),
         );
-        match self.kpi.get_mut(1) {
-            Some(slot) => *slot = subset,
-            None => self.kpi.push(subset),
-        }
+        self.kpi = vec![subset];
         let verdicts = || self.rows.iter().filter_map(|r| r.verdict.as_ref());
         self.entry_share = moon_core::db::tuner::ticks::verify::share(verdicts().map(|v| v.entry));
         self.exit_share = moon_core::db::tuner::ticks::verify::share(verdicts().map(|v| v.exit));

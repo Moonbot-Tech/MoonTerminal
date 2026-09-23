@@ -2316,3 +2316,43 @@ fn a_hand_written_figure_alert_setting_cannot_discard_the_saved_layout() {
     assert_eq!(resolve_alert_repeat(Some(0)), 0);
     assert_eq!(resolve_alert_repeat(Some(9_999)), ALERT_REPEAT_MAX);
 }
+
+/// The Entry/Exit axis' settings survive their own round trip, a config without them opens on
+/// the defaults, and a block written wrong costs only itself.
+#[test]
+fn the_ticks_axis_settings_round_trip_and_never_cost_the_layout() {
+    let saved = WindowLayout {
+        analytics_ticks: Some(TicksAxisLayout {
+            iters: Some(40),
+            locked: vec!["SellPrice".to_string()],
+            model: crate::db::tuner::ticks::ModelSettings {
+                latency_ms: 250.0,
+                entry_method: crate::db::tuner::ticks::EntryMethod::Shift,
+                ..Default::default()
+            },
+            ..TicksAxisLayout::default()
+        }),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&saved).expect("the layout must serialize");
+    let decoded: WindowLayout = toml::from_str(&encoded).expect("its own output must load back");
+    assert_eq!(decoded.analytics_ticks, saved.analytics_ticks);
+
+    let old: WindowLayout = toml::from_str("analytics_period = \"p-cur-month\"\n").unwrap();
+    assert_eq!(old.analytics_ticks, None);
+
+    let partial: WindowLayout =
+        toml::from_str("[analytics_ticks.model]\nlatency_ms = 150.0\n").expect("a partial block");
+    let model = partial.analytics_ticks.expect("the block").model;
+    assert_eq!(model.latency_ms, 150.0);
+    assert_eq!(
+        model.ticker_period_ms,
+        crate::db::tuner::ticks::line::TICKER_PERIOD_MS
+    );
+
+    let broken: WindowLayout =
+        toml::from_str("analytics_period = \"p-cur-month\"\n[analytics_ticks]\niters = \"many\"\n")
+            .expect("a malformed block must not reject the document");
+    assert_eq!(broken.analytics_period.as_deref(), Some("p-cur-month"));
+    assert_eq!(broken.analytics_ticks, None);
+}

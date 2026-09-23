@@ -624,6 +624,29 @@ pub struct TableSortPreference {
     pub ascending: bool,
 }
 
+/// The "Entry/Exit" tuner's persisted settings ([`WindowLayout::analytics_ticks`]). Every field
+/// has a default, so a block missing any of them reads the rest.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TicksAxisLayout {
+    /// Restart count of the search; `None` = the axis default.
+    pub iters: Option<u32>,
+    /// Percentage of the period the search may fit on; `None` = the whole period.
+    pub train: Option<u32>,
+    /// Base seed of the restarts, as text (see [`WindowLayout::analytics_tuner_seed`]); `None`
+    /// draws one per search.
+    pub seed: Option<String>,
+    /// Passes of coordinate descent per restart; `None` = the search's default.
+    pub passes: Option<u32>,
+    /// The share of reproduced trades, per cent, a parameter group needs before it may be
+    /// searched; `None` = the axis default.
+    pub gate_pct: Option<u32>,
+    /// Strategy fields the search holds at their base value — the unticked grid rows.
+    pub locked: Vec<String>,
+    /// The model's own settings.
+    pub model: crate::db::tuner::ticks::ModelSettings,
+}
+
 /// Complete window layout.
 ///
 /// Every field is `Option` or carries `#[serde(default)]` on purpose, and prefers a type wider
@@ -1115,6 +1138,12 @@ pub struct WindowLayout {
     /// file.
     #[serde(default, deserialize_with = "de_lenient_bool")]
     pub analytics_tuner_compose: bool,
+    /// The "Entry/Exit" tuner's settings: its search's and its model's. `None` — every config
+    /// written before the axis had settings — opens on the defaults. Read leniently: the block
+    /// is hand-editable, and a malformed one must cost only itself, never the window positions
+    /// around it.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub analytics_ticks: Option<TicksAxisLayout>,
     /// Visible screener columns (keys in canonical order). None = all.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,

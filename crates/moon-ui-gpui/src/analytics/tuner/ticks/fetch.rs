@@ -16,7 +16,7 @@ use std::time::Duration;
 use gpui::*;
 
 use super::super::super::AnalyticsView;
-use super::state::{RowAddress, TapeStatus};
+use super::state::{RowAddress, RowEdit, TapeStatus};
 use crate::Backend;
 use moon_core::db::tuner::ticks::{Deal, model_window};
 use moon_core::market::MarketDataSource;
@@ -228,13 +228,12 @@ impl AnalyticsView {
         let in_flight = job::progress().in_flight;
         job::stop();
         autoload::cancel();
-        for uid in in_flight.into_iter().flat_map(|(uids, _)| uids) {
-            self.ticks.update_row(uid, |row| {
-                if row.tape == TapeStatus::Fetching {
-                    row.tape = TapeStatus::Missing;
-                }
-            });
-        }
+        self.ticks.edit_rows(
+            in_flight
+                .into_iter()
+                .flat_map(|(uids, _)| uids)
+                .map(|uid| (uid, RowEdit::UnmarkFetching)),
+        );
         cx.notify();
     }
 
@@ -282,9 +281,7 @@ impl AnalyticsView {
                 // hear.
                 let applied = cx.update(|cx| {
                     this.update(cx, |this, cx| {
-                        for event in events {
-                            this.apply_fetch_event(event, cx);
-                        }
+                        this.apply_fetch_events(events, cx);
                         cx.notify();
                     })
                 });
@@ -302,42 +299,38 @@ impl AnalyticsView {
         }));
     }
 
-    /// Fold one job event into the table.
-    fn apply_fetch_event(&mut self, event: job::JobEvent, cx: &mut Context<Self>) {
-        match event {
-            // A start still queued when the batch was stopped marks nothing: no answer would
-            // follow to unmark it.
-            job::JobEvent::Started(uid) if job::progress().active => {
-                self.ticks.update_row(uid, |row| {
-                    if row.tape == TapeStatus::Missing {
-                        row.tape = TapeStatus::Fetching;
-                    }
-                });
-            }
-            job::JobEvent::Started(_) => {}
-            job::JobEvent::Row(answer) => {
-                let uid = answer.deal.report_uid;
-                self.ticks.update_row(uid, |slot| slot.take_replay(*answer));
-                // A row joined the replayable set: the variant columns are due a rescore.
-                self.arm_ticks_variants(cx);
-            }
-            job::JobEvent::Progress => {}
+    /// Fold one hop of job events into the table, in order, with one recount for the lot.
+    fn apply_fetch_events(&mut self, events: Vec<job::JobEvent>, cx: &mut Context<Self>) {
+        // A start still queued when the batch was stopped marks nothing: no answer would follow
+        // to unmark it.
+        let active = job::progress().active;
+        let mut answered = false;
+        let edits: Vec<(i64, RowEdit)> = events
+            .into_iter()
+            .filter_map(|event| match event {
+                job::JobEvent::Started(uid) if active => Some((uid, RowEdit::MarkFetching)),
+                job::JobEvent::Row(answer) => {
+                    answered = true;
+                    Some((answer.deal.report_uid, RowEdit::Replay(answer)))
+                }
+                job::JobEvent::Started(_) | job::JobEvent::Progress => None,
+            })
+            .collect();
+        self.ticks.edit_rows(edits);
+        // Rows joined the replayable set: the variant columns are due a rescore — once.
+        if answered {
+            self.arm_ticks_variants(cx);
         }
-        cx.notify();
     }
 
     /// Mark the rows the job is out for, after the table was rebuilt.
     pub(in crate::analytics::tuner) fn mark_fetch_in_flight(&mut self) {
-        for uid in job::progress()
-            .in_flight
-            .into_iter()
-            .flat_map(|(uids, _)| uids)
-        {
-            self.ticks.update_row(uid, |row| {
-                if row.tape == TapeStatus::Missing {
-                    row.tape = TapeStatus::Fetching;
-                }
-            });
-        }
+        self.ticks.edit_rows(
+            job::progress()
+                .in_flight
+                .into_iter()
+                .flat_map(|(uids, _)| uids)
+                .map(|uid| (uid, RowEdit::MarkFetching)),
+        );
     }
 }
