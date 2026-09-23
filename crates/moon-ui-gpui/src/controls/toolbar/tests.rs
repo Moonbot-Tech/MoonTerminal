@@ -171,8 +171,22 @@ fn launcher_fold_keeps_every_launcher_reachable_at_the_minimum_window() {
         .count();
     assert_eq!(drawn + fold.folded, LAUNCHER_FOLD_ORDER.len());
 
-    // Even when nothing but the overflow button could fit, every launcher sits in its menu.
-    let starved = launcher_fold(10.0, widths);
+    assert!(!fold.pinned, "a row that fits keeps the button in the flow");
+
+    // The real 520 px case: the trading controls alone are wider than the window. Every launcher
+    // sits in the menu, and the overflow button pins itself to the right edge because the end of
+    // the flow is off-screen.
+    let starved = launcher_fold(
+        min_w,
+        LauncherFoldWidths {
+            icon_only: 700.0 + 5.0 * 30.0,
+            ..widths
+        },
+    );
     assert_eq!(starved.folded, LAUNCHER_FOLD_ORDER.len());
     assert!(LAUNCHER_FOLD_ORDER.iter().all(|&l| !starved.shows(l)));
+    assert!(
+        starved.pinned,
+        "an overflow button past the window edge must pin itself inside the row"
+    );
 }

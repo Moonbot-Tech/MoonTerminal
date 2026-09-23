@@ -296,6 +296,10 @@ struct LauncherFold {
     folded: usize,
     /// Budgeted row width after the fold, overflow button included when `folded > 0`.
     width: f32,
+    /// Even the fully folded row is wider than the window: the trading controls alone outgrow it.
+    /// The overflow button then pins itself to the row's right edge, over the clipped tail of
+    /// the trading controls, because at the end of the flow it would sit past the window's edge.
+    pinned: bool,
 }
 
 impl LauncherFold {
@@ -314,20 +318,22 @@ impl LauncherFold {
 /// `available`, launchers fold one by one in [`LAUNCHER_FOLD_ORDER`] until the row, now carrying
 /// the always-visible overflow button, fits. Nothing folds while the icon-only row fits, so the
 /// overflow button exists only when something is in it. If every launcher is folded and the row
-/// still does not fit, the fold stops there: the rest of the row is trading controls, which never
-/// leave it.
+/// still does not fit, the fold stops there — the rest of the row is trading controls, which never
+/// leave it — and the overflow button is `pinned` to the row's right edge instead.
 ///
 /// Args:
 ///     available: Toolbar width available to the complete row.
 ///     widths: Icon-only row width and per-button launcher and overflow costs.
 ///
 /// Returns:
-///     The folded launcher count and the resulting budgeted row width.
+///     The folded launcher count, the resulting budgeted row width and whether the overflow
+///     button must pin itself to the right edge.
 fn launcher_fold(available: f32, widths: LauncherFoldWidths) -> LauncherFold {
     if available >= widths.icon_only {
         return LauncherFold {
             folded: 0,
             width: widths.icon_only,
+            pinned: false,
         };
     }
     let width_at =
@@ -335,9 +341,11 @@ fn launcher_fold(available: f32, widths: LauncherFoldWidths) -> LauncherFold {
     let folded = (1..=LAUNCHER_FOLD_ORDER.len())
         .find(|&folded| available >= width_at(folded))
         .unwrap_or(LAUNCHER_FOLD_ORDER.len());
+    let width = width_at(folded);
     LauncherFold {
         folded,
-        width: width_at(folded),
+        width,
+        pinned: available < width,
     }
 }
 
@@ -1029,6 +1037,8 @@ pub fn toolbar(
 
     let mut row = h_flex()
         .id("toolbar")
+        // Anchors the overflow section when it pins itself to the right edge (`LauncherFold`).
+        .relative()
         .w_full()
         .h(px(design::toolbar_height(cx)))
         .flex_none()
@@ -1350,6 +1360,20 @@ pub fn toolbar(
         .child(design::chrome_divider(cx, p))
         .child(
             section()
+                // The trading controls alone outgrow the window, so the end of the flow is past
+                // its edge: the section (by then the overflow button alone) is laid over the
+                // row's right edge instead, on the row's own background with a rule before it.
+                .when(folds.pinned, |section| {
+                    section
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right(design::ui_px(cx, design::HEADER_PAD_X))
+                        .pl(design::ui_px(cx, design::CHROME_GAP))
+                        .bg(rgb(p.shell_high))
+                        .border_l_1()
+                        .border_color(rgb(p.border))
+                })
                 .children(button(Launcher::Settings).map(|settings| {
                     div()
                         .relative()
