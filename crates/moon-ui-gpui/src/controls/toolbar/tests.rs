@@ -1,8 +1,9 @@
 //! Adaptive-fit and manual-strategy target regressions for the trading toolbar.
 
 use super::{
-    ICON_BTN_W, LabelLadder, LabelWidths, TOOLBAR_LAUNCHER_BORDER_W, TOOLBAR_LAUNCHER_PAD_X,
-    label_ladder, launcher_label_width, manual_strategy_core,
+    ICON_BTN_W, LAUNCHER_FOLD_ORDER, LabelLadder, LabelWidths, Launcher, LauncherFoldWidths,
+    TOOLBAR_LAUNCHER_BORDER_W, TOOLBAR_LAUNCHER_PAD_X, label_ladder, launcher_fold,
+    launcher_label_width, manual_strategy_core,
 };
 use moon_core::config::UiThemeMode;
 use moon_ui::MoonButtonSize;
@@ -91,5 +92,101 @@ fn launcher_label_width_matches_the_drawn_tier_geometry(cx: &mut gpui::TestAppCo
     assert_eq!(
         actual, expected,
         "launcher budget must equal drawn geometry"
+    );
+}
+
+/// Budget shared by the fold tests: a 400 px icon-only row, 30 px per launcher, 30 px overflow.
+const FOLD_WIDTHS: LauncherFoldWidths = LauncherFoldWidths {
+    icon_only: 400.0,
+    launcher: 30.0,
+    overflow: 30.0,
+};
+
+/// Regression target: `controls/toolbar.rs:launcher_fold` folding while the icon-only row still
+/// fits would hide a launcher behind a menu for no reason, and draw an overflow button that
+/// competes with the label ladder the row is still shedding.
+#[test]
+fn launcher_fold_is_empty_while_the_icon_only_row_fits() {
+    // Everything fits, labels and all.
+    let wide = launcher_fold(1000.0, FOLD_WIDTHS);
+    assert_eq!(wide.folded, 0);
+    // Labels shed, icons still fit exactly.
+    let exact = launcher_fold(400.0, FOLD_WIDTHS);
+    assert_eq!(
+        exact.folded, 0,
+        "no overflow button at the exact icon-only fit"
+    );
+    assert_eq!(exact.width, 400.0);
+    assert!(LAUNCHER_FOLD_ORDER.iter().all(|&l| exact.shows(l)));
+}
+
+/// Regression target: a fold order other than the right-to-left clip order would pull a
+/// launcher out of the middle of the cluster; Settings, Analytics, Strategies must go first.
+#[test]
+fn launcher_fold_takes_settings_then_analytics_then_strategies() {
+    // One pixel short: folding Settings frees 30 and the overflow costs 30 — still short, so a
+    // second launcher (Analytics) goes too.
+    let one_short = launcher_fold(399.0, FOLD_WIDTHS);
+    assert_eq!(one_short.folded, 2);
+    assert!(!one_short.shows(Launcher::Settings));
+    assert!(!one_short.shows(Launcher::Analytics));
+    assert!(one_short.shows(Launcher::Strategies));
+
+    let three = launcher_fold(340.0, FOLD_WIDTHS);
+    assert_eq!(three.folded, 3);
+    assert!(!three.shows(Launcher::Strategies));
+    assert!(three.shows(Launcher::Screener));
+    assert!(three.shows(Launcher::ProfitMonitor));
+    assert_eq!(
+        &LAUNCHER_FOLD_ORDER[..3],
+        &[
+            Launcher::Settings,
+            Launcher::Analytics,
+            Launcher::Strategies
+        ]
+    );
+}
+
+/// Regression target: at the group window's 520 px minimum every launcher must stay reachable —
+/// drawn or in the menu — and the overflow button's right edge must stay inside the row.
+#[test]
+fn launcher_fold_keeps_every_launcher_reachable_at_the_minimum_window() {
+    let min_w = 520.0;
+    // A row whose trading controls alone take 400 px plus five 30 px launchers.
+    let widths = LauncherFoldWidths {
+        icon_only: 400.0 + 5.0 * 30.0,
+        launcher: 30.0,
+        overflow: 30.0,
+    };
+    let fold = launcher_fold(min_w, widths);
+    assert!(fold.folded > 0, "the 550 px row must fold at 520 px");
+    assert!(
+        fold.width <= min_w,
+        "overflow button right edge {} is past the row's {min_w}",
+        fold.width
+    );
+    let drawn = LAUNCHER_FOLD_ORDER
+        .iter()
+        .filter(|&&l| fold.shows(l))
+        .count();
+    assert_eq!(drawn + fold.folded, LAUNCHER_FOLD_ORDER.len());
+
+    assert!(!fold.pinned, "a row that fits keeps the button in the flow");
+
+    // The real 520 px case: the trading controls alone are wider than the window. Every launcher
+    // sits in the menu, and the overflow button pins itself to the right edge because the end of
+    // the flow is off-screen.
+    let starved = launcher_fold(
+        min_w,
+        LauncherFoldWidths {
+            icon_only: 700.0 + 5.0 * 30.0,
+            ..widths
+        },
+    );
+    assert_eq!(starved.folded, LAUNCHER_FOLD_ORDER.len());
+    assert!(LAUNCHER_FOLD_ORDER.iter().all(|&l| !starved.shows(l)));
+    assert!(
+        starved.pinned,
+        "an overflow button past the window edge must pin itself inside the row"
     );
 }

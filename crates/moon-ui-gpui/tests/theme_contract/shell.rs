@@ -1180,10 +1180,11 @@ fn toolbar_budget_includes_every_singleton_launcher() {
     let text = read_src("controls/toolbar.rs");
     let budget = fn_body(&text, "fn row_fit(");
     let toolbar = fn_body(&text, "pub fn toolbar(");
-    let drawn = toolbar.matches("open_window_button(").count();
+    // Each launcher is described once, as a `LaunchTarget`, and drawn or folded from there.
+    let drawn = toolbar.matches("=> LaunchTarget {").count();
     assert_eq!(
         drawn, 5,
-        "row_fit must budget every open_window_button rendered by toolbar"
+        "row_fit must budget every launcher rendered by toolbar"
     );
     assert!(
         budget.contains("design::glyph_btn_w(cx) * 5.0"),
@@ -1216,6 +1217,24 @@ fn toolbar_orders_launchers_around_one_semantic_divider() {
     assert!(
         positions.windows(2).all(|pair| pair[0] < pair[1]),
         "launcher order must be Profit Monitor, Screener, Strategies, Analytics, Settings"
+    );
+    // The row draws each launcher through `button(Launcher::..)`; the sections and dividers are
+    // checked against those draw sites.
+    let drawn = [
+        "ProfitMonitor",
+        "Screener",
+        "Strategies",
+        "Analytics",
+        "Settings",
+    ];
+    let positions = drawn.map(|name| {
+        toolbar
+            .find(&format!("button(Launcher::{name})"))
+            .unwrap_or_else(|| panic!("{name} launcher must be drawn"))
+    });
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "launcher draw order must be Profit Monitor, Screener, Strategies, Analytics, Settings"
     );
     let between_first_and_last = &toolbar[positions[0]..positions[4]];
     assert!(
@@ -1263,8 +1282,8 @@ fn toolbar_launcher_labels_are_measured_and_all_or_none() {
     );
     let labeled_launchers = chain_between(
         toolbar,
-        "toolbar-screener",
-        "settings_hint_at",
+        "shows_any(&[Launcher::Strategies",
+        "overflow_button(folded",
         "labeled launcher containers",
     );
     assert_eq!(
