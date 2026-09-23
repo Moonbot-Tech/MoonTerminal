@@ -5,8 +5,13 @@
 //!
 //! - the order stands `MShotPrice` % away from the reference price; the price may approach it
 //!   down to `MShotPriceMin` % — closer than that, the order is re-placed at `MShotPrice` again
-//!   after `MShotReplaceDelay` seconds; when the price runs away so the order is farther than
-//!   `MShotPrice`, it is re-placed after `MShotRaiseWait` seconds;
+//!   after `MShotReplaceDelay` seconds; when the price runs away, it is re-placed after
+//!   `MShotRaiseWait` seconds. How far it may run is not what the FAQ's wording suggests: the
+//!   corridor the core saves with the report (`BuyCorridorDown` / `BuyCorridorUp`) is a band of
+//!   ORDER prices symmetric around the placement, from `MShotPriceMin` to `2 · MShotPrice −
+//!   MShotPriceMin` off the reference, modifiers included — to 0.05 % on 155 of 287 MoonShot
+//!   trades (2026-09-23), the rest wider by what the live deltas moved. So the order is re-placed
+//!   only past `2 · far − near`, not past `far`;
 //! - every `MShotAdd*Delta` adds `k · delta` to BOTH bounds, the delta's sign as the report
 //!   carries it: the FAQ's `-10% + (-20 · 0.05) = -11%` is a coin UP 20 % on 3 h putting the
 //!   order 1 % deeper (checked on the live tape on 2026-09-20: a long on ROSE, up 7 % / 11 % on
@@ -43,9 +48,19 @@
 //! ARX the same day: the core re-placed 0.3 s into the tape after a wait of 30 s, and the model
 //! waiting its own 30 s put the order one step too deep for the spike. Past the window the
 //! model is on its own, and the archive is what it is held against.
+//!
+//! What the report adds since 2026-09-21: the moment the core CREATED the order
+//! (`Deal::order_open_ms`), and with it the whole of the order's life — where the record proves
+//! the placement (`Deal::entry_placed`, see `record::entry_placement`: the archived line's first
+//! point, or the buy price for an order the archive shows never moved). When the tape reaches
+//! back to the creation the model replays that whole life: the order is placed at the creation
+//! where the core placed it, and from then on the corridor is the model's own, with no blind
+//! window and no archived move taken as given. A VARIANT is placed off the same reference by its
+//! own bounds ([`MshotEntry::placement_at_creation`]) instead of inheriting the fact's level,
+//! which is what a search over `MShotPrice` asks about.
 
 use super::verify::archived_replacements;
-use super::{Deal, Deltas, Fill, reaches, snap_to_step};
+use super::{Deal, Deltas, EntryParams, Fill, reaches, snap_to_step};
 use crate::feed::types::{Side, Tick};
 
 /// Which price the order keeps its distance from (`MShotUsePrice`).
@@ -225,6 +240,48 @@ impl<'a> MshotEntry<'a> {
         level
     }
 
+    /// The level the order stood at when the core created it, under these parameters.
+    ///
+    /// The fact's own level is the record's ([`Deal::entry_placed`]). A VARIANT's is the level
+    /// its own far bound places off the same reference: the fact's level stands the fact's far
+    /// bound off it, so the reference is read back from the level and this variant's bound
+    /// applied instead, through the same placement rule ([`Self::place`]).
+    ///
+    /// Whose parameters are the fact's is [`Deal::own_entry`]. A variant is always replayed on a
+    /// prepared deal (`record::prepare_deal` fills it), and the one caller without it — the
+    /// verdict — replays the trade's own parameters, so a deal without it is placed at the
+    /// fact's level as it stands.
+    ///
+    /// Args:
+    ///     deal: The report row, with its model inputs.
+    ///     far_pct: These parameters' far bound for the deal.
+    ///
+    /// Returns:
+    ///     The level, or `None` when the record proves no placement or no reference can be read
+    ///     back from it.
+    fn placement_at_creation(&self, deal: &Deal, far_pct: f64) -> Option<f64> {
+        let fact_level = deal.entry_placed.filter(|l| l.is_finite() && *l > 0.0)?;
+        let Some(EntryParams::MoonShot(own)) = deal.own_entry.as_ref() else {
+            return Some(fact_level);
+        };
+        let (_, fact_far_pct) = own.bounds_pct(&deal.deltas);
+        if fact_far_pct == far_pct {
+            return Some(fact_level);
+        }
+        // The fact's level is its placement snapped AWAY from the reference (`place`): the level
+        // before the snap lay within one step of it toward the price, half a step on average, and
+        // the reference is read back from there — off the snapped level itself it would sit a
+        // half step too far and every variant with it. (`MShotMinusSatoshi` binds only on a
+        // corridor narrower than two steps and is not undone.)
+        let half_step = deal.tick.filter(|t| *t > 0.0).map_or(0.0, |t| t / 2.0);
+        let reference = if deal.is_long() {
+            (fact_level + half_step) / (1.0 - fact_far_pct / 100.0)
+        } else {
+            (fact_level - half_step) / (1.0 + fact_far_pct / 100.0)
+        };
+        (reference.is_finite() && reference > 0.0).then(|| self.place(reference, far_pct, deal))
+    }
+
     /// Distance from the reference to the level, per cent, positive when the level is on the
     /// order's own side of the price (below for a long) and negative when the price has
     /// crossed it.
@@ -258,6 +315,10 @@ impl<'a> MshotEntry<'a> {
             return None;
         }
         let (near_pct, far_pct) = self.params.bounds_pct(&deal.deltas);
+        // The corridor's far edge: a run-away re-places the order only past it (module doc).
+        // Where the bounds meet after the modifiers (`bounds_pct` lifts far to near) the band has
+        // no width: every move off the placement re-places, as before.
+        let retreat_pct = 2.0 * far_pct - near_pct;
         let raise_wait_ms = (self.params.raise_wait_s * 1000.0).max(0.0);
         let replace_delay_ms = (self.params.replace_delay_s * 1000.0).max(0.0);
         let latency_ms = self.params.latency_ms.max(0.0);
@@ -268,65 +329,83 @@ impl<'a> MshotEntry<'a> {
             deal.is_long(),
         );
 
-        // The archive's moves, and where the order stood when the tape begins: the last
-        // archived level at or before the first print, else the archive's first point (an
-        // order placed inside the tape starts at its own moment), else nothing.
         let first_print_ms = ticks[0].time_ms as i64;
-        let moves: Vec<(i64, f64)> = line
-            .filter(|l| !l.is_empty())
-            .map(archived_replacements)
-            .unwrap_or_default();
-        let start: Option<(i64, f64)> = moves
-            .iter()
-            .filter(|(t, _)| *t <= first_print_ms)
-            .max_by_key(|(t, _)| *t)
-            .or(moves.first())
-            .copied();
-        // The blind window: the core's moves archived inside it are applied as archived,
-        // because the wait behind each began before the tape did. Only moves after the start
-        // and before the fill count.
-        let blind_until_ms = first_print_ms + raise_wait_ms.max(replace_delay_ms) as i64;
-        let mut hints: Vec<(i64, f64)> = moves
-            .iter()
-            .filter(|(t, p)| {
-                start.is_none_or(|(s, _)| *t > s)
-                    && *t > first_print_ms
-                    && *t < blind_until_ms
-                    && *t < deal.buy_ms
-                    && *p > 0.0
-            })
-            .copied()
-            .collect();
-        // The archive files a move as the old level's end and the new one's start, a few
-        // milliseconds apart and not always in that order; the hints are walked in time.
-        hints.sort_by_key(|(t, _)| *t);
-        let mut hints = hints.into_iter().peekable();
-
-        // Where the tape starts for the order: at the archived start, or at the first print.
-        // Prints before the start only feed the reference.
-        let start_ms = start.map(|(t, _)| t);
         let mut index = 0;
-        if let Some(start_ms) = start_ms {
-            while index < ticks.len() && (ticks[index].time_ms as i64) < start_ms {
-                reference.observe(&ticks[index]);
-                index += 1;
+        let mut hints: Vec<(i64, f64)> = Vec::new();
+        // The whole life of the order, when the tape reaches back to its creation.
+        let created = deal
+            .order_open_ms()
+            .filter(|&created_ms| first_print_ms <= created_ms)
+            .and_then(|created_ms| Some((created_ms, self.placement_at_creation(deal, far_pct)?)));
+        // The exchange's level (what fills; `None` until the order reaches the book) and the
+        // core's (what the corridor is measured against); `pending` is a move the core made that
+        // the exchange has not seen yet.
+        let (mut exch_level, mut core_level, mut pending) = match created {
+            Some((created_ms, level)) => {
+                // Prints before the creation only feed the reference, and the placement reaches
+                // the book a latency after it, like any move.
+                while index < ticks.len() && (ticks[index].time_ms as i64) < created_ms {
+                    reference.observe(&ticks[index]);
+                    index += 1;
+                }
+                (None, level, Some((created_ms + latency_ms as i64, level)))
             }
-        }
-        // The exchange's level (what fills) and the core's (what the corridor is measured
-        // against); `pending` is a move the core made that the exchange has not seen yet.
-        let (mut exch_level, mut core_level) = match start {
-            Some((_, price)) if price > 0.0 => (price, price),
-            _ => {
-                // No archive: the order is placed off the first print, which then cannot fill
-                // it (it is the reference itself).
-                let first = ticks.get(index)?;
-                reference.observe(first);
-                index += 1;
-                let level = self.place(reference.price()?, far_pct, deal);
-                (level, level)
+            None => {
+                // The archive's moves, and where the order stood when the tape begins: the last
+                // archived level at or before the first print, else the archive's first point
+                // (an order placed inside the tape starts at its own moment), else nothing.
+                let moves: Vec<(i64, f64)> = line
+                    .filter(|l| !l.is_empty())
+                    .map(archived_replacements)
+                    .unwrap_or_default();
+                let start: Option<(i64, f64)> = moves
+                    .iter()
+                    .filter(|(t, _)| *t <= first_print_ms)
+                    .max_by_key(|(t, _)| *t)
+                    .or(moves.first())
+                    .copied();
+                // The blind window: the core's moves archived inside it are applied as
+                // archived, because the wait behind each began before the tape did. Only moves
+                // after the start and before the fill count.
+                let blind_until_ms = first_print_ms + raise_wait_ms.max(replace_delay_ms) as i64;
+                hints = moves
+                    .iter()
+                    .filter(|(t, p)| {
+                        start.is_none_or(|(s, _)| *t > s)
+                            && *t > first_print_ms
+                            && *t < blind_until_ms
+                            && *t < deal.buy_ms
+                            && *p > 0.0
+                    })
+                    .copied()
+                    .collect();
+                // The archive files a move as the old level's end and the new one's start, a
+                // few milliseconds apart and not always in that order; the hints are walked in
+                // time.
+                hints.sort_by_key(|(t, _)| *t);
+                // Where the tape starts for the order: at the archived start, or at the first
+                // print. Prints before the start only feed the reference.
+                if let Some((start_ms, _)) = start {
+                    while index < ticks.len() && (ticks[index].time_ms as i64) < start_ms {
+                        reference.observe(&ticks[index]);
+                        index += 1;
+                    }
+                }
+                let level = match start {
+                    Some((_, price)) if price > 0.0 => price,
+                    _ => {
+                        // No archive: the order is placed off the first print, which then
+                        // cannot fill it (it is the reference itself).
+                        let first = ticks.get(index)?;
+                        reference.observe(first);
+                        index += 1;
+                        self.place(reference.price()?, far_pct, deal)
+                    }
+                };
+                (Some(level), level, None)
             }
         };
-        let mut pending: Option<(i64, f64)> = None;
+        let mut hints = hints.into_iter().peekable();
         let mut breach: Option<(Breach, i64)> = None;
 
         for tick in &ticks[index..] {
@@ -343,14 +422,11 @@ impl<'a> MshotEntry<'a> {
                 breach = None;
             }
             if let Some((_, level)) = pending.filter(|(apply_at, _)| t_ms >= *apply_at) {
-                exch_level = level;
+                exch_level = Some(level);
                 pending = None;
             }
-            if reaches(price, exch_level, deal.is_long()) {
-                return Some(Fill {
-                    t_ms,
-                    price: exch_level,
-                });
+            if let Some(level) = exch_level.filter(|&level| reaches(price, level, deal.is_long())) {
+                return Some(Fill { t_ms, price: level });
             }
             reference.observe(tick);
             let Some(reference) = reference.price() else {
@@ -359,7 +435,7 @@ impl<'a> MshotEntry<'a> {
             let distance = Self::distance_pct(reference, core_level, deal);
             let now = if distance < near_pct {
                 Some(Breach::Approach)
-            } else if distance > far_pct {
+            } else if distance > retreat_pct {
                 Some(Breach::Retreat)
             } else {
                 None

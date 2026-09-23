@@ -424,18 +424,19 @@ pub(super) fn pick_dispatchable<'a>(
         .or_else(|| rows.iter().rposition(free))
 }
 
-/// What the cluster rule reads of a row: its market on its exchange, and its window.
+/// What the cluster rule reads of a row: its market on its exchange, and its window — opened
+/// where the row's own window opens (`model_window`: the entry order's creation, else the buy).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ClusterKey<'a> {
     pub(super) exchange_key: &'a str,
     pub(super) market: &'a str,
-    pub(super) buy_ms: i64,
+    pub(super) open_ms: i64,
     pub(super) close_ms: i64,
     pub(super) margin_ms: i64,
 }
 
 /// The rows that go out with the seed in one request: every pending row of the seed's market
-/// whose margined window overlaps the cluster's hull, taken while the hull's first entry and
+/// whose margined window overlaps the cluster's hull, taken while the hull's first open and
 /// last exit stay within `long_position_ms` — the seed's own threshold, captured when its window
 /// was built (`ReplayWindow::long_position_ms`), past which the worker walks a stretch as its
 /// two ends. Grows until nothing more joins — a row that joins can bridge to the next one.
@@ -454,7 +455,7 @@ pub(super) fn pick_cluster(
 ) -> Vec<usize> {
     let anchor = rows[seed];
     let mut taken = vec![seed];
-    let (mut first_buy, mut last_close) = (anchor.buy_ms, anchor.close_ms);
+    let (mut first_open, mut last_close) = (anchor.open_ms, anchor.close_ms);
     loop {
         let mut grew = false;
         for (index, row) in rows.iter().enumerate() {
@@ -464,15 +465,15 @@ pub(super) fn pick_cluster(
             {
                 continue;
             }
-            let overlaps = row.buy_ms.saturating_sub(row.margin_ms)
+            let overlaps = row.open_ms.saturating_sub(row.margin_ms)
                 <= last_close.saturating_add(anchor.margin_ms)
                 && row.close_ms.saturating_add(row.margin_ms)
-                    >= first_buy.saturating_sub(anchor.margin_ms);
-            let hull_from = first_buy.min(row.buy_ms);
+                    >= first_open.saturating_sub(anchor.margin_ms);
+            let hull_from = first_open.min(row.open_ms);
             let hull_to = last_close.max(row.close_ms);
             if overlaps && hull_to.saturating_sub(hull_from) <= long_position_ms {
                 taken.push(index);
-                first_buy = hull_from;
+                first_open = hull_from;
                 last_close = hull_to;
                 grew = true;
             }
@@ -546,7 +547,7 @@ fn run(job: &'static Job) {
                 .map(|row| ClusterKey {
                     exchange_key: &row.address.exchange_key,
                     market: &row.address.market,
-                    buy_ms: row.deal.buy_ms,
+                    open_ms: row.window.open_ms,
                     close_ms: row.deal.close_ms,
                     margin_ms: row.window.margin_ms,
                 })
@@ -636,20 +637,20 @@ fn serve_cluster(
 ) {
     let uids: Vec<i64> = rows.iter().map(|r| r.deal.report_uid).collect();
     let first = &rows[0];
-    // The hull: the first entry to the last exit, with the seed's margin — what
-    // `pick_cluster` kept within the long-position threshold, so the worker walks it as one
-    // stretch.
-    let first_buy = rows
+    // The hull: the first window's open (an entry order's creation, else a buy) to the last
+    // exit, with the seed's margin — what `pick_cluster` kept within the long-position
+    // threshold, so the worker walks it as one stretch.
+    let first_open = rows
         .iter()
-        .map(|r| r.deal.buy_ms)
+        .map(|r| r.window.open_ms)
         .min()
-        .unwrap_or(first.deal.buy_ms);
+        .unwrap_or(first.window.open_ms);
     let last_close = rows
         .iter()
         .map(|r| r.deal.close_ms)
         .max()
         .unwrap_or(first.deal.close_ms);
-    let window = replay_window_ms(first_buy, last_close, first.window.margin_ms)
+    let window = replay_window_ms(first_open, last_close, first.window.margin_ms)
         .map(|hull| ReplayWindow {
             // The seed's threshold, not a fresh read: the hull was clustered by it, and the
             // walk and the post-walk check must split it the same way.

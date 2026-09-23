@@ -1,5 +1,5 @@
-//! The core's own record as the model's inputs: the stop anchor, the fallback lines, the rule
-//! for the search's sample.
+//! The core's own record as the model's inputs: the stop anchor, the fact's entry, the rule for
+//! the search's sample.
 
 use super::*;
 use crate::db::tuner::ticks::line::walk;
@@ -54,6 +54,9 @@ fn stopped() -> Deal {
         step_lag_ms: 0.0,
         stop_anchor: None,
         own_entry: None,
+        buy_set_ms: None,
+        corridor: None,
+        entry_placed: None,
     }
 }
 
@@ -199,6 +202,42 @@ fn the_verdict_never_leans_on_the_anchor() {
     assert_eq!((w.exit.t_ms, w.exit.price), (8_000, 97.0));
 }
 
+/// The entry order's placement at its creation: the archived line's first point when the line
+/// starts at the stamp; the buy price when the archive answered with lines and none is the
+/// entry's — the core files a line only when the order moved; nothing when the archive gave no
+/// lines, when the line starts elsewhere, or without a stamp.
+#[test]
+fn the_entry_placement_is_what_the_record_proves() {
+    let mut d = stopped();
+    d.buy_ms = 10_000;
+    d.buy_set_ms = Some(2_000);
+    let line = [(2_000, 98.5), (6_000, 99.4), (10_000, 100.0)];
+    let answered = |entry| OwnLines {
+        entry,
+        exit: None,
+        answered: true,
+    };
+    assert_eq!(entry_placement(&d, answered(Some(&line))), Some(98.5));
+    assert_eq!(
+        entry_placement(&d, answered(None)),
+        Some(100.0),
+        "never moved"
+    );
+    assert_eq!(
+        entry_placement(&d, OwnLines::default()),
+        None,
+        "no lines: no proof"
+    );
+    let late = [(5_000, 98.5), (10_000, 100.0)];
+    assert_eq!(
+        entry_placement(&d, answered(Some(&late))),
+        None,
+        "not the stamp's line"
+    );
+    d.buy_set_ms = None;
+    assert_eq!(entry_placement(&d, answered(Some(&line))), None, "no stamp");
+}
+
 /// A variant running the trade's own entry settings filled where the report says — the entry
 /// model is for the settings the core never ran.
 #[test]
@@ -206,7 +245,7 @@ fn a_variant_running_the_trades_own_entry_fills_at_the_fact() {
     let mut d = stopped();
     d.kind = "MoonShot".into();
     let own = EntryParams::MoonShot(MshotParams::default());
-    prepare_deal(&mut d, &own, &book(), None);
+    prepare_deal(&mut d, &own, &book(), OwnLines::default());
     // A tape the corridor never reaches: the model alone would not fill at all.
     let ticks = vec![
         tick(-20_000, 100.0),

@@ -81,8 +81,9 @@ impl DealRow {
 
     /// Take everything a replay learned about this row from its answer: the tape's word, the
     /// verdict, the model inputs derived for the deal (the price step, the archived pre-spike
-    /// ask and take, the core's step lag, what the fact proves about the stop, the entry the
-    /// trade ran with), the prints, the entry line and the held coverage.
+    /// ask and take, where the entry order was placed, the core's step lag, what the fact proves
+    /// about the stop, the entry the trade ran with), the prints, the entry line and the held
+    /// coverage.
     /// Every fold of a replay answer goes through here: the variants replay the STORED row
     /// (`prepared_deals`), so a take lifted to the archive's pre-spike ask in the verdict but
     /// read off the tape in the variants puts the two on different levels, and a row folded
@@ -94,6 +95,7 @@ impl DealRow {
         self.deal.tick = answer.deal.tick;
         self.deal.pre_spike_ask = answer.deal.pre_spike_ask;
         self.deal.archived_take = answer.deal.archived_take;
+        self.deal.entry_placed = answer.deal.entry_placed;
         self.deal.step_lag_ms = answer.deal.step_lag_ms;
         self.deal.stop_anchor = answer.deal.stop_anchor;
         self.deal.own_entry = answer.deal.own_entry;

@@ -96,25 +96,62 @@ impl StopAnchor {
     }
 }
 
+/// The trade's own lines as the order archive answered for it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OwnLines<'a> {
+    /// The archived Entry line, when the archive holds one.
+    pub entry: Option<&'a [(i64, f64)]>,
+    /// The archived Exit line, when the archive holds one.
+    pub exit: Option<&'a [(i64, f64)]>,
+    /// Whether the core answered for the trade WITH lines. Without them — an answer of "no
+    /// archive", or no answer yet — a missing Entry line proves nothing.
+    pub answered: bool,
+}
+
 /// Fill the model inputs the core's own record gives: the ask a MoonShot's take was lifted to,
-/// read back off the take as placed, the take itself, the stop anchor, and the entry settings
-/// the trade ran with ([`Deal::own_entry`]).
+/// read back off the take as placed, the take itself, the level the entry order was placed at
+/// ([`entry_placement`]), the stop anchor, and the entry settings the trade ran with
+/// ([`Deal::own_entry`]).
 ///
 /// Args:
 ///     deal: The trade, filled in place.
 ///     entry: The entry parameters as of the buy.
 ///     exit: The sell parameters as of the buy.
-///     exit_points: The archived Exit line, when the archive holds it.
-pub fn prepare_deal(
-    deal: &mut Deal,
-    entry: &EntryParams,
-    exit: &ExitParams,
-    exit_points: Option<&[(i64, f64)]>,
-) {
-    deal.pre_spike_ask = archived_pre_spike_ask(exit_points, exit, deal.is_short);
-    deal.archived_take = archived_take(exit_points);
-    deal.stop_anchor = Some(StopAnchor::of(deal, exit, exit_points));
+///     lines: The trade's own archived lines.
+pub fn prepare_deal(deal: &mut Deal, entry: &EntryParams, exit: &ExitParams, lines: OwnLines<'_>) {
+    deal.pre_spike_ask = archived_pre_spike_ask(lines.exit, exit, deal.is_short);
+    deal.archived_take = archived_take(lines.exit);
+    deal.entry_placed = entry_placement(deal, lines);
+    deal.stop_anchor = Some(StopAnchor::of(deal, exit, lines.exit));
     deal.own_entry = Some(entry.clone());
+}
+
+/// The level the entry order stood at when the core created it ([`Deal::entry_placed`]).
+///
+/// The core files an order's line only when the order moved: every archived Entry line holds a
+/// move, starts at the creation stamp and ends at the fill (165 of 165 MoonShot lines of
+/// 2026-09-23). So the level is the line's first point where the line starts at the creation,
+/// and the buy price where the archive answered with lines and none of them is the entry's —
+/// the order stood where it filled from its creation on.
+///
+/// Args:
+///     deal: The trade, for its creation stamp and buy price.
+///     lines: The trade's own archived lines.
+///
+/// Returns:
+///     The level, or `None` — no creation stamp, no answer with lines (a missing line is then
+///     no proof of anything), or a line that starts elsewhere than the stamp says.
+pub fn entry_placement(deal: &Deal, lines: OwnLines<'_>) -> Option<f64> {
+    let created_ms = deal.order_open_ms()?;
+    let level = match lines.entry.filter(|l| !l.is_empty()) {
+        Some(points) => {
+            let &(first_ms, price) = points.iter().min_by_key(|(t, _)| *t)?;
+            ((first_ms - created_ms).abs() <= POINT_TIME_TOLERANCE_MS).then_some(price)?
+        }
+        None if lines.answered => deal.buy_price,
+        None => return None,
+    };
+    (level.is_finite() && level > 0.0).then_some(level)
 }
 
 /// The deal as the verdict replays it: without what the fact proves ([`Deal::stop_anchor`],

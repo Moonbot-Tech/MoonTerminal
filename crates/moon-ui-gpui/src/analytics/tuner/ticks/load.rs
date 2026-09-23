@@ -27,8 +27,8 @@ use crate::analytics::refresh::{CatchUpOutcome, report_result_is_stale};
 use moon_core::db::ReadFail;
 use moon_core::db::order_traces::{TraceEntry, read_many};
 use moon_core::db::tuner::ticks::{
-    Deal, DealsRead, EntryParams, entry_model_for, infer_tick, params, prepare_deal,
-    required_spans, verify,
+    Deal, DealsRead, EntryParams, OwnLines, entry_model_for, infer_tick, model_window, params,
+    prepare_deal, required_spans, verify,
 };
 use moon_core::db::tuner::{VarStats, Variant, strategy_current_values, strategy_values_at};
 use moon_core::feed::report_traces::ArchivedLineKind;
@@ -36,7 +36,7 @@ use moon_core::feed::types::Tick;
 use moon_core::market::trade_replay::venue_caps::trade_route;
 use moon_core::market::trade_replay::worker::inside_retention;
 use moon_core::market::trade_replay::{
-    Coverage, TickQuery, TickStatus, model_margin_ms, query_held, replay_window_ms,
+    Coverage, ReplayWindow, TickQuery, TickStatus, long_position_ms, model_margin_ms, query_held,
 };
 
 /// How long a held query waits for the worker's answer. The coordinator answers held queries
@@ -379,18 +379,18 @@ fn held_tapes(
     let asked: Vec<(
         i64,
         mpsc::Receiver<moon_core::market::trade_replay::TickAnswer>,
-        Coverage,
+        ReplayWindow,
     )> = targets
         .iter()
         .filter_map(|(deal, address)| {
-            let (rx, spans) = ask_held(address, deal, long_position_ms)?;
-            Some((deal.report_uid, rx, spans))
+            let (rx, window) = ask_held(address, deal, long_position_ms)?;
+            Some((deal.report_uid, rx, window))
         })
         .collect();
     let asked_n = asked.len();
     let mut out = HashMap::with_capacity(asked_n);
     let mut unanswered = 0usize;
-    for (uid, rx, spans) in asked {
+    for (uid, rx, window) in asked {
         if moon_core::db::current_is_cancelled() {
             break;
         }
@@ -399,7 +399,7 @@ fn held_tapes(
             unanswered += 1;
             continue;
         };
-        out.insert(uid, (answer.ticks, answer.covered, spans));
+        out.insert(uid, (answer.ticks, answer.covered, window));
     }
     if unanswered > 0 {
         log::info!(
@@ -411,28 +411,27 @@ fn held_tapes(
     out
 }
 
-/// One held query sent, with the spans it asked for; the answer arrives on the receiver.
-/// `long_position_ms` is the caller's — a queued row's own window's, or one read for a whole
-/// table — so the split is the one every other stage of that row used.
+/// One held query sent, with the window whose spans it asked for; the answer arrives on the
+/// receiver. The window is the model's (`model_window`: from the entry order's creation where
+/// the report stamps it). `long_position_ms` is the caller's — a queued row's own window's, or
+/// one read for a whole table — so the split is the one every other stage of that row used.
 fn ask_held(
     address: &RowAddress,
     deal: &Deal,
     long_position_ms: i64,
 ) -> Option<(
     mpsc::Receiver<moon_core::market::trade_replay::TickAnswer>,
-    Coverage,
+    ReplayWindow,
 )> {
-    let mut window = replay_window_ms(deal.buy_ms, deal.close_ms, model_margin_ms())?;
-    window.long_position_ms = long_position_ms;
-    let spans = window.focus_spans();
+    let window = model_window(deal, model_margin_ms(), long_position_ms)?;
     let (reply, rx) = mpsc::channel();
     query_held(TickQuery {
         exchange_key: address.exchange_key.clone(),
         market: address.market.clone(),
-        spans: spans.clone(),
+        spans: window.focus_spans(),
         reply,
     });
-    Some((rx, spans))
+    Some((rx, window))
 }
 
 /// The grid's "now" column: every selected strategy's current value per field, folded to
@@ -461,12 +460,14 @@ fn now_values(targets: &[(i64, Option<u64>)], keys: &[String]) -> HashMap<String
         .collect()
 }
 
-/// What the order archive holds of one deal's own lines: the entry line's points and the
-/// exit line's points.
+/// What the order archive holds of one deal's own lines: the entry line's points, the exit
+/// line's points, and whether the core answered for the deal with lines at all — without them
+/// a missing entry line proves nothing (`record::entry_placement`).
 #[derive(Clone, Debug, Default)]
 pub(super) struct ArchivedLines {
     pub(super) entry_points: Option<Arc<[(i64, f64)]>>,
     pub(super) exit_points: Option<Vec<(i64, f64)>>,
+    pub(super) answered: bool,
 }
 
 impl ArchivedLines {
@@ -486,6 +487,7 @@ impl ArchivedLines {
         Self {
             entry_points,
             exit_points,
+            answered: true,
         }
     }
 }
@@ -511,8 +513,8 @@ fn archived_lines(rows: &[DealRow]) -> HashMap<i64, ArchivedLines> {
     out
 }
 
-/// The held prints of one deal's window, their coverage, and the spans that were asked for.
-type HeldTape = (Vec<Tick>, Coverage, Coverage);
+/// The held prints of one deal's window, their coverage, and the window that was asked for.
+type HeldTape = (Vec<Tick>, Coverage, ReplayWindow);
 
 /// The held prints of one deal's window, through the worker. `None` when the worker did not
 /// answer in time.
@@ -521,9 +523,9 @@ pub(super) fn held_tape(
     deal: &Deal,
     long_position_ms: i64,
 ) -> Option<HeldTape> {
-    let (rx, spans) = ask_held(address, deal, long_position_ms)?;
+    let (rx, window) = ask_held(address, deal, long_position_ms)?;
     let answer = rx.recv_timeout(HELD_ANSWER_WAIT).ok()?;
-    Some((answer.ticks, answer.covered, spans))
+    Some((answer.ticks, answer.covered, window))
 }
 
 /// Why a fetch of a row the terminal holds no tape for could only come back refused, said at
@@ -536,7 +538,7 @@ fn unservable_status(address: &RowAddress, deal: &Deal, now_ms: i64) -> Option<T
     let Some(route) = trade_route(address.venue) else {
         return Some(TapeStatus::Refused(TickStatus::NoRoute));
     };
-    let window = replay_window_ms(deal.buy_ms, deal.close_ms, model_margin_ms())?;
+    let window = model_window(deal, model_margin_ms(), long_position_ms())?;
     let retention_ms = route.retention_ms()?;
     (!inside_retention(route, window, now_ms)).then_some(TapeStatus::Refused(
         TickStatus::OutOfRetention { retention_ms },
@@ -576,7 +578,7 @@ pub(super) fn replay_row_with(
     let Some(address) = row.address.clone() else {
         return;
     };
-    let Some((ticks, covered, spans)) = tape else {
+    let Some((ticks, covered, window)) = tape else {
         row.tape = TapeStatus::Missing;
         row.verdict = None;
         return;
@@ -590,7 +592,7 @@ pub(super) fn replay_row_with(
     // Coverage is the worker's own word on what was walked; a quiet run-up with no print in it
     // is covered all the same, which the tape's first stamp could not tell from a missing one.
     // What must be covered is the model's own rule (`required_spans`), not the whole margin.
-    if ticks.is_empty() || !covered.covers(&required_spans(&row.deal, &spans)) {
+    if ticks.is_empty() || !covered.covers(&required_spans(&window)) {
         row.tape = TapeStatus::Missing;
         row.verdict = None;
         return;
@@ -619,8 +621,18 @@ pub(super) fn replay_row_with(
     };
     let exit = params::exit_params(&sv);
     // What the core's own record fixes: the ask its take was lifted to, the take as placed,
-    // what the fact proves about the stop, the entry the trade ran with.
-    prepare_deal(&mut row.deal, &entry, &exit, lines.exit_points.as_deref());
+    // where the entry order was placed, what the fact proves about the stop, the entry the
+    // trade ran with.
+    prepare_deal(
+        &mut row.deal,
+        &entry,
+        &exit,
+        OwnLines {
+            entry: lines.entry_points.as_deref(),
+            exit: lines.exit_points.as_deref(),
+            answered: lines.answered,
+        },
+    );
     // The core's own clock for its PriceDown steps, as the last load calibrated it.
     row.deal.step_lag_ms = super::lags::step_lag_of(row.deal.core_uid);
     row.verdict = Some(verify(

@@ -139,10 +139,10 @@ fn a_cluster_takes_the_overlapping_rows_of_one_market_within_a_long_position() {
     const SEC: i64 = 1_000;
     /// The threshold as this test hands it in: the default five minutes.
     const LONG_POSITION_MS: i64 = 5 * 60 * SEC;
-    let key = |exchange_key, market, buy_ms, close_ms| ClusterKey {
+    let key = |exchange_key, market, open_ms, close_ms| ClusterKey {
         exchange_key,
         market,
-        buy_ms,
+        open_ms,
         close_ms,
         margin_ms: 30 * SEC,
     };

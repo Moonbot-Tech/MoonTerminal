@@ -18,9 +18,9 @@ use gpui::*;
 use super::super::super::AnalyticsView;
 use super::state::{RowAddress, TapeStatus};
 use crate::Backend;
-use moon_core::db::tuner::ticks::Deal;
+use moon_core::db::tuner::ticks::{Deal, model_window};
 use moon_core::market::MarketDataSource;
-use moon_core::market::trade_replay::{model_margin_ms, replay_window_ms};
+use moon_core::market::trade_replay::{long_position_ms, model_margin_ms};
 
 pub(crate) mod autoload;
 pub(in crate::analytics::tuner) mod job;
@@ -89,16 +89,17 @@ impl FetchResolver {
         address
     }
 
-    /// The request for one addressed deal — the same addressing a trade window resolves: the
-    /// live source for the exchange identity, the core's contract terms for how the prints are
-    /// valued. `None` when the deal's stamps describe no window, or the core went away between
-    /// the address and now.
+    /// The request for one addressed deal — the model's window (`model_window`: from the entry
+    /// order's creation where the report stamps it) and the same addressing a trade window
+    /// resolves: the live source for the exchange identity, the core's contract terms for how
+    /// the prints are valued. `None` when the deal's stamps describe no window, or the core went
+    /// away between the address and now.
     pub(in crate::analytics::tuner) fn queued_row(
         &self,
         deal: Deal,
         address: Arc<RowAddress>,
     ) -> Option<job::QueuedRow> {
-        let window = replay_window_ms(deal.buy_ms, deal.close_ms, model_margin_ms())?;
+        let window = model_window(&deal, model_margin_ms(), long_position_ms())?;
         let replay_address = self.source.replay_address(address.core_uid).ok()?;
         let terms = self
             .source

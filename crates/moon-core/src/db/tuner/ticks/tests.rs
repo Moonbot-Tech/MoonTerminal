@@ -54,6 +54,9 @@ fn deal() -> Deal {
         step_lag_ms: 0.0,
         stop_anchor: None,
         own_entry: None,
+        buy_set_ms: None,
+        corridor: None,
+        entry_placed: None,
     }
 }
 
@@ -290,6 +293,123 @@ fn leaving_and_re_entering_the_corridor_resets_the_wait() {
     ]);
     let fill = fill_of(&deal(), &ticks, &params).expect("filled");
     assert!((fill.price - 99.0).abs() < 1e-9);
+}
+
+/// The corridor the core saves is symmetric around the placement: a run-away re-places the order
+/// only past `2 · far − near` — 1.5 % on the 1 % / 0.5 % corridor — not past `far`.
+#[test]
+fn a_run_away_re_places_the_order_only_past_the_corridors_far_edge() {
+    // Level 99 off 100. At 100.4 the order is 1.39 % off: inside the corridor, it stays, and
+    // the spike to 99 fills it there.
+    let ticks = tape(&[(0, 100.0), (1_000, 100.4), (2_000, 99.0)]);
+    let fill = fill_of(&deal(), &ticks, &mshot()).expect("filled");
+    assert!((fill.price - 99.0).abs() < 1e-9, "{fill:?}");
+    // At 100.6 it is 1.59 % off: re-placed at 100.6 · 0.99 ≈ 99.594 (the tape's `f32` 100.6),
+    // which the spike fills.
+    let ticks = tape(&[(0, 100.0), (1_000, 100.6), (2_000, 99.5)]);
+    let fill = fill_of(&deal(), &ticks, &mshot()).expect("filled");
+    let re_placed = f64::from(100.6_f32) * 0.99;
+    assert!((fill.price - re_placed).abs() < 1e-9, "{fill:?}");
+}
+
+// ---- entry: the order's whole life, from its creation --------------------------------------
+
+/// A deal the core stamped with its order's creation at `created_ms`, the record proving the
+/// order stood at the buy price from then on (`record::entry_placement`).
+fn stamped(created_ms: i64) -> Deal {
+    let d = deal();
+    Deal {
+        buy_set_ms: Some(created_ms),
+        entry_placed: Some(d.buy_price),
+        ..d
+    }
+}
+
+/// With no archived line the order never moved: it stood at the buy price from its creation,
+/// and reached the book a latency after it — a print at the level before then fills nothing.
+/// (A 10 s replace delay keeps that print's approach from moving the order.) Unstamped, the same
+/// tape places the order off its first print, on the book at once, and the same print fills it.
+#[test]
+fn a_stamped_order_stands_at_the_buy_price_from_its_creation() {
+    let params = MshotParams {
+        replace_delay_s: 10.0,
+        ..mshot()
+    };
+    let ticks = tape(&[
+        (0, 100.0),
+        (1_000, 100.0),
+        (2_050, 99.0),
+        (3_000, 100.0),
+        (9_000, 99.0),
+    ]);
+    let fill = fill_of(&stamped(2_000), &ticks, &params).expect("filled");
+    assert_eq!((fill.t_ms, fill.price), (9_000, 99.0));
+    let unstamped = fill_of(&deal(), &ticks, &params).expect("filled");
+    assert_eq!((unstamped.t_ms, unstamped.price), (2_050, 99.0));
+}
+
+/// The placement is the record's: the order stands where it proves the core placed it, and from
+/// then on the corridor is the model's own — the archived line is not replayed on top. Without a
+/// proven placement, or with a tape that starts after the creation, the stamp changes nothing.
+#[test]
+fn a_stamped_order_starts_at_the_records_placement_or_not_at_all() {
+    let ticks = tape(&[(0, 100.0), (2_500, 99.2), (3_000, 98.5)]);
+    let placed = Deal {
+        entry_placed: Some(98.5),
+        ..stamped(2_000)
+    };
+    let fill = fill_of(&placed, &ticks, &mshot()).expect("filled");
+    assert_eq!((fill.t_ms, fill.price), (3_000, 98.5));
+    let unproven = Deal {
+        entry_placed: None,
+        ..stamped(2_000)
+    };
+    assert_eq!(
+        fill_of(&unproven, &ticks, &mshot()),
+        fill_of(&deal(), &ticks, &mshot())
+    );
+    let late_tape = tape(&[(2_500, 99.2), (3_000, 98.5)]);
+    assert_eq!(
+        fill_of(&placed, &late_tape, &mshot()),
+        fill_of(&deal(), &late_tape, &mshot())
+    );
+}
+
+/// A variant is placed at the creation off the reference the fact's level stood on, by its own
+/// far bound: the fact at 99 on a 1 % bound stood off 100, so a 2 % variant stands at 98 and
+/// fills on the deeper print. Without the fact's own parameters on the deal — the verdict's
+/// case, which replays those very parameters — the order stands at the fact's level.
+#[test]
+fn a_variant_is_placed_at_the_creation_by_its_own_bound() {
+    let mut d = stamped(2_000);
+    d.own_entry = Some(EntryParams::MoonShot(mshot()));
+    let deeper = MshotParams {
+        price_pct: 2.0,
+        ..mshot()
+    };
+    let ticks = tape(&[(0, 100.0), (2_500, 99.5), (3_000, 99.0), (4_000, 98.0)]);
+    let fill = fill_of(&d, &ticks, &deeper).expect("filled deeper");
+    assert_eq!((fill.t_ms, fill.price), (4_000, 98.0));
+    let fact = fill_of(&stamped(2_000), &ticks, &deeper).expect("filled");
+    assert_eq!((fact.t_ms, fact.price), (3_000, 99.0));
+}
+
+/// On a price grid the fact's level is its placement snapped away from the price, so the
+/// reference is read back from half a step toward it: the fact at 99 on a 1-step grid stood off
+/// 100 … 101, 100.5 at the middle, and a 1.3 % variant stands at 99.2 → 99 — not at the 98 a
+/// reference read off the snapped 99 itself would give.
+#[test]
+fn a_variants_reference_is_read_back_from_the_middle_of_the_step() {
+    let mut d = stamped(2_000);
+    d.tick = Some(1.0);
+    d.own_entry = Some(EntryParams::MoonShot(mshot()));
+    let variant = MshotParams {
+        price_pct: 1.3,
+        ..mshot()
+    };
+    let ticks = tape(&[(0, 100.5), (2_500, 99.0)]);
+    let fill = fill_of(&d, &ticks, &variant).expect("filled at the variant's level");
+    assert_eq!((fill.t_ms, fill.price), (2_500, 99.0));
 }
 
 // ---- entry: modifiers, the price grid, the reference --------------------------------------
@@ -1168,6 +1288,9 @@ fn hook_deal() -> Deal {
         step_lag_ms: 0.0,
         stop_anchor: None,
         own_entry: None,
+        buy_set_ms: None,
+        corridor: None,
+        entry_placed: None,
         ..deal()
     }
 }

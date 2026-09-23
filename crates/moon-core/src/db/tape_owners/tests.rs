@@ -82,6 +82,7 @@ fn is_tunable_follows_the_axis_filter() {
         close: ReportStamp::Seconds(2),
         strategy_id,
         sell_reason: sell_reason.into(),
+        buy_set_ms: None,
         kind: kind.into(),
     };
     assert!(owner(42, "MoonShot", "Sell Price").is_tunable());

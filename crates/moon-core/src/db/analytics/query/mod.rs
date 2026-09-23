@@ -517,6 +517,12 @@ const UNIFIED_COLS: &[&str] = &[
     "reportuid",
     "buydatems",
     "closedatems",
+    // The entry order's creation and the corridor the core last saved for it — the same tuner
+    // starts its MoonShot replay at the creation. Cores file them since 2026-09-21 and never
+    // backfill; NULL on an older replica, zero on an older row.
+    "buysetdatems",
+    "buycorridordown",
+    "buycorridorup",
 ];
 
 /// Money projection resolved by quote coverage before one analytical scan.

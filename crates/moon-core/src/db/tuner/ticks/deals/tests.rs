@@ -100,6 +100,51 @@ fn the_usdt_overlay_fills_profit_by_report_uid() {
     );
 }
 
+/// The entry order's creation and its saved corridor come with the row where the core filed
+/// them; a zero, a creation after the fill and a half corridor read as not filed, and a replica
+/// without the columns (the fixture above) reads them all as absent.
+#[test]
+fn the_orders_creation_and_corridor_are_read_where_filed() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep(
+            reportuid INTEGER, core_uid INTEGER, strategyid INTEGER, coin TEXT,
+            buydate INTEGER, closedate INTEGER, buydatems INTEGER, closedatems INTEGER,
+            buyprice REAL, sellprice REAL, spentbtc REAL, profitbtc REAL, isshort INTEGER,
+            sellreason TEXT, basecurrency INTEGER, buysetdatems INTEGER,
+            buycorridordown REAL, buycorridorup REAL
+         );
+         INSERT INTO orders_rep VALUES
+            (21, 7, 42, 'ACE', 100, 200, 100000, 200000, 99.0, 100.0, 1000.0, 10.0, 0,
+             'Sell Price', 1, 95000, 99.6, 98.1),
+            (22, 7, 42, 'ACE', 110, 210, 110000, 210000, 99.0, 100.0, 1000.0, 10.0, 0,
+             'Sell Price', 1, 0, 0.0, 0.0),
+            (23, 7, 42, 'ACE', 120, 220, 120000, 220000, 99.0, 100.0, 1000.0, 10.0, 0,
+             'Sell Price', 1, 120001, 99.6, 0.0);",
+    )
+    .expect("fixture");
+    let (q, src) = tuner_source_on(&conn, &scope()).expect("source");
+    let read = read_on(&conn, &q, &src).expect("read");
+    let by_uid = |uid| {
+        read.deals
+            .iter()
+            .find(|d| d.report_uid == uid)
+            .expect("deal")
+    };
+    assert_eq!(by_uid(21).buy_set_ms, Some(95_000));
+    assert_eq!(by_uid(21).corridor, Some((99.6, 98.1)));
+    assert_eq!((by_uid(22).buy_set_ms, by_uid(22).corridor), (None, None));
+    assert_eq!((by_uid(23).buy_set_ms, by_uid(23).corridor), (None, None));
+    let old_conn = replica();
+    let (old_q, old_src) = tuner_source_on(&old_conn, &scope()).expect("source");
+    let old = read_on(&old_conn, &old_q, &old_src).expect("read");
+    assert!(
+        old.deals
+            .iter()
+            .all(|d| d.buy_set_ms.is_none() && d.corridor.is_none())
+    );
+}
+
 #[test]
 fn a_replica_without_the_stamp_columns_yields_no_deals() {
     let conn = Connection::open_in_memory().expect("in-memory database");

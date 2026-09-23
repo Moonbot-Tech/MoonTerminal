@@ -23,7 +23,7 @@
 //! checked against the live `strategies.sqlite` field names on 2026-09-20.
 
 use crate::feed::types::Tick;
-use crate::market::trade_replay::Coverage;
+use crate::market::trade_replay::{Coverage, ReplayWindow, replay_window_ms};
 
 pub mod calibrate;
 pub mod deals;
@@ -45,7 +45,7 @@ pub use exit::{ExitModel, ExitParams, archived_pre_spike_ask, archived_take, tak
 pub use hook::{HookDetect, KIND_MOONHOOK, hook_take_pct, parse_hook_detect};
 pub use mshot::{MshotEntry, MshotParams, UsePrice};
 pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};
-pub use record::{StopAnchor, fit_for_search, prepare_deal};
+pub use record::{OwnLines, StopAnchor, entry_placement, fit_for_search, prepare_deal};
 pub use scope::{is_service_row, is_tunable};
 pub use search::{PreparedDeal, SearchParams, SearchResult, suggest, variant_tally};
 pub use stats::{fact_stats, stats_of};
@@ -165,6 +165,17 @@ pub struct Deal {
     /// `buydatems` — the fill of the entry, Unix ms. Rows without a millisecond stamp are not
     /// deals for this axis; the caller drops them and counts them.
     pub buy_ms: i64,
+    /// `buysetdatems` — the moment the core CREATED the entry order, Unix ms on the same clock
+    /// as `buy_ms`. Filed by cores since 2026-09-21 and never backfilled; `None` on older rows,
+    /// on a zero, and on a stamp after the fill, which no order can have.
+    pub buy_set_ms: Option<i64>,
+    /// `buycorridordown` / `buycorridorup` — the entry corridor the core last saved, as absolute
+    /// prices under their own names: `Down` is the edge a falling price crosses, `Up` the one a
+    /// rising price crosses, whatever their numeric order. `None` unless both are prices. The
+    /// model does not replay it — the core saves it once, at a moment the report does not name —
+    /// but its width is the corridor's own, so the `real_data` bench holds the model's
+    /// `MShotPriceMin` … `2 · MShotPrice − MShotPriceMin` band against it on every run.
+    pub corridor: Option<(f64, f64)>,
     /// `closedatems` — the fill of the exit, Unix ms.
     pub close_ms: i64,
     pub buy_price: f64,
@@ -205,6 +216,10 @@ pub struct Deal {
     /// starts. FLOCK 2026-09-21 (HookN0, short): the model's `SellPrice` take at −1.0 %, the
     /// core's at −2.2 %, every PriceDown step then a different level.
     pub archived_take: Option<f64>,
+    /// The level the entry order stood at when the core created it — where a replay from the
+    /// creation places the fact's order ([`record::entry_placement`]); filled with the rest of
+    /// the model inputs, `None` before them and wherever the record does not prove it.
+    pub entry_placed: Option<f64>,
     /// The detect depth of a MoonHook trade, per cent, as the core wrote it into the report's
     /// `comment` — the base of that kind's take rule ([`hook::hook_take_pct`]). `None` for
     /// every other kind, and for a hook row whose comment the scan could not read.
@@ -234,6 +249,76 @@ impl Deal {
     pub fn is_long(&self) -> bool {
         !self.is_short
     }
+
+    /// When the entry order's life began, for a model that replays it whole ([`order_open_at`]).
+    pub fn order_open_ms(&self) -> Option<i64> {
+        order_open_at(self.buy_ms, self.buy_set_ms)
+    }
+}
+
+/// When an entry order's life began, for a model that replays it whole: its creation stamp,
+/// unless the order waited longer than [`ORDER_WAIT_CAP_MS`] — then its early life is not
+/// fetched and the model starts where the tape does. One rule for every kind of the tuner, the
+/// ones without an entry model too: their tape is fetched and kept for a model to come.
+///
+/// Args:
+///     buy_ms: The fill of the entry.
+///     buy_set_ms: The order's creation, on the same clock (`buysetdatems`).
+pub fn order_open_at(buy_ms: i64, buy_set_ms: Option<i64>) -> Option<i64> {
+    buy_set_ms.filter(|&set| set <= buy_ms && buy_ms - set <= ORDER_WAIT_CAP_MS)
+}
+
+/// The longest wait of an entry order the tape is fetched for, from its creation to its fill.
+/// MoonShot orders on this machine's reports (2026-09-23, 289 with a creation stamp) waited a
+/// median 114 s, 280 s at the 90th percentile and hours at the 99th; the cap keeps the few that
+/// wait for hours from asking the venue for hours of prints, and they replay as before.
+pub const ORDER_WAIT_CAP_MS: i64 = 10 * 60_000;
+
+/// The replay window of a deal as the model needs it ([`model_window_at`] on the deal's own
+/// stamps).
+pub fn model_window(deal: &Deal, margin_ms: i64, long_position_ms: i64) -> Option<ReplayWindow> {
+    model_window_at(
+        deal.order_open_ms(),
+        deal.buy_ms,
+        deal.close_ms,
+        margin_ms,
+        long_position_ms,
+    )
+}
+
+/// The replay window of a trade as the model needs it: from the entry order's creation
+/// ([`order_open_at`]) through the close, one stretch. Where that stretch would be walked as its
+/// two ends — the order's life plus the position outrun `long_position_ms` — the window opens at
+/// the fill as before: an entry end centred on the creation would leave the fill itself between
+/// the ends, where nothing is fetched. The tape cleanup claims by this same rule
+/// (`trades_cleanup`), so what the tuner fetched is what it keeps.
+///
+/// Args:
+///     order_open_ms: The order's creation where a replay may start there ([`order_open_at`]).
+///     buy_ms: The fill of the entry.
+///     close_ms: The close.
+///     margin_ms: The model's margin (`trade_replay::model_margin_ms`).
+///     long_position_ms: The threshold the window is split by — the caller's, so every stage
+///         of one row splits it the same way.
+///
+/// Returns:
+///     The window, or `None` when the stamps describe none.
+pub fn model_window_at(
+    order_open_ms: Option<i64>,
+    buy_ms: i64,
+    close_ms: i64,
+    margin_ms: i64,
+    long_position_ms: i64,
+) -> Option<ReplayWindow> {
+    let with_threshold = |window: ReplayWindow| ReplayWindow {
+        long_position_ms,
+        ..window
+    };
+    let from_creation = order_open_ms
+        .and_then(|open| replay_window_ms(open, close_ms, margin_ms))
+        .map(with_threshold)
+        .filter(|w| w.close_ms - w.open_ms <= w.long_position_ms);
+    from_creation.or_else(|| replay_window_ms(buy_ms, close_ms, margin_ms).map(with_threshold))
 }
 
 /// Where and when the modelled entry order filled.
@@ -302,9 +387,10 @@ pub enum EntryParams {
     MoonShot(MshotParams),
 }
 
-/// The tape must reach this far back before the buy for the corridor to have a run-up. The
-/// replay worker walks exactly this much as part of the trade for a model's request
-/// (`trade_replay::MODEL_PAD_MS`), so the two are one number.
+/// The tape must reach this far back before the window's open — the entry order's creation, or
+/// the buy — for the corridor to have a run-up. The replay worker walks exactly this much as
+/// part of the trade for a model's request (`trade_replay::MODEL_PAD_MS`), so the two are one
+/// number.
 pub const RUN_UP_MS: i64 = crate::market::trade_replay::MODEL_PAD_MS;
 
 /// The tape must reach this far past the close for the exit to have a tail: a line the fact
@@ -314,26 +400,28 @@ pub const RUN_UP_MS: i64 = crate::market::trade_replay::MODEL_PAD_MS;
 /// into one.
 pub const TAIL_MS: i64 = crate::market::trade_replay::MODEL_PAD_MS;
 
-/// The part of a deal's window the model cannot do without: the run-up before the buy through
-/// the tail after the close, clipped to what the window asks for at all (a long position asks
-/// only around its two ends; a model's window is built with a margin of at least the pads, see
-/// `trade_replay::model_margin_ms`). The rest of the
-/// window — the trail beyond the tail, the lead beyond the run-up — is served as far as the
-/// tape goes: a venue's page budget runs out on the trail of a pumped coin long before the
-/// margin, and a variant that outlives the tape is marked open at the window's end.
+/// The part of a deal's window the model cannot do without: the run-up before the window's open
+/// — the entry order's creation where [`model_window`] opened there, else the buy — through the
+/// tail after the close, clipped to what the window asks for at all (a long position asks only
+/// around its two ends; a model's window is built with a margin of at least the pads, see
+/// `trade_replay::model_margin_ms`). Read off the window rather than the deal: the worker walks
+/// the pads around the window's own open as part of the trade, and a requirement reaching past
+/// them would name prints nobody was sure to fetch. The rest of the window — the trail beyond
+/// the tail, the lead beyond the run-up — is served as far as the tape goes: a venue's page
+/// budget runs out on the trail of a pumped coin long before the margin, and a variant that
+/// outlives the tape is marked open at the window's end.
 ///
 /// Args:
-///     deal: The deal, for its buy and close stamps.
-///     spans: The window's focus spans, as asked from the worker.
+///     window: The deal's window, as asked from the worker.
 ///
 /// Returns:
 ///     The spans the held coverage must include for the deal to count as covered.
-pub fn required_spans(deal: &Deal, spans: &Coverage) -> Coverage {
+pub fn required_spans(window: &ReplayWindow) -> Coverage {
     Coverage::one((
-        deal.buy_ms.saturating_sub(RUN_UP_MS),
-        deal.close_ms.saturating_add(TAIL_MS),
+        window.open_ms.saturating_sub(RUN_UP_MS),
+        window.close_ms.saturating_add(TAIL_MS),
     ))
-    .clip(spans)
+    .clip(&window.focus_spans())
 }
 
 /// Run one trade through the entry and the exit model.

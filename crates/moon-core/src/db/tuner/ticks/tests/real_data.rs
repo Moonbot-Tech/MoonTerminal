@@ -27,17 +27,18 @@ use crate::db::analytics::Query;
 use crate::db::order_traces::{TraceEntry, read_many};
 use crate::db::tuner::strategy_values_at;
 use crate::feed::report_traces::ArchivedLineKind;
-use crate::market::trade_replay::{Coverage, TickQuery, query_held, replay_window_ms};
+use crate::market::trade_replay::{Coverage, TickQuery, long_position_ms, query_held};
 use crate::symbol::{coin_match_key, coin_of_market};
 
-/// Every point of an archived entry line and of an exit line.
-type ArchivedLines = (Option<Vec<(i64, f64)>>, Option<Vec<(i64, f64)>>);
+/// Every point of an archived entry line and of an exit line, and whether the core answered
+/// for the deal with lines at all.
+type ArchivedLines = (Option<Vec<(i64, f64)>>, Option<Vec<(i64, f64)>>, bool);
 
 /// The points of the deal's own entry line and of its own exit line, when the archive holds
-/// them.
+/// them, and whether it answered with lines — as the axis reads them (`load.rs::ArchivedLines`).
 fn archived_lines(deal: &Deal) -> ArchivedLines {
     let Ok(entries) = read_many(deal.core_uid, &[deal.report_uid]) else {
-        return (None, None);
+        return (None, None, false);
     };
     match entries.get(&deal.report_uid) {
         Some(TraceEntry::Lines(lines)) => {
@@ -49,9 +50,9 @@ fn archived_lines(deal: &Deal) -> ArchivedLines {
                 .iter()
                 .find(|l| l.own && l.kind == ArchivedLineKind::Exit)
                 .map(|l| l.points.iter().map(|&(t, p)| (t as i64, p)).collect());
-            (entry, exit)
+            (entry, exit, true)
         }
-        _ => (None, None),
+        _ => (None, None, false),
     }
 }
 
@@ -180,7 +181,7 @@ fn core_step_lags(
         if !is_tunable(&deal.kind, &deal.sell_reason) {
             continue;
         }
-        let (_, Some(points)) = archived_lines(deal) else {
+        let (_, Some(points), _) = archived_lines(deal) else {
             continue;
         };
         let Some(values) =
@@ -268,6 +269,11 @@ fn real_data_reproduction() {
     // reads as that in the summary rather than as a scope without tape.
     let mut no_venue = 0usize;
     let (mut fit_n, mut own_n, mut own_close) = (0usize, 0usize, 0usize);
+    // MoonShot entries replayed from the order's creation (`mshot`, `Deal::entry_placed`), and
+    // how many of those the model reproduced.
+    let (mut created_n, mut created_hits, mut stamped) = (0usize, 0usize, 0usize);
+    // MoonShot trades whose saved corridor (`Deal::corridor`) the model's band matches in width.
+    let (mut corridor_n, mut corridor_hits) = (0usize, 0usize);
     let (mut own_sum, mut fact_sum) = (0.0f64, 0.0f64);
     for mut deal in read.deals {
         *kinds_seen.entry(deal.kind.clone()).or_default() += 1;
@@ -290,7 +296,7 @@ fn real_data_reproduction() {
         let coin_key = coin_match_key(&deal.coin);
         // The same window and the same gate the axis applies (`load.rs::replay_row`): the
         // worker's coverage must include `required_spans`, whatever the prints say.
-        let Some(window) = replay_window_ms(deal.buy_ms, deal.close_ms, margin_ms) else {
+        let Some(window) = model_window(&deal, margin_ms, long_position_ms()) else {
             continue;
         };
         let spans = window.focus_spans();
@@ -315,12 +321,12 @@ fn real_data_reproduction() {
         }
         ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
         ticks.dedup_by(|a, b| a.time_ms == b.time_ms && a.price == b.price && a.qty == b.qty);
-        if ticks.is_empty() || !covered.covers(&required_spans(&deal, &spans)) {
+        if ticks.is_empty() || !covered.covers(&required_spans(&window)) {
             continue;
         }
         with_tape += 1;
         deal.tick = infer_tick(&ticks);
-        let (entry_line, exit_points) = archived_lines(&deal);
+        let (entry_line, exit_points, answered) = archived_lines(&deal);
         let sv = StrategyValues {
             values: &values,
             defaults: &defaults,
@@ -332,7 +338,30 @@ fn real_data_reproduction() {
         };
         let exit = exit_params(&sv);
         deal.step_lag_ms = core_lags.get(&deal.core_uid).copied().unwrap_or(0.0);
-        prepare_deal(&mut deal, &entry, &exit, exit_points.as_deref());
+        prepare_deal(
+            &mut deal,
+            &entry,
+            &exit,
+            OwnLines {
+                entry: entry_line.as_deref(),
+                exit: exit_points.as_deref(),
+                answered,
+            },
+        );
+        // The corridor the core saved against the model's band, `near` … `2 · far − near` off one
+        // reference (`mshot`): the ratio of its edges is the band's width whatever the reference.
+        if let (Some((down, up)), EntryParams::MoonShot(params)) = (deal.corridor, &entry) {
+            let (near, far) = params.bounds_pct(&deal.deltas);
+            let (a, b) = (near / 100.0, (2.0 * far - near) / 100.0);
+            let predicted = if deal.is_long() {
+                (1.0 - a) / (1.0 - b)
+            } else {
+                (1.0 + b) / (1.0 + a)
+            };
+            corridor_n += 1;
+            corridor_hits +=
+                usize::from((down.max(up) / down.min(up) / predicted - 1.0).abs() <= 0.0005);
+        }
         // The modelled line beside the archive's moves, for the eye.
         if let (Some(fill), Some(moves)) = (
             simulate(&deal, &ticks, &entry, &exit, entry_line.as_deref()).fill,
@@ -488,6 +517,17 @@ fn real_data_reproduction() {
         if let Some(ok) = entry_verdict {
             entry_n += 1;
             entry_hits += usize::from(ok);
+            // Replayed from the creation: the record proved the placement and the tape reaches
+            // back to it — the condition `mshot` starts the order there on.
+            stamped += usize::from(deal.order_open_ms().is_some());
+            let from_creation = deal.entry_placed.is_some()
+                && deal
+                    .order_open_ms()
+                    .is_some_and(|created| (ticks[0].time_ms as i64) <= created);
+            if from_creation {
+                created_n += 1;
+                created_hits += usize::from(ok);
+            }
         }
         if let Some(ok) = archived.exit {
             exit_n += 1;
@@ -499,6 +539,10 @@ fn real_data_reproduction() {
         "with tape: {with_tape} · entry ✓ {entry_hits}/{entry_n} · exit ✓ {exit_hits}/{exit_n} · \
          skipped, core venue unknown: {no_venue}"
     );
+    eprintln!(
+        "entry from the order's creation: ✓ {created_hits}/{created_n} · stamped entries {stamped}"
+    );
+    eprintln!("saved corridors the model's band matches to 0.05 %: {corridor_hits}/{corridor_n}");
     let mut unfit: Vec<(String, usize)> = unfit.into_iter().collect();
     unfit.sort_by_key(|u| std::cmp::Reverse(u.1));
     eprintln!("fit for the search: {fit_n} of {with_tape} · left out: {unfit:?}");

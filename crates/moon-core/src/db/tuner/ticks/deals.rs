@@ -116,7 +116,8 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
         "SELECT o.\"reportuid\", o.\"core_uid\", o.\"strategyid\", o.\"coin\",
                 o.\"buydatems\", o.\"closedatems\", o.\"buyprice\", o.\"sellprice\",
                 o.\"spentbtc\", o.\"isshort\", o.\"sellreason\", COALESCE(o.pnl, 0), {deltas},
-                o.\"core_name\", o.\"quantity\", o.\"boughtq\"
+                o.\"core_name\", o.\"quantity\", o.\"boughtq\",
+                o.\"buysetdatems\", o.\"buycorridordown\", o.\"buycorridorup\"
          FROM {src}"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
@@ -182,6 +183,10 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             *slot = num(12 + offset)?;
         }
         let report_uid = int(0)?;
+        // Zero, NULL and a creation after the fill all read as "not filed" (`Deal::buy_set_ms`).
+        let buy_set_ms = Some(int(name_at + 3)?).filter(|&set| set > 0 && set <= buy_ms);
+        let corridor = Some((num(name_at + 4)?, num(name_at + 5)?))
+            .filter(|&(down, up)| down > 0.0 && up > 0.0);
         out.deals.push(Deal {
             report_uid,
             core_uid: int(1)? as u64,
@@ -196,6 +201,8 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
                 .map_err(fail)?
                 .unwrap_or_default(),
             buy_ms,
+            buy_set_ms,
+            corridor,
             close_ms,
             buy_price: num(6)?,
             sell_price: num(7)?,
@@ -209,6 +216,8 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             tick: None,
             pre_spike_ask: None,
             archived_take: None,
+            // Filled with the model inputs, once the archive is in (`record::prepare_deal`).
+            entry_placed: None,
             // Filled by `overlay_hook_detect` off the raw report row's comment.
             hook_depth_pct: None,
             hook_stated_take_pct: None,

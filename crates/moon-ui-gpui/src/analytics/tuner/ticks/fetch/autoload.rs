@@ -37,10 +37,10 @@ use gpui::App;
 use super::job;
 use super::{FetchResolver, strategy_field_defaults};
 use crate::Backend;
-use moon_core::db::tuner::ticks::Deal;
+use moon_core::db::tuner::ticks::{Deal, model_window};
 use moon_core::market::trade_replay::venue_caps::trade_route;
 use moon_core::market::trade_replay::worker::inside_retention;
-use moon_core::market::trade_replay::{model_margin_ms, replay_window_ms};
+use moon_core::market::trade_replay::{long_position_ms, model_margin_ms};
 
 /// How far back the autoload looks, whatever the venue documents: the longest retention a
 /// route names is 90 days, and a month of rows is already thousands of walks.
@@ -229,7 +229,7 @@ fn run_pass(
     for deal in deals {
         // Stamps that describe no window are the row's own fault, final: not a core that is
         // still coming, so never retried.
-        if replay_window_ms(deal.buy_ms, deal.close_ms, model_margin_ms()).is_none() {
+        if model_window(&deal, model_margin_ms(), long_position_ms()).is_none() {
             degenerate += 1;
             continue;
         }

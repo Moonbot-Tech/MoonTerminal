@@ -27,6 +27,9 @@ fn deal(pnl: f64, spent: f64) -> Deal {
         step_lag_ms: 0.0,
         stop_anchor: None,
         own_entry: None,
+        buy_set_ms: None,
+        corridor: None,
+        entry_placed: None,
     }
 }
 
