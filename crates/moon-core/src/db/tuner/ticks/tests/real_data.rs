@@ -8,7 +8,11 @@
 //! coverage column uses) and its entry line from `order_traces.sqlite`, runs [`verify`] on the
 //! parameters as of the buy, and prints one line per deal plus the ✓ share per group. The
 //! environment variables are read HERE only, in a test a developer runs by hand (`MOON_TICKS_COIN`
-//! narrows the run to one coin); the application never moves its data root on a variable.
+//! narrows the run to one coin; `MOON_TICKS_DUMP=<dir>` writes every deal and its prints for an
+//! analysis outside; `MOON_TICKS_LATENCY_MS` replays with another latency and
+//! `MOON_TICKS_LATENCY_BASE_MS` with that plus each core's archived round trip, the entry's only
+//! unless `MOON_TICKS_LATENCY_EXIT` is set; `MOON_TICKS_PATH_DEBUG` prints each order's modelled
+//! and archived path); the application never moves its data root on a variable.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -86,8 +90,20 @@ fn dump_deal(
     exit_points: Option<&[(i64, f64)]>,
     entry_points: Option<&[(i64, f64)]>,
     entry: &EntryParams,
+    exit: &ExitParams,
 ) {
     use std::io::Write;
+    // The stop as the verdict reads it (`verify::verify_stop`): the model's level off the fact's
+    // buy, the level the core printed into the reason, and the activation — the archive's jump
+    // past that level.
+    let stop = super::super::exit::stop_pct(exit, deal, deal.buy_ms);
+    let level = if deal.is_long() {
+        deal.buy_price * (1.0 + stop / 100.0)
+    } else {
+        deal.buy_price * (1.0 - stop / 100.0)
+    };
+    let stated = verify::stated_stop_level(&deal.sell_reason);
+    let activation = verify::archived_stop_jump(deal, stated.unwrap_or(level), exit_points);
     let dir = PathBuf::from(dir);
     let _ = std::fs::create_dir_all(dir.join("ticks"));
     let row = serde_json::json!({
@@ -111,6 +127,15 @@ fn dump_deal(
         "order_open_ms": deal.order_open_ms(),
         "entry_placed": deal.entry_placed,
         "corridor": deal.corridor,
+        "stop": {
+            "pct": stop,
+            "level": level,
+            "stated": stated,
+            "activation": activation,
+            "fast": exit.fast_stop_loss,
+            "ema": exit.stop_loss_ema,
+            "delay_s": exit.stop_loss_delay_s,
+        },
         "mshot": match entry {
             EntryParams::MoonShot(p) => {
                 let (near, far) = p.bounds_pct(&deal.deltas_at(deal.buy_ms));
@@ -228,6 +253,90 @@ fn core_step_lags(
         .collect()
 }
 
+/// How much of the order's archived path the model walked: the archived moves after the creation
+/// and before the fill, the ones the model also made (within a second, on the same price step),
+/// and the model's moves the archive never shows.
+#[derive(Default)]
+struct PathTally {
+    deals: usize,
+    whole: usize,
+    archived: usize,
+    matched: usize,
+    extra: usize,
+    /// Archived moves with a model move within the second, whatever its price.
+    timed: usize,
+    /// For those, how far the nearest model move's level sat, per cent of the archived one —
+    /// `[0]` strategies whose `MShotAdd*` move the corridor, `[1]` those whose do not.
+    level_errors: [Vec<f64>; 2],
+}
+
+impl PathTally {
+    fn add(&mut self, deal: &Deal, model: &[(i64, f64)], archived: &[(i64, f64)], moved: bool) {
+        // Within a second, and within a step or 0.05 % — the reference the core read and the
+        // print the model read sit a step apart on a spike.
+        let step = deal.tick.unwrap_or(0.0);
+        let same = |a: (i64, f64), b: (i64, f64)| {
+            (a.0 - b.0).abs() <= verify::POINT_TIME_TOLERANCE_MS
+                && (a.1 - b.1).abs() <= (step * 1.01).max(a.1.abs() * 5e-4)
+        };
+        let until = deal.buy_ms;
+        // Past the creation's own point, and before the fill.
+        let archived: Vec<(i64, f64)> = verify::archived_replacements(archived)
+            .into_iter()
+            .skip(1)
+            .filter(|&(t, _)| t < until)
+            .collect();
+        let model: Vec<(i64, f64)> = model
+            .iter()
+            .skip(1)
+            .copied()
+            .filter(|&(t, _)| t < until)
+            .collect();
+        let matched = archived
+            .iter()
+            .filter(|&&a| model.iter().any(|&m| same(a, m)))
+            .count();
+        let extra = model
+            .iter()
+            .filter(|&&m| !archived.iter().any(|&a| same(a, m)))
+            .count();
+        for &(t, p) in &archived {
+            if let Some(&(_, mp)) = model
+                .iter()
+                .filter(|&&(mt, _)| (mt - t).abs() <= verify::POINT_TIME_TOLERANCE_MS)
+                .min_by(|a, b| (a.1 - p).abs().total_cmp(&(b.1 - p).abs()))
+            {
+                self.timed += 1;
+                self.level_errors[usize::from(!moved)].push((mp - p) / p * 100.0);
+            }
+        }
+        self.deals += 1;
+        self.whole += usize::from(matched == archived.len() && extra == 0);
+        self.archived += archived.len();
+        self.matched += matched;
+        self.extra += extra;
+    }
+}
+
+/// Each core's replace round trip off its archived Entry lines
+/// (`calibrate::replace_round_trip_samples`, the median per core).
+fn core_round_trips(deals: &[Deal]) -> HashMap<u64, f64> {
+    let mut samples: HashMap<u64, Vec<i64>> = HashMap::new();
+    for deal in deals.iter().filter(|d| entry_model_for(&d.kind)) {
+        let (Some(points), _, _) = archived_lines(deal) else {
+            continue;
+        };
+        samples
+            .entry(deal.core_uid)
+            .or_default()
+            .extend(calibrate::replace_round_trip_samples(&points));
+    }
+    samples
+        .into_iter()
+        .filter_map(|(core, mut v)| calibrate::median_step_lag(&mut v).map(|rt| (core, rt)))
+        .collect()
+}
+
 fn round3(v: Option<f64>) -> Option<f64> {
     v.map(|d| (d * 1000.0).round() / 1000.0)
 }
@@ -342,6 +451,13 @@ fn real_data_reproduction() {
     let keys = param_keys();
     let defaults = HashMap::new();
     let core_lags = core_step_lags(&read.deals, &keys, &defaults);
+    // `MOON_TICKS_LATENCY_BASE_MS=<ms>`: each core's latency is that plus its own archived
+    // replace round trip, instead of one number for every core.
+    let round_trips = core_round_trips(&read.deals);
+    let latency_base = std::env::var("MOON_TICKS_LATENCY_BASE_MS")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok());
+    eprintln!("replace round trip per core: {round_trips:?} · base {latency_base:?}");
     // The live deltas' history bars (`deltas::track_for`), off this data root's kline cache —
     // opened on a COPY of the data root: opening prunes past the retention, as the app does.
     // `MOON_TICKS_SNAPSHOT_DELTAS=1` runs the model on the report's snapshot, for the A/B.
@@ -374,6 +490,8 @@ fn real_data_reproduction() {
     let (mut created_n, mut created_hits, mut stamped) = (0usize, 0usize, 0usize);
     // MoonShot trades whose saved corridor (`Deal::corridor`) the model's band matches in width.
     let (mut corridor_n, mut corridor_hits) = (0usize, 0usize);
+    // The order's path from its creation against the archived entry line.
+    let mut path = PathTally::default();
     let (mut own_sum, mut fact_sum) = (0.0f64, 0.0f64);
     for mut deal in read.deals {
         *kinds_seen.entry(deal.kind.clone()).or_default() += 1;
@@ -447,17 +565,24 @@ fn real_data_reproduction() {
             values: &values,
             defaults: &defaults,
         };
+        // `MOON_TICKS_LATENCY_MS=<ms>` replays the entry with another replacement latency.
+        let latency = std::env::var("MOON_TICKS_LATENCY_MS")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(DEFAULT_LATENCY_MS);
+        let core_latency = match (latency_base, round_trips.get(&deal.core_uid)) {
+            (Some(base), Some(rt)) => base + rt,
+            _ => latency,
+        };
         let entry = if entry_model_for(&deal.kind) {
-            // `MOON_TICKS_LATENCY_MS=<ms>` replays the entry with another replacement latency.
-            let latency = std::env::var("MOON_TICKS_LATENCY_MS")
-                .ok()
-                .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(DEFAULT_LATENCY_MS);
-            EntryParams::MoonShot(mshot_params(&sv, latency))
+            EntryParams::MoonShot(mshot_params(&sv, core_latency))
         } else {
             EntryParams::Fact
         };
-        let exit = exit_params(&sv);
+        let mut exit = exit_params(&sv);
+        if std::env::var_os("MOON_TICKS_LATENCY_EXIT").is_some() {
+            exit.latency_ms = core_latency;
+        }
         deal.step_lag_ms = core_lags.get(&deal.core_uid).copied().unwrap_or(0.0);
         if let (Some(cache), Some((exchange, market))) = (klines.as_ref(), address.as_ref()) {
             let btc = btc_of_exchange.get(exchange).map(String::as_str);
@@ -493,6 +618,42 @@ fn real_data_reproduction() {
             corridor_n += 1;
             corridor_hits +=
                 usize::from((down.max(up) / down.min(up) / predicted - 1.0).abs() <= 0.0005);
+        }
+        // The order's path from its creation, where the model replays the whole of it.
+        if let (EntryParams::MoonShot(params), Some(line)) = (&entry, entry_line.as_deref()) {
+            let from_creation = deal.entry_placed.is_some()
+                && deal
+                    .order_open_ms()
+                    .is_some_and(|created| (ticks[0].time_ms as i64) <= created);
+            if from_creation {
+                let (_, moves) =
+                    super::super::mshot::MshotEntry::new(params).trace(&deal, &ticks, Some(line));
+                let moved = params.modifiers.near_addition(&deal.deltas) != 0.0;
+                path.add(&deal, &moves, line, moved);
+                if std::env::var_os("MOON_TICKS_PATH_DEBUG").is_some() {
+                    let created = deal.order_open_ms().unwrap_or(deal.buy_ms);
+                    let fmt = |pts: &[(i64, f64)]| -> String {
+                        pts.iter()
+                            .take(14)
+                            .map(|(t, p)| format!("{:+}ms {:.8}", t - created, p))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    eprintln!(
+                        "    path {} {} buy {:+}ms fast {} rw {} rd {} near {:.3} far {:.3}\n      model  : {}\n      archive: {}",
+                        deal.coin,
+                        deal.core_name,
+                        deal.buy_ms - created,
+                        params.fast_algo,
+                        params.raise_wait_s,
+                        params.replace_delay_s,
+                        params.bounds_pct(&deal.deltas_at(created)).0,
+                        params.bounds_pct(&deal.deltas_at(created)).1,
+                        fmt(&moves),
+                        fmt(&verify::archived_replacements(line)),
+                    );
+                }
+            }
         }
         // The modelled line beside the archive's moves, for the eye.
         if let (Some(fill), Some(moves)) = (
@@ -536,6 +697,7 @@ fn real_data_reproduction() {
                     exit_points.as_deref(),
                     entry_line.as_deref(),
                     &entry,
+                    &exit,
                 );
             }
             eprintln!(
@@ -676,6 +838,30 @@ fn real_data_reproduction() {
         "entry from the order's creation: ✓ {created_hits}/{created_n} · stamped entries {stamped}"
     );
     eprintln!("saved corridors the model's band matches to 0.05 %: {corridor_hits}/{corridor_n}");
+    eprintln!(
+        "entry path from the creation: {} deals, whole path {} · archived moves matched {}/{} · model moves the archive lacks {}",
+        path.deals, path.whole, path.matched, path.archived, path.extra
+    );
+    eprintln!(
+        "entry path timing: {}/{} archived moves have a model move within the second",
+        path.timed, path.archived
+    );
+    for (name, errors) in ["with MShotAdd*", "without"].iter().zip(&path.level_errors) {
+        let mut abs: Vec<f64> = errors.iter().map(|e| e.abs()).collect();
+        abs.sort_by(f64::total_cmp);
+        let q = |f: f64| {
+            abs.get(((abs.len() as f64 - 1.0) * f) as usize)
+                .map(|v| (v * 1000.0).round() / 1000.0)
+        };
+        eprintln!(
+            "entry path level, {name}: {} moves · |err| p25 {:?} p50 {:?} p75 {:?} · model above {}",
+            errors.len(),
+            q(0.25),
+            q(0.5),
+            q(0.75),
+            errors.iter().filter(|e| **e > 0.0).count()
+        );
+    }
     print_delta_quality(&tracks, no_track);
     let mut unfit: Vec<(String, usize)> = unfit.into_iter().collect();
     unfit.sort_by_key(|u| std::cmp::Reverse(u.1));

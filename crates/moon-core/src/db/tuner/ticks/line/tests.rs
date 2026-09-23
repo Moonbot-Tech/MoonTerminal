@@ -107,9 +107,37 @@ fn the_archived_ask_sets_the_take_where_the_core_placed_it() {
         None
     );
     assert_eq!(archived_pre_spike_ask(None, &p, false), None);
-    // A short's take is the ask adjusted UP toward the entry: divide the other way.
+    // A short's take is the ask adjusted UP toward the entry, `ask / (1 − 0.2 %)`: the ask is
+    // the take times 0.998.
     let short_ask = archived_pre_spike_ask(Some(&[(0, 0.031603)]), &p, true).expect("on");
-    assert!((short_ask - 0.031603 / 1.002).abs() < 1e-12);
+    assert!((short_ask - 0.031603 * 0.998).abs() < 1e-12);
+}
+
+/// A short MoonShot's take is divided off the fill, `fill / (1 + SellPrice/100)`, and the ask's
+/// branch placed at `ask / (1 − adjust/100)` when it is the lower (the core developer,
+/// 2026-09-23; ONE and BCH_RP on the archive).
+#[test]
+fn a_short_moonshot_take_divides_off_the_fill() {
+    let p = ExitParams {
+        sell_price_pct: 1.0,
+        ..params()
+    };
+    let take = ExitModel::new(&p).take_level(&deal(true), &[], fill());
+    assert!((take - 100.0 / 1.01).abs() < 1e-9, "{take}");
+    let lifted = ExitParams {
+        sell_at_last_price: true,
+        sell_price_adjust_pct: 1.0,
+        ..p
+    };
+    let mut d = deal(true);
+    d.pre_spike_ask = Some(97.0);
+    let take = ExitModel::new(&lifted).take_level(&d, &[], fill());
+    assert!((take - 97.0 / 0.99).abs() < 1e-9, "{take}");
+    // A MoonHook short keeps the product: its stored take cannot tell the two apart.
+    let mut hook = deal(true);
+    hook.kind = "MoonHook".into();
+    let take = ExitModel::new(&p).take_level(&hook, &[], fill());
+    assert!((take - 99.0).abs() < 1e-9, "{take}");
 }
 
 // ---- PriceDown -------------------------------------------------------------------------------
@@ -362,17 +390,24 @@ fn sold(t_ms: i64, price: f64) -> Tick {
     }
 }
 
-/// The book-watching stop (`FastStopLoss` off) reads the BID through the prints that hit it —
-/// taker sells — on its own sample clock, not every print through the level.
-#[test]
-fn the_book_stop_fires_on_a_sample_of_the_bid_not_on_a_print() {
-    let book = ExitParams {
+/// A book-watching stop (`FastStopLoss` off) that reads the bare ticker price: `StopLossEMA`
+/// neither 0 (which adds the series) nor 3, 5, 10 (which average).
+fn bare_book_stop() -> ExitParams {
+    ExitParams {
         stop_loss_pct: -1.0,
         fast_stop_loss: false,
+        stop_loss_ema: 7.0,
         ..params()
-    };
+    }
+}
+
+/// The book-watching stop (`FastStopLoss` off) reads the ticker's BID through the prints that
+/// hit it — taker sells — on the ticker's clock, not every print through the level.
+#[test]
+fn the_book_stop_fires_on_a_sample_of_the_bid_not_on_a_print() {
+    let book = bare_book_stop();
     // A taker BUY through the level says nothing about the BID; the taker sell at 98.8 does,
-    // and the next sample after it — 4 s — fires, at the proxy's price.
+    // and the next arrival after it — 4.3 s — fires, at the proxy's price.
     let ticks = vec![
         tick(1_000, 98.5),
         sold(1_500, 99.5),
@@ -380,7 +415,10 @@ fn the_book_stop_fires_on_a_sample_of_the_bid_not_on_a_print() {
         tick(5_000, 100.0),
     ];
     let w = walk(&deal(false), &ticks, fill(), 101.0, &book);
-    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 4_000));
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms),
+        (ExitKind::Stop, 2 * TICKER_PERIOD_MS)
+    );
     assert!((w.exit.price - 98.8).abs() < 1e-4);
     // The fast stop takes the first print through the level, whichever side it hit.
     let fast = ExitParams {
@@ -395,38 +433,122 @@ fn the_book_stop_fires_on_a_sample_of_the_bid_not_on_a_print() {
 /// samples before a print, so the tape's end is where it must not be forgotten.
 #[test]
 fn the_book_stop_takes_the_sample_at_the_last_print() {
-    let book = ExitParams {
-        stop_loss_pct: -1.0,
-        fast_stop_loss: false,
-        ..params()
-    };
-    let w = walk(&deal(false), &[sold(2_000, 98.8)], fill(), 101.0, &book);
-    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 2_000));
+    let book = bare_book_stop();
+    let w = walk(
+        &deal(false),
+        &[sold(TICKER_PERIOD_MS, 98.8)],
+        fill(),
+        101.0,
+        &book,
+    );
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms),
+        (ExitKind::Stop, TICKER_PERIOD_MS)
+    );
     // A sample the tape ends before is not taken: nothing is known past the last print.
     let w = walk(&deal(false), &[sold(1_500, 98.8)], fill(), 101.0, &book);
     assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd);
 }
 
-/// `StopLossEMA` averages the samples, so a BID just past the level fires only once the
-/// average is past it too.
+/// `StopLossEMA` 3 averages the ticker's arrivals as the core does, `(avg·2 + bid)/3`, so a BID
+/// just past the level fires only once the average is past it too.
 #[test]
 fn the_stop_ema_waits_for_the_average() {
-    let ticks = vec![sold(1_500, 99.5), sold(2_500, 98.9), sold(9_000, 98.9)];
-    let plain = ExitParams {
-        stop_loss_pct: -1.0,
-        fast_stop_loss: false,
-        ..params()
-    };
-    let w = walk(&deal(false), &ticks, fill(), 101.0, &plain);
-    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 4_000));
-    // Samples 99.5, 98.9, 98.9, 98.9 at 2, 4, 6, 8 s: the EMA over 3 (α = 0.5) reads 99.5,
-    // 99.2, 99.05, 98.975 — past 99 at the fourth.
+    let ticks = vec![
+        sold(1_500, 99.5),
+        sold(2_500, 98.9),
+        sold(9_000, 98.9),
+        sold(13_000, 98.9),
+    ];
+    let bare = bare_book_stop();
+    let w = walk(&deal(false), &ticks, fill(), 101.0, &bare);
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms),
+        (ExitKind::Stop, 2 * TICKER_PERIOD_MS)
+    );
+    // Arrivals 99.5, then 98.9 from the second on: the average reads 99.5, 99.3, 99.167,
+    // 99.078, 99.019, 98.979 — past 99 at the sixth. An EMA of 2/(N + 1) = 0.5 would have
+    // crossed at the fourth.
     let smoothed = ExitParams {
         stop_loss_ema: 3.0,
-        ..plain
+        ..bare
     };
     let w = walk(&deal(false), &ticks, fill(), 101.0, &smoothed);
-    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 8_000));
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms),
+        (ExitKind::Stop, 6 * TICKER_PERIOD_MS)
+    );
+}
+
+/// The core keeps the average from its start, so at the fill it remembers the prices before it:
+/// the prints before the fill warm it, and can never fire it.
+#[test]
+fn the_stop_average_is_warm_at_the_fill() {
+    let smoothed = ExitParams {
+        stop_loss_ema: 3.0,
+        ..bare_book_stop()
+    };
+    let after = [sold(1_500, 98.9), sold(30_000, 98.9)];
+    let cold = walk(&deal(false), &after, fill(), 101.0, &smoothed);
+    assert_eq!(
+        (cold.exit.kind, cold.exit.t_ms),
+        (ExitKind::Stop, TICKER_PERIOD_MS)
+    );
+    // A minute at 101 before the fill: the average starts there, seven arrivals of 98.9 leave
+    // it at 101 · (2/3)^7 + 98.9 · (1 − (2/3)^7) = 99.02, and the eighth brings it to 98.98.
+    let mut warm: Vec<Tick> = (0..30).map(|i| sold(-60_000 + i * 2_000, 101.0)).collect();
+    warm.extend(after);
+    let w = walk(&deal(false), &warm, fill(), 101.0, &smoothed);
+    assert_eq!(w.exit.kind, ExitKind::Stop);
+    assert_eq!(w.exit.t_ms, 8 * TICKER_PERIOD_MS, "{w:?}");
+    // The prints before the fill, past the level, fire nothing before it.
+    let early = vec![sold(-3_000, 98.0), tick(500, 100.0)];
+    let w = walk(&deal(false), &early, fill(), 101.0, &bare_book_stop());
+    assert!(w.exit.t_ms > 0, "{w:?}");
+}
+
+/// A short's book stop watches the bare ASK: `StopLossEMA` averages a long's BID only.
+#[test]
+fn a_short_book_stop_does_not_average() {
+    let smoothed = ExitParams {
+        stop_loss_ema: 3.0,
+        ..bare_book_stop()
+    };
+    // A taker buy prints at the ASK: 100 before the fill, then 101.1 past a short's stop at 101
+    // — which an average of the two, 100.37, would not be.
+    let ticks = vec![tick(-1_000, 100.0), tick(1_500, 101.1), tick(5_000, 100.0)];
+    let w = walk(&deal(true), &ticks, fill(), 99.0, &smoothed);
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms),
+        (ExitKind::Stop, TICKER_PERIOD_MS)
+    );
+}
+
+/// At `StopLossEMA` 0 the core's price series fires the stop too: a lone print past the level
+/// is its tick's point, and fires when the tick closes; a spike among prints near the last
+/// point is not the point, and waits for the ticker.
+#[test]
+fn a_stop_without_averaging_fires_on_the_series_point() {
+    let series = ExitParams {
+        stop_loss_ema: 0.0,
+        ..bare_book_stop()
+    };
+    let lone = vec![tick(1_000, 98.5), tick(5_000, 100.0)];
+    let w = walk(&deal(false), &lone, fill(), 101.0, &series);
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 1_250));
+    assert!((w.exit.price - 98.5).abs() < 1e-4);
+    // The same print after a point at 100 and beside 99.9 in its tick: the point is 99.9.
+    let spike = vec![
+        tick(900, 100.0),
+        tick(1_000, 98.5),
+        tick(1_100, 99.9),
+        tick(5_000, 100.0),
+    ];
+    let w = walk(&deal(false), &spike, fill(), 101.0, &series);
+    assert_ne!(w.exit.kind, ExitKind::Stop, "{w:?}");
+    // At 7 the core reads the bare ticker price and no series.
+    let w = walk(&deal(false), &lone, fill(), 101.0, &bare_book_stop());
+    assert_ne!(w.exit.kind, ExitKind::Stop, "{w:?}");
 }
 
 /// A book stop's sale is a panic sell walked through the book: the verdict holds the model's

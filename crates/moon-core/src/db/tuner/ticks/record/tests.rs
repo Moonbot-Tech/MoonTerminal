@@ -184,8 +184,8 @@ fn the_stop_moment_comes_from_the_archive_then_the_close() {
     assert_eq!(anchor.quiet_until_ms, 3_600);
 }
 
-/// The verdict tests the proxy, never the anchor: the core's activation 5.5 s after the proxy's
-/// sample is a miss of the model, even though a variant would sell exactly where the core did.
+/// The verdict tests the proxy, never the anchor: the core's activation 5 s after the proxy's
+/// is a miss of the model, even though a variant would sell exactly where the core did.
 #[test]
 fn the_verdict_never_leans_on_the_anchor() {
     let mut d = stopped();
@@ -197,7 +197,7 @@ fn the_verdict_never_leans_on_the_anchor() {
     assert_eq!(
         v.exit,
         Some(false),
-        "the proxy fired at 4 s, the core at 8 s: {v:?}"
+        "the series fired at 2.75 s, the core at 8 s: {v:?}"
     );
     let w = walk(&d, &ticks, fact_fill(), 101.0, &book());
     assert_eq!((w.exit.t_ms, w.exit.price), (8_000, 97.0));

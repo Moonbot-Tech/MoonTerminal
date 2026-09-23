@@ -50,8 +50,34 @@ pub fn step_lag_samples(deal: &Deal, exit: &ExitParams, exit_points: &[(i64, f64
         .collect()
 }
 
-/// A core's step lag: the median of its samples — the mean of the two middle ones for an even
-/// count — or `None` below [`MIN_STEP_LAG_SAMPLES`].
+/// One archived line's replace round trips: for every re-place, how long the exchange took to
+/// answer the core's request, in milliseconds.
+///
+/// The core files a re-place as three points (the core developer, 2026-09-23, and every archived
+/// MoonShot entry line of that day): the old level's end at the exchange's RESPONSE, the new
+/// level's start at the REQUEST — earlier — and the new level again at the response, `(t_resp,
+/// old)`, `(t_req, new)`, `(t_resp, new)`, on the core's clock. The round trip is `t_resp −
+/// t_req`: while it runs the old order stands on the book and fills. A triple of any other shape
+/// is not a re-place and is left out.
+///
+/// Args:
+///     points: The archived line's `(t_ms, price)` points, in the archive's order.
+pub fn replace_round_trip_samples(points: &[(i64, f64)]) -> Vec<i64> {
+    let same = |a: f64, b: f64| (a - b).abs() <= 1e-12 * a.abs().max(b.abs());
+    points
+        .windows(3)
+        .filter_map(|w| {
+            let [(t_resp, old), (t_req, new), (t_again, again)] = [w[0], w[1], w[2]];
+            (!same(old, new) && same(new, again) && t_req < t_resp && t_again == t_resp)
+                .then_some(t_resp - t_req)
+        })
+        .collect()
+}
+
+/// A core's lag: the median of its samples — the mean of the two middle ones for an even
+/// count — or `None` below [`MIN_STEP_LAG_SAMPLES`]. Both the PriceDown step lag
+/// ([`step_lag_samples`]) and the replace round trip ([`replace_round_trip_samples`]) are read
+/// through it.
 ///
 /// Args:
 ///     samples: Every sample of the core's deals, in any order; sorted in place.

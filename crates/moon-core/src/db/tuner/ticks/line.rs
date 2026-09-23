@@ -30,11 +30,13 @@
 //! - **StopLoss** — `StopLoss` per cent from the buy (negative: a loss), armed
 //!   `StopLossDelay` seconds after the buy. With `FastStopLoss` the first print through it is
 //!   a market exit at the print's own price. Without it — the core's default — the core
-//!   watches the book's BID (a short's ASK) averaged over `StopLossEMA` samples, and the walk
-//!   reads a proxy of that: the last print on that side of the book (a taker sell prints at the
-//!   BID), sampled every [`STOP_SAMPLE_MS`], averaged the same way; the exit is at the sample,
-//!   at the proxy's price. Where the core's panic sell then fills is the book's business — see
-//!   [`super::verify`] for how the fact is judged.
+//!   watches the REST ticker's BID (a short's ASK), a long's averaged over `StopLossEMA` of the
+//!   ticker's arrivals, and the walk reads a proxy of that: the last print on that side of the
+//!   book (a taker sell prints at the BID), sampled every [`TICKER_PERIOD_MS`], averaged the
+//!   same way from before the fill on; at `StopLossEMA` 0 the core's price series fires it too
+//!   ([`SERIES_TICK_MS`]). The exit is at the sample, at the proxy's price. Where the core's
+//!   panic sell then fills is the book's business — see [`super::verify`] for how the fact is
+//!   judged.
 //!
 //! Every rule is written for a long and mirrored for a short by [`Side`]. A replacement reaches
 //! the exchange `latency_ms` later, as the entry's does: a spike through the OLD level in that
@@ -56,16 +58,22 @@ use crate::feed::types::Tick;
 /// The terminal's own floor on a step delay of zero: the FAQ's "0.33 s internal minimum".
 pub const STEP_FLOOR_MS: i64 = 330;
 
-/// How often the non-fast stop's BID proxy is sampled. The core's own cadence is not in the
-/// FAQ and the tape has no book, so this is a CALIBRATION, not the core's constant: against
-/// the activation the order archive records (the sell line's jump past the stop), on 199 live
-/// book-watching stops (2026-09-22), the first print through the level fired a median 3.9 s
-/// early with `StopLossEMA` at 3 and 0.6 s with it off; sampling the proxy every 2 s and
-/// averaging the samples brings both medians within 0.4 s and puts 64 of 98 (EMA off) and 35
-/// of 101 (EMA 3) within a second, against 53 and 25. Faster sampling left the EMA-3 stops
-/// seconds early, 3 s left the rest a second late. What the proxy still cannot see is the book
-/// itself, and the EMA-3 stops are where that shows.
-pub const STOP_SAMPLE_MS: i64 = 2_000;
+/// How often the core's REST ticker brings the BID (a short's ASK) the non-fast stop watches,
+/// and so how often the walk samples its proxy. The core developer (2026-09-23): the stop reads
+/// the ticker, not the book and not the trades; the ticker arrives every ~2–2.3 s (Gate's spot
+/// half a second slower, about once a second around each hour's turn); the stop is checked
+/// every ~0.1 s but the price only moves with the ticker, so it fires on the first arrival
+/// that puts it past the level. The middle of that range: over the 192 live book-watching
+/// stops of 2026-09-23, 2 000–2 300 ms move the stops judged on time by ±5, the noise of a
+/// phase no record keeps.
+pub const TICKER_PERIOD_MS: i64 = 2_150;
+
+/// The core's price-series tick: one point per 250 ms, of the prints the tick brought the one
+/// closest to the previous point (`docs-internal/STRATEGY_FORMULAS/deltas.md` §7). A stop at
+/// `StopLossEMA` 0 fires on that series as well as on the ticker's price (the core developer,
+/// 2026-09-23) — a lone print in its tick is a point, a spike among prints near the last
+/// point is not.
+pub const SERIES_TICK_MS: i64 = 250;
 
 /// How far past `PumpMoveTimer` the core's pump move lands, less the model's own placement
 /// latency: over 32 archived PumpsDetection lines (2026-09-22, every live Pump strategy runs
@@ -131,39 +139,150 @@ impl Side {
     }
 }
 
-/// The book-watching stop's state: a BID proxy — the last print on the stop's side of the
-/// book — sampled every [`STOP_SAMPLE_MS`] and averaged over `StopLossEMA` samples.
+/// The weight of a new ticker price in the average the non-fast stop watches, when the core
+/// keeps one: `avg = (avg·(N − 1) + bid) / N`, a weight of `1/N`, for a LONG at `StopLossEMA`
+/// 3, 5 or 10 only. Any other value — 7 included — and every short watch the bare price (the
+/// core developer, 2026-09-23). The FAQ's "average over the last 3, 5, 10 ticks" read as an
+/// EMA of `2/(N + 1)` forgot the price before a dump twice as fast, and fired early.
+fn stop_average_weight(params: &ExitParams, long: bool) -> Option<f64> {
+    let n = params.stop_loss_ema;
+    let whole = (n - n.round()).abs() < 1e-9;
+    (long && whole && matches!(n.round() as i64, 3 | 5 | 10)).then(|| 1.0 / n)
+}
+
+/// The book-watching stop's state: a ticker-price proxy — the last print on the stop's side of
+/// the book — sampled every [`TICKER_PERIOD_MS`] and, for a long at `StopLossEMA` 3, 5 or 10,
+/// averaged ([`stop_average_weight`]); at `StopLossEMA` 0 the core's price series as well.
+///
+/// The core keeps the average for every market from its start, so at the fill it is warm:
+/// after a dump it still remembers the prices above, and fires later than a fresh one. The
+/// walk feeds it the prints before the fill for that — they move the average and can never
+/// fire it.
 struct BookStop {
     long: bool,
     level: f64,
     /// The end of `StopLossDelay`: a sample before it is averaged but cannot fire.
     armed_at: i64,
-    /// The EMA weight, `2 / (StopLossEMA + 1)`; 1 without averaging.
-    alpha: f64,
+    /// The fill: a sample or a series point up to it only warms the state.
+    fill_ms: i64,
+    /// The average's weight, `None` for the bare price.
+    weight: Option<f64>,
     proxy: Option<f64>,
     avg: Option<f64>,
     next_sample: i64,
     /// Up to when the fact proves this stop did not fire (`record::StopAnchor`): a sample by
     /// then is averaged but cannot fire. `i64::MIN` when the walk is not the trade's own stop.
     quiet_until: i64,
+    /// The price series a stop at `StopLossEMA` 0 also fires on.
+    series: Option<SeriesPoint>,
+}
+
+/// The core's price series as the stop reads it (see [`SERIES_TICK_MS`]).
+struct SeriesPoint {
+    /// The series' last point.
+    point: Option<f64>,
+    /// Of the prints the open tick brought, the one closest to `point`.
+    candidate: Option<f64>,
+    /// When the open tick closes; every pending print is before it.
+    tick_end: i64,
+}
+
+impl SeriesPoint {
+    fn new(first_ms: i64) -> Self {
+        Self {
+            point: None,
+            candidate: None,
+            tick_end: next_series_tick(first_ms),
+        }
+    }
+
+    /// Read a print into the open tick.
+    fn see(&mut self, price: f64) {
+        self.candidate = match (self.point, self.candidate) {
+            (Some(point), Some(held)) if (held - point).abs() <= (price - point).abs() => {
+                Some(held)
+            }
+            // Before the first point any print will do; the latest stands.
+            _ => Some(price),
+        };
+    }
+}
+
+/// The end of the series tick a print at `t_ms` falls in: the ticks run on the clock's 250 ms
+/// boundaries, and a print ON a boundary opens the next tick.
+fn next_series_tick(t_ms: i64) -> i64 {
+    (t_ms.div_euclid(SERIES_TICK_MS) + 1) * SERIES_TICK_MS
 }
 
 impl BookStop {
-    /// Take every sample due strictly before `until` — the prints before it are all the
-    /// proxy has seen — and answer the first one whose average is past the level: the stop,
-    /// at the sample's moment and the proxy's price.
-    fn sample_before(&mut self, until: i64) -> Option<Exit> {
+    /// Args:
+    ///     long: The trade's side.
+    ///     level: The stop level.
+    ///     armed_at: The end of `StopLossDelay`.
+    ///     fill_ms: The fill.
+    ///     first_ms: The first print the walk will feed, before the fill when the tape reaches
+    ///         back: the ticker's clock is run back to it so the average is warm at the fill.
+    ///     params: The sell parameters, for `StopLossEMA`.
+    ///     quiet_until: See the field.
+    fn new(
+        long: bool,
+        level: f64,
+        armed_at: i64,
+        fill_ms: i64,
+        first_ms: i64,
+        params: &ExitParams,
+        quiet_until: i64,
+    ) -> Self {
+        // One period past the fill, and back from there in whole periods: the ticker's phase
+        // is on no record, so the fill anchors it, however far back the tape reaches.
+        let anchor = fill_ms + TICKER_PERIOD_MS;
+        let back = (anchor - first_ms).max(0) / TICKER_PERIOD_MS;
+        Self {
+            long,
+            level,
+            armed_at,
+            fill_ms,
+            weight: stop_average_weight(params, long),
+            proxy: None,
+            avg: None,
+            next_sample: anchor - back * TICKER_PERIOD_MS,
+            quiet_until,
+            series: (params.stop_loss_ema.abs() < 1e-9).then(|| SeriesPoint::new(first_ms)),
+        }
+    }
+
+    fn may_fire(&self, at: i64) -> bool {
+        at > self.fill_ms && at >= self.armed_at && at > self.quiet_until
+    }
+
+    /// Everything due before the print at `until` — the ticker's arrivals strictly before it,
+    /// the series ticks closing at or before it — and the earliest that put the stop past its
+    /// level: the stop, at that moment and that price.
+    fn before(&mut self, until: i64) -> Option<Exit> {
+        let by_ticker = self.samples_before(until);
+        let by_series = self.series_before(until);
+        match (by_ticker, by_series) {
+            (Some(t), Some(s)) => Some(if s.t_ms < t.t_ms { s } else { t }),
+            (t, s) => t.or(s),
+        }
+    }
+
+    /// The ticker's arrivals strictly before `until` — the prints before it are all the proxy
+    /// has seen — and the first whose price (averaged, when the core averages) is past the
+    /// level.
+    fn samples_before(&mut self, until: i64) -> Option<Exit> {
         while self.next_sample < until {
             let at = self.next_sample;
-            self.next_sample += STOP_SAMPLE_MS;
+            self.next_sample += TICKER_PERIOD_MS;
             let Some(bid) = self.proxy else {
                 continue;
             };
-            let avg = self
-                .avg
-                .map_or(bid, |a| self.alpha * bid + (1.0 - self.alpha) * a);
+            let avg = match (self.weight, self.avg) {
+                (Some(w), Some(avg)) => w * bid + (1.0 - w) * avg,
+                _ => bid,
+            };
             self.avg = Some(avg);
-            if at >= self.armed_at && at > self.quiet_until && reaches(avg, self.level, self.long) {
+            if self.may_fire(at) && reaches(avg, self.level, self.long) {
                 return Some(Exit {
                     t_ms: at,
                     price: bid,
@@ -174,16 +293,45 @@ impl BookStop {
         None
     }
 
-    /// Read a print into the proxy: a taker sell prints at the BID — a long's stop side; a
-    /// short's stop watches the ASK, where a taker buy prints.
+    /// The series tick the pending prints fall in, when it closes by `until`: its point, and
+    /// the stop when that point is strictly past the level. The ticks after it up to `until`
+    /// brought no print and add no point.
+    fn series_before(&mut self, until: i64) -> Option<Exit> {
+        let series = self.series.as_mut()?;
+        if series.tick_end > until {
+            return None;
+        }
+        let at = series.tick_end;
+        series.tick_end = next_series_tick(until);
+        let point = series.candidate.take()?;
+        series.point = Some(point);
+        let past = if self.long {
+            point < self.level
+        } else {
+            point > self.level
+        };
+        (past && self.may_fire(at)).then_some(Exit {
+            t_ms: at,
+            price: point,
+            kind: ExitKind::Stop,
+        })
+    }
+
+    /// Read a print: into the series, and into the proxy when it hit the stop's side — a taker
+    /// sell prints at the BID, a long's stop side; a short's stop watches the ASK, where a
+    /// taker buy prints.
     fn see(&mut self, tick: &Tick) {
+        let price = f64::from(tick.price);
+        if let Some(series) = self.series.as_mut() {
+            series.see(price);
+        }
         let stop_side = if self.long {
             crate::feed::types::Side::Sell
         } else {
             crate::feed::types::Side::Buy
         };
         if tick.side == stop_side {
-            self.proxy = Some(f64::from(tick.price));
+            self.proxy = Some(price);
         }
     }
 }
@@ -381,18 +529,32 @@ pub fn walk_held(
     let anchor = deal.stop_anchor.filter(|a| a.holds(deal, fill, params));
     let quiet_until = anchor.map_or(i64::MIN, |a| a.quiet_until_ms);
     let fired = anchor.and_then(|a| a.fired);
-    // The non-fast stop's BID proxy: the last print on the stop's side of the book, sampled on
-    // its own clock and averaged over `StopLossEMA` samples (see `STOP_SAMPLE_MS`).
+    // The non-fast stop's ticker proxy: the last print on the stop's side of the book, sampled
+    // on the ticker's clock, averaged as the core averages (see `BookStop`) — warmed on the
+    // prints before the fill, which can never fire it.
     let book_stop = stop_on && !params.fast_stop_loss;
-    let mut book = book_stop.then(|| BookStop {
-        long: side.long,
-        level: stop_level,
-        armed_at: stop_from,
-        alpha: 2.0 / (params.stop_loss_ema.max(1.0) + 1.0),
-        proxy: None,
-        avg: None,
-        next_sample: fill.t_ms + STOP_SAMPLE_MS,
-        quiet_until,
+    let mut book = book_stop.then(|| {
+        let first_ms = ticks
+            .first()
+            .map_or(fill.t_ms, |t| (t.time_ms as i64).min(fill.t_ms));
+        let mut book = BookStop::new(
+            side.long,
+            stop_level,
+            stop_from,
+            fill.t_ms,
+            first_ms,
+            params,
+            quiet_until,
+        );
+        for tick in ticks
+            .iter()
+            .take_while(|t| (t.time_ms as i64) <= fill.t_ms)
+            .filter(|t| t.price.is_finite() && t.price > 0.0)
+        {
+            let _warm_only = book.before(tick.time_ms as i64);
+            book.see(tick);
+        }
+        book
     });
     let anchored_stop = |at: i64, price: f64, points: Vec<LinePoint>| LineWalk {
         exit: Exit {
@@ -502,10 +664,11 @@ pub fn walk_held(
             pending = None;
         }
         // The book-watching stop samples between prints: every sample due BEFORE this print
-        // reads the proxy the earlier prints left, and one past the level fires at its own
-        // moment, ahead of anything this print does.
+        // reads the proxy the earlier prints left, every series tick closing by it the points
+        // they left, and one past the level fires at its own moment, ahead of anything this
+        // print does.
         if let Some(book) = book.as_mut() {
-            if let Some(exit) = book.sample_before(t_ms) {
+            if let Some(exit) = book.before(t_ms) {
                 return LineWalk { exit, points };
             }
             book.see(tick);
@@ -613,7 +776,7 @@ pub fn walk_held(
     }
     // The book stop's samples up to the tape's end — the one AT the last print included — read
     // the proxy the last prints left; the loop only ever reaches the samples before a print.
-    if let Some(exit) = book.as_mut().and_then(|book| book.sample_before(tail + 1)) {
+    if let Some(exit) = book.as_mut().and_then(|book| book.before(tail + 1)) {
         return LineWalk { exit, points };
     }
     // Nothing closed it inside the tape. Not the report's own exit: a variant that never

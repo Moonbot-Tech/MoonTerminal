@@ -111,14 +111,16 @@ pub struct ExitParams {
     pub stop_loss_pct: f64,
     pub stop_loss_delay_s: f64,
     /// `FastStopLoss` — what the stop watches. YES: the trades ("crosses", FAQ), so the first
-    /// print through the level fires it. NO — the core's default: the book's BID (the ASK for a
-    /// short), averaged over `StopLossEMA` of its own samples, which the trade tape does not
+    /// print through the level fires it. NO — the core's default: the REST ticker's BID (the
+    /// ASK for a short), a long's averaged per `StopLossEMA`, which the trade tape does not
     /// carry; the walk then reads a sampled proxy of it (see [`super::line`]).
     pub fast_stop_loss: bool,
-    /// `StopLossEMA` — how many of the core's samples the non-fast stop averages (FAQ: 0 off,
-    /// 3/5/10 "the last 3, 5, 10 ticks", so that a single spike through the line does not start
-    /// the panic sell). Ignored by a fast stop — the FAQ's own distinction, and the live
-    /// activations agree: 48 fast stops with it at 3 fire as promptly as 81 without it.
+    /// `StopLossEMA` — the non-fast stop's average of the ticker's BID, `(avg·(N − 1) + bid)/N`
+    /// per arrival, kept for a LONG at 3, 5 or 10 only; any other value and every short watch the
+    /// bare price, and at 0 the core's price series fires it too (the core developer,
+    /// 2026-09-23; see `line::stop_average_weight`). Ignored by a fast stop — the FAQ's own
+    /// distinction, and the live activations agree: 48 fast stops with it at 3 fire as promptly
+    /// as 81 without it.
     pub stop_loss_ema: f64,
     /// A sell rule the strategy switched on that the model does not have. The walk runs as if
     /// it were off, and the verdict answers nothing for such a trade, which keeps it out of the
@@ -229,23 +231,29 @@ impl<'a> ExitModel<'a> {
         // (`PriceDownAllowedDrop`, a negative `SellShotDistance`), and they get there by
         // stepping down from the take, not by starting underneath it.
         let pct = (self.base_take_pct(deal) + self.modifier_pct(deal, fill.t_ms)).max(0.0);
-        let by_pct = fill.price * pct / 100.0;
+        let mshot = take_model_for(&deal.kind);
         let mut take = if deal.is_long() {
-            fill.price + by_pct
+            fill.price * (1.0 + pct / 100.0)
+        } else if mshot {
+            // The core divides a short MoonShot's take off the fill (the core developer,
+            // 2026-09-23): `fill / (1 + SellPrice/100)`. The two archived short takes that
+            // SellPrice placed and whose price step tells the formulas apart (ONE, BCH_RP) sit
+            // on it; MoonHook's stored take is rounded too coarsely to tell, and keeps the
+            // product.
+            fill.price / (1.0 + pct / 100.0)
         } else {
-            fill.price - by_pct
+            fill.price * (1.0 - pct / 100.0)
         };
         if self.params.sell_at_last_price {
             let pre = deal
                 .pre_spike_ask
                 .filter(|p| p.is_finite() && *p > 0.0)
                 .or_else(|| pre_spike_price(ticks, fill.t_ms));
-            if let Some(pre) = pre {
-                let adjust = pre * self.params.sell_price_adjust_pct / 100.0;
+            if let (Some(pre), Some(factor)) = (pre, ask_take_factor(self.params, deal.is_short)) {
                 take = if deal.is_long() {
-                    take.max(pre - adjust)
+                    take.max(pre * factor)
                 } else {
-                    take.min(pre + adjust)
+                    take.min(pre * factor)
                 };
             }
         }
@@ -428,17 +436,31 @@ pub fn archived_take(exit_points: Option<&[(i64, f64)]>) -> Option<f64> {
     (take.is_finite() && take > 0.0).then_some(take)
 }
 
+/// What `MShotSellAtLastPrice` multiplies the ask by to place the take: `1 − adjust/100` for a
+/// long, `1/(1 − adjust/100)` for a short, whose take sits below the entry and is adjusted UP
+/// toward it (the core developer, 2026-09-23: `max(Y·(1 − adj/100), …)` and
+/// `min(Y/(1 − adj/100), …)`). `None` for an adjustment of 100 % or more, which leaves no price.
+pub fn ask_take_factor(params: &ExitParams, is_short: bool) -> Option<f64> {
+    let keep = 1.0 - params.sell_price_adjust_pct / 100.0;
+    // NaN included: an adjustment the strategy did not spell as a number leaves no price.
+    if keep.is_nan() || keep <= 0.0 {
+        return None;
+    }
+    Some(if is_short { 1.0 / keep } else { keep })
+}
+
 /// The pre-spike ask behind an archived Exit line: its first point is the take as the core
-/// placed it, `ask · (1 − MShotSellPriceAdjust/100)` when `MShotSellAtLastPrice` lifted it —
-/// `ask · (1 + adjust)` for a short, whose take sits below the entry and is adjusted UP toward
-/// it — so the ask is that point with the trade's own adjustment divided out. `None` when the
-/// rule was off (the take came from `SellPrice`, and the archive says nothing about the ask),
-/// when the archive holds no Exit line, or when the first point is not a price.
+/// placed it, the ask times [`ask_take_factor`] when `MShotSellAtLastPrice` placed it, so the
+/// ask is that point with the factor divided out. The ask's branch carries no delta modifier
+/// (the core developer, 2026-09-23), so the ask read back is the core's own, to the price step.
+/// `None` when the rule was off (the take came from `SellPrice`, and the archive says nothing
+/// about the ask), when the archive holds no Exit line, or when the first point is not a price.
 ///
-/// When `SellPrice` alone set the take higher than the ask would have, the division reads a
+/// When `SellPrice` alone set the take farther than the ask would have, the division reads a
 /// slightly high ask back — and the same `max` (a long) or `min` (a short, whose take sits
 /// below the entry) puts the take on `SellPrice` again, so the trade's own replay is exact
-/// either way; a variant with a smaller adjustment inherits the overread.
+/// either way; a variant with a smaller adjustment inherits the overread. On the live sample
+/// (2026-09-23) the ask placed 776 of 785 archived MoonShot takes.
 ///
 /// Args:
 ///     exit_points: The archived Exit line's `(t_ms, price)` points, in the archive's order.
@@ -452,14 +474,7 @@ pub fn archived_pre_spike_ask(
     if !params.sell_at_last_price {
         return None;
     }
-    let factor = if is_short {
-        1.0 + params.sell_price_adjust_pct / 100.0
-    } else {
-        1.0 - params.sell_price_adjust_pct / 100.0
-    };
-    if !(factor > 0.0) {
-        return None;
-    }
+    let factor = ask_take_factor(params, is_short)?;
     let (_, take) = exit_points?.first().copied()?;
     (take.is_finite() && take > 0.0).then_some(take / factor)
 }

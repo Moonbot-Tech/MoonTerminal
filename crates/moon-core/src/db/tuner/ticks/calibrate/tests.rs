@@ -98,6 +98,27 @@ fn a_line_without_price_down_gives_nothing() {
     assert!(step_lag_samples(&deal(), &ExitParams::default(), &archived).is_empty());
 }
 
+/// A re-place is filed as the old level's end at the answer, the new level's start at the
+/// request, and the new level again at the answer: the round trip is the answer less the
+/// request. Any other shape — a plain step, a point that repeats — is no re-place.
+#[test]
+fn the_replace_round_trip_reads_the_request_and_the_answer() {
+    // FATCOIN on GateF, 2026-09-23: requested at 23 940, answered at 23 972.
+    let line = [
+        (0, 0.00191),
+        (23_972, 0.00191),
+        (23_940, 0.00189),
+        (23_972, 0.00189),
+        (29_347, 0.00189),
+        (29_332, 0.00185),
+        (29_347, 0.00185),
+    ];
+    assert_eq!(replace_round_trip_samples(&line), vec![32, 15]);
+    // A line of plain steps, each at its own moment, holds none.
+    let steps = [(0, 101.0), (1_000, 100.9), (2_000, 100.8)];
+    assert!(replace_round_trip_samples(&steps).is_empty());
+}
+
 /// The median, and nothing from too few samples to trust.
 #[test]
 fn the_core_lag_is_the_median_of_enough_samples() {

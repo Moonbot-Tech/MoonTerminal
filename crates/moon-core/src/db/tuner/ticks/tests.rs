@@ -592,10 +592,11 @@ fn an_ask_reference_follows_buy_side_prints_only() {
     assert!((fill.price - 99.99).abs() < 1e-9, "{}", fill.price);
 }
 
+/// The corridor is measured from the current print, whatever `FastShotAlgo` is; a re-placed
+/// order goes off the lowest print of the last 100 ms, not off the print that decided the move
+/// (the core developer, 2026-09-23).
 #[test]
-fn fast_algo_measures_the_corridor_from_the_extreme_print_of_the_last_100_ms() {
-    // An 80 ms replace delay and no latency, so the move lands between prints and the two
-    // references can be told apart.
+fn the_corridor_reads_the_last_print_and_re_places_off_the_windows_low() {
     let params = MshotParams {
         fast_algo: true,
         raise_wait_s: 30.0,
@@ -603,15 +604,8 @@ fn fast_algo_measures_the_corridor_from_the_extreme_print_of_the_last_100_ms() {
         latency_ms: 0.0,
         ..mshot()
     };
-    let plain = MshotParams {
-        fast_algo: false,
-        ..params.clone()
-    };
-    // Level 99 off 100. A dip to 99.4 at t=1000 (0.40 % < 0.5 %: an approach) followed by 99.6
-    // prints at t=1050 and t=1090. The plain reference is the last print, 99.6 → 0.60 %, inside
-    // the corridor: the approach is forgotten and 99.0 at t=1100 fills. The fast reference is
-    // the lowest print of the last 100 ms — still the 99.4 at t=1090 — so the approach has
-    // held for 90 ms ≥ 80 ms and the order moves off 99 before the 99.0 arrives.
+    // Level 99 off 100. A dip to 99.4 at t=1000 (0.40 % < 0.5 %: an approach) and back to 99.6
+    // before the 80 ms delay ran out: the approach is forgotten, and 99.0 at t=1100 fills.
     let dip = tape(&[
         (0, 100.0),
         (1_000, 99.4),
@@ -619,27 +613,66 @@ fn fast_algo_measures_the_corridor_from_the_extreme_print_of_the_last_100_ms() {
         (1_090, 99.6),
         (1_100, 99.0),
     ]);
-    assert!(
-        fill_of(&deal(), &dip, &plain).is_some(),
-        "plain: still at 99"
-    );
-    assert_eq!(
-        fill_of(&deal(), &dip, &params),
-        None,
-        "fast: moved off the 99.4"
-    );
-    // The 99.4 falls out of the window after 100 ms: at t=1150 the reference is 99.6 again, the
-    // approach is forgotten, and 99.0 fills.
-    let back = tape(&[(0, 100.0), (1_000, 99.4), (1_150, 99.6), (1_200, 99.0)]);
-    let fill = fill_of(&deal(), &back, &params).expect("still at 99 after the dip aged out");
-    assert!((fill.price - 99.0).abs() < 1e-9);
-    // Without a raise wait the fast algo is algorithm 1, which the model reads as the plain
-    // last print.
-    let algo1 = MshotParams {
-        raise_wait_s: 0.0,
+    for fast_algo in [true, false] {
+        let p = MshotParams {
+            fast_algo,
+            ..params.clone()
+        };
+        let fill = fill_of(&deal(), &dip, &p).expect("still at 99");
+        assert!(
+            (fill.price - 99.0).abs() < 1e-9,
+            "fast {fast_algo}: {fill:?}"
+        );
+    }
+    // An approach held 60 ms past a 50 ms delay: the order is re-placed 1 % under the window's
+    // low, 99.40 — not under 99.48, the print that decided the move — so 98.45 does not reach
+    // it, and 98.40 does.
+    let held = MshotParams {
+        replace_delay_s: 0.05,
         ..params
     };
-    assert!(fill_of(&deal(), &dip, &algo1).is_some());
+    let ticks = tape(&[
+        (0, 100.0),
+        (1_000, 99.45),
+        (1_020, 99.40),
+        (1_060, 99.48),
+        (1_200, 98.45),
+        (1_300, 98.40),
+    ]);
+    let fill = fill_of(&deal(), &ticks, &held).expect("filled");
+    assert_eq!(fill.t_ms, 1_300);
+    assert!(
+        (fill.price - f64::from(99.40_f32) * 0.99).abs() < 1e-9,
+        "{fill:?}"
+    );
+}
+
+/// One re-place at a time: while the last one is on its way to the exchange, a spike's prints
+/// move nothing — the order the spike meets is the one the exchange has.
+#[test]
+fn no_re_place_while_the_last_is_in_flight() {
+    let params = MshotParams {
+        latency_ms: 300.0,
+        ..mshot()
+    };
+    // Level 99 off 100, on the book at once (placed off the first print). At t=1000 the price
+    // runs 1.59 % away, past the 1.5 % edge: the order is re-placed off 100.6 (99.594), on the
+    // book at 1300. At t=1150 101.2 runs away again; the move is in flight, so nothing moves —
+    // chasing it would have put the order at 100.188, which 100.15 fills. The exchange's
+    // 99.594 is what 99.5 fills.
+    let ticks = tape(&[
+        (0, 100.0),
+        (1_000, 100.6),
+        (1_150, 101.2),
+        (1_500, 100.15),
+        (1_600, 99.5),
+    ]);
+    let fill = fill_of(&deal(), &ticks, &params).expect("filled");
+    assert_eq!(fill.t_ms, 1_600);
+    assert!(
+        (fill.price - f64::from(100.6_f32) * 0.99).abs() < 1e-9,
+        "{fill:?}"
+    );
 }
 
 #[test]
@@ -773,16 +806,17 @@ fn sell_delay_arms_the_take_late() {
     assert_eq!((out.kind, out.t_ms), (ExitKind::Take, 1_700));
 }
 
+/// A short MoonShot's take sits below the fill, divided off it: `101 / (1 + 1 %)` = 100.
 #[test]
 fn a_short_take_is_below_the_fill() {
     let fill = Fill {
         t_ms: 1_000,
         price: 101.0,
     };
-    let ticks = tape(&[(1_000, 101.0), (2_000, 100.0), (3_000, 99.9)]);
+    let ticks = tape(&[(1_000, 101.0), (2_000, 100.05), (3_000, 99.95)]);
     let out = ExitModel::new(&ExitParams::default()).exit(&short_deal(), &ticks, fill);
     assert_eq!((out.kind, out.t_ms), (ExitKind::Take, 3_000));
-    assert!((out.price - 99.99).abs() < 1e-9);
+    assert!((out.price - 100.0).abs() < 1e-9);
 }
 
 // ---- simulate: the whole trade -----------------------------------------------------------
@@ -808,7 +842,9 @@ fn simulate_chains_entry_and_exit_and_signs_the_result() {
         &ExitParams::default(),
         None,
     );
-    assert!((short.profit_pct.unwrap() - 1.0).abs() < 1e-9);
+    // Filled at 101, taken at 101 / 1.01 = 100: 1 − 1/1.01 of the fill.
+    let pct = short.profit_pct.unwrap();
+    assert!((pct - 100.0 * (1.0 - 1.0 / 1.01)).abs() < 1e-9, "{pct}");
 }
 
 #[test]

@@ -54,6 +54,14 @@ use crate::feed::types::Tick;
 /// move: the archive stamps the core's own moment, the model the print that triggered it.
 pub const POINT_TIME_TOLERANCE_MS: i64 = 1_000;
 
+/// How far apart a modelled and a factual book-watching stop (`FastStopLoss` off) may fire and
+/// still be the same stop: one gap of the REST ticker the core reads that stop's price off —
+/// 2–2.3 s (the core developer, 2026-09-23). The core fires on the first arrival that puts the
+/// price past the level, the model on its own sample clock, and the ticker's phase is on no
+/// record: a dump through the level fires both at their next arrival, up to a whole gap apart.
+/// On the 192 live book-watching stops of 2026-09-23, a second judged 112 on time, the gap 141.
+pub const BOOK_STOP_TIME_TOLERANCE_MS: i64 = 2_300;
+
 /// Tolerance on a STOP's level: the modelled level against the one the core fixed carries
 /// `StopLossModifier` over deltas the model only partly re-reads live — the coin's ranges where
 /// the deal has a track, the BTC, market, mark and price-bug terms as the report's one snapshot
@@ -493,8 +501,12 @@ fn verify_stop(
         (matched_points(modelled, &moves), moves.len())
     });
     let line_ok = points.is_none_or(|(matched, total)| matched == total);
-    let on_time =
-        (closed.t_ms - activation.unwrap_or(deal.close_ms)).abs() <= POINT_TIME_TOLERANCE_MS;
+    let tolerance_ms = if exit.fast_stop_loss {
+        POINT_TIME_TOLERANCE_MS
+    } else {
+        BOOK_STOP_TIME_TOLERANCE_MS
+    };
+    let on_time = (closed.t_ms - activation.unwrap_or(deal.close_ms)).abs() <= tolerance_ms;
     match stated {
         Some(stated) => {
             let dev = deviation_pct(level, stated);
