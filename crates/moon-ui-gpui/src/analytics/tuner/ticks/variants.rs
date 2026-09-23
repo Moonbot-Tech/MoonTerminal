@@ -15,6 +15,7 @@
 //! core's did (`record::StopAnchor`) — the book the tape does not carry, answered by the fact.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::*;
@@ -22,14 +23,15 @@ use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
 use super::super::shared::N_VAR;
-use super::state::{NowValue, SuggState};
+use super::state::SuggState;
 use super::tape::{PendingDeal, prepare_sample};
 use crate::analytics::bg::ReadLane;
 use moon_core::db::tuner::threshold_search::SearchHandle;
 use moon_core::db::tuner::ticks::TICK_PARAMS;
 use moon_core::db::tuner::ticks::params::ParamGroup;
 use moon_core::db::tuner::ticks::search::{
-    DEFAULT_MAX_PASSES, SearchParams, suggest, train_len, variant_tally_by_deal,
+    DEFAULT_MAX_PASSES, SearchMiss, SearchParams, check_corridors, suggest, train_len,
+    variant_tally_by_deal,
 };
 use moon_core::db::tuner::ticks::stats_of;
 
@@ -314,6 +316,7 @@ impl AnalyticsView {
             .ok()
             .filter(|n| *n > 0);
         let train_frac = super::super::filter::state::train_frac(self.ticks.train_pct);
+        let keep_corridor = self.ticks.keep_corridor;
         // A floor over the slice the search fits on no point can keep: say so before a run that
         // can only come back empty.
         let closes: Vec<i64> = pending.iter().map(|d| d.deal.close_ms).collect();
@@ -351,6 +354,7 @@ impl AnalyticsView {
                     train_frac,
                     max_passes,
                     model,
+                    keep_corridor,
                 };
                 suggest(&deals, &params, &handle)
             },
@@ -360,7 +364,7 @@ impl AnalyticsView {
                 }
                 this.ticks.sugg = SuggState::Idle;
                 match result {
-                    Some(result) => {
+                    Ok(result) => {
                         match only {
                             None => {
                                 this.ticks.variants[0] =
@@ -381,11 +385,17 @@ impl AnalyticsView {
                         this.ticks.last_result = Some(result);
                         this.arm_ticks_variants(cx);
                     }
-                    // Under a floor, "nothing" is that no point kept it.
-                    None => {
-                        this.ticks.sugg_note = Some(match min_n {
-                            Some(n) => t!("analytics.ticks.sugg_floor", n = n).to_string(),
-                            None => t!("analytics.ticks.sugg_none").to_string(),
+                    // Why nothing: the floor no point kept — the typed one, or the search's own
+                    // tenth of the training slice —, the corridor none kept, or nothing at all.
+                    Err(miss) => {
+                        this.ticks.sugg_note = Some(match miss {
+                            SearchMiss::Floor => t!(
+                                "analytics.ticks.sugg_floor",
+                                n = min_n.unwrap_or((train_n as i64 / 10).max(1))
+                            )
+                            .to_string(),
+                            SearchMiss::Corridor => t!("analytics.ticks.sugg_corridor").to_string(),
+                            SearchMiss::Nothing => t!("analytics.ticks.sugg_none").to_string(),
                         });
                     }
                 }
@@ -412,7 +422,7 @@ impl AnalyticsView {
             log::info!("analytics: 'Save' (ticks) - no variant to write");
             return;
         }
-        let warns = self.ticks_change_warnings(&changes);
+        let warns = self.ticks_change_warnings(&changes, cx);
         self.open_change_dialog(targets, changes, None, Vec::new(), warns, false, cx);
     }
 
@@ -426,39 +436,74 @@ impl AnalyticsView {
             return;
         };
         let changes = self.ticks.variant_changes(0);
-        let warns = self.ticks_change_warnings(&changes);
+        let warns = self.ticks_change_warnings(&changes, cx);
         self.open_copy_with(target, changes, warns, window, cx);
     }
 
-    /// The honesty line of a write: a closer `MShotPrice` is UNDERESTIMATED by the sample
-    /// (spikes the real order never reached are not in the report), so the dialog says so —
-    /// when the value is closer than ANY strategy's own, not only when they all agree on one.
-    fn ticks_change_warnings(&self, changes: &[(String, String)]) -> Vec<String> {
-        let mut warns = Vec::new();
-        let parse = |v: &str| v.replace(',', ".").parse::<f64>().ok();
-        let Some(value) = changes
-            .iter()
-            .find(|(k, _)| k == "MShotPrice")
-            .and_then(|(_, v)| parse(v))
-        else {
-            return warns;
-        };
-        let closer = self.ticks.data.data().is_some_and(|d| {
-            let agreed = match d.now.get("MShotPrice") {
-                Some(NowValue::Same(v)) => parse(v),
-                _ => None,
-            };
-            agreed
-                .into_iter()
-                .chain(
-                    d.own
-                        .values()
-                        .filter_map(|own| own.get("MShotPrice").and_then(|v| parse(v))),
-                )
-                .any(|base| value < base)
+    /// The honesty lines of a write. A variant whose corridor fields are inverted
+    /// (`MShotPriceMin ≥ MShotPrice`, which the search never proposes) is judged on a corridor
+    /// the core's fields do not describe; one whose corridor comes nearer the price than a
+    /// trade's own — the rule the search keeps under "keep the corridor"
+    /// (`search::check_corridors`), asked of В1 as it will be written, typed or found — is
+    /// judged on a sample without the spikes such an order would catch, so the dialog says on
+    /// how many trades it does. Over the rows the columns and the search replay, each on its
+    /// strategy's current values as they take them, so "M" is the column's "by N"; and only
+    /// for a variant that moves an Entry field — one that leaves the corridor alone moves
+    /// nothing a warning could be about.
+    fn ticks_change_warnings(
+        &self,
+        changes: &[(String, String)],
+        cx: &Context<Self>,
+    ) -> Vec<String> {
+        let moves_entry = changes.iter().any(|(key, _)| {
+            TICK_PARAMS
+                .iter()
+                .any(|f| f.key == key && f.group == ParamGroup::Entry)
         });
-        if closer {
-            warns.push(t!("analytics.ticks.closer_warn").to_string());
+        let Some(data) = self.ticks.data.data().filter(|_| moves_entry) else {
+            return Vec::new();
+        };
+        let deals: Vec<(
+            &moon_core::db::tuner::ticks::Deal,
+            Arc<HashMap<String, String>>,
+        )> = data
+            .replayable()
+            .map(|r| {
+                let own = data
+                    .own
+                    .get(&(r.deal.strategy_id, r.deal.core_uid))
+                    .cloned()
+                    .unwrap_or_default();
+                (&r.deal, own)
+            })
+            .collect();
+        let defaults = self.filter_defaults(cx);
+        let check = check_corridors(
+            deals.iter().map(|(deal, own)| (*deal, own.as_ref())),
+            &defaults,
+            changes,
+            super::model_cfg::current(),
+        );
+        let mut warns = Vec::new();
+        if check.inverted > 0 {
+            warns.push(
+                t!(
+                    "analytics.ticks.inverted_warn",
+                    n = check.inverted,
+                    m = check.checked
+                )
+                .to_string(),
+            );
+        }
+        if check.nearer > 0 {
+            warns.push(
+                t!(
+                    "analytics.ticks.closer_warn",
+                    n = check.nearer,
+                    m = check.checked
+                )
+                .to_string(),
+            );
         }
         warns
     }

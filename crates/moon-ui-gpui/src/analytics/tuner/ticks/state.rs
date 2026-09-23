@@ -336,6 +336,9 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) passes: String,
     /// The group gate, per cent of reproduced trades; empty = [`DEFAULT_GATE_PCT`].
     pub(in crate::analytics::tuner) gate_pct: String,
+    /// Whether the search keeps every trade's entry corridor at least as far from the price as
+    /// the trade's own (`SearchParams::keep_corridor`). On unless the user turned it off.
+    pub(in crate::analytics::tuner) keep_corridor: bool,
     /// Whether the search settings popover is open.
     pub(in crate::analytics::tuner) sugg_cfg_open: bool,
     /// Whether the model settings popover is open.
@@ -415,6 +418,7 @@ impl Default for TicksState {
             last_seed: None,
             passes: String::new(),
             gate_pct: String::new(),
+            keep_corridor: true,
             sugg_cfg_open: false,
             model_cfg_open: false,
             sugg: SuggState::Idle,
@@ -464,6 +468,7 @@ impl TicksState {
         self.gate_pct = saved.gate_pct.map(|n| n.to_string()).unwrap_or_default();
         self.locked = saved.locked.iter().cloned().collect();
         self.trade.open = saved.trade_open;
+        self.keep_corridor = !saved.allow_closer_corridor;
     }
 
     /// The axis' settings as the layout persists them, the model's from their process-wide
@@ -481,6 +486,7 @@ impl TicksState {
             locked,
             model: super::model_cfg::current(),
             trade_open: self.trade.open,
+            allow_closer_corridor: !self.keep_corridor,
         }
     }
 

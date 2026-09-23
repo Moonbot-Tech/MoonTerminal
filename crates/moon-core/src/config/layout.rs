@@ -647,6 +647,10 @@ pub struct TicksAxisLayout {
     pub model: crate::db::tuner::ticks::ModelSettings,
     /// Whether the trade pane under the deal table is open.
     pub trade_open: bool,
+    /// Whether the search may bring a trade's entry corridor nearer the price than the trade's
+    /// own. Off by default — and stored this way round so that a config written before the
+    /// switch existed reads it off, the guard on (`SearchParams::keep_corridor`).
+    pub allow_closer_corridor: bool,
 }
 
 /// Complete window layout.

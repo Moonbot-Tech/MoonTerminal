@@ -302,7 +302,43 @@ impl MshotParams {
         let far = (self.price_pct + self.modifiers.far_addition(deltas)).max(near);
         (near, far)
     }
+
+    /// Whether the near bound sits below the far one — `MShotPriceMin < MShotPrice`, the
+    /// corridor the fields describe: the price moves above the order between the two (FAQ: 10 %
+    /// and 7 %, the price between +7 and +10 %). A pair at or past that is a corridor no field
+    /// describes; the model reads it as a band of no width (`bounds_pct` lifts the far bound to
+    /// the near one), and what the core does with it is not known — a variant built on it is
+    /// judged on a regime that may not exist.
+    pub fn is_ordered(&self) -> bool {
+        self.price_min_pct < self.price_pct
+    }
+
+    /// Whether this corridor stands at least as far from the price as `own` at every one of
+    /// `deltas` — both bounds, under the same deltas. The corridor is what the delta modifiers
+    /// make of the base fields, so a variant may move its distance between `MShotPrice` and the
+    /// `MShotAdd*` fields, but never end up nearer the price than the trade did: an order nearer
+    /// the price fills on spikes the real one never reached, and those trades are not in the
+    /// sample the variant is judged on.
+    ///
+    /// Args:
+    ///     own: The corridor the trade ran with.
+    ///     deltas: The deltas its entry order lived through ([`Deal::entry_deltas`]).
+    ///     near_too: Whether the near bound is held as well as the far one — not under
+    ///         [`EntryMethod::Shift`], which places the order at the far bound and reads nothing
+    ///         of the near one.
+    pub fn never_closer_than(&self, own: &MshotParams, deltas: &[Deltas], near_too: bool) -> bool {
+        deltas.iter().all(|d| {
+            let (near, far) = self.bounds_pct(d);
+            let (own_near, own_far) = own.bounds_pct(d);
+            far >= own_far - CORRIDOR_EPS_PCT && (!near_too || near >= own_near - CORRIDOR_EPS_PCT)
+        })
+    }
 }
+
+/// How far below the fact's bound, in per cent, a variant's bound may sit and still count as
+/// not nearer: the same corridor arrived at through a different sum of modifiers differs only
+/// by float rounding.
+const CORRIDOR_EPS_PCT: f64 = 1e-9;
 
 /// One placement of a modelled order and the corridor around it, until the next placement.
 #[derive(Clone, Copy, Debug, PartialEq)]

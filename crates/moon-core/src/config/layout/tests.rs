@@ -2328,6 +2328,7 @@ fn the_ticks_axis_settings_round_trip_and_never_cost_the_layout() {
             iters: Some(40),
             locked: vec!["SellPrice".to_string()],
             trade_open: true,
+            allow_closer_corridor: true,
             model: crate::db::tuner::ticks::ModelSettings {
                 latency_ms: 250.0,
                 entry_method: crate::db::tuner::ticks::EntryMethod::Shift,
@@ -2343,6 +2344,16 @@ fn the_ticks_axis_settings_round_trip_and_never_cost_the_layout() {
 
     let old: WindowLayout = toml::from_str("analytics_period = \"p-cur-month\"\n").unwrap();
     assert_eq!(old.analytics_ticks, None);
+
+    // A block written before the corridor switch existed keeps the guard on.
+    let before: WindowLayout =
+        toml::from_str("[analytics_ticks]\niters = 40\n").expect("a block without the switch");
+    assert!(
+        !before
+            .analytics_ticks
+            .expect("the block")
+            .allow_closer_corridor
+    );
 
     let partial: WindowLayout =
         toml::from_str("[analytics_ticks.model]\nlatency_ms = 150.0\n").expect("a partial block");

@@ -117,6 +117,7 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
         seed: Some(7),
         train_frac: 1.0,
         max_passes: DEFAULT_MAX_PASSES,
+        keep_corridor: true,
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -137,6 +138,14 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
     );
     assert!(result.holdout.is_none());
     assert_eq!(handle.completed(), 3);
+    // The run's own account: every restart finished, each within the pass limit, and at least
+    // one point was scored per restart.
+    let stats = result.stats;
+    assert_eq!(stats.restarts, 3);
+    assert!(stats.best_restart < 3);
+    assert!(stats.converged && stats.passes >= 1 && stats.passes <= DEFAULT_MAX_PASSES);
+    assert!((1..=3).contains(&stats.distinct));
+    assert!(stats.evaluations >= 3);
     // The same values through the variant column.
     let (tally, spent) = variant_tally(
         &deals,
@@ -213,6 +222,7 @@ fn the_holdout_is_scored_but_never_fitted_on() {
         seed: Some(1),
         train_frac: 0.75,
         max_passes: DEFAULT_MAX_PASSES,
+        keep_corridor: true,
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -244,6 +254,7 @@ fn a_cancelled_run_answers_nothing_and_nothing_varied_answers_nothing() {
         seed: Some(1),
         train_frac: 1.0,
         max_passes: DEFAULT_MAX_PASSES,
+        keep_corridor: true,
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -251,7 +262,7 @@ fn a_cancelled_run_answers_nothing_and_nothing_varied_answers_nothing() {
     };
     let handle = SearchHandle::new();
     assert!(
-        suggest(&deals, &params, &handle).is_none(),
+        suggest(&deals, &params, &handle).is_err(),
         "everything locked"
     );
     let none: HashSet<String> = HashSet::new();
@@ -261,7 +272,7 @@ fn a_cancelled_run_answers_nothing_and_nothing_varied_answers_nothing() {
     };
     let handle = SearchHandle::new();
     handle.cancel();
-    assert!(suggest(&deals, &params, &handle).is_none());
+    assert!(suggest(&deals, &params, &handle).is_err());
     assert!(handle.abandoned());
 }
 
@@ -344,6 +355,7 @@ fn a_shift_does_not_search_the_path_only_fields() {
             seed: Some(1),
             train_frac: 1.0,
             max_passes: DEFAULT_MAX_PASSES,
+            keep_corridor: true,
             model: ModelSettings {
                 entry_method: method,
                 ..ModelSettings::default()
@@ -423,6 +435,7 @@ fn a_search_holds_each_deals_own_value_and_reports_a_value_one_strategy_lacks() 
         seed: Some(7),
         train_frac: 1.0,
         max_passes: DEFAULT_MAX_PASSES,
+        keep_corridor: true,
         model,
     };
     let result = suggest(&deals, &params, &SearchHandle::new()).expect("a result");
@@ -467,17 +480,267 @@ fn a_trade_floor_no_point_keeps_finds_nothing() {
         seed: Some(7),
         train_frac: 1.0,
         max_passes: DEFAULT_MAX_PASSES,
+        keep_corridor: true,
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
         },
     };
     let result = suggest(&deals, &params, &SearchHandle::new());
-    assert!(result.is_none(), "{result:?}");
+    assert_eq!(result.map(|r| r.values), Err(SearchMiss::Floor));
     // Held by every point, the same search answers.
     let params = SearchParams {
         min_n: Some(8),
         ..params
     };
-    assert!(suggest(&deals, &params, &SearchHandle::new()).is_some());
+    assert!(suggest(&deals, &params, &SearchHandle::new()).is_ok());
+}
+
+/// A MoonShot corridor with its near bound, far bound and one-minute modifier.
+fn corridor(far: f64, near: f64, add_1m: f64) -> MshotParams {
+    MshotParams {
+        price_pct: far,
+        price_min_pct: near,
+        modifiers: super::super::mshot::Modifiers {
+            add_1m,
+            ..Default::default()
+        },
+        ..MshotParams::default()
+    }
+}
+
+/// The corridor is what the modifiers make of the base fields: a variant may move distance
+/// between `MShotPrice` and `MShotAdd*`, but not end nearer the price than the trade's own — and
+/// a larger modifier brings the order NEARER on a coin whose delta fell.
+#[test]
+fn a_corridor_is_kept_on_its_bounds_not_on_its_fields() {
+    let own = corridor(2.5, 2.0, 0.02);
+    let rose = Deltas {
+        d1m: 1.0,
+        ..Deltas::default()
+    };
+    let fell = Deltas {
+        d1m: -1.0,
+        ..Deltas::default()
+    };
+    // The found variant of the screenshot: the base halved, the modifier eightfold.
+    assert!(!corridor(1.25, 0.6, 0.16).never_closer_than(&own, &[rose], true));
+    // The same distance moved onto the modifier: kept while the coin rises…
+    assert!(corridor(2.5, 2.0, 0.05).never_closer_than(&own, &[rose], true));
+    // …and not once it falls, anywhere in the order's life.
+    assert!(!corridor(2.5, 2.0, 0.05).never_closer_than(&own, &[rose, fell], true));
+    // Wider on both bounds holds whatever the deltas; the trade's own holds against itself.
+    assert!(corridor(3.0, 2.5, 0.02).never_closer_than(&own, &[rose, fell], true));
+    assert!(own.never_closer_than(&own, &[rose, fell], true));
+
+    // The guard reads each deal's own corridor, and a deal with the fact's entry keeps none.
+    let mut moonshot = prepared(1, 101.0);
+    moonshot.deal.own_entry = Some(EntryParams::MoonShot(own.clone()));
+    moonshot.deal.deltas = fell;
+    let guard = CorridorGuard::of(&[moonshot, prepared(2, 101.0)]);
+    assert_eq!(guard.deals.len(), 1);
+    let exit = ExitParams::default();
+    let of = |variant: MshotParams| vec![(EntryParams::MoonShot(variant), exit.clone())];
+    assert!(guard.holds(&[0, 0], &of(corridor(3.0, 2.5, 0.02))));
+    assert!(!guard.holds(&[0, 0], &of(corridor(2.5, 2.0, 0.05))));
+    assert!(guard.holds(&[0, 0], &[(EntryParams::Fact, exit.clone())]));
+    // A shift places the order at the far bound and reads nothing of the near one.
+    assert!(!corridor(2.5, 1.0, 0.02).never_closer_than(&own, &[rose], true));
+    assert!(corridor(2.5, 1.0, 0.02).never_closer_than(&own, &[rose], false));
+    let shifted = |mut variant: MshotParams| {
+        variant.model.entry_method = EntryMethod::Shift;
+        vec![(EntryParams::MoonShot(variant), exit.clone())]
+    };
+    assert!(guard.holds(&[0, 0], &shifted(corridor(3.0, 1.0, 0.02))));
+    assert!(!guard.holds(&[0, 0], &shifted(corridor(2.0, 2.0, 0.02))));
+
+    // The same rule asked of a typed variant before it is written: one of one MoonShot deal
+    // comes nearer, the other deal has no corridor to hold.
+    let mut moonshot = prepared(3, 101.0);
+    moonshot.deal.kind = "MoonShot".into();
+    moonshot.deal.own_entry = Some(EntryParams::MoonShot(own.clone()));
+    let plain = prepared(4, 101.0);
+    let base = base();
+    let check = |values: &[(String, String)]| {
+        let c = check_corridors(
+            [(&moonshot.deal, &base), (&plain.deal, &base)],
+            &HashMap::new(),
+            values,
+            ModelSettings::default(),
+        );
+        (c.nearer, c.inverted, c.checked)
+    };
+    let typed = |far: &str, near: &str| {
+        vec![
+            ("MShotPrice".to_string(), far.to_string()),
+            ("MShotPriceMin".to_string(), near.to_string()),
+        ]
+    };
+    assert_eq!(check(&typed("1.25", "0.6")), (1, 0, 1));
+    assert_eq!(check(&typed("3", "2.5")), (0, 0, 1));
+    // The screenshot's V1: the near field past the far one. Both effective bounds sit farther
+    // than the trade's (the far one lifted to the near), so the corridor rule passes it — the
+    // order rule does not.
+    assert_eq!(check(&typed("2.6", "2.7")), (0, 1, 1));
+}
+
+/// The search never proposes a corridor whose near field is at or past its far one, whatever
+/// the switch; an Exit-only search leaves the strategy's own fields alone.
+#[test]
+fn an_inverted_corridor_is_refused_only_where_the_entry_is_searched() {
+    assert!(corridor(2.5, 2.0, 0.0).is_ordered());
+    assert!(!corridor(1.7, 2.0, 0.0).is_ordered());
+    assert!(!corridor(2.0, 2.0, 0.0).is_ordered());
+    assert!(ordered(&EntryParams::Fact));
+    assert!(!ordered(&EntryParams::MoonShot(corridor(1.7, 2.0, 0.0))));
+    // A point inverts only a base that started in order: a strategy stored inverted does not
+    // refuse every point of the search.
+    let exit = ExitParams::default();
+    let at = |far: f64, near: f64| {
+        (
+            EntryParams::MoonShot(corridor(far, near, 0.0)),
+            exit.clone(),
+        )
+    };
+    assert!(inverts(&[true, true], &[at(2.5, 2.0), at(1.7, 2.0)]));
+    assert!(!inverts(&[true, false], &[at(2.5, 2.0), at(1.7, 2.0)]));
+    assert!(!inverts(&[true], &[at(2.5, 2.0)]));
+}
+
+fn field(key: &str) -> &'static TickParam {
+    TICK_PARAMS
+        .iter()
+        .find(|f| f.key == key)
+        .expect("a grid field")
+}
+
+/// A distance that only moves between two fields together: every single move scores worse, the
+/// pair — `MShotPrice` a step down, `MShotAdd1minDelta` a step up — scores better, and the
+/// descent finds it where one field at a time never could.
+#[test]
+fn a_pair_move_reaches_what_no_single_move_does() {
+    let price = field("MShotPrice");
+    let add = field("MShotAdd1minDelta");
+    let start: HashMap<&'static str, usize> = [(price.key, 10), (add.key, 5)].into();
+    let target = (9, 6);
+    let evaluate = |point: &Point| -> Option<Tally> {
+        let at = (
+            grid_index(price, point, &start).expect("price"),
+            grid_index(add, point, &start).expect("add"),
+        );
+        let mut tally = Tally::default();
+        tally.push(if at == target {
+            10.0
+        } else if at == (10, 5) {
+            5.0
+        } else {
+            1.0
+        });
+        Some(tally)
+    };
+    let order = [price, add];
+    let walked = descend(
+        Point::new(),
+        &order,
+        &order,
+        &start,
+        &evaluate,
+        1,
+        DEFAULT_MAX_PASSES,
+        &SearchHandle::new(),
+    )
+    .expect("not stopped");
+    assert_eq!(
+        (
+            grid_index(price, &walked.point, &start),
+            grid_index(add, &walked.point, &start)
+        ),
+        (Some(9), Some(6))
+    );
+    assert!((walked.score.expect("scored").profit - 10.0).abs() < 1e-9);
+    assert!(walked.converged);
+    // Without the pairs the walk stays where it began.
+    let alone = descend(
+        Point::new(),
+        &order,
+        &[],
+        &start,
+        &evaluate,
+        1,
+        DEFAULT_MAX_PASSES,
+        &SearchHandle::new(),
+    )
+    .expect("not stopped");
+    assert!(alone.point.is_empty(), "{:?}", alone.point);
+}
+
+/// A restart past the first starts near the base: one to three fields, a number field at most
+/// three steps from where it stands.
+#[test]
+fn a_perturbed_start_stays_near_the_base() {
+    let price = field("MShotPrice");
+    let add = field("MShotAdd1minDelta");
+    let start: HashMap<&'static str, usize> = [(price.key, 10), (add.key, 5)].into();
+    let order = [price, add];
+    for restart in 1..200 {
+        let mut state = restart_seed(7, restart);
+        let mut point = Point::new();
+        perturb(&mut point, &order, &start, &mut state);
+        assert!((1..=2).contains(&point.len()), "{point:?}");
+        for f in order {
+            if let Some(at) = point.get(f.key).and_then(|_| grid_index(f, &point, &start)) {
+                assert!(at.abs_diff(start[f.key]) <= 3, "{} at {at}", f.key);
+            }
+        }
+    }
+    let mut items: Vec<usize> = (0..10).collect();
+    shuffle(&mut items, &mut restart_seed(7, 1));
+    let mut sorted = items.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        (0..10).collect::<Vec<_>>(),
+        "a shuffle keeps every field"
+    );
+}
+
+/// A search whose every point would bring a trade's corridor nearer the price than its own
+/// comes back with that reason: the trade ran a corridor wider than any grid value, so nothing
+/// the Entry group can be set to keeps it — and with the switch off the same search answers.
+#[test]
+fn a_search_that_no_point_can_keep_the_corridor_of_says_so() {
+    let mut deals: Vec<PreparedDeal> = (1..=4).map(|uid| prepared(uid, 101.0)).collect();
+    for d in &mut deals {
+        d.deal.kind = "MoonShot".into();
+        d.deal.own_entry = Some(EntryParams::MoonShot(corridor(100.0, 90.0, 0.0)));
+    }
+    let held = HashMap::new();
+    let defaults = HashMap::new();
+    let locked = HashSet::new();
+    let params = SearchParams {
+        held: &held,
+        defaults: &defaults,
+        kind: "MoonShot",
+        vary_entry: true,
+        vary_exit: false,
+        locked: &locked,
+        restarts: 2,
+        min_n: Some(1),
+        seed: Some(7),
+        train_frac: 1.0,
+        max_passes: 2,
+        keep_corridor: true,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+    };
+    let result = suggest(&deals, &params, &SearchHandle::new());
+    assert_eq!(result.map(|r| r.values), Err(SearchMiss::Corridor));
+    let params = SearchParams {
+        keep_corridor: false,
+        ..params
+    };
+    let result = suggest(&deals, &params, &SearchHandle::new());
+    assert!(!matches!(result, Err(SearchMiss::Corridor)), "{result:?}");
 }

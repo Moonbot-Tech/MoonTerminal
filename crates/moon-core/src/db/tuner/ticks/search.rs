@@ -1,6 +1,10 @@
-//! The search of the "Entry/Exit" axis: coordinate descent with random restarts over the
-//! discrete grids of [`TICK_PARAMS`], scoring a point by REPLAYING every covered deal under
-//! it — the same shape as `threshold_search`, with the SQL mask replaced by [`simulate`].
+//! The search of the "Entry/Exit" axis: coordinate descent with restarts over the discrete
+//! grids of [`TICK_PARAMS`], scoring a point by REPLAYING every covered deal under it — the shape
+//! of `threshold_search`, with the SQL mask replaced by [`simulate`]. Restart 0 starts from the
+//! strategy itself; the others from the strategy moved a few steps on a few fields, each walking
+//! the fields in an order of its own. A pass that moves no single field then tries PAIRS of the
+//! Entry group's number fields, one a step down and another a step up, so a corridor's distance
+//! can move between the base fields and the modifiers ([`descend`]).
 //!
 //! A point is a set of strategy values in the strategy's own spelling, laid over the values
 //! each deal's OWN strategy holds now ([`PreparedDeal::own`]) — a field the point leaves alone
@@ -30,12 +34,12 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
-use super::mshot::{CorridorStep, EntryMethod, MshotEntry};
+use super::mshot::{CorridorStep, EntryMethod, MshotEntry, MshotParams};
 use super::params::{
-    ParamGroup, ParamKind, StrategyValues, TICK_PARAMS, exit_params, mshot_params,
+    ParamGroup, ParamKind, StrategyValues, TICK_PARAMS, TickParam, exit_params, mshot_params,
 };
 use super::settings::ModelSettings;
-use super::{Deal, EntryParams, ExitParams, Outcome, entry_model_for, simulate};
+use super::{Deal, Deltas, EntryParams, ExitParams, Outcome, entry_model_for, simulate};
 use crate::db::metrics::Tally;
 use crate::db::tuner::threshold_search::search::{install, restart_seed};
 use crate::db::tuner::threshold_search::{SearchHandle, train_split};
@@ -128,6 +132,47 @@ pub struct SearchParams<'a> {
     pub max_passes: usize,
     /// The model's own settings, the entry method among them.
     pub model: ModelSettings,
+    /// Whether a point whose entry corridor comes nearer the price than a trade's own, at any
+    /// moment of that trade's entry order, is out of the search
+    /// ([`MshotParams::never_closer_than`]). Read only while the Entry group is searched: a
+    /// search of the exit alone moves no corridor.
+    pub keep_corridor: bool,
+}
+
+/// Why a search came back with nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchMiss {
+    /// Nothing to search — no deals, no field to vary — or the run was stopped before its
+    /// first restart finished.
+    Nothing,
+    /// No point the search visited kept `min_n` trades.
+    Floor,
+    /// No point the search visited kept a corridor it may propose: `MShotPriceMin` below
+    /// `MShotPrice` where the strategy had them so ([`MshotParams::is_ordered`]), and, under
+    /// [`SearchParams::keep_corridor`], every trade's corridor at least as far from the price as
+    /// the trade's own.
+    Corridor,
+}
+
+/// How a search went — what shows whether its restarts and passes changed anything.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SearchStats {
+    /// Restarts that ran to the end (a stop leaves the rest out).
+    pub restarts: usize,
+    /// The restart the answer came from: 0 starts from the strategy itself.
+    pub best_restart: usize,
+    /// Passes of coordinate descent the winning restart took.
+    pub passes: usize,
+    /// Whether the winning restart stopped because a pass changed nothing — `false` means it
+    /// was still improving when the pass limit cut it.
+    pub converged: bool,
+    /// Distinct end points among the restarts: 1 means every restart ended at the same point.
+    pub distinct: usize,
+    /// Points scored over the whole run, each a replay of the training slice.
+    pub evaluations: usize,
+    /// Restarts that ended on a point the corridor rules refuse — none of their moves reached
+    /// an allowed one.
+    pub refused: usize,
 }
 
 /// What the search found.
@@ -142,6 +187,198 @@ pub struct SearchResult {
     pub holdout: Option<Tally>,
     /// The seed the restarts were derived from.
     pub seed: u64,
+    /// How the run went.
+    pub stats: SearchStats,
+}
+
+/// Where one descent stopped.
+struct Walked {
+    point: Point,
+    score: Option<Tally>,
+    passes: usize,
+    converged: bool,
+}
+
+/// One restart's descent from `point`: every pass visits each field in `order` over its whole
+/// grid, keeping any value that beats the score; a pass that moves no single field then tries
+/// the pairs — one field of `pairs` a step down, another a step up — so a distance shared
+/// between two fields can move from one to the other, which no single move reaches when each
+/// alone makes the score worse or breaks a corridor rule. The walk ends when a pass moves
+/// nothing, or at `max_passes`.
+///
+/// Returns:
+///     Where it stopped, or `None` when the run was stopped.
+#[allow(clippy::too_many_arguments)]
+fn descend(
+    mut point: Point,
+    order: &[&'static TickParam],
+    pairs: &[&'static TickParam],
+    start: &HashMap<&'static str, usize>,
+    evaluate: &(dyn Fn(&Point) -> Option<Tally> + Sync),
+    min_n: i64,
+    max_passes: usize,
+    handle: &SearchHandle,
+) -> Option<Walked> {
+    let mut score = evaluate(&point);
+    let (mut passes, mut converged) = (0, false);
+    for _ in 0..max_passes {
+        passes += 1;
+        let mut improved = false;
+        for field in order {
+            if handle.is_cancelled() {
+                handle.note_abandoned();
+                return None;
+            }
+            let mut current = point.get(field.key).cloned();
+            for index in 0..arity(&field.kind) {
+                let candidate = spell(&field.kind, index);
+                if current.as_deref() == Some(candidate.as_str()) {
+                    continue;
+                }
+                point.insert(field.key, candidate.clone());
+                let trial = evaluate(&point);
+                if better_score(&trial, &score, min_n) {
+                    score = trial;
+                    improved = true;
+                    // The accepted value is what a rejected later candidate restores to.
+                    current = Some(candidate);
+                } else {
+                    restore(&mut point, field.key, current.clone());
+                }
+            }
+            // A field that moved may enable a better value of one visited before, hence the
+            // passes; within one pass every field is visited once.
+        }
+        if !improved {
+            for &down in pairs {
+                for &up in pairs {
+                    // Each pair is a replay of the sample: a stop is noticed between two of
+                    // them, not after a whole row.
+                    if handle.is_cancelled() {
+                        handle.note_abandoned();
+                        return None;
+                    }
+                    if down.key == up.key {
+                        continue;
+                    }
+                    let (Some(d), Some(u)) = (
+                        grid_index(down, &point, start),
+                        grid_index(up, &point, start),
+                    ) else {
+                        continue;
+                    };
+                    if d == 0 || u + 1 >= arity(&up.kind) {
+                        continue;
+                    }
+                    let (was_down, was_up) =
+                        (point.get(down.key).cloned(), point.get(up.key).cloned());
+                    point.insert(down.key, spell(&down.kind, d - 1));
+                    point.insert(up.key, spell(&up.kind, u + 1));
+                    let trial = evaluate(&point);
+                    if better_score(&trial, &score, min_n) {
+                        score = trial;
+                        improved = true;
+                    } else {
+                        restore(&mut point, down.key, was_down);
+                        restore(&mut point, up.key, was_up);
+                    }
+                }
+            }
+        }
+        if !improved {
+            converged = true;
+            break;
+        }
+    }
+    Some(Walked {
+        point,
+        score,
+        passes,
+        converged,
+    })
+}
+
+/// Put a field back to what the point held: a value, or none (the base's).
+fn restore(point: &mut Point, key: &'static str, was: Option<String>) {
+    match was {
+        Some(value) => {
+            point.insert(key, value);
+        }
+        None => {
+            point.remove(key);
+        }
+    }
+}
+
+/// Where a number field stands on its grid: the step the point holds, else the base's
+/// (`start`). `None` for a field that is not a number, or a base with no value to snap.
+fn grid_index(
+    field: &TickParam,
+    point: &Point,
+    start: &HashMap<&'static str, usize>,
+) -> Option<usize> {
+    let ParamKind::Num { .. } = &field.kind else {
+        return None;
+    };
+    match point.get(field.key) {
+        Some(value) => (0..arity(&field.kind)).find(|&i| spell(&field.kind, i) == *value),
+        None => start.get(field.key).copied(),
+    }
+}
+
+/// The grid step nearest `value`.
+fn nearest_step(grid: &[f64], value: f64) -> usize {
+    grid.iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| (*a - value).abs().total_cmp(&(*b - value).abs()))
+        .map_or(0, |(i, _)| i)
+}
+
+/// Fisher–Yates over the restart's own stream.
+fn shuffle<T>(items: &mut [T], state: &mut u64) {
+    for i in (1..items.len()).rev() {
+        let j = (next_random(state) % (i as u64 + 1)) as usize;
+        items.swap(i, j);
+    }
+}
+
+/// Move the base a little: one to three fields of `order`, a number field one to three grid
+/// steps either way from where it stands (`start`), any other field to a value of its own.
+fn perturb(
+    point: &mut Point,
+    order: &[&'static TickParam],
+    start: &HashMap<&'static str, usize>,
+    state: &mut u64,
+) {
+    if order.is_empty() {
+        return;
+    }
+    let moves = 1 + (next_random(state) % 3) as usize;
+    for _ in 0..moves {
+        let field = order[(next_random(state) % order.len() as u64) as usize];
+        let n = arity(&field.kind);
+        let index = match (&field.kind, start.get(field.key)) {
+            (ParamKind::Num { .. }, Some(&at)) => {
+                let step = 1 + (next_random(state) % 3) as usize;
+                if next_random(state) % 2 == 0 {
+                    at.saturating_sub(step)
+                } else {
+                    (at + step).min(n - 1)
+                }
+            }
+            _ => (next_random(state) % n as u64) as usize,
+        };
+        point.insert(field.key, spell(&field.kind, index));
+    }
+}
+
+/// One restart's end: where the descent stopped and how it got there.
+struct Run {
+    restart: usize,
+    point: Point,
+    score: Option<Tally>,
+    passes: usize,
+    converged: bool,
 }
 
 /// One point of the grid: the varied fields' values, in strategy spelling.
@@ -312,6 +549,128 @@ fn tally_and_spent(
     (tally, spent)
 }
 
+/// Each MoonShot deal's own corridor and the deltas its entry order lived through — what a
+/// point's corridor is held against under [`SearchParams::keep_corridor`]. Read once per search:
+/// the deltas along a track are the same for every point.
+struct CorridorGuard {
+    /// `(deal index, own corridor, deltas)`; a deal without a MoonShot entry of its own holds
+    /// no corridor to keep.
+    deals: Vec<(usize, MshotParams, Vec<Deltas>)>,
+}
+
+impl CorridorGuard {
+    fn of(deals: &[PreparedDeal]) -> Self {
+        Self {
+            deals: deals
+                .iter()
+                .enumerate()
+                .filter_map(|(i, d)| match &d.deal.own_entry {
+                    Some(EntryParams::MoonShot(own)) => {
+                        Some((i, own.clone(), d.deal.entry_deltas()))
+                    }
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
+
+    /// Whether a point's parameters keep every deal's corridor.
+    ///
+    /// Args:
+    ///     of_deal: Each deal's index into `params` ([`Bases::of_deal`]).
+    ///     params: The point's parameters per base ([`Bases::params`]).
+    fn holds(&self, of_deal: &[usize], params: &[(EntryParams, ExitParams)]) -> bool {
+        self.deals
+            .iter()
+            .all(|(i, own, deltas)| keeps_corridor(&params[of_deal[*i]].0, own, deltas))
+    }
+}
+
+/// Whether an entry keeps a trade's own corridor ([`MshotParams::never_closer_than`]); an entry
+/// of the fact's has none to move. The near bound is held only where the entry method reads it.
+fn keeps_corridor(entry: &EntryParams, own: &MshotParams, deltas: &[Deltas]) -> bool {
+    match entry {
+        EntryParams::MoonShot(variant) => {
+            let near_too = variant.model.entry_method != EntryMethod::Shift;
+            variant.never_closer_than(own, deltas, near_too)
+        }
+        EntryParams::Fact => true,
+    }
+}
+
+/// Whether an entry's corridor fields are in order ([`MshotParams::is_ordered`]); an entry of the
+/// fact's has none.
+fn ordered(entry: &EntryParams) -> bool {
+    match entry {
+        EntryParams::MoonShot(params) => params.is_ordered(),
+        EntryParams::Fact => true,
+    }
+}
+
+/// Whether a point's parameters invert the corridor fields of a base that started in order
+/// (`start_ordered`, one flag per base, in the bases' order).
+fn inverts(start_ordered: &[bool], params: &[(EntryParams, ExitParams)]) -> bool {
+    start_ordered
+        .iter()
+        .zip(params)
+        .any(|(was, (entry, _))| *was && !ordered(entry))
+}
+
+/// What [`check_corridors`] finds of one variant over a sample.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CorridorCheck {
+    /// Deals whose corridor the variant brings nearer the price than their own.
+    pub nearer: usize,
+    /// Deals whose corridor fields the variant inverts (`MShotPriceMin ≥ MShotPrice`).
+    pub inverted: usize,
+    /// Deals with a MoonShot corridor of their own to hold.
+    pub checked: usize,
+}
+
+/// The corridor rules the search keeps, asked of a variant the search did not make — one typed
+/// into a column, before it is written: on how many deals it comes nearer the price than their
+/// own corridor ([`SearchParams::keep_corridor`]), and on how many it inverts the corridor's two
+/// fields ([`MshotParams::is_ordered`]).
+///
+/// Args:
+///     deals: Each deal with its strategy's current values ([`PreparedDeal::own`]).
+///     defaults, values, model: As for [`variant_tally`]; the kind is each deal's own.
+pub fn check_corridors<'a>(
+    deals: impl IntoIterator<Item = (&'a Deal, &'a HashMap<String, String>)>,
+    defaults: &HashMap<String, f64>,
+    values: &[(String, String)],
+    model: ModelSettings,
+) -> CorridorCheck {
+    let point = point_of(values);
+    let model = model.sanitized();
+    let held = HashMap::new();
+    let mut out = CorridorCheck::default();
+    for (deal, own_base) in deals {
+        let Some(EntryParams::MoonShot(own)) = &deal.own_entry else {
+            continue;
+        };
+        let (entry, _) = params_of(own_base, &held, defaults, &point, &deal.kind, model);
+        out.checked += 1;
+        if !keeps_corridor(&entry, own, &deal.entry_deltas()) {
+            out.nearer += 1;
+        }
+        if !ordered(&entry) {
+            out.inverted += 1;
+        }
+    }
+    out
+}
+
+/// Whether `a` beats `b` where a point may be out of the search: `None` is a point the corridor
+/// guard refused, below every point it let through.
+fn better_score(a: &Option<Tally>, b: &Option<Tally>, min_n: i64) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => better(a, b, min_n),
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
 /// The tally of a point over `deals`, in order; arguments as for [`results`].
 fn tally(deals: &[PreparedDeal], of_deal: &[usize], params: &[(EntryParams, ExitParams)]) -> Tally {
     tally_and_spent(deals, of_deal, params).0
@@ -359,17 +718,17 @@ pub fn train_len(closes: &[i64], train_frac: f64) -> usize {
 ///     handle: Stop and progress; a fresh one per run.
 ///
 /// Returns:
-///     The best point found, or `None` when the sample is empty, nothing is varied, the run
-///     was stopped before its first restart finished, or no point it visited keeps `min_n`
-///     trades — the richest point under the floor is not what the caller asked for.
+///     The best point found, or why there is none ([`SearchMiss`]): nothing to search or a
+///     stop, no point that keeps `min_n` trades — the richest point under the floor is not what
+///     the caller asked for — or none that keeps the corridor.
 pub fn suggest(
     deals: &[PreparedDeal],
     params: &SearchParams<'_>,
     handle: &SearchHandle,
-) -> Option<SearchResult> {
+) -> Result<SearchResult, SearchMiss> {
     let fields = varied(params);
     if deals.is_empty() || fields.is_empty() {
-        return None;
+        return Err(SearchMiss::Nothing);
     }
     let closes: Vec<i64> = deals.iter().map(|d| d.deal.close_ms).collect();
     let train_n = train_len(&closes, params.train_frac);
@@ -390,11 +749,82 @@ pub fn suggest(
     let model = params.model.sanitized();
     let bases = Bases::of(deals);
     let train_of = &bases.of_deal[..train_n];
-    let evaluate = |point: &Point| -> Tally {
+    // Held over the whole sample, the holdout included: a corridor nearer the price than a
+    // trade's own is out whichever side of the cut the trade sits on.
+    let guard = (params.keep_corridor && params.vary_entry).then(|| CorridorGuard::of(deals));
+    // Which bases start with their corridor fields in order: the search must not invert one
+    // that is, and must not be held hostage by one that already is — a strategy stored inverted
+    // would otherwise refuse every point of a search that never touches its corridor. The
+    // write warns about that one (`check_corridors`).
+    let start_ordered: Vec<bool> = bases
+        .params(
+            params.held,
+            params.defaults,
+            &Point::new(),
+            params.kind,
+            model,
+        )
+        .iter()
+        .map(|(entry, _)| ordered(entry))
+        .collect();
+    let evaluations = std::sync::atomic::AtomicUsize::new(0);
+    let evaluate = |point: &Point| -> Option<Tally> {
         let per_base = bases.params(params.held, params.defaults, point, params.kind, model);
-        tally(train, train_of, &per_base)
+        // A point that inverts the corridor's two fields is never proposed, whatever the
+        // switch: the searched fields are gridded one by one, and nothing else ties them. Only
+        // a search of the Entry group can produce one — an Exit search leaves the strategy's
+        // own fields alone, whatever they hold.
+        if params.vary_entry && inverts(&start_ordered, &per_base) {
+            return None;
+        }
+        if guard
+            .as_ref()
+            .is_some_and(|g| !g.holds(&bases.of_deal, &per_base))
+        {
+            return None;
+        }
+        // Counted here, past the refusals: what the stats call a scored point is a replay.
+        evaluations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(tally(train, train_of, &per_base))
     };
-    let best = install(|| {
+    // Where each number field starts on its grid — the median of what the selected strategies
+    // hold (the held value over all of them; the schema default for one that leaves it out),
+    // snapped to the nearest grid step: what a pair move and a perturbed start step from while
+    // the point leaves the field alone. A move sets one value for every strategy, so it steps
+    // from the middle of theirs rather than from whichever came first.
+    let parse = |text: &String| text.trim().replace(',', ".").parse::<f64>().ok();
+    let start: HashMap<&'static str, usize> = fields
+        .iter()
+        .filter_map(|f| {
+            let ParamKind::Num { grid } = &f.kind else {
+                return None;
+            };
+            let default = params.defaults.get(f.key).copied();
+            let mut values: Vec<f64> = match params.held.get(f.key).and_then(parse) {
+                Some(held) => vec![held],
+                None => bases
+                    .owns
+                    .iter()
+                    .filter_map(|own| own.get(f.key).and_then(parse).or(default))
+                    .collect(),
+            };
+            values.sort_by(f64::total_cmp);
+            let value = values.get(values.len() / 2).copied().or(default)?;
+            Some((f.key, nearest_step(grid, value)))
+        })
+        .collect();
+    // The fields that move in pairs: the Entry group's numbers, where a corridor's distance is
+    // shared between the base fields and the modifiers and one field alone cannot move it.
+    let pairs: Vec<&'static TickParam> = if params.vary_entry {
+        fields
+            .iter()
+            .filter(|f| f.group == ParamGroup::Entry && matches!(f.kind, ParamKind::Num { .. }))
+            .copied()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let runs: Vec<Run> = install(|| {
         (0..restarts)
             .into_par_iter()
             .map(|restart| {
@@ -402,75 +832,78 @@ pub fn suggest(
                     handle.note_abandoned();
                     return None;
                 }
-                // Restart 0 starts from the base itself; the others from a random grid point
-                // per varied field, so the descent is not trapped in the base's own valley.
+                // Restart 0 starts from the base itself, in grid order. The others start from
+                // the base moved a few steps on a few fields, and walk the fields in an order of
+                // their own: a start anywhere on the grid lands far from anything a strategy
+                // would run and descends into a worse valley every time (2026-09-24: 19 of 20
+                // random restarts lost to restart 0 on every run).
+                let mut order = fields.clone();
                 let mut point = Point::new();
                 if restart > 0 {
                     let mut state = restart_seed(seed, restart);
-                    for field in &fields {
-                        let index = (next_random(&mut state) % arity(&field.kind) as u64) as usize;
-                        point.insert(field.key, spell(&field.kind, index));
-                    }
+                    shuffle(&mut order, &mut state);
+                    perturb(&mut point, &order, &start, &mut state);
                 }
-                let mut score = evaluate(&point);
-                for _ in 0..max_passes {
-                    let mut improved = false;
-                    for field in &fields {
-                        if handle.is_cancelled() {
-                            handle.note_abandoned();
-                            return None;
-                        }
-                        let mut current = point.get(field.key).cloned();
-                        for index in 0..arity(&field.kind) {
-                            let candidate = spell(&field.kind, index);
-                            if current.as_deref() == Some(candidate.as_str()) {
-                                continue;
-                            }
-                            point.insert(field.key, candidate.clone());
-                            let trial = evaluate(&point);
-                            if better(&trial, &score, min_n) {
-                                score = trial;
-                                improved = true;
-                                // The accepted value is what a rejected later candidate
-                                // restores to.
-                                current = Some(candidate);
-                            } else {
-                                match &current {
-                                    Some(c) => {
-                                        point.insert(field.key, c.clone());
-                                    }
-                                    None => {
-                                        point.remove(field.key);
-                                    }
-                                }
-                            }
-                        }
-                        // A field that moved may enable a better value of one visited before,
-                        // hence the passes; within one pass every field is visited once.
-                    }
-                    if !improved {
-                        break;
-                    }
-                }
+                let walked = descend(
+                    point, &order, &pairs, &start, &evaluate, min_n, max_passes, handle,
+                )?;
                 handle.record_restart();
-                Some((restart, point, score))
+                Some(Run {
+                    restart,
+                    point: walked.point,
+                    score: walked.score,
+                    passes: walked.passes,
+                    converged: walked.converged,
+                })
             })
             .flatten()
-            // Among equal scores the LOWEST restart wins, so the parallel fan-out answers as a
-            // sequential run would.
-            .reduce_with(|a, b| {
-                if better(&b.2, &a.2, min_n) || (!better(&a.2, &b.2, min_n) && b.0 < a.0) {
-                    b
-                } else {
-                    a
-                }
-            })
-    })?;
-    let (_, point, train_tally) = best;
-    // `better` ranks a point under the floor below any above it, so a best under it means no
-    // point held the floor at all.
+            .collect()
+    });
+    // Among equal scores the LOWEST restart wins, so the parallel fan-out answers as a
+    // sequential run would: in restart order, a later run takes the lead only by beating it.
+    let mut runs = runs;
+    runs.sort_by_key(|run| run.restart);
+    // An end point by the parameters it comes to on every base, not by its spelling: restart 0
+    // leaves a field at its base by not holding it, a random restart by holding the base's
+    // value — or the schema default's, for a field the strategy leaves out — and those are one
+    // end point, not two.
+    let mut ends: Vec<Vec<(EntryParams, ExitParams)>> = Vec::new();
+    for run in &runs {
+        let end = bases.params(params.held, params.defaults, &run.point, params.kind, model);
+        if !ends.contains(&end) {
+            ends.push(end);
+        }
+    }
+    let distinct = ends.len();
+    let restarts_done = runs.len();
+    let refused = runs.iter().filter(|run| run.score.is_none()).count();
+    let best = runs
+        .into_iter()
+        .reduce(|a, b| {
+            if better_score(&b.score, &a.score, min_n) {
+                b
+            } else {
+                a
+            }
+        })
+        .ok_or(SearchMiss::Nothing)?;
+    let stats = SearchStats {
+        restarts: restarts_done,
+        best_restart: best.restart,
+        passes: best.passes,
+        converged: best.converged,
+        distinct,
+        evaluations: evaluations.load(std::sync::atomic::Ordering::Relaxed),
+        refused,
+    };
+    let (point, score) = (best.point, best.score);
+    // `better_score` ranks a refused point below every other, and `better` one under the floor
+    // below any above it: a best refused or under the floor means no point held either.
+    let Some(train_tally) = score else {
+        return Err(SearchMiss::Corridor);
+    };
     if train_tally.n < min_n {
-        return None;
+        return Err(SearchMiss::Floor);
     }
     // A field every deal's base already spells so is not a change; only what moved is
     // reported — a value one strategy holds and another does not is a change for the other.
@@ -484,11 +917,12 @@ pub fn suggest(
         let per_base = bases.params(params.held, params.defaults, &point, params.kind, model);
         tally(&deals[train_n..], &bases.of_deal[train_n..], &per_base)
     });
-    Some(SearchResult {
+    Ok(SearchResult {
         values,
         train: train_tally,
         holdout,
         seed,
+        stats,
     })
 }
 

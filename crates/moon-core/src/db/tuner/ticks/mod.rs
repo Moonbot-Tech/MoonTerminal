@@ -49,7 +49,9 @@ pub use mshot::{CorridorStep, EntryMethod, MshotEntry, MshotParams, UsePrice};
 pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};
 pub use record::{OwnLines, StopAnchor, entry_placement, fit_for_search, prepare_deal};
 pub use scope::{is_service_row, is_tunable};
-pub use search::{PreparedDeal, SearchParams, SearchResult, suggest, variant_tally};
+pub use search::{
+    PreparedDeal, SearchMiss, SearchParams, SearchResult, SearchStats, suggest, variant_tally,
+};
 pub use settings::ModelSettings;
 pub use stats::{fact_stats, stats_of};
 pub use verify::{Verdict, verify};
@@ -272,6 +274,28 @@ impl Deal {
     /// When the entry order's life began, for a model that replays it whole ([`order_open_at`]).
     pub fn order_open_ms(&self) -> Option<i64> {
         order_open_at(self.buy_ms, self.buy_set_ms)
+    }
+
+    /// The deltas the entry order lived through, one per refresh step of the live track
+    /// ([`deltas::STEP_MS`]) from the order's creation ([`Deal::order_open_ms`]) to the fill,
+    /// the fill's own included — the core re-places the corridor when a delta moves, so these
+    /// are every corridor it held as the model reads them: where the track does not reach, the
+    /// report's snapshot, as `deltas_at` gives it to the replay itself. A deal without a track
+    /// has the snapshot alone, and
+    /// one whose order waited past [`ORDER_WAIT_CAP_MS`] the fill's alone: its early life is
+    /// neither fetched nor replayed, so nothing of it is held against a variant either.
+    pub fn entry_deltas(&self) -> Vec<Deltas> {
+        if self.delta_track.is_none() {
+            return vec![self.deltas];
+        }
+        let to = self.buy_ms;
+        let from = self.order_open_ms().unwrap_or(to);
+        let mut out: Vec<Deltas> = (from..to)
+            .step_by(deltas::STEP_MS as usize)
+            .map(|t| self.deltas_at(t))
+            .collect();
+        out.push(self.deltas_at(to));
+        out
     }
 
     /// The deltas as the core held them at a moment: every field the live track answers for

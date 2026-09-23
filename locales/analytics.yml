@@ -1960,6 +1960,34 @@ analytics.ticks.sugg_none:
   ru: "Подбор ничего не нашёл"
   en: "The search found nothing"
   es: "La búsqueda no encontró nada"
+analytics.ticks.stats_line:
+  ru: "перезапусков %{restarts} · лучший — №%{best} · %{passes} · разных итогов %{distinct} · без разрешённой точки %{refused} · оценено точек %{evals}"
+  en: "restarts %{restarts} · best from #%{best} · %{passes} · distinct ends %{distinct} · with no allowed point %{refused} · points scored %{evals}"
+  es: "reinicios %{restarts} · mejor del n.º %{best} · %{passes} · finales distintos %{distinct} · sin punto permitido %{refused} · puntos evaluados %{evals}"
+analytics.ticks.stats_converged:
+  ru: "сошёлся за %{n} прох."
+  en: "converged in %{n} passes"
+  es: "convergió en %{n} pasadas"
+analytics.ticks.stats_cut:
+  ru: "не сошёлся за %{n} прох. — упёрся в предел"
+  en: "still improving after %{n} passes — cut by the limit"
+  es: "seguía mejorando tras %{n} pasadas — cortado por el límite"
+analytics.ticks.sugg_corridor:
+  ru: "Ни один вариант не держит коридор: MShotPriceMin меньше MShotPrice и, с галкой, не ближе к цене, чем у сделки"
+  en: "No variant keeps the corridor: MShotPriceMin below MShotPrice and, with the switch on, no nearer the price than the trade's"
+  es: "Ninguna variante mantiene el corredor: MShotPriceMin por debajo de MShotPrice y, con la casilla, no más cerca del precio que el de la operación"
+analytics.ticks.inverted_warn:
+  ru: "MShotPriceMin не меньше MShotPrice у %{n} из %{m} сделок: такой коридор полями не описан, что сделает ядро — неизвестно, оценка ненадёжна"
+  en: "MShotPriceMin is not below MShotPrice on %{n} of %{m} trades: the fields describe no such corridor, what the core does with it is unknown, the estimate is unreliable"
+  es: "MShotPriceMin no está por debajo de MShotPrice en %{n} de %{m} operaciones: los campos no describen ese corredor, se desconoce qué hará el núcleo, la estimación no es fiable"
+analytics.ticks.cfg_keep_corridor:
+  ru: "Не приближать коридор к цене"
+  en: "Keep the corridor no nearer the price"
+  es: "No acercar el corredor al precio"
+analytics.ticks.cfg_keep_corridor_help:
+  ru: "Итоговый коридор варианта (MShotPrice, MShotPriceMin и прибавки MShotAdd по дельтам) ни в один момент жизни ордера не ближе к цене, чем был у сделки. Расстояние можно перераспределять между полями, но не сокращать: ордер ближе к цене ловит прострелы, которых нет в выборке."
+  en: "The variant's resulting corridor (MShotPrice, MShotPriceMin and the MShotAdd delta additions) is at no moment of the order's life nearer the price than the trade's was. The distance may be moved between the fields, not shortened: an order nearer the price catches spikes that are not in the sample."
+  es: "El corredor resultante de la variante (MShotPrice, MShotPriceMin y las adiciones MShotAdd por deltas) en ningún momento de la vida de la orden está más cerca del precio que el de la operación. La distancia puede repartirse entre los campos, no acortarse: una orden más cerca del precio atrapa picos que no están en la muestra."
 analytics.ticks.sugg_floor:
   ru: "Ни один вариант не держит ≥ %{n} сделок"
   en: "No variant keeps ≥ %{n} trades"
@@ -1969,9 +1997,9 @@ analytics.ticks.sugg_floor_sample:
   en: "A floor of %{n} trades exceeds the sample: %{m} trades with tape in memory to train on"
   es: "Un mínimo de %{n} operaciones supera la muestra: %{m} con cinta en memoria para entrenar"
 analytics.ticks.closer_warn:
-  ru: "MShotPrice ближе фактического: оценка занижена — прострелы, до которых реальный ордер не дотянулся, в отчёте отсутствуют"
-  en: "MShotPrice closer than the fact: underestimated — spikes the real order never reached are not in the report"
-  es: "MShotPrice más cerca que el hecho: subestimado — los picos que la orden real nunca alcanzó no están en el informe"
+  ru: "Коридор ближе к цене, чем был у %{n} из %{m} сделок: оценка ненадёжна — такой ордер поймал бы прострелы, которых в выборке нет"
+  en: "The corridor is nearer the price than it was on %{n} of %{m} trades: the estimate is unreliable — such an order would catch spikes that are not in the sample"
+  es: "El corredor está más cerca del precio que en %{n} de %{m} operaciones: la estimación no es fiable — esa orden atraparía picos que no están en la muestra"
 analytics.ticks.var_untouched:
   ru: "без изменений"
   en: "unchanged"

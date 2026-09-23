@@ -71,10 +71,19 @@ const GRID_ADJUST: &[f64] = &[
     -0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4,
     1.6, 1.8, 2.0,
 ];
+/// The `MShotAdd*` modifiers, per cent per one per cent of the delta. Fine near zero — the
+/// 24-hour deltas run to tens of per cent, and their live coefficients sit at 0.001–0.002 — then
+/// a 0.05 step to 1.0 (the developer's call, 2026-09-24): the old 0.2 ceiling could not reach a
+/// live `MShotAddMarkDelta` of 0.5.
 const GRID_ADD: &[f64] = &[
-    0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.12, 0.14, 0.16, 0.18, 0.2,
+    0.0, 0.001, 0.002, 0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4,
+    0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0,
 ];
-const GRID_DISTANCE: &[f64] = &[0.0, 25.0, 50.0, 100.0, 200.0];
+/// `MShotAddDistance`, per cent: finer below 50 — a live strategy's 10 sat between the old 0
+/// and 25 (2026-09-24).
+const GRID_DISTANCE: &[f64] = &[
+    0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 75.0, 100.0, 150.0, 200.0,
+];
 /// Measured against the 1 713 live strategies that set it (2026-09-22): median 1 %, and 300 of
 /// them sit outside 0.2…5 — up to 11 % — so the tail is covered rather than clipped.
 const GRID_SELL_PRICE: &[f64] = &[

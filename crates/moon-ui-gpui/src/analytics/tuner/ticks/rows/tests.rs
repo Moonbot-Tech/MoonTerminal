@@ -263,6 +263,7 @@ fn invalidate_stops_the_search_and_drops_the_variant_scores_but_keeps_the_edits(
         train: Default::default(),
         holdout: Some(Default::default()),
         seed: 1,
+        stats: Default::default(),
     });
     state.invalidate();
     assert!(handle.is_cancelled());

@@ -16,9 +16,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonInput, MoonInputEvent,
-    MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonTooltipView, h_flex,
-    v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
+    MoonInputEvent, MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonTooltipView, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -78,9 +78,12 @@ impl AnalyticsView {
                 .to_string(),
                 p.text_soft,
             ),
-            SuggState::Idle => match &self.ticks.sugg_note {
-                Some(note) => (note.clone(), p.amber),
-                None => (String::new(), p.text_muted),
+            // A note first; else how the last search went, so a restart or pass count that
+            // changed nothing can be seen to have changed nothing.
+            SuggState::Idle => match (&self.ticks.sugg_note, &self.ticks.last_result) {
+                (Some(note), _) => (note.clone(), p.amber),
+                (None, Some(result)) => (search_stats_line(&result.stats), p.text_muted),
+                (None, None) => (String::new(), p.text_muted),
             },
         };
         let placeholder = super::variants::DEFAULT_RESTARTS.to_string();
@@ -371,6 +374,24 @@ impl AnalyticsView {
                     .text_color(moon(p.text_muted))
                     .child(t!(method_keys(method).1).to_string()),
             )
+            .child(
+                MoonCheckbox::new("tun-cfg-corridor-x")
+                    .label(t!("analytics.ticks.cfg_keep_corridor").to_string())
+                    .description(t!("analytics.ticks.cfg_keep_corridor_help").to_string())
+                    .checked(self.ticks.keep_corridor)
+                    // `on_change` hands the callback an `&mut App`, not a `Context`.
+                    .on_change({
+                        let view = cx.entity();
+                        move |checked: &bool, _w, app| {
+                            let on = *checked;
+                            view.update(app, |this, cx| {
+                                this.ticks.keep_corridor = on;
+                                this.persist_ticks_settings(cx);
+                                cx.notify();
+                            });
+                        }
+                    }),
+            )
             .child(popup_section(
                 t!("analytics.tuner.cfg_validation_section").to_string(),
                 p,
@@ -659,6 +680,26 @@ impl AnalyticsView {
         let value = Some(self.ticks.saved());
         self.persist_setting(cx, |l| &mut l.analytics_ticks, value);
     }
+}
+
+/// The status band's account of the last search: restarts, the winning one, its passes and
+/// whether it converged, how many distinct end points, how many points were scored.
+fn search_stats_line(stats: &moon_core::db::tuner::ticks::SearchStats) -> String {
+    let passes = if stats.converged {
+        t!("analytics.ticks.stats_converged", n = stats.passes)
+    } else {
+        t!("analytics.ticks.stats_cut", n = stats.passes)
+    };
+    t!(
+        "analytics.ticks.stats_line",
+        restarts = stats.restarts,
+        best = stats.best_restart,
+        passes = passes,
+        distinct = stats.distinct,
+        evals = stats.evaluations,
+        refused = stats.refused
+    )
+    .to_string()
 }
 
 /// The popovers' scroll-bounded column. No padding, background, border or corners: the popover
