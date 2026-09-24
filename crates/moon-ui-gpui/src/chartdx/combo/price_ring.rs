@@ -44,6 +44,7 @@ pub(crate) struct PriceRing {
 }
 
 impl PriceRing {
+    /// Creates an empty ring with at least one GPU slot.
     pub(crate) fn new(cap: usize) -> Self {
         Self {
             cap: cap.max(1),
@@ -125,6 +126,7 @@ impl PriceRing {
         (self.start() + i) % self.cap
     }
 
+    /// Returns the relative time of logical point `i`.
     fn time(&self, i: usize) -> f32 {
         self.slots[self.physical(i)].time_rel_ms
     }

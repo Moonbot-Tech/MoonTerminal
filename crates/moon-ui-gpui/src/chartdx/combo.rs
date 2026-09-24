@@ -1132,6 +1132,7 @@ impl ComboLayer {
         }
     }
 
+    /// Creates an unbaked cross texture with the supplied vertical margin.
     fn create_tex(device: &ID3D11Device, tex_w: u32, tex_h_total: u32, v_margin: f32) -> ComboTex {
         let (tex, rtv, srv) = super::gpu::create_cache_texture(device, tex_w, tex_h_total);
         ComboTex {
@@ -1143,6 +1144,7 @@ impl ComboLayer {
         }
     }
 
+    /// Creates an unbaked volume-band texture for the current chart height.
     fn create_vol_tex(device: &ID3D11Device, tex_w: u32, band_px: u32, chart_h: u32) -> VolumeTex {
         let (tex, rtv, srv) = super::gpu::create_cache_texture(device, tex_w, band_px);
         VolumeTex {

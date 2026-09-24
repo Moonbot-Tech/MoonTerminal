@@ -12,6 +12,7 @@ use moonproto::state::TradeHistoryRow;
 const BLOCK: usize = 256;
 
 #[derive(Clone, Copy)]
+/// Cached time and price bounds for one fixed-size slice of the retained rows.
 struct Block {
     t_min: i64,
     t_max: i64,
@@ -57,6 +58,7 @@ impl Default for PriceFitIndex {
 }
 
 impl PriceFitIndex {
+    /// Removes every retained row and marks the index unable to answer until it is rebuilt.
     pub(crate) fn clear(&mut self) {
         self.rows.clear();
         self.blocks.clear();
@@ -187,12 +189,14 @@ impl PriceFitIndex {
         Some(((count > 0).then_some((lo, hi)), count))
     }
 
+    /// Returns the live portion of block `i`, excluding trimmed leading rows.
     fn block_span(&self, i: usize) -> std::ops::Range<usize> {
         let start = (i * BLOCK).max(self.dead);
         let end = ((i + 1) * BLOCK).min(self.rows.len());
         start..end.max(start)
     }
 
+    /// Aggregates the time and price bounds for the current live portion of block `i`.
     fn build_block(&self, i: usize) -> Block {
         let mut block = Block {
             t_min: i64::MAX,
@@ -211,6 +215,7 @@ impl PriceFitIndex {
         block
     }
 
+    /// Rebuilds block metadata from `first` through the current row tail.
     fn rebuild_blocks_from(&mut self, first: usize) {
         self.blocks.truncate(first);
         let total = self.rows.len().div_ceil(BLOCK);

@@ -399,6 +399,7 @@ impl OrderBookLayer {
         }
     }
 
+    /// Creates an unbaked order-book texture with the supplied vertical margin.
     fn create_tex(device: &ID3D11Device, tex_w: u32, tex_h_total: u32, v_margin: f32) -> BookTex {
         let (tex, rtv, srv) = super::gpu::create_cache_texture(device, tex_w, tex_h_total);
         let blit_vs = make_vs(device, BLIT_HLSL, "blit_vertex");

@@ -63,6 +63,7 @@ pub(crate) struct CandleWindow {
 }
 
 impl CandleWindow {
+    /// Creates an empty window that retains at most `cap` newest candle rows.
     pub(crate) fn new(cap: usize) -> Self {
         Self {
             rows: Vec::new(),
@@ -169,6 +170,7 @@ impl CandleWindow {
         }
     }
 
+    /// Recomputes right-edge prefix maxima from the first changed row onward.
     fn recompute_end_max(&mut self, from: usize) {
         self.end_max.truncate(from);
         let mut acc = if from == 0 {

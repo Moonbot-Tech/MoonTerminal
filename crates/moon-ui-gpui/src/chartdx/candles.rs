@@ -42,6 +42,7 @@ struct CandlePipe {
     style_cb: ID3D11Buffer,
 }
 
+/// DX11 candle renderer with a retained CPU window for partial GPU uploads.
 pub struct CandleLayer {
     pipe: Option<CandlePipe>,
     /// CPU mirror of the buffer and the slots a patched tail dirtied.
@@ -56,6 +57,7 @@ pub struct CandleLayer {
 }
 
 impl CandleLayer {
+    /// Creates an empty layer with a CPU window sized to the DX11 instance buffer.
     pub fn new() -> Self {
         Self {
             pipe: None,
