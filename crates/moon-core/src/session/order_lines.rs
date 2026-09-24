@@ -893,7 +893,7 @@ fn explicit_close_reason(row: &OrderRow) -> OrderCloseReason {
 }
 
 mod archived;
-pub use archived::{ArchivedOrdersInput, ReportExit};
+pub use archived::{ArchivedOrdersInput, ReportEntry, ReportExit};
 
 #[cfg(test)]
 mod tests;

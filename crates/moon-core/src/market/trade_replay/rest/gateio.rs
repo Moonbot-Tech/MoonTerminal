@@ -10,7 +10,7 @@
 
 use serde_json::Value;
 
-use super::{FetchError, TradeCursor, TradePage, cell_f32, cell_i64};
+use super::{FetchError, TradeCursor, TradePage, cell_f32, cell_i64, cell_number, split_no_fill};
 use crate::feed::types::{Side, Tick};
 use crate::market::candles::ChartCandle;
 use crate::market::trade_replay::venue_caps::{KlineRoute, TradeRoute};
@@ -207,17 +207,22 @@ fn parse_futures_row(row: &Value) -> Option<ChartCandle> {
 /// Largest page number the SPOT trades endpoint's own cap allows.
 ///
 /// Gate documents `limit*(page-1) <= 100000` for `/spot/trades`; a page beyond that is refused.
-/// Futures pagination is by row `offset` and carries no such cap.
+/// Futures pagination is by time and id ([`TradeCursor::Before`]) and carries no such cap.
 const SPOT_PAGE_ROW_CAP: usize = 100_000;
 
 /// Fetch one page of public trades and return the decoded body.
 ///
 /// # Order is UNDOCUMENTED here, unlike the candle endpoint
 ///
-/// Both routes' pagination below therefore keys on the ROW COUNT alone, never on a row's own
-/// timestamp: nothing here assumes ascending or descending order, and
-/// [`super::super::worker::serve_ticks`] is what sorts the complete tick vector once every page
-/// of a stage is in.
+/// Both routes' pagination below keys on the ROW COUNT for "is there more", never on a row's
+/// position; the spot route assumes no order at all. The futures route's time cursor
+/// ([`TradeCursor::Before`]) takes the page's oldest row by value, whatever its position, and
+/// its drain ([`TradeCursor::Within`]) filters by a fixed id boundary, so neither loses a row
+/// to the order — but the walk's EXHAUSTIVENESS does lean on the MEASURED newest-first order
+/// (2026-09-21, see `venue_caps.rs`): a page's oldest row is the walk's next edge only when
+/// the page held everything newer, and `walked_part` (`worker.rs`) claims an interrupted walk
+/// covered from that edge up on the same ground. [`super::super::worker::serve_ticks`] sorts the complete tick vector once
+/// every page of a stage is in.
 ///
 /// Args:
 ///     agent: Shared client.
@@ -242,22 +247,64 @@ pub(super) fn fetch_trades(
         true => "contract",
         false => "currency_pair",
     };
+    // A futures walk is paged back by TIME: the next page ends at the second of the oldest
+    // row seen (one past it, as `trade_window_seconds` widens every `to`), and the rows of
+    // that second the page before already took are dropped by id in `parse_futures_trades`.
+    // A second too dense for a page is drained by `offset` with `from`/`to` pinned to it
+    // (`TradeCursor::Within`) — the one use of `offset`. One `from` and one `to` in the query,
+    // decided here: `query` appends, and a second `to` would leave the venue to pick either.
+    let (from_s, to_s, offset) = match (futures, cursor) {
+        (true, Some(TradeCursor::Before { boundary_ms, .. })) => {
+            let (from_s, to_s) = trade_window_seconds(from_ms, boundary_ms.min(to_ms));
+            (from_s, to_s, None)
+        }
+        (
+            true,
+            Some(TradeCursor::Within {
+                second_s, offset, ..
+            }),
+        ) => (second_s, second_s + 1, Some(offset)),
+        _ => {
+            let (from_s, to_s) = trade_window_seconds(from_ms, to_ms);
+            (from_s, to_s, None)
+        }
+    };
     let mut request = agent
         .get(route.url())
         .query(market_param, market)
         .query("limit", route.max_rows().to_string())
-        .query("from", (from_ms / MS_PER_S).to_string())
-        .query("to", (to_ms / MS_PER_S).to_string());
+        .query("from", from_s.to_string())
+        .query("to", to_s.to_string());
     request = match (futures, cursor) {
         (false, Some(TradeCursor::Page(page))) => request.query("page", page.to_string()),
         (false, _) => request.query("page", "1"),
-        (true, Some(TradeCursor::Offset(offset))) => request.query("offset", offset.to_string()),
-        (true, _) => request.query("offset", "0"),
+        (true, _) => match offset {
+            Some(offset) => request.query("offset", offset.to_string()),
+            None => request,
+        },
     };
     let response = request
         .call()
         .map_err(|error| FetchError::Transient(error.to_string()))?;
     super::decode_and_classify(response, "gate", classify)
+}
+
+/// The `from`/`to` pair a millisecond slice is sent as, in Gate's whole seconds.
+///
+/// `to` is the slice's last second PLUS ONE, never its truncation: Gate reads a second-valued
+/// `to` as "prints up to `to`.000", so `to=…954` does not return a print at `…954.306` while
+/// `to=…955` does (probed 2026-09-21 on both routes). A truncated `to` would leave the tail of
+/// every slice's last second unasked while the walk marks the slice covered. The widening is
+/// harmless: [`super::super::worker::paginate_ticks`] clips every page back to the slice.
+///
+/// Args:
+///     from_ms: First millisecond of the slice, inclusive.
+///     to_ms: Last millisecond of the slice, inclusive.
+///
+/// Returns:
+///     `(from, to)` in seconds, `from` floored and `to` one past the slice's last second.
+pub(super) fn trade_window_seconds(from_ms: i64, to_ms: i64) -> (i64, i64) {
+    (from_ms / MS_PER_S, to_ms / MS_PER_S + 1)
 }
 
 /// Parse a Gate SPOT trades array into a page of ticks.
@@ -278,14 +325,18 @@ pub(super) fn parse_spot_trades(
     let rows = body
         .as_array()
         .ok_or_else(|| FetchError::Transient("gate: spot response is not an array".to_string()))?;
-    let ticks: Vec<Tick> = rows.iter().filter_map(parse_spot_trade_row).collect();
+    let (fills, no_fill) = split_no_fill(rows, "amount");
+    let ticks: Vec<Tick> = fills
+        .iter()
+        .filter_map(|row| parse_spot_trade_row(row))
+        .collect();
     // A page holding a malformed row alongside valid ones can still finish pagination with a
     // non-empty tick vector that is silently missing rows — a hole must send the window to
     // candles instead of drawing a partial tape as if it were whole.
-    if ticks.len() < rows.len() {
+    if ticks.len() < fills.len() {
         return Err(FetchError::Transient(format!(
-            "gate: spot page held {} unparseable row(s) of {} (parsed {})",
-            rows.len() - ticks.len(),
+            "gate: spot page held {} unparseable row(s) of {} (parsed {}, {no_fill} of zero size)",
+            fills.len() - ticks.len(),
             rows.len(),
             ticks.len()
         )));
@@ -348,14 +399,35 @@ fn parse_spot_trade_row(row: &Value) -> Option<Tick> {
 /// recorded response, and it is the first place to look if a Gate futures tick chart shows every
 /// trade on the wrong side.
 ///
-/// A FULL page is ALWAYS treated as incomplete regardless of any other signal: this endpoint
-/// truncates SILENTLY at `limit` with no error, so a full page means "ask again", never "that was
-/// all" — see [`super::super::rest::TradePage::next`]'s own doc for why that rule is frozen.
+/// # Time cells are fractional SECONDS, not milliseconds
+///
+/// `create_time` and `create_time_ms` both hold `1789726954.306`-style JSON numbers: the suffix
+/// names the precision. The vendor says so — gateapi-python `docs/FuturesTrade.md` types
+/// `create_time_ms` as `float`, "trade time, with millisecond precision to 3 decimal places",
+/// where spot's `docs/Trade.md` types it `str` — and the recorded response agrees. Spot's
+/// `create_time_ms` is a millisecond string; the two parsers are deliberately not shared.
+///
+/// A FULL page is NEVER accepted as complete: this endpoint truncates SILENTLY at `limit` with
+/// no error, so a full page means "ask again", never "that was all" — see
+/// [`super::super::rest::TradePage::next`]'s own doc for why that rule is frozen.
+///
+/// # Paged by time and id; one second at a time by `offset`
+///
+/// The next page is asked up to the second of this page's OLDEST row ([`TradeCursor::Before`]),
+/// so it holds that second again: the rows of it this page took are told apart by trade id —
+/// every row at or above the oldest id taken is dropped, and on a continuation page a row
+/// with no id is dropped too, or it would be taken again on every page — and the rest are
+/// new. A full page that brought NOTHING new is a second holding more prints than a page,
+/// which `to` in whole seconds cannot enter: the walk drains that one second by `offset`
+/// ([`TradeCursor::Within`]) until a short page, then goes back to time up to the second's
+/// own start. A drain page that brought nothing new and is full still moves the offset — the
+/// rows behind it are the venue's, and the page budget bounds the walk.
 ///
 /// Args:
 ///     body: Decoded response.
 ///     max_rows: Row cap that was sent.
-///     cursor: The cursor this request was sent with, so the next `offset` is derived from it.
+///     cursor: The cursor this request was sent with; its `below_id` is what the rows already
+///         held are dropped by.
 ///
 /// Returns:
 ///     The page, or a failure when the envelope is not an array.
@@ -367,29 +439,119 @@ pub(super) fn parse_futures_trades(
     let rows = body.as_array().ok_or_else(|| {
         FetchError::Transient("gate: futures response is not an array".to_string())
     })?;
-    let ticks: Vec<Tick> = rows.iter().filter_map(parse_futures_trade_row).collect();
+    let full = rows.len() >= max_rows;
+    // Rows the page before already took: at or above the oldest id it held.
+    let below_id = match cursor {
+        Some(TradeCursor::Before { below_id, .. } | TradeCursor::Within { below_id, .. }) => {
+            below_id
+        }
+        _ => u64::MAX,
+    };
+    let continuing = matches!(
+        cursor,
+        Some(TradeCursor::Before { .. } | TradeCursor::Within { .. })
+    );
+    let raw_len = rows.len();
+    let rows: Vec<&Value> = rows
+        .iter()
+        .filter(|row| match futures_row_id(row) {
+            Some(id) => id < below_id,
+            None => !continuing,
+        })
+        .collect();
+    // The `size: 0` rows a small contract prints between real fills are split off first — the
+    // rule of `split_no_fill`, over the rows kept; this is the route they were recorded on.
+    let (fills, empty): (Vec<&Value>, Vec<&Value>) = rows
+        .iter()
+        .partition(|row| row.get("size").and_then(cell_number) != Some(0.0));
+    let no_fill = empty.len();
+    let ticks: Vec<Tick> = fills
+        .iter()
+        .filter_map(|row| parse_futures_trade_row(row))
+        .collect();
     // A page holding a malformed row alongside valid ones can still finish pagination with a
     // non-empty tick vector that is silently missing rows — a hole must send the window to
     // candles instead of drawing a partial tape as if it were whole.
-    if ticks.len() < rows.len() {
+    if ticks.len() < fills.len() {
         return Err(FetchError::Transient(format!(
-            "gate: futures page held {} unparseable row(s) of {} (parsed {})",
-            rows.len() - ticks.len(),
+            "gate: futures page held {} unparseable row(s) of {} (parsed {}, {no_fill} of zero size)",
+            fills.len() - ticks.len(),
             rows.len(),
             ticks.len()
         )));
     }
-    let offset = match cursor {
-        Some(TradeCursor::Offset(offset)) => offset,
-        _ => 0,
-    };
-    let next = match rows.len() >= max_rows {
-        true => Some(TradeCursor::Offset(
-            offset.saturating_add(rows.len() as u32),
-        )),
-        false => None,
+    // The oldest row this page holds — fills and zero-size rows alike, they are rows of the
+    // venue's stream and a page of nothing but dead rows must still move the cursor.
+    let oldest = rows
+        .iter()
+        .filter_map(|row| Some((futures_row_time_ms(row)?, futures_row_id(row)?)))
+        .min();
+    // The lowest id this page took, for the drain's own bookkeeping.
+    let lowest_id = rows.iter().filter_map(|row| futures_row_id(row)).min();
+    let next = match (cursor, full, oldest) {
+        // A drain page: the offset moves by the venue's row count whatever was new, the
+        // boundary the rows are filtered by stays; a short page ends the second, and the walk
+        // resumes by time up to the second's own start, below everything the drain took.
+        (
+            Some(TradeCursor::Within {
+                second_s,
+                offset,
+                below_id,
+                low_id,
+            }),
+            true,
+            _,
+        ) => Some(TradeCursor::Within {
+            second_s,
+            offset: offset.saturating_add(raw_len as u32),
+            below_id,
+            low_id: lowest_id.map_or(low_id, |id| id.min(low_id)),
+        }),
+        (
+            Some(TradeCursor::Within {
+                second_s, low_id, ..
+            }),
+            false,
+            _,
+        ) => Some(TradeCursor::Before {
+            boundary_ms: second_s * MS_PER_S - 1,
+            below_id: lowest_id.map_or(low_id, |id| id.min(low_id)),
+        }),
+        (_, true, Some((boundary_ms, id))) => Some(TradeCursor::Before {
+            boundary_ms,
+            below_id: id,
+        }),
+        // Full, nothing new: the boundary second holds more prints than a page. Drain it.
+        (Some(TradeCursor::Before { boundary_ms, .. }), true, None) => Some(TradeCursor::Within {
+            second_s: boundary_ms.div_euclid(MS_PER_S),
+            offset: 0,
+            below_id,
+            low_id: below_id,
+        }),
+        (_, true, None) => {
+            return Err(FetchError::Transient(
+                "gate: futures first page full of rows without an id".to_string(),
+            ));
+        }
+        (_, false, _) => None,
     };
     Ok(TradePage { ticks, next })
+}
+
+/// The trade id of one Gate futures row, the venue's own ascending counter.
+fn futures_row_id(row: &Value) -> Option<u64> {
+    row.get("id")?.as_u64()
+}
+
+/// The millisecond stamp of one Gate futures row — the same two cells and the same rounding as
+/// [`parse_futures_trade_row`], so a cursor's boundary is the stamp the tick carries.
+fn futures_row_time_ms(row: &Value) -> Option<i64> {
+    let seconds = row
+        .get("create_time_ms")
+        .and_then(cell_seconds)
+        .or_else(|| row.get("create_time").and_then(cell_seconds))?;
+    let ms = (seconds * MS_PER_S as f64).round();
+    ms.is_finite().then_some(ms as i64)
 }
 
 /// Parse one Gate futures trade row.
@@ -415,10 +577,7 @@ pub(super) fn parse_futures_trades(
 ///     The tick, or `None` when the row is malformed.
 fn parse_futures_trade_row(row: &Value) -> Option<Tick> {
     let price = cell_f32(row.get("price")?)?;
-    let size_raw = match row.get("size")? {
-        Value::String(text) => text.parse::<f64>().ok()?,
-        other => other.as_f64()?,
-    };
+    let size_raw = cell_number(row.get("size")?)?;
     let qty = size_raw.abs() as f32;
     if !(qty.is_finite() && qty > 0.0) {
         return None;
@@ -427,21 +586,34 @@ fn parse_futures_trade_row(row: &Value) -> Option<Tick> {
         true => Side::Sell,
         false => Side::Buy,
     };
-    let time_ms = row
+    // Both time cells are fractional SECONDS (`1789726954.306`), as JSON numbers — the `_ms`
+    // suffix names the precision, not the unit (vendor doc: `float`, "millisecond precision to
+    // 3 decimal places"), and neither cell is an integer, so a `cell_i64` read would reject every
+    // row the venue sends. Recorded 2026-09-21, see `gateio/tests.rs`; spot's `create_time_ms`
+    // is a millisecond STRING and parses separately.
+    let seconds = row
         .get("create_time_ms")
-        .and_then(cell_i64)
-        .map(|v| v as f64)
-        .or_else(|| {
-            row.get("create_time")
-                .and_then(cell_i64)
-                .map(|s| (s * MS_PER_S) as f64)
-        })?;
+        .and_then(cell_seconds)
+        .or_else(|| row.get("create_time").and_then(cell_seconds))?;
+    let time_ms = (seconds * MS_PER_S as f64).round();
     Some(Tick {
         time_ms,
         price,
         qty,
         side,
     })
+}
+
+/// Read a Gate futures time cell: fractional seconds, as a JSON number or quoted text.
+///
+/// Args:
+///     cell: One response cell.
+///
+/// Returns:
+///     A finite positive count of seconds, or `None`.
+fn cell_seconds(cell: &Value) -> Option<f64> {
+    let seconds = cell_number(cell)?;
+    (seconds.is_finite() && seconds > 0.0).then_some(seconds)
 }
 
 #[cfg(test)]

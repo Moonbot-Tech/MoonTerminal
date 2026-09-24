@@ -50,6 +50,13 @@ trade_window.settings.hide_rail:
   en: "Hide the side panel"
   es: "Ocultar el panel lateral"
 
+# The entry corridor the core saved for a MoonShot order, shaded from the order's placement to its
+# fill. Off by default: the band is loud and the corridor is an input, not an event.
+trade_window.settings.moonshot_zone:
+  ru: "Зона MoonShot"
+  en: "MoonShot zone"
+  es: "Zona MoonShot"
+
 # The tick stage: the venue's own prints around the position, paged from its public REST — slow
 # on some venues, so the reader can leave the window on bars alone.
 trade_window.settings.load_ticks:
@@ -157,6 +164,11 @@ trade_window.source.candles_failed:
   ru: "свечи %{min} мин — тики не загрузились"
   en: "%{min}-minute candles - could not load ticks"
   es: "velas de %{min} min - no se pudieron cargar los ticks"
+
+trade_window.source.candles_rate_limited:
+  ru: "свечи %{min} мин — биржа ограничила запросы, тики не запрошены; переоткройте окно через %{secs} с"
+  en: "%{min}-minute candles - the exchange is rate-limiting, ticks were not asked for; reopen the window in %{secs} s"
+  es: "velas de %{min} min - el exchange limita las solicitudes, no se pidieron los ticks; vuelve a abrir la ventana en %{secs} s"
 
 trade_window.empty.no_data:
   ru: "За это время по рынку нет данных."

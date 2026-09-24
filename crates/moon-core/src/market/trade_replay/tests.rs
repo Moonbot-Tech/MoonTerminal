@@ -114,10 +114,15 @@ fn trade_first_paging_protects_position_from_soft_page_and_deadline_stops() {
     use venue_caps::TradeRoute::*;
     for route in [OkxHistoryTrades, BitgetMixFills, BinanceUsdMAggTrades] {
         for soft_deadline in [false, true] {
-            for duration in [0, 120_000, 1_260_000] {
+            // Up to the longest position still walked as one stretch: past
+            // `long_position_ms()` the plan tiles the two ends only, which the plan's own test
+            // covers. With the threshold under `TICK_SLICE_MS` no short position spans two
+            // trade tiles any more, so the multi-tile trade prefix this loop once ran (21 min,
+            // three tiles, under the hour-long threshold) is unreachable here by construction.
+            for duration in [0, 120_000, long_position_ms() - MINUTE_MS] {
                 let window =
                     replay_window_ms(100_000_000, 100_000_000 + duration, MARGIN_MS).unwrap();
-                let plan = tick_plan(window, route, None);
+                let plan = tick_plan(window, route, None, ReplayIntent::Chart);
                 let mut observer = CoverageObserver::default();
                 let fetched = observer.fetched.clone();
                 let calls = std::cell::Cell::new(0);
@@ -178,7 +183,7 @@ fn trade_first_paging_still_obeys_hard_stops_cancellation_and_venue_errors() {
     for route in [OkxHistoryTrades, BinanceUsdMAggTrades] {
         for stop in ["pages", "deadline", "cancel", "venue"] {
             let window = replay_window_ms(100_000_000, 100_120_000, MARGIN_MS).unwrap();
-            let plan = tick_plan(window, route, None);
+            let plan = tick_plan(window, route, None, ReplayIntent::Chart);
             let mut observer = CoverageObserver::default();
             let fetched = observer.fetched.clone();
             let calls = std::cell::Cell::new(0);
@@ -231,7 +236,7 @@ fn trade_first_paging_keeps_progress_contiguous_across_both_margins_and_retentio
             Some(100_180_000),
             Some(100_420_001),
         ] {
-            let plan = tick_plan(window, route, earliest);
+            let plan = tick_plan(window, route, earliest, ReplayIntent::Chart);
             let mut observer = CoverageObserver::default();
             let fetched = observer.fetched.clone();
             let verdict = worker::paginate_ticks(
@@ -274,7 +279,7 @@ fn trade_first_paging_partial_margins_never_expand_past_fetched_coverage() {
     for route in [OkxHistoryTrades, BitgetMixFills, BinanceUsdMAggTrades] {
         for budget in [6, 16] {
             let window = replay_window_ms(100_000_000, 100_120_000, MARGIN_MS).unwrap();
-            let plan = tick_plan(window, route, None);
+            let plan = tick_plan(window, route, None, ReplayIntent::Chart);
             let mut observer = CoverageObserver::default();
             let fetched = observer.fetched.clone();
             let verdict = worker::paginate_ticks(
@@ -305,7 +310,12 @@ fn detailed_tick_window_excludes_wide_candle_context() {
     let window = replay_window_ms(100_000_000, 100_060_000, MARGIN_MS).expect("one-minute trade");
     let narrow = window.tick_window();
     assert_eq!((narrow.from_ms, narrow.to_ms), (99_700_000, 100_360_000));
-    let plan = tick_plan(window, venue_caps::TradeRoute::BinanceUsdMAggTrades, None);
+    let plan = tick_plan(
+        window,
+        venue_caps::TradeRoute::BinanceUsdMAggTrades,
+        None,
+        ReplayIntent::Chart,
+    );
     assert_eq!(plan.slices.iter().map(|s| s.0).min(), Some(99_700_000));
     assert_eq!(plan.slices.iter().map(|s| s.1).max(), Some(100_360_000));
     assert!(
@@ -444,6 +454,7 @@ fn bars_only_series() -> TradeReplaySeries {
             open_ms: 0,
             close_ms: 2 * MINUTE_MS,
             margin_ms: MARGIN_MS,
+            long_position_ms: 5 * 60_000,
             over_budget: false,
         },
         tf_ms: MINUTE_MS,
@@ -641,6 +652,7 @@ fn cache_coverage_rejects_prefixes_and_oversized_holes() {
         open_ms: 0,
         close_ms: 5 * MINUTE_MS,
         margin_ms: MARGIN_MS,
+        long_position_ms: 5 * 60_000,
         over_budget: false,
     };
     let exact = [0, 1, 2, 3, 4, 5]
@@ -847,6 +859,7 @@ fn time_slices_keeps_unbounded_windows_whole_and_bounded_windows_gap_free() {
         open_ms: 1_000,
         close_ms: 7_200_999,
         margin_ms: MARGIN_MS,
+        long_position_ms: 5 * 60_000,
         over_budget: false,
     };
 
@@ -891,6 +904,7 @@ fn tick_plan_prioritizes_focus_and_keeps_every_prefix_contiguous_after_clipping(
         window,
         venue_caps::TradeRoute::BinanceUsdMAggTrades,
         Some(earliest_ms),
+        ReplayIntent::Chart,
     );
     let focus = window.focus();
 
@@ -1008,25 +1022,29 @@ fn kline_tick_statuses_keep_the_same_chart_revision_while_ticks_change_it() {
     );
 }
 
-/// A position held up to `LONG_POSITION_MS` keeps one focus; past it the focus is two
-/// neighbourhoods — the margin centred on each end, half before and half after — clamped into
-/// the window like the whole one.
+/// A position held up to `long_position_ms()` keeps one focus; past it the focus is two
+/// neighbourhoods — the whole margin on both sides of each end, so the run-up before the entry
+/// and the tail past the exit are the margin, as on a short position — clamped into the window
+/// like the whole one.
 #[test]
 fn focus_spans_split_only_a_long_position() {
+    // A margin well under the position's length, so the two ends of a long one stay apart:
+    // neighbourhoods that reach each other fold into one stretch, which the end of this test
+    // pins.
+    let margin_ms: i64 = long_position_ms() / 5;
     let short =
-        replay_window_ms(100_000_000, 100_000_000 + LONG_POSITION_MS, MARGIN_MS).expect("window");
+        replay_window_ms(100_000_000, 100_000_000 + long_position_ms(), margin_ms).expect("window");
     assert_eq!(short.focus_spans(), Coverage::one(short.focus()));
 
     let open_ms = 100_000_000;
-    let close_ms = open_ms + LONG_POSITION_MS + 1;
-    let long = replay_window_ms(open_ms, close_ms, MARGIN_MS).expect("window");
+    let close_ms = open_ms + long_position_ms() + 1;
+    let long = replay_window_ms(open_ms, close_ms, margin_ms).expect("window");
     let spans = long.focus_spans();
-    let half = MARGIN_MS / 2;
     assert_eq!(
         spans.spans(),
         &[
-            (open_ms - half, open_ms + half),
-            (close_ms - half, close_ms + half),
+            (open_ms - margin_ms, open_ms + margin_ms),
+            (close_ms - margin_ms, close_ms + margin_ms),
         ]
     );
     let (left, right) = long.focus();
@@ -1039,14 +1057,15 @@ fn focus_spans_split_only_a_long_position() {
         bare.focus_spans().spans(),
         &[(open_ms, open_ms), (close_ms, close_ms)]
     );
-    // A margin whose halves reach the position's own length folds the two ends into one
-    // stretch — still half the margin past each end, not the whole of it as on a short one.
+    // A margin whose two neighbourhoods reach each other folds the two ends into one stretch —
+    // the whole focus, the margin before the entry and past the exit as on a short one.
     let length = close_ms - open_ms;
-    let wide = replay_window_ms(open_ms, close_ms, 2 * length).expect("window");
+    let wide = replay_window_ms(open_ms, close_ms, length).expect("window");
     assert_eq!(
         wide.focus_spans(),
         Coverage::one((open_ms - length, close_ms + length))
     );
+    assert_eq!(wide.focus_spans(), Coverage::one(wide.focus()));
 }
 
 /// A long position's plan tiles only the two neighbourhoods: the trade parts of both first (the
@@ -1059,13 +1078,12 @@ fn tick_plan_of_a_long_position_tiles_the_entry_and_the_exit_only() {
     let close_ms = open_ms + 8 * 60 * MINUTE_MS;
     let window = replay_window_ms(open_ms, close_ms, MARGIN_MS).expect("window");
     for route in [BinanceUsdMAggTrades, OkxHistoryTrades] {
-        let plan = tick_plan(window, route, None);
+        let plan = tick_plan(window, route, None, ReplayIntent::Chart);
         let backward = route == OkxHistoryTrades;
-        let half = MARGIN_MS / 2;
-        let entry_trade = (open_ms, open_ms + half);
-        let exit_trade = (close_ms - half, close_ms);
-        let lead = (open_ms - half, open_ms - 1);
-        let trail = (close_ms + 1, close_ms + half);
+        let entry_trade = (open_ms, open_ms + MARGIN_MS);
+        let exit_trade = (close_ms - MARGIN_MS, close_ms);
+        let lead = (open_ms - MARGIN_MS, open_ms - 1);
+        let trail = (close_ms + 1, close_ms + MARGIN_MS);
         let expected = if backward {
             vec![exit_trade, entry_trade, lead, trail]
         } else {
@@ -1077,10 +1095,49 @@ fn tick_plan_of_a_long_position_tiles_the_entry_and_the_exit_only() {
         assert!(
             plan.slices
                 .iter()
-                .all(|&s| s.1 < open_ms + MARGIN_MS || s.0 > close_ms - MARGIN_MS),
+                .all(|&s| s.1 <= open_ms + MARGIN_MS || s.0 >= close_ms - MARGIN_MS),
             "no tile inside the middle of the position"
         );
     }
+}
+
+/// A model's request walks the entry's lead before the exit's trail on a forward route — the
+/// run-up is what its entry model reads — and the lead is still walked away from the trade, so
+/// every completed prefix stays one stretch. A backward route already walks the lead first.
+/// The model's trade tile reaches [`MODEL_PAD_MS`] outside the position — the run-up and the
+/// tail are walked under the trade budget, never as an optional margin; a chart's is the
+/// position alone.
+#[test]
+fn tick_plan_of_a_model_request_walks_the_lead_before_the_trail() {
+    use venue_caps::TradeRoute::*;
+    let open_ms = 100_000_000;
+    let close_ms = open_ms + MINUTE_MS;
+    let window = replay_window_ms(open_ms, close_ms, MARGIN_MS).expect("window");
+    let (focus_from, focus_to) = window.focus();
+    let padded = (open_ms - MODEL_PAD_MS, close_ms + MODEL_PAD_MS);
+    let lead = (focus_from, padded.0 - 1);
+    let trail = (padded.1 + 1, focus_to);
+    let forward = tick_plan(window, BinanceUsdMAggTrades, None, ReplayIntent::Model);
+    assert_eq!(forward.slices, vec![padded, lead, trail]);
+    assert_eq!((forward.trade_len, forward.focus_len), (1, 3));
+    let trade = (open_ms, close_ms);
+    let chart = tick_plan(window, BinanceUsdMAggTrades, None, ReplayIntent::Chart);
+    assert_eq!(
+        chart.slices,
+        vec![trade, (close_ms + 1, focus_to), (focus_from, open_ms - 1)],
+        "the chart keeps its order and its bare trade tile"
+    );
+    let backward = tick_plan(window, OkxHistoryTrades, None, ReplayIntent::Model);
+    assert_eq!(
+        backward.slices,
+        vec![padded, lead, trail],
+        "a backward route walks the lead first for either intent, the model's tile padded"
+    );
+    assert_eq!(
+        tick_plan(window, OkxHistoryTrades, None, ReplayIntent::Chart).slices,
+        vec![trade, (focus_from, open_ms - 1), (close_ms + 1, focus_to)],
+        "and the chart's bare"
+    );
 }
 
 /// Walking a long position's plan proves two stretches, never a hull over the unwalked hours
@@ -1092,7 +1149,7 @@ fn paginating_a_long_position_covers_two_stretches_and_never_the_middle() {
     let close_ms = open_ms + 8 * 60 * MINUTE_MS;
     let window = replay_window_ms(open_ms, close_ms, MARGIN_MS).expect("window");
     for route in [BinanceUsdMAggTrades, OkxHistoryTrades] {
-        let plan = tick_plan(window, route, None);
+        let plan = tick_plan(window, route, None, ReplayIntent::Chart);
         let mut observer = CoverageObserver::default();
         let fetched = observer.fetched.clone();
         let verdict = worker::paginate_ticks(
@@ -1109,12 +1166,11 @@ fn paginating_a_long_position_covers_two_stretches_and_never_the_middle() {
             panic!("served")
         };
         assert!(harvest.complete);
-        let half = MARGIN_MS / 2;
         assert_eq!(
             harvest.covered.spans(),
             &[
-                (open_ms - half, open_ms + half),
-                (close_ms - half, close_ms + half),
+                (open_ms - MARGIN_MS, open_ms + MARGIN_MS),
+                (close_ms - MARGIN_MS, close_ms + MARGIN_MS),
             ],
             "{route:?}"
         );

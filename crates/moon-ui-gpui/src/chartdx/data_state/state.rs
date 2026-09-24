@@ -77,6 +77,8 @@ impl ChartDataState {
             trade_replay: None,
             frozen_orders: None,
             frozen_fit_range: None,
+            frozen_overlay: None,
+            frozen_overlay_rev: 0,
             last_frame_tick_at: None,
             present_rate_candidate_hz: 0.0,
             present_rate_candidate_hits: 0,
@@ -135,6 +137,9 @@ impl ChartDataState {
                     false => self.frozen_orders.as_ref().map_or(0, |store| store.rev),
                 };
                 sig = sig.wrapping_mul(31).wrapping_add(order_lines_rev);
+                if !self.draws_live_market() {
+                    sig = sig.wrapping_mul(31).wrapping_add(self.frozen_overlay_rev);
+                }
                 if self.draws_live_market() {
                     sig = sig.wrapping_mul(31).wrapping_add(core_st.strategies_rev);
                     sig = sig.wrapping_mul(31).wrapping_add(core_st.schema_rev);
@@ -243,6 +248,22 @@ impl ChartDataState {
     ) {
         self.frozen_orders = store;
         self.frozen_fit_range = fit_range;
+        self.view_dirty = true;
+    }
+
+    /// Hand a frozen viewer what it draws beside its store, or take it away.
+    ///
+    /// Stamps a fresh revision, which both the order signature and the per-pane rebuild gate
+    /// read, so the next sync rebuilds the geometry.
+    ///
+    /// Args:
+    ///     overlay: The corridor and modelled trades, or `None` to draw neither.
+    pub(crate) fn set_frozen_overlay(
+        &mut self,
+        overlay: Option<std::rc::Rc<moon_chart::frozen_overlay::FrozenOverlay>>,
+    ) {
+        self.frozen_overlay = overlay.filter(|o| !o.is_empty());
+        self.frozen_overlay_rev = self.frozen_overlay_rev.wrapping_add(1);
         self.view_dirty = true;
     }
 

@@ -64,7 +64,12 @@ pub(super) fn rail_wraps(viewport_w: f32) -> bool {
 impl Render for TradeWindowView {
     /// Render the focused trade and its remembered neighbouring-trades control.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        crate::hotkeys::restore_root_focus(&self.focus, window, cx);
+        // A pane leaves the keyboard to the window it sits in: no focus of its own to restore,
+        // no keys, no window chrome (`Host::Embedded`).
+        let embedded = self.host.embedded();
+        if !embedded {
+            crate::hotkeys::restore_root_focus(&self.focus, window, cx);
+        }
         let p = MoonPalette::active(cx);
         let narrow = rail_wraps(f32::from(window.viewport_size().width));
         // The header's ACTUAL height, not the constant it is built from: that constant is scaled,
@@ -75,6 +80,23 @@ impl Render for TradeWindowView {
             .controls(MoonWindowFrameControls::Close)
             .show_controls(design::show_custom_window_controls());
         let title = format!("{} · {}", self.record.coin, self.stamps.1);
+        let title_el = match embedded {
+            true => div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(design::t_body(cx))
+                .text_color(moon(p.text))
+                .child(title)
+                .into_any_element(),
+            false => frame
+                .title_cluster(title, cx)
+                .h_full()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .into_any_element(),
+        };
         // Built per branch rather than cloned: `AnyElement` is single-use by construction, which
         // is also what keeps a stray second mount from silently sharing element ids.
         let body = self.chart_area(p, cx);
@@ -113,37 +135,42 @@ impl Render for TradeWindowView {
             // Escape is taken in the CAPTURE phase so it wins over anything a descendant may grow
             // later and so it is settled before the hotkey table can see it; the configured
             // hotkeys ride the bubble phase, like every other window root in the app.
-            .track_focus(&self.focus)
-            .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
-                crate::hotkeys::trace_key_arrived(ev);
-                this.modifier_watch.interrupt();
-                this.on_key(ev, window, cx);
-            }))
-            .on_key_down(
-                cx.listener(|this, ev: &KeyDownEvent, window, cx| this.on_hotkey(ev, window, cx)),
-            )
-            .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, window, cx| {
-                this.on_modifier_hotkey(ev, window, cx)
-            }))
+            .when(!embedded, |el| {
+                el.track_focus(&self.focus)
+                    .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                        crate::hotkeys::trace_key_arrived(ev);
+                        this.modifier_watch.interrupt();
+                        this.on_key(ev, window, cx);
+                    }))
+                    .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                        this.on_hotkey(ev, window, cx)
+                    }))
+                    .on_modifiers_changed(cx.listener(
+                        |this, ev: &ModifiersChangedEvent, window, cx| {
+                            this.on_modifier_hotkey(ev, window, cx)
+                        },
+                    ))
+            })
             .child(
                 h_flex()
                     .h(header_h)
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, design::CHROME_GAP))
-                    .pl(design::ui_px(cx, design::titlebar_leading_inset()))
+                    // A pane has no traffic lights to clear.
+                    .pl(design::ui_px(
+                        cx,
+                        if embedded {
+                            8.0
+                        } else {
+                            design::titlebar_leading_inset()
+                        },
+                    ))
                     .pr(design::ui_px(cx, 6.0))
                     .border_b_1()
                     .border_color(moon(p.border))
                     .bg(moon(p.shell_high))
-                    .child(
-                        frame
-                            .title_cluster(title, cx)
-                            .h_full()
-                            .flex_1()
-                            .min_w_0()
-                            .items_center(),
-                    )
+                    .child(title_el)
                     // THE SETTINGS POPUP: one ⚙ for everything this window draws, including the
                     // "other trades" toggle that used to sit here as a bare checkbox. The header
                     // has a hard minimum width and every control on it is `flex_none`; one button
@@ -181,7 +208,7 @@ impl Render for TradeWindowView {
                     //
                     // `flex_none` because the sibling title cluster is `flex_1().min_w_0()` and
                     // would otherwise squeeze the button to zero at the minimum window width.
-                    .when(design::show_custom_window_controls(), |el| {
+                    .when(!embedded && design::show_custom_window_controls(), |el| {
                         el.child(frame.visual_controls(cx).flex_none())
                     }),
             )
@@ -216,7 +243,7 @@ impl Render for TradeWindowView {
                         ))
                     }),
             )
-            .child(modifier_hook)
+            .when(!embedded, |el| el.child(modifier_hook))
     }
 }
 
@@ -325,6 +352,12 @@ impl TradeWindowView {
                     TickStatus::NoTrades => {
                         t!("trade_window.source.candles_no_trades", min = tf_min).to_string()
                     }
+                    TickStatus::RateLimited { retry_in_s } => t!(
+                        "trade_window.source.candles_rate_limited",
+                        min = tf_min,
+                        secs = retry_in_s
+                    )
+                    .to_string(),
                     TickStatus::Failed => {
                         t!("trade_window.source.candles_failed", min = tf_min).to_string()
                     }

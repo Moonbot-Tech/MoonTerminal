@@ -9,8 +9,8 @@
 //!
 //! # One module per venue, and why the file is not one file
 //!
-//! This module owns only what every venue shares: the client, the failure vocabulary, the two
-//! cell readers, and the dispatch. Everything a VENDOR decides — its query grammar, its error
+//! This module owns only what every venue shares: the client, the failure vocabulary, the
+//! cell readers, the zero-quantity split every trade page goes through, and the dispatch. Everything a VENDOR decides — its query grammar, its error
 //! envelope, its row order, which cell holds base volume — lives in that vendor's own module
 //! beside its route.
 //!
@@ -152,10 +152,12 @@ pub fn fetch_klines(
 
 /// Continuation token for one public-trade page.
 ///
-/// FIVE variants, because the venues genuinely paginate five ways and abusing one venue's
+/// SIX variants, because the venues genuinely paginate five ways and abusing one venue's
 /// semantics for another silently truncates a window: Binance walks forward by aggregate-trade
-/// id; OKX and Bitget walk BACKWARD by trade id; Gate spot
-/// walks by 1-based `page`; Gate futures walks by row `offset`.
+/// id; OKX and Bitget walk BACKWARD by trade id; Gate spot walks by 1-based `page`; Gate
+/// futures walks BACKWARD by time, its `to` moved onto the oldest row seen and the rows already
+/// taken told apart by trade id — and drains by `offset` the one second a time cursor cannot
+/// enter, a second holding more prints than a page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TradeCursor {
     /// Binance: next aggregate-trade id to ask for, walking forward.
@@ -167,8 +169,31 @@ pub enum TradeCursor {
     LessThanId(u64),
     /// Gate spot: next 1-based page number.
     Page(u32),
-    /// Gate futures: next row offset.
-    Offset(u32),
+    /// Gate futures: the next page is asked up to the second of `boundary_ms` (the oldest
+    /// print of the page before), and every row whose id is at or above `below_id` — the
+    /// oldest id that page took — is one it already holds. The endpoint's own `offset` is NOT
+    /// a cursor: under back-to-back requests it answered the same page for two offsets and
+    /// skipped one for the next (measured 2026-09-21 on GSTOCKBSC_USDT, five requests 100
+    /// rows apart came back as rows 0, 100, 100, 300, 300, then 500), and `last_id` is ignored
+    /// with `from`/`to` and empty without them.
+    Before { boundary_ms: i64, below_id: u64 },
+    /// Gate futures, inside ONE second that holds more prints than a page: `from`/`to` pinned
+    /// to that second and `offset` moved by the venue's row count — the one place `offset` is
+    /// used, because within a single second's rows it answered the same contiguous ids on
+    /// every probe, newest first (2026-09-21, AKE_USDT second 1789811988 with 1 451 prints:
+    /// offsets 0 and 1000 answered ids 28266599..28265600 and 28265599..28265149), where
+    /// across a window it did not. `below_id` is the boundary the drain began at and does not
+    /// move: rows at or above it are held from before, and a filter that followed the pages
+    /// down would drop the drain's own rows if the venue ever answered them oldest first.
+    /// `low_id` is the lowest id the drain took, for the boundary the walk resumes by time
+    /// from. A short page ends the drain and the walk goes back to time, up to that second's
+    /// own start.
+    Within {
+        second_s: i64,
+        offset: u32,
+        below_id: u64,
+        low_id: u64,
+    },
 }
 
 /// One fetched page of public trades.
@@ -180,7 +205,9 @@ pub struct TradePage {
     /// Continuation, Some ONLY when this page was FULL and the window is not yet covered.
     ///
     /// A full Gate futures page is NEVER accepted as complete: that endpoint truncates silently
-    /// at `limit` with no error, so a full page means "ask again", never "that was all".
+    /// at `limit` with no error, so a full page means "ask again", never "that was all" — and
+    /// a full page that cannot be asked again (every row already taken) is a refusal, not a
+    /// `None` here.
     pub next: Option<TradeCursor>,
 }
 
@@ -300,6 +327,48 @@ pub(super) fn cell_f32(cell: &Value) -> Option<f32> {
     }
 }
 
+/// Read a numeric cell as the venue sends it — a JSON number or quoted text — with no sign or
+/// range judgement: the caller decides what a zero or a negative means.
+///
+/// Args:
+///     cell: One response cell.
+///
+/// Returns:
+///     The number, or `None` when the cell is neither a number nor numeric text.
+pub(super) fn cell_number(cell: &Value) -> Option<f64> {
+    match cell {
+        Value::String(text) => text.parse::<f64>().ok(),
+        other => other.as_f64(),
+    }
+}
+
+/// Split one page of trade rows into the rows that carry a fill and the count of rows whose
+/// quantity cell reads as zero.
+///
+/// A zero-quantity row is a well-formed row that carries no fill: Gate futures prints one
+/// between every real fill on a small contract (UB_USDT, recorded 2026-09-21 —
+/// `gateio/tests.rs`), with its own id and a price. **What such a row means is not settled by
+/// vendor docs** — Gate types `size` as "trading size" and says nothing about zero — so it is
+/// read at face value: nothing traded, no tick, its price not a print. A page parser that
+/// counted it as malformed turned a page the venue served in full into a `Transient` refusal
+/// and backed the whole host off for minutes. Every trade-page parser splits its rows here
+/// first, so its hole check judges only the rows that should have parsed; the count travels in
+/// the refusal text, and a page of nothing but such rows parses as an empty page whose cursor
+/// still advances by the venue's own row count.
+///
+/// Args:
+///     rows: The page, as the venue sent it.
+///     qty_key: The row's quantity field.
+///
+/// Returns:
+///     The rows to parse as fills, in page order, and how many rows were zero-quantity.
+pub(super) fn split_no_fill<'a>(rows: &'a [Value], qty_key: &str) -> (Vec<&'a Value>, usize) {
+    let (fills, empty): (Vec<&Value>, Vec<&Value>) = rows
+        .iter()
+        .partition(|row| row.get(qty_key).and_then(cell_number) != Some(0.0));
+    (fills, empty.len())
+}
+
 /// Read an integer cell that a vendor may send as either a JSON number or a quoted string.
 ///
 /// Args:
@@ -313,3 +382,6 @@ pub(super) fn cell_i64(cell: &Value) -> Option<i64> {
         other => other.as_i64(),
     }
 }
+
+#[cfg(test)]
+mod tests;

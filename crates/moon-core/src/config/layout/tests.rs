@@ -2197,6 +2197,23 @@ fn trade_window_fit_and_hide_rail_default_off_and_round_trip() {
     assert_eq!(off.trade_window_ticks, Some(false));
 }
 
+#[test]
+fn the_corridor_and_the_tuner_panes_rail_read_their_own_defaults() {
+    let old: WindowLayout = toml::from_str("").expect("legacy layout");
+    assert!(!old.trade_window_moonshot_zone.unwrap_or(false));
+    assert!(old.analytics_trade_hide_rail.unwrap_or(true));
+    let saved: WindowLayout =
+        toml::from_str("trade_window_moonshot_zone = true\nanalytics_trade_hide_rail = false")
+            .expect("set");
+    let encoded = toml::to_string(&saved).expect("serialize preference");
+    let reopened: WindowLayout = toml::from_str(&encoded).expect("reopen preference");
+    assert_eq!(reopened.trade_window_moonshot_zone, Some(true));
+    assert_eq!(reopened.analytics_trade_hide_rail, Some(false));
+    assert_eq!(reopened.trade_window_hide_rail, None);
+    let bad: WindowLayout = toml::from_str("trade_window_moonshot_zone = 1").expect("lenient");
+    assert_eq!(bad.trade_window_moonshot_zone, None);
+}
+
 /// `layout.rs:ChartGraphicsCfg::candle_volume_sides` — the serde default is OFF while `Default`
 /// is ON, on purpose: a file without the key predates the switch and its style alone said
 /// whether the band drew, so reading the key as ON there would open every user who had the band

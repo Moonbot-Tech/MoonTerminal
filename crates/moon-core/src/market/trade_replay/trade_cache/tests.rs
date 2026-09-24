@@ -207,6 +207,69 @@ fn a_foreign_layout_is_dropped_at_open() {
     );
 }
 
+/// The offset-walk repair drops Gate futures VENUE spans once: the core's own spans of the same
+/// market stay, other venues' spans stay, and a second open drops nothing more.
+#[test]
+fn the_gate_futures_repair_drops_only_venue_spans_of_that_platform_once() {
+    let conn = conn();
+    // 9 = Gate futures, 8 = Gate spot, 4 = Binance futures (`venue::venue`).
+    // Distinct stretches per row: the store files only what is not yet held.
+    for (key, source, from_ms) in [
+        ("9:00000000", TileSource::Venue, 0),
+        ("9:00000000", TileSource::Core, 100),
+        ("8:00000000", TileSource::Venue, 0),
+        ("4:00000000", TileSource::Venue, 0),
+    ] {
+        insert_span(
+            &conn,
+            key,
+            "M",
+            from_ms,
+            from_ms + 99,
+            &[tick(from_ms + 50, Side::Buy)],
+            source,
+            1,
+        )
+        .expect("insert");
+    }
+    conn.execute("DELETE FROM repairs", [])
+        .expect("forget the repair");
+    repair_gate_futures_offset_walks(&conn).expect("repair");
+    let sources = |key: &str| -> Vec<i64> {
+        conn.prepare("SELECT source FROM spans WHERE exchange = ?1 ORDER BY source")
+            .expect("prepare")
+            .query_map([key], |r| r.get(0))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows")
+    };
+    assert_eq!(
+        sources("9:00000000"),
+        vec![1],
+        "the venue span went, the core's stayed"
+    );
+    assert_eq!(sources("8:00000000"), vec![0]);
+    assert_eq!(sources("4:00000000"), vec![0]);
+    // Recorded: a venue span filed after the repair survives the next open.
+    insert_span(
+        &conn,
+        "9:00000000",
+        "M",
+        200,
+        299,
+        &[tick(250, Side::Buy)],
+        TileSource::Venue,
+        2,
+    )
+    .expect("insert");
+    init_schema(&conn).expect("schema again");
+    assert_eq!(sources("9:00000000"), vec![0, 1]);
+    assert!(
+        !exchange_key_is_gate_futures("x:1"),
+        "an unknown ordinal is left alone"
+    );
+}
+
 /// Age alone drops nothing — a span untouched for a year is kept whole — and the byte ceiling
 /// drops the spans written longest ago first.
 #[test]
@@ -311,5 +374,23 @@ fn no_ceiling_keeps_everything() {
             .ticks
             .len(),
         500
+    );
+}
+
+/// The bounds read answers what is held over a stretch — every span that touches it, in order,
+/// the empty ones included — without the prints.
+#[test]
+fn span_bounds_answer_what_is_held_without_the_prints() {
+    let conn = conn();
+    for (from, to) in [(3_000, 3_999), (1_000, 1_999), (9_000, 9_999)] {
+        insert_span(&conn, "x", "M", from, to, &[], TileSource::Venue, 1).expect("insert");
+    }
+    insert_span(&conn, "x", "OTHER", 1_000, 1_999, &[], TileSource::Venue, 1).expect("insert");
+    let held = read_span_bounds(&conn, "x", "M", 1_500, 3_500).expect("read");
+    assert_eq!(held, vec![(1_000, 1_999), (3_000, 3_999)]);
+    assert!(
+        read_span_bounds(&conn, "x", "M", 5_000, 6_000)
+            .expect("read")
+            .is_empty()
     );
 }

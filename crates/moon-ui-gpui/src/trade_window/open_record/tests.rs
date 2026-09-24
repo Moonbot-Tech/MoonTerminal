@@ -1,4 +1,4 @@
-//! Fixture coverage for Report-period neighbours and the retained drawing selection.
+//! Fixture coverage for the period neighbours a trade window is opened with.
 
 use super::period_history;
 use moon_core::db::{OffsetSegment, ReportAxis, ReportFilter, ReportStrategyKey, SideFilter};

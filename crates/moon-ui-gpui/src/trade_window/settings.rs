@@ -4,8 +4,9 @@
 //!
 //! The main chart splits its settings over six popups because a live chart has six subjects. A
 //! frozen replay has fewer: the horizontal profile is off by construction (`chartdx::data_state`
-//! draws none under a `trade_replay`), the core price lines and the MoonShot corridor need a
-//! live order, the order book and the trade zone are switched off by the panel's constructor.
+//! draws none under a `trade_replay`), the core price lines need a live order (the MoonShot
+//! corridor comes from the report row instead, under a switch of its own here), the order book and
+//! the trade zone are switched off by the panel's constructor.
 //! What is left — the window's own switches, how the closed trades and their lines are drawn,
 //! how the candles look, and the volume band the replay serves from its own prints — fits one
 //! popup, and a reader who came to look at ONE trade should not have to learn which of six
@@ -276,6 +277,7 @@ impl TradeWindowView {
                 fit_trade: self.fit_trade,
                 hide_rail: self.hide_rail,
                 load_ticks: self.load_ticks,
+                show_corridor: self.show_corridor,
             },
             self.graphics_cfg(cx),
             self.candle_cfg(cx),
@@ -305,6 +307,7 @@ struct WindowSwitches {
     fit_trade: bool,
     hide_rail: bool,
     load_ticks: bool,
+    show_corridor: bool,
 }
 
 fn render_settings_popup(
@@ -347,6 +350,16 @@ fn render_settings_popup(
             .on_change(move |load: &bool, _w, app| {
                 let load = *load;
                 entity.update(app, |this, cx| this.set_load_ticks(load, cx));
+            })
+    };
+    let corridor_cb = {
+        let entity = entity.clone();
+        MoonCheckbox::new("trade-window-moonshot-zone")
+            .label(t!("trade_window.settings.moonshot_zone").to_string())
+            .checked(switches.show_corridor)
+            .on_change(move |show: &bool, _w, app| {
+                let show = *show;
+                entity.update(app, |this, cx| this.set_show_corridor(show, cx));
             })
     };
     let hide_rail_cb = {
@@ -559,6 +572,7 @@ fn render_settings_popup(
                     .child(other_trades_cb)
                     .child(fit_cb)
                     .child(ticks_cb)
+                    .child(corridor_cb)
                     .child(hide_rail_cb),
             ),
         )

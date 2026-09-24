@@ -41,25 +41,19 @@ pub const DEFAULT_IGNORE_FIELDS: &[&str] = &[
     "StrategyName",
 ];
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StorageCfg {
     pub strategies: StrategiesStoreCfg,
     pub trade_replay: TradeReplayStoreCfg,
 }
 
-impl Default for StorageCfg {
-    fn default() -> Self {
-        Self {
-            strategies: StrategiesStoreCfg::default(),
-            trade_replay: TradeReplayStoreCfg::default(),
-        }
-    }
-}
-
 /// The `[trade_replay]` section for the persisted trade prints (`trades.sqlite`).
+///
+/// Read through [`TradeReplayStoreRaw`]: a file written before the margin moved to seconds
+/// carries `margin_min`, and the conversion happens on load, not in the parser's field names.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(from = "TradeReplayStoreRaw")]
 pub struct TradeReplayStoreCfg {
     /// Whether the prints a trade window fetched are kept on disk for the next window and the
     /// next launch. Off, they live in memory for the session only and the file is not touched.
@@ -67,33 +61,152 @@ pub struct TradeReplayStoreCfg {
     /// Ceiling on the packed prints the file may hold, in megabytes; past it the spans written
     /// longest ago go first. `0` keeps everything, with no age limit.
     pub max_mb: u32,
-    /// Minutes of prints kept around a trade, per end: a short position gets this many minutes
-    /// before its entry and after its exit; a long one (over an hour) gets this many minutes
-    /// centred on each end, half before and half after, with bars between. It sizes what a trade
-    /// window fetches, what a close copies out of the core's ring, and what the file keeps.
-    /// `0` is the position alone; clamped to [`MAX_TRADE_MARGIN_MIN`] on load.
-    pub margin_min: u32,
+    /// Seconds of prints kept around a trade, per end: a short position gets this much before
+    /// its entry and after its exit; a long one (held past [`Self::long_position_min`]) gets
+    /// this much on both sides of each end, with bars between. It sizes what a trade window
+    /// fetches, what a close copies out of the core's ring, and what the file keeps. One of
+    /// [`TRADE_MARGIN_STEPS_S`]: a hand-edited value is snapped to the nearest step on load.
+    pub margin_s: u32,
+    /// Minutes a position may be held and still count as SHORT; held past them it is LONG —
+    /// walked as its two ends with bars between, by a trade window and by the close-time capture.
+    /// Bounded to [`LONG_POSITION_MIN_RANGE`] on load; a file written before the field reads
+    /// as the default, which is what the threshold was while it was a constant.
+    pub long_position_min: u32,
+    /// Whether the terminal runs the Storage tab's cleanup on its own once the cores are up.
+    /// Off by default: it rewrites the file unasked. A file written before the field reads as
+    /// off.
+    pub cleanup_at_startup: bool,
 }
+
+/// Default minutes of [`TradeReplayStoreCfg::long_position_min`]: the five minutes the
+/// threshold was as a constant.
+pub const DEFAULT_LONG_POSITION_MIN: u32 = 5;
+
+/// What [`TradeReplayStoreCfg::long_position_min`] may be, inclusive: one minute — below it
+/// every trade is "long" and no window shows its middle — to two hours, the margin's own
+/// ceiling.
+pub const LONG_POSITION_MIN_RANGE: std::ops::RangeInclusive<u32> = 1..=120;
 
 /// Default ceiling on `trades.sqlite`, megabytes: a day of busy replays is tens of megabytes,
 /// so this is months of them for the reader who never touches the setting.
 pub const DEFAULT_TRADES_MAX_MB: u32 = 256;
 
-/// Default minutes of prints around a trade, per end (the developer's call, 2026-09-20).
-pub const DEFAULT_TRADE_MARGIN_MIN: u32 = 15;
+/// The values [`TradeReplayStoreCfg::margin_s`] may take, ascending: the Storage tab steps
+/// through this list rather than by a fixed amount, so the short end is fine-grained and the
+/// long end coarse. The floor is 30 s — the tuner's run-up and tail
+/// (`trade_replay::MODEL_PAD_MS`): one setting sizes the chart's window, the close-time capture,
+/// the tuner's fetch and the cleanup alike, and none of them pads it behind the tab's back (the
+/// developer's call, 2026-09-23; the steps started at 5 s before that, and the tuner lifted
+/// them to a minute on its own). The ceiling is two hours: the bar context after an exit is two
+/// hours at least, and prints past the bars would have nowhere to draw.
+pub const TRADE_MARGIN_STEPS_S: &[u32] = &[30, 60, 180, 300, 600, 900, 1800, 3600, 7200];
 
-/// Ceiling on [`TradeReplayStoreCfg::margin_min`]: the bar context after an exit is two hours at
-/// least, and prints past the bars would have nowhere to draw.
-pub const MAX_TRADE_MARGIN_MIN: u32 = 120;
+/// Default seconds of prints around a trade, per end — the floor of [`TRADE_MARGIN_STEPS_S`],
+/// 30 s (the developer's call, 2026-09-23; 5 s from 2026-09-21, 15 minutes before that).
+pub const DEFAULT_TRADE_MARGIN_S: u32 = 30;
+
+/// Ceiling on [`TradeReplayStoreCfg::margin_s`] — the last of [`TRADE_MARGIN_STEPS_S`].
+pub const MAX_TRADE_MARGIN_S: u32 = 7200;
 
 impl Default for TradeReplayStoreCfg {
     fn default() -> Self {
         Self {
             persist_trades: true,
             max_mb: DEFAULT_TRADES_MAX_MB,
-            margin_min: DEFAULT_TRADE_MARGIN_MIN,
+            margin_s: DEFAULT_TRADE_MARGIN_S,
+            long_position_min: DEFAULT_LONG_POSITION_MIN,
+            cleanup_at_startup: false,
         }
     }
+}
+
+/// The on-disk shape of `[trade_replay]`, one field wider than the struct: `margin_min` is the
+/// key every file written before 2026-09-20 carries, in minutes. Both absent reads as the
+/// default; both present, the new key wins — a file the terminal wrote never has both.
+#[derive(Deserialize)]
+#[serde(default)]
+struct TradeReplayStoreRaw {
+    persist_trades: bool,
+    max_mb: u32,
+    margin_s: Option<u32>,
+    margin_min: Option<u32>,
+    long_position_min: u32,
+    cleanup_at_startup: bool,
+}
+
+impl Default for TradeReplayStoreRaw {
+    fn default() -> Self {
+        let d = TradeReplayStoreCfg::default();
+        Self {
+            persist_trades: d.persist_trades,
+            max_mb: d.max_mb,
+            margin_s: None,
+            margin_min: None,
+            long_position_min: d.long_position_min,
+            cleanup_at_startup: d.cleanup_at_startup,
+        }
+    }
+}
+
+impl From<TradeReplayStoreRaw> for TradeReplayStoreCfg {
+    fn from(raw: TradeReplayStoreRaw) -> Self {
+        let margin_s = raw
+            .margin_s
+            .or_else(|| raw.margin_min.map(|min| min.saturating_mul(60)))
+            .unwrap_or(DEFAULT_TRADE_MARGIN_S);
+        Self {
+            persist_trades: raw.persist_trades,
+            max_mb: raw.max_mb,
+            margin_s,
+            long_position_min: raw.long_position_min,
+            cleanup_at_startup: raw.cleanup_at_startup,
+        }
+    }
+}
+
+/// [`LONG_POSITION_MIN_RANGE`] applied to a value from the file or the tab.
+pub fn clamp_long_position_min(minutes: u32) -> u32 {
+    minutes.clamp(
+        *LONG_POSITION_MIN_RANGE.start(),
+        *LONG_POSITION_MIN_RANGE.end(),
+    )
+}
+
+/// The step of [`TRADE_MARGIN_STEPS_S`] nearest to `secs` — the lower one when `secs` sits
+/// exactly between two (a migrated `margin_min = 45` lands on 30 minutes, not 60). Anything
+/// past the last step is the last step, anything under the first is the first.
+///
+/// Args:
+///     secs: A margin in seconds, from the file or a caller.
+///
+/// Returns:
+///     A member of [`TRADE_MARGIN_STEPS_S`].
+pub fn snap_trade_margin_s(secs: u32) -> u32 {
+    TRADE_MARGIN_STEPS_S
+        .iter()
+        .copied()
+        .min_by_key(|step| (step.abs_diff(secs), *step))
+        .unwrap_or(DEFAULT_TRADE_MARGIN_S)
+}
+
+/// The step `delta` places away from `secs` in [`TRADE_MARGIN_STEPS_S`], from the step nearest
+/// to `secs`; the list's ends absorb the rest. What the Storage tab's stepper does.
+///
+/// Args:
+///     secs: The current margin in seconds.
+///     delta: How many steps to move, negative for shorter.
+///
+/// Returns:
+///     A member of [`TRADE_MARGIN_STEPS_S`].
+pub fn step_trade_margin_s(secs: u32, delta: i32) -> u32 {
+    let snapped = snap_trade_margin_s(secs);
+    let index = TRADE_MARGIN_STEPS_S
+        .iter()
+        .position(|&step| step == snapped)
+        .unwrap_or(0);
+    let last = TRADE_MARGIN_STEPS_S.len() - 1;
+    let target = (index as i64 + i64::from(delta)).clamp(0, last as i64) as usize;
+    TRADE_MARGIN_STEPS_S[target]
 }
 
 /// The `[strategies]` section for the local strategy and version database.
@@ -137,9 +250,13 @@ pub fn load() -> StorageCfg {
     sanitize(toml_io::load_or_default(&path, "storage.toml", |_| {}))
 }
 
-/// Bound what a hand-edited file may carry: the margin never exceeds [`MAX_TRADE_MARGIN_MIN`].
+/// Bound what a hand-edited file may carry: the long-position threshold is clamped to
+/// [`LONG_POSITION_MIN_RANGE`], and the margin is snapped onto [`TRADE_MARGIN_STEPS_S`],
+/// which also caps it at [`MAX_TRADE_MARGIN_S`].
 fn sanitize(mut cfg: StorageCfg) -> StorageCfg {
-    cfg.trade_replay.margin_min = cfg.trade_replay.margin_min.min(MAX_TRADE_MARGIN_MIN);
+    cfg.trade_replay.margin_s = snap_trade_margin_s(cfg.trade_replay.margin_s);
+    cfg.trade_replay.long_position_min =
+        clamp_long_position_min(cfg.trade_replay.long_position_min);
     cfg
 }
 

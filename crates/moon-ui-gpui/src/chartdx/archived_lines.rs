@@ -10,9 +10,10 @@
 //! The EXIT line never waits for the archive: the report row already states where the exit order
 //! was placed, at what price and when it filled, so every closed trade draws its exit as a line
 //! from the first frame, and the core's archived exit — with its repricing path — replaces that
-//! straight line when it arrives. Only the ENTRY still depends on the archive: the report dates
-//! the entry's completion, not its placement, so an entry the core archived no line for keeps
-//! its arrow until the wire says where the buy line began.
+//! straight line when it arrives. The ENTRY does the same where the row dates its placement
+//! (`buysetdatems`, filed since 2026-09-21): the core archives an entry line only once the order
+//! moved, so one that stood at its price is drawn straight from the placement to the fill. An
+//! older row states no placement, and an entry the core archived no line for keeps its arrow.
 //!
 //! Which trades to resolve is this engine's call too: the ones nearest the pane's right edge,
 //! because a market's history runs to a thousand rows and the core is asked about at most a few
@@ -26,7 +27,9 @@ use moon_core::config::TradeHistoryStyle;
 use moon_core::db::ChartTradeRecord;
 use moon_core::feed::{ArchivedLineKind, ArchivedOrderTrace};
 use moon_core::session::CoreId;
-use moon_core::session::order_lines::{ArchivedOrdersInput, OrderLineStore, ReportExit};
+use moon_core::session::order_lines::{
+    ArchivedOrdersInput, OrderLineStore, ReportEntry, ReportExit,
+};
 
 use super::ChartDataState;
 use super::trade_history_sync::trade_kind_visible;
@@ -71,9 +74,9 @@ impl ChartDataState {
     }
 
     /// Which ends of this trade the lines pass draws — `(entry, exit)` — so the arrows pass
-    /// draws the arrow of the end that has none. The entry only when the core archived its own
-    /// line — it archives only a line its chart gave a point, so a market entry typically has
-    /// none. The exit: on a live chart always, from the archive or from the row (see the module
+    /// draws the arrow of the end that has none. The entry when the core archived its own line, or
+    /// when the row dates the entry's placement before its fill — the builders then draw the line
+    /// from the report ([`ReportEntry`]); a market entry typically has neither. The exit: on a live chart always, from the archive or from the row (see the module
     /// doc), because the live archived store is built from the whole history; on a frozen viewer
     /// only when the store actually holds the trade — the trade window's store carries the
     /// subject and a capped set of neighbours while its arrows draw the whole published history,
@@ -95,11 +98,13 @@ impl ChartDataState {
         // The same predicate `orders::sync` picks its frozen branch by, so the two passes agree
         // on which rule applies — a store not yet built is still a frozen viewer, whose exits are
         // then lined by nothing.
+        let placed = ReportEntry::of_record(record, &self.report_axis).is_some();
         match self.draws_live_market() {
-            true => line_ends(record, &self.archived_lines),
+            true => line_ends(record, &self.archived_lines, placed),
             false => frozen_line_ends(
                 record,
                 &self.archived_lines,
+                placed,
                 self.is_live_twin(record, drawn),
             ),
         }
@@ -218,20 +223,23 @@ fn frozen_store_drawn(draws_lines: bool) -> bool {
 fn frozen_line_ends(
     record: &ChartTradeRecord,
     lines: &HashMap<i64, Arc<[ArchivedOrderTrace]>>,
+    placed: bool,
     stored: bool,
 ) -> (bool, bool) {
-    let (entry, exit) = line_ends(record, lines);
-    (entry, exit && stored)
+    let (entry, exit) = line_ends(record, lines, placed);
+    (entry && stored, exit && stored)
 }
 
-/// See [`ChartDataState::archived_line_ends`]; `lines` is the resolver's map by `ReportUID`.
+/// See [`ChartDataState::archived_line_ends`]; `lines` is the resolver's map by `ReportUID`,
+/// `placed` whether the row dates its entry's placement ([`ReportEntry::of_record`]).
 fn line_ends(
     record: &ChartTradeRecord,
     lines: &HashMap<i64, Arc<[ArchivedOrderTrace]>>,
+    placed: bool,
 ) -> (bool, bool) {
     // The same test `ReportExit::of_record` makes: a row with no exit price places no line.
     let exit = record.sell_price > 0.0;
-    let entry = record
+    let archived = record
         .report_uid
         .and_then(|uid| lines.get(&uid))
         .is_some_and(|lines| {
@@ -239,7 +247,7 @@ fn line_ends(
                 .iter()
                 .any(|line| line.own && line.kind == ArchivedLineKind::Entry)
         });
-    (entry, exit)
+    (archived || placed, exit)
 }
 
 /// One number for the live twins a store was built against, for the per-pane cache key: the
@@ -370,6 +378,7 @@ fn archived_store(
                 entry_fill_ms: Some(buy_ms as f64),
                 close_ms: close_ms as f64,
                 exit: ReportExit::of_record(record, axis),
+                entry: ReportEntry::of_record(record, axis),
                 // Moonbot draws its closed trades' lines in full colour; so does this style.
                 bright: true,
             },

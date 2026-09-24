@@ -23,12 +23,14 @@ mod range_pick;
 mod strategy_read;
 /// Automatic threshold search over all fields at once, scan plus DB-free optimizer.
 pub mod threshold_search;
+/// The Entry/Exit axis: a what-if replayed over the trade tape, not an SQL mask.
+pub mod ticks;
 mod time;
 
 pub use fields::{FIELDS, FieldClass, FieldSpec, slot_type_for};
 pub use strategy_read::{
     StratFilters, strategy_cores, strategy_current_values, strategy_current_values_opt,
-    strategy_filters,
+    strategy_filters, strategy_kinds,
 };
 pub use time::{
     SliderProfiles, TimeAxes, TimeSuggest, TimeWindow, format_week_span, format_working_time,

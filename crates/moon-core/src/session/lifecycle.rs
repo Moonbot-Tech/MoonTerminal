@@ -510,7 +510,12 @@ impl SessionManager {
                 market,
                 open_ms,
                 close_ms,
+                // The setting's margin, whose floor is the tuner's run-up and tail
+                // (`MODEL_PAD_MS`): the capture is what the tuner reads a closed trade's tape
+                // from, and they must be in the tile or every closed trade re-walks the venue
+                // for the seconds the ring held for free.
                 margin_ms: crate::market::trade_replay::margin_ms(),
+                long_position_ms: crate::market::trade_replay::long_position_ms(),
             },
         );
     }

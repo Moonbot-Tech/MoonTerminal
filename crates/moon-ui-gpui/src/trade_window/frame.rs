@@ -119,16 +119,17 @@ pub(crate) fn trade_frame(entry_ms: i64, exit_ms: i64, bar_ms: i64) -> Option<(i
 /// asked for after seeing the trade edge to edge: "a little smaller, one click each way".
 pub(crate) const FIT_PAD: f32 = 0.25;
 
-/// One trade's own span for fitting: from where its entry order was PLACED, when the archive
-/// holds that line, to its close.
+/// One trade's own span for fitting: from where its entry order was PLACED, when that is known,
+/// to its close.
 ///
 /// The placement is the start of the archived entry line — the first point the core recorded —
-/// and it is used only when it precedes the fill it belongs to; an archive stamp later than the
+/// or, where the archive holds none, the row's own `buysetdatems` (the caller picks, see
+/// `traces::rebuild_frozen_orders`); it is used only when it precedes the fill it belongs to; an archive stamp later than the
 /// fill is noise, and the fill is the floor. Without a line the fill is the start: a market entry
 /// was placed and filled in one instant as far as the picture is concerned.
 ///
 /// Args:
-///     entry_set_ms: Start of the archived entry line, when there is one.
+///     entry_set_ms: Where the entry order was placed, when known.
 ///     entry_fill_ms: The entry fill, Unix milliseconds.
 ///     close_ms: The close, Unix milliseconds.
 ///

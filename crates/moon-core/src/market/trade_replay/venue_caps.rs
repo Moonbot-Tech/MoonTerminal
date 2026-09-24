@@ -79,15 +79,18 @@
 //! | `BinanceUsdMAggTrades` | `/fapi/v1/aggTrades` | `fapi.binance.com` | 1000 | **< 1 h** | **48 h** | `fromId` | undocumented | HTTP 4xx `-1121` | developers.binance.com/.../derivatives/usds-margined-futures/market-data/rest-api/Compressed-Aggregate-Trades-List |
 //! | `BinanceCoinMAggTrades` | `/dapi/v1/aggTrades` | `dapi.binance.com` | 1000 | **< 1 h** | **48 h** | `fromId` | undocumented | HTTP 4xx `-1121` | developers.binance.com/.../derivatives/coin-margined-futures/market-data/rest-api/Compressed-Aggregate-Trades-List |
 //! | `GateSpotTrades` | `/api/v4/spot/trades` | `api.gateio.ws` | 1000 | none (page cap `limit*(page-1) <= 100000`) | ~30 d | `from`/`to` in **SECONDS** + `page` | undocumented | label `INVALID_CURRENCY_PAIR` | gateio/gateapi-python docs/SpotApi.md |
-//! | `GateFuturesTrades` | `/api/v4/futures/usdt/trades` | `api.gateio.ws` | **undocumented, default 100** | none | none documented | `from`/`to` in **SECONDS** + `offset` | undocumented | label `CONTRACT_NOT_FOUND` | gateio/gateapi-python docs/FuturesApi.md |
+//! | `GateFuturesTrades` | `/api/v4/futures/usdt/trades` | `api.gateio.ws` | 1000 (documented max; default 100) | none | none documented | `from`/`to` in **SECONDS**, `to` walked back onto the oldest row's second, rows told apart by `id`; a second denser than a page drained by `offset` with `from`/`to` pinned to it — **`offset` across a window is not a cursor** (2026-09-21: back-to-back requests 100 apart came back as rows 0, 100, 100, 300, 300, 500; `last_id` ignored with `from`/`to`; within one second `offset` answered the same contiguous ids on every probe) | newest first (measured) | label `CONTRACT_NOT_FOUND` | gateio/gateapi-python docs/FuturesApi.md |
 //! | `BitgetSpotFills` | `/api/v2/spot/market/fills-history` | `api.bitget.com` | 1000 | **7 d** | **90 d** | `idLessThan` | **desc** | envelope `code != "00000"` | bitget.com/api-doc/classic/spot/market/Get-Market-Trades |
 //! | `BitgetMixFills` | `/api/v2/mix/market/fills-history` | `api.bitget.com` | 1000 | **7 d** | **90 d** | `idLessThan` (+`productType` required) | **desc** | envelope `code != "00000"` | bitget.com/api-doc/classic/contract/market/Get-Fills-History |
 //! | `OkxHistoryTrades` | `/api/v5/market/history-trades` | `www.okx.com` | **100** | none (no `startTime`/`endTime` at all) | **3 months** | `type=2&after=<ms>` for the FIRST page, `type=1&after=<tradeId>` for every later one | **desc** | HTTP 200 + `code 51001` | okx.com/docs-v5/en/#order-book-trading-market-data-get-trades-history |
 //!
-//! Two venue facts that are silently wrong when mistaken: **Binance futures (both arms) retain
-//! only 48 hours of aggTrades**, so the retention check must run before any request is spent; and
+//! Three venue facts that are silently wrong when mistaken: **Binance futures (both arms) retain
+//! only 48 hours of aggTrades**, so the retention check must run before any request is spent;
 //! **Gate's `from`/`to` are in SECONDS**, while every other timestamp in this module is
-//! milliseconds.
+//! milliseconds; and **Gate's two trade rows do not share a time cell**: futures sends
+//! `create_time`/`create_time_ms` as fractional SECONDS in a JSON number (`1789726954.306`),
+//! spot sends `create_time_ms` as a millisecond STRING — a parser shared between the two rejects
+//! every futures row and reads as a venue refusal (recorded 2026-09-21, `rest/gateio/tests.rs`).
 //!
 //! **Three trade routes report a CONTRACT count where `Tick::qty` is documented as base-currency
 //! quantity**, and this is deliberate rather than an oversight: `OkxHistoryTrades`
@@ -322,6 +325,36 @@ impl TradeRoute {
         }
     }
 
+    /// Least time between two pages of this route on its host.
+    ///
+    /// Binance's futures `aggTrades` weigh 20 against an IP budget of 2 400 per minute (both
+    /// arms' documentation), so more than two pages a second is a refusal — measured on the
+    /// live endpoint (2026-09-20): the default 100 ms floor answered 429 after ~80 pages, and
+    /// every refusal then cost the batch a 30–600 s backoff on the whole host. 650 ms is ~92
+    /// pages a minute, ~1 850 of the budget, leaving a quarter for the candle pages of the
+    /// same host (weight up to 10 each) that a chart window or the next request issues beside
+    /// the walk. Every other route's documented limit is met by the gate's default floor.
+    ///
+    /// Returns:
+    ///     The floor to pace a page of this route with.
+    pub const fn page_interval(self) -> std::time::Duration {
+        match self {
+            Self::BinanceUsdMAggTrades | Self::BinanceCoinMAggTrades => {
+                std::time::Duration::from_millis(650)
+            }
+            // Not a weight limit: under back-to-back requests the futures trades endpoint
+            // answered a repeat of the previous page for a changed `offset` (2026-09-21, see
+            // the route table), and never did 300 ms apart; a page is 1 000 rows, so the
+            // floor costs a busy minute of tape a third of a second.
+            Self::GateFuturesTrades => std::time::Duration::from_millis(350),
+            Self::BinanceSpotAggTrades
+            | Self::GateSpotTrades
+            | Self::BitgetSpotFills
+            | Self::BitgetMixFills
+            | Self::OkxHistoryTrades => super::gate::MIN_INTERVAL,
+        }
+    }
+
     /// Largest number of rows one request may ask for.
     ///
     /// Returns:
@@ -332,8 +365,10 @@ impl TradeRoute {
             | Self::BinanceUsdMAggTrades
             | Self::BinanceCoinMAggTrades => 1_000,
             Self::GateSpotTrades => 1_000,
-            // UNDOCUMENTED: this is the MEASURED default page size, not a vendor-stated cap.
-            Self::GateFuturesTrades => 100,
+            // The documented maximum; a 3-minute window on a pumping contract came back whole
+            // in one page of 896 rows (2026-09-21), where the default of 100 took nine pages —
+            // and nine chances for the page walk to go wrong (see the route table).
+            Self::GateFuturesTrades => 1_000,
             Self::BitgetSpotFills | Self::BitgetMixFills => 1_000,
             Self::OkxHistoryTrades => 100,
         }

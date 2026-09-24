@@ -170,6 +170,8 @@ fn neighbour_toggle_selects_all_or_focus_without_losing_the_snapshot() {
         close_ms: None,
         sell_set_date: 0,
         sell_set_ms: None,
+        buy_set_ms: None,
+        corridor: None,
         buy_price: 10.0,
         sell_price: 12.0,
         quantity: 2.0,

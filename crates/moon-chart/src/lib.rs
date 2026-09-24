@@ -19,6 +19,7 @@ pub use moon_core::data;
 pub mod drawing_snap;
 pub mod figures;
 pub use figures::build_figure_geometry;
+pub mod frozen_overlay;
 pub mod layers;
 pub mod news_marks;
 pub use news_marks::build_news_geometry;

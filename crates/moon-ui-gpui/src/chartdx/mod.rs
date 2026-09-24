@@ -750,6 +750,9 @@ struct PaneRender {
     /// Last `archived_lines_rev` the userdata buffer was built with — the closed trades' Moonbot
     /// lines ride the same buffer as the live orders, so a new archive answer rebuilds it.
     last_archived_lines_rev: u64,
+    /// Last `frozen_overlay_rev` the userdata buffer was built with: a frozen viewer's corridor
+    /// and modelled trades ride the same buffer as its archived store.
+    last_overlay_rev: u64,
     /// The archived store this pane last drew, and the `(archived_lines_rev, twins signature,
     /// graphics bits, closed-order cap)` it was built for. Reused across the forced syncs a drag
     /// or hover fires per frame; see the order pass.
@@ -987,6 +990,7 @@ impl PaneRender {
             last_book_hi: f32::NAN,
             last_order_lines_rev: u64::MAX,
             last_archived_lines_rev: u64::MAX,
+            last_overlay_rev: u64::MAX,
             archived_store: None,
             archived_store_key: None,
             last_order_strategies_rev: u64::MAX,
@@ -1658,6 +1662,11 @@ struct ChartDataState {
     /// Set with `frozen_orders`, by the same owner: a live chart takes this band from the
     /// session store's open orders (`auto_fit_range`), which an archived store never has.
     frozen_fit_range: Option<(f32, f32)>,
+    /// What a frozen viewer draws beside its store — the entry corridor, modelled trades — and
+    /// the revision each hand-over stamps, which the order sync is gated on. Same ownership as
+    /// `frozen_orders`; drawn in either trade style, since neither is an order of the trade.
+    frozen_overlay: Option<Rc<moon_chart::frozen_overlay::FrozenOverlay>>,
+    frozen_overlay_rev: u64,
     last_frame_tick_at: Option<Instant>,
     present_rate_candidate_hz: f32,
     present_rate_candidate_hits: u8,

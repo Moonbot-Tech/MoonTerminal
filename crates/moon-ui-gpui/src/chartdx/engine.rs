@@ -633,6 +633,20 @@ impl ChartEngine {
         self.data.borrow_mut().set_frozen_orders(store, fit_range);
     }
 
+    /// Draw a frozen viewer's corridor and modelled trades beside its archived lines.
+    ///
+    /// Only the trade window calls this, on the engine it owns; see
+    /// `ChartDataState::frozen_overlay`.
+    ///
+    /// Args:
+    ///     overlay: What to draw, or `None` for nothing.
+    pub(crate) fn set_frozen_overlay(
+        &mut self,
+        overlay: Option<std::rc::Rc<moon_chart::frozen_overlay::FrozenOverlay>>,
+    ) {
+        self.data.borrow_mut().set_frozen_overlay(overlay);
+    }
+
     /// Hand this engine the closed trade its captions describe, or take it away.
     ///
     /// Only the trade window calls this, on the engine it owns — the same boundary

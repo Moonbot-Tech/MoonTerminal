@@ -879,18 +879,25 @@ fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
             "the trade window must never route a trading or figure action through `{forbidden}`"
         );
     }
-    let opener = code_only(braced_body(
-        &trade_window,
-        "pub(crate) fn open_trade_window(",
-    ));
+    // Every host builds the view through the one constructor, so the pin is checked there, and
+    // the window opener must go through it.
+    assert!(
+        code_only(braced_body(
+            &trade_window,
+            "pub(crate) fn open_trade_window("
+        ))
+        .contains("new_view("),
+        "the trade window opener must build its view through the shared constructor"
+    );
+    let opener = code_only(braced_body(&trade_window, "fn new_view("));
     // The pin lives in ONE rule — `settings::pinned_candle_view` — that the opener, the popup,
-    // the mode restore and the reset all draw candles through; the opener must apply it before
-    // the view exists, and the rule itself must pin to one minute.
+    // the mode restore and the reset all draw candles through; the constructor must apply it
+    // before the view exists, and the rule itself must pin to one minute.
     let pin = opener
         .find("pinned_candle_view(")
         .expect("the trade window must pin replay candles through settings::pinned_candle_view");
     let view = opener
-        .find("let view = cx.new")
+        .find("let mut this = TradeWindowView")
         .expect("the trade window must construct its view after configuring the panel");
     assert!(
         opener.contains("new_historical(") && opener.contains("set_candle_view(") && pin < view,

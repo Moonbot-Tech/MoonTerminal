@@ -31,6 +31,7 @@
 pub mod coverage;
 pub mod gate;
 pub mod rest;
+mod settings;
 pub(crate) mod tick_tiles;
 pub mod trade_cache;
 pub mod venue_caps;
@@ -41,8 +42,11 @@ use crate::market::candles::ChartCandle;
 use crate::market::{CandleReadParams, ChartHistoryBuffers, ChartHistoryRead};
 use crate::venue::{Brand, Venue};
 pub use coverage::Coverage;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU32, Ordering};
+pub use settings::{
+    cleanup_at_startup, long_position_ms, margin_ms, set_cleanup_at_startup, set_long_position_min,
+    set_margin_s,
+};
+pub use worker::{TickAnswer, TickQuery, query_held};
 
 /// Milliseconds in one minute, the only timeframe a replay is fetched at.
 const MINUTE_MS: i64 = 60_000;
@@ -77,43 +81,32 @@ const MAX_SPAN_MS: i64 = 7 * 24 * 60 * MINUTE_MS;
 /// exit — so a window clipped exactly to the position would answer the wrong question.
 const CONTEXT_FRACTION: f64 = 0.5;
 
-/// Live value of `[trade_replay] margin_min` — how many minutes of prints a window asks for
-/// around a trade, per end ([`ReplayWindow::margin_ms`]); the Storage tab moves it.
-static MARGIN_MIN: AtomicU32 = AtomicU32::new(crate::config::storage::DEFAULT_TRADE_MARGIN_MIN);
-static MARGIN_INIT: OnceLock<()> = OnceLock::new();
+// A position held longer than `[trade_replay] long_position_min` ([`long_position_ms`]) asks
+// for ticks only around its entry and its exit ([`ReplayWindow::focus_spans`]), each end
+// getting the window's margin on both sides of it; the middle stays bars.
+//
+// A meaning bound, not a resource one: the page budget already caps what a walk can fetch, but
+// on a multi-hour position it burned out ~40 minutes after the entry and the exit came back as
+// bars — while at the zoom such a position is viewed at, the chart draws bars for the middle
+// anyway. Five minutes was the developer's call as a constant (2026-09-21; an hour the day
+// before) and is the default now that the Storage tab moves it: past it the ticks between the
+// ends are a ribbon nobody reads, and what matters is how the entry and the exit printed. The
+// tuner's model runs a long position on that two-end tape as it is — also the developer's
+// call, the same day: an exit that really happened in the unwalked middle is a miss in the
+// replay, and the deal table's "held" column shows how far the tape reaches on each side.
+//
+// The tuner's fetch clusters several trades of one market into one request whose open is the
+// first entry and whose close is the last exit, and keeps the cluster within the same
+// threshold: a longer one would be walked as two ends, and the trades in between would go
+// without their tape.
 
-/// The configured margin, in milliseconds — what every new [`ReplayWindow`] and every close-time
-/// capture is built with. Read once from `storage.toml` on first use, then from the live cell.
-pub fn margin_ms() -> i64 {
-    MARGIN_INIT.get_or_init(|| {
-        let cfg = crate::config::storage::load();
-        MARGIN_MIN.store(cfg.trade_replay.margin_min, Ordering::Relaxed);
-    });
-    i64::from(MARGIN_MIN.load(Ordering::Relaxed)) * MINUTE_MS
-}
-
-/// Move the live margin; the Storage tab writes `storage.toml` beside this. Windows already open
-/// keep the margin they were built with; the next one asks for the new stretch, and the tile
-/// store hands back what earlier windows already fetched of it.
-pub fn set_margin_min(minutes: u32) {
-    // Initialise first, or the file's value would land on top of this one on the first read.
-    let _ = margin_ms();
-    MARGIN_MIN.store(
-        minutes.min(crate::config::storage::MAX_TRADE_MARGIN_MIN),
-        Ordering::Relaxed,
-    );
-}
-
-/// A position held longer than this asks for ticks only around its entry and its exit
-/// ([`ReplayWindow::focus_spans`]), each end getting the window's margin centred on it; the
-/// middle stays bars.
-///
-/// A meaning bound, not a resource one: the page budget already caps what a walk can fetch, but
-/// on a multi-hour position it burned out ~40 minutes after the entry and the exit came back as
-/// bars — while at the zoom such a position is viewed at, the chart draws bars for the middle
-/// anyway. One hour is the developer's call (2026-09-20): past it the ticks between the ends
-/// are a ribbon nobody reads, and what matters is how the entry and the exit printed.
-const LONG_POSITION_MS: i64 = 60 * MINUTE_MS;
+/// How far before the entry and past the exit a MODEL's request treats the tape as part of the
+/// trade itself (walked under the trade budget, never cut short by the normal page ceiling):
+/// the run-up the entry model reads and the tail the exit is judged on —
+/// `db::tuner::ticks::{RUN_UP_MS, TAIL_MS}` are this constant. Without it the model's lead was
+/// an ordinary margin tile: on a pumped coin the normal budget ran out inside the ten-minute
+/// tile before it reached the thirty seconds before the entry, and the row stayed missing.
+pub const MODEL_PAD_MS: i64 = 30_000;
 
 /// Bound each tick tile so completed groups can be shown during a long position's replay.
 const TICK_SLICE_MS: i64 = 10 * MINUTE_MS;
@@ -155,6 +148,13 @@ pub enum TickStatus {
     },
     /// The venue answered and held no trade inside the window, while klines exist.
     NoTrades,
+    /// The walk was not sent: the venue's host is in the gate's backoff after a refusal it gave
+    /// an earlier walk. Asking again once the wait is out is what changes it — a batch waits it
+    /// out on the same row rather than marching every remaining row into the same refusal.
+    RateLimited {
+        /// How long the host is still refused for, in seconds, as the gate will honour it.
+        retry_in_s: u32,
+    },
     /// The tick fetch itself did not produce an answer.
     Failed,
     /// The tick stage finished; carried by exchange or core tick series.
@@ -224,7 +224,8 @@ pub enum TradeReplayEmpty {
 /// Why a replay could not be fetched, as opposed to having come back empty.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TradeReplayFailure {
-    /// The venue's send permit is not due yet; the window may retry in this many seconds.
+    /// The venue's host is in the gate's backoff after a refusal it gave an earlier request;
+    /// the window may retry in this many seconds.
     RateLimited { retry_in_s: u32 },
     /// Transport, service, or malformed-response failure that may recover.
     ///
@@ -249,6 +250,66 @@ pub enum TradeReplayOutcome {
     Failed(TradeReplayFailure),
 }
 
+/// Who is asking for the prints, which decides three things the requester cannot express in
+/// the window alone: which margin the walk spends its page budget on first, whether a short
+/// answer waits for the core's archive, and whether the remembered-answer ring is consulted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ReplayIntent {
+    /// A live trade window. The exit's trail is walked before the entry's lead — the part of the
+    /// picture the eye lands on — and an answer short of the focus keeps polling the core's
+    /// archive for a while, since a just-opened window asked for it and it may still arrive.
+    Chart,
+    /// A model replaying the trade off the tiles (the tuner's Entry/Exit axis). The lead before
+    /// the entry is walked before the trail: the run-up is what the entry model reads, and on a
+    /// pumped coin the trail alone exhausts a venue's page budget. No archive wait: the
+    /// requester reads the tiles itself once the stage has run, and thirty seconds per row of a
+    /// batch would be paid for an archive the close-time capture already filed.
+    Model,
+}
+
+impl ReplayIntent {
+    /// Whether the plan walks the entry's lead before the exit's trail on a forward route.
+    pub(crate) fn lead_first(self) -> bool {
+        matches!(self, Self::Model)
+    }
+
+    /// How far outside the position the trade tiles reach — see [`MODEL_PAD_MS`]. A chart's
+    /// trade tiles are the position alone.
+    pub(crate) fn trade_pad_ms(self) -> i64 {
+        match self {
+            Self::Chart => 0,
+            Self::Model => MODEL_PAD_MS,
+        }
+    }
+
+    /// Whether an answer short of the focus arms the bounded core-archive follow-up.
+    pub(crate) fn awaits_core(self) -> bool {
+        matches!(self, Self::Chart)
+    }
+
+    /// Whether what the core's ring holds of the window is FILED into the tiles rather than
+    /// answered from. A model's requester reads the tiles, not the answer: an answer straight
+    /// from the ring — the candle stage's core-first, the tick stage's own read, the mid-walk
+    /// upgrade — reached nobody, since none of them files a tile and the close-time capture that
+    /// would have filed it never ran for a trade that closed while the terminal was down.
+    /// Filed, the ring's stretch is what the walk no longer asks the venue
+    /// for, and the held query finds it. A chart keeps the ring as an answer: its window shows
+    /// the series it is sent.
+    pub(crate) fn files_core(self) -> bool {
+        matches!(self, Self::Model)
+    }
+
+    /// Whether the remembered-answer ring is read and written for this request. A model's
+    /// request does neither: the ring is keyed by the window alone, so a chart's answer that
+    /// stopped on the page budget before its lead would be served to the model with no run-up,
+    /// and the model's own lead-first answer, stopped before its trail, would be served to the
+    /// next chart with no trail. The tiles already keep either stage from paying twice for what
+    /// the other did bring back.
+    pub(crate) fn reuses_answers(self) -> bool {
+        matches!(self, Self::Chart)
+    }
+}
+
 /// The inclusive millisecond window a replay covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReplayWindow {
@@ -265,10 +326,18 @@ pub struct ReplayWindow {
     /// Millisecond-exact when the core supplied a millisecond column, whole seconds otherwise.
     pub close_ms: i64,
     /// How many milliseconds of prints are asked for around the position, per end — the
-    /// `[trade_replay] margin_min` setting at the moment the window was built. A short position
-    /// gets this much before the entry and after the exit ([`Self::focus`]); a long one gets it
-    /// centred on each end ([`Self::focus_spans`]). Zero is the position alone.
+    /// `[trade_replay] margin_s` setting at the moment the window was built ([`margin_ms`]).
+    /// A short position gets this much before the entry and after the exit ([`Self::focus`]);
+    /// a long one gets it on both sides of each end ([`Self::focus_spans`]). Zero is the position
+    /// alone — a value the setting no longer offers, but one a hand-built window may still carry.
     pub margin_ms: i64,
+    /// How long a position must be held to be walked as its two ends — the `[trade_replay]
+    /// long_position_min` setting at the moment the window was built ([`long_position_ms`]),
+    /// in milliseconds. Captured like [`Self::margin_ms`], for the same reason: one request is
+    /// clustered, walked, judged complete and drawn at different moments, and every one of
+    /// them must read the same position as long or short whatever the Storage tab did
+    /// meanwhile.
+    pub long_position_ms: i64,
     /// Whether this window is WIDER than [`MAX_SPAN_MS`] because its floors demanded it.
     ///
     /// Renamed from `clipped`, and the rename is the point: the field used to mean "half the
@@ -321,27 +390,30 @@ impl ReplayWindow {
         (left, right)
     }
     /// The stretches actually requested as ticks: the whole [`Self::focus`] on a position held up
-    /// to [`LONG_POSITION_MS`]; on a longer one, [`Self::margin_ms`] centred on the entry and on
-    /// the exit — half before each end, half after — two spans with the middle left to bars.
+    /// to [`Self::long_position_ms`]; on a longer one, [`Self::margin_ms`] on both sides of the
+    /// entry and of the exit — two spans with the middle left to bars. Both sides, not half the
+    /// margin each: the stretch before the entry and past the exit is what the tuner's run-up
+    /// and exit horizon are, and a long position must get the same margin there as a short one
+    /// (the developer's call, 2026-09-23; the margin was centred on each end before).
     ///
     /// Returns:
     ///     One or two spans, each clamped into `[Self::from_ms, Self::to_ms]`. The two of a long
-    ///     position coalesce into one when the margin reaches the position's own length, which
-    ///     is then the whole focus again — the same picture a short position gets.
+    ///     position coalesce into one when twice the margin reaches the position's own length,
+    ///     which is then the whole focus again — the same picture a short position gets.
     pub fn focus_spans(self) -> Coverage {
         let (left, right) = self.focus();
-        if self.close_ms.saturating_sub(self.open_ms) <= LONG_POSITION_MS {
+        if self.close_ms.saturating_sub(self.open_ms) <= self.long_position_ms {
             return Coverage::one((left, right));
         }
-        let half = self.margin_ms.max(0) / 2;
+        let margin = self.margin_ms.max(0);
         let clamp = |from: i64, to: i64| (from.max(left).min(right), to.min(right).max(left));
         let mut spans = Coverage::one(clamp(
-            self.open_ms.saturating_sub(half),
-            self.open_ms.saturating_add(half),
+            self.open_ms.saturating_sub(margin),
+            self.open_ms.saturating_add(margin),
         ));
         spans.add(clamp(
-            self.close_ms.saturating_sub(half),
-            self.close_ms.saturating_add(half),
+            self.close_ms.saturating_sub(margin),
+            self.close_ms.saturating_add(margin),
         ));
         spans
     }
@@ -420,6 +492,7 @@ pub fn replay_window_ms(open_ms: i64, close_ms: i64, margin_ms: i64) -> Option<R
         open_ms,
         close_ms,
         margin_ms: margin_ms.max(0),
+        long_position_ms: long_position_ms(),
         over_budget,
     })
 }
@@ -525,6 +598,7 @@ pub(crate) struct TickPlan {
 ///     window: The trade and its candle context.
 ///     route: Determines the query cap and paging direction; Gate keeps its existing page order.
 ///     earliest_ms: Optional retention boundary, applied before splitting the trade and margins.
+///     intent: Which margin goes first on a forward route — see [`ReplayIntent`].
 ///
 /// Returns:
 ///     Non-overlapping tiles in fetch order, with the protected trade prefix counted separately.
@@ -532,6 +606,7 @@ pub(crate) fn tick_plan(
     window: ReplayWindow,
     route: venue_caps::TradeRoute,
     earliest_ms: Option<i64>,
+    intent: ReplayIntent,
 ) -> TickPlan {
     let span = match route.max_query_ms() {
         Some(cap) if cap > 0 => TICK_SLICE_MS.min(cap),
@@ -577,36 +652,43 @@ pub(crate) fn tick_plan(
     };
     // Each focus span splits into its trade part and the margins outside the position; a span
     // that holds only one end of a long position simply has an empty margin on the other side.
+    // The trade part reaches `pad` outside the position — nothing for a chart, the model's
+    // run-up and tail for a model ([`ReplayIntent::trade_pad_ms`]).
     let mut focus: Vec<(i64, i64)> = window.focus_spans().spans().to_vec();
     if backward {
         focus.reverse();
     }
+    let pad = intent.trade_pad_ms();
+    let trade_from = window.open_ms.saturating_sub(pad);
+    let trade_to = window.close_ms.saturating_add(pad);
     let mut slices = Vec::new();
     for &(focus_from, focus_to) in &focus {
         slices.extend(tiles(
-            window.open_ms.max(focus_from),
-            window.close_ms.min(focus_to),
+            trade_from.max(focus_from),
+            trade_to.min(focus_to),
             backward,
         ));
     }
     let trade_len = slices.len();
     // The margins keep the single-focus order — a backward route walks the lead before the
-    // trail, a forward one the trail before the lead — across both spans of a long position.
+    // trail, a forward one the trail before the lead — across both spans of a long position. A
+    // model's request walks the lead first on either: the lead tiles are reversed, so the
+    // coverage still grows away from the trade in one stretch.
     let mut lead = Vec::new();
     let mut trail = Vec::new();
     for &(focus_from, focus_to) in &focus {
         lead.extend(tiles(
             focus_from,
-            window.open_ms.saturating_sub(1).min(focus_to),
+            trade_from.saturating_sub(1).min(focus_to),
             true,
         ));
         trail.extend(tiles(
-            window.close_ms.saturating_add(1).max(focus_from),
+            trade_to.saturating_add(1).max(focus_from),
             focus_to,
             false,
         ));
     }
-    if backward {
+    if backward || intent.lead_first() {
         slices.extend(lead);
         slices.extend(trail);
     } else {
