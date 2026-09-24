@@ -415,12 +415,23 @@ impl MarketDataSource {
         let from_time = moon_time_from_rel_ms(epoch_ms, from_rel_ms);
         let to_time = moon_time_from_rel_ms(epoch_ms, to_rel_ms.max(from_rel_ms + 1.0));
         // Read trade crosses and scans only from the last-K-candles display zone. INFINITY hides
-        // trades entirely when K is zero; it does not constrain candle aggregation.
+        // trades entirely when K is zero; it does not constrain candle aggregation. Max
+        // (`TRADES_FROM_UNBOUNDED`) is finite so trades stay on, and it is NOT raised to the
+        // history window: the copy starts at the oldest retained row and the ring capacity
+        // is the only clamp. The drawn edge is applied later, from the oldest row returned.
+        let zone_unbounded = candle_params.is_some_and(|cp| {
+            cp.trades_from_rel_ms == crate::market::candles::TRADES_FROM_UNBOUNDED
+        });
         let display_trades = candle_params.map_or(true, |cp| cp.trades_from_rel_ms.is_finite());
-        let trades_from_rel = candle_params
-            .map(|cp| cp.trades_from_rel_ms.max(from_rel_ms))
-            .filter(|v| v.is_finite())
-            .unwrap_or(from_rel_ms);
+        let trades_from_rel = if zone_unbounded {
+            crate::market::candles::TRADES_FROM_UNBOUNDED
+        } else {
+            candle_params
+                .map(|cp| cp.trades_from_rel_ms.max(from_rel_ms))
+                .filter(|v| v.is_finite())
+                .unwrap_or(from_rel_ms)
+        };
+        let zone_tf_ms = candle_params.map(|cp| cp.tf_ms).unwrap_or(1);
         let trades_from_time = moon_time_from_rel_ms(epoch_ms, trades_from_rel);
         let trades_limit = candle_params.map_or(usize::MAX, |cp| cp.trades_limit.max(1));
         let mut read = ChartHistoryRead {
@@ -434,7 +445,29 @@ impl MarketDataSource {
         if let Some(reader) = trade_reader.as_ref().filter(|_| display_trades) {
             read.combo_capacity = reader.capacity();
             let display_cap = reader.capacity().min(trades_limit);
-            let reset = force_reset || cursor.trades.is_none();
+            // Max follows the ring, not the clock. A full copy rebuilds the candle series
+            // (`combo_reset` below), so it runs when the oldest retained trade leaves its
+            // bucket or older history arrives — not on every live print.
+            let mut reset = force_reset || cursor.trades.is_none();
+            if !reset && zone_unbounded {
+                reader.copy_from_cursor(
+                    reader.cursor_from_oldest(),
+                    1,
+                    &mut cursor.scan_trade_rows,
+                );
+                let window_end_ms = to_time.unix_millis();
+                let ring_oldest = cursor.scan_trade_rows.first().and_then(|row| {
+                    let ms = row.unix_millis();
+                    (ms < window_end_ms).then_some(ms)
+                });
+                if crate::market::candles::max_zone_recopy_due(
+                    cursor.displayed_oldest_ms,
+                    ring_oldest,
+                    zone_tf_ms,
+                ) {
+                    reset = true;
+                }
+            }
             // Every full read parks the follow-up cursor at the first row PAST the window it just
             // copied, never at "now". The window's right edge sits behind now whenever the pane is
             // panned into the past — by hand, by wheel, or by a framing request — and a cursor
@@ -453,6 +486,7 @@ impl MarketDataSource {
                 cursor.trades = Some(reader.cursor_at_or_after_time(to_time));
                 read.combo_reset = true;
                 read.caught_up = true;
+                cursor.displayed_oldest_ms = cursor.trade_rows.first().map(|row| row.unix_millis());
             } else if let Some(cur) = cursor.trades.as_mut() {
                 let meta = reader.drain_new_bounded(cur, display_cap, &mut cursor.trade_rows);
                 read.clipped |= meta.clipped;
@@ -466,6 +500,8 @@ impl MarketDataSource {
                     );
                     cursor.trades = Some(reader.cursor_at_or_after_time(to_time));
                     read.combo_reset = true;
+                    cursor.displayed_oldest_ms =
+                        cursor.trade_rows.first().map(|row| row.unix_millis());
                 }
             }
             rows_to_ticks(&cursor.trade_rows, &mut out.ticks);

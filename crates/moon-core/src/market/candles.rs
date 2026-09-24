@@ -30,6 +30,32 @@ pub const CANDLE_MODE_OUTLINE_IN_ZONE: u8 = 2;
 /// Disables candles completely, leaving a pure tick chart across the full window.
 pub const CANDLE_MODE_OFF: u8 = 3;
 
+/// `trade_candles` / `hide_candles` step meaning the zone runs as far as retained
+/// trades reach, rather than a fixed candle count.
+///
+/// Stored as [`u16::MAX`]. An older build that only knows numeric counts reads it as
+/// a very wide zone and still loads the file; existing numeric values are unchanged.
+/// The popup labels this step "Max".
+pub const CANDLE_ZONE_MAX: u16 = u16::MAX;
+
+/// Whether `count` is the Max zone step ([`CANDLE_ZONE_MAX`]).
+///
+/// Args:
+///     count: A `trade_candles` or `hide_candles` value.
+///
+/// Returns:
+///     `true` only for the Max sentinel, never for a large numeric count.
+pub fn is_candle_zone_max(count: u16) -> bool {
+    count == CANDLE_ZONE_MAX
+}
+
+/// `CandleReadParams::trades_from_rel_ms` meaning "do not cut the trade read at a
+/// candle window".
+///
+/// Finite, so the read still draws trades (`f32::INFINITY` hides them). The history
+/// read starts at the oldest retained row and the ring capacity is the clamp.
+pub const TRADES_FROM_UNBOUNDED: f32 = f32::MIN;
+
 /// Bottom candle-volume styles used by `crate::config::ChartGraphicsCfg::candle_volume_style`.
 ///
 /// A `u8` rather than an enum for the same reason [`CANDLE_MODE_FILLED`] is one: the value travels
@@ -69,9 +95,11 @@ pub struct CandleViewCfg {
     pub mode: u8,
     /// Number of MOST RECENT candles redrawn with trades in the trade zone; crosses are
     /// drawn only inside those buckets. A value of 0 disables trades entirely.
+    /// [`CANDLE_ZONE_MAX`] extends the zone to the oldest retained trade.
     pub trade_candles: u16,
     /// Number of MOST RECENT candles not drawn at all, leaving only trades in those
     /// buckets. A value of 0 shows every candle. Usually no greater than `trade_candles`.
+    /// [`CANDLE_ZONE_MAX`] hides candles over the same stretch the Max trade zone covers.
     pub hide_candles: u16,
     /// Hard cap on displayed trades to protect against bursts.
     pub trades_limit: u32,
@@ -463,6 +491,158 @@ pub(crate) fn split_wire_volume(
 pub fn bucket_open_ms(time_ms: f64, tf_ms: i64) -> f64 {
     let tf = tf_ms.max(1) as f64;
     (time_ms / tf).floor() * tf
+}
+
+/// Lower bound the history read should use for displayed trades, relative to `epoch_ms`.
+///
+/// Numeric counts keep the last-N window: the open of the bucket `count - 1` back from
+/// `now_ms`, or `f32::INFINITY` when the count is 0 (the read treats a non-finite bound
+/// as "draw no trades"). Max returns [`TRADES_FROM_UNBOUNDED`]: a finite value the read
+/// does not raise to the visible window, so it copies as far as the ring still holds and
+/// the drawn edge is applied afterwards from the oldest trade that copy returned.
+///
+/// Args:
+///     trade_candles: Zone width, or [`CANDLE_ZONE_MAX`].
+///     now_ms: Wall clock, Unix milliseconds.
+///     tf_ms: Candle timeframe, milliseconds.
+///     epoch_ms: Pane epoch, Unix milliseconds.
+///
+/// Returns:
+///     Relative milliseconds. Non-finite means draw no trades.
+pub fn trades_read_from_rel(trade_candles: u16, now_ms: f64, tf_ms: i64, epoch_ms: f64) -> f32 {
+    if is_candle_zone_max(trade_candles) {
+        return TRADES_FROM_UNBOUNDED;
+    }
+    trade_zone_start_rel(trade_candles, now_ms, tf_ms, epoch_ms, f32::NAN)
+}
+
+/// Shader start of the trade zone, in milliseconds relative to `epoch_ms`.
+///
+/// Candles whose bucket opens at or after this value are inside the zone. A non-finite
+/// result means there is no zone (candles everywhere, no crosses from this setting).
+/// Max uses the open of the bucket that holds `oldest_trade_rel`; a non-finite oldest
+/// trade means nothing is retained, so Max draws no empty stretch. Numeric counts ignore
+/// `oldest_trade_rel` and use the clock window.
+///
+/// Args:
+///     trade_candles: Zone width, or [`CANDLE_ZONE_MAX`].
+///     now_ms: Wall clock, Unix milliseconds.
+///     tf_ms: Candle timeframe, milliseconds.
+///     epoch_ms: Pane epoch, Unix milliseconds.
+///     oldest_trade_rel: Oldest retained trade relative to the epoch, or NaN if none.
+///
+/// Returns:
+///     Zone start relative to the epoch, or a non-finite value when the zone is off.
+pub fn trade_zone_start_rel(
+    trade_candles: u16,
+    now_ms: f64,
+    tf_ms: i64,
+    epoch_ms: f64,
+    oldest_trade_rel: f32,
+) -> f32 {
+    if is_candle_zone_max(trade_candles) {
+        return max_trade_zone_edge_rel(oldest_trade_rel, tf_ms, epoch_ms);
+    }
+    if trade_candles == 0 {
+        return f32::INFINITY;
+    }
+    let zone_open = bucket_open_ms(now_ms, tf_ms) - (trade_candles as f64 - 1.0) * tf_ms as f64;
+    (zone_open - epoch_ms) as f32
+}
+
+/// Left edge of a Max trade zone: the open of the bucket holding the oldest retained trade.
+///
+/// Args:
+///     oldest_trade_rel: Oldest retained trade relative to `epoch_ms`, or non-finite if none.
+///     tf_ms: Candle timeframe, milliseconds.
+///     epoch_ms: Pane epoch, Unix milliseconds.
+///
+/// Returns:
+///     That bucket's open relative to the epoch, or `f32::INFINITY` when no trade is retained.
+pub fn max_trade_zone_edge_rel(oldest_trade_rel: f32, tf_ms: i64, epoch_ms: f64) -> f32 {
+    if !oldest_trade_rel.is_finite() {
+        return f32::INFINITY;
+    }
+    let open = bucket_open_ms(epoch_ms + oldest_trade_rel as f64, tf_ms);
+    (open - epoch_ms) as f32
+}
+
+/// Shader start of the hide-candles zone, in milliseconds relative to the pane epoch.
+///
+/// Candles whose bucket opens at or after it are omitted and only the trade crosses stay.
+/// `f32::MAX` means the zone is off and every candle is drawn.
+///
+/// A numeric count is that many buckets back from the one holding `now_ms`, never reaching
+/// left of the first resident trade: the setting means "draw ticks here rather than
+/// candles", so a bucket with no ticks keeps its candle. The clamp is the open of the
+/// bucket holding that first tick. A raw tick timestamp sits later than its own open, and
+/// comparing bucket opens against the tick hid one candle fewer than asked.
+///
+/// Max uses the same edge as the Max trade zone ([`max_trade_zone_edge_rel`]). No retained
+/// trade suppresses the zone instead of punching an empty stretch.
+///
+/// Args:
+///     hide_candles: Hidden width, or [`CANDLE_ZONE_MAX`]. Zero disables the zone.
+///     now_ms: Wall clock, Unix milliseconds.
+///     tf_ms: Candle timeframe, milliseconds.
+///     epoch_ms: Pane epoch, Unix milliseconds.
+///     oldest_trade_rel: Oldest retained trade relative to the epoch, or NaN if none.
+///
+/// Returns:
+///     Hide start relative to the epoch, or `f32::MAX` when candles stay everywhere.
+pub fn hide_zone_start_rel(
+    hide_candles: u16,
+    now_ms: f64,
+    tf_ms: i64,
+    epoch_ms: f64,
+    oldest_trade_rel: f32,
+) -> f32 {
+    if hide_candles == 0 {
+        return f32::MAX;
+    }
+    if is_candle_zone_max(hide_candles) {
+        let edge = max_trade_zone_edge_rel(oldest_trade_rel, tf_ms, epoch_ms);
+        return if edge.is_finite() { edge } else { f32::MAX };
+    }
+    if oldest_trade_rel.is_nan() {
+        return f32::MAX;
+    }
+    let hide_open = bucket_open_ms(now_ms, tf_ms) - (hide_candles as f64 - 1.0) * tf_ms as f64;
+    let first_cross_open = bucket_open_ms(epoch_ms + oldest_trade_rel as f64, tf_ms);
+    (hide_open.max(first_cross_open) - epoch_ms) as f32
+}
+
+/// Whether a Max trade zone must copy its crosses again.
+///
+/// `drawn_oldest_ms` is the oldest trade the last full copy uploaded. `ring_oldest_ms` is
+/// the oldest trade the ring still holds. `None` means that side has no trade.
+///
+/// A live print at the right edge must not recopy: a cross reset rebuilds the candle
+/// series, and that cost belongs on a bucket boundary, not on every frame. Older history
+/// arriving (the ring's oldest timestamp moves left) recopies immediately so the zone can
+/// extend. Eviction recopies only once the oldest trade has left its candle bucket, which
+/// is when the drawn left edge actually moves.
+///
+/// Args:
+///     drawn_oldest_ms: Oldest uploaded trade, Unix milliseconds.
+///     ring_oldest_ms: Oldest retained trade, Unix milliseconds.
+///     tf_ms: Candle timeframe, milliseconds.
+///
+/// Returns:
+///     Whether the cross buffer is stale relative to the ring.
+pub fn max_zone_recopy_due(
+    drawn_oldest_ms: Option<i64>,
+    ring_oldest_ms: Option<i64>,
+    tf_ms: i64,
+) -> bool {
+    match (drawn_oldest_ms, ring_oldest_ms) {
+        (None, None) => false,
+        (Some(_), None) | (None, Some(_)) => true,
+        (Some(drawn), Some(ring)) if ring < drawn => true,
+        (Some(drawn), Some(ring)) => {
+            bucket_open_ms(drawn as f64, tf_ms) != bucket_open_ms(ring as f64, tf_ms)
+        }
+    }
 }
 
 /// Returns the first bucket that a source starting at `oldest_ms` covers in FULL.

@@ -1,7 +1,9 @@
 //! Regression tests for the chart-history floor calculation.
 
 use moon_core::market::CandleViewCfg;
-use moon_core::market::candles::{CANDLE_MODE_FILLED, CANDLE_MODE_OFF, CANDLE_TF_CHOICES_MIN};
+use moon_core::market::candles::{
+    CANDLE_MODE_FILLED, CANDLE_MODE_OFF, CANDLE_TF_CHOICES_MIN, CANDLE_ZONE_MAX,
+};
 
 use super::{chart_history_floor_ms, hide_start_rel};
 
@@ -212,6 +214,26 @@ fn hide_zone_is_off_without_a_count_or_without_resident_trades() {
     assert_eq!(hide_start_rel(0, now_ms, tf_ms, epoch_ms, 0.0), f32::MAX);
     assert_eq!(
         hide_start_rel(3, now_ms, tf_ms, epoch_ms, f32::NAN),
+        f32::MAX
+    );
+}
+
+/// Hide Max on the chart path must use the oldest trade's bucket, not a candle count back
+/// from now. Treating the sentinel as a huge `hide_candles` would blank the whole series.
+#[test]
+fn hide_max_follows_the_oldest_trade_bucket_and_stays_off_without_one() {
+    let tf_ms = 300_000_i64;
+    let epoch_ms = 1_700_000_000_000.0;
+    let now_ms = epoch_ms + 637_474.0;
+    let oldest_rel = 410_000.0;
+    let abs = epoch_ms + oldest_rel as f64;
+    let expected = ((abs / tf_ms as f64).floor() * tf_ms as f64 - epoch_ms) as f32;
+    assert_eq!(
+        hide_start_rel(CANDLE_ZONE_MAX, now_ms, tf_ms, epoch_ms, oldest_rel),
+        expected
+    );
+    assert_eq!(
+        hide_start_rel(CANDLE_ZONE_MAX, now_ms, tf_ms, epoch_ms, f32::NAN),
         f32::MAX
     );
 }

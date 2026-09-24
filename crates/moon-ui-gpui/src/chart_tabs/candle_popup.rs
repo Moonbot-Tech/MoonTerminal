@@ -13,7 +13,7 @@
 use gpui::*;
 use moon_core::market::candles::{
     CANDLE_MODE_FILLED, CANDLE_MODE_OFF, CANDLE_MODE_OUTLINE, CANDLE_MODE_OUTLINE_IN_ZONE,
-    CandleViewCfg,
+    CANDLE_ZONE_MAX, CandleViewCfg, is_candle_zone_max,
 };
 use moon_ui::{MoonCheckbox, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex};
 use rust_i18n::t;
@@ -48,22 +48,42 @@ const MODES: [u8; 4] = [
 
 /// Steps for how many recent candles are redrawn with trades, where zero means candles only.
 ///
-/// The same steps are used for hiding recent candles.
-const ZONES: [u16; 8] = [0, 1, 2, 3, 5, 10, 20, 50];
+/// The last step is Max ([`CANDLE_ZONE_MAX`]): the zone follows retained trades instead of a
+/// count. The same steps are used for hiding recent candles.
+const ZONES: [u16; 9] = [0, 1, 2, 3, 5, 10, 20, 50, CANDLE_ZONE_MAX];
+
+/// Width of one zone or hide segment, in design units. Nine of these set the popup width.
+const ZONE_SEG_W: f32 = 34.0;
 
 pub(crate) const OUTLINES: [u8; 3] = [1, 2, 3];
 
 /// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
 ///
-/// The row allowance is 7×42 rather than any row's real width: the widest row is the four 70-unit
-/// mode segments (280), and the zone/hide rows are eight 34-unit segments (272). The extra ~14 is
-/// slack, kept deliberately — the mode labels are localized and ES runs longer than RU/EN.
-///
-/// A ZONES step added past eight therefore has to be checked against 280, not against this
-/// number: the segments are rendered pixels (`MoonSegmentItem::width`, no item gap), so the row
-/// is exactly `ZONES.len() * 34`.
+/// Segments are rendered pixels (`MoonSegmentItem::width`, no item gap), so a row is exactly
+/// `count * segment width`. The mode row is four 70-unit segments (280). The zone and hide rows
+/// are nine 34-unit segments (306) once Max is included, and that row is now the widest — 306
+/// is past the 280 the mode labels need, so the localized mode text keeps the slack it had.
+/// The group frame's horizontal inset is added because it is taken out of this content box.
 pub(super) fn content_width(cx: &App) -> Pixels {
-    px(7.0 * 42.0 + popup_group_inset_px(cx))
+    let zone_row = ZONES.len() as f32 * ZONE_SEG_W;
+    let mode_row = MODES.len() as f32 * 70.0;
+    px(zone_row.max(mode_row) + popup_group_inset_px(cx))
+}
+
+/// Label of one zone or hide step. Numeric steps print the count; Max prints `max_label`.
+///
+/// Args:
+///     step: A value from [`ZONES`].
+///     max_label: Localized "Max" text.
+///
+/// Returns:
+///     The segment caption.
+fn zone_step_text(step: u16, max_label: &str) -> String {
+    if is_candle_zone_max(step) {
+        max_label.to_string()
+    } else {
+        step.to_string()
+    }
 }
 
 /// Build a multiline hint below a control.
@@ -221,9 +241,14 @@ fn render_candle_popup<T: CandlePopupHost>(
             t!("chart.candles.zone").to_string(),
             ZONES
                 .iter()
-                .map(|k| (format!("{k}"), *k == cfg.trade_candles))
+                .map(|k| {
+                    (
+                        zone_step_text(*k, &t!("chart.candles.zone_max")),
+                        *k == cfg.trade_candles,
+                    )
+                })
                 .collect(),
-            34.0,
+            ZONE_SEG_W,
             p,
             cx,
             move |ix, app| {
@@ -242,9 +267,14 @@ fn render_candle_popup<T: CandlePopupHost>(
             t!("chart.candles.hide").to_string(),
             ZONES
                 .iter()
-                .map(|k| (format!("{k}"), *k == cfg.hide_candles))
+                .map(|k| {
+                    (
+                        zone_step_text(*k, &t!("chart.candles.zone_max")),
+                        *k == cfg.hide_candles,
+                    )
+                })
                 .collect(),
-            34.0,
+            ZONE_SEG_W,
             p,
             cx,
             move |ix, app| {
