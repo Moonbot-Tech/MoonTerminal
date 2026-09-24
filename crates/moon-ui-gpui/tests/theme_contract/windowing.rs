@@ -3,6 +3,31 @@
 
 use super::support::*;
 
+/// Restoring the main frame's hit overlay covers MANUAL/AUTO when the brand is hidden (#712).
+/// Removing either in-flow drag handle instead would lose logo or empty-header dragging.
+#[test]
+fn main_header_uses_only_in_flow_drag_regions() {
+    let shell = code_only(&read_src("shell/render.rs"));
+    let render = braced_body(&shell, "fn render(");
+    assert!(
+        !render.contains(".hit_overlay("),
+        "the main window must not mount a fixed drag strip over header controls"
+    );
+
+    let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
+    let header = braced_body(&chrome, "pub fn header(");
+    for id in ["terminal-header-brand-drag", "terminal-header-spacer-drag"] {
+        let handle = header
+            .split_once(&format!("MoonWindowFrame::main(\"{id}\", 0.0)"))
+            .unwrap_or_else(|| panic!("missing in-flow header drag region: {id}"))
+            .1;
+        assert!(
+            handle.trim_start().starts_with(".drag_handle()"),
+            "{id} must retain MoonUI's native drag and single-delivery double-click handler"
+        );
+    }
+}
+
 #[test]
 fn terminal_windowing_separates_detached_panel_and_chart_contracts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

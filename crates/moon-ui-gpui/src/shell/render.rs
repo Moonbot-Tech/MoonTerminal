@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use gpui::*;
 
-use moon_ui::{MoonPalette, MoonWindowFrame, v_flex};
+use moon_ui::{MoonPalette, v_flex};
 
 use super::Shell;
 use crate::chrome::terminal_chrome;
@@ -431,15 +431,8 @@ impl Render for Shell {
                     cx,
                 )
             })
-            .child(
-                // The drag overlay reads the same tier-derived header height as the drawn chrome:
-                // it now matches at Compact, Standard, and Large instead of only at Compact.
-                MoonWindowFrame::main("moon-main-window-frame", chrome_width)
-                    .header_height(design::header_height(cx))
-                    .leading_inset(design::titlebar_leading_inset())
-                    .show_controls(design::show_custom_window_controls())
-                    .hit_overlay(),
-            )
+            // The header's in-flow logo and spacer own dragging. A fixed overlay here would
+            // cover MANUAL/AUTO when the responsive header hides its logo (#712).
             // Header price-ticker source picker and its dismiss layer.
             .children(ticker_dismiss)
             .children(ticker_overlay)
