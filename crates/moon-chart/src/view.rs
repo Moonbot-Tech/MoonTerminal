@@ -1103,6 +1103,8 @@ impl ChartView {
     /// Fits the price center/range. X-follow affects only target selection: live mode centers
     /// on the last price, while manual X centers on the visible range. Manual Y-pan/RMB-zoom
     /// (`manual_price`) freezes Y until a scale is selected.
+    /// Automatic history fits retain the rendered scale between hysteresis crossings, unless
+    /// retaining it would clip a visible extreme.
     pub fn update_y(
         &mut self,
         now_ms: f64,
@@ -1208,11 +1210,11 @@ impl ChartView {
                 1.0
             };
         }
-        // Snap Y. In live mode, render_* is piecewise constant: keep the range until the target
-        // moves beyond ±RANGE_HYST, and keep the center until the price moves by more than
+        // Snap Y. Live and automatic history render_* are piecewise constant: keep the range
+        // until the target moves beyond RANGE_HYST, and keep the center until it moves by more than
         // CENTER_SNAP_PX px. In manual mode, follow input exactly for responsive dragging;
         // the render cache is rebuilt transiently during interaction.
-        if live && !self.manual_price {
+        if !self.manual_price && (live || self.auto_price) {
             let target = self.price_range.max(Self::min_range(self.center_price));
             if !self.auto_price
                 || !(self.render_range > Self::min_range(self.center_price))
@@ -1225,6 +1227,21 @@ impl ChartView {
                 (area_h / self.render_range.max(Self::min_range(self.center_price))).max(1e-6);
             if (self.center_price - self.render_center).abs() * ppp > CENTER_SNAP_PX {
                 self.render_center = self.center_price;
+            }
+            if let Some((lo, hi)) = visible.filter(|_| !live) {
+                // Range and centre hysteresis can together leave an edge outside the retained
+                // band. Refit immediately with the existing padding; never delay data visibility.
+                let half = self.render_range * 0.5;
+                if lo < self.render_center - half || hi > self.render_center + half {
+                    self.render_center = self.center_price;
+                    self.render_range = target;
+                }
+            }
+            if !live {
+                // History has no eased target to carry between frames. Keep gesture origins on
+                // the displayed window so entering manual Y cannot jump to an unrendered fit.
+                self.center_price = self.render_center;
+                self.price_range = self.render_range;
             }
         } else {
             self.render_range = self.price_range.max(Self::min_range(self.center_price));
