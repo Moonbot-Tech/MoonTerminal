@@ -209,12 +209,13 @@ impl From<CandleViewCfg> for CandleViewOut {
 }
 
 impl Default for CandleViewCfg {
+    /// Start an unsaved candle view with matching 50-candle trade and hidden zones.
     fn default() -> Self {
         Self {
             tf_min: 5,
             mode: CANDLE_MODE_OUTLINE_IN_ZONE,
-            trade_candles: 3,
-            hide_candles: 0,
+            trade_candles: 50,
+            hide_candles: 50,
             trades_limit: 50_000,
             outline_px: 1.0,
             wicks_in_zone: true,
@@ -230,8 +231,9 @@ impl Default for CandleViewCfg {
 /// It exists because a plain `#[serde(default)]` cannot express "default to ANOTHER field": a
 /// config that only says `price_lines = false` would silently come back with both lines ON, which
 /// is the setting the user explicitly turned off. Every field is optional so a file missing any key
-/// still loads; [`From`] resolves each against [`CandleViewCfg::default`], which keeps the defaults
-/// named once instead of once per struct.
+/// still loads. Missing zone widths retain the historical 3/0 values in saved objects; other
+/// fields resolve against [`CandleViewCfg::default`]. An entirely absent candle view uses the
+/// fresh default instead.
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct CandleViewWire {
@@ -254,13 +256,14 @@ struct CandleViewWire {
 }
 
 impl From<CandleViewWire> for CandleViewCfg {
+    /// Preserve saved choices and historical zone widths when an older object omits them.
     fn from(w: CandleViewWire) -> Self {
         let d = CandleViewCfg::default();
         Self {
             tf_min: w.tf_min.unwrap_or(d.tf_min),
             mode: w.mode.unwrap_or(d.mode),
-            trade_candles: w.trade_candles.unwrap_or(d.trade_candles),
-            hide_candles: w.hide_candles.unwrap_or(d.hide_candles),
+            trade_candles: w.trade_candles.unwrap_or(3),
+            hide_candles: w.hide_candles.unwrap_or(0),
             trades_limit: w.trades_limit.unwrap_or(d.trades_limit),
             // A hand-edited `nan` compares unequal to itself, so it would report a change forever:
             // `set_candle_view` would mark the view dirty and rebuild order geometry every single

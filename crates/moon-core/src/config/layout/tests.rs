@@ -4,6 +4,44 @@ use crate::config::ProfileAge;
 
 use super::*;
 
+/// Reverting the fresh widths or bypassing legacy decoding changes every following chart kind.
+#[test]
+fn candle_zone_defaults_distinguish_absent_and_saved_views() {
+    use crate::config::chart_defaults::ChartTabKind;
+
+    for (text, expected) in [
+        ("", (50, 50)),
+        ("[candle_view]\n", (3, 0)),
+        (
+            "[candle_view]\ntrade_candles = 0\nhide_candles = 0\n",
+            (0, 0),
+        ),
+        (
+            "[candle_view]\ntrade_candles = 12\nhide_candles = 7\n",
+            (12, 7),
+        ),
+    ] {
+        let layout: WindowLayout = toml::from_str(text).expect("layout loads");
+        let saved = toml::to_string(&layout).expect("layout saves");
+        let reloaded: WindowLayout = toml::from_str(&saved).expect("saved layout loads");
+        for layout in [layout, reloaded] {
+            for kind in ChartTabKind::ALL {
+                let cfg = layout.candle_view_for(kind);
+                assert_eq!((cfg.trade_candles, cfg.hide_candles), expected);
+            }
+        }
+    }
+    let layout: WindowLayout = toml::from_str(
+        "[chart_defaults_addto.candle_view]\ntrade_candles = 9\n\
+         [chart_defaults_trade.candle_view]\nhide_candles = 2\n",
+    )
+    .expect("per-kind saved views load");
+    let detached = layout.candle_view_for(ChartTabKind::AddTo);
+    assert_eq!((detached.trade_candles, detached.hide_candles), (9, 0));
+    let trade = layout.candle_view_for(ChartTabKind::Trade);
+    assert_eq!((trade.trade_candles, trade.hide_candles), (3, 2));
+}
+
 /// Construct saved placement without involving platform window state.
 fn restore_fixture(x: i32, y: i32, w: u32, h: u32) -> GeomRect {
     GeomRect {
