@@ -9,6 +9,10 @@
 
 use bytemuck::Zeroable;
 use gpui::RawGpuAccess;
+use moon_chart::tick_volume::{
+    TickTimeOrder, pending_ring_at, tick_bake_span, tick_slot_runs, tick_time_range,
+    tick_touches_bake,
+};
 use moon_core::data::PriceLinePoint;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::*;
@@ -20,7 +24,7 @@ use super::gpu::{
 };
 use super::types::{
     PriceStyleGpu, TickStyleGpu, append_cross_ring, cross_volume_max, evicted_cross_ranges,
-    ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, update_cross_volume_max,
+    reset_cross_ring,
 };
 
 const MIN_COMBO_CAPACITY: u32 = 1;
@@ -103,6 +107,8 @@ pub struct ComboLayer {
     resident_crosses: Vec<ChartCross>,
     resident_head: usize,
     resident_count: usize,
+    /// Ordering evidence for resident and queued rows, maintained only when data arrives.
+    tick_time_order: TickTimeOrder,
     last_line_count: u32,
     mark_line_count: u32,
     cross_capacity: u32,
@@ -140,6 +146,7 @@ impl ComboLayer {
             resident_crosses: Vec::new(),
             resident_head: 0,
             resident_count: 0,
+            tick_time_order: TickTimeOrder::default(),
             last_line_count: 0,
             mark_line_count: 0,
             cross_capacity: MIN_COMBO_CAPACITY,
@@ -166,6 +173,7 @@ impl ComboLayer {
         self.count > 0
     }
 
+    /// Resize GPU storage and retire ordering evidence with the resident ring.
     pub fn set_capacity(&mut self, cross_capacity: usize, price_line_capacity: usize) {
         let cross_capacity = sanitize_capacity(cross_capacity);
         let price_line_capacity = sanitize_capacity(price_line_capacity);
@@ -185,19 +193,43 @@ impl ComboLayer {
         self.last_line_count = 0;
         self.mark_line_count = 0;
         self.pending_append.clear();
+        self.refresh_pending_time_order();
         self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
         self.volume_window_cache = None;
     }
 
+    /// Rebuild ordering evidence after resident storage is retired, keeping queued rows visible.
+    fn refresh_pending_time_order(&mut self) {
+        self.tick_time_order = TickTimeOrder::default();
+        self.tick_time_order.extend(
+            moon_chart::tick_volume::pending_ring(
+                &self.resident_crosses,
+                self.resident_head,
+                self.resident_count,
+                self.cross_capacity as usize,
+                self.pending_reset.as_deref(),
+                &self.pending_append,
+            )
+            .map(|c| c.time_rel),
+        );
+    }
+
     /// Reuploads the complete tick set after reloading market history and discards pending appends.
     pub fn reset(&mut self, data: Vec<ChartCross>) {
+        self.tick_time_order = TickTimeOrder::default();
+        self.tick_time_order.extend(
+            data.iter()
+                .skip(data.len().saturating_sub(self.cross_capacity as usize))
+                .map(|c| c.time_rel),
+        );
         self.pending_reset = Some(data);
         self.pending_append.clear();
     }
 
-    /// Appends newly arrived ticks to the ring's live edge.
+    /// Append live ticks and retain lateness evidence even when this batch replaces the ring.
     pub fn append(&mut self, data: &[ChartCross]) {
         if !data.is_empty() {
+            self.tick_time_order.extend(data.iter().map(|c| c.time_rel));
             self.pending_append.extend_from_slice(data);
         }
     }
@@ -241,6 +273,7 @@ impl ComboLayer {
             self.resident_crosses.clear();
             self.resident_head = 0;
             self.resident_count = 0;
+            self.refresh_pending_time_order();
             self.last_line_count = 0;
             self.mark_line_count = 0;
             self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
@@ -320,6 +353,13 @@ impl ComboLayer {
             tex_ref.bake_t0
         };
         let (buy_max, sell_max) = self.volume_scale_for_bake_window(bake_t0, tex_w as f32, ttp);
+        let span = tick_bake_span(bake_t0, tex_w as f32, ttp, view.marker_half);
+        let full_runs = tick_slot_runs(
+            self.resident_time_range(span.0, span.1),
+            self.resident_head,
+            self.resident_count,
+            self.cross_capacity as usize,
+        );
         let pipe = self.pipe.as_ref().unwrap();
         let tex = self.tex.as_mut().unwrap();
         if transform_changed {
@@ -389,12 +429,23 @@ impl ComboLayer {
                 // then reveals the lower grid/background layer between crosses; grid applies #131416.
                 context.ClearRenderTargetView(&tex.rtv, &[0.0, 0.0, 0.0, 0.0]);
                 context.VSSetShaderResources(1, Some(&[Some(pipe.srv.clone())]));
-                context.VSSetShader(&pipe.volume_vs, None);
-                context.PSSetShader(&pipe.volume_ps, None);
-                context.DrawInstanced(6, self.count, 0, 0);
-                context.VSSetShader(&pipe.cross_vs, None);
-                context.PSSetShader(&pipe.cross_ps, None);
-                context.DrawInstanced(6, self.count, 0, 0);
+                // Keep both pass order and ascending physical slot order identical to the full draw.
+                for (vs, ps) in [
+                    (&pipe.volume_vs, &pipe.volume_ps),
+                    (&pipe.cross_vs, &pipe.cross_ps),
+                ] {
+                    context.VSSetShader(vs, None);
+                    context.PSSetShader(ps, None);
+                    for (first, count) in full_runs {
+                        if count == 0 {
+                            continue;
+                        }
+                        let mut run_view = bake_view;
+                        run_view.pad = first as f32;
+                        update_dynamic(context, &pipe.view_cb, &[run_view]);
+                        context.DrawInstanced(6, count as u32, 0, 0);
+                    }
+                }
                 tex.last_baked_head = self.head;
                 tex.last_time_to_px = view.time_to_px;
                 tex.last_price_to_px = view.price_to_px;
@@ -539,6 +590,7 @@ impl ComboLayer {
         }
     }
 
+    /// Upload pending rows; offscreen eviction keeps the established incremental append look.
     fn apply_uploads(&mut self, context: &ID3D11DeviceContext) {
         let (tick_buffer, last_line_buf, mark_line_buf) = {
             let pipe = self.pipe.as_ref().unwrap();
@@ -589,17 +641,22 @@ impl ComboLayer {
             } else {
                 &data
             };
-            let before_scale = (self.volume_buy_max, self.volume_sell_max);
-            let old_head = self.resident_head;
-            let old_count = self.resident_count;
             let full_reset = data.len() >= cap as usize;
-            let evicted_ranges =
-                evicted_cross_ranges(old_head, old_count, cap as usize, data.len());
-            let evicted_any = ranges_have_entries(&evicted_ranges);
-            let evicted_scale_max =
-                ranges_touch_volume_max(&self.resident_crosses, &evicted_ranges, before_scale);
+            let invalidates_bake = self.tex.as_ref().is_some_and(|tex| {
+                self.append_invalidates_bake(
+                    data.len(),
+                    tick_bake_span(
+                        tex.bake_t0,
+                        tex.tex_w as f32,
+                        tex.last_time_to_px,
+                        tex.last_marker_half,
+                    ),
+                )
+            });
             let n = data.len() as u32;
-            let written = ring_write_no_overwrite(context, &tick_buffer, self.head, cap, data);
+            // A capacity-sized batch resets the CPU mirror to slot zero, regardless of old head.
+            let written =
+                !full_reset && ring_write_no_overwrite(context, &tick_buffer, self.head, cap, data);
             self.head = (self.head + n) % cap;
             self.count = (self.count + n).min(cap);
             append_cross_ring(
@@ -614,12 +671,9 @@ impl ComboLayer {
                     .resize(cap as usize, ChartCross::zeroed());
             }
             if !written {
-                // The in-place append was refused, so the slots just counted as filled hold
-                // whatever the last DISCARD left there. The CPU mirror is laid out slot for slot
-                // like the ring, so a full DISCARD upload of it is the ring's true contents;
-                // its head and count become the ring's, which also covers the wrap-around
-                // reset `append_cross_ring` performs on an oversized batch. The bake has to
-                // start over: it may already have painted the stale slots.
+                // A refused in-place append or a full reset requires a DISCARD upload of the
+                // mirror's actual slot layout. Otherwise a bounded draw could select different
+                // CPU/GPU ticks. Its head and count become the GPU ring's as well.
                 update_dynamic(context, &tick_buffer, &self.resident_crosses);
                 self.head = self.resident_head as u32;
                 self.count = self.resident_count as u32;
@@ -627,49 +681,91 @@ impl ComboLayer {
                     tex.valid = false;
                 }
             }
-            if full_reset || evicted_scale_max {
-                self.recalc_volume_scale();
-            } else {
-                self.update_volume_scale(data);
-            }
-            if before_scale != (self.volume_buy_max, self.volume_sell_max) {
-                self.volume_scale_dirty = true;
-            }
+            // prepare_combo compares the new bake-window scale with the scale actually baked.
+            // A global maximum (including an evicted offscreen maximum) cannot affect that scale.
             self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
             self.volume_window_cache = None;
-            if full_reset || evicted_any {
-                if let Some(tex) = self.tex.as_mut() {
-                    tex.valid = false;
-                }
+            // New runs retain the existing volume-then-cross incremental order, even at wrap.
+            if invalidates_bake && let Some(tex) = self.tex.as_mut() {
+                tex.valid = false;
             }
         }
     }
 
-    /// Read the chronological ring that pending GPU uploads will publish.
-    pub(super) fn tick_samples(&self) -> impl Iterator<Item = &ChartCross> {
-        moon_chart::tick_volume::pending_ring(
+    /// Repaint only when an append replaces the ring or erases a potentially baked row.
+    /// Overlap with surviving/new ticks keeps the pre-existing incremental append order.
+    fn append_invalidates_bake(&self, appended: usize, baked_span: (f64, f64)) -> bool {
+        appended >= self.cross_capacity as usize
+            || evicted_cross_ranges(
+                self.resident_head,
+                self.resident_count,
+                self.cross_capacity as usize,
+                appended,
+            )
+            .into_iter()
+            .any(|(start, count)| {
+                self.resident_crosses[start..start + count]
+                    .iter()
+                    .any(|cross| tick_touches_bake(cross.time_rel, baked_span))
+            })
+    }
+
+    /// Borrow candidates including pending uploads using O(1) slice probes and lateness bounds.
+    pub(super) fn tick_samples(&self, from: f64, to: f64) -> impl Iterator<Item = &ChartCross> {
+        let samples = moon_chart::tick_volume::pending_ring(
             &self.resident_crosses,
             self.resident_head,
             self.resident_count,
             self.cross_capacity as usize,
             self.pending_reset.as_deref(),
             &self.pending_append,
+        );
+        let range = tick_time_range(
+            samples.len(),
+            self.tick_time_order.max_lateness(),
+            from,
+            to,
+            |index| {
+                pending_ring_at(
+                    &self.resident_crosses,
+                    self.resident_head,
+                    self.resident_count,
+                    self.cross_capacity as usize,
+                    self.pending_reset.as_deref(),
+                    &self.pending_append,
+                    index,
+                )
+                .time_rel
+            },
+        );
+        samples.skip(range.start).take(range.len())
+    }
+
+    /// Search resident rows without changing their physical GPU slot layout.
+    fn resident_time_range(&self, from: f64, to: f64) -> std::ops::Range<usize> {
+        let capacity = self.cross_capacity as usize;
+        let origin = if self.resident_count == capacity {
+            self.resident_head
+        } else {
+            0
+        };
+        tick_time_range(
+            self.resident_count,
+            self.tick_time_order.max_lateness(),
+            from,
+            to,
+            |index| self.resident_crosses[(origin + index) % capacity].time_rel,
         )
     }
 
+    /// Initialize the scale after a reset; the next bake resolves its exact window scale.
     fn recalc_volume_scale(&mut self) {
         let (buy, sell) = cross_volume_max(self.resident_crosses.iter().take(self.resident_count));
         self.volume_buy_max = buy;
         self.volume_sell_max = sell;
     }
 
-    fn update_volume_scale(&mut self, data: &[ChartCross]) {
-        let mut max = (self.volume_buy_max, self.volume_sell_max);
-        update_cross_volume_max(&mut max, data);
-        self.volume_buy_max = max.0;
-        self.volume_sell_max = max.1;
-    }
-
+    /// Cache the exact historical volume-window predicate over a bounded ring lookup.
     fn volume_scale_for_bake_window(
         &mut self,
         bake_t0: f32,
@@ -692,23 +788,19 @@ impl ComboLayer {
         }
         let time_left = bake_t0 - 2.0 / time_to_px;
         let time_right = bake_t0 + (tex_w + 2.0) / time_to_px;
-        let capacity = self.cross_capacity.max(1) as usize;
-        let count = self
-            .resident_count
-            .min(capacity)
-            .min(self.resident_crosses.len());
-        let start = if count == capacity {
-            self.resident_head % capacity
-        } else {
-            0
-        };
+        let range = self.resident_time_range(f64::from(time_left), f64::from(time_right));
+        let runs = tick_slot_runs(
+            range,
+            self.resident_head,
+            self.resident_count,
+            self.cross_capacity as usize,
+        );
         let mut buy = 1e-6f32;
         let mut sell = 1e-6f32;
-        for i in 0..count {
-            let idx = (start + i) % capacity;
-            let Some(c) = self.resident_crosses.get(idx) else {
-                continue;
-            };
+        for c in runs
+            .into_iter()
+            .flat_map(|(start, count)| &self.resident_crosses[start..start + count])
+        {
             if c.time_rel < time_left || c.time_rel > time_right || c.qty <= 0.0 {
                 continue;
             }
@@ -846,3 +938,6 @@ fn upload_points(
 fn sanitize_capacity(capacity: usize) -> u32 {
     capacity.clamp(MIN_COMBO_CAPACITY as usize, u32::MAX as usize) as u32
 }
+
+#[cfg(test)]
+mod tests;

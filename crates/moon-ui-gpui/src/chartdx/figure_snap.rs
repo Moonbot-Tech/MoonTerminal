@@ -108,7 +108,7 @@ impl ChartEngine {
         // before projection; no history read, history clone or candidate vector on pointer motion.
         let ticks = rendered
             .layers
-            .tick_samples()
+            .tick_samples(left, right)
             .filter(|row| {
                 row.side < 2 && f64::from(row.time_rel) >= left && f64::from(row.time_rel) <= right
             })

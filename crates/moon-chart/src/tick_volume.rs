@@ -122,7 +122,7 @@ pub fn pending_ring<'a, T>(
     capacity: usize,
     reset: Option<&'a [T]>,
     append: &'a [T],
-) -> impl Iterator<Item = &'a T> {
+) -> impl ExactSizeIterator<Item = &'a T> + Clone {
     let old_count = reset
         .map_or(count.min(resident.len()), <[T]>::len)
         .min(capacity);
@@ -141,6 +141,162 @@ pub fn pending_ring<'a, T>(
             &resident[(start + index) % capacity]
         }
     })
+}
+
+/// Index the next-upload ring in O(1), directly through resident/reset/append slices.
+/// The index is relative to the retained chronological tail, exactly like [`pending_ring`].
+/// Panics when the index is outside that tail; an empty/zero-capacity ring has no valid index.
+pub fn pending_ring_at<'a, T>(
+    resident: &'a [T],
+    head: usize,
+    count: usize,
+    capacity: usize,
+    reset: Option<&'a [T]>,
+    append: &'a [T],
+    index: usize,
+) -> &'a T {
+    let old_count = reset
+        .map_or(count.min(resident.len()), <[T]>::len)
+        .min(capacity);
+    let total = old_count + append.len();
+    assert!(index < total.min(capacity), "pending ring index is bounded");
+    let index = total.saturating_sub(capacity) + index;
+    if index >= old_count {
+        &append[index - old_count]
+    } else if let Some(reset) = reset {
+        &reset[reset.len() - old_count + index]
+    } else {
+        let origin = if old_count == capacity {
+            head % capacity
+        } else {
+            0
+        };
+        &resident[(origin + index) % capacity]
+    }
+}
+
+/// Arrival-time evidence for conservative searches over late, interleaved ticks.
+/// Lateness never shrinks until the owner resets the evidence with its storage.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TickTimeOrder {
+    prefix_max: Option<f32>,
+    max_lateness: f64,
+}
+
+impl TickTimeOrder {
+    /// Track max(prefix maximum before each row - row time, 0) in O(batch).
+    /// Non-finite input permanently forces a full walk until the evidence is reset.
+    pub fn extend(&mut self, times: impl IntoIterator<Item = f32>) {
+        for time in times {
+            if !time.is_finite() {
+                self.max_lateness = f64::INFINITY;
+                continue;
+            }
+            if let Some(max) = self.prefix_max {
+                self.max_lateness = self.max_lateness.max(f64::from(max) - f64::from(time));
+                self.prefix_max = Some(max.max(time));
+            } else {
+                self.prefix_max = Some(time);
+            }
+        }
+    }
+
+    /// Maximum observed lateness, or infinity if any recorded time was non-finite.
+    pub fn max_lateness(self) -> f64 {
+        self.max_lateness
+    }
+}
+
+/// Find conservative candidates for an inclusive window using O(log n) O(1) index probes.
+/// Callers keep their exact per-row predicate; invalid bounds/evidence select the whole ring.
+///
+/// Let L bound every row's lateness from its preceding prefix maximum. After the first
+/// prefix maximum reaches from, every later time is >= from - L. Thus plain binary
+/// search for from - L cannot skip that first row: any false predicate is before it,
+/// and all skipped rows are < from. For the upper bound, any row before the last
+/// time <= to is <= to + L (otherwise that last row would exceed L). Searching for
+/// the first time > to + L therefore ends after that last row. Neither predicate
+/// needs to be monotone inside the widened fringe; widening only adds candidates.
+/// Compute bounds in f64 so subtracting finite f32 extremes cannot overflow.
+pub fn tick_time_range(
+    len: usize,
+    max_lateness: f64,
+    from: f64,
+    to: f64,
+    time_at: impl Fn(usize) -> f32,
+) -> std::ops::Range<usize> {
+    if !max_lateness.is_finite()
+        || max_lateness < 0.0
+        || !from.is_finite()
+        || !to.is_finite()
+        || from > to
+    {
+        return 0..len;
+    }
+    let partition = |bound: f64, inclusive: bool| {
+        let (mut lo, mut hi) = (0, len);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let time = f64::from(time_at(mid));
+            if time < bound || (inclusive && time == bound) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    };
+    partition(from - max_lateness, false)..partition(to + max_lateness, true)
+}
+
+/// Convert chronological bounds into at most two physical runs, in original GPU draw order.
+/// Keeping ascending slot order preserves overlapping tick colours and alpha blending.
+pub fn tick_slot_runs(
+    range: std::ops::Range<usize>,
+    head: usize,
+    count: usize,
+    capacity: usize,
+) -> [(usize, usize); 2] {
+    if range.is_empty() || capacity == 0 {
+        return [(0, 0), (0, 0)];
+    }
+    let origin = if count == capacity {
+        head % capacity
+    } else {
+        0
+    };
+    let start = (origin + range.start) % capacity;
+    let first = range.len().min(capacity - start);
+    let second = range.len() - first;
+    if second == 0 {
+        [(start, first), (0, 0)]
+    } else {
+        [(0, second), (start, first)]
+    }
+}
+
+/// Conservative bake bounds including marker size, volume half-width and shader rounding.
+/// Invalid transforms select all rows, retaining the shader as the final culling authority.
+pub fn tick_bake_span(time0: f32, width: f32, time_to_px: f32, marker_half: f32) -> (f64, f64) {
+    if !time0.is_finite()
+        || !width.is_finite()
+        || !time_to_px.is_finite()
+        || time_to_px <= 1e-9
+        || !marker_half.is_finite()
+    {
+        return (f64::NEG_INFINITY, f64::INFINITY);
+    }
+    // The shader rounds cross centres, culls at max(8, half + 1), and draws bars up to 3px wide.
+    let margin = marker_half.max(0.0).max(8.0) + 2.0;
+    // Compute in f32 like the shader, then widen by one representable time on each side.
+    let left = (time0 - margin / time_to_px).next_down();
+    let right = (time0 + (width + margin) / time_to_px).next_up();
+    (f64::from(left), f64::from(right))
+}
+
+/// Whether overwriting this tick might remove a pixel from the cached bitmap.
+pub fn tick_touches_bake(time: f32, span: (f64, f64)) -> bool {
+    !time.is_finite() || (f64::from(time) >= span.0 && f64::from(time) <= span.1)
 }
 
 #[cfg(test)]
