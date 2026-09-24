@@ -30,7 +30,6 @@ use gpui::*;
 use moon_ui::{MoonPalette, MoonSurface, MoonSurfaceVariant, h_flex, v_flex};
 use rust_i18n::t;
 
-use moon_chart::trade_marks::TradeMarkAt;
 use moon_core::db::ChartTradeRecord;
 use moon_core::figures::Proj;
 use moon_core::util::fmt;
@@ -121,8 +120,13 @@ impl ChartPanel {
             return false;
         }
         self.trade_hover.probe = Some(pos);
-        let hit = self.trade_hit(pos);
-        self.apply_trade_hover(hit, cx)
+        match self.trade_hit(pos) {
+            Some(hit) => self.apply_trade_hover(hit, cx),
+            None => {
+                self.rebuild_stale_trade_geometry(cx);
+                false
+            }
+        }
     }
 
     /// Drop the hover when the pointer leaves the chart slot entirely.
@@ -149,10 +153,32 @@ impl ChartPanel {
         if self.trade_hover.hover.is_none() {
             return;
         }
-        let hit = self.input.cursor.and_then(|pos| self.trade_hit(pos));
+        let hit = match self.input.cursor.map(|pos| self.trade_hit(pos)) {
+            Some(Some(hit)) => hit,
+            None => None,
+            Some(None) => {
+                self.rebuild_stale_trade_geometry(cx);
+                return;
+            }
+        };
         // No notify: this runs INSIDE render, and the card is built from the fresh state right
         // after — a notify here would schedule a repaint on every frame the chart scrolls.
         self.apply_trade_hover(hit, cx);
+    }
+
+    /// The cursor is past the span the pane's arrows were built over: rebuild them through the
+    /// same path a hover rebuild takes, and leave the hover as it is for this frame.
+    fn rebuild_stale_trade_geometry(&mut self, cx: &mut Context<Self>) {
+        let Some(pane) = self
+            .input
+            .cursor
+            .and_then(|pos| self.input.pane_at(pos.0, pos.1))
+        else {
+            return;
+        };
+        self.chart.invalidate_trade_pane(pane);
+        let b = self.backend.read(cx);
+        self.chart.sync_orders_if_visible(&b.session, false);
     }
 
     /// Hit-test the drawn trade arrows at a panel-local device-pixel position.
@@ -161,8 +187,27 @@ impl ChartPanel {
     ///     pos: Pointer position in panel-local device pixels.
     ///
     /// Returns:
-    ///     The resolved arrow and its panel-record indices, or `None` when nothing drawn is hit.
-    fn trade_hit(&self, pos: (f32, f32)) -> Option<TradeHover> {
+    ///     `None` when the cursor lies outside the span the pane's arrows were built over, so the
+    ///     geometry cannot answer; otherwise the resolved arrow and its panel-record indices, or
+    ///     `Some(None)` when nothing drawn is hit.
+    fn trade_hit(&self, pos: (f32, f32)) -> Option<Option<TradeHover>> {
+        if !self.orderbook_only
+            && let Some(pane) = self.input.pane_at(pos.0, pos.1)
+            && let Some(map) = self.pane_map(pane)
+            && pos.0 >= map.plot.x
+            && pos.0 <= map.plot.x + map.plot.w
+            && let Some(Some((lo, hi))) = self.chart.with_trade_geometry(pane, |geom| geom.span)
+        {
+            let t = map.time_at_x(pos.0);
+            if !(t >= lo && t <= hi) {
+                return None;
+            }
+        }
+        Some(self.trade_hit_built(pos))
+    }
+
+    /// [`Self::trade_hit`] against the pane's built geometry, span already checked.
+    fn trade_hit_built(&self, pos: (f32, f32)) -> Option<TradeHover> {
         // Book-only (broom) mode leaves the plot 1 px wide and the engine skips the whole layer
         // there, so without this guard the test would report hits on arrows never drawn.
         if self.orderbook_only {
@@ -180,13 +225,11 @@ impl ChartPanel {
             return None;
         }
         let (anchor, trades) = self.chart.with_trade_geometry(pane, |geom| {
-            let hit = moon_chart::trade_marks::hit_trade_marks(
-                geom.clusters.iter().map(|cluster| TradeMarkAt {
-                    x: map.x_of_time(cluster.t_ms),
-                    apex_y: map.y_of_price(cluster.price),
-                    buy: cluster.buy,
-                    count: cluster.members.len() as u32,
-                }),
+            let hit = moon_chart::trade_marks::hit_trade_marks_windowed(
+                &geom.clusters,
+                &geom.order_by_t,
+                |t_ms| map.x_of_time(t_ms),
+                |price| map.y_of_price(price),
                 pos,
                 self.last_ppp,
                 // From the engine, not from the backend config: these arrows were baked with the
@@ -237,7 +280,10 @@ impl ChartPanel {
             .hover
             .as_ref()
             .map(|hover| (hover.pane, hover.anchor.0, hover.anchor.1));
-        if self.chart.set_trade_hover(hovered) {
+        // A patched hover rewrote the two arrows in place; only a rebuild needs the order sync.
+        if self.chart.set_trade_hover(hovered)
+            == crate::chartdx::trade_history_sync::TradeHoverChange::NeedsRebuild
+        {
             // Userdata rebuilds only through `sync_orders_*`; trigger it so the arrow grows now
             // rather than waiting for the next order revision.
             //

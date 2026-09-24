@@ -1307,11 +1307,23 @@ impl CandleSeries {
     }
 
     /// Returns the low-to-high range of candles intersecting a time window for chart auto-Y.
+    ///
+    /// Scans only the rows around the window: `candles` is ascending by `t_open_ms` (`rebuild`
+    /// merges a sorted base with sorted trade buckets, `push_trades` only appends later buckets).
     pub fn price_range(&self, from_ms: f64, to_ms: f64) -> Option<(f32, f32)> {
         let tf = self.tf_ms.max(1) as f64;
         let mut lo = f32::MAX;
         let mut hi = f32::MIN;
-        for c in &self.candles {
+        let start = self
+            .candles
+            .partition_point(|c| c.t_open_ms + tf <= from_ms);
+        let end = self
+            .candles
+            .partition_point(|c| c.t_open_ms <= to_ms)
+            .max(start);
+        for c in &self.candles[start..end] {
+            #[cfg(test)]
+            PRICE_RANGE_VISITED.with(|n| n.set(n.get() + 1));
             if !candle_intersects_window(c.t_open_ms, tf, from_ms, to_ms) {
                 continue;
             }
@@ -1320,6 +1332,18 @@ impl CandleSeries {
         }
         (lo <= hi).then_some((lo, hi))
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static PRICE_RANGE_VISITED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Rows `price_range` inspected on this thread since the last call; resets the count.
+#[cfg(test)]
+#[allow(dead_code)] // read by the prover's before/after measurement
+pub(crate) fn take_price_range_visited() -> u64 {
+    PRICE_RANGE_VISITED.with(|n| n.replace(0))
 }
 
 #[cfg(test)]

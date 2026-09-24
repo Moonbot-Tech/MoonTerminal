@@ -298,7 +298,19 @@ fn visible_candle_fit(
     if let Some((lo, hi)) = cursor.candle_series.price_range(window.0, window.1) {
         include(lo, hi);
     }
-    for (candle, tf) in &cursor.coarse_fill {
+    // `coarse_fill` is ascending by `t_open_ms` (`compose_with_coarse` rule 5), so only rows
+    // from the first one whose widest possible bucket reaches the window up to the window's end
+    // can intersect it.
+    let fill = &cursor.coarse_fill;
+    let start = cursor.coarse_fill_max_tf.map_or(0, |max_tf| {
+        fill.partition_point(|(c, _)| c.t_open_ms + max_tf <= window.0)
+    });
+    let end = fill
+        .partition_point(|(c, _)| c.t_open_ms <= window.1)
+        .max(start);
+    for (candle, tf) in &fill[start..end] {
+        #[cfg(test)]
+        VISIBLE_FIT_VISITED.with(|n| n.set(n.get() + 1));
         if f64::from(*tf) > series_tf_ms as f64
             && crate::market::candles::candle_intersects_window(
                 candle.t_open_ms,
@@ -311,6 +323,18 @@ fn visible_candle_fit(
         }
     }
     range
+}
+
+#[cfg(test)]
+thread_local! {
+    static VISIBLE_FIT_VISITED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Coarse-fill rows `visible_candle_fit` inspected on this thread since the last call; resets it.
+#[cfg(test)]
+#[allow(dead_code)] // read by the prover's before/after measurement
+pub(crate) fn take_visible_fit_visited() -> u64 {
+    VISIBLE_FIT_VISITED.with(|n| n.replace(0))
 }
 
 /// Fit the actual uploaded fixture bars, including partial boundary candles on cached reads.
@@ -487,10 +511,39 @@ impl MarketDataSource {
                 read.combo_reset = true;
                 read.caught_up = true;
                 cursor.displayed_oldest_ms = cursor.trade_rows.first().map(|row| row.unix_millis());
+                // A copy that filled its cap may have left rows out; the index then defers.
+                cursor.price_fit.replace_from(
+                    &cursor.trade_rows,
+                    cursor.trade_rows.len() < display_cap,
+                    trades_from_time.unix_millis(),
+                );
             } else if let Some(cur) = cursor.trades.as_mut() {
                 let meta = reader.drain_new_bounded(cur, display_cap, &mut cursor.trade_rows);
                 read.clipped |= meta.clipped;
                 read.caught_up &= meta.caught_up;
+                if !meta.clipped {
+                    // `trade_rows` holds only this drain's delta, and `copy_last` below may
+                    // overwrite it, so the index takes it now.
+                    cursor.price_fit.append(&cursor.trade_rows);
+                    // Rows still waiting in the ring are rows the ring's copy would see.
+                    if !meta.caught_up {
+                        cursor.price_fit.mark_lagging();
+                    } else if cursor.price_fit.needs_recopy() {
+                        // Caught up again: one copy of everything since the window start, up to
+                        // the ring's head (drains ran past `to_time`), re-arms the index.
+                        reader.copy_time_range(
+                            trades_from_time,
+                            moonproto::MoonTime::from_unix_millis(i64::MAX),
+                            display_cap,
+                            &mut cursor.scan_trade_rows,
+                        );
+                        cursor.price_fit.replace_from(
+                            &cursor.scan_trade_rows,
+                            cursor.scan_trade_rows.len() < display_cap,
+                            trades_from_time.unix_millis(),
+                        );
+                    }
+                }
                 if meta.clipped {
                     reader.copy_time_range(
                         trades_from_time,
@@ -502,8 +555,15 @@ impl MarketDataSource {
                     read.combo_reset = true;
                     cursor.displayed_oldest_ms =
                         cursor.trade_rows.first().map(|row| row.unix_millis());
+                    cursor.price_fit.replace_from(
+                        &cursor.trade_rows,
+                        cursor.trade_rows.len() < display_cap,
+                        trades_from_time.unix_millis(),
+                    );
                 }
             }
+            cursor.price_fit.cap_live(reader.capacity());
+            cursor.price_fit.trim_before(trades_from_time.unix_millis());
             rows_to_ticks(&cursor.trade_rows, &mut out.ticks);
             read.combo_left_rel_ms = out
                 .ticks
@@ -519,17 +579,22 @@ impl MarketDataSource {
                 }
             }
             if let Some((price_from, price_to)) = price_window {
-                reader.copy_time_range(
-                    moon_time_from_rel_ms(epoch_ms, price_from.max(trades_from_rel)),
-                    moon_time_from_rel_ms(epoch_ms, price_to),
-                    display_cap,
-                    &mut cursor.scan_trade_rows,
-                );
-                read.tick_price_range = trade_price_range(&cursor.scan_trade_rows);
+                let from = moon_time_from_rel_ms(epoch_ms, price_from.max(trades_from_rel));
+                let to = moon_time_from_rel_ms(epoch_ms, price_to);
+                // The index answers while the window holds no more rows than the ring copy would
+                // take; past the cap only the copy reproduces which rows it keeps.
+                match cursor.price_fit.range(from.unix_millis(), to.unix_millis()) {
+                    Some((range, n)) if n <= display_cap => read.tick_price_range = range,
+                    _ => {
+                        reader.copy_time_range(from, to, display_cap, &mut cursor.scan_trade_rows);
+                        read.tick_price_range = trade_price_range(&cursor.scan_trade_rows);
+                    }
+                }
             }
         } else {
             cursor.trades = None;
             cursor.last_price = None;
+            cursor.price_fit.clear();
             // Trades are hidden when K is zero, but the ring still supplies last_price. On reset,
             // combo_reset instructs the layer to clear its cross ring.
             if let Some(reader) = trade_reader.as_ref() {
@@ -1197,6 +1262,13 @@ impl MarketDataSource {
                     &mut fill,
                 );
                 cursor.coarse_fill = fill;
+                cursor.coarse_fill_max_tf = Some(
+                    layers
+                        .iter()
+                        // The fill stores each width as f32; bound by exactly what the filter reads.
+                        .map(|layer| f64::from(layer.tf_ms as f32))
+                        .fold(f64::from(cp.tf_ms as f32), f64::max),
+                );
             }
             if read.candles_changed {
                 out.candles.reserve(cursor.coarse_fill.len());

@@ -304,6 +304,9 @@ pub struct ChartPanel {
     /// notification because each peer schedules its own present. Empty means comparison is inactive.
     ghost_peers: Vec<crate::chartdx::ChartGhostCursor>,
     view_dirty: bool,
+    /// The camera moved (pan, wheel, zoom) and nothing else did: the overlays sync UNFORCED, so
+    /// each layer rebuilds only when its own signature says the new view changed it.
+    camera_dirty: bool,
     last_adaptive_notify_at: Option<Instant>,
     /// Last window scale factor recorded during rendering. The data-prepare path has no `Window`, so
     /// it reuses this value between infrequent DPI changes.
@@ -726,6 +729,7 @@ impl ChartPanel {
             compare_broom_on: false,
             ghost_peers: Vec::new(),
             view_dirty: true,
+            camera_dirty: false,
             last_adaptive_notify_at: None,
             last_ppp: 1.0,
             ttl_timer_armed: false,
@@ -941,6 +945,7 @@ impl ChartPanel {
             compare_broom_on: false,
             ghost_peers: Vec::new(),
             view_dirty: true,
+            camera_dirty: false,
             last_adaptive_notify_at: None,
             last_ppp: 1.0,
             ttl_timer_armed: false,
@@ -1926,7 +1931,7 @@ impl ChartPanel {
                 }
             });
         }
-        self.view_dirty = true;
+        self.camera_dirty = true;
     }
 
     /// Returns the tab caption. Numbered AddToChart and Custom panels use `N · market`, falling back

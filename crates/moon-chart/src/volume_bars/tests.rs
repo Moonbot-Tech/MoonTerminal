@@ -228,3 +228,79 @@ fn every_stored_pair_that_drew_volumes_reads_as_hills_with_the_split() {
         VOLUME_STYLE_OFF
     );
 }
+
+/// `volume_bars.rs:sample_at_sorted` flipping its equal-width tie rule (`<=` to `<`) lets the
+/// later of two overlapping same-width buckets win, and `visible_interval_max_sorted` losing a
+/// bound drops a visible bucket, so the volume readout names the wrong bucket or the wrong peak.
+/// Both are compared with the order-free linear references over random sorted mixed-width rows.
+#[test]
+fn sorted_lookups_equal_the_linear_references() {
+    let mut state = 0x0F0F_1234_u64;
+    let mut next = move |n: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % n
+    };
+    let widths = [60_000.0, 300_000.0, 900_000.0];
+    let mut samples = Vec::new();
+    let mut t = 0.0;
+    for _ in 0..3_000 {
+        // Opens advance by less than a bucket, so same-width buckets overlap and tie.
+        t += (next(4) * 30_000) as f64;
+        samples.push(VolumeSample {
+            t_open_ms: t,
+            tf_ms: widths[next(3) as usize],
+            quote_volume: 1.0 + next(10_000) as f32,
+        });
+    }
+    let max_tf = 900_000.0;
+    let (mut ties, mut hits) = (0, 0);
+    for q in 0..5_000 {
+        let at = (next(t as u64 + 1_000_000)) as f64 + if q % 2 == 0 { 0.0 } else { 0.5 };
+        take_sample_at_visited();
+        let got = sample_at_sorted(&samples, max_tf, at);
+        let visited = take_sample_at_visited();
+        let want = sample_at(&samples, at);
+        assert_eq!(got, want, "t {at}");
+        if let Some(w) = want {
+            hits += 1;
+            ties += usize::from(
+                samples
+                    .iter()
+                    .filter(|s| {
+                        s.tf_ms == w.tf_ms && at >= s.t_open_ms && at < s.t_open_ms + s.tf_ms
+                    })
+                    .count()
+                    > 1,
+            );
+        }
+        assert!(
+            visited <= 2 + (max_tf / 30_000.0) as u64 * 2,
+            "visited {visited}"
+        );
+        if q % 2_000 == 0 {
+            println!("[sample_at] before={} after={visited}", samples.len());
+        }
+
+        let from = at;
+        let to = from + (next(40) * 60_000) as f64;
+        let boundary = if q % 3 == 0 {
+            f64::INFINITY
+        } else {
+            from + (next(50) * 60_000) as f64
+        };
+        take_interval_max_visited();
+        let got = visible_interval_max_sorted(&samples, max_tf, from, to, 60_000.0, boundary);
+        let visited = take_interval_max_visited();
+        assert_eq!(
+            got,
+            visible_interval_max(&samples, from, to, 60_000.0, boundary),
+            "[{from}, {to}]"
+        );
+        if q % 2_000 == 0 {
+            println!("[interval_max] before={} after={visited}", samples.len());
+        }
+    }
+    assert!(hits > 0 && ties > 0, "{hits} {ties}");
+}

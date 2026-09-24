@@ -441,9 +441,13 @@ impl RenderState {
                     .and_then(|b| SideVolume::new(b, pr.side_tf_ms))
                     .map(BandFigure::Sides)
             } else {
-                moon_chart::volume_bars::sample_at(&pr.volume_samples, t_ms)
-                    .and_then(|sample| CandleVolume::new(sample.quote_volume, sample.tf_ms))
-                    .map(BandFigure::Candle)
+                moon_chart::volume_bars::sample_at_sorted(
+                    &pr.volume_samples,
+                    pr.volume_samples_max_tf,
+                    t_ms,
+                )
+                .and_then(|sample| CandleVolume::new(sample.quote_volume, sample.tf_ms))
+                .map(BandFigure::Candle)
             }
         });
         let unit = pr.quote.clone();

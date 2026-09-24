@@ -239,6 +239,9 @@ const HIT_SLACK: f32 = 4.0;
 ///
 /// Returns:
 ///     Multiplier for both arrow half-extents.
+/// The largest [`cluster_growth`] can return: its log2 term stops at 3.
+pub const GROWTH_CAP: f32 = 1.75;
+
 pub fn cluster_growth(count: u32) -> f32 {
     1.0 + 0.25 * (count.max(1) as f32).log2().min(3.0)
 }
@@ -382,21 +385,32 @@ pub fn cluster_actions(
     px_per_price: f32,
     scale: f32,
 ) -> Vec<TradeCluster> {
-    let reach = (CLUSTER_PX * scale.max(0.1)) as f64;
-    // A degenerate view (a pane mid-layout, a collapsed price range) must not merge the whole
-    // history into one marker: with no usable scale, nothing is close enough to anything.
-    let (ppm, ppp) = (px_per_ms as f64, px_per_price as f64);
-    let usable = ppm.is_finite() && ppp.is_finite() && ppm > 0.0 && ppp > 0.0;
+    cluster_sorted(&sort_actions(actions), None, px_per_ms, px_per_price, scale)
+}
 
-    let mut out = Vec::new();
-    for key in [(false, false), (true, false), (false, true), (true, true)] {
-        let mut part = actions
-            .iter()
-            .filter(|a| (a.buy, a.is_short) == key)
-            .collect::<Vec<_>>();
-        if part.is_empty() {
-            continue;
-        }
+/// The four `(buy, is_short)` partitions, in the order clusters are emitted.
+const ACTION_KEYS: [(bool, bool); 4] = [(false, false), (true, false), (false, true), (true, true)];
+
+/// Actions partitioned by `(buy, is_short)` and sorted within each partition, ready to sweep.
+///
+/// Built once per trade-set change and reused across pans: the sort is the expensive half of
+/// clustering and it does not depend on the view.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SortedActions {
+    keys: [Vec<TradeAction>; 4],
+}
+
+/// Partition and sort actions the way the clustering sweep reads them.
+///
+/// Args:
+///     actions: Actions to group, in any order.
+///
+/// Returns:
+///     One ascending `(t_ms, price, mark)` list per `(buy, is_short)` partition.
+pub fn sort_actions(actions: &[TradeAction]) -> SortedActions {
+    let mut sorted = SortedActions::default();
+    for (part, key) in sorted.keys.iter_mut().zip(ACTION_KEYS) {
+        part.extend(actions.iter().filter(|a| (a.buy, a.is_short) == key));
         // A TOTAL order: `t_ms` alone is not unique, and an unstable tie would vary which member
         // seeds a cluster and therefore where the marker lands.
         part.sort_by(|a, b| {
@@ -405,9 +419,69 @@ pub fn cluster_actions(
                 .then(a.price.total_cmp(&b.price))
                 .then(a.mark.cmp(&b.mark))
         });
+    }
+    sorted
+}
+
+/// Sweep pre-sorted actions into clusters, optionally only around a time window.
+///
+/// With `window = None` this is [`cluster_actions`]. With `Some((lo, hi))` (absolute ms) every
+/// cluster with a member in `[lo, hi]` comes out exactly as the full sweep builds it: the sweep
+/// starts at a TIME GAP wider than the cluster reach, where the full sweep must start a new group
+/// too (no member sits within reach of a seed across that gap), and stops one reach past `hi`,
+/// beyond which no member can join a group seeded inside the window. Groups seeded in that
+/// trailing reach may come out truncated; they lie outside the window.
+///
+/// Args:
+///     sorted: Actions from [`sort_actions`].
+///     window: Absolute-ms time window to cluster around, or `None` for everything.
+///     px_per_ms: Horizontal scale, physical px per millisecond.
+///     px_per_price: Vertical scale, physical px per price unit.
+///     scale: Device pixel scale, applied to [`CLUSTER_PX`].
+///
+/// Returns:
+///     One cluster per drawn marker, ordered by kind and then chronologically.
+pub fn cluster_sorted(
+    sorted: &SortedActions,
+    window: Option<(f64, f64)>,
+    px_per_ms: f32,
+    px_per_price: f32,
+    scale: f32,
+) -> Vec<TradeCluster> {
+    let reach = (CLUSTER_PX * scale.max(0.1)) as f64;
+    // A degenerate view (a pane mid-layout, a collapsed price range) must not merge the whole
+    // history into one marker: with no usable scale, nothing is close enough to anything.
+    let (ppm, ppp) = (px_per_ms as f64, px_per_price as f64);
+    let usable = ppm.is_finite() && ppp.is_finite() && ppm > 0.0 && ppp > 0.0;
+
+    let mut out = Vec::new();
+    for (part, key) in sorted.keys.iter().zip(ACTION_KEYS) {
+        if part.is_empty() {
+            continue;
+        }
+        let span = match window {
+            None => 0..part.len(),
+            Some((lo, hi)) => {
+                let mut i0 = part.partition_point(|a| (a.t_ms as f64) < lo);
+                // Back up to a gap the full sweep also cuts at; the same f64 expression as `dx`.
+                if usable {
+                    while i0 > 0
+                        && i0 < part.len()
+                        && !((part[i0].t_ms - part[i0 - 1].t_ms) as f64 * ppm > reach)
+                    {
+                        i0 -= 1;
+                    }
+                }
+                let hi = if usable { hi + reach / ppm + 1.0 } else { hi };
+                let i1 = part.partition_point(|a| (a.t_ms as f64) <= hi).max(i0);
+                i0..i1
+            }
+        };
 
         let mut group: Vec<&TradeAction> = Vec::new();
-        for action in part {
+        for action in &part[span] {
+            #[cfg(test)]
+            CLUSTER_VISITED.with(|n| n.set(n.get() + 1));
             let joins = match group.first() {
                 Some(seed) if usable => {
                     let dx = (action.t_ms - seed.t_ms) as f64 * ppm;
@@ -601,6 +675,32 @@ pub fn build_trade_geometry(
     markers: &mut Vec<MarkerInstance>,
     segs: &mut Vec<SegInstance>,
 ) -> Vec<TradeCluster> {
+    let sorted = sort_actions(&explode_actions(marks));
+    build_trade_geometry_sorted(marks, &sorted, None, ctx, markers, segs)
+}
+
+/// [`build_trade_geometry`] over actions sorted once by the caller, culled to a time window.
+///
+/// Args:
+///     marks: Trades to draw, already filtered to the pane's own core and coin.
+///     sorted: `sort_actions(&explode_actions(marks))`, retained by the caller across pans.
+///     window: Absolute-ms span the result must be exact over, already widened by
+///         [`trade_glyph_margin_ms`]; `None` builds everything. Connectors wholly outside it are
+///         left out; clusters are swept as [`cluster_sorted`] documents.
+///     ctx: The pane's epoch, colours and scales.
+///     markers: Marker union to extend.
+///     segs: Segment union to extend.
+///
+/// Returns:
+///     The cluster snapshot the markers were built from, as [`build_trade_geometry`] documents.
+pub fn build_trade_geometry_sorted(
+    marks: &[TradeMark],
+    sorted: &SortedActions,
+    window: Option<(f64, f64)>,
+    ctx: &TradeGeometryCtx,
+    markers: &mut Vec<MarkerInstance>,
+    segs: &mut Vec<SegInstance>,
+) -> Vec<TradeCluster> {
     let TradeGeometryCtx {
         epoch_ms,
         long_rgb,
@@ -608,43 +708,15 @@ pub fn build_trade_geometry(
         scale,
         px_per_ms,
         px_per_price,
-        arrow_scale,
         connector_thickness,
         hovered,
+        ..
     } = *ctx;
-    let clusters = cluster_actions(&explode_actions(marks), px_per_ms, px_per_price, scale);
+    let clusters = cluster_sorted(sorted, window, px_per_ms, px_per_price, scale);
 
-    let arrow_scale = clamp_arrow_scale(arrow_scale);
-    let half_h = ARROW_HALF_H * scale * arrow_scale;
-    let half_w = ARROW_HALF_W * scale * arrow_scale;
     markers.reserve(clusters.len());
     for cluster in &clusters {
-        let rgb = if cluster.is_short {
-            short_rgb
-        } else {
-            long_rgb
-        };
-        // The hovered arrow grows and goes fully opaque. The growth is applied HERE and not through
-        // the cluster count, so it stays out of `cluster_growth` and therefore out of the hit area.
-        let hot = hovered
-            .is_some_and(|(mark, buy)| cluster.buy == buy && cluster.members.contains(&mark));
-        let grow = if hot { TRADE_HOVER_SCALE } else { 1.0 };
-        let alpha = if hot { 1.0 } else { MARKER_ALPHA };
-        // The arrow points the way the ACTION went: an up arrow is a buy whichever side opened it.
-        let shape = if cluster.buy {
-            MARKER_SHAPE_ARROW_UP
-        } else {
-            MARKER_SHAPE_ARROW_DOWN
-        };
-        markers.push(MarkerInstance::arrow(
-            (cluster.t_ms - epoch_ms) as f32,
-            cluster.price as f32,
-            half_h * grow,
-            half_w * grow,
-            shape,
-            cluster.members.len() as u32,
-            rgba(rgb, alpha),
-        ));
+        markers.push(trade_marker(cluster, ctx, cluster_is_hot(cluster, hovered)));
     }
 
     // Connectors stay PER TRADE and are never clustered: a cluster's two ends belong to different
@@ -658,6 +730,13 @@ pub fn build_trade_geometry(
             // join it to.
             if !mark.whole() {
                 continue;
+            }
+            // Outside the culled span; the window's glyph margin covers the line's half-thickness.
+            if let Some((lo, hi)) = window {
+                let (a, b) = (mark.buy_ms as f64, mark.close_ms as f64);
+                if a.max(b) < lo || a.min(b) > hi {
+                    continue;
+                }
             }
             // Skip a connector too short to read. Measured in the CURRENT view, so the same trade
             // gains its line back the moment the user zooms in on it.
@@ -686,6 +765,60 @@ pub fn build_trade_geometry(
     }
 
     clusters
+}
+
+/// Whether `hovered` names an action of this cluster: the one rule for which arrow is hot.
+///
+/// Args:
+///     cluster: A built cluster.
+///     hovered: `(marks index, buy)` of the hovered action, as `TradeGeometryCtx::hovered`.
+///
+/// Returns:
+///     Whether the cluster draws hot.
+pub fn cluster_is_hot(cluster: &TradeCluster, hovered: Option<(usize, bool)>) -> bool {
+    hovered.is_some_and(|(mark, buy)| cluster.buy == buy && cluster.members.contains(&mark))
+}
+
+/// The arrow instance one cluster draws as.
+///
+/// The ONE place an arrow instance is made, so a hover that rewrites a single instance in place
+/// produces exactly what a full rebuild would.
+///
+/// Args:
+///     cluster: The cluster to draw.
+///     ctx: The build's context; only its epoch, colours, scale and arrow multiplier are read.
+///     hot: Whether the cluster is the hovered one.
+///
+/// Returns:
+///     The marker instance.
+pub fn trade_marker(cluster: &TradeCluster, ctx: &TradeGeometryCtx, hot: bool) -> MarkerInstance {
+    let arrow_scale = clamp_arrow_scale(ctx.arrow_scale);
+    let half_h = ARROW_HALF_H * ctx.scale * arrow_scale;
+    let half_w = ARROW_HALF_W * ctx.scale * arrow_scale;
+    let rgb = if cluster.is_short {
+        ctx.short_rgb
+    } else {
+        ctx.long_rgb
+    };
+    // The hovered arrow grows and goes fully opaque. The growth is applied HERE and not through
+    // the cluster count, so it stays out of `cluster_growth` and therefore out of the hit area.
+    let grow = if hot { TRADE_HOVER_SCALE } else { 1.0 };
+    let alpha = if hot { 1.0 } else { MARKER_ALPHA };
+    // The arrow points the way the ACTION went: an up arrow is a buy whichever side opened it.
+    let shape = if cluster.buy {
+        MARKER_SHAPE_ARROW_UP
+    } else {
+        MARKER_SHAPE_ARROW_DOWN
+    };
+    MarkerInstance::arrow(
+        (cluster.t_ms - ctx.epoch_ms) as f32,
+        cluster.price as f32,
+        half_h * grow,
+        half_w * grow,
+        shape,
+        cluster.members.len() as u32,
+        rgba(rgb, alpha),
+    )
 }
 
 /// One arrow as the hit test sees it: where it is drawn and how big it was drawn.
@@ -742,6 +875,112 @@ pub fn hit_trade_marks(
     scale: f32,
     arrow_scale: f32,
 ) -> Option<TradeHit> {
+    hit_indexed(marks.into_iter().enumerate(), cursor, scale, arrow_scale)
+}
+
+/// Farthest on x an arrow at the [`GROWTH_CAP`] can reach, times `hover`, plus the hit slack and
+/// a pixel, in device px.
+fn glyph_reach_px(scale: f32, arrow_scale: f32, hover: f32) -> f32 {
+    let scale = scale.max(0.1);
+    ARROW_HALF_W * scale * clamp_arrow_scale(arrow_scale) * GROWTH_CAP * hover
+        + HIT_SLACK * scale
+        + 1.0
+}
+
+/// How far, in ms, a trade glyph can reach past its time: the arrow at its largest (cluster cap
+/// times hover growth) plus the hit slack. A cull window is widened by this on both sides.
+///
+/// Args:
+///     scale: Device pixel scale.
+///     arrow_scale: The user arrow multiplier, clamped as the geometry clamps it.
+///     px_per_ms: Horizontal view scale, physical px per millisecond.
+///
+/// Returns:
+///     The margin in milliseconds, infinite when the scale is unusable.
+pub fn trade_glyph_margin_ms(scale: f32, arrow_scale: f32, px_per_ms: f32) -> f64 {
+    let px = glyph_reach_px(scale, arrow_scale, TRADE_HOVER_SCALE);
+    let ppm = px_per_ms as f64;
+    if ppm.is_finite() && ppm > 0.0 {
+        px as f64 / ppm
+    } else {
+        f64::INFINITY
+    }
+}
+
+/// Cluster indices ordered by time, for [`hit_trade_marks_windowed`].
+///
+/// Args:
+///     clusters: The retained cluster snapshot.
+///
+/// Returns:
+///     Indices into `clusters`, ascending by `(t_ms, index)`.
+pub fn order_by_time(clusters: &[TradeCluster]) -> Vec<u32> {
+    let mut order = (0..clusters.len() as u32).collect::<Vec<_>>();
+    order.sort_by(|&a, &b| {
+        clusters[a as usize]
+            .t_ms
+            .total_cmp(&clusters[b as usize].t_ms)
+            .then(a.cmp(&b))
+    });
+    order
+}
+
+/// [`hit_trade_marks`] over only the clusters near the cursor, with the same result.
+///
+/// One exception: a cluster whose x projects to NaN is never in the window, so it hits nothing,
+/// where the unwindowed scan could still count it.
+///
+/// Args:
+///     clusters: The retained cluster snapshot.
+///     order_by_t: [`order_by_time`] of `clusters`.
+///     x_of: Absolute ms to device px x; must be non-decreasing.
+///     y_of: Price to device px y.
+///     cursor: Cursor position in device px.
+///     scale: Device pixel scale.
+///     arrow_scale: The user arrow multiplier the arrows were drawn with.
+///
+/// Returns:
+///     The touched clusters, indexed into `clusters`, or `None`.
+pub fn hit_trade_marks_windowed(
+    clusters: &[TradeCluster],
+    order_by_t: &[u32],
+    x_of: impl Fn(f64) -> f32,
+    y_of: impl Fn(f64) -> f32,
+    cursor: (f32, f32),
+    scale: f32,
+    arrow_scale: f32,
+) -> Option<TradeHit> {
+    let reach = glyph_reach_px(scale, arrow_scale, 1.0);
+    let x_at = |i: &u32| x_of(clusters[*i as usize].t_ms);
+    let start = order_by_t.partition_point(|i| x_at(i) < cursor.0 - reach);
+    let end = order_by_t
+        .partition_point(|i| x_at(i) <= cursor.0 + reach)
+        .max(start);
+    let near = order_by_t[start..end].iter().map(|&i| {
+        let cluster = &clusters[i as usize];
+        (
+            i as usize,
+            TradeMarkAt {
+                x: x_of(cluster.t_ms),
+                apex_y: y_of(cluster.price),
+                buy: cluster.buy,
+                count: cluster.members.len() as u32,
+            },
+        )
+    });
+    hit_indexed(near, cursor, scale, arrow_scale)
+}
+
+/// The body of both hit tests, over `(index, arrow)` pairs in any order.
+///
+/// `stack` comes out ascending and `nearest` is the smallest index among the equally nearest,
+/// which is exactly what the forward scan of [`hit_trade_marks`] produces.
+fn hit_indexed(
+    marks: impl Iterator<Item = (usize, TradeMarkAt)>,
+    cursor: (f32, f32),
+    scale: f32,
+    arrow_scale: f32,
+) -> Option<TradeHit> {
     let scale = scale.max(0.1);
     let slack = HIT_SLACK * scale;
     // Hoisted: this loop runs on the POINTER PATH, once per mark on every mouse move that clears
@@ -752,7 +991,9 @@ pub fn hit_trade_marks(
     let mut stack: Vec<usize> = Vec::new();
     let mut nearest = 0usize;
     let mut best = f32::INFINITY;
-    for (index, mark) in marks.into_iter().enumerate() {
+    for (index, mark) in marks {
+        #[cfg(test)]
+        HIT_VISITED.with(|n| n.set(n.get() + 1));
         let grow = cluster_growth(mark.count);
         let reach_x = half_w * grow + slack;
         let dx = cursor.0 - mark.x;
@@ -774,13 +1015,34 @@ pub fn hit_trade_marks(
         let center_y = (top + bottom) * 0.5;
         let dy = cursor.1 - center_y;
         let dist = dx * dx + dy * dy;
-        if dist < best {
+        if dist < best || (dist == best && index < nearest) {
             best = dist;
             nearest = index;
         }
         stack.push(index);
     }
+    stack.sort_unstable();
     (!stack.is_empty()).then_some(TradeHit { nearest, stack })
+}
+
+#[cfg(test)]
+thread_local! {
+    static CLUSTER_VISITED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static HIT_VISITED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Actions the clustering sweep inspected on this thread since the last call; resets the count.
+#[cfg(test)]
+#[allow(dead_code)] // read by the prover's before/after measurement
+pub(crate) fn take_cluster_visited() -> u64 {
+    CLUSTER_VISITED.with(|n| n.replace(0))
+}
+
+/// Arrows the hit test inspected on this thread since the last call; resets the count.
+#[cfg(test)]
+#[allow(dead_code)] // read by the prover's before/after measurement
+pub(crate) fn take_hit_visited() -> u64 {
+    HIT_VISITED.with(|n| n.replace(0))
 }
 
 #[cfg(test)]

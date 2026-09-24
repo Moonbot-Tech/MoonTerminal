@@ -63,6 +63,14 @@ pub struct PlatformLayers {
 }
 
 impl PlatformLayers {
+    /// Whether this backend retains the marker buffer so a hover can patch arrows in place.
+    ///
+    /// Returns:
+    ///     `true` on DX11, `false` on every backend whose `patch_markers` declines.
+    pub const fn can_patch_markers() -> bool {
+        cfg!(windows)
+    }
+
     /// Borrow tick candidates in a time window, including pending native uploads.
     /// DX11 bounds the lookup; other backends retain their scan until their native paths are ported.
     pub(super) fn tick_samples(&self, from: f64, to: f64) -> impl Iterator<Item = &ChartCross> {
@@ -343,6 +351,25 @@ impl PlatformLayers {
         {
             let _ = bh;
             0.0
+        }
+    }
+
+    /// Rewrite already-uploaded userdata markers by index, without a full `set_userdata`.
+    ///
+    /// DX11 only: it retains a CPU copy of the marker buffer. Metal and wgpu answer `false`, and
+    /// the caller then rebuilds the whole union as before.
+    ///
+    /// Returns:
+    ///     Whether the patch was applied.
+    pub fn patch_markers(&mut self, patches: &[(u32, MarkerInstance)]) -> bool {
+        #[cfg(windows)]
+        {
+            self.userdata.patch_markers(patches)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = patches;
+            false
         }
     }
 

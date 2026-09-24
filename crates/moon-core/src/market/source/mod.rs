@@ -3,6 +3,7 @@ mod archive;
 mod history;
 #[cfg(test)]
 mod label_tests;
+mod price_fit;
 mod read;
 mod refresh;
 mod replay;
@@ -930,6 +931,8 @@ pub struct ChartHistoryCursor {
     /// bucket. `None` means that copy held no trade. Cleared with the cursor.
     displayed_oldest_ms: Option<i64>,
     scan_trade_rows: Vec<TradeHistoryRow>,
+    /// Every trade copied or drained since the last full copy, blocked for the auto-Y price fit.
+    price_fit: price_fit::PriceFitIndex,
     /// Fixture candles last uploaded by this pane, retained for viewport-only fitting without SQL.
     fixture_candles: Vec<ChartCandle>,
     liq_rows: Vec<TradeHistoryRow>,
@@ -1007,6 +1010,9 @@ pub struct ChartHistoryCursor {
     /// Deriving the fill twice is how the price scale and the drawn candles came to disagree about
     /// which coarse rows exist; one vector makes that unrepresentable.
     coarse_fill: Vec<(ChartCandle, f32)>,
+    /// Widest timeframe `coarse_fill` was composed with, so a window scan can bound its start
+    /// without a pass over the fill. `None` means unknown: scan from the first row.
+    coarse_fill_max_tf: Option<f64>,
     /// `(series revision, cache generation)` the retained fill was composed from.
     coarse_fill_key: Option<(u64, u64)>,
     /// Signature of the last deep rows written to the cache; write back only after a change.
@@ -1067,6 +1073,7 @@ impl ChartHistoryCursor {
         self.trade_rows.clear();
         self.displayed_oldest_ms = None;
         self.scan_trade_rows.clear();
+        self.price_fit.clear();
         self.liq_rows.clear();
         self.last_price_rows.clear();
         self.mark_price_rows.clear();
@@ -1080,6 +1087,7 @@ impl ChartHistoryCursor {
         self.ring_rows_5m.clear();
         self.coarse_fill.clear();
         self.coarse_fill_key = None;
+        self.coarse_fill_max_tf = None;
         // Preserve last_deep_request so request throttling survives a reset. Changing markets
         // recreates PaneRender and therefore starts with a fresh cursor.
     }

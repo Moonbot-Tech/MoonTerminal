@@ -208,3 +208,85 @@ fn fixture_fit_uses_complete_uploaded_boundary_candles() {
         None
     );
 }
+
+/// `history.rs:visible_candle_fit` starting its coarse scan without the `coarse_fill_max_tf`
+/// widening drops a coarse filler that opened before the window but still overhangs its left
+/// edge, so auto-Y ignores a bar drawn on screen. Compared with a full scan of the fill.
+#[test]
+fn visible_fit_windowed_coarse_scan_equals_a_full_scan() {
+    let candle = |time: f64, low: f32, high: f32| ChartCandle {
+        t_open_ms: time,
+        open: low,
+        close: high,
+        low,
+        high,
+        volume: 1.0,
+        quote_volume: 1.0,
+    };
+    let mut state = 0xDEAD_BEEF_u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    // Ascending mixed-width fill: hourly bars with 5-minute bars between them.
+    let hour = 3_600_000.0_f64;
+    let five = 300_000.0_f64;
+    let mut fill = Vec::new();
+    let mut t = 0.0;
+    while fill.len() < 3_000 {
+        let lo = 1.0 + (next() % 1_000) as f32;
+        let hi = lo + (next() % 50) as f32;
+        let tf = if next() % 3 == 0 { hour } else { five };
+        fill.push((candle(t, lo, hi), tf as f32));
+        t += tf;
+    }
+    let hourly: Vec<f64> = fill
+        .iter()
+        .filter(|(_, tf)| f64::from(*tf) == hour)
+        .map(|(c, _)| c.t_open_ms)
+        .collect();
+    let mut cursor = ChartHistoryCursor::default();
+    cursor.coarse_fill = fill.clone();
+    cursor.coarse_fill_max_tf = Some(hour);
+    let last = t;
+    let mut overhang_hits = 0;
+    for q in 0..3_000 {
+        let (a, b) = if q % 3 == 0 {
+            // Start strictly inside an hourly bar: it opens before the window and overhangs it.
+            let open = hourly[(next() % hourly.len() as u64) as usize];
+            let a = open + 1.0 + (next() % (hour as u64 - 1)) as f64;
+            (a, a + (next() % 5) as f64 * five)
+        } else {
+            let a = (next() % last as u64) as f64;
+            (a, a + (next() % 40) as f64 * five)
+        };
+        let mut want: Option<(f32, f32)> = None;
+        for (c, tf) in &fill {
+            let tf = f64::from(*tf);
+            if tf > 60_000.0 && c.t_open_ms + tf > a && c.t_open_ms <= b {
+                if c.t_open_ms < a {
+                    overhang_hits += 1;
+                }
+                want = Some(match want {
+                    Some((l, h)) => (l.min(c.low), h.max(c.high)),
+                    None => (c.low, c.high),
+                });
+            }
+        }
+        take_visible_fit_visited();
+        assert_eq!(
+            visible_candle_fit(&cursor, 60_000, (a, b), None),
+            want,
+            "window [{a}, {b}]"
+        );
+        let visited = take_visible_fit_visited();
+        let bound = (b - a) / five + hour / five + 2.0;
+        assert!(visited as f64 <= bound, "visited {visited} > {bound}");
+        if q % 1_000 == 0 {
+            println!("[visible_fit] before={} after={visited}", fill.len());
+        }
+    }
+    assert!(overhang_hits > 0);
+}

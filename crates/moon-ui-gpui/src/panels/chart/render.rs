@@ -168,7 +168,11 @@ impl Render for ChartPanel {
         let view_changed = self.view_dirty;
         if became_visible || view_changed {
             self.view_dirty = false;
+            self.camera_dirty = false;
             self.sync_orders_if_visible(cx, true);
+        } else if self.camera_dirty {
+            self.camera_dirty = false;
+            self.sync_orders_if_visible(cx, false);
         }
 
         // Snapshot visible pane layout once and reuse its rectangles for pane-positioned GPUI

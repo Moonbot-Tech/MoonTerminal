@@ -966,6 +966,11 @@ impl ChartDataState {
                         candle_tf_ms as f64,
                         &mut pr.volume_samples,
                     );
+                    // Ascending as the composed history is; the widest width bounds each lookup.
+                    pr.volume_samples_max_tf = pr
+                        .volume_samples
+                        .iter()
+                        .fold(0.0, |max: f64, s| max.max(s.tf_ms));
                     // `take` hands the buffer away and leaves an empty one to grow again on the
                     // next revision — tens of ~24 KB allocations a second on a live market. The
                     // allocation lands inside the timer above; the matching free happens when the
@@ -1492,8 +1497,9 @@ impl ChartDataState {
                 // stamped with: with the switch on and no read landed yet (client or snapshot
                 // momentarily absent) the stamp is still zero, and the candle half must keep
                 // drawing from what it has rather than go dark with the split.
-                let history = moon_chart::volume_bars::visible_interval_max(
+                let history = moon_chart::volume_bars::visible_interval_max_sorted(
                     &pr.volume_samples,
+                    pr.volume_samples_max_tf,
                     vol_from,
                     vol_to,
                     side_tf_ms as f64,
@@ -1982,8 +1988,9 @@ impl ChartDataState {
                 pixels_changed = true;
             }
         }
-        let prev_cursor_params: Vec<CursorParams> =
-            st.panes.iter().map(|pr| pr.cursor_params).collect();
+        let mut prev_cursor_params = std::mem::take(&mut st.cursor_params_scratch);
+        prev_cursor_params.clear();
+        prev_cursor_params.extend(st.panes.iter().map(|pr| pr.cursor_params));
         st.sync_cursor_params();
         let cursor_changed = (st.cursor.is_some() || st.ghost_price.is_some())
             && st
@@ -1991,6 +1998,7 @@ impl ChartDataState {
                 .iter()
                 .zip(prev_cursor_params.iter())
                 .any(|(pr, prev)| pr.cursor_params != *prev);
+        st.cursor_params_scratch = prev_cursor_params;
         if pixels_changed {
             st.base_dirty = true;
         }

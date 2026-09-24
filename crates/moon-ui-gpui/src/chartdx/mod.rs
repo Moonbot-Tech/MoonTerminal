@@ -635,6 +635,8 @@ struct PaneRender {
     /// the uploaded candle layer is still resident. Scaling the band from it would blank the
     /// band on exactly the gesture that should rescale it.
     volume_samples: Vec<moon_chart::VolumeSample>,
+    /// Widest `tf_ms` among `volume_samples`, bounding the sorted band lookups' windows.
+    volume_samples_max_tf: f64,
     /// Visible-range volume max and average behind the band, kept as SEMANTIC values.
     ///
     /// The numeric labels read these rather than inverting `VolumeStyleGpu.m`, whose fields are
@@ -798,6 +800,10 @@ struct PaneRender {
     /// one bucket the view keeps moving while the buffers do not, so re-clustering from the live
     /// scale would answer about a picture that is not on screen. Hit-testing reads this.
     trade_geometry: trade_history_sync::TradeGeometry,
+    /// The filtered marks and sorted actions `trade_geometry` is built from, reused across pans.
+    trade_source: Option<trade_history_sync::TradeSource>,
+    /// Userdata buffers the order sync builds into, retained so a rebuild allocates nothing.
+    ud_scratch: UdScratch,
     /// Warning-badge signature encoded into userdata; `u64::MAX` means dirty.
     last_warn_sig: u64,
     /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
@@ -821,6 +827,8 @@ struct PaneRender {
     /// Placed order and cursor labels for this frame. `prepare_text` lays them out with overlap
     /// avoidance, and `sync_readout_params` builds their backing plates.
     label_placed: Vec<PlacedLabel>,
+    /// The other of `prepare_text`'s two layout buffers, reused so a frame allocates none.
+    label_placed_spare: Vec<PlacedLabel>,
     /// CPU copy of visible order-book levels for quantity labels under the cursor and on sell lines.
     /// Filled during order-book upload in `prepare`; empty while the order book is disabled.
     orderbook_levels: Vec<moon_core::data::BookDepthPoint>,
@@ -953,6 +961,7 @@ impl PaneRender {
             tick_style: TickStyleGpu::default(),
             volume_style: VolumeStyleGpu::default(),
             volume_samples: Vec::new(),
+            volume_samples_max_tf: 0.0,
             volume_stats: None,
             side_samples: Vec::new(),
             side_upload: Vec::new(),
@@ -1013,6 +1022,8 @@ impl PaneRender {
             last_news_sig: u64::MAX,
             last_trade_history_sig: u64::MAX,
             trade_geometry: trade_history_sync::TradeGeometry::default(),
+            trade_source: None,
+            ud_scratch: UdScratch::default(),
             last_warn_sig: u64::MAX,
             order_labels: Vec::new(),
             figure_labels: Vec::new(),
@@ -1020,6 +1031,7 @@ impl PaneRender {
             orderbook_labels: Vec::new(),
             prospective_usd: None,
             label_placed: Vec::new(),
+            label_placed_spare: Vec::new(),
             orderbook_levels: Vec::new(),
             book_best: None,
             epoch_ms: 0.0,
@@ -1104,11 +1116,36 @@ impl PaneRender {
     }
 }
 
+/// The userdata union and the archived pass's own buffers, reused across order syncs.
+#[derive(Default)]
+struct UdScratch {
+    zones: Vec<moon_chart::layers::ZoneInstance>,
+    hlines: Vec<moon_chart::layers::LineInstance>,
+    segs: Vec<moon_chart::layers::SegInstance>,
+    markers: Vec<moon_chart::layers::MarkerInstance>,
+    arch_zones: Vec<moon_chart::layers::ZoneInstance>,
+    arch_hlines: Vec<moon_chart::layers::LineInstance>,
+    arch_segs: Vec<moon_chart::layers::SegInstance>,
+    arch_markers: Vec<moon_chart::layers::MarkerInstance>,
+}
+
+impl UdScratch {
+    /// Empty the live union; the archived buffers are cleared by the build that fills them.
+    fn clear_live(&mut self) {
+        self.zones.clear();
+        self.hlines.clear();
+        self.segs.clear();
+        self.markers.clear();
+    }
+}
+
 /// Render state for all panels shared with `gpu_canvas` callbacks through `Rc<RefCell>`.
 ///
 /// The UI is single-threaded, and `prepare` never overlaps frame callbacks in time.
 struct RenderState {
     panes: Vec<PaneRender>,
+    /// Buffer for the previous frame's cursor params, reused by the market sync.
+    cursor_params_scratch: Vec<CursorParams>,
     /// CPU-side dirty flag for `GpuCanvasDriver::frame`: `prepare()` updated resident state, so the
     /// next platform tick must present even without GPUI dirtiness.
     needs_present: bool,

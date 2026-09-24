@@ -1860,3 +1860,49 @@ fn sells_zone_cursor_badge_does_not_inherit_the_readout_style() {
         "badge size must go through the control-tier body plus the t_body_lg step"
     );
 }
+
+/// A camera-only change (wheel, pan) must run the UNFORCED order sync, and that sync must be able
+/// to see the trade arrows' built span. `panels/chart/render.rs` reverting its camera branch to
+/// `sync_orders_if_visible(cx, true)` rebuilds every overlay on every wheel tick again; dropping
+/// `trade_history_sig(` from `ChartDataState::order_signature` lets an unforced sync sleep through
+/// a pan past the built span, so the arrows are never re-culled; an unconditional
+/// `dirty_all_trade_panes()` ahead of the patch in `set_trade_hover` turns every hover into a
+/// full rebuild of every pane.
+#[test]
+fn camera_moves_take_the_unforced_sync_that_the_trade_span_can_wake() {
+    let render = code_only(&read_src("panels/chart/render.rs"));
+    let camera = render
+        .split_once("} else if self.camera_dirty {")
+        .expect("render.rs must keep a camera-only branch")
+        .1;
+    let camera = &camera[..camera.find('}').expect("camera branch closes")];
+    assert!(
+        camera.contains("self.sync_orders_if_visible(cx, false);"),
+        "the camera branch must run the unforced sync: {camera}"
+    );
+    assert!(!camera.contains("sync_orders_if_visible(cx, true)"));
+
+    let state = code_only(&read_src("chartdx/data_state/state.rs"));
+    let sig = braced_body(&state, "pub(crate) fn order_signature(");
+    assert!(
+        sig.contains("trade_history_sig("),
+        "order_signature must fold in each pane's trade_history_sig"
+    );
+
+    let sync = code_only(&read_src("chartdx/trade_history_sync.rs"));
+    let hover = braced_body(&sync, "pub(super) fn set_trade_hover(");
+    let patch_at = hover
+        .find("self.patch_trade_hover(")
+        .expect("set_trade_hover must try the in-place patch");
+    let head = &hover[..patch_at];
+    // The only rebuild allowed ahead of the patch is the backend that cannot patch at all.
+    let guarded = braced_body(
+        head,
+        "if !super::backend::PlatformLayers::can_patch_markers()",
+    );
+    let unguarded = head.replacen(guarded, "", 1);
+    assert!(
+        !unguarded.contains("dirty_all_trade_panes()"),
+        "set_trade_hover dirties every pane before trying the patch: {unguarded}"
+    );
+}

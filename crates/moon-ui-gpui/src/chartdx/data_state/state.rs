@@ -122,11 +122,46 @@ impl ChartDataState {
             && self
                 .chart_labels
                 .any_drawn(|f| f == moon_core::config::ChartLabelField::StrategyFilters);
+        let shared_sigs = (self.figures_sig(), self.news_sig(), self.warn_sig());
         let container = self.container.borrow();
         for ix in 0..container.pane_count() {
             let Some((core, _market)) = container.target_ref(ix) else {
                 continue;
             };
+            // Trade arrows draw with or without a live core, and a camera-only sync is not forced,
+            // so their own signature (scale bucket, built span) has to be able to wake it.
+            if let Some(pane) = container.pane(ix) {
+                sig = sig
+                    .wrapping_mul(31)
+                    .wrapping_add(self.trade_history_sig(&pane.view));
+            }
+            // Everything else the per-pane rebuild gate in `orders::sync` compares, so an unforced
+            // sync is woken by at least what that gate would rebuild for.
+            let frozen = !self.draws_live_market();
+            let highlight_uid = self
+                .order_highlight
+                .and_then(|(c, uid)| (c == core && !frozen).then_some(uid));
+            let drag_preview_sig = self.order_drag_preview.and_then(|(c, uid, kind, price)| {
+                (c == core && !frozen).then_some((
+                    uid,
+                    std::mem::discriminant(&kind),
+                    price.to_bits(),
+                ))
+            });
+            let mut pane_sig = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(
+                &(
+                    shared_sigs.0,
+                    shared_sigs.1,
+                    shared_sigs.2,
+                    highlight_uid,
+                    drag_preview_sig,
+                ),
+                &mut pane_sig,
+            );
+            sig = sig
+                .wrapping_mul(31)
+                .wrapping_add(std::hash::Hasher::finish(&pane_sig));
             if let Some(core_st) = session.store().core(core) {
                 // A frozen viewer draws its archived store, so THAT revision is what wakes it; the
                 // live store's changes are exactly what such a viewer must not react to.

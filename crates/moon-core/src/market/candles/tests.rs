@@ -1131,3 +1131,53 @@ fn max_zone_recopies_on_a_new_oldest_bucket_or_older_history_only() {
     assert!(max_zone_recopy_due(Some(bucket), None, tf_ms));
     assert!(max_zone_recopy_due(None, Some(bucket), tf_ms));
 }
+
+/// `market/candles.rs:CandleSeries::price_range` closing its end bound at `t_open < to` instead of
+/// `<=` drops the candle that opens exactly on the window's right edge, so auto-Y misses it.
+/// Compared with a full scan over every candle for random windows, edges landing on bucket opens.
+#[test]
+fn price_range_equals_a_full_scan_and_visits_only_the_window() {
+    let tf = 60_000.0;
+    let mut state = 0x1234_5678_u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let base: Vec<ChartCandle> = (0..4096)
+        .map(|i| {
+            let lo = 1.0 + (next() % 10_000) as f32;
+            let hi = lo + (next() % 500) as f32;
+            candle(f64::from(i) * tf, lo, hi, lo, hi, 1.0)
+        })
+        .collect();
+    let mut s = CandleSeries::default();
+    s.rebuild(60_000, &base, 60_000, &[]);
+    assert_eq!(s.candles().len(), 4096);
+    for q in 0..2_000 {
+        let offset = if q % 2 == 0 { 0.0 } else { 17.0 };
+        let a = (next() % 4200) as f64 * tf - tf * 50.0 + offset;
+        let span = (next() % 300) as f64 * tf;
+        let b = a + span;
+        let mut want: Option<(f32, f32)> = None;
+        for c in &base {
+            if c.t_open_ms + tf > a && c.t_open_ms <= b {
+                want = Some(match want {
+                    Some((l, h)) => (l.min(c.low), h.max(c.high)),
+                    None => (c.low, c.high),
+                });
+            }
+        }
+        take_price_range_visited();
+        assert_eq!(s.price_range(a, b), want, "window [{a}, {b}]");
+        let visited = take_price_range_visited();
+        assert!(
+            visited as f64 <= span / tf + 2.0,
+            "visited {visited} for a {span} ms window"
+        );
+        if q % 500 == 0 {
+            println!("[price_range] before=4096 after={visited}");
+        }
+    }
+}

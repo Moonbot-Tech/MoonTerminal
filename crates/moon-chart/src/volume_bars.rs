@@ -166,18 +166,15 @@ pub fn collect_samples(
 ///
 /// Returns:
 ///     The covering bucket, or `None` when the time falls in a gap or is not finite.
+///
+/// Order-free linear reference; production calls the `_sorted` variant.
 pub fn sample_at(samples: &[VolumeSample], t_ms: f64) -> Option<VolumeSample> {
     if !t_ms.is_finite() {
         return None;
     }
     let mut best: Option<VolumeSample> = None;
     for s in samples {
-        if !s.t_open_ms.is_finite()
-            || !s.tf_ms.is_finite()
-            || s.tf_ms <= 0.0
-            || t_ms < s.t_open_ms
-            || t_ms >= s.t_open_ms + s.tf_ms
-        {
+        if !sample_covers(s, t_ms) {
             continue;
         }
         if best.is_none_or(|b| s.tf_ms < b.tf_ms) {
@@ -185,6 +182,54 @@ pub fn sample_at(samples: &[VolumeSample], t_ms: f64) -> Option<VolumeSample> {
         }
     }
     best
+}
+
+/// [`sample_at`] over samples ascending by `t_open_ms`, visiting only the rows that can cover `t_ms`.
+///
+/// Same result as [`sample_at`] for sorted input, ties included: on equal widths the earliest
+/// sample wins, as in the forward scan.
+///
+/// Args:
+///     samples: Retained per-candle samples, ascending by `t_open_ms`.
+///     max_tf_ms: At least every sample's `tf_ms`.
+///     t_ms: Absolute Unix milliseconds under the cursor.
+///
+/// Returns:
+///     The covering bucket, or `None` when the time falls in a gap or is not finite.
+pub fn sample_at_sorted(
+    samples: &[VolumeSample],
+    max_tf_ms: f64,
+    t_ms: f64,
+) -> Option<VolumeSample> {
+    if !t_ms.is_finite() {
+        return None;
+    }
+    let end = samples.partition_point(|s| s.t_open_ms <= t_ms);
+    let mut best: Option<VolumeSample> = None;
+    for s in samples[..end].iter().rev() {
+        #[cfg(test)]
+        SAMPLE_AT_VISITED.with(|n| n.set(n.get() + 1));
+        // Sorted, so this row and every earlier one end before `t_ms`.
+        if s.t_open_ms + max_tf_ms <= t_ms {
+            break;
+        }
+        if !sample_covers(s, t_ms) {
+            continue;
+        }
+        if best.is_none_or(|b| s.tf_ms <= b.tf_ms) {
+            best = Some(*s);
+        }
+    }
+    best
+}
+
+/// Whether a sample's own half-open bucket holds `t_ms`; the per-row test of both cursor lookups.
+fn sample_covers(s: &VolumeSample, t_ms: f64) -> bool {
+    s.t_open_ms.is_finite()
+        && s.tf_ms.is_finite()
+        && s.tf_ms > 0.0
+        && t_ms >= s.t_open_ms
+        && t_ms < s.t_open_ms + s.tf_ms
 }
 
 /// A bucket duration as the chart's own timeframe controls spell it: `30s`, `1m`, `4h`, `1d`.
@@ -275,6 +320,8 @@ pub fn clamp_volume_style(style: u8, sides: bool) -> u8 {
 ///
 /// Returns:
 ///     The maximum, or `None` when no candle before the boundary is visible or all are empty.
+///
+/// Order-free linear reference; production calls the `_sorted` variant.
 pub fn visible_interval_max(
     samples: &[VolumeSample],
     from_ms: f64,
@@ -287,18 +334,67 @@ pub fn visible_interval_max(
     }
     let mut max = 0.0f32;
     for s in samples {
-        if !(s.tf_ms > 0.0)
-            || s.t_open_ms >= boundary_ms
-            || !candle_intersects_window(s.t_open_ms, s.tf_ms, from_ms, to_ms)
-        {
-            continue;
-        }
-        let scaled = (f64::from(s.quote_volume) * interval_ms / s.tf_ms) as f32;
-        if scaled.is_finite() {
+        if let Some(scaled) = interval_figure(s, from_ms, to_ms, interval_ms, boundary_ms) {
             max = max.max(scaled);
         }
     }
     (max > 0.0).then_some(max)
+}
+
+/// [`visible_interval_max`] over samples ascending by `t_open_ms`, visiting only the rows that
+/// can intersect the window.
+///
+/// Args:
+///     samples: Retained per-candle samples, ascending by `t_open_ms`.
+///     max_tf_ms: At least every sample's `tf_ms`.
+///     from_ms: Visible window start, unix milliseconds.
+///     to_ms: Visible window end, unix milliseconds.
+///     interval_ms: The sides band's rolling interval, milliseconds.
+///     boundary_ms: Where the split history begins, unix milliseconds.
+///
+/// Returns:
+///     The same maximum [`visible_interval_max`] returns for this input.
+pub fn visible_interval_max_sorted(
+    samples: &[VolumeSample],
+    max_tf_ms: f64,
+    from_ms: f64,
+    to_ms: f64,
+    interval_ms: f64,
+    boundary_ms: f64,
+) -> Option<f32> {
+    if !(interval_ms > 0.0) {
+        return None;
+    }
+    let start = samples.partition_point(|s| s.t_open_ms + max_tf_ms <= from_ms);
+    let end = samples.partition_point(|s| s.t_open_ms <= to_ms).max(start);
+    let mut max = 0.0f32;
+    for s in &samples[start..end] {
+        #[cfg(test)]
+        INTERVAL_MAX_VISITED.with(|n| n.set(n.get() + 1));
+        if let Some(scaled) = interval_figure(s, from_ms, to_ms, interval_ms, boundary_ms) {
+            max = max.max(scaled);
+        }
+    }
+    (max > 0.0).then_some(max)
+}
+
+/// A visible, pre-boundary sample's turnover read at the rolling interval; the per-row figure of
+/// both band maxima. `None` when the sample does not count or the figure is not finite.
+fn interval_figure(
+    s: &VolumeSample,
+    from_ms: f64,
+    to_ms: f64,
+    interval_ms: f64,
+    boundary_ms: f64,
+) -> Option<f32> {
+    if !(s.tf_ms > 0.0)
+        || s.t_open_ms >= boundary_ms
+        || !candle_intersects_window(s.t_open_ms, s.tf_ms, from_ms, to_ms)
+    {
+        return None;
+    }
+    let scaled = (f64::from(s.quote_volume) * interval_ms / s.tf_ms) as f32;
+    scaled.is_finite().then_some(scaled)
 }
 
 /// Clamp a bottom-volume band height from a hand-editable chart configuration.
@@ -357,6 +453,26 @@ pub fn quantize_ratio(ratio: f32) -> f32 {
     }
     const STEPS: f32 = 256.0;
     (ratio.clamp(0.0, 1.0) * STEPS).round() / STEPS
+}
+
+#[cfg(test)]
+thread_local! {
+    static SAMPLE_AT_VISITED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static INTERVAL_MAX_VISITED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Rows `sample_at_sorted` inspected on this thread since the last call; resets the count.
+#[cfg(test)]
+#[allow(dead_code)] // read by the prover's before/after measurement
+pub(crate) fn take_sample_at_visited() -> u64 {
+    SAMPLE_AT_VISITED.with(|n| n.replace(0))
+}
+
+/// Rows `visible_interval_max_sorted` inspected on this thread since the last call; resets it.
+#[cfg(test)]
+#[allow(dead_code)] // read by the prover's before/after measurement
+pub(crate) fn take_interval_max_visited() -> u64 {
+    INTERVAL_MAX_VISITED.with(|n| n.replace(0))
 }
 
 #[cfg(test)]
