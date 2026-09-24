@@ -369,12 +369,13 @@ fn deep_kind_mapping() {
     assert_eq!(deep_kind_min_for_tf(1440), 1440);
 }
 
+/// Reverting the fresh zone widths would give new users the former 3/0 chart.
 #[test]
 fn cfg_defaults_sane() {
     let cfg = CandleViewCfg::default();
     assert_eq!(cfg.tf_ms(), TF5);
     assert_eq!(cfg.mode, CANDLE_MODE_OUTLINE_IN_ZONE);
-    assert!(cfg.trade_candles > 0);
+    assert_eq!((cfg.trade_candles, cfg.hide_candles), (50, 50));
     assert!(
         cfg.carried_lines.is_none(),
         "a fresh value carries nothing to migrate"
@@ -469,12 +470,26 @@ fn the_carrier_is_written_back_under_the_old_keys_until_consumed() {
     );
 }
 
-/// Every field stays optional: a spec that predates the whole struct, or one hand-edited down to a
-/// single key, must load on defaults rather than fail the whole config.
+/// Filling absent saved widths from the fresh default would silently redraw older charts.
 #[test]
 fn missing_keys_fall_back_to_defaults() {
-    let cfg: CandleViewCfg = serde_json::from_str("{}").expect("an empty spec loads");
-    assert_eq!(cfg, CandleViewCfg::default());
+    for cfg in [
+        serde_json::from_str::<CandleViewCfg>("{}").expect("an empty spec loads"),
+        toml::from_str::<CandleViewCfg>("mode = 2\n").expect("an older table loads"),
+    ] {
+        assert_eq!(
+            cfg,
+            CandleViewCfg {
+                trade_candles: 3,
+                hide_candles: 0,
+                ..CandleViewCfg::default()
+            }
+        );
+    }
+    let trade_only: CandleViewCfg = toml::from_str("trade_candles = 7\n").unwrap();
+    assert_eq!((trade_only.trade_candles, trade_only.hide_candles), (7, 0));
+    let hide_only: CandleViewCfg = serde_json::from_str(r#"{"hide_candles":2}"#).unwrap();
+    assert_eq!((hide_only.trade_candles, hide_only.hide_candles), (3, 2));
 }
 
 /// A hand-written `nan` must not reach the config. It compares unequal to itself, so the engine's

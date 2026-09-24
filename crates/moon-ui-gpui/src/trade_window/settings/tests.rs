@@ -9,6 +9,17 @@ use super::{
     trade_window_mode_segment,
 };
 
+/// Resetting zone widths in the replay pin would replace a new user's 50/50 settings.
+#[test]
+fn fresh_trade_window_keeps_fifty_candle_zones() {
+    for ticks in [false, true] {
+        let cfg = pinned_candle_view(CandleViewCfg::default(), ticks);
+        assert_eq!((cfg.trade_candles, cfg.hide_candles), (50, 50));
+        let stored = candles_for_default(cfg, 5);
+        assert_eq!((stored.trade_candles, stored.hide_candles), (50, 50));
+    }
+}
+
 fn user(mode: u8, tf_min: u32) -> CandleViewCfg {
     CandleViewCfg {
         tf_min,
