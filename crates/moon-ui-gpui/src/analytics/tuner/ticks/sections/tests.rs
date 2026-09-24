@@ -101,9 +101,10 @@ fn the_schema_places_every_field_and_marks_what_the_model_turns() {
             "TrailingSpread"
         ]
     );
-    assert_eq!(stops.rows[0].role, RowRole::Fixed);
-    // The trailing stop is read as the strategy sets it; its spread is the sale's, not the model's.
-    assert_eq!(stops.rows[3].role, RowRole::Fixed);
+    // The stop's switch and the trailing stop are knobs since 2026-09-24; the trailing's spread is
+    // the sale's, not the model's.
+    assert!(matches!(stops.rows[0].role, RowRole::Knob(p) if p.key == "UseStopLoss"));
+    assert!(matches!(stops.rows[3].role, RowRole::Knob(p) if p.key == "TrailingPercent"));
     assert_eq!(stops.rows[4].role, RowRole::Outside);
 
     // A section outside the grid is not drawn.
@@ -142,10 +143,13 @@ fn two_kinds_share_a_section_without_repeating_a_field() {
     let shot = vec![section("Stops", &["UseStopLoss", "StopLoss"])];
     let hook = vec![section("Stops", &["StopLoss", "StopLossDelay"])];
     let out = layout(&[shot.as_slice(), hook.as_slice()], &knobs);
-    assert_eq!(
-        keys(find(&out, ParamSection::Stops)),
-        ["UseStopLoss", "StopLoss", "StopLossDelay"]
-    );
+    let stops = keys(find(&out, ParamSection::Stops));
+    // The two kinds' fields first, each once; the section's knobs no schema here places follow.
+    assert_eq!(stops[..3], ["UseStopLoss", "StopLoss", "StopLossDelay"]);
+    let mut seen = stops.clone();
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), stops.len(), "{stops:?}");
 }
 
 #[test]

@@ -16,9 +16,12 @@
 //!
 //! The objective is the total money result over the fitted deals with at least `min_n` of them
 //! still trading, ties broken by the profit factor — `metrics::Tally`, the same figures the KPI
-//! matrix prints. A deal the variant never fills, or never closes inside its tape, is not a
-//! trade and drops out of `n`; the caller prints "by N of M" beside the column so a variant
-//! that wins by trading less is visible as such.
+//! matrix prints. A deal the variant never fills is not a trade and drops out of `n`; the caller
+//! prints "by N of M" beside the column so a variant that wins by trading less is visible as
+//! such. A point that buys a deal and does not close it inside its tape, or leaves a strategy
+//! with nothing standing to close a trade, is refused outright ([`closing`], the developer,
+//! 2026-09-24): dropping the deal would reward the loss it carries past the tape. A switch the
+//! point turns on brings the values it needs ([`deps`]).
 //!
 //! A MoonShot variant's entry is replayed the way the caller's model settings pick
 //! ([`super::mshot::EntryMethod`]): the corridor model from the order's creation, or the fact's
@@ -152,6 +155,9 @@ pub enum SearchMiss {
     /// [`SearchParams::keep_corridor`], every trade's corridor at least as far from the price as
     /// the trade's own.
     Corridor,
+    /// No point the search visited closed every deal it bought inside the tape with something
+    /// standing to close each trade — a stop, or a trailing without a take profit ([`closing`]).
+    Unclosed,
 }
 
 /// How a search went — what shows whether its restarts and passes changed anything.
@@ -170,8 +176,8 @@ pub struct SearchStats {
     pub distinct: usize,
     /// Points scored over the whole run, each a replay of the training slice.
     pub evaluations: usize,
-    /// Restarts that ended on a point the corridor rules refuse — none of their moves reached
-    /// an allowed one.
+    /// Restarts that ended on a point the corridor rules or the closing rule (`closing`) refuse
+    /// — none of their moves reached an allowed one.
     pub refused: usize,
 }
 
@@ -185,6 +191,9 @@ pub struct SearchResult {
     pub train: Tally,
     /// What they achieve on the deals held back, when any were.
     pub holdout: Option<Tally>,
+    /// How many of the deals held back the answer bought and left open inside the tape — none
+    /// may be among the deals it was fitted on; the holdout is only scored, so it says them.
+    pub holdout_open: usize,
     /// The seed the restarts were derived from.
     pub seed: u64,
     /// How the run went.
@@ -508,7 +517,7 @@ impl<'a> Bases<'a> {
 }
 
 /// Every deal's result under one point, in order — `(money, spent)`, `None` where the point
-/// makes no trade of the deal.
+/// makes no trade of the deal — and whether it bought the deal and left it open.
 ///
 /// Args:
 ///     deals: The deals.
@@ -518,15 +527,17 @@ fn results(
     deals: &[PreparedDeal],
     of_deal: &[usize],
     params: &[(EntryParams, ExitParams)],
-) -> Vec<Option<(f64, f64)>> {
+) -> Vec<(Option<(f64, f64)>, bool)> {
     deals
         .par_iter()
         .zip(of_deal.par_iter())
         .map(|(d, &base)| {
             let (entry, exit) = &params[base];
-            simulate(&d.deal, &d.ticks, entry, exit, d.entry_line.as_deref())
+            let outcome = simulate(&d.deal, &d.ticks, entry, exit, d.entry_line.as_deref());
+            let result = outcome
                 .profit_money(&d.deal)
-                .map(|money| (money, d.deal.spent))
+                .map(|money| (money, d.deal.spent));
+            (result, outcome.left_open())
         })
         .collect()
 }
@@ -542,7 +553,7 @@ fn tally_and_spent(
     let results = results(deals, of_deal, params);
     let mut tally = Tally::default();
     let mut spent = 0.0;
-    for (money, size) in results.into_iter().flatten() {
+    for (money, size) in results.into_iter().filter_map(|(result, _)| result) {
         tally.push(money);
         spent += size;
     }
@@ -671,11 +682,6 @@ fn better_score(a: &Option<Tally>, b: &Option<Tally>, min_n: i64) -> bool {
     }
 }
 
-/// The tally of a point over `deals`, in order; arguments as for [`results`].
-fn tally(deals: &[PreparedDeal], of_deal: &[usize], params: &[(EntryParams, ExitParams)]) -> Tally {
-    tally_and_spent(deals, of_deal, params).0
-}
-
 /// Whether `a` beats `b` under the objective, with the sample floor.
 fn better(a: &Tally, b: &Tally, min_n: i64) -> bool {
     let a_ok = a.n >= min_n;
@@ -767,26 +773,6 @@ pub fn suggest(
         .iter()
         .map(|(entry, _)| ordered(entry))
         .collect();
-    let evaluations = std::sync::atomic::AtomicUsize::new(0);
-    let evaluate = |point: &Point| -> Option<Tally> {
-        let per_base = bases.params(params.held, params.defaults, point, params.kind, model);
-        // A point that inverts the corridor's two fields is never proposed, whatever the
-        // switch: the searched fields are gridded one by one, and nothing else ties them. Only
-        // a search of the Entry group can produce one — an Exit search leaves the strategy's
-        // own fields alone, whatever they hold.
-        if params.vary_entry && inverts(&start_ordered, &per_base) {
-            return None;
-        }
-        if guard
-            .as_ref()
-            .is_some_and(|g| !g.holds(&bases.of_deal, &per_base))
-        {
-            return None;
-        }
-        // Counted here, past the refusals: what the stats call a scored point is a replay.
-        evaluations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Some(tally(train, train_of, &per_base))
-    };
     // Where each number field starts on its grid — the median of what the selected strategies
     // hold (the held value over all of them; the schema default for one that leaves it out),
     // snapped to the nearest grid step: what a pair move and a perturbed start step from while
@@ -813,6 +799,42 @@ pub fn suggest(
             Some((f.key, nearest_step(grid, value)))
         })
         .collect();
+    // The Strategies window's dependencies: what a point switches on it gives a value.
+    let deps = deps::Dependents::new(&fields, &start);
+    let evaluations = std::sync::atomic::AtomicUsize::new(0);
+    // Why points were refused, for the answer's reason when none is left.
+    let (cornered, unclosed) = (
+        std::sync::atomic::AtomicUsize::new(0),
+        std::sync::atomic::AtomicUsize::new(0),
+    );
+    let evaluate = |point: &Point| -> Option<Tally> {
+        // Every number field the point switches on stands at a value (`deps`).
+        let full = deps.complete(point, &bases.owns, params.held, params.defaults);
+        let per_base = bases.params(params.held, params.defaults, &full, params.kind, model);
+        // A point that inverts the corridor's two fields is never proposed, whatever the
+        // switch: the searched fields are gridded one by one, and nothing else ties them. Only
+        // a search of the Entry group can produce one — an Exit search leaves the strategy's
+        // own fields alone, whatever they hold.
+        if (params.vary_entry && inverts(&start_ordered, &per_base))
+            || guard
+                .as_ref()
+                .is_some_and(|g| !g.holds(&bases.of_deal, &per_base))
+        {
+            cornered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return None;
+        }
+        // Counted here, past the refusals: what the stats call a scored point is a replay.
+        evaluations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // A trade must be closed while it lasts: something that can close it stands on every
+        // strategy, and none of the deals it bought is left open (`closing`).
+        let closed = closing::protected(&per_base)
+            .then(|| closing::closed_tally(train, train_of, &per_base))
+            .flatten();
+        if closed.is_none() {
+            unclosed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        closed
+    };
     // The fields that move in pairs: the Entry group's numbers, where a corridor's distance is
     // shared between the base fields and the modifiers and one field alone cannot move it.
     let pairs: Vec<&'static TickParam> = if params.vary_entry {
@@ -869,7 +891,8 @@ pub fn suggest(
     // end point, not two.
     let mut ends: Vec<Vec<(EntryParams, ExitParams)>> = Vec::new();
     for run in &runs {
-        let end = bases.params(params.held, params.defaults, &run.point, params.kind, model);
+        let full = deps.complete(&run.point, &bases.owns, params.held, params.defaults);
+        let end = bases.params(params.held, params.defaults, &full, params.kind, model);
         if !ends.contains(&end) {
             ends.push(end);
         }
@@ -897,10 +920,25 @@ pub fn suggest(
         refused,
     };
     let (point, score) = (best.point, best.score);
+    // The answer as it was scored — every field it switched on at a value — less what is in
+    // effect on no strategy.
+    let point = deps.prune(
+        &deps.complete(&point, &bases.owns, params.held, params.defaults),
+        &bases.owns,
+        params.held,
+        params.defaults,
+    );
     // `better_score` ranks a refused point below every other, and `better` one under the floor
     // below any above it: a best refused or under the floor means no point held either.
     let Some(train_tally) = score else {
-        return Err(SearchMiss::Corridor);
+        // The rule that refused the most points is the one to name.
+        let load =
+            |c: &std::sync::atomic::AtomicUsize| c.load(std::sync::atomic::Ordering::Relaxed);
+        return Err(if load(&unclosed) > load(&cornered) {
+            SearchMiss::Unclosed
+        } else {
+            SearchMiss::Corridor
+        });
     };
     if train_tally.n < min_n {
         return Err(SearchMiss::Floor);
@@ -913,14 +951,19 @@ pub fn suggest(
         .map(|(key, value)| ((*key).to_string(), value.clone()))
         .collect();
     values.sort();
-    let holdout = (train_n < deals.len()).then(|| {
+    let (holdout, holdout_open) = if train_n < deals.len() {
         let per_base = bases.params(params.held, params.defaults, &point, params.kind, model);
-        tally(&deals[train_n..], &bases.of_deal[train_n..], &per_base)
-    });
+        let (tally, open) =
+            closing::tally_counting_open(&deals[train_n..], &bases.of_deal[train_n..], &per_base);
+        (Some(tally), open)
+    } else {
+        (None, 0)
+    };
     Ok(SearchResult {
         values,
         train: train_tally,
         holdout,
+        holdout_open,
         seed,
         stats,
     })
@@ -1078,6 +1121,10 @@ fn point_of(values: &[(String, String)]) -> Point {
     }
     point
 }
+
+mod closing;
+pub use self::closing::unguarded_strategies;
+mod deps;
 
 #[cfg(test)]
 mod tests;

@@ -86,6 +86,7 @@ impl AnalyticsView {
                 (None, None) => (String::new(), p.text_muted),
             },
         };
+        super::variants::probe_painted(&status);
         let placeholder = super::variants::DEFAULT_RESTARTS.to_string();
         let it_input = self.shell_cfg_input(
             TunerKind::Ticks,

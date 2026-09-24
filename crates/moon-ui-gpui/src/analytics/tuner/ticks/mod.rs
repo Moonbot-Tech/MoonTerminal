@@ -555,11 +555,11 @@ impl AnalyticsView {
             )
             .to_string();
             if i == 0 {
-                if let Some(holdout) = self
+                if let Some((holdout, open)) = self
                     .ticks
                     .last_result
                     .as_ref()
-                    .and_then(|r| r.holdout.as_ref())
+                    .and_then(|r| r.holdout.as_ref().map(|h| (h, r.holdout_open)))
                 {
                     sub = format!(
                         "{sub} · {}",
@@ -569,6 +569,10 @@ impl AnalyticsView {
                             profit = super::super::summary::fmt_signed(holdout.profit)
                         )
                     );
+                    // Deals held back the answer left open: the holdout cannot count them.
+                    if open > 0 {
+                        sub = format!("{sub} · {}", t!("analytics.ticks.holdout_open", n = open));
+                    }
                 }
             }
             labels.push(VarLabel::with_sub(title, sub));

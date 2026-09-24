@@ -306,7 +306,7 @@ impl Drop for TicksState {
     /// A search outlives nothing: closing the window while one runs would otherwise leave it
     /// on the shared pool to the end, its answer going nowhere.
     fn drop(&mut self) {
-        self.stop_search();
+        self.stop_search("window closed");
     }
 }
 
@@ -517,22 +517,37 @@ impl TicksState {
     /// The scope changed: every row belongs to the previous scope. The fetch batch is the
     /// process's, not the scope's, and runs on; its answers land on rows by id where present.
     pub(in crate::analytics) fn invalidate(&mut self) {
-        self.dirty = true;
-        self.seq = self.seq.wrapping_add(1);
-        self.rows_rev = self.rows_rev.wrapping_add(1);
-        self.order = None;
-        // The variant KPIs and a running search describe the previous scope's deals; the
-        // variant EDITS are the user's and stay, to be rescored over the new scope.
-        self.var_seq = self.var_seq.wrapping_add(1);
-        self.var_task = None;
-        self.var_stats = Default::default();
-        self.plan = Default::default();
-        self.stop_search();
+        self.retire_rows();
+        // A running search and its last answer describe the previous scope's deals.
+        self.stop_search("scope change");
         // Nor does the last search's holdout: В1's caption would print it beside a column
         // rescored over deals it never saw.
         self.last_result = None;
         // A note about the previous scope's search says nothing about this one.
         self.sugg_note = None;
+    }
+
+    /// The report axis moved — a core's clock offset measured, or measured again: the rows are
+    /// read again on the new axis, but the scope is the same strategies over the same period,
+    /// and a running search goes on. It runs on its own copy of the deals and lands in В1, whose
+    /// columns are then rescored over the reloaded rows — as across a report that moved
+    /// (`load.rs`). Stopped here, no search outlived the minutes after a start, while the cores
+    /// adopt their offsets one by one (2026-09-24: the axis moved every ~30 s).
+    pub(in crate::analytics) fn invalidate_for_axis(&mut self) {
+        self.retire_rows();
+    }
+
+    /// Retire the rows and everything scored over them; the variant EDITS are the user's and
+    /// stay, to be rescored over the new rows.
+    fn retire_rows(&mut self) {
+        self.dirty = true;
+        self.seq = self.seq.wrapping_add(1);
+        self.rows_rev = self.rows_rev.wrapping_add(1);
+        self.order = None;
+        self.var_seq = self.var_seq.wrapping_add(1);
+        self.var_task = None;
+        self.var_stats = Default::default();
+        self.plan = Default::default();
         if let Some(data) = self.data.data_mut() {
             for row in &mut data.rows {
                 if row.tape == TapeStatus::Fetching {
@@ -549,8 +564,13 @@ impl TicksState {
 
     /// Ask a running search to stop and forget it; its completion is dropped by the
     /// generation.
-    pub(in crate::analytics::tuner) fn stop_search(&mut self) {
-        if let SuggState::Running { handle, .. } = &self.sugg {
+    pub(in crate::analytics::tuner) fn stop_search(&mut self, reason: &str) {
+        if let SuggState::Running { handle, total } = &self.sugg {
+            log::info!(
+                target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+                "[x] ticks search: stopped by {reason} at {}/{total} restart(s)",
+                handle.completed()
+            );
             handle.cancel();
         }
         self.sugg = SuggState::Idle;

@@ -13,7 +13,10 @@ impl ExitModel<'_> {
     }
 }
 
-/// The summed delta modifiers of a trade, capped: `Min(MaxModifier, Σ Pn · Dn)`.
+/// The summed delta modifiers of a trade, capped: `Min(MaxModifier, |Σ Pn · Dn|)` — the core
+/// takes the sum's magnitude and caps it when `MaxModifier` is above zero (the core developer via
+/// LinKvo, 2026-09-24), so the sum is never negative: only a negative coefficient moves a level
+/// toward the entry.
 ///
 /// One sum, two consumers — the sell level through `SellModifier` and the stop through
 /// `StopLossModifier` — because the core computes it once and spends it on both (FAQ).
@@ -30,10 +33,13 @@ impl ExitModel<'_> {
 ///     deal: The trade, for its deltas.
 ///     at_ms: When the sell was placed — the fill.
 pub fn modifier_sum(params: &ExitParams, deal: &Deal, at_ms: i64) -> f64 {
-    let sum = params.sell_mods.near_addition(&deal.deltas_at(at_ms));
+    let sum = params.sell_mods.near_addition(&deal.deltas_at(at_ms)).abs();
     if params.max_modifier > 0.0 {
         sum.min(params.max_modifier)
     } else {
         sum
     }
 }
+
+#[cfg(test)]
+mod tests;

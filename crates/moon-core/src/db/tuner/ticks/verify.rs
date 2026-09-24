@@ -255,7 +255,14 @@ pub fn verify(
         // No line stood at the close: a miss of the exit group, not an unanswered question.
         (Some(false), None, None)
     } else if closed.kind == ExitKind::Stop && exit_rule_matches(closed.kind, &deal.sell_reason) {
-        verify_stop(deal, &fact_exit, &walked.points, closed, exit_points)
+        verify_stop(
+            deal,
+            &fact_exit,
+            &walked.points,
+            closed,
+            walked.stop_level,
+            exit_points,
+        )
     } else if exit_rule_matches(closed.kind, &deal.sell_reason) {
         let dev = deviation_pct(closed.price, deal.sell_price);
         let tolerance = model.price_pct;
@@ -494,19 +501,24 @@ fn is_fill_point(deal: &Deal, exit: &ExitParams, last: (i64, f64), prev: (i64, f
 ///     exit: The parameters the fact is replayed with.
 ///     modelled: Every level the modelled line stood at.
 ///     closed: The modelled stop.
+///     stop_level: Where the walk's stop stood when it fired — a ladder step's level once one was
+///         taken; `None` falls back to the first stop's level.
 ///     exit_points: The archived Exit line, when the archive holds it.
 fn verify_stop(
     deal: &Deal,
     exit: &ExitParams,
     modelled: &[LinePoint],
     closed: Exit,
+    stop_level: Option<f64>,
     exit_points: Option<&[(i64, f64)]>,
 ) -> (Option<bool>, Option<f64>, Option<(usize, usize)>) {
-    let level = level_off_buy(
-        deal.buy_price,
-        stop_pct(exit, deal, deal.buy_ms),
-        deal.is_long(),
-    );
+    let level = stop_level.unwrap_or_else(|| {
+        level_off_buy(
+            deal.buy_price,
+            stop_pct(exit, deal, deal.buy_ms),
+            deal.is_long(),
+        )
+    });
     let stated = stated_stop_level(&deal.sell_reason);
     let panic_at = stop_jump_level(deal, exit);
     let mut activation: Option<i64> = None;

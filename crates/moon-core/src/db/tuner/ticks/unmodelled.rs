@@ -9,6 +9,11 @@
 //! - the panic sell's execution — `AllowedDrop`, `AllowedDrop3`, `StopLossSpread`,
 //!   `StopSpreadAdd1mDelta`, `TrailingSpread`: the verdict judges a stop by its decision, and a
 //!   variant that keeps the trade's stop takes the fact's own sale (`record::StopAnchor`);
+//! - the liquidation guards and the grid's fixed stop — `DontSellBelowLiq`, `StopAboveLiq`,
+//!   `StopLossFixed`: not taken into account at all (the developer's call, 2026-09-24);
+//! - `UseMarketOrder` — how a stop's sale goes, the book's again: the verdict tells a market stop
+//!   by the fact's own reason (`StopLoss Market Sell`), and a variant keeping the stop takes the
+//!   fact's sale;
 //! - the entry — `SellEMACheckEnter` (checks the EMA filter before the BUY), `BuyModifier`,
 //!   `DetectModifier`;
 //! - the EMA sell — `SellByCustomEMA` and its `SellEMADelay`: unused, and left out of the list
@@ -67,24 +72,12 @@ const fn watched(key: &'static str, section: ParamSection, default: &'static str
 /// Every exit field a strategy can switch on that the model does not have, in the strategy
 /// window's order.
 const WATCHED: &[Watched] = &[
-    // Stops.
-    Watched {
-        rule: Some(UnmodelledRule::StopLadder),
-        ..watched("UseSecondStop", ParamSection::Stops, "NO")
-    },
-    Watched {
-        rule: Some(UnmodelledRule::StopLadder),
-        ..watched("UseStopLoss3", ParamSection::Stops, "NO")
-    },
+    // Stops. The ladder is modelled (`exit::stops::ladder`); `DontSellBelowLiq`, `StopAboveLiq`
+    // and `StopLossFixed` are left out on purpose (the developer's call, 2026-09-24).
     // A stop on the ratio of buy to sell volume, over trades the tape has but a rule it does not.
     watched("UseBV_SV_Stop", ParamSection::Stops, "NO"),
     // Stops taken from a Telegram signal.
     watched("UseSignalStops", ParamSection::Stops, "NO"),
-    // Keeps the stop's sale and PriceDown off the liquidation price.
-    watched("DontSellBelowLiq", ParamSection::Stops, "NO"),
-    watched("StopAboveLiq", ParamSection::Stops, "0"),
-    // The stop of a grid position stays at the first order's.
-    watched("StopLossFixed", ParamSection::Stops, "NO"),
     // A panic sell on a delisting message.
     watched("PanicSellDelisted", ParamSection::Stops, "NO"),
     // Sell order.

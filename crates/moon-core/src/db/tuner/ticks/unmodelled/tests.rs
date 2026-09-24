@@ -29,58 +29,76 @@ fn a_plain_strategy_raises_nothing() {
 #[test]
 fn switched_on_fields_come_with_value_and_section() {
     let v = values(&[
-        ("UseSecondStop", "YES"),
-        ("DontSellBelowLiq", "True"),
-        ("StopAboveLiq", "50"),
+        ("UseBV_SV_Stop", "YES"),
         ("PanicSellDelisted", "YES"),
+        ("SellByFilters", "30"),
         ("IgnoreSellSpread", "NO"),
     ]);
     let found = unmodelled_fields(&v, &HashMap::new(), &FieldDeps::bundled());
     assert_eq!(
         keys(&found),
         [
-            "UseSecondStop",
-            "DontSellBelowLiq",
-            "StopAboveLiq",
+            "UseBV_SV_Stop",
             "PanicSellDelisted",
+            "SellByFilters",
             "IgnoreSellSpread"
         ]
     );
-    assert_eq!(found[2].value, "50");
-    assert_eq!(found[2].section, ParamSection::Stops);
-    assert_eq!(found[3].section, ParamSection::Stops);
-    assert_eq!(found[0].rule, Some(UnmodelledRule::StopLadder));
-    assert_eq!(found[4].rule, Some(UnmodelledRule::SellSpread));
-    assert_eq!(found[1].rule, None, "a warning, not a rule");
+    assert_eq!(found[2].value, "30");
+    assert_eq!(found[2].section, ParamSection::SellOrder);
+    assert_eq!(found[1].section, ParamSection::Stops);
+    assert_eq!(found[3].rule, Some(UnmodelledRule::SellSpread));
+    assert_eq!(found[0].rule, None, "a warning, not a rule");
+}
+
+/// The stop ladder is modelled, and the liquidation guards and the grid's fixed stop are left out
+/// on purpose (the developer's call, 2026-09-24): none of them raises the warning.
+#[test]
+fn the_ladder_and_the_left_out_stop_fields_raise_nothing() {
+    let v = values(&[
+        ("UseSecondStop", "YES"),
+        ("UseStopLoss3", "YES"),
+        ("DontSellBelowLiq", "True"),
+        ("StopAboveLiq", "50"),
+        ("StopLossFixed", "YES"),
+    ]);
+    assert!(unmodelled_fields(&v, &HashMap::new(), &FieldDeps::bundled()).is_empty());
+}
+
+/// The live schema's default wins over the one written here: a value AT it raises nothing.
+#[test]
+fn the_schema_default_decides_what_is_changed() {
+    let v = values(&[("SellByFilters", "50")]);
+    let defaults: HashMap<String, f64> = [("sellbyfilters".to_string(), 50.0)].into();
+    assert!(unmodelled_fields(&v, &defaults, &FieldDeps::bundled()).is_empty());
+    // A schema that says the sell is off by default fills `AutoSell` for the rule.
+    let v = values(&[("SellByFilters", "30")]);
+    let off: HashMap<String, f64> = [("autosell".to_string(), 0.0)].into();
+    assert!(unmodelled_fields(&v, &off, &FieldDeps::bundled()).is_empty());
 }
 
 /// A field whose dependency rule does not hold is not in effect, as the Strategies window greys
-/// it out: the stop's options mean nothing with `UseStopLoss` off.
+/// it out: `SellByFilters` means nothing with `AutoSell` off.
 #[test]
 fn a_field_under_a_switch_that_is_off_is_not_in_effect() {
-    let v = values(&[("UseStopLoss", "NO"), ("DontSellBelowLiq", "YES")]);
-    assert!(unmodelled_fields(&v, &HashMap::new(), &FieldDeps::bundled()).is_empty());
-    let on = values(&[("UseStopLoss", "YES"), ("DontSellBelowLiq", "YES")]);
+    let v = values(&[("AutoSell", "NO"), ("SellByFilters", "30")]);
+    assert!(
+        !keys(&unmodelled_fields(
+            &v,
+            &HashMap::new(),
+            &FieldDeps::bundled()
+        ))
+        .contains(&"SellByFilters")
+    );
+    let on = values(&[("AutoSell", "YES"), ("SellByFilters", "30")]);
     assert_eq!(
         keys(&unmodelled_fields(
             &on,
             &HashMap::new(),
             &FieldDeps::bundled()
         )),
-        ["DontSellBelowLiq"]
+        ["SellByFilters"]
     );
-}
-
-/// The live schema's default wins over the one written here: a value AT it raises nothing.
-#[test]
-fn the_schema_default_decides_what_is_changed() {
-    let v = values(&[("StopAboveLiq", "50")]);
-    let defaults: HashMap<String, f64> = [("stopaboveliq".to_string(), 50.0)].into();
-    assert!(unmodelled_fields(&v, &defaults, &FieldDeps::bundled()).is_empty());
-    // A schema that says the stop is off by default fills `UseStopLoss` for the rule.
-    let v = values(&[("DontSellBelowLiq", "YES")]);
-    let off: HashMap<String, f64> = [("usestoploss".to_string(), 0.0)].into();
-    assert!(unmodelled_fields(&v, &off, &FieldDeps::bundled()).is_empty());
 }
 
 /// `UseScalpingMode` acts only under a 1 % `SellPrice`; SellShot only with a distance.
@@ -117,8 +135,6 @@ fn auto_sell_off_is_raised() {
 fn every_unmodelled_rule_is_raised() {
     let cases = [
         values(&[("AutoSell", "NO")]),
-        values(&[("UseSecondStop", "YES")]),
-        values(&[("UseStopLoss3", "YES"), ("UseStopLoss", "YES")]),
         values(&[("IgnoreSellShot", "NO"), ("SellShotDistance", "0.1")]),
         values(&[("IgnoreSellSpread", "NO")]),
     ];

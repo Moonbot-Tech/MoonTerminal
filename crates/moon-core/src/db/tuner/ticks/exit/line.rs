@@ -34,6 +34,9 @@ pub struct LinePoint {
 pub struct LineWalk {
     pub exit: Exit,
     pub points: Vec<LinePoint>,
+    /// Where the stop stood when the walk ended — the ladder's last step, else the first stop's
+    /// level; `None` without a stop. What the verdict holds against the level the core printed.
+    pub stop_level: Option<f64>,
 }
 
 /// One step of the core's sell price: `level` is what a rule computed, `order` that level on
@@ -173,6 +176,7 @@ impl Line {
         LineWalk {
             exit,
             points: self.points,
+            stop_level: None,
         }
     }
 }
@@ -226,7 +230,7 @@ pub fn walk_held(
         // The fact's own stop fired between the last print and this one: ahead of anything
         // this print does, and after everything the prints before it did.
         if let Some(exit) = stops.fired_by(t_ms) {
-            return line.close(exit);
+            return finish(line, exit, &stops);
         }
         // The timer-driven rules moved the line at their own moments, between prints; every
         // step due by this print happened BEFORE it, and a step that also reached the book
@@ -257,7 +261,7 @@ pub fn walk_held(
         line.land(t_ms);
         // The stops come before the print-driven rule below moves anything.
         if let Some(exit) = stops.on_print(tick, t_ms, price) {
-            return line.close(exit);
+            return finish(line, exit, &stops);
         }
         // A print AT the level fills the sell — the optimistic reading the spec states (§7:
         // the queue standing at the level is not modelled; COOL 2026-09-21 printed 31
@@ -273,22 +277,33 @@ pub fn walk_held(
         let held = hold_until_ms.is_some_and(|until| t_ms <= until);
         if !held {
             if let Some(exit) = line.fill_on(t_ms, price, side) {
-                return line.close(exit);
+                return finish(line, exit, &stops);
             }
         }
     }
     let tail = ticks.last().map(|t| t.time_ms as i64).unwrap_or(last_t);
     // The fact's own stop past the last print, or the book stop's samples up to the tape's end.
     if let Some(exit) = stops.after_tape(tail) {
-        return line.close(exit);
+        return finish(line, exit, &stops);
     }
     // Nothing closed it inside the tape. Not the report's own exit: a variant that never
     // closes is not a trade, whatever the core's rules did, and the caption counts it.
-    line.close(Exit {
-        t_ms: tail,
-        price: f64::NAN,
-        kind: ExitKind::OpenAtWindowEnd,
-    })
+    finish(
+        line,
+        Exit {
+            t_ms: tail,
+            price: f64::NAN,
+            kind: ExitKind::OpenAtWindowEnd,
+        },
+        &stops,
+    )
+}
+
+/// Close the line on `exit`, with the stop's level as it then stood.
+fn finish(line: Line, exit: Exit, stops: &Stops) -> LineWalk {
+    let mut walked = line.close(exit);
+    walked.stop_level = stops.level();
+    walked
 }
 
 #[cfg(test)]

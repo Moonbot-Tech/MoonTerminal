@@ -263,6 +263,7 @@ fn invalidate_stops_the_search_and_drops_the_variant_scores_but_keeps_the_edits(
         values: Vec::new(),
         train: Default::default(),
         holdout: Some(Default::default()),
+        holdout_open: 0,
         seed: 1,
         stats: Default::default(),
     });

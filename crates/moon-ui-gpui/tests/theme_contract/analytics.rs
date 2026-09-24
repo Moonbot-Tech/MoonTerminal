@@ -4,10 +4,14 @@
 use super::support::*;
 
 /// `analytics/mod.rs:observe_report_axis` must refresh through the Writer path and must call
-/// `TunerState::invalidate_for_axis`, while `observe_valuation_mode` remains a real scope reload.
+/// `TunerState::invalidate_for_axis` and `TicksState::invalidate_for_axis`, while
+/// `observe_valuation_mode` remains a real scope reload.
 ///
 /// Breakage: restoring `self.tuner.invalidate();` cancels a live field-set composition. The
-/// spinner vanishes minutes into "Pick the set", with no error and no caption. The time, coin,
+/// spinner vanishes minutes into "Pick the set", with no error and no caption. Restoring
+/// `self.ticks.invalidate();` — or cancelling the search lane with the rest — stops the
+/// Entry/Exit search whenever a core adopts its clock offset, which after a start is every ~30 s:
+/// no search longer than that ever finished (2026-09-24). The time, coin,
 /// and coin-list axes still call `invalidate()`; dropping one of those leaves that axis's drafts
 /// alive across an axis adoption. Merging the axis path into `reload(` blanks Analytics on every
 /// feed reconnect; removing the valuation reload leaves a mode change under stale values.
@@ -26,6 +30,11 @@ fn report_axis_observation_uses_writer_refresh_while_valuation_mode_reloads() {
         "a report-axis observation must not cancel a running composition"
     );
     assert!(
+        !report_axis.contains("self.ticks.invalidate();")
+            && !report_axis.contains("self.cancel_latest_reads();"),
+        "a report-axis observation must not stop the Entry/Exit search"
+    );
+    assert!(
         report_axis.contains("self.request_report_refresh(")
             && report_axis.contains("RefreshUrgency::Writer,")
             && report_axis.contains("false,"),
@@ -34,8 +43,9 @@ fn report_axis_observation_uses_writer_refresh_while_valuation_mode_reloads() {
     for required in [
         "self.seq = self.seq.wrapping_add(1);",
         "self.cal_seq = self.cal_seq.wrapping_add(1);",
-        "self.cancel_latest_reads();",
+        "self.cancel_reads_for_axis_move();",
         "self.tuner.invalidate_for_axis();",
+        "self.ticks.invalidate_for_axis();",
         "self.time_tuner.invalidate();",
         "self.coins.invalidate();",
         "self.coin_lists.invalidate();",

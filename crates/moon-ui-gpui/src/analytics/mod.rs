@@ -1153,7 +1153,7 @@ impl AnalyticsView {
     /// every period bound moves. But the SCOPE (period, filters) does not, so this is a
     /// writer-driven catch-up, not a user reload: the visible snapshot stays on screen, with no
     /// blocking overlay, until the replacement lands. The observer retires EVERY in-flight read
-    /// identity for the old axis — `seq`, `cal_seq`, `cancel_latest_reads`, plus `time_tuner`,
+    /// identity for the old axis — `seq`, `cal_seq`, `cancel_reads_for_axis_move`, plus `time_tuner`,
     /// `coins` and `coin_lists` `invalidate()` for the axes that keep their own request
     /// generations — because a cancelled read is not silently dropped: the DB layer raises a
     /// real SQLite interrupt that gets classified as a durable `Settled` failure, so a read
@@ -1169,8 +1169,10 @@ impl AnalyticsView {
     /// is captioned as fitted across the move. A minutes-long composition is the most expensive
     /// thing this window does, and a report generation advance — a strictly larger change —
     /// already does not retire it (`TunerState::mark_report_stale`).
-    /// `TunerState::invalidate_for_axis` is that path. With no joint run live the tuner is
-    /// invalidated exactly as before: drafts cleared, every identity retired.
+    /// `TunerState::invalidate_for_axis` is that path. The Entry/Exit search is the other: its lane
+    /// is left out of the cancel and `TicksState::invalidate_for_axis` keeps it running. With no
+    /// joint run live the tuner is invalidated exactly as before: drafts cleared, every identity
+    /// retired.
     ///
     /// Args:
     ///     cx: Analytics window context used to schedule a catch-up only when the axis moved.
@@ -1186,11 +1188,11 @@ impl AnalyticsView {
         self.axis = axis;
         self.seq = self.seq.wrapping_add(1);
         self.cal_seq = self.cal_seq.wrapping_add(1);
-        self.cancel_latest_reads();
+        self.cancel_reads_for_axis_move();
         self.tuner.invalidate_for_axis();
         self.time_tuner.invalidate();
         self.coins.invalidate();
-        self.ticks.invalidate();
+        self.ticks.invalidate_for_axis();
         self.coin_lists.invalidate();
         self.mark_report_data_stale();
         self.request_report_refresh(RefreshUrgency::Writer, false, cx);

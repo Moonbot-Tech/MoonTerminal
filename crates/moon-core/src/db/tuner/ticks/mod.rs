@@ -435,6 +435,14 @@ impl Outcome {
     pub fn is_trade(&self) -> bool {
         self.profit_pct.is_some()
     }
+
+    /// Whether the position was bought and nothing closed it inside the tape.
+    pub fn left_open(&self) -> bool {
+        self.fill.is_some()
+            && self
+                .exit
+                .is_some_and(|exit| exit.kind == ExitKind::OpenAtWindowEnd)
+    }
 }
 
 /// The entry-side parameters of one variant: the strategy kind's own model, or the fact.

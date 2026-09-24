@@ -106,7 +106,7 @@ impl AnalyticsView {
         // finished at all, and said nothing.
         if !after_report {
             self.latest_reads.cancel(&[ReadLane::TicksSearch]);
-            self.ticks.stop_search();
+            self.ticks.stop_search("manual reload");
         }
         let req = self.ticks.seq;
         let report_req = self.current_report_generation();
@@ -391,7 +391,7 @@ impl AnalyticsView {
             ReadLane::TicksVariants,
             ReadLane::TicksSearch,
         ]);
-        self.ticks.stop_search();
+        self.ticks.stop_search("model settings");
         // Every verdict of the table is of the old settings now: none may be carried by a
         // reload until this stage has judged them all again.
         self.ticks.judged_under = None;

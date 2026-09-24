@@ -10,8 +10,8 @@
 
 use std::collections::HashMap;
 
-use super::exit::{ExitParams, UnmodelledRule};
-use super::mshot::{MarketSign, Modifiers, MshotParams, UsePrice};
+use super::exit::{ExitParams, StopStep, UnmodelledRule};
+use super::mshot::{MSHOT_PRICEBUG_CAP_PCT, MarketSign, Modifiers, MshotParams, UsePrice};
 use super::settings::ModelSettings;
 
 /// Which group of the grid a parameter belongs to.
@@ -170,6 +170,26 @@ const GRID_STOP: &[f64] = &[
     -0.1,
 ];
 const GRID_STOP_DELAY_S: &[f64] = &[0.0, 1.0, 2.0, 4.0, 6.0, 10.0, 20.0, 30.0];
+/// `TimeToSwitch2Stop` / `TimeToSwitchStop3`, whole seconds: the live ladders switch after 0–5 s
+/// (78 strategies with `UseSecondStop`, 2026-09-24); the rest reach the "stop by time" use.
+const GRID_SWITCH_S: &[f64] = &[
+    0.0, 1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0,
+];
+/// `PriceToSwitch2Stop` / `PriceToSwitchStop3`, per cent off the buy: live 0.3, 0.5 and 1.5.
+const GRID_SWITCH_PCT: &[f64] = &[0.1, 0.2, 0.3, 0.5, 0.8, 1.0, 1.3, 1.5, 2.0, 3.0, 5.0];
+/// `SecondStopLoss` / `StopLoss3`, per cent off the buy: a break-even step lives just over zero
+/// (live 0.25, 0.4, 0.8), a stop by time below it.
+const GRID_STEP_LEVEL: &[f64] = &[
+    -3.0, -2.0, -1.0, -0.5, -0.2, 0.0, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.8, 1.0, 1.5, 2.0,
+];
+/// `TrailingPercent`, negative: live −0.1 to −4 among the 81 strategies with `UseTrailing`.
+const GRID_TRAILING: &[f64] = &[
+    -10.0, -5.0, -4.0, -3.0, -2.0, -1.8, -1.5, -1.0, -0.8, -0.5, -0.3, -0.2, -0.1,
+];
+/// `TrailingEMA`, ticks: live 0, 2 and 4.
+const GRID_TRAILING_EMA: &[f64] = &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0];
+/// `TakeProfit` of the trailing, per cent off the buy: live 1, 2, 2.5 and 5.
+const GRID_TAKE_PROFIT: &[f64] = &[0.2, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 5.0, 10.0];
 
 /// Every parameter of the axis, grid order: the Entry group first, then Exit.
 pub const TICK_PARAMS: &[TickParam] = &[
@@ -394,8 +414,36 @@ pub const TICK_PARAMS: &[TickParam] = &[
     exit_bool("SellLevelRelative", ParamSection::SellOrder),
     exit_num("SellLevelAllowedDrop", ParamSection::SellOrder, GRID_DROP),
     exit_num("SellLevelWorkTime", ParamSection::SellOrder, GRID_SL_TIME_S),
-    exit_num("StopLoss", ParamSection::Stops, GRID_STOP),
+    // The Stops section in the strategy window's order. `FastStopLoss` is read with the strategy's
+    // value — the trigger hangs on it — but is no knob; `UseMarketOrder` is read by nothing (the
+    // verdict tells a market stop by the fact's own reason, `StopLoss Market Sell`); nor are the panic sell's execution fields (`StopLossSpread`,
+    // `StopSpreadAdd1mDelta`, `AllowedDrop`, `AllowedDrop3`, `TrailingSpread`): where a panic
+    // sell fills is the book's, which the tape does not carry (the developer's call, 2026-09-24).
+    exit_bool("UseStopLoss", ParamSection::Stops),
+    TickParam {
+        key: "StopLossEMA",
+        group: ParamGroup::Exit,
+        section: ParamSection::Stops,
+        // The core averages at 3, 5 and 10 only (`exit::stops::stop_average_weight`).
+        kind: ParamKind::Enum(&["0", "3", "5", "10"]),
+        kinds: ANY,
+        not_kinds: &[],
+    },
     exit_num("StopLossDelay", ParamSection::Stops, GRID_STOP_DELAY_S),
+    exit_num("StopLoss", ParamSection::Stops, GRID_STOP),
+    exit_bool("UseSecondStop", ParamSection::Stops),
+    exit_num("TimeToSwitch2Stop", ParamSection::Stops, GRID_SWITCH_S),
+    exit_num("PriceToSwitch2Stop", ParamSection::Stops, GRID_SWITCH_PCT),
+    exit_num("SecondStopLoss", ParamSection::Stops, GRID_STEP_LEVEL),
+    exit_bool("UseStopLoss3", ParamSection::Stops),
+    exit_num("TimeToSwitchStop3", ParamSection::Stops, GRID_SWITCH_S),
+    exit_num("PriceToSwitchStop3", ParamSection::Stops, GRID_SWITCH_PCT),
+    exit_num("StopLoss3", ParamSection::Stops, GRID_STEP_LEVEL),
+    exit_bool("UseTrailing", ParamSection::Stops),
+    exit_num("TrailingPercent", ParamSection::Stops, GRID_TRAILING),
+    exit_num("TrailingEMA", ParamSection::Stops, GRID_TRAILING_EMA),
+    exit_bool("UseTakeProfit", ParamSection::Stops),
+    exit_num("TakeProfit", ParamSection::Stops, GRID_TAKE_PROFIT),
 ];
 
 /// A numeric field of the Exit group every kind understands.
@@ -450,16 +498,9 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "SellModifier",
     "MaxModifier",
     "StopLossModifier",
-    // The stop's switch and its trigger (see `ExitParams::fast_stop_loss`).
-    "UseStopLoss",
+    // The stop's trigger (see `ExitParams::fast_stop_loss`): read with the strategy's value, no
+    // knob.
     "FastStopLoss",
-    "StopLossEMA",
-    // The trailing stop (`exit::stops::trailing`): read as the strategy sets it, not a knob yet.
-    "UseTrailing",
-    "TrailingPercent",
-    "TrailingEMA",
-    "UseTakeProfit",
-    "TakeProfit",
     // PumpsDetection's one sell move (see `exit::pump_move::PUMP_MOVE_LAG_MS`); `PumpMovePersent` is the
     // core's own spelling of the field.
     "PumpMoveTimer",
@@ -489,9 +530,6 @@ const MODEL_ONLY_KEYS: &[&str] = &[
 const RULE_SWITCH_KEYS: &[&str] = &[
     // No sell order at all.
     "AutoSell",
-    // The stop ladder.
-    "UseSecondStop",
-    "UseStopLoss3",
     // SellShot is on only with a distance to keep.
     "IgnoreSellShot",
     "SellShotDistance",
@@ -595,7 +633,9 @@ pub fn mshot_params(v: &StrategyValues<'_>, model: ModelSettings) -> MshotParams
             add_dump_1h: 0.0,
             market_sign: MarketSign::Signed,
             distance_pct: v.num("MShotAddDistance", 0.0),
+            pricebug_cap: MSHOT_PRICEBUG_CAP_PCT,
         },
+        max_modifier: v.num("MaxModifier", 0.0),
         model,
     }
 }
@@ -635,6 +675,7 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
             add_dump_1h: v.num("AddDump1h", 0.0),
             market_sign: MarketSign::Magnitude,
             distance_pct: 0.0,
+            pricebug_cap: 0.0,
         },
         price_down_timer_s: v.num("PriceDownTimer", base.price_down_timer_s),
         price_down_pct: v.num("PriceDownPercent", base.price_down_pct),
@@ -680,6 +721,21 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
         trailing_ema: v.num("TrailingEMA", base.trailing_ema),
         trailing_take_profit_pct: (v.bool("UseTrailing", false) && v.bool("UseTakeProfit", false))
             .then(|| v.num("TakeProfit", 0.0)),
+        // The ladder's fields hang on `UseStopLoss` and on their own switch (param_deps.toml).
+        second_stop: (v.bool("UseStopLoss", true) && v.bool("UseSecondStop", false)).then(|| {
+            StopStep {
+                after_s: v.num("TimeToSwitch2Stop", 0.0),
+                switch_pct: v.num("PriceToSwitch2Stop", 0.0),
+                level_pct: v.num("SecondStopLoss", 0.0),
+            }
+        }),
+        third_stop: (v.bool("UseStopLoss", true) && v.bool("UseStopLoss3", false)).then(|| {
+            StopStep {
+                after_s: v.num("TimeToSwitchStop3", 0.0),
+                switch_pct: v.num("PriceToSwitchStop3", 0.0),
+                level_pct: v.num("StopLoss3", 0.0),
+            }
+        }),
         unmodelled: unmodelled_rule(v),
         model,
         take_from_archive: base.take_from_archive,
@@ -690,8 +746,8 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
 ///
 /// Read by the switch, never by its fields: the fields stay in a strategy's dump with the switch
 /// off (`assets/param_deps.toml`). On this machine's reports (2026-09-23) the trailing stop was
-/// on for the strategies of 44 trades of 2 042 and the stop ladder for 2; the trailing stop is
-/// modelled since 2026-09-24 (`exit::stops::trailing`). SellShot and SellSpread are not modelled
+/// on for the strategies of 44 trades of 2 042 and the stop ladder for 2; both are modelled since
+/// 2026-09-24 (`exit::stops::trailing`, `exit::stops::ladder`). SellShot and SellSpread are not modelled
 /// at all (the developer's call, 2026-09-24); each is on for 2 live strategies of 1 422 (24.09),
 /// SellShot only where a distance is set (the walk kept it off at a zero one). `AutoSell` off
 /// places no sell order at all (no live strategy, 24.09). The EMA exit and
@@ -700,8 +756,6 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
 pub(super) fn unmodelled_rule(v: &StrategyValues<'_>) -> Option<UnmodelledRule> {
     if !v.bool("AutoSell", true) {
         Some(UnmodelledRule::NoAutoSell)
-    } else if v.bool("UseSecondStop", false) || v.bool("UseStopLoss3", false) {
-        Some(UnmodelledRule::StopLadder)
     } else if !v.bool("IgnoreSellShot", true) && v.num("SellShotDistance", 0.0) != 0.0 {
         Some(UnmodelledRule::SellShot)
     } else if !v.bool("IgnoreSellSpread", true) {

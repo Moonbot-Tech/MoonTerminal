@@ -14,10 +14,12 @@
 //! fact is judged.
 //!
 //! The trailing stop (`UseTrailing`) is [`trailing`]; the stop ladder (`UseSecondStop`,
-//! `UseStopLoss3`) is not modelled ([`super::UnmodelledRule`]).
+//! `UseStopLoss3`) is [`ladder`], which moves the level this stop fires at.
 
+pub mod ladder;
 pub mod trailing;
 
+use self::ladder::Ladder;
 use self::trailing::Trailing;
 use super::delta_mods::modifier_sum;
 use super::{ExitParams, Side};
@@ -43,9 +45,9 @@ pub const SERIES_TICK_MS: i64 = 250;
 
 /// The stop distance of a trade, per cent: `StopLoss` adjusted by `StopLossModifier · Σ`.
 ///
-/// Normally that deepens the stop (a positive coefficient over a positive delta sum), but
-/// neither sign is guaranteed: live strategies carry `StopLossModifier` down to −0.3, and a
-/// delta sum can be negative, so the adjustment can also pull the stop TOWARD the entry.
+/// The sum is never negative (the core takes its magnitude, [`modifier_sum`]), so a positive
+/// coefficient deepens the stop; but live strategies carry `StopLossModifier` down to −0.3, and
+/// that pulls the stop TOWARD the entry.
 ///
 /// An adjustment big enough to pull it THROUGH the entry answers `0.0` — no stop on this trade
 /// — rather than a level. Clamping it to a hair's breadth from the entry instead would fire on
@@ -295,6 +297,8 @@ enum Trigger {
 /// stop beside it.
 pub(super) struct Stops {
     trigger: Trigger,
+    /// The second and third stops, when the strategy switched one on and there is a stop to move.
+    ladder: Option<Ladder>,
     /// `UseTrailing`'s line, when the strategy switched it on.
     trailing: Option<Trailing>,
     /// When and at what price the fact's own stop fired, when the walk runs the trade's own.
@@ -385,18 +389,68 @@ impl Stops {
             }
             Trigger::Book(book)
         };
+        // The ladder moves a stop there is: none without one (`UseStopLoss` off, the fields hang
+        // on it — param_deps.toml — or an adjustment that cancelled it).
+        let ladder = stop_on
+            .then(|| {
+                Ladder::new(
+                    side.long,
+                    fill.price,
+                    fill.t_ms,
+                    super::sell_order::armed_at(fill, params),
+                    stop_from,
+                    first_ms,
+                    params.model.ticker_period_ms,
+                    &[params.second_stop, params.third_stop],
+                )
+            })
+            .flatten()
+            .map(|mut ladder| {
+                for tick in before_fill() {
+                    ladder.see(tick);
+                }
+                ladder
+            });
         Self {
             trigger,
+            ladder,
             trailing,
             fired,
         }
     }
 
+    /// Where the stop stands now — the ladder's last step, else the first stop's level; `None`
+    /// without a stop.
+    pub(super) fn level(&self) -> Option<f64> {
+        match &self.trigger {
+            Trigger::Off => None,
+            Trigger::Fast { level, .. } => Some(*level),
+            Trigger::Book(book) => Some(book.level),
+        }
+    }
+
+    /// The ladder's steps due before `until`, moving the stop's level when one is taken. The step
+    /// is read on the ticker's arrivals before the print, and the stop's own arrivals up to it
+    /// then read the new level — within one gap between prints, the order of the two is not
+    /// kept.
+    fn climb(&mut self, until: i64) {
+        let Some(level) = self.ladder.as_mut().and_then(|ladder| ladder.before(until)) else {
+            return;
+        };
+        match &mut self.trigger {
+            Trigger::Off => {}
+            Trigger::Fast { level: at, .. } => *at = level,
+            Trigger::Book(book) => book.level = level,
+        }
+    }
+
     /// The fact's own stop, when it fired by the print at `t_ms`.
-    pub(super) fn fired_by(&self, t_ms: i64) -> Option<Exit> {
-        self.fired
-            .filter(|(at, _)| t_ms >= *at)
-            .map(|(at, sold)| stop_exit(at, sold))
+    /// The ladder is climbed up to that moment — not past it — so the level the walk then
+    /// reports is the one the fact's stop fired at.
+    pub(super) fn fired_by(&mut self, t_ms: i64) -> Option<Exit> {
+        let (at, sold) = self.fired.filter(|(at, _)| t_ms >= *at)?;
+        self.climb(at + 1);
+        Some(stop_exit(at, sold))
     }
 
     /// The stop on the print at `t_ms`, `price`: the book stop's and the trailing's ticker
@@ -405,6 +459,7 @@ impl Stops {
     /// moment, the stop first on the same moment (the core checks it first) — or the fast stop, a
     /// market order the core fires on the print.
     pub(super) fn on_print(&mut self, tick: &Tick, t_ms: i64, price: f64) -> Option<Exit> {
+        self.climb(t_ms);
         let by_book = match &mut self.trigger {
             Trigger::Book(book) => book.before(t_ms),
             Trigger::Off | Trigger::Fast { .. } => None,
@@ -421,6 +476,9 @@ impl Stops {
         }
         if let Some(trailing) = self.trailing.as_mut() {
             trailing.see(tick);
+        }
+        if let Some(ladder) = self.ladder.as_mut() {
+            ladder.see(tick);
         }
         match &self.trigger {
             Trigger::Fast {
@@ -439,9 +497,13 @@ impl Stops {
     /// included, reading the proxies the last prints left; the walk only ever reaches the samples
     /// before a print.
     pub(super) fn after_tape(&mut self, tail: i64) -> Option<Exit> {
+        // The fact's own stop, with the ladder climbed to its moment — often past the tape's end,
+        // on the last bid the prints left.
         if let Some((at, sold)) = self.fired {
+            self.climb(at + 1);
             return Some(stop_exit(at, sold));
         }
+        self.climb(tail + 1);
         let by_book = match &mut self.trigger {
             Trigger::Book(book) => book.before(tail + 1),
             Trigger::Off | Trigger::Fast { .. } => None,

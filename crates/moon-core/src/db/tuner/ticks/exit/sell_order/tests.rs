@@ -301,3 +301,66 @@ fn sell_level_relative_takes_a_share_of_the_distance_to_the_buy() {
     let w = walk(&deal(false), &ticks, fill(), 120.0, &p);
     assert!((w.points[1].price - 105.0).abs() < 1e-9, "{:?}", w.points);
 }
+
+// ---- the delta modifiers' shift ---------------------------------------------------------------
+
+/// The delta modifiers move the sell as placed — after the `SellPrice` floor and the lift to the
+/// pre-spike ask — by `SellModifier · Σ` per cent of its own price, a short's by a division
+/// (the core developer via LinKvo, 2026-09-24; the core's "SellPrice adjusted by +0.30 * +2.30% =
+/// +0.69% (0.00056430 => 0.00056044)" is a short's 0.00056430 / 1.0069).
+#[test]
+fn the_sell_shift_follows_the_lift_and_divides_for_a_short() {
+    let mods = crate::db::tuner::ticks::mshot::Modifiers {
+        add_1h: 1.0,
+        ..Default::default()
+    };
+    let p = ExitParams {
+        sell_price_pct: 1.0,
+        sell_modifier: 0.2,
+        sell_mods: mods,
+        sell_at_last_price: true,
+        ..params()
+    };
+    let mut d = deal(false);
+    d.deltas.d1h = 5.0;
+    d.pre_spike_ask = Some(103.0);
+    // Lifted to the ask's 103 (above the 101 of `SellPrice`), then 5 % · 0.2 = 1 % off that.
+    let take = ExitModel::new(&p).take_level(&d, &[], fill());
+    assert!((take - 104.03).abs() < 1e-9, "{take}");
+    let short = ExitParams {
+        sell_at_last_price: false,
+        ..p
+    };
+    let mut d = deal(true);
+    d.deltas.d1h = 5.0;
+    // 100 / 1.01 for `SellPrice`, then that over 1.01 again for the shift.
+    let take = ExitModel::new(&short).take_level(&d, &[], fill());
+    assert!((take - 100.0 / 1.01 / 1.01).abs() < 1e-9, "{take}");
+}
+
+/// A shift deep enough to carry the sell through the entry — toward zero, a short's toward
+/// infinity — is held at the entry, with no step at −100 %.
+#[test]
+fn a_shift_through_the_entry_is_held_at_the_entry() {
+    let mods = crate::db::tuner::ticks::mshot::Modifiers {
+        add_1h: 1.0,
+        ..Default::default()
+    };
+    let p = ExitParams {
+        sell_price_pct: 1.0,
+        sell_modifier: -0.5,
+        sell_mods: mods,
+        ..params()
+    };
+    for short in [false, true] {
+        for d1h in [150.0, 198.0, 300.0] {
+            let mut d = deal(short);
+            d.deltas.d1h = d1h;
+            let take = ExitModel::new(&p).take_level(&d, &[], fill());
+            assert!(
+                (take - 100.0).abs() < 1e-9,
+                "short {short}, Σ {d1h}: {take}"
+            );
+        }
+    }
+}

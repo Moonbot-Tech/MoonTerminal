@@ -141,14 +141,16 @@ impl EntryMethod {
     }
 }
 
-/// How a family of modifiers reads the market-wide deltas.
+/// How a family of modifiers reads the market-wide and the BTC deltas.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MarketSign {
-    /// With the sign the report carries — `MShotAddMarketDelta` ("аналогично", FAQ :1289).
+    /// With the sign the report carries — `MShotAddMarketDelta` ("аналогично", FAQ :1289) and the
+    /// corridor's BTC terms.
     #[default]
     Signed,
     /// As a magnitude — the Delta Modifiers tab's `AddMarketDelta` and `AddMarket24Delta`, "по
-    /// модулю, то есть всегда положительный" (FAQ :1171, :1172).
+    /// модулю, то есть всегда положительный" (FAQ :1171, :1172), and its BTC terms likewise (the
+    /// core developer via LinKvo, 2026-09-24: "рыночные и BTC берутся по модулю").
     Magnitude,
 }
 
@@ -184,6 +186,10 @@ pub struct Modifiers {
     pub market_sign: MarketSign,
     /// `MShotAddDistance` — per cent by which the far bound's addition exceeds the near one's.
     pub distance_pct: f64,
+    /// The ceiling on the `add_pricebug` term alone, per cent; 0 for none. The corridor family's
+    /// `MShotAddPriceBug` contributes at most 30 % (the core developer via LinKvo, 2026-09-24);
+    /// the Delta Modifiers tab's `AddPriceBug` has no ceiling of its own.
+    pub pricebug_cap: f64,
 }
 
 impl Modifiers {
@@ -192,7 +198,7 @@ impl Modifiers {
     /// FAQ example and the live check behind the sign), the market-wide ones as the family reads
     /// them ([`MarketSign`]).
     pub fn near_addition(&self, d: &Deltas) -> f64 {
-        let market = |delta: f64| match self.market_sign {
+        let wide = |delta: f64| match self.market_sign {
             MarketSign::Signed => delta,
             MarketSign::Magnitude => delta.abs(),
         };
@@ -204,21 +210,29 @@ impl Modifiers {
             + self.add_3h * d.d3h
             + self.add_24h * d.d24h
             + self.add_mark * d.dmark
-            + self.add_btc_1h * d.btc1h
-            + self.add_btc_5m * d.btc5m
-            + self.add_btc_1m * d.btc1m
-            + self.add_market_1h * market(d.market1h)
-            + self.add_market_24h * market(d.market24h)
+            + self.add_btc_1h * wide(d.btc1h)
+            + self.add_btc_5m * wide(d.btc5m)
+            + self.add_btc_1m * wide(d.btc1m)
+            + self.add_market_1h * wide(d.market1h)
+            + self.add_market_24h * wide(d.market24h)
             + self.add_pump_1h * d.pump1h
             + self.add_dump_1h * d.dump1h
-            + self.add_pricebug * d.pricebug
+            + self.pricebug_term(d.pricebug)
     }
 
-    /// The addition to the FAR bound: the near one scaled by `1 + distance / 100`.
-    pub fn far_addition(&self, d: &Deltas) -> f64 {
-        self.near_addition(d) * (1.0 + self.distance_pct / 100.0)
+    /// The `add_pricebug` term, under its own ceiling when the family has one.
+    fn pricebug_term(&self, pricebug: f64) -> f64 {
+        let term = self.add_pricebug * pricebug;
+        if self.pricebug_cap > 0.0 {
+            term.min(self.pricebug_cap)
+        } else {
+            term
+        }
     }
 }
+
+/// The ceiling `MShotPriceBug`'s term stands under in the corridor family, per cent.
+pub const MSHOT_PRICEBUG_CAP_PCT: f64 = 30.0;
 
 /// Smallest distance either bound may end up at after the modifiers, in per cent — the
 /// expert-mode floor of `MShotPrice`, so a pumping coin cannot push the order ABOVE the price.
@@ -260,6 +274,10 @@ pub struct MshotParams {
     /// same corridor either way (see the module doc).
     pub fast_algo: bool,
     pub modifiers: Modifiers,
+    /// `MaxModifier` — the one ceiling the Delta Modifiers tab shares with the corridor: the sum
+    /// of the `MShotAdd*` terms is capped by it from above when it is above zero, with its sign
+    /// kept (no magnitude, unlike the sell's sum) — the core developer via LinKvo, 2026-09-24.
+    pub max_modifier: f64,
     /// The model's own settings, not strategy fields: the replacement latency, the replay
     /// method, the windows.
     pub model: ModelSettings,
@@ -290,6 +308,7 @@ impl Default for MshotParams {
             minus_satoshi: false,
             fast_algo: false,
             modifiers: Modifiers::default(),
+            max_modifier: 0.0,
             model: ModelSettings::default(),
         }
     }
@@ -298,9 +317,22 @@ impl Default for MshotParams {
 impl MshotParams {
     /// The effective `(near, far)` bounds in per cent for a deal's deltas, floored and ordered.
     pub fn bounds_pct(&self, deltas: &Deltas) -> (f64, f64) {
-        let near = (self.price_min_pct + self.modifiers.near_addition(deltas)).max(BOUND_FLOOR_PCT);
-        let far = (self.price_pct + self.modifiers.far_addition(deltas)).max(near);
+        let near_add = self.addition(deltas);
+        let far_add = near_add * (1.0 + self.modifiers.distance_pct / 100.0);
+        let near = (self.price_min_pct + near_add).max(BOUND_FLOOR_PCT);
+        let far = (self.price_pct + far_add).max(near);
         (near, far)
+    }
+
+    /// The `MShotAdd*` sum for these deltas, capped from above by `MaxModifier` when it is set —
+    /// the near bound's addition; the far one's is it scaled by `1 + MShotAddDistance / 100`.
+    fn addition(&self, deltas: &Deltas) -> f64 {
+        let sum = self.modifiers.near_addition(deltas);
+        if self.max_modifier > 0.0 {
+            sum.min(self.max_modifier)
+        } else {
+            sum
+        }
     }
 
     /// Whether the near bound sits below the far one — `MShotPriceMin < MShotPrice`, the
@@ -921,3 +953,6 @@ impl Reference {
         extreme.or_else(|| self.check())
     }
 }
+
+#[cfg(test)]
+mod tests;

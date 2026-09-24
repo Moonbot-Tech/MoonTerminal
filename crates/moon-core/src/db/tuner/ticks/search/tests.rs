@@ -7,7 +7,7 @@ use super::*;
 use crate::db::tuner::ticks::Deltas;
 use crate::feed::types::Side;
 
-fn tick(t_ms: i64, price: f64) -> Tick {
+pub(super) fn tick(t_ms: i64, price: f64) -> Tick {
     Tick {
         time_ms: t_ms as f64,
         price: price as f32,
@@ -18,7 +18,7 @@ fn tick(t_ms: i64, price: f64) -> Tick {
 
 /// A PumpsDetection deal (entry from the fact, take by `SellPrice`) bought at 100 whose tape peaks at `peak` after the
 /// fill, then falls back to the fact's exit.
-fn prepared(uid: i64, peak: f64) -> PreparedDeal {
+pub(super) fn prepared(uid: i64, peak: f64) -> PreparedDeal {
     let deal = Deal {
         report_uid: uid,
         core_uid: 1,
@@ -71,7 +71,7 @@ fn prepared(uid: i64, peak: f64) -> PreparedDeal {
 fn with_take(uid: i64, take: &str) -> PreparedDeal {
     let mut deal = prepared(uid, 101.0);
     deal.own = Arc::new(
-        [("SellPrice", take), ("StopLoss", "0")]
+        [("SellPrice", take), ("StopLoss", "-50")]
             .into_iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
@@ -88,7 +88,7 @@ fn tape_end_ms(d: &PreparedDeal) -> i64 {
 }
 
 fn base() -> HashMap<String, String> {
-    [("SellPrice", "0.2"), ("StopLoss", "0")]
+    [("SellPrice", "0.2"), ("StopLoss", "-50")]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect()

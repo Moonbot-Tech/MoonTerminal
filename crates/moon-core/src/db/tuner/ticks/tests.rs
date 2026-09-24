@@ -1610,21 +1610,22 @@ fn a_moonshot_lifted_to_the_ask_needs_the_recorded_ask() {
     assert!(ExitModel::new(&ExitParams::default()).take_known(&deal()));
 }
 
-/// A modifier deep enough to drive the distance negative must not put the take on the losing
-/// side of the entry — the line steps DOWN from the take, and a take below the fill inverts it.
+/// The sum's sign does not reach the sell — the core takes its magnitude — and a negative
+/// COEFFICIENT moves the sell after the `SellPrice` floor, so it can take it under that floor
+/// (the core developer via LinKvo, 2026-09-24).
 #[test]
-fn a_negative_modifier_cannot_push_the_take_through_the_fill() {
+fn a_negative_coefficient_takes_the_sell_under_its_floor() {
     let mut mods = Modifiers::default();
     mods.add_1h = 1.0;
     let params = ExitParams {
         sell_price_pct: 1.0,
-        sell_modifier: 1.0,
+        sell_modifier: -0.5,
         sell_mods: mods,
         ..ExitParams::default()
     };
-    let d = Deal {
+    let deal_at = |d1h: f64| Deal {
         deltas: Deltas {
-            d1h: -50.0,
+            d1h,
             ..Deltas::default()
         },
         ..deal()
@@ -1633,11 +1634,12 @@ fn a_negative_modifier_cannot_push_the_take_through_the_fill() {
         t_ms: 10_000,
         price: 100.0,
     };
-    let take = ExitModel::new(&params).take_level(&d, &[], fill);
-    assert!(
-        (take - 100.0).abs() < 1e-9,
-        "floored at the fill, got {take}"
-    );
+    // Σ = |±1| = 1, times −0.5 = −0.5 % off the placed 101: 100.495, under the floor of 101 and
+    // still over the buy.
+    for d1h in [1.0, -1.0] {
+        let take = ExitModel::new(&params).take_level(&deal_at(d1h), &[], fill);
+        assert!((take - 100.495).abs() < 1e-9, "Σ {d1h}: {take}");
+    }
 }
 
 /// The grid must not offer a knob that moves nothing: `SellPrice` is not a MoonHook's take.
@@ -1801,8 +1803,8 @@ fn an_adjustment_through_the_entry_leaves_no_stop() {
         0.0,
         "no stop, not a near one"
     );
-    // A negative delta sum with a positive coefficient reaches the same place from the other
-    // side.
+    // A falling coin does not: the sum is a magnitude, so a positive coefficient deepens the
+    // stop whichever way the deltas went — −2 − |−70|·0.3 = −23.
     let other = ExitParams {
         stop_loss_modifier: 0.3,
         ..base.clone()
@@ -1814,7 +1816,7 @@ fn an_adjustment_through_the_entry_leaves_no_stop() {
         },
         ..deal()
     };
-    assert_eq!(moon_core_stop_pct(&other, &down, down.buy_ms), 0.0);
+    assert!((moon_core_stop_pct(&other, &down, down.buy_ms) - -23.0).abs() < 1e-9);
     // A modifier that only moves the stop within its own side is applied as it is.
     let mild = Deal {
         deltas: Deltas {
@@ -1849,15 +1851,15 @@ fn a_cancelled_stop_does_not_fire_at_the_entry() {
     mods.add_1h = 1.0;
     let params = ExitParams {
         stop_loss_pct: -2.0,
-        stop_loss_modifier: 0.2,
+        stop_loss_modifier: -0.2,
         sell_price_pct: 5.0,
         sell_mods: mods,
         ..ExitParams::default()
     };
-    // Σ = −10, so −2 − (−10·0.2) = 0 exactly without the clamp.
+    // Σ = 10, so −2 − (10·(−0.2)) = 0 exactly without the clamp.
     let d = Deal {
         deltas: Deltas {
-            d1h: -10.0,
+            d1h: 10.0,
             ..Deltas::default()
         },
         ..deal()
@@ -1939,16 +1941,16 @@ fn sell_modifiers_lift_the_take_by_the_faq_example() {
         t_ms: 10_000,
         price: 100.0,
     };
-    // 1 % of SellPrice plus 5 % * 0.2 = 2 % in all.
+    // The 101 of SellPrice, then 5 % * 0.2 = 1 % higher.
     let take = ExitModel::new(&params).take_level(&d, &[], fill);
-    assert!((take - 102.0).abs() < 1e-9, "{take}");
+    assert!((take - 102.01).abs() < 1e-9, "{take}");
     // `MaxModifier` caps the SUM before the coefficient: min(2, 5) * 0.2 = 0.4.
     let capped = ExitParams {
         max_modifier: 2.0,
         ..params.clone()
     };
     let take = ExitModel::new(&capped).take_level(&d, &[], fill);
-    assert!((take - 101.4).abs() < 1e-9, "{take}");
+    assert!((take - 101.404).abs() < 1e-9, "{take}");
     // No coefficient, no movement — whatever the deltas.
     let off = ExitParams {
         sell_modifier: 0.0,

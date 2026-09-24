@@ -35,8 +35,14 @@ use moon_core::db::tuner::ticks::search::{
 };
 use moon_core::db::tuner::ticks::stats_of;
 
+mod probe;
+pub(super) use probe::painted as probe_painted;
+
 /// How long a burst of cell edits may keep coalescing before the columns are rescored.
 const VARIANT_DEBOUNCE: Duration = Duration::from_millis(350);
+
+/// How often a running search's row is looked at for a moved restart count.
+const SEARCH_POLL: Duration = Duration::from_millis(250);
 
 /// Restarts the search runs with, out of the box's text: the default when empty or
 /// unreadable, clamped to a sane range.
@@ -74,6 +80,13 @@ impl AnalyticsView {
     /// Arm a debounced rescore of the variant columns — every edit of a cell, every row that
     /// joins the replayable set, goes through here.
     pub(in crate::analytics::tuner) fn arm_ticks_variants(&mut self, cx: &mut Context<Self>) {
+        if !self.ticks.tape_reading
+            && self.ticks.data.data().is_some_and(|d| d.fit() > 0)
+            && probe::fire()
+        {
+            probe::dump_schema(self.backend.read(cx).session.store());
+            self.ticks_start_search(None, cx);
+        }
         self.latest_reads.cancel(&[ReadLane::TicksVariants]);
         self.ticks.var_seq = self.ticks.var_seq.wrapping_add(1);
         // Nothing to score: an untouched pair of columns costs no clone of the rows and no
@@ -269,6 +282,12 @@ impl AnalyticsView {
 
     /// Say why a search did not start.
     fn ticks_search_refused(&mut self, key: &str, cx: &mut Context<Self>) {
+        log::info!(
+            target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+            "[x] ticks search: refused, {key}, shares entry {:?} exit {:?}",
+            self.ticks.data.data().map(|d| d.entry_share),
+            self.ticks.data.data().map(|d| d.exit_share)
+        );
         self.ticks.sugg_note = Some(t!(key).to_string());
         cx.notify();
     }
@@ -333,7 +352,7 @@ impl AnalyticsView {
             return self.ticks_search_refused("analytics.ticks.sugg_no_tape", cx);
         }
         let defaults = self.filter_defaults(cx);
-        let restarts = restarts_of(&self.ticks.iters);
+        let restarts = probe::restarts().unwrap_or_else(|| restarts_of(&self.ticks.iters));
         let max_passes = passes_of(&self.ticks.passes);
         let seed = self.ticks.seed.trim().parse::<u64>().ok();
         let min_n = self
@@ -363,6 +382,14 @@ impl AnalyticsView {
         self.ticks.sugg_seq = self.ticks.sugg_seq.wrapping_add(1);
         self.ticks.sugg_note = None;
         let seq = self.ticks.sugg_seq;
+        log::info!(
+            target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+            "[x] ticks search: start #{seq}, {restarts} restart(s) x {max_passes} pass(es) over {} deal(s), entry {vary_entry}, exit {vary_exit}",
+            pending.len()
+        );
+        probe::watch(handle.clone(), restarts, seq);
+        self.poll_ticks_search(handle.clone(), seq, cx);
+        let started = std::time::Instant::now();
         self.spawn_latest_db(
             &[ReadLane::TicksSearch],
             false,
@@ -387,6 +414,16 @@ impl AnalyticsView {
                 suggest(&deals, &params, &handle)
             },
             move |this, result, cx| {
+                log::info!(
+                    target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+                    "[x] ticks search: #{seq} answered after {} ms ({}), current #{}",
+                    started.elapsed().as_millis(),
+                    match &result {
+                        Ok(found) => format!("found {:?}", found.values),
+                        Err(miss) => format!("nothing: {miss:?}"),
+                    },
+                    this.ticks.sugg_seq
+                );
                 if this.ticks.sugg_seq != seq {
                     return;
                 }
@@ -414,7 +451,8 @@ impl AnalyticsView {
                         this.arm_ticks_variants(cx);
                     }
                     // Why nothing: the floor no point kept — the typed one, or the search's own
-                    // tenth of the training slice —, the corridor none kept, or nothing at all.
+                    // tenth of the training slice —, the corridor none kept, no point that
+                    // closed every trade it bought, or nothing at all.
                     Err(miss) => {
                         this.ticks.sugg_note = Some(match miss {
                             SearchMiss::Floor => t!(
@@ -423,6 +461,7 @@ impl AnalyticsView {
                             )
                             .to_string(),
                             SearchMiss::Corridor => t!("analytics.ticks.sugg_corridor").to_string(),
+                            SearchMiss::Unclosed => t!("analytics.ticks.sugg_unclosed").to_string(),
                             SearchMiss::Nothing => t!("analytics.ticks.sugg_none").to_string(),
                         });
                     }
@@ -433,9 +472,45 @@ impl AnalyticsView {
         cx.notify();
     }
 
+    /// Repaint the search row while the run it follows goes on, each time its restart count
+    /// moves — nothing else repaints a quiet window, and the count would stand still for the
+    /// whole run. Ends when the run finished or was replaced (`sugg_seq`); a window closed under
+    /// it stops the run, which has nobody left to answer.
+    fn poll_ticks_search(&self, handle: SearchHandle, seq: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let mut shown = None;
+            loop {
+                executor.timer(SEARCH_POLL).await;
+                let mut running = false;
+                let view_gone = cx.update(|cx| {
+                    this.update(cx, |this, cx| {
+                        // The answer sets the row idle without a new generation.
+                        running = this.ticks.sugg_seq == seq
+                            && matches!(this.ticks.sugg, SuggState::Running { .. });
+                        let done = handle.completed();
+                        if running && shown != Some(done) {
+                            shown = Some(done);
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                });
+                if view_gone {
+                    handle.cancel();
+                    return;
+                }
+                if !running {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
     /// Stop a running search; what it found so far is dropped.
     pub(in crate::analytics::tuner) fn ticks_stop_suggest(&mut self, cx: &mut Context<Self>) {
-        self.ticks.stop_search();
+        self.ticks.stop_search("Stop");
         cx.notify();
     }
 
@@ -451,6 +526,7 @@ impl AnalyticsView {
             return;
         }
         let mut warns = self.ticks_change_warnings(&changes, cx);
+        warns.extend(self.ticks_unguarded_warning(&targets, &changes, cx));
         warns.extend(self.ticks_unmodelled_warns(&targets, cx));
         self.open_change_dialog(targets, changes, None, Vec::new(), warns, false, cx);
     }
@@ -466,6 +542,7 @@ impl AnalyticsView {
         };
         let changes = self.ticks.variant_changes(0);
         let mut warns = self.ticks_change_warnings(&changes, cx);
+        warns.extend(self.ticks_unguarded_warning(std::slice::from_ref(&target), &changes, cx));
         warns.extend(self.ticks_unmodelled_warns(std::slice::from_ref(&target), cx));
         self.open_copy_with(target, changes, warns, window, cx);
     }
@@ -508,13 +585,13 @@ impl AnalyticsView {
             })
             .collect();
         let defaults = self.filter_defaults(cx);
+        let mut warns = Vec::new();
         let check = check_corridors(
             deals.iter().map(|(deal, own)| (*deal, own.as_ref())),
             &defaults,
             changes,
             super::model_cfg::current(),
         );
-        let mut warns = Vec::new();
         if check.inverted > 0 {
             warns.push(
                 t!(
@@ -536,5 +613,37 @@ impl AnalyticsView {
             );
         }
         warns
+    }
+
+    /// The warning of a write that leaves a strategy it lands on with nothing standing to close a
+    /// trade — no stop, and no trailing without a take profit: the search refuses such a point
+    /// (`search::unguarded_strategies`), a variant typed by hand is said to do so. Over the
+    /// write's own targets the axis has read; one it has not is named by
+    /// `ticks_unmodelled_warns`.
+    fn ticks_unguarded_warning(
+        &self,
+        targets: &[super::super::shared::SaveTarget],
+        changes: &[(String, String)],
+        cx: &Context<Self>,
+    ) -> Vec<String> {
+        let Some(data) = self.ticks.data.data() else {
+            return Vec::new();
+        };
+        let owns: Vec<&HashMap<String, String>> = targets
+            .iter()
+            .filter_map(|t| data.own.get(&(t.sid, t.core?)))
+            .map(|o| o.as_ref())
+            .collect();
+        let n = moon_core::db::tuner::ticks::search::unguarded_strategies(
+            owns.iter().copied(),
+            &self.filter_defaults(cx),
+            data.single_kind().unwrap_or_default(),
+            changes,
+            super::model_cfg::current(),
+        );
+        if n == 0 {
+            return Vec::new();
+        }
+        vec![t!("analytics.ticks.unguarded_warn", n = n, m = owns.len()).to_string()]
     }
 }

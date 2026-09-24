@@ -353,12 +353,16 @@ impl AnalyticsView {
             .collect();
         let (all_on, some_on) = self.ticks_tick_state(&keys);
         let mut notes: Vec<(String, u32)> = Vec::new();
+        // What the heading's tooltip says in place of a note: the short "not modelled" on the
+        // row, what follows from it on hover.
+        let mut unmodelled_tip = None;
         let modelled = section.section.modelled();
         if !modelled {
             notes.push((
                 t!("analytics.ticks.section_unmodelled").to_string(),
                 p.text_muted,
             ));
+            unmodelled_tip = Some(t!("analytics.ticks.section_unmodelled_tip").to_string());
         }
         match data {
             // Only a LOADED empty scope says so; a load in flight or a failed one has its own
@@ -384,11 +388,21 @@ impl AnalyticsView {
             p.text_muted
         };
         let note = (!notes.is_empty()).then(|| {
-            notes
-                .into_iter()
-                .map(|(text, _)| text)
+            let text = notes
+                .iter()
+                .map(|(text, _)| text.as_str())
                 .collect::<Vec<_>>()
-                .join(" · ")
+                .join(" · ");
+            // The tooltip repeats the row with the unmodelled note spelled out: it is always
+            // the first one pushed.
+            let tip = match &unmodelled_tip {
+                Some(long) => std::iter::once(long.as_str())
+                    .chain(notes.iter().skip(1).map(|(text, _)| text.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+                None => text.clone(),
+            };
+            (text, tip)
         });
         let id = format!("{:?}", section.section);
         let which = section.section;
@@ -443,7 +457,7 @@ impl AnalyticsView {
                         cx.listener(move |this, _, _, cx| this.ticks_toggle_section(which, cx)),
                     ),
             )
-            .when_some(note, |el, note| {
+            .when_some(note, |el, (note, tip)| {
                 el.child(
                     div()
                         .id(SharedString::from(format!("an-ticks-sec-note-{id}")))
@@ -451,7 +465,7 @@ impl AnalyticsView {
                         .min_w_0()
                         .truncate()
                         .text_color(moon(color))
-                        .tooltip(crate::panels::common::text_tooltip(note.clone()))
+                        .tooltip(crate::panels::common::text_tooltip(tip))
                         .child(note),
                 )
             })

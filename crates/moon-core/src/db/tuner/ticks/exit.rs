@@ -23,6 +23,8 @@ pub mod pump_move;
 pub mod sell_order;
 pub mod stops;
 
+pub use self::stops::ladder::StopStep;
+
 use self::line::{LineWalk, walk, walk_held};
 use super::mshot::Modifiers;
 use super::settings::ModelSettings;
@@ -154,8 +156,10 @@ pub struct ExitParams {
     /// kinds that do not set the field did not move.
     pub sell_modifier: f64,
     /// `MaxModifier` — ceiling on the summed modifiers BEFORE the coefficient:
-    /// `Min(MaxModifier, Σ Pn · Dn)`. 0 means no ceiling. Live strategies keep it around 70 %
-    /// (median of 526 that set it), so it rarely binds.
+    /// `Min(MaxModifier, |Σ Pn · Dn|)` — the core caps the sum's magnitude, so the sum is never
+    /// negative (`exit::delta_mods::modifier_sum`). 0 means no ceiling. Live strategies keep it
+    /// around 70 % (median of 526 that set it), so it rarely binds. The same field caps the
+    /// MoonShot corridor's `MShotAdd*` sum (`MshotParams::max_modifier`).
     pub max_modifier: f64,
     /// `StopLossModifier` — the same summed modifiers, applied to the STOP instead of the sell:
     /// the stop goes DEEPER by `StopLossModifier · Σ`, as the core's FAQ spells it:
@@ -214,6 +218,11 @@ pub struct ExitParams {
     /// buy, NOT the order's `SellPrice`: no line until the middle passed it by `|TrailingPercent|`,
     /// and no sale below it. `None` when it is off.
     pub trailing_take_profit_pct: Option<f64>,
+    /// The second stop (`UseSecondStop` and its three fields), `None` when it is off or there is
+    /// no stop to move (`exit::stops::ladder`).
+    pub second_stop: Option<StopStep>,
+    /// The third stop (`UseStopLoss3` and its three fields), likewise.
+    pub third_stop: Option<StopStep>,
     /// A sell rule the strategy switched on that the model does not have. The walk runs as if
     /// it were off, and the verdict answers nothing for such a trade, which keeps it out of the
     /// search (`record::fit_for_search`): a variant's exit there is whatever the missing rule
@@ -268,6 +277,8 @@ impl Default for ExitParams {
             trailing_pct: 0.0,
             trailing_ema: 0.0,
             trailing_take_profit_pct: None,
+            second_stop: None,
+            third_stop: None,
             unmodelled: None,
             model: ModelSettings::default(),
             take_from_archive: false,
@@ -278,8 +289,6 @@ impl Default for ExitParams {
 /// A sell rule the strategy can switch on that the model does not have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnmodelledRule {
-    /// `UseSecondStop` / `UseStopLoss3` — the stop ladder.
-    StopLadder,
     /// `IgnoreSellShot` off with a `SellShotDistance` — the sell kept at a distance from the
     /// market's high.
     SellShot,

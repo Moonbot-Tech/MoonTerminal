@@ -1940,10 +1940,18 @@ analytics.ticks.row_unmodelled:
   ru: "Раздел не моделируется — поле модель не учитывает"
   en: "The section is not modelled — the model does not take this field into account"
   es: "La sección no se modela — el modelo no tiene en cuenta este campo"
+analytics.ticks.side_pick_strategy:
+  ru: "Выберите стратегию в списке — параметры и «Факт vs варианты» считаются по выбранным"
+  en: "Pick a strategy in the list — the parameters and \"Fact vs variants\" are computed over the selected ones"
+  es: "Elija una estrategia en la lista: los parámetros y «Hecho vs variantes» se calculan sobre las seleccionadas"
 analytics.ticks.section_unmodelled:
-  ru: "не моделируется: сделки стратегий с включённым разделом не судятся и в подбор не идут"
-  en: "not modelled: trades of a strategy that switches it on are not judged and stay out of the search"
-  es: "no se modela: las operaciones de una estrategia que lo activa no se juzgan y quedan fuera de la búsqueda"
+  ru: "не моделируется"
+  en: "not modelled"
+  es: "no se modela"
+analytics.ticks.section_unmodelled_tip:
+  ru: "Не моделируется: сделки стратегий с включённым разделом не судятся и в подбор не идут"
+  en: "Not modelled: trades of a strategy that switches it on are not judged and stay out of the search"
+  es: "No se modela: las operaciones de una estrategia que lo activa no se juzgan y quedan fuera de la búsqueda"
 analytics.ticks.unmodelled_title:
   ru: "Параметры выхода, которых нет в модели"
   en: "Exit parameters the model does not have"
@@ -2020,6 +2028,18 @@ analytics.ticks.stats_cut:
   ru: "не сошёлся за %{n} прох. — упёрся в предел"
   en: "still improving after %{n} passes — cut by the limit"
   es: "seguía mejorando tras %{n} pasadas — cortado por el límite"
+analytics.ticks.sugg_unclosed:
+  ru: "Ни один вариант не закрывает сделку внутри ленты: нужен стоп или трейлинг без ТП, и каждая купленная сделка должна закрыться стопом или селлом"
+  en: "No variant closes its trades inside the tape: a stop or a trailing without a take profit is needed, and every trade bought must close by its stop or its sell"
+  es: "Ninguna variante cierra sus operaciones dentro de la cinta: hace falta un stop o un trailing sin take profit, y cada operación comprada debe cerrarse por su stop o su venta"
+analytics.ticks.holdout_open:
+  ru: "открытыми остались %{n}"
+  en: "%{n} left open"
+  es: "%{n} quedaron abiertas"
+analytics.ticks.unguarded_warn:
+  ru: "Без защиты: %{n} из %{m} стратегий — ни стопа, ни трейлинга без ТП; сделка может не закрыться"
+  en: "Unguarded: %{n} of %{m} strategies — no stop and no trailing without a take profit; a trade may never close"
+  es: "Sin protección: %{n} de %{m} estrategias — sin stop ni trailing sin take profit; una operación puede no cerrarse"
 analytics.ticks.sugg_corridor:
   ru: "Ни один вариант не держит коридор: MShotPriceMin меньше MShotPrice и, с галкой, не ближе к цене, чем у сделки"
   en: "No variant keeps the corridor: MShotPriceMin below MShotPrice and, with the switch on, no nearer the price than the trade's"

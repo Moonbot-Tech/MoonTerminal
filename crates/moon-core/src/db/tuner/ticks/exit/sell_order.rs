@@ -56,18 +56,13 @@ impl ExitModel<'_> {
                 return take;
             }
         }
-        // Floored at zero: a modifier deep enough to drive the distance negative would put the
-        // TAKE on the losing side of the entry and turn every level the line steps down from
-        // inside out. The rules that legitimately sell below the entry are the moving ones
-        // (`PriceDownAllowedDrop`), and they get there by
-        // stepping down from the take, not by starting underneath it.
-        let pct = (self.base_take_pct(deal) + self.modifier_pct(deal, fill.t_ms)).max(0.0);
         // A short's take divides off the fill for every kind (the core developer, 2026-09-23 for
-        // MoonShot, 2026-09-24 for every per cent of a short off the buy). A MoonHook's take
-        // carries the delta modifiers, whose live sum the report does not keep, so the archive
-        // cannot tell the two readings apart on it; the stop and the `PriceDownAllowedDrop`
-        // floor, which it can, divide.
-        let mut take = level_off_buy(fill.price, pct, deal.is_long());
+        // MoonShot, 2026-09-24 for every per cent of a short off the buy).
+        let mut take = level_off_buy(
+            fill.price,
+            self.base_take_pct(deal).max(0.0),
+            deal.is_long(),
+        );
         if self.params.sell_at_last_price {
             let pre = deal
                 .pre_spike_ask
@@ -82,6 +77,25 @@ impl ExitModel<'_> {
                     take.min(pre * factor)
                 };
             }
+        }
+        // Then the delta modifiers move the sell so placed — by `SellModifier · Σ` per cent of
+        // its own price, a short's by a division as every short per cent — after the floor of
+        // `SellPrice` over the buy and after the lift to the ask, so a negative coefficient can
+        // take it under that floor (the core developer via LinKvo, 2026-09-24; the core's own
+        // "SellPrice adjusted by +0.30 * +2.30% = +0.69% (0.00056430 => 0.00056044)" is a short's
+        // 0.00056430 / 1.0069).
+        // Under the floor, but not through the fill: a shift deep enough to carry the sell past
+        // the entry — toward zero, a short's toward infinity at −100 % — is held AT the entry.
+        // What the core does there is not known (no trade of the live sample reaches it), and a
+        // take on the losing side would turn every level the line steps from inside out.
+        let shift = self.modifier_pct(deal, fill.t_ms);
+        if shift.is_finite() && shift != 0.0 {
+            let shifted = level_off_buy(take, shift.max(-99.0), deal.is_long());
+            take = if deal.is_long() {
+                shifted.max(fill.price.min(take))
+            } else {
+                shifted.min(fill.price.max(take))
+            };
         }
         take
     }

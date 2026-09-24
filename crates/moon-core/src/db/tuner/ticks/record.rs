@@ -17,9 +17,9 @@
 //! proxy, and the verdict (which replays the proxy, never the anchor) is what says how far the
 //! proxy may be trusted.
 
-use super::exit::ExitParams;
 use super::exit::sell_order::{archived_pre_spike_ask, archived_take};
 use super::exit::stops::stop_pct;
+use super::exit::{ExitParams, StopStep};
 use super::verify::{
     POINT_TIME_TOLERANCE_MS, Verdict, archived_stop_jump, is_stop_reason, stop_jump_level,
 };
@@ -36,6 +36,9 @@ pub struct StopAnchor {
     pub delay_s: f64,
     pub fast: bool,
     pub ema: f64,
+    /// The ladder the fact ran (`ExitParams::second_stop`, `third_stop`).
+    pub second: Option<StopStep>,
+    pub third: Option<StopStep>,
     /// When the fact's stop fired and the price it sold at; `None` when the fact did not stop.
     pub fired: Option<(i64, f64)>,
     /// Up to when the fact proves the stop quiet: its activation, or the close.
@@ -74,6 +77,8 @@ impl StopAnchor {
             delay_s: exit.stop_loss_delay_s,
             fast: exit.fast_stop_loss,
             ema: exit.stop_loss_ema,
+            second: exit.second_stop,
+            third: exit.third_stop,
             fired,
             quiet_until_ms: fired.map_or(deal.close_ms, |(t, _)| t),
         }
@@ -95,6 +100,8 @@ impl StopAnchor {
             && params.stop_loss_delay_s == self.delay_s
             && params.fast_stop_loss == self.fast
             && params.stop_loss_ema == self.ema
+            && params.second_stop == self.second
+            && params.third_stop == self.third
     }
 }
 
