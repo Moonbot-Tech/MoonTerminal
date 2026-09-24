@@ -212,3 +212,173 @@ fn strategy_sound_ignores_archive_folders() {
     assert_eq!(sound_stem(r"sounds\hook"), Some("hook".into()));
     assert_eq!(sound_stem("sounds/"), None);
 }
+
+/// A snapshot whose only interesting state is the fields a test names.
+///
+/// Id 9 makes the identifier fallback `strat 9`, so a test that expected a real name and got the
+/// fallback cannot pass by accident.
+fn snapshot_with(pairs: &[(&str, FieldValue)]) -> StrategySnapshot {
+    let mut fields = StrategyFields::new();
+    for (name, value) in pairs {
+        fields.insert(*name, value.clone());
+    }
+    StrategySnapshot::new(
+        9,
+        1,
+        0,
+        false,
+        moonproto::StrategyKind::MOON_SHOT,
+        "",
+        fields,
+    )
+}
+
+/// An omitted timing field is the caller's default, and the three callers do not share one.
+///
+/// `KeepAlert` waits a minute, `AddToChart` means "do not add", and `KeepInChart` waits a minute
+/// only when no schema can say that the omitted field was the zero meaning "keep forever".
+/// Collapsing the three to one number would open a chart tab for a strategy that asked for none,
+/// or drop a detect alert immediately.
+#[test]
+fn missing_timing_fields_take_their_own_defaults() {
+    let params = alert_params(&snapshot_with(&[]), None);
+    assert!(!params.sound_alert);
+    assert_eq!(params.sound_name, None);
+    assert_eq!(params.keep_alert_secs, 60);
+    assert_eq!(params.add_to_chart, 0);
+    assert_eq!(params.keep_in_chart_secs, 60);
+}
+
+/// Zero stored on the strategy is a meaning — "keep forever", "do not add" — not a missing field.
+///
+/// The server omits a field that still equals its schema default, so a zero that DID arrive has
+/// already been judged different from that default. Treating it as absent would replace a chart
+/// the user pinned with the sixty-second fallback.
+#[test]
+fn a_stored_zero_stays_zero() {
+    let params = alert_params(
+        &snapshot_with(&[
+            ("KeepAlert", FieldValue::Int32(0)),
+            ("KeepInChart", FieldValue::UInt32(0)),
+            ("AddToChart", FieldValue::UInt32(2)),
+        ]),
+        None,
+    );
+    assert_eq!(params.keep_alert_secs, 0);
+    assert_eq!(params.keep_in_chart_secs, 0);
+    assert_eq!(params.add_to_chart, 2);
+}
+
+/// A present field that cannot be read falls back to the caller's default, never to zero.
+///
+/// Zero in `KeepInChart` and `AddToChart` is itself a meaning. Folding NaN, a negative, or a
+/// string onto that meaning would pin a chart forever or refuse to add one because a value failed
+/// to parse.
+#[test]
+fn garbage_in_a_present_timing_field_uses_the_caller_default() {
+    let params = alert_params(
+        &snapshot_with(&[
+            ("KeepAlert", FieldValue::Int32(-1)),
+            ("KeepInChart", FieldValue::Double(f64::NAN)),
+            ("AddToChart", FieldValue::String("4".into())),
+        ]),
+        None,
+    );
+    assert_eq!(params.keep_alert_secs, 60);
+    assert_eq!(params.keep_in_chart_secs, 60);
+    assert_eq!(
+        params.add_to_chart, 0,
+        "text in a numeric field is not parsed as that number"
+    );
+}
+
+/// The sound the strategy names plays even when `SoundAlert` is off.
+///
+/// The flag decides whether an alert is raised. The stem is a separate field, and dropping it
+/// whenever the flag is false would silence a strategy that named `DING1` the moment that flag
+/// is the one the server bothered to send.
+#[test]
+fn a_named_sound_plays_while_the_alert_flag_is_off() {
+    let params = alert_params(
+        &snapshot_with(&[
+            ("SoundAlert", FieldValue::Bool(false)),
+            ("SoundKind", FieldValue::String("sounds/DING1.wav".into())),
+        ]),
+        None,
+    );
+    assert!(!params.sound_alert);
+    assert_eq!(params.sound_name, Some("ding1".into()));
+}
+
+/// No strategy behind a detect prints nothing. A strategy that exists is never nameless.
+///
+/// An alert is a drawn chart object and has no snapshot; an empty card label is how a caption
+/// tells those apart from a strategy the core simply did not name. The unnamed strategy still
+/// has an id, including when the only characters in its name are invisible.
+#[test]
+fn an_absent_detect_is_nameless_and_a_blank_strategy_uses_its_id() {
+    assert_eq!(detect_strat_name(None), "");
+    assert_eq!(
+        detect_strat_name(Some(&snapshot_with(&[]))),
+        "strat 9",
+        "a missing StrategyName is the identifier, not a blank caption"
+    );
+    assert_eq!(
+        detect_strat_name(Some(&snapshot_with(&[(
+            "StrategyName",
+            FieldValue::String(String::new())
+        )]))),
+        "strat 9"
+    );
+    assert_eq!(
+        detect_strat_name(Some(&snapshot_with(&[(
+            "StrategyName",
+            FieldValue::String("\u{200b}\u{202e}".into()),
+        )]))),
+        "strat 9",
+        "bidi and zero-width marks are not a name"
+    );
+    assert_eq!(
+        strat_display_name(&snapshot_with(&[(
+            "StrategyName",
+            FieldValue::String("   ".into())
+        )])),
+        "strat 9"
+    );
+}
+
+/// Leading blanks are removed before the length cut, and a newline does not survive into the caption.
+///
+/// The cut is [`crate::feed::DETECT_STRAT_NAME_KEEP`] characters of the trimmed name. Cutting the
+/// raw string first spends that budget on the padding, and a name that is only blanks inside the
+/// window then falls through to `strat <id>` — the answer reserved for a strategy that sent no
+/// name at all. A newline is a control character, so it becomes a space; joining the two words
+/// would rename the strategy.
+#[test]
+fn the_strategy_name_is_trimmed_before_the_length_cut() {
+    let keep = crate::feed::DETECT_STRAT_NAME_KEEP;
+    let padded = format!("{}Moon", " ".repeat(keep));
+    assert_eq!(
+        detect_strat_name(Some(&snapshot_with(&[(
+            "StrategyName",
+            FieldValue::String(padded),
+        )]))),
+        "Moon",
+        "padding wider than the cut must not erase the name"
+    );
+    let long = format!("{}{}", " ".repeat(keep), "B".repeat(keep + 10));
+    assert_eq!(
+        detect_strat_name(Some(&snapshot_with(&[(
+            "StrategyName",
+            FieldValue::String(long),
+        )]))),
+        "B".repeat(keep)
+    );
+    assert_eq!(
+        detect_strat_name(Some(&snapshot_with(&[(
+            "StrategyName",
+            FieldValue::String("  Foo\nBar  ".into()),
+        )]))),
+        "Foo Bar"
+    );
+}
