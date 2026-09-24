@@ -36,7 +36,9 @@ feature — a row in the map, a new user word — a row in the dictionary.
 ## Dictionary: what users' words mean
 
 - **«Карта ордеров»** (“order map”) = an order-book heatmap over time, as in Bookmap (book
-  walls in colour on history). There is no such feature (request — #489). Do not confuse it with the
+  walls in colour on history). There is no such feature. #489 was closed: that reading was
+  not the request. The open ask is #496, Moonbot's HMap — large-trade dots under the
+  bottom volumes. Do not confuse either with the
   **order book on the chart** — that exists: cumulative bid/ask walls on the sides of
   the chart + thin lines of individual levels on top (Settings → Interface →
   Order book; drawn by the shaders, the same in DX11/native/Metal). The word “heatmap”
@@ -54,8 +56,9 @@ feature — a row in the map, a new user word — a row in the dictionary.
 - **«Реплей» / «окно сделки»** (“replay” / “Trade window”) — viewing a closed trade: candle context
   6h before entry / 2h after exit, tick detail around the position,
   history from the core's archives.
-- **«Супер-растяжка»** (“super stretch”) — Moonbot's Ctrl+Shift+wheel (time down to 3 sec);
-  it is not here, the floor is 30 sec (#493).
+- **«Супер-растяжка»** (“super stretch”) — Moonbot's Ctrl+Shift+wheel zooms time down to
+  3 seconds. Plain wheel and Ctrl+wheel still stop at 30 seconds. The super-zoom hotkeys
+  use that same 3-second floor and are unbound by default (#493).
 - **«Фигуры»** (“Figures”) — drawing: Segment, Ray, Rectangle, Triangle,
   “Position”, two kinds of Fibonacci (including Moonbot's), fills, line styles,
   Ctrl+Z, magnet on Ctrl, figure alerts with sound and flags.
@@ -76,7 +79,8 @@ percentages. Clusters with dividers; on a narrow window it compresses in a casca
 
 **Chart**: tick trail + candles with TF, history is pulled from the core's
 archives, a “trades only” zone, the order book on the sides (walls + level lines),
-volumes at the bottom (in quote currency), bought/sold volume by the chart,
+volumes at the bottom (in quote currency), horizontal volumes by price beside the
+plot (Moonbot's HVol), bought/sold volume by the chart,
 volume measure around the cursor, liquidation count, news marks (gems by
 tags, Ctrl-hover card), own-trade markers, chart stacks/columns,
 detach into separate windows, chart screenshot to the clipboard (with the header baked in), favourite
@@ -153,8 +157,8 @@ only by an explicit Silent/`NONE`.
 
 ## Known gaps (frequently requested)
 
-Order-book heatmap (#489), a volume profile by price (#487), a % ruler without
-creating a figure (#485),
-super-stretch Ctrl+Shift+wheel (#493). Before
+A % ruler without creating a figure (#485), and Moonbot's HMap — large trades under
+the volume bars (#496). A Bookmap-style order-book heatmap is also absent; #489 was
+closed because that description was the wrong ask. Before
 answering the user “no” or “yes” — check the open issues and the code:
 the list grows, and something on it may already have been done.
