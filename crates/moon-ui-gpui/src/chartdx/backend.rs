@@ -63,20 +63,24 @@ pub struct PlatformLayers {
 }
 
 impl PlatformLayers {
-    /// Borrow the chronological tick ring for this frame, including pending native uploads.
-    /// Consumers can inspect prices or notionals without allocating a second history mirror.
-    pub(super) fn tick_samples(&self) -> impl Iterator<Item = &ChartCross> {
+    /// Borrow tick candidates in a time window, including pending native uploads.
+    /// DX11 bounds the lookup; other backends retain their scan until their native paths are ported.
+    pub(super) fn tick_samples(&self, from: f64, to: f64) -> impl Iterator<Item = &ChartCross> {
         #[cfg(windows)]
         {
-            self.combo.tick_samples()
+            self.combo.tick_samples(from, to)
         }
         #[cfg(target_os = "linux")]
         {
-            self.wgpu.tick_samples()
+            self.wgpu
+                .tick_samples()
+                .filter(move |c| f64::from(c.time_rel) >= from && f64::from(c.time_rel) <= to)
         }
         #[cfg(target_os = "macos")]
         {
-            self.metal.tick_samples()
+            self.metal
+                .tick_samples()
+                .filter(move |c| f64::from(c.time_rel) >= from && f64::from(c.time_rel) <= to)
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
@@ -91,7 +95,7 @@ impl PlatformLayers {
         to: f32,
     ) -> [Option<moon_chart::tick_volume::TickVolumeRange>; 2] {
         moon_chart::tick_volume::nearby_ticks(
-            self.tick_samples().map(|c| {
+            self.tick_samples(f64::from(from), f64::from(to)).map(|c| {
                 (
                     c.time_rel,
                     c.side,
