@@ -34,7 +34,7 @@ from tour import emit, knowledge, paths
 from tour import map as map_mod
 from tour import render as render_mod
 from tour.__main__ import main as tour_main
-from tour.content import Language
+from tour.content import Language, step_digest, step_texts
 from tour.content import load as load_content
 from tour.errors import ContentError, Problems, TourError
 from tour.locales import load as load_locales
@@ -124,7 +124,7 @@ class KnowledgeBundle(unittest.TestCase):
         for zone in content.zones:
             texts.extend((zone["title"], zone["body"]))
         for step in content.steps:
-            texts.extend((step["title"], step["body"]))
+            texts.extend(step_texts(step))
         for panel in content.panels:
             texts.append(panel["description"])
         for window in content.windows:
@@ -518,11 +518,11 @@ class Escaping(unittest.TestCase):
         self.assertIn("u2028", literal)
 
     def test_markup_is_opt_in(self):
-        """Only the quick-start bodies may carry raw markup."""
+        """Only quick-start slots may carry raw markup, and some of them do."""
         _, content, _ = build()
         raw = [k for k, t in content.page.items() if t.html]
         self.assertEqual(raw, [], "page chrome must not carry markup")
-        self.assertTrue(all(s["body"].html for s in content.steps))
+        self.assertTrue(any(t.html for s in content.steps for t in step_texts(s)))
 
     def test_active_or_malformed_quickstart_html_is_rejected(self):
         """A content edit must not turn the public Pages origin into an XSS surface."""
@@ -550,6 +550,43 @@ class Escaping(unittest.TestCase):
                     with self.assertRaises(ContentError):
                         content = load_content(content_dir, locales)
                         content.problems.raise_if_any("content is not usable", ContentError)
+
+    def test_quickstart_block_markup_is_validated(self):
+        """A markup slot inside a quick-start block goes through the same allowlist."""
+        locales = load_locales(paths.LOCALES_DIR)
+
+        def inject(doc):
+            """Put an active tag into the first markup-bearing block of step 3."""
+            doc["steps"][2]["blocks"][0]["warn"]["ru"] = "<img src=x onerror=alert(1)>"
+
+        with broken_content("quickstart.yml", inject) as content_dir:
+            with self.assertRaises(ContentError):
+                content = load_content(content_dir, locales)
+                content.problems.raise_if_any("content is not usable", ContentError)
+
+    def test_unknown_quickstart_block_kind_is_rejected(self):
+        """A typo in a block kind is a content error, not a silently dropped block."""
+        locales = load_locales(paths.LOCALES_DIR)
+
+        def inject(doc):
+            """Append a block whose kind the renderer does not know."""
+            doc["steps"][2]["blocks"].append({"warning": {"ru": "x", "en": "x"}})
+
+        with broken_content("quickstart.yml", inject) as content_dir:
+            content = load_content(content_dir, locales)
+            self.assertTrue(content.problems, "an unknown block kind must be reported")
+
+    def test_quickstart_code_block_is_escaped_and_digested(self):
+        """The firewall command reaches the page raw for JS escaping, and the
+        knowledge corpus keeps it verbatim inside the step's digest."""
+        _, content, _ = build()
+        step = content.steps[2]
+        code = next(b["code"] for b in step["blocks"] if b["kind"] == "code")
+        self.assertIn('name="MoonBot-UDP-5017"', code)
+        self.assertIn("localport=5017", render_mod.data_steps(content))
+        digest = step_digest(step, content.codes)
+        for code_lang in content.codes:
+            self.assertIn(f"<code>{code}</code>", digest.get(code_lang))
 
     def test_markdown_source_text_cannot_create_active_markup(self):
         """Plain and allowed-HTML text may not inject Markdown or raw HTML."""

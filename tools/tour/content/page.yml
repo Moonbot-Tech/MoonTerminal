@@ -47,6 +47,18 @@ strings:
       настройки не сохранены.'
     en: 'Five steps from an empty window to a green indicator. Order matters: the terminal does not connect
       until settings are saved.'
+  qs.note:
+    ru: Важно
+    en: Note
+  qs.warn:
+    ru: Внимание
+    en: Heads up
+  qs.copy:
+    ru: Копировать
+    en: Copy
+  qs.copied:
+    ru: Скопировано
+    en: Copied
   pn.h:
     ru: Панели дока
     en: Dock panels

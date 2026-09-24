@@ -1,9 +1,18 @@
-# Five steps from download to a connected core. The bodies carry markup on
-# purpose (`<code>`, `<a>`, `<b>`), which is what `html: true` declares — every
+# Five steps from download to a connected core. Each step is a title, a short
+# body and optional `blocks` — one-key mappings rendered in order:
+#   group        a sub-heading naming WHERE the user acts
+#   sub          one numbered sub-step (3.1, 3.2, ... across the whole step)
+#   p            a plain paragraph
+#   code         a literal command, the same in every language, with a copy button
+#   path         a click path, one item per crumb
+#   note / warn  a callout
+#   terms        a list of {term, text} pairs
+#   status       a status sequence, left to right
+# Slots with `html: true` carry `<code>`, `<a>` or `<b>` on purpose; every
 # other slot is escaped at render time.
 # Edited by hand; rendered into docs/tour/index.html by `make tour`.
 
-_schema: tour.quickstart.v1
+_schema: tour.quickstart.v2
 steps:
 - title:
     ru: Скачайте терминал
@@ -28,54 +37,129 @@ steps:
     ru: Добавьте ядро и вставьте ключ
     en: Add a core and paste the key
   body:
-    ru: 'Кнопка <code>+ Добавить ядро (в «default»)</code> создаёт строку. Порядок важен: ключ несёт
-      порт и режим внутри себя — ключ, скопированный до их настройки, уже устарел. На машине с MoonBot
-      откройте UDP-порт ядра для входящих: в Windows это <code>netsh advfirewall firewall add rule
-      name="MoonBot-UDP-5017" dir=in action=allow protocol=UDP localport=5017</code>; у хостера со своим
-      фаерволом (AWS и подобные) порт нужно открыть и там, на обычном VPS достаточно правила Windows.
-      В MoonBot зелёный кружок слева внизу открывает <code>Info</code>; в строке <code>Moon Kernel</code>
-      нажмите <code>Settings</code> — откроется <code>Moon Proto</code>; на вкладке <code>Settings</code>
-      включите <code>Kernel (VPS)</code>, задайте <code>Port</code> (по умолчанию <code>5017</code>),
-      выберите версию переключателями <code>V0</code> / <code>V1</code> / <code>V2</code> (MoonBot
-      по умолчанию создаёт ключ <code>V0</code>: если не сменить версию до <code>Copy Key</code>,
-      терминал прочитает из ключа <code>V0</code>), нажмите <code>Apply</code> — появится зелёное «Server activated on port …». На строке <code>Key:</code>
-      нажмите <code>Copy Key</code> (ключа нет — <code>New Key</code>). Вставьте его в поле «Ключ»
-      кнопкой из буфера. Хост и порт отдельно вводить не надо — они внутри ключа.'
-    en: 'The <code>+ Add core (to "default")</code> button creates a row. The order matters: the key
-      carries the port and mode inside it — a key copied before they are set is stale. On the machine
-      running MoonBot, open the core''s UDP port for inbound traffic: on Windows that is <code>netsh
-      advfirewall firewall add rule name="MoonBot-UDP-5017" dir=in action=allow protocol=UDP localport=5017</code>;
-      a hoster with its own firewall (AWS and the like) needs the port opened there too, while a plain
-      VPS needs only the Windows rule. In MoonBot the green dot at the bottom left opens <code>Info</code>;
-      on the <code>Moon Kernel</code> row press <code>Settings</code>, which opens <code>Moon Proto</code>;
-      on its <code>Settings</code> tab tick <code>Kernel (VPS)</code>, set <code>Port</code> (default
-      <code>5017</code>), choose the version with the <code>V0</code> / <code>V1</code> / <code>V2</code>
-      radio buttons (MoonBot creates a <code>V0</code> key by default: unless you change the version
-      before <code>Copy Key</code>, the terminal reads <code>V0</code> from the key), press
-      <code>Apply</code> — a green "Server activated on port …" appears.
-      On the <code>Key:</code> row press <code>Copy Key</code> (<code>New Key</code> if there is no
-      key yet). Paste it into the Key field with the clipboard button. Host and port are not entered
-      separately — they are inside the key.'
+    ru: Сначала настройка на машине с MoonBot, потом ключ — в терминал.
+    en: Set things up on the MoonBot machine first, then bring the key to the terminal.
     html: true
+  blocks:
+  - warn:
+      ru: 'Порядок важен: ключ несёт порт и режим внутри себя. Задайте <code>Port</code>, режим и версию
+        <b>до</b> <code>Copy Key</code> — ключ, скопированный раньше, уже устарел.'
+      en: 'The order matters: the key carries the port and mode inside it. Set <code>Port</code>, the mode
+        and the version <b>before</b> <code>Copy Key</code> — a key copied earlier is stale.'
+      html: true
+  - group:
+      ru: На машине с MoonBot
+      en: On the MoonBot machine
+  - sub:
+      ru: 'Откройте UDP-порт ядра для входящих. В Windows:'
+      en: 'Open the core''s UDP port for inbound traffic. On Windows:'
+  - code: netsh advfirewall firewall add rule name="MoonBot-UDP-5017" dir=in action=allow protocol=UDP localport=5017
+  - note:
+      ru: У хостера со своим фаерволом (AWS и подобные) порт нужно открыть и там. На обычном VPS достаточно
+        правила Windows.
+      en: A hoster with its own firewall (AWS and the like) needs the port opened there too. A plain VPS
+        needs only the Windows rule.
+  - sub:
+      ru: 'Откройте настройки <code>Moon Proto</code>:'
+      en: 'Open the <code>Moon Proto</code> settings:'
+      html: true
+  - path:
+    - ru: зелёный кружок слева внизу
+      en: green dot, bottom left
+    - ru: <code>Info</code>
+      en: <code>Info</code>
+      html: true
+    - ru: строка <code>Moon Kernel</code> → <code>Settings</code>
+      en: <code>Moon Kernel</code> row → <code>Settings</code>
+      html: true
+    - ru: <code>Moon Proto</code>, вкладка <code>Settings</code>
+      en: <code>Moon Proto</code>, <code>Settings</code> tab
+      html: true
+  - sub:
+      ru: Включите <code>Kernel (VPS)</code>.
+      en: Tick <code>Kernel (VPS)</code>.
+      html: true
+  - sub:
+      ru: Задайте <code>Port</code> (по умолчанию <code>5017</code>).
+      en: Set <code>Port</code> (default <code>5017</code>).
+      html: true
+  - sub:
+      ru: Выберите версию переключателями <code>V0</code> / <code>V1</code> / <code>V2</code>.
+      en: Choose the version with the <code>V0</code> / <code>V1</code> / <code>V2</code> radio buttons.
+      html: true
+  - note:
+      ru: MoonBot по умолчанию создаёт ключ <code>V0</code>. Если не сменить версию до <code>Copy Key</code>,
+        терминал прочитает из ключа <code>V0</code>.
+      en: MoonBot creates a <code>V0</code> key by default. Unless you change the version before <code>Copy
+        Key</code>, the terminal reads <code>V0</code> from the key.
+      html: true
+  - sub:
+      ru: Нажмите <code>Apply</code> — появится зелёное «Server activated on port …».
+      en: Press <code>Apply</code> — a green "Server activated on port …" appears.
+      html: true
+  - sub:
+      ru: На строке <code>Key:</code> нажмите <code>Copy Key</code> (ключа нет — <code>New Key</code>).
+      en: On the <code>Key:</code> row press <code>Copy Key</code> (<code>New Key</code> if there is no key
+        yet).
+      html: true
+  - group:
+      ru: В терминале
+      en: In the terminal
+  - sub:
+      ru: Нажмите <code>+ Добавить ядро (в «default»)</code> — появится строка.
+      en: Press <code>+ Add core (to "default")</code> — a row appears.
+      html: true
+  - sub:
+      ru: Вставьте ключ в поле «Ключ» кнопкой из буфера.
+      en: Paste the key into the Key field with the clipboard button.
+  - note:
+      ru: Хост и порт отдельно вводить не надо — они внутри ключа.
+      en: Host and port are not entered separately — they are inside the key.
 - title:
     ru: Отметьте, что принимать
     en: Choose what to accept
   body:
-    ru: <b>Акт</b> — подключаться вообще. <b>Окн</b> — рисовать окно ядра; выключенное «Окн» при включённом
-      «Акт» даёт headless-ядро. Колонки <b>Данные</b> (Ord / Det / Rep / Bal / Str / Log / Alr / Arb)
-      фильтруют, что вы принимаете от этого ядра.
-    en: <b>Act</b> — connect at all. <b>Win</b> — draw the core's window; Win off with Act on gives you
-      a headless core. The <b>Data</b> columns (Ord / Det / Rep / Bal / Str / Log / Alr / Arb) filter
-      what you accept from that core.
-    html: true
+    ru: 'Флажки в строке ядра:'
+    en: 'Checkboxes on the core''s row:'
+  blocks:
+  - terms:
+    - term:
+        ru: Акт
+        en: Act
+      text:
+        ru: подключаться вообще.
+        en: connect at all.
+    - term:
+        ru: Окн
+        en: Win
+      text:
+        ru: рисовать окно ядра. Выключенное «Окн» при включённом «Акт» даёт headless-ядро.
+        en: draw the core's window. Win off with Act on gives you a headless core.
+    - term:
+        ru: Данные
+        en: Data
+      text:
+        ru: колонки <code>Ord</code> / <code>Det</code> / <code>Rep</code> / <code>Bal</code> / <code>Str</code>
+          / <code>Log</code> / <code>Alr</code> / <code>Arb</code> фильтруют, что вы принимаете от этого ядра.
+        en: the <code>Ord</code> / <code>Det</code> / <code>Rep</code> / <code>Bal</code> / <code>Str</code>
+          / <code>Log</code> / <code>Alr</code> / <code>Arb</code> columns filter what you accept from that
+          core.
+        html: true
 - title:
     ru: Нажмите «Сохранить»
     en: Press Save
   body:
-    ru: До сохранения ядро честно пишет «Нет данных (сохраните настройки для подключения)». После — статус
-      проходит «Подключение…» и становится зелёным «Подключено». Ключи уезжают в <code>servers.enc</code>,
-      зашифрованные ключом из хранилища ОС.
-    en: Until you save, the core plainly reports "No data (save settings to connect)". After that the
-      status moves through "Connecting…" to a green "Connected". Keys go into <code>servers.enc</code>,
-      encrypted with a key from the OS keyring.
-    html: true
+    ru: 'До сохранения ядро не подключается. После — статус проходит путь:'
+    en: 'Until you save, the core does not connect. After that the status moves along:'
+  blocks:
+  - status:
+    - ru: Нет данных (сохраните настройки для подключения)
+      en: No data (save settings to connect)
+    - ru: Подключение…
+      en: Connecting…
+    - ru: Подключено
+      en: Connected
+  - p:
+      ru: Ключи уезжают в <code>servers.enc</code>, зашифрованные ключом из хранилища ОС.
+      en: Keys go into <code>servers.enc</code>, encrypted with a key from the OS keyring.
+      html: true

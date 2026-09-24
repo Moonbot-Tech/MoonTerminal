@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from . import emit
-from .content import Content, Text
+from .content import Content, Text, step_digest
 from .errors import Problems, TemplateError
 from .render import css_tokens
 from .theme import Themes
@@ -229,7 +229,7 @@ def getting_started_markdown(content: Content) -> str:
     )
     for number, step in enumerate(content.steps, start=1):
         lines.extend([f"## step-{number}", ""])
-        lines.extend(_language_sections(step["title"], step["body"], content.codes))
+        lines.extend(_language_sections(step["title"], step_digest(step, content.codes), content.codes))
     return emit.normalise("\n".join(lines))
 
 
@@ -429,7 +429,7 @@ def knowledge_jsonl(content: Content) -> str:
     """Render one searchable bilingual JSON object per documented fact."""
     rows: list[dict[str, object]] = []
     for index, step in enumerate(content.steps, start=1):
-        rows.append(_entry("quickstart", str(index), step["title"], step["body"], "tools/tour/content/quickstart.yml"))
+        rows.append(_entry("quickstart", str(index), step["title"], step_digest(step, content.codes), "tools/tour/content/quickstart.yml"))
     for zone in content.zones:
         zone_id = str(zone["id"]) if zone["mode"] == "classic" else f"{zone['mode']}.{zone['id']}"
         rows.append(

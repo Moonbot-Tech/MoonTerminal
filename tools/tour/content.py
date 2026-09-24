@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
+from html import escape as html_escape
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -273,6 +274,112 @@ class _Resolver:
         return value
 
 
+#: Quick-start block kinds. A text kind carries one slot, a list kind a list of
+#: slots; ``code`` is a language-neutral literal and ``terms`` a list of
+#: ``{term, text}`` pairs.
+STEP_TEXT_BLOCKS = {"group", "sub", "p", "note", "warn"}
+STEP_LIST_BLOCKS = {"path", "status"}
+STEP_BLOCKS = STEP_TEXT_BLOCKS | STEP_LIST_BLOCKS | {"code", "terms"}
+
+
+def _load_step(where: str, raw: object, r: _Resolver, problems: Problems, codes: list[str]) -> dict:
+    """Resolve one quick-start step: title, short body and its optional blocks."""
+    if not isinstance(raw, dict):
+        problems.add(where, "a step must be a mapping")
+        empty = Text(values={code: "" for code in codes})
+        return {"title": empty, "body": empty, "blocks": []}
+    extra = set(raw) - {"title", "body", "blocks"}
+    if extra:
+        problems.add(where, f"unknown step key(s) {sorted(extra)}")
+    title = r.text(f"{where} title", raw.get("title"))
+    body = r.text(f"{where} body", raw.get("body"))
+    blocks: list[dict] = []
+    raw_blocks = raw.get("blocks") or []
+    if not isinstance(raw_blocks, list):
+        problems.add(where, "blocks must be a list")
+        raw_blocks = []
+    for bi, block in enumerate(raw_blocks, 1):
+        at = f"{where} block {bi}"
+        if not isinstance(block, dict) or len(block) != 1:
+            problems.add(at, f"a block is a one-key mapping of one of {sorted(STEP_BLOCKS)}")
+            continue
+        ((kind, value),) = block.items()
+        if kind not in STEP_BLOCKS:
+            problems.add(at, f"unknown block kind {kind!r}", f"use one of {sorted(STEP_BLOCKS)}")
+        elif kind == "code":
+            if not isinstance(value, str) or not value.strip():
+                problems.add(at, "code must be a non-empty string")
+            else:
+                blocks.append({"kind": kind, "code": value.strip()})
+        elif kind in STEP_TEXT_BLOCKS:
+            blocks.append({"kind": kind, "text": r.text(f"{at} {kind}", value)})
+        elif not isinstance(value, list) or not value:
+            problems.add(at, f"{kind} must be a non-empty list")
+        elif kind == "terms":
+            pairs = []
+            for ti, item in enumerate(value, 1):
+                if not isinstance(item, dict) or set(item) != {"term", "text"}:
+                    problems.add(f"{at} item {ti}", "a terms item has exactly `term` and `text`")
+                    continue
+                pairs.append(
+                    {
+                        "term": r.text(f"{at} item {ti} term", item["term"]),
+                        "text": r.text(f"{at} item {ti} text", item["text"]),
+                    }
+                )
+            blocks.append({"kind": kind, "items": pairs})
+        else:
+            items = [r.text(f"{at} item {ti}", item) for ti, item in enumerate(value, 1)]
+            blocks.append({"kind": kind, "items": items})
+    return {"title": title, "body": body, "blocks": blocks}
+
+
+def step_texts(step: dict) -> list[Text]:
+    """Every slot one quick-start step carries, blocks included."""
+    texts = [step["title"], step["body"]]
+    for block in step["blocks"]:
+        if "text" in block:
+            texts.append(block["text"])
+        for item in block.get("items", []):
+            texts.extend((item["term"], item["text"]) if isinstance(item, dict) else (item,))
+    return texts
+
+
+def as_html(text: Text, code: str) -> str:
+    """One language of a slot as safe HTML: escaped unless it declared markup."""
+    value = text.get(code)
+    return value if text.html else html_escape(value, quote=False)
+
+
+def step_digest(step: dict, codes: list[str]) -> Text:
+    """The whole step flattened to one HTML paragraph per language — the
+    knowledge bundle's one-fact-per-step view of the structured page."""
+    body, blocks = step["body"], step["blocks"]
+    values = {}
+    for code in codes:
+        parts = [as_html(body, code)]
+        for block in blocks:
+            kind = block["kind"]
+            if kind == "code":
+                parts.append(f"<code>{html_escape(block['code'], quote=False)}</code>")
+            elif kind == "group":
+                parts.append(f"<b>{as_html(block['text'], code)}:</b>")
+            elif "text" in block:
+                parts.append(as_html(block["text"], code))
+            elif kind == "terms":
+                parts.append(
+                    "; ".join(
+                        f"<b>{as_html(i['term'], code)}</b> — {as_html(i['text'], code)}"
+                        for i in block["items"]
+                    )
+                    + "."
+                )
+            else:
+                parts.append(" → ".join(as_html(i, code) for i in block["items"]) + ".")
+        values[code] = " ".join(part for part in parts if part)
+    return Text(values=values, html=True)
+
+
 def _load_yaml(path: Path, schema: str, problems: Problems) -> dict:
     if not path.is_file():
         problems.add(path.name, "is missing")
@@ -329,12 +436,9 @@ def load(content_dir: Path, locales: Locales) -> Content:
     zones_doc = _load_yaml(content_dir / "zones.yml", "tour.zones.v2", problems)
     zones = _load_zones(zones_doc, r, locales, problems)
 
-    steps_doc = _load_yaml(content_dir / "quickstart.yml", "tour.quickstart.v1", problems)
+    steps_doc = _load_yaml(content_dir / "quickstart.yml", "tour.quickstart.v2", problems)
     steps = [
-        {
-            "title": r.text(f"quickstart.yml: step {i} title", s.get("title")),
-            "body": r.text(f"quickstart.yml: step {i} body", s.get("body")),
-        }
+        _load_step(f"quickstart.yml: step {i}", s, r, problems, codes)
         for i, s in enumerate(steps_doc.get("steps", []), 1)
     ]
 
