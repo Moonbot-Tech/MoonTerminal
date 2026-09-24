@@ -1712,6 +1712,22 @@ analytics.ticks.coverage:
   ru: "с лентой %{covered} из %{total} · годных %{fit} · без мс-штампа %{without}"
   en: "tape for %{covered} of %{total} · reproduced %{fit} · no ms stamp %{without}"
   es: "cinta en %{covered} de %{total} · reproducidas %{fit} · sin marca ms %{without}"
+analytics.ticks.tail_short:
+  ru: "лента после закрытия < %{s} с: %{n}"
+  en: "tape past the close < %{s} s: %{n}"
+  es: "cinta tras el cierre < %{s} s: %{n}"
+analytics.ticks.model_sec_sample:
+  ru: "Выборка"
+  en: "Sample"
+  es: "Muestra"
+analytics.ticks.tail_min:
+  ru: "Лента после закрытия ≥, с"
+  en: "Tape past the close ≥, s"
+  es: "Cinta tras el cierre ≥, s"
+analytics.ticks.tail_min_tip:
+  ru: "Сделки, у которых лента после закрытия короче, не идут ни в «Годные», ни в В1/В2, ни в подбор: при варианте они закрылись бы позже факта и остались бы открытыми на обрезе ленты. Догрузить старую ленту нельзя — биржа её уже не отдаёт. Не больше запаса подгрузки из «Хранилища»: лент длиннее у сделок не бывает. 0 — без отбора"
+  en: "Trades whose tape past the close is shorter are left out of the reproduced baseline, V1/V2 and the search: under a variant they would close later than the fact and stay open where the tape ends. An old tape cannot be fetched again — the exchange no longer serves it. Never more than the Storage tab's loading margin: no trade holds more. 0 — no filter"
+  es: "Las operaciones cuya cinta tras el cierre es más corta quedan fuera de las reproducidas, V1/V2 y la búsqueda: con una variante cerrarían más tarde que el hecho y quedarían abiertas donde termina la cinta. Una cinta antigua no se puede volver a descargar — el exchange ya no la sirve. Nunca más que el margen de carga de la pestaña Almacenamiento: ninguna operación tiene más. 0 — sin filtro"
 analytics.ticks.coverage_service:
   ru: "служебных %{n}"
   en: "service rows %{n}"
@@ -2016,6 +2032,10 @@ analytics.ticks.sugg_none:
   ru: "Подбор ничего не нашёл"
   en: "The search found nothing"
   es: "La búsqueda no encontró nada"
+analytics.ticks.stats_left_open:
+  ru: "вне выборки сделок, которые стратегия как есть не закрывает внутри ленты: %{n}"
+  en: "left out, deals the strategy as it stands does not close inside the tape: %{n}"
+  es: "fuera de la muestra, operaciones que la estrategia tal cual no cierra dentro de la cinta: %{n}"
 analytics.ticks.stats_line:
   ru: "перезапусков %{restarts} · лучший — №%{best} · %{passes} · разных итогов %{distinct} · без разрешённой точки %{refused} · оценено точек %{evals}"
   en: "restarts %{restarts} · best from #%{best} · %{passes} · distinct ends %{distinct} · with no allowed point %{refused} · points scored %{evals}"
@@ -2077,9 +2097,13 @@ analytics.ticks.not_read:
   en: "not read"
   es: "no se lee"
 analytics.ticks.suggest_one_tip:
-  ru: "Подобрать только %{field}; остальные поля — как в В1"
-  en: "Search %{field} alone; the other fields as V1 has them"
-  es: "Buscar solo %{field}; los demás campos como en V1"
+  ru: "Подобрать только выделенное поле %{field}, галочка не учитывается; остальные поля держатся как в В1. Ответ пишется в ячейку %{field} столбца В1 — и в поля, которые включённый переключатель требует (UseTakeProfit → TakeProfit)"
+  en: "Search the selected field %{field} alone, ticked or not; the other fields stay as V1 has them. The answer goes into V1's %{field} cell — and into the fields a switch it turns on needs (UseTakeProfit → TakeProfit)"
+  es: "Buscar solo el campo seleccionado %{field}, marcado o no; los demás campos quedan como en V1. La respuesta va a la celda %{field} de V1 — y a los campos que requiere un interruptor que active (UseTakeProfit → TakeProfit)"
+analytics.ticks.suggest_all_tip:
+  ru: "Подобрать все поля с галочкой в группах, прошедших порог воспроизводимости, — сейчас их %{n}. Найденная точка заменяет весь столбец В1; поле без галочки остаётся как есть, кроме значения, которое требует включённый подбором переключатель (UseTakeProfit → TakeProfit): оно одно на все стратегии"
+  en: "Search every ticked field of the groups past the reproduction gate — %{n} now. The point found replaces the whole V1 column; an unticked field stays as it is, but for a value a switch the search turns on needs (UseTakeProfit → TakeProfit): one value for every strategy"
+  es: "Buscar todos los campos marcados de los grupos que pasan el umbral de reproducción — ahora %{n}. El punto hallado reemplaza toda la columna V1; un campo sin marcar queda como está, salvo el valor que requiere un interruptor que la búsqueda active (UseTakeProfit → TakeProfit): un valor para todas las estrategias"
 analytics.ticks.suggest_one_none:
   ru: "Выберите поле: щёлкните по его имени в таблице"
   en: "Pick a field: click its name in the grid"

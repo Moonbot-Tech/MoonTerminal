@@ -1,10 +1,13 @@
 //! The rows of the Entry/Exit grid, laid out by the strategy editor's sections — Strategy
-//! settings, Stops, Sell order, SellShot, SellSpread, Delta Modifiers — with EVERY field each
+//! settings, Stops, Sell order, SellShot, SellSpread, Delta Modifiers — with the fields each
 //! section holds for the scope's kinds, as the Strategies window shows them. Only the knobs of
-//! [`TICK_PARAMS`](moon_core::db::tuner::ticks::TICK_PARAMS) are searched; every other field is
-//! drawn fixed, so what the model does not turn yet stays in sight where the user looks for it.
-//! The sections the model does not have at all — SellShot and SellSpread
-//! ([`ParamSection::modelled`]) — keep their fields in sight too, every one of them inactive.
+//! [`TICK_PARAMS`](moon_core::db::tuner::ticks::TICK_PARAMS) are searched, and they are always
+//! drawn; every other field is drawn fixed, and only while a strategy of the scope switches it
+//! on (`unmodelled::fields_in_use`: its rule holds and it is off its default), so what the model
+//! does not turn yet stays in sight where the user looks for it, and what no strategy uses does
+//! not crowd it. The sections the model does not have at all — SellShot and SellSpread
+//! ([`ParamSection::modelled`]) — follow the same rule, every row of them inactive; a section
+//! left without a row is not drawn.
 //!
 //! The field lists come from the live schema of each deal's strategy kind — the store's strategy
 //! row gives the kind ordinal, as `strategies::logic::selected_sections` does; the `SignalType`
@@ -14,8 +17,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use moon_core::db::tuner::ticks::Deal;
 use moon_core::db::tuner::ticks::params::{ParamSection, TickParam, is_model_only, params_for};
+use moon_core::db::tuner::ticks::unmodelled::fields_in_use;
 use moon_core::feed::SchemaSection;
+use moon_core::feed::strategy_deps::FieldDeps;
 use moon_core::session::CoreStore;
 
 use crate::strategies::sections::section_title_eq;
@@ -76,18 +82,62 @@ pub(in crate::analytics::tuner) fn scope_knobs(kinds: &[String]) -> Vec<&'static
         .collect()
 }
 
+/// The grid's rows for the deals' kinds, by section: the fields the live schema files under
+/// each of the kinds that a strategy of the scope switches on, every knob, the knobs no schema
+/// places under their own section.
+///
+/// Args:
+///     store: The connected cores, for their schemas and strategy lists.
+///     deals: The scope's deals.
+///     strategies: Every strategy of the scope with its values, by `(strategy_id, core_uid)` —
+///         the deals' own and the selected ones. One whose kind the store cannot tell — no core
+///         given, or its core no longer lists it (renamed or deleted since the trade) — is read
+///         against every kind of the scope, so a field it switches on is not lost.
+///     deps: The fields' dependency rules, read for this load.
+pub(in crate::analytics::tuner) fn grid_for<'a>(
+    store: &CoreStore,
+    deals: &[Deal],
+    strategies: impl IntoIterator<Item = ((i64, Option<u64>), &'a HashMap<String, String>)>,
+    deps: &FieldDeps,
+) -> Vec<GridSection> {
+    let mut kinds: Vec<String> = Vec::new();
+    for deal in deals {
+        if !kinds.contains(&deal.kind) {
+            kinds.push(deal.kind.clone());
+        }
+    }
+    let knobs = scope_knobs(&kinds);
+    let schema = scope_schema(store, deals.iter().map(|d| (d.strategy_id, d.core_uid)));
+    let mut in_use: HashSet<String> = HashSet::new();
+    for ((sid, core), values) in strategies {
+        match core.and_then(|core| strategy_schema(store, sid, core)) {
+            Some(sections) => in_use.extend(fields_in_use(sections, values, deps)),
+            None => {
+                for sections in &schema {
+                    in_use.extend(fields_in_use(sections, values, deps));
+                }
+            }
+        }
+    }
+    layout(&schema, &knobs, &in_use)
+}
+
 /// The grid's sections, every one of [`ParamSection::GRID_ORDER`] in that order, empty ones
-/// included.
+/// included — the grid drops those once the scope is known.
 ///
 /// A field goes where the first kind's schema that has it files it; a field two sections share
-/// is drawn once. A knob no schema places goes under its own [`TickParam::section`].
+/// is drawn once. A knob no schema places goes under its own [`TickParam::section`]. A field
+/// that is not a knob is drawn only when `in_use` holds it.
 ///
 /// Args:
 ///     kind_sections: The schema sections of each kind in the scope.
 ///     knobs: The knobs of the scope ([`scope_knobs`]).
+///     in_use: The fields some strategy of the scope switches on, lowercase
+///         (`unmodelled::fields_in_use`).
 pub(in crate::analytics::tuner) fn layout(
     kind_sections: &[&[SchemaSection]],
     knobs: &[&'static TickParam],
+    in_use: &HashSet<String>,
 ) -> Vec<GridSection> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<GridSection> = ParamSection::GRID_ORDER
@@ -105,8 +155,13 @@ pub(in crate::analytics::tuner) fn layout(
                 .filter(|s| section_title_eq(&s.title, title))
             {
                 for field in &section.fields {
-                    if seen.insert(field.name.to_ascii_lowercase()) {
-                        grid.rows.push(row(&field.name, grid.section, knobs));
+                    let key = field.name.to_ascii_lowercase();
+                    if !seen.insert(key.clone()) {
+                        continue;
+                    }
+                    let row = row(&field.name, grid.section, knobs);
+                    if matches!(row.role, RowRole::Knob(_)) || in_use.contains(&key) {
+                        grid.rows.push(row);
                     }
                 }
             }
@@ -176,8 +231,26 @@ pub(in crate::analytics::tuner) fn scope_schema(
     out
 }
 
-/// Every field name the grid's sections hold in any kind of any connected core's schema — the
-/// keys the "now" column reads beside the models' own, so a fixed row shows the strategy's value.
+/// The schema sections of one strategy's kind, when its core is connected with a schema and
+/// still lists the strategy.
+fn strategy_schema(store: &CoreStore, strategy: i64, core: u64) -> Option<&[SchemaSection]> {
+    let data = store.core(core)?;
+    let schema = data.schema.as_ref()?;
+    let row = data
+        .strategies
+        .iter()
+        .find(|row| same_strategy(row.id, strategy))?;
+    schema
+        .kinds
+        .iter()
+        .find(|k| k.ordinal == row.kind_ordinal)
+        .map(|k| k.sections.as_slice())
+}
+
+/// Every field name any kind of any connected core's schema holds — the keys the "now" column
+/// reads beside the models' own, so a fixed row shows the strategy's value, and the ones the
+/// grid's rows are chosen by ([`grid_for`]): a field's rule may read a field of a section the grid
+/// does not draw (`HODLmode`), and one left unread would stand at its default.
 pub(in crate::analytics::tuner) fn schema_keys(store: &CoreStore) -> Vec<String> {
     let mut seen: HashSet<&str> = HashSet::new();
     for (_, core) in store.cores() {
@@ -185,11 +258,7 @@ pub(in crate::analytics::tuner) fn schema_keys(store: &CoreStore) -> Vec<String>
             continue;
         };
         for kind in &schema.kinds {
-            for section in kind.sections.iter().filter(|s| {
-                ParamSection::GRID_ORDER
-                    .iter()
-                    .any(|g| section_title_eq(&s.title, g.schema_title()))
-            }) {
+            for section in &kind.sections {
                 seen.extend(section.fields.iter().map(|f| f.name.as_str()));
             }
         }

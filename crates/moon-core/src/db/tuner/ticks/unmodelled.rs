@@ -28,11 +28,20 @@
 //! (`assets/param_deps.toml`, [`FieldDeps`]) and its value differs from the core's default — the
 //! live schema's, else the one written here, which is the site's (`moonbot.pro`, the Sell order
 //! and Stops tabs) or, where the site is silent, the value the live strategies leave out (24.09).
+//!
+//! The same reading decides which rows the tuner's grid draws ([`fields_in_use`]): a field no
+//! strategy of the scope switches on is left out of it. There the whole kind's schema fills what
+//! a dump leaves out, as the Strategies window fills its values (`strategies::logic::
+//! selected_values`). The Delta Modifiers tab is read as a whole on top of that: its sum acts
+//! only through a modifier that applies it, so a coefficient with no modifier, or a modifier with
+//! no coefficient, uses nothing (the core developer via LinKvo, 2026-09-24,
+//! `STRATEGY_FORMULAS/sell-common.md`).
 
 use std::collections::HashMap;
 
 use super::exit::UnmodelledRule;
 use super::params::ParamSection;
+use crate::feed::SchemaSection;
 use crate::feed::strategy_deps::{FieldDeps, Values, as_bool};
 
 /// A further condition a watched field only acts under, beyond its dependency rule.
@@ -109,6 +118,16 @@ const WATCHED: &[Watched] = &[
     },
 ];
 
+/// The Delta Modifiers tab's fields that APPLY its sum `Σ Pn·Dn`, lowercase — the sell's, the
+/// stop's, and the buy's and the detect's for the kinds whose schema shows them; every other field
+/// of the tab but `MaxModifier` is a term of the sum.
+const DELTA_APPLIERS: &[&str] = &[
+    "sellmodifier",
+    "stoplossmodifier",
+    "buymodifier",
+    "detectmodifier",
+];
+
 /// The fields the dependency rules of [`WATCHED`] and its extra conditions read, spelled as the
 /// strategy dump spells them — a read by key is case-sensitive, and [`FieldDeps`] hands the
 /// names back lowercase. A unit test holds this against the bundled rules.
@@ -182,8 +201,7 @@ pub fn unmodelled_fields(
                 .get(&w.key.to_ascii_lowercase())
                 .map(f64::to_string)
                 .unwrap_or_else(|| w.default.to_string());
-            let on = !same_value(value, &default)
-                && deps.field_active(w.key, &effective)
+            let on = switched_on(w.key, value, &default, &effective, deps)
                 && also_holds(w.also, values, defaults);
             on.then(|| UnmodelledField {
                 key: w.key,
@@ -193,6 +211,90 @@ pub fn unmodelled_fields(
             })
         })
         .collect()
+}
+
+/// The fields of `sections` — one strategy kind's schema — that the strategy holding `values`
+/// switches on, lowercase, in the schema's order: the field's rule holds and its value is not
+/// the schema's default.
+///
+/// Args:
+///     sections: The strategy kind's live schema, every section of it: a rule may read a field
+///         of any section.
+///     values: The strategy's values by field name, as `strategy_current_values` reads them — a
+///         field left at its default is absent, and reads the schema's default here, else
+///         nothing, as the Strategies window reads it.
+///     deps: The fields' dependency rules.
+pub fn fields_in_use(
+    sections: &[SchemaSection],
+    values: &HashMap<String, String>,
+    deps: &FieldDeps,
+) -> Vec<String> {
+    let fields = || sections.iter().flat_map(|s| s.fields.iter());
+    let mut effective: Values = values
+        .iter()
+        .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
+        .collect();
+    for field in fields() {
+        effective
+            .entry(field.name.to_ascii_lowercase())
+            .or_insert_with(|| field.default.clone().unwrap_or_default());
+    }
+    let mut out: Vec<String> = Vec::new();
+    for field in fields() {
+        let key = field.name.to_ascii_lowercase();
+        let default = field.default.as_deref().unwrap_or_default();
+        let on = effective
+            .get(&key)
+            .is_some_and(|value| switched_on(&field.name, value, default, &effective, deps));
+        if on && !out.contains(&key) {
+            out.push(key);
+        }
+    }
+    drop_silent_delta_tab(sections, &mut out);
+    out
+}
+
+/// Take the Delta Modifiers tab out of `in_use` unless it acts: a term of the sum in use AND a
+/// modifier that applies it in use. The tab is the section holding `SellModifier`.
+fn drop_silent_delta_tab(sections: &[SchemaSection], in_use: &mut Vec<String>) {
+    let Some(tab) = sections.iter().find(|s| {
+        s.fields
+            .iter()
+            .any(|f| f.name.eq_ignore_ascii_case("SellModifier"))
+    }) else {
+        return;
+    };
+    let tab: Vec<String> = tab
+        .fields
+        .iter()
+        .map(|f| f.name.to_ascii_lowercase())
+        .collect();
+    let applied = in_use.iter().any(|k| DELTA_APPLIERS.contains(&k.as_str()));
+    let summed = in_use
+        .iter()
+        .any(|k| tab.contains(k) && !DELTA_APPLIERS.contains(&k.as_str()) && k != "maxmodifier");
+    if !(applied && summed) {
+        in_use.retain(|k| !tab.contains(k));
+    }
+}
+
+/// Whether a strategy switches a field on, as the Strategies window reads it: the field's rule
+/// holds on the strategy's values and its value is not the default.
+///
+/// Args:
+///     key: The field.
+///     value: The strategy's value of it.
+///     default: The core's default of it.
+///     effective: The strategy's values as the rules read them, lowercase.
+///     deps: The fields' dependency rules.
+fn switched_on(
+    key: &str,
+    value: &str,
+    default: &str,
+    effective: &Values,
+    deps: &FieldDeps,
+) -> bool {
+    !same_value(value, default) && deps.field_active(key, effective)
 }
 
 /// Whether the extra condition of a watched field holds.

@@ -90,3 +90,50 @@ fn a_point_that_leaves_a_deal_open_is_refused() {
     );
     assert_eq!(result.train.n, 6, "every deal closed, by its stop");
 }
+
+/// One deal the strategy as it stands does not close inside its tape — a flat tape that reaches
+/// neither the take nor the stop — no longer refuses every point: it leaves the sample, the
+/// answer says so, and the one field asked about is searched over the rest (LinKvo, 2026-09-24).
+#[test]
+fn a_deal_the_strategy_itself_leaves_open_leaves_the_sample() {
+    let mut deals: Vec<PreparedDeal> = (1..=6).map(|uid| prepared(uid, 101.0)).collect();
+    let mut flat = prepared(7, 101.0);
+    let t0 = flat.deal.buy_ms;
+    flat.ticks = Arc::from(vec![
+        tick(t0 - 500, 100.0),
+        tick(t0, 100.0),
+        tick(t0 + 900, 99.9),
+    ]);
+    deals.push(flat);
+    let (held, defaults) = (HashMap::new(), HashMap::new());
+    let locked: HashSet<String> = TICK_PARAMS
+        .iter()
+        .map(|f| f.key.to_string())
+        .filter(|k| k != "SellPrice")
+        .collect();
+    let params = SearchParams {
+        held: &held,
+        defaults: &defaults,
+        kind: "PumpsDetection",
+        vary_entry: false,
+        vary_exit: true,
+        locked: &locked,
+        restarts: 2,
+        min_n: Some(3),
+        seed: Some(5),
+        train_frac: 1.0,
+        max_passes: DEFAULT_MAX_PASSES,
+        keep_corridor: true,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+    };
+    let result = suggest(&deals, &params, &SearchHandle::new()).expect("a point over the rest");
+    assert_eq!(result.stats.left_open, 1);
+    assert_eq!(result.train.n, 6);
+    assert_eq!(
+        result.values,
+        vec![("SellPrice".to_string(), "1".to_string())]
+    );
+}

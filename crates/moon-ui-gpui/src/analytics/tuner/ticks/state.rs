@@ -74,10 +74,13 @@ pub(in crate::analytics::tuner) struct DealRow {
 }
 
 impl DealRow {
-    /// Whether the variants and the search run on this row: its tape covers the window and the
-    /// model reproduced it (`fit_for_search`). The table shows every row; this is the sample.
+    /// Whether the variants and the search run on this row: its tape covers the window, holds
+    /// the shortest tail past the close (`tail`) and the model reproduced it (`fit_for_search`).
+    /// The table shows every row; this is the sample.
     pub(in crate::analytics::tuner) fn fit(&self) -> bool {
-        self.tape == TapeStatus::Covered && self.verdict.as_ref().is_some_and(fit_for_search)
+        self.tape == TapeStatus::Covered
+            && self.verdict.as_ref().is_some_and(fit_for_search)
+            && super::tail::holds(self.held)
     }
 
     /// Whether the row is fit but holds no tape — one the memory cap let go under a wider scope.
@@ -327,7 +330,7 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) var_task: Option<gpui::Task<()>>,
     /// The grid's and the row's input boxes, created lazily and kept across repaints.
     pub(in crate::analytics::tuner) inputs: HashMap<String, Entity<MoonInputState>>,
-    /// Fields held at their base value by the search — the grid's unticked rows. Persisted.
+    /// Unticked rows: held at base by the search, bar what a switch it turns on needs. Persisted.
     pub(in crate::analytics::tuner) locked: HashSet<String>,
     /// The field "Search" on one field varies — the one whose name was clicked last.
     pub(in crate::analytics::tuner) sel_field: Option<&'static str>,
@@ -506,6 +509,7 @@ impl TicksState {
             model: super::model_cfg::current(),
             trade_open: self.trade.open,
             allow_closer_corridor: !self.keep_corridor,
+            min_tail_s: Some(super::tail::current_s()),
         }
     }
 

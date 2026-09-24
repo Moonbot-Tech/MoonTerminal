@@ -48,13 +48,16 @@ use moon_core::market::trade_replay::{
 /// stalls — past it the rows still unanswered fold as missing, and the log says how many.
 const HELD_ANSWER_WAIT: Duration = Duration::from_secs(240);
 
-/// What stage A brings back: the deals, the grid's "now" values, the strategies' own values and
-/// the exit fields outside the model they switch on.
+/// What stage A brings back: the deals, the grid's "now" values, the strategies' own values, the
+/// exit fields outside the model they switch on, the selected strategies' values and the rules
+/// all of it was read under — the grid chooses its rows by them.
 type StageA = (
     Result<DealsRead, ReadFail>,
     HashMap<String, NowValue>,
     OwnValues,
     Arc<UnmodelledMap>,
+    Vec<SelectedValues>,
+    FieldDeps,
 );
 
 /// What stage B publishes beside the rows: the strategies' values and the grid's layout.
@@ -171,18 +174,19 @@ impl AnalyticsView {
                     .map(|read| own_values(&read.deals, &keys))
                     .unwrap_or_default();
                 let (now, selected) = now_values(&targets, &keys, &own);
-                // The rules are read per load: an edit of the file reaches the warning on the
-                // axis' next load, never a process-lifetime copy.
+                // The rules are read per load: an edit of the file reaches the warning and the
+                // grid on the axis' next load, never a process-lifetime copy.
+                let deps = FieldDeps::load();
                 let unmodelled = unmodelled_map(
                     own.iter()
                         .map(|(&(sid, core), values)| ((sid, Some(core)), values.as_ref()))
                         .chain(selected.iter().map(|(key, values)| (*key, values.as_ref()))),
                     &defaults,
-                    &FieldDeps::load(),
+                    &deps,
                 );
-                (deals, now, own, Arc::new(unmodelled))
+                (deals, now, own, Arc::new(unmodelled), selected, deps)
             },
-            move |this, (deals, now, own, unmodelled): StageA, cx| {
+            move |this, (deals, now, own, unmodelled, selected, deps): StageA, cx| {
                 if this.ticks.seq != req {
                     return;
                 }
@@ -204,7 +208,15 @@ impl AnalyticsView {
                         return;
                     }
                 };
-                let grid = this.grid_layout(&read.deals, cx);
+                let grid = super::sections::grid_for(
+                    this.backend.read(cx).session.store(),
+                    &read.deals,
+                    own.iter()
+                        .map(|(&(sid, core), values)| ((sid, Some(core)), values.as_ref()))
+                        .chain(selected.iter().map(|(key, values)| (*key, values.as_ref()))),
+                    &deps,
+                )
+                .into();
                 let addresses = this.resolve_addresses(&read.deals, cx);
                 this.start_replay_stage(
                     req,
@@ -222,28 +234,6 @@ impl AnalyticsView {
                 );
             },
         );
-    }
-
-    /// The grid's rows for the deals' kinds, by section: the fields the live schema files under
-    /// each of the kinds, the knobs no schema places under their own section.
-    fn grid_layout(
-        &self,
-        deals: &[Deal],
-        cx: &Context<Self>,
-    ) -> Arc<[super::sections::GridSection]> {
-        let mut kinds: Vec<String> = Vec::new();
-        for deal in deals {
-            if !kinds.contains(&deal.kind) {
-                kinds.push(deal.kind.clone());
-            }
-        }
-        let knobs = super::sections::scope_knobs(&kinds);
-        let backend = self.backend.read(cx);
-        let schema = super::sections::scope_schema(
-            backend.session.store(),
-            deals.iter().map(|d| (d.strategy_id, d.core_uid)),
-        );
-        super::sections::layout(&schema, &knobs).into()
     }
 
     /// Where each deal's prints live, per distinct `(core, coin)` — the fetch's own resolver,

@@ -38,6 +38,9 @@ use moon_core::db::tuner::ticks::stats_of;
 mod probe;
 pub(super) use probe::painted as probe_painted;
 
+#[cfg(test)]
+mod tests;
+
 /// How long a burst of cell edits may keep coalescing before the columns are rescored.
 const VARIANT_DEBOUNCE: Duration = Duration::from_millis(350);
 
@@ -243,6 +246,35 @@ impl AnalyticsView {
         supported && data.group_passes(group, self.ticks.gate()) == Some(true)
     }
 
+    /// The tooltips of "Search" and "Search all": what each varies and where its answer lands —
+    /// the selected field by name, the number of ticked fields the gate lets through. A scope of
+    /// several kinds, which neither searches, says so on both.
+    pub(super) fn ticks_search_tips(&self) -> (String, String) {
+        let data = self.ticks.data.data();
+        if data.is_some_and(|d| !d.kinds.is_empty() && d.single_kind().is_none()) {
+            let refused = t!("analytics.ticks.sugg_one_kind").to_string();
+            return (refused.clone(), refused);
+        }
+        let one = match self.ticks.sel_field {
+            Some(key) => t!("analytics.ticks.suggest_one_tip", field = key).to_string(),
+            None => t!("analytics.ticks.suggest_one_none").to_string(),
+        };
+        let entry_on = data.is_some_and(|d| d.entry_modelled());
+        let ticked = data.map_or(0, |d| {
+            d.grid
+                .iter()
+                .flat_map(super::sections::GridSection::knobs)
+                .filter(|k| super::grid::knob_ticks(k, entry_on))
+                .filter(|k| !self.ticks.locked.contains(k.key))
+                .filter(|k| self.ticks_group_searchable(k.group))
+                .count()
+        });
+        (
+            one,
+            t!("analytics.ticks.suggest_all_tip", n = ticked).to_string(),
+        )
+    }
+
     /// "Search all": every ticked field of the groups the gate lets through, into В1.
     pub(in crate::analytics::tuner) fn ticks_suggest(
         &mut self,
@@ -252,8 +284,8 @@ impl AnalyticsView {
         self.ticks_run_search(None, window, cx);
     }
 
-    /// "Search": the selected field alone, the rest of В1 held as it stands; the answer goes
-    /// into that one cell of В1.
+    /// "Search": the selected field alone, ticked or not, the rest of В1 held as it stands; the
+    /// answer goes into that cell of В1 and the cells of the values it completed ([`land_answer`]).
     pub(in crate::analytics::tuner) fn ticks_suggest_one(
         &mut self,
         window: &mut Window,
@@ -365,7 +397,9 @@ impl AnalyticsView {
         let train_frac = super::super::filter::state::train_frac(self.ticks.train_pct);
         let keep_corridor = self.ticks.keep_corridor;
         // A floor over the slice the search fits on no point can keep: say so before a run that
-        // can only come back empty.
+        // can only come back empty. Counted on every replayable row: the search then drops the
+        // deals the strategies as they stand leave open (`closing::closable_at_base`), so a floor
+        // this lets through can still fail there, and the search says so itself.
         let closes: Vec<i64> = pending.iter().map(|d| d.deal.close_ms).collect();
         let train_n = train_len(&closes, train_frac);
         if let Some(n) = min_n.filter(|n| *n > train_n as i64) {
@@ -430,21 +464,7 @@ impl AnalyticsView {
                 this.ticks.sugg = SuggState::Idle;
                 match result {
                     Ok(result) => {
-                        match only {
-                            None => {
-                                this.ticks.variants[0] =
-                                    result.values.iter().cloned().collect::<HashMap<_, _>>();
-                            }
-                            // Only the searched cell moves; one the search left at its base
-                            // keeps what В1 had.
-                            Some(key) => {
-                                if let Some((_, value)) =
-                                    result.values.iter().find(|(k, _)| k == key)
-                                {
-                                    this.ticks.set_variant(0, key, value.clone());
-                                }
-                            }
-                        }
+                        land_answer(&mut this.ticks.variants[0], only, &result.values);
                         this.ticks_reset_inputs_of(0);
                         this.ticks.last_seed = Some(result.seed);
                         this.ticks.last_result = Some(result);
@@ -645,5 +665,47 @@ impl AnalyticsView {
             return Vec::new();
         }
         vec![t!("analytics.ticks.unguarded_warn", n = n, m = owns.len()).to_string()]
+    }
+}
+
+/// Lay a search's answer into В1. A search of every field replaces В1 with it. A search of one
+/// field lays its cells over В1's: the searched field, and every value the answer completed for a
+/// switch it turned on (`search::deps` — `UseTakeProfit` brings its `TakeProfit`), which the
+/// search scored and Save must write with it; the search locked every other field, so nothing
+/// else moves, and a field it left at its base keeps what В1 had.
+///
+/// Args:
+///     v1: В1's cells.
+///     only: The searched field, for a search of one.
+///     values: The answer ([`SearchResult::values`](moon_core::db::tuner::ticks::search::SearchResult)).
+fn land_answer(v1: &mut HashMap<String, String>, only: Option<&str>, values: &[(String, String)]) {
+    match only {
+        None => *v1 = values.iter().cloned().collect(),
+        Some(_) => v1.extend(values.iter().cloned()),
+    }
+}
+
+/// The status band's account of the last search: restarts, the winning one, its passes and
+/// whether it converged, how many distinct end points, how many points were scored.
+pub(super) fn search_stats_line(stats: &moon_core::db::tuner::ticks::SearchStats) -> String {
+    let passes = if stats.converged {
+        t!("analytics.ticks.stats_converged", n = stats.passes)
+    } else {
+        t!("analytics.ticks.stats_cut", n = stats.passes)
+    };
+    let line = t!(
+        "analytics.ticks.stats_line",
+        restarts = stats.restarts,
+        best = stats.best_restart,
+        passes = passes,
+        distinct = stats.distinct,
+        evals = stats.evaluations,
+        refused = stats.refused
+    )
+    .to_string();
+    // The deals taken out before the search: the sample it answers for is smaller by them.
+    match stats.left_open {
+        0 => line,
+        n => format!("{line} · {}", t!("analytics.ticks.stats_left_open", n = n)),
     }
 }

@@ -219,3 +219,113 @@ fn every_watched_field_sits_in_its_section() {
         );
     }
 }
+
+/// A schema section of `(name, default)` fields.
+fn schema(title: &str, fields: &[(&str, Option<&str>)]) -> crate::feed::SchemaSection {
+    crate::feed::SchemaSection {
+        title: title.to_string(),
+        fields: fields
+            .iter()
+            .map(|(name, default)| crate::feed::SchemaField {
+                name: (*name).to_string(),
+                type_name: "Double".to_string(),
+                ui: crate::feed::SchemaFieldUi::Edit,
+                picklist: Vec::new(),
+                default: default.map(str::to_string),
+            })
+            .collect(),
+    }
+}
+
+/// The grid's reading: a field is in use when its rule holds and it is off its default. A dump
+/// that leaves SellSpread's switch out keeps the section off (`IgnoreSellSpread` defaults to
+/// YES), so its distance, though stored, is not in use; the stop's per cent under a stop left on
+/// at default is.
+#[test]
+fn a_field_is_in_use_when_its_rule_holds_and_it_is_off_its_default() {
+    let kind = [
+        schema(
+            "Sell order",
+            &[
+                ("HODLmode", Some("NO")),
+                ("AutoSell", Some("YES")),
+                ("SellPrice", Some("1")),
+                ("SellDelay", Some("0")),
+            ],
+        ),
+        schema(
+            "Sell order\\SellSpread",
+            &[
+                ("IgnoreSellSpread", Some("YES")),
+                ("SellSpreadDistance", Some("0.5")),
+            ],
+        ),
+        schema(
+            "Stops",
+            &[
+                ("UseStopLoss", Some("YES")),
+                ("StopLoss", Some("-5")),
+                ("UseSecondStop", Some("NO")),
+                ("SecondStopLoss", None),
+            ],
+        ),
+    ];
+    let v = values(&[
+        ("SellPrice", "1.5"),
+        ("SellDelay", "0.0"),
+        ("SellSpreadDistance", "0.8"),
+        ("StopLoss", "-3"),
+        ("SecondStopLoss", "-1"),
+    ]);
+    let used = fields_in_use(&kind, &v, &FieldDeps::bundled());
+    assert_eq!(used, ["sellprice", "stoploss"]);
+    // Switched on, SellSpread's switch and its distance are both in use; the second stop's per
+    // cent stays out behind its switch, which is off by default.
+    let mut on = v.clone();
+    on.insert("IgnoreSellSpread".into(), "NO".into());
+    let used = fields_in_use(&kind, &on, &FieldDeps::bundled());
+    assert_eq!(
+        used,
+        [
+            "sellprice",
+            "ignoresellspread",
+            "sellspreaddistance",
+            "stoploss"
+        ]
+    );
+    // A stop switched off takes its per cent out with it.
+    on.insert("UseStopLoss".into(), "NO".into());
+    let used = fields_in_use(&kind, &on, &FieldDeps::bundled());
+    assert!(used.contains(&"usestoploss".to_string()), "{used:?}");
+    assert!(!used.contains(&"stoploss".to_string()), "{used:?}");
+}
+
+/// The Delta Modifiers tab acts as a whole: `AddPriceBug` with no modifier applying the sum uses
+/// nothing, and neither does a modifier with no term; the two together use the tab.
+#[test]
+fn the_delta_tab_is_in_use_only_when_a_modifier_applies_a_term() {
+    let kind = [schema(
+        "Delta Modifiers",
+        &[
+            ("SellModifier", Some("0")),
+            ("StopLossModifier", Some("0")),
+            ("MaxModifier", Some("0")),
+            ("AddPriceBug", Some("0")),
+            ("Add1minDelta", Some("0")),
+        ],
+    )];
+    let deps = FieldDeps::bundled();
+    let term = values(&[("AddPriceBug", "0.2"), ("MaxModifier", "5")]);
+    assert!(fields_in_use(&kind, &term, &deps).is_empty());
+    let modifier = values(&[("SellModifier", "0.3")]);
+    assert!(fields_in_use(&kind, &modifier, &deps).is_empty());
+    let both = values(&[
+        ("AddPriceBug", "0.2"),
+        ("SellModifier", "0.3"),
+        ("MaxModifier", "5"),
+    ]);
+    assert_eq!(
+        fields_in_use(&kind, &both, &deps),
+        ["sellmodifier", "maxmodifier", "addpricebug"]
+    );
+}

@@ -402,7 +402,7 @@ fn the_cap_keeps_only_the_fit_rows_tapes_and_counts_them_packed() {
                 address: None,
                 ticks: Some(tape_of(10)),
                 entry_line: None,
-                held: None,
+                held: Some((60_000, 60_000)),
             },
             DealRow {
                 deal: deal(2, 2_000, 100.0, 99.0, false),
@@ -442,11 +442,30 @@ fn a_fit_row_without_its_tape_is_the_one_that_lost_it() {
         address: None,
         ticks: Some(tape_of(3)),
         entry_line: None,
-        held: None,
+        held: Some((60_000, 60_000)),
     };
     assert!(!row.lost_tape());
     row.ticks = None;
     assert!(row.lost_tape());
     row.verdict = Some(verdict(Some(false), Some(true)));
     assert!(!row.lost_tape(), "an unfit row keeps no tape by design");
+}
+
+/// A reproduced row whose tape stops short of the shortest tail past the close is out of the
+/// sample: nothing held past the close against the setting in force, whatever the store's
+/// margin caps it at, while two hours reach any of them.
+#[test]
+fn a_reproduced_row_with_a_short_tail_is_not_fit() {
+    let mut row = DealRow {
+        deal: deal(1, 1_000, 100.0, 101.0, false),
+        tape: TapeStatus::Covered,
+        verdict: Some(verdict(Some(true), Some(true))),
+        address: None,
+        ticks: Some(tape_of(3)),
+        entry_line: None,
+        held: Some((60_000, 0)),
+    };
+    assert!(!row.fit());
+    row.held = Some((60_000, 7_200_000));
+    assert!(row.fit());
 }

@@ -111,14 +111,22 @@ const NOT_SELL_PRICE: &[&str] = &[
 ];
 const ANY: &[&str] = &[];
 
-const GRID_PRICE: &[f64] = &[
-    0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5,
-    7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
-];
-const GRID_PRICE_MIN: &[f64] = &[
-    0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.25, 1.5,
-    1.75, 2.0, 2.5, 3.0, 4.0, 5.0,
-];
+/// The corridor's two fields, `MShotPrice` and `MShotPriceMin`: every 0.05 of a per cent from
+/// 0.05 to 8 (LinKvo, 2026-09-24) — a strategy's own 1.7 is a step, not a snap to 1.75.
+const GRID_PRICE: &[f64] = &twentieths::<160>();
+const GRID_PRICE_MIN: &[f64] = GRID_PRICE;
+
+/// `5/100, 10/100, … 5·N/100`: each value divided rather than summed, so 1.7 is exactly the
+/// `1.7` a strategy spells, with no accumulated rounding.
+const fn twentieths<const N: usize>() -> [f64; N] {
+    let mut out = [0.0; N];
+    let mut i = 0;
+    while i < N {
+        out[i] = ((i + 1) * 5) as f64 / 100.0;
+        i += 1;
+    }
+    out
+}
 const GRID_WAIT_S: &[f64] = &[0.0, 0.1, 0.3, 0.5, 1.0, 2.0, 5.0];
 const GRID_ADJUST: &[f64] = &[
     -0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4,
@@ -764,3 +772,6 @@ pub(super) fn unmodelled_rule(v: &StrategyValues<'_>) -> Option<UnmodelledRule> 
         None
     }
 }
+
+#[cfg(test)]
+mod tests;

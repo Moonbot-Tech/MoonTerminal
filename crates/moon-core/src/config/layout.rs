@@ -651,6 +651,10 @@ pub struct TicksAxisLayout {
     /// own. Off by default — and stored this way round so that a config written before the
     /// switch existed reads it off, the guard on (`SearchParams::keep_corridor`).
     pub allow_closer_corridor: bool,
+    /// The shortest tape past the close, seconds, a deal must hold to be worked on — the sample
+    /// the variant columns and the search run on; `None` = the axis default. The tape of an
+    /// older trade cannot be fetched again, and one short tail cut every variant's exit at it.
+    pub min_tail_s: Option<u32>,
 }
 
 /// Complete window layout.

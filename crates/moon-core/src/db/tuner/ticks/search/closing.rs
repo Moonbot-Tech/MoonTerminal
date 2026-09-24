@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use super::{PreparedDeal, Tally, params_of, point_of, results};
+use super::{Bases, Point, PreparedDeal, SearchParams, Tally, params_of, point_of, results};
 use crate::db::tuner::ticks::EntryParams;
 use crate::db::tuner::ticks::exit::ExitParams;
 use crate::db::tuner::ticks::settings::ModelSettings;
@@ -69,6 +69,63 @@ pub(super) fn closed_tally(
         }
     }
     Some(tally)
+}
+
+/// The sample less the deals the strategies as they stand leave open inside the tape — the
+/// variant's held edits over them and nothing else moved, completed as every point is
+/// (`deps::Dependents::complete`), over the same bases the search then scores on: restart 0's
+/// very point — with the kept deals' indices into `bases.owns`, and the dropped deals' ids.
+///
+/// Such a deal is no point's doing: a gap in its tape, a rule the model does not have. Held in the
+/// sample it would refuse every point, the strategy itself among them, and the search could not
+/// move even the one field it was asked about (LinKvo, 2026-09-24: "the stops are in the strategy
+/// and must stay; only the selected field is searched"). A point is still refused when it leaves
+/// open a deal the strategies as they stand close ([`closed_tally`]).
+///
+/// Args:
+///     deals: The sample, cut at its horizon.
+///     bases: The sample's bases ([`Bases::of`] over `deals`), kept by the search as they are.
+///     params: The search's parameters: the held edits, the defaults, the kind, the model.
+///     deps: The search's completion ([`super::deps::dependents_of`]) over `bases`.
+pub(super) fn closable_at_base(
+    deals: &[PreparedDeal],
+    bases: &Bases<'_>,
+    params: &SearchParams<'_>,
+    deps: &super::deps::Dependents,
+) -> (Vec<PreparedDeal>, Vec<usize>, Vec<i64>) {
+    let point = deps.complete(&Point::new(), &bases.owns, params.held, params.defaults);
+    let base = bases.params(
+        params.held,
+        params.defaults,
+        &point,
+        params.kind,
+        params.model.sanitized(),
+    );
+    let mut kept = Vec::with_capacity(deals.len());
+    let mut of_kept = Vec::with_capacity(deals.len());
+    let mut left_open = Vec::new();
+    for (((_, open), deal), &base_of) in results(deals, &bases.of_deal, &base)
+        .into_iter()
+        .zip(deals)
+        .zip(&bases.of_deal)
+    {
+        if open {
+            left_open.push(deal.deal.report_uid);
+        } else {
+            kept.push(deal.clone());
+            of_kept.push(base_of);
+        }
+    }
+    if !left_open.is_empty() {
+        log::info!(
+            target: crate::diagnostics::TICKS_AXIS_TARGET,
+            "[x] ticks search: {} of {} deal(s) the strategies as they stand leave open inside the tape are out of the sample: {:?}",
+            left_open.len(),
+            deals.len(),
+            left_open
+        );
+    }
+    (kept, of_kept, left_open)
 }
 
 /// The tally of a point over `deals` — the deals it closed — and how many it bought and left

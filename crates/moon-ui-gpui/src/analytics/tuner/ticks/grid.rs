@@ -4,12 +4,12 @@
 //! a click sends to В1, and the two variant columns with the copy arrows and the clear crosses.
 //!
 //! The rows come by the strategy editor's sections (`sections.rs`) — Strategy settings, Stops,
-//! Sell order, SellShot, SellSpread, Delta Modifiers — each with every field it holds for the
-//! scope's kinds, and a tick in its heading that admits all its knobs at once. Only the knobs
-//! are live; a field the model reads but does not turn, or does not know at all, is drawn
-//! greyed with the strategies' value, so the grid shows the whole section as Moonbot does. The
-//! sections the model does not have at all (SellShot, SellSpread) are drawn muted, every row
-//! inactive, and their heading says so.
+//! Sell order, SellShot, SellSpread, Delta Modifiers — each with every knob and every field a
+//! strategy of the scope switches on, and a tick in its heading that admits all its knobs at
+//! once. Only the knobs are live; a field the model reads but does not turn, or does not know at
+//! all, is drawn greyed with the strategies' value, where Moonbot shows it. The sections the
+//! model does not have at all (SellShot, SellSpread) are drawn muted, every row inactive, and
+//! their heading says so; a section no row is left in is not drawn.
 //!
 //! The search still gates by group, Entry and Exit: a group the model does not reproduce well
 //! enough (the share gate of the search settings) is not searched, and the first section holding
@@ -77,7 +77,7 @@ impl AnalyticsView {
         // Before the first load there is no layout; the bare headings stand in for it.
         let sections: Arc<[GridSection]> = match data.as_ref() {
             Some(d) if !d.grid.is_empty() => d.grid.clone(),
-            _ => layout(&[], &[]).into(),
+            _ => layout(&[], &[], &Default::default()).into(),
         };
         let live: Vec<&'static str> = sections
             .iter()
@@ -89,8 +89,9 @@ impl AnalyticsView {
             .w_full()
             .flex_none()
             .child(self.ticks_grid_header(live, p, cx));
-        // A section the scope's kinds leave empty is dropped once the scope is known; before
-        // that every heading stands, the first carrying the scope's note.
+        // A section left without a row — no knob of the scope's kinds, no field a strategy of it
+        // switches on — is dropped once the scope is known; before that every heading stands,
+        // the first carrying the scope's note.
         let scoped = data.as_ref().is_some_and(|d| !d.kinds.is_empty());
         let mut noted: Vec<ParamGroup> = Vec::new();
         let mut first = true;
@@ -146,7 +147,8 @@ impl AnalyticsView {
     }
 
     /// Tick or untick every field the grid shows — the header's tick. Unticked is held at its
-    /// base value by the search.
+    /// base value by the search, but for a value a switch the variant turns on needs
+    /// (`search::deps`).
     fn ticks_set_all(&mut self, fields: &[&'static str], on: bool, cx: &mut Context<Self>) {
         for key in fields {
             if on {
@@ -766,6 +768,6 @@ fn knob_live(knob: &TickParam, entry_on: bool) -> bool {
 /// Whether a section's or the header's tick counts and toggles a knob: a live one the entry
 /// method reads. A field it does not read is drawn unticked whatever `locked` says, and counting
 /// it would leave the tick half-set with every visible box ticked.
-fn knob_ticks(knob: &TickParam, entry_on: bool) -> bool {
+pub(super) fn knob_ticks(knob: &TickParam, entry_on: bool) -> bool {
     knob_live(knob, entry_on) && super::model_cfg::current().entry_method.reads(knob.key)
 }

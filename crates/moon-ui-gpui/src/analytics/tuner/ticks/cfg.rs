@@ -82,7 +82,10 @@ impl AnalyticsView {
             // changed nothing can be seen to have changed nothing.
             SuggState::Idle => match (&self.ticks.sugg_note, &self.ticks.last_result) {
                 (Some(note), _) => (note.clone(), p.amber),
-                (None, Some(result)) => (search_stats_line(&result.stats), p.text_muted),
+                (None, Some(result)) => (
+                    super::variants::search_stats_line(&result.stats),
+                    p.text_muted,
+                ),
                 (None, None) => (String::new(), p.text_muted),
             },
         };
@@ -96,10 +99,7 @@ impl AnalyticsView {
             cx,
         );
         let settings = self.ticks_search_settings(p, window, cx);
-        let one_tip = match self.ticks.sel_field {
-            Some(key) => t!("analytics.ticks.suggest_one_tip", field = key).to_string(),
-            None => t!("analytics.ticks.suggest_one_none").to_string(),
-        };
+        let (one_tip, all_tip) = self.ticks_search_tips();
         let controls = h_flex()
             .w_full()
             .flex_none()
@@ -158,14 +158,20 @@ impl AnalyticsView {
                     ),
             )
             .child(
-                div().flex_none().child(
-                    MoonButton::new("tun-suggest-run-x")
-                        .variant(MoonButtonVariant::Blue)
-                        .label(t!("analytics.tuner.suggest_run").to_string())
-                        .disabled(running)
-                        .on_click(cx.listener(|this, _, window, cx| this.ticks_suggest(window, cx)))
-                        .render(),
-                ),
+                div()
+                    .id("tun-suggest-run-x-box")
+                    .flex_none()
+                    .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(all_tip.clone())).into())
+                    .child(
+                        MoonButton::new("tun-suggest-run-x")
+                            .variant(MoonButtonVariant::Blue)
+                            .label(t!("analytics.tuner.suggest_run").to_string())
+                            .disabled(running)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.ticks_suggest(window, cx)),
+                            )
+                            .render(),
+                    ),
             );
         v_flex()
             .w_full()
@@ -544,6 +550,7 @@ impl AnalyticsView {
             ));
         }
         content
+            .children(self.ticks_tail_rows(p, window, cx))
             .child(
                 h_flex().w_full().justify_end().child(
                     MoonButton::new("an-ticks-model-reset")
@@ -687,26 +694,6 @@ impl AnalyticsView {
     }
 }
 
-/// The status band's account of the last search: restarts, the winning one, its passes and
-/// whether it converged, how many distinct end points, how many points were scored.
-fn search_stats_line(stats: &moon_core::db::tuner::ticks::SearchStats) -> String {
-    let passes = if stats.converged {
-        t!("analytics.ticks.stats_converged", n = stats.passes)
-    } else {
-        t!("analytics.ticks.stats_cut", n = stats.passes)
-    };
-    t!(
-        "analytics.ticks.stats_line",
-        restarts = stats.restarts,
-        best = stats.best_restart,
-        passes = passes,
-        distinct = stats.distinct,
-        evals = stats.evaluations,
-        refused = stats.refused
-    )
-    .to_string()
-}
-
 /// The popovers' scroll-bounded column. No padding, background, border or corners: the popover
 /// supplies them (see the filter's settings popover).
 fn popup_frame(id: &'static str, window: &Window, cx: &Context<AnalyticsView>) -> Stateful<Div> {
@@ -756,7 +743,11 @@ fn popup_head(
 }
 
 /// A section heading inside a popover.
-fn popup_section(title: String, p: MoonPalette, cx: &Context<AnalyticsView>) -> AnyElement {
+pub(super) fn popup_section(
+    title: String,
+    p: MoonPalette,
+    cx: &Context<AnalyticsView>,
+) -> AnyElement {
     div()
         .w_full()
         .pt(design::ui_px(cx, 5.0))
@@ -767,7 +758,7 @@ fn popup_section(title: String, p: MoonPalette, cx: &Context<AnalyticsView>) -> 
 }
 
 /// One setting: its caption (with a tooltip when it needs explaining) and its control.
-fn popup_row(
+pub(super) fn popup_row(
     caption: String,
     tip: Option<String>,
     body: AnyElement,

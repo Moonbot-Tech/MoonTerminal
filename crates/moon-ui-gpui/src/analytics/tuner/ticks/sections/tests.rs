@@ -25,9 +25,23 @@ fn find(out: &[GridSection], s: ParamSection) -> &GridSection {
     out.iter().find(|g| g.section == s).expect("section")
 }
 
+/// Every field of `kinds` in use, lowercase: the layout as it stood before rows were chosen.
+fn all_used(kinds: &[&[SchemaSection]]) -> HashSet<String> {
+    kinds
+        .iter()
+        .flat_map(|k| k.iter())
+        .flat_map(|s| s.fields.iter())
+        .map(|f| f.name.to_ascii_lowercase())
+        .collect()
+}
+
+fn used(names: &[&str]) -> HashSet<String> {
+    names.iter().map(|n| n.to_ascii_lowercase()).collect()
+}
+
 #[test]
 fn every_section_comes_out_in_grid_order() {
-    let out = layout(&[], &[]);
+    let out = layout(&[], &[], &HashSet::new());
     let order: Vec<ParamSection> = out.iter().map(|g| g.section).collect();
     assert_eq!(order, ParamSection::GRID_ORDER);
     assert!(out.iter().all(|g| g.rows.is_empty()));
@@ -62,7 +76,7 @@ fn the_schema_places_every_field_and_marks_what_the_model_turns() {
         ),
         section("Filters", &["MinVolume"]),
     ];
-    let out = layout(&[kind.as_slice()], &knobs);
+    let out = layout(&[kind.as_slice()], &knobs, &all_used(&[kind.as_slice()]));
 
     let settings = find(&out, ParamSection::StrategySettings);
     assert_eq!(
@@ -118,7 +132,7 @@ fn the_schema_places_every_field_and_marks_what_the_model_turns() {
 #[test]
 fn a_knob_the_schema_does_not_place_goes_under_its_own_section_once() {
     let knobs = scope_knobs(&["MoonShot".to_string()]);
-    let out = layout(&[], &knobs);
+    let out = layout(&[], &knobs, &HashSet::new());
     for knob in &knobs {
         let at: Vec<ParamSection> = out
             .iter()
@@ -129,7 +143,7 @@ fn a_knob_the_schema_does_not_place_goes_under_its_own_section_once() {
     }
     // With the schema, the field keeps the schema's place and is not drawn a second time.
     let kind = vec![section("Sell order", &["SellPrice"])];
-    let out = layout(&[kind.as_slice()], &knobs);
+    let out = layout(&[kind.as_slice()], &knobs, &HashSet::new());
     let placed: usize = out
         .iter()
         .map(|g| g.rows.iter().filter(|r| r.key == "SellPrice").count())
@@ -142,7 +156,8 @@ fn two_kinds_share_a_section_without_repeating_a_field() {
     let knobs = scope_knobs(&["MoonShot".to_string(), "MoonHook".to_string()]);
     let shot = vec![section("Stops", &["UseStopLoss", "StopLoss"])];
     let hook = vec![section("Stops", &["StopLoss", "StopLossDelay"])];
-    let out = layout(&[shot.as_slice(), hook.as_slice()], &knobs);
+    let kinds = [shot.as_slice(), hook.as_slice()];
+    let out = layout(&kinds, &knobs, &all_used(&kinds));
     let stops = keys(find(&out, ParamSection::Stops));
     // The two kinds' fields first, each once; the section's knobs no schema here places follow.
     assert_eq!(stops[..3], ["UseStopLoss", "StopLoss", "StopLossDelay"]);
@@ -157,10 +172,75 @@ fn a_knob_another_kind_has_is_outside_for_a_kind_that_does_not_read_it() {
     // A MoonHook's take is `HookSellLevel`; `SellPrice` moves nothing for it.
     let knobs = scope_knobs(&["MoonHook".to_string()]);
     let kind = vec![section("Sell order", &["SellPrice", "SellDelay"])];
-    let out = layout(&[kind.as_slice()], &knobs);
+    let out = layout(&[kind.as_slice()], &knobs, &used(&["SellPrice"]));
     let sell = find(&out, ParamSection::SellOrder);
     assert_eq!(sell.rows[0].role, RowRole::Outside);
     assert!(matches!(sell.rows[1].role, RowRole::Knob(p) if p.key == "SellDelay"));
+}
+
+/// Only the knobs and the fields a strategy of the scope switches on are drawn: a MoonShot scope
+/// that keeps SellSpread off (`IgnoreSellSpread` at its default YES) and never touched
+/// `TrailingSpread` shows neither — the SellSpread section is left with no row — while every knob
+/// stands, used or not, and a field outside the model in use keeps its place in the schema's
+/// order.
+#[test]
+fn only_knobs_and_the_fields_in_use_are_drawn() {
+    let knobs = scope_knobs(&["MoonShot".to_string()]);
+    let kind = vec![
+        section("Strategy settings", &["MShotPrice", "MShotRepeatWait"]),
+        section(
+            "Sell order\\SellSpread",
+            &["IgnoreSellSpread", "SellSpreadDistance"],
+        ),
+        section(
+            "Stops",
+            &[
+                "UseStopLoss",
+                "StopLoss",
+                "DontSellBelowLiq",
+                "TrailingSpread",
+            ],
+        ),
+    ];
+    let out = layout(
+        &[kind.as_slice()],
+        &knobs,
+        &used(&["MShotRepeatWait", "DontSellBelowLiq"]),
+    );
+    let settings = find(&out, ParamSection::StrategySettings);
+    assert_eq!(keys(settings)[..2], ["MShotPrice", "MShotRepeatWait"]);
+    assert_eq!(settings.rows[1].role, RowRole::Outside);
+    assert!(find(&out, ParamSection::SellSpread).rows.is_empty());
+    let stops = keys(find(&out, ParamSection::Stops));
+    assert_eq!(stops[..3], ["UseStopLoss", "StopLoss", "DontSellBelowLiq"]);
+    assert!(!stops.contains(&"TrailingSpread"), "{stops:?}");
+    // Every knob of the scope is drawn once, whether a strategy moved it or not.
+    for knob in &knobs {
+        let n: usize = out
+            .iter()
+            .map(|g| g.rows.iter().filter(|r| r.key == knob.key).count())
+            .sum();
+        assert_eq!(n, 1, "{}", knob.key);
+    }
+}
+
+/// SellSpread switched on in one strategy of the scope brings its section back, inactive, with
+/// the fields that strategy uses.
+#[test]
+fn a_section_the_model_lacks_is_drawn_while_a_strategy_uses_it() {
+    let knobs = scope_knobs(&["MoonShot".to_string()]);
+    let kind = vec![section(
+        "Sell order\\SellSpread",
+        &["IgnoreSellSpread", "SellSpreadDistance", "SellSpreadDelay"],
+    )];
+    let out = layout(
+        &[kind.as_slice()],
+        &knobs,
+        &used(&["IgnoreSellSpread", "SellSpreadDistance"]),
+    );
+    let spread = find(&out, ParamSection::SellSpread);
+    assert_eq!(keys(spread), ["IgnoreSellSpread", "SellSpreadDistance"]);
+    assert!(spread.rows.iter().all(|r| r.role == RowRole::Unmodelled));
 }
 
 #[test]

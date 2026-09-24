@@ -179,6 +179,9 @@ pub struct SearchStats {
     /// Restarts that ended on a point the corridor rules or the closing rule (`closing`) refuse
     /// — none of their moves reached an allowed one.
     pub refused: usize,
+    /// Deals the strategies as they stand leave open inside the tape, taken out of the sample
+    /// before the search (`closing::closable_at_base`).
+    pub left_open: usize,
 }
 
 /// What the search found.
@@ -447,21 +450,10 @@ fn arity(kind: &ParamKind) -> usize {
     }
 }
 
-/// The fields one search varies.
+/// The fields one search varies: those it offers ([`deps::offered`]) less the locked.
 fn varied<'a>(p: &SearchParams<'a>) -> Vec<&'static super::params::TickParam> {
-    TICK_PARAMS
-        .iter()
-        .filter(|f| match f.group {
-            ParamGroup::Entry => p.vary_entry,
-            ParamGroup::Exit => p.vary_exit,
-        })
-        .filter(|f| f.kinds.is_empty() || f.kinds.contains(&p.kind))
-        // The same gate the grid applies: a field this kind's model does not read would be
-        // varied for nothing, land in a variant column the grid cannot show, and be written by
-        // Save all the same.
-        .filter(|f| !f.not_kinds.contains(&p.kind))
-        // A field the entry method does not read moves nothing either.
-        .filter(|f| p.model.entry_method.reads(f.key))
+    deps::offered(p)
+        .into_iter()
         .filter(|f| !p.locked.contains(f.key))
         .collect()
 }
@@ -733,6 +725,15 @@ pub fn suggest(
     handle: &SearchHandle,
 ) -> Result<SearchResult, SearchMiss> {
     let fields = varied(params);
+    // The strategies of the WHOLE sample stay the bases throughout, a strategy whose every deal
+    // leaves the sample below among them: where each number field starts, what completes a point
+    // (`deps`) and the parameters built per base are then the same for the filter and for every
+    // point scored after it, restart 0's included.
+    let whole = Bases::of(deals);
+    let (start, deps) = deps::dependents_of(params, &whole.owns);
+    // A deal the strategies as they stand leave open is out of the sample (`closing`).
+    let (kept, of_kept, left_open) = closing::closable_at_base(deals, &whole, params, &deps);
+    let deals = kept.as_slice();
     if deals.is_empty() || fields.is_empty() {
         return Err(SearchMiss::Nothing);
     }
@@ -753,7 +754,10 @@ pub fn suggest(
     let restarts = params.restarts.max(1);
     let max_passes = params.max_passes.max(1);
     let model = params.model.sanitized();
-    let bases = Bases::of(deals);
+    let bases = Bases {
+        owns: whole.owns,
+        of_deal: of_kept,
+    };
     let train_of = &bases.of_deal[..train_n];
     // Held over the whole sample, the holdout included: a corridor nearer the price than a
     // trade's own is out whichever side of the cut the trade sits on.
@@ -773,34 +777,6 @@ pub fn suggest(
         .iter()
         .map(|(entry, _)| ordered(entry))
         .collect();
-    // Where each number field starts on its grid — the median of what the selected strategies
-    // hold (the held value over all of them; the schema default for one that leaves it out),
-    // snapped to the nearest grid step: what a pair move and a perturbed start step from while
-    // the point leaves the field alone. A move sets one value for every strategy, so it steps
-    // from the middle of theirs rather than from whichever came first.
-    let parse = |text: &String| text.trim().replace(',', ".").parse::<f64>().ok();
-    let start: HashMap<&'static str, usize> = fields
-        .iter()
-        .filter_map(|f| {
-            let ParamKind::Num { grid } = &f.kind else {
-                return None;
-            };
-            let default = params.defaults.get(f.key).copied();
-            let mut values: Vec<f64> = match params.held.get(f.key).and_then(parse) {
-                Some(held) => vec![held],
-                None => bases
-                    .owns
-                    .iter()
-                    .filter_map(|own| own.get(f.key).and_then(parse).or(default))
-                    .collect(),
-            };
-            values.sort_by(f64::total_cmp);
-            let value = values.get(values.len() / 2).copied().or(default)?;
-            Some((f.key, nearest_step(grid, value)))
-        })
-        .collect();
-    // The Strategies window's dependencies: what a point switches on it gives a value.
-    let deps = deps::Dependents::new(&fields, &start);
     let evaluations = std::sync::atomic::AtomicUsize::new(0);
     // Why points were refused, for the answer's reason when none is left.
     let (cornered, unclosed) = (
@@ -918,8 +894,46 @@ pub fn suggest(
         distinct,
         evaluations: evaluations.load(std::sync::atomic::Ordering::Relaxed),
         refused,
+        left_open: left_open.len(),
     };
     let (point, score) = (best.point, best.score);
+    // The strategies as they stand against the answer, on the slice both were fitted on: a best
+    // below its own base is a search that could not reach the base, and the log says so.
+    let base_score = evaluate(&Point::new());
+    let brief = |t: &Option<Tally>| {
+        t.as_ref()
+            .map(|t| (t.n, (t.profit * 100.0).round() / 100.0))
+    };
+    // Which rule refused the base, when one did: how many deals' corridors it comes nearer
+    // than, whether it inverts, whether it is guarded.
+    let base_why = base_score.is_none().then(|| {
+        let full = deps.complete(&Point::new(), &bases.owns, params.held, params.defaults);
+        let per_base = bases.params(params.held, params.defaults, &full, params.kind, model);
+        let nearer = guard.as_ref().map(|g| {
+            g.deals
+                .iter()
+                .filter(|(i, own, deltas)| {
+                    !keeps_corridor(&per_base[bases.of_deal[*i]].0, own, deltas)
+                })
+                .count()
+        });
+        (
+            params.vary_entry && inverts(&start_ordered, &per_base),
+            nearer,
+            closing::protected(&per_base),
+        )
+    });
+    log::info!(
+        target: crate::diagnostics::TICKS_AXIS_TARGET,
+        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} left out; base refused by (inverts, deals nearer than their own corridor, guarded) {:?}; points refused by the corridor {}, by a deal left open {}",
+        brief(&base_score),
+        brief(&score),
+        train_n,
+        left_open.len(),
+        base_why,
+        cornered.load(std::sync::atomic::Ordering::Relaxed),
+        unclosed.load(std::sync::atomic::Ordering::Relaxed)
+    );
     // The answer as it was scored — every field it switched on at a value — less what is in
     // effect on no strategy.
     let point = deps.prune(
