@@ -63,6 +63,13 @@ pub struct UserDataLayer {
     seg_count: u32,
     mk_count: u32,
     pending: Option<Pending>,
+    /// Buffers of the last uploaded `Pending`, reused by the next `set` instead of reallocated.
+    spare: Pending,
+    /// CPU copy of the markers on the GPU, so a hover can rewrite a few of them and re-upload the
+    /// marker buffer alone: the buffers are write-discard, with no in-place sub-range write.
+    mk_cpu: Vec<MarkerGpu>,
+    /// `mk_cpu` was patched after its upload and the marker buffer must be written again.
+    mk_dirty: bool,
     device_generation: u64,
 }
 
@@ -75,6 +82,9 @@ impl UserDataLayer {
             seg_count: 0,
             mk_count: 0,
             pending: None,
+            spare: Pending::default(),
+            mk_cpu: Vec::new(),
+            mk_dirty: false,
             device_generation: 0,
         }
     }
@@ -87,12 +97,47 @@ impl UserDataLayer {
         segs: &[SegInstance],
         markers: &[MarkerInstance],
     ) {
-        self.pending = Some(Pending {
-            zone: zones.iter().map(zone_of).collect(),
-            hl: hlines.iter().map(hl_of).collect(),
-            seg: segs.iter().map(seg_of).collect(),
-            mk: markers.iter().map(mk_of).collect(),
-        });
+        let mut p = self
+            .pending
+            .take()
+            .unwrap_or_else(|| std::mem::take(&mut self.spare));
+        p.zone.clear();
+        p.zone.extend(zones.iter().map(zone_of));
+        p.hl.clear();
+        p.hl.extend(hlines.iter().map(hl_of));
+        p.seg.clear();
+        p.seg.extend(segs.iter().map(seg_of));
+        p.mk.clear();
+        p.mk.extend(markers.iter().map(mk_of));
+        self.pending = Some(p);
+        // The full upload supersedes any patch still waiting.
+        self.mk_dirty = false;
+    }
+
+    /// Rewrite markers in place by index and re-upload only the marker buffer.
+    ///
+    /// Args:
+    ///     patches: `(marker index, new instance)` pairs, indices into the last `set` union.
+    ///
+    /// Returns:
+    ///     Whether every index was in range and the patch was applied; nothing changes otherwise.
+    pub fn patch_markers(&mut self, patches: &[(u32, MarkerInstance)]) -> bool {
+        let target = match self.pending.as_mut() {
+            Some(p) => &mut p.mk,
+            None => &mut self.mk_cpu,
+        };
+        if patches.iter().any(|(ix, _)| *ix as usize >= target.len()) {
+            return false;
+        }
+        for (ix, marker) in patches {
+            target[*ix as usize] = mk_of(marker);
+        }
+        if self.pending.is_none() {
+            self.mk_dirty = true;
+        }
+        #[cfg(test)]
+        MARKER_PATCHES.with(|n| n.set(n.get() + 1));
+        true
     }
 
     /// Prepare phase: creates resources and uploads pending user geometry.
@@ -111,6 +156,9 @@ impl UserDataLayer {
             self.hl_count = 0;
             self.seg_count = 0;
             self.mk_count = 0;
+            // The GPU copy is gone; a patch has nothing to patch until the next `set`.
+            self.mk_cpu.clear();
+            self.mk_dirty = false;
         }
         if self.pipe.is_none() {
             self.pipe = Some(Self::create_pipe(
@@ -140,6 +188,16 @@ impl UserDataLayer {
             self.hl_count = upload_all(context, &pipe.hl_buf, &p.hl);
             self.seg_count = upload_all(context, &pipe.seg_buf, &p.seg);
             self.mk_count = upload_all(context, &pipe.mk_buf, &p.mk);
+            let mut p = p;
+            std::mem::swap(&mut self.mk_cpu, &mut p.mk);
+            self.spare = p;
+            self.mk_dirty = false;
+        } else if self.mk_dirty
+            && let Some(pipe) = self.pipe.as_ref()
+        {
+            // Same length as the last upload, so the buffer already fits it.
+            self.mk_count = upload_all(context, &pipe.mk_buf, &self.mk_cpu);
+            self.mk_dirty = false;
         }
     }
 
@@ -270,6 +328,18 @@ impl UserDataLayer {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static MARKER_PATCHES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Marker patches applied on this thread since the last call; resets the count.
+#[cfg(test)]
+#[allow(dead_code)] // read by the prover's before/after measurement
+pub(crate) fn take_marker_patches() -> u64 {
+    MARKER_PATCHES.with(|n| n.replace(0))
+}
+
 fn upload_all<T: Copy>(context: &ID3D11DeviceContext, buf: &ID3D11Buffer, data: &[T]) -> u32 {
     if !data.is_empty() {
         update_dynamic(context, buf, data);
@@ -280,3 +350,6 @@ fn upload_all<T: Copy>(context: &ID3D11DeviceContext, buf: &ID3D11Buffer, data: 
 fn next_buffer_cap(len: usize, floor: u32) -> u32 {
     (len as u32).max(1).max(floor).next_power_of_two()
 }
+
+#[cfg(test)]
+mod tests;

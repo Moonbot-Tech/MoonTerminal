@@ -33,4 +33,4 @@ pub mod side_volume;
 pub mod tick_volume;
 pub mod view;
 pub mod volume_bars;
-pub use volume_bars::{VolumeSample, VolumeStats, collect_samples};
+pub use volume_bars::{VolumeSample, VolumeStats, collect_samples, extend_samples};

@@ -100,6 +100,7 @@ impl ChartEngine {
         let container = Rc::new(RefCell::new(Container::new(kind)));
         let state = Rc::new(RefCell::new(RenderState {
             panes: Vec::new(),
+            cursor_params_scratch: Vec::new(),
             needs_present: true,
             base_dirty: true,
             last_present_at: None,
@@ -687,7 +688,10 @@ impl ChartEngine {
     ///
     /// Returns:
     ///     Whether anything changed, so the caller can skip the userdata resync.
-    pub(crate) fn set_trade_hover(&mut self, hovered: Option<(usize, usize, bool)>) -> bool {
+    pub(crate) fn set_trade_hover(
+        &mut self,
+        hovered: Option<(usize, usize, bool)>,
+    ) -> super::trade_history_sync::TradeHoverChange {
         self.data.borrow_mut().set_trade_hover(hovered)
     }
 
@@ -750,6 +754,14 @@ impl ChartEngine {
     ///
     /// Returns:
     ///     The closure's value, or `None` when that pane does not exist.
+    /// Mark one pane's trade geometry stale so the next unforced order sync rebuilds only it.
+    ///
+    /// Args:
+    ///     pane: Pane index whose built span no longer covers the cursor.
+    pub(crate) fn invalidate_trade_pane(&mut self, pane: usize) {
+        self.data.borrow_mut().dirty_trade_pane(pane);
+    }
+
     pub(crate) fn with_trade_geometry<R>(
         &self,
         pane: usize,

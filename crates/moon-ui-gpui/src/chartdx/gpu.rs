@@ -98,6 +98,8 @@ pub fn make_ps(device: &ID3D11Device, src: &str, entry: &str) -> ID3D11PixelShad
 // ───────────────────────── Buffers and resources ─────────────────────────
 
 /// Create a DYNAMIC CPU-writable StructuredBuffer for `count` elements of `elem_size` bytes.
+///
+/// A buffer whose slots are rewritten IN PLACE uses [`create_structured_default`] instead.
 pub fn create_structured(device: &ID3D11Device, elem_size: u32, count: u32) -> ID3D11Buffer {
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: elem_size * count,
@@ -111,6 +113,73 @@ pub fn create_structured(device: &ID3D11Device, elem_size: u32, count: u32) -> I
         let mut b = None;
         device.CreateBuffer(&desc, None, Some(&mut b)).unwrap();
         b.unwrap()
+    }
+}
+
+/// Create a DEFAULT-usage StructuredBuffer for `count` elements of `elem_size` bytes.
+///
+/// For a buffer rewritten IN PLACE (a slot the GPU may still be reading): `UpdateSubresource` is
+/// driver-versioned and hazard-safe, where `MAP_WRITE_NO_OVERWRITE` into a slot an in-flight draw
+/// reads is undefined. Appends go through `create_structured` + `ring_write_no_overwrite` instead.
+pub fn create_structured_default(
+    device: &ID3D11Device,
+    elem_size: u32,
+    count: u32,
+) -> ID3D11Buffer {
+    let desc = D3D11_BUFFER_DESC {
+        ByteWidth: elem_size * count,
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: D3D11_RESOURCE_MISC_BUFFER_STRUCTURED.0 as u32,
+        StructureByteStride: elem_size,
+    };
+    unsafe {
+        let mut b = None;
+        device.CreateBuffer(&desc, None, Some(&mut b)).unwrap();
+        b.unwrap()
+    }
+}
+
+/// Byte `left` and `right` of the `D3D11_BOX` covering `len` elements from `first_elem`; `None`
+/// when either does not fit in `u32`.
+pub(crate) fn upload_box(first_elem: u32, len: u32, elem_size: u32) -> Option<(u32, u32)> {
+    let left = first_elem.checked_mul(elem_size)?;
+    let right = first_elem.checked_add(len)?.checked_mul(elem_size)?;
+    Some((left, right))
+}
+
+/// Write `data` into a DEFAULT buffer from element `first_elem` on, through `UpdateSubresource`.
+///
+/// Immediate context only (a deferred context needs the source pointer pre-offset by the box origin
+/// on drivers without command-list support).
+pub fn update_default_range<T: Copy>(
+    context: &ID3D11DeviceContext,
+    buffer: &ID3D11Buffer,
+    first_elem: u32,
+    data: &[T],
+) {
+    if data.is_empty() {
+        return;
+    }
+    let Some((left, right)) = upload_box(
+        first_elem,
+        data.len() as u32,
+        std::mem::size_of::<T>() as u32,
+    ) else {
+        debug_assert!(false, "D3D11 box exceeds u32");
+        return;
+    };
+    let dst = D3D11_BOX {
+        left,
+        top: 0,
+        front: 0,
+        right,
+        bottom: 1,
+        back: 1,
+    };
+    unsafe {
+        context.UpdateSubresource(buffer, 0, Some(&dst), data.as_ptr() as *const _, 0, 0);
     }
 }
 

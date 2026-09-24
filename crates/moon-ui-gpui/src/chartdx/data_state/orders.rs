@@ -339,10 +339,19 @@ impl ChartDataState {
                     || pr.last_trade_history_sig != trade_history_sig
                     || pr.last_warn_sig != warn_sig
                 {
-                    let mut hlines = Vec::new();
-                    let mut segs = Vec::new();
-                    let mut markers = Vec::new();
-                    let mut zones = Vec::new();
+                    // Retained buffers: taken out of the pane for the build, handed back after.
+                    let mut scratch = std::mem::take(&mut pr.ud_scratch);
+                    scratch.clear_live();
+                    let crate::chartdx::UdScratch {
+                        zones,
+                        hlines,
+                        segs,
+                        markers,
+                        arch_zones: archived_zones,
+                        arch_hlines: archived_hlines,
+                        arch_segs: archived_segs,
+                        arch_markers: archived_markers,
+                    } = &mut scratch;
                     moon_chart::build_order_geometry(
                         order_lines,
                         &core_st.strategies,
@@ -358,10 +367,10 @@ impl ChartDataState {
                         f32::NEG_INFINITY,
                         f32::INFINITY,
                         0.0,
-                        &mut zones,
-                        &mut hlines,
-                        &mut segs,
-                        &mut markers,
+                        zones,
+                        hlines,
+                        segs,
+                        markers,
                     );
                     // The closed trades' Moonbot lines, in the "lines" trade style: a SECOND pass
                     // through the same geometry with the pane's archived store, into the same
@@ -413,10 +422,6 @@ impl ChartDataState {
                         // Into buffers of its own, then appended: `build_order_geometry`
                         // CLEARS what it is handed before it draws, and handing it the live
                         // pass's buffers would erase every live order just drawn.
-                        let mut archived_zones = Vec::new();
-                        let mut archived_hlines = Vec::new();
-                        let mut archived_segs = Vec::new();
-                        let mut archived_markers = Vec::new();
                         moon_chart::build_order_geometry(
                             archived.as_ref(),
                             &core_st.strategies,
@@ -432,15 +437,15 @@ impl ChartDataState {
                             f32::NEG_INFINITY,
                             f32::INFINITY,
                             0.0,
-                            &mut archived_zones,
-                            &mut archived_hlines,
-                            &mut archived_segs,
-                            &mut archived_markers,
+                            archived_zones,
+                            archived_hlines,
+                            archived_segs,
+                            archived_markers,
                         );
-                        zones.extend(archived_zones);
-                        hlines.extend(archived_hlines);
-                        segs.extend(archived_segs);
-                        markers.extend(archived_markers);
+                        zones.extend_from_slice(archived_zones);
+                        hlines.extend_from_slice(archived_hlines);
+                        segs.extend_from_slice(archived_segs);
+                        markers.extend_from_slice(archived_markers);
                     }
                     // A frozen viewer's corridor and modelled trades, beside its store in either
                     // trade style: neither is an order of the trade.
@@ -466,32 +471,33 @@ impl ChartDataState {
                         &pane.market,
                         pane.view.epoch_ms,
                         &mut moon_chart::figures::FigureBuffers {
-                            zones: &mut zones,
-                            hlines: &mut hlines,
-                            segs: &mut segs,
-                            markers: &mut markers,
+                            zones,
+                            hlines,
+                            segs,
+                            markers,
                             labels: &mut pr.figure_labels,
                         },
                     );
                     // News marks, then trade history, then warning badges ride the same layer
                     // after the orders, so none of them is hidden under an order line's cross.
                     // The order among these three is their stacking order, last one on top.
-                    self.append_news_geometry(pane.view.epoch_ms, &mut markers);
+                    self.append_news_geometry(pane.view.epoch_ms, markers);
                     pr.trade_geometry = self.append_trade_history_geometry(
                         *idx,
                         pane.core,
                         &pane.view,
-                        &mut markers,
-                        &mut segs,
+                        markers,
+                        segs,
                         // A frozen viewer names its store's closes; a live chart its live twins.
                         match frozen {
                             true => frozen_closes.as_deref(),
                             false => live_twins.as_deref(),
                         },
+                        &mut pr.trade_source,
                     );
                     // Warning badges ride the same layer, after news.
-                    self.append_warn_geometry(pane.view.epoch_ms, &mut markers);
-                    let zone_sig = hash_order_zones(&zones);
+                    self.append_warn_geometry(pane.view.epoch_ms, markers);
+                    let zone_sig = hash_order_zones(zones);
                     if pr.last_order_zone_sig != zone_sig {
                         pr.last_order_zone_sig = zone_sig;
                         base_changed = true;
@@ -503,6 +509,7 @@ impl ChartDataState {
                         segs,
                         markers,
                     );
+                    pr.ud_scratch = scratch;
                     let quote_usd = self
                         .market_source
                         .as_ref()
@@ -557,29 +564,32 @@ impl ChartDataState {
                         pr.last_order_zone_sig = 0;
                         base_changed = true;
                     }
-                    let mut markers = Vec::new();
                     // Trade history outlives its core: the replica is durable, so a pane whose core
                     // was removed still draws its closed trades — and their connectors, which is why
                     // this branch carries a real segment buffer rather than an empty slice.
-                    let mut segs = Vec::new();
-                    self.append_news_geometry(pane.view.epoch_ms, &mut markers);
+                    let mut scratch = std::mem::take(&mut pr.ud_scratch);
+                    scratch.clear_live();
+                    let crate::chartdx::UdScratch { segs, markers, .. } = &mut scratch;
+                    self.append_news_geometry(pane.view.epoch_ms, markers);
                     pr.trade_geometry = self.append_trade_history_geometry(
                         *idx,
                         pane.core,
                         &pane.view,
-                        &mut markers,
-                        &mut segs,
+                        markers,
+                        segs,
                         // No core, no order pass: nothing draws lines here, so the arrows stay.
                         None,
+                        &mut pr.trade_source,
                     );
-                    self.append_warn_geometry(pane.view.epoch_ms, &mut markers);
+                    self.append_warn_geometry(pane.view.epoch_ms, markers);
                     crate::chartdx::trade_history_sync::set(
                         &mut pr.layers,
-                        Vec::new(),
-                        Vec::new(),
+                        &[],
+                        &[],
                         segs,
                         markers,
                     );
+                    pr.ud_scratch = scratch;
                     pr.order_labels.clear();
                     pr.order_label_order.clear();
                     pr.orderbook_labels.clear();

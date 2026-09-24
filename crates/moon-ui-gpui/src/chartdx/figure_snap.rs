@@ -12,24 +12,89 @@ use super::types::{CandleGpu, CandleStyleGpu};
 #[derive(Default)]
 pub(super) struct FigureSnapData {
     candles: Vec<CandleGpu>,
+    /// Widest own `tf_rel` among `candles`, so a pointer lookup can bound its slice without a pass.
+    max_row_tf: f32,
+    /// Whether some row has no own width and draws at the style's series timeframe instead.
+    any_series_tf: bool,
+    /// Index within the full list at which the retained window starts.
+    base: usize,
+}
+
+/// The DX11 candle buffer's instance capacity; figure snaps mirror exactly what it holds.
+/// `chartdx/candles.rs` sizes the buffer from this constant.
+pub(super) const DX11_CANDLE_WINDOW: usize = 4096;
+
+/// Start of the window the candle layer actually keeps: DX11's CandleLayer keeps only the newest
+/// `DX11_CANDLE_WINDOW` instances, native backends keep all.
+pub(super) fn dx11_window_start(len: usize) -> usize {
+    if cfg!(windows) {
+        len.saturating_sub(DX11_CANDLE_WINDOW)
+    } else {
+        0
+    }
 }
 
 impl FigureSnapData {
     /// Replace candles on series revision, preserving the platform's actual upload capacity.
     pub(super) fn set_candles(&mut self, rows: &[CandleGpu]) {
-        // DX11's CandleLayer keeps only the newest 4096 instances; native backends keep all.
-        let start = if cfg!(windows) {
-            rows.len().saturating_sub(4096)
-        } else {
-            0
-        };
+        let start = dx11_window_start(rows.len());
+        self.base = start;
         self.candles.clear();
         self.candles.extend_from_slice(&rows[start..]);
+        self.max_row_tf = self
+            .candles
+            .iter()
+            .fold(0.0, |max, row| max.max(row.tf_rel));
+        self.any_series_tf = self.candles.iter().any(|row| !(row.tf_rel > 0.0));
+    }
+
+    /// Rows whose plotted nodes can fall inside `[left, right]` (epoch-relative milliseconds).
+    ///
+    /// The upload is ascending by `t_open_rel` (the composed history is ascending and
+    /// `fill_candle_upload` maps it in order), and a node sits at most one timeframe past its
+    /// row's open. One millisecond of slack on each side absorbs the rounding of the absolute node
+    /// time the caller filters on, so the slice never drops a row that filter would keep.
+    /// A negative or NaN style timeframe is out of contract: a node before `t_open` is not searched.
+    fn candles_near(&self, left: f64, right: f64, series_tf: f32) -> &[CandleGpu] {
+        let series_tf = if self.any_series_tf { series_tf } else { 0.0 };
+        let max_tf = f64::from(self.max_row_tf.max(series_tf).max(0.0));
+        let start = self
+            .candles
+            .partition_point(|row| f64::from(row.t_open_rel) + max_tf + 1.0 < left);
+        let end = self
+            .candles
+            .partition_point(|row| f64::from(row.t_open_rel) <= right + 1.0)
+            .max(start);
+        &self.candles[start..end]
+    }
+
+    /// Re-apply the tail of `full` from `from` on; a window that moved takes the whole set again.
+    pub(super) fn patch_candles(&mut self, from: usize, full: &[CandleGpu]) {
+        let start = dx11_window_start(full.len());
+        if start == self.base
+            && from >= start
+            && from <= full.len()
+            && from - start <= self.candles.len()
+        {
+            self.candles.truncate(from - start);
+            let tail = &full[from..];
+            self.candles.extend_from_slice(tail);
+            // Widen only: bounds left over from truncated rows keep the lookup conservative.
+            self.max_row_tf = tail
+                .iter()
+                .fold(self.max_row_tf, |max, row| max.max(row.tf_rel));
+            self.any_series_tf |= tail.iter().any(|row| !(row.tf_rel > 0.0));
+        } else {
+            self.set_candles(full);
+        }
     }
 
     /// Retire candle candidates together with a disabled or cleared candle layer.
     pub(super) fn clear_candles(&mut self) {
         self.candles.clear();
+        self.max_row_tf = 0.0;
+        self.any_series_tf = false;
+        self.base = 0;
     }
 }
 
@@ -115,12 +180,28 @@ impl ChartEngine {
             .map(|row| FigNode::new(epoch + f64::from(row.time_rel), f64::from(row.price)));
         let candles = rendered
             .figure_snap
-            .candles
+            .candles_near(left, right, rendered.candle_style.tf_rel_ms)
             .iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                FIGURE_SNAP_VISITED.with(|n| n.set(n.get() + 1));
+            })
             .flat_map(|row| candle_nodes(row, epoch, rendered.candle_style))
             .filter(|node| node.time_ms >= epoch + left && node.time_ms <= epoch + right);
         nearest_point(ticks.chain(candles), pointer, plot, projection, tolerance)
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static FIGURE_SNAP_VISITED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Candle rows `nearest_figure_snap` inspected on this thread since the last call; resets it.
+#[cfg(test)]
+#[allow(dead_code)] // read by the prover's before/after measurement
+pub(crate) fn take_figure_snap_visited() -> u64 {
+    FIGURE_SNAP_VISITED.with(|n| n.replace(0))
 }
 
 #[cfg(test)]

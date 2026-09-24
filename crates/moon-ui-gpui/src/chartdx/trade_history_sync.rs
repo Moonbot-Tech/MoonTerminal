@@ -23,12 +23,12 @@ use super::ChartDataState;
 /// Publish a complete session-authored userdata union.
 pub(crate) fn set(
     layers: &mut super::backend::PlatformLayers,
-    zones: Vec<ZoneInstance>,
-    hlines: Vec<LineInstance>,
-    segs: Vec<SegInstance>,
-    markers: Vec<MarkerInstance>,
+    zones: &[ZoneInstance],
+    hlines: &[LineInstance],
+    segs: &[SegInstance],
+    markers: &[MarkerInstance],
 ) {
-    layers.set_userdata(&zones, &hlines, &segs, &markers);
+    layers.set_userdata(zones, hlines, segs, markers);
 }
 
 /// Whether a closed trade of this kind is drawn, per the graphics popup's two checkboxes.
@@ -163,7 +163,71 @@ pub(crate) struct TradeGeometry {
     /// indices back to the panel's record list. Carrying the map rather than a record id also
     /// sidesteps the legacy rows whose id column collapses to `0`, which cannot tell two trades
     /// apart at all.
-    pub sources: Vec<usize>,
+    pub sources: Rc<[usize]>,
+    /// `clusters` indices ascending by time, so a hit test visits only the arrows near the cursor.
+    pub order_by_t: Vec<u32>,
+    /// Index of the first arrow in the pane's userdata marker union: cluster `i` is marker
+    /// `marker_offset + i`.
+    pub marker_offset: u32,
+    /// The context the arrows were built with, so a hover can rebuild one instance exactly.
+    pub ctx: Option<trade_marks::TradeGeometryCtx>,
+    /// Absolute-ms span the arrows were culled to; `None` when nothing was culled. A cursor
+    /// outside it is over arrows this geometry never built.
+    pub span: Option<(f64, f64)>,
+}
+
+/// What a hover change needed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TradeHoverChange {
+    /// Same arrow as before; nothing to do.
+    Unchanged,
+    /// The old and new hot arrows were rewritten in place; no rebuild is needed.
+    Patched,
+    /// Every pane was marked dirty; the caller must run the forced order sync.
+    NeedsRebuild,
+}
+
+/// A pane's filtered trade marks and their sorted actions, kept across pans and zooms.
+///
+/// Filtering the record list, exploding it and sorting the actions depends on the trades and the
+/// line-drawing inputs, never on the camera, so a pan that rebuilds the arrows reuses all of it.
+pub(crate) struct TradeSource {
+    /// What the marks were built from; see `append_trade_history_geometry`.
+    key: u64,
+    marks: Vec<TradeMark>,
+    /// Record-list index of each mark, as `TradeGeometry::sources`.
+    sources: Rc<[usize]>,
+    sorted: trade_marks::SortedActions,
+}
+
+/// The time span a pane's trade geometry is built over, keyed so it moves only in coarse steps.
+///
+/// The visible range `[a - (1 - f) W, a + f W]` (`ChartView::visible_x`, `a` the right time, `W`
+/// the window width, `f` the right margin) lies inside `[(cell - 1) Q, (cell + 2) Q]` for
+/// `Q = 2^ceil(log2 W) >= W` and `cell = floor(a / Q)`, so a pan rebuilds only when `a` crosses a
+/// cell.
+///
+/// Args:
+///     right_time_ms: The view's right time, absolute ms.
+///     width_px: The widest the pane's plot can be, device px.
+///     px_per_ms: Horizontal view scale, device px per ms.
+///
+/// Returns:
+///     `(cell, log2 Q, span)` with the span in absolute ms, or `None` when the scale is unusable
+///     and nothing may be culled.
+pub(super) fn built_span(
+    right_time_ms: f64,
+    width_px: u32,
+    px_per_ms: f32,
+) -> Option<(i64, i32, (f64, f64))> {
+    let window = width_px as f64 / px_per_ms as f64;
+    if !(window.is_finite() && window > 0.0 && right_time_ms.is_finite()) {
+        return None;
+    }
+    let log2_q = window.log2().ceil() as i32;
+    let q = 2f64.powi(log2_q);
+    let cell = (right_time_ms / q).floor();
+    Some((cell as i64, log2_q, (cell * q - q, (cell + 2.0) * q)))
 }
 
 impl ChartDataState {
@@ -172,7 +236,7 @@ impl ChartDataState {
     /// The shared body of every setter here that invalidates the userdata pass rather than a
     /// single pane: `set_trade_history`, `set_trade_history_cores`, `set_trade_hover`, and
     /// `set_report_axis` all need exactly this.
-    fn dirty_all_trade_panes(&mut self) {
+    pub(super) fn dirty_all_trade_panes(&mut self) {
         let mut render = self.render.borrow_mut();
         for pane in &mut render.panes {
             pane.last_trade_history_sig = u64::MAX;
@@ -180,9 +244,31 @@ impl ChartDataState {
             // with the arrows.
             pane.archived_store = None;
             pane.archived_store_key = None;
+            // So is the filtered mark list: the report axis and the history live in its inputs.
+            pane.trade_source = None;
             pane.gpu_prepare_dirty = true;
         }
         render.needs_present = true;
+    }
+
+    /// Mark one pane's trade arrows for a rebuild over a fresh span, keeping its filtered marks.
+    ///
+    /// Only the camera-dependent geometry is stale here, so the pane's mark list and archived
+    /// store stay; `last_order_sig` is reset because the order signature cannot see this pane's
+    /// built span, and an unforced sync then rebuilds only the pane whose gate now mismatches.
+    ///
+    /// Args:
+    ///     pane: Pane index whose geometry no longer covers the cursor.
+    pub(super) fn dirty_trade_pane(&mut self, pane: usize) {
+        let mut render = self.render.borrow_mut();
+        let Some(pr) = render.panes.get_mut(pane) else {
+            return;
+        };
+        pr.last_trade_history_sig = u64::MAX;
+        pr.gpu_prepare_dirty = true;
+        render.needs_present = true;
+        drop(render);
+        self.last_order_sig = u64::MAX;
     }
 
     /// Replace the exact-target durable history and invalidate userdata only on a real change.
@@ -254,12 +340,71 @@ impl ChartDataState {
     ///
     /// Returns:
     ///     Whether the hovered arrow changed.
-    pub(super) fn set_trade_hover(&mut self, hovered: Option<(usize, usize, bool)>) -> bool {
+    pub(super) fn set_trade_hover(
+        &mut self,
+        hovered: Option<(usize, usize, bool)>,
+    ) -> TradeHoverChange {
         if self.trade_hovered == hovered {
-            return false;
+            return TradeHoverChange::Unchanged;
         }
+        let previous = self.trade_hovered;
         self.trade_hovered = hovered;
+        if !super::backend::PlatformLayers::can_patch_markers() {
+            self.dirty_all_trade_panes();
+            return TradeHoverChange::NeedsRebuild;
+        }
+        // Only DX11 retains the marker buffer to patch; elsewhere the patch declines.
+        if self.patch_trade_hover(previous, hovered) {
+            return TradeHoverChange::Patched;
+        }
         self.dirty_all_trade_panes();
+        TradeHoverChange::NeedsRebuild
+    }
+
+    /// Rewrite the previously and newly hovered arrows in the uploaded marker buffers.
+    ///
+    /// Only the arrow instance changes on hover — its size and alpha — so the two instances are
+    /// rebuilt through `trade_marker` exactly as the full build makes them.
+    ///
+    /// Returns:
+    ///     Whether both were patched; `false` leaves the caller to rebuild.
+    fn patch_trade_hover(
+        &self,
+        previous: Option<(usize, usize, bool)>,
+        hovered: Option<(usize, usize, bool)>,
+    ) -> bool {
+        let mut render = self.render.borrow_mut();
+        let mut touched = false;
+        for (pane, mark, buy) in [previous, hovered].into_iter().flatten() {
+            let Some(pr) = render.panes.get_mut(pane) else {
+                continue;
+            };
+            let geom = &pr.trade_geometry;
+            let Some(ctx) = geom.ctx.as_ref() else {
+                return false;
+            };
+            // Nothing drawn for this action here: nothing to rewrite.
+            let Some(ix) = geom
+                .clusters
+                .iter()
+                .position(|c| trade_marks::cluster_is_hot(c, Some((mark, buy))))
+            else {
+                continue;
+            };
+            let hot = hovered == Some((pane, mark, buy));
+            let marker = trade_marks::trade_marker(&geom.clusters[ix], ctx, hot);
+            if !pr
+                .layers
+                .patch_markers(&[(geom.marker_offset + ix as u32, marker)])
+            {
+                return false;
+            }
+            pr.gpu_prepare_dirty = true;
+            touched = true;
+        }
+        if touched {
+            render.needs_present = true;
+        }
         true
     }
 
@@ -301,7 +446,18 @@ impl ChartDataState {
             // Clustering happens when this layer is rebuilt, so ZOOM has to invalidate it — but
             // through a quantized bucket, never the raw scale, or a smooth zoom would rebuild every
             // marker on every frame.
-            .wrapping_add(trade_marks::scale_bucket(view.px_per_ms, view.px_per_price));
+            .wrapping_add(trade_marks::scale_bucket(view.px_per_ms, view.px_per_price))
+            // The arrows are culled to the built span, so leaving it has to rebuild them.
+            .wrapping_add(
+                built_span(view.right_time_ms, self.w, view.px_per_ms)
+                    .map_or(u64::MAX, |(cell, log2_q, _)| {
+                        (cell as u64)
+                            .wrapping_mul(0xA24B_AED4_963E_E407)
+                            .wrapping_add((log2_q as u64).wrapping_mul(0x9FB2_1C65_1E98_DF25))
+                            .wrapping_add(u64::from(self.w))
+                    })
+                    .wrapping_mul(0xC2B2_AE3D_27D4_EB4F),
+            );
         if sig == u64::MAX { 0 } else { sig }
     }
 
@@ -327,6 +483,7 @@ impl ChartDataState {
     ///         arrows of an answered end must give way; carries the close instants of the live
     ///         closed orders the live pass draws, whose trades get no arrows at all.
     ///     segs: Existing order/figure segment union to extend with the connectors.
+    ///     source: The pane's retained `TradeSource`, reused while its key holds.
     ///
     /// Returns:
     ///     The cluster snapshot the markers were built from plus the map back to the panel's
@@ -341,10 +498,86 @@ impl ChartDataState {
         markers: &mut Vec<MarkerInstance>,
         segs: &mut Vec<SegInstance>,
         lines_drawn: Option<&[f64]>,
+        source: &mut Option<TradeSource>,
     ) -> TradeGeometry {
         if self.orderbook_only {
             return TradeGeometry::default();
         }
+        #[cfg(test)]
+        TRADE_GEOMETRY_BUILDS.with(|n| n.set(n.get() + 1));
+        // Everything the filter below reads besides the history and the report axis, whose
+        // setters drop the cache through `dirty_all_trade_panes`.
+        let key = self
+            .trade_history_revision
+            .wrapping_mul(0xD6E8_FEB8_6659_FD93)
+            .wrapping_add(self.archived_lines_rev.wrapping_mul(0x94D0_49BB_1331_11EB))
+            .wrapping_add(
+                self.archived_graphics_bits()
+                    .wrapping_mul(0xBF58_476D_1CE4_E5B9),
+            )
+            .wrapping_add(u64::from(self.draws_live_market()).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            .wrapping_add(
+                lines_drawn
+                    .map_or(u64::MAX, crate::chartdx::archived_lines::twins_signature)
+                    .wrapping_mul(0xA24B_AED4_963E_E407),
+            )
+            .wrapping_add(core.wrapping_mul(0x9FB2_1C65_1E98_DF25));
+        if source.as_ref().is_none_or(|cached| cached.key != key) {
+            *source = Some(self.trade_source(core, lines_drawn, key));
+        }
+        let Some(source) = source.as_ref() else {
+            return TradeGeometry::default();
+        };
+        let window = built_span(view.right_time_ms, self.w, view.px_per_ms).map(|(_, _, span)| {
+            let margin = trade_marks::trade_glyph_margin_ms(
+                self.last_ppp,
+                self.chart_graphics.trade_arrow_scale,
+                view.px_per_ms,
+            );
+            (span.0 - margin, span.1 + margin)
+        });
+        let marker_offset = markers.len() as u32;
+        let ctx = trade_marks::TradeGeometryCtx {
+            epoch_ms: view.epoch_ms,
+            long_rgb: self.theme.label_positive,
+            short_rgb: self.theme.label_negative,
+            scale: self.last_ppp,
+            px_per_ms: view.px_per_ms,
+            px_per_price: view.px_per_price,
+            arrow_scale: self.chart_graphics.trade_arrow_scale,
+            connector_thickness: self.chart_graphics.connector_thickness_px,
+            hovered: self
+                .trade_hovered
+                .and_then(|(hot, mark, buy)| (hot == pane).then_some((mark, buy))),
+        };
+        let clusters = moon_chart::trade_marks::build_trade_geometry_sorted(
+            &source.marks,
+            &source.sorted,
+            window,
+            &ctx,
+            markers,
+            segs,
+        );
+        TradeGeometry {
+            order_by_t: trade_marks::order_by_time(&clusters),
+            clusters,
+            sources: Rc::clone(&source.sources),
+            marker_offset,
+            ctx: Some(ctx),
+            span: window,
+        }
+    }
+
+    /// Filter the panel's records to the marks this pane draws and sort their actions.
+    ///
+    /// Args:
+    ///     core: The pane's own core.
+    ///     lines_drawn: As `append_trade_history_geometry` takes it.
+    ///     key: The inputs signature to stamp the result with.
+    ///
+    /// Returns:
+    ///     The pane's retained trade source.
+    fn trade_source(&self, core: CoreId, lines_drawn: Option<&[f64]>, key: u64) -> TradeSource {
         // When the order pass draws the closed trades as lines, an END drawn as a line loses its
         // arrow, which would sit on top of it: one or the other, per end. For the pane's OWN core
         // the EXIT is a line — from the archive or from the row itself — so its arrow never draws
@@ -355,7 +588,6 @@ impl ChartDataState {
         // the exit. The CALLER says whether the lines are drawn — a pane without a core runs no
         // order pass at all, and its arrows stay — and names the trades that closed this session,
         // which the live store draws whole: no arrow for either of their ends.
-        let epoch_ms = view.epoch_ms;
         let mut sources = Vec::new();
         // The replica stores seconds and, when the core supplied them, milliseconds; every other
         // instance in this layer is relative milliseconds.
@@ -399,26 +631,26 @@ impl ChartDataState {
                 ))
             })
             .collect::<Vec<_>>();
-        let clusters = moon_chart::build_trade_geometry(
-            &marks,
-            &trade_marks::TradeGeometryCtx {
-                epoch_ms,
-                long_rgb: self.theme.label_positive,
-                short_rgb: self.theme.label_negative,
-                scale: self.last_ppp,
-                px_per_ms: view.px_per_ms,
-                px_per_price: view.px_per_price,
-                arrow_scale: self.chart_graphics.trade_arrow_scale,
-                connector_thickness: self.chart_graphics.connector_thickness_px,
-                hovered: self
-                    .trade_hovered
-                    .and_then(|(hot, mark, buy)| (hot == pane).then_some((mark, buy))),
-            },
-            markers,
-            segs,
-        );
-        TradeGeometry { clusters, sources }
+        let sorted = trade_marks::sort_actions(&trade_marks::explode_actions(&marks));
+        TradeSource {
+            key,
+            marks,
+            sources: sources.into(),
+            sorted,
+        }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TRADE_GEOMETRY_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Trade-geometry builds on this thread since the last call; resets the count.
+#[cfg(test)]
+#[allow(dead_code)] // read by the prover's before/after measurement
+pub(crate) fn take_trade_geometry_builds() -> u64 {
+    TRADE_GEOMETRY_BUILDS.with(|n| n.replace(0))
 }
 
 #[cfg(test)]

@@ -1325,3 +1325,71 @@ fn pan_zoom_and_y_drag_count_as_chart_interaction() {
     view.rmb_zoom(100.0, 10.0, 20.0, NOW + 30.0);
     assert_eq!(view.last_interaction_ms, Some(NOW + 30.0));
 }
+
+/// Restoring per-frame history range assignment makes all 200 updates change scale instead of
+/// retaining it; removing the clipping escape loses the sudden wider band on a short plot.
+#[test]
+fn history_auto_y_retains_scale_without_clipping() {
+    for height in [40.0, 400.0, 1600.0] {
+        let mut view = in_history(NOW, WIDTH, WIDTH);
+        view.auto_price = true;
+        view.update_y(NOW, height, Some((990.0, 1010.0)), None);
+        let mut changes = 0;
+        for i in 1..=200 {
+            let now = NOW + i as f64 * 16.0;
+            view.pan_x_px(1.0, now, WIDTH);
+            let half = 10.0 + (i % 13) as f32 * 0.02;
+            let center = 1000.0 + i as f32 * 0.002;
+            let previous = view.px_per_price;
+            view.update_y(now, height, Some((center - half, center + half)), None);
+            changes += usize::from(previous != view.px_per_price);
+            assert!(center - half >= view.render_center - view.render_range * 0.5);
+            assert!(center + half <= view.render_center + view.render_range * 0.5);
+            assert!(!view.is_live(now));
+        }
+        assert!(
+            changes <= 4,
+            "height={height}: {changes} scale changes in 200 pans"
+        );
+        // The fitted target is still inside the 15% range threshold, but the data exceeds
+        // the retained range. At 40 px, its centre drift also stays below the 8 px threshold.
+        view.update_y(NOW + 4000.0, height, Some((991.0, 1013.0)), None);
+        assert!(view.render_center - view.render_range * 0.5 <= 991.0);
+        assert!(view.render_center + view.render_range * 0.5 >= 1013.0);
+        let expanded = view.render_range;
+        view.update_y(NOW + 4016.0, height, Some((998.0, 1002.0)), None);
+        assert!(
+            view.render_range < expanded,
+            "a large contraction must shrink"
+        );
+    }
+}
+
+/// Applying automatic hysteresis to manual Y would swallow subpixel drags and RMB zoom steps;
+/// applying centre hysteresis to a pending explicit snap would leave its old centre behind.
+/// Removing history's target/render synchronization makes the first drag jump and rescale.
+#[test]
+fn history_manual_y_and_explicit_center_snap_remain_exact() {
+    let mut view = in_history(NOW, WIDTH, WIDTH);
+    view.auto_price = true;
+    view.update_y(NOW, 400.0, Some((990.0, 1010.0)), None);
+    let before_center = view.render_center;
+    let before_scale = view.px_per_price;
+    view.update_y(NOW + 8.0, 400.0, Some((989.2, 1011.2)), None);
+    view.pan_y_px(0.25, NOW + 16.0);
+    let dragged = view.render_center;
+    assert!(((dragged - before_center) * before_scale - 0.25).abs() < 0.001);
+    view.update_y(NOW + 32.0, 400.0, Some((900.0, 1100.0)), None);
+    assert_eq!(view.px_per_price, before_scale, "a Y pan must not zoom");
+    assert_eq!(view.render_center, dragged);
+    assert_eq!(view.render_center, view.center_price);
+    view.rmb_zoom(view.center_price, view.price_range, 0.25, NOW + 48.0);
+    let zoomed = view.render_range;
+    view.update_y(NOW + 64.0, 400.0, Some((900.0, 1100.0)), None);
+    assert_eq!(view.render_range, zoomed);
+    view.manual_price = false;
+    view.center_snap_pending = true;
+    view.update_y(NOW + 80.0, 400.0, Some((990.01, 1010.01)), None);
+    assert_eq!(view.render_center, (990.01 + 1010.01) * 0.5);
+    assert!(!view.center_snap_pending);
+}

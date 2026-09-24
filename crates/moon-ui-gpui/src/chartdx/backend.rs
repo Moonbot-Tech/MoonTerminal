@@ -63,6 +63,14 @@ pub struct PlatformLayers {
 }
 
 impl PlatformLayers {
+    /// Whether this backend retains the marker buffer so a hover can patch arrows in place.
+    ///
+    /// Returns:
+    ///     `true` on DX11, `false` on every backend whose `patch_markers` declines.
+    pub const fn can_patch_markers() -> bool {
+        cfg!(windows)
+    }
+
     /// Borrow tick candidates in a time window, including pending native uploads.
     /// DX11 bounds the lookup; other backends retain their scan until their native paths are ported.
     pub(super) fn tick_samples(&self, from: f64, to: f64) -> impl Iterator<Item = &ChartCross> {
@@ -186,17 +194,29 @@ impl PlatformLayers {
         }
     }
 
-    /// Fully replaces the layer's candle set when the series revision changes.
-    pub fn set_candles(&mut self, data: Vec<CandleGpu>) {
+    /// Fully replaces the layer's candle set from the whole composed list.
+    pub fn set_candles(&mut self, data: &[CandleGpu]) {
         #[cfg(windows)]
         self.candles.set(data);
         #[cfg(target_os = "linux")]
-        self.wgpu.set_candles(data);
+        self.wgpu.set_candles(data.to_vec());
         #[cfg(target_os = "macos")]
-        self.metal.set_candles(data);
+        self.metal.set_candles(data.to_vec());
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = data;
+        }
+    }
+
+    /// Re-applies the whole composed list's tail from `from` on. DX11 uploads only those slots;
+    /// the native backends take the whole list, exactly as a full set.
+    pub fn patch_candles(&mut self, from: usize, full: &[CandleGpu]) {
+        #[cfg(windows)]
+        self.candles.patch(from, full);
+        #[cfg(not(windows))]
+        {
+            let _ = from;
+            self.set_candles(full);
         }
     }
 
@@ -303,6 +323,27 @@ impl PlatformLayers {
         }
     }
 
+    /// Appends newly drained points to the price lines. DX11 uploads only those; the native
+    /// backends take the full lines, exactly as a set.
+    pub fn append_price_lines(
+        &mut self,
+        last_new: &[PriceLinePoint],
+        mark_new: &[PriceLinePoint],
+        last_full: &[PriceLinePoint],
+        mark_full: &[PriceLinePoint],
+    ) {
+        #[cfg(windows)]
+        {
+            let _ = (last_full, mark_full);
+            self.combo.append_price_lines(last_new, mark_new);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (last_new, mark_new);
+            self.set_price_lines(last_full, mark_full);
+        }
+    }
+
     pub fn set_price_lines(&mut self, last: &[PriceLinePoint], mark: &[PriceLinePoint]) {
         #[cfg(windows)]
         self.combo.set_price_lines(last, mark);
@@ -316,16 +357,52 @@ impl PlatformLayers {
         }
     }
 
-    pub fn set_orderbook(&mut self, levels: Vec<LevelInstance>) {
+    /// Queue order-book levels; `immediate` bakes them this frame on backends that throttle.
+    pub fn set_orderbook(&mut self, levels: &[LevelInstance], immediate: bool) {
         #[cfg(windows)]
-        self.orderbook.set(levels);
+        self.orderbook.set(levels, immediate);
         #[cfg(target_os = "linux")]
-        self.wgpu.set_orderbook(levels);
+        self.wgpu.set_orderbook(levels.to_vec());
         #[cfg(target_os = "macos")]
-        self.metal.set_orderbook(levels);
+        self.metal.set_orderbook(levels.to_vec());
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = levels;
+        }
+        #[cfg(not(windows))]
+        let _ = immediate;
+    }
+
+    /// Vertical margin the order-book bitmap bakes beyond the zone; zero where the backend
+    /// rebakes on every window change.
+    pub fn book_v_margin_px(&self, bh: f32) -> f32 {
+        #[cfg(windows)]
+        {
+            super::orderbook::book_v_margin_px(bh)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = bh;
+            0.0
+        }
+    }
+
+    /// Rewrite already-uploaded userdata markers by index, without a full `set_userdata`.
+    ///
+    /// DX11 only: it retains a CPU copy of the marker buffer. Metal and wgpu answer `false`, and
+    /// the caller then rebuilds the whole union as before.
+    ///
+    /// Returns:
+    ///     Whether the patch was applied.
+    pub fn patch_markers(&mut self, patches: &[(u32, MarkerInstance)]) -> bool {
+        #[cfg(windows)]
+        {
+            self.userdata.patch_markers(patches)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = patches;
+            false
         }
     }
 

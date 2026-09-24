@@ -47,7 +47,8 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use super::candles::ChartCandle;
@@ -90,7 +91,67 @@ pub struct MergeItem {
     pub rows: Vec<ChartCandle>,
 }
 
-enum Op {
+/// One chart's whole kline-cache prefix, asked for in a single queued request so the frame that
+/// needs it never waits on the worker.
+pub struct PrefixReadRequest {
+    /// Cache exchange key (`"{code}:{dex}"`).
+    pub exchange: String,
+    pub market: String,
+    /// The panel's native kind in minutes; the prefix is read at this kind.
+    pub native_kind: u32,
+    /// Left edge of every read, inclusive; each read runs to the end of the cache.
+    pub from_ms: i64,
+    /// Right edge the native rows are checked against for holes.
+    pub now_ms: i64,
+    /// Also read kind 5 as a cache-only coarser layer.
+    pub want_5m: bool,
+    /// Also read kind 1440 as a cache-only coarser layer.
+    pub want_1d: bool,
+    /// Bumped by the worker after the reply is sent, so the requester's frame signature changes
+    /// and the reply is picked up; owned by the requesting chart, so no other chart wakes.
+    pub done: Arc<AtomicU64>,
+}
+
+/// The rows answering one [`PrefixReadRequest`].
+pub struct PrefixRows {
+    /// Rows of the native kind.
+    pub native: Vec<ChartCandle>,
+    /// Finer kinds `(kind, rows)` read because the native rows have holes; empty otherwise.
+    pub finer: Vec<(u32, Vec<ChartCandle>)>,
+    /// Kind-5 rows, empty unless asked for.
+    pub m5: Vec<ChartCandle>,
+    /// Kind-1440 rows, empty unless asked for.
+    pub d1: Vec<ChartCandle>,
+}
+
+/// A queued [`PrefixReadRequest`] whose reply is picked up by polling, never by waiting.
+pub struct PendingPrefixRead {
+    rx: mpsc::Receiver<PrefixRows>,
+}
+
+/// State of a [`PendingPrefixRead`].
+///
+/// `Lost` means the read did not happen (the worker is gone or dropped the reply), the old
+/// `read_range` `None`. `Ready` rows are authoritative: an empty vector is the old `Some(vec![])`,
+/// "the cache holds nothing there". Never conflate the two.
+pub enum PrefixPoll {
+    Pending,
+    Ready(PrefixRows),
+    Lost,
+}
+
+impl PendingPrefixRead {
+    /// Checks for the reply without blocking.
+    pub fn poll(&self) -> PrefixPoll {
+        match self.rx.try_recv() {
+            Ok(rows) => PrefixPoll::Ready(rows),
+            Err(mpsc::TryRecvError::Empty) => PrefixPoll::Pending,
+            Err(mpsc::TryRecvError::Disconnected) => PrefixPoll::Lost,
+        }
+    }
+}
+
+pub(crate) enum Op {
     Merge {
         exchange: String,
         market: String,
@@ -110,6 +171,10 @@ enum Op {
         from_ms: i64,
         to_ms: i64,
         reply: mpsc::Sender<Vec<ChartCandle>>,
+    },
+    ReadPrefix {
+        req: PrefixReadRequest,
+        reply: mpsc::Sender<PrefixRows>,
     },
 }
 
@@ -159,6 +224,22 @@ impl KlineCache {
             .ok()?;
         log::info!("kline cache открыт: {}", path.display());
         Some(Self { tx })
+    }
+
+    /// A handle whose queue is handed back instead of served: nothing it is asked ever answers.
+    #[cfg(test)]
+    pub(crate) fn stalled_for_tests() -> (Self, mpsc::Receiver<Op>) {
+        let (tx, rx) = mpsc::channel::<Op>();
+        (Self { tx }, rx)
+    }
+
+    /// Queues one chart's whole prefix read and returns at once.
+    ///
+    /// `None` only when the worker is gone and the request could not be queued.
+    pub fn request_prefix(&self, req: PrefixReadRequest) -> Option<PendingPrefixRead> {
+        let (reply, rx) = mpsc::channel();
+        self.tx.send(Op::ReadPrefix { req, reply }).ok()?;
+        Some(PendingPrefixRead { rx })
     }
 
     /// Enqueues a nonblocking row merge.
@@ -494,15 +575,70 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
                 to_ms,
                 reply,
             } => {
-                let rows = read_rows(&conn, &exchange, &market, kind_min, from_ms, to_ms)
-                    .unwrap_or_else(|e| {
-                        log::warn!("kline cache read failed {exchange}/{market}/{kind_min}: {e}");
-                        Vec::new()
-                    });
+                let rows = read_or_empty(&conn, &exchange, &market, kind_min, from_ms, to_ms);
                 let _ = reply.send(rows);
+            }
+            Op::ReadPrefix { req, reply } => {
+                let read = |kind: u32| {
+                    read_or_empty(
+                        &conn,
+                        &req.exchange,
+                        &req.market,
+                        kind,
+                        req.from_ms,
+                        i64::MAX,
+                    )
+                };
+                let native = read(req.native_kind);
+                let finer = if super::candles::has_holes(
+                    &native,
+                    req.native_kind as i64 * 60_000,
+                    req.from_ms,
+                    req.now_ms,
+                ) {
+                    [1u32, 5]
+                        .into_iter()
+                        .filter(|k| *k < req.native_kind)
+                        .map(|k| (k, read(k)))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let m5 = if !req.want_5m {
+                    Vec::new()
+                } else if let Some((_, rows)) = finer.iter().find(|(k, _)| *k == 5) {
+                    rows.clone()
+                } else {
+                    read(5)
+                };
+                let rows = PrefixRows {
+                    native,
+                    finer,
+                    m5,
+                    d1: if req.want_1d { read(1440) } else { Vec::new() },
+                };
+                // Only a reply someone still waits for wakes its chart.
+                if reply.send(rows).is_ok() {
+                    req.done.fetch_add(1, Ordering::Release);
+                }
             }
         }
     }
+}
+
+/// Reads one key's rows, logging a failure and answering it as empty.
+fn read_or_empty(
+    conn: &rusqlite::Connection,
+    exchange: &str,
+    market: &str,
+    kind_min: u32,
+    from_ms: i64,
+    to_ms: i64,
+) -> Vec<ChartCandle> {
+    read_rows(conn, exchange, market, kind_min, from_ms, to_ms).unwrap_or_else(|e| {
+        log::warn!("kline cache read failed {exchange}/{market}/{kind_min}: {e}");
+        Vec::new()
+    })
 }
 
 /// Writes rows for one exchange, market, and kind through an ALREADY OPEN transaction.

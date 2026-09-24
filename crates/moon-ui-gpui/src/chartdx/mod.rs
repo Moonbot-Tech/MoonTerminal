@@ -95,8 +95,9 @@ use pane::{Container, ContainerKind};
 use types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
     GridParams, HvolRowGpu, HvolStyleGpu, PriceStyleGpu, ReadoutRect, SideVolumeGpu, TickStyleGpu,
-    VolumeStyleGpu, cover_uv, fill_candle_upload, fill_cross_upload, fill_hvol_upload,
-    fill_liq_upload, fill_price_upload, fill_side_volume_upload, rgb4, rgba3,
+    VolumeStyleGpu, cover_uv, extend_candle_upload, extend_price_upload, fill_candle_upload,
+    fill_cross_upload, fill_hvol_upload, fill_liq_upload, fill_price_upload,
+    fill_side_volume_upload, rgb4, rgba3,
 };
 
 const CHART_PHOTO_BACKGROUND_ENABLED: bool = false;
@@ -605,10 +606,19 @@ struct PaneRender {
     cross_upload: Vec<ChartCross>,
     /// LIQUIDATION trade-cross upload buffer using `side=2` in the same combo ring.
     liq_upload: Vec<ChartCross>,
-    last_line_upload: Vec<PriceLinePoint>,
-    mark_line_upload: Vec<PriceLinePoint>,
-    /// Reusable candle-layer upload buffer.
-    candle_upload: Vec<CandleGpu>,
+    /// The full uploaded last-price line; the non-DX11 backends and a capacity change re-send it
+    /// whole.
+    last_line_rows: Vec<PriceLinePoint>,
+    /// The full uploaded mark-price line, kept like `last_line_rows`.
+    mark_line_rows: Vec<PriceLinePoint>,
+    /// Epoch both line mirrors were converted against; NaN before the first.
+    price_line_epoch: f64,
+    /// The whole composed candle list, converted for the GPU and patched in place by a tail read.
+    candle_rows: Vec<CandleGpu>,
+    /// Epoch `candle_rows` was converted against; a tail patch against another epoch is rejected.
+    candle_rows_epoch: f64,
+    /// A tail patch could not be applied; the next frame re-reads the history for a full list.
+    candle_resync: bool,
     /// Candle candidates retained with the uploaded series for drawing-tool snapping.
     figure_snap: figure_snap::FigureSnapData,
     /// Last candle-series revision delivered to the GPU; `u64::MAX` means never delivered.
@@ -635,6 +645,8 @@ struct PaneRender {
     /// the uploaded candle layer is still resident. Scaling the band from it would blank the
     /// band on exactly the gesture that should rescale it.
     volume_samples: Vec<moon_chart::VolumeSample>,
+    /// Widest `tf_ms` among `volume_samples`, bounding the sorted band lookups' windows.
+    volume_samples_max_tf: f64,
     /// Visible-range volume max and average behind the band, kept as SEMANTIC values.
     ///
     /// The numeric labels read these rather than inverting `VolumeStyleGpu.m`, whose fields are
@@ -739,6 +751,12 @@ struct PaneRender {
     last_book_rev: u64,
     last_book_lo: f32,
     last_book_hi: f32,
+    /// Price window the current order-book instances were emitted over, margin included, and
+    /// the visible range their bar lengths were normalized to.
+    last_book_emit: (f32, f32),
+    last_book_range: f32,
+    /// Reused order-book instance buffer.
+    book_scratch: Vec<moon_core::data::LevelInstance>,
     /// Book revision the sell-line depth labels were measured against; `u64::MAX` means
     /// unmeasured, which is also how `sync_orders_from_session` asks for a re-measure after
     /// rebuilding them. Separate from `last_book_rev` because that one also tracks the visible
@@ -795,6 +813,10 @@ struct PaneRender {
     /// one bucket the view keeps moving while the buffers do not, so re-clustering from the live
     /// scale would answer about a picture that is not on screen. Hit-testing reads this.
     trade_geometry: trade_history_sync::TradeGeometry,
+    /// The filtered marks and sorted actions `trade_geometry` is built from, reused across pans.
+    trade_source: Option<trade_history_sync::TradeSource>,
+    /// Userdata buffers the order sync builds into, retained so a rebuild allocates nothing.
+    ud_scratch: UdScratch,
     /// Warning-badge signature encoded into userdata; `u64::MAX` means dirty.
     last_warn_sig: u64,
     /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
@@ -818,6 +840,8 @@ struct PaneRender {
     /// Placed order and cursor labels for this frame. `prepare_text` lays them out with overlap
     /// avoidance, and `sync_readout_params` builds their backing plates.
     label_placed: Vec<PlacedLabel>,
+    /// The other of `prepare_text`'s two layout buffers, reused so a frame allocates none.
+    label_placed_spare: Vec<PlacedLabel>,
     /// CPU copy of visible order-book levels for quantity labels under the cursor and on sell lines.
     /// Filled during order-book upload in `prepare`; empty while the order book is disabled.
     orderbook_levels: Vec<moon_core::data::BookDepthPoint>,
@@ -938,9 +962,12 @@ impl PaneRender {
             source_archive: u64::MAX,
             cross_upload: Vec::new(),
             liq_upload: Vec::new(),
-            last_line_upload: Vec::new(),
-            mark_line_upload: Vec::new(),
-            candle_upload: Vec::new(),
+            last_line_rows: Vec::new(),
+            mark_line_rows: Vec::new(),
+            price_line_epoch: f64::NAN,
+            candle_rows: Vec::new(),
+            candle_rows_epoch: f64::NAN,
+            candle_resync: false,
             figure_snap: figure_snap::FigureSnapData::default(),
             last_candle_rev: u64::MAX,
             applied_candle_cfg: moon_core::market::CandleViewCfg::default().history_inputs(),
@@ -950,6 +977,7 @@ impl PaneRender {
             tick_style: TickStyleGpu::default(),
             volume_style: VolumeStyleGpu::default(),
             volume_samples: Vec::new(),
+            volume_samples_max_tf: 0.0,
             volume_stats: None,
             side_samples: Vec::new(),
             side_upload: Vec::new(),
@@ -988,6 +1016,9 @@ impl PaneRender {
             last_label_book_rev: u64::MAX,
             last_book_lo: f32::NAN,
             last_book_hi: f32::NAN,
+            last_book_emit: (f32::NAN, f32::NAN),
+            last_book_range: f32::NAN,
+            book_scratch: Vec::new(),
             last_order_lines_rev: u64::MAX,
             last_archived_lines_rev: u64::MAX,
             last_overlay_rev: u64::MAX,
@@ -1008,6 +1039,8 @@ impl PaneRender {
             last_news_sig: u64::MAX,
             last_trade_history_sig: u64::MAX,
             trade_geometry: trade_history_sync::TradeGeometry::default(),
+            trade_source: None,
+            ud_scratch: UdScratch::default(),
             last_warn_sig: u64::MAX,
             order_labels: Vec::new(),
             figure_labels: Vec::new(),
@@ -1015,6 +1048,7 @@ impl PaneRender {
             orderbook_labels: Vec::new(),
             prospective_usd: None,
             label_placed: Vec::new(),
+            label_placed_spare: Vec::new(),
             orderbook_levels: Vec::new(),
             book_best: None,
             epoch_ms: 0.0,
@@ -1099,11 +1133,36 @@ impl PaneRender {
     }
 }
 
+/// The userdata union and the archived pass's own buffers, reused across order syncs.
+#[derive(Default)]
+struct UdScratch {
+    zones: Vec<moon_chart::layers::ZoneInstance>,
+    hlines: Vec<moon_chart::layers::LineInstance>,
+    segs: Vec<moon_chart::layers::SegInstance>,
+    markers: Vec<moon_chart::layers::MarkerInstance>,
+    arch_zones: Vec<moon_chart::layers::ZoneInstance>,
+    arch_hlines: Vec<moon_chart::layers::LineInstance>,
+    arch_segs: Vec<moon_chart::layers::SegInstance>,
+    arch_markers: Vec<moon_chart::layers::MarkerInstance>,
+}
+
+impl UdScratch {
+    /// Empty the live union; the archived buffers are cleared by the build that fills them.
+    fn clear_live(&mut self) {
+        self.zones.clear();
+        self.hlines.clear();
+        self.segs.clear();
+        self.markers.clear();
+    }
+}
+
 /// Render state for all panels shared with `gpu_canvas` callbacks through `Rc<RefCell>`.
 ///
 /// The UI is single-threaded, and `prepare` never overlaps frame callbacks in time.
 struct RenderState {
     panes: Vec<PaneRender>,
+    /// Buffer for the previous frame's cursor params, reused by the market sync.
+    cursor_params_scratch: Vec<CursorParams>,
     /// CPU-side dirty flag for `GpuCanvasDriver::frame`: `prepare()` updated resident state, so the
     /// next platform tick must present even without GPUI dirtiness.
     needs_present: bool,

@@ -1,7 +1,6 @@
 //! Backend-neutral GPU structs shared by DX11, Metal, and wgpu chart passes.
 //! Also includes small builders and helpers that convert feed data into these GPU instances.
 
-use bytemuck::Zeroable;
 use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance};
 use moon_core::data::PriceLinePoint;
 use moon_core::feed::{PricePoint, Side, Tick};
@@ -78,6 +77,11 @@ pub fn fill_liq_upload(ticks: &[Tick], epoch_ms: f64, out: &mut Vec<ChartCross>)
 /// non-positive prices.
 pub fn fill_price_upload(points: &[PricePoint], epoch_ms: f64, out: &mut Vec<PriceLinePoint>) {
     out.clear();
+    extend_price_upload(points, epoch_ms, out);
+}
+
+/// [`fill_price_upload`] without the clear: appends the converted `points` to `out`.
+pub fn extend_price_upload(points: &[PricePoint], epoch_ms: f64, out: &mut Vec<PriceLinePoint>) {
     out.reserve(points.len());
     out.extend(points.iter().filter_map(|p| {
         (p.price.is_finite() && p.price > 0.0).then_some(PriceLinePoint {
@@ -385,6 +389,17 @@ pub fn fill_candle_upload(
     out: &mut Vec<CandleGpu>,
 ) {
     out.clear();
+    extend_candle_upload(candles, tf_ms, epoch_ms, out);
+}
+
+/// [`fill_candle_upload`] without the clear: appends the converted `candles` to `out`, so a changed
+/// tail can be re-applied to a retained list. `tf_ms` is indexed relative to `candles`.
+pub fn extend_candle_upload(
+    candles: &[moon_core::market::ChartCandle],
+    tf_ms: &[f32],
+    epoch_ms: f64,
+    out: &mut Vec<CandleGpu>,
+) {
     out.reserve(candles.len());
     out.extend(candles.iter().enumerate().map(|(i, c)| CandleGpu {
         t_open_rel: (c.t_open_ms - epoch_ms) as f32,
@@ -514,13 +529,14 @@ pub fn ordered_cross_ring(
     out
 }
 
-#[allow(dead_code)]
-pub fn reset_cross_ring(
-    buf: &mut Vec<ChartCross>,
+/// Also used by the DX11 price-line ring.
+#[allow(dead_code)] // each backend compiles its own subset of these ring helpers
+pub fn reset_cross_ring<T: Copy>(
+    buf: &mut Vec<T>,
     head: &mut usize,
     count: &mut usize,
     capacity: usize,
-    data: &[ChartCross],
+    data: &[T],
 ) {
     let capacity = capacity.max(1);
     let start = data.len().saturating_sub(capacity);
@@ -530,13 +546,14 @@ pub fn reset_cross_ring(
     *head = *count % capacity;
 }
 
-#[allow(dead_code)]
-pub fn append_cross_ring(
-    buf: &mut Vec<ChartCross>,
+/// Also used by the DX11 price-line ring.
+#[allow(dead_code)] // each backend compiles its own subset of these ring helpers
+pub fn append_cross_ring<T: Copy + bytemuck::Zeroable>(
+    buf: &mut Vec<T>,
     head: &mut usize,
     count: &mut usize,
     capacity: usize,
-    data: &[ChartCross],
+    data: &[T],
 ) {
     let capacity = capacity.max(1);
     if data.is_empty() {
@@ -547,7 +564,7 @@ pub fn append_cross_ring(
         return;
     }
     if buf.len() < capacity {
-        buf.resize(capacity, ChartCross::zeroed());
+        buf.resize(capacity, T::zeroed());
     }
     for cross in data {
         buf[*head] = *cross;
@@ -567,6 +584,8 @@ pub struct ChartViewGpu {
     pub price_to_px: f32,
     pub view_price0: f32,
     pub marker_half: f32,
+    /// The base view's right-edge time; the DX11 candle layer and the combo layer (`combo.rs`
+    /// `run_view`, and its price lines) override it with an instance offset on local copies.
     pub pad: f32,
     pub volume_buy_inv: f32,
     pub volume_sell_inv: f32,

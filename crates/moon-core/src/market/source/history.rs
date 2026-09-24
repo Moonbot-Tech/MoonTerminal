@@ -10,8 +10,8 @@ use crate::market::candles::ChartCandle;
 use crate::session::CoreId;
 
 use super::{
-    CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead, MarketDataSource,
-    drain_price_line, moon_time_from_rel_ms, price_rows_to_points, rows_to_ticks,
+    CandleEmit, CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead,
+    MarketDataSource, drain_price_line, moon_time_from_rel_ms, price_rows_to_points, rows_to_ticks,
     trade_price_range,
 };
 
@@ -298,7 +298,19 @@ fn visible_candle_fit(
     if let Some((lo, hi)) = cursor.candle_series.price_range(window.0, window.1) {
         include(lo, hi);
     }
-    for (candle, tf) in &cursor.coarse_fill {
+    // `coarse_fill` is ascending by `t_open_ms` (`compose_with_coarse` rule 5), so only rows
+    // from the first one whose widest possible bucket reaches the window up to the window's end
+    // can intersect it.
+    let fill = &cursor.coarse_fill;
+    let start = cursor.coarse_fill_max_tf.map_or(0, |max_tf| {
+        fill.partition_point(|(c, _)| c.t_open_ms + max_tf <= window.0)
+    });
+    let end = fill
+        .partition_point(|(c, _)| c.t_open_ms <= window.1)
+        .max(start);
+    for (candle, tf) in &fill[start..end] {
+        #[cfg(test)]
+        VISIBLE_FIT_VISITED.with(|n| n.set(n.get() + 1));
         if f64::from(*tf) > series_tf_ms as f64
             && crate::market::candles::candle_intersects_window(
                 candle.t_open_ms,
@@ -311,6 +323,18 @@ fn visible_candle_fit(
         }
     }
     range
+}
+
+#[cfg(test)]
+thread_local! {
+    static VISIBLE_FIT_VISITED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Coarse-fill rows `visible_candle_fit` inspected on this thread since the last call; resets it.
+#[cfg(test)]
+#[allow(dead_code)] // read by the prover's before/after measurement
+pub(crate) fn take_visible_fit_visited() -> u64 {
+    VISIBLE_FIT_VISITED.with(|n| n.replace(0))
 }
 
 /// Fit the actual uploaded fixture bars, including partial boundary candles on cached reads.
@@ -487,10 +511,39 @@ impl MarketDataSource {
                 read.combo_reset = true;
                 read.caught_up = true;
                 cursor.displayed_oldest_ms = cursor.trade_rows.first().map(|row| row.unix_millis());
+                // A copy that filled its cap may have left rows out; the index then defers.
+                cursor.price_fit.replace_from(
+                    &cursor.trade_rows,
+                    cursor.trade_rows.len() < display_cap,
+                    trades_from_time.unix_millis(),
+                );
             } else if let Some(cur) = cursor.trades.as_mut() {
                 let meta = reader.drain_new_bounded(cur, display_cap, &mut cursor.trade_rows);
                 read.clipped |= meta.clipped;
                 read.caught_up &= meta.caught_up;
+                if !meta.clipped {
+                    // `trade_rows` holds only this drain's delta, and `copy_last` below may
+                    // overwrite it, so the index takes it now.
+                    cursor.price_fit.append(&cursor.trade_rows);
+                    // Rows still waiting in the ring are rows the ring's copy would see.
+                    if !meta.caught_up {
+                        cursor.price_fit.mark_lagging();
+                    } else if cursor.price_fit.needs_recopy() {
+                        // Caught up again: one copy of everything since the window start, up to
+                        // the ring's head (drains ran past `to_time`), re-arms the index.
+                        reader.copy_time_range(
+                            trades_from_time,
+                            moonproto::MoonTime::from_unix_millis(i64::MAX),
+                            display_cap,
+                            &mut cursor.scan_trade_rows,
+                        );
+                        cursor.price_fit.replace_from(
+                            &cursor.scan_trade_rows,
+                            cursor.scan_trade_rows.len() < display_cap,
+                            trades_from_time.unix_millis(),
+                        );
+                    }
+                }
                 if meta.clipped {
                     reader.copy_time_range(
                         trades_from_time,
@@ -502,8 +555,15 @@ impl MarketDataSource {
                     read.combo_reset = true;
                     cursor.displayed_oldest_ms =
                         cursor.trade_rows.first().map(|row| row.unix_millis());
+                    cursor.price_fit.replace_from(
+                        &cursor.trade_rows,
+                        cursor.trade_rows.len() < display_cap,
+                        trades_from_time.unix_millis(),
+                    );
                 }
             }
+            cursor.price_fit.cap_live(reader.capacity());
+            cursor.price_fit.trim_before(trades_from_time.unix_millis());
             rows_to_ticks(&cursor.trade_rows, &mut out.ticks);
             read.combo_left_rel_ms = out
                 .ticks
@@ -519,17 +579,22 @@ impl MarketDataSource {
                 }
             }
             if let Some((price_from, price_to)) = price_window {
-                reader.copy_time_range(
-                    moon_time_from_rel_ms(epoch_ms, price_from.max(trades_from_rel)),
-                    moon_time_from_rel_ms(epoch_ms, price_to),
-                    display_cap,
-                    &mut cursor.scan_trade_rows,
-                );
-                read.tick_price_range = trade_price_range(&cursor.scan_trade_rows);
+                let from = moon_time_from_rel_ms(epoch_ms, price_from.max(trades_from_rel));
+                let to = moon_time_from_rel_ms(epoch_ms, price_to);
+                // The index answers while the window holds no more rows than the ring copy would
+                // take; past the cap only the copy reproduces which rows it keeps.
+                match cursor.price_fit.range(from.unix_millis(), to.unix_millis()) {
+                    Some((range, n)) if n <= display_cap => read.tick_price_range = range,
+                    _ => {
+                        reader.copy_time_range(from, to, display_cap, &mut cursor.scan_trade_rows);
+                        read.tick_price_range = trade_price_range(&cursor.scan_trade_rows);
+                    }
+                }
             }
         } else {
             cursor.trades = None;
             cursor.last_price = None;
+            cursor.price_fit.clear();
             // Trades are hidden when K is zero, but the ring still supplies last_price. On reset,
             // combo_reset instructs the layer to clear its cross ring.
             if let Some(reader) = trade_reader.as_ref() {
@@ -634,7 +699,7 @@ impl MarketDataSource {
             // `true` via `!candle_series.is_valid()` on that same first pass.
             let exchange_key_changed = cursor.last_exchange_key != exchange_key;
             if exchange_key_changed {
-                cursor.cache_kind = None;
+                cursor.invalidate_cache_prefix();
             }
             // Subscribe to the core's live timeframe bars. Event::LiveCandle appends or replaces
             // the last retained tf_candles row. Without it, deep rows freeze at response time and
@@ -683,115 +748,25 @@ impl MarketDataSource {
             // Load authoritative native klines from prior sessions as a local-cache prefix. Read
             // SQLite once per `(market, kind, left edge)` because pan and zoom reset frequently;
             // extending the window to the left triggers another read.
+            // ONE left edge for the kline-cache read and the series build, with hysteresis so a pan
+            // within a window span does not move it.
+            let want_from_ms = (epoch_ms + (from_rel_ms - cp.tf_ms.max(0) as f32) as f64) as i64;
+            let span_ms = ((to_rel_ms - from_rel_ms).max(0.0) as i64).max(cp.tf_ms.max(1));
+            let series_floor_ms = series_floor(cursor.series_from_base_ms, want_from_ms, span_ms);
             if use_deep {
-                let need_from = (epoch_ms + (from_rel_ms - cp.tf_ms.max(0) as f32) as f64) as i64;
-                // A read that TIMED OUT must not be remembered as a completed one. The cache has a
-                // single worker thread shared by every reader and writer, so a write burst can push
-                // a read past its timeout — and this block runs only when the timeframe or the left
-                // edge changes, so a lost read used to stick as an empty prefix until the user
-                // panned. Retry it instead, no more often than once every `CACHE_RETRY_MS` so a
-                // busy worker is not asked again on every frame.
-                let retry_due = cursor.cache_retry_at.map_or(true, |t| {
-                    t.elapsed() >= Duration::from_millis(CACHE_RETRY_MS)
-                });
-                let cache_stale = (cursor.cache_kind != Some(native_kind_min)
-                    || need_from < cursor.cache_from_ms)
-                    && retry_due;
-                if cache_stale {
-                    cursor.cache_rows.clear();
-                    cursor.cache_rows_finer.clear();
-                    cursor.cache_rows_5m.clear();
-                    cursor.cache_rows_1d.clear();
-                    cursor.cache_generation = cursor.cache_generation.wrapping_add(1);
-                    if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_deref())
-                    {
-                        // Every read of this pass must land before the window counts as loaded;
-                        // one timeout leaves the whole set to be retried together, so the layers
-                        // cannot end up describing different left edges.
-                        let mut complete = true;
-                        let mut read = |kind: u32| match cache.read_range(
-                            ex,
-                            market,
-                            kind,
-                            need_from,
-                            i64::MAX,
-                        ) {
-                            Some(rows) => rows,
-                            None => {
-                                complete = false;
-                                Vec::new()
-                            }
-                        };
-                        cursor.cache_rows = read(native_kind_min);
-                        cursor.cache_rows_kind = native_kind_min;
-                        // Where the native kind leaves a hole, the finer kinds too: the 1-minute
-                        // deep-history rows and the recorder's 5-minute rows, over the same
-                        // window, aggregated to the native kind right here. Every supported
-                        // timeframe is divisible by both. Reading them only when the native kind
-                        // was EMPTY left a holey native kind to the range-only snapshot, which
-                        // draws as bodies without wicks (#634); a native kind without holes has
-                        // nothing to fill and costs no extra read. The right edge is now: a
-                        // native cache that stops where the previous session did leaves a tail
-                        // another window's finer rows may have covered since.
-                        let native_tf_ms = native_kind_min as i64 * 60_000;
-                        let now_unix = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_or(0, |d| d.as_millis() as i64);
-                        if crate::market::candles::has_holes(
-                            &cursor.cache_rows,
-                            native_tf_ms,
-                            need_from,
-                            now_unix,
-                        ) {
-                            let finer: Vec<(u32, Vec<ChartCandle>)> = [1u32, 5]
-                                .into_iter()
-                                .filter(|fk| *fk < native_kind_min)
-                                .map(|fk| (fk, read(fk)))
-                                .collect();
-                            let parts: Vec<crate::market::candles::BasePart<'_>> = finer
-                                .iter()
-                                .map(|(fk, rows)| crate::market::candles::BasePart {
-                                    rows,
-                                    tf_ms: *fk as i64 * 60_000,
-                                })
-                                .collect();
-                            crate::market::candles::merge_bases(
-                                native_tf_ms,
-                                &parts,
-                                &mut cursor.cache_rows_finer,
-                            );
-                        }
-                        // Load cache-only coarser layers used to extend the historical prefix. Kind-5
-                        // rows come from the recorder and possible deep-history writeback; the
-                        // retained 5-minute snapshot is merged separately through `snap_part`.
-                        if cp.tf_ms < 300_000 {
-                            cursor.cache_rows_5m = read(5);
-                        }
-                        if cp.tf_ms < 86_400_000 {
-                            cursor.cache_rows_1d = read(1440);
-                        }
-                        if complete {
-                            cursor.cache_kind = Some(native_kind_min);
-                            cursor.cache_from_ms = need_from;
-                            cursor.cache_retry_at = None;
-                        } else {
-                            cursor.cache_retry_at = Some(Instant::now());
-                        }
-                    } else {
-                        // No cache at all: nothing to retry, and the window IS loaded — as empty.
-                        cursor.cache_kind = Some(native_kind_min);
-                        cursor.cache_from_ms = need_from;
-                    }
-                    if !cursor.cache_rows.is_empty() || !cursor.cache_rows_finer.is_empty() {
-                        log::log!(
-                            super::SOURCE_TRACE_LEVEL,
-                            "kline cache: префикс {market} kind{}: {} рядов, из finer kinds: {}",
-                            cursor.cache_rows_kind,
-                            cursor.cache_rows.len(),
-                            cursor.cache_rows_finer.len()
-                        );
-                    }
-                }
+                let now_unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis() as i64);
+                poll_cache_prefix(
+                    cursor,
+                    kline_cache.as_ref(),
+                    exchange_key.as_deref(),
+                    market,
+                    native_kind_min,
+                    series_floor_ms,
+                    cp.tf_ms,
+                    now_unix,
+                );
             }
             // Backfill a coarse timeframe natively when the panel asks for a kind coarser than the
             // effective one-core timeframe and neither retained state nor the cache has native
@@ -865,7 +840,7 @@ impl MarketDataSource {
                                 );
                                 // The merge enters the FIFO queue before the future read, so the
                                 // prefix reread sees the new rows.
-                                cursor.cache_kind = None;
+                                cursor.invalidate_cache_prefix();
                                 cursor.candle_series.invalidate();
                             }
                         }
@@ -948,20 +923,23 @@ impl MarketDataSource {
                 // A response or live bar advanced the deep rows, so reset the request backoff.
                 cursor.deep_retry_delay_s = HISTORY_RETRY_MIN_S;
             }
-            let series_reset = force_reset
-                || read.combo_reset
-                || !cursor.candle_series.is_valid()
-                || cursor.candle_series.tf_ms() != cp.tf_ms
-                || (cursor.candle_trades.is_none() && trade_reader.is_some())
-                || deep_rows_sig != cursor.last_deep_sig
-                || exchange_key_changed;
+            let series_reset = series_reset_due(&SeriesResetInputs {
+                params_reset: cp.series_reset,
+                valid: cursor.candle_series.is_valid(),
+                tf_changed: cursor.candle_series.tf_ms() != cp.tf_ms,
+                trades_newly_available: cursor.candle_trades.is_none() && trade_reader.is_some(),
+                deep_sig_changed: deep_rows_sig != cursor.last_deep_sig,
+                exchange_key_changed,
+                floor_moved: series_floor_ms != cursor.series_from_base_ms,
+                cache_arrived: cursor.cache_generation != cursor.series_cache_generation,
+            });
             if series_reset {
+                cursor.series_from_base_ms = series_floor_ms;
+                cursor.series_cache_generation = cursor.cache_generation;
                 cursor.last_deep_sig = deep_rows_sig;
                 cursor.last_exchange_key = exchange_key.clone();
                 cursor.server_candle_rows.clear();
                 cursor.server_candles.clear();
-                let from_base_ms =
-                    (epoch_ms + (from_rel_ms - cp.tf_ms.max(0) as f32) as f64) as i64;
                 // Keep the base's right edge at least at now rather than at the window's right edge.
                 // A reset while scrolling into the past used to truncate the base at that window.
                 // Returning live does not reset because it only extends left, leaving a gap in the
@@ -983,7 +961,7 @@ impl MarketDataSource {
                         rows.iter()
                             .filter(|r| {
                                 let t = r.unix_millis();
-                                t >= from_base_ms && t <= to_ms
+                                t >= series_floor_ms && t <= to_ms
                             })
                             .map(|r| deep_row_candle(r, deep_quote)),
                     );
@@ -993,8 +971,7 @@ impl MarketDataSource {
                 let mut snap_part: Vec<ChartCandle> = Vec::new();
                 if use_snap5 {
                     if let Some(r5) = readers.candles_5m.as_ref() {
-                        let from5 =
-                            moon_time_from_rel_ms(epoch_ms, from_rel_ms - cp.tf_ms.max(0) as f32);
+                        let from5 = moonproto::MoonTime::from_unix_millis(series_floor_ms);
                         r5.copy_time_range(
                             from5,
                             moonproto::MoonTime::from_unix_millis(to_ms),
@@ -1019,7 +996,7 @@ impl MarketDataSource {
                     cursor.ring_rows_5m.clear();
                     if let Some(r5) = readers.candles_5m.as_ref() {
                         r5.copy_time_range(
-                            moonproto::MoonTime::from_unix_millis(from_base_ms),
+                            moonproto::MoonTime::from_unix_millis(series_floor_ms),
                             moonproto::MoonTime::from_unix_millis(to_ms),
                             r5.capacity(),
                             &mut cursor.server_candle_rows,
@@ -1037,7 +1014,7 @@ impl MarketDataSource {
                 // and the finer cached kinds beside them to fill the native kind's holes.
                 let in_window = |c: &&ChartCandle| {
                     let t = c.t_open_ms as i64;
-                    t >= from_base_ms && t <= to_ms
+                    t >= series_floor_ms && t <= to_ms
                 };
                 let cache_part: Vec<ChartCandle> = cursor
                     .cache_rows
@@ -1055,20 +1032,42 @@ impl MarketDataSource {
                 // advances. Same-timestamp OHLC replacements do not advance it and remain unwritten
                 // until a later bucket does. Persist the complete retained sequence rather than
                 // `deep_part` clipped to the visible window; a narrow window used to save one
-                // response candle and lose the remaining depth.
+                // response candle and lose the remaining depth. Only the tail past the last written
+                // bucket is converted unless the ring was replaced.
                 if have_deep && deep_rows_sig != cursor.cache_written_sig {
                     match (kline_cache.as_ref(), exchange_key.as_ref()) {
                         (Some(cache), Some(ex)) => {
                             cursor.cache_written_sig = deep_rows_sig;
-                            let full: Vec<ChartCandle> = snapshot
-                                .tf_candles(market, deep_kind)
-                                .map(|rows| {
-                                    rows.iter()
-                                        .map(|r| deep_row_candle(r, deep_quote))
-                                        .collect()
-                                })
-                                .unwrap_or_default();
-                            cache.merge(ex.clone(), market.to_string(), deep_kind_min, full);
+                            let rows = snapshot.tf_candles(market, deep_kind).unwrap_or_default();
+                            let times: Vec<i64> = rows.iter().map(|r| r.unix_millis()).collect();
+                            let same_key = cursor
+                                .cache_written_key
+                                .as_ref()
+                                .is_some_and(|(k, m)| k == ex && *m == deep_kind_min);
+                            let start = deep_writeback_start(
+                                &times,
+                                same_key,
+                                cursor.cache_written_first_ms,
+                                cursor.cache_written_last_ms,
+                                cursor.cache_written_len,
+                                cursor.cache_writebacks_since_full,
+                            );
+                            cursor.cache_writebacks_since_full = if start == 0 {
+                                0
+                            } else {
+                                cursor.cache_writebacks_since_full.saturating_add(1)
+                            };
+                            let tail: Vec<ChartCandle> = rows[start..]
+                                .iter()
+                                .map(|r| deep_row_candle(r, deep_quote))
+                                .collect();
+                            cache.merge(ex.clone(), market.to_string(), deep_kind_min, tail);
+                            cursor.cache_written_key = Some((ex.clone(), deep_kind_min));
+                            cursor.cache_written_first_ms =
+                                times.first().copied().unwrap_or(i64::MIN);
+                            cursor.cache_written_last_ms =
+                                times.last().copied().unwrap_or(i64::MIN);
+                            cursor.cache_written_len = times.len();
                         }
                         (Some(_), None) => {
                             // The provider exchange identity is unavailable, so the cache cannot
@@ -1123,9 +1122,10 @@ impl MarketDataSource {
                 if let Some(reader) = trade_reader.as_ref() {
                     // Extend the series tail through now, which is already included in to_ms. The
                     // follow-up cursor starts at now, so the copied range must reach the same point
-                    // or a permanent gap remains between them.
+                    // or a permanent gap remains between them. The copy starts at the series floor
+                    // so trade-built candles cover the same span as the base.
                     reader.copy_time_range(
-                        from_time,
+                        moonproto::MoonTime::from_unix_millis(series_floor_ms),
                         moonproto::MoonTime::from_unix_millis(to_ms),
                         reader.capacity(),
                         &mut cursor.candle_trade_rows,
@@ -1158,8 +1158,7 @@ impl MarketDataSource {
                 }
             }
             read.candles_revision = cursor.candle_series.revision();
-            read.candles_changed =
-                cursor.candle_series.is_valid() && read.candles_revision != cp.shipped_revision;
+            let dirty = cursor.candle_series.take_dirty_from();
             // Compose the series with its cache-only coarser layers. The kind-5 layer comes from
             // the recorder and possible deep-history writeback, the daily layer from backfill and
             // cache; the retained `snap_part` separately feeds the main series. Fillers carry their
@@ -1167,75 +1166,101 @@ impl MarketDataSource {
             //
             // Composed OUTSIDE the `candles_changed` branch on purpose: the auto-Y scan below runs
             // every frame while the upload runs only when the revision moved, so deriving the fill
-            // in each of them is how the price scale and the drawn candles came to disagree.
-            let fill_key = (read.candles_revision, cursor.cache_generation);
+            // in each of them is how the price scale and the drawn candles came to disagree. A
+            // same-layout change is patched here too, so the auto-Y scan and the upload still share
+            // one vector.
+            let fill_key = (
+                cursor.candle_series.layout_revision(),
+                cursor.cache_generation,
+            );
             if cursor.coarse_fill_key != Some(fill_key) {
                 cursor.coarse_fill_key = Some(fill_key);
-                let mut layers: Vec<crate::market::candles::CoarseLayer<'_>> = Vec::new();
-                // Order is PRIORITY: each layer's coverage is subtracted before the next is
-                // offered the remainder. The local cache goes first because its rows are
-                // trade-derived with real OHLC; the core's ring is range-only, so it fills what
-                // the cache could not — which after a restart is most of the night.
-                for (rows, tf) in [
-                    (&cursor.cache_rows_5m, 300_000.0f64),
-                    (&cursor.ring_rows_5m, 300_000.0f64),
-                    (&cursor.cache_rows_1d, 86_400_000.0f64),
-                ] {
-                    // A layer finer than or equal to the series has nothing to add: those rows
-                    // already reach the series through `cache_part`/`snap_part` resampling, and
-                    // re-adding them here would draw every bucket twice.
-                    if (cp.tf_ms as f64) >= tf {
-                        continue;
-                    }
-                    layers.push(crate::market::candles::CoarseLayer { rows, tf_ms: tf });
-                }
-                let mut fill = std::mem::take(&mut cursor.coarse_fill);
-                crate::market::candles::compose_with_coarse(
+                recompose_coarse_fill(cursor, cp.tf_ms);
+                cursor.candle_emit = CandleEmit::Full;
+            } else if let Some(d) = dirty {
+                match crate::market::candles::patch_composed_tail(
                     cursor.candle_series.candles(),
                     cp.tf_ms as f64,
-                    &layers,
-                    &mut fill,
-                );
-                cursor.coarse_fill = fill;
+                    d,
+                    &mut cursor.coarse_fill,
+                ) {
+                    Some(fi) => {
+                        cursor.candle_emit = match cursor.candle_emit {
+                            CandleEmit::Full => CandleEmit::Full,
+                            CandleEmit::Patch(p) => CandleEmit::Patch(p.min(fi)),
+                            CandleEmit::Clean => CandleEmit::Patch(fi),
+                        };
+                    }
+                    None => {
+                        recompose_coarse_fill(cursor, cp.tf_ms);
+                        cursor.candle_emit = CandleEmit::Full;
+                    }
+                }
             }
+            read.candles_changed = cursor.candle_series.is_valid()
+                && (read.candles_revision != cp.shipped_revision
+                    || cursor.candle_emit != CandleEmit::Clean);
             if read.candles_changed {
-                out.candles.reserve(cursor.coarse_fill.len());
-                out.candle_tf_ms.reserve(cursor.coarse_fill.len());
-                for (c, tf) in cursor.coarse_fill.iter() {
+                let from = match cursor.candle_emit {
+                    CandleEmit::Patch(from)
+                        if cursor.candles_emitted_rev == Some(cp.shipped_revision)
+                            && from <= cursor.coarse_fill.len() =>
+                    {
+                        read.candles_patch_from = Some(from);
+                        from
+                    }
+                    _ => {
+                        read.candles_patch_from = None;
+                        0
+                    }
+                };
+                let shipped = &cursor.coarse_fill[from..];
+                out.candles.reserve(shipped.len());
+                out.candle_tf_ms.reserve(shipped.len());
+                for (c, tf) in shipped {
                     out.candles.push(*c);
                     out.candle_tf_ms.push(*tf);
                 }
+                cursor.candle_emit = CandleEmit::Clean;
+                cursor.candles_emitted_rev = Some(read.candles_revision);
                 // Diagnose candle-to-now gaps. If the last candle is older than three timeframes,
                 // log layer coverage once every 30 seconds so the exhausted layer is identifiable
                 // as series, deep, cache, 5-minute, or 1-day instead of debugging screenshots.
                 let now_unix = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0.0, |d| d.as_millis() as f64);
-                let last_ms = out.candles.last().map(|c| c.t_open_ms).unwrap_or(0.0);
+                let last_ms = cursor
+                    .coarse_fill
+                    .last()
+                    .map(|(c, _)| c.t_open_ms)
+                    .unwrap_or(0.0);
+                let warn_due = cursor
+                    .last_gap_diag
+                    .map_or(true, |t| t.elapsed() > Duration::from_secs(30));
+                let scan_due = cursor
+                    .last_gap_scan
+                    .map_or(true, |t| t.elapsed() > Duration::from_secs(30));
                 // Detect gaps inside the sequence where the next candle begins after the previous
                 // one ends. This is where the scroll-to-history then return-to-live gap was hidden.
                 let mut max_hole = 0.0f64;
                 let mut hole_at = 0.0f64;
-                for i in 1..out.candles.len() {
-                    let prev = &out.candles[i - 1];
-                    let prev_tf = out
-                        .candle_tf_ms
-                        .get(i - 1)
-                        .copied()
-                        .filter(|t| *t > 0.0)
-                        .unwrap_or(cp.tf_ms as f32) as f64;
-                    let hole = out.candles[i].t_open_ms - (prev.t_open_ms + prev_tf);
-                    if hole > max_hole {
-                        max_hole = hole;
-                        hole_at = prev.t_open_ms + prev_tf;
+                if scan_due {
+                    cursor.last_gap_scan = Some(Instant::now());
+                    for w in cursor.coarse_fill.windows(2) {
+                        let (prev, tf) = &w[0];
+                        let prev_tf =
+                            Some(*tf).filter(|t| *t > 0.0).unwrap_or(cp.tf_ms as f32) as f64;
+                        let hole = w[1].0.t_open_ms - (prev.t_open_ms + prev_tf);
+                        if hole > max_hole {
+                            max_hole = hole;
+                            hole_at = prev.t_open_ms + prev_tf;
+                        }
                     }
                 }
                 if last_ms > 0.0
                     && (now_unix - last_ms > 3.0 * cp.tf_ms as f64
                         || max_hole > 3.0 * cp.tf_ms as f64)
-                    && cursor
-                        .last_gap_diag
-                        .map_or(true, |t| t.elapsed() > Duration::from_secs(30))
+                    && warn_due
                 {
                     cursor.last_gap_diag = Some(Instant::now());
                     let ago_min = |ms: f64| ((now_unix - ms) / 60_000.0).round();
@@ -1292,7 +1317,7 @@ impl MarketDataSource {
         }
 
         if let Some(reader) = readers.last_prices {
-            drain_price_line(
+            read.last_line = drain_price_line(
                 &reader,
                 from_time,
                 to_time,
@@ -1308,7 +1333,7 @@ impl MarketDataSource {
         }
 
         if let Some(reader) = readers.mark_prices {
-            drain_price_line(
+            read.mark_line = drain_price_line(
                 &reader,
                 from_time,
                 to_time,
@@ -1400,6 +1425,7 @@ fn read_fixture_history(
         // Still claim the reset: `resident_left_rel` is stamped only inside the caller's
         // combo-reset branch, and without it every later frame forces a full history re-read.
         read.combo_reset = true;
+        read.replace_price_lines();
         return read;
     };
     out.candles = fixture.candles(cache, params.tf_ms, from_ms, to_ms);
@@ -1408,6 +1434,7 @@ fn read_fixture_history(
     // inside its combo-reset branch. Without this flag it stays NaN, which the caller reads as
     // "coverage unknown" and forces a full history reset on EVERY frame.
     read.combo_reset = true;
+    read.replace_price_lines();
     read.last_price = out.candles.last().map(|c| c.close);
     // The chart's automatic Y fit is built from the TICK price range — candles do not feed it. A
     // bench has no trade ring, so leaving this empty collapses the scale onto the single last
@@ -1457,3 +1484,291 @@ fn fixture_revision(tf_ms: i64, from_ms: i64, to_ms: i64) -> u64 {
 
 #[cfg(test)]
 mod tests;
+
+/// Left edge the candle series should be built from. Keeps the current floor while the needed
+/// edge stays inside `[floor, floor + 4 * span]`; otherwise re-anchors one span LEFT of the needed
+/// edge, so a leftward pan re-anchors at most once per span of travel and a rightward pan never
+/// does until the retained excess exceeds four spans.
+pub(crate) fn series_floor(current: i64, want_from_ms: i64, span_ms: i64) -> i64 {
+    if current != i64::MAX
+        && want_from_ms >= current
+        && want_from_ms.saturating_sub(current) <= span_ms.saturating_mul(4)
+    {
+        current
+    } else {
+        want_from_ms.saturating_sub(span_ms)
+    }
+}
+
+/// Every reason the candle series is rebuilt. A camera pan or a trade/combo reset is not one.
+pub(crate) struct SeriesResetInputs {
+    pub params_reset: bool,
+    pub valid: bool,
+    pub tf_changed: bool,
+    pub trades_newly_available: bool,
+    pub deep_sig_changed: bool,
+    pub exchange_key_changed: bool,
+    pub floor_moved: bool,
+    pub cache_arrived: bool,
+}
+
+/// Whether the candle series must be rebuilt this read.
+pub(crate) fn series_reset_due(i: &SeriesResetInputs) -> bool {
+    i.params_reset
+        || !i.valid
+        || i.tf_changed
+        || i.trades_newly_available
+        || i.deep_sig_changed
+        || i.exchange_key_changed
+        || i.floor_moved
+        || i.cache_arrived
+}
+
+/// Tail-only deep writebacks between two full ones.
+const DEEP_FULL_WRITEBACK_EVERY: u32 = 64;
+
+/// Index of the first deep row still to write back. 0 = rewrite everything: nothing written yet
+/// for this (exchange, kind), OLDER history arrived (the first row moved earlier), or fewer rows
+/// than were written (a re-fetched response replaced rows). A ring that slid forward (first row
+/// later, same or larger count) writes only the tail: the first row at or after the last written
+/// bucket, which re-covers that bucket.
+///
+/// Accepted limit: a same-count correction of a middle row, or a merge the worker dropped, reaches
+/// the cache only at the next full rewrite, at most `DEEP_FULL_WRITEBACK_EVERY` advances later.
+pub(crate) fn deep_writeback_start(
+    times: &[i64],
+    same_key: bool,
+    written_first: i64,
+    written_last: i64,
+    written_len: usize,
+    since_full: u32,
+) -> usize {
+    if !same_key
+        || since_full >= DEEP_FULL_WRITEBACK_EVERY
+        || written_last == i64::MIN
+        || times.first().map_or(true, |f| *f < written_first)
+        || times.len() < written_len
+    {
+        0
+    } else {
+        times.partition_point(|t| *t < written_last)
+    }
+}
+
+/// The one kline-cache prefix read a chart has in flight, with the key it was asked for.
+pub(crate) struct PendingCacheRead {
+    read: crate::market::kline_cache::PendingPrefixRead,
+    exchange: String,
+    market: String,
+    kind: u32,
+    need_from: i64,
+}
+
+/// Keeps the chart's kline-cache prefix current without ever waiting on the cache worker.
+///
+/// At most one read is in flight; its reply is installed on the frame that finds it. The rows held
+/// stay drawn until then, so a read in flight never shows as an empty history. A read that did not
+/// happen is retried no more often than every `CACHE_RETRY_MS`, as a timed-out read was.
+#[allow(clippy::too_many_arguments)] // every argument is a separate read-key part; a struct would only rename them
+pub(crate) fn poll_cache_prefix(
+    cursor: &mut ChartHistoryCursor,
+    cache: Option<&crate::market::kline_cache::KlineCache>,
+    exchange: Option<&str>,
+    market: &str,
+    native_kind_min: u32,
+    need_from: i64,
+    tf_ms: i64,
+    now_unix_ms: i64,
+) {
+    use crate::market::kline_cache::{PrefixPoll, PrefixReadRequest};
+
+    // Rows of another exchange or market are wrong, not merely old: drop them at once.
+    if let Some(ex) = exchange {
+        let same = cursor
+            .cache_identity
+            .as_ref()
+            .is_some_and(|(e, m)| e == ex && m == market);
+        if !same {
+            cursor.cache_want_from = None;
+            cursor.drop_cache_rows();
+            cursor.invalidate_cache_prefix();
+            cursor.cache_identity = Some((ex.to_string(), market.to_string()));
+        }
+    }
+    // A read of another kind: its reply would be discarded anyway; waiting only delays the right one.
+    if cursor
+        .cache_pending
+        .as_ref()
+        .is_some_and(|p| p.kind != native_kind_min)
+    {
+        cursor.cache_pending = None;
+    }
+
+    if let Some(pending) = cursor.cache_pending.as_ref() {
+        match pending.read.poll() {
+            PrefixPoll::Pending => {}
+            PrefixPoll::Lost => {
+                cursor.cache_pending = None;
+                cursor.cache_retry_at = Some(Instant::now());
+            }
+            PrefixPoll::Ready(rows) => {
+                let pending = cursor
+                    .cache_pending
+                    .take()
+                    .expect("pending read polled above");
+                let current = exchange == Some(pending.exchange.as_str())
+                    && market == pending.market
+                    && native_kind_min == pending.kind;
+                if current {
+                    // Where the native kind leaves a hole, the worker also read the finer kinds:
+                    // the 1-minute deep-history rows and the recorder's 5-minute rows, over the
+                    // same window, aggregated to the native kind right here. Every supported
+                    // timeframe is divisible by both. Reading them only when the native kind was
+                    // EMPTY left a holey native kind to the range-only snapshot, which draws as
+                    // bodies without wicks (#634); a native kind without holes has nothing to fill
+                    // and costs no extra read.
+                    let native_tf_ms = pending.kind as i64 * 60_000;
+                    cursor.cache_rows_finer.clear();
+                    if !rows.finer.is_empty() {
+                        let parts: Vec<crate::market::candles::BasePart<'_>> = rows
+                            .finer
+                            .iter()
+                            .map(|(fk, r)| crate::market::candles::BasePart {
+                                rows: r,
+                                tf_ms: *fk as i64 * 60_000,
+                            })
+                            .collect();
+                        crate::market::candles::merge_bases(
+                            native_tf_ms,
+                            &parts,
+                            &mut cursor.cache_rows_finer,
+                        );
+                    }
+                    cursor.cache_rows = rows.native;
+                    cursor.cache_rows_kind = pending.kind;
+                    // Cache-only coarser layers extending the historical prefix. Kind-5 rows come
+                    // from the recorder and possible deep-history writeback; the retained 5-minute
+                    // snapshot is merged separately through `snap_part`.
+                    cursor.cache_rows_5m = rows.m5;
+                    cursor.cache_rows_1d = rows.d1;
+                    cursor.cache_generation = cursor.cache_generation.wrapping_add(1);
+                    cursor.cache_kind = Some(pending.kind);
+                    cursor.cache_from_ms = pending.need_from;
+                    cursor.cache_retry_at = None;
+                    if !cursor.cache_rows.is_empty() || !cursor.cache_rows_finer.is_empty() {
+                        log::log!(
+                            super::SOURCE_TRACE_LEVEL,
+                            "kline cache: префикс {market} kind{}: {} рядов, из finer kinds: {}",
+                            cursor.cache_rows_kind,
+                            cursor.cache_rows.len(),
+                            cursor.cache_rows_finer.len()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let stale = cursor.cache_kind != Some(native_kind_min) || need_from < cursor.cache_from_ms;
+    if !stale {
+        return;
+    }
+    let want_from = cursor
+        .cache_want_from
+        .map_or(need_from, |w| w.min(need_from));
+    cursor.cache_want_from = Some(want_from);
+    // A read that did not happen must not be remembered as a completed one; retry it, but no more
+    // often than every `CACHE_RETRY_MS` so a busy worker is not asked again on every frame.
+    let retry_due = cursor.cache_retry_at.map_or(true, |t| {
+        t.elapsed() >= Duration::from_millis(CACHE_RETRY_MS)
+    });
+    if cursor.cache_pending.is_some() || !retry_due {
+        return;
+    }
+    match (cache, exchange) {
+        (Some(cache), Some(ex)) => {
+            let req = PrefixReadRequest {
+                exchange: ex.to_string(),
+                market: market.to_string(),
+                native_kind: native_kind_min,
+                from_ms: want_from,
+                now_ms: now_unix_ms,
+                want_5m: tf_ms < 300_000,
+                want_1d: tf_ms < 86_400_000,
+                done: cursor.cache_done.clone(),
+            };
+            match cache.request_prefix(req) {
+                Some(read) => {
+                    cursor.cache_pending = Some(PendingCacheRead {
+                        read,
+                        exchange: ex.to_string(),
+                        market: market.to_string(),
+                        kind: native_kind_min,
+                        need_from: want_from,
+                    });
+                    cursor.cache_want_from = None;
+                    // The coarse filler layers are drawn at their own timeframe, so ones held over
+                    // from a finer chart must not fill this one's gaps while the read is in flight.
+                    let mut dropped = false;
+                    if tf_ms >= 300_000 && !cursor.cache_rows_5m.is_empty() {
+                        cursor.cache_rows_5m.clear();
+                        dropped = true;
+                    }
+                    if tf_ms >= 86_400_000 && !cursor.cache_rows_1d.is_empty() {
+                        cursor.cache_rows_1d.clear();
+                        dropped = true;
+                    }
+                    if dropped {
+                        cursor.cache_generation = cursor.cache_generation.wrapping_add(1);
+                    }
+                }
+                None => cursor.cache_retry_at = Some(Instant::now()),
+            }
+        }
+        _ => {
+            // No cache at all: nothing to retry, and the window IS loaded — as empty.
+            cursor.drop_cache_rows();
+            cursor.cache_kind = Some(native_kind_min);
+            cursor.cache_from_ms = need_from;
+            cursor.cache_want_from = None;
+        }
+    }
+}
+
+/// Recomposes the chart's series with its cache-only coarser layers into `coarse_fill`.
+fn recompose_coarse_fill(cursor: &mut ChartHistoryCursor, series_tf_ms: i64) {
+    let mut fill = std::mem::take(&mut cursor.coarse_fill);
+    let mut layers: Vec<crate::market::candles::CoarseLayer<'_>> = Vec::new();
+    // Order is PRIORITY: each layer's coverage is subtracted before the next is offered the
+    // remainder. The local cache goes first because its rows are trade-derived with real OHLC; the
+    // core's ring is range-only, so it fills what the cache could not — which after a restart is
+    // most of the night.
+    for (rows, tf) in [
+        (&cursor.cache_rows_5m, 300_000.0f64),
+        (&cursor.ring_rows_5m, 300_000.0f64),
+        (&cursor.cache_rows_1d, 86_400_000.0f64),
+    ] {
+        // A layer finer than or equal to the series has nothing to add: those rows already reach
+        // the series through `cache_part`/`snap_part` resampling, and re-adding them here would
+        // draw every bucket twice.
+        if (series_tf_ms as f64) >= tf {
+            continue;
+        }
+        layers.push(crate::market::candles::CoarseLayer { rows, tf_ms: tf });
+    }
+    crate::market::candles::compose_with_coarse(
+        cursor.candle_series.candles(),
+        series_tf_ms as f64,
+        &layers,
+        &mut fill,
+    );
+    cursor.coarse_fill = fill;
+    // A tail patch never changes which layers fed the fill, so only a recompose moves this bound.
+    cursor.coarse_fill_max_tf = Some(
+        layers
+            .iter()
+            // The fill stores each width as f32; bound by exactly what the filter reads.
+            .map(|layer| f64::from(layer.tf_ms as f32))
+            .fold(f64::from(series_tf_ms as f32), f64::max),
+    );
+}

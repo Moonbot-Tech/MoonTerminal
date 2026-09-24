@@ -74,6 +74,7 @@ CandleOut cull_out() {
 }
 
 CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
+    iid += (uint)round(cv_instance_offset); // the draw submits only the visible slice
     Candle cd = candles[iid];
     uint part = vid / 6u;          // 0 body, 1 upper wick, 2 lower wick
     float2 corner = CORNERS[vid % 6u];
@@ -215,6 +216,7 @@ VolumeBarOut vol_cull() {
 }
 
 VolumeBarOut volume_bars_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
+    iid += (uint)round(cv_instance_offset); // the draw submits only the visible slice
     if (vs_m.x < 0.5) {
         return vol_cull(); // style OFF
     }
@@ -238,6 +240,9 @@ VolumeBarOut volume_bars_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID
         return vol_cull();
     }
     float2 c1 = vol_center_px(cd1);
+    if (max(c0.x, c1.x) < cv_bounds.x || min(c0.x, c1.x) > cv_bounds.x + cv_bounds.z) {
+        return vol_cull(); // wholly off-plot: the clamp below would collapse it to zero width anyway
+    }
     float h1 = vol_height_px(cd1);
     float x = lerp(c0.x, c1.x, corner.x);
     float h = lerp(h0, h1, corner.x);

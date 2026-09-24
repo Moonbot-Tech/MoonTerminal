@@ -237,3 +237,131 @@ fn hide_max_follows_the_oldest_trade_bucket_and_stays_off_without_one() {
         f32::MAX
     );
 }
+
+/// `data_state/market.rs:book_instances_stale` + `orderbook.rs:plan_book_bake`: keying staleness
+/// on the exact window edges (or its derived width) rebuilds the book instances and rebakes the
+/// glass on every frame of a live follow; leaving the emitted window must still rebuild at once,
+/// and a backend without a margin keeps the exact old `(rev, lo, hi)` rule.
+#[cfg(windows)]
+#[test]
+fn live_follow_inside_the_book_margin_keeps_instances_and_bitmap() {
+    use crate::chartdx::orderbook::{BookBakeKey, book_v_margin_px, plan_book_bake};
+
+    use super::book_instances_stale;
+
+    let epoch = 1.7e12;
+    let mut view = moon_chart::view::ChartView::new(epoch);
+    let area = moon_chart::view::Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 1000.0,
+        h: 600.0,
+    };
+    let mut now = epoch + 16.0;
+    view.update_y(now, area.h, Some((50.0, 150.0)), Some(100.0));
+    let gpu = |v: &moon_chart::view::ChartView| {
+        crate::chartdx::view::view_gpu(
+            v,
+            area,
+            [area.w, area.h],
+            1.0,
+            crate::chartdx::view::ViewStyle::default(),
+        )
+    };
+    let window = |v: &moon_chart::view::ChartView| {
+        let half = v.render_range.max(1e-9) * 0.5;
+        (v.render_center - half, v.render_center + half)
+    };
+    let v_margin = book_v_margin_px(area.h);
+    let g0 = gpu(&view);
+    let margin_price = v_margin / g0.price_to_px;
+    let rev = 7u64;
+    let (lo0, hi0) = window(&view);
+    let mut emit = (lo0 - margin_price, hi0 + margin_price);
+    let mut last_range = view.render_range;
+    let mut last_lo_hi = (lo0, hi0);
+    let key = BookBakeKey {
+        tex_h_total: area.h as u32 + 2 * v_margin as u32,
+        v_margin,
+        bake_p0: g0.view_price0 - v_margin / g0.price_to_px,
+        price_to_px: g0.price_to_px,
+        baked: true,
+    };
+
+    let (mut old_rebuilds, mut new_rebuilds, mut bakes) = (0, 0, 0);
+    for i in 1..=120 {
+        now += 16.0;
+        let last = 100.0 + 25.0 * i as f32 / 120.0;
+        view.update_y(now, area.h, Some((last - 50.0, last + 50.0)), Some(last));
+        let (lo, hi) = window(&view);
+        if (lo, hi) != last_lo_hi {
+            old_rebuilds += 1;
+        }
+        if book_instances_stale(
+            rev,
+            emit,
+            last_range,
+            last_lo_hi,
+            rev,
+            view.render_range,
+            lo,
+            hi,
+            margin_price,
+        ) {
+            new_rebuilds += 1;
+            emit = (lo - margin_price, hi + margin_price);
+            last_range = view.render_range;
+        }
+        last_lo_hi = (lo, hi);
+        if plan_book_bake(&key, &gpu(&view), false, false, false).bake {
+            bakes += 1;
+        }
+    }
+    println!("[G1] book rebuilds per 120 follow syncs: old={old_rebuilds} new={new_rebuilds}");
+    assert!(
+        old_rebuilds > 0,
+        "the drive must actually move the book window"
+    );
+    assert_eq!(
+        new_rebuilds, 0,
+        "book instances rebuilt inside the emitted window"
+    );
+    assert_eq!(bakes, 0, "book glass rebaked inside its margin");
+
+    // Leaving the emitted window rebuilds, and that rebuild bakes immediately.
+    let (lo, hi) = (emit.0 - 1.0, emit.0 - 1.0 + view.render_range);
+    assert!(book_instances_stale(
+        rev,
+        emit,
+        last_range,
+        last_lo_hi,
+        rev,
+        view.render_range,
+        lo,
+        hi,
+        margin_price
+    ));
+    let window_rebuilt = !(lo >= emit.0) || !(hi <= emit.1);
+    let plan = plan_book_bake(&key, &gpu(&view), false, false, window_rebuilt);
+    assert!(
+        plan.bake && plan.immediate,
+        "leaving the window must bake at once"
+    );
+
+    // No margin (Metal/wgpu): exactly the old (rev, lo, hi) inequality.
+    let table = [
+        (7u64, (1.0f32, 2.0f32)),
+        (8, (1.0, 2.0)),
+        (7, (1.0, 2.5)),
+        (7, (0.5, 2.0)),
+        (7, (1.5, 1.8)),
+    ];
+    for (r, (l, h)) in table {
+        let stale = book_instances_stale(7, (1.0, 2.0), 1.0, (1.0, 2.0), r, 1.0, l, h, 0.0);
+        assert_eq!(
+            stale,
+            r != 7 || (l, h) != (1.0, 2.0),
+            "rev {r} lo {l} hi {h}"
+        );
+    }
+}

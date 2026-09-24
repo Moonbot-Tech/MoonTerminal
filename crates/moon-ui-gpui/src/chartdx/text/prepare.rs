@@ -85,7 +85,8 @@ impl RenderState {
             // Label layout for this frame, used by badges in sync_readout_params. Retain the old
             // layout for comparison: zoom changes Y, so backdrops must move with their text.
             let previous_placed = std::mem::take(&mut self.panes[idx].label_placed);
-            let mut placed: Vec<PlacedLabel> = Vec::new();
+            let mut placed = std::mem::take(&mut self.panes[idx].label_placed_spare);
+            placed.clear();
             let pane_left = pane_bounds[0] / sf;
             let pane_right = (pane_bounds[0] + pane_bounds[2]) / sf;
             let pane_bottom = (pane_bounds[1] + pane_bounds[3]) / sf;
@@ -273,9 +274,16 @@ impl RenderState {
                 // derive volume/percentage from the book view, while the backend cursor layer
                 // draws the line.
                 self.draw_ghost_cursor_labels(ctx, idx, sf, &mut placed)?;
+                // Keep whichever layout is current and park the other as next frame's buffer.
+                // Without the `else` the collapsed pane was left with no layout at all, so the
+                // next frame compared against an empty one and flagged a change every frame.
                 if previous_placed != placed {
                     self.panes[idx].label_placed = placed;
+                    self.panes[idx].label_placed_spare = previous_placed;
                     readout_metrics_changed = true;
+                } else {
+                    self.panes[idx].label_placed = previous_placed;
+                    self.panes[idx].label_placed_spare = placed;
                 }
                 continue;
             }
@@ -957,9 +965,11 @@ impl RenderState {
             // otherwise backdrops remain at the old price and appear to float away from labels.
             if previous_placed != placed {
                 self.panes[idx].label_placed = placed;
+                self.panes[idx].label_placed_spare = previous_placed;
                 readout_metrics_changed = true;
             } else {
                 self.panes[idx].label_placed = previous_placed;
+                self.panes[idx].label_placed_spare = placed;
             }
 
             // Price labels use fixed height fractions matching the STATIC horizontal grid lines

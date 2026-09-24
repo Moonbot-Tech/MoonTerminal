@@ -208,3 +208,193 @@ fn fixture_fit_uses_complete_uploaded_boundary_candles() {
         None
     );
 }
+
+/// `history.rs:visible_candle_fit` starting its coarse scan without the `coarse_fill_max_tf`
+/// widening drops a coarse filler that opened before the window but still overhangs its left
+/// edge, so auto-Y ignores a bar drawn on screen. Compared with a full scan of the fill.
+#[test]
+fn visible_fit_windowed_coarse_scan_equals_a_full_scan() {
+    let candle = |time: f64, low: f32, high: f32| ChartCandle {
+        t_open_ms: time,
+        open: low,
+        close: high,
+        low,
+        high,
+        volume: 1.0,
+        quote_volume: 1.0,
+    };
+    let mut state = 0xDEAD_BEEF_u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    // Ascending mixed-width fill: hourly bars with 5-minute bars between them.
+    let hour = 3_600_000.0_f64;
+    let five = 300_000.0_f64;
+    let mut fill = Vec::new();
+    let mut t = 0.0;
+    while fill.len() < 3_000 {
+        let lo = 1.0 + (next() % 1_000) as f32;
+        let hi = lo + (next() % 50) as f32;
+        let tf = if next() % 3 == 0 { hour } else { five };
+        fill.push((candle(t, lo, hi), tf as f32));
+        t += tf;
+    }
+    let hourly: Vec<f64> = fill
+        .iter()
+        .filter(|(_, tf)| f64::from(*tf) == hour)
+        .map(|(c, _)| c.t_open_ms)
+        .collect();
+    let mut cursor = ChartHistoryCursor::default();
+    cursor.coarse_fill = fill.clone();
+    cursor.coarse_fill_max_tf = Some(hour);
+    let last = t;
+    let mut overhang_hits = 0;
+    for q in 0..3_000 {
+        let (a, b) = if q % 3 == 0 {
+            // Start strictly inside an hourly bar: it opens before the window and overhangs it.
+            let open = hourly[(next() % hourly.len() as u64) as usize];
+            let a = open + 1.0 + (next() % (hour as u64 - 1)) as f64;
+            (a, a + (next() % 5) as f64 * five)
+        } else {
+            let a = (next() % last as u64) as f64;
+            (a, a + (next() % 40) as f64 * five)
+        };
+        let mut want: Option<(f32, f32)> = None;
+        for (c, tf) in &fill {
+            let tf = f64::from(*tf);
+            if tf > 60_000.0 && c.t_open_ms + tf > a && c.t_open_ms <= b {
+                if c.t_open_ms < a {
+                    overhang_hits += 1;
+                }
+                want = Some(match want {
+                    Some((l, h)) => (l.min(c.low), h.max(c.high)),
+                    None => (c.low, c.high),
+                });
+            }
+        }
+        take_visible_fit_visited();
+        assert_eq!(
+            visible_candle_fit(&cursor, 60_000, (a, b), None),
+            want,
+            "window [{a}, {b}]"
+        );
+        let visited = take_visible_fit_visited();
+        let bound = (b - a) / five + hour / five + 2.0;
+        assert!(visited as f64 <= bound, "visited {visited} > {bound}");
+        if q % 1_000 == 0 {
+            println!("[visible_fit] before={} after={visited}", fill.len());
+        }
+    }
+    assert!(overhang_hits > 0);
+}
+
+/// Polls the prefix of a cursor that has never loaded one, against a cache whose worker never
+/// answers, so every poll after the first finds the read still in flight.
+fn poll_stalled(cursor: &mut ChartHistoryCursor, cache: &crate::market::kline_cache::KlineCache) {
+    poll_cache_prefix(
+        cursor,
+        Some(cache),
+        Some("binance"),
+        "BTCUSDT",
+        1,
+        1_000_000,
+        60_000,
+        2_000_000,
+    );
+}
+
+/// Breakage: `kline_cache.rs` `PendingPrefixRead::poll` turned from `try_recv()` into a
+/// `recv_timeout(READ_TIMEOUT)` wait. Consequence: every chart frame with a read in flight blocks
+/// the UI thread for up to 250 ms again instead of drawing the rows it already holds.
+#[test]
+fn prefix_poll_with_a_read_in_flight_never_waits_on_the_worker() {
+    let (cache, ops) = crate::market::kline_cache::KlineCache::stalled_for_tests();
+    let mut cursor = ChartHistoryCursor::default();
+    poll_stalled(&mut cursor, &cache);
+    let generation = cursor.cache_generation;
+
+    let started = Instant::now();
+    for _ in 0..4 {
+        poll_stalled(&mut cursor, &cache);
+    }
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(200),
+        "4 polls of a stalled read took {elapsed:?}; the frame path must not wait"
+    );
+    assert!(cursor.cache_pending.is_some(), "the read stays in flight");
+    assert!(cursor.cache_rows.is_empty());
+    assert_eq!(cursor.cache_generation, generation);
+    assert_eq!(ops.try_iter().count(), 1, "exactly one read was queued");
+}
+
+/// Breakage: `source/mod.rs` `ChartHistoryCursor::invalidate_cache_prefix` stops dropping
+/// `cache_pending`. Consequence: a read queued before a cache merge answers with the pre-merge
+/// rows and marks the prefix fresh, so the merged rows are never drawn this session.
+#[test]
+fn invalidating_the_prefix_drops_the_read_in_flight_and_asks_again() {
+    let (cache, ops) = crate::market::kline_cache::KlineCache::stalled_for_tests();
+    let mut cursor = ChartHistoryCursor::default();
+    poll_stalled(&mut cursor, &cache);
+
+    cursor.invalidate_cache_prefix();
+    assert!(cursor.cache_pending.is_none(), "the pre-merge read is gone");
+    poll_stalled(&mut cursor, &cache);
+
+    assert_eq!(
+        ops.try_iter().count(),
+        2,
+        "a fresh read follows the invalidation"
+    );
+}
+
+/// Breakage: `history.rs` `series_floor` loses its hysteresis and re-anchors on every call.
+/// Consequence: every pan past the 20% prefetch rebuilds the whole candle series again.
+/// Numbers: rebuilds per 100 in-span pans were 100 before the hysteresis, 0 with it.
+#[test]
+fn pans_inside_the_retained_span_never_rebuild_the_series() {
+    let span = 3_600_000i64;
+    let want0 = 10_000_000_000i64;
+    let mut floor = series_floor(i64::MAX, want0, span);
+    assert_eq!(floor, want0 - span);
+    let reset_for = |old: i64, new: i64| {
+        series_reset_due(&SeriesResetInputs {
+            params_reset: false,
+            valid: true,
+            tf_changed: false,
+            trades_newly_available: false,
+            deep_sig_changed: false,
+            exchange_key_changed: false,
+            floor_moved: new != old,
+            cache_arrived: false,
+        })
+    };
+
+    let mut resets = 0;
+    for k in 0..100i64 {
+        // 50 steps right by 1/50 span, then 50 back left to 0.9 span before the start.
+        let want = if k < 50 {
+            want0 + k * span / 50
+        } else {
+            want0 + span - (k - 49) * (span * 19 / 10) / 50
+        };
+        assert!(want >= floor && want <= floor + 4 * span);
+        let next = series_floor(floor, want, span);
+        if reset_for(floor, next) {
+            resets += 1;
+        }
+        floor = next;
+    }
+    assert_eq!(resets, 0, "no rebuild while the view stays in the span");
+
+    let next = series_floor(floor, floor - 1, span);
+    assert!(
+        reset_for(floor, next),
+        "one pan past the floor rebuilds once"
+    );
+    assert_eq!(next, floor - 1 - span);
+}

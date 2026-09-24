@@ -93,28 +93,42 @@ impl OrderBookModel {
     /// not emitted: the scissor still guards bar edges, but the CPU and GPU do not process
     /// order book data that is known to be invisible.
     pub fn build_instances(&self, lo: f32, hi: f32, out: &mut Vec<LevelInstance>) {
+        self.build_instances_normalized((lo, hi), (lo, hi), out);
+    }
+
+    /// Builds GPU instances for levels overlapping `emit`, with bar lengths normalized against
+    /// the maximum among levels overlapping `norm`, so a wider emitted window keeps the visible
+    /// window's scale.
+    pub fn build_instances_normalized(
+        &self,
+        norm: (f32, f32),
+        emit: (f32, f32),
+        out: &mut Vec<LevelInstance>,
+    ) {
         out.clear();
 
-        // Both bid and ask bars share the denominator for the visible window, keeping walls on
-        // either side visually comparable. Invisible levels are omitted from the GPU buffer:
-        // the order book is drawn as ordinary opaque rectangles over the visible price range.
+        // Both bid and ask bars share the denominator for the normalizing window, keeping walls
+        // on either side visually comparable.
         let mut max_qty = 1e-6_f32;
         let mut max_cum = 1e-6_f32;
-        let mut visible: Vec<&RawLevel> = Vec::new();
-        for r in &self.raw {
-            if !level_overlaps(r, lo, hi) {
-                continue;
-            }
+        for r in self
+            .raw
+            .iter()
+            .filter(|r| level_overlaps(r, norm.0, norm.1))
+        {
             max_qty = max_qty.max(r.qty);
             max_cum = max_cum.max(r.cum);
-            visible.push(r);
         }
-
         let inv_max_cum = 1.0 / max_cum.max(1e-6);
         let inv_max_qty = 1.0 / max_qty.max(1e-6);
-        out.reserve(visible.len().saturating_mul(2));
+        let emitted = || {
+            self.raw
+                .iter()
+                .filter(move |r| level_overlaps(r, emit.0, emit.1))
+        };
 
-        for r in &visible {
+        // Depth fills first, then level lines, so the lines draw over every fill.
+        for r in emitted() {
             out.push(LevelInstance {
                 price: r.price,
                 span: r.span,
@@ -122,8 +136,7 @@ impl OrderBookModel {
                 kind: if r.is_ask { 1.0 } else { 0.0 },
             });
         }
-
-        for r in visible {
+        for r in emitted() {
             out.push(LevelInstance {
                 price: r.price,
                 span: r.span,

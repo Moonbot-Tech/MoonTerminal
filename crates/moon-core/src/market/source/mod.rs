@@ -3,6 +3,7 @@ mod archive;
 mod history;
 #[cfg(test)]
 mod label_tests;
+mod price_fit;
 mod read;
 mod refresh;
 mod replay;
@@ -917,6 +918,18 @@ impl std::fmt::Display for LatestPriceError {
     }
 }
 
+/// What a chart's next candle emission must ship.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum CandleEmit {
+    /// Nothing changed since the last emission.
+    #[default]
+    Clean,
+    /// Only the composed entries from this index on changed.
+    Patch(usize),
+    /// The composed list was recomposed; ship all of it.
+    Full,
+}
+
 #[derive(Default)]
 pub struct ChartHistoryCursor {
     trades: Option<SeqRingCursor>,
@@ -931,6 +944,8 @@ pub struct ChartHistoryCursor {
     /// bucket. `None` means that copy held no trade. Cleared with the cursor.
     displayed_oldest_ms: Option<i64>,
     scan_trade_rows: Vec<TradeHistoryRow>,
+    /// Every trade copied or drained since the last full copy, blocked for the auto-Y price fit.
+    price_fit: price_fit::PriceFitIndex,
     /// Fixture candles last uploaded by this pane, retained for viewport-only fitting without SQL.
     fixture_candles: Vec<ChartCandle>,
     liq_rows: Vec<TradeHistoryRow>,
@@ -1001,6 +1016,14 @@ pub struct ChartHistoryCursor {
     ///
     /// `None` means the last attempt completed, whatever it found.
     cache_retry_at: Option<Instant>,
+    /// The one kline-cache prefix read in flight, picked up by polling on a later frame.
+    cache_pending: Option<history::PendingCacheRead>,
+    /// Leftmost edge wanted while a read is in flight, asked for by the next read; `None` = none.
+    cache_want_from: Option<i64>,
+    /// `(exchange key, market)` the held cache rows belong to; a change drops them at once.
+    cache_identity: Option<(String, String)>,
+    /// Bumped by the cache worker whenever a prefix read this cursor asked for is answered.
+    cache_done: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// The series plus its coarse gap fillers, each tagged with the timeframe it is drawn at.
     ///
     /// Retained rather than rebuilt per block because the two consumers fire INDEPENDENTLY: the
@@ -1008,12 +1031,41 @@ pub struct ChartHistoryCursor {
     /// Deriving the fill twice is how the price scale and the drawn candles came to disagree about
     /// which coarse rows exist; one vector makes that unrepresentable.
     coarse_fill: Vec<(ChartCandle, f32)>,
-    /// `(series revision, cache generation)` the retained fill was composed from.
+    /// Widest timeframe `coarse_fill` was composed with, so a window scan can bound its start
+    /// without a pass over the fill. `None` means unknown: scan from the first row.
+    coarse_fill_max_tf: Option<f64>,
+    /// `(series layout revision, cache generation)` the retained fill was composed from; a
+    /// same-layout change is patched into the fill's tail instead of recomposing it.
     coarse_fill_key: Option<(u64, u64)>,
+    /// What the next candle emission must ship.
+    candle_emit: CandleEmit,
+    /// Series revision this reader last emitted candles at; a tail patch is only valid against it.
+    candles_emitted_rev: Option<u64>,
     /// Signature of the last deep rows written to the cache; write back only after a change.
     cache_written_sig: u64,
+    /// `(exchange key, deep kind minutes)` the deep-row writeback last wrote for.
+    cache_written_key: Option<(String, u32)>,
+    /// Open time of the first deep row at the last writeback; `i64::MIN` = nothing written.
+    cache_written_first_ms: i64,
+    /// Open time of the last deep row at the last writeback; `i64::MIN` = nothing written.
+    cache_written_last_ms: i64,
+    /// Deep row count at the last writeback.
+    cache_written_len: usize,
+    /// Tail-only writebacks since the last full one; a full rewrite every
+    /// `DEEP_FULL_WRITEBACK_EVERY` heals middle rows a tail write cannot see.
+    cache_writebacks_since_full: u32,
+    /// Left edge the current candle series was built from; one window span left of the edge that
+    /// was needed at build time, so a leftward pan within that span does not rebuild. `i64::MAX` =
+    /// no series built. The derived default 0 is re-anchored by `series_floor` the same way.
+    series_from_base_ms: i64,
+    /// `cache_generation` the current series was built with; a different value means kline-cache
+    /// rows landed after the build and only a rebuild merges them into the base.
+    series_cache_generation: u64,
     /// Throttle for candle-to-now gap diagnostics: at most one warning per panel every 30 seconds.
     last_gap_diag: Option<Instant>,
+    /// When the O(N) internal-gap scan last ran; it runs at most every 30 s whether or not a
+    /// warning fired.
+    last_gap_scan: Option<Instant>,
     /// Equivalent signature for rows of the panel's native kind.
     ///
     /// These rows are produced by native backfill attempts when the core's effective kind is finer
@@ -1059,6 +1111,28 @@ pub struct ChartHistoryCursor {
 }
 
 impl ChartHistoryCursor {
+    /// Prefix reads answered for this cursor so far; a change means its reply can be picked up.
+    pub fn cache_completions(&self) -> u64 {
+        self.cache_done.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Forces a fresh prefix read. The read in flight is dropped too: the worker answers in FIFO
+    /// order, so a read queued before a merge would return the pre-merge rows and mark the prefix
+    /// fresh.
+    pub(crate) fn invalidate_cache_prefix(&mut self) {
+        self.cache_kind = None;
+        self.cache_pending = None;
+    }
+
+    /// Drops every held cache layer and bumps the generation so the composed fill recomputes.
+    fn drop_cache_rows(&mut self) {
+        self.cache_rows.clear();
+        self.cache_rows_finer.clear();
+        self.cache_rows_5m.clear();
+        self.cache_rows_1d.clear();
+        self.cache_generation = self.cache_generation.wrapping_add(1);
+    }
+
     pub fn reset(&mut self) {
         self.trades = None;
         self.liquidations = None;
@@ -1068,6 +1142,7 @@ impl ChartHistoryCursor {
         self.trade_rows.clear();
         self.displayed_oldest_ms = None;
         self.scan_trade_rows.clear();
+        self.price_fit.clear();
         self.liq_rows.clear();
         self.last_price_rows.clear();
         self.mark_price_rows.clear();
@@ -1081,6 +1156,18 @@ impl ChartHistoryCursor {
         self.ring_rows_5m.clear();
         self.coarse_fill.clear();
         self.coarse_fill_key = None;
+        self.coarse_fill_max_tf = None;
+        self.series_from_base_ms = i64::MAX;
+        self.series_cache_generation = 0;
+        self.candle_emit = CandleEmit::Full;
+        self.candles_emitted_rev = None;
+        self.cache_pending = None;
+        self.cache_want_from = None;
+        self.cache_written_key = None;
+        self.cache_written_first_ms = i64::MIN;
+        self.cache_written_last_ms = i64::MIN;
+        self.cache_written_len = 0;
+        self.cache_writebacks_since_full = 0;
         // Preserve last_deep_request so request throttling survives a reset. Changing markets
         // recreates PaneRender and therefore starts with a fresh cursor.
     }
@@ -1097,10 +1184,10 @@ pub struct ChartHistoryBuffers {
     pub liquidations: Vec<Tick>,
     pub last_points: Vec<PricePoint>,
     pub mark_points: Vec<PricePoint>,
-    /// Complete visible candle series.
+    /// Composed candle list: the whole of it, or only its changed tail when
+    /// `ChartHistoryRead::candles_patch_from` is `Some`.
     ///
-    /// Populated only when the series revision differs from
-    /// `CandleReadParams::shipped_revision`; see `ChartHistoryRead::candles_changed`.
+    /// Populated only when `ChartHistoryRead::candles_changed` is set.
     pub candles: Vec<ChartCandle>,
     /// Timeframe in milliseconds for each entry in `candles`, stored as a parallel array.
     ///
@@ -1118,6 +1205,28 @@ impl ChartHistoryBuffers {
         self.candles.clear();
         self.candle_tf_ms.clear();
     }
+}
+
+impl ChartHistoryRead {
+    /// Marks both price lines as replaced by what the read carries (possibly nothing), so a bench
+    /// or a replay clears the live lines instead of leaving them drawn.
+    pub(crate) fn replace_price_lines(&mut self) {
+        self.last_line = PriceLineUpdate::Replace;
+        self.mark_line = PriceLineUpdate::Replace;
+        self.price_lines_changed = true;
+    }
+}
+
+/// What one read carries for a price line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PriceLineUpdate {
+    /// Nothing new; the output is empty.
+    #[default]
+    None,
+    /// The output holds only the newly drained rows, to be appended to what the receiver holds.
+    Append,
+    /// The output holds the whole window, replacing what the receiver holds.
+    Replace,
 }
 
 /// Candle and trade-zone parameters for `read_chart_history_into`.
@@ -1139,6 +1248,10 @@ pub struct CandleReadParams {
     ///
     /// When it matches the current revision, `out.candles` remains empty.
     pub shipped_revision: u64,
+    /// Series-relevant reset reasons only (source generation or archive change, candle config
+    /// change, first read). A camera pan or a trade/combo reset must NOT set it: the candle series
+    /// is anchored on its own history floor, not on the camera.
+    pub series_reset: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1158,6 +1271,14 @@ pub struct ChartHistoryRead {
     pub candles_changed: bool,
     /// Current candle-series revision to return in the next `CandleReadParams`.
     pub candles_revision: u64,
+    /// What `out.last_points` carries for the last-price line.
+    pub last_line: PriceLineUpdate,
+    /// What `out.mark_points` carries for the mark-price line.
+    pub mark_line: PriceLineUpdate,
+    /// `None`: `out.candles` is the whole composed list. `Some(i)`: `out.candles` replaces the
+    /// composed entries from index `i` on; the list's new length is `i + out.candles.len()`. Only
+    /// sent when the receiver's `shipped_revision` equals the revision this reader last emitted.
+    pub candles_patch_from: Option<usize>,
 }
 
 /// Live timeframe-bar subscription state for one `(provider, market)`; see `candle_subs`.
@@ -1521,8 +1642,9 @@ fn moon_time_from_rel_ms(epoch_ms: f64, rel_ms: f32) -> MoonTime {
 /// the cursor at the first row at or after `to_time` — the edge of the window it copies — so the
 /// next drain fills anything between that edge and now instead of leaving a gap when the pane is
 /// panned into the past; subsequent calls drain new rows and accumulate `clipped` and `caught_up`
-/// in `read`. After a change, the visible range is copied and converted to points. Call only when
-/// the reader exists.
+/// in `read`. A reset or a clipped drain copies the window `[from_time, to_time]` and answers
+/// `Replace`; a drain that copied rows converts only those and answers `Append` — they may lie past
+/// `to_time`, off-screen right, where the draw culls them. Call only when the reader exists.
 #[allow(clippy::too_many_arguments)]
 fn drain_price_line<R: SeqRingTimedRow>(
     reader: &SeqRingReader<R>,
@@ -1534,23 +1656,40 @@ fn drain_price_line<R: SeqRingTimedRow>(
     out: &mut Vec<PricePoint>,
     read: &mut ChartHistoryRead,
     convert: impl Fn(&[R], &mut Vec<PricePoint>),
-) {
+) -> PriceLineUpdate {
     read.price_line_capacity = read.price_line_capacity.max(reader.capacity());
     let reset = force_reset || cursor_slot.is_none();
-    let mut changed = reset;
+    let mut update = PriceLineUpdate::None;
     if reset {
         *cursor_slot = Some(reader.cursor_at_or_after_time(to_time));
+        update = PriceLineUpdate::Replace;
     } else if let Some(cur) = cursor_slot.as_mut() {
+        // `drain_new_bounded` replaces `rows` with the drained batch.
         let meta = reader.drain_new_bounded(cur, reader.capacity(), rows);
         read.clipped |= meta.clipped;
         read.caught_up &= meta.caught_up;
-        changed = meta.copied > 0 || meta.clipped;
+        if meta.clipped {
+            update = PriceLineUpdate::Replace;
+        } else if meta.copied > 0 {
+            convert(rows, out);
+            update = PriceLineUpdate::Append;
+        }
     }
-    if changed {
-        reader.copy_time_range(from_time, to_time, reader.capacity(), rows);
+    if update == PriceLineUpdate::Replace {
+        // A clipped drain moved the cursor to the newest row, so its window runs through that row
+        // or the next append would leave a gap; a reset parks the cursor at `to_time` instead.
+        let copy_to = if reset {
+            to_time
+        } else {
+            MoonTime::from_unix_millis(i64::MAX)
+        };
+        reader.copy_time_range(from_time, copy_to, reader.capacity(), rows);
         convert(rows, out);
+    }
+    if update != PriceLineUpdate::None {
         read.price_lines_changed = true;
     }
+    update
 }
 
 fn rows_to_ticks(rows: &[TradeHistoryRow], out: &mut Vec<Tick>) {
