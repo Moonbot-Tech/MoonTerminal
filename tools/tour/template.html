@@ -366,6 +366,55 @@ table.t tbody tr:nth-child(even){background:var(--row-alt)}
   font-family:var(--mono);font-size:.88em;background:var(--accent-tint);
   color:var(--accent-fg);padding:1px 5px;border-radius:3px
 }
+.sbody{min-width:0}
+.sbody>:not(.cmd):not(noscript){max-width:72ch}
+.sbody>*+*{margin-top:12px}
+.step h4+*{margin-top:0}
+.sgroup{
+  margin:20px 0 0;font:600 11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:var(--text-muted);padding-bottom:6px;border-bottom:1px solid var(--border-soft)
+}
+.subs{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:8px}
+.subs li{display:grid;grid-template-columns:34px minmax(0,1fr);gap:8px;color:var(--text-soft);font-size:14.5px}
+.subs .sn{font:600 12px/22px var(--mono);color:var(--accent)}
+.cmd{border:1px solid var(--border);border-radius:var(--r-btn);background:var(--panel);min-width:0}
+.cmd .chead{display:flex;justify-content:flex-end;padding:5px 6px;border-bottom:1px solid var(--border-soft)}
+.cmd pre{margin:0;padding:12px 14px;overflow-x:auto;font-size:13px;line-height:1.5}
+.cmd pre code{background:none;padding:0;color:var(--text);white-space:pre;user-select:all}
+.cmd .copy{
+  appearance:none;cursor:pointer;min-height:28px;padding:0 10px;
+  border-radius:var(--r-btn);border:1px solid var(--border);background:var(--card);
+  color:var(--text-soft);font:600 12px/1 var(--mono)
+}
+.cmd .copy:hover{border-color:var(--border-hover);color:var(--text)}
+.cmd .copy:focus-visible{outline:2px solid var(--sel-ring);outline-offset:1px}
+.crumbs,.status{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.crumbs li,.status li{
+  font-size:13px;padding:3px 9px;border-radius:var(--r-btn);border:1px solid var(--border);
+  background:var(--panel);color:var(--text)
+}
+.crumbs li+li::before,.status li+li::before{content:"→";margin:0 8px 0 -2px;color:var(--text-faint)}
+.crumbs li+li,.status li+li{margin-left:0}
+.crumbs li code{background:none;padding:0}
+.status li:first-child{color:var(--text-muted)}
+.status li:last-child{color:var(--green-text);border-color:var(--green)}
+.callout{
+  display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:baseline;
+  padding:10px 14px;border-radius:var(--r-btn);font-size:14px;color:var(--text-soft);
+  border:1px solid var(--border);border-left:3px solid var(--accent);background:var(--accent-tint)
+}
+.callout b{font:600 11px/1.6 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--accent-fg)}
+.callout.warn{border-left-color:var(--amber);background:color-mix(in srgb,var(--amber) 9%,transparent)}
+.callout.warn b{color:var(--amber)}
+.terms{margin:0;display:grid;gap:6px}
+.terms div{display:grid;grid-template-columns:minmax(64px,auto) minmax(0,1fr);gap:12px;font-size:14.5px}
+.terms dt{font-weight:650;color:var(--text)}
+.terms dd{margin:0;color:var(--text-soft)}
+@media(max-width:520px){
+  .step{gap:12px;padding:16px 14px}
+  .callout{grid-template-columns:1fr;gap:2px}
+  .terms div{grid-template-columns:1fr;gap:0}
+}
 
 /* ---------- карточки ---------- */
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:2px;
@@ -480,7 +529,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
   <section id="start">
     <div class="shead"><span class="snum">02</span><h2 data-i18n="qs.h">Быстрый старт</h2></div>
     <p class="slead" data-i18n="qs.lead">Пять шагов от пустого окна до зелёного индикатора. Порядок важен: терминал не подключается, пока настройки не сохранены.</p>
-    <div class="steps" id="steps"></div>
+    <div class="steps" id="steps">{{steps_noscript}}</div>
   </section>
 
   <!-- ==================== 03. ПАНЕЛИ ==================== -->
@@ -673,6 +722,47 @@ function applyMode(next, fromUser){
   }
 }
 
+/* Quick-start blocks. Every text arrives from the generator as safe HTML;
+   only `code` is raw and escaped here. Sub-steps number as "3.1, 3.2, ..."
+   across the whole step so a reader can say where they are. */
+function stepBlocks(n, blocks){
+  let sub = 0, out = "", list = false;
+  const close = ()=>{ if(list){ out += "</ol>"; list = false; } };
+  for(const [kind, v] of blocks){
+    if(kind === "sub"){
+      if(!list){ out += `<ol class="subs">`; list = true; }
+      out += `<li><span class="sn">${n}.${++sub}</span><span>${v}</span></li>`;
+      continue;
+    }
+    close();
+    if(kind === "group") out += `<h5 class="sgroup">${v}</h5>`;
+    else if(kind === "p") out += `<p>${v}</p>`;
+    else if(kind === "note" || kind === "warn")
+      out += `<div class="callout ${kind}"><b>${esc(T["qs." + kind][lang])}</b><span>${v}</span></div>`;
+    else if(kind === "code")
+      out += `<div class="cmd"><div class="chead"><button type="button" class="copy" data-copy>${esc(T["qs.copy"][lang])}</button></div>`
+        + `<pre><code>${esc(v)}</code></pre></div>`;
+    else if(kind === "path")
+      out += `<ol class="crumbs">${v.map(c=>`<li>${c}</li>`).join("")}</ol>`;
+    else if(kind === "status")
+      out += `<ol class="status">${v.map(c=>`<li>${c}</li>`).join("")}</ol>`;
+    else if(kind === "terms")
+      out += `<dl class="terms">${v.map(([t,d])=>`<div><dt>${t}</dt><dd>${d}</dd></div>`).join("")}</dl>`;
+  }
+  close();
+  return out;
+}
+
+document.addEventListener("click", e=>{
+  const btn = e.target.closest && e.target.closest("[data-copy]");
+  if(!btn || !navigator.clipboard) return;
+  const text = btn.closest(".cmd").querySelector("code").textContent;
+  navigator.clipboard.writeText(text).then(()=>{
+    btn.textContent = T["qs.copied"][lang];
+    setTimeout(()=>{ btn.textContent = T["qs.copy"][lang]; }, 1600);
+  });
+});
+
 function render(){
   document.documentElement.lang = lang;
 
@@ -689,9 +779,11 @@ function render(){
   ).join("");
 
   // шаги
-  $("#steps").innerHTML = STEPS.map((s,i)=>
-    `<div class="step"><div class="n">${i+1}</div><div><h4>${esc(s[lang][0])}</h4><p>${s[lang][1]}</p></div></div>`
-  ).join("");
+  $("#steps").innerHTML = STEPS.map((s,i)=>{
+    const [title, body, blocks] = s[lang];
+    return `<div class="step"><div class="n">${i+1}</div><div class="sbody"><h4>${esc(title)}</h4>`
+      + (body ? `<p>${body}</p>` : "") + stepBlocks(i+1, blocks) + `</div></div>`;
+  }).join("");
 
   // панели
   $("#panels-cards").innerHTML = PANELS.map(p=>

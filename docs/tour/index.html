@@ -488,6 +488,55 @@ table.t tbody tr:nth-child(even){background:var(--row-alt)}
   font-family:var(--mono);font-size:.88em;background:var(--accent-tint);
   color:var(--accent-fg);padding:1px 5px;border-radius:3px
 }
+.sbody{min-width:0}
+.sbody>:not(.cmd):not(noscript){max-width:72ch}
+.sbody>*+*{margin-top:12px}
+.step h4+*{margin-top:0}
+.sgroup{
+  margin:20px 0 0;font:600 11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:var(--text-muted);padding-bottom:6px;border-bottom:1px solid var(--border-soft)
+}
+.subs{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:8px}
+.subs li{display:grid;grid-template-columns:34px minmax(0,1fr);gap:8px;color:var(--text-soft);font-size:14.5px}
+.subs .sn{font:600 12px/22px var(--mono);color:var(--accent)}
+.cmd{border:1px solid var(--border);border-radius:var(--r-btn);background:var(--panel);min-width:0}
+.cmd .chead{display:flex;justify-content:flex-end;padding:5px 6px;border-bottom:1px solid var(--border-soft)}
+.cmd pre{margin:0;padding:12px 14px;overflow-x:auto;font-size:13px;line-height:1.5}
+.cmd pre code{background:none;padding:0;color:var(--text);white-space:pre;user-select:all}
+.cmd .copy{
+  appearance:none;cursor:pointer;min-height:28px;padding:0 10px;
+  border-radius:var(--r-btn);border:1px solid var(--border);background:var(--card);
+  color:var(--text-soft);font:600 12px/1 var(--mono)
+}
+.cmd .copy:hover{border-color:var(--border-hover);color:var(--text)}
+.cmd .copy:focus-visible{outline:2px solid var(--sel-ring);outline-offset:1px}
+.crumbs,.status{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.crumbs li,.status li{
+  font-size:13px;padding:3px 9px;border-radius:var(--r-btn);border:1px solid var(--border);
+  background:var(--panel);color:var(--text)
+}
+.crumbs li+li::before,.status li+li::before{content:"→";margin:0 8px 0 -2px;color:var(--text-faint)}
+.crumbs li+li,.status li+li{margin-left:0}
+.crumbs li code{background:none;padding:0}
+.status li:first-child{color:var(--text-muted)}
+.status li:last-child{color:var(--green-text);border-color:var(--green)}
+.callout{
+  display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:baseline;
+  padding:10px 14px;border-radius:var(--r-btn);font-size:14px;color:var(--text-soft);
+  border:1px solid var(--border);border-left:3px solid var(--accent);background:var(--accent-tint)
+}
+.callout b{font:600 11px/1.6 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--accent-fg)}
+.callout.warn{border-left-color:var(--amber);background:color-mix(in srgb,var(--amber) 9%,transparent)}
+.callout.warn b{color:var(--amber)}
+.terms{margin:0;display:grid;gap:6px}
+.terms div{display:grid;grid-template-columns:minmax(64px,auto) minmax(0,1fr);gap:12px;font-size:14.5px}
+.terms dt{font-weight:650;color:var(--text)}
+.terms dd{margin:0;color:var(--text-soft)}
+@media(max-width:520px){
+  .step{gap:12px;padding:16px 14px}
+  .callout{grid-template-columns:1fr;gap:2px}
+  .terms div{grid-template-columns:1fr;gap:0}
+}
 
 /* ---------- карточки ---------- */
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:2px;
@@ -940,7 +989,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
   <section id="start">
     <div class="shead"><span class="snum">02</span><h2 data-i18n="qs.h">Быстрый старт</h2></div>
     <p class="slead" data-i18n="qs.lead">Пять шагов от пустого окна до зелёного индикатора. Порядок важен: терминал не подключается, пока настройки не сохранены.</p>
-    <div class="steps" id="steps"></div>
+    <div class="steps" id="steps"><noscript><div class="step"><div class="sbody"><div class="cmd"><pre><code>netsh advfirewall firewall add rule name="MoonBot-UDP-5017" dir=in action=allow protocol=UDP localport=5017</code></pre></div></div></div></noscript></div>
   </section>
 
   <!-- ==================== 03. ПАНЕЛИ ==================== -->
@@ -1033,6 +1082,22 @@ const T = {
   "qs.lead": {
     "ru": "Пять шагов от пустого окна до зелёного индикатора. Порядок важен: терминал не подключается, пока настройки не сохранены.",
     "en": "Five steps from an empty window to a green indicator. Order matters: the terminal does not connect until settings are saved."
+  },
+  "qs.note": {
+    "ru": "Важно",
+    "en": "Note"
+  },
+  "qs.warn": {
+    "ru": "Внимание",
+    "en": "Heads up"
+  },
+  "qs.copy": {
+    "ru": "Копировать",
+    "en": "Copy"
+  },
+  "qs.copied": {
+    "ru": "Скопировано",
+    "en": "Copied"
   },
   "pn.h": {
     "ru": "Панели дока",
@@ -1781,51 +1846,271 @@ const STEPS = [
   {
     "ru": [
       "Скачайте терминал",
-      "На странице <a href=\"https://github.com/Moonbot-Tech/MoonTerminal/releases/latest\" target=\"_blank\" rel=\"noopener\">Releases<\/a> лежат готовые сборки: <code>MoonTerminal.exe<\/code> для Windows и <code>.dmg<\/code> для macOS. Под Linux пока только сборка из исходников — <code>make build<\/code>."
+      "На странице <a href=\"https://github.com/Moonbot-Tech/MoonTerminal/releases/latest\" target=\"_blank\" rel=\"noopener\">Releases<\/a> лежат готовые сборки: <code>MoonTerminal.exe<\/code> для Windows и <code>.dmg<\/code> для macOS. Под Linux пока только сборка из исходников — <code>make build<\/code>.",
+      []
     ],
     "en": [
       "Download the terminal",
-      "Ready builds live on the <a href=\"https://github.com/Moonbot-Tech/MoonTerminal/releases/latest\" target=\"_blank\" rel=\"noopener\">Releases<\/a> page: <code>MoonTerminal.exe<\/code> for Windows and a <code>.dmg<\/code> for macOS. Linux is build-from-source for now — <code>make build<\/code>."
+      "Ready builds live on the <a href=\"https://github.com/Moonbot-Tech/MoonTerminal/releases/latest\" target=\"_blank\" rel=\"noopener\">Releases<\/a> page: <code>MoonTerminal.exe<\/code> for Windows and a <code>.dmg<\/code> for macOS. Linux is build-from-source for now — <code>make build<\/code>.",
+      []
     ]
   },
   {
     "ru": [
       "Откройте Настройки → Подключения",
-      "Кнопка «Настройки» — справа в торговом тулбаре. Первая вкладка окна и есть та, что нужна."
+      "Кнопка «Настройки» — справа в торговом тулбаре. Первая вкладка окна и есть та, что нужна.",
+      []
     ],
     "en": [
       "Open Settings → Connections",
-      "The Settings button sits at the right of the trading toolbar. The first tab of that window is the one you need."
+      "The Settings button sits at the right of the trading toolbar. The first tab of that window is the one you need.",
+      []
     ]
   },
   {
     "ru": [
       "Добавьте ядро и вставьте ключ",
-      "Кнопка <code>+ Добавить ядро (в «default»)<\/code> создаёт строку. Порядок важен: ключ несёт порт и режим внутри себя — ключ, скопированный до их настройки, уже устарел. На машине с MoonBot откройте UDP-порт ядра для входящих: в Windows это <code>netsh advfirewall firewall add rule name=\"MoonBot-UDP-5017\" dir=in action=allow protocol=UDP localport=5017<\/code>; у хостера со своим фаерволом (AWS и подобные) порт нужно открыть и там, на обычном VPS достаточно правила Windows. В MoonBot зелёный кружок слева внизу открывает <code>Info<\/code>; в строке <code>Moon Kernel<\/code> нажмите <code>Settings<\/code> — откроется <code>Moon Proto<\/code>; на вкладке <code>Settings<\/code> включите <code>Kernel (VPS)<\/code>, задайте <code>Port<\/code> (по умолчанию <code>5017<\/code>), выберите версию переключателями <code>V0<\/code> / <code>V1<\/code> / <code>V2<\/code> (MoonBot по умолчанию создаёт ключ <code>V0<\/code>: если не сменить версию до <code>Copy Key<\/code>, терминал прочитает из ключа <code>V0<\/code>), нажмите <code>Apply<\/code> — появится зелёное «Server activated on port …». На строке <code>Key:<\/code> нажмите <code>Copy Key<\/code> (ключа нет — <code>New Key<\/code>). Вставьте его в поле «Ключ» кнопкой из буфера. Хост и порт отдельно вводить не надо — они внутри ключа."
+      "Сначала настройка на машине с MoonBot, потом ключ — в терминал.",
+      [
+        [
+          "warn",
+          "Порядок важен: ключ несёт порт и режим внутри себя. Задайте <code>Port<\/code>, режим и версию <b>до<\/b> <code>Copy Key<\/code> — ключ, скопированный раньше, уже устарел."
+        ],
+        [
+          "group",
+          "На машине с MoonBot"
+        ],
+        [
+          "sub",
+          "Откройте UDP-порт ядра для входящих. В Windows:"
+        ],
+        [
+          "code",
+          "netsh advfirewall firewall add rule name=\"MoonBot-UDP-5017\" dir=in action=allow protocol=UDP localport=5017"
+        ],
+        [
+          "note",
+          "У хостера со своим фаерволом (AWS и подобные) порт нужно открыть и там. На обычном VPS достаточно правила Windows."
+        ],
+        [
+          "sub",
+          "Откройте настройки <code>Moon Proto<\/code>:"
+        ],
+        [
+          "path",
+          [
+            "зелёный кружок слева внизу",
+            "<code>Info<\/code>",
+            "строка <code>Moon Kernel<\/code> → <code>Settings<\/code>",
+            "<code>Moon Proto<\/code>, вкладка <code>Settings<\/code>"
+          ]
+        ],
+        [
+          "sub",
+          "Включите <code>Kernel (VPS)<\/code>."
+        ],
+        [
+          "sub",
+          "Задайте <code>Port<\/code> (по умолчанию <code>5017<\/code>)."
+        ],
+        [
+          "sub",
+          "Выберите версию переключателями <code>V0<\/code> / <code>V1<\/code> / <code>V2<\/code>."
+        ],
+        [
+          "note",
+          "MoonBot по умолчанию создаёт ключ <code>V0<\/code>. Если не сменить версию до <code>Copy Key<\/code>, терминал прочитает из ключа <code>V0<\/code>."
+        ],
+        [
+          "sub",
+          "Нажмите <code>Apply<\/code> — появится зелёное «Server activated on port …»."
+        ],
+        [
+          "sub",
+          "На строке <code>Key:<\/code> нажмите <code>Copy Key<\/code> (ключа нет — <code>New Key<\/code>)."
+        ],
+        [
+          "group",
+          "В терминале"
+        ],
+        [
+          "sub",
+          "Нажмите <code>+ Добавить ядро (в «default»)<\/code> — появится строка."
+        ],
+        [
+          "sub",
+          "Вставьте ключ в поле «Ключ» кнопкой из буфера."
+        ],
+        [
+          "note",
+          "Хост и порт отдельно вводить не надо — они внутри ключа."
+        ]
+      ]
     ],
     "en": [
       "Add a core and paste the key",
-      "The <code>+ Add core (to \"default\")<\/code> button creates a row. The order matters: the key carries the port and mode inside it — a key copied before they are set is stale. On the machine running MoonBot, open the core's UDP port for inbound traffic: on Windows that is <code>netsh advfirewall firewall add rule name=\"MoonBot-UDP-5017\" dir=in action=allow protocol=UDP localport=5017<\/code>; a hoster with its own firewall (AWS and the like) needs the port opened there too, while a plain VPS needs only the Windows rule. In MoonBot the green dot at the bottom left opens <code>Info<\/code>; on the <code>Moon Kernel<\/code> row press <code>Settings<\/code>, which opens <code>Moon Proto<\/code>; on its <code>Settings<\/code> tab tick <code>Kernel (VPS)<\/code>, set <code>Port<\/code> (default <code>5017<\/code>), choose the version with the <code>V0<\/code> / <code>V1<\/code> / <code>V2<\/code> radio buttons (MoonBot creates a <code>V0<\/code> key by default: unless you change the version before <code>Copy Key<\/code>, the terminal reads <code>V0<\/code> from the key), press <code>Apply<\/code> — a green \"Server activated on port …\" appears. On the <code>Key:<\/code> row press <code>Copy Key<\/code> (<code>New Key<\/code> if there is no key yet). Paste it into the Key field with the clipboard button. Host and port are not entered separately — they are inside the key."
+      "Set things up on the MoonBot machine first, then bring the key to the terminal.",
+      [
+        [
+          "warn",
+          "The order matters: the key carries the port and mode inside it. Set <code>Port<\/code>, the mode and the version <b>before<\/b> <code>Copy Key<\/code> — a key copied earlier is stale."
+        ],
+        [
+          "group",
+          "On the MoonBot machine"
+        ],
+        [
+          "sub",
+          "Open the core's UDP port for inbound traffic. On Windows:"
+        ],
+        [
+          "code",
+          "netsh advfirewall firewall add rule name=\"MoonBot-UDP-5017\" dir=in action=allow protocol=UDP localport=5017"
+        ],
+        [
+          "note",
+          "A hoster with its own firewall (AWS and the like) needs the port opened there too. A plain VPS needs only the Windows rule."
+        ],
+        [
+          "sub",
+          "Open the <code>Moon Proto<\/code> settings:"
+        ],
+        [
+          "path",
+          [
+            "green dot, bottom left",
+            "<code>Info<\/code>",
+            "<code>Moon Kernel<\/code> row → <code>Settings<\/code>",
+            "<code>Moon Proto<\/code>, <code>Settings<\/code> tab"
+          ]
+        ],
+        [
+          "sub",
+          "Tick <code>Kernel (VPS)<\/code>."
+        ],
+        [
+          "sub",
+          "Set <code>Port<\/code> (default <code>5017<\/code>)."
+        ],
+        [
+          "sub",
+          "Choose the version with the <code>V0<\/code> / <code>V1<\/code> / <code>V2<\/code> radio buttons."
+        ],
+        [
+          "note",
+          "MoonBot creates a <code>V0<\/code> key by default. Unless you change the version before <code>Copy Key<\/code>, the terminal reads <code>V0<\/code> from the key."
+        ],
+        [
+          "sub",
+          "Press <code>Apply<\/code> — a green \"Server activated on port …\" appears."
+        ],
+        [
+          "sub",
+          "On the <code>Key:<\/code> row press <code>Copy Key<\/code> (<code>New Key<\/code> if there is no key yet)."
+        ],
+        [
+          "group",
+          "In the terminal"
+        ],
+        [
+          "sub",
+          "Press <code>+ Add core (to \"default\")<\/code> — a row appears."
+        ],
+        [
+          "sub",
+          "Paste the key into the Key field with the clipboard button."
+        ],
+        [
+          "note",
+          "Host and port are not entered separately — they are inside the key."
+        ]
+      ]
     ]
   },
   {
     "ru": [
       "Отметьте, что принимать",
-      "<b>Акт<\/b> — подключаться вообще. <b>Окн<\/b> — рисовать окно ядра; выключенное «Окн» при включённом «Акт» даёт headless-ядро. Колонки <b>Данные<\/b> (Ord / Det / Rep / Bal / Str / Log / Alr / Arb) фильтруют, что вы принимаете от этого ядра."
+      "Флажки в строке ядра:",
+      [
+        [
+          "terms",
+          [
+            [
+              "Акт",
+              "подключаться вообще."
+            ],
+            [
+              "Окн",
+              "рисовать окно ядра. Выключенное «Окн» при включённом «Акт» даёт headless-ядро."
+            ],
+            [
+              "Данные",
+              "колонки <code>Ord<\/code> / <code>Det<\/code> / <code>Rep<\/code> / <code>Bal<\/code> / <code>Str<\/code> / <code>Log<\/code> / <code>Alr<\/code> / <code>Arb<\/code> фильтруют, что вы принимаете от этого ядра."
+            ]
+          ]
+        ]
+      ]
     ],
     "en": [
       "Choose what to accept",
-      "<b>Act<\/b> — connect at all. <b>Win<\/b> — draw the core's window; Win off with Act on gives you a headless core. The <b>Data<\/b> columns (Ord / Det / Rep / Bal / Str / Log / Alr / Arb) filter what you accept from that core."
+      "Checkboxes on the core's row:",
+      [
+        [
+          "terms",
+          [
+            [
+              "Act",
+              "connect at all."
+            ],
+            [
+              "Win",
+              "draw the core's window. Win off with Act on gives you a headless core."
+            ],
+            [
+              "Data",
+              "the <code>Ord<\/code> / <code>Det<\/code> / <code>Rep<\/code> / <code>Bal<\/code> / <code>Str<\/code> / <code>Log<\/code> / <code>Alr<\/code> / <code>Arb<\/code> columns filter what you accept from that core."
+            ]
+          ]
+        ]
+      ]
     ]
   },
   {
     "ru": [
       "Нажмите «Сохранить»",
-      "До сохранения ядро честно пишет «Нет данных (сохраните настройки для подключения)». После — статус проходит «Подключение…» и становится зелёным «Подключено». Ключи уезжают в <code>servers.enc<\/code>, зашифрованные ключом из хранилища ОС."
+      "До сохранения ядро не подключается. После — статус проходит путь:",
+      [
+        [
+          "status",
+          [
+            "Нет данных (сохраните настройки для подключения)",
+            "Подключение…",
+            "Подключено"
+          ]
+        ],
+        [
+          "p",
+          "Ключи уезжают в <code>servers.enc<\/code>, зашифрованные ключом из хранилища ОС."
+        ]
+      ]
     ],
     "en": [
       "Press Save",
-      "Until you save, the core plainly reports \"No data (save settings to connect)\". After that the status moves through \"Connecting…\" to a green \"Connected\". Keys go into <code>servers.enc<\/code>, encrypted with a key from the OS keyring."
+      "Until you save, the core does not connect. After that the status moves along:",
+      [
+        [
+          "status",
+          [
+            "No data (save settings to connect)",
+            "Connecting…",
+            "Connected"
+          ]
+        ],
+        [
+          "p",
+          "Keys go into <code>servers.enc<\/code>, encrypted with a key from the OS keyring."
+        ]
+      ]
     ]
   }
 ];
@@ -2340,6 +2625,47 @@ function applyMode(next, fromUser){
   }
 }
 
+/* Quick-start blocks. Every text arrives from the generator as safe HTML;
+   only `code` is raw and escaped here. Sub-steps number as "3.1, 3.2, ..."
+   across the whole step so a reader can say where they are. */
+function stepBlocks(n, blocks){
+  let sub = 0, out = "", list = false;
+  const close = ()=>{ if(list){ out += "</ol>"; list = false; } };
+  for(const [kind, v] of blocks){
+    if(kind === "sub"){
+      if(!list){ out += `<ol class="subs">`; list = true; }
+      out += `<li><span class="sn">${n}.${++sub}</span><span>${v}</span></li>`;
+      continue;
+    }
+    close();
+    if(kind === "group") out += `<h5 class="sgroup">${v}</h5>`;
+    else if(kind === "p") out += `<p>${v}</p>`;
+    else if(kind === "note" || kind === "warn")
+      out += `<div class="callout ${kind}"><b>${esc(T["qs." + kind][lang])}</b><span>${v}</span></div>`;
+    else if(kind === "code")
+      out += `<div class="cmd"><div class="chead"><button type="button" class="copy" data-copy>${esc(T["qs.copy"][lang])}</button></div>`
+        + `<pre><code>${esc(v)}</code></pre></div>`;
+    else if(kind === "path")
+      out += `<ol class="crumbs">${v.map(c=>`<li>${c}</li>`).join("")}</ol>`;
+    else if(kind === "status")
+      out += `<ol class="status">${v.map(c=>`<li>${c}</li>`).join("")}</ol>`;
+    else if(kind === "terms")
+      out += `<dl class="terms">${v.map(([t,d])=>`<div><dt>${t}</dt><dd>${d}</dd></div>`).join("")}</dl>`;
+  }
+  close();
+  return out;
+}
+
+document.addEventListener("click", e=>{
+  const btn = e.target.closest && e.target.closest("[data-copy]");
+  if(!btn || !navigator.clipboard) return;
+  const text = btn.closest(".cmd").querySelector("code").textContent;
+  navigator.clipboard.writeText(text).then(()=>{
+    btn.textContent = T["qs.copied"][lang];
+    setTimeout(()=>{ btn.textContent = T["qs.copy"][lang]; }, 1600);
+  });
+});
+
 function render(){
   document.documentElement.lang = lang;
 
@@ -2385,9 +2711,11 @@ function render(){
   ).join("");
 
   // шаги
-  $("#steps").innerHTML = STEPS.map((s,i)=>
-    `<div class="step"><div class="n">${i+1}</div><div><h4>${esc(s[lang][0])}</h4><p>${s[lang][1]}</p></div></div>`
-  ).join("");
+  $("#steps").innerHTML = STEPS.map((s,i)=>{
+    const [title, body, blocks] = s[lang];
+    return `<div class="step"><div class="n">${i+1}</div><div class="sbody"><h4>${esc(title)}</h4>`
+      + (body ? `<p>${body}</p>` : "") + stepBlocks(i+1, blocks) + `</div></div>`;
+  }).join("");
 
   // панели
   $("#panels-cards").innerHTML = PANELS.map(p=>

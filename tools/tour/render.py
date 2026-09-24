@@ -13,10 +13,11 @@ on.
 from __future__ import annotations
 
 import re
+from html import escape as html_escape
 from dataclasses import dataclass
 
 from . import emit, map as map_mod
-from .content import Content
+from .content import Content, as_html
 from .errors import OutputError, Problems, TemplateError
 from .theme import Theme, Themes
 
@@ -182,11 +183,45 @@ def _src_line(zone: dict) -> str:
 
 
 def data_steps(content: Content) -> str:
-    rows = [
-        {code: [s["title"].get(code), s["body"].get(code)] for code in _langs(content)}
-        for s in content.steps
-    ]
+    """Quick-start steps per language: ``[title, body_html, blocks]``.
+
+    Every text that reaches ``innerHTML`` leaves here as safe HTML (escaped
+    unless its slot declared markup), so the template never has to know which
+    block kind carries markup. ``code`` stays raw: the template escapes it.
+    """
+    rows = []
+    for s in content.steps:
+        row = {}
+        for code in _langs(content):
+            blocks: list[list[object]] = []
+            for block in s["blocks"]:
+                kind = block["kind"]
+                if kind == "code":
+                    blocks.append([kind, block["code"]])
+                elif "text" in block:
+                    blocks.append([kind, as_html(block["text"], code)])
+                elif kind == "terms":
+                    blocks.append(
+                        [kind, [[as_html(i["term"], code), as_html(i["text"], code)] for i in block["items"]]]
+                    )
+                else:
+                    blocks.append([kind, [as_html(i, code) for i in block["items"]]])
+            row[code] = [s["title"].get(code), as_html(s["body"], code), blocks]
+        rows.append(row)
     return f"const STEPS = {emit.js_literal(rows)};"
+
+
+def steps_noscript(content: Content) -> str:
+    """The quick-start commands as static markup, so they stay readable and
+    selectable when the page's JavaScript does not run."""
+    codes = [b["code"] for s in content.steps for b in s["blocks"] if b["kind"] == "code"]
+    if not codes:
+        return ""
+    body = "".join(
+        f'<div class="cmd"><pre><code>{html_escape(code, quote=False)}</code></pre></div>'
+        for code in codes
+    )
+    return f'<noscript><div class="step"><div class="sbody">{body}</div></div></noscript>'
 
 
 def data_panels(content: Content) -> str:
@@ -280,6 +315,7 @@ def render(template: str, content: Content, themes: Themes) -> Rendered:
         "data_page": lambda: data_page(content),
         "data_modes": lambda: data_modes(content),
         "data_steps": lambda: data_steps(content),
+        "steps_noscript": lambda: steps_noscript(content),
         "data_panels": lambda: data_panels(content),
         "data_windows": lambda: data_windows(content),
         "data_hotkeys": lambda: data_hotkeys(content),
