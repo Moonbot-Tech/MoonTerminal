@@ -91,7 +91,7 @@ fn auto_workspace_keeps_one_dock_and_the_chart_route() {
 }
 
 /// Catches swapping the `WorkspaceMode` values in
-/// `chrome/terminal_chrome.rs:workspace_mode_selector`'s dropdown rows; choosing AUTO or MANUAL
+/// `chrome/terminal_chrome.rs:workspace_mode_selector`'s picker rows; choosing AUTO or MANUAL
 /// would silently save the opposite workspace mode.
 #[test]
 fn header_workspace_mode_maps_dropdown_rows_and_current_trigger() {

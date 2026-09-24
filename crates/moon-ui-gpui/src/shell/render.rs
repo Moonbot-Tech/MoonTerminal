@@ -378,6 +378,7 @@ impl Render for Shell {
                     self.updater.clone(),
                     cx.entity(),
                     ticker_sel,
+                    self.header_workspace_mode_open,
                     self.header_core_selector_open,
                     self.core_settings_open,
                     core_settings_content,

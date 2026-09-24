@@ -201,6 +201,9 @@ pub(crate) struct Shell {
     /// Shell owns this state so selecting a core can close the popover while clicks on exchange
     /// labels and the scroll area leave it open.
     header_core_selector_open: bool,
+    /// Whether the workspace-mode picker in the header is open; Shell owns it like the core
+    /// selector's so picking a mode can close the menu.
+    header_workspace_mode_open: bool,
     /// Whether the controlled `MoonPopover` on the core-settings button is open.
     /// The popover handles outside-click dismissal, while opening seeds its editor fields.
     core_settings_open: bool,
