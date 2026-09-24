@@ -578,45 +578,6 @@ impl SettingsView {
             )
             .child(self.trades_cleanup_controls(cx, p, busy))
             .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap(design::ui_px(cx, 8.0))
-                    .items_center()
-                    .child(
-                        div()
-                            .text_color(rgba_from(p.text, 1.0))
-                            .child(t!("storage.trades_long_position").to_string()),
-                    )
-                    .child(self.stepper_controls(
-                        cx,
-                        "trades-long-position-min",
-                        true,
-                        t!("storage.trades_min", min = long_position_min).to_string(),
-                        1,
-                        5,
-                        Self::adjust_long_position_min,
-                    )),
-            )
-            .child(hint(t!("storage.trades_long_position_hint").to_string()))
-            // The startup cleanup: read once per launch by the coordination tick, so the flip
-            // takes effect at the next launch — which is what "at startup" says.
-            .child(
-                moon_ui::MoonCheckbox::new("trades-cleanup-at-startup")
-                    .checked(cleanup_at_startup)
-                    .label(t!("storage.trades_cleanup_at_startup").to_string())
-                    .description(t!("storage.trades_cleanup_at_startup_hint").to_string())
-                    .on_change(cx.listener(|this, v: &bool, _, cx| {
-                        let v = *v;
-                        if this.storage.cfg.trade_replay.cleanup_at_startup != v {
-                            this.storage.cfg.trade_replay.cleanup_at_startup = v;
-                            moon_core::market::trade_replay::set_cleanup_at_startup(v);
-                            storage_cfg::save(&this.storage.cfg);
-                            cx.notify();
-                        }
-                    })),
-            )
-            .child(self.trades_cleanup_controls(cx, p, busy))
-            .child(
                 h_flex().child(
                     tool_btn("trades-compact", t!("storage.compact").to_string(), busy)
                         .on_click(cx.listener(|this, _, _, cx| {

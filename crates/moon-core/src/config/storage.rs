@@ -62,7 +62,7 @@ pub struct TradeReplayStoreCfg {
     /// longest ago go first. `0` keeps everything, with no age limit.
     pub max_mb: u32,
     /// Seconds of prints kept around a trade, per end: a short position gets this much before
-    /// its entry and after its exit; a long one ([`Self::long_position_min`] or longer) gets
+    /// its entry and after its exit; a long one (held past [`Self::long_position_min`]) gets
     /// this much on both sides of each end, with bars between. It sizes what a trade window
     /// fetches, what a close copies out of the core's ring, and what the file keeps. One of
     /// [`TRADE_MARGIN_STEPS_S`]: a hand-edited value is snapped to the nearest step on load.
@@ -72,8 +72,8 @@ pub struct TradeReplayStoreCfg {
     /// missed because the terminal was not running. Off by default: it spends the venues' public
     /// request budget without being asked. A file written before the field reads as off.
     pub autoload_missing: bool,
-    /// Minutes a position must be held to count as LONG — walked as its two ends with bars
-    /// between, both by a trade window and by the tuner's fetch, whose clusters stay within it.
+    /// Minutes a position may be held and still count as SHORT; held past them it is LONG —
+    /// walked as its two ends with bars between, both by a trade window and by the tuner's fetch, whose clusters stay within it.
     /// Bounded to [`LONG_POSITION_MIN_RANGE`] on load; a file written before the field reads
     /// as the default, which is what the threshold was while it was a constant.
     pub long_position_min: u32,
