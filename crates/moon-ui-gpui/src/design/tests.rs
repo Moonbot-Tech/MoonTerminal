@@ -435,3 +435,89 @@ fn body_font_base_round_trips_through_the_font_channel(cx: &mut gpui::TestAppCon
     });
     assert!((rendered - body).abs() < 0.01, "{rendered} != {body}");
 }
+
+/// A headless host drawing a caption text line beside a grid cell with the dense input and one
+/// with the ordinary small input, so their laid-out heights can be read back.
+struct InputProbe {
+    dense: Option<gpui::Entity<moon_ui::MoonInputState>>,
+    small: Option<gpui::Entity<moon_ui::MoonInputState>>,
+}
+
+impl gpui::Render for InputProbe {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{AppContext, InteractiveElement, ParentElement, Styled, div, px};
+        let mut state = |slot: &mut Option<gpui::Entity<moon_ui::MoonInputState>>| {
+            slot.get_or_insert_with(|| {
+                cx.new(|cx| moon_ui::MoonInputState::new(window, cx).default_value("0.1"))
+            })
+            .clone()
+        };
+        let dense = state(&mut self.dense);
+        let small = state(&mut self.small);
+        let cell = |id: &'static str, input: moon_ui::MoonInput| {
+            div()
+                .debug_selector(move || id.into())
+                .w(px(60.0))
+                .flex_none()
+                .child(input)
+        };
+        moon_ui::h_flex()
+            .items_center()
+            .child(
+                div()
+                    .debug_selector(|| "caption".into())
+                    .flex_none()
+                    .text_size(super::t_caption(cx))
+                    .child("SellShotDelay"),
+            )
+            .child(cell(
+                "dense",
+                moon_ui::MoonInput::new("dense")
+                    .state(&dense)
+                    .size(super::dense_input_size(cx)),
+            ))
+            .child(cell(
+                "small",
+                moon_ui::MoonInput::new("small")
+                    .state(&small)
+                    .size(super::INPUT_SIZE),
+            ))
+    }
+}
+
+/// `design::dense_input_size` must lay out as tall as a caption text line: the tuner's
+/// Entry/Exit grid puts it in rows beside text-only rows. `MoonInputSize::Custom`'s `height`
+/// reaches only the size the input computes its box from — its own `h` goes to the multi-line
+/// height — so `height: 0` drew a 3 px strip (2026-09-24) while every unit read of the code said
+/// 19 px.
+#[gpui::test]
+fn the_dense_input_stands_as_tall_as_a_caption_line(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            cx,
+        );
+    });
+    let window = cx.add_window(|_, _| InputProbe {
+        dense: None,
+        small: None,
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let mut height = |id| f32::from(visual.debug_bounds(id).expect("laid out").size.height);
+    let (caption, dense, small) = (height("caption"), height("dense"), height("small"));
+    assert!(
+        (dense - caption).abs() <= 1.0,
+        "dense input {dense}px against a caption line of {caption}px"
+    );
+    assert!(
+        dense < small,
+        "dense {dense}px is no denser than small {small}px"
+    );
+}

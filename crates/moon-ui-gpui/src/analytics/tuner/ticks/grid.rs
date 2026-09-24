@@ -3,11 +3,19 @@
 //! a click selects it for "Search" on one field — the value the selected strategies hold, which
 //! a click sends to В1, and the two variant columns with the copy arrows and the clear crosses.
 //!
-//! The rows come in two groups, Entry and Exit. A group the model does not reproduce well enough
-//! (the share gate of the search settings) is not searched, and its heading says so; the Entry
-//! group folds to one line where a kind in the scope has no entry model. A field the entry
-//! method does not read — the path-only fields under the shift — is greyed out: varying it would
-//! move no column.
+//! The rows come by the strategy editor's sections (`sections.rs`) — Strategy settings, Stops,
+//! Sell order, SellShot, SellSpread, Delta Modifiers — each with every field it holds for the
+//! scope's kinds, and a tick in its heading that admits all its knobs at once. Only the knobs
+//! are live; a field the model reads but does not turn, or does not know at all, is drawn
+//! greyed with the strategies' value, so the grid shows the whole section as Moonbot does.
+//!
+//! The search still gates by group, Entry and Exit: a group the model does not reproduce well
+//! enough (the share gate of the search settings) is not searched, and the first section holding
+//! its knobs says so; where a kind in the scope has no entry model, the Entry knobs are drawn
+//! fixed. A field the entry method does not read — the path-only fields under the shift — is
+//! greyed out: varying it would move no column.
+
+use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -17,18 +25,22 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
-use super::super::shared::{N_VAR, TunerKind, glyph_btn};
+use super::super::shared::{N_VAR, TunerKind, collapse_caret, glyph_btn};
+use super::sections::{GridSection, RowRole, layout};
 use super::state::{NowValue, TicksData};
 use crate::design;
 use crate::design::{moon, moon_alpha};
-use moon_core::db::tuner::ticks::params::{ParamGroup, TickParam, params_for};
+use moon_core::db::tuner::ticks::params::{ParamGroup, ParamSection, TickParam};
 
 /// Width of the strategy and variant cells, font-scaled px.
 const CELL_W: f32 = 60.0;
+/// Left inset of a field row, ui px: its tick sits under its section's tick, past the caret,
+/// so the row reads as inside the section.
+const ROW_INDENT: f32 = 30.0;
 
 impl AnalyticsView {
-    /// The grid panel: the shared toolbar (title, Copy, Save), the search row, then the two
-    /// groups, scrolling.
+    /// The grid panel: the shared toolbar (title, Copy, Save), the search row, then the
+    /// sections, scrolling.
     pub(in crate::analytics::tuner) fn ticks_grid(
         &mut self,
         p: MoonPalette,
@@ -42,19 +54,70 @@ impl AnalyticsView {
         );
         let cfg_row = self.shell_config_row(TunerKind::Ticks, p, window, cx);
         let data = self.ticks.data.data().cloned();
-        let fields = scope_fields(data.as_deref());
+        let schema_sig = super::sections::schema_signature(self.backend.read(cx).session.store());
+        // A core's schema that arrived, changed or went after the latest load chose its keys
+        // leaves the layout short of that core's fields and their values: ask the refresh gate
+        // for the visible axis again, once per signature. Deferred — a load is not started from
+        // inside a render.
+        if self.ticks.keys_sig.is_some_and(|sig| sig != schema_sig)
+            && self.ticks.schema_reload != Some(schema_sig)
+        {
+            self.ticks.schema_reload = Some(schema_sig);
+            cx.defer_in(window, |this, _window, cx| {
+                this.request_report_refresh(
+                    crate::analytics::refresh::RefreshUrgency::User,
+                    false,
+                    cx,
+                )
+            });
+        }
+        let entry_on = data.as_ref().is_some_and(|d| d.entry_modelled());
+        // Before the first load there is no layout; the bare headings stand in for it.
+        let sections: Arc<[GridSection]> = match data.as_ref() {
+            Some(d) if !d.grid.is_empty() => d.grid.clone(),
+            _ => layout(&[], &[]).into(),
+        };
+        let live: Vec<&'static str> = sections
+            .iter()
+            .flat_map(GridSection::knobs)
+            .filter(|k| knob_ticks(k, entry_on))
+            .map(|k| k.key)
+            .collect();
         let mut grid = v_flex()
             .w_full()
             .flex_none()
-            .child(self.ticks_grid_header(&fields, p, cx));
-        for group in [ParamGroup::Entry, ParamGroup::Exit] {
-            grid = grid.child(self.ticks_group_header(group, data.as_deref(), p, cx));
-            if group == ParamGroup::Entry && !data.as_ref().is_some_and(|d| d.entry_modelled()) {
-                continue;
-            }
-            for field in fields.iter().filter(|f| f.group == group) {
-                let now = data.as_ref().and_then(|d| d.now.get(field.key).cloned());
-                grid = grid.child(self.ticks_field_row(field.key, now, p, window, cx));
+            .child(self.ticks_grid_header(live, p, cx));
+        // A section the scope's kinds leave empty is dropped once the scope is known; before
+        // that every heading stands, the first carrying the scope's note.
+        let scoped = data.as_ref().is_some_and(|d| !d.kinds.is_empty());
+        let mut noted: Vec<ParamGroup> = Vec::new();
+        let mut first = true;
+        for section in sections.iter().filter(|s| !scoped || !s.rows.is_empty()) {
+            grid = grid.child(self.ticks_section_header(
+                section,
+                data.as_deref(),
+                first,
+                &mut noted,
+                p,
+                cx,
+            ));
+            first = false;
+            // A folded section keeps one row in sight: the field selected for "Search", so what
+            // the button would search is never hidden.
+            let open = self.ticks.open_sections.contains(&section.section);
+            let sel = self.ticks.sel_field;
+            for row in section
+                .rows
+                .iter()
+                .filter(|r| open || sel == Some(r.key.as_str()))
+            {
+                let now = data.as_ref().and_then(|d| d.now.get(&row.key).cloned());
+                grid = grid.child(match row.role {
+                    RowRole::Knob(knob) if knob_live(knob, entry_on) => {
+                        self.ticks_field_row(knob.key, now, p, window, cx)
+                    }
+                    role => self.ticks_fixed_row(&row.key, role, now, data.as_deref(), p, cx),
+                });
             }
         }
         v_flex()
@@ -94,15 +157,36 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// The column headings: the master tick, field · strategy · В1 → ✕ · В2 ← ✕.
+    /// Open or fold one section of the grid.
+    fn ticks_toggle_section(&mut self, section: ParamSection, cx: &mut Context<Self>) {
+        if !self.ticks.open_sections.remove(&section) {
+            self.ticks.open_sections.insert(section);
+        }
+        cx.notify();
+    }
+
+    /// The state of a tick that admits all of `keys`: `(checked, indeterminate)` — every one
+    /// admitted to the search, or some but not all. No keys, no tick.
+    fn ticks_tick_state(&self, keys: &[&'static str]) -> (bool, bool) {
+        let on = keys
+            .iter()
+            .filter(|k| !self.ticks.locked.contains(**k))
+            .count();
+        (
+            !keys.is_empty() && on == keys.len(),
+            on > 0 && on < keys.len(),
+        )
+    }
+
+    /// The column headings: the master tick over every live knob, field · strategy · В1 → ✕ ·
+    /// В2 ← ✕.
     fn ticks_grid_header(
         &self,
-        fields: &[&'static TickParam],
+        keys: Vec<&'static str>,
         p: MoonPalette,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let keys: Vec<&'static str> = fields.iter().map(|f| f.key).collect();
-        let all_on = !keys.is_empty() && keys.iter().all(|k| !self.ticks.locked.contains(*k));
+        let (all_on, some_on) = self.ticks_tick_state(&keys);
         let cell = |text: String| {
             div()
                 .w(design::font_w_px(cx, CELL_W))
@@ -124,6 +208,8 @@ impl AnalyticsView {
                 div().flex_none().child(
                     MoonCheckbox::new("an-ticks-en-all")
                         .checked(all_on)
+                        .indeterminate(some_on)
+                        .disabled(keys.is_empty())
                         .size(design::CONTROL_TIER)
                         .on_change({
                             let view = cx.entity();
@@ -137,18 +223,21 @@ impl AnalyticsView {
             )
             // The caption toggles the lot too, as the filter grid's does — a click target rather
             // than the checkbox's own label, which would widen the checkbox and push every
-            // heading after it out of line.
+            // heading after it out of line. It answers as the box does: a half-set box reads as
+            // ticked, so a click on either unticks all.
             .child(
                 div()
                     .id("an-ticks-en-all-lbl")
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .cursor_pointer()
                     .child(t!("analytics.tuner.field").to_string())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.ticks_set_all(&keys, !all_on, cx);
-                    })),
+                    .when(!keys.is_empty(), |el| {
+                        el.cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.ticks_set_all(&keys, !(all_on || some_on), cx);
+                            }))
+                    }),
             )
             .child(cell(t!("analytics.tuner.strat_chip").to_string()));
         for vi in 0..N_VAR {
@@ -192,54 +281,109 @@ impl AnalyticsView {
         head.into_any_element()
     }
 
-    /// A group's heading: its name, and why it is not searched when it is not — the kinds whose
-    /// entry is taken from the fact, or a share of reproduced trades under the gate.
-    fn ticks_group_header(
+    /// Why a search group is not searched, when it is not — the kinds whose entry is taken from
+    /// the fact, or a share of reproduced trades under the gate — with the colour to say it in.
+    fn ticks_group_note(
         &self,
         group: ParamGroup,
-        data: Option<&TicksData>,
+        d: &TicksData,
         p: MoonPalette,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let title = match group {
-            ParamGroup::Entry => t!("analytics.ticks.group_entry"),
-            ParamGroup::Exit => t!("analytics.ticks.group_exit"),
-        }
-        .to_string();
-        let gate = self.ticks.gate();
-        let note: Option<(String, u32)> = match data {
-            // Only a LOADED empty scope says so; a load in flight or a failed one has its own
-            // note in the table.
-            Some(d) if d.kinds.is_empty() => {
-                Some((t!("analytics.ticks.no_deals").to_string(), p.text_muted))
-            }
-            Some(d) if group == ParamGroup::Entry && !d.entry_modelled() => Some((
+    ) -> Option<(String, u32)> {
+        if group == ParamGroup::Entry && !d.entry_modelled() {
+            return Some((
                 t!(
                     "analytics.ticks.entry_from_fact",
                     kinds = d.unmodelled_kinds().join(", ")
                 )
                 .to_string(),
                 p.text_muted,
+            ));
+        }
+        let gate = self.ticks.gate();
+        let (hits, n) = d.share_of(group);
+        let name = match group {
+            ParamGroup::Entry => t!("analytics.ticks.group_entry"),
+            ParamGroup::Exit => t!("analytics.ticks.group_exit"),
+        };
+        match d.group_passes(group, gate) {
+            Some(false) => Some((
+                format!(
+                    "{name}: {}",
+                    t!(
+                        "analytics.ticks.vary_gated",
+                        hits = hits,
+                        n = n,
+                        gate = (gate * 100.0).round() as i64
+                    )
+                ),
+                p.orange,
             )),
-            Some(d) => {
-                let (hits, n) = d.share_of(group);
-                match d.group_passes(group, gate) {
-                    Some(false) => Some((
-                        t!(
-                            "analytics.ticks.vary_gated",
-                            hits = hits,
-                            n = n,
-                            gate = (gate * 100.0).round() as i64
-                        )
-                        .to_string(),
-                        p.orange,
-                    )),
-                    None => Some((t!("analytics.ticks.vary_unknown").to_string(), p.text_muted)),
-                    Some(true) => None,
+            None => Some((
+                format!("{name}: {}", t!("analytics.ticks.vary_unknown")),
+                p.text_muted,
+            )),
+            Some(true) => None,
+        }
+    }
+
+    /// A section's heading: the tick admitting all its live knobs, its name as the Strategies
+    /// window titles it (the human gloss under that window's own preference), and the notes of
+    /// the search groups first met in it (`noted` carries the groups an earlier heading already
+    /// spoke for).
+    fn ticks_section_header(
+        &self,
+        section: &GridSection,
+        data: Option<&TicksData>,
+        first: bool,
+        noted: &mut Vec<ParamGroup>,
+        p: MoonPalette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let title = crate::strategies::sections::section_display_title(
+            section.section.schema_title(),
+            crate::strategies::settings::human_labels(&self.backend.read(cx).layout),
+        );
+        let entry_on = data.is_some_and(|d| d.entry_modelled());
+        let keys: Vec<&'static str> = section
+            .knobs()
+            .filter(|k| knob_ticks(k, entry_on))
+            .map(|k| k.key)
+            .collect();
+        let (all_on, some_on) = self.ticks_tick_state(&keys);
+        let mut notes: Vec<(String, u32)> = Vec::new();
+        match data {
+            // Only a LOADED empty scope says so; a load in flight or a failed one has its own
+            // note in the table.
+            Some(d) if d.kinds.is_empty() => {
+                if first {
+                    notes.push((t!("analytics.ticks.no_deals").to_string(), p.text_muted));
                 }
             }
-            None => None,
+            Some(d) => {
+                for group in [ParamGroup::Entry, ParamGroup::Exit] {
+                    if section.knobs().any(|k| k.group == group) && !noted.contains(&group) {
+                        noted.push(group);
+                        notes.extend(self.ticks_group_note(group, d, p));
+                    }
+                }
+            }
+            None => {}
+        }
+        let color = if notes.iter().any(|(_, c)| *c == p.orange) {
+            p.orange
+        } else {
+            p.text_muted
         };
+        let note = (!notes.is_empty()).then(|| {
+            notes
+                .into_iter()
+                .map(|(text, _)| text)
+                .collect::<Vec<_>>()
+                .join(" · ")
+        });
+        let id = format!("{:?}", section.section);
+        let which = section.section;
+        let collapsed = !self.ticks.open_sections.contains(&which);
         h_flex()
             .w_full()
             .px(design::ui_px(cx, 8.0))
@@ -251,11 +395,49 @@ impl AnalyticsView {
             .border_color(moon_alpha(p.border, 0.7))
             .text_size(design::t_caption(cx))
             .font_family(design::ui_font())
-            .child(div().flex_none().text_color(moon(p.text_soft)).child(title))
-            .when_some(note, |el, (note, color)| {
+            .child(collapse_caret(
+                SharedString::from(format!("an-ticks-sec-caret-{id}")),
+                collapsed,
+                t!("analytics.ticks.section_collapse").to_string(),
+                t!("analytics.ticks.section_expand").to_string(),
+                p,
+                cx.listener(move |this, _, _, cx| this.ticks_toggle_section(which, cx)),
+            ))
+            .child(
+                div().flex_none().child(
+                    MoonCheckbox::new(SharedString::from(format!("an-ticks-sec-{id}")))
+                        .checked(all_on)
+                        .indeterminate(some_on)
+                        .disabled(keys.is_empty())
+                        .size(design::CONTROL_TIER)
+                        .on_change({
+                            let view = cx.entity();
+                            let keys = keys.clone();
+                            move |on: &bool, _w, app| {
+                                let on = *on;
+                                view.update(app, |this, cx| this.ticks_set_all(&keys, on, cx));
+                            }
+                        }),
+                ),
+            )
+            // The name folds the section too, as a heading row does; the body step marks it
+            // above the caption-sized rows it holds.
+            .child(
+                div()
+                    .id(SharedString::from(format!("an-ticks-sec-title-{id}")))
+                    .flex_none()
+                    .cursor_pointer()
+                    .text_size(design::t_body(cx))
+                    .text_color(moon(p.text))
+                    .child(title)
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.ticks_toggle_section(which, cx)),
+                    ),
+            )
+            .when_some(note, |el, note| {
                 el.child(
                     div()
-                        .id(SharedString::from(format!("an-ticks-grp-note-{group:?}")))
+                        .id(SharedString::from(format!("an-ticks-sec-note-{id}")))
                         .flex_1()
                         .min_w_0()
                         .truncate()
@@ -265,6 +447,84 @@ impl AnalyticsView {
                 )
             })
             .into_any_element()
+    }
+
+    /// A field the search does not turn: a greyed, disabled tick, the name with why in its
+    /// tooltip, the strategies' value, and blanks where the variant cells stand, so the columns
+    /// stay in line.
+    fn ticks_fixed_row(
+        &self,
+        key: &str,
+        role: RowRole,
+        now: Option<NowValue>,
+        data: Option<&TicksData>,
+        p: MoonPalette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let (tip, name_color) = match role {
+            RowRole::Fixed => (t!("analytics.ticks.row_fixed").to_string(), p.text_soft),
+            RowRole::Outside => (t!("analytics.ticks.row_outside").to_string(), p.text_muted),
+            // A knob of the entry group while a kind of the scope has no entry model.
+            RowRole::Knob(_) => (
+                t!(
+                    "analytics.ticks.entry_from_fact",
+                    kinds = data
+                        .map(|d| d.unmodelled_kinds().join(", "))
+                        .unwrap_or_default()
+                )
+                .to_string(),
+                p.text_soft,
+            ),
+        };
+        let value = match now {
+            Some(NowValue::Same(value)) if !value.is_empty() => value,
+            Some(NowValue::Differs) => t!("analytics.time.cur_varies").to_string(),
+            _ => "—".to_string(),
+        };
+        let mut row = h_flex()
+            .w_full()
+            .px(design::ui_px(cx, 8.0))
+            .pl(design::ui_px(cx, ROW_INDENT))
+            .py(design::ui_px(cx, 2.0))
+            .items_center()
+            .gap(design::ui_px(cx, 6.0))
+            .border_t_1()
+            .border_color(moon_alpha(p.border, 0.5))
+            .text_size(design::t_caption(cx))
+            .child(
+                div().flex_none().child(
+                    MoonCheckbox::new(SharedString::from(format!("an-ticks-fx-en-{key}")))
+                        .checked(false)
+                        .disabled(true)
+                        .size(design::CONTROL_TIER),
+                ),
+            )
+            .child(
+                div()
+                    .id(SharedString::from(format!("an-ticks-fx-{key}")))
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(moon(name_color))
+                    .tooltip(crate::panels::common::text_tooltip(tip))
+                    .child(key.to_string()),
+            )
+            .child(
+                div()
+                    .w(design::font_w_px(cx, CELL_W))
+                    .flex_none()
+                    .truncate()
+                    .text_right()
+                    .text_color(moon_alpha(p.text_muted, 0.8))
+                    .child(value),
+            );
+        for _ in 0..N_VAR {
+            row = row
+                .child(div().w(design::font_w_px(cx, CELL_W)).flex_none())
+                .child(div().w(design::ui_px(cx, 12.0)).flex_none())
+                .child(div().w(design::ui_px(cx, 12.0)).flex_none());
+        }
+        row.into_any_element()
     }
 
     /// One field: its tick, its name, the strategies' value, an input per variant with its
@@ -287,12 +547,13 @@ impl AnalyticsView {
             .id(SharedString::from(format!("an-ticks-field-{key}")))
             .w_full()
             .px(design::ui_px(cx, 8.0))
+            .pl(design::ui_px(cx, ROW_INDENT))
             .py(design::ui_px(cx, 2.0))
             .items_center()
             .gap(design::ui_px(cx, 6.0))
             .border_t_1()
             .border_color(moon_alpha(p.border, 0.5))
-            .text_size(design::t_body(cx))
+            .text_size(design::t_caption(cx))
             .when(selected, |el| el.bg(moon_alpha(p.amber, 0.08)))
             .child(
                 div().flex_none().child(
@@ -392,7 +653,7 @@ impl AnalyticsView {
                         .child(
                             MoonInput::new(SharedString::from(format!("an-ticks-in-v{vi}-{key}")))
                                 .state(input)
-                                .size(design::INPUT_SIZE),
+                                .size(design::dense_input_size(cx)),
                         ),
                 )
                 // Under the header's copy arrow.
@@ -469,16 +730,15 @@ impl AnalyticsView {
     }
 }
 
-/// The fields the scope's kinds understand — the union over the kinds present, in descriptor
-/// order.
-fn scope_fields(data: Option<&TicksData>) -> Vec<&'static TickParam> {
-    let kinds: Vec<String> = data.map(|d| d.kinds.clone()).unwrap_or_default();
-    moon_core::db::tuner::ticks::TICK_PARAMS
-        .iter()
-        .filter(|f| {
-            kinds
-                .iter()
-                .any(|k| params_for(f.group, k).any(|g| g.key == f.key))
-        })
-        .collect()
+/// Whether a knob is drawn live: an Entry knob only while every kind of the scope has an entry
+/// model, as the search varies it only then.
+fn knob_live(knob: &TickParam, entry_on: bool) -> bool {
+    knob.group != ParamGroup::Entry || entry_on
+}
+
+/// Whether a section's or the header's tick counts and toggles a knob: a live one the entry
+/// method reads. A field it does not read is drawn unticked whatever `locked` says, and counting
+/// it would leave the tick half-set with every visible box ticked.
+fn knob_ticks(knob: &TickParam, entry_on: bool) -> bool {
+    knob_live(knob, entry_on) && super::model_cfg::current().entry_method.reads(knob.key)
 }

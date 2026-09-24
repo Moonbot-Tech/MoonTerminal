@@ -1946,3 +1946,49 @@ fn sell_modifiers_lift_the_take_by_the_faq_example() {
     let take = ExitModel::new(&off).take_level(&d, &[], fill);
     assert!((take - 101.0).abs() < 1e-9, "{take}");
 }
+
+/// Every knob's fallback section is the one `assets/param_deps.toml` files it under — the
+/// repository's copy of the schema's sections. A knob tagged elsewhere would be drawn in the
+/// wrong section of the grid whenever no core with a schema is connected.
+#[test]
+fn knob_sections_match_the_schema_copy() {
+    use super::params::ParamSection;
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/param_deps.toml");
+    let text = std::fs::read_to_string(&path).expect("param_deps.toml");
+    let mut section = String::new();
+    let mut filed: HashMap<String, String> = HashMap::new();
+    for line in text.lines() {
+        if let Some(title) = line
+            .strip_prefix("# === ")
+            .and_then(|l| l.strip_suffix(" ==="))
+        {
+            section = title.to_string();
+        } else if let Some((key, _)) = line.strip_prefix('"').and_then(|r| r.split_once('"')) {
+            filed.insert(key.to_string(), section.clone());
+        }
+    }
+    // Knobs the copy does not list at all: read off MoonBot.exe after the copy was made (the
+    // spec's §11, 20.09), so its section there is unconfirmed. A new absence fails below.
+    const NOT_IN_COPY: &[&str] = &["MShotAdd24hDelta"];
+    for p in TICK_PARAMS {
+        if NOT_IN_COPY.contains(&p.key) {
+            assert!(!filed.contains_key(p.key), "{} is in the copy now", p.key);
+            continue;
+        }
+        assert_eq!(
+            filed.get(p.key).map(String::as_str),
+            Some(p.section.schema_title()),
+            "{} is tagged {:?}",
+            p.key,
+            p.section
+        );
+    }
+    // Every section the grid draws is one the schema copy has.
+    for s in ParamSection::GRID_ORDER {
+        assert!(
+            filed.values().any(|t| t == s.schema_title()),
+            "{s:?} has no section in param_deps.toml"
+        );
+    }
+}

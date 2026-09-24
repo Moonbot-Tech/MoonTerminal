@@ -17,7 +17,7 @@ use super::tape::{PackedTape, PendingDeal};
 use crate::load_state::LoadState;
 use moon_core::db::tuner::VarStats;
 use moon_core::db::tuner::threshold_search::SearchHandle;
-use moon_core::db::tuner::ticks::params::ParamGroup;
+use moon_core::db::tuner::ticks::params::{ParamGroup, ParamSection};
 use moon_core::db::tuner::ticks::search::SearchResult;
 use moon_core::db::tuner::ticks::{Deal, Verdict, fit_for_search};
 use moon_core::market::trade_replay::TickStatus;
@@ -170,6 +170,9 @@ pub(in crate::analytics::tuner) struct TicksData {
     /// ([`PreparedDeal::own`]). The grid folds these into one "now" cell; a replay must not,
     /// or a field the strategies disagree on runs every deal at its default.
     pub(in crate::analytics::tuner) own: OwnValues,
+    /// The parameter grid's rows by section (`sections::layout`), published with the rows so a
+    /// layout never meets another scope's "now" values or kinds.
+    pub(in crate::analytics::tuner) grid: Arc<[super::sections::GridSection]>,
 }
 
 /// What [`TicksData::tape_budget`] counts.
@@ -397,6 +400,15 @@ pub(in crate::analytics) struct TicksState {
     /// no trade of, or one outside the replayed sample. Scored with the columns, cleared with
     /// them.
     pub(in crate::analytics::tuner) plan: [HashMap<i64, (f64, f64)>; N_VAR],
+    /// `sections::schema_signature` of the store when the latest load chose the keys of its
+    /// "now" values — set when the load is ASKED, so a load already running under a new schema
+    /// is not asked for again (`grid.rs`).
+    pub(in crate::analytics::tuner) keys_sig: Option<u64>,
+    /// The schema signature a reload was last asked for because the latest load chose its keys
+    /// under another; one ask per signature, so a failed reload is not retried every frame.
+    pub(in crate::analytics::tuner) schema_reload: Option<u64>,
+    /// The grid's sections the user opened; every section starts folded (`grid.rs`).
+    pub(in crate::analytics::tuner) open_sections: HashSet<ParamSection>,
 }
 
 impl Default for TicksState {
@@ -439,6 +451,9 @@ impl Default for TicksState {
             tape_seq: 0,
             trade: Default::default(),
             plan: Default::default(),
+            keys_sig: None,
+            schema_reload: None,
+            open_sections: HashSet::new(),
         }
     }
 }

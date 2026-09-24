@@ -63,7 +63,7 @@ const SECTION_LABELS: &[(&str, &str)] = &[
 ///
 /// Returns:
 ///     Whether the two titles name the same section.
-fn section_title_eq(a: &str, b: &str) -> bool {
+pub(crate) fn section_title_eq(a: &str, b: &str) -> bool {
     let separator = |c: char| c == '/' || c == '\\';
     let mut left = a.split(separator);
     let mut right = b.split(separator);
@@ -113,7 +113,7 @@ pub(super) fn section_label_key(raw_title: &str) -> Option<&'static str> {
 ///
 /// Returns:
 ///     `"<raw> · <localized>"` when a label exists and labels are on, or `raw_title` unchanged.
-pub(super) fn section_display_title(raw_title: &str, human_labels: bool) -> String {
+pub(crate) fn section_display_title(raw_title: &str, human_labels: bool) -> String {
     match section_label_key(raw_title).filter(|_| human_labels) {
         Some(key) => format!("{raw_title} · {}", t!(key)),
         None => raw_title.to_string(),

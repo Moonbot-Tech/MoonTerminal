@@ -23,6 +23,46 @@ pub enum ParamGroup {
     Exit,
 }
 
+/// The strategy editor's section a field sits in — where Moonbot's Strategies window shows it.
+///
+/// The grid lays its rows out by section, not by [`ParamGroup`]: a MoonShot's
+/// `MShotSellAtLastPrice` moves the exit and sits in "Strategy settings" beside the entry
+/// corridor, and it is found where the Strategies window has it. The group still decides what the
+/// search gates on; the section only decides where the row is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ParamSection {
+    StrategySettings,
+    Stops,
+    SellOrder,
+    SellShot,
+    SellSpread,
+    DeltaModifiers,
+}
+
+impl ParamSection {
+    /// The sections of the grid, in the order it draws them.
+    pub const GRID_ORDER: [ParamSection; 6] = [
+        ParamSection::StrategySettings,
+        ParamSection::Stops,
+        ParamSection::SellOrder,
+        ParamSection::SellShot,
+        ParamSection::SellSpread,
+        ParamSection::DeltaModifiers,
+    ];
+
+    /// The section's title as the strategy schema spells it (`assets/param_deps.toml`).
+    pub fn schema_title(self) -> &'static str {
+        match self {
+            ParamSection::StrategySettings => "Strategy settings",
+            ParamSection::Stops => "Stops",
+            ParamSection::SellOrder => "Sell order",
+            ParamSection::SellShot => "Sell order / SellShot",
+            ParamSection::SellSpread => "Sell order / SellSpread",
+            ParamSection::DeltaModifiers => "Delta Modifiers",
+        }
+    }
+}
+
 /// How a parameter is typed and, for the search, which values it may take.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ParamKind {
@@ -41,6 +81,9 @@ pub struct TickParam {
     /// The strategy field name, as stored and as shown in the grid.
     pub key: &'static str,
     pub group: ParamGroup,
+    /// Where the grid draws the row when the live schema does not place it — no core with a
+    /// schema is connected. The schema, when there is one, wins.
+    pub section: ParamSection,
     pub kind: ParamKind,
     /// Strategy kinds whose grid shows this parameter; empty means every kind.
     pub kinds: &'static [&'static str],
@@ -132,6 +175,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotPrice",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_PRICE },
         kinds: MSHOT,
         not_kinds: &[],
@@ -139,6 +183,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotPriceMin",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num {
             grid: GRID_PRICE_MIN,
         },
@@ -148,6 +193,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotUsePrice",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Enum(&["Trade", "ASK", "BID"]),
         kinds: MSHOT,
         not_kinds: &[],
@@ -155,6 +201,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotRaiseWait",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_WAIT_S },
         kinds: MSHOT,
         not_kinds: &[],
@@ -162,6 +209,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotReplaceDelay",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_WAIT_S },
         kinds: MSHOT,
         not_kinds: &[],
@@ -169,6 +217,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotMinusSatoshi",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Bool,
         kinds: MSHOT,
         not_kinds: &[],
@@ -176,6 +225,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "FastShotAlgo",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Bool,
         kinds: MSHOT,
         not_kinds: &[],
@@ -183,6 +233,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotAddHourlyDelta",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
         not_kinds: &[],
@@ -190,6 +241,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotAdd3hDelta",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
         not_kinds: &[],
@@ -197,6 +249,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotAdd15minDelta",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
         not_kinds: &[],
@@ -204,6 +257,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotAdd5minDelta",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
         not_kinds: &[],
@@ -211,6 +265,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotAdd1minDelta",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
         not_kinds: &[],
@@ -218,6 +273,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotAdd24hDelta",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
         not_kinds: &[],
@@ -225,6 +281,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotAddMarkDelta",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
         not_kinds: &[],
@@ -232,6 +289,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotAddMarketDelta",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
         not_kinds: &[],
@@ -239,6 +297,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotAddBTCDelta",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
         not_kinds: &[],
@@ -246,6 +305,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotAddBTC5mDelta",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
         not_kinds: &[],
@@ -253,6 +313,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotAddPriceBug",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_ADD },
         kinds: MSHOT,
         not_kinds: &[],
@@ -260,6 +321,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotAddDistance",
         group: ParamGroup::Entry,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num {
             grid: GRID_DISTANCE,
         },
@@ -269,6 +331,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "SellPrice",
         group: ParamGroup::Exit,
+        section: ParamSection::SellOrder,
         kind: ParamKind::Num {
             grid: GRID_SELL_PRICE,
         },
@@ -280,6 +343,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotSellAtLastPrice",
         group: ParamGroup::Exit,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Bool,
         kinds: MSHOT,
         not_kinds: &[],
@@ -287,6 +351,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotSellPriceAdjust",
         group: ParamGroup::Exit,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num { grid: GRID_ADJUST },
         kinds: MSHOT,
         not_kinds: &[],
@@ -294,6 +359,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "HookSellLevel",
         group: ParamGroup::Exit,
+        section: ParamSection::StrategySettings,
         kind: ParamKind::Num {
             grid: GRID_HOOK_LEVEL,
         },
@@ -303,43 +369,57 @@ pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "SellDelay",
         group: ParamGroup::Exit,
+        section: ParamSection::SellOrder,
         kind: ParamKind::Num {
             grid: GRID_SELL_DELAY_MS,
         },
         kinds: ANY,
         not_kinds: &[],
     },
-    exit_num("PriceDownTimer", GRID_PD_TIMER_S),
-    exit_num("PriceDownPercent", GRID_PD_PCT),
-    exit_num("PriceDownDelay", GRID_PD_DELAY_S),
-    exit_bool("PriceDownRelative"),
-    exit_num("PriceDownAllowedDrop", GRID_DROP),
-    exit_num("SellLevelDelay", GRID_SL_DELAY_S),
-    exit_num("SellLevelDelayNext", GRID_SL_DELAY_S),
-    exit_num("SellLevelTime", GRID_SL_TIME_S),
-    exit_num("SellLevelCount", GRID_SL_COUNT),
-    exit_num("SellLevelAdjust", GRID_DROP),
-    exit_bool("SellLevelRelative"),
-    exit_num("SellLevelAllowedDrop", GRID_DROP),
-    exit_num("SellLevelWorkTime", GRID_SL_TIME_S),
-    exit_bool("IgnoreSellShot"),
-    exit_num("SellShotDistance", GRID_SS_DISTANCE),
-    exit_num("SellShotCorridor", GRID_SS_CORRIDOR),
-    exit_num("SellShotCalcInterval", GRID_SS_INTERVAL_S),
-    exit_num("SellShotRaiseWait", GRID_SS_WAIT_S),
-    exit_num("SellShotReplaceDelay", GRID_SS_WAIT_S),
-    exit_num("SellShotAllowedUp", GRID_SS_BOUND),
-    exit_num("SellShotAllowedDown", GRID_SS_BOUND),
-    exit_num("SellShotDelay", GRID_SS_WAIT_S),
-    exit_num("StopLoss", GRID_STOP),
-    exit_num("StopLossDelay", GRID_STOP_DELAY_S),
+    exit_num("PriceDownTimer", ParamSection::SellOrder, GRID_PD_TIMER_S),
+    exit_num("PriceDownPercent", ParamSection::SellOrder, GRID_PD_PCT),
+    exit_num("PriceDownDelay", ParamSection::SellOrder, GRID_PD_DELAY_S),
+    exit_bool("PriceDownRelative", ParamSection::SellOrder),
+    exit_num("PriceDownAllowedDrop", ParamSection::SellOrder, GRID_DROP),
+    exit_num("SellLevelDelay", ParamSection::SellOrder, GRID_SL_DELAY_S),
+    exit_num(
+        "SellLevelDelayNext",
+        ParamSection::SellOrder,
+        GRID_SL_DELAY_S,
+    ),
+    exit_num("SellLevelTime", ParamSection::SellOrder, GRID_SL_TIME_S),
+    exit_num("SellLevelCount", ParamSection::SellOrder, GRID_SL_COUNT),
+    exit_num("SellLevelAdjust", ParamSection::SellOrder, GRID_DROP),
+    exit_bool("SellLevelRelative", ParamSection::SellOrder),
+    exit_num("SellLevelAllowedDrop", ParamSection::SellOrder, GRID_DROP),
+    exit_num("SellLevelWorkTime", ParamSection::SellOrder, GRID_SL_TIME_S),
+    exit_bool("IgnoreSellShot", ParamSection::SellShot),
+    exit_num("SellShotDistance", ParamSection::SellShot, GRID_SS_DISTANCE),
+    exit_num("SellShotCorridor", ParamSection::SellShot, GRID_SS_CORRIDOR),
+    exit_num(
+        "SellShotCalcInterval",
+        ParamSection::SellShot,
+        GRID_SS_INTERVAL_S,
+    ),
+    exit_num("SellShotRaiseWait", ParamSection::SellShot, GRID_SS_WAIT_S),
+    exit_num(
+        "SellShotReplaceDelay",
+        ParamSection::SellShot,
+        GRID_SS_WAIT_S,
+    ),
+    exit_num("SellShotAllowedUp", ParamSection::SellShot, GRID_SS_BOUND),
+    exit_num("SellShotAllowedDown", ParamSection::SellShot, GRID_SS_BOUND),
+    exit_num("SellShotDelay", ParamSection::SellShot, GRID_SS_WAIT_S),
+    exit_num("StopLoss", ParamSection::Stops, GRID_STOP),
+    exit_num("StopLossDelay", ParamSection::Stops, GRID_STOP_DELAY_S),
 ];
 
 /// A numeric field of the Exit group every kind understands.
-const fn exit_num(key: &'static str, grid: &'static [f64]) -> TickParam {
+const fn exit_num(key: &'static str, section: ParamSection, grid: &'static [f64]) -> TickParam {
     TickParam {
         key,
         group: ParamGroup::Exit,
+        section,
         kind: ParamKind::Num { grid },
         kinds: ANY,
         not_kinds: &[],
@@ -347,10 +427,11 @@ const fn exit_num(key: &'static str, grid: &'static [f64]) -> TickParam {
 }
 
 /// A boolean field of the Exit group every kind understands.
-const fn exit_bool(key: &'static str) -> TickParam {
+const fn exit_bool(key: &'static str, section: ParamSection) -> TickParam {
     TickParam {
         key,
         group: ParamGroup::Exit,
+        section,
         kind: ParamKind::Bool,
         kinds: ANY,
         not_kinds: &[],
@@ -421,6 +502,12 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     // The corridor family's one modifier the grid does not offer (no live strategy sets it).
     "MShotAdd5sDelta",
 ];
+
+/// Whether the models read `key` from the strategy without the grid offering it as a knob —
+/// the grid draws such a field as fixed rather than as outside the model.
+pub fn is_model_only(key: &str) -> bool {
+    MODEL_ONLY_KEYS.contains(&key)
+}
 
 /// Every field name the models read — [`TICK_PARAMS`] plus [`MODEL_ONLY_KEYS`] — for a
 /// `strategy_current_values` read.

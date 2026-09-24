@@ -160,6 +160,12 @@ const HUMAN_LABELS: PrefRow = PrefRow {
     store: |layout, value| layout.strategies_human_labels = Some(value),
 };
 
+/// The human-labels preference as the layout holds it, for a section heading drawn outside the
+/// Strategies window — the tuner's Entry/Exit grid names its sections as this window does.
+pub(crate) fn human_labels(layout: &moon_core::config::WindowLayout) -> bool {
+    (HUMAN_LABELS.saved)(layout).unwrap_or_else(|| StrategiesPrefs::default().human_labels)
+}
+
 /// Every preference, in the order `restore` resolves them. Persistence covers all of them wherever
 /// their control lives.
 const PREF_ROWS: [&PrefRow; 4] = [&GROUP_BY_VENUE, &ACTIVE_ONLY, &PARAMS_FULL, &HUMAN_LABELS];

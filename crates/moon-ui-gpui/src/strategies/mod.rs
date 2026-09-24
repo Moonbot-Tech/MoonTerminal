@@ -18,10 +18,10 @@ pub(crate) mod logic;
 mod param_entries;
 mod params;
 mod rules;
-mod sections;
+pub(crate) mod sections;
 mod selection;
 mod session;
-mod settings;
+pub(crate) mod settings;
 mod split;
 mod state;
 // `pub(crate)` exposes `unique_name`, `set_field`, and `STRATEGY_NAME_FIELD` to the Analytics

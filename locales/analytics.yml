@@ -1920,6 +1920,22 @@ analytics.ticks.entry_from_fact:
   ru: "вход для %{kinds} не моделируется — берётся из факта"
   en: "the entry of %{kinds} is not modelled — taken from the fact"
   es: "la entrada de %{kinds} no se modela — se toma del hecho"
+analytics.ticks.section_collapse:
+  ru: "Свернуть секцию"
+  en: "Fold the section"
+  es: "Plegar la sección"
+analytics.ticks.section_expand:
+  ru: "Развернуть секцию"
+  en: "Open the section"
+  es: "Abrir la sección"
+analytics.ticks.row_fixed:
+  ru: "Модель берёт значение стратегии — в переборе не участвует"
+  en: "The model reads the strategy's value — it is not searched"
+  es: "El modelo lee el valor de la estrategia — no entra en la búsqueda"
+analytics.ticks.row_outside:
+  ru: "Модель это поле пока не учитывает"
+  en: "The model does not take this field into account yet"
+  es: "El modelo aún no tiene en cuenta este campo"
 analytics.ticks.no_deals:
   ru: "в выборке нет сделок с мс-штампами"
   en: "no trades with millisecond stamps in the scope"

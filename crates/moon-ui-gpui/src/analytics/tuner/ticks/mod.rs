@@ -44,6 +44,7 @@ mod lags;
 mod load;
 pub(in crate::analytics) mod model_cfg;
 pub(in crate::analytics::tuner) mod rows;
+mod sections;
 pub(in crate::analytics) mod state;
 mod tape;
 mod trade_pane;

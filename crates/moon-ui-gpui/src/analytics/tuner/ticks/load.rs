@@ -52,6 +52,13 @@ type StageA = (
     OwnValues,
 );
 
+/// What stage B publishes beside the rows: the strategies' values and the grid's layout.
+struct ScopeView {
+    now: HashMap<String, NowValue>,
+    own: OwnValues,
+    grid: Arc<[super::sections::GridSection]>,
+}
+
 impl AnalyticsView {
     /// Recompute the axis for the current scope.
     pub(in crate::analytics) fn reload_ticks(&mut self, cx: &mut Context<Self>) {
@@ -99,7 +106,22 @@ impl AnalyticsView {
         let report_req = self.current_report_generation();
         let q = self.tuner_query();
         let targets: Vec<(i64, Option<u64>)> = self.visible_target_keys(self.read_core_ids());
-        let keys = params::param_keys();
+        // The models' fields, and every field the grid's sections draw fixed beside them, so
+        // those rows show the strategies' values too. The models read theirs by name; the extra
+        // keys only ride along in the maps. The schema signature comes off the same store read:
+        // a schema that moves on after it makes the grid ask for another load (`grid.rs`), whose
+        // keys then cover it.
+        let mut keys = params::param_keys();
+        self.ticks.keys_sig = Some({
+            let backend = self.backend.read(cx);
+            let store = backend.session.store();
+            for key in super::sections::schema_keys(store) {
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+            super::sections::schema_signature(store)
+        });
         self.ticks.data.begin();
         self.ticks.kpi.begin();
         self.spawn_latest_db(
@@ -160,18 +182,45 @@ impl AnalyticsView {
                         return;
                     }
                 };
+                let grid = this.grid_layout(&read.deals, cx);
                 let addresses = this.resolve_addresses(&read.deals, cx);
                 this.start_replay_stage(
                     req,
                     report_req,
                     after_report,
                     read,
-                    (now, own),
+                    ScopeView {
+                        now,
+                        own,
+                        grid,
+                    },
                     addresses,
                     cx,
                 );
             },
         );
+    }
+
+    /// The grid's rows for the deals' kinds, by section: the fields the live schema files under
+    /// each of the kinds, the knobs no schema places under their own section.
+    fn grid_layout(
+        &self,
+        deals: &[Deal],
+        cx: &Context<Self>,
+    ) -> Arc<[super::sections::GridSection]> {
+        let mut kinds: Vec<String> = Vec::new();
+        for deal in deals {
+            if !kinds.contains(&deal.kind) {
+                kinds.push(deal.kind.clone());
+            }
+        }
+        let knobs = super::sections::scope_knobs(&kinds);
+        let backend = self.backend.read(cx);
+        let schema = super::sections::scope_schema(
+            backend.session.store(),
+            deals.iter().map(|d| (d.strategy_id, d.core_uid)),
+        );
+        super::sections::layout(&schema, &knobs).into()
     }
 
     /// Where each deal's prints live, per distinct `(core, coin)` — the fetch's own resolver,
@@ -204,7 +253,7 @@ impl AnalyticsView {
         report_req: u64,
         after_report: bool,
         read: DealsRead,
-        (now, own): (HashMap<String, NowValue>, OwnValues),
+        scope: ScopeView,
         addresses: HashMap<(u64, String), Option<Arc<RowAddress>>>,
         cx: &mut Context<Self>,
     ) {
@@ -276,8 +325,9 @@ impl AnalyticsView {
                     entry_share: (0, 0),
                     exit_share: (0, 0),
                     kinds,
-                    now,
-                    own,
+                    now: scope.now,
+                    own: scope.own,
+                    grid: scope.grid,
                 };
                 data.retain_within_cap();
                 data.refresh_summary();
