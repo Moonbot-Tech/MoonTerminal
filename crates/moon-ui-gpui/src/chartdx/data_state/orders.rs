@@ -456,9 +456,9 @@ impl ChartDataState {
                             &self.chart_graphics,
                             self.last_ppp,
                             pane.view.epoch_ms,
-                            &mut zones,
-                            &mut segs,
-                            &mut markers,
+                            zones,
+                            segs,
+                            markers,
                         );
                     }
                     // Add user figures through the same userdata layers after orders, placing them
