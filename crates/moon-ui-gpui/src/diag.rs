@@ -268,6 +268,10 @@ diag_counters!(
     CHART_BASE_BLIT   => "base_blit",
     CHART_COMBO_DRAW  => "combo_draw",
     CHART_COMBO_BAKE  => "combo_bake",
+    // A dense full bake draws LOD-reduced rows; `BAKE_INSTANCES` sums the cross instances each
+    // full cross bake drew, and `VOLUME_BAKE` counts full rebakes of the separate volume band.
+    CHART_COMBO_BAKE_INSTANCES => "combo_bake_instances",
+    CHART_COMBO_VOLUME_BAKE => "combo_volume_bake",
     // The candle layer draws during each base pass. `UPLOAD_LEN` counts rows uploaded after a
     // candle-series revision, and a live-edge trade batch advances that revision — so on a live
     // market the WHOLE buffer is re-shipped continuously. Measured at 9 000 to 83 000 rows a second
@@ -362,6 +366,8 @@ diag_counters!(
     CHART_PRICE_LINE_UPLOAD_LEN => "price_line_upload_len",
     CHART_BOOK_DRAW   => "orderbook_draw",
     CHART_BOOK_BAKE   => "orderbook_bake",
+    // Order-book instance rebuilds on the CPU; a pan inside the emitted margin should not count.
+    CHART_BOOK_LEVEL_BUILD => "orderbook_level_build",
     CHART_USER_DRAW   => "userdata_draw",
     ORDERS_OBS_FIRE   => "orders_obs_fire",
     ORDERS_OBS_NOTIFY => "orders_obs_notify",

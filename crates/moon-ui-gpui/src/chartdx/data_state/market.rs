@@ -7,6 +7,27 @@ use super::orders::refresh_orderbook_label_notionals;
 use super::*;
 use crate::chartdx::types::TickStyleGpu;
 
+/// Whether the order-book instances must be rebuilt: new book data, a new view `render_range`
+/// (compared bit for bit on the source value, so centre motion never jitters it), the view
+/// leaving the window last emitted, or any move when the backend keeps no margin.
+fn book_instances_stale(
+    last_rev: u64,
+    last_emit: (f32, f32),
+    last_render_range: f32,
+    last_lo_hi: (f32, f32),
+    rev: u64,
+    render_range: f32,
+    lo: f32,
+    hi: f32,
+    margin_price: f32,
+) -> bool {
+    last_rev != rev
+        || last_render_range.to_bits() != render_range.to_bits()
+        || !(lo >= last_emit.0)
+        || !(hi <= last_emit.1)
+        || (margin_price == 0.0 && last_lo_hi != (lo, hi))
+}
+
 /// Refit after a pixel of motion or any width/zoom change, without rescanning subpixel live motion.
 fn price_fit_window_changed(cached: Option<(f32, f32, f32)>, current: (f32, f32, f32)) -> bool {
     cached.is_none_or(|(from, span, ppm)| {
@@ -1577,10 +1598,12 @@ impl ChartDataState {
             // clear any that already exist.
             if !orderbook_on {
                 if pr.last_book_rev != u64::MAX {
-                    pr.layers.set_orderbook(Vec::new());
+                    pr.layers.set_orderbook(&[], false);
                     pr.last_book_rev = u64::MAX;
                     pr.last_book_lo = f32::NAN;
                     pr.last_book_hi = f32::NAN;
+                    pr.last_book_emit = (f32::NAN, f32::NAN);
+                    pr.last_book_range = f32::NAN;
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }
@@ -1597,18 +1620,49 @@ impl ChartDataState {
                             pane.view.render_center + half,
                         );
                         let mut diag_levels_len = None;
-                        if pr.last_book_rev != book_rev
-                            || pr.last_book_lo != lo
+                        // Levels are emitted over the book bitmap's vertical margin too, so a pan
+                        // inside it moves the baked bitmap instead of rebuilding the instances.
+                        let book_bh = pr.orderbook_view.bounds[3];
+                        let px_per_price = pr.orderbook_view.price_to_px;
+                        let margin_price = if px_per_price > 0.0 {
+                            pr.layers.book_v_margin_px(book_bh) / px_per_price
+                        } else {
+                            0.0
+                        };
+                        if book_instances_stale(
+                            pr.last_book_rev,
+                            pr.last_book_emit,
+                            pr.last_book_range,
+                            (pr.last_book_lo, pr.last_book_hi),
+                            book_rev,
+                            pane.view.render_range,
+                            lo,
+                            hi,
+                            margin_price,
+                        ) {
+                            crate::diag::bump(&crate::diag::CHART_BOOK_LEVEL_BUILD);
+                            let emit = (lo - margin_price, hi + margin_price);
+                            // A move out of the emitted window or a zoom must show at once; a
+                            // revision alone stays behind the book bitmap's data throttle.
+                            let window_rebuilt = !(lo >= pr.last_book_emit.0)
+                                || !(hi <= pr.last_book_emit.1)
+                                || pr.last_book_range.to_bits() != pane.view.render_range.to_bits();
+                            book.build_instances_normalized((lo, hi), emit, &mut pr.book_scratch);
+                            diag_levels_len = Some(pr.book_scratch.len());
+                            pr.layers.set_orderbook(&pr.book_scratch, window_rebuilt);
+                            pr.last_book_rev = book_rev;
+                            pr.last_book_emit = emit;
+                            pr.last_book_range = pane.view.render_range;
+                            pr.gpu_prepare_dirty = true;
+                            pixels_changed = true;
+                        }
+                        if pr.last_book_lo != lo
                             || pr.last_book_hi != hi
+                            || diag_levels_len.is_some()
                         {
-                            let mut levels = Vec::new();
-                            book.build_instances(lo, hi, &mut levels);
-                            diag_levels_len = Some(levels.len());
-                            pr.layers.set_orderbook(levels);
                             // Keep a CPU copy of the visible book for cursor-volume labels, whose
                             // level always sits at the cursor and is therefore on screen anyway.
                             book.collect_visible_depth(lo, hi, &mut pr.orderbook_levels);
-                            pr.last_book_rev = book_rev;
                             pr.last_book_lo = lo;
                             pr.last_book_hi = hi;
                             pr.gpu_prepare_dirty = true;
@@ -1652,11 +1706,13 @@ impl ChartDataState {
                     } else {
                         pr.forget_book_figures();
                         if pr.last_book_rev != u64::MAX {
-                            pr.layers.set_orderbook(Vec::new());
+                            pr.layers.set_orderbook(&[], false);
                             pr.orderbook_levels.clear();
                             pr.last_book_rev = u64::MAX;
                             pr.last_book_lo = f32::NAN;
                             pr.last_book_hi = f32::NAN;
+                            pr.last_book_emit = (f32::NAN, f32::NAN);
+                            pr.last_book_range = f32::NAN;
                             pr.gpu_prepare_dirty = true;
                             pixels_changed = true;
                         }

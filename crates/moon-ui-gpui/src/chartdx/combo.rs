@@ -1,8 +1,8 @@
-//! Combo layer for all immutable market history. It currently contains trades, with price lines
-//! and volume sharing the layer. Crosses reside in a VRAM ring; a combo backing bitmap 20% wider
-//! than the screen is baked by the cross shader and blitted with UV panning. Because historical
-//! data is immutable, scrolling moves the baked bitmap and appending draws only the live edge
-//! without redrawing history.
+//! Combo layer for all immutable market history: trade crosses, their volume bars and price
+//! lines. Crosses reside in a VRAM ring; the cross shader bakes them into a bitmap wider and taller
+//! than the chart, and the volume bars into a separate band bitmap with no price axis. Both are
+//! blitted with UV panning, so scrolling on either axis moves a baked bitmap and appending draws
+//! only the live edge without redrawing history.
 //!
 //! Device-loss handling resets every resource when the hook's device generation changes after
 //! GPUI recreates the device. Otherwise the new context would draw from stale buffers.
@@ -10,8 +10,8 @@
 use bytemuck::Zeroable;
 use gpui::RawGpuAccess;
 use moon_chart::tick_volume::{
-    TickTimeOrder, pending_ring_at, tick_bake_span, tick_slot_runs, tick_time_range,
-    tick_touches_bake,
+    BakeColumns, LodPick, TickTimeOrder, lod_applies, pending_ring_at, reduce_crosses,
+    reduce_volume, tick_bake_span, tick_slot_runs, tick_time_range, tick_touches_bake,
 };
 use moon_core::data::PriceLinePoint;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -23,21 +23,19 @@ use super::gpu::{
     device_changed, full_viewport, ring_write_no_overwrite, set_scissor_rect, update_dynamic,
 };
 use super::types::{
-    PriceStyleGpu, TickStyleGpu, append_cross_ring, cross_volume_max, evicted_cross_ranges,
-    reset_cross_ring,
+    PriceStyleGpu, TickStyleGpu, append_cross_ring, evicted_cross_ranges, reset_cross_ring,
 };
 
 const MIN_COMBO_CAPACITY: u32 = 1;
 const CROSSES_HLSL: &str = include_str!("shaders/crosses.hlsl");
 const BLIT_HLSL: &str = include_str!("shaders/blit.hlsl");
 
-#[inline]
-fn texel_aligned_time0(time0: f32, time_to_px: f32) -> f32 {
-    if !(time_to_px > 1e-9) {
-        return time0;
-    }
-    (time0 * time_to_px).floor() / time_to_px
-}
+mod plan;
+
+use plan::{
+    ComboBakeKey, VolumeBakeKey, combo_v_margin_px, combo_x_margin_px, cross_blit_uv,
+    lod_instance_count, plan_cross_bake, plan_volume_bake, volume_band_px, volume_blit_uv,
+};
 
 /// Cross-rendering pipeline and resident VRAM tick ring.
 struct CrossPipe {
@@ -52,6 +50,10 @@ struct CrossPipe {
     premultiplied_blend: ID3D11BlendState,
     buffer: ID3D11Buffer,
     srv: ID3D11ShaderResourceView,
+    /// Rows a dense full bake keeps after LOD reduction, grown in powers of two.
+    lod_buffer: ID3D11Buffer,
+    lod_srv: ID3D11ShaderResourceView,
+    lod_capacity: u32,
     last_line_buf: ID3D11Buffer,
     last_line_srv: ID3D11ShaderResourceView,
     mark_line_buf: ID3D11Buffer,
@@ -59,32 +61,29 @@ struct CrossPipe {
     view_cb: ID3D11Buffer,
     price_style_cb: ID3D11Buffer,
     tick_style_cb: ID3D11Buffer,
-}
-
-/// Combo backing bitmap `(W * 1.2) x H`, containing baked history and a UV-scroll anchor.
-struct ComboTex {
-    _tex: ID3D11Texture2D, // Retain the texture through RAII while its RTV and SRV reference it.
-    rtv: ID3D11RenderTargetView,
-    srv: ID3D11ShaderResourceView,
-    tex_w: u32,
-    tex_h: u32,
+    /// Blit resources shared by the cross and volume bitmaps.
     blit_vs: ID3D11VertexShader,
     blit_fs: ID3D11PixelShader,
     blit_cb: ID3D11Buffer,
     sampler: ID3D11SamplerState,
-    bake_t0: f32,
+}
+
+/// Cross bitmap `(W * 1.2) x (H + 2 * margin)`, containing baked crosses and a UV-scroll anchor.
+struct ComboTex {
+    _tex: ID3D11Texture2D, // Retain the texture through RAII while its RTV and SRV reference it.
+    rtv: ID3D11RenderTargetView,
+    srv: ID3D11ShaderResourceView,
+    key: ComboBakeKey,
     last_baked_head: u32,
-    last_time_to_px: f32,
-    last_price_to_px: f32,
-    last_view_price0: f32,
-    last_marker_half: f32,
-    /// Trade-volume opacity the texture was baked with.
-    ///
-    /// Part of the cache key because the bars are baked INTO the texture. It was a
-    /// compile-time constant until `ChartGraphicsCfg` gained `trade_volume_alpha`, which is why the
-    /// other four fields were once a complete key and no longer are.
-    last_volume_alpha: f32,
-    valid: bool,
+}
+
+/// Volume band bitmap `(W * 1.2) x band`, baked without a price axis so Y motion never touches it.
+struct VolumeTex {
+    _tex: ID3D11Texture2D, // Retain the texture through RAII while its RTV and SRV reference it.
+    rtv: ID3D11RenderTargetView,
+    srv: ID3D11ShaderResourceView,
+    key: VolumeBakeKey,
+    last_baked_head: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -99,6 +98,7 @@ struct VolumeScaleKey {
 pub struct ComboLayer {
     pipe: Option<CrossPipe>,
     tex: Option<ComboTex>,
+    vol_tex: Option<VolumeTex>,
     count: u32,
     head: u32,
     pending_reset: Option<Vec<ChartCross>>,
@@ -130,6 +130,9 @@ pub struct ComboLayer {
     price_style: PriceStyleGpu,
     /// Trade-tick style retained across resource recreation and compared before rebaking.
     tick_style: TickStyleGpu,
+    /// Reusable LOD reduction scratch and the gathered rows it uploads.
+    lod_pick: LodPick,
+    lod_rows: Vec<ChartCross>,
 }
 
 impl ComboLayer {
@@ -138,6 +141,7 @@ impl ComboLayer {
         Self {
             pipe: None,
             tex: None,
+            vol_tex: None,
             count: 0,
             head: 0,
             pending_reset: None,
@@ -160,6 +164,8 @@ impl ComboLayer {
             volume_window_cache: None,
             price_style: PriceStyleGpu::default(),
             tick_style: TickStyleGpu::default(),
+            lod_pick: LodPick::default(),
+            lod_rows: Vec::new(),
         }
     }
 
@@ -185,6 +191,7 @@ impl ComboLayer {
         self.price_line_capacity = price_line_capacity;
         self.pipe = None;
         self.tex = None;
+        self.vol_tex = None;
         self.count = 0;
         self.head = 0;
         self.resident_crosses.clear();
@@ -238,9 +245,7 @@ impl ComboLayer {
     pub fn set_tick_style(&mut self, style: TickStyleGpu) {
         if self.tick_style != style {
             self.tick_style = style;
-            if let Some(tex) = self.tex.as_mut() {
-                tex.valid = false;
-            }
+            self.invalidate_bakes();
         }
     }
 
@@ -268,6 +273,7 @@ impl ComboLayer {
         if device_changed(&mut self.device_generation_seen, gpu) {
             self.pipe = None;
             self.tex = None;
+            self.vol_tex = None;
             self.count = 0;
             self.head = 0;
             self.resident_crosses.clear();
@@ -285,9 +291,7 @@ impl ComboLayer {
         }
         self.apply_uploads(context);
         if self.volume_scale_dirty {
-            if let Some(tex) = self.tex.as_mut() {
-                tex.valid = false;
-            }
+            self.invalidate_bakes();
             self.volume_scale_dirty = false;
         }
         if self.count == 0 {
@@ -314,8 +318,18 @@ impl ComboLayer {
         self.draw_price_lines_to_backbuffer(view, context, rtv, gpu, panel_clip);
     }
 
-    /// Incrementally bakes new combo ticks into the texture. Performs a full rebake when the 20%
-    /// margin is exhausted or the bitmap is invalid due to zoom, resize, or the first frame.
+    /// Force the next prepare to fully rebake both bitmaps.
+    fn invalidate_bakes(&mut self) {
+        if let Some(tex) = self.tex.as_mut() {
+            tex.key.valid = false;
+        }
+        if let Some(tex) = self.vol_tex.as_mut() {
+            tex.key.valid = false;
+        }
+    }
+
+    /// Bakes new ticks into the cross and volume bitmaps. Each planner decides a full rebake when
+    /// its baked window no longer covers the view; otherwise only newly appended ring rows draw.
     fn prepare_combo(
         &mut self,
         view: &ChartViewGpu,
@@ -327,61 +341,46 @@ impl ComboLayer {
         if bw <= 0.0 || bh <= 0.0 {
             return;
         }
-        let margin_px = (bw * 0.2).max(128.0);
-        let tex_w = (bw + margin_px).round().max(1.0) as u32;
+        let tex_w = (bw + combo_x_margin_px(bw)).round().max(1.0) as u32;
         let tex_h = bh.round().max(1.0) as u32;
-        let need_new = self
-            .tex
-            .as_ref()
-            .map_or(true, |c| c.tex_w != tex_w || c.tex_h != tex_h);
-        if need_new {
-            self.tex = Some(Self::create_tex(device, tex_w, tex_h));
+        let v_margin = combo_v_margin_px(bh);
+        let tex_h_total = tex_h + 2 * v_margin as u32;
+        let band_px = volume_band_px(bh);
+        if self.tex.as_ref().map_or(true, |c| {
+            c.key.tex_w != tex_w || c.key.tex_h_total != tex_h_total
+        }) {
+            self.tex = Some(Self::create_tex(device, tex_w, tex_h_total, v_margin));
+        }
+        if self.vol_tex.as_ref().map_or(true, |c| {
+            c.key.tex_w != tex_w || c.key.band_px != band_px || c.key.chart_h != tex_h
+        }) {
+            self.vol_tex = Some(Self::create_vol_tex(device, tex_w, band_px, tex_h));
         }
         let ttp = view.time_to_px;
-        let tex_ref = self.tex.as_ref().unwrap();
-        let transform_changed = tex_ref.last_time_to_px != view.time_to_px
-            || tex_ref.last_price_to_px != view.price_to_px
-            || tex_ref.last_view_price0 != view.view_price0
-            || tex_ref.last_marker_half != view.marker_half
-            || tex_ref.last_volume_alpha != view.volume_alpha;
-        let u_left_px = (view.view_time0 - tex_ref.bake_t0) * ttp;
-        let mut need_full =
-            transform_changed || !tex_ref.valid || u_left_px < 0.0 || u_left_px > margin_px;
-        let bake_t0 = if need_full {
-            texel_aligned_time0(view.view_time0, ttp)
-        } else {
-            tex_ref.bake_t0
+        let cross_plan = plan_cross_bake(&self.tex.as_ref().unwrap().key, view, bw);
+        let vol_key = self.vol_tex.as_ref().unwrap().key;
+        let vol_plan = plan_volume_bake(&vol_key, view, bw, |bake_t0| {
+            self.volume_scale_for_bake_window(bake_t0, tex_w as f32, ttp)
+        });
+        (self.volume_buy_max, self.volume_sell_max) = vol_plan.scale;
+        let runs_from = |layer: &Self, bake_t0: f32, marker_half: f32| {
+            let span = tick_bake_span(bake_t0, tex_w as f32, ttp, marker_half);
+            tick_slot_runs(
+                layer.resident_time_range(span.0, span.1),
+                layer.resident_head,
+                layer.resident_count,
+                layer.cross_capacity as usize,
+            )
         };
-        let (buy_max, sell_max) = self.volume_scale_for_bake_window(bake_t0, tex_w as f32, ttp);
-        let span = tick_bake_span(bake_t0, tex_w as f32, ttp, view.marker_half);
-        let full_runs = tick_slot_runs(
-            self.resident_time_range(span.0, span.1),
-            self.resident_head,
-            self.resident_count,
-            self.cross_capacity as usize,
-        );
-        let pipe = self.pipe.as_ref().unwrap();
-        let tex = self.tex.as_mut().unwrap();
-        if transform_changed {
-            tex.valid = false;
-        }
-        if (buy_max, sell_max) != (self.volume_buy_max, self.volume_sell_max) {
-            self.volume_buy_max = buy_max;
-            self.volume_sell_max = sell_max;
-            tex.valid = false;
-            need_full = true;
-        }
-        // The bake uniform fixes the left time edge at bake_t0 and covers the full bitmap viewport.
-        // During a full rebake, keep bake_t0 on the global texel phase. Otherwise the old bake plus
-        // rounded UV scroll can differ from the new raw view_time0 by one pixel, making historical
-        // crosses visibly jump when the margin is exhausted.
-        let bake_view = ChartViewGpu {
-            bounds: [0.0, 0.0, tex_w as f32, tex_h as f32],
-            resolution: [tex_w as f32, tex_h as f32],
+        let cross_runs = runs_from(self, cross_plan.bake_t0, view.marker_half);
+        let vol_runs = runs_from(self, vol_plan.bake_t0, 0.0);
+        let cross_view = ChartViewGpu {
+            bounds: [0.0, 0.0, tex_w as f32, tex_h_total as f32],
+            resolution: [tex_w as f32, tex_h_total as f32],
             time_to_px: ttp,
-            view_time0: bake_t0,
+            view_time0: cross_plan.bake_t0,
             price_to_px: view.price_to_px,
-            view_price0: view.view_price0,
+            view_price0: cross_plan.bake_p0,
             marker_half: view.marker_half,
             // crosses.hlsl: combo-pass first-instance offset into the resident ring buffer.
             pad: 0.0,
@@ -390,102 +389,253 @@ impl ComboLayer {
             volume_alpha: view.volume_alpha,
             _pad2: 0.0,
         };
-        update_dynamic(context, &pipe.view_cb, &[bake_view]);
-        update_dynamic(context, &pipe.tick_style_cb, &[self.tick_style]);
-        let tex_vp = D3D11_VIEWPORT {
+        // The band keeps the chart's full height as its bounds so bar heights match a direct draw;
+        // only the bottom `band_px` rows land inside the target.
+        let vol_view = ChartViewGpu {
+            bounds: [
+                0.0,
+                band_px as f32 - tex_h as f32,
+                tex_w as f32,
+                tex_h as f32,
+            ],
+            resolution: [tex_w as f32, band_px as f32],
+            view_time0: vol_plan.bake_t0,
+            view_price0: view.view_price0,
+            ..cross_view
+        };
+        let head = self.head;
+        let cap = self.cross_capacity;
+        update_dynamic(
+            context,
+            &self.pipe.as_ref().unwrap().tick_style_cb,
+            &[self.tick_style],
+        );
+        if vol_plan.full {
+            crate::diag::bump(&crate::diag::CHART_COMBO_VOLUME_BAKE);
+            let cols = BakeColumns {
+                time0: vol_plan.bake_t0,
+                time_to_px: ttp,
+                price0: view.view_price0,
+                price_to_px: view.price_to_px,
+                height: tex_h as f32,
+                width_px: tex_w,
+                volume_alpha: view.volume_alpha,
+                marker_half: view.marker_half,
+                buy_inv: 1.0 / self.volume_buy_max.max(1e-6),
+                sell_inv: 1.0 / self.volume_sell_max.max(1e-6),
+            };
+            let lod = self.upload_lod(device, context, vol_runs, &cols, false);
+            let pipe = self.pipe.as_ref().unwrap();
+            let vol = self.vol_tex.as_mut().unwrap();
+            let (srv, runs) = match lod {
+                Some(n) => (&pipe.lod_srv, [(0, n), (0, 0)]),
+                None => (&pipe.srv, slot_runs_u32(vol_runs)),
+            };
+            Self::bake_pass(
+                context,
+                pipe,
+                &vol.rtv,
+                vol_view,
+                (&pipe.volume_vs, &pipe.volume_ps),
+                srv,
+                runs,
+                true,
+            );
+            vol.key.bake_t0 = vol_plan.bake_t0;
+            vol.key.time_to_px = ttp;
+            vol.key.volume_alpha = view.volume_alpha;
+            vol.key.scale = vol_plan.scale;
+            vol.key.valid = true;
+            vol.last_baked_head = head;
+        } else {
+            let pipe = self.pipe.as_ref().unwrap();
+            let vol = self.vol_tex.as_mut().unwrap();
+            if head != vol.last_baked_head {
+                Self::bake_pass(
+                    context,
+                    pipe,
+                    &vol.rtv,
+                    vol_view,
+                    (&pipe.volume_vs, &pipe.volume_ps),
+                    &pipe.srv,
+                    appended_runs(vol.last_baked_head, head, cap),
+                    false,
+                );
+                vol.last_baked_head = head;
+            }
+        }
+        if cross_plan.full {
+            crate::diag::bump(&crate::diag::CHART_COMBO_BAKE);
+            let cols = BakeColumns {
+                time0: cross_plan.bake_t0,
+                time_to_px: ttp,
+                price0: cross_plan.bake_p0,
+                price_to_px: view.price_to_px,
+                height: tex_h_total as f32,
+                width_px: tex_w,
+                volume_alpha: view.volume_alpha,
+                marker_half: view.marker_half,
+                buy_inv: 1.0 / self.volume_buy_max.max(1e-6),
+                sell_inv: 1.0 / self.volume_sell_max.max(1e-6),
+            };
+            let lod = self.upload_lod(device, context, cross_runs, &cols, true);
+            let pipe = self.pipe.as_ref().unwrap();
+            let tex = self.tex.as_mut().unwrap();
+            let (srv, runs) = match lod {
+                Some(n) => (&pipe.lod_srv, [(0, n), (0, 0)]),
+                None => (&pipe.srv, slot_runs_u32(cross_runs)),
+            };
+            crate::diag::bump_by(
+                &crate::diag::CHART_COMBO_BAKE_INSTANCES,
+                runs.iter().map(|&(_, count)| u64::from(count)).sum(),
+            );
+            Self::bake_pass(
+                context,
+                pipe,
+                &tex.rtv,
+                cross_view,
+                (&pipe.cross_vs, &pipe.cross_ps),
+                srv,
+                runs,
+                true,
+            );
+            tex.key.bake_t0 = cross_plan.bake_t0;
+            tex.key.bake_p0 = cross_plan.bake_p0;
+            tex.key.time_to_px = ttp;
+            tex.key.price_to_px = view.price_to_px;
+            tex.key.marker_half = view.marker_half;
+            tex.key.valid = true;
+            tex.last_baked_head = head;
+        } else {
+            let pipe = self.pipe.as_ref().unwrap();
+            let tex = self.tex.as_mut().unwrap();
+            if head != tex.last_baked_head {
+                Self::bake_pass(
+                    context,
+                    pipe,
+                    &tex.rtv,
+                    cross_view,
+                    (&pipe.cross_vs, &pipe.cross_ps),
+                    &pipe.srv,
+                    appended_runs(tex.last_baked_head, head, cap),
+                    false,
+                );
+                tex.last_baked_head = head;
+            }
+        }
+        let tex = self.tex.as_ref().unwrap();
+        super::gpu::debug_dump_combo_texture_once(device, context, &tex._tex);
+    }
+
+    /// Thin a dense full bake to what its bitmap can show and upload the picked rows, in draw
+    /// order, to the LOD buffer; `None` keeps the raw ring draw.
+    fn upload_lod(
+        &mut self,
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+        runs: [(usize, usize); 2],
+        cols: &BakeColumns,
+        crosses: bool,
+    ) -> Option<u32> {
+        let rows_in_span = runs.iter().map(|&(_, count)| count).sum();
+        if !lod_applies(rows_in_span, cols.width_px) {
+            return None;
+        }
+        let resident = &self.resident_crosses;
+        let span_rows = runs
+            .into_iter()
+            .flat_map(|(start, count)| start..start + count)
+            .map(|slot| {
+                let c = &resident[slot];
+                (slot as u32, c.time_rel, c.price, c.side, c.qty)
+            });
+        if crosses {
+            reduce_crosses(span_rows, cols, &mut self.lod_pick);
+        } else {
+            reduce_volume(span_rows, cols, &mut self.lod_pick);
+        }
+        let picked = if crosses {
+            &self.lod_pick.cross
+        } else {
+            &self.lod_pick.volume
+        };
+        let n = lod_instance_count(rows_in_span, cols.width_px, picked.len());
+        self.lod_rows.clear();
+        self.lod_rows
+            .extend(picked.iter().map(|&slot| resident[slot as usize]));
+        let n = n as u32;
+        if n == 0 {
+            return Some(0);
+        }
+        let pipe = self.pipe.as_mut().unwrap();
+        if n > pipe.lod_capacity {
+            pipe.lod_capacity = n.next_power_of_two();
+            pipe.lod_buffer = create_structured(
+                device,
+                std::mem::size_of::<ChartCross>() as u32,
+                pipe.lod_capacity,
+            );
+            pipe.lod_srv = create_srv(device, &pipe.lod_buffer);
+        }
+        update_dynamic(context, &pipe.lod_buffer, &self.lod_rows);
+        Some(n)
+    }
+
+    /// Draw ring runs into one bitmap with one shader pair, clearing it first on a full bake.
+    /// Runs stay in ascending physical slot order so overlaps blend as in a direct draw.
+    fn bake_pass(
+        context: &ID3D11DeviceContext,
+        pipe: &CrossPipe,
+        rtv: &ID3D11RenderTargetView,
+        bake_view: ChartViewGpu,
+        (vs, ps): (&ID3D11VertexShader, &ID3D11PixelShader),
+        rows: &ID3D11ShaderResourceView,
+        runs: [(u32, u32); 2],
+        clear: bool,
+    ) {
+        let [w, h] = bake_view.resolution;
+        let vp = D3D11_VIEWPORT {
             TopLeftX: 0.0,
             TopLeftY: 0.0,
-            Width: tex_w as f32,
-            Height: tex_h as f32,
+            Width: w,
+            Height: h,
             MinDepth: 0.0,
             MaxDepth: 1.0,
         };
         unsafe {
-            context.OMSetRenderTargets(Some(&[Some(tex.rtv.clone())]), None);
-            context.RSSetViewports(Some(&[tex_vp]));
-            set_scissor_rect(context, 0.0, 0.0, tex_w as f32, tex_h as f32);
+            context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
+            context.RSSetViewports(Some(&[vp]));
+            set_scissor_rect(context, 0.0, 0.0, w, h);
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            context.VSSetConstantBuffers(
-                0,
-                Some(&[
-                    Some(pipe.view_cb.clone()),
-                    None,
-                    Some(pipe.tick_style_cb.clone()),
-                ]),
-            );
-            context.PSSetConstantBuffers(
-                0,
-                Some(&[
-                    Some(pipe.view_cb.clone()),
-                    None,
-                    Some(pipe.tick_style_cb.clone()),
-                ]),
-            );
+            let cbs = [
+                Some(pipe.view_cb.clone()),
+                None,
+                Some(pipe.tick_style_cb.clone()),
+            ];
+            context.VSSetConstantBuffers(0, Some(&cbs));
+            context.PSSetConstantBuffers(0, Some(&cbs));
             context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
-            if need_full {
-                crate::diag::bump(&crate::diag::CHART_COMBO_BAKE);
-                tex.bake_t0 = bake_t0;
-                // Keep the bitmap background transparent so only crosses are opaque. Alpha blitting
-                // then reveals the lower grid/background layer between crosses; grid applies #131416.
-                context.ClearRenderTargetView(&tex.rtv, &[0.0, 0.0, 0.0, 0.0]);
-                context.VSSetShaderResources(1, Some(&[Some(pipe.srv.clone())]));
-                // Keep both pass order and ascending physical slot order identical to the full draw.
-                for (vs, ps) in [
-                    (&pipe.volume_vs, &pipe.volume_ps),
-                    (&pipe.cross_vs, &pipe.cross_ps),
-                ] {
-                    context.VSSetShader(vs, None);
-                    context.PSSetShader(ps, None);
-                    for (first, count) in full_runs {
-                        if count == 0 {
-                            continue;
-                        }
-                        let mut run_view = bake_view;
-                        run_view.pad = first as f32;
-                        update_dynamic(context, &pipe.view_cb, &[run_view]);
-                        context.DrawInstanced(6, count as u32, 0, 0);
-                    }
-                }
-                tex.last_baked_head = self.head;
-                tex.last_time_to_px = view.time_to_px;
-                tex.last_price_to_px = view.price_to_px;
-                tex.last_view_price0 = view.view_price0;
-                tex.last_marker_half = view.marker_half;
-                tex.last_volume_alpha = view.volume_alpha;
-                tex.valid = true;
-            } else if self.head != tex.last_baked_head {
-                // Incrementally draw only new ring ticks in [last_head, head), including wraparound.
-                let cap = self.cross_capacity;
-                let delta = (self.head + cap - tex.last_baked_head) % cap;
-                let runs: [(u32, u32); 2] = if tex.last_baked_head + delta <= cap {
-                    [(tex.last_baked_head, delta), (0, 0)]
-                } else {
-                    [
-                        (tex.last_baked_head, cap - tex.last_baked_head),
-                        (0, delta - (cap - tex.last_baked_head)),
-                    ]
-                };
-                for (rf, rc) in runs {
-                    if rc == 0 {
-                        continue;
-                    }
-                    let mut run_view = bake_view;
-                    run_view.pad = rf as f32;
-                    update_dynamic(context, &pipe.view_cb, &[run_view]);
-                    context.VSSetShaderResources(1, Some(&[Some(pipe.srv.clone())]));
-                    context.VSSetShader(&pipe.volume_vs, None);
-                    context.PSSetShader(&pipe.volume_ps, None);
-                    context.DrawInstanced(6, rc, 0, 0);
-                    context.VSSetShader(&pipe.cross_vs, None);
-                    context.PSSetShader(&pipe.cross_ps, None);
-                    context.DrawInstanced(6, rc, 0, 0);
-                }
-                tex.last_baked_head = self.head;
+            if clear {
+                // Keep the bitmap background transparent so alpha blitting reveals the grid below.
+                context.ClearRenderTargetView(rtv, &[0.0, 0.0, 0.0, 0.0]);
             }
-            super::gpu::debug_dump_combo_texture_once(device, context, &tex._tex);
+            context.VSSetShaderResources(1, Some(&[Some(rows.clone())]));
+            context.VSSetShader(vs, None);
+            context.PSSetShader(ps, None);
+            for (first, count) in runs {
+                if count == 0 {
+                    continue;
+                }
+                let mut run_view = bake_view;
+                run_view.pad = first as f32;
+                update_dynamic(context, &pipe.view_cb, &[run_view]);
+                context.DrawInstanced(6, count, 0, 0);
+            }
         }
     }
 
+    /// Composite the volume band, then the crosses over it, each through its whole-texel UV
+    /// window; point sampling at a fractional offset would flicker by half a pixel.
     fn blit_combo(
         &mut self,
         view: &ChartViewGpu,
@@ -494,32 +644,41 @@ impl ComboLayer {
         gpu: &RawGpuAccess,
         panel_clip: [f32; 4],
     ) {
-        let bw = view.bounds[2];
+        let [x, y, bw, bh] = view.bounds;
         let Some(pipe) = self.pipe.as_ref() else {
             return;
         };
-        let Some(tex) = self.tex.as_mut() else {
-            return;
-        };
-        if !tex.valid || bw <= 0.0 {
+        if bw <= 0.0 {
             return;
         }
-        // Composite the visible bitmap window into the backbuffer chart area with point sampling.
-        // Keep the UV offset in whole texels because a fractional point-sampled offset causes
-        // half-pixel flicker during live scrolling.
-        let u_left_px = (view.view_time0 - tex.bake_t0) * view.time_to_px;
-        let tex_w = tex.tex_w;
-        let u_left_px = u_left_px.round().clamp(0.0, (tex_w as f32 - bw).max(0.0));
-        let u_left = u_left_px / tex_w as f32;
-        let u_span = bw / tex_w as f32;
-        let bp = BlitParams {
-            dst: view.bounds,
-            resolution: view.resolution,
-            uv_off: [u_left, 0.0],
-            uv_scale: [u_span, 1.0],
-            pad: [0.0, 0.0],
-        };
-        update_dynamic(context, &tex.blit_cb, &[bp]);
+        let mut layers: [Option<(&ID3D11ShaderResourceView, BlitParams)>; 2] = [None, None];
+        if let Some(vol) = self.vol_tex.as_ref().filter(|v| v.key.valid) {
+            let band = vol.key.band_px as f32;
+            let (uv_off, uv_scale) = volume_blit_uv(&vol.key, view);
+            layers[0] = Some((
+                &vol.srv,
+                BlitParams {
+                    dst: [x, y + bh - band, bw, band],
+                    resolution: view.resolution,
+                    uv_off,
+                    uv_scale,
+                    pad: [0.0, 0.0],
+                },
+            ));
+        }
+        if let Some(tex) = self.tex.as_ref().filter(|t| t.key.valid) {
+            let (uv_off, uv_scale) = cross_blit_uv(&tex.key, view);
+            layers[1] = Some((
+                &tex.srv,
+                BlitParams {
+                    dst: view.bounds,
+                    resolution: view.resolution,
+                    uv_off,
+                    uv_scale,
+                    pad: [0.0, 0.0],
+                },
+            ));
+        }
         let vp = full_viewport(gpu);
         unsafe {
             context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
@@ -532,14 +691,17 @@ impl ComboLayer {
                 panel_clip[3],
             );
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            context.VSSetShader(&tex.blit_vs, None);
-            context.PSSetShader(&tex.blit_fs, None);
-            context.VSSetConstantBuffers(0, Some(&[Some(tex.blit_cb.clone())]));
-            context.PSSetConstantBuffers(0, Some(&[Some(tex.blit_cb.clone())]));
-            context.PSSetShaderResources(0, Some(&[Some(tex.srv.clone())]));
-            context.PSSetSamplers(0, Some(&[Some(tex.sampler.clone())]));
+            context.VSSetShader(&pipe.blit_vs, None);
+            context.PSSetShader(&pipe.blit_fs, None);
+            context.VSSetConstantBuffers(0, Some(&[Some(pipe.blit_cb.clone())]));
+            context.PSSetConstantBuffers(0, Some(&[Some(pipe.blit_cb.clone())]));
+            context.PSSetSamplers(0, Some(&[Some(pipe.sampler.clone())]));
             context.OMSetBlendState(&pipe.premultiplied_blend, None, 0xFFFFFFFF);
-            context.Draw(6, 0);
+            for (srv, bp) in layers.into_iter().flatten() {
+                update_dynamic(context, &pipe.blit_cb, &[bp]);
+                context.PSSetShaderResources(0, Some(&[Some(srv.clone())]));
+                context.Draw(6, 0);
+            }
         }
     }
 
@@ -628,7 +790,6 @@ impl ComboLayer {
                 self.resident_crosses
                     .resize(cap as usize, ChartCross::zeroed());
             }
-            self.recalc_volume_scale();
             self.volume_scale_dirty = true;
             self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
             self.volume_window_cache = None;
@@ -646,10 +807,20 @@ impl ComboLayer {
                 self.append_invalidates_bake(
                     data.len(),
                     tick_bake_span(
-                        tex.bake_t0,
-                        tex.tex_w as f32,
-                        tex.last_time_to_px,
-                        tex.last_marker_half,
+                        tex.key.bake_t0,
+                        tex.key.tex_w as f32,
+                        tex.key.time_to_px,
+                        tex.key.marker_half,
+                    ),
+                )
+            }) || self.vol_tex.as_ref().is_some_and(|tex| {
+                self.append_invalidates_bake(
+                    data.len(),
+                    tick_bake_span(
+                        tex.key.bake_t0,
+                        tex.key.tex_w as f32,
+                        tex.key.time_to_px,
+                        0.0,
                     ),
                 )
             });
@@ -677,17 +848,15 @@ impl ComboLayer {
                 update_dynamic(context, &tick_buffer, &self.resident_crosses);
                 self.head = self.resident_head as u32;
                 self.count = self.resident_count as u32;
-                if let Some(tex) = self.tex.as_mut() {
-                    tex.valid = false;
-                }
+                self.invalidate_bakes();
             }
             // prepare_combo compares the new bake-window scale with the scale actually baked.
             // A global maximum (including an evicted offscreen maximum) cannot affect that scale.
             self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
             self.volume_window_cache = None;
-            // New runs retain the existing volume-then-cross incremental order, even at wrap.
-            if invalidates_bake && let Some(tex) = self.tex.as_mut() {
-                tex.valid = false;
+            // New runs draw into each bitmap separately, so crosses always sit above the bars.
+            if invalidates_bake {
+                self.invalidate_bakes();
             }
         }
     }
@@ -756,13 +925,6 @@ impl ComboLayer {
             to,
             |index| self.resident_crosses[(origin + index) % capacity].time_rel,
         )
-    }
-
-    /// Initialize the scale after a reset; the next bake resolves its exact window scale.
-    fn recalc_volume_scale(&mut self) {
-        let (buy, sell) = cross_volume_max(self.resident_crosses.iter().take(self.resident_count));
-        self.volume_buy_max = buy;
-        self.volume_sell_max = sell;
     }
 
     /// Cache the exact historical volume-window predicate over a bounded ring lookup.
@@ -853,6 +1015,13 @@ impl ComboLayer {
             self.cross_capacity,
         );
         let srv = create_srv(device, &buffer);
+        let lod_capacity = MIN_COMBO_CAPACITY;
+        let lod_buffer = create_structured(
+            device,
+            std::mem::size_of::<ChartCross>() as u32,
+            lod_capacity,
+        );
+        let lod_srv = create_srv(device, &lod_buffer);
         let last_line_buf = create_structured(
             device,
             std::mem::size_of::<PriceLinePoint>() as u32,
@@ -868,6 +1037,10 @@ impl ComboLayer {
         let view_cb = create_dynamic_cb(device, std::mem::size_of::<ChartViewGpu>() as u32);
         let price_style_cb = create_dynamic_cb(device, std::mem::size_of::<PriceStyleGpu>() as u32);
         let tick_style_cb = create_dynamic_cb(device, std::mem::size_of::<TickStyleGpu>() as u32);
+        let blit_vs = super::gpu::make_vs(device, BLIT_HLSL, "blit_vertex");
+        let blit_fs = super::gpu::make_ps(device, BLIT_HLSL, "blit_fragment");
+        let blit_cb = create_dynamic_cb(device, std::mem::size_of::<BlitParams>() as u32);
+        let sampler = create_point_sampler(device);
         CrossPipe {
             cross_vs,
             cross_ps,
@@ -880,6 +1053,9 @@ impl ComboLayer {
             premultiplied_blend,
             buffer,
             srv,
+            lod_buffer,
+            lod_srv,
+            lod_capacity,
             last_line_buf,
             last_line_srv,
             mark_line_buf,
@@ -887,35 +1063,48 @@ impl ComboLayer {
             view_cb,
             price_style_cb,
             tick_style_cb,
-        }
-    }
-
-    fn create_tex(device: &ID3D11Device, tex_w: u32, tex_h: u32) -> ComboTex {
-        let (tex, rtv, srv) = super::gpu::create_cache_texture(device, tex_w, tex_h);
-        let blit_vs = super::gpu::make_vs(device, BLIT_HLSL, "blit_vertex");
-        let blit_fs = super::gpu::make_ps(device, BLIT_HLSL, "blit_fragment");
-        let blit_cb = create_dynamic_cb(device, std::mem::size_of::<BlitParams>() as u32);
-        let sampler = create_point_sampler(device);
-        ComboTex {
-            _tex: tex,
-            rtv,
-            srv,
-            tex_w,
-            tex_h,
             blit_vs,
             blit_fs,
             blit_cb,
             sampler,
-            bake_t0: 0.0,
-            last_baked_head: u32::MAX,
-            last_time_to_px: f32::NAN,
-            last_price_to_px: f32::NAN,
-            last_view_price0: f32::NAN,
-            last_marker_half: f32::NAN,
-            last_volume_alpha: f32::NAN,
-            valid: false,
         }
     }
+
+    fn create_tex(device: &ID3D11Device, tex_w: u32, tex_h_total: u32, v_margin: f32) -> ComboTex {
+        let (tex, rtv, srv) = super::gpu::create_cache_texture(device, tex_w, tex_h_total);
+        ComboTex {
+            _tex: tex,
+            rtv,
+            srv,
+            key: ComboBakeKey::unbaked(tex_w, tex_h_total, v_margin),
+            last_baked_head: u32::MAX,
+        }
+    }
+
+    fn create_vol_tex(device: &ID3D11Device, tex_w: u32, band_px: u32, chart_h: u32) -> VolumeTex {
+        let (tex, rtv, srv) = super::gpu::create_cache_texture(device, tex_w, band_px);
+        VolumeTex {
+            _tex: tex,
+            rtv,
+            srv,
+            key: VolumeBakeKey::unbaked(tex_w, band_px, chart_h),
+            last_baked_head: u32::MAX,
+        }
+    }
+}
+
+/// Ring runs `[last, head)` appended since a bake, split at the wrap in draw order.
+fn appended_runs(last: u32, head: u32, cap: u32) -> [(u32, u32); 2] {
+    let delta = (head + cap - last) % cap;
+    if last + delta <= cap {
+        [(last, delta), (0, 0)]
+    } else {
+        [(last, cap - last), (0, delta - (cap - last))]
+    }
+}
+
+fn slot_runs_u32(runs: [(usize, usize); 2]) -> [(u32, u32); 2] {
+    runs.map(|(first, count)| (first as u32, count as u32))
 }
 
 fn upload_points(

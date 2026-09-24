@@ -299,5 +299,269 @@ pub fn tick_touches_bake(time: f32, span: (f64, f64)) -> bool {
     !time.is_finite() || (f64::from(time) >= span.0 && f64::from(time) <= span.1)
 }
 
+/// Rows per pixel column above which a full bake is reduced before drawing.
+pub const LOD_MIN_PER_COLUMN: usize = 2;
+/// Distinct cross rows one column keeps before per-side row sampling starts. With three side
+/// classes (buy, sell, liquidation) a sampled column keeps at most `3 * (LOD_MAX_ROWS + 2)` rows.
+pub const LOD_MAX_ROWS: usize = 32;
+/// Upper bound on volume bars per column that may cover any one bar height.
+pub const LOD_VOLUME_CAP: usize = 64;
+/// Tallest volume bar in whole pixels (crosses.hlsl caps the band at 72 px).
+const LOD_BAR_MAX_PX: usize = 72;
+
+/// Bake transform in the shader's units: `price0` is the bake origin price including the
+/// vertical margin, `height` the full texture height including margins, `width_px` in texels.
+#[derive(Clone, Copy, Debug)]
+pub struct BakeColumns {
+    pub time0: f32,
+    pub time_to_px: f32,
+    pub price0: f32,
+    pub price_to_px: f32,
+    pub height: f32,
+    pub width_px: u32,
+    pub volume_alpha: f32,
+    /// Cross half-size; the shader culls crosses beyond `max(8, marker_half + 1)` past bounds.
+    pub marker_half: f32,
+    /// Volume bar scale exactly as the shader uniform receives it; unused by `reduce_crosses`.
+    pub buy_inv: f32,
+    pub sell_inv: f32,
+}
+
+/// One input row keyed to its texel; its index in `rows` is its draw order.
+#[derive(Clone, Copy, Debug)]
+struct LodRow {
+    slot: u32,
+    col: i64,
+    row: i64,
+    side: u32,
+    qty: f32,
+}
+
+/// Ring slots kept by `reduce_crosses` / `reduce_volume`, each list in ascending original draw
+/// order, plus scratch
+/// buffers reused across calls so a dense bake allocates nothing once warmed up.
+#[derive(Default, Debug)]
+pub struct LodPick {
+    pub cross: Vec<u32>,
+    pub volume: Vec<u32>,
+    rows: Vec<LodRow>,
+    order: Vec<u32>,
+    kept: Vec<u32>,
+    keep: Vec<bool>,
+    /// Kept later bars in the current column, counted per whole-pixel height.
+    covering: Vec<u32>,
+}
+
+/// Whether a full bake over `rows_in_span` rows is dense enough to reduce.
+pub fn lod_applies(rows_in_span: usize, width_px: u32) -> bool {
+    rows_in_span > LOD_MIN_PER_COLUMN * width_px as usize
+}
+
+/// Overlapping bars of this alpha after which one more is invisible in 8-bit colour.
+pub fn lod_volume_keep(alpha: f32) -> usize {
+    if !(alpha > 0.0 && alpha < 1.0) {
+        return 1;
+    }
+    let keep = ((1.0f32 / 255.0).ln() / (1.0 - alpha).ln()).ceil();
+    if keep.is_finite() {
+        (keep.max(1.0) as usize).clamp(1, LOD_VOLUME_CAP)
+    } else {
+        LOD_VOLUME_CAP
+    }
+}
+
+/// Key rows to their texel in the shader's f32 operation order (HLSL round() ties to even),
+/// keeping only rows `drawn` says the shader would not cull.
+fn key_rows(
+    rows: impl IntoIterator<Item = (u32, f32, f32, u32, f32)>,
+    g: &BakeColumns,
+    out: &mut LodPick,
+    drawn: impl Fn(f32, f32, f32, u32, f32) -> bool,
+) {
+    out.rows.clear();
+    for (slot, t, p, side, qty) in rows {
+        let sx = 0.0 + (t - g.time0) * g.time_to_px;
+        let col = sx.round_ties_even();
+        let row = ((0.0 + g.height) - (p - g.price0) * g.price_to_px).round_ties_even();
+        if !drawn(sx, col, row, side, qty) {
+            continue;
+        }
+        out.rows.push(LodRow {
+            slot,
+            col: col as i64,
+            row: row as i64,
+            side,
+            qty,
+        });
+    }
+}
+
+/// Reduce `(slot, time, price, side, qty)` rows to the crosses a bitmap can show: the last row
+/// per texel, then per-side sampling past `LOD_MAX_ROWS` rows a column. Culled rows are dropped.
+pub fn reduce_crosses(
+    rows: impl IntoIterator<Item = (u32, f32, f32, u32, f32)>,
+    g: &BakeColumns,
+    out: &mut LodPick,
+) {
+    out.cross.clear();
+    let cull = g.marker_half.max(8.0).max(g.marker_half + 1.0);
+    let (w, h) = (g.width_px as f32, g.height);
+    key_rows(rows, g, out, |_, col, row, _, _| {
+        col.is_finite()
+            && row.is_finite()
+            && col >= -cull
+            && col <= w + cull
+            && row >= -cull
+            && row <= h + cull
+    });
+    let LodPick {
+        cross,
+        rows,
+        order,
+        kept,
+        keep,
+        ..
+    } = out;
+    let n = rows.len();
+    keep.clear();
+    keep.resize(n, false);
+
+    // Tier A: the last row per texel wins, as it would in the draw.
+    order.clear();
+    order.extend(0..n as u32);
+    order.sort_unstable_by_key(|&k| {
+        let r = &rows[k as usize];
+        (r.col, r.row, k)
+    });
+    kept.clear();
+    for (i, &k) in order.iter().enumerate() {
+        let r = &rows[k as usize];
+        let last_of_texel = order.get(i + 1).is_none_or(|&next| {
+            let q = &rows[next as usize];
+            (q.col, q.row) != (r.col, r.row)
+        });
+        if last_of_texel {
+            kept.push(k);
+        }
+    }
+
+    // Tier B: columns still holding too many distinct rows are sampled per side class.
+    kept.sort_unstable_by_key(|&k| {
+        let r = &rows[k as usize];
+        (r.col, r.side.min(2), r.row, k)
+    });
+    let mut col_start = 0;
+    while col_start < kept.len() {
+        let col = rows[kept[col_start] as usize].col;
+        let col_end = col_start
+            + kept[col_start..]
+                .iter()
+                .take_while(|&&k| rows[k as usize].col == col)
+                .count();
+        if col_end - col_start <= LOD_MAX_ROWS {
+            for &k in &kept[col_start..col_end] {
+                keep[k as usize] = true;
+            }
+        } else {
+            let mut side_start = col_start;
+            while side_start < col_end {
+                let class = rows[kept[side_start] as usize].side.min(2);
+                let side_end = side_start
+                    + kept[side_start..col_end]
+                        .iter()
+                        .take_while(|&&k| rows[k as usize].side.min(2) == class)
+                        .count();
+                let side_rows = &kept[side_start..side_end];
+                let stride = side_rows.len().div_ceil(LOD_MAX_ROWS).max(1);
+                for (pos, &k) in side_rows.iter().enumerate() {
+                    if pos % stride == 0 {
+                        keep[k as usize] = true;
+                    }
+                }
+                keep[side_rows[side_rows.len() - 1] as usize] = true;
+                side_start = side_end;
+            }
+        }
+        col_start = col_end;
+    }
+    cross.extend((0..n).filter(|&k| keep[k]).map(|k| rows[k].slot));
+}
+
+/// Reduce `(slot, time, price, side, qty)` rows to the volume bars a bitmap can show: those
+/// fewer than `lod_volume_keep` later kept bars at least as tall in pixels cover, plus the
+/// tallest per side. Rows the volume pass culls (off the band, empty, liquidations) are dropped
+/// first. A column keeps at most `V * (LOD_BAR_MAX_PX + 1) + 2` bars.
+pub fn reduce_volume(
+    rows: impl IntoIterator<Item = (u32, f32, f32, u32, f32)>,
+    g: &BakeColumns,
+    out: &mut LodPick,
+) {
+    out.volume.clear();
+    let w = g.width_px as f32;
+    key_rows(rows, g, out, |sx, _, _, side, qty| {
+        sx >= -2.0 && sx <= w + 2.0 && qty > 0.0 && side < 2
+    });
+    let LodPick {
+        volume,
+        rows,
+        order,
+        kept,
+        covering,
+        ..
+    } = out;
+    let n = rows.len();
+    // Volume: walking back from the last drawn bar, a bar stays visible unless `v` later kept
+    // bars in its column already cover it; the tallest bar per column and side is always kept.
+    let v = lod_volume_keep(g.volume_alpha) as u32;
+    // Whole-pixel bar height, as volume_vertex computes it.
+    let band_h = (g.height * 0.18).min(72.0);
+    let height_px = |r: &LodRow| {
+        let inv = if r.side == 0 { g.buy_inv } else { g.sell_inv };
+        let norm = (r.qty * inv).clamp(0.0, 1.0);
+        let h = (norm.sqrt() * band_h).max(1.0).ceil();
+        if h.is_finite() {
+            (h as usize).min(LOD_BAR_MAX_PX)
+        } else {
+            LOD_BAR_MAX_PX
+        }
+    };
+    order.clear();
+    order.extend(0..n as u32);
+    order.sort_unstable_by_key(|&k| (rows[k as usize].col, k));
+    kept.clear();
+    let mut start = 0;
+    while start < order.len() {
+        let col = rows[order[start] as usize].col;
+        let end = start
+            + order[start..]
+                .iter()
+                .take_while(|&&k| rows[k as usize].col == col)
+                .count();
+        let group = &order[start..end];
+        // Latest-drawn tallest bar per side; ties go to the later bar.
+        let mut tallest = [u32::MAX; 3];
+        for &k in group {
+            let r = &rows[k as usize];
+            let best = &mut tallest[r.side.min(2) as usize];
+            if *best == u32::MAX || height_px(r) >= height_px(&rows[*best as usize]) {
+                *best = k;
+            }
+        }
+        covering.clear();
+        covering.resize(LOD_BAR_MAX_PX + 1, 0);
+        for &k in group.iter().rev() {
+            let hp = height_px(&rows[k as usize]);
+            let covered: u32 = covering[hp..].iter().sum();
+            if tallest.contains(&k) || covered < v {
+                covering[hp] += 1;
+                kept.push(k);
+            }
+        }
+        start = end;
+    }
+    kept.sort_unstable();
+    volume.extend(kept.iter().map(|&k| rows[k as usize].slot));
+}
+
 #[cfg(test)]
 mod tests;

@@ -739,6 +739,12 @@ struct PaneRender {
     last_book_rev: u64,
     last_book_lo: f32,
     last_book_hi: f32,
+    /// Price window the current order-book instances were emitted over, margin included, and
+    /// the visible range their bar lengths were normalized to.
+    last_book_emit: (f32, f32),
+    last_book_range: f32,
+    /// Reused order-book instance buffer.
+    book_scratch: Vec<moon_core::data::LevelInstance>,
     /// Book revision the sell-line depth labels were measured against; `u64::MAX` means
     /// unmeasured, which is also how `sync_orders_from_session` asks for a re-measure after
     /// rebuilding them. Separate from `last_book_rev` because that one also tracks the visible
@@ -985,6 +991,9 @@ impl PaneRender {
             last_label_book_rev: u64::MAX,
             last_book_lo: f32::NAN,
             last_book_hi: f32::NAN,
+            last_book_emit: (f32::NAN, f32::NAN),
+            last_book_range: f32::NAN,
+            book_scratch: Vec::new(),
             last_order_lines_rev: u64::MAX,
             last_archived_lines_rev: u64::MAX,
             archived_store: None,

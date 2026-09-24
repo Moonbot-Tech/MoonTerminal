@@ -316,16 +316,33 @@ impl PlatformLayers {
         }
     }
 
-    pub fn set_orderbook(&mut self, levels: Vec<LevelInstance>) {
+    /// Queue order-book levels; `immediate` bakes them this frame on backends that throttle.
+    pub fn set_orderbook(&mut self, levels: &[LevelInstance], immediate: bool) {
         #[cfg(windows)]
-        self.orderbook.set(levels);
+        self.orderbook.set(levels, immediate);
         #[cfg(target_os = "linux")]
-        self.wgpu.set_orderbook(levels);
+        self.wgpu.set_orderbook(levels.to_vec());
         #[cfg(target_os = "macos")]
-        self.metal.set_orderbook(levels);
+        self.metal.set_orderbook(levels.to_vec());
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = levels;
+        }
+        #[cfg(not(windows))]
+        let _ = immediate;
+    }
+
+    /// Vertical margin the order-book bitmap bakes beyond the zone; zero where the backend
+    /// rebakes on every window change.
+    pub fn book_v_margin_px(&self, bh: f32) -> f32 {
+        #[cfg(windows)]
+        {
+            super::orderbook::book_v_margin_px(bh)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = bh;
+            0.0
         }
     }
 
