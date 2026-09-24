@@ -70,22 +70,20 @@ fn chart_history_floor_ms(cfg: moon_core::market::CandleViewCfg) -> f32 {
         .min(HISTORY_FLOOR_MAX_BARS * tf) as f32
 }
 
-/// The shader boundary of the hide-candles zone, in milliseconds relative to the pane epoch:
-/// candles whose bucket opens at or after it are omitted and only the trade crosses stay.
+/// The shader boundary of the hide-candles zone, in milliseconds relative to the pane epoch.
 ///
-/// `hide_candles` buckets counted back from the one holding `now_ms`; zero disables the zone.
-/// `combo_left_rel` is where the resident trade crosses ACTUALLY begin (the first tick the last
-/// full read returned, or the first one the live drain delivered on an empty ring), and the zone
-/// never reaches left of it: the setting means "draw ticks here rather than candles", so a bucket
-/// with no ticks to show has to keep its candle — otherwise a freshly opened market, whose trade
-/// ring the core has not streamed yet, renders the whole zone as empty space. NaN means no crosses
-/// are resident at all, which suppresses the zone entirely rather than clamping it.
+/// Delegates to [`moon_core::market::candles::hide_zone_start_rel`], which owns the numeric
+/// clamp and the Max step. Kept here so the chart sync and its tests share one name.
 ///
-/// The clamp is taken at the OPEN of the bucket holding that first tick, not at the tick itself.
-/// The shader compares bucket opens against this value, and a raw tick timestamp — always later
-/// than the open of its own bucket — put the boundary past that open, so the bucket with the first
-/// trade was drawn as a candle over its crosses in every configuration, and with `trade_candles`
-/// no wider than `hide_candles` the setting hid one candle fewer than asked, permanently.
+/// Args:
+///     hide_candles: Hidden width, or the Max sentinel.
+///     now_ms: Wall clock, Unix milliseconds.
+///     tf_ms: Candle timeframe, milliseconds.
+///     epoch_ms: Pane epoch, Unix milliseconds.
+///     combo_left_rel: Oldest resident trade relative to the epoch, or NaN if none.
+///
+/// Returns:
+///     Hide start relative to the epoch, or `f32::MAX` when candles stay everywhere.
 fn hide_start_rel(
     hide_candles: u16,
     now_ms: f64,
@@ -93,17 +91,13 @@ fn hide_start_rel(
     epoch_ms: f64,
     combo_left_rel: f32,
 ) -> f32 {
-    if hide_candles == 0 {
-        return f32::MAX;
-    }
-    if combo_left_rel.is_nan() {
-        return f32::MAX;
-    }
-    let hide_open = moon_core::market::candles::bucket_open_ms(now_ms, tf_ms)
-        - (hide_candles as f64 - 1.0) * tf_ms as f64;
-    let first_cross_open =
-        moon_core::market::candles::bucket_open_ms(epoch_ms + combo_left_rel as f64, tf_ms);
-    (hide_open.max(first_cross_open) - epoch_ms) as f32
+    moon_core::market::candles::hide_zone_start_rel(
+        hide_candles,
+        now_ms,
+        tf_ms,
+        epoch_ms,
+        combo_left_rel,
+    )
 }
 
 impl ChartDataState {
@@ -450,10 +444,13 @@ impl ChartDataState {
             );
             let price_lines_toggle_changed = pr.applied_price_lines != price_lines;
             pr.applied_price_lines = price_lines;
-            // Candle/trade-zone configuration changes, including timeframe, K, or limit, require a
-            // history reset. Moving the current bucket does too because the last-K-candle zone has
-            // advanced and old crosses must be removed. The bucket advances only once per timeframe,
-            // measured in minutes, so resets are infrequent.
+            // Candle/trade-zone configuration changes, including timeframe or K, require a
+            // history reset. Moving the current bucket does too for a numeric zone, because the
+            // last-K window has advanced and old crosses must be removed. The bucket advances
+            // only once per timeframe, measured in minutes, so resets are infrequent. Max does
+            // not slide with the clock: its left edge is the oldest retained trade, and the
+            // read recopies only when that trade leaves its bucket. Resetting on the clock
+            // would rebuild the series every timeframe even while the retained edge held still.
             let candle_cfg = self.candle_view;
             let candle_tf_ms = candle_cfg.tf_ms();
             // Only the fields the read actually consumes may buy a reset; the popup's style
@@ -470,6 +467,7 @@ impl ChartDataState {
             let now_zone_bucket = (now / candle_tf_ms as f64).floor() as i64;
             let zone_bucket_changed = !candles_off
                 && candle_cfg.trade_candles > 0
+                && !moon_core::market::candles::is_candle_zone_max(candle_cfg.trade_candles)
                 && pr.last_zone_bucket != now_zone_bucket;
             pr.last_zone_bucket = now_zone_bucket;
             if device_lost {
@@ -520,15 +518,27 @@ impl ChartDataState {
                 // overhang, exactly as in the pan budget above.
                 || view_time0 - marker_margin < pr.resident_left_rel
                 || pan_reset_due;
-            // The lower displayed-trade boundary in relative milliseconds is the opening of bucket
-            // N-K+1. K=0 yields infinity, suppressing all crosses and leaving only candles.
-            let trades_zone_rel = if candle_cfg.trade_candles == 0 {
-                f32::INFINITY
-            } else {
-                let zone_open = moon_core::market::candles::bucket_open_ms(now, candle_tf_ms)
-                    - (candle_cfg.trade_candles as f64 - 1.0) * candle_tf_ms as f64;
-                (zone_open - pane.view.epoch_ms) as f32
-            };
+            // Drawn zone edge for the once-a-second geometry log. The shader edge is
+            // computed again after this sync's read, because Max can upload a wider cross
+            // buffer than the oldest trade we knew at the start of the frame. Numeric K is
+            // the opening of bucket N-K+1; K=0 is infinity, which suppresses crosses. Max
+            // is the open of the bucket holding the oldest resident trade, or infinity when
+            // nothing is retained. The READ bound stays separate: using the drawn edge as
+            // the read bound would freeze the window on last frame's oldest trade.
+            let epoch_ms = pane.view.epoch_ms;
+            let trades_zone_rel = moon_core::market::candles::trade_zone_start_rel(
+                candle_cfg.trade_candles,
+                now,
+                candle_tf_ms,
+                epoch_ms,
+                pr.combo_left_rel,
+            );
+            let trades_read_from = moon_core::market::candles::trades_read_from_rel(
+                candle_cfg.trade_candles,
+                now,
+                candle_tf_ms,
+                epoch_ms,
+            );
             // The hide-candles zone makes the last N buckets trade-only. This shader boundary does
             // not alter data and moves once per bucket; the style update below picks it up on the
             // next synchronization.
@@ -582,7 +592,7 @@ impl ChartDataState {
             }
             let candle_params = moon_core::market::CandleReadParams {
                 tf_ms: candle_tf_ms,
-                trades_from_rel_ms: trades_zone_rel,
+                trades_from_rel_ms: trades_read_from,
                 // The hard trade limit was removed at the user's request; ring capacity is the actual bound.
                 // Keep the field in the read protocol for future use.
                 trades_limit: usize::MAX,
@@ -1377,8 +1387,24 @@ impl ChartDataState {
                 pixels_changed = true;
             }
             // Candle-layer colors come from the theme; mode, zone, and outline come from the config.
-            // The relative-millisecond zone changes once per timeframe bucket, as tracked by
-            // zone_bucket_changed above, and the style updates at the same time.
+            // Recompute from the oldest trade this sync just stamped. The locals above were
+            // for the diagnostic and still name the previous edge; `view_dirty` is cleared
+            // on the way out, so a quiet market would otherwise keep ordinary candles over
+            // the crosses uploaded in this same read.
+            let trades_zone_rel = moon_core::market::candles::trade_zone_start_rel(
+                candle_cfg.trade_candles,
+                now,
+                candle_tf_ms,
+                pane.view.epoch_ms,
+                pr.combo_left_rel,
+            );
+            let hide_start_rel = moon_core::market::candles::hide_zone_start_rel(
+                candle_cfg.hide_candles,
+                now,
+                candle_tf_ms,
+                pane.view.epoch_ms,
+                pr.combo_left_rel,
+            );
             let next_candle_style = CandleStyleGpu {
                 up: rgb4(self.theme.candle_up),
                 down: rgb4(self.theme.candle_down),

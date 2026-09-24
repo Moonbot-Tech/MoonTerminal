@@ -964,3 +964,155 @@ fn has_holes_sees_the_prefix_the_gaps_and_the_tail() {
         "a tail older than a bucket is a hole"
     );
 }
+
+/// Max is a sentinel count, not a wider number. Replacing the equality with `>=` would treat a
+/// hand-written `1000` as Max and stretch that chart to the ring.
+#[test]
+fn candle_zone_max_is_only_the_sentinel() {
+    assert!(is_candle_zone_max(CANDLE_ZONE_MAX));
+    assert!(!is_candle_zone_max(0));
+    assert!(!is_candle_zone_max(50));
+    assert!(!is_candle_zone_max(CANDLE_ZONE_MAX - 1));
+}
+
+/// A saved Max step must come back as Max, and a saved numeric step must not. Losing the
+/// sentinel on the wire shim would drop the user's choice to the default of 3 on every launch.
+#[test]
+fn max_zone_survives_a_save_and_reload_and_numeric_steps_stay_numeric() {
+    let cfg = CandleViewCfg {
+        tf_min: 1,
+        mode: CANDLE_MODE_FILLED,
+        trade_candles: CANDLE_ZONE_MAX,
+        hide_candles: CANDLE_ZONE_MAX,
+        trades_limit: 50_000,
+        outline_px: 2.0,
+        wicks_in_zone: false,
+        neutral_in_zone: true,
+        carried_lines: None,
+    };
+    let toml_back: CandleViewCfg =
+        toml::from_str(&toml::to_string(&cfg).expect("serializes")).expect("reloads");
+    assert_eq!(toml_back.trade_candles, CANDLE_ZONE_MAX);
+    assert_eq!(toml_back.hide_candles, CANDLE_ZONE_MAX);
+    assert_eq!(toml_back, cfg);
+    let json_back: CandleViewCfg =
+        serde_json::from_str(&serde_json::to_string(&cfg).expect("serializes")).expect("reloads");
+    assert_eq!(json_back, cfg);
+
+    let numeric: CandleViewCfg =
+        toml::from_str("trade_candles = 50\nhide_candles = 3\n").expect("a numeric file loads");
+    assert_eq!(numeric.trade_candles, 50);
+    assert_eq!(numeric.hide_candles, 3);
+    assert!(!is_candle_zone_max(numeric.trade_candles));
+}
+
+/// `max_trade_zone_edge_rel` must sit on the open of the bucket that holds the oldest trade.
+/// Returning the trade's own timestamp leaves that bucket drawn as an ordinary candle over
+/// its crosses, which is a one-candle gap in front of the zone.
+#[test]
+fn max_zone_edge_is_the_open_of_the_oldest_trades_bucket() {
+    let tf_ms = 300_000_i64;
+    let epoch_ms = 1_700_000_000_000.0;
+    // 23s into a bucket, so a raw timestamp and the bucket open differ.
+    let oldest_rel = 90_000.0 + 23_000.0;
+    let abs = epoch_ms + oldest_rel as f64;
+    let expected_open = (abs / tf_ms as f64).floor() * tf_ms as f64;
+    let expected_rel = (expected_open - epoch_ms) as f32;
+
+    let edge = max_trade_zone_edge_rel(oldest_rel, tf_ms, epoch_ms);
+    assert_eq!(edge, expected_rel);
+    assert!(
+        edge <= oldest_rel,
+        "the edge cannot sit to the right of its trade"
+    );
+    assert!(
+        oldest_rel < edge + tf_ms as f32,
+        "the trade must fall inside the bucket the edge opens"
+    );
+    // The previous bucket's open is one timeframe left, so it stays an ordinary candle.
+    let previous_open = (expected_open - tf_ms as f64 - epoch_ms) as f32;
+    assert!(previous_open < edge);
+}
+
+/// No retained trade must not punch an empty Max zone. A finite edge with nothing to draw
+/// there hides candles (or starts a trade zone) over empty space.
+#[test]
+fn max_zone_is_off_when_no_trade_is_retained() {
+    let tf_ms = 300_000_i64;
+    let epoch_ms = 1_700_000_000_000.0;
+    let now_ms = epoch_ms + 637_474.0;
+    assert!(
+        !max_trade_zone_edge_rel(f32::NAN, tf_ms, epoch_ms).is_finite(),
+        "a trade zone with no trade is not a zone"
+    );
+    assert_eq!(
+        hide_zone_start_rel(CANDLE_ZONE_MAX, now_ms, tf_ms, epoch_ms, f32::NAN),
+        f32::MAX,
+        "hide Max with no trade leaves every candle drawn"
+    );
+    assert!(!trade_zone_start_rel(CANDLE_ZONE_MAX, now_ms, tf_ms, epoch_ms, f32::NAN).is_finite());
+}
+
+/// Hide Max and the Max trade zone are one boundary. Diverging them hides candles where no
+/// crosses are drawn, or leaves candles on top of the trade stretch.
+#[test]
+fn hide_max_matches_the_max_trade_zone_edge() {
+    let tf_ms = 300_000_i64;
+    let epoch_ms = 1_700_000_000_000.0;
+    let now_ms = epoch_ms + 637_474.0;
+    let oldest_rel = 120_000.0;
+    let trade = trade_zone_start_rel(CANDLE_ZONE_MAX, now_ms, tf_ms, epoch_ms, oldest_rel);
+    let hide = hide_zone_start_rel(CANDLE_ZONE_MAX, now_ms, tf_ms, epoch_ms, oldest_rel);
+    assert!(trade.is_finite());
+    assert_eq!(hide, trade);
+}
+
+/// The Max read asks for the whole ring. Feeding it the drawn edge would stop the next copy
+/// at last frame's oldest trade, so a backfill could never extend the zone.
+#[test]
+fn max_trade_read_is_unbounded_while_a_numeric_read_keeps_its_window() {
+    let tf_ms = 300_000_i64;
+    let epoch_ms = 1_700_000_000_000.0;
+    let now_ms = epoch_ms + 637_474.0;
+    let unbound = trades_read_from_rel(CANDLE_ZONE_MAX, now_ms, tf_ms, epoch_ms);
+    assert_eq!(unbound, TRADES_FROM_UNBOUNDED);
+    assert!(
+        unbound.is_finite(),
+        "a non-finite read bound hides trades entirely"
+    );
+
+    assert!(!trades_read_from_rel(0, now_ms, tf_ms, epoch_ms).is_finite());
+
+    let three = trades_read_from_rel(3, now_ms, tf_ms, epoch_ms);
+    let open = (now_ms / tf_ms as f64).floor() * tf_ms as f64;
+    let expected = (open - 2.0 * tf_ms as f64 - epoch_ms) as f32;
+    assert_eq!(three, expected);
+    assert_ne!(three, TRADES_FROM_UNBOUNDED);
+}
+
+/// A Max recopy rebuilds the candle series, so a live print inside the same oldest bucket
+/// must not ask for one. Dropping the bucket compare would reset on every eviction.
+#[test]
+fn max_zone_recopies_on_a_new_oldest_bucket_or_older_history_only() {
+    let tf_ms = 300_000_i64;
+    let bucket = 1_700_000_100_000_i64;
+    assert!(
+        !max_zone_recopy_due(None, None, tf_ms),
+        "nothing retained and nothing drawn is already in agreement"
+    );
+    assert!(!max_zone_recopy_due(
+        Some(bucket + 1_000),
+        Some(bucket + 20_000),
+        tf_ms
+    ));
+    assert!(
+        max_zone_recopy_due(Some(bucket + 1_000), Some(bucket + tf_ms), tf_ms),
+        "eviction into the next bucket moves the drawn edge"
+    );
+    assert!(
+        max_zone_recopy_due(Some(bucket + 10_000), Some(bucket - tf_ms), tf_ms),
+        "older history has to extend the zone"
+    );
+    assert!(max_zone_recopy_due(Some(bucket), None, tf_ms));
+    assert!(max_zone_recopy_due(None, Some(bucket), tf_ms));
+}

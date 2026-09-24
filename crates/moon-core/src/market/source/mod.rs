@@ -924,6 +924,11 @@ pub struct ChartHistoryCursor {
     mark_prices: Option<SeqRingCursor>,
     last_price: Option<f32>,
     trade_rows: Vec<TradeHistoryRow>,
+    /// Oldest trade Unix-ms uploaded by the last full cross copy.
+    ///
+    /// Max uses it to decide when eviction or a backfill has moved the zone's left
+    /// bucket. `None` means that copy held no trade. Cleared with the cursor.
+    displayed_oldest_ms: Option<i64>,
     scan_trade_rows: Vec<TradeHistoryRow>,
     /// Fixture candles last uploaded by this pane, retained for viewport-only fitting without SQL.
     fixture_candles: Vec<ChartCandle>,
@@ -1060,6 +1065,7 @@ impl ChartHistoryCursor {
         self.mark_prices = None;
         self.last_price = None;
         self.trade_rows.clear();
+        self.displayed_oldest_ms = None;
         self.scan_trade_rows.clear();
         self.liq_rows.clear();
         self.last_price_rows.clear();
@@ -1123,7 +1129,8 @@ pub struct CandleReadParams {
     /// Lower bound for displayed trades in milliseconds relative to the epoch.
     ///
     /// This defines the last-K-candles display zone. `f32::INFINITY` hides trades entirely when
-    /// K is zero. It does not limit candle aggregation.
+    /// K is zero. [`crate::market::candles::TRADES_FROM_UNBOUNDED`] asks for every retained
+    /// trade and lets the ring capacity clamp the copy. It does not limit candle aggregation.
     pub trades_from_rel_ms: f32,
     /// Hard limit on the number of displayed trades.
     pub trades_limit: usize,

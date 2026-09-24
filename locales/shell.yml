@@ -1235,6 +1235,10 @@ chart.candles.zone:
   ru: "Свечей с трейдами"
   en: "Candles with trades"
   es: "Velas con trades"
+chart.candles.zone_max:
+  ru: "Max"
+  en: "Max"
+  es: "Max"
 chart.candles.zone_hint:
   ru: "Трейды рисуются в последних N свечах;\n0 — только свечи"
   en: "Trades are drawn in the last N candles;\n0 — candles only"
