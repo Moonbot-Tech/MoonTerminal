@@ -47,6 +47,10 @@ fn the_schema_places_every_field_and_marks_what_the_model_turns() {
             &["IgnoreSellShot", "SellShotPriceDown"],
         ),
         section(
+            "Sell order\\SellSpread",
+            &["IgnoreSellSpread", "SellSpreadDistance"],
+        ),
+        section(
             "Stops",
             &[
                 "UseStopLoss",
@@ -68,17 +72,23 @@ fn the_schema_places_every_field_and_marks_what_the_model_turns() {
     assert!(matches!(settings.rows[0].role, RowRole::Knob(p) if p.key == "MShotPrice"));
     assert_eq!(settings.rows[1].role, RowRole::Outside);
 
-    let shot = find(&out, ParamSection::SellShot);
-    assert_eq!(keys(shot)[..2], ["IgnoreSellShot", "SellShotPriceDown"]);
-    // Read by the SellShot walk, never turned.
-    assert_eq!(shot.rows[1].role, RowRole::Fixed);
-    // The knobs this schema left out follow under their own section.
-    assert!(
-        shot.rows[2..]
-            .iter()
-            .all(|r| matches!(r.role, RowRole::Knob(p) if p.section == ParamSection::SellShot))
-    );
-    assert!(shot.rows.iter().any(|r| r.key == "SellShotDistance"));
+    // SellShot and SellSpread are not modelled: every field is drawn, none of them live, and no
+    // knob follows under them.
+    for (s, names) in [
+        (
+            ParamSection::SellShot,
+            ["IgnoreSellShot", "SellShotPriceDown"],
+        ),
+        (
+            ParamSection::SellSpread,
+            ["IgnoreSellSpread", "SellSpreadDistance"],
+        ),
+    ] {
+        let grid = find(&out, s);
+        assert_eq!(keys(grid), names);
+        assert!(grid.rows.iter().all(|r| r.role == RowRole::Unmodelled));
+        assert_eq!(grid.knobs().count(), 0);
+    }
 
     let stops = find(&out, ParamSection::Stops);
     assert_eq!(

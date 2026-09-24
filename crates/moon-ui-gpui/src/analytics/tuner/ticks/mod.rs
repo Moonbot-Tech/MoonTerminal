@@ -48,6 +48,7 @@ mod sections;
 pub(in crate::analytics) mod state;
 mod tape;
 mod trade_pane;
+mod unmodelled;
 mod variants;
 
 impl AnalyticsView {

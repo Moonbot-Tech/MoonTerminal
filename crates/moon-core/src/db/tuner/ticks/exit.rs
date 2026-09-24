@@ -3,9 +3,15 @@
 //! function of the sell-order rules and the tape.
 //!
 //! One file per section of the strategy window, in the window's order: [`stops`],
-//! [`sell_order`] (the take, `SellDelay`, `PriceDown*`, `SellLevel*`), [`sell_shot`],
-//! [`sell_spread`], [`delta_mods`] — and PumpsDetection's own [`pump_move`]. The step they share —
-//! the walk over the tape, the price grid, the latency, the recorded replacements — is [`line`].
+//! [`sell_order`] (the take, `SellDelay`, `PriceDown*`, `SellLevel*`), [`delta_mods`] — and
+//! PumpsDetection's own [`pump_move`]. The step they share — the walk over the tape, the price
+//! grid, the latency, the recorded replacements — is [`line`].
+//!
+//! The "Sell order / SellShot" and "Sell order / SellSpread" sections are not modelled at all (the
+//! developer's call, 2026-09-24): SellShot follows the book's side of the market and SellSpread the
+//! spread, neither of which the trade tape carries, and 2 live strategies of 1 422 switch either
+//! on. A trade under one of them is not judged ([`UnmodelledRule`]).
+//!
 //! A position nothing closed inside the tape is [`ExitKind::OpenAtWindowEnd`]: not a trade,
 //! whatever the core's exit was.
 //!
@@ -15,8 +21,6 @@ pub mod delta_mods;
 pub mod line;
 pub mod pump_move;
 pub mod sell_order;
-pub mod sell_shot;
-pub mod sell_spread;
 pub mod stops;
 
 use self::line::{LineWalk, walk, walk_held};
@@ -24,6 +28,36 @@ use super::mshot::Modifiers;
 use super::settings::ModelSettings;
 use super::{Deal, Exit, Fill};
 use crate::feed::types::Tick;
+
+/// A level `pct` per cent off the buy, positive in the PROFIT direction: `buy·(1 + pct/100)` for a
+/// long, `buy/(1 + pct/100)` for a short — the short's per cents are counted from the level back
+/// to the buy, not the long's product mirrored. The one formula for every level a strategy states
+/// in per cent of the buy: the take of every kind, the stop, the trailing's take profit and the
+/// `*AllowedDrop` floors.
+///
+/// The core developer (2026-09-24, answer 9): every per cent of a short off the buy divides; only
+/// the trailing distance, a PriceDown step without `Relative` and `StopAboveLiq` multiply. The
+/// site's page on the short says the same ("a take of +50 % at 100 stands at 66.6"). Checked on
+/// the data: the stop's `StopLoss fixed: X` lands on the division for 11 099 short stops against
+/// 25 for the mirror, and the `PriceDownAllowedDrop` floor of the archived short Exit lines for 67
+/// against 1 (2026-09-24; 215 more sit where the two readings round to one step).
+///
+/// A loss of 100 % or more leaves no price: 0 for a long and `f64::INFINITY` for a short, levels
+/// no print reaches.
+///
+/// Args:
+///     buy: The buy the level counts from.
+///     pct: The distance, negative on the losing side.
+///     long: The trade's side.
+pub fn level_off_buy(buy: f64, pct: f64, long: bool) -> f64 {
+    let keep = 1.0 + pct / 100.0;
+    match (long, keep <= 0.0) {
+        (true, true) => 0.0,
+        (true, false) => buy * keep,
+        (false, true) => f64::INFINITY,
+        (false, false) => buy / keep,
+    }
+}
 
 /// Which way the position profits, folding every "above/below the buy" into one sign. Every
 /// section's rule is written for a long and mirrored for a short through it.
@@ -33,8 +67,15 @@ struct Side {
 }
 
 impl Side {
-    /// `pct` per cent over the buy in the PROFIT direction: above for a long, below for a
-    /// short.
+    /// `pct` per cent off the buy in the profit direction — [`level_off_buy`].
+    fn off_buy(self, buy: f64, pct: f64) -> f64 {
+        level_off_buy(buy, pct, self.long)
+    }
+
+    /// `pct` per cent of `base` in the PROFIT direction, the long's product mirrored: above for
+    /// a long, below for a short. For a distance off a price that is NOT the buy — the high a
+    /// `SellLevelAdjust` counts from — and for a step that is a share of the price rather than a
+    /// level. A level off the buy is [`Self::off_buy`].
     fn over(self, base: f64, pct: f64) -> f64 {
         if self.long {
             base * (1.0 + pct / 100.0)
@@ -46,11 +87,6 @@ impl Side {
     /// The take side of two levels — the higher for a long — i.e. farther in profit.
     fn farther(self, a: f64, b: f64) -> f64 {
         if self.long { a.max(b) } else { a.min(b) }
-    }
-
-    /// The nearer of two levels in profit terms.
-    fn nearer(self, a: f64, b: f64) -> f64 {
-        if self.long { a.min(b) } else { a.max(b) }
     }
 
     /// The extreme print in the profit direction over a run.
@@ -73,19 +109,6 @@ impl Side {
                 })
                 .map(|t| f64::from(t.price)),
         )
-    }
-
-    /// Distance of `level` from `reference`, per cent, positive in the profit direction.
-    fn distance_pct(self, reference: f64, level: f64) -> f64 {
-        if reference <= 0.0 {
-            return 0.0;
-        }
-        let signed = if self.long {
-            level - reference
-        } else {
-            reference - level
-        };
-        signed / reference * 100.0
     }
 }
 
@@ -158,18 +181,6 @@ pub struct ExitParams {
     pub sell_level_relative: bool,
     pub sell_level_allowed_drop_pct: f64,
     pub sell_level_work_time_s: f64,
-    // SellShot
-    pub ignore_sell_shot: bool,
-    pub sell_shot_distance_pct: f64,
-    pub sell_shot_corridor_pct: f64,
-    pub sell_shot_calc_interval_s: f64,
-    pub sell_shot_raise_wait_s: f64,
-    pub sell_shot_replace_delay_s: f64,
-    pub sell_shot_price_down: f64,
-    pub sell_shot_price_down_delay_s: f64,
-    pub sell_shot_allowed_up_pct: f64,
-    pub sell_shot_allowed_down_pct: f64,
-    pub sell_shot_delay_s: f64,
     // PumpMove (PumpsDetection)
     /// `PumpMoveTimer` — seconds after the take before the one pump move; 0 never moves.
     pub pump_move_timer_s: f64,
@@ -246,17 +257,6 @@ impl Default for ExitParams {
             sell_level_relative: false,
             sell_level_allowed_drop_pct: 0.0,
             sell_level_work_time_s: 0.0,
-            ignore_sell_shot: true,
-            sell_shot_distance_pct: 0.0,
-            sell_shot_corridor_pct: 50.0,
-            sell_shot_calc_interval_s: 0.6,
-            sell_shot_raise_wait_s: 0.0,
-            sell_shot_replace_delay_s: 0.0,
-            sell_shot_price_down: 0.0,
-            sell_shot_price_down_delay_s: 0.0,
-            sell_shot_allowed_up_pct: 10.0,
-            sell_shot_allowed_down_pct: -100.0,
-            sell_shot_delay_s: 0.0,
             pump_move_timer_s: 0.0,
             pump_move_pct: 0.0,
             stop_loss_pct: 0.0,
@@ -280,6 +280,13 @@ impl Default for ExitParams {
 pub enum UnmodelledRule {
     /// `UseSecondStop` / `UseStopLoss3` — the stop ladder.
     StopLadder,
+    /// `IgnoreSellShot` off with a `SellShotDistance` — the sell kept at a distance from the
+    /// market's high.
+    SellShot,
+    /// `IgnoreSellSpread` off — the sell placed under the spread.
+    SellSpread,
+    /// `AutoSell` off — the core places no sell order at all, so there is no line to replay.
+    NoAutoSell,
 }
 
 /// The exit model over one parameter set.

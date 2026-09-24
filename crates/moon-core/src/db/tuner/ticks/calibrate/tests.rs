@@ -29,6 +29,7 @@ fn deal() -> Deal {
         step_lag_ms: 0.0,
         stop_anchor: None,
         delta_track: None,
+        bars: None,
         own_entry: None,
         buy_set_ms: None,
         corridor: None,

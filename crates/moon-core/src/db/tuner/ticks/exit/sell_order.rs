@@ -27,10 +27,14 @@
 //!   seconds adjusted by `SellLevelAdjust` per cent — of that high, or of its distance to the
 //!   buy when `SellLevelRelative` — at most `SellLevelCount` times, every `SellLevelDelayNext`
 //!   (or `SellLevelDelay`) seconds, inside `SellLevelWorkTime`, never below
-//!   `SellLevelAllowedDrop` per cent over the buy.
+//!   `SellLevelAllowedDrop` per cent over the buy. The high is read over the tape AND the
+//!   market's minute bars (`Deal::bars`): the tape reaches minutes before the order, the look-back
+//!   an hour — read off the tape alone, the "hour's high" was the high of the run-up, and a
+//!   variant turning SellLevel on sold at a level the core would never have placed.
 
 use super::line::Line;
-use super::{ExitModel, ExitParams, Side, due_by};
+use super::{ExitModel, ExitParams, Side, due_by, level_off_buy};
+use crate::db::tuner::ticks::deltas::Bar;
 use crate::db::tuner::ticks::hook::{KIND_MOONHOOK, hook_take_pct};
 use crate::db::tuner::ticks::{Deal, Fill};
 use crate::feed::types::Tick;
@@ -55,22 +59,15 @@ impl ExitModel<'_> {
         // Floored at zero: a modifier deep enough to drive the distance negative would put the
         // TAKE on the losing side of the entry and turn every level the line steps down from
         // inside out. The rules that legitimately sell below the entry are the moving ones
-        // (`PriceDownAllowedDrop`, a negative `SellShotDistance`), and they get there by
+        // (`PriceDownAllowedDrop`), and they get there by
         // stepping down from the take, not by starting underneath it.
         let pct = (self.base_take_pct(deal) + self.modifier_pct(deal, fill.t_ms)).max(0.0);
-        let mshot = take_model_for(&deal.kind);
-        let mut take = if deal.is_long() {
-            fill.price * (1.0 + pct / 100.0)
-        } else if mshot {
-            // The core divides a short MoonShot's take off the fill (the core developer,
-            // 2026-09-23): `fill / (1 + SellPrice/100)`. The two archived short takes that
-            // SellPrice placed and whose price step tells the formulas apart (ONE, BCH_RP) sit
-            // on it; MoonHook's stored take is rounded too coarsely to tell, and keeps the
-            // product.
-            fill.price / (1.0 + pct / 100.0)
-        } else {
-            fill.price * (1.0 - pct / 100.0)
-        };
+        // A short's take divides off the fill for every kind (the core developer, 2026-09-23 for
+        // MoonShot, 2026-09-24 for every per cent of a short off the buy). A MoonHook's take
+        // carries the delta modifiers, whose live sum the report does not keep, so the archive
+        // cannot tell the two readings apart on it; the stop and the `PriceDownAllowedDrop`
+        // floor, which it can, divide.
+        let mut take = level_off_buy(fill.price, pct, deal.is_long());
         if self.params.sell_at_last_price {
             let pre = deal
                 .pre_spike_ask
@@ -268,7 +265,7 @@ impl<'a> PriceDown<'a> {
             fill,
             side,
             next: pd_on.then(|| fill.t_ms + (params.price_down_timer_s * 1000.0) as i64),
-            floor: side.over(fill.price, params.price_down_allowed_drop_pct),
+            floor: side.off_buy(fill.price, params.price_down_allowed_drop_pct),
             delay_ms: step_ms(params.price_down_delay_s, params.model.step_floor_ms),
             lag_ms: deal.step_lag_ms.max(0.0) as i64,
         }
@@ -287,6 +284,8 @@ impl<'a> PriceDown<'a> {
         let next = if params.price_down_relative {
             core - (core - fill.price) * params.price_down_pct / 100.0
         } else {
+            // A share of the price, not a level off the buy: the step multiplies for a short too
+            // (the core developer, 2026-09-24, answer 9).
             core - side.over(fill.price, params.price_down_pct) + fill.price
         };
         let next = side.farther(next, self.floor);
@@ -319,10 +318,12 @@ pub(super) struct SellLevel<'a> {
     until: Option<i64>,
     /// `SellLevelAllowedDrop` over the buy.
     floor: f64,
+    /// The market's bars (`Deal::bars`), for the part of the look-back the tape does not reach.
+    bars: &'a [Bar],
 }
 
 impl<'a> SellLevel<'a> {
-    pub(super) fn new(params: &'a ExitParams, fill: Fill, side: Side) -> Self {
+    pub(super) fn new(params: &'a ExitParams, deal: &'a Deal, fill: Fill, side: Side) -> Self {
         let floor_ms = params.model.step_floor_ms;
         let sl_on = params.sell_level_delay_s != 0.0
             && params.sell_level_time_s > 0.0
@@ -348,34 +349,56 @@ impl<'a> SellLevel<'a> {
             left: params.sell_level_count,
             until: (params.sell_level_work_time_s > 0.0)
                 .then(|| fill.t_ms + (params.sell_level_work_time_s * 1000.0) as i64),
-            floor: side.over(fill.price, params.sell_level_allowed_drop_pct),
+            floor: side.off_buy(fill.price, params.sell_level_allowed_drop_pct),
+            bars: deal.bars.as_deref().unwrap_or_default(),
         }
     }
 
-    /// Every move due by the print at `t_ms`: to the high of the look-back, adjusted.
+    /// The move due by the print at `t_ms`, if any.
+    pub(super) fn due(&self, t_ms: i64) -> Option<i64> {
+        due_by(self.next, t_ms)
+    }
+
+    /// The extreme of `[from, due]` in the profit direction: the tape's prints, and every bar that
+    /// lies inside the look-back and closed by `due` — a bar still open at `due` holds prints
+    /// from after it, and one that began before `from` holds prints from before the look-back.
+    fn high(&self, seen: &[Tick], from: i64, due: i64) -> Option<f64> {
+        let side = self.side;
+        let bars = self
+            .bars
+            .iter()
+            .filter(|b| b.from_ms >= from && b.to_ms <= due)
+            .map(|b| if side.long { b.high } else { b.low })
+            .filter(|p| p.is_finite() && *p > 0.0);
+        let prints = side.extreme_between(seen, from, due);
+        side.extreme(prints.into_iter().chain(bars))
+    }
+
+    /// The move due at `due`: to the high of the look-back, adjusted.
     ///
     /// Args:
-    ///     seen: The prints up to and including the one at `t_ms`.
-    pub(super) fn catch_up(&mut self, t_ms: i64, seen: &[Tick], line: &mut Line) {
+    ///     seen: The prints up to and including the one the move is due by.
+    pub(super) fn step(&mut self, due: i64, seen: &[Tick], line: &mut Line) {
         let (params, fill, side) = (self.params, self.fill, self.side);
-        while let Some(due) = due_by(self.next, t_ms) {
-            if self.left == 0 || self.until.is_some_and(|until| due > until) {
-                self.next = None;
-                break;
-            }
-            let from = due - (params.sell_level_time_s * 1000.0) as i64;
-            if let Some(high) = side.extreme_between(seen, from, due) {
-                let next = if params.sell_level_relative {
-                    fill.price + (high - fill.price) * params.sell_level_adjust_pct / 100.0
-                } else {
-                    side.over(high, params.sell_level_adjust_pct)
-                };
-                let next = side.farther(next, self.floor);
-                line.place(due, next);
-            }
-            self.left -= 1;
-            self.next = Some(due + self.every_ms);
+        if self.left == 0 || self.until.is_some_and(|until| due > until) {
+            self.next = None;
+            return;
         }
+        let from = due - (params.sell_level_time_s * 1000.0) as i64;
+        if let Some(high) = self.high(seen, from, due) {
+            let next = if params.sell_level_relative {
+                fill.price + (high - fill.price) * params.sell_level_adjust_pct / 100.0
+            } else {
+                // Off the high, not off the buy — the product, like the trailing distance off its
+                // peak. No live strategy runs SellLevel (`SellLevelDelay` is absent from all
+                // 1 422, 2026-09-24), so no archive tells the readings apart.
+                side.over(high, params.sell_level_adjust_pct)
+            };
+            let next = side.farther(next, self.floor);
+            line.place(due, next);
+        }
+        self.left -= 1;
+        self.next = Some(due + self.every_ms);
     }
 }
 

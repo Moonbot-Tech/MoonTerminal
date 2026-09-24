@@ -78,6 +78,22 @@ pub const LOOKBACK_MS: i64 = 25 * 60 * MINUTE_MS + CANDLE_MS;
 /// opens on a hole in the history.
 const BTC_LOOKBACK_MS: i64 = 4 * 60 * MINUTE_MS;
 
+/// How far before a deal's window its market's bars are kept on the deal (`Deal::bars`) for the
+/// sell rules that look back past the tape: SellLevel's `SellLevelTime` is 3 600 s in every live
+/// strategy that sets it (1 412 of 1 422, 24.09), 7 200 s at the grid's widest. A look-back past
+/// this reads what is there.
+pub const PRICE_HISTORY_MS: i64 = 4 * 60 * MINUTE_MS;
+
+/// What [`track_for`] reads for one deal: the deltas along its window, and its market's bars.
+#[derive(Clone, Debug, Default)]
+pub struct History {
+    /// The deltas' track; `None` keeps the report's snapshot (see [`track_for`]).
+    pub track: Option<Arc<DeltaTrack>>,
+    /// The bars from [`PRICE_HISTORY_MS`] before the window through the tape's end
+    /// (`Deal::bars`); `None` when the cache holds none.
+    pub bars: Option<Arc<[Bar]>>,
+}
+
 /// One bar of history: what printed over `[from_ms, to_ms)`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bar {
@@ -355,29 +371,59 @@ pub fn read_bars(
     from_ms: i64,
     to_ms: i64,
 ) -> Vec<Bar> {
-    let read = |kind_min: u32| {
-        let span_ms = i64::from(kind_min) * MINUTE_MS;
-        cache
-            .read_range(exchange_key, market, kind_min, from_ms, to_ms)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|c| c.t_open_ms.is_finite())
-            .map(|c| {
-                let from_ms = c.t_open_ms as i64;
-                Bar {
-                    from_ms,
-                    to_ms: from_ms + span_ms,
-                    open: f64::from(c.open),
-                    high: f64::from(c.high),
-                    low: f64::from(c.low),
-                    close: f64::from(c.close),
-                }
-            })
-            .collect::<Vec<Bar>>()
-    };
-    let minutes = read(1);
+    let (minutes, fives) = read_both(cache, exchange_key, market, from_ms, to_ms);
+    minute_first(minutes, fives)
+}
+
+/// One kind of a market's bars over `[from_ms, to_ms]` off the kline cache, ascending as the
+/// cache gives them.
+fn read_kind(
+    cache: &KlineCache,
+    exchange_key: &str,
+    market: &str,
+    kind_min: u32,
+    from_ms: i64,
+    to_ms: i64,
+) -> Vec<Bar> {
+    let span_ms = i64::from(kind_min) * MINUTE_MS;
+    cache
+        .read_range(exchange_key, market, kind_min, from_ms, to_ms)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| c.t_open_ms.is_finite())
+        .map(|c| {
+            let from_ms = c.t_open_ms as i64;
+            Bar {
+                from_ms,
+                to_ms: from_ms + span_ms,
+                open: f64::from(c.open),
+                high: f64::from(c.high),
+                low: f64::from(c.low),
+                close: f64::from(c.close),
+            }
+        })
+        .collect()
+}
+
+/// The one-minute and the five-minute bars of a market over `[from_ms, to_ms]`.
+fn read_both(
+    cache: &KlineCache,
+    exchange_key: &str,
+    market: &str,
+    from_ms: i64,
+    to_ms: i64,
+) -> (Vec<Bar>, Vec<Bar>) {
+    (
+        read_kind(cache, exchange_key, market, 1, from_ms, to_ms),
+        read_kind(cache, exchange_key, market, 5, from_ms, to_ms),
+    )
+}
+
+/// The minute bars, and the five-minute ones wherever no minute bar lies — bars that do not
+/// overlap, as the deltas' series needs them.
+fn minute_first(minutes: Vec<Bar>, fives: Vec<Bar>) -> Vec<Bar> {
     let mut bars = minutes.clone();
-    bars.extend(read(5).into_iter().filter(|five| {
+    bars.extend(fives.into_iter().filter(|five| {
         !minutes
             .iter()
             .any(|m| m.from_ms >= five.from_ms && m.from_ms < five.to_ms)
@@ -386,8 +432,20 @@ pub fn read_bars(
     bars
 }
 
-/// The track of one deal, from its tape and the kline cache — the one call the tuner's table and
-/// the `real_data` bench both make, so what the bench measures is what the table replays.
+/// Every bar of both kinds, overlapping — for a rule that takes an extreme over a window
+/// (`Deal::bars`), where a five-minute bar holding the minutes the minute bars miss is data, and
+/// an overlap changes no extreme. Filtering the five-minute bars by the minute ones, as the series
+/// does, lost a whole five-minute bar to a single minute bar inside it, with the rest of its
+/// minutes missing.
+pub fn all_bars(minutes: &[Bar], fives: &[Bar]) -> Vec<Bar> {
+    let mut bars: Vec<Bar> = minutes.iter().chain(fives).copied().collect();
+    bars.sort_by_key(|b| (b.from_ms, b.to_ms));
+    bars
+}
+
+/// The track of one deal, from its tape and the kline cache, and the bars it was read off — the
+/// one call the tuner's table and the `real_data` bench both make, so what the bench measures is
+/// what the table replays.
 ///
 /// Args:
 ///     cache: The terminal's kline cache.
@@ -406,19 +464,29 @@ pub fn track_for(
     deal: &Deal,
     ticks: &[Tick],
     covered: &Coverage,
-) -> Option<Arc<DeltaTrack>> {
-    // Only a track anchored on the report is the core's number (see the module doc): a trade
-    // without a stamp the tape reaches keeps the snapshot.
-    let at = snapshot_ms(deal)?;
-    let (from, to) = covered.hull()?;
+) -> History {
+    let Some((from, to)) = covered.hull() else {
+        return History::default();
+    };
     let eval = eval_span(deal);
-    let coin_bars = read_bars(
+    let (minutes, fives) = read_both(
         cache,
         exchange_key,
         market,
         from - LOOKBACK_MS - CANDLE_MS,
         to,
     );
+    let kept: Vec<Bar> = all_bars(&minutes, &fives)
+        .into_iter()
+        .filter(|b| b.to_ms > eval.0 - PRICE_HISTORY_MS)
+        .collect();
+    let coin_bars = minute_first(minutes, fives);
+    let bars = (!kept.is_empty()).then(|| Arc::from(kept));
+    // Only a track anchored on the report is the core's number (see the module doc): a trade
+    // without a stamp the tape reaches keeps the snapshot.
+    let Some(at) = snapshot_ms(deal) else {
+        return History { track: None, bars };
+    };
     // A deal on BTC's own market reads BTC off its own bars.
     let btc_bars = match btc_market {
         Some(btc) if btc == market => coin_bars
@@ -429,7 +497,7 @@ pub fn track_for(
         Some(btc) => read_bars(cache, exchange_key, btc, eval.0 - BTC_LOOKBACK_MS, eval.1),
         None => Vec::new(),
     };
-    DeltaTrack::build(TrackInputs {
+    let track = DeltaTrack::build(TrackInputs {
         coin_bars: &coin_bars,
         ticks,
         covered: covered.spans(),
@@ -437,7 +505,8 @@ pub fn track_for(
         eval,
         anchor: Some((at, &deal.deltas)),
     })
-    .map(Arc::new)
+    .map(Arc::new);
+    History { track, bars }
 }
 
 #[cfg(test)]

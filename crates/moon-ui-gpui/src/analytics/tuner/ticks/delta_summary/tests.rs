@@ -23,6 +23,7 @@ fn row(tape: TapeStatus) -> DealRow {
             profit: None,
             deltas: Deltas::default(),
             delta_track: None,
+            bars: None,
             tick: None,
             pre_spike_ask: None,
             archived_take: None,

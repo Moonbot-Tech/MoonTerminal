@@ -148,7 +148,11 @@ impl AnalyticsView {
                             .variant(MoonButtonVariant::Soft)
                             .label(t!("analytics.tuner.suggest_one").to_string())
                             .disabled(running || self.ticks.sel_field.is_none())
-                            .on_click(cx.listener(|this, _, _, cx| this.ticks_suggest_one(cx)))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.ticks_suggest_one(window, cx)
+                                }),
+                            )
                             .render(),
                     ),
             )
@@ -158,7 +162,7 @@ impl AnalyticsView {
                         .variant(MoonButtonVariant::Blue)
                         .label(t!("analytics.tuner.suggest_run").to_string())
                         .disabled(running)
-                        .on_click(cx.listener(|this, _, _, cx| this.ticks_suggest(cx)))
+                        .on_click(cx.listener(|this, _, window, cx| this.ticks_suggest(window, cx)))
                         .render(),
                 ),
             );

@@ -1,6 +1,6 @@
 //! The moving sell line: where the sell order stood at every moment after the fill, and which
 //! print crossed it — the step every section's rules share. The rules themselves live with their
-//! section of the strategy window: [`super::stops`], [`super::sell_order`], [`super::sell_shot`],
+//! section of the strategy window: [`super::stops`], [`super::sell_order`],
 //! [`super::delta_mods`], and PumpsDetection's own [`super::pump_move`].
 //!
 //! Every rule is written for a long and mirrored for a short by `Side`. A replacement reaches
@@ -17,7 +17,6 @@
 
 use super::pump_move::PumpMove;
 use super::sell_order::{PriceDown, SellLevel, armed_at};
-use super::sell_shot::SellShot;
 use super::stops::Stops;
 use super::{ExitParams, Side};
 use crate::db::tuner::ticks::{Deal, Exit, ExitKind, Fill, reaches, round_to_step};
@@ -212,8 +211,7 @@ pub fn walk_held(
     let mut line = Line::new(deal.tick, take, armed_at, params.model.latency_whole_ms());
     let mut price_down = PriceDown::new(params, deal, fill, side);
     let mut pump_move = PumpMove::new(params, fill, side, armed_at);
-    let mut sell_level = SellLevel::new(params, fill, side);
-    let mut sell_shot = SellShot::new(params, fill, side);
+    let mut sell_level = SellLevel::new(params, deal, fill, side);
     let mut stops = Stops::new(deal, ticks, fill, params, side);
 
     let mut last_t = fill.t_ms;
@@ -234,24 +232,28 @@ pub fn walk_held(
         // step due by this print happened BEFORE it, and a step that also reached the book
         // before it is what this print meets.
         //
-        // PriceDown steps, one per due moment, and the pump move, in the order they fell due —
-        // the pump move first on a tie: each step chains off where the one before it left the
-        // line.
+        // PriceDown steps, the pump move and SellLevel's moves, one per due moment, in the
+        // order they fell due — on a tie the pump move, then PriceDown, then SellLevel: each step
+        // chains off where the one before it left the line. (SellLevel ran as a pass of its own
+        // after the others until 2026-09-24, so a PriceDown step due after a SellLevel move went
+        // first, off the level the move then replaced.)
         loop {
-            let pd_due = price_down.due(t_ms);
-            let pm_due = pump_move.due(t_ms);
-            if let Some(due) = pm_due.filter(|pm| pd_due.is_none_or(|pd| *pm <= pd)) {
-                pump_move.step(due, seen, &mut line);
-                continue;
+            let due = [
+                pump_move.due(t_ms),
+                price_down.due(t_ms),
+                sell_level.due(t_ms),
+            ]
+            .into_iter()
+            .enumerate()
+            .filter_map(|(rule, due)| due.map(|due| (due, rule)))
+            .min();
+            match due {
+                None => break,
+                Some((due, 0)) => pump_move.step(due, seen, &mut line),
+                Some((due, 1)) => price_down.step(due, &mut line),
+                Some((due, _)) => sell_level.step(due, seen, &mut line),
             }
-            let Some(due) = pd_due else {
-                break;
-            };
-            price_down.step(due, &mut line);
         }
-        // SellLevel is not in that race: its moves due by this print all come after it, as a
-        // pass of their own.
-        sell_level.catch_up(t_ms, seen, &mut line);
         line.land(t_ms);
         // The stops come before the print-driven rule below moves anything.
         if let Some(exit) = stops.on_print(tick, t_ms, price) {
@@ -274,8 +276,6 @@ pub fn walk_held(
                 return line.close(exit);
             }
         }
-        // SellShot: the line follows the market inside its corridor — driven by this print.
-        sell_shot.on_print(t_ms, seen, &mut line);
     }
     let tail = ticks.last().map(|t| t.time_ms as i64).unwrap_or(last_t);
     // The fact's own stop past the last print, or the book stop's samples up to the tape's end.

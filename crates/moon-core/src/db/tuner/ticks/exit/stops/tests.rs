@@ -2,6 +2,7 @@
 //! how the verdict judges each.
 
 use super::*;
+use crate::db::tuner::ticks::exit::level_off_buy;
 use crate::db::tuner::ticks::exit::line::walk;
 use crate::db::tuner::ticks::exit::tests::{deal, fill, params, tape, tick};
 use crate::db::tuner::ticks::{EntryParams, verify};
@@ -36,12 +37,12 @@ fn a_short_stop_divides_the_buy() {
     let inside = tape(&[(1_000, 102.53), (2_000, 102.57)]);
     let w = walk(&deal(true), &inside, fill(), 99.0, &p);
     assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 2_000), "{w:?}");
-    assert!((stop_level(100.0, -2.5, false) - 100.0 / 0.975).abs() < 1e-9);
-    assert!((stop_level(100.0, -2.5, true) - 97.5).abs() < 1e-9);
+    assert!((level_off_buy(100.0, -2.5, false) - 100.0 / 0.975).abs() < 1e-9);
+    assert!((level_off_buy(100.0, -2.5, true) - 97.5).abs() < 1e-9);
     // A stop on the profit side of a short sits below the buy, by the same division.
-    assert!((stop_level(100.0, 0.4, false) - 100.0 / 1.004).abs() < 1e-9);
+    assert!((level_off_buy(100.0, 0.4, false) - 100.0 / 1.004).abs() < 1e-9);
     // A loss of 100 % or more leaves a short no finite price to stop at.
-    assert_eq!(stop_level(100.0, -100.0, false), f64::INFINITY);
+    assert_eq!(level_off_buy(100.0, -100.0, false), f64::INFINITY);
 }
 
 fn sold(t_ms: i64, price: f64) -> Tick {

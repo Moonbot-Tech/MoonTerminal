@@ -22,16 +22,19 @@ use gpui::*;
 use super::super::super::AnalyticsView;
 use super::state::{DealRow, NowValue, OwnValues, RowAddress, TapeStatus, TicksData};
 use super::tape;
+use super::unmodelled::{UnmodelledMap, unmodelled_map};
 use crate::analytics::bg::ReadLane;
 use crate::analytics::refresh::{CatchUpOutcome, report_result_is_stale};
 use moon_core::db::ReadFail;
 use moon_core::db::order_traces::{TraceEntry, read_many};
+use moon_core::db::tuner::ticks::unmodelled::watched_keys;
 use moon_core::db::tuner::ticks::{
     Deal, DealsRead, EntryParams, ModelSettings, OwnLines, deltas, entry_model_for, infer_tick,
     model_window, params, prepare_deal, required_spans, verify,
 };
 use moon_core::db::tuner::{strategy_current_values, strategy_values_at};
 use moon_core::feed::report_traces::ArchivedLineKind;
+use moon_core::feed::strategy_deps::FieldDeps;
 use moon_core::feed::types::Tick;
 use moon_core::market::kline_cache::KlineCache;
 use moon_core::market::trade_replay::venue_caps::trade_route;
@@ -45,17 +48,20 @@ use moon_core::market::trade_replay::{
 /// stalls — past it the rows still unanswered fold as missing, and the log says how many.
 const HELD_ANSWER_WAIT: Duration = Duration::from_secs(240);
 
-/// What stage A brings back: the deals and the grid's "now" values.
+/// What stage A brings back: the deals, the grid's "now" values, the strategies' own values and
+/// the exit fields outside the model they switch on.
 type StageA = (
     Result<DealsRead, ReadFail>,
     HashMap<String, NowValue>,
     OwnValues,
+    Arc<UnmodelledMap>,
 );
 
 /// What stage B publishes beside the rows: the strategies' values and the grid's layout.
 struct ScopeView {
     now: HashMap<String, NowValue>,
     own: OwnValues,
+    unmodelled: Arc<UnmodelledMap>,
     grid: Arc<[super::sections::GridSection]>,
 }
 
@@ -111,7 +117,14 @@ impl AnalyticsView {
         // keys only ride along in the maps. The schema signature comes off the same store read:
         // a schema that moves on after it makes the grid ask for another load (`grid.rs`), whose
         // keys then cover it.
+        // The exit fields the model does not have ride along too, for the warning they raise.
         let mut keys = params::param_keys();
+        for key in watched_keys() {
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+        let defaults = self.filter_defaults(cx);
         self.ticks.keys_sig = Some({
             let backend = self.backend.read(cx);
             let store = backend.session.store();
@@ -157,10 +170,19 @@ impl AnalyticsView {
                     .as_ref()
                     .map(|read| own_values(&read.deals, &keys))
                     .unwrap_or_default();
-                let now = now_values(&targets, &keys, &own);
-                (deals, now, own)
+                let (now, selected) = now_values(&targets, &keys, &own);
+                // The rules are read per load: an edit of the file reaches the warning on the
+                // axis' next load, never a process-lifetime copy.
+                let unmodelled = unmodelled_map(
+                    own.iter()
+                        .map(|(&(sid, core), values)| ((sid, Some(core)), values.as_ref()))
+                        .chain(selected.iter().map(|(key, values)| (*key, values.as_ref()))),
+                    &defaults,
+                    &FieldDeps::load(),
+                );
+                (deals, now, own, Arc::new(unmodelled))
             },
-            move |this, (deals, now, own): StageA, cx| {
+            move |this, (deals, now, own, unmodelled): StageA, cx| {
                 if this.ticks.seq != req {
                     return;
                 }
@@ -192,6 +214,7 @@ impl AnalyticsView {
                     ScopeView {
                         now,
                         own,
+                        unmodelled,
                         grid,
                     },
                     addresses,
@@ -327,6 +350,7 @@ impl AnalyticsView {
                     kinds,
                     now: scope.now,
                     own: scope.own,
+                    unmodelled: scope.unmodelled,
                     grid: scope.grid,
                 };
                 data.retain_within_cap();
@@ -598,14 +622,15 @@ fn ask_held(
 }
 
 /// The grid's "now" column: every selected strategy's current value per field, folded to
-/// one value or "varies". A target on a known core that the deals' strategies already read
-/// (`own`, from [`own_values`]) is not read again.
+/// one value or "varies" — and those values per target. A target on a known core that the deals'
+/// strategies already read (`own`, from [`own_values`]) is not read again.
 fn now_values(
     targets: &[(i64, Option<u64>)],
     keys: &[String],
     own: &OwnValues,
-) -> HashMap<String, NowValue> {
+) -> (HashMap<String, NowValue>, Vec<SelectedValues>) {
     let mut seen: HashMap<String, Vec<Option<String>>> = HashMap::new();
+    let mut read = Vec::with_capacity(targets.len());
     for &(sid, core) in targets {
         let values = match core.and_then(|core| own.get(&(sid, core))) {
             Some(values) => Arc::clone(values),
@@ -616,8 +641,10 @@ fn now_values(
                 .or_default()
                 .push(values.get(key).cloned());
         }
+        read.push(((sid, core), values));
     }
-    seen.into_iter()
+    let now = seen
+        .into_iter()
         .map(|(key, values)| {
             let first = values.first().cloned().flatten();
             let same = values.iter().all(|v| v.as_deref() == first.as_deref());
@@ -628,8 +655,12 @@ fn now_values(
             };
             (key, value)
         })
-        .collect()
+        .collect();
+    (now, read)
 }
+
+/// A selected strategy's current values, by `(strategy_id, core)`.
+type SelectedValues = ((i64, Option<u64>), Arc<HashMap<String, String>>);
 
 /// Every strategy of `deals` as it stands now, read once per `(strategy_id, core)` — the base
 /// each deal's variants run over ([`TicksData::own`]). A strategy that cannot be read gets an
@@ -770,6 +801,7 @@ pub(super) fn replay_row_with(
     row.entry_line = lines.entry_points.clone();
     row.held = None;
     row.deal.delta_track = None;
+    row.deal.bars = None;
     let Some(address) = row.address.clone() else {
         return;
     };
@@ -813,9 +845,9 @@ pub(super) fn replay_row_with(
     };
     let exit = params::exit_params(&sv, model);
     // The deltas along the window, before the record's inputs: the stop anchor reads the stop
-    // through them.
-    row.deal.delta_track = klines.and_then(|cache| {
-        deltas::track_for(
+    // through them. The bars they were read off go with the deal for SellLevel's look-back.
+    if let Some(cache) = klines {
+        let history = deltas::track_for(
             cache,
             &address.exchange_key,
             &address.market,
@@ -823,8 +855,10 @@ pub(super) fn replay_row_with(
             &row.deal,
             &ticks,
             &covered,
-        )
-    });
+        );
+        row.deal.delta_track = history.track;
+        row.deal.bars = history.bars;
+    }
     // What the core's own record fixes: the ask its take was lifted to, the take as placed,
     // where the entry order was placed, what the fact proves about the stop, the entry the
     // trade ran with.

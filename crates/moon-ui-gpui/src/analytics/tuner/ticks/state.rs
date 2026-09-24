@@ -109,6 +109,7 @@ impl DealRow {
         self.deal.stop_anchor = answer.deal.stop_anchor;
         self.deal.own_entry = answer.deal.own_entry;
         self.deal.delta_track = answer.deal.delta_track;
+        self.deal.bars = answer.deal.bars;
         self.ticks = answer.ticks;
         self.entry_line = answer.entry_line;
         self.held = answer.held;
@@ -170,6 +171,9 @@ pub(in crate::analytics::tuner) struct TicksData {
     /// ([`PreparedDeal::own`]). The grid folds these into one "now" cell; a replay must not,
     /// or a field the strategies disagree on runs every deal at its default.
     pub(in crate::analytics::tuner) own: OwnValues,
+    /// The exit fields outside the model each strategy of the scope and of the selection switches
+    /// on (`unmodelled.rs`), read with [`Self::own`] — what a search and a write warn about.
+    pub(in crate::analytics::tuner) unmodelled: Arc<super::unmodelled::UnmodelledMap>,
     /// The parameter grid's rows by section (`sections::layout`), published with the rows so a
     /// layout never meets another scope's "now" values or kinds.
     pub(in crate::analytics::tuner) grid: Arc<[super::sections::GridSection]>,

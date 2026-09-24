@@ -12,7 +12,9 @@
 //! analysis outside; `MOON_TICKS_LATENCY_MS` replays with another latency and
 //! `MOON_TICKS_LATENCY_BASE_MS` with that plus each core's archived round trip, the entry's only
 //! unless `MOON_TICKS_LATENCY_EXIT` is set; `MOON_TICKS_PATH_DEBUG` prints each order's modelled
-//! and archived path); the application never moves its data root on a variable.
+//! and archived path; `MOON_TICKS_VARIANT="Key=value,…"` replays each deal under those values laid
+//! over its own and prints the line it walked); the application never moves its data root on a
+//! variable.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -100,7 +102,7 @@ fn dump_deal(
     // buy, the level the core printed into the reason, and the activation — the archive's jump
     // past that level.
     let stop = super::super::exit::stops::stop_pct(exit, deal, deal.buy_ms);
-    let level = super::super::exit::stops::stop_level(deal.buy_price, stop, deal.is_long());
+    let level = super::super::exit::level_off_buy(deal.buy_price, stop, deal.is_long());
     let stated = verify::stated_stop_level(&deal.sell_reason);
     let activation = verify::stop_jump_level(deal, exit)
         .and_then(|jump_at| verify::archived_stop_jump(deal, jump_at, exit_points));
@@ -733,7 +735,9 @@ fn real_data_reproduction() {
         deal.step_lag_ms = core_lags.get(&deal.core_uid).copied().unwrap_or(0.0);
         if let (Some(cache), Some((exchange, market))) = (klines.as_ref(), address.as_ref()) {
             let btc = btc_of_exchange.get(exchange).map(String::as_str);
-            let track = deltas::track_for(cache, exchange, market, btc, &deal, &ticks, &covered);
+            let history = deltas::track_for(cache, exchange, market, btc, &deal, &ticks, &covered);
+            deal.bars = history.bars;
+            let track = history.track;
             match &track {
                 Some(track) => {
                     tracks.push(track.clone());
@@ -1040,6 +1044,42 @@ fn real_data_reproduction() {
         // variant column counts the same money the "Fact" column does.
         let fit = fit_for_search(&archived);
         let own = simulate(&deal, &ticks, &entry, &exit, entry_line.as_deref());
+        // `MOON_TICKS_VARIANT="SellPrice=1.6,PriceDownTimer=3"` replays the deal under those values
+        // laid over its own, the way a variant column does, and prints the line it walked.
+        if let Ok(spec) = std::env::var("MOON_TICKS_VARIANT") {
+            let mut laid = values.clone();
+            for pair in spec.split(',') {
+                if let Some((k, v)) = pair.split_once('=') {
+                    laid.insert(k.trim().to_string(), v.trim().to_string());
+                }
+            }
+            let lsv = StrategyValues {
+                values: &laid,
+                defaults: &defaults,
+            };
+            let v_entry = if entry_model_for(&deal.kind) {
+                EntryParams::MoonShot(mshot_params(&lsv, ModelSettings::default()))
+            } else {
+                EntryParams::Fact
+            };
+            let v_exit = exit_params(&lsv, ModelSettings::default());
+            let out = simulate(&deal, &ticks, &v_entry, &v_exit, entry_line.as_deref());
+            eprintln!(
+                "    variant fill {:?} · exit {:?} · {:?}",
+                out.fill,
+                out.exit,
+                round3(out.profit_pct)
+            );
+            if let Some(fill) = out.fill {
+                let w = ExitModel::new(&v_exit).walk(&deal, &ticks, fill);
+                let pts: Vec<String> = w
+                    .points
+                    .iter()
+                    .map(|p| format!("+{}ms {:.6}", p.t_ms - fill.t_ms, p.price))
+                    .collect();
+                eprintln!("    variant line: {}", pts.join(", "));
+            }
+        }
         let fact = profit_pct(&deal, deal.buy_price, deal.sell_price);
         eprintln!(
             "    fit {fit} · own {:?} {:?} at {:?} · fact {:?}",

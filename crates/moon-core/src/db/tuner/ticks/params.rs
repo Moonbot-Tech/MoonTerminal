@@ -61,6 +61,13 @@ impl ParamSection {
             ParamSection::DeltaModifiers => "Delta Modifiers",
         }
     }
+
+    /// Whether the model has the section's rules at all. SellShot and SellSpread it does not (the
+    /// developer's call, 2026-09-24): the grid draws them without knobs and says so, and a trade
+    /// of a strategy that switches one on is not judged (`exit::UnmodelledRule`).
+    pub fn modelled(self) -> bool {
+        !matches!(self, ParamSection::SellShot | ParamSection::SellSpread)
+    }
 }
 
 /// How a parameter is typed and, for the search, which values it may take.
@@ -157,15 +164,6 @@ const GRID_DROP: &[f64] = &[
 const GRID_SL_DELAY_S: &[f64] = &[0.0, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0];
 const GRID_SL_TIME_S: &[f64] = &[0.0, 60.0, 300.0, 900.0, 1800.0, 3600.0, 7200.0];
 const GRID_SL_COUNT: &[f64] = &[0.0, 1.0, 2.0, 3.0, 5.0, 10.0];
-const GRID_SS_DISTANCE: &[f64] = &[
-    0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.25, 1.5, 2.0,
-];
-const GRID_SS_CORRIDOR: &[f64] = &[10.0, 25.0, 50.0, 75.0, 90.0];
-const GRID_SS_INTERVAL_S: &[f64] = &[0.2, 0.4, 0.6, 1.0, 2.0, 5.0, 10.0, 25.0];
-const GRID_SS_WAIT_S: &[f64] = &[0.0, 0.1, 0.2, 0.5, 1.0, 2.0];
-const GRID_SS_BOUND: &[f64] = &[
-    -1.0, -0.5, -0.2, -0.1, 0.0, 0.2, 0.4, 0.5, 1.0, 2.0, 5.0, 10.0,
-];
 /// Live values run to −15 (29 of 1 869 strategies sit outside the old −10 floor).
 const GRID_STOP: &[f64] = &[
     -15.0, -12.0, -10.0, -7.0, -5.0, -4.0, -3.0, -2.5, -2.0, -1.5, -1.0, -0.75, -0.5, -0.3, -0.2,
@@ -396,23 +394,6 @@ pub const TICK_PARAMS: &[TickParam] = &[
     exit_bool("SellLevelRelative", ParamSection::SellOrder),
     exit_num("SellLevelAllowedDrop", ParamSection::SellOrder, GRID_DROP),
     exit_num("SellLevelWorkTime", ParamSection::SellOrder, GRID_SL_TIME_S),
-    exit_bool("IgnoreSellShot", ParamSection::SellShot),
-    exit_num("SellShotDistance", ParamSection::SellShot, GRID_SS_DISTANCE),
-    exit_num("SellShotCorridor", ParamSection::SellShot, GRID_SS_CORRIDOR),
-    exit_num(
-        "SellShotCalcInterval",
-        ParamSection::SellShot,
-        GRID_SS_INTERVAL_S,
-    ),
-    exit_num("SellShotRaiseWait", ParamSection::SellShot, GRID_SS_WAIT_S),
-    exit_num(
-        "SellShotReplaceDelay",
-        ParamSection::SellShot,
-        GRID_SS_WAIT_S,
-    ),
-    exit_num("SellShotAllowedUp", ParamSection::SellShot, GRID_SS_BOUND),
-    exit_num("SellShotAllowedDown", ParamSection::SellShot, GRID_SS_BOUND),
-    exit_num("SellShotDelay", ParamSection::SellShot, GRID_SS_WAIT_S),
     exit_num("StopLoss", ParamSection::Stops, GRID_STOP),
     exit_num("StopLossDelay", ParamSection::Stops, GRID_STOP_DELAY_S),
 ];
@@ -466,11 +447,6 @@ pub fn params_for<'k>(
 /// something the search should turn.
 const MODEL_ONLY_KEYS: &[&str] = &[
     "HookSellFixed",
-    // Read by `exit_params` and acted on by the SellShot walk, never a grid knob — and absent
-    // from both lists until 2026-09-22, so the decay of the sell-shot distance has been running
-    // on its fallback since the axis was written.
-    "SellShotPriceDown",
-    "SellShotPriceDownDelay",
     "SellModifier",
     "MaxModifier",
     "StopLossModifier",
@@ -484,10 +460,6 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "TrailingEMA",
     "UseTakeProfit",
     "TakeProfit",
-    // The switches of the stop ladder, which the model does not have: a trade under one is not
-    // modelled (`exit::UnmodelledRule`).
-    "UseSecondStop",
-    "UseStopLoss3",
     // PumpsDetection's one sell move (see `exit::pump_move::PUMP_MOVE_LAG_MS`); `PumpMovePersent` is the
     // core's own spelling of the field.
     "PumpMoveTimer",
@@ -511,19 +483,35 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "MShotAdd5sDelta",
 ];
 
+/// The switches of the sell rules the model does NOT have — read only to tell that one is on,
+/// which keeps the trade out of the verdict and the search ([`unmodelled_rule`]). Not
+/// [`MODEL_ONLY_KEYS`]: the model acts on none of them, and the grid draws them as outside it.
+const RULE_SWITCH_KEYS: &[&str] = &[
+    // No sell order at all.
+    "AutoSell",
+    // The stop ladder.
+    "UseSecondStop",
+    "UseStopLoss3",
+    // SellShot is on only with a distance to keep.
+    "IgnoreSellShot",
+    "SellShotDistance",
+    "IgnoreSellSpread",
+];
+
 /// Whether the models read `key` from the strategy without the grid offering it as a knob —
 /// the grid draws such a field as fixed rather than as outside the model.
 pub fn is_model_only(key: &str) -> bool {
     MODEL_ONLY_KEYS.contains(&key)
 }
 
-/// Every field name the models read — [`TICK_PARAMS`] plus [`MODEL_ONLY_KEYS`] — for a
-/// `strategy_current_values` read.
+/// Every field name the models read — [`TICK_PARAMS`], [`MODEL_ONLY_KEYS`] and the switches of
+/// the rules they do not have ([`RULE_SWITCH_KEYS`]) — for a `strategy_current_values` read.
 pub fn param_keys() -> Vec<String> {
     TICK_PARAMS
         .iter()
         .map(|p| p.key)
         .chain(MODEL_ONLY_KEYS.iter().copied())
+        .chain(RULE_SWITCH_KEYS.iter().copied())
         .map(str::to_string)
         .collect()
 }
@@ -665,18 +653,6 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
         sell_level_allowed_drop_pct: v
             .num("SellLevelAllowedDrop", base.sell_level_allowed_drop_pct),
         sell_level_work_time_s: v.num("SellLevelWorkTime", base.sell_level_work_time_s),
-        ignore_sell_shot: v.bool("IgnoreSellShot", base.ignore_sell_shot),
-        sell_shot_distance_pct: v.num("SellShotDistance", base.sell_shot_distance_pct),
-        sell_shot_corridor_pct: v.num("SellShotCorridor", base.sell_shot_corridor_pct),
-        sell_shot_calc_interval_s: v.num("SellShotCalcInterval", base.sell_shot_calc_interval_s),
-        sell_shot_raise_wait_s: v.num("SellShotRaiseWait", base.sell_shot_raise_wait_s),
-        sell_shot_replace_delay_s: v.num("SellShotReplaceDelay", base.sell_shot_replace_delay_s),
-        sell_shot_price_down: v.num("SellShotPriceDown", base.sell_shot_price_down),
-        sell_shot_price_down_delay_s: v
-            .num("SellShotPriceDownDelay", base.sell_shot_price_down_delay_s),
-        sell_shot_allowed_up_pct: v.num("SellShotAllowedUp", base.sell_shot_allowed_up_pct),
-        sell_shot_allowed_down_pct: v.num("SellShotAllowedDown", base.sell_shot_allowed_down_pct),
-        sell_shot_delay_s: v.num("SellShotDelay", base.sell_shot_delay_s),
         pump_move_timer_s: v.num("PumpMoveTimer", base.pump_move_timer_s),
         pump_move_pct: v.num("PumpMovePersent", base.pump_move_pct),
         // `StopLoss` means nothing with `UseStopLoss` off (param_deps.toml: every stop field
@@ -714,12 +690,22 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
 ///
 /// Read by the switch, never by its fields: the fields stay in a strategy's dump with the switch
 /// off (`assets/param_deps.toml`). On this machine's reports (2026-09-23) the trailing stop was
-/// on for the strategies of 44 trades of 2 042 and the stop ladder for 2; `SellSpread` and the EMA exit
-/// were on for none, and are left out until a strategy turns them on. The trailing stop is
-/// modelled since 2026-09-24 (`exit::stops::trailing`).
-fn unmodelled_rule(v: &StrategyValues<'_>) -> Option<UnmodelledRule> {
-    if v.bool("UseSecondStop", false) || v.bool("UseStopLoss3", false) {
+/// on for the strategies of 44 trades of 2 042 and the stop ladder for 2; the trailing stop is
+/// modelled since 2026-09-24 (`exit::stops::trailing`). SellShot and SellSpread are not modelled
+/// at all (the developer's call, 2026-09-24); each is on for 2 live strategies of 1 422 (24.09),
+/// SellShot only where a distance is set (the walk kept it off at a zero one). `AutoSell` off
+/// places no sell order at all (no live strategy, 24.09). The EMA exit and
+/// the rest of the sell fields the model does not have are in `unmodelled`, which warns about
+/// them; this is the set that takes a trade out of the verdict.
+pub(super) fn unmodelled_rule(v: &StrategyValues<'_>) -> Option<UnmodelledRule> {
+    if !v.bool("AutoSell", true) {
+        Some(UnmodelledRule::NoAutoSell)
+    } else if v.bool("UseSecondStop", false) || v.bool("UseStopLoss3", false) {
         Some(UnmodelledRule::StopLadder)
+    } else if !v.bool("IgnoreSellShot", true) && v.num("SellShotDistance", 0.0) != 0.0 {
+        Some(UnmodelledRule::SellShot)
+    } else if !v.bool("IgnoreSellSpread", true) {
+        Some(UnmodelledRule::SellSpread)
     } else {
         None
     }

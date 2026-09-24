@@ -3,6 +3,8 @@
 //! section holds for the scope's kinds, as the Strategies window shows them. Only the knobs of
 //! [`TICK_PARAMS`](moon_core::db::tuner::ticks::TICK_PARAMS) are searched; every other field is
 //! drawn fixed, so what the model does not turn yet stays in sight where the user looks for it.
+//! The sections the model does not have at all — SellShot and SellSpread
+//! ([`ParamSection::modelled`]) — keep their fields in sight too, every one of them inactive.
 //!
 //! The field lists come from the live schema of each deal's strategy kind — the store's strategy
 //! row gives the kind ordinal, as `strategies::logic::selected_sections` does; the `SignalType`
@@ -30,6 +32,9 @@ pub(in crate::analytics::tuner) enum RowRole {
     Fixed,
     /// A field the model does not take into account.
     Outside,
+    /// A field of a section the model does not have at all ([`ParamSection::modelled`]): a
+    /// strategy that switches the section on is not judged.
+    Unmodelled,
 }
 
 /// One row: the field as the schema spells it, and its role.
@@ -101,7 +106,7 @@ pub(in crate::analytics::tuner) fn layout(
             {
                 for field in &section.fields {
                     if seen.insert(field.name.to_ascii_lowercase()) {
-                        grid.rows.push(row(&field.name, knobs));
+                        grid.rows.push(row(&field.name, grid.section, knobs));
                     }
                 }
             }
@@ -120,9 +125,11 @@ pub(in crate::analytics::tuner) fn layout(
     out
 }
 
-/// A schema field's row: a knob of the scope, a field the model reads, or one it does not.
-fn row(name: &str, knobs: &[&'static TickParam]) -> GridRow {
+/// A schema field's row: a knob of the scope, a field the model reads, or one it does not —
+/// and every field of a section the model does not have, whatever the field.
+fn row(name: &str, section: ParamSection, knobs: &[&'static TickParam]) -> GridRow {
     let role = match knobs.iter().find(|k| k.key.eq_ignore_ascii_case(name)) {
+        _ if !section.modelled() => RowRole::Unmodelled,
         Some(&knob) => RowRole::Knob(knob),
         None if is_model_only(name) => RowRole::Fixed,
         None => RowRole::Outside,

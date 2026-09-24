@@ -54,6 +54,7 @@ pub(super) fn deal() -> Deal {
         step_lag_ms: 0.0,
         stop_anchor: None,
         delta_track: None,
+        bars: None,
         own_entry: None,
         buy_set_ms: None,
         corridor: None,
@@ -1433,7 +1434,14 @@ fn the_descriptor_keys_every_field_the_builders_read_and_splits_the_groups() {
         !exit_any.contains(&"MShotSellAtLastPrice"),
         "a MoonShot-only field"
     );
-    assert!(exit_any.contains(&"StopLoss") && exit_any.contains(&"SellShotDistance"));
+    assert!(exit_any.contains(&"StopLoss"));
+    // SellShot and SellSpread are not modelled: no knob of theirs (`ParamSection::modelled`).
+    assert!(
+        TICK_PARAMS
+            .iter()
+            .all(|p| p.section.modelled() && !p.key.starts_with("SellShot")),
+        "a knob of an unmodelled section"
+    );
     assert!(entry_model_for("MoonShot") && !entry_model_for("Spread"));
 }
 
@@ -1460,6 +1468,7 @@ fn hook_deal() -> Deal {
         step_lag_ms: 0.0,
         stop_anchor: None,
         delta_track: None,
+        bars: None,
         own_entry: None,
         buy_set_ms: None,
         corridor: None,
@@ -1491,7 +1500,8 @@ fn a_hook_takes_a_share_of_its_detect_depth() {
     assert!((take - 104.0).abs() < 1e-9, "{take}");
 }
 
-/// A short hook sells below the entry, by the same share.
+/// A short hook sells below the entry, by the same share divided off the fill — every per cent of
+/// a short off the buy divides (`exit::level_off_buy`).
 #[test]
 fn a_short_hook_takes_below_the_entry() {
     let params = ExitParams {
@@ -1507,7 +1517,7 @@ fn a_short_hook_takes_below_the_entry() {
         price: 100.0,
     };
     let take = ExitModel::new(&params).take_level(&d, &[], fill);
-    assert!((take - 98.0).abs() < 1e-9, "{take}");
+    assert!((take - 100.0 / 1.02).abs() < 1e-9, "{take}");
 }
 
 /// Without a depth (or without a level) the rule cannot be computed — the model still needs a
@@ -1873,7 +1883,7 @@ fn a_cancelled_stop_does_not_fire_at_the_entry() {
     );
 }
 
-/// A short's stop sits ABOVE the entry, the adjusted distance included (`stops::stop_level`
+/// A short's stop sits ABOVE the entry, the adjusted distance included (`exit::level_off_buy`
 /// divides the fill by it).
 #[test]
 fn a_short_stop_sits_above_with_the_modifier() {

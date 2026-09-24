@@ -7,7 +7,9 @@
 //! Sell order, SellShot, SellSpread, Delta Modifiers — each with every field it holds for the
 //! scope's kinds, and a tick in its heading that admits all its knobs at once. Only the knobs
 //! are live; a field the model reads but does not turn, or does not know at all, is drawn
-//! greyed with the strategies' value, so the grid shows the whole section as Moonbot does.
+//! greyed with the strategies' value, so the grid shows the whole section as Moonbot does. The
+//! sections the model does not have at all (SellShot, SellSpread) are drawn muted, every row
+//! inactive, and their heading says so.
 //!
 //! The search still gates by group, Entry and Exit: a group the model does not reproduce well
 //! enough (the share gate of the search settings) is not searched, and the first section holding
@@ -351,6 +353,13 @@ impl AnalyticsView {
             .collect();
         let (all_on, some_on) = self.ticks_tick_state(&keys);
         let mut notes: Vec<(String, u32)> = Vec::new();
+        let modelled = section.section.modelled();
+        if !modelled {
+            notes.push((
+                t!("analytics.ticks.section_unmodelled").to_string(),
+                p.text_muted,
+            ));
+        }
         match data {
             // Only a LOADED empty scope says so; a load in flight or a failed one has its own
             // note in the table.
@@ -428,7 +437,7 @@ impl AnalyticsView {
                     .flex_none()
                     .cursor_pointer()
                     .text_size(design::t_body(cx))
-                    .text_color(moon(p.text))
+                    .text_color(moon(if modelled { p.text } else { p.text_muted }))
                     .child(title)
                     .on_click(
                         cx.listener(move |this, _, _, cx| this.ticks_toggle_section(which, cx)),
@@ -464,6 +473,10 @@ impl AnalyticsView {
         let (tip, name_color) = match role {
             RowRole::Fixed => (t!("analytics.ticks.row_fixed").to_string(), p.text_soft),
             RowRole::Outside => (t!("analytics.ticks.row_outside").to_string(), p.text_muted),
+            RowRole::Unmodelled => (
+                t!("analytics.ticks.row_unmodelled").to_string(),
+                p.text_muted,
+            ),
             // A knob of the entry group while a kind of the scope has no entry model.
             RowRole::Knob(_) => (
                 t!(

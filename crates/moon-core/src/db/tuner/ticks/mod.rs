@@ -19,7 +19,7 @@
 //! into the column caption; the model does not hide it.
 //!
 //! Sources of the mechanics: the Moonbot FAQ (`data/faqru.tsv`, "Какие есть специфические
-//! параметры у стратегии MoonShot" and the `PriceDown*` / `SellLevel*` / `SellShot*` answers),
+//! параметры у стратегии MoonShot" and the `PriceDown*` / `SellLevel*` answers),
 //! checked against the live `strategies.sqlite` field names on 2026-09-20.
 
 use crate::feed::types::Tick;
@@ -38,6 +38,7 @@ pub mod scope;
 pub mod search;
 pub mod settings;
 pub mod stats;
+pub mod unmodelled;
 pub mod verify;
 
 pub use deals::{DealsRead, read_deals};
@@ -219,6 +220,12 @@ pub struct Deal {
     /// ([`deltas::track_for`]); filled by the caller that holds the tape, before the other model
     /// inputs (the stop anchor reads the stop through it). `None` keeps the snapshot everywhere.
     pub delta_track: Option<std::sync::Arc<deltas::DeltaTrack>>,
+    /// The market's price bars — one-minute klines, five-minute ones where no minute bar lies —
+    /// from [`deltas::PRICE_HISTORY_MS`] before the window through the tape's end
+    /// ([`deltas::track_for`]): what a rule that looks back further than the tape reads, as
+    /// SellLevel's `SellLevelTime` does. `None` without a kline cache; the rule then reads the tape
+    /// alone.
+    pub bars: Option<std::sync::Arc<[deltas::Bar]>>,
     /// Price step of the market, when the caller could resolve it (the live catalog, or
     /// [`infer_tick`] over the window). `None` disables the step-bound rules and rounds nothing.
     pub tick: Option<f64>,
@@ -387,7 +394,7 @@ pub struct Fill {
 pub enum ExitKind {
     /// A print reached the take-profit level.
     Take,
-    /// A print crossed the moving sell line (PriceDown / SellLevel / SellShot).
+    /// A print crossed the moving sell line (PriceDown / SellLevel / PumpMove).
     Line,
     /// The stop-loss level was crossed: a market exit at the print.
     Stop,

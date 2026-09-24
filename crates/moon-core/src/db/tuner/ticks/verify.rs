@@ -44,9 +44,10 @@
 //! fixed, when the stored reason keeps it, and the moment it activated ([`verify_stop`]). A stop the core fired and the model never did is a miss.
 
 use super::exit::ExitModel;
+use super::exit::level_off_buy;
 use super::exit::line::LinePoint;
+use super::exit::stops::stop_pct;
 use super::exit::stops::trailing::trailing_level;
-use super::exit::stops::{stop_level, stop_pct};
 use super::mshot::MshotParams;
 use super::settings::ModelSettings;
 use super::{
@@ -501,7 +502,7 @@ fn verify_stop(
     closed: Exit,
     exit_points: Option<&[(i64, f64)]>,
 ) -> (Option<bool>, Option<f64>, Option<(usize, usize)>) {
-    let level = stop_level(
+    let level = level_off_buy(
         deal.buy_price,
         stop_pct(exit, deal, deal.buy_ms),
         deal.is_long(),
@@ -562,7 +563,8 @@ pub(super) fn stop_jump_level(deal: &Deal, exit: &ExitParams) -> Option<f64> {
     }
     let pct = stop_pct(exit, deal, deal.buy_ms);
     (reason_starts_with(reason, REASON_STOP) && pct != 0.0).then(|| {
-        stated_stop_level(reason).unwrap_or_else(|| stop_level(deal.buy_price, pct, deal.is_long()))
+        stated_stop_level(reason)
+            .unwrap_or_else(|| level_off_buy(deal.buy_price, pct, deal.is_long()))
     })
 }
 
@@ -679,7 +681,7 @@ fn matched_points_of(
 pub const REASON_TAKE: &str = "Sell Price";
 
 /// The core's `sellreason` prefixes for a position its moving line closed.
-pub const REASONS_LINE: [&str; 3] = ["Auto Price Down", "Sell Level", "SellShot"];
+pub const REASONS_LINE: [&str; 2] = ["Auto Price Down", "Sell Level"];
 
 /// The core's `sellreason` prefix for a position its stop closed.
 pub const REASON_STOP: &str = "StopLoss";
@@ -701,7 +703,8 @@ pub(super) fn is_stop_reason(sell_reason: &str) -> bool {
 
 /// Whether the model's exit rule is the one the core's `sellreason` names, so the two prices
 /// are comparable: the take against "Sell Price", the moving line against the PriceDown /
-/// SellLevel / SellShot reasons, the stop against "StopLoss …".
+/// SellLevel reasons, the stop against "StopLoss …". A SellShot close has no counterpart: the
+/// model has no SellShot, and a strategy under it is not judged (`exit::UnmodelledRule`).
 fn exit_rule_matches(kind: ExitKind, sell_reason: &str) -> bool {
     let reason = sell_reason.trim();
     let starts = |prefix: &str| reason_starts_with(reason, prefix);

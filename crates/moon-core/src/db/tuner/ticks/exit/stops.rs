@@ -72,30 +72,6 @@ pub fn stop_pct(params: &ExitParams, deal: &Deal, at_ms: i64) -> f64 {
     adjusted
 }
 
-/// The stop's price: `pct` per cent ([`stop_pct`]) off the buy — `buy·(1 + pct/100)` for a long,
-/// `buy/(1 + pct/100)` for a short, not the long's product mirrored. The core prints the level
-/// into its reason (`StopLoss fixed: X`): over the report (2026-09-24) the division lands on it
-/// for 11 099 short stops against 25 for the mirror, the product for 20 930 long ones against 12
-/// — the adjusted distance of `StopLossModifier` included. At `−2.5 %` the two short readings
-/// part by 0.06 % of the price.
-///
-/// A loss of 100 % or more leaves no price to stop at: 0 for a long and `f64::INFINITY` for a
-/// short, levels no print reaches.
-///
-/// Args:
-///     buy: The buy the stop counts from.
-///     pct: The stop distance, negative on the losing side.
-///     long: The trade's side.
-pub fn stop_level(buy: f64, pct: f64, long: bool) -> f64 {
-    let keep = 1.0 + pct / 100.0;
-    match (long, keep <= 0.0) {
-        (true, true) => 0.0,
-        (true, false) => buy * keep,
-        (false, true) => f64::INFINITY,
-        (false, false) => buy / keep,
-    }
-}
-
 /// The weight of a new ticker price in the average the non-fast stop watches, when the core
 /// keeps one: `avg = (avg·(N − 1) + bid) / N`, a weight of `1/N`, for a LONG at `StopLossEMA`
 /// 3, 5 or 10 only. Any other value — 7 included — and every short watch the bare price (the
@@ -338,13 +314,13 @@ impl Stops {
         // The ADJUSTED distance decides both whether there is a stop and where it stands —
         // reading the raw `stop_loss_pct` for the first and the adjusted one for the second would
         // arm a stop the adjustment had cancelled, at the fill price itself, where the next print
-        // fires it. [`stop_level`] puts the distance on the trade's side, so only the distance is
+        // fires it. `level_off_buy` puts the distance on the trade's side, so only the distance is
         // adjusted here; the level is NOT snapped to the price grid, unlike every level that
         // reaches the exchange —
         // a stop is the core's own trigger for a market sell, and nothing about it is ever placed.
         let stop = stop_pct(params, deal, fill.t_ms);
         let stop_on = stop != 0.0;
-        let level = stop_level(fill.price, stop, side.long);
+        let level = side.off_buy(fill.price, stop);
         let stop_from = fill.t_ms + (params.stop_loss_delay_s.max(0.0) * 1000.0) as i64;
         // What the fact proves about the stop when this walk runs the trade's own
         // (`record::StopAnchor`): it fired when the core's did, at the price the core sold at, and

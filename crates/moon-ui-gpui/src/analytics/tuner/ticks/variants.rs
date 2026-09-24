@@ -231,15 +231,39 @@ impl AnalyticsView {
     }
 
     /// "Search all": every ticked field of the groups the gate lets through, into В1.
-    pub(in crate::analytics::tuner) fn ticks_suggest(&mut self, cx: &mut Context<Self>) {
-        self.ticks_run_search(None, cx);
+    pub(in crate::analytics::tuner) fn ticks_suggest(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ticks_run_search(None, window, cx);
     }
 
     /// "Search": the selected field alone, the rest of В1 held as it stands; the answer goes
     /// into that one cell of В1.
-    pub(in crate::analytics::tuner) fn ticks_suggest_one(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::analytics::tuner) fn ticks_suggest_one(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(key) = self.ticks.sel_field {
-            self.ticks_run_search(Some(key), cx);
+            self.ticks_run_search(Some(key), window, cx);
+        }
+    }
+
+    /// A search asked for: first the warning when a strategy it runs on switches on an exit
+    /// field the model does not have (`unmodelled.rs`) — the search then starts on its Continue.
+    fn ticks_run_search(
+        &mut self,
+        only: Option<&'static str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(self.ticks.sugg, SuggState::Running { .. }) {
+            return;
+        }
+        if !self.ticks_warn_before_search(only, window, cx) {
+            self.ticks_start_search(only, cx);
         }
     }
 
@@ -251,7 +275,11 @@ impl AnalyticsView {
 
     /// Run the search into В1: over every ticked field (`only` = `None`), or over one field with
     /// every other held — at the strategies' value, or at В1's where В1 changes it.
-    fn ticks_run_search(&mut self, only: Option<&'static str>, cx: &mut Context<Self>) {
+    pub(super) fn ticks_start_search(
+        &mut self,
+        only: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) {
         if matches!(self.ticks.sugg, SuggState::Running { .. }) {
             return;
         }
@@ -422,7 +450,8 @@ impl AnalyticsView {
             log::info!("analytics: 'Save' (ticks) - no variant to write");
             return;
         }
-        let warns = self.ticks_change_warnings(&changes, cx);
+        let mut warns = self.ticks_change_warnings(&changes, cx);
+        warns.extend(self.ticks_unmodelled_warns(&targets, cx));
         self.open_change_dialog(targets, changes, None, Vec::new(), warns, false, cx);
     }
 
@@ -436,7 +465,8 @@ impl AnalyticsView {
             return;
         };
         let changes = self.ticks.variant_changes(0);
-        let warns = self.ticks_change_warnings(&changes, cx);
+        let mut warns = self.ticks_change_warnings(&changes, cx);
+        warns.extend(self.ticks_unmodelled_warns(std::slice::from_ref(&target), cx));
         self.open_copy_with(target, changes, warns, window, cx);
     }
 

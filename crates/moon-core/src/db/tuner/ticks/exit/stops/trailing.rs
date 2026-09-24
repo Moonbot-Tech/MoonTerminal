@@ -23,7 +23,7 @@
 //! ticker's clock ([`super::TICKER_PERIOD_MS`]).
 
 use super::super::ExitParams;
-use super::stop_level;
+use super::super::level_off_buy;
 use crate::db::tuner::ticks::{Exit, ExitKind};
 use crate::feed::types::{Side as TickSide, Tick};
 
@@ -46,7 +46,7 @@ pub fn trailing_level(peak: f64, buy: f64, params: &ExitParams, long: bool) -> f
         -params.trailing_pct.abs(),
         params
             .trailing_take_profit_pct
-            .map(|tp| stop_level(buy, tp, long)),
+            .map(|tp| level_off_buy(buy, tp, long)),
         long,
     )
 }
@@ -124,10 +124,10 @@ impl Trailing {
         // stop's own conversion, boundary included.
         let take = params
             .trailing_take_profit_pct
-            .map(|tp| stop_level(buy, tp, long));
+            .map(|tp| level_off_buy(buy, tp, long));
         let activation = params
             .trailing_take_profit_pct
-            .map(|tp| stop_level(buy, tp + pct.abs(), long));
+            .map(|tp| level_off_buy(buy, tp + pct.abs(), long));
         let period_ms = params.model.ticker_period_ms.max(1);
         let anchor = fill_ms + period_ms;
         let back = (anchor - first_ms).max(0) / period_ms;
