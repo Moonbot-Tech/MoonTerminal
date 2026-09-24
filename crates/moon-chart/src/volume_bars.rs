@@ -137,6 +137,17 @@ pub fn collect_samples(
     out: &mut Vec<VolumeSample>,
 ) {
     out.clear();
+    extend_samples(candles, tf_ms, series_tf_ms, out);
+}
+
+/// [`collect_samples`] without the clear: appends the samples of `candles` to `out`, so a changed
+/// tail can be re-applied to a retained list. `tf_ms` is indexed relative to `candles`.
+pub fn extend_samples(
+    candles: &[ChartCandle],
+    tf_ms: &[f32],
+    series_tf_ms: f64,
+    out: &mut Vec<VolumeSample>,
+) {
     out.reserve(candles.len());
     out.extend(candles.iter().enumerate().map(|(i, c)| {
         let own = tf_ms.get(i).copied().unwrap_or(0.0) as f64;

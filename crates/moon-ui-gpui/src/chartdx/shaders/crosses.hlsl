@@ -164,8 +164,11 @@ float2 price_point_px(PricePoint p) {
 }
 
 PriceLineOut price_line_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
-    PricePoint p0 = price_points[iid];
-    PricePoint p1 = price_points[iid + 1];
+    // Buffer length from the view (`cv_pad2`): vs_4_1 cannot query a structured buffer's size.
+    uint n = max((uint)round(cv_pad2), 1u);
+    uint i0 = ((uint)round(cv_instance_offset) + iid) % n; // ring slot of the segment's start
+    PricePoint p0 = price_points[i0];
+    PricePoint p1 = price_points[(i0 + 1u) % n];
     float2 a = price_point_px(p0);
     float2 b = price_point_px(p1);
     float2 dir = b - a;

@@ -28,7 +28,7 @@ pub use source::{
     ChartHistoryRead, CoinTag, DetectSnapshot, LatestPriceError, LiqSpanReadout,
     MarketContextReadout, MarketDataSource, MarketFiguresReadout, MarketLabel, MarketLimits,
     MarketQuantityUnit, MarketRevisions, MarketTickerReadout, MarketWindowsReadout, MaxOrder,
-    MaxOrderSource, OrderSizeRules, PriceProfileRow, ProfileWindow, ReplayAddress,
+    MaxOrderSource, OrderSizeRules, PriceLineUpdate, PriceProfileRow, ProfileWindow, ReplayAddress,
     ReplayAddressError, SIDE_BUCKET_MS, SideVolumeBucket, VolumeAt, VolumeSpan, VolumeSpanReadout,
     WindowFigures, pick_market_for_coin, pick_market_for_identity,
 };

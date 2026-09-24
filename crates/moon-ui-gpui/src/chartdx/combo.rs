@@ -20,13 +20,22 @@ use windows::Win32::Graphics::Direct3D11::*;
 use super::gpu::{
     BlitParams, ChartCross, ChartViewGpu, create_alpha_blend, create_dynamic_cb,
     create_point_sampler, create_premultiplied_alpha_blend, create_srv, create_structured,
-    device_changed, full_viewport, ring_write_no_overwrite, set_scissor_rect, update_dynamic,
+    create_structured_default, device_changed, full_viewport, ring_write_no_overwrite,
+    set_scissor_rect, update_default_range, update_dynamic,
 };
 use super::types::{
-    PriceStyleGpu, TickStyleGpu, append_cross_ring, evicted_cross_ranges, reset_cross_ring,
+    PriceStyleGpu, TickStyleGpu, append_cross_ring, cross_append_ranges, evicted_cross_ranges,
+    reset_cross_ring,
 };
 
+mod price_ring;
+
+use price_ring::{PriceRing, RingPending};
+
 const MIN_COMBO_CAPACITY: u32 = 1;
+/// Price-line ring capacity ceiling: slot offsets and the ring length travel to the shader as f32
+/// in the view cbuffer, exact only below 2^24.
+const MAX_PRICE_LINE_CAPACITY: u32 = 1 << 24;
 const CROSSES_HLSL: &str = include_str!("shaders/crosses.hlsl");
 const BLIT_HLSL: &str = include_str!("shaders/blit.hlsl");
 
@@ -58,6 +67,10 @@ struct CrossPipe {
     last_line_srv: ID3D11ShaderResourceView,
     mark_line_buf: ID3D11Buffer,
     mark_line_srv: ID3D11ShaderResourceView,
+    last_decim_buf: ID3D11Buffer,
+    last_decim_srv: ID3D11ShaderResourceView,
+    mark_decim_buf: ID3D11Buffer,
+    mark_decim_srv: ID3D11ShaderResourceView,
     view_cb: ID3D11Buffer,
     price_style_cb: ID3D11Buffer,
     tick_style_cb: ID3D11Buffer,
@@ -103,14 +116,15 @@ pub struct ComboLayer {
     head: u32,
     pending_reset: Option<Vec<ChartCross>>,
     pending_append: Vec<ChartCross>,
-    pending_lines: Option<(Vec<PriceLinePoint>, Vec<PriceLinePoint>)>,
     resident_crosses: Vec<ChartCross>,
     resident_head: usize,
     resident_count: usize,
     /// Ordering evidence for resident and queued rows, maintained only when data arrives.
     tick_time_order: TickTimeOrder,
-    last_line_count: u32,
-    mark_line_count: u32,
+    /// Last-price line, mirrored slot for slot in its GPU buffer.
+    last_ring: PriceRing,
+    /// Mark-price line, mirrored slot for slot in its GPU buffer.
+    mark_ring: PriceRing,
     cross_capacity: u32,
     price_line_capacity: u32,
     /// `RawGpuAccess` device generation on which the resources were created; a change means loss.
@@ -146,13 +160,12 @@ impl ComboLayer {
             head: 0,
             pending_reset: None,
             pending_append: Vec::new(),
-            pending_lines: None,
             resident_crosses: Vec::new(),
             resident_head: 0,
             resident_count: 0,
             tick_time_order: TickTimeOrder::default(),
-            last_line_count: 0,
-            mark_line_count: 0,
+            last_ring: PriceRing::new(MIN_COMBO_CAPACITY as usize),
+            mark_ring: PriceRing::new(MIN_COMBO_CAPACITY as usize),
             cross_capacity: MIN_COMBO_CAPACITY,
             price_line_capacity: MIN_COMBO_CAPACITY,
             device_generation_seen: 0,
@@ -182,11 +195,13 @@ impl ComboLayer {
     /// Resize GPU storage and retire ordering evidence with the resident ring.
     pub fn set_capacity(&mut self, cross_capacity: usize, price_line_capacity: usize) {
         let cross_capacity = sanitize_capacity(cross_capacity);
-        let price_line_capacity = sanitize_capacity(price_line_capacity);
+        let price_line_capacity =
+            sanitize_capacity(price_line_capacity).min(MAX_PRICE_LINE_CAPACITY);
         if self.cross_capacity == cross_capacity && self.price_line_capacity == price_line_capacity
         {
             return;
         }
+        let lines_changed = self.price_line_capacity != price_line_capacity;
         self.cross_capacity = cross_capacity;
         self.price_line_capacity = price_line_capacity;
         self.pipe = None;
@@ -197,8 +212,14 @@ impl ComboLayer {
         self.resident_crosses.clear();
         self.resident_head = 0;
         self.resident_count = 0;
-        self.last_line_count = 0;
-        self.mark_line_count = 0;
+        if lines_changed {
+            self.last_ring = PriceRing::new(price_line_capacity as usize);
+            self.mark_ring = PriceRing::new(price_line_capacity as usize);
+        } else {
+            // The recreated pipe's line buffers start empty; the rings still hold the lines.
+            self.last_ring.invalidate_gpu();
+            self.mark_ring.invalidate_gpu();
+        }
         self.pending_append.clear();
         self.refresh_pending_time_order();
         self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
@@ -254,8 +275,16 @@ impl ComboLayer {
         self.price_style = style;
     }
 
+    /// Replaces both price lines; the rings keep the data, so nothing is copied twice.
     pub fn set_price_lines(&mut self, last: &[PriceLinePoint], mark: &[PriceLinePoint]) {
-        self.pending_lines = Some((last.to_vec(), mark.to_vec()));
+        self.last_ring.reset(last);
+        self.mark_ring.reset(mark);
+    }
+
+    /// Appends newly drained points to each price line; only those slots are uploaded.
+    pub fn append_price_lines(&mut self, last_new: &[PriceLinePoint], mark_new: &[PriceLinePoint]) {
+        self.last_ring.append(last_new);
+        self.mark_ring.append(mark_new);
     }
 
     /// Prepare phase: uploads pending data and bakes/extends the offscreen combo texture.
@@ -280,8 +309,8 @@ impl ComboLayer {
             self.resident_head = 0;
             self.resident_count = 0;
             self.refresh_pending_time_order();
-            self.last_line_count = 0;
-            self.mark_line_count = 0;
+            self.last_ring.invalidate_gpu();
+            self.mark_ring.invalidate_gpu();
             self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
             self.volume_window_cache = None;
             self.device_gen = self.device_gen.wrapping_add(1);
@@ -309,7 +338,7 @@ impl ComboLayer {
         gpu: &RawGpuAccess,
         panel_clip: [f32; 4],
     ) {
-        if self.count == 0 && self.last_line_count <= 1 && self.mark_line_count <= 1 {
+        if self.count == 0 && self.last_ring.count <= 1 && self.mark_ring.count <= 1 {
             return;
         }
         if self.count > 0 {
@@ -706,20 +735,19 @@ impl ComboLayer {
     }
 
     fn draw_price_lines_to_backbuffer(
-        &self,
+        &mut self,
         view: &ChartViewGpu,
         context: &ID3D11DeviceContext,
         rtv: &ID3D11RenderTargetView,
         gpu: &RawGpuAccess,
         panel_clip: [f32; 4],
     ) {
-        if self.last_line_count <= 1 && self.mark_line_count <= 1 {
+        if self.last_ring.count <= 1 && self.mark_ring.count <= 1 {
             return;
         }
         let Some(pipe) = self.pipe.as_ref() else {
             return;
         };
-        update_dynamic(context, &pipe.view_cb, std::slice::from_ref(view));
         update_dynamic(context, &pipe.price_style_cb, &[self.price_style]);
         let vp = full_viewport(gpu);
         unsafe {
@@ -748,8 +776,28 @@ impl ComboLayer {
                 ]),
             );
             context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
-            Self::draw_price_lines(context, pipe, self.last_line_count, self.mark_line_count);
+            context.VSSetShader(&pipe.price_vs, None);
         }
+        draw_price_ring(
+            context,
+            view,
+            &pipe.view_cb,
+            &mut self.last_ring,
+            &pipe.last_line_srv,
+            &pipe.last_decim_buf,
+            &pipe.last_decim_srv,
+            &pipe.price_last_ps,
+        );
+        draw_price_ring(
+            context,
+            view,
+            &pipe.view_cb,
+            &mut self.mark_ring,
+            &pipe.mark_line_srv,
+            &pipe.mark_decim_buf,
+            &pipe.mark_decim_srv,
+            &pipe.price_mark_ps,
+        );
     }
 
     /// Upload pending rows; offscreen eviction keeps the established incremental append look.
@@ -762,11 +810,28 @@ impl ComboLayer {
                 pipe.mark_line_buf.clone(),
             )
         };
-        if let Some((last, mark)) = self.pending_lines.take() {
-            self.last_line_count =
-                upload_points(context, &last_line_buf, &last, self.price_line_capacity);
-            self.mark_line_count =
-                upload_points(context, &mark_line_buf, &mark, self.price_line_capacity);
+        // Price lines are drawn every frame, so a NO_OVERWRITE map onto their oldest slots can race
+        // the previous frame's draw; `UpdateSubresource` into a DEFAULT buffer is hazard-safe.
+        for (ring, buf) in [
+            (&mut self.last_ring, &last_line_buf),
+            (&mut self.mark_ring, &mark_line_buf),
+        ] {
+            match std::mem::replace(&mut ring.pending, RingPending::None) {
+                RingPending::None => {}
+                // The whole cap-sized slot vector, so the GPU layout is the mirror's layout.
+                RingPending::Reset => update_default_range(context, buf, 0, &ring.slots),
+                RingPending::Append { start, rows } => {
+                    let mut done = 0usize;
+                    for (slot, n) in
+                        cross_append_ranges(start, rows.len(), self.price_line_capacity as usize)
+                    {
+                        if n > 0 {
+                            update_default_range(context, buf, slot as u32, &rows[done..done + n]);
+                            done += n;
+                        }
+                    }
+                }
+            }
         }
         if let Some(data) = self.pending_reset.take() {
             // On overflow, retain only the most recent capacity-sized tail.
@@ -977,27 +1042,6 @@ impl ComboLayer {
         out
     }
 
-    fn draw_price_lines(
-        context: &ID3D11DeviceContext,
-        pipe: &CrossPipe,
-        last_line_count: u32,
-        mark_line_count: u32,
-    ) {
-        unsafe {
-            context.VSSetShader(&pipe.price_vs, None);
-            if last_line_count > 1 {
-                context.VSSetShaderResources(2, Some(&[Some(pipe.last_line_srv.clone())]));
-                context.PSSetShader(&pipe.price_last_ps, None);
-                context.DrawInstanced(6, last_line_count - 1, 0, 0);
-            }
-            if mark_line_count > 1 {
-                context.VSSetShaderResources(2, Some(&[Some(pipe.mark_line_srv.clone())]));
-                context.PSSetShader(&pipe.price_mark_ps, None);
-                context.DrawInstanced(6, mark_line_count - 1, 0, 0);
-            }
-        }
-    }
-
     /// Creates tick, volume, and price pipelines with their style buffers.
     fn create_pipe(&self, device: &ID3D11Device) -> CrossPipe {
         let cross_vs = super::gpu::make_vs(device, CROSSES_HLSL, "crosses_vertex");
@@ -1022,18 +1066,32 @@ impl ComboLayer {
             lod_capacity,
         );
         let lod_srv = create_srv(device, &lod_buffer);
-        let last_line_buf = create_structured(
+        let last_line_buf = create_structured_default(
             device,
             std::mem::size_of::<PriceLinePoint>() as u32,
             self.price_line_capacity,
         );
         let last_line_srv = create_srv(device, &last_line_buf);
-        let mark_line_buf = create_structured(
+        let mark_line_buf = create_structured_default(
             device,
             std::mem::size_of::<PriceLinePoint>() as u32,
             self.price_line_capacity,
         );
         let mark_line_srv = create_srv(device, &mark_line_buf);
+        // A decimation is never longer than its ring, so each decimation buffer holds the ring's
+        // capacity and every pane width decimates.
+        let last_decim_buf = create_structured_default(
+            device,
+            std::mem::size_of::<PriceLinePoint>() as u32,
+            self.price_line_capacity,
+        );
+        let last_decim_srv = create_srv(device, &last_decim_buf);
+        let mark_decim_buf = create_structured_default(
+            device,
+            std::mem::size_of::<PriceLinePoint>() as u32,
+            self.price_line_capacity,
+        );
+        let mark_decim_srv = create_srv(device, &mark_decim_buf);
         let view_cb = create_dynamic_cb(device, std::mem::size_of::<ChartViewGpu>() as u32);
         let price_style_cb = create_dynamic_cb(device, std::mem::size_of::<PriceStyleGpu>() as u32);
         let tick_style_cb = create_dynamic_cb(device, std::mem::size_of::<TickStyleGpu>() as u32);
@@ -1060,6 +1118,10 @@ impl ComboLayer {
             last_line_srv,
             mark_line_buf,
             mark_line_srv,
+            last_decim_buf,
+            last_decim_srv,
+            mark_decim_buf,
+            mark_decim_srv,
             view_cb,
             price_style_cb,
             tick_style_cb,
@@ -1107,21 +1169,68 @@ fn slot_runs_u32(runs: [(usize, usize); 2]) -> [(u32, u32); 2] {
     runs.map(|(first, count)| (first as u32, count as u32))
 }
 
-fn upload_points(
+/// Draws one price line: the segments in view, or their min/max-per-column decimation when there
+/// are more than four points per pixel column. The view goes up as a LOCAL copy whose `pad` is the
+/// shader's instance offset; the shared view carries the right-edge time there.
+#[allow(clippy::too_many_arguments)] // one line's buffers and shader, passed apart to borrow the pipe
+fn draw_price_ring(
     context: &ID3D11DeviceContext,
-    buffer: &ID3D11Buffer,
-    data: &[PriceLinePoint],
-    cap: u32,
-) -> u32 {
-    let data = if data.len() as u32 > cap {
-        &data[data.len() - cap as usize..]
-    } else {
-        data
-    };
-    if !data.is_empty() {
-        update_dynamic(context, buffer, data);
+    view: &ChartViewGpu,
+    view_cb: &ID3D11Buffer,
+    ring: &mut PriceRing,
+    line_srv: &ID3D11ShaderResourceView,
+    decim_buf: &ID3D11Buffer,
+    decim_srv: &ID3D11ShaderResourceView,
+    ps: &ID3D11PixelShader,
+) {
+    if ring.count <= 1 || !(view.time_to_px > 0.0) {
+        return;
     }
-    data.len() as u32
+    let left = view.view_time0 - 2.0 / view.time_to_px;
+    let right = view.view_time0 + (view.bounds[2] + 2.0) / view.time_to_px;
+    let (lo, hi) = ring.visible(left, right);
+    let n = hi.saturating_sub(lo);
+    if n < 2 {
+        return;
+    }
+    let columns = view.bounds[2].max(0.0).ceil() as usize;
+    let mut v = *view;
+    let mut srv = line_srv;
+    let mut segments = (n - 1) as u32;
+    // `pad` is the first segment's slot and `_pad2` the buffer's length, which the price-line
+    // shader wraps slot indices by.
+    v.pad = ring.physical(lo) as f32;
+    v._pad2 = ring.slots.len() as f32;
+    if n > 4 * columns {
+        // Decimated over the whole ring on absolute columns, so a scroll without a new row reuses
+        // it; only a new row or a zoom recomputes.
+        let key = (ring.head, ring.count, view.time_to_px.to_bits());
+        if ring.decim_key != Some(key) {
+            let mut decim = std::mem::take(&mut ring.decim);
+            ring.m4(view.time_to_px, &mut decim);
+            ring.decim = decim;
+            update_default_range(context, decim_buf, 0, &ring.decim);
+            ring.decim_len = ring.decim.len() as u32;
+            ring.decim_key = Some(key);
+        }
+        let (dlo, dhi) = ring.decim_visible(left, right);
+        if dhi.saturating_sub(dlo) >= 2 {
+            v.pad = dlo as f32;
+            v._pad2 = ring.slots.len() as f32;
+            srv = decim_srv;
+            segments = (dhi - dlo - 1) as u32;
+        }
+    }
+    update_dynamic(context, view_cb, std::slice::from_ref(&v));
+    crate::diag::bump_by(
+        &crate::diag::CHART_PRICE_LINE_DRAW_SEGMENTS,
+        segments as u64,
+    );
+    unsafe {
+        context.VSSetShaderResources(2, Some(&[Some(srv.clone())]));
+        context.PSSetShader(ps, None);
+        context.DrawInstanced(6, segments, 0, 0);
+    }
 }
 
 fn sanitize_capacity(capacity: usize) -> u32 {

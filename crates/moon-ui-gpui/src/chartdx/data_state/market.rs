@@ -1,7 +1,7 @@
 //! Synchronizes market history, the order book, and automatic Y scaling.
 
 use moon_core::config::{SpanAnchor as LabelAnchor, VolumeSpanKey};
-use moon_core::market::{LiqSpanReadout, VolumeAt, VolumeSpan, VolumeSpanReadout};
+use moon_core::market::{LiqSpanReadout, PriceLineUpdate, VolumeAt, VolumeSpan, VolumeSpanReadout};
 
 use super::orders::refresh_orderbook_label_notionals;
 use super::*;
@@ -451,6 +451,7 @@ impl ChartDataState {
                 history_source_sig = mix_sig(history_source_sig, revs.history);
                 history_source_sig = mix_sig(history_source_sig, revs.meta);
             }
+            history_source_sig = mix_sig(history_source_sig, pr.history_cursor.cache_completions());
             let history_source_changed = history_source_sig != pr.source_history_sig;
             // Changing the Liquidations toggle reuploads combo to add or remove liquidation crosses.
             let liq_toggle_changed = pr.liquidations_enabled != self.chart_graphics.liquidations;
@@ -463,7 +464,19 @@ impl ChartDataState {
                 self.chart_graphics.last_price_line,
                 self.chart_graphics.mark_price_line,
             );
-            let price_lines_toggle_changed = pr.applied_price_lines != price_lines;
+            // A new epoch invalidates the mirrored lines' relative times: re-read them whole, the
+            // same way a toggle does — once per change, so a market without price rows does not
+            // force a reset every frame. An unknown epoch forces only when a mirror holds points.
+            let price_epoch_moved = if pr.price_line_epoch.is_finite() {
+                pr.price_line_epoch != pane.view.epoch_ms
+            } else {
+                !(pr.last_line_rows.is_empty() && pr.mark_line_rows.is_empty())
+            };
+            if price_epoch_moved {
+                pr.price_line_epoch = pane.view.epoch_ms;
+            }
+            let price_lines_toggle_changed =
+                pr.applied_price_lines != price_lines || price_epoch_moved;
             pr.applied_price_lines = price_lines;
             // Candle/trade-zone configuration changes, including timeframe or K, require a
             // history reset. Moving the current bucket does too for a numeric zone, because the
@@ -494,14 +507,19 @@ impl ChartDataState {
             if device_lost {
                 // A new device has an empty candle layer, invalidating the delivered revision.
                 pr.last_candle_rev = u64::MAX;
+                pr.candle_rows.clear();
+                pr.volume_samples.clear();
+                pr.candle_rows_epoch = f64::NAN;
+                pr.candle_resync = false;
             }
             // A pane panned off the live edge needs its coverage re-established, and only a reset
             // does it. Two invariants ride on it, and neither survives dropping it. (A third used
             // to: the read parked its follow-up cursor at now, leaving the ring with a hole between
             // the window's right edge and now. The read now parks the cursor at that edge, so the
             // drain fills the stretch itself — `history.rs`, the reset arm.)
-            //   * a candle-series rebuild re-clips the series to the then-current window, so its
-            //     left edge can move RIGHT of `resident_left_rel` between resets.
+            //   * the candle series no longer re-clips to the current window on a pan reset: it is
+            //     anchored on its own floor one span left of the window, so its left edge cannot
+            //     move RIGHT of `resident_left_rel` between resets.
             //   * a pane parked in the past keeps appending live trades into a fixed-capacity ring,
             //     evicting the historical crosses it is displaying.
             // What it does NOT need is a reset per camera pixel, which is what a drag used to cost:
@@ -618,11 +636,19 @@ impl ChartDataState {
                 // Keep the field in the read protocol for future use.
                 trades_limit: usize::MAX,
                 shipped_revision: pr.last_candle_rev,
+                series_reset: source_generation_changed
+                    || source_archive_changed
+                    || candle_cfg_changed
+                    || pr.resident_left_rel.is_nan(),
             };
             if candles_off && pr.last_candle_rev != u64::MAX {
                 pr.figure_snap.clear_candles();
-                pr.layers.set_candles(Vec::new());
+                pr.layers.set_candles(&[]);
                 pr.last_candle_rev = u64::MAX;
+                pr.candle_rows.clear();
+                pr.volume_samples.clear();
+                pr.candle_rows_epoch = f64::NAN;
+                pr.candle_resync = false;
                 pr.gpu_prepare_dirty = true;
                 pixels_changed = true;
             }
@@ -636,8 +662,10 @@ impl ChartDataState {
             // `scan_price` alone, independently of `force_reset`. Reading without resetting is what
             // makes the budget affordable — those pixels still get a fitted Y and an incremental
             // drain, they just do not re-upload the world.
-            let read_history =
-                history_source_changed || force_history_reset || price_window_changed;
+            let read_history = history_source_changed
+                || force_history_reset
+                || price_window_changed
+                || pr.candle_resync;
             let mut history = if read_history {
                 let read_timer = crate::diag::timer();
                 // An engine holding a frozen replay answers from it and never touches the live
@@ -855,9 +883,16 @@ impl ChartDataState {
                 let last_price = history.last_price;
                 if capacity_changed || history.combo_reset {
                     pr.combo_cross_capacity = history.combo_capacity;
+                    let lines_cap_changed =
+                        pr.combo_price_line_capacity != history.price_line_capacity;
                     pr.combo_price_line_capacity = history.price_line_capacity;
                     pr.layers
                         .set_combo_capacity(history.combo_capacity, history.price_line_capacity);
+                    // A new line capacity empties the DX11 rings; hand them the mirrors again.
+                    if lines_cap_changed {
+                        pr.layers
+                            .set_price_lines(&pr.last_line_rows, &pr.mark_line_rows);
+                    }
                 }
                 if history.combo_reset {
                     crate::diag::bump_by(
@@ -938,77 +973,125 @@ impl ChartDataState {
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }
-                // A live trade batch advances the series revision, so on a live market the whole
-                // composed series is re-shipped continuously — not the "hundreds of rows" this
-                // once assumed. What it measures and what it costs: `candle_upload_len` and
-                // `candle_upload_us` in `diag.rs`.
+                // A live trade batch usually changes only the last candle, so the source ships
+                // just the changed tail and `candle_rows` is patched in place; a rebuild ships the
+                // whole list. `candle_upload_len` counts the rows actually shipped.
                 if history.candles_changed {
                     let upload_timer = crate::diag::timer();
-                    fill_candle_upload(
+                    crate::diag::bump_by(
+                        &crate::diag::CHART_CANDLE_UPLOAD_LEN,
+                        pr.history_buffers.candles.len() as u64,
+                    );
+                    // The bottom band's samples ride along, in QUOTE-currency turnover, so its
+                    // bars and labels are monetary amounts in this market.
+                    let applied = apply_candle_read(
+                        &mut pr.candle_rows,
+                        &mut pr.volume_samples,
+                        &mut pr.candle_rows_epoch,
+                        history.candles_patch_from,
                         &pr.history_buffers.candles,
                         &pr.history_buffers.candle_tf_ms,
                         pane.view.epoch_ms,
-                        &mut pr.candle_upload,
-                    );
-                    crate::diag::bump_by(
-                        &crate::diag::CHART_CANDLE_UPLOAD_LEN,
-                        pr.candle_upload.len() as u64,
-                    );
-                    // Retain a compact copy for the bottom band's visible-range statistics, in
-                    // QUOTE-currency turnover. That makes its bars and labels monetary amounts in
-                    // this market rather than arbitrary base-unit counts.
-                    // `history_buffers` is cleared on entry to every read and refilled only when
-                    // the series revision moved, so this block is the only place it is populated -
-                    // and a plain pan, which must rescale the band, does not reach it.
-                    moon_chart::collect_samples(
-                        &pr.history_buffers.candles,
-                        &pr.history_buffers.candle_tf_ms,
                         candle_tf_ms as f64,
-                        &mut pr.volume_samples,
                     );
-                    // Ascending as the composed history is; the widest width bounds each lookup.
-                    pr.volume_samples_max_tf = pr
-                        .volume_samples
-                        .iter()
-                        .fold(0.0, |max: f64, s| max.max(s.tf_ms));
-                    // `take` hands the buffer away and leaves an empty one to grow again on the
-                    // next revision — tens of ~24 KB allocations a second on a live market. The
-                    // allocation lands inside the timer above; the matching free happens when the
-                    // layer drops the vector, which no timer spans. Left alone deliberately:
-                    // retaining it means handing the buffer back OUT of the layer, an API change
-                    // across three backends for a slice of a figure already at 0.14% of wall time.
-                    pr.figure_snap.set_candles(&pr.candle_upload);
-                    pr.layers.set_candles(std::mem::take(&mut pr.candle_upload));
-                    crate::diag::record_us(&crate::diag::CHART_CANDLE_UPLOAD_US, upload_timer);
-                    pr.last_candle_rev = history.candles_revision;
-                    pr.gpu_prepare_dirty = true;
-                    pixels_changed = true;
+                    match applied {
+                        CandleApply::Full => {
+                            pr.figure_snap.set_candles(&pr.candle_rows);
+                            pr.layers.set_candles(&pr.candle_rows);
+                        }
+                        CandleApply::Patch(from) => {
+                            pr.figure_snap.patch_candles(from, &pr.candle_rows);
+                            pr.layers.patch_candles(from, &pr.candle_rows);
+                        }
+                        CandleApply::Rejected => {}
+                    }
+                    if matches!(applied, CandleApply::Rejected) {
+                        pr.last_candle_rev = u64::MAX;
+                        pr.candle_resync = true;
+                    } else {
+                        // Ascending as the composed history is; the widest width bounds each
+                        // lookup. A patch may bring a wider row, so this follows every apply.
+                        pr.volume_samples_max_tf = pr
+                            .volume_samples
+                            .iter()
+                            .fold(0.0, |max: f64, s| max.max(s.tf_ms));
+                        crate::diag::record_us(&crate::diag::CHART_CANDLE_UPLOAD_US, upload_timer);
+                        pr.last_candle_rev = history.candles_revision;
+                        pr.candle_resync = false;
+                        pr.gpu_prepare_dirty = true;
+                        pixels_changed = true;
+                    }
                 }
-                if history.price_lines_changed || history.combo_reset {
+                if history.price_lines_changed {
                     // Each price line follows its OWN toggle, so one can be drawn without the
                     // other. Flipping either forces a history reset (`price_lines_toggle_changed`)
                     // and reaches this branch; a disabled line uploads an empty buffer rather than
-                    // a stale one, because the layer keeps whatever it was last given.
-                    let last_points: &[_] = if self.chart_graphics.last_price_line {
-                        &pr.history_buffers.last_points
-                    } else {
-                        &[]
-                    };
-                    fill_price_upload(last_points, pane.view.epoch_ms, &mut pr.last_line_upload);
-                    let mark_points: &[_] = if self.chart_graphics.mark_price_line {
-                        &pr.history_buffers.mark_points
-                    } else {
-                        &[]
-                    };
-                    fill_price_upload(mark_points, pane.view.epoch_ms, &mut pr.mark_line_upload);
-                    crate::diag::bump_by(
-                        &crate::diag::CHART_PRICE_LINE_UPLOAD_LEN,
-                        (pr.last_line_upload.len() + pr.mark_line_upload.len()) as u64,
+                    // a stale one, because the layer keeps whatever it was last given. A live row
+                    // arrives as an append and only it travels to the GPU; a combo reset alone
+                    // leaves the lines as they are.
+                    let cap = history.price_line_capacity.max(1);
+                    let epoch = pane.view.epoch_ms;
+                    // An append against mirrors of another epoch is dropped; a NaN epoch then
+                    // forces the full re-read on the next frame.
+                    let stale_append = pr.price_line_epoch != epoch
+                        && (history.last_line == PriceLineUpdate::Append
+                            || history.mark_line == PriceLineUpdate::Append);
+                    let (last_ship, last_from) = apply_price_line(
+                        &mut pr.last_line_rows,
+                        history.last_line,
+                        &pr.history_buffers.last_points,
+                        self.chart_graphics.last_price_line,
+                        cap,
+                        epoch,
+                        pr.price_line_epoch,
                     );
-                    pr.layers
-                        .set_price_lines(&pr.last_line_upload, &pr.mark_line_upload);
-                    pr.gpu_prepare_dirty = true;
-                    pixels_changed = true;
+                    let (mark_ship, mark_from) = apply_price_line(
+                        &mut pr.mark_line_rows,
+                        history.mark_line,
+                        &pr.history_buffers.mark_points,
+                        self.chart_graphics.mark_price_line,
+                        cap,
+                        epoch,
+                        pr.price_line_epoch,
+                    );
+                    pr.price_line_epoch = if stale_append { f64::NAN } else { epoch };
+                    let replace = last_ship == PriceLineUpdate::Replace
+                        || mark_ship == PriceLineUpdate::Replace;
+                    let append = last_ship == PriceLineUpdate::Append
+                        || mark_ship == PriceLineUpdate::Append;
+                    if replace {
+                        crate::diag::bump_by(
+                            &crate::diag::CHART_PRICE_LINE_UPLOAD_LEN,
+                            (pr.last_line_rows.len() + pr.mark_line_rows.len()) as u64,
+                        );
+                        pr.layers
+                            .set_price_lines(&pr.last_line_rows, &pr.mark_line_rows);
+                    } else if append {
+                        let last_new: &[PriceLinePoint] = if last_ship == PriceLineUpdate::Append {
+                            &pr.last_line_rows[last_from..]
+                        } else {
+                            &[]
+                        };
+                        let mark_new: &[PriceLinePoint] = if mark_ship == PriceLineUpdate::Append {
+                            &pr.mark_line_rows[mark_from..]
+                        } else {
+                            &[]
+                        };
+                        crate::diag::bump_by(
+                            &crate::diag::CHART_PRICE_LINE_UPLOAD_LEN,
+                            (last_new.len() + mark_new.len()) as u64,
+                        );
+                        pr.layers.append_price_lines(
+                            last_new,
+                            mark_new,
+                            &pr.last_line_rows,
+                            &pr.mark_line_rows,
+                        );
+                    }
+                    if replace || append {
+                        pr.gpu_prepare_dirty = true;
+                        pixels_changed = true;
+                    }
                 }
                 if chart_market_diag_enabled()
                     && chart_market_diag_due(format!("combo:{}:{}:{}", pane.core, pane.market, idx))
@@ -1040,10 +1123,16 @@ impl ChartDataState {
             } else if read_history {
                 if pr.resident_left_rel.is_finite() {
                     pr.layers.reset_combo(Vec::new());
+                    pr.last_line_rows.clear();
+                    pr.mark_line_rows.clear();
                     pr.layers.set_price_lines(&[], &[]);
                     pr.figure_snap.clear_candles();
-                    pr.layers.set_candles(Vec::new());
+                    pr.layers.set_candles(&[]);
                     pr.last_candle_rev = u64::MAX;
+                    pr.candle_rows.clear();
+                    pr.volume_samples.clear();
+                    pr.candle_rows_epoch = f64::NAN;
+                    pr.candle_resync = false;
                     pr.history_cursor.reset();
                     pr.resident_left_rel = f32::NAN;
                     pr.pan_reset_cam_px = i64::MIN;
@@ -2126,4 +2215,96 @@ fn merge_readouts<T>(
 /// chart prints one or two periods, and the comparison runs per pane per market revision.
 fn same_period_set(held: &[(VolumeSpan, VolumeAt)], want: &[(VolumeSpan, VolumeAt)]) -> bool {
     held.len() == want.len() && want.iter().all(|key| held.contains(key))
+}
+
+/// How a candle read landed in a pane's retained rows.
+pub(crate) enum CandleApply {
+    /// The whole list was replaced.
+    Full,
+    /// The rows from this index on were replaced.
+    Patch(usize),
+    /// A tail patch did not fit the retained rows; nothing changed and a full read is due.
+    Rejected,
+}
+
+/// Applies one candle read to the retained GPU rows and volume samples.
+///
+/// `patch_from == None` replaces both; `Some(from)` replaces them from `from` on, and is rejected
+/// when the retained rows are shorter, were converted against another epoch, or have fallen out of
+/// step with the samples.
+#[allow(clippy::too_many_arguments)] // two retained buffers, their epoch and one read's parts
+pub(crate) fn apply_candle_read(
+    rows: &mut Vec<CandleGpu>,
+    samples: &mut Vec<moon_chart::VolumeSample>,
+    rows_epoch: &mut f64,
+    patch_from: Option<usize>,
+    candles: &[moon_core::market::ChartCandle],
+    tf: &[f32],
+    epoch_ms: f64,
+    series_tf_ms: f64,
+) -> CandleApply {
+    match patch_from {
+        None => {
+            fill_candle_upload(candles, tf, epoch_ms, rows);
+            moon_chart::collect_samples(candles, tf, series_tf_ms, samples);
+            *rows_epoch = epoch_ms;
+            CandleApply::Full
+        }
+        Some(from) => {
+            if from > rows.len() || *rows_epoch != epoch_ms || samples.len() != rows.len() {
+                return CandleApply::Rejected;
+            }
+            rows.truncate(from);
+            samples.truncate(from);
+            extend_candle_upload(candles, tf, epoch_ms, rows);
+            moon_chart::extend_samples(candles, tf, series_tf_ms, samples);
+            CandleApply::Patch(from)
+        }
+    }
+}
+
+/// Applies one price line's read to its mirror and says what the GPU must receive.
+///
+/// Returns the update to ship and, for an append, the mirror index the new points start at. A
+/// disabled line empties its mirror; a replacement, or points converted against another epoch,
+/// rebuild it; an append extends it, and a mirror grown past twice the capacity drops its oldest
+/// points and ships whole, since every slot then moves.
+pub(crate) fn apply_price_line(
+    mirror: &mut Vec<PriceLinePoint>,
+    update: PriceLineUpdate,
+    points: &[moon_core::feed::PricePoint],
+    enabled: bool,
+    cap: usize,
+    epoch_ms: f64,
+    mirror_epoch: f64,
+) -> (PriceLineUpdate, usize) {
+    if !enabled {
+        // Readers drain whether or not the toggle is on; an already empty line has nothing to say.
+        if mirror.is_empty() {
+            return (PriceLineUpdate::None, 0);
+        }
+        mirror.clear();
+        return (PriceLineUpdate::Replace, 0);
+    }
+    match update {
+        PriceLineUpdate::None => (PriceLineUpdate::None, 0),
+        PriceLineUpdate::Replace => {
+            fill_price_upload(points, epoch_ms, mirror);
+            (PriceLineUpdate::Replace, 0)
+        }
+        // The batch holds only new rows, not the window: leave the mirror for the full re-read the
+        // caller forces.
+        PriceLineUpdate::Append if mirror_epoch != epoch_ms => (PriceLineUpdate::None, 0),
+        PriceLineUpdate::Append => {
+            let from = mirror.len();
+            extend_price_upload(points, epoch_ms, mirror);
+            if mirror.len() > 2 * cap {
+                let excess = mirror.len() - cap;
+                mirror.drain(..excess);
+                (PriceLineUpdate::Replace, 0)
+            } else {
+                (PriceLineUpdate::Append, from)
+            }
+        }
+    }
 }

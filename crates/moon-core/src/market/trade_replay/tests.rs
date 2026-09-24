@@ -468,6 +468,7 @@ fn candle_params(shipped_revision: u64) -> CandleReadParams {
         trades_from_rel_ms: 0.0,
         trades_limit: 100,
         shipped_revision,
+        series_reset: false,
     }
 }
 

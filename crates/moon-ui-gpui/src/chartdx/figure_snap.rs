@@ -16,17 +16,29 @@ pub(super) struct FigureSnapData {
     max_row_tf: f32,
     /// Whether some row has no own width and draws at the style's series timeframe instead.
     any_series_tf: bool,
+    /// Index within the full list at which the retained window starts.
+    base: usize,
+}
+
+/// The DX11 candle buffer's instance capacity; figure snaps mirror exactly what it holds.
+/// `chartdx/candles.rs` sizes the buffer from this constant.
+pub(super) const DX11_CANDLE_WINDOW: usize = 4096;
+
+/// Start of the window the candle layer actually keeps: DX11's CandleLayer keeps only the newest
+/// `DX11_CANDLE_WINDOW` instances, native backends keep all.
+pub(super) fn dx11_window_start(len: usize) -> usize {
+    if cfg!(windows) {
+        len.saturating_sub(DX11_CANDLE_WINDOW)
+    } else {
+        0
+    }
 }
 
 impl FigureSnapData {
     /// Replace candles on series revision, preserving the platform's actual upload capacity.
     pub(super) fn set_candles(&mut self, rows: &[CandleGpu]) {
-        // DX11's CandleLayer keeps only the newest 4096 instances; native backends keep all.
-        let start = if cfg!(windows) {
-            rows.len().saturating_sub(4096)
-        } else {
-            0
-        };
+        let start = dx11_window_start(rows.len());
+        self.base = start;
         self.candles.clear();
         self.candles.extend_from_slice(&rows[start..]);
         self.max_row_tf = self
@@ -56,11 +68,33 @@ impl FigureSnapData {
         &self.candles[start..end]
     }
 
+    /// Re-apply the tail of `full` from `from` on; a window that moved takes the whole set again.
+    pub(super) fn patch_candles(&mut self, from: usize, full: &[CandleGpu]) {
+        let start = dx11_window_start(full.len());
+        if start == self.base
+            && from >= start
+            && from <= full.len()
+            && from - start <= self.candles.len()
+        {
+            self.candles.truncate(from - start);
+            let tail = &full[from..];
+            self.candles.extend_from_slice(tail);
+            // Widen only: bounds left over from truncated rows keep the lookup conservative.
+            self.max_row_tf = tail
+                .iter()
+                .fold(self.max_row_tf, |max, row| max.max(row.tf_rel));
+            self.any_series_tf |= tail.iter().any(|row| !(row.tf_rel > 0.0));
+        } else {
+            self.set_candles(full);
+        }
+    }
+
     /// Retire candle candidates together with a disabled or cleared candle layer.
     pub(super) fn clear_candles(&mut self) {
         self.candles.clear();
         self.max_row_tf = 0.0;
         self.any_series_tf = false;
+        self.base = 0;
     }
 }
 

@@ -1181,3 +1181,56 @@ fn price_range_equals_a_full_scan_and_visits_only_the_window() {
         }
     }
 }
+
+/// Breakage: `candles.rs` `compose_with_coarse` pushes a coarse row once PER hole it overlaps
+/// instead of once. Consequence: a candle between two disjoint blocks is drawn twice and the
+/// volume band counts that bucket twice. Probes per row are at most 2 after a binary search,
+/// against every hole before.
+#[test]
+fn coarse_row_straddling_two_wide_holes_is_composed_once() {
+    let m = 60_000.0;
+    let series = [
+        candle(0.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        candle(7.0 * m, 1.0, 1.0, 1.0, 1.0, 1.0),
+        candle(14.0 * m, 1.0, 1.0, 1.0, 1.0, 1.0),
+    ];
+    // Holes [1m, 7m) and [8m, 14m), each 6 minutes, both wide enough for a 5-minute row; the row
+    // at 5m spans [5m, 10m) and overlaps both.
+    let straddler = candle(5.0 * m, 2.0, 2.0, 2.0, 2.0, 9.0);
+    let rows = [straddler];
+    let mut out = Vec::new();
+    compose_with_coarse(
+        &series,
+        m,
+        &[CoarseLayer {
+            rows: &rows,
+            tf_ms: 5.0 * m,
+        }],
+        &mut out,
+    );
+    let taken = out.iter().filter(|(c, _)| *c == straddler).count();
+    assert_eq!(taken, 1, "the straddling row is composed exactly once");
+    assert_eq!(out.len(), 4);
+}
+
+/// A hole narrower than the layer's timeframe takes no row from it.
+#[test]
+fn coarse_row_is_not_offered_a_hole_narrower_than_its_timeframe() {
+    let m = 60_000.0;
+    let series = [
+        candle(0.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        candle(3.0 * m, 1.0, 1.0, 1.0, 1.0, 1.0),
+    ];
+    let rows = [candle(0.0, 2.0, 2.0, 2.0, 2.0, 9.0)];
+    let mut out = Vec::new();
+    compose_with_coarse(
+        &series,
+        m,
+        &[CoarseLayer {
+            rows: &rows,
+            tf_ms: 5.0 * m,
+        }],
+        &mut out,
+    );
+    assert_eq!(out.len(), 2, "only the series survives: {out:?}");
+}

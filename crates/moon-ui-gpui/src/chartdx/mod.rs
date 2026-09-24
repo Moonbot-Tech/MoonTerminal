@@ -95,8 +95,9 @@ use pane::{Container, ContainerKind};
 use types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
     GridParams, HvolRowGpu, HvolStyleGpu, PriceStyleGpu, ReadoutRect, SideVolumeGpu, TickStyleGpu,
-    VolumeStyleGpu, cover_uv, fill_candle_upload, fill_cross_upload, fill_hvol_upload,
-    fill_liq_upload, fill_price_upload, fill_side_volume_upload, rgb4, rgba3,
+    VolumeStyleGpu, cover_uv, extend_candle_upload, extend_price_upload, fill_candle_upload,
+    fill_cross_upload, fill_hvol_upload, fill_liq_upload, fill_price_upload,
+    fill_side_volume_upload, rgb4, rgba3,
 };
 
 const CHART_PHOTO_BACKGROUND_ENABLED: bool = false;
@@ -605,10 +606,19 @@ struct PaneRender {
     cross_upload: Vec<ChartCross>,
     /// LIQUIDATION trade-cross upload buffer using `side=2` in the same combo ring.
     liq_upload: Vec<ChartCross>,
-    last_line_upload: Vec<PriceLinePoint>,
-    mark_line_upload: Vec<PriceLinePoint>,
-    /// Reusable candle-layer upload buffer.
-    candle_upload: Vec<CandleGpu>,
+    /// The full uploaded last-price line; the non-DX11 backends and a capacity change re-send it
+    /// whole.
+    last_line_rows: Vec<PriceLinePoint>,
+    /// The full uploaded mark-price line, kept like `last_line_rows`.
+    mark_line_rows: Vec<PriceLinePoint>,
+    /// Epoch both line mirrors were converted against; NaN before the first.
+    price_line_epoch: f64,
+    /// The whole composed candle list, converted for the GPU and patched in place by a tail read.
+    candle_rows: Vec<CandleGpu>,
+    /// Epoch `candle_rows` was converted against; a tail patch against another epoch is rejected.
+    candle_rows_epoch: f64,
+    /// A tail patch could not be applied; the next frame re-reads the history for a full list.
+    candle_resync: bool,
     /// Candle candidates retained with the uploaded series for drawing-tool snapping.
     figure_snap: figure_snap::FigureSnapData,
     /// Last candle-series revision delivered to the GPU; `u64::MAX` means never delivered.
@@ -949,9 +959,12 @@ impl PaneRender {
             source_archive: u64::MAX,
             cross_upload: Vec::new(),
             liq_upload: Vec::new(),
-            last_line_upload: Vec::new(),
-            mark_line_upload: Vec::new(),
-            candle_upload: Vec::new(),
+            last_line_rows: Vec::new(),
+            mark_line_rows: Vec::new(),
+            price_line_epoch: f64::NAN,
+            candle_rows: Vec::new(),
+            candle_rows_epoch: f64::NAN,
+            candle_resync: false,
             figure_snap: figure_snap::FigureSnapData::default(),
             last_candle_rev: u64::MAX,
             applied_candle_cfg: moon_core::market::CandleViewCfg::default().history_inputs(),

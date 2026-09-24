@@ -194,17 +194,29 @@ impl PlatformLayers {
         }
     }
 
-    /// Fully replaces the layer's candle set when the series revision changes.
-    pub fn set_candles(&mut self, data: Vec<CandleGpu>) {
+    /// Fully replaces the layer's candle set from the whole composed list.
+    pub fn set_candles(&mut self, data: &[CandleGpu]) {
         #[cfg(windows)]
         self.candles.set(data);
         #[cfg(target_os = "linux")]
-        self.wgpu.set_candles(data);
+        self.wgpu.set_candles(data.to_vec());
         #[cfg(target_os = "macos")]
-        self.metal.set_candles(data);
+        self.metal.set_candles(data.to_vec());
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = data;
+        }
+    }
+
+    /// Re-applies the whole composed list's tail from `from` on. DX11 uploads only those slots;
+    /// the native backends take the whole list, exactly as a full set.
+    pub fn patch_candles(&mut self, from: usize, full: &[CandleGpu]) {
+        #[cfg(windows)]
+        self.candles.patch(from, full);
+        #[cfg(not(windows))]
+        {
+            let _ = from;
+            self.set_candles(full);
         }
     }
 
@@ -308,6 +320,27 @@ impl PlatformLayers {
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = style;
+        }
+    }
+
+    /// Appends newly drained points to the price lines. DX11 uploads only those; the native
+    /// backends take the full lines, exactly as a set.
+    pub fn append_price_lines(
+        &mut self,
+        last_new: &[PriceLinePoint],
+        mark_new: &[PriceLinePoint],
+        last_full: &[PriceLinePoint],
+        mark_full: &[PriceLinePoint],
+    ) {
+        #[cfg(windows)]
+        {
+            let _ = (last_full, mark_full);
+            self.combo.append_price_lines(last_new, mark_new);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (last_new, mark_new);
+            self.set_price_lines(last_full, mark_full);
         }
     }
 

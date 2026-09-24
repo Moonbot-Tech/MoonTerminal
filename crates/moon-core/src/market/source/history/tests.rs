@@ -290,3 +290,111 @@ fn visible_fit_windowed_coarse_scan_equals_a_full_scan() {
     }
     assert!(overhang_hits > 0);
 }
+
+/// Polls the prefix of a cursor that has never loaded one, against a cache whose worker never
+/// answers, so every poll after the first finds the read still in flight.
+fn poll_stalled(cursor: &mut ChartHistoryCursor, cache: &crate::market::kline_cache::KlineCache) {
+    poll_cache_prefix(
+        cursor,
+        Some(cache),
+        Some("binance"),
+        "BTCUSDT",
+        1,
+        1_000_000,
+        60_000,
+        2_000_000,
+    );
+}
+
+/// Breakage: `kline_cache.rs` `PendingPrefixRead::poll` turned from `try_recv()` into a
+/// `recv_timeout(READ_TIMEOUT)` wait. Consequence: every chart frame with a read in flight blocks
+/// the UI thread for up to 250 ms again instead of drawing the rows it already holds.
+#[test]
+fn prefix_poll_with_a_read_in_flight_never_waits_on_the_worker() {
+    let (cache, ops) = crate::market::kline_cache::KlineCache::stalled_for_tests();
+    let mut cursor = ChartHistoryCursor::default();
+    poll_stalled(&mut cursor, &cache);
+    let generation = cursor.cache_generation;
+
+    let started = Instant::now();
+    for _ in 0..4 {
+        poll_stalled(&mut cursor, &cache);
+    }
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(200),
+        "4 polls of a stalled read took {elapsed:?}; the frame path must not wait"
+    );
+    assert!(cursor.cache_pending.is_some(), "the read stays in flight");
+    assert!(cursor.cache_rows.is_empty());
+    assert_eq!(cursor.cache_generation, generation);
+    assert_eq!(ops.try_iter().count(), 1, "exactly one read was queued");
+}
+
+/// Breakage: `source/mod.rs` `ChartHistoryCursor::invalidate_cache_prefix` stops dropping
+/// `cache_pending`. Consequence: a read queued before a cache merge answers with the pre-merge
+/// rows and marks the prefix fresh, so the merged rows are never drawn this session.
+#[test]
+fn invalidating_the_prefix_drops_the_read_in_flight_and_asks_again() {
+    let (cache, ops) = crate::market::kline_cache::KlineCache::stalled_for_tests();
+    let mut cursor = ChartHistoryCursor::default();
+    poll_stalled(&mut cursor, &cache);
+
+    cursor.invalidate_cache_prefix();
+    assert!(cursor.cache_pending.is_none(), "the pre-merge read is gone");
+    poll_stalled(&mut cursor, &cache);
+
+    assert_eq!(
+        ops.try_iter().count(),
+        2,
+        "a fresh read follows the invalidation"
+    );
+}
+
+/// Breakage: `history.rs` `series_floor` loses its hysteresis and re-anchors on every call.
+/// Consequence: every pan past the 20% prefetch rebuilds the whole candle series again.
+/// Numbers: rebuilds per 100 in-span pans were 100 before the hysteresis, 0 with it.
+#[test]
+fn pans_inside_the_retained_span_never_rebuild_the_series() {
+    let span = 3_600_000i64;
+    let want0 = 10_000_000_000i64;
+    let mut floor = series_floor(i64::MAX, want0, span);
+    assert_eq!(floor, want0 - span);
+    let reset_for = |old: i64, new: i64| {
+        series_reset_due(&SeriesResetInputs {
+            params_reset: false,
+            valid: true,
+            tf_changed: false,
+            trades_newly_available: false,
+            deep_sig_changed: false,
+            exchange_key_changed: false,
+            floor_moved: new != old,
+            cache_arrived: false,
+        })
+    };
+
+    let mut resets = 0;
+    for k in 0..100i64 {
+        // 50 steps right by 1/50 span, then 50 back left to 0.9 span before the start.
+        let want = if k < 50 {
+            want0 + k * span / 50
+        } else {
+            want0 + span - (k - 49) * (span * 19 / 10) / 50
+        };
+        assert!(want >= floor && want <= floor + 4 * span);
+        let next = series_floor(floor, want, span);
+        if reset_for(floor, next) {
+            resets += 1;
+        }
+        floor = next;
+    }
+    assert_eq!(resets, 0, "no rebuild while the view stays in the span");
+
+    let next = series_floor(floor, floor - 1, span);
+    assert!(
+        reset_for(floor, next),
+        "one pan past the floor rebuilds once"
+    );
+    assert_eq!(next, floor - 1 - span);
+}

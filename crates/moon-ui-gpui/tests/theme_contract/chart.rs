@@ -252,7 +252,7 @@ fn chart_appearance_contracts_stay_identical_across_shader_backends() {
         (
             "chartdx/candles.rs",
             "context.DrawInstanced(6, bars, 0, 0);",
-            "context.DrawInstanced(18, self.count, 0, 0);",
+            "context.DrawInstanced(18, slice.candles, 0, 0);",
         ),
         (
             "chartdx/wgpu_backend/render.rs",

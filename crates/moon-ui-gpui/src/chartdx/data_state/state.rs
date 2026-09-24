@@ -314,6 +314,11 @@ impl ChartDataState {
             // for the lot rather than re-listing the fields and drifting from them.
             sig = mix_sig(sig, revs.combined_signature());
         }
+        // Only this chart's own cache replies wake it.
+        let cache_done = self.render.borrow().panes.iter().fold(0u64, |acc, pr| {
+            acc.wrapping_add(pr.history_cursor.cache_completions())
+        });
+        sig = mix_sig(sig, cache_done);
         sig
     }
 

@@ -1018,6 +1018,7 @@ impl TradeReplaySeries {
         read.combo_left_rel_ms = out.ticks.first().map(|t| (t.time_ms - epoch_ms) as f32);
         read.combo_capacity = out.ticks.len().max(1);
         read.combo_reset = true;
+        read.replace_price_lines();
         read.tick_price_range =
             price_window.and_then(|window| price_range_of_ticks(&out.ticks, window));
         read.last_price = out.ticks.last().map(|t| t.price);

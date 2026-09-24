@@ -272,12 +272,12 @@ diag_counters!(
     // full cross bake drew, and `VOLUME_BAKE` counts full rebakes of the separate volume band.
     CHART_COMBO_BAKE_INSTANCES => "combo_bake_instances",
     CHART_COMBO_VOLUME_BAKE => "combo_volume_bake",
-    // The candle layer draws during each base pass. `UPLOAD_LEN` counts rows uploaded after a
-    // candle-series revision, and a live-edge trade batch advances that revision — so on a live
-    // market the WHOLE buffer is re-shipped continuously. Measured at 9 000 to 83 000 rows a second
-    // across a handful of charts, not the "hundreds" this note used to assume; what that costs is
-    // `candle_upload_us` below, and the answer is what keeps the full reupload as it is.
+    // The candle layer draws during each base pass. `UPLOAD_LEN` counts the rows actually shipped
+    // after a candle-series revision: a live-edge trade batch ships only the changed tail, a
+    // rebuild the whole list. `DRAW_INSTANCES` counts the candle instances submitted, only the
+    // ones in view.
     CHART_CANDLE_DRAW => "candle_draw",
+    CHART_CANDLE_DRAW_INSTANCES => "candle_draw_instances",
     CHART_CANDLE_UPLOAD_LEN => "candle_upload_len",
     // The bottom volume band is a SECOND draw on the candle layer with its own on/off switch,
     // so it gets its own counter: folded into `candle_draw` a disabled band would be
@@ -364,6 +364,7 @@ diag_counters!(
     CHART_VOLUME_READ_US => "volume_read_us",
     CHART_COMBO_UPLOAD_LEN => "combo_upload_len",
     CHART_PRICE_LINE_UPLOAD_LEN => "price_line_upload_len",
+    CHART_PRICE_LINE_DRAW_SEGMENTS => "price_line_draw_segments",
     CHART_BOOK_DRAW   => "orderbook_draw",
     CHART_BOOK_BAKE   => "orderbook_bake",
     // Order-book instance rebuilds on the CPU; a pan inside the emitted margin should not count.

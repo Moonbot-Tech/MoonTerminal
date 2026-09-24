@@ -950,6 +950,11 @@ pub struct CandleSeries {
     /// base candle whose volume and turnover are already complete. `INFINITY` while nothing is
     /// trade-derived.
     live_from: f64,
+    /// Bumps when the series' bucket layout changes in a way a tail patch cannot express: rebuild,
+    /// invalidate, the first candle, or an append that leaves a gap.
+    layout_revision: u64,
+    /// Lowest index changed since the last `take_dirty_from`; `usize::MAX` = clean.
+    dirty_from: usize,
 }
 
 impl Default for CandleSeries {
@@ -963,6 +968,8 @@ impl Default for CandleSeries {
             merge_scratch: Vec::new(),
             // Nothing is trade-derived yet, so every bucket is "base" until a rebuild says so.
             live_from: f64::INFINITY,
+            layout_revision: 0,
+            dirty_from: usize::MAX,
         }
     }
 }
@@ -975,6 +982,48 @@ impl Default for CandleSeries {
 pub struct CoarseLayer<'a> {
     pub rows: &'a [ChartCandle],
     pub tf_ms: f64,
+}
+
+/// Re-applies a changed series tail to its composed list without recomposing.
+///
+/// Sound because compose rule 1 puts no hole after the last candle, so the composed list ends in
+/// series entries; a gap-free append adds none either (a gap bumps `layout_revision` instead).
+/// Returns the composed index the patch starts at, or `None` when the tail is not what that
+/// argument assumes (a filler met among the entries to replace, or pairing failed) — the caller
+/// then recomposes.
+pub fn patch_composed_tail(
+    series: &[ChartCandle],
+    series_tf_ms: f64,
+    dirty_from: usize,
+    fill: &mut Vec<(ChartCandle, f32)>,
+) -> Option<usize> {
+    let stf = series_tf_ms as f32;
+    if dirty_from >= series.len() {
+        return None;
+    }
+    let last_series = fill.iter().rposition(|(_, tf)| *tf == stf)?;
+    let t_last = fill[last_series].0.t_open_ms;
+    let prev_len = series.partition_point(|c| c.t_open_ms <= t_last);
+    if dirty_from > prev_len {
+        return None;
+    }
+    // Walk back over the series entries being replaced; a filler among them means the tail is not
+    // pure series and only a recompose is right.
+    let mut fi = fill.len();
+    let mut k = prev_len;
+    while k > dirty_from {
+        fi = fi.checked_sub(1)?;
+        if fill[fi].1 != stf {
+            return None;
+        }
+        k -= 1;
+    }
+    if fi > 0 && fill[fi - 1].0.t_open_ms >= series[dirty_from].t_open_ms {
+        return None;
+    }
+    fill.truncate(fi);
+    fill.extend(series[dirty_from..].iter().map(|c| (*c, stf)));
+    Some(fi)
 }
 
 /// Builds the render list: the series itself plus coarser fillers for the stretches it does not
@@ -1039,21 +1088,33 @@ pub fn compose_with_coarse(
 
     let mut fillers: Vec<(ChartCandle, f32)> = Vec::new();
     let mut covered: Vec<(f64, f64)> = Vec::new();
+    let mut wide: Vec<(f64, f64)> = Vec::new();
     for layer in layers {
         if holes.is_empty() || layer.rows.is_empty() || !(layer.tf_ms > 0.0) {
             continue;
         }
         covered.clear();
+        wide.clear();
+        wide.extend(
+            holes
+                .iter()
+                .copied()
+                .filter(|&(start, end)| end - start >= layer.tf_ms),
+        );
         // ROWS outer, holes inner, so a row is taken AT MOST ONCE per layer. Scanning per hole
         // instead would take a row twice whenever its bucket straddles two holes — which is not an
         // exotic case but the ordinary one this feature exists for: a single isolated candle
         // between two large disjoint blocks leaves a gap narrower than the coarse timeframe on
         // either side of it. The duplicate survived into the render list, where it drew the same
         // candle twice and made the volume band count that bucket twice.
+        // The per-row lookup binary-searches the holes wide enough for this layer and probes at
+        // most two neighbours: those holes are disjoint and each at least one bucket wide.
         for c in layer.rows.iter() {
-            let fills_a_hole = holes.iter().any(|&(start, end)| {
-                end - start >= layer.tf_ms && c.t_open_ms + layer.tf_ms > start && c.t_open_ms < end
-            });
+            let i = wide.partition_point(|h| h.1 <= c.t_open_ms);
+            let fills_a_hole = [wide.get(i), wide.get(i + 1)]
+                .into_iter()
+                .flatten()
+                .any(|&(start, end)| c.t_open_ms + layer.tf_ms > start && c.t_open_ms < end);
             if fills_a_hole {
                 fillers.push((*c, layer.tf_ms as f32));
                 covered.push((c.t_open_ms, c.t_open_ms + layer.tf_ms));
@@ -1151,9 +1212,26 @@ impl CandleSeries {
         &self.candles
     }
 
+    /// Revision of the bucket layout; see the field.
+    pub fn layout_revision(&self) -> u64 {
+        self.layout_revision
+    }
+
+    /// Lowest index changed since the previous call, `None` when nothing changed; resets it.
+    pub fn take_dirty_from(&mut self) -> Option<usize> {
+        let d = std::mem::replace(&mut self.dirty_from, usize::MAX);
+        (d != usize::MAX).then_some(d)
+    }
+
+    fn bump_layout(&mut self) {
+        self.layout_revision = self.layout_revision.wrapping_add(1);
+        self.dirty_from = usize::MAX;
+    }
+
     pub fn invalidate(&mut self) {
         self.valid = false;
         self.candles.clear();
+        self.bump_layout();
     }
 
     /// Rebuilds the series from sorted base candles and nearly sorted trades.
@@ -1235,6 +1313,7 @@ impl CandleSeries {
         self.scratch = local;
         self.valid = true;
         self.revision = self.revision.wrapping_add(1);
+        self.bump_layout();
     }
 
     /// Applies new trades from the same drain that feeds crosses to the live edge.
@@ -1258,10 +1337,12 @@ impl CandleSeries {
             // bucket over instead of joining it. Before the per-bucket merge the series always
             // ended in a trade-derived candle and this could not arise.
             let live_here = open_ms >= self.live_from;
+            let n = self.candles.len();
             match self.candles.last_mut() {
                 Some(last) if last.t_open_ms == open_ms && !live_here => {
                     *last = candle_from_tick(open_ms, t);
                     self.live_from = open_ms;
+                    self.dirty_from = self.dirty_from.min(n - 1);
                     changed = true;
                 }
                 Some(last) if last.t_open_ms == open_ms => {
@@ -1270,31 +1351,42 @@ impl CandleSeries {
                     last.close = t.price;
                     last.volume += t.qty.max(0.0);
                     last.quote_volume += t.price * t.qty.max(0.0);
+                    self.dirty_from = self.dirty_from.min(n - 1);
                     changed = true;
                 }
                 Some(last) if open_ms > last.t_open_ms => {
+                    // Bucket opens are aligned, so the next contiguous bucket is exactly one
+                    // timeframe on; anything later leaves a gap a tail patch cannot express.
+                    let gap = open_ms > last.t_open_ms + tf_ms as f64;
                     self.candles.push(candle_from_tick(open_ms, t));
                     self.live_from = self.live_from.min(open_ms);
+                    if gap {
+                        self.bump_layout();
+                    } else {
+                        self.dirty_from = self.dirty_from.min(n);
+                    }
                     changed = true;
                 }
                 None => {
                     self.candles.push(candle_from_tick(open_ms, t));
                     self.live_from = self.live_from.min(open_ms);
+                    self.bump_layout();
                     changed = true;
                 }
                 _ => {
                     // Update high, low, and volume for a late resend into a recent old bucket.
-                    if let Some(c) = self
-                        .candles
-                        .iter_mut()
-                        .rev()
-                        .take(4)
-                        .find(|c| c.t_open_ms == open_ms)
+                    let lo = n.saturating_sub(4);
+                    if let Some(i) = self.candles[lo..]
+                        .iter()
+                        .rposition(|c| c.t_open_ms == open_ms)
+                        .map(|i| lo + i)
                     {
+                        let c = &mut self.candles[i];
                         c.high = c.high.max(t.price);
                         c.low = c.low.min(t.price);
                         c.volume += t.qty.max(0.0);
                         c.quote_volume += t.price * t.qty.max(0.0);
+                        self.dirty_from = self.dirty_from.min(i);
                         changed = true;
                     }
                 }
