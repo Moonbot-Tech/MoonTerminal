@@ -89,7 +89,7 @@ fn dump_deal(
     deal: &Deal,
     values: &HashMap<String, String>,
     ticks: &[Tick],
-    held: &super::super::line::LineWalk,
+    held: &super::super::exit::line::LineWalk,
     exit_points: Option<&[(i64, f64)]>,
     entry_points: Option<&[(i64, f64)]>,
     entry: &EntryParams,
@@ -99,14 +99,11 @@ fn dump_deal(
     // The stop as the verdict reads it (`verify::verify_stop`): the model's level off the fact's
     // buy, the level the core printed into the reason, and the activation — the archive's jump
     // past that level.
-    let stop = super::super::exit::stop_pct(exit, deal, deal.buy_ms);
-    let level = if deal.is_long() {
-        deal.buy_price * (1.0 + stop / 100.0)
-    } else {
-        deal.buy_price * (1.0 - stop / 100.0)
-    };
+    let stop = super::super::exit::stops::stop_pct(exit, deal, deal.buy_ms);
+    let level = super::super::exit::stops::stop_level(deal.buy_price, stop, deal.is_long());
     let stated = verify::stated_stop_level(&deal.sell_reason);
-    let activation = verify::archived_stop_jump(deal, stated.unwrap_or(level), exit_points);
+    let activation = verify::stop_jump_level(deal, exit)
+        .and_then(|jump_at| verify::archived_stop_jump(deal, jump_at, exit_points));
     let dir = PathBuf::from(dir);
     let _ = std::fs::create_dir_all(dir.join("ticks"));
     let row = serde_json::json!({
@@ -978,7 +975,7 @@ fn real_data_reproduction() {
                 "    held exit {:?} at {:+}ms of close · stop {:.3}% · model pts {}",
                 held.exit.kind,
                 held.exit.t_ms - deal.close_ms,
-                super::super::exit::stop_pct(&exit, &deal, deal.buy_ms),
+                super::super::exit::stops::stop_pct(&exit, &deal, deal.buy_ms),
                 held.points.len()
             );
             if let Some(points) = exit_points.as_deref() {

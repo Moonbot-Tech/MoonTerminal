@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use super::exit::pre_spike_price;
-use super::exit::stop_pct as moon_core_stop_pct;
+use super::exit::sell_order::pre_spike_price;
+use super::exit::stops::stop_pct as moon_core_stop_pct;
 use super::mshot::{Modifiers, PRE_SPIKE_LOOKBACK_MS};
 use super::params::{StrategyValues, exit_params, mshot_params, param_keys, params_for};
 use super::verify::share;
@@ -1424,7 +1424,7 @@ fn the_descriptor_keys_every_field_the_builders_read_and_splits_the_groups() {
         .map(|p| p.key)
         .collect();
     assert!(exit_any.starts_with(&["SellPrice", "SellDelay", "PriceDownTimer"]));
-    // A Spread's take is the spread it detected, not `SellPrice` (`exit::take_is_recorded`).
+    // A Spread's take is the spread it detected, not `SellPrice` (`exit::sell_order::take_is_recorded`).
     let spread: Vec<_> = params_for(ParamGroup::Exit, "Spread")
         .map(|p| p.key)
         .collect();
@@ -1873,9 +1873,10 @@ fn a_cancelled_stop_does_not_fire_at_the_entry() {
     );
 }
 
-/// A short's stop sits ABOVE the entry, and the same distance mirrors there.
+/// A short's stop sits ABOVE the entry, the adjusted distance included (`stops::stop_level`
+/// divides the fill by it).
 #[test]
-fn a_short_stop_mirrors_with_the_modifier() {
+fn a_short_stop_sits_above_with_the_modifier() {
     let mut mods = Modifiers::default();
     mods.add_1h = 1.0;
     let params = ExitParams {
@@ -1891,7 +1892,7 @@ fn a_short_stop_mirrors_with_the_modifier() {
         },
         ..short_deal()
     };
-    // −2 − 0.2·5 = −3 per cent, and a short's stop is that far ABOVE the fill.
+    // −2 − 0.2·5 = −3 per cent, and a short's stop is the fill over 0.97: 103.09, ABOVE it.
     let walk = ExitModel::new(&params).walk(
         &d,
         &tape(&[(10_000, 100.0), (15_000, 103.5)]),
@@ -1900,7 +1901,7 @@ fn a_short_stop_mirrors_with_the_modifier() {
             price: 100.0,
         },
     );
-    assert_eq!(walk.exit.kind, ExitKind::Stop, "the price crossed 103");
+    assert_eq!(walk.exit.kind, ExitKind::Stop, "the price crossed 103.09");
     assert!((walk.exit.price - 103.5).abs() < 1e-9, "{:?}", walk.exit);
 }
 

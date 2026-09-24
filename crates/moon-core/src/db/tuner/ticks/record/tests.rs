@@ -2,7 +2,7 @@
 //! the search's sample.
 
 use super::*;
-use crate::db::tuner::ticks::line::walk;
+use crate::db::tuner::ticks::exit::line::walk;
 use crate::db::tuner::ticks::mshot::MshotParams;
 use crate::db::tuner::ticks::{Deltas, ExitKind, ModelSettings, simulate, verify};
 use crate::feed::types::{Side, Tick};

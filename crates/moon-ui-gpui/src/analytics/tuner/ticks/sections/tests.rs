@@ -48,7 +48,13 @@ fn the_schema_places_every_field_and_marks_what_the_model_turns() {
         ),
         section(
             "Stops",
-            &["UseStopLoss", "StopLoss", "UseTrailing", "TrailingPercent"],
+            &[
+                "UseStopLoss",
+                "StopLoss",
+                "UseTrailing",
+                "TrailingPercent",
+                "TrailingSpread",
+            ],
         ),
         section("Filters", &["MinVolume"]),
     ];
@@ -76,11 +82,19 @@ fn the_schema_places_every_field_and_marks_what_the_model_turns() {
 
     let stops = find(&out, ParamSection::Stops);
     assert_eq!(
-        keys(stops)[..4],
-        ["UseStopLoss", "StopLoss", "UseTrailing", "TrailingPercent"]
+        keys(stops)[..5],
+        [
+            "UseStopLoss",
+            "StopLoss",
+            "UseTrailing",
+            "TrailingPercent",
+            "TrailingSpread"
+        ]
     );
     assert_eq!(stops.rows[0].role, RowRole::Fixed);
-    assert_eq!(stops.rows[3].role, RowRole::Outside);
+    // The trailing stop is read as the strategy sets it; its spread is the sale's, not the model's.
+    assert_eq!(stops.rows[3].role, RowRole::Fixed);
+    assert_eq!(stops.rows[4].role, RowRole::Outside);
 
     // A section outside the grid is not drawn.
     assert!(

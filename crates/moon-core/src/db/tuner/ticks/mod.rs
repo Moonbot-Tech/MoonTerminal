@@ -31,7 +31,6 @@ pub mod deltas;
 pub mod entry;
 pub mod exit;
 pub mod hook;
-pub mod line;
 pub mod mshot;
 pub mod params;
 pub mod record;
@@ -43,7 +42,8 @@ pub mod verify;
 
 pub use deals::{DealsRead, read_deals};
 pub use entry::{EntryModel, entry_model_for};
-pub use exit::{ExitModel, ExitParams, archived_pre_spike_ask, archived_take, take_model_for};
+pub use exit::sell_order::{archived_pre_spike_ask, archived_take, take_model_for};
+pub use exit::{ExitModel, ExitParams};
 pub use hook::{HookDetect, KIND_MOONHOOK, hook_take_pct, parse_hook_detect};
 pub use mshot::{CorridorStep, EntryMethod, MshotEntry, MshotParams, UsePrice};
 pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};

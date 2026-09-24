@@ -1905,9 +1905,9 @@ analytics.ticks.params_title:
   en: "Parameters"
   es: "Parámetros"
 analytics.ticks.assumptions:
-  ru: "Модель не знает: стакан и очередь на уровне · правила выхода вне модели (трейлинг, лестница стопов) · MShotRepeat* · опора ASK/BID — последний принт своей стороны"
-  en: "The model does not know: the book and the queue at a level · exit rules outside it (trailing, the stop ladder) · MShotRepeat* · the ASK/BID reference is the last print of its side"
-  es: "El modelo no conoce: el libro y la cola en un nivel · reglas de salida fuera de él (trailing, escalera de stops) · MShotRepeat* · la referencia ASK/BID es el último print de su lado"
+  ru: "Модель не знает: стакан и очередь на уровне · правила выхода вне модели (лестница стопов) · MShotRepeat* · опора ASK/BID — последний принт своей стороны"
+  en: "The model does not know: the book and the queue at a level · exit rules outside it (the stop ladder) · MShotRepeat* · the ASK/BID reference is the last print of its side"
+  es: "El modelo no conoce: el libro y la cola en un nivel · reglas de salida fuera de él (escalera de stops) · MShotRepeat* · la referencia ASK/BID es el último print de su lado"
 analytics.ticks.group_entry:
   ru: "Вход"
   en: "Entry"

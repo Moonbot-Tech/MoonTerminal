@@ -14,7 +14,7 @@
 
 use super::Deal;
 use super::exit::ExitParams;
-use super::line::step_ms;
+use super::exit::sell_order::step_ms;
 use super::verify::ArchivedExit;
 
 /// Fewest samples a core's lag is taken from; below it the core runs on the plain schedule.

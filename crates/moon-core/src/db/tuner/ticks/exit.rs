@@ -2,31 +2,100 @@
 //! model for every strategy kind — after the entry filled, the exit of any strategy is a
 //! function of the sell-order rules and the tape.
 //!
-//! The take-profit is `SellPrice` per cent above the fill for every kind but two: MoonHook,
-//! whose take replaces it with `HookSellLevel` per cent of the trade's own detect depth
-//! ([`super::hook`]), and Spread, whose take is the edge of the spread it detected — a level,
-//! not a rule, taken as the core recorded it ([`take_is_recorded`]). The rules are moved by the
-//! Delta-Modifier family (`SellModifier`). It is
-//! raised by `MShotSellAtLastPrice` to
-//! the pre-spike price less `MShotSellPriceAdjust` (the FAQ: "the 4-second-old ASK, i.e. before
-//! the spike"; the model takes the ask the caller recovered from the order archive
-//! (`Deal::pre_spike_ask`), else reads the last print at least
-//! `ModelSettings::pre_spike_lookback_ms` ([`super::mshot::PRE_SPIKE_LOOKBACK_MS`] by default)
-//! before the fill, since the tape has no book). From there the line moves under the strategy's
-//! sell rules
-//! — `PriceDown*`, `SellLevel*`, `SellShot*` — and the stop fires under `StopLoss*`; see
-//! [`super::line`]. A position nothing closed inside the tape is [`ExitKind::OpenAtWindowEnd`]:
-//! not a trade, whatever the core's exit was.
+//! One file per section of the strategy window, in the window's order: [`stops`],
+//! [`sell_order`] (the take, `SellDelay`, `PriceDown*`, `SellLevel*`), [`sell_shot`],
+//! [`sell_spread`], [`delta_mods`] — and PumpsDetection's own [`pump_move`]. The step they share —
+//! the walk over the tape, the price grid, the latency, the recorded replacements — is [`line`].
+//! A position nothing closed inside the tape is [`ExitKind::OpenAtWindowEnd`]: not a trade,
+//! whatever the core's exit was.
+//!
+//! [`ExitKind::OpenAtWindowEnd`]: super::ExitKind::OpenAtWindowEnd
 
-use super::hook::{KIND_MOONHOOK, hook_take_pct};
-use super::line::{LineWalk, walk, walk_held};
+pub mod delta_mods;
+pub mod line;
+pub mod pump_move;
+pub mod sell_order;
+pub mod sell_shot;
+pub mod sell_spread;
+pub mod stops;
+
+use self::line::{LineWalk, walk, walk_held};
 use super::mshot::Modifiers;
 use super::settings::ModelSettings;
 use super::{Deal, Exit, Fill};
 use crate::feed::types::Tick;
 
+/// Which way the position profits, folding every "above/below the buy" into one sign. Every
+/// section's rule is written for a long and mirrored for a short through it.
+#[derive(Clone, Copy)]
+struct Side {
+    long: bool,
+}
+
+impl Side {
+    /// `pct` per cent over the buy in the PROFIT direction: above for a long, below for a
+    /// short.
+    fn over(self, base: f64, pct: f64) -> f64 {
+        if self.long {
+            base * (1.0 + pct / 100.0)
+        } else {
+            base * (1.0 - pct / 100.0)
+        }
+    }
+
+    /// The take side of two levels — the higher for a long — i.e. farther in profit.
+    fn farther(self, a: f64, b: f64) -> f64 {
+        if self.long { a.max(b) } else { a.min(b) }
+    }
+
+    /// The nearer of two levels in profit terms.
+    fn nearer(self, a: f64, b: f64) -> f64 {
+        if self.long { a.min(b) } else { a.max(b) }
+    }
+
+    /// The extreme print in the profit direction over a run.
+    fn extreme(self, prices: impl Iterator<Item = f64>) -> Option<f64> {
+        if self.long {
+            prices.reduce(f64::max)
+        } else {
+            prices.reduce(f64::min)
+        }
+    }
+
+    /// The extreme print in the profit direction among `seen` stamped from `from` to `to`, both
+    /// included.
+    fn extreme_between(self, seen: &[Tick], from: i64, to: i64) -> Option<f64> {
+        self.extreme(
+            seen.iter()
+                .filter(|t| {
+                    let tt = t.time_ms as i64;
+                    tt >= from && tt <= to && t.price > 0.0
+                })
+                .map(|t| f64::from(t.price)),
+        )
+    }
+
+    /// Distance of `level` from `reference`, per cent, positive in the profit direction.
+    fn distance_pct(self, reference: f64, level: f64) -> f64 {
+        if reference <= 0.0 {
+            return 0.0;
+        }
+        let signed = if self.long {
+            level - reference
+        } else {
+            reference - level
+        };
+        signed / reference * 100.0
+    }
+}
+
+/// A timer rule's next moment, when it is due by the print at `t_ms`.
+fn due_by(next: Option<i64>, t_ms: i64) -> Option<i64> {
+    next.filter(|due| t_ms >= *due)
+}
+
 /// Sell-line parameters, in the strategy's own units (per cent, seconds; `SellDelay` is ms).
-/// Every rule's fields are documented in [`super::line`].
+/// Every rule's fields are documented in its section's module.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExitParams {
     /// `SellPrice` — take-profit distance from the fill, per cent.
@@ -116,15 +185,24 @@ pub struct ExitParams {
     /// `FastStopLoss` — what the stop watches. YES: the trades ("crosses", FAQ), so the first
     /// print through the level fires it. NO — the core's default: the REST ticker's BID (the
     /// ASK for a short), a long's averaged per `StopLossEMA`, which the trade tape does not
-    /// carry; the walk then reads a sampled proxy of it (see [`super::line`]).
+    /// carry; the walk then reads a sampled proxy of it (see [`stops`]).
     pub fast_stop_loss: bool,
     /// `StopLossEMA` — the non-fast stop's average of the ticker's BID, `(avg·(N − 1) + bid)/N`
     /// per arrival, kept for a LONG at 3, 5 or 10 only; any other value and every short watch the
     /// bare price, and at 0 the core's price series fires it too (the core developer,
-    /// 2026-09-23; see `line::stop_average_weight`). Ignored by a fast stop — the FAQ's own
+    /// 2026-09-23; see `stops::stop_average_weight`). Ignored by a fast stop — the FAQ's own
     /// distinction, and the live activations agree: 48 fast stops with it at 3 fire as promptly
     /// as 81 without it.
     pub stop_loss_ema: f64,
+    /// `TrailingPercent` when `UseTrailing` is on, 0 when it is off: how far under the peak of the
+    /// spread's middle the trailing line stands, per cent (negative). See [`stops`].
+    pub trailing_pct: f64,
+    /// `TrailingEMA` — a step of the trailing peak moves `1/(N + 1)` of the way to the middle.
+    pub trailing_ema: f64,
+    /// `TakeProfit` when `UseTakeProfit` is on — the trailing's own take profit, per cent off the
+    /// buy, NOT the order's `SellPrice`: no line until the middle passed it by `|TrailingPercent|`,
+    /// and no sale below it. `None` when it is off.
+    pub trailing_take_profit_pct: Option<f64>,
     /// A sell rule the strategy switched on that the model does not have. The walk runs as if
     /// it were off, and the verdict answers nothing for such a trade, which keeps it out of the
     /// search (`record::fit_for_search`): a variant's exit there is whatever the missing rule
@@ -187,6 +265,9 @@ impl Default for ExitParams {
             // its absence there is the core's default, NO.
             fast_stop_loss: true,
             stop_loss_ema: 0.0,
+            trailing_pct: 0.0,
+            trailing_ema: 0.0,
+            trailing_take_profit_pct: None,
             unmodelled: None,
             model: ModelSettings::default(),
             take_from_archive: false,
@@ -197,8 +278,6 @@ impl Default for ExitParams {
 /// A sell rule the strategy can switch on that the model does not have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnmodelledRule {
-    /// `UseTrailing` — the trailing stop.
-    Trailing,
     /// `UseSecondStop` / `UseStopLoss3` — the stop ladder.
     StopLadder,
 }
@@ -211,116 +290,6 @@ pub struct ExitModel<'a> {
 impl<'a> ExitModel<'a> {
     pub fn new(params: &'a ExitParams) -> Self {
         Self { params }
-    }
-
-    /// The take-profit level for a fill: `SellPrice` off the fill, lifted to the pre-spike
-    /// ask (the archive's, else the tape's last print) less the adjustment when
-    /// `MShotSellAtLastPrice` is on. Long above, short below.
-    pub fn take_level(&self, deal: &Deal, ticks: &[Tick], fill: Fill) -> f64 {
-        // A kind whose take rule the model does not have starts where the core's line did —
-        // when the fact is being judged; a variant computes the take from the rules for every
-        // kind (see `ExitParams::take_from_archive`) but the one whose take is not a rule at
-        // all ([`take_is_recorded`]). The recorded level is the core's own, modifiers and all,
-        // so nothing below is added to it.
-        if (self.params.take_from_archive && !take_model_for(&deal.kind))
-            || take_is_recorded(&deal.kind)
-        {
-            if let Some(take) = deal.archived_take.filter(|t| t.is_finite() && *t > 0.0) {
-                return take;
-            }
-        }
-        // Floored at zero: a modifier deep enough to drive the distance negative would put the
-        // TAKE on the losing side of the entry and turn every level the line steps down from
-        // inside out. The rules that legitimately sell below the entry are the moving ones
-        // (`PriceDownAllowedDrop`, a negative `SellShotDistance`), and they get there by
-        // stepping down from the take, not by starting underneath it.
-        let pct = (self.base_take_pct(deal) + self.modifier_pct(deal, fill.t_ms)).max(0.0);
-        let mshot = take_model_for(&deal.kind);
-        let mut take = if deal.is_long() {
-            fill.price * (1.0 + pct / 100.0)
-        } else if mshot {
-            // The core divides a short MoonShot's take off the fill (the core developer,
-            // 2026-09-23): `fill / (1 + SellPrice/100)`. The two archived short takes that
-            // SellPrice placed and whose price step tells the formulas apart (ONE, BCH_RP) sit
-            // on it; MoonHook's stored take is rounded too coarsely to tell, and keeps the
-            // product.
-            fill.price / (1.0 + pct / 100.0)
-        } else {
-            fill.price * (1.0 - pct / 100.0)
-        };
-        if self.params.sell_at_last_price {
-            let pre = deal
-                .pre_spike_ask
-                .filter(|p| p.is_finite() && *p > 0.0)
-                .or_else(|| {
-                    pre_spike_price(ticks, fill.t_ms, self.params.model.pre_spike_lookback_ms)
-                });
-            if let (Some(pre), Some(factor)) = (pre, ask_take_factor(self.params, deal.is_short)) {
-                take = if deal.is_long() {
-                    take.max(pre * factor)
-                } else {
-                    take.min(pre * factor)
-                };
-            }
-        }
-        take
-    }
-
-    /// The take distance before the modifiers, per cent of the fill: `HookSellLevel` of the
-    /// trade's own detect depth for a MoonHook, `SellPrice` for every other kind.
-    ///
-    /// A hook whose depth or level is unknown falls back to `SellPrice` so the line still has
-    /// somewhere to step down from — and [`Self::take_known`] answers `false` for it, which is
-    /// what keeps that fallback out of the verdict.
-    fn base_take_pct(&self, deal: &Deal) -> f64 {
-        if deal.kind == KIND_MOONHOOK && self.params.hook_sell_level_pct > 0.0 {
-            if let Some(depth) = deal.hook_depth_pct.filter(|d| d.is_finite() && *d > 0.0) {
-                return hook_take_pct(depth, self.params.hook_sell_level_pct);
-            }
-        }
-        self.params.sell_price_pct
-    }
-
-    /// What the delta modifiers add to the sell level, per cent — the capped sum times
-    /// `SellModifier`, per the FAQ — as the deltas stood when the sell was placed, at `at_ms`.
-    fn modifier_pct(&self, deal: &Deal, at_ms: i64) -> f64 {
-        modifier_sum(self.params, deal, at_ms) * self.params.sell_modifier
-    }
-
-    /// Whether a walk under these parameters knows where the trade's take stands — the level
-    /// every PriceDown step and every fill of the line is counted from.
-    ///
-    /// Asked with a VARIANT's parameters, so it answers for the variants: a trade whose take a
-    /// variant cannot place is one the search cannot run, whatever the fact's own replay did
-    /// with the level the core recorded. Per kind:
-    ///
-    /// - a MoonHook needs its rule's inputs — the detect depth and `HookSellLevel`, with
-    ///   `HookSellFixed` off (that branch computes the distance differently and is not modelled:
-    ///   no live strategy sets it, so it could not be checked against anything);
-    /// - a Spread needs the take the core recorded ([`take_is_recorded`]);
-    /// - a MoonShot lifted to the pre-spike ask (`MShotSellAtLastPrice`) needs that ask off the
-    ///   core's record (`Deal::pre_spike_ask`) — the tape's print before the spike sits 0.1–0.5 %
-    ///   under the book's ask on a dump, and on 88 stopped MoonShot trades (2026-09-23) a take
-    ///   placed off it was touched before the core's stop on 30, turning a loss into a win;
-    /// - every other kind takes `SellPrice`, known by construction.
-    ///
-    /// `false` is not "the model was wrong": it is "this trade's take is not modelled here", and
-    /// [`super::verify`] then answers the exit group with nothing — which keeps the trade out of
-    /// the search (`record::fit_for_search`).
-    pub fn take_known(&self, deal: &Deal) -> bool {
-        let positive = |v: Option<f64>| v.is_some_and(|x| x.is_finite() && x > 0.0);
-        if deal.kind == KIND_MOONHOOK {
-            return !self.params.hook_sell_fixed
-                && self.params.hook_sell_level_pct > 0.0
-                && positive(deal.hook_depth_pct);
-        }
-        if take_is_recorded(&deal.kind) {
-            return positive(deal.archived_take);
-        }
-        if take_model_for(&deal.kind) && self.params.sell_at_last_price {
-            return positive(deal.pre_spike_ask);
-        }
-        true
     }
 
     /// Replay the tape after the fill: the take, the moving line, the stop.
@@ -353,145 +322,5 @@ impl<'a> ExitModel<'a> {
     }
 }
 
-/// The summed delta modifiers of a trade, capped: `Min(MaxModifier, Σ Pn · Dn)`.
-///
-/// One sum, two consumers — the sell level through `SellModifier` and the stop through
-/// `StopLossModifier` — because the core computes it once and spends it on both (FAQ).
-///
-/// The core sums the deltas as they stand when it places the sell: on 121 of its printed sums
-/// (2026-09-22) the report's snapshot, stamped at the entry order's placement for every kind but
-/// MoonShot, drifted from the core's number the more, the longer the entry order waited. So the
-/// sum is read at `at_ms` through the deal's live coin deltas ([`Deal::deltas_at`]); the BTC,
-/// market, mark and price-bug terms stay the snapshot, and on the stop the verdict absorbs their
-/// residual in its level tolerance (`verify::STOP_PRICE_TOLERANCE`).
-///
-/// Args:
-///     params: The sell parameters, for the coefficients and the ceiling.
-///     deal: The trade, for its deltas.
-///     at_ms: When the sell was placed — the fill.
-pub fn modifier_sum(params: &ExitParams, deal: &Deal, at_ms: i64) -> f64 {
-    let sum = params.sell_mods.near_addition(&deal.deltas_at(at_ms));
-    if params.max_modifier > 0.0 {
-        sum.min(params.max_modifier)
-    } else {
-        sum
-    }
-}
-
-/// The stop distance of a trade, per cent: `StopLoss` adjusted by `StopLossModifier · Σ`.
-///
-/// Normally that deepens the stop (a positive coefficient over a positive delta sum), but
-/// neither sign is guaranteed: live strategies carry `StopLossModifier` down to −0.3, and a
-/// delta sum can be negative, so the adjustment can also pull the stop TOWARD the entry.
-///
-/// An adjustment big enough to pull it THROUGH the entry answers `0.0` — no stop on this trade
-/// — rather than a level. Clamping it to a hair's breadth from the entry instead would fire on
-/// the first print that moves, which is not a stop but a coin flip dressed as one; and placing
-/// it beyond the entry would fire on the first print, full stop. What the core does with an
-/// adjustment that large is unknown: none of the 1 735 replayed trades reaches this branch, so
-/// the model declines to invent an answer. A configured stop on the profit side (`StopLoss` positive —
-/// live data has it) is a different thing and is left exactly as configured.
-///
-/// Args:
-///     params: The sell parameters.
-///     deal: The trade, for its deltas.
-///     at_ms: When the sell was placed — the fill; see [`modifier_sum`].
-pub fn stop_pct(params: &ExitParams, deal: &Deal, at_ms: i64) -> f64 {
-    if params.stop_loss_pct == 0.0 || params.stop_loss_modifier == 0.0 {
-        return params.stop_loss_pct;
-    }
-    let adjusted =
-        params.stop_loss_pct - modifier_sum(params, deal, at_ms) * params.stop_loss_modifier;
-    // Same side as configured, or nothing at all.
-    if adjusted == 0.0 || adjusted.is_sign_negative() != params.stop_loss_pct.is_sign_negative() {
-        return 0.0;
-    }
-    adjusted
-}
-
-/// The kind name of Spread as the strategy list spells it.
-pub const KIND_SPREAD: &str = "Spread";
-
-/// Whether the kind's take is not a rule of its parameters but a level the core took off the
-/// detect — the spread it detected. `SellPrice` places it on 5 of 157 archived Spread takes
-/// (2026-09-23) — the coincidences it takes for the width of a spread to land on the field. The
-/// report's `comment` keeps only the width, rounded to 0.1 %, so the level is the take the order
-/// archive recorded or nothing, for the fact and for every variant alike; and `SellPrice` is no
-/// knob of the kind (`params::TICK_PARAMS`).
-pub fn take_is_recorded(kind: &str) -> bool {
-    kind == KIND_SPREAD
-}
-
-/// Whether the take the model computes for the kind is the kind's OWN rule, rather than the
-/// general `SellPrice` — true for MoonShot, whose `MShotSellAtLastPrice` lift belongs to it
-/// alone. For the rest the verdict prefers the archived level when the trade has one
-/// (`Deal::archived_take`, `ExitParams::take_from_archive`), because the core's placed level
-/// carries the delta modifiers exactly as the core applied them.
-///
-/// It is NOT the test for "is the take known at all" — that is [`ExitModel::take_known`], and
-/// reading this one in its place silenced five legitimate verdicts on the live sample
-/// (2026-09-22), four of them hits: `SellPrice` is the take of every kind but MoonHook, and a
-/// Spread trade without an archived line is judged by it perfectly well.
-pub fn take_model_for(kind: &str) -> bool {
-    super::entry::entry_model_for(kind)
-}
-
-/// The take as an archived Exit line records it: its first point, when it is a price.
-pub fn archived_take(exit_points: Option<&[(i64, f64)]>) -> Option<f64> {
-    let (_, take) = exit_points?.first().copied()?;
-    (take.is_finite() && take > 0.0).then_some(take)
-}
-
-/// What `MShotSellAtLastPrice` multiplies the ask by to place the take: `1 − adjust/100` for a
-/// long, `1/(1 − adjust/100)` for a short, whose take sits below the entry and is adjusted UP
-/// toward it (the core developer, 2026-09-23: `max(Y·(1 − adj/100), …)` and
-/// `min(Y/(1 − adj/100), …)`). `None` for an adjustment of 100 % or more, which leaves no price.
-pub fn ask_take_factor(params: &ExitParams, is_short: bool) -> Option<f64> {
-    let keep = 1.0 - params.sell_price_adjust_pct / 100.0;
-    // NaN included: an adjustment the strategy did not spell as a number leaves no price.
-    if keep.is_nan() || keep <= 0.0 {
-        return None;
-    }
-    Some(if is_short { 1.0 / keep } else { keep })
-}
-
-/// The pre-spike ask behind an archived Exit line: its first point is the take as the core
-/// placed it, the ask times [`ask_take_factor`] when `MShotSellAtLastPrice` placed it, so the
-/// ask is that point with the factor divided out. The ask's branch carries no delta modifier
-/// (the core developer, 2026-09-23), so the ask read back is the core's own, to the price step.
-/// `None` when the rule was off (the take came from `SellPrice`, and the archive says nothing
-/// about the ask), when the archive holds no Exit line, or when the first point is not a price.
-///
-/// When `SellPrice` alone set the take farther than the ask would have, the division reads a
-/// slightly high ask back — and the same `max` (a long) or `min` (a short, whose take sits
-/// below the entry) puts the take on `SellPrice` again, so the trade's own replay is exact
-/// either way; a variant with a smaller adjustment inherits the overread. On the live sample
-/// (2026-09-23) the ask placed 776 of 785 archived MoonShot takes.
-///
-/// Args:
-///     exit_points: The archived Exit line's `(t_ms, price)` points, in the archive's order.
-///     params: The sell-line parameters as of the trade.
-///     is_short: The trade's side — which way the adjustment went.
-pub fn archived_pre_spike_ask(
-    exit_points: Option<&[(i64, f64)]>,
-    params: &ExitParams,
-    is_short: bool,
-) -> Option<f64> {
-    if !params.sell_at_last_price {
-        return None;
-    }
-    let factor = ask_take_factor(params, is_short)?;
-    let (_, take) = exit_points?.first().copied()?;
-    (take.is_finite() && take > 0.0).then_some(take / factor)
-}
-
-/// The last print at least `lookback_ms` ([`super::mshot::PRE_SPIKE_LOOKBACK_MS`] by default)
-/// before `at_ms` — the FAQ's "price before the spike".
-pub fn pre_spike_price(ticks: &[Tick], at_ms: i64, lookback_ms: i64) -> Option<f64> {
-    let cutoff = at_ms - lookback_ms;
-    ticks
-        .iter()
-        .rev()
-        .find(|t| (t.time_ms as i64) <= cutoff && t.price > 0.0)
-        .map(|t| f64::from(t.price))
-}
+#[cfg(test)]
+mod tests;

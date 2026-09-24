@@ -4,13 +4,13 @@
 //! variant columns and the search alike, so the three can never judge a trade by different rules.
 //!
 //! Every default is the measured constant it replaces; the measurement stays on the constant
-//! (`mshot::DEFAULT_LATENCY_MS`, `line::TICKER_PERIOD_MS`, `verify::POINT_TIME_TOLERANCE_MS`, …).
+//! (`mshot::DEFAULT_LATENCY_MS`, `exit::stops::TICKER_PERIOD_MS`, `verify::POINT_TIME_TOLERANCE_MS`, …).
 
 use serde::{Deserialize, Serialize};
 
-use super::line::{
-    PUMP_MOVE_LAG_MS, PUMP_PEAK_LOOKBACK_MS, SERIES_TICK_MS, STEP_FLOOR_MS, TICKER_PERIOD_MS,
-};
+use super::exit::pump_move::{PUMP_MOVE_LAG_MS, PUMP_PEAK_LOOKBACK_MS};
+use super::exit::sell_order::STEP_FLOOR_MS;
+use super::exit::stops::{SERIES_TICK_MS, TICKER_PERIOD_MS};
 use super::mshot::{
     DEFAULT_LATENCY_MS, EntryMethod, FAST_ALGO_WINDOW_MS, PRE_SPIKE_LOOKBACK_MS, SHIFT_WINDOW_MS,
 };

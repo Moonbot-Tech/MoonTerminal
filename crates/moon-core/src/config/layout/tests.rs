@@ -2361,7 +2361,7 @@ fn the_ticks_axis_settings_round_trip_and_never_cost_the_layout() {
     assert_eq!(model.latency_ms, 150.0);
     assert_eq!(
         model.ticker_period_ms,
-        crate::db::tuner::ticks::line::TICKER_PERIOD_MS
+        crate::db::tuner::ticks::exit::stops::TICKER_PERIOD_MS
     );
 
     let broken: WindowLayout =

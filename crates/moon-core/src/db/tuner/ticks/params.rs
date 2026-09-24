@@ -97,8 +97,11 @@ pub struct TickParam {
 const MSHOT: &[&str] = &["MoonShot"];
 const HOOK: &[&str] = &[super::hook::KIND_MOONHOOK];
 /// The kinds whose take `SellPrice` does not place: MoonHook's is `HookSellLevel`, Spread's the
-/// edge of the spread it detected (`exit::take_is_recorded`).
-const NOT_SELL_PRICE: &[&str] = &[super::hook::KIND_MOONHOOK, super::exit::KIND_SPREAD];
+/// edge of the spread it detected (`exit::sell_order::take_is_recorded`).
+const NOT_SELL_PRICE: &[&str] = &[
+    super::hook::KIND_MOONHOOK,
+    super::exit::sell_order::KIND_SPREAD,
+];
 const ANY: &[&str] = &[];
 
 const GRID_PRICE: &[f64] = &[
@@ -475,12 +478,17 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "UseStopLoss",
     "FastStopLoss",
     "StopLossEMA",
-    // The switches of the sell rules the model does not have: a trade under one is not
-    // modelled (`exit::UnmodelledRule`).
+    // The trailing stop (`exit::stops::trailing`): read as the strategy sets it, not a knob yet.
     "UseTrailing",
+    "TrailingPercent",
+    "TrailingEMA",
+    "UseTakeProfit",
+    "TakeProfit",
+    // The switches of the stop ladder, which the model does not have: a trade under one is not
+    // modelled (`exit::UnmodelledRule`).
     "UseSecondStop",
     "UseStopLoss3",
-    // PumpsDetection's one sell move (see `line::PUMP_MOVE_LAG_MS`); `PumpMovePersent` is the
+    // PumpsDetection's one sell move (see `exit::pump_move::PUMP_MOVE_LAG_MS`); `PumpMovePersent` is the
     // core's own spelling of the field.
     "PumpMoveTimer",
     "PumpMovePersent",
@@ -686,6 +694,16 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
         // the book-watching stop, never as the fast stop's "StopLoss Market Sell".
         fast_stop_loss: v.bool("FastStopLoss", false),
         stop_loss_ema: v.num("StopLossEMA", base.stop_loss_ema),
+        // Every trailing field hangs on `UseTrailing` (param_deps.toml), and `TakeProfit` on
+        // `UseTakeProfit` too; the values stay in the dump with the switches off.
+        trailing_pct: if v.bool("UseTrailing", false) {
+            v.num("TrailingPercent", base.trailing_pct)
+        } else {
+            0.0
+        },
+        trailing_ema: v.num("TrailingEMA", base.trailing_ema),
+        trailing_take_profit_pct: (v.bool("UseTrailing", false) && v.bool("UseTakeProfit", false))
+            .then(|| v.num("TakeProfit", 0.0)),
         unmodelled: unmodelled_rule(v),
         model,
         take_from_archive: base.take_from_archive,
@@ -697,11 +715,10 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
 /// Read by the switch, never by its fields: the fields stay in a strategy's dump with the switch
 /// off (`assets/param_deps.toml`). On this machine's reports (2026-09-23) the trailing stop was
 /// on for the strategies of 44 trades of 2 042 and the stop ladder for 2; `SellSpread` and the EMA exit
-/// were on for none, and are left out until a strategy turns them on.
+/// were on for none, and are left out until a strategy turns them on. The trailing stop is
+/// modelled since 2026-09-24 (`exit::stops::trailing`).
 fn unmodelled_rule(v: &StrategyValues<'_>) -> Option<UnmodelledRule> {
-    if v.bool("UseTrailing", false) {
-        Some(UnmodelledRule::Trailing)
-    } else if v.bool("UseSecondStop", false) || v.bool("UseStopLoss3", false) {
+    if v.bool("UseSecondStop", false) || v.bool("UseStopLoss3", false) {
         Some(UnmodelledRule::StopLadder)
     } else {
         None

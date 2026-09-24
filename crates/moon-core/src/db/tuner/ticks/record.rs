@@ -17,10 +17,11 @@
 //! proxy, and the verdict (which replays the proxy, never the anchor) is what says how far the
 //! proxy may be trusted.
 
-use super::exit::{ExitParams, archived_pre_spike_ask, archived_take, stop_pct};
+use super::exit::ExitParams;
+use super::exit::sell_order::{archived_pre_spike_ask, archived_take};
+use super::exit::stops::stop_pct;
 use super::verify::{
-    POINT_TIME_TOLERANCE_MS, REASON_STOP, Verdict, archived_stop_jump, reason_starts_with,
-    stated_stop_level,
+    POINT_TIME_TOLERANCE_MS, Verdict, archived_stop_jump, is_stop_reason, stop_jump_level,
 };
 use super::{Deal, EntryParams, Fill};
 
@@ -45,9 +46,11 @@ impl StopAnchor {
     /// The anchor of a trade whose fact ran `exit`.
     ///
     /// The moment a stopped trade's stop fired: the order archive's first move at or past the
-    /// stop's level (the panic sell's jump), else the close — the sale completes within a second
-    /// or two of the activation, and on a trade with no record of the moment that is the nearest
-    /// the fact gets.
+    /// level `verify::stop_jump_level` gives (the panic sell's jump) — the stop's, or a trailing
+    /// stop's own line under its printed peak — else the close: the sale completes within a
+    /// second or two of the activation, and on a trade with no record of the moment (no archive,
+    /// no such level, a trailing stop rewritten to a market sale) that is the nearest the fact
+    /// gets.
     ///
     /// Args:
     ///     deal: The trade.
@@ -55,16 +58,13 @@ impl StopAnchor {
     ///     exit_points: The archived Exit line, when the archive holds it.
     pub fn of(deal: &Deal, exit: &ExitParams, exit_points: Option<&[(i64, f64)]>) -> Self {
         let pct = stop_pct(exit, deal, deal.buy_ms);
-        // The verdict's own test of a stopped fact (`verify::reason_starts_with`), not a copy.
-        let stopped = reason_starts_with(deal.sell_reason.trim(), REASON_STOP);
+        // The verdict's own test of a stopped fact (`verify::is_stop_reason`), not a copy.
+        let stopped = is_stop_reason(&deal.sell_reason);
         let fired = stopped.then(|| {
-            // The level the jump is read against: the core's own when its reason kept it.
-            let level = stated_stop_level(&deal.sell_reason).unwrap_or(if deal.is_long() {
-                deal.buy_price * (1.0 + pct / 100.0)
-            } else {
-                deal.buy_price * (1.0 - pct / 100.0)
-            });
-            let at = archived_stop_jump(deal, level, exit_points).unwrap_or(deal.close_ms);
+            // The level the jump is read against — the verdict's own (`verify::stop_jump_level`).
+            let at = stop_jump_level(deal, exit)
+                .and_then(|level| archived_stop_jump(deal, level, exit_points))
+                .unwrap_or(deal.close_ms);
             (at, deal.sell_price)
         });
         Self {

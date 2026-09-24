@@ -43,8 +43,10 @@
 //! sell or a market order walked through a book the tape does not carry: by the level the core
 //! fixed, when the stored reason keeps it, and the moment it activated ([`verify_stop`]). A stop the core fired and the model never did is a miss.
 
-use super::exit::{ExitModel, stop_pct};
-use super::line::LinePoint;
+use super::exit::ExitModel;
+use super::exit::line::LinePoint;
+use super::exit::stops::trailing::trailing_level;
+use super::exit::stops::{stop_level, stop_pct};
 use super::mshot::MshotParams;
 use super::settings::ModelSettings;
 use super::{
@@ -67,7 +69,7 @@ pub const BOOK_STOP_TIME_TOLERANCE_MS: i64 = 2_300;
 /// Tolerance on a STOP's level: the modelled level against the one the core fixed carries
 /// `StopLossModifier` over deltas the model only partly re-reads live — the coin's ranges where
 /// the deal has a track, the BTC, market, mark and price-bug terms as the report's one snapshot
-/// (`exit::modifier_sum`) — and the residual sits right there.
+/// (`exit::delta_mods::modifier_sum`) — and the residual sits right there.
 pub const STOP_PRICE_TOLERANCE: f64 = 0.003;
 
 /// How much BETTER than the modelled level the fact's fill may be and still be that level's
@@ -171,7 +173,7 @@ pub fn verify(
     // the line as it stood when the core sold — the last level the exchange had been given
     // by then, the model's own latency allowed for — and the rule is the take when no move
     // had reached the exchange, the moving line otherwise.
-    let fact_stopped = reason_starts_with(deal.sell_reason.trim(), REASON_STOP);
+    let fact_stopped = is_stop_reason(&deal.sell_reason);
     // The archive's own record of the sell: its moves, and the fill it filed as a point.
     let archive = exit_points
         .filter(|p| !p.is_empty())
@@ -231,9 +233,15 @@ pub fn verify(
     // A stop the core fired and the model, holding a stop of its own, never did — the book
     // proxy of a non-fast stop can stay short of the level to the tape's end — is a miss of
     // the stop, whatever the line was doing: not a question about another rule.
+    // The trailing answers for it only where the fact's reason can be the trailing's: its own, or
+    // the market sale the core rewrites it to — never a stop that printed its fixed level.
+    let reason = deal.sell_reason.trim();
+    let trailing_can_be_it = reason_starts_with(reason, REASON_TRAILING)
+        || reason.eq_ignore_ascii_case(REASON_MARKET_STOP);
     let missed_stop = fact_stopped
         && closed.kind != ExitKind::Stop
-        && stop_pct(&fact_exit, deal, deal.buy_ms) != 0.0;
+        && (stop_pct(&fact_exit, deal, deal.buy_ms) != 0.0
+            || (fact_exit.trailing_pct != 0.0 && trailing_can_be_it));
     let (exit_ok, exit_dev, line_points) = if exit.unmodelled.is_some() {
         // A rule the model does not have was on: whatever the walk made of the trade is not
         // an answer about it (see `ExitParams::unmodelled`).
@@ -470,10 +478,15 @@ fn is_fill_point(deal: &Deal, exit: &ExitParams, last: (i64, f64), prev: (i64, f
 ///
 /// The level tolerance is [`STOP_PRICE_TOLERANCE`] rather than the line's: the modelled level
 /// carries `StopLossModifier` over deltas the model only partly re-reads live (see
-/// `exit::modifier_sum`), and the residual sits right there.
+/// `exit::delta_mods::modifier_sum`), and the residual sits right there.
 ///
-/// Archived moves from the activation on — the first move past the stop level — are the panic
-/// sell, not the line the rules moved, and are not held against the model.
+/// Archived moves from the activation on — the first move past the level [`stop_jump_level`]
+/// gives: the stop's, or for a trailing stop's reason its own line under the printed peak — are
+/// the panic sell, not the line the rules moved, and are not held against the model. A fact whose
+/// level is on no record (a trailing stop rewritten to `StopLoss Market Sell`) keeps them.
+///
+/// A trailing stop's reason is timed with the book stop's tolerance whatever `FastStopLoss` says:
+/// the trailing fires on the ticker's arrivals, like the book stop.
 ///
 /// Args:
 ///     deal: The report row.
@@ -488,25 +501,25 @@ fn verify_stop(
     closed: Exit,
     exit_points: Option<&[(i64, f64)]>,
 ) -> (Option<bool>, Option<f64>, Option<(usize, usize)>) {
-    let stop = stop_pct(exit, deal, deal.buy_ms);
-    let level = if deal.is_long() {
-        deal.buy_price * (1.0 + stop / 100.0)
-    } else {
-        deal.buy_price * (1.0 - stop / 100.0)
-    };
+    let level = stop_level(
+        deal.buy_price,
+        stop_pct(exit, deal, deal.buy_ms),
+        deal.is_long(),
+    );
     let stated = stated_stop_level(&deal.sell_reason);
-    let panic_at = stated.unwrap_or(level);
+    let panic_at = stop_jump_level(deal, exit);
     let mut activation: Option<i64> = None;
     let points = exit_points.filter(|p| !p.is_empty()).map(|archived| {
         let mut moves = archived_replacements(archived);
-        if let Some(i) = stop_jump(deal, &moves, panic_at) {
+        if let Some(i) = panic_at.and_then(|level| stop_jump(deal, &moves, level)) {
             activation = Some(moves[i].0);
             moves.truncate(i);
         }
         (matched_points(modelled, &moves, &exit.model), moves.len())
     });
     let line_ok = points.is_none_or(|(matched, total)| matched == total);
-    let tolerance_ms = if exit.fast_stop_loss {
+    let trailing_fact = reason_starts_with(deal.sell_reason.trim(), REASON_TRAILING);
+    let tolerance_ms = if exit.fast_stop_loss && !trailing_fact {
         exit.model.point_time_ms
     } else {
         exit.model.book_stop_time_ms
@@ -526,6 +539,43 @@ fn verify_stop(
         // the fact's own price (`record::StopAnchor`).
         None => (Some(on_time && line_ok), None, points),
     }
+}
+
+/// The level an archived line's jump into the panic sell is read against:
+///
+/// - a stop's reason (`REASON_STOP`): the level the core printed into it when it kept one, else
+///   the stop's own — `None` for a strategy without a stop;
+/// - a trailing stop's reason (`REASON_TRAILING`): the fact's own line at the activation, under
+///   the `PeakPrice` the core printed ([`trailing_level`]) — `None` without a trailing setting or
+///   a readable peak.
+///
+/// `None` leaves the moment to the close. A `StopLoss Market Sell` can still be a trailing stop the
+/// core rewrote (the core's answer of 2026-09-24): read against the stop's level, its market sale
+/// stands short of it, no jump is found, and the moment is the close's as well.
+pub(super) fn stop_jump_level(deal: &Deal, exit: &ExitParams) -> Option<f64> {
+    let reason = deal.sell_reason.trim();
+    if reason_starts_with(reason, REASON_TRAILING) {
+        return (exit.trailing_pct != 0.0)
+            .then(|| stated_peak(reason))
+            .flatten()
+            .map(|peak| trailing_level(peak, deal.buy_price, exit, deal.is_long()));
+    }
+    let pct = stop_pct(exit, deal, deal.buy_ms);
+    (reason_starts_with(reason, REASON_STOP) && pct != 0.0).then(|| {
+        stated_stop_level(reason).unwrap_or_else(|| stop_level(deal.buy_price, pct, deal.is_long()))
+    })
+}
+
+/// The peak a trailing stop's reason prints — `PeakPrice = X;` — when it is a usable price.
+pub fn stated_peak(reason: &str) -> Option<f64> {
+    const MARKER: &str = "PeakPrice =";
+    let at = reason.find(MARKER)? + MARKER.len();
+    let rest = reason[at..].trim_start();
+    let len = rest
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .filter(|&len| len > 0)?;
+    let value: f64 = rest[..len].parse().ok()?;
+    (value.is_finite() && value > 0.0).then_some(value)
 }
 
 /// Where the stop took over an archived line: the first move at or after the buy that stands at
@@ -634,6 +684,21 @@ pub const REASONS_LINE: [&str; 3] = ["Auto Price Down", "Sell Level", "SellShot"
 /// The core's `sellreason` prefix for a position its stop closed.
 pub const REASON_STOP: &str = "StopLoss";
 
+/// The core's `sellreason` of a stop — or a trailing stop — sold at market (`UseMarketOrder`).
+pub const REASON_MARKET_STOP: &str = "StopLoss Market Sell";
+
+/// The core's `sellreason` prefix for a position its trailing stop closed with a limit panic
+/// sell; with `UseMarketOrder` the core rewrites it to `StopLoss Market Sell`, like a stop's
+/// (the core's answer of 2026-09-24).
+pub const REASON_TRAILING: &str = "TrailingStop";
+
+/// Whether the core closed the position by a stop or by its trailing stop — the exits the model
+/// fires as [`ExitKind::Stop`] and judges by the decision, not the sale.
+pub(super) fn is_stop_reason(sell_reason: &str) -> bool {
+    let reason = sell_reason.trim();
+    reason_starts_with(reason, REASON_STOP) || reason_starts_with(reason, REASON_TRAILING)
+}
+
 /// Whether the model's exit rule is the one the core's `sellreason` names, so the two prices
 /// are comparable: the take against "Sell Price", the moving line against the PriceDown /
 /// SellLevel / SellShot reasons, the stop against "StopLoss …".
@@ -643,7 +708,7 @@ fn exit_rule_matches(kind: ExitKind, sell_reason: &str) -> bool {
     match kind {
         ExitKind::Take => reason.eq_ignore_ascii_case(REASON_TAKE),
         ExitKind::Line => REASONS_LINE.iter().any(|r| starts(r)),
-        ExitKind::Stop => starts(REASON_STOP),
+        ExitKind::Stop => is_stop_reason(reason),
         ExitKind::OpenAtWindowEnd => false,
     }
 }
