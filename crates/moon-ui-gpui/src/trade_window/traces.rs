@@ -27,9 +27,12 @@
 use std::sync::Arc;
 
 use gpui::*;
+use moon_chart::frozen_overlay::{FrozenOverlay, OverlayBand};
 use moon_core::db::ChartTradeRecord;
 use moon_core::feed::ArchivedOrderTrace;
-use moon_core::session::order_lines::{ArchivedOrdersInput, OrderLineStore, ReportExit};
+use moon_core::session::order_lines::{
+    ArchivedOrdersInput, OrderLineStore, ReportEntry, ReportExit,
+};
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonPalette, MoonSize, h_flex, v_flex,
 };
@@ -264,8 +267,10 @@ impl TradeWindowView {
                 quantity: record.quantity as f32,
                 entry_fill_ms: Some(buy_utc_ms as f64),
                 close_ms: close_utc_ms as f64,
-                // The exit line the archive may not hold, from the row itself.
+                // The exit line the archive may not hold, from the row itself — and the entry
+                // line, where the row dates the order's placement.
                 exit: ReportExit::of_record(record, &axis),
+                entry: ReportEntry::of_record(record, &axis),
                 bright: false,
             }
         };
@@ -276,9 +281,14 @@ impl TradeWindowView {
         // widened by the shown neighbours within reach, and every price their lines and arrows
         // sit at. Kept on the window for `reframe`; the band goes to the chart only while the
         // window is fitted, so the ordinary frame keeps fitting the prices alone.
+        // Where an entry was placed: the archived line's start, else the row's own placement.
+        let placed_ms = |record: &ChartTradeRecord, lines: &[ArchivedOrderTrace]| {
+            super::frame::entry_set_ms(lines)
+                .or_else(|| ReportEntry::of_record(record, &axis).map(|entry| entry.set_ms as i64))
+        };
         let span_of = |record: &ChartTradeRecord, lines: &[ArchivedOrderTrace]| {
             let (buy_utc_ms, close_utc_ms) = super::utc_stamps_ms(record, &axis);
-            super::frame::trade_span(super::frame::entry_set_ms(lines), buy_utc_ms, close_utc_ms)
+            super::frame::trade_span(placed_ms(record, lines), buy_utc_ms, close_utc_ms)
         };
         let prices_of = |record: &ChartTradeRecord, lines: &[ArchivedOrderTrace]| {
             [record.buy_price as f32, record.sell_price as f32]
@@ -299,6 +309,43 @@ impl TradeWindowView {
             subject_span.1.saturating_add(reach),
         );
         let mut prices = prices_of(&self.record, subject_lines);
+        // What the store does not carry: the corridor the core saved, over the entry order's
+        // life, and the trades the tuner's variants would have made. Both join the fitted band.
+        let corridor = self
+            .show_corridor
+            .then(|| {
+                let (down, up) = self.record.corridor?;
+                let (buy_utc_ms, _) = super::utc_stamps_ms(&self.record, &axis);
+                let from_ms = placed_ms(&self.record, subject_lines)?;
+                (from_ms < buy_utc_ms).then_some(OverlayBand {
+                    from_ms: from_ms as f64,
+                    to_ms: buy_utc_ms as f64,
+                    prices: (down as f32, up as f32),
+                })
+            })
+            .flatten();
+        // The variants' corridors under the same switch as the fact's.
+        let bands: Vec<OverlayBand> = corridor
+            .into_iter()
+            .chain(
+                self.model_corridor
+                    .iter()
+                    .copied()
+                    .filter(|_| self.show_corridor),
+            )
+            .collect();
+        for band in &bands {
+            prices.extend([band.prices.0, band.prices.1]);
+        }
+        for trade in &self.model_trades {
+            prices.push(trade.fill_price);
+            prices.extend(trade.exit.map(|(_, price)| price));
+            prices.extend(trade.path.iter().map(|(_, level)| *level));
+        }
+        let overlay = FrozenOverlay {
+            bands,
+            trades: self.model_trades.clone(),
+        };
         let mut spans = Vec::with_capacity(neighbours.len());
         for (record, lines) in neighbours {
             let span = span_of(record, lines);
@@ -335,6 +382,7 @@ impl TradeWindowView {
         self.panel.update(cx, |panel, pcx| {
             panel.attach_archived_lines(std::rc::Rc::new(by_uid), pcx);
             panel.attach_frozen_orders(Some(std::rc::Rc::new(store)), fit_range, pcx);
+            panel.attach_frozen_overlay(Some(std::rc::Rc::new(overlay)), pcx);
         });
         // A rebuild that learned where the entry was placed moves the fitted frame; one that
         // changed nothing does not move the reader.

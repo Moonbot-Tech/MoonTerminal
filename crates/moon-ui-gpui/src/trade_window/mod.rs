@@ -32,10 +32,19 @@
 //! act on its own chart — so both must reach the view whatever descendant holds focus. The header
 //! mounts the frame's close control as the visible dismissal affordance; the key is the fallback
 //! for a taskbar-hidden window whose chrome cannot be reached.
+//!
+//! # Two hosts
+//!
+//! The same view also lives as a PANE under the tuner's deal table ([`Host::Embedded`]): the
+//! trade the table selects, drawn exactly as its window would draw it, plus the trades a variant
+//! of the strategy would have made ([`TradeWindowView::set_model_trades`]). A pane owns no
+//! window: no geometry to remember, no taskbar entry, no focus of its own and no keys — its host
+//! window has its own — and the figures rail keeps a switch of its own, hidden by default.
 
 mod figures;
 pub(crate) mod frame;
 mod hotkeys;
+pub(crate) mod open_record;
 mod render;
 mod settings;
 mod strategy;
@@ -60,7 +69,34 @@ use moon_core::market::trade_replay::{
 use moon_core::session::CoreId;
 use moon_core::venue::Brand;
 
-pub(crate) use window::open_trade_window;
+pub(crate) use window::{TradeSeed, open_trade_window};
+
+/// Where a trade view lives.
+pub(crate) enum Host {
+    /// A window of its own, opened from a Report or a deal row.
+    Window {
+        /// Native window id, used to unregister exactly this window and no other.
+        window_id: WindowId,
+        /// Live taskbar-suppression burst; replaced on every activation and cancelled on release.
+        taskbar_hide: crate::window::windowing::TaskbarHideTask,
+        /// Offset this window was opened at, so [`remembered_geometry`] knows not to persist it
+        /// back.
+        cascade_px: f32,
+    },
+    /// A pane inside another view — the tuner's deal table. See the module doc.
+    #[expect(
+        dead_code,
+        reason = "the tuner's Entry/Exit axis, its consumer, lands separately"
+    )]
+    Embedded,
+}
+
+impl Host {
+    /// Whether the view is a pane rather than a window.
+    pub(crate) fn embedded(&self) -> bool {
+        matches!(self, Self::Embedded)
+    }
+}
 
 /// What the window is currently able to show.
 ///
@@ -351,6 +387,14 @@ pub(crate) struct TradeWindowView {
     fit_trade: bool,
     /// Hide the figures rail, leaving the chart the whole window.
     hide_rail: bool,
+    /// Shade the entry corridor the core saved, from the order's placement to its fill.
+    show_corridor: bool,
+    /// Trades a model says a variant of the strategy would have made — the tuner's pane hands
+    /// them over; a window of its own draws none.
+    model_trades: Vec<moon_chart::frozen_overlay::OverlayTrade>,
+    /// The corridors those variants' orders walked, placement by placement — shaded under the
+    /// same switch as the fact's corridor ([`Self::show_corridor`]).
+    model_corridor: Vec<moon_chart::frozen_overlay::OverlayBand>,
     /// Let the fetch run its tick stage; off, the window draws the bars alone.
     load_ticks: bool,
     /// The fitted frame the last store rebuild produced — the subject's span widened by the
@@ -421,8 +465,8 @@ pub(crate) struct TradeWindowView {
     cancel: Arc<AtomicBool>,
     /// Identity of this window's own series, so two windows never share a chart revision.
     identity: u64,
-    /// Native window id, used to unregister exactly this window and no other.
-    window_id: WindowId,
+    /// A window of its own, or a pane; see [`Host`].
+    host: Host,
     /// Window-root focus handle, so a key press reaches this view rather than only the chart.
     ///
     /// The root owns the handle because both the things this window listens for are WINDOW
@@ -435,10 +479,6 @@ pub(crate) struct TradeWindowView {
     /// Per window because one such press spans several events, so the state cannot be local to
     /// the handler. Same role as the detached chart host's own watch.
     modifier_watch: moon_ui::MoonHotkeyModifierWatch,
-    /// Live taskbar-suppression burst; replaced on every activation and cancelled on release.
-    taskbar_hide: crate::window::windowing::TaskbarHideTask,
-    /// Offset this window was opened at, so [`remembered_geometry`] knows not to persist it back.
-    cascade_px: f32,
 }
 
 impl TradeWindowView {
@@ -519,19 +559,69 @@ impl TradeWindowView {
         self.fetch(cx);
     }
 
-    /// Show or hide the figures rail, and remember it.
+    /// Show or hide the figures rail, and remember it — a pane in its own slot, since it shares
+    /// its tab with a table and a grid where a window has the screen.
     fn set_hide_rail(&mut self, hide: bool, cx: &mut Context<Self>) {
         if self.hide_rail == hide {
             return;
         }
         self.hide_rail = hide;
+        let embedded = self.host.embedded();
         self.backend.update(cx, |backend, _| {
-            if backend.layout.trade_window_hide_rail != Some(hide) {
-                backend.layout.trade_window_hide_rail = Some(hide);
+            let slot = match embedded {
+                true => &mut backend.layout.analytics_trade_hide_rail,
+                false => &mut backend.layout.trade_window_hide_rail,
+            };
+            if *slot != Some(hide) {
+                *slot = Some(hide);
                 backend.layout_dirty = true;
             }
         });
         cx.notify();
+    }
+
+    /// Shade the entry corridor or stop, and remember it for every trade view.
+    fn set_show_corridor(&mut self, show: bool, cx: &mut Context<Self>) {
+        if self.show_corridor == show {
+            return;
+        }
+        self.show_corridor = show;
+        self.backend.update(cx, |backend, _| {
+            if backend.layout.trade_window_moonshot_zone != Some(show) {
+                backend.layout.trade_window_moonshot_zone = Some(show);
+                backend.layout_dirty = true;
+            }
+        });
+        // The band rides the overlay the store rebuild hands over, and joins the fitted band.
+        self.sync_traces(true, cx);
+        cx.notify();
+    }
+
+    /// The trades a variant of the strategy would have made on this trade's tape, drawn beside
+    /// the fact in the variants' own pens, and the corridors their orders walked. The tuner's
+    /// pane calls this whenever the variants or the selected trade change; an unchanged set
+    /// costs one compare.
+    ///
+    /// Args:
+    ///     trades: The modelled trades, in Unix UTC ms.
+    ///     corridor: Their corridors, shaded while the MoonShot zone switch is on.
+    ///     cx: View context.
+    #[expect(
+        dead_code,
+        reason = "the tuner's Entry/Exit axis, its consumer, lands separately"
+    )]
+    pub(crate) fn set_model_trades(
+        &mut self,
+        trades: Vec<moon_chart::frozen_overlay::OverlayTrade>,
+        corridor: Vec<moon_chart::frozen_overlay::OverlayBand>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.model_trades == trades && self.model_corridor == corridor {
+            return;
+        }
+        self.model_trades = trades;
+        self.model_corridor = corridor;
+        self.sync_traces(true, cx);
     }
 
     /// The frame this window wants right now: the trade itself while fitted, the fixed context
@@ -817,6 +907,7 @@ impl TradeWindowView {
             identity: self.identity,
             tick_value,
             ticks: self.load_ticks,
+            intent: moon_core::market::trade_replay::ReplayIntent::Chart,
             cancel: self.cancel.clone(),
             reply: tx,
         });

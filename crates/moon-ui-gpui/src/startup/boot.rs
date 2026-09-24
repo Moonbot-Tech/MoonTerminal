@@ -709,6 +709,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                         }
                     }
                     b.tick_telegram(cx);
+                    // The startup cleanup of the trade tape: a switch read and a clock compare on
+                    // every tick, a background pass when one is due.
+                    crate::settings::trades_cleanup_startup::tick(b, cx);
                     // A core removed from the session cannot answer what was asked of it; the
                     // drain edge does not fire for a removal, so the slow tick settles those.
                     // Nothing to walk while no ask is out.

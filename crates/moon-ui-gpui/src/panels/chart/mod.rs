@@ -1216,6 +1216,22 @@ impl ChartPanel {
         cx.notify();
     }
 
+    /// Hand this panel what its frozen picture draws beside the archived lines — the entry
+    /// corridor, modelled trades — or take it away.
+    ///
+    /// Args:
+    ///     overlay: What to draw, or `None` for nothing.
+    ///     cx: Panel context.
+    pub(crate) fn attach_frozen_overlay(
+        &mut self,
+        overlay: Option<std::rc::Rc<moon_chart::frozen_overlay::FrozenOverlay>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.chart.set_frozen_overlay(overlay);
+        self.view_dirty = true;
+        cx.notify();
+    }
+
     /// Hand this panel the archived lines its frozen store was built from, by `ReportUID`.
     ///
     /// The trade window's companion to [`Self::attach_frozen_orders`]: the store is what the

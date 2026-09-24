@@ -1,10 +1,13 @@
 //! Storage tab for local databases (`data/*.sqlite`): main/WAL sizes, row counts, maintenance
-//! actions (compact/backup), and strategy-database settings.
+//! actions (compact/backup, the trade-tape cleanup of [`trades_cleanup`]), and
+//! strategy-database settings.
 //!
 //! Changes apply immediately to `cfg/storage.toml` and live `strat_db` atomics, unlike draft-backed
 //! tabs: Storage has its own file, and its recording toggle must take effect without Save. SQLite
 //! statistics and maintenance run only on the background executor because counting a large replica
 //! on the UI thread would freeze the interface.
+
+mod trades_cleanup;
 
 use gpui::*;
 use moon_ui::{MoonButton, MoonPalette, StyledExt, h_flex, rgba_from, v_flex};
@@ -13,6 +16,8 @@ use rust_i18n::t;
 use super::{SettingsView, StatusMsg, open_folder, section, separator};
 use crate::design;
 use moon_core::config::{paths, storage as storage_cfg};
+use trades_cleanup::CleanupPreview;
+pub(crate) use trades_cleanup::startup as trades_cleanup_startup;
 
 /// Snapshot of storage state collected in the background.
 #[derive(Clone, Default)]
@@ -41,6 +46,13 @@ pub(super) struct StorageEd {
     pub inflight: bool,
     /// Whether a maintenance operation is running and action buttons must be disabled.
     pub busy: bool,
+    /// What the trade-tape cleanup would remove, or why it could not be counted; `None` while
+    /// a count is pending.
+    pub cleanup: Option<Result<CleanupPreview, String>>,
+    /// Whether a count is running; a second ask meanwhile sets `cleanup_dirty` instead.
+    pub cleanup_inflight: bool,
+    /// The margin moved while a count was running: count again when it lands.
+    pub cleanup_dirty: bool,
 }
 
 pub(super) fn build() -> StorageEd {
@@ -49,6 +61,9 @@ pub(super) fn build() -> StorageEd {
         info: None,
         inflight: false,
         busy: false,
+        cleanup: None,
+        cleanup_inflight: false,
+        cleanup_dirty: false,
     }
 }
 
@@ -98,6 +113,7 @@ impl SettingsView {
             return;
         }
         self.storage.inflight = true;
+        self.storage_cleanup_refresh(cx);
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let info = executor.spawn(async move { collect_info() }).await;
@@ -113,11 +129,13 @@ impl SettingsView {
     }
 
     /// Runs a maintenance operation on the background executor, then refreshes data and status.
+    /// A job may answer with a detail line for the status (`Some`), such as what a cleanup
+    /// removed; `None` reports plain success.
     fn storage_op(
         &mut self,
         cx: &mut Context<Self>,
         op_key: &'static str,
-        job: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
+        job: impl FnOnce() -> anyhow::Result<Option<String>> + Send + 'static,
     ) {
         if self.storage.busy {
             return;
@@ -135,8 +153,15 @@ impl SettingsView {
                 let _ = this.update(cx, |this, cx| {
                     this.storage.busy = false;
                     this.status = Some(match result {
-                        Ok(()) => (
+                        Ok(None) => (
                             StatusMsg::Text(t!("storage.op_done", op = t!(op_key)).to_string()),
+                            false,
+                        ),
+                        Ok(Some(detail)) => (
+                            StatusMsg::Text(
+                                t!("storage.op_done_with", op = t!(op_key), detail = detail)
+                                    .to_string(),
+                            ),
                             false,
                         ),
                         Err(e) => (
@@ -147,8 +172,13 @@ impl SettingsView {
                             true,
                         ),
                     });
-                    this.storage.info = None; // Invalidate the snapshot after every maintenance attempt.
+                    // Invalidate the snapshot and re-count after every maintenance attempt: a
+                    // compaction moves the sizes, a cleanup moves the counts too. The count is
+                    // asked on its own — `storage_refresh` skips everything while a snapshot is
+                    // still in flight, and the counts must not stay armed on pre-op numbers.
+                    this.storage.info = None;
                     this.storage_refresh(cx);
+                    this.storage_cleanup_refresh(cx);
                     cx.notify();
                 });
             });
@@ -179,16 +209,44 @@ impl SettingsView {
         }
     }
 
-    /// Adjusts the minutes of prints kept around a trade, per end, clamps them to
-    /// `0..=MAX_TRADE_MARGIN_MIN`, and updates live state and storage.toml.
-    fn adjust_trades_margin_min(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let ceiling = moon_core::config::storage::MAX_TRADE_MARGIN_MIN as i32;
-        let v = (self.storage.cfg.trade_replay.margin_min as i32 + delta).clamp(0, ceiling) as u32;
-        if self.storage.cfg.trade_replay.margin_min != v {
-            self.storage.cfg.trade_replay.margin_min = v;
-            moon_core::market::trade_replay::set_margin_min(v);
+    /// Moves the prints kept around a trade, per end, `delta` steps along
+    /// `TRADE_MARGIN_STEPS_S` (30 s … 120 min, not a fixed amount), and updates live state and
+    /// storage.toml.
+    fn adjust_trades_margin_step(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let v = storage_cfg::step_trade_margin_s(self.storage.cfg.trade_replay.margin_s, delta);
+        if self.storage.cfg.trade_replay.margin_s != v {
+            self.storage.cfg.trade_replay.margin_s = v;
+            moon_core::market::trade_replay::set_margin_s(v);
             storage_cfg::save(&self.storage.cfg);
+            // The excess is measured against the margin: the counts under the buttons move
+            // with it.
+            self.storage_cleanup_refresh(cx);
             cx.notify();
+        }
+    }
+
+    /// Moves the minutes a position must be held to count as long, clamped to
+    /// `LONG_POSITION_MIN_RANGE`, and updates live state and storage.toml. The cleanup's count
+    /// moves with it: a long position claims its two ends, a short one its whole length.
+    fn adjust_long_position_min(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let current = self.storage.cfg.trade_replay.long_position_min as i32;
+        let v = storage_cfg::clamp_long_position_min((current + delta).max(0) as u32);
+        if self.storage.cfg.trade_replay.long_position_min != v {
+            self.storage.cfg.trade_replay.long_position_min = v;
+            moon_core::market::trade_replay::set_long_position_min(v);
+            storage_cfg::save(&self.storage.cfg);
+            self.storage_cleanup_refresh(cx);
+            cx.notify();
+        }
+    }
+
+    /// The stepper's label for a margin: whole seconds under a minute, whole minutes from
+    /// there — every step of `TRADE_MARGIN_STEPS_S` is one or the other.
+    fn trades_margin_label(secs: u32) -> String {
+        if secs < 60 {
+            t!("storage.trades_sec", s = secs).to_string()
+        } else {
+            t!("storage.trades_min", min = secs / 60).to_string()
         }
     }
 
@@ -207,7 +265,9 @@ impl SettingsView {
         let limit = self.storage.cfg.strategies.version_limit;
         let persist_trades = self.storage.cfg.trade_replay.persist_trades;
         let trades_max_mb = self.storage.cfg.trade_replay.max_mb;
-        let trades_margin_min = self.storage.cfg.trade_replay.margin_min;
+        let trades_margin_s = self.storage.cfg.trade_replay.margin_s;
+        let long_position_min = self.storage.cfg.trade_replay.long_position_min;
+        let cleanup_at_startup = self.storage.cfg.trade_replay.cleanup_at_startup;
 
         let size_line = |sz: Option<(u64, u64)>| -> String {
             match sz {
@@ -297,6 +357,7 @@ impl SettingsView {
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.storage_op(cx, "storage.op_compact", || {
                                 moon_core::db::maint::compact_db(&paths::reports_db_path())
+                                    .map(|()| None)
                             });
                         }))
                         .render(),
@@ -368,6 +429,7 @@ impl SettingsView {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.storage_op(cx, "storage.op_compact", || {
                                     moon_core::db::maint::compact_db(&paths::strategies_db_path())
+                                        .map(|()| None)
                                 });
                             }))
                             .render(),
@@ -376,7 +438,7 @@ impl SettingsView {
                         tool_btn("strat-backup", t!("storage.backup").to_string(), busy)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.storage_op(cx, "storage.op_backup", || {
-                                    moon_core::strat_db::backup::backup_now().map(|_| ())
+                                    moon_core::strat_db::backup::backup_now().map(|_| None)
                                 });
                             }))
                             .render(),
@@ -448,21 +510,61 @@ impl SettingsView {
                     // fetches and what a close copies, not only what the file keeps.
                     .child(self.stepper_controls(
                         cx,
-                        "trades-margin-min",
+                        "trades-margin-s",
                         true,
-                        t!("storage.trades_min", min = trades_margin_min).to_string(),
-                        5,
-                        15,
-                        Self::adjust_trades_margin_min,
+                        Self::trades_margin_label(trades_margin_s),
+                        1,
+                        3,
+                        Self::adjust_trades_margin_step,
                     )),
             )
             .child(hint(t!("storage.trades_margin_hint").to_string()))
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap(design::ui_px(cx, 8.0))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(rgba_from(p.text, 1.0))
+                            .child(t!("storage.trades_long_position").to_string()),
+                    )
+                    .child(self.stepper_controls(
+                        cx,
+                        "trades-long-position-min",
+                        true,
+                        t!("storage.trades_min", min = long_position_min).to_string(),
+                        1,
+                        5,
+                        Self::adjust_long_position_min,
+                    )),
+            )
+            .child(hint(t!("storage.trades_long_position_hint").to_string()))
+            // The startup cleanup: read once per launch by the coordination tick, so the flip
+            // takes effect at the next launch — which is what "at startup" says.
+            .child(
+                moon_ui::MoonCheckbox::new("trades-cleanup-at-startup")
+                    .checked(cleanup_at_startup)
+                    .label(t!("storage.trades_cleanup_at_startup").to_string())
+                    .description(t!("storage.trades_cleanup_at_startup_hint").to_string())
+                    .on_change(cx.listener(|this, v: &bool, _, cx| {
+                        let v = *v;
+                        if this.storage.cfg.trade_replay.cleanup_at_startup != v {
+                            this.storage.cfg.trade_replay.cleanup_at_startup = v;
+                            moon_core::market::trade_replay::set_cleanup_at_startup(v);
+                            storage_cfg::save(&this.storage.cfg);
+                            cx.notify();
+                        }
+                    })),
+            )
+            .child(self.trades_cleanup_controls(cx, p, busy))
             .child(
                 h_flex().child(
                     tool_btn("trades-compact", t!("storage.compact").to_string(), busy)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.storage_op(cx, "storage.op_compact", || {
                                 moon_core::db::maint::compact_db(&paths::trades_db_path())
+                                    .map(|()| None)
                             });
                         }))
                         .render(),

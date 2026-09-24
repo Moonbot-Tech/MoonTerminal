@@ -30,6 +30,8 @@ fn record(
         // The exit order went out a minute before it filled.
         sell_set_date: close_date - 60,
         sell_set_ms: None,
+        buy_set_ms: None,
+        corridor: None,
         buy_price: 1.0,
         sell_price: 1.1,
         quantity: 100.0,
@@ -174,17 +176,20 @@ fn only_the_entry_keeps_its_arrow_until_the_archive_names_its_line() {
         }]) as Arc<[ArchivedOrderTrace]>,
     );
     let answered = record(1, 7, 1_700_000_000, Some(11), false);
-    assert_eq!(line_ends(&answered, &resolved), (true, true));
+    assert_eq!(line_ends(&answered, &resolved, false), (true, true));
     let inherited_only = record(2, 7, 1_700_000_500, Some(12), false);
     assert_eq!(
-        line_ends(&inherited_only, &resolved),
+        line_ends(&inherited_only, &resolved, false),
         (false, true),
         "an inherited entry is an ancestor's; this trade's entry keeps its arrow"
     );
     let unanswered = record(3, 7, 1_700_000_900, Some(13), false);
-    assert_eq!(line_ends(&unanswered, &resolved), (false, true));
+    assert_eq!(line_ends(&unanswered, &resolved, false), (false, true));
     let unaskable = record(4, 7, 1_700_000_950, None, false);
-    assert_eq!(line_ends(&unaskable, &resolved), (false, true));
+    assert_eq!(line_ends(&unaskable, &resolved, false), (false, true));
+    // A row that dates its entry's placement is lined from the report, archive or not.
+    assert_eq!(line_ends(&unaskable, &resolved, true), (true, true));
+    assert_eq!(line_ends(&inherited_only, &resolved, true), (true, true));
 }
 
 #[test]
@@ -248,12 +253,20 @@ fn a_frozen_viewer_keeps_both_arrows_for_a_trade_its_store_does_not_hold() {
     let mut map = HashMap::new();
     map.insert(11, lines());
     // Stored: the entry from the archive, the exit from the row.
-    assert_eq!(frozen_line_ends(&with_uid, &map, true), (true, true));
-    // Stored without a uid: no archive to ask, the exit line still comes from the row.
-    assert_eq!(frozen_line_ends(&unasked, &map, true), (false, true));
-    // Outside the store: both arrows, whatever the archive holds for it.
-    assert_eq!(frozen_line_ends(&with_uid, &map, false), (true, false));
-    assert_eq!(frozen_line_ends(&unasked, &map, false), (false, false));
+    assert_eq!(frozen_line_ends(&with_uid, &map, false, true), (true, true));
+    // Stored without a uid: no archive to ask, the exit line still comes from the row — and the
+    // entry too where the row dates its placement.
+    assert_eq!(frozen_line_ends(&unasked, &map, false, true), (false, true));
+    assert_eq!(frozen_line_ends(&unasked, &map, true, true), (true, true));
+    // Outside the store: both arrows, whatever the archive or the row holds for it.
+    assert_eq!(
+        frozen_line_ends(&with_uid, &map, false, false),
+        (false, false)
+    );
+    assert_eq!(
+        frozen_line_ends(&unasked, &map, true, false),
+        (false, false)
+    );
     // The live rule is untouched: the row's exit price alone lines the exit there.
-    assert_eq!(line_ends(&unasked, &map), (false, true));
+    assert_eq!(line_ends(&unasked, &map, false), (false, true));
 }

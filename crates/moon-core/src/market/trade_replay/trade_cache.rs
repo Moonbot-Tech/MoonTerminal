@@ -22,10 +22,13 @@
 //! Everything, until the reader's ceiling says otherwise: there is no age limit. The prints a
 //! close copied out of a core's ring are the only copy there will ever be for a venue whose
 //! trade route reaches back hours (Binance futures) or does not exist (Bybit, Hyperliquid), so
-//! the file is an archive, not a cache. `[trade_replay] max_mb` is the one rule — past it the
-//! spans written longest ago go first (by `updated_ms`, which only a write sets — a replay that
-//! reads a span does not renew it) — and `0` keeps everything for ever; deleting the file
-//! is then the reader's own call, made with the terminal closed.
+//! the file is an archive, not a cache. `[trade_replay] max_mb` is the one rule that runs on
+//! its own — past it the spans written longest ago go first (by `updated_ms`, which only a
+//! write sets — a replay that reads a span does not renew it) — and `0` keeps everything for
+//! ever. The reader's own cut is the Storage tab's cleanup ([`trim`]) — by the button, or at
+//! startup behind `[trade_replay] cleanup_at_startup`: down to the margin now in force around
+//! the trades the tuner can be run on; deleting the file itself stays a call made with the
+//! terminal closed.
 //!
 //! # Threading
 //!
@@ -37,21 +40,26 @@
 //! # The switch
 //!
 //! `storage.toml` → `[trade_replay] persist_trades` (default on). Off, nothing is read from the
-//! file and nothing is written to it, and the tile store lives in memory alone; a file this
-//! session already opened while the switch was on stays open, idle, until the process exits —
-//! the handle is a `OnceLock`, and closing it under a queued write is not worth a second state.
-//! The live value is an atomic the Storage tab flips without a restart, initialised from the
-//! file on first use.
+//! file and nothing is written to it by the replay path, and the tile store lives in memory
+//! alone; a file this session already opened while the switch was on stays open, idle, until
+//! the process exits — the handle is a `OnceLock`, and closing it under a queued write is not
+//! worth a second state. The live value is an atomic the Storage tab flips without a restart,
+//! initialised from the file on first use. The tab's own maintenance — the cleanup and its
+//! preview — opens the file whatever the switch says ([`maintenance_handle`]): a file the
+//! reader switched off is still a file the reader may want smaller.
+
+mod trim;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{OnceLock, mpsc};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::time::Duration;
 
 use rusqlite::OptionalExtension;
 
 use super::tick_tiles::TileSource;
 use crate::feed::types::{Side, Tick};
+pub use trim::{Inventory, KeepMap, TrimReport};
 
 /// Bytes per packed print: `i64 time_ms`, `f32 price`, `f32 qty`, `u32 side` (`0` buy, `1`
 /// sell). The stamp is absolute, not an offset from the span's edge: a span is the position's
@@ -61,6 +69,12 @@ const ROW_BYTES: usize = 20;
 
 /// How long a read waits for the worker before answering `None`.
 const READ_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// How long a maintenance call (inventory, trim) waits for the worker. Generous: a trim that
+/// applies ends with a `VACUUM` over the whole file, and the call runs on a background thread
+/// the Storage tab is not waiting on; a wait past this is the worker gone or wedged, and the
+/// caller reports that rather than a number.
+const MAINTENANCE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Ceiling on the packed bytes the file may hold, from `[trade_replay] max_mb` — checked at
 /// open and again after every insert; past it the spans written longest ago go first. Live,
@@ -106,6 +120,25 @@ enum Op {
         from_ms: i64,
         to_ms: i64,
         reply: mpsc::Sender<Vec<StoredSpan>>,
+    },
+    /// The bounds of every stored span intersecting a stretch — what is held, without reading
+    /// a single print.
+    Spans {
+        exchange: String,
+        market: String,
+        from_ms: i64,
+        to_ms: i64,
+        reply: mpsc::Sender<rusqlite::Result<Vec<(i64, i64)>>>,
+    },
+    /// The file's markets and time range, for a caller building a [`KeepMap`].
+    Inventory {
+        reply: mpsc::Sender<rusqlite::Result<Inventory>>,
+    },
+    /// Clip every span to the map — counting only, or for real followed by a `VACUUM`.
+    Trim {
+        keep: Arc<KeepMap>,
+        apply: bool,
+        reply: mpsc::Sender<rusqlite::Result<TrimReport>>,
     },
 }
 
@@ -209,6 +242,53 @@ impl TradeCache {
             .ok()?;
         rx.recv_timeout(READ_TIMEOUT).ok()
     }
+
+    /// The bounds `(from_ms, to_ms)` of every stored span of a market intersecting
+    /// `[from_ms, to_ms]`, ascending — whether a stretch is held, answered off the span table's
+    /// own columns, without unpacking a print. For a caller deciding what is worth asking the
+    /// venue for over thousands of trades at once, where reading the prints themselves would
+    /// cost as much as the fetch it is trying to spare.
+    ///
+    /// `None` means the read did not happen (worker gone or busy past [`READ_TIMEOUT`]) or
+    /// failed; the caller must not mistake it for "nothing stored".
+    pub fn held_spans(
+        &self,
+        exchange: &str,
+        market: &str,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Option<Vec<(i64, i64)>> {
+        let (reply, rx) = mpsc::channel();
+        self.tx
+            .send(Op::Spans {
+                exchange: exchange.to_string(),
+                market: market.to_string(),
+                from_ms,
+                to_ms,
+                reply,
+            })
+            .ok()?;
+        rx.recv_timeout(READ_TIMEOUT).ok()?.ok()
+    }
+
+    /// The file's markets and time range — see [`Inventory`].
+    ///
+    /// Waits for the worker up to [`MAINTENANCE_TIMEOUT`]; `None` means the worker is gone or
+    /// did not answer in time, `Some(Err)` that the read itself failed.
+    pub fn inventory(&self) -> Option<rusqlite::Result<Inventory>> {
+        let (reply, rx) = mpsc::channel();
+        self.tx.send(Op::Inventory { reply }).ok()?;
+        rx.recv_timeout(MAINTENANCE_TIMEOUT).ok()
+    }
+
+    /// Clip every span to `keep` — see [`trim`]. With `apply`, the file is rewritten in one
+    /// transaction and then compacted (`VACUUM`), so the bytes leave the disk, not only the
+    /// table. Waits like [`Self::inventory`].
+    pub fn trim(&self, keep: Arc<KeepMap>, apply: bool) -> Option<rusqlite::Result<TrimReport>> {
+        let (reply, rx) = mpsc::channel();
+        self.tx.send(Op::Trim { keep, apply, reply }).ok()?;
+        rx.recv_timeout(MAINTENANCE_TIMEOUT).ok()
+    }
 }
 
 /// The one process-wide cache, started on the first use that finds the switch on. `None` only
@@ -256,9 +336,20 @@ pub fn handle() -> Option<TradeCache> {
     if !is_enabled() {
         return None;
     }
-    CACHE
-        .get_or_init(|| TradeCache::open(crate::config::paths::trades_db_path()))
-        .clone()
+    maintenance_handle()
+}
+
+/// The cache for the Storage tab's own maintenance — the cleanup and its preview —
+/// whatever the switch says: it starts the worker if the switch kept [`handle`] from doing so.
+/// It never CREATES the file, though: with the switch off and no file on disk there is nothing
+/// to maintain, and opening the tab must not leave behind the very file the reader switched
+/// off. `None` then, and when the worker could not be started.
+pub fn maintenance_handle() -> Option<TradeCache> {
+    let path = crate::config::paths::trades_db_path();
+    if !is_enabled() && CACHE.get().is_none() && !path.exists() {
+        return None;
+    }
+    CACHE.get_or_init(|| TradeCache::open(path)).clone()
 }
 
 fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -285,7 +376,71 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS spans_updated ON spans(updated_ms);",
     )?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    repair_gate_futures_offset_walks(conn)?;
     Ok(())
+}
+
+/// The one-off repair recorded in the file so it runs once: `(name, spans dropped)`.
+const REPAIR_GATE_FUTURES_OFFSET: &str = "gate-futures-offset-pager";
+
+/// Drop every VENUE span of a Gate futures market filed before 2026-09-21, once per file.
+///
+/// Those spans were walked by the endpoint's `offset`, which is not a cursor — under
+/// back-to-back requests the venue answered the same page twice and skipped the next — so the
+/// file holds them with prints repeated up to nine times and holes of half a minute inside a
+/// stretch it calls covered (GSTOCKBSC_USDT, 2026-09-21: 985 rows, 459 distinct, no print
+/// between +0.06 s and +29.9 s of a trade the venue serves 11 prints for within 2 s of the
+/// close). Covered is final for the walk, so the only way to a whole tape is to forget them
+/// and let the next request walk them again by time ([`super::rest::TradeCursor::Before`]).
+/// The route documents no retention, and a three-day-old window came back whole.
+///
+/// The market's venue is read off the span's exchange key (`<ordinal>:<dex>`, the ordinal a
+/// core reports for its platform); a key that names no known ordinal is left alone. Core
+/// spans (source 1) are the core's own ring and never wrong this way.
+fn repair_gate_futures_offset_walks(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS repairs(name TEXT PRIMARY KEY, spans_dropped INTEGER NOT NULL);",
+    )?;
+    let done: bool = conn.query_row(
+        "SELECT COUNT(*) FROM repairs WHERE name = ?1",
+        [REPAIR_GATE_FUTURES_OFFSET],
+        |r| r.get::<_, i64>(0),
+    )? > 0;
+    if done {
+        return Ok(());
+    }
+    let keys: Vec<String> = conn
+        .prepare("SELECT DISTINCT exchange FROM spans WHERE source = ?1")?
+        .query_map([TileSource::Venue.code()], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut dropped = 0i64;
+    for key in keys.iter().filter(|k| exchange_key_is_gate_futures(k)) {
+        dropped += conn.execute(
+            "DELETE FROM spans WHERE exchange = ?1 AND source = ?2",
+            rusqlite::params![key, TileSource::Venue.code()],
+        )? as i64;
+    }
+    conn.execute(
+        "INSERT INTO repairs(name, spans_dropped) VALUES(?1, ?2)",
+        rusqlite::params![REPAIR_GATE_FUTURES_OFFSET, dropped],
+    )?;
+    if dropped > 0 {
+        log::info!(
+            "trade cache: {dropped} Gate futures span(s) walked by offset dropped, to be fetched again by time"
+        );
+    }
+    Ok(())
+}
+
+/// Whether an exchange key (`<ordinal>:<dex>`) names a Gate futures platform.
+fn exchange_key_is_gate_futures(key: &str) -> bool {
+    key.split(':')
+        .next()
+        .and_then(|ordinal| ordinal.parse::<u8>().ok())
+        .and_then(crate::venue::venue)
+        .is_some_and(|v| {
+            v.brand == crate::venue::Brand::Gate && v.kind == crate::venue::MarketKind::Futures
+        })
 }
 
 /// Packed bytes the file holds, re-counted from the table.
@@ -402,6 +557,48 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, mut held: i64) {
                 };
                 let _ = reply.send(spans);
             }
+            Op::Spans {
+                exchange,
+                market,
+                from_ms,
+                to_ms,
+                reply,
+            } => {
+                let spans = read_span_bounds(&conn, &exchange, &market, from_ms, to_ms);
+                if let Err(e) = &spans {
+                    log::warn!("trade cache span read failed {exchange}/{market}: {e}");
+                }
+                let _ = reply.send(spans);
+            }
+            Op::Inventory { reply } => {
+                let _ = reply.send(trim::inventory(&conn));
+            }
+            Op::Trim { keep, apply, reply } => {
+                let result = trim::trim(&conn, &keep, apply);
+                if apply {
+                    // Whatever the pass did, the carried count must be the file's: a failed
+                    // transaction rolled back to what it was, a committed one removed rows.
+                    held = held_bytes(&conn).unwrap_or(held);
+                    if let Ok(report) = &result {
+                        log::info!(
+                            "trade cache trimmed: {} span(s) dropped, {} cut, {} print(s) / {} bytes gone of {}",
+                            report.spans_dropped,
+                            report.spans_cut,
+                            report.prints_dropped,
+                            report.bytes_dropped,
+                            report.bytes_total
+                        );
+                        // The bytes leave the disk only here; the table alone would keep the
+                        // file its old size and the tab's readout would not move.
+                        if let Err(e) =
+                            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
+                        {
+                            log::warn!("trade cache vacuum after trim failed: {e}");
+                        }
+                    }
+                }
+                let _ = reply.send(result);
+            }
         }
     }
 }
@@ -473,6 +670,26 @@ fn read_spans(
             ticks: unpack(&blob),
             source: TileSource::from_code(source),
         })
+    })?;
+    rows.collect()
+}
+
+/// The bounds of every span of a market intersecting `[from_ms, to_ms]`, ascending — the
+/// columns alone, never the blob.
+fn read_span_bounds(
+    conn: &rusqlite::Connection,
+    exchange: &str,
+    market: &str,
+    from_ms: i64,
+    to_ms: i64,
+) -> rusqlite::Result<Vec<(i64, i64)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT from_ms, to_ms FROM spans
+         WHERE exchange = ?1 AND market = ?2 AND to_ms >= ?3 AND from_ms <= ?4
+         ORDER BY from_ms",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![exchange, market, from_ms, to_ms], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
     })?;
     rows.collect()
 }

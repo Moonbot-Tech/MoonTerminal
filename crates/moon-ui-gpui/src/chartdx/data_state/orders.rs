@@ -329,6 +329,7 @@ impl ChartDataState {
                 if force
                     || pr.last_order_lines_rev != order_lines_rev
                     || pr.last_archived_lines_rev != self.archived_lines_rev
+                    || pr.last_overlay_rev != self.frozen_overlay_rev
                     || pr.last_order_strategies_rev != core_st.strategies_rev
                     || pr.last_order_schema_rev != core_st.schema_rev
                     || pr.last_order_highlight_uid != highlight_uid
@@ -441,6 +442,20 @@ impl ChartDataState {
                         segs.extend(archived_segs);
                         markers.extend(archived_markers);
                     }
+                    // A frozen viewer's corridor and modelled trades, beside its store in either
+                    // trade style: neither is an order of the trade.
+                    if frozen && let Some(overlay) = self.frozen_overlay.as_deref() {
+                        moon_chart::frozen_overlay::build_overlay_geometry(
+                            overlay,
+                            orders_style,
+                            &self.chart_graphics,
+                            self.last_ppp,
+                            pane.view.epoch_ms,
+                            &mut zones,
+                            &mut segs,
+                            &mut markers,
+                        );
+                    }
                     // Add user figures through the same userdata layers after orders, placing them
                     // above order zones but below cursor markers. Their FILLS join the zone layer
                     // (drawn over the grid, under the candles) before `hash_order_zones` reads it —
@@ -514,6 +529,7 @@ impl ChartDataState {
                     }
                     pr.last_order_lines_rev = order_lines_rev;
                     pr.last_archived_lines_rev = self.archived_lines_rev;
+                    pr.last_overlay_rev = self.frozen_overlay_rev;
                     pr.last_order_strategies_rev = core_st.strategies_rev;
                     pr.last_order_schema_rev = core_st.schema_rev;
                     pr.last_order_lines_sync_ms = now;

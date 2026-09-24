@@ -11,6 +11,7 @@ mod tests;
 mod volume;
 
 pub use read::{ReplayAddress, ReplayAddressError};
+pub(crate) use replay::CoreReplayTicks;
 pub use volume::{
     LiqSpanReadout, PriceProfileRow, ProfileWindow, SIDE_BUCKET_MS, SideSlot, SideVolumeBucket,
     VolumeAt, VolumeSpan, VolumeSpanReadout, merge_side_slots, replay_sides, side_slots_of_ticks,

@@ -203,6 +203,16 @@ pub struct ChartTradeRecord {
     pub sell_set_date: i64,
     /// Raw `sellsetdatems`, same caveats as [`Self::buy_ms`].
     pub sell_set_ms: Option<i64>,
+    /// Raw `buysetdatems` — when the core CREATED the entry order, core-local milliseconds like
+    /// [`Self::buy_ms`]. Filed by cores since 2026-09-21 and never backfilled: `None` for an older
+    /// row, a zero, or a source without the column. Where the entry line of this trade begins
+    /// when the core archived none — it archives an entry line only once the order moved, so an
+    /// order that stood at its price from creation has no line but still has a placement.
+    pub buy_set_ms: Option<i64>,
+    /// `buycorridordown` / `buycorridorup` — the entry corridor the core last saved for a MoonShot
+    /// (or managed MoonHook) order, as absolute prices under their own names, whatever their
+    /// numeric order. `None` unless both are positive prices: zero is the column's "unavailable".
+    pub corridor: Option<(f64, f64)>,
     /// Entry price.
     pub buy_price: f64,
     /// Exit price.
@@ -283,6 +293,18 @@ impl ChartTradeRecord {
         } else {
             self.buy_stamp()
         }
+    }
+
+    /// The stamp of the entry order's CREATION, when the core filed one (`buysetdatems`). No
+    /// seconds counterpart exists, so there is nothing to fall back on: `None` means the row does
+    /// not say where its entry was placed.
+    ///
+    /// Returns:
+    ///     The typed core-local stamp, or `None` for a row without the column's value.
+    pub fn buy_set_stamp(&self) -> Option<ReportStamp> {
+        self.buy_set_ms
+            .filter(|ms| *ms > 0)
+            .map(ReportStamp::Millis)
     }
 }
 
@@ -2295,11 +2317,24 @@ pub fn query_chart_trade_history_for_cores(
         } else {
             "NULL"
         };
+        // The entry order's creation and its saved corridor, optional the same way: cores file
+        // them since 2026-09-21, nothing backfills them, and a source without them reads NULL.
+        let optional = |column: &'static str| {
+            if source.cols.contains(column) {
+                format!("r.{column}")
+            } else {
+                "NULL".to_string()
+            }
+        };
+        let buy_set_ms_sql = optional("buysetdatems");
+        let corridor_down_sql = optional("buycorridordown");
+        let corridor_up_sql = optional("buycorridorup");
         let sql = format!(
             "SELECT {record_id}, r.core_uid, r.coin, r.buydate, r.closedate, \
              r.buyprice, r.sellprice, r.quantity, r.isshort, \
              {profit_sql}, {quote_sql}, {percent_sql}, {emulator_sql}, \
-             {buy_ms_sql}, {close_ms_sql}, {report_uid_sql}, {sell_set_sql}, {sell_set_ms_sql} \
+             {buy_ms_sql}, {close_ms_sql}, {report_uid_sql}, {sell_set_sql}, {sell_set_ms_sql}, \
+             {buy_set_ms_sql}, {corridor_down_sql}, {corridor_up_sql} \
              FROM {} r{where_sql} \
              ORDER BY r.closedate DESC, {record_id} DESC LIMIT ?",
             source.table
@@ -2331,6 +2366,11 @@ pub fn query_chart_trade_history_for_cores(
                     row.get::<_, Value>(15)?,
                     row.get::<_, Value>(16)?,
                     row.get::<_, Value>(17)?,
+                    (
+                        row.get::<_, Value>(18)?,
+                        row.get::<_, Value>(19)?,
+                        row.get::<_, Value>(20)?,
+                    ),
                 ))
             })
             .map_err(|error| read_fail(CONTEXT, error))?;
@@ -2354,6 +2394,7 @@ pub fn query_chart_trade_history_for_cores(
                 report_uid,
                 sell_set_date,
                 sell_set_ms,
+                (buy_set_ms, corridor_down, corridor_up),
             ) = row.map_err(|error| read_fail(CONTEXT, error))?;
             let Some(buy_date) = report_value_i64(&buy_date) else {
                 continue;
@@ -2387,6 +2428,15 @@ pub fn query_chart_trade_history_for_cores(
                 close_ms: report_value_i64(&close_ms),
                 sell_set_date: report_value_i64(&sell_set_date).unwrap_or_default(),
                 sell_set_ms: report_value_i64(&sell_set_ms),
+                // Zero is the column's "unavailable", never an epoch date or a zero price.
+                buy_set_ms: report_value_i64(&buy_set_ms).filter(|ms| *ms > 0),
+                corridor: match (
+                    report_value_f64(&corridor_down),
+                    report_value_f64(&corridor_up),
+                ) {
+                    (Some(down), Some(up)) if down > 0.0 && up > 0.0 => Some((down, up)),
+                    _ => None,
+                },
                 buy_price,
                 sell_price,
                 quantity: report_value_f64(&quantity).unwrap_or_default(),

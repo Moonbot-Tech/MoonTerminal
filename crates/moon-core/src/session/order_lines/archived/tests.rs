@@ -18,6 +18,7 @@ fn input() -> ArchivedOrdersInput<'static> {
         entry_fill_ms: Some(1_500.0),
         close_ms: 9_000.0,
         exit: None,
+        entry: None,
         bright: false,
     }
 }
@@ -113,6 +114,7 @@ fn appended_neighbours_are_pale_and_keep_their_own_fill() {
         entry_fill_ms: Some(20_500.0),
         close_ms: 30_000.0,
         exit: None,
+        entry: None,
         bright: false,
     };
     store.append_archived(
@@ -218,18 +220,36 @@ fn an_archived_own_exit_line_replaces_the_reports() {
         &[trace(
             true,
             ArchivedLineKind::Exit,
-            &[(2_000.0, 1.5), (2_500.0, 1.6)],
+            &[
+                (2_000.0, 1.5),
+                (2_500.0, 1.5),
+                (2_400.0, 1.6),
+                (2_500.0, 1.6),
+            ],
         )],
     );
     let drawn = store.market_draw_orders("ADAUSDT", usize::MAX);
-    assert_eq!(drawn.len(), 1);
+    assert_eq!(
+        drawn.len(),
+        1,
+        "no second, straight line beside the archived one"
+    );
+    // The archived path, carried to the report's sale at the close; the line at the sale.
     assert_eq!(
         drawn[0].lines[LineKind::Sell as usize].steps,
-        vec![(2_000.0, 1.6)]
+        vec![(2_000.0, 1.7)]
     );
     assert_eq!(
-        drawn[0].lines[LineKind::Sell as usize].server_points.len(),
-        2
+        drawn[0].lines[LineKind::Sell as usize].server_points,
+        vec![
+            (2_000.0, 1.5),
+            (2_500.0, 1.5),
+            (2_400.0, 1.6),
+            (2_500.0, 1.6),
+            (9_000.0, 1.6),
+            (9_000.0, 1.7),
+            (9_000.0, 1.7),
+        ]
     );
 
     let mut store = OrderLineStore::archived(input(), &[]);
@@ -281,4 +301,186 @@ fn a_placement_after_the_close_collapses_to_the_close() {
         drawn[0].lines[LineKind::Sell as usize].steps,
         vec![(9_000.0, 1.7)]
     );
+}
+
+/// The report's entry: an order that stood at 1.0 from 700 until its fill at 1_500.
+fn report_entry() -> ReportEntry {
+    ReportEntry {
+        price: 1.0,
+        set_ms: 700.0,
+    }
+}
+
+/// The core archives an entry line only once the order moved, so an order that stood at its price
+/// from creation answers with none — and the report's placement still draws it: straight at the
+/// entry price from the placement, ending at the fill.
+#[test]
+fn an_entry_the_archive_lacks_is_drawn_from_the_reports_placement() {
+    let store = OrderLineStore::archived(
+        ArchivedOrdersInput {
+            entry: Some(report_entry()),
+            exit: Some(report_exit()),
+            ..input()
+        },
+        &[],
+    );
+    let drawn = store.market_draw_orders("ADAUSDT", usize::MAX);
+    assert_eq!(
+        drawn.len(),
+        1,
+        "one subject order carries both report lines"
+    );
+    let order = drawn[0];
+    assert!(order.subject);
+    assert_eq!(order.create_ms, 700.0);
+    assert_eq!(order.entry_fill_ms, Some(1_500.0));
+    assert_eq!(
+        order.lines[LineKind::Buy as usize].steps,
+        vec![(700.0, 1.0)]
+    );
+    assert!(order.lines[LineKind::Buy as usize].server_points.is_empty());
+}
+
+/// An own entry line in the archive wins: it carries the path the report cannot state. A
+/// neighbour takes the fallback as an order of its own, dated with the row's fill.
+#[test]
+fn an_archived_own_entry_line_replaces_the_reports_and_neighbours_fall_back() {
+    let store = OrderLineStore::archived(
+        ArchivedOrdersInput {
+            entry: Some(report_entry()),
+            ..input()
+        },
+        &[trace(
+            true,
+            ArchivedLineKind::Entry,
+            &[(1_000.0, 1.1), (1_200.0, 1.05)],
+        )],
+    );
+    let drawn = store.market_draw_orders("ADAUSDT", usize::MAX);
+    assert_eq!(drawn.len(), 1);
+    assert_eq!(
+        drawn[0].lines[LineKind::Buy as usize].steps,
+        vec![(1_000.0, 1.05)]
+    );
+
+    let mut store = OrderLineStore::archived(input(), &[]);
+    store.append_archived(
+        ArchivedOrdersInput {
+            entry: Some(report_entry()),
+            ..input()
+        },
+        &[],
+    );
+    let drawn = store.market_draw_orders("ADAUSDT", usize::MAX);
+    assert_eq!(drawn.len(), 1);
+    assert!(!drawn[0].subject);
+    assert_eq!(drawn[0].entry_fill_ms, Some(1_500.0));
+    assert_eq!(
+        drawn[0].lines[LineKind::Buy as usize].steps,
+        vec![(700.0, 1.0)]
+    );
+}
+
+/// Archived points as the store draws them: the price narrowed to the chart's `f32`.
+fn drawn_points(points: &[(f64, f64)]) -> Vec<(f64, f32)> {
+    points.iter().map(|&(t, p)| (t, p as f32)).collect()
+}
+
+/// A stop sold by market leaves no price on the sell order: the core's trace stops at the take
+/// it last stood at, and the report alone says where the position closed. The exit line stands at
+/// the report's sell price, and the trace is carried to it at the close — the trade window and a
+/// "Moonbot lines" chart alike.
+#[test]
+fn an_exit_trace_that_ends_off_the_sell_price_is_carried_to_it_at_the_close() {
+    let exit = ReportExit {
+        price: 1.2,
+        set_ms: 2_000.0,
+    };
+    // An anchor and one move, as the core writes them: held at 1.6 to 2_500, down to 1.55.
+    let taken = [
+        (2_000.0, 1.6),
+        (2_500.0, 1.6),
+        (2_450.0, 1.55),
+        (2_500.0, 1.55),
+    ];
+    // The sale as one more move: held at 1.55 to the close, down to 1.2 there.
+    let mut carried = drawn_points(&taken);
+    carried.extend([(9_000.0, 1.55), (9_000.0, 1.2), (9_000.0, 1.2)]);
+    let store = OrderLineStore::archived(
+        ArchivedOrdersInput {
+            exit: Some(exit),
+            ..input()
+        },
+        &[trace(true, ArchivedLineKind::Exit, &taken)],
+    );
+    let sell = &store.market_draw_orders("ADAUSDT", usize::MAX)[0].lines[LineKind::Sell as usize];
+    assert_eq!(sell.steps, vec![(2_000.0, 1.2)]);
+    assert_eq!(sell.server_points, carried);
+
+    let mut store = OrderLineStore::archived(input(), &[]);
+    store.append_archived(
+        ArchivedOrdersInput {
+            exit: Some(exit),
+            bright: true,
+            ..input()
+        },
+        &[
+            trace(false, ArchivedLineKind::Exit, &[(500.0, 0.9)]),
+            trace(true, ArchivedLineKind::Exit, &taken),
+        ],
+    );
+    let mut drawn = store.market_draw_orders("ADAUSDT", usize::MAX);
+    drawn.sort_by_key(|o| o.uid);
+    assert_eq!(drawn.len(), 2);
+    assert_eq!(
+        drawn[0].lines[LineKind::Sell as usize].steps,
+        vec![(500.0, 0.9)],
+        "an inherited exit is an ancestor's, not this trade's sale"
+    );
+    let sell = &drawn[1].lines[LineKind::Sell as usize];
+    assert_eq!(sell.steps, vec![(2_000.0, 1.2)]);
+    assert_eq!(sell.server_points, carried);
+
+    // A trace that ends ON the sell price is the sale itself: nothing is added.
+    let store = OrderLineStore::archived(
+        ArchivedOrdersInput {
+            exit: Some(ReportExit {
+                price: 1.55,
+                ..exit
+            }),
+            ..input()
+        },
+        &[trace(true, ArchivedLineKind::Exit, &taken)],
+    );
+    let sell = &store.market_draw_orders("ADAUSDT", usize::MAX)[0].lines[LineKind::Sell as usize];
+    assert_eq!(sell.steps, vec![(2_000.0, 1.55)]);
+    assert_eq!(sell.server_points, drawn_points(&taken));
+
+    // Nor for a price a float's width off it: the report's and the wire's two pipes.
+    let store = OrderLineStore::archived(
+        ArchivedOrdersInput {
+            exit: Some(ReportExit {
+                price: 1.550_000_1,
+                ..exit
+            }),
+            ..input()
+        },
+        &[trace(true, ArchivedLineKind::Exit, &taken)],
+    );
+    let sell = &store.market_draw_orders("ADAUSDT", usize::MAX)[0].lines[LineKind::Sell as usize];
+    assert_eq!(sell.server_points, drawn_points(&taken));
+
+    // A trace off the anchor-and-triples layout keeps its points: one appended would be read
+    // off its grid. The line still stands at the sale.
+    let odd = [(2_000.0, 1.6), (2_500.0, 1.55)];
+    let store = OrderLineStore::archived(
+        ArchivedOrdersInput {
+            exit: Some(exit),
+            ..input()
+        },
+        &[trace(true, ArchivedLineKind::Exit, &odd)],
+    );
+    let sell = &store.market_draw_orders("ADAUSDT", usize::MAX)[0].lines[LineKind::Sell as usize];
+    assert_eq!(sell.steps, vec![(2_000.0, 1.2)]);
+    assert_eq!(sell.server_points, drawn_points(&odd));
 }

@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 
-use super::{FetchError, TradeCursor, TradePage, cell_f32};
+use super::{FetchError, TradeCursor, TradePage, cell_f32, split_no_fill};
 use crate::feed::types::{Side, Tick};
 use crate::market::candles::{ChartCandle, estimate_quote_volume};
 use crate::market::trade_replay::venue_caps::{KlineRoute, TradeRoute};
@@ -230,15 +230,19 @@ pub(super) fn parse_agg_trades(
     let rows = body
         .as_array()
         .ok_or_else(|| FetchError::Transient("binance: response is not an array".to_string()))?;
-    let ticks: Vec<Tick> = rows.iter().filter_map(parse_trade_row).collect();
+    let (fills, no_fill) = split_no_fill(rows, "q");
+    let ticks: Vec<Tick> = fills
+        .iter()
+        .filter_map(|row| parse_trade_row(row))
+        .collect();
     // A page holding a malformed row alongside valid ones can still finish pagination with a
     // non-empty tick vector that is silently missing rows — dropping one bad row in a thousand is
     // fine for candles, where a missing bar is visible, but not here, where a hole must send the
     // window to candles instead of drawing a partial tape as if it were whole.
-    if ticks.len() < rows.len() {
+    if ticks.len() < fills.len() {
         return Err(FetchError::Transient(format!(
-            "binance: page held {} unparseable row(s) of {} (parsed {})",
-            rows.len() - ticks.len(),
+            "binance: page held {} unparseable row(s) of {} (parsed {}, {no_fill} of zero size)",
+            fills.len() - ticks.len(),
             rows.len(),
             ticks.len()
         )));

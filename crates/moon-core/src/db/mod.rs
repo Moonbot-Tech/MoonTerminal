@@ -32,6 +32,7 @@ mod rep;
 pub mod report_axis;
 mod report_read;
 pub mod report_recovery;
+pub mod tape_owners;
 #[cfg(test)]
 mod test_support;
 pub mod trace;

@@ -6,6 +6,9 @@ fn fixture(name: &str) -> Value {
         "futures" => include_str!("fixtures/futures_klines.json"),
         "spot_unknown" => include_str!("fixtures/spot_unknown_symbol.json"),
         "futures_unknown" => include_str!("fixtures/futures_unknown_symbol.json"),
+        "spot_trades" => include_str!("fixtures/spot_trades.json"),
+        "futures_trades" => include_str!("fixtures/futures_trades.json"),
+        "futures_trades_zero_size" => include_str!("fixtures/futures_trades_zero_size.json"),
         _ => unreachable!("only recorded Gate fixtures are used"),
     };
     serde_json::from_str(text).expect("recorded Gate fixture is JSON")
@@ -193,12 +196,19 @@ fn gate_spot_trade_page_stops_on_the_documented_row_cap() {
         parse_spot_trades(&full, max_rows, Some(TradeCursor::Page(101))).expect("page 101");
     assert_eq!(past_cap.next, None);
 
-    let ignored =
-        parse_spot_trades(&full, max_rows, Some(TradeCursor::Offset(50))).expect("offset");
+    let ignored = parse_spot_trades(
+        &full,
+        max_rows,
+        Some(TradeCursor::Before {
+            boundary_ms: 50,
+            below_id: 50,
+        }),
+    )
+    .expect("futures cursor");
     assert_eq!(
         ignored.next,
         Some(TradeCursor::Page(2)),
-        "a futures offset is not a spot page number"
+        "a futures cursor is not a spot page number"
     );
 }
 
@@ -206,9 +216,10 @@ fn gate_spot_trade_page_stops_on_the_documented_row_cap() {
 /// size as quantity, draws every Gate futures print on the wrong side or with a negative size.
 #[test]
 fn gate_futures_trade_side_is_the_sign_of_size() {
+    // Futures `create_time_ms` is fractional SECONDS (see the recorded case below).
     let body = serde_json::json!([
-        {"price": "10", "size": -4, "create_time_ms": 5_000},
-        {"price": 9, "size": "2.5", "create_time_ms": 6_000}
+        {"price": "10", "size": -4, "create_time_ms": 5.0},
+        {"price": 9, "size": "2.5", "create_time_ms": 6.0}
     ]);
     let page = parse_futures_trades(&body, 10, None).expect("both rows parse");
 
@@ -238,24 +249,305 @@ fn gate_futures_trade_falls_back_to_second_timestamps() {
     assert_eq!(page.ticks[0].qty, 1.0);
 }
 
-/// `rest/gateio.rs:parse_futures_trades` treating an exactly-full page as complete, or advancing
-/// the offset by the requested limit rather than the rows returned, either stops a silently
-/// truncated page or skips the next slice.
+/// `rest/gateio.rs:parse_futures_trades` treating an exactly-full page as complete, or pinning
+/// the next page to a row other than the oldest one it holds, either stops a silently
+/// truncated page or skips the prints between the two rows.
 #[test]
-fn gate_futures_trade_full_page_continues_by_row_count() {
-    let row = serde_json::json!({"price": "3", "size": 1, "create_time_ms": 10});
-    let one = serde_json::json!([row]);
-    let exact = parse_futures_trades(&one, 1, Some(TradeCursor::Offset(10))).expect("exact page");
-    assert_eq!(exact.next, Some(TradeCursor::Offset(11)));
+fn gate_futures_trade_full_page_continues_from_its_oldest_row() {
+    let one = serde_json::json!([{"id": 7, "price": "3", "size": 1, "create_time_ms": 10.5}]);
+    let exact = parse_futures_trades(&one, 1, None).expect("exact page");
+    assert_eq!(
+        exact.next,
+        Some(TradeCursor::Before {
+            boundary_ms: 10_500,
+            below_id: 7
+        })
+    );
     assert_eq!(exact.ticks.len(), 1);
 
+    // Newest first, as the venue answers.
     let two = serde_json::json!([
-        {"price": "3", "size": 1, "create_time_ms": 10},
-        {"price": "4", "size": 2, "create_time_ms": 11}
+        {"id": 8, "price": "4", "size": 2, "create_time_ms": 11.0},
+        {"id": 7, "price": "3", "size": 1, "create_time_ms": 10.0}
     ]);
-    let over = parse_futures_trades(&two, 1, Some(TradeCursor::Offset(10))).expect("over-full");
-    assert_eq!(over.next, Some(TradeCursor::Offset(12)));
+    let over = parse_futures_trades(&two, 1, None).expect("over-full");
+    assert_eq!(
+        over.next,
+        Some(TradeCursor::Before {
+            boundary_ms: 10_000,
+            below_id: 7
+        })
+    );
 
-    let short = parse_futures_trades(&one, 2, Some(TradeCursor::Offset(10))).expect("short page");
+    let short = parse_futures_trades(&one, 2, None).expect("short page");
     assert_eq!(short.next, None);
+}
+
+/// `rest/gateio.rs:parse_futures_trade_row` reading `create_time_ms` as an integer of
+/// milliseconds rejects every row Gate futures actually sends — the field is a fractional
+/// NUMBER of SECONDS there (`1789726954.306`), unlike spot's millisecond STRING — so a whole page
+/// comes back "unparseable", the walk files it as a venue refusal and the host backs off for
+/// minutes on a request the venue answered in 300 ms. Recorded on 2026-09-21 from
+/// `/futures/usdt/trades?contract=CATE_USDT`, the market from that day's refused batch.
+#[test]
+fn gate_futures_trades_carry_fractional_seconds_not_integer_milliseconds() {
+    let body = fixture("futures_trades");
+    let page = parse_futures_trades(&body, 1_000, None).expect("recorded futures page parses");
+
+    assert_eq!(page.ticks.len(), 3, "every recorded row is a tick");
+    assert_eq!(page.ticks[0].time_ms, 1_789_726_954_306.0);
+    assert_eq!(page.ticks[0].price, 0.09058);
+    assert_eq!(page.ticks[0].qty, 1.0);
+    assert_eq!(page.ticks[0].side, Side::Sell);
+    assert_eq!(page.ticks[1].side, Side::Buy);
+    assert_eq!(
+        page.next, None,
+        "three rows against a cap of 1000 is a final page"
+    );
+}
+
+/// `rest/gateio.rs:parse_spot_trade_row` is the OTHER shape of the same brand: a millisecond
+/// string. Pinned beside the futures case so a "fix" that unifies the two parsers on one unit
+/// breaks here rather than on a live chart.
+#[test]
+fn gate_spot_trades_carry_a_millisecond_string() {
+    let body = fixture("spot_trades");
+    let page = parse_spot_trades(&body, 1_000, None).expect("recorded spot page parses");
+
+    assert_eq!(page.ticks.len(), 3);
+    assert_eq!(page.ticks[0].time_ms, 1_789_726_954_886.294);
+    assert_eq!(page.ticks[0].qty, 66.0);
+    assert_eq!(page.ticks[0].side, Side::Sell);
+    assert_eq!(page.ticks[2].side, Side::Buy);
+}
+
+/// `#[ignore]` on purpose: it asks the LIVE Gate futures endpoint, so it is a probe to run by
+/// hand when the recorded fixture and the venue may have parted ways — the parser above is
+/// pinned to a recording, and a recording cannot notice the venue changing its row shape. The
+/// window is the recorded one; Gate keeps futures trades for months, so it stays answerable.
+#[test]
+#[ignore = "probe: asks the live Gate futures trades endpoint"]
+fn gate_futures_trades_live_page_parses_end_to_end() {
+    let agent = super::super::agent();
+    // CATE: the fractional-seconds recording; UB: the market that prints `size: 0` rows
+    // between its fills (both recorded 2026-09-21).
+    for (market, from_ms, to_ms) in [
+        ("CATE_USDT", 1_789_726_772_000, 1_789_726_957_000),
+        ("UB_USDT", 1_789_899_637_000, 1_789_899_702_000),
+    ] {
+        let page = super::super::fetch_trades(
+            &agent,
+            TradeRoute::GateFuturesTrades,
+            market,
+            from_ms,
+            to_ms,
+            None,
+        )
+        .unwrap_or_else(|e| panic!("live Gate futures page for {market} parses: {e:?}"));
+
+        assert!(
+            !page.ticks.is_empty(),
+            "{market}: the recorded window held prints"
+        );
+        for tick in &page.ticks {
+            let t = tick.time_ms as i64;
+            assert!(
+                (from_ms..=to_ms).contains(&t),
+                "{market}: tick at {t} ms sits inside the asked window {from_ms}..{to_ms}"
+            );
+        }
+    }
+}
+
+/// `rest/gateio.rs:trade_window_seconds` truncating `to` asks Gate for prints up to the slice's
+/// last WHOLE second: a print at `…954.306` is not returned for `to=…954` (probed live on both
+/// routes), so the slice's final partial second goes unasked while the walk marks it covered.
+#[test]
+fn gate_trade_window_asks_one_second_past_the_slice_end() {
+    assert_eq!(
+        trade_window_seconds(1_789_726_772_454, 1_789_726_954_306),
+        (1_789_726_772, 1_789_726_955)
+    );
+    // A second-aligned end still widens by one: whether Gate's `to` is inclusive at `.000`
+    // is not something the walk should depend on.
+    assert_eq!(
+        trade_window_seconds(1_789_726_772_000, 1_789_726_954_000),
+        (1_789_726_772, 1_789_726_955)
+    );
+}
+
+/// `rest/gateio.rs:parse_futures_trades` counting a `size: 0` row as unparseable turns a page
+/// the venue served in full into a `Transient` refusal, and the host backs off for minutes on
+/// a market where every other row prints that way. Recorded on 2026-09-21 from
+/// `/futures/usdt/trades?contract=UB_USDT`: rows with their own ids and a price but no size,
+/// alternating with ordinary fills. Nothing was traded in such a row, so it is not a tick —
+/// but it is the venue's well-formed answer, and the page stands.
+#[test]
+fn gate_futures_trades_skip_a_zero_size_row_without_refusing_the_page() {
+    let body = fixture("futures_trades_zero_size");
+    let page = parse_futures_trades(&body, 1_000, None).expect("a page with zero-size rows parses");
+
+    assert_eq!(
+        page.ticks.len(),
+        3,
+        "the three fills; the three zero-size rows are no fills"
+    );
+    assert_eq!(
+        page.ticks.iter().map(|t| t.qty).collect::<Vec<_>>(),
+        vec![1.0, 2.0, 8.0]
+    );
+    assert_eq!(page.next, None);
+}
+
+/// `rest/gateio.rs:parse_futures_trades` on a FULL page of nothing but `size: 0` rows: the
+/// route never accepts a full page as complete, so the cursor must still move onto the page's
+/// oldest row — a dead stretch on a small contract is walked through, not refused and not
+/// mistaken for the end of the tape.
+#[test]
+fn gate_futures_page_of_only_zero_size_rows_is_empty_and_still_pages_on() {
+    let mut body = fixture("futures_trades_zero_size");
+    for row in body.as_array_mut().expect("array") {
+        row["size"] = serde_json::json!(0);
+    }
+    let rows = body.as_array().expect("array");
+    let oldest_id = rows
+        .iter()
+        .map(|r| r["id"].as_u64().unwrap())
+        .min()
+        .unwrap();
+    let page = parse_futures_trades(
+        &body,
+        6,
+        Some(TradeCursor::Before {
+            boundary_ms: i64::MAX,
+            below_id: u64::MAX,
+        }),
+    )
+    .expect("a page of zero-size rows parses");
+    assert!(page.ticks.is_empty());
+    assert!(
+        matches!(page.next, Some(TradeCursor::Before { below_id, .. }) if below_id == oldest_id)
+    );
+}
+
+/// A full page hands back a `Before` cursor at its OLDEST row (time and id), and the next page
+/// — asked up to that row's second, so it holds that second again — drops every row at or
+/// above that id and keeps the rest. Three rows against a cap of three is a full page.
+#[test]
+fn gate_futures_full_page_pages_back_by_time_and_drops_the_rows_already_taken() {
+    let body = fixture("futures_trades");
+    let page = parse_futures_trades(&body, 3, None).expect("full page parses");
+    assert_eq!(page.ticks.len(), 3);
+    let Some(TradeCursor::Before {
+        boundary_ms,
+        below_id,
+    }) = page.next
+    else {
+        panic!("a full page pages on: {:?}", page.next);
+    };
+    assert_eq!(boundary_ms, 1_789_726_950_929, "the oldest row's stamp");
+    assert_eq!(below_id, 29202, "the oldest row's id");
+    // The next page, as the venue answers `to=1789726951`: the two rows of that second again
+    // (ids 29203, 29202 — already held) plus one older row.
+    let next_body = serde_json::json!([
+        {"id": 29203, "contract": "CATE_USDT", "create_time": 1789726950.929, "create_time_ms": 1789726950.929, "size": 1, "price": "0.09102"},
+        {"id": 29202, "contract": "CATE_USDT", "create_time": 1789726950.929, "create_time_ms": 1789726950.929, "size": 1, "price": "0.09102"},
+        {"id": 29201, "contract": "CATE_USDT", "create_time": 1789726948.100, "create_time_ms": 1789726948.100, "size": -2, "price": "0.09100"}
+    ]);
+    let next = parse_futures_trades(&next_body, 3, page.next).expect("next page parses");
+    assert_eq!(
+        next.ticks.len(),
+        1,
+        "only the row below the id already held"
+    );
+    assert_eq!(next.ticks[0].time_ms, 1_789_726_948_100.0);
+    assert!(
+        matches!(
+            next.next,
+            Some(TradeCursor::Before {
+                below_id: 29201,
+                boundary_ms: 1_789_726_948_100
+            })
+        ),
+        "{:?}",
+        next.next
+    );
+    // A full page whose every row is already held is a second denser than a page: the walk
+    // drains that second by offset, from its start.
+    let dense = serde_json::json!([
+        {"id": 29203, "contract": "CATE_USDT", "create_time": 1789726950.929, "create_time_ms": 1789726950.929, "size": 1, "price": "0.09102"},
+        {"id": 29202, "contract": "CATE_USDT", "create_time": 1789726950.929, "create_time_ms": 1789726950.929, "size": 1, "price": "0.09102"},
+        {"id": 29204, "contract": "CATE_USDT", "create_time": 1789726954.306, "create_time_ms": 1789726954.306, "size": -1, "price": "0.09058"}
+    ]);
+    let drain = parse_futures_trades(&dense, 3, page.next).expect("parses");
+    assert!(drain.ticks.is_empty());
+    assert_eq!(
+        drain.next,
+        Some(TradeCursor::Within {
+            second_s: 1_789_726_950,
+            offset: 0,
+            below_id: 29202,
+            low_id: 29202
+        })
+    );
+    // A full drain page moves the offset by the venue's row count and keeps only the new
+    // rows; the boundary id follows the oldest new row.
+    let drain_page = serde_json::json!([
+        {"id": 29202, "contract": "CATE_USDT", "create_time": 1789726950.929, "create_time_ms": 1789726950.929, "size": 1, "price": "0.09102"},
+        {"id": 29200, "contract": "CATE_USDT", "create_time": 1789726950.500, "create_time_ms": 1789726950.500, "size": 3, "price": "0.09101"},
+        {"id": 29199, "contract": "CATE_USDT", "create_time": 1789726950.400, "create_time_ms": 1789726950.400, "size": 3, "price": "0.09101"}
+    ]);
+    let drained = parse_futures_trades(&drain_page, 3, drain.next).expect("parses");
+    assert_eq!(drained.ticks.len(), 2);
+    assert_eq!(
+        drained.next,
+        Some(TradeCursor::Within {
+            second_s: 1_789_726_950,
+            offset: 3,
+            below_id: 29202,
+            low_id: 29199
+        }),
+        "the boundary stays, the low id follows the drain"
+    );
+    // Oldest-first inside the second would not lose a row: the boundary does not follow.
+    let ascending = serde_json::json!([
+        {"id": 29195, "contract": "CATE_USDT", "create_time": 1789726950.050, "create_time_ms": 1789726950.050, "size": 1, "price": "0.09100"},
+        {"id": 29196, "contract": "CATE_USDT", "create_time": 1789726950.060, "create_time_ms": 1789726950.060, "size": 1, "price": "0.09100"},
+        {"id": 29197, "contract": "CATE_USDT", "create_time": 1789726950.070, "create_time_ms": 1789726950.070, "size": 1, "price": "0.09100"}
+    ]);
+    let asc = parse_futures_trades(&ascending, 3, drained.next).expect("parses");
+    assert_eq!(asc.ticks.len(), 3);
+    // A short drain page ends the second: back to time, up to the second's own start, so the
+    // next `to` is the second itself and the rows of it are not asked a third time.
+    let tail = serde_json::json!([
+        {"id": 29198, "contract": "CATE_USDT", "create_time": 1789726950.100, "create_time_ms": 1789726950.100, "size": 1, "price": "0.09100"}
+    ]);
+    let ended = parse_futures_trades(&tail, 3, drained.next).expect("parses");
+    assert_eq!(ended.ticks.len(), 1);
+    assert_eq!(
+        ended.next,
+        Some(TradeCursor::Before {
+            boundary_ms: 1_789_726_949_999,
+            below_id: 29198
+        })
+    );
+    assert_eq!(trade_window_seconds(0, 1_789_726_949_999).1, 1_789_726_950);
+    // On a continuation page a row without an id is dropped, not taken again.
+    let no_id = serde_json::json!([
+        {"contract": "CATE_USDT", "create_time": 1789726948.100, "create_time_ms": 1789726948.100, "size": -2, "price": "0.09100"}
+    ]);
+    let short = parse_futures_trades(&no_id, 3, page.next).expect("parses");
+    assert!(short.ticks.is_empty());
+    assert_eq!(short.next, None);
+    let first = parse_futures_trades(&no_id, 3, None).expect("parses");
+    assert_eq!(first.ticks.len(), 1, "a first page keeps it");
+}
+
+/// `rest/gateio.rs:fetch_trades` sends the cursor's boundary as `to`, one second past the
+/// boundary's own second, and never an `offset`.
+#[test]
+fn gate_futures_before_cursor_moves_to_onto_the_boundary_second() {
+    // `trade_window_seconds` is the one rule for `to`; the cursor reuses it on its boundary.
+    let (_, to) = trade_window_seconds(0, 1_789_726_950_929);
+    assert_eq!(to, 1_789_726_951);
 }

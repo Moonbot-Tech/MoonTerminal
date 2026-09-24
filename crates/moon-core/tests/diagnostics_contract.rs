@@ -42,6 +42,10 @@ const ENV_ALLOW: &[(&str, &str)] = &[
         "one-off unit probe for archive reach, deliberately separate from the market channel",
     ),
     (
+        "MOON_TICKS_PROBE",
+        "names the route, market and slice an #[ignore] test walks against the live venue by hand; a switch in a user's file must not send requests",
+    ),
+    (
         "MOON_CRASH_PROBE",
         "raises a real access violation to exercise the crash report; a switch that kills the          process must never be a key in a file a user edits",
     ),

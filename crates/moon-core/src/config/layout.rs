@@ -800,6 +800,15 @@ pub struct WindowLayout {
     /// Let trade windows fetch the venue's prints (the tick stage); absent means ON.
     #[serde(default, deserialize_with = "de_lenient")]
     pub trade_window_ticks: Option<bool>,
+    /// Shade the entry corridor the core saved for a MoonShot trade, from the order's placement
+    /// to its fill, in trade windows and in the tuner's trade pane; absent means OFF.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub trade_window_moonshot_zone: Option<bool>,
+    /// Hide the figures rail of the trade pane under the tuner's deal table; absent means
+    /// HIDDEN — the pane shares the tab with the table and the grid, and the chart is what it is
+    /// opened for. Apart from [`Self::trade_window_hide_rail`], which a window of its own keeps.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub analytics_trade_hide_rail: Option<bool>,
 
     /// Selected Profit Monitor period id.
     #[serde(default, deserialize_with = "de_lenient")]

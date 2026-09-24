@@ -28,6 +28,7 @@ mod segment;
 mod share;
 mod sound_folder;
 mod storage;
+pub(crate) use storage::trades_cleanup_startup;
 mod telegram;
 mod trade_sounds;
 
