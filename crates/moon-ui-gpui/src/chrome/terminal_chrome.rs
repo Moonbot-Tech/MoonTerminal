@@ -7,9 +7,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem,
-    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect, MoonSelectorPill,
-    MoonSelectorSegment, MoonSize, MoonTag, MoonWindowFrame, h_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonMenuItem, MoonPalette, MoonPopover,
+    MoonPopoverPlacement, MoonPopupMenu, MoonRect, MoonSelectorPill, MoonSelectorSegment, MoonSize,
+    MoonTag, MoonWindowFrame, h_flex,
 };
 use rust_i18n::t;
 
@@ -63,6 +63,7 @@ pub fn header(
     updater: Entity<crate::update::UpdateController>,
     shell: Entity<Shell>,
     ticker_sel: Option<(moon_core::session::CoreId, String)>,
+    workspace_mode_open: bool,
     core_selector_open: bool,
     core_settings_open: bool,
     core_settings_content: Option<AnyElement>,
@@ -183,7 +184,14 @@ pub fn header(
         )
         // Workspace mode is fixed chrome rather than dock content, so it remains reachable while
         // Auto independently controls which dock operations are allowed.
-        .child(design::chrome_section(cx).child(workspace_mode_selector(group, &backend, cx)))
+        .child(design::chrome_section(cx).child(workspace_mode_selector(
+            group,
+            &backend,
+            shell.clone(),
+            workspace_mode_open,
+            p,
+            cx,
+        )))
         .child(design::chrome_divider(cx, p))
         // Active trade core leads the trading context after the workspace preset. Balance, manual
         // strategy, and ticker all read through it. Interactive widgets are never a drag zone.
@@ -443,7 +451,7 @@ fn header_trade_mode_tag(emu_mode: Option<bool>) -> Option<AnyElement> {
     )
 }
 
-/// Build the persisted workspace-mode control as a compact two-item dropdown.
+/// Build the persisted workspace-mode control as a compact two-item picker.
 ///
 /// AUTO and MANUAL are two full modes rather than the two positions of one switch, so the header
 /// NAMES the current mode and lists both instead of showing a single labeled toggle: a toggle
@@ -451,23 +459,33 @@ fn header_trade_mode_tag(emu_mode: Option<bool>) -> Option<AnyElement> {
 /// workspaces needs. Only the naming moved — `WorkspaceMode` and everything persisted under it are
 /// unchanged, and selection still writes through the same `Backend::set_workspace_mode` authority.
 ///
-/// `MoonDropdown` rather than the `MoonSelectorPill` + `MoonPopover` pair the core selector uses
-/// below: that pattern parks its open state on `Shell`, which a two-item picker does not earn.
-/// The trigger is `Action`-sized like the header gear at :167 and takes a FIXED
-/// [`MODE_TRIGGER_W`] rather than a fitted range, so the two labels render at one width and the
-/// control cannot twitch as the mode changes — `fit_trigger_width` would clamp each label's own
-/// natural width into the range and give the two modes different widths.
+/// Built on the same `MoonSelectorPill` + controlled `MoonPopover` pair as [`core_selector`], with
+/// its open state on `Shell`, rather than on `MoonDropdown`: on macOS the dropdown in this header
+/// did nothing when used while the core selector beside it worked, so the mode control runs
+/// through the one popup path this header has proven on every platform. The trigger takes a
+/// FIXED `MODE_TRIGGER_W` rather than a fitted width, so the two labels render at one width and
+/// the control cannot twitch as the mode changes.
 ///
 /// Args:
 ///     group: Group whose preset is selected.
 ///     backend: Shared persisted workspace authority.
+///     shell: Shell that owns the picker's open state.
+///     open: Whether the picker menu is currently open.
+///     p: Active palette for the trigger label.
 ///     cx: Application context used to read the controlled mode.
 ///
 /// Returns:
-///     A compact MoonUI dropdown that publishes mode changes through `WorkspaceRevision`.
-fn workspace_mode_selector(group: &str, backend: &Entity<Backend>, cx: &App) -> impl IntoElement {
+///     The header mode picker; a pick publishes through `WorkspaceRevision` and closes the menu.
+fn workspace_mode_selector(
+    group: &str,
+    backend: &Entity<Backend>,
+    shell: Entity<Shell>,
+    open: bool,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
     /// Design-unit trigger width, FIXED rather than fitted: it holds the longer of the two SHORT
-    /// mode names (`MANUAL`) in every locale plus the component's own caret suffix and padding,
+    /// mode names (`MANUAL`) in every locale plus the pill's caret and padding,
     /// at the narrowest supported UI font, so neither mode truncates and neither is narrower
     /// than the other. The trigger shows only the bare name to keep the header short; the rows
     /// below spell out «… режим» / «… mode» because a menu has the room to say what it selects.
@@ -494,6 +512,7 @@ fn workspace_mode_selector(group: &str, backend: &Entity<Backend>, cx: &App) -> 
     };
     let backend = backend.clone();
     let group = group.to_string();
+    let item_shell = shell.clone();
     let items = crate::panels::radio_items(
         [
             (
@@ -513,28 +532,61 @@ fn workspace_mode_selector(group: &str, backend: &Entity<Backend>, cx: &App) -> 
             backend.update(app, |backend, backend_cx| {
                 backend.set_workspace_mode(&group, mode, backend_cx);
             });
+            item_shell.update(app, |shell, cx| {
+                shell.set_header_workspace_mode_open(false, cx);
+            });
         },
     );
+
+    // Same geometry rules as the core pill: `bounds` takes final pixels, while `height` and
+    // `radius` take design units that the pill scales itself.
+    let trigger_w = design::ui_value(cx, MODE_TRIGGER_W);
+    let trigger_h = design::action_control_h_value(cx);
+    let trigger_h_units = trigger_h / design::ui_value(cx, 1.0);
+    let pill = div()
+        .relative()
+        .flex_none()
+        .w(px(trigger_w))
+        .h(px(trigger_h))
+        .child(
+            MoonSelectorPill::new("header-workspace-mode-pill")
+                .bounds(MoonRect::new(0.0, 0.0, trigger_w, trigger_h))
+                .height(trigger_h_units)
+                .radius(trigger_h_units / 2.0)
+                .caret(true)
+                .segment(
+                    MoonSelectorSegment::new(label)
+                        .color(p.text)
+                        .weight(500.0)
+                        .font_size(design::body_font_base(cx, 0.0)),
+                )
+                .render(),
+        );
+
     div()
         .id("header-workspace-mode-tip")
-        // No family is set here on purpose. The mode name IS a caption and the rule would move it
-        // to the UI face, but `MoonDropdown` forces its trigger mono -- `DROPDOWN_TRIGGER_MONO`
-        // (MoonUI `moon/dropdown.rs:27`) reaches both the render (`dropdown/trigger.rs:494`) and
-        // the fitted-label measurement (`:471`, `:516`), with no builder override. Setting the
-        // family on this wrapper could not reach the trigger, so it would leave a font call that
-        // does nothing behind a comment claiming otherwise.
         .tooltip(crate::panels::common::text_tooltip(tooltip))
         .child(
-            MoonDropdown::new("header-workspace-mode")
-                .label(label)
-                .trigger_caret(true)
-                .trigger_variant(MoonButtonVariant::Soft)
-                .trigger_size(MoonButtonSize::density(cx))
-                .trigger_width_scaled(MODE_TRIGGER_W)
-                .menu_width_scaled(MODE_MENU_W)
-                .menu_size(MoonSize::Xs)
-                .items(items),
+            MoonPopover::new("header-workspace-mode")
+                .placement(MoonPopoverPlacement::BottomStart)
+                .fit_content()
+                .open(open)
+                .on_open_change(move |open, _, cx| {
+                    shell.update(cx, |shell, cx| {
+                        shell.set_header_workspace_mode_open(open, cx);
+                    });
+                })
+                .trigger(pill)
+                .content(
+                    MoonPopupMenu::new("header-workspace-mode-menu")
+                        .width_scaled(MODE_MENU_W)
+                        .size(MoonSize::Xs)
+                        .mono(true)
+                        .items(items)
+                        .render(),
+                ),
         )
+        .into_any_element()
 }
 
 /// Render the header ticker as `1 BTC = 61 333$ 1h +0.1% 24h +2.0%`.

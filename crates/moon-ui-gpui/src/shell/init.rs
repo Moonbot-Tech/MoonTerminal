@@ -574,6 +574,7 @@ impl Shell {
             modifier_watch: moon_ui::MoonHotkeyModifierWatch::default(),
             window_active: true,
             header_core_selector_open: false,
+            header_workspace_mode_open: false,
             core_settings_open: false,
             core_settings_target: None,
             core_settings_cancel_confirm: false,
