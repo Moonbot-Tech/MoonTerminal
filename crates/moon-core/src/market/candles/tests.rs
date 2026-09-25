@@ -1234,3 +1234,119 @@ fn coarse_row_is_not_offered_a_hole_narrower_than_its_timeframe() {
     );
     assert_eq!(out.len(), 2, "only the series survives: {out:?}");
 }
+
+/// Base volume is turnover divided by OHLC4, not by one extreme and not by the product.
+///
+/// Hand oracle: prices 1, 8, 2 and 5 sum to 16, so OHLC4 is 4 and 20 / 4 is 5. Close alone
+/// would give 4, and the high-low midpoint would give 4 as well.
+#[test]
+fn base_volume_is_turnover_divided_by_ohlc4() {
+    assert_eq!(estimate_base_volume(20.0, 1.0, 8.0, 2.0, 5.0), 5.0);
+}
+
+/// A quote-money wire figure stays the turnover, and the base field is the OHLC4 estimate.
+///
+/// Same prices as [`base_volume_is_turnover_divided_by_ohlc4`]: swapping the two fields, or
+/// estimating the turnover from the wire figure, yields (20, 80) rather than (5, 20).
+#[test]
+fn quote_wire_keeps_turnover_and_derives_base() {
+    assert_eq!(
+        split_wire_volume(20.0, 1.0, 8.0, 2.0, 5.0, true),
+        (5.0, 20.0)
+    );
+}
+
+/// An unusable quote-money wire figure must not reach the volume band as itself.
+///
+/// The true branch returns the wire figure verbatim. Dropping the finite guard, or returning
+/// the raw figure beside a zeroed estimate, leaves a NaN or a negative turnover in the quote slot.
+#[test]
+fn non_finite_quote_turnover_zeros_base_and_quote() {
+    assert_eq!(
+        split_wire_volume(f32::NAN, 1.0, 8.0, 2.0, 5.0, true),
+        (0.0, 0.0)
+    );
+    assert_eq!(
+        split_wire_volume(f32::INFINITY, 10.0, 10.0, 10.0, 10.0, true),
+        (0.0, 0.0)
+    );
+    assert_eq!(
+        split_wire_volume(-5.0, 10.0, 10.0, 10.0, 10.0, true),
+        (0.0, 0.0)
+    );
+}
+
+/// A base-money wire figure stays the base, including a negative one the quote estimate rejects.
+///
+/// Flat prices of 10 make the quote estimate exactly `8 * 10`. Folding the quote-wire guard onto
+/// this branch would turn the negative print into `(0, 0)` and hide that the source reported it.
+#[test]
+fn base_wire_keeps_the_reported_base_beside_its_quote_estimate() {
+    assert_eq!(
+        split_wire_volume(8.0, 10.0, 10.0, 10.0, 10.0, false),
+        (8.0, 80.0)
+    );
+    assert_eq!(
+        split_wire_volume(-3.0, 10.0, 10.0, 10.0, 10.0, false),
+        (-3.0, 0.0)
+    );
+}
+
+/// A dirty series suffix replaces only its own composed entries and leaves the coarse prefix.
+///
+/// The replaced closes are 20 and 30; the untouched series candle stays at 1 and the coarse
+/// candle stays at 9. Rewriting from the start, or refusing a clean tail, moves one of those.
+#[test]
+fn composed_tail_patch_rewrites_only_the_dirty_series_suffix() {
+    let tf = 60_000.0;
+    let coarse = candle(-5.0 * tf, 9.0, 9.0, 9.0, 9.0, 1.0);
+    let mut series = [
+        candle(0.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        candle(tf, 2.0, 2.0, 2.0, 2.0, 1.0),
+        candle(2.0 * tf, 3.0, 3.0, 3.0, 3.0, 1.0),
+    ];
+    let mut fill = vec![
+        (coarse, (5.0 * tf) as f32),
+        (series[0], tf as f32),
+        (series[1], tf as f32),
+        (series[2], tf as f32),
+    ];
+    series[1].close = 20.0;
+    series[2].close = 30.0;
+
+    let at = patch_composed_tail(&series, tf, 1, &mut fill);
+
+    assert_eq!(at, Some(2));
+    assert_eq!(fill.len(), 4);
+    assert_eq!(fill[0], (coarse, (5.0 * tf) as f32));
+    assert_eq!(fill[1].0.close, 1.0);
+    assert_eq!(fill[2].0.close, 20.0);
+    assert_eq!(fill[3].0.close, 30.0);
+    assert_eq!(fill[2].1, tf as f32);
+    assert_eq!(fill[3].1, tf as f32);
+}
+
+/// A filler inside the replaced suffix means the tail is not pure series, so the buffer stays.
+///
+/// Treating that filler as a series entry truncates through it and appends the dirty candles.
+#[test]
+fn composed_tail_patch_refuses_a_filler_inside_the_suffix() {
+    let tf = 60_000.0;
+    let series = [
+        candle(0.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        candle(tf, 2.0, 2.0, 2.0, 2.0, 1.0),
+        candle(2.0 * tf, 3.0, 3.0, 3.0, 3.0, 1.0),
+    ];
+    let coarse = candle(tf, 9.0, 9.0, 9.0, 9.0, 4.0);
+    let fill = vec![
+        (series[0], tf as f32),
+        (coarse, (5.0 * tf) as f32),
+        (series[2], tf as f32),
+    ];
+    let mut patched = fill.clone();
+
+    let at = patch_composed_tail(&series, tf, 1, &mut patched);
+
+    assert_eq!(at, None);
+    assert_eq!(patched, fill);
+}
