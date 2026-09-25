@@ -150,9 +150,9 @@ impl AnalyticsView {
             .into_any_element()
     }
 
-    /// Tick or untick every field the grid shows — the header's tick. Unticked is held at its
-    /// base value by the search, but for a value a switch the variant turns on needs
-    /// (`search::deps`).
+    /// Tick or untick every field the grid shows — the header's tick. Unticked is held by the
+    /// search at В1's value where В1 has one, else at the strategy's, but for a value a switch
+    /// the variant turns on needs (`search::deps`).
     fn ticks_set_all(&mut self, fields: &[&'static str], on: bool, cx: &mut Context<Self>) {
         for key in fields {
             if on {

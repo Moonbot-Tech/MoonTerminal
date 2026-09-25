@@ -340,7 +340,8 @@ pub(in crate::analytics) struct TicksState {
     /// The placeholder each range cell's box was last given, by its id in `inputs` — set again
     /// only when what the search takes there moved (`ranges.rs`).
     pub(in crate::analytics::tuner) placeholders: HashMap<String, String>,
-    /// Unticked rows: held at base by the search, bar what a switch it turns on needs. Persisted.
+    /// Unticked rows: held by the search at В1's value where В1 has one, else at the strategy's,
+    /// bar what a switch it turns on needs. Persisted.
     pub(in crate::analytics::tuner) locked: HashSet<String>,
     /// The search ranges typed over the automatic ones, by field key; a field absent is fully
     /// automatic. Persisted.

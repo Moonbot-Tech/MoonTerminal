@@ -26,7 +26,6 @@ fn a_search_of_one_field_lands_the_values_it_completed() {
     let mut v1 = cells(&[("SellPrice", "1.5"), ("StopLoss", "-3")]);
     land_answer(
         &mut v1,
-        Some("UseTakeProfit"),
         &answer(&[("TakeProfit", "1"), ("UseTakeProfit", "YES")]),
     );
     assert_eq!(
@@ -44,14 +43,18 @@ fn a_search_of_one_field_lands_the_values_it_completed() {
 #[test]
 fn a_field_left_at_its_base_keeps_what_v1_had() {
     let mut v1 = cells(&[("SellPrice", "1.5")]);
-    land_answer(&mut v1, Some("SellPrice"), &[]);
+    land_answer(&mut v1, &[]);
     assert_eq!(v1, cells(&[("SellPrice", "1.5")]));
 }
 
-/// "Search all" replaces В1 with its answer.
+/// "Search all" lays its answer over В1 and never empties it (the developer, 2026-09-25): a
+/// search runs from В1 as it stands, so a cell it did not move is still В1's, and В1 is cleared
+/// only by the user.
 #[test]
-fn a_search_of_every_field_replaces_v1() {
+fn a_search_of_every_field_keeps_what_v1_had() {
     let mut v1 = cells(&[("SellPrice", "1.5"), ("StopLoss", "-3")]);
-    land_answer(&mut v1, None, &answer(&[("SellPrice", "2")]));
-    assert_eq!(v1, cells(&[("SellPrice", "2")]));
+    land_answer(&mut v1, &answer(&[("SellPrice", "2")]));
+    assert_eq!(v1, cells(&[("SellPrice", "2"), ("StopLoss", "-3")]));
+    land_answer(&mut v1, &[]);
+    assert_eq!(v1, cells(&[("SellPrice", "2"), ("StopLoss", "-3")]));
 }

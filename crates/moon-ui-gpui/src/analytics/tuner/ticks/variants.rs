@@ -239,7 +239,8 @@ impl AnalyticsView {
         )
     }
 
-    /// "Search all": every ticked field of the groups the gate lets through, into В1.
+    /// "Search all": every ticked field of the groups the gate lets through, from В1 as it
+    /// stands and into it ([`land_answer`]).
     pub(in crate::analytics::tuner) fn ticks_suggest(
         &mut self,
         window: &mut Window,
@@ -306,9 +307,11 @@ impl AnalyticsView {
             return self.ticks_search_refused("analytics.ticks.sugg_one_kind", cx);
         };
         let model = super::model_cfg::current();
-        // Laid over every deal's own strategy before the search's point: nothing for a search
-        // of every field, В1's other fields for a search of one.
-        let mut held: HashMap<String, String> = HashMap::new();
+        // Laid over every deal's own strategy before the search's point: В1 as it stands,
+        // whatever is searched (the developer, 2026-09-25). A search runs on from what the
+        // earlier ones found — В1's fields are its base, its unticked ones held at В1's value —
+        // not from the strategy as if В1 were empty.
+        let held: HashMap<String, String> = self.ticks.variant_changes().into_iter().collect();
         let (vary_entry, vary_exit, locked) = match only {
             None => (
                 self.ticks_group_searchable(ParamGroup::Entry),
@@ -325,9 +328,6 @@ impl AnalyticsView {
                 if !self.ticks_group_searchable(field.group) {
                     return self.ticks_search_refused("analytics.ticks.sugg_gated", cx);
                 }
-                // The other fields as В1 has them: the one field is searched in the variant it
-                // will land in, not in the strategy as it stands.
-                held.extend(self.ticks.variant_changes());
                 let locked: HashSet<String> = TICK_PARAMS
                     .iter()
                     .map(|f| f.key)
@@ -440,7 +440,7 @@ impl AnalyticsView {
                 this.ticks.sugg = SuggState::Idle;
                 match result {
                     Ok(result) => {
-                        land_answer(&mut this.ticks.variant, only, &result.values);
+                        land_answer(&mut this.ticks.variant, &result.values);
                         this.ticks_reset_variant_inputs();
                         this.ticks.last_seed = Some(result.seed);
                         this.ticks.last_result = Some(result);
@@ -641,21 +641,18 @@ impl AnalyticsView {
     }
 }
 
-/// Lay a search's answer into В1. A search of every field replaces В1 with it. A search of one
-/// field lays its cells over В1's: the searched field, and every value the answer completed for a
-/// switch it turned on (`search::deps` — `UseTakeProfit` brings its `TakeProfit`), which the
-/// search scored and Save must write with it; the search locked every other field, so nothing
-/// else moves, and a field it left at its base keeps what В1 had.
+/// Lay a search's answer over В1 — a search of one field or of every one alike. Every search runs
+/// from В1 as it stands (`ticks_start_search`), and the answer holds what it moved off that: the
+/// searched fields, and every value it completed for a switch it turned on (`search::deps` —
+/// `UseTakeProfit` brings its `TakeProfit`), which the search scored and Save must write with
+/// it. A field it left where В1 had it is not in the answer and keeps В1's cell. В1 is never
+/// emptied here: only the user clears it (the developer, 2026-09-25).
 ///
 /// Args:
 ///     v1: В1's cells.
-///     only: The searched field, for a search of one.
 ///     values: The answer ([`SearchResult::values`](moon_core::db::tuner::ticks::search::SearchResult)).
-fn land_answer(v1: &mut HashMap<String, String>, only: Option<&str>, values: &[(String, String)]) {
-    match only {
-        None => *v1 = values.iter().cloned().collect(),
-        Some(_) => v1.extend(values.iter().cloned()),
-    }
+fn land_answer(v1: &mut HashMap<String, String>, values: &[(String, String)]) {
+    v1.extend(values.iter().cloned());
 }
 
 /// The status band's account of the last search: restarts, the winning one, its passes and

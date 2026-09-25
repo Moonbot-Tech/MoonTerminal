@@ -111,8 +111,9 @@ pub fn common_horizon_ms(deals: &[PreparedDeal]) -> Option<i64> {
 /// What one search varies and how.
 pub struct SearchParams<'a> {
     /// Values held over every deal's own base ([`PreparedDeal::own`]) before the point is laid
-    /// on — the variant's edits when one field is searched in it (the searched field among
-    /// them, which the point then overrides); empty otherwise.
+    /// on — the axis passes the variant's edits for every search, so a search runs on from what
+    /// the earlier ones found (the searched fields among them, which the point then overrides).
+    /// Empty searches from the strategies as they stand.
     pub held: &'a HashMap<String, String>,
     /// Schema defaults for the keys a deal's base leaves out.
     pub defaults: &'a HashMap<String, f64>,
