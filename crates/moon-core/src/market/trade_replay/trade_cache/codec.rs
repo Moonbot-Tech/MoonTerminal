@@ -40,6 +40,16 @@ const LEVEL: u32 = 6;
 /// the busiest harvest is a few hundred thousand — and trusting it would size an allocation.
 const MAX_PRINTS: u64 = 50_000_000;
 
+/// Most bytes deflate can expand one compressed byte into (zlib's technical notes: a stream of
+/// one repeated byte, 258-byte matches at two bits each, peaks at 1032:1). What bounds a blob's
+/// inflated size by the blob's own length rather than by the header it carries.
+const MAX_DEFLATE_RATIO: usize = 1032;
+
+/// Bytes reserved up front per packed byte when inflating. The columns inflate to about three
+/// times their packed size (11 bytes a print against 3.9); twice more leaves a real span one
+/// allocation, and a blob that claims more grows the buffer only as its stream yields bytes.
+const RESERVE_PER_PACKED_BYTE: usize = 8;
+
 /// Why a packed blob did not decode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum DecodeError {
@@ -47,10 +57,14 @@ pub(super) enum DecodeError {
     Header,
     /// The header claims more prints than any span this store writes.
     TooMany(u64),
+    /// The header claims more prints than the blob's compressed stream can inflate to.
+    Unholdable(u64),
     /// The compressed stream is damaged.
     Inflate(String),
     /// The stream decoded to the wrong number of bytes for its print count.
     Length,
+    /// The stream inflates past the most its print count can take.
+    TooLong,
 }
 
 impl std::fmt::Display for DecodeError {
@@ -58,8 +72,10 @@ impl std::fmt::Display for DecodeError {
         match self {
             Self::Header => write!(f, "no print count"),
             Self::TooMany(n) => write!(f, "claims {n} prints"),
+            Self::Unholdable(n) => write!(f, "claims {n} prints, more than the blob can hold"),
             Self::Inflate(e) => write!(f, "inflate: {e}"),
             Self::Length => write!(f, "columns shorter than the print count"),
+            Self::TooLong => write!(f, "columns longer than the print count"),
         }
     }
 }
@@ -150,10 +166,32 @@ pub(super) fn decode(blob: &[u8]) -> Result<Vec<Tick>, DecodeError> {
     if n == 0 {
         return Ok(Vec::new());
     }
-    let mut raw = Vec::with_capacity(n * 11 + n / 8 + 1);
+    // Nothing below is sized off the header alone: a row damaged after it was written may claim
+    // any count up to `MAX_PRINTS`. The columns take at least one stamp byte, eight fixed bytes
+    // and a side bit per print, at most ten stamp bytes; and the stream cannot inflate past what
+    // deflate makes of this blob's own length. A count those bounds cannot hold is refused
+    // outright; the inflate stops one byte past the most the count can take; and the buffer is
+    // reserved off the blob's length, growing only as the stream actually yields bytes.
+    let side_bytes = n.div_ceil(8);
+    let least = n * 9 + side_bytes;
+    let most = n * 18 + side_bytes;
+    let packed = blob.len() - head;
+    if least > packed.saturating_mul(MAX_DEFLATE_RATIO) {
+        return Err(DecodeError::Unholdable(n as u64));
+    }
+    let mut raw = Vec::with_capacity(
+        (n * 11 + side_bytes).min(packed.saturating_mul(RESERVE_PER_PACKED_BYTE)),
+    );
     DeflateDecoder::new(&blob[head..])
+        .take(most as u64 + 1)
         .read_to_end(&mut raw)
         .map_err(|e| DecodeError::Inflate(e.to_string()))?;
+    if raw.len() > most {
+        return Err(DecodeError::TooLong);
+    }
+    if raw.len() < least {
+        return Err(DecodeError::Length);
+    }
     let mut pos = 0usize;
     let mut stamps = Vec::with_capacity(n);
     let mut prev = 0i64;
