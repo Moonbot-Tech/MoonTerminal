@@ -13,8 +13,9 @@
 //! `MOON_TICKS_LATENCY_BASE_MS` with that plus each core's archived round trip, the entry's only
 //! unless `MOON_TICKS_LATENCY_EXIT` is set; `MOON_TICKS_PATH_DEBUG` prints each order's modelled
 //! and archived path; `MOON_TICKS_VARIANT="Key=value,…"` replays each deal under those values laid
-//! over its own and prints the line it walked); the application never moves its data root on a
-//! variable.
+//! over its own and prints the line it walked; `MOON_TICKS_SEARCH=<kind>` runs the search over
+//! that kind's fit deals, the Delta Modifiers section alone, and prints what it found); the
+//! application never moves its data root on a variable.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -36,6 +37,8 @@ use crate::feed::report_traces::ArchivedLineKind;
 use crate::market::kline_cache::KlineCache;
 use crate::market::trade_replay::{Coverage, TickQuery, long_position_ms, query_held};
 use crate::symbol::{coin_match_key, coin_of_market};
+
+mod search;
 
 /// One trade's d1m and d5m errors at the report's stamp (`StampCheck::error`).
 type ShortErrors = (Option<f64>, Option<f64>);
@@ -636,6 +639,8 @@ fn real_data_reproduction() {
     let partners = partners_of(&read.deals, &venue_of_core, &keys, &defaults);
     let mut partner_tally = PartnerTally::default();
     let (mut own_sum, mut fact_sum) = (0.0f64, 0.0f64);
+    let search_kind = std::env::var("MOON_TICKS_SEARCH").ok();
+    let mut searched: Vec<search::PreparedDeal> = Vec::new();
     for mut deal in read.deals {
         *kinds_seen.entry(deal.kind.clone()).or_default() += 1;
         // Every kind the axis takes, as the table does: a kind without an entry model replays
@@ -1088,6 +1093,15 @@ fn real_data_reproduction() {
             own.exit.map(|e| e.t_ms - deal.close_ms),
             round3(fact),
         );
+        // `MOON_TICKS_SEARCH=<kind>`: the fit deals of that kind go to a search after the loop.
+        if fit && search_kind.as_deref() == Some(deal.kind.as_str()) {
+            searched.push(search::prepared(
+                &deal,
+                &ticks,
+                entry_line.as_deref(),
+                &values,
+            ));
+        }
         if fit {
             fit_n += 1;
             if let (Some(own), Some(fact)) = (own.profit_pct, fact) {
@@ -1139,6 +1153,9 @@ fn real_data_reproduction() {
             exit_n += 1;
             exit_hits += usize::from(ok);
         }
+    }
+    if let Some(kind) = &search_kind {
+        search::run(searched, kind, &defaults);
     }
     eprintln!("kinds: {kinds_seen:?}");
     eprintln!(

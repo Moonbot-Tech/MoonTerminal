@@ -198,6 +198,29 @@ const GRID_TRAILING: &[f64] = &[
 const GRID_TRAILING_EMA: &[f64] = &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0];
 /// `TakeProfit` of the trailing, per cent off the buy: live 1, 2, 2.5 and 5.
 const GRID_TAKE_PROFIT: &[f64] = &[0.2, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 5.0, 10.0];
+/// `SellModifier`, per cent of the sell's price per one per cent of the summed deltas: live 0.03
+/// to 1.5 among the 201 strategies of 1 423 that set it (2026-09-25; 0.5 at 114 of them). Below
+/// zero a volatile coin's sell comes nearer the entry, which the core allows.
+const GRID_SELL_MODIFIER: &[f64] = &[
+    -0.5, -0.3, -0.2, -0.1, -0.05, 0.0, 0.03, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.75, 1.0,
+    1.5,
+];
+/// `StopLossModifier`: live 0.2 at 139 of 150 strategies, −0.3 and −0.1 at the rest.
+const GRID_STOP_MODIFIER: &[f64] = &[
+    -0.5, -0.3, -0.2, -0.1, -0.05, 0.0, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0,
+];
+/// `MaxModifier`, per cent of summed deltas; 0 caps nothing. Live 10 to 1 000 (30 at 47 of 127);
+/// the small steps are what lets a cap bite on a quiet coin.
+const GRID_MAX_MODIFIER: &[f64] = &[
+    0.0, 1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 100.0, 130.0, 200.0, 1000.0,
+];
+/// The `Add*` terms of the Delta Modifiers tab, per one per cent of their delta: live from 0.002
+/// (`Add3hDelta`) to 3 (`Add1minDelta`), none below zero (2026-09-25). The sum is taken as a
+/// magnitude, so a single term's sign moves nothing.
+const GRID_DELTA_ADD: &[f64] = &[
+    0.0, 0.001, 0.002, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0,
+    1.5, 2.0, 3.0,
+];
 
 /// Every parameter of the axis, grid order: the Entry group first, then Exit.
 pub const TICK_PARAMS: &[TickParam] = &[
@@ -452,7 +475,54 @@ pub const TICK_PARAMS: &[TickParam] = &[
     exit_num("TrailingEMA", ParamSection::Stops, GRID_TRAILING_EMA),
     exit_bool("UseTakeProfit", ParamSection::Stops),
     exit_num("TakeProfit", ParamSection::Stops, GRID_TAKE_PROFIT),
+    // The Delta Modifiers section: one capped sum of the trade's deltas, spent on the sell and on
+    // the stop (`exit::delta_mods`). It is a product, and the search walks it as one
+    // (`search::coupled`). `BuyModifier` and `DetectModifier` move the entry and the detect,
+    // which the model takes from the fact for every kind but MoonShot, whose core ignores them.
+    exit_num(
+        "SellModifier",
+        ParamSection::DeltaModifiers,
+        GRID_SELL_MODIFIER,
+    ),
+    exit_num(
+        "StopLossModifier",
+        ParamSection::DeltaModifiers,
+        GRID_STOP_MODIFIER,
+    ),
+    TickParam {
+        key: "MaxModifier",
+        group: ParamGroup::Exit,
+        section: ParamSection::DeltaModifiers,
+        kind: ParamKind::Num {
+            grid: GRID_MAX_MODIFIER,
+        },
+        kinds: ANY,
+        // One field, two families: a MoonShot's cap also bounds its `MShotAdd*` corridor
+        // (`mshot_params`), so turning it in an Exit search would move the entry the search
+        // leaves alone, past every corridor guard. There it stays at the strategy's value.
+        not_kinds: MSHOT,
+    },
+    delta_add("Add1minDelta"),
+    delta_add("Add5minDelta"),
+    delta_add("Add15minDelta"),
+    delta_add("AddHourlyDelta"),
+    delta_add("Add3hDelta"),
+    delta_add("Add24hDelta"),
+    delta_add("AddMarketDelta"),
+    delta_add("AddMarket24Delta"),
+    delta_add("AddBTCDelta"),
+    delta_add("AddBTC5mDelta"),
+    delta_add("AddBTC1mDelta"),
+    delta_add("AddMarkDelta"),
+    delta_add("AddPump1h"),
+    delta_add("AddDump1h"),
+    delta_add("AddPriceBug"),
 ];
+
+/// An `Add*` term of the Delta Modifiers section.
+const fn delta_add(key: &'static str) -> TickParam {
+    exit_num(key, ParamSection::DeltaModifiers, GRID_DELTA_ADD)
+}
 
 /// A numeric field of the Exit group every kind understands.
 const fn exit_num(key: &'static str, section: ParamSection, grid: &'static [f64]) -> TickParam {
@@ -498,14 +568,12 @@ pub fn params_for<'k>(
 /// while every test passed.
 ///
 /// `HookSellFixed` is here because it is not a knob (the branch it selects is not modelled) but
-/// its value decides whether the take is known at all; the `Add*` family and its two
-/// coefficients are here because they move the level of every kind, and none of them is
-/// something the search should turn.
+/// its value decides whether the take is known at all. The Delta Modifiers section is a knob
+/// since 2026-09-25, all but `MaxModifier` on a MoonShot, which the grid draws fixed there
+/// (see its [`TICK_PARAMS`] entry) — so it is listed here as well.
 const MODEL_ONLY_KEYS: &[&str] = &[
     "HookSellFixed",
-    "SellModifier",
     "MaxModifier",
-    "StopLossModifier",
     // The stop's trigger (see `ExitParams::fast_stop_loss`): read with the strategy's value, no
     // knob.
     "FastStopLoss",
@@ -513,21 +581,6 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     // core's own spelling of the field.
     "PumpMoveTimer",
     "PumpMovePersent",
-    "Add1minDelta",
-    "Add5minDelta",
-    "Add15minDelta",
-    "AddHourlyDelta",
-    "Add3hDelta",
-    "Add24hDelta",
-    "AddMarkDelta",
-    "AddPriceBug",
-    "AddBTCDelta",
-    "AddBTC1mDelta",
-    "AddBTC5mDelta",
-    "AddMarketDelta",
-    "AddMarket24Delta",
-    "AddPump1h",
-    "AddDump1h",
     // The corridor family's one modifier the grid does not offer (no live strategy sets it).
     "MShotAdd5sDelta",
 ];
@@ -544,6 +597,20 @@ const RULE_SWITCH_KEYS: &[&str] = &[
     "IgnoreSellSpread",
 ];
 
+/// Exit fields the entry model reads as well: a MoonShot's `MaxModifier` caps its `MShotAdd*`
+/// corridor too ([`mshot_params`]).
+const ENTRY_SHARED_KEYS: &[&str] = &["MaxModifier"];
+
+/// Whether writing `key` can move a MoonShot's entry corridor — an Entry field, or an Exit field
+/// the entry model reads too. What a write's corridor warning keys on: the group alone misses
+/// `MaxModifier`, which a mixed-kind scope offers as a knob and Save writes to every strategy.
+pub fn moves_entry(key: &str) -> bool {
+    ENTRY_SHARED_KEYS.contains(&key)
+        || TICK_PARAMS
+            .iter()
+            .any(|f| f.key == key && f.group == ParamGroup::Entry)
+}
+
 /// Whether the models read `key` from the strategy without the grid offering it as a knob —
 /// the grid draws such a field as fixed rather than as outside the model.
 pub fn is_model_only(key: &str) -> bool {
@@ -551,15 +618,21 @@ pub fn is_model_only(key: &str) -> bool {
 }
 
 /// Every field name the models read — [`TICK_PARAMS`], [`MODEL_ONLY_KEYS`] and the switches of
-/// the rules they do not have ([`RULE_SWITCH_KEYS`]) — for a `strategy_current_values` read.
+/// the rules they do not have ([`RULE_SWITCH_KEYS`]) — for a `strategy_current_values` read,
+/// each once: a knob for some kinds is model-only for others (`MaxModifier`).
 pub fn param_keys() -> Vec<String> {
-    TICK_PARAMS
+    let mut keys: Vec<String> = Vec::new();
+    for key in TICK_PARAMS
         .iter()
         .map(|p| p.key)
         .chain(MODEL_ONLY_KEYS.iter().copied())
         .chain(RULE_SWITCH_KEYS.iter().copied())
-        .map(str::to_string)
-        .collect()
+    {
+        if !keys.iter().any(|k| k == key) {
+            keys.push(key.to_string());
+        }
+    }
+    keys
 }
 
 /// Strategy values as `strategy_current_values` hands them (strings, `YES`/`NO` booleans) plus

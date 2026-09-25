@@ -215,8 +215,10 @@ struct Walked {
 /// grid, keeping any value that beats the score; a pass that moves no single field then tries
 /// the pairs — one field of `pairs` a step down, another a step up — so a distance shared
 /// between two fields can move from one to the other, which no single move reaches when each
-/// alone makes the score worse or breaks a corridor rule. The walk ends when a pass moves
-/// nothing, or at `max_passes`.
+/// alone makes the score worse or breaks a corridor rule. The Delta Modifiers section is a
+/// product ([`coupled`]): a field of it that moves nothing at the point is not scanned, and the
+/// same stalled pass walks each (coefficient, term) pair stuck at zero along a diagonal of their
+/// grids. The walk ends when a pass moves nothing, or at `max_passes`.
 ///
 /// Returns:
 ///     Where it stopped, or `None` when the run was stopped.
@@ -225,6 +227,7 @@ fn descend(
     mut point: Point,
     order: &[&'static TickParam],
     pairs: &[&'static TickParam],
+    coupling: &coupled::Coupling<'_>,
     start: &HashMap<&'static str, usize>,
     evaluate: &(dyn Fn(&Point) -> Option<Tally> + Sync),
     min_n: i64,
@@ -240,6 +243,9 @@ fn descend(
             if handle.is_cancelled() {
                 handle.note_abandoned();
                 return None;
+            }
+            if coupling.inert(field, &point) {
+                continue;
             }
             let mut current = point.get(field.key).cloned();
             for index in 0..arity(&field.kind) {
@@ -294,6 +300,23 @@ fn descend(
                         restore(&mut point, down.key, was_down);
                         restore(&mut point, up.key, was_up);
                     }
+                }
+            }
+            for (coefficient, term) in coupling.stuck(&point) {
+                // A path walked earlier in this pass may have freed the pair.
+                if !coupling.is_stuck(coefficient, term, &point) {
+                    continue;
+                }
+                for path in coupled::Coupling::diagonals(coefficient, term) {
+                    improved |= coupled::walk_path(
+                        &mut point,
+                        (coefficient, term),
+                        &path,
+                        evaluate,
+                        &mut score,
+                        min_n,
+                        handle,
+                    )?;
                 }
             }
         }
@@ -783,10 +806,14 @@ pub fn suggest(
         std::sync::atomic::AtomicUsize::new(0),
         std::sync::atomic::AtomicUsize::new(0),
     );
-    let evaluate = |point: &Point| -> Option<Tally> {
-        // Every number field the point switches on stands at a value (`deps`).
+    // Every number field the point switches on stands at a value (`deps`).
+    let per_base_at = |point: &Point| {
         let full = deps.complete(point, &bases.owns, params.held, params.defaults);
-        let per_base = bases.params(params.held, params.defaults, &full, params.kind, model);
+        bases.params(params.held, params.defaults, &full, params.kind, model)
+    };
+    let coupling = coupled::Coupling::of(&fields, &per_base_at);
+    let evaluate = |point: &Point| -> Option<Tally> {
+        let per_base = per_base_at(point);
         // A point that inverts the corridor's two fields is never proposed, whatever the
         // switch: the searched fields are gridded one by one, and nothing else ties them. Only
         // a search of the Entry group can produce one — an Exit search leaves the strategy's
@@ -843,7 +870,7 @@ pub fn suggest(
                     perturb(&mut point, &order, &start, &mut state);
                 }
                 let walked = descend(
-                    point, &order, &pairs, &start, &evaluate, min_n, max_passes, handle,
+                    point, &order, &pairs, &coupling, &start, &evaluate, min_n, max_passes, handle,
                 )?;
                 handle.record_restart();
                 Some(Run {
@@ -1138,6 +1165,7 @@ fn point_of(values: &[(String, String)]) -> Point {
 
 mod closing;
 pub use self::closing::unguarded_strategies;
+mod coupled;
 mod deps;
 
 #[cfg(test)]

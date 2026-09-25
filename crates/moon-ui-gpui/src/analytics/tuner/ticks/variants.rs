@@ -28,7 +28,7 @@ use super::tape::{PendingDeal, prepare_sample};
 use crate::analytics::bg::ReadLane;
 use moon_core::db::tuner::threshold_search::SearchHandle;
 use moon_core::db::tuner::ticks::TICK_PARAMS;
-use moon_core::db::tuner::ticks::params::ParamGroup;
+use moon_core::db::tuner::ticks::params::{self, ParamGroup};
 use moon_core::db::tuner::ticks::search::{
     DEFAULT_MAX_PASSES, SearchMiss, SearchParams, check_corridors, suggest, train_len,
     variant_tally_by_deal,
@@ -575,18 +575,15 @@ impl AnalyticsView {
     /// judged on a sample without the spikes such an order would catch, so the dialog says on
     /// how many trades it does. Over the rows the columns and the search replay, each on its
     /// strategy's current values as they take them, so "M" is the column's "by N"; and only
-    /// for a variant that moves an Entry field — one that leaves the corridor alone moves
-    /// nothing a warning could be about.
+    /// for a variant that moves an Entry field or `MaxModifier`, which caps the corridor too
+    /// (`params::moves_entry`) — one that leaves the corridor alone moves nothing a warning
+    /// could be about.
     fn ticks_change_warnings(
         &self,
         changes: &[(String, String)],
         cx: &Context<Self>,
     ) -> Vec<String> {
-        let moves_entry = changes.iter().any(|(key, _)| {
-            TICK_PARAMS
-                .iter()
-                .any(|f| f.key == key && f.group == ParamGroup::Entry)
-        });
+        let moves_entry = changes.iter().any(|(key, _)| params::moves_entry(key));
         let Some(data) = self.ticks.data.data().filter(|_| moves_entry) else {
             return Vec::new();
         };
