@@ -2,8 +2,19 @@
 //!
 //! Survives close and reopen of the window while this process is running. Deliberately not
 //! serialized: a full application restart still opens the window from construction defaults.
+//! In Auto, a close of at least fifteen minutes drops expansion before that restore; see
+//! [`strategies_reopen_collapses`].
+
+use std::time::{Duration, SystemTime};
+
+use moon_core::config::WorkspaceMode;
+use moon_core::session::CoreId;
 
 use super::*;
+
+/// How long a closed Strategies window must stay shut, in Auto, before the next open
+/// drops tree expansion. Fixed: there is no setting.
+pub(super) const STRATEGIES_IDLE_COLLAPSE: Duration = Duration::from_secs(15 * 60);
 
 /// Restorable Strategies browsing state for the current process only.
 #[derive(Clone, Default)]
@@ -69,3 +80,80 @@ impl StrategiesSessionState {
         }
     }
 }
+
+/// Elapsed time since the Strategies window closed, or `None` when it has not.
+///
+/// A backwards wall clock yields `None` so the next open keeps the snapshot instead of
+/// treating the jump as a long idle gap.
+///
+/// Args:
+///     closed_at: Wall clock stamped when the window last released, or `None` while it
+///         is open or has never closed in this process.
+///     now: Wall clock at the moment of the reopen.
+///
+/// Returns:
+///     The non-negative gap, or `None` when there is no close to measure.
+pub(super) fn strategies_closed_for(
+    closed_at: Option<SystemTime>,
+    now: SystemTime,
+) -> Option<Duration> {
+    closed_at.and_then(|closed| now.duration_since(closed).ok())
+}
+
+/// Whether this reopen should drop Strategies tree expansion.
+///
+/// Auto and a close of at least [`STRATEGIES_IDLE_COLLAPSE`] collapses. A shorter close
+/// keeps the snapshot. Classic always keeps it. `None` means the window has not closed
+/// in this process, which also keeps the snapshot.
+///
+/// Args:
+///     mode: Workspace preset the singleton window is opening under.
+///     closed_for: Time since the window last closed, from [`strategies_closed_for`].
+///
+/// Returns:
+///     `true` when expansion and folder selection should be discarded.
+pub(super) fn strategies_reopen_collapses(
+    mode: WorkspaceMode,
+    closed_for: Option<Duration>,
+) -> bool {
+    mode == WorkspaceMode::AutoTrading
+        && closed_for.is_some_and(|elapsed| elapsed >= STRATEGIES_IDLE_COLLAPSE)
+}
+
+/// Drop expansion and the folder selection that only makes sense while those nodes are open.
+///
+/// Search text, kind, side, and exchange filters stay. Strategy selection stays: it is
+/// not expansion, and the parameter pane can still show it. Empty UI folders stay: they
+/// are tree structure, not an open/closed bit. Tree scroll is not in this snapshot; the
+/// window builds a fresh tree on every open. The active-only filter lives on layout
+/// prefs, not here, so this function cannot touch it.
+///
+/// Args:
+///     state: Browsing snapshot about to be restored into a new window.
+pub(super) fn collapse_strategies_expansion(state: &mut StrategiesSessionState) {
+    state.expanded_cores.clear();
+    state.expanded_folders.clear();
+    state.expanded_deleted.clear();
+    state.folder_sel.clear();
+    state.folder_anchor = None;
+}
+
+/// The Auto rail overlay to open with.
+///
+/// A normal open seeds the selected core. An idle collapse opens with every core row
+/// shut, so the overlay is `None` even when the rail has a selection. `rail_seen_core`
+/// is a different field and still records that selection, so a later revision of the
+/// same rail does not treat the collapse as a move and open the row again.
+///
+/// Args:
+///     collapse: Whether [`strategies_reopen_collapses`] dropped the saved expansion.
+///     rail_seed: The core `rail_seed_core` would open on an ordinary reopen.
+///
+/// Returns:
+///     The overlay to store in `rail_expanded_core`.
+pub(super) fn rail_overlay_on_open(collapse: bool, rail_seed: Option<CoreId>) -> Option<CoreId> {
+    if collapse { None } else { rail_seed }
+}
+
+#[cfg(test)]
+mod tests;
