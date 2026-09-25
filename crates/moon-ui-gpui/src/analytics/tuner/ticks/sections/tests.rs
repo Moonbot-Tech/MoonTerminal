@@ -252,3 +252,34 @@ fn a_strategy_id_past_i64_max_is_the_reports_negative_one() {
     assert!(same_strategy(42, 42));
     assert!(!same_strategy(42, 43));
 }
+
+/// A section holding knobs of both groups marks the fewer: MoonShot's Strategy settings carry the
+/// entry corridor and two exit fields; a section of one group, or split evenly, marks none.
+#[test]
+fn the_odd_group_of_a_mixed_section_is_the_fewer() {
+    let knobs = scope_knobs(&["MoonShot".to_string()]);
+    let out = layout(&[], &knobs, &HashSet::new());
+    let strategy = find(&out, ParamSection::StrategySettings);
+    assert!(keys(strategy).contains(&"MShotSellPriceAdjust"));
+    assert!(keys(strategy).contains(&"MShotPrice"));
+    assert_eq!(strategy.minority_group(), Some(ParamGroup::Exit));
+    assert_eq!(find(&out, ParamSection::Stops).minority_group(), None);
+    // An even split has no odd one out.
+    let even = GridSection {
+        section: ParamSection::StrategySettings,
+        rows: ["MShotPrice", "MShotSellPriceAdjust"]
+            .iter()
+            .map(|key| {
+                let param = moon_core::db::tuner::ticks::TICK_PARAMS
+                    .iter()
+                    .find(|p| p.key == *key)
+                    .expect("a knob");
+                GridRow {
+                    key: key.to_string(),
+                    role: RowRole::Knob(param),
+                }
+            })
+            .collect(),
+    };
+    assert_eq!(even.minority_group(), None);
+}

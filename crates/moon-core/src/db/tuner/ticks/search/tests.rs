@@ -180,6 +180,22 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
     assert_eq!(exit.kind, crate::db::tuner::ticks::ExitKind::Take);
     assert!((exit.price - 101.0).abs() < 1e-6, "{exit:?}");
     assert!((outcome.profit_pct.expect("a trade") - 1.0).abs() < 1e-6);
+    // The sell's path from the fill: placed no earlier than the fill, standing at the take the
+    // exit closed on when it closed.
+    let fill_ms = outcome.fill.expect("a fill").t_ms;
+    let first = picture.sell_line.first().expect("a sell line");
+    assert!(first.t_ms >= fill_ms, "{:?}", picture.sell_line);
+    let last = picture
+        .sell_line
+        .iter()
+        .rev()
+        .find(|point| point.t_ms <= exit.t_ms)
+        .expect("a level at the close");
+    assert!(
+        (last.price - exit.price).abs() < 1e-6,
+        "{:?}",
+        picture.sell_line
+    );
     // And the deal table's plan column: every deal's money, summing to the column's tally.
     let (by_tally, by_spent, money) = variant_tally_by_deal(
         &deals,

@@ -276,6 +276,7 @@ impl TradeWindowView {
                 show_other_trades: self.show_other_trades,
                 fit_trade: self.fit_trade,
                 hide_rail: self.hide_rail,
+                show_labels: self.show_labels,
                 load_ticks: self.load_ticks,
                 show_corridor: self.show_corridor,
             },
@@ -306,6 +307,7 @@ struct WindowSwitches {
     show_other_trades: bool,
     fit_trade: bool,
     hide_rail: bool,
+    show_labels: bool,
     load_ticks: bool,
     show_corridor: bool,
 }
@@ -370,6 +372,17 @@ fn render_settings_popup(
             .on_change(move |hide: &bool, _w, app| {
                 let hide = *hide;
                 entity.update(app, |this, cx| this.set_hide_rail(hide, cx));
+            })
+    };
+
+    let labels_cb = {
+        let entity = entity.clone();
+        MoonCheckbox::new("trade-window-labels")
+            .label(t!("trade_window.settings.show_labels").to_string())
+            .checked(switches.show_labels)
+            .on_change(move |show: &bool, _w, app| {
+                let show = *show;
+                entity.update(app, |this, cx| this.set_show_labels(show, cx));
             })
     };
 
@@ -573,6 +586,7 @@ fn render_settings_popup(
                     .child(fit_cb)
                     .child(ticks_cb)
                     .child(corridor_cb)
+                    .child(labels_cb)
                     .child(hide_rail_cb),
             ),
         )

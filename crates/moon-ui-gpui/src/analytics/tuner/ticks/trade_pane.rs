@@ -1,8 +1,9 @@
 //! The trade pane under the deal table: the selected deal drawn as its trade window draws it —
 //! the same view (`trade_window::Host::Embedded`), not a second chart — with the trades the
 //! variant column would have made beside the fact, dashed: the path the variant's entry order
-//! walked, its fill and exit, and — under the window's MoonShot zone switch — the corridor the
-//! model held around that order, placement by placement.
+//! walked, its fill, the path its sell order walked to the exit, and — under the window's
+//! MoonShot zone switch — the corridor the model held around the entry order, placement by
+//! placement.
 //!
 //! Folded by default, behind a rail like the one between the halves of the tab; folded, a click
 //! on a row selects nothing and nothing is built. Open, a click on a row shows that deal; a
@@ -201,6 +202,11 @@ impl AnalyticsView {
                             .exit
                             .filter(|exit| exit.kind != ExitKind::OpenAtWindowEnd)
                             .map(|exit| (exit.t_ms as f64, exit.price as f32)),
+                        exit_path: picture
+                            .sell_line
+                            .iter()
+                            .map(|point| (point.t_ms as f64, point.price as f32))
+                            .collect(),
                         is_short,
                         pattern: VARIANT_PATTERN,
                     })

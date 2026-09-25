@@ -44,6 +44,10 @@ pub struct OverlayTrade {
     pub fill_price: f32,
     /// Exit instant and price; `None` when the position was still open where the tape ends.
     pub exit: Option<(f64, f32)>,
+    /// The sell order's path as the model walked it — `(Unix UTC ms, level)` of each placement
+    /// from the fill, stepped to the exit like the entry path; empty draws the exit line flat at
+    /// the exit price, as a Moonbot line pair does.
+    pub exit_path: Vec<(f64, f32)>,
     /// Whether the position is short, which picks the short styles and the arrows' direction.
     pub is_short: bool,
     /// Pen of the entry path, the exit line and the connector (`SEG_PATTERN_*`) — what tells two
@@ -135,47 +139,19 @@ pub fn build_overlay_geometry(
         } else {
             (&style.buy, &style.sell)
         };
-        // The entry line the model walked, stepped like a repriced order's path, to the fill.
+        // The entry line the model walked, to the fill.
         let entry_color = rgba(entry_style.color, 1.0);
-        for (i, &(t_ms, level)) in trade.path.iter().enumerate() {
-            if !price_ok(level) || t_ms > trade.fill_ms {
-                continue;
-            }
-            let end_ms = trade
-                .path
-                .get(i + 1)
-                .map_or(trade.fill_ms, |(next_ms, _)| *next_ms)
-                .min(trade.fill_ms)
-                .max(t_ms);
-            segs.push(SegInstance {
-                t0_rel: to_rel(t_ms),
-                p0: level,
-                t1_rel: to_rel(end_ms),
-                p1: level,
+        push_stepped(
+            segs,
+            &trade.path,
+            Pen {
+                end_ms: trade.fill_ms,
                 thickness: entry_style.thickness,
                 pattern: trade.pattern,
-                extend: SEG_EXTEND_NONE,
-                clamp: SEG_CLAMP_NONE,
                 color: entry_color,
-            });
-            let riser = trade
-                .path
-                .get(i + 1)
-                .filter(|(next_ms, next)| *next_ms <= trade.fill_ms && price_ok(*next));
-            if let Some(&(next_ms, next)) = riser {
-                segs.push(SegInstance {
-                    t0_rel: to_rel(next_ms),
-                    p0: level,
-                    t1_rel: to_rel(next_ms),
-                    p1: next,
-                    thickness: 1.0,
-                    pattern: trade.pattern,
-                    extend: SEG_EXTEND_NONE,
-                    clamp: SEG_CLAMP_NONE,
-                    color: entry_color,
-                });
-            }
-        }
+                epoch_ms,
+            },
+        );
         // Direction follows the ACTION, as trade history's arrows do: a long enters with a buy.
         markers.push(arrow(
             trade.fill_ms,
@@ -187,19 +163,42 @@ pub fn build_overlay_geometry(
             continue;
         };
         let exit_color = rgba(exit_style.color, 1.0);
-        // The exit line as a Moonbot line pair draws it: at the exit price, from the fill (where
-        // the exit order is placed) to the close.
-        segs.push(SegInstance {
-            t0_rel: to_rel(trade.fill_ms),
-            p0: exit_price,
-            t1_rel: to_rel(exit_ms.max(trade.fill_ms)),
-            p1: exit_price,
-            thickness: exit_style.thickness,
-            pattern: trade.pattern,
-            extend: SEG_EXTEND_NONE,
-            clamp: SEG_CLAMP_NONE,
-            color: exit_color,
-        });
+        let exit_end_ms = exit_ms.max(trade.fill_ms);
+        // A path none of whose levels stood before the close — a stop inside `SellDelay`, before
+        // the sell was ever placed, or on the very ms it was — draws as a path without one would.
+        let path_drawn = trade
+            .exit_path
+            .iter()
+            .any(|&(t_ms, level)| t_ms < exit_end_ms && price_ok(level));
+        if !path_drawn {
+            // The exit line as a Moonbot line pair draws it: at the exit price, from the fill
+            // (where the exit order is placed) to the close.
+            segs.push(SegInstance {
+                t0_rel: to_rel(trade.fill_ms),
+                p0: exit_price,
+                t1_rel: to_rel(exit_end_ms),
+                p1: exit_price,
+                thickness: exit_style.thickness,
+                pattern: trade.pattern,
+                extend: SEG_EXTEND_NONE,
+                clamp: SEG_CLAMP_NONE,
+                color: exit_color,
+            });
+        } else {
+            // The sell order the model walked, from its placement to the close — a stop's exit
+            // lands off it, at the stop's own price.
+            push_stepped(
+                segs,
+                &trade.exit_path,
+                Pen {
+                    end_ms: exit_end_ms,
+                    thickness: exit_style.thickness,
+                    pattern: trade.pattern,
+                    color: exit_color,
+                    epoch_ms,
+                },
+            );
+        }
         segs.push(SegInstance {
             t0_rel: to_rel(trade.fill_ms),
             p0: trade.fill_price,
@@ -212,6 +211,59 @@ pub fn build_overlay_geometry(
             color: rgba(exit_style.color, CONNECTOR_ALPHA),
         });
         markers.push(arrow(exit_ms, exit_price, trade.is_short, exit_color));
+    }
+}
+
+/// How [`push_stepped`] draws one path.
+struct Pen {
+    /// Nothing is drawn past this instant, Unix UTC ms.
+    end_ms: f64,
+    thickness: f32,
+    pattern: f32,
+    color: [f32; 4],
+    /// The pane's epoch; every instance is relative to it.
+    epoch_ms: f64,
+}
+
+/// A path the model walked, stepped like a repriced order's: a level per placement to the next
+/// one, a riser at each move, nothing past the pen's end.
+fn push_stepped(segs: &mut Vec<SegInstance>, path: &[(f64, f32)], pen: Pen) {
+    let to_rel = |t_ms: f64| (t_ms - pen.epoch_ms) as f32;
+    let price_ok = |p: f32| p.is_finite() && p > 0.0;
+    for (i, &(t_ms, level)) in path.iter().enumerate() {
+        if !price_ok(level) || t_ms > pen.end_ms {
+            continue;
+        }
+        let next = path.get(i + 1);
+        let to_ms = next
+            .map_or(pen.end_ms, |(next_ms, _)| *next_ms)
+            .min(pen.end_ms)
+            .max(t_ms);
+        segs.push(SegInstance {
+            t0_rel: to_rel(t_ms),
+            p0: level,
+            t1_rel: to_rel(to_ms),
+            p1: level,
+            thickness: pen.thickness,
+            pattern: pen.pattern,
+            extend: SEG_EXTEND_NONE,
+            clamp: SEG_CLAMP_NONE,
+            color: pen.color,
+        });
+        let riser = next.filter(|(next_ms, next)| *next_ms <= pen.end_ms && price_ok(*next));
+        if let Some(&(next_ms, next)) = riser {
+            segs.push(SegInstance {
+                t0_rel: to_rel(next_ms),
+                p0: level,
+                t1_rel: to_rel(next_ms),
+                p1: next,
+                thickness: 1.0,
+                pattern: pen.pattern,
+                extend: SEG_EXTEND_NONE,
+                clamp: SEG_CLAMP_NONE,
+                color: pen.color,
+            });
+        }
     }
 }
 

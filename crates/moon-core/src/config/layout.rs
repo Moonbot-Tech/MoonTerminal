@@ -857,6 +857,15 @@ pub struct WindowLayout {
     /// opened for. Apart from [`Self::trade_window_hide_rail`], which a window of its own keeps.
     #[serde(default, deserialize_with = "de_lenient")]
     pub analytics_trade_hide_rail: Option<bool>,
+    /// Print the trade's own captions — its strategy, the detect it fired on, why it closed —
+    /// at the top of trade windows; absent means ON.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub trade_window_labels: Option<bool>,
+    /// The same captions in the trade pane under the tuner's deal table; absent means OFF, as
+    /// the pane's rail is hidden — the pane is opened for the picture. Apart from
+    /// [`Self::trade_window_labels`], which a window of its own keeps.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub analytics_trade_labels: Option<bool>,
 
     /// Selected Profit Monitor period id.
     #[serde(default, deserialize_with = "de_lenient")]

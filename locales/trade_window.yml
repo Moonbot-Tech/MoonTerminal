@@ -45,6 +45,13 @@ trade_window.settings.fit:
   en: "Fit the trade to the window"
   es: "Ajustar la operación a la ventana"
 
+# The trade's own captions at the top of the chart: its strategy, the detect it fired on, why it
+# closed. On in a trade window, off in the tuner's pane — each remembers its own.
+trade_window.settings.show_labels:
+  ru: "Надписи сделки на чарте"
+  en: "Trade captions on the chart"
+  es: "Rótulos de la operación en el gráfico"
+
 trade_window.settings.hide_rail:
   ru: "Скрыть правую панель"
   en: "Hide the side panel"

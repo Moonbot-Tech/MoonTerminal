@@ -383,6 +383,8 @@ pub(crate) struct TradeWindowView {
     fit_trade: bool,
     /// Hide the figures rail, leaving the chart the whole window.
     hide_rail: bool,
+    /// Print the trade's own captions — strategy, detect, sell reason — at the top of the chart.
+    show_labels: bool,
     /// Shade the entry corridor the core saved, from the order's placement to its fill.
     show_corridor: bool,
     /// Trades a model says a variant of the strategy would have made — the tuner's pane hands
@@ -576,6 +578,32 @@ impl TradeWindowView {
         cx.notify();
     }
 
+    /// Print or drop the trade's own captions, and remember it — a pane in its own slot, as its
+    /// rail. Off hands the chart no trade to caption, and the three trade fields print nothing
+    /// (`chartdx::text::labels`); on names the strategy afresh, as the window's first paint does.
+    fn set_show_labels(&mut self, show: bool, cx: &mut Context<Self>) {
+        if self.show_labels == show {
+            return;
+        }
+        self.show_labels = show;
+        let embedded = self.host.embedded();
+        let labels = self.backend.update(cx, |backend, _| {
+            let slot = match embedded {
+                true => &mut backend.layout.analytics_trade_labels,
+                false => &mut backend.layout.trade_window_labels,
+            };
+            if *slot != Some(show) {
+                *slot = Some(show);
+                backend.layout_dirty = true;
+            }
+            show.then(|| std::rc::Rc::new(trade_labels(backend, self.core, &self.meta).0))
+        });
+        self.panel.update(cx, |panel, pcx| {
+            panel.attach_trade_labels(labels, pcx);
+        });
+        cx.notify();
+    }
+
     /// Shade the entry corridor or stop, and remember it for every trade view.
     fn set_show_corridor(&mut self, show: bool, cx: &mut Context<Self>) {
         if self.show_corridor == show {
@@ -750,14 +778,17 @@ impl TradeWindowView {
             return;
         };
         self.strategy_pending = false;
-        let labels = std::rc::Rc::new(crate::chartdx::TradeLabels {
-            strategy: name,
-            detect: self.meta.detect.clone(),
-            sell_reason: self.meta.sell_reason.clone(),
-        });
-        self.panel.update(cx, |panel, pcx| {
-            panel.attach_trade_labels(Some(labels), pcx);
-        });
+        // Switched off, the name waits in the store: the switch builds the captions afresh.
+        if self.show_labels {
+            let labels = std::rc::Rc::new(crate::chartdx::TradeLabels {
+                strategy: name,
+                detect: self.meta.detect.clone(),
+                sell_reason: self.meta.sell_reason.clone(),
+            });
+            self.panel.update(cx, |panel, pcx| {
+                panel.attach_trade_labels(Some(labels), pcx);
+            });
+        }
         // The rail's strategy block reads `strategy_pending` on render. This view's repaint must
         // not depend on the panel's own notify above reaching the window: state of THIS view
         // changed, so THIS view says so.

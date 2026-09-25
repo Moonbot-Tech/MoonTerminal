@@ -73,6 +73,7 @@ fn a_modelled_trade_carries_its_pen_and_an_open_one_only_its_entry() {
                 fill_ms: 3_000.0,
                 fill_price: 1.0,
                 exit: Some((6_000.0, 1.05)),
+                exit_path: Vec::new(),
                 is_short: false,
                 pattern: SEG_PATTERN_DASH,
             },
@@ -81,6 +82,7 @@ fn a_modelled_trade_carries_its_pen_and_an_open_one_only_its_entry() {
                 fill_ms: 3_500.0,
                 fill_price: 1.01,
                 exit: None,
+                exit_path: Vec::new(),
                 is_short: true,
                 pattern: SEG_PATTERN_DOT,
             },
@@ -114,6 +116,7 @@ fn a_modelled_entry_path_steps_to_the_fill() {
             fill_ms: 3_000.0,
             fill_price: 0.99,
             exit: None,
+            exit_path: Vec::new(),
             is_short: false,
             pattern: SEG_PATTERN_DASH,
         }],
@@ -134,4 +137,71 @@ fn a_modelled_entry_path_steps_to_the_fill() {
         1,
         "one riser: the second move falls after the fill"
     );
+}
+
+/// The model's sell path is stepped from its placement to the close, like the entry path, and
+/// stands in for the flat exit line; the exit arrow keeps the exit's own price.
+#[test]
+fn a_modelled_sell_path_steps_to_the_close() {
+    let (_, segs, markers) = build(&FrozenOverlay {
+        bands: Vec::new(),
+        trades: vec![OverlayTrade {
+            path: Vec::new(),
+            fill_ms: 2_000.0,
+            fill_price: 1.0,
+            exit: Some((5_000.0, 1.02)),
+            exit_path: vec![
+                (2_000.0, 1.05),
+                (3_000.0, 1.03),
+                (4_000.0, 1.02),
+                (6_000.0, 1.01),
+            ],
+            is_short: false,
+            pattern: SEG_PATTERN_DASH,
+        }],
+    });
+    assert_eq!(markers.len(), 2, "the entry and the exit arrow");
+    let levels: Vec<(f32, f32, f32)> = segs
+        .iter()
+        .filter(|s| s.p0 == s.p1)
+        .map(|s| (s.t0_rel, s.t1_rel, s.p0))
+        .collect();
+    assert_eq!(
+        levels,
+        vec![
+            (1_000.0, 2_000.0, 1.05),
+            (2_000.0, 3_000.0, 1.03),
+            (3_000.0, 4_000.0, 1.02),
+        ],
+        "no flat line at the exit price, and nothing past the close"
+    );
+    assert_eq!(
+        segs.iter().filter(|s| s.p0 != s.p1).count(),
+        3,
+        "two risers and the fill-to-exit connector"
+    );
+}
+
+/// A sell path none of whose levels stood by the close — a stop inside `SellDelay`, the sell not
+/// yet placed — draws the flat exit line rather than nothing.
+#[test]
+fn a_sell_path_placed_after_the_close_falls_back_to_the_flat_line() {
+    let (_, segs, _) = build(&FrozenOverlay {
+        bands: Vec::new(),
+        trades: vec![OverlayTrade {
+            path: Vec::new(),
+            fill_ms: 2_000.0,
+            fill_price: 1.0,
+            exit: Some((3_000.0, 0.98)),
+            exit_path: vec![(4_000.0, 1.05)],
+            is_short: false,
+            pattern: SEG_PATTERN_DASH,
+        }],
+    });
+    let levels: Vec<(f32, f32, f32)> = segs
+        .iter()
+        .filter(|s| s.p0 == s.p1)
+        .map(|s| (s.t0_rel, s.t1_rel, s.p0))
+        .collect();
+    assert_eq!(levels, vec![(1_000.0, 2_000.0, 0.98)]);
 }

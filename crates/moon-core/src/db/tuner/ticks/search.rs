@@ -39,13 +39,14 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
+use super::exit::line::LinePoint;
 use super::mshot::{CorridorStep, EntryMethod, MshotEntry, MshotParams};
 use super::params::range::Grids;
 use super::params::{
     ParamGroup, ParamKind, StrategyValues, TICK_PARAMS, TickParam, exit_params, mshot_params,
 };
 use super::settings::ModelSettings;
-use super::{Deal, Deltas, EntryParams, ExitParams, Outcome, entry_model_for, simulate};
+use super::{Deal, Deltas, EntryParams, ExitModel, ExitParams, Outcome, entry_model_for, simulate};
 use crate::db::metrics::Tally;
 use crate::db::tuner::threshold_search::search::{install, restart_seed};
 use crate::db::tuner::threshold_search::{SearchHandle, train_split};
@@ -1109,6 +1110,9 @@ pub struct VariantPicture {
     /// replayed by the corridor model only; empty for a shift and for a kind without an entry
     /// model, which walk no corridor of their own.
     pub corridor: Vec<CorridorStep>,
+    /// The sell order's path as the exit model walked it from the fill — every level the line
+    /// stood at, placement first; empty when the entry never filled.
+    pub sell_line: Vec<LinePoint>,
 }
 
 /// One variant replayed on ONE deal — what the tuner's trade pane draws beside the fact: where
@@ -1157,7 +1161,18 @@ pub fn variant_picture(
         }
         _ => Vec::new(),
     };
-    VariantPicture { outcome, corridor }
+    // The same walk `simulate` took its exit from — `ExitModel::exit` is this walk's `exit` —
+    // run again for its levels: one deal, once per pane refresh.
+    let sell_line = outcome.fill.map_or_else(Vec::new, |fill| {
+        ExitModel::new(&exit)
+            .walk(&deal.deal, &deal.ticks, fill)
+            .points
+    });
+    VariantPicture {
+        outcome,
+        corridor,
+        sell_line,
+    }
 }
 
 /// Each deal's `(report_uid, (money, per cent))` under one variant, in the deals' order; `None`

@@ -165,6 +165,9 @@ pub(in crate::analytics::tuner) struct TicksData {
     pub(in crate::analytics::tuner) entry_share: (usize, usize),
     /// `(hits, answered)` of the exit group over the covered rows.
     pub(in crate::analytics::tuner) exit_share: (usize, usize),
+    /// The model's accuracy over every covered row — unjudged ones counted against it — for
+    /// the line under the grid after a search (`accuracy.rs`).
+    pub(in crate::analytics::tuner) accuracy: super::accuracy::Accuracy,
     /// Strategy kinds present among the rows, for the entry group's availability.
     pub(in crate::analytics::tuner) kinds: Vec<String>,
     /// The parameter grid's "now" column, by field key.
@@ -842,5 +845,11 @@ impl TicksData {
         let verdicts = || self.rows.iter().filter_map(|r| r.verdict.as_ref());
         self.entry_share = moon_core::db::tuner::ticks::verify::share(verdicts().map(|v| v.entry));
         self.exit_share = moon_core::db::tuner::ticks::verify::share(verdicts().map(|v| v.exit));
+        self.accuracy = super::accuracy::Accuracy::of(
+            self.rows
+                .iter()
+                .filter(|r| r.tape == TapeStatus::Covered)
+                .map(|r| r.verdict.as_ref()),
+        );
     }
 }

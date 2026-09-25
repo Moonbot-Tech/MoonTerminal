@@ -18,7 +18,9 @@
 use std::collections::{HashMap, HashSet};
 
 use moon_core::db::tuner::ticks::Deal;
-use moon_core::db::tuner::ticks::params::{ParamSection, TickParam, is_model_only, params_for};
+use moon_core::db::tuner::ticks::params::{
+    ParamGroup, ParamSection, TickParam, is_model_only, params_for,
+};
 use moon_core::db::tuner::ticks::unmodelled::fields_in_use;
 use moon_core::feed::SchemaSection;
 use moon_core::feed::strategy_deps::FieldDeps;
@@ -66,6 +68,25 @@ impl GridSection {
             RowRole::Knob(p) => Some(p),
             _ => None,
         })
+    }
+
+    /// The search group whose knobs are the fewer in a section that holds both — a field the
+    /// strategy editor files among the other group's, as `MShotSellPriceAdjust` (an exit field)
+    /// sits in Strategy settings among the entry's corridor. The grid marks those, so a search
+    /// of one group is not read as leaving the whole section alone. `None` for a section of one
+    /// group, and for an even split, where neither side is the odd one out.
+    pub(in crate::analytics::tuner) fn minority_group(&self) -> Option<ParamGroup> {
+        let entry = self
+            .knobs()
+            .filter(|k| k.group == ParamGroup::Entry)
+            .count();
+        let exit = self.knobs().filter(|k| k.group == ParamGroup::Exit).count();
+        match (entry, exit) {
+            (0, _) | (_, 0) => None,
+            (entry, exit) if entry < exit => Some(ParamGroup::Entry),
+            (entry, exit) if exit < entry => Some(ParamGroup::Exit),
+            _ => None,
+        }
     }
 }
 

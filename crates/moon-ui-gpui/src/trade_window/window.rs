@@ -229,6 +229,15 @@ fn new_view(
     // keeps asking until it does.
     let (resolved, named) = super::trade_labels(owner.read(vcx), core, &meta);
     let labels = std::rc::Rc::new(resolved);
+    // Whether they are printed at all, per host like the rail: a window prints them unless told
+    // not to, the tuner's pane only when told to.
+    let show_labels = {
+        let layout = &owner.read(vcx).layout;
+        match host.embedded() {
+            true => layout.analytics_trade_labels.unwrap_or(false),
+            false => layout.trade_window_labels.unwrap_or(true),
+        }
+    };
     // The entry instant on the terminal's clock, for the strategy-version lookup: `fetch` resolves
     // the same pair again for the REST window, but that one is re-resolved on every Retry and the
     // version placement has no reason to follow it.
@@ -304,7 +313,7 @@ fn new_view(
         // timeframe pin above: they come from the replica, not from the network, so the window
         // states what this trade WAS even while the picture behind it is still loading — and
         // never has to swap one set of captions for another once it lands.
-        panel.attach_trade_labels(Some(labels.clone()), pcx);
+        panel.attach_trade_labels(show_labels.then(|| labels.clone()), pcx);
         if let Some(pct) = saved_scale {
             panel.force_scale(Some(pct), pcx);
         }
@@ -344,6 +353,7 @@ fn new_view(
         settings_open: false,
         fit_trade,
         hide_rail,
+        show_labels,
         show_corridor,
         model_trades: Vec::new(),
         model_corridor: Vec::new(),

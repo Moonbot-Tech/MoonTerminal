@@ -359,6 +359,7 @@ impl AnalyticsView {
                     kpi: Vec::new(),
                     entry_share: (0, 0),
                     exit_share: (0, 0),
+                    accuracy: Default::default(),
                     kinds,
                     now: scope.now,
                     own: scope.own,

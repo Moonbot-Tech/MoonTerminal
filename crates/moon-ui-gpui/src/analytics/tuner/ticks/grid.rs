@@ -113,6 +113,9 @@ impl AnalyticsView {
             // the button would search is never hidden.
             let open = self.ticks.open_sections.contains(&section.section);
             let sel = self.ticks.sel_field;
+            // The knobs filed among the other group's are marked, so a search of one group does
+            // not read as leaving the whole section alone.
+            let odd = section.minority_group();
             for row in section
                 .rows
                 .iter()
@@ -121,7 +124,8 @@ impl AnalyticsView {
                 let now = data.as_ref().and_then(|d| d.now.get(&row.key).cloned());
                 grid = grid.child(match row.role {
                     RowRole::Knob(knob) if knob_live(knob, entry_on) => {
-                        self.ticks_field_row(knob.key, now, p, window, cx)
+                        let odd = odd.filter(|group| *group == knob.group);
+                        self.ticks_field_row(knob.key, odd, now, p, window, cx)
                     }
                     role => self.ticks_fixed_row(&row.key, role, now, data.as_deref(), p, cx),
                 });
@@ -131,6 +135,9 @@ impl AnalyticsView {
         // priced again whenever what a point costs under may have moved (`estimate.rs`).
         self.ticks_measure_cost(cx);
         let estimate = self.ticks_estimate_row(p, cx);
+        // After a search: how much of the scope's tape the model reproduces — the part of the
+        // strategy's history the answer speaks for (`accuracy.rs`).
+        let accuracy = self.ticks_accuracy_row(p, cx);
         v_flex()
             .w_full()
             .flex_1()
@@ -152,6 +159,7 @@ impl AnalyticsView {
                     .child(grid),
             )
             .children(estimate)
+            .children(accuracy)
             .into_any_element()
     }
 
@@ -555,6 +563,7 @@ impl AnalyticsView {
     fn ticks_field_row(
         &mut self,
         key: &'static str,
+        odd: Option<ParamGroup>,
         now: Option<NowValue>,
         p: MoonPalette,
         window: &mut Window,
@@ -613,8 +622,17 @@ impl AnalyticsView {
                         moon(p.amber)
                     } else if !read {
                         moon(p.text_muted)
+                    } else if odd.is_some() {
+                        moon(p.blue)
                     } else {
                         moon(p.text)
+                    })
+                    .when_some(odd, |el, group| {
+                        let key = match group {
+                            ParamGroup::Entry => "analytics.ticks.row_odd_entry",
+                            ParamGroup::Exit => "analytics.ticks.row_odd_exit",
+                        };
+                        el.tooltip(crate::panels::common::text_tooltip(t!(key).to_string()))
                     })
                     .child(key)
                     .on_click(cx.listener(move |this, _, _, cx| {

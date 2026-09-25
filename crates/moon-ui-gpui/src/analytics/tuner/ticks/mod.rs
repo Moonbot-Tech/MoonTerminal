@@ -35,6 +35,7 @@ pub(in crate::analytics::tuner) use fetch::strategy_field_defaults;
 use moon_core::market::trade_replay::TickStatus;
 use state::{DealRow, TapeStatus};
 
+mod accuracy;
 mod cfg;
 pub(in crate::analytics::tuner) mod columns;
 mod delta_summary;

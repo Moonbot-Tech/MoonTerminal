@@ -2230,6 +2230,23 @@ fn the_corridor_and_the_tuner_panes_rail_read_their_own_defaults() {
     assert_eq!(bad.trade_window_moonshot_zone, None);
 }
 
+/// The trade captions read absent as ON in a window and OFF in the tuner pane, and each slot
+/// survives a round trip without touching the other.
+#[test]
+fn the_trade_captions_read_their_own_defaults_per_host() {
+    let old: WindowLayout = toml::from_str("").expect("legacy layout");
+    assert!(old.trade_window_labels.unwrap_or(true));
+    assert!(!old.analytics_trade_labels.unwrap_or(false));
+    let saved: WindowLayout =
+        toml::from_str("trade_window_labels = false\nanalytics_trade_labels = true").expect("set");
+    let encoded = toml::to_string(&saved).expect("serialize preference");
+    let reopened: WindowLayout = toml::from_str(&encoded).expect("reopen preference");
+    assert_eq!(reopened.trade_window_labels, Some(false));
+    assert_eq!(reopened.analytics_trade_labels, Some(true));
+    let bad: WindowLayout = toml::from_str("analytics_trade_labels = \"on\"").expect("lenient");
+    assert_eq!(bad.analytics_trade_labels, None);
+}
+
 /// `layout.rs:ChartGraphicsCfg::candle_volume_sides` — the serde default is OFF while `Default`
 /// is ON, on purpose: a file without the key predates the switch and its style alone said
 /// whether the band drew, so reading the key as ON there would open every user who had the band

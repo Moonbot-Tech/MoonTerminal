@@ -1777,9 +1777,9 @@ analytics.ticks.trade_collapse:
   en: "Collapse the trade pane"
   es: "Contraer el panel de la operación"
 analytics.ticks.trade_legend:
-  ru: "факт — сплошные, В1 — штрих, В2 — пунктир"
-  en: "fact solid, V1 dashed, V2 dotted"
-  es: "real continuo, V1 a trazos, V2 punteado"
+  ru: "факт — сплошные, В1 — штрих: путь бай- и селл-ордера модели"
+  en: "fact solid, V1 dashed: the model's buy and sell order paths"
+  es: "real continuo, V1 a trazos: recorrido de las órdenes de compra y venta del modelo"
 analytics.ticks.trade_pick:
   ru: "Выберите сделку в таблице"
   en: "Pick a trade in the table"
@@ -1944,6 +1944,14 @@ analytics.ticks.section_expand:
   ru: "Развернуть секцию"
   en: "Open the section"
   es: "Abrir la sección"
+analytics.ticks.row_odd_exit:
+  ru: "Относится к выходу, хотя стоит среди полей входа — подбирается вместе с группой «Выход»"
+  en: "Belongs to the exit, though filed among the entry fields — searched with the Exit group"
+  es: "Pertenece a la salida aunque figura entre los campos de entrada — se busca con el grupo Salida"
+analytics.ticks.row_odd_entry:
+  ru: "Относится к входу, хотя стоит среди полей выхода — подбирается вместе с группой «Вход»"
+  en: "Belongs to the entry, though filed among the exit fields — searched with the Entry group"
+  es: "Pertenece a la entrada aunque figura entre los campos de salida — se busca con el grupo Entrada"
 analytics.ticks.row_fixed:
   ru: "Модель берёт значение стратегии — в переборе не участвует"
   en: "The model reads the strategy's value — it is not searched"
@@ -2056,6 +2064,34 @@ analytics.ticks.est_tip:
   ru: "Оценка по отмеченным полям, сеткам, перезапускам и проходам. Отмечены и вход, и выход — на каждую точку входа подбирается весь выход, время растёт кратно. Время — по замеру одной точки на этой выборке, после каждого подбора уточняется. Порядок, не точное число."
   en: "An estimate from the ticked fields, the grids, restarts and passes. With both the entry and the exit ticked, the whole exit is searched under every entry point, and the time multiplies. The time is one point measured on this sample, refined after every search. An order of magnitude, not an exact figure."
   es: "Estimación a partir de los campos marcados, las rejillas, los reinicios y las pasadas. Con la entrada y la salida marcadas, se busca toda la salida en cada punto de entrada y el tiempo se multiplica. El tiempo sale de medir un punto en esta muestra y se afina tras cada búsqueda. Un orden de magnitud, no una cifra exacta."
+analytics.ticks.acc_line:
+  ru: "Точность модели: вход %{entry} · выход %{exit} — по %{n} сделкам с лентой"
+  en: "Model accuracy: entry %{entry} · exit %{exit} — over %{n} trades with tape"
+  es: "Precisión del modelo: entrada %{entry} · salida %{exit} — sobre %{n} operaciones con cinta"
+analytics.ticks.acc_entry_fact:
+  ru: "по факту"
+  en: "from the fact"
+  es: "del hecho"
+analytics.ticks.acc_tip_base:
+  ru: "Доля сделок с лентой (%{n}), которые модель повторила по своим правилам. Промах ✗ и «не судится» · считаются против модели: за эти сделки подбор не говорит."
+  en: "The share of the trades with tape (%{n}) the model repeated by its own rules. A miss ✗ and a trade it cannot judge · both count against it: the search does not speak for those trades."
+  es: "La parte de las operaciones con cinta (%{n}) que el modelo repitió con sus propias reglas. Un fallo ✗ y una operación que no puede juzgar · cuentan en su contra: la búsqueda no habla por ellas."
+analytics.ticks.acc_tip_group:
+  ru: "%{name}: ✓ %{hits} · ✗ %{misses} · не судится %{unjudged}"
+  en: "%{name}: ✓ %{hits} · ✗ %{misses} · not judged %{unjudged}"
+  es: "%{name}: ✓ %{hits} · ✗ %{misses} · sin juzgar %{unjudged}"
+analytics.ticks.acc_tip_fit:
+  ru: "Подбор учился на %{fit} годных; на остальных его результат — экстраполяция."
+  en: "The search learned on %{fit} fit trades; on the rest its answer is an extrapolation."
+  es: "La búsqueda aprendió con %{fit} operaciones aptas; en el resto su respuesta es una extrapolación."
+analytics.ticks.acc_tip_no_tape:
+  ru: "Без ленты — %{n}: в оценку не входят."
+  en: "Without tape: %{n}, left out of the estimate."
+  es: "Sin cinta: %{n}, fuera de la estimación."
+analytics.ticks.acc_tip_assumptions:
+  ru: "Допущения модели: стакана нет — очередь перед нашим ордером не моделируется, филл = касание принтом; стоп по стакану видит цену тикера раз в %{ticker} с, вместо неё — последний принт; задержка ядра и биржи — одна на все ядра, %{latency} мс; совпадением считается цена в пределах %{price} % и момент в пределах %{time} с; поля выхода вне модели (SellShot, SellSpread и другие) — такие сделки не судятся."
+  en: "The model assumes: no order book — the queue ahead of our order is not modelled, a fill is a touching print; a book-watching stop sees the ticker price every %{ticker} s, the last print standing in for it; one core and venue latency for every core, %{latency} ms; a match is a price within %{price} % and a moment within %{time} s; exit fields outside the model (SellShot, SellSpread and others) leave such trades unjudged."
+  es: "El modelo supone: sin libro de órdenes — la cola delante de nuestra orden no se modela, un llenado es un print que toca; un stop por libro ve el precio del ticker cada %{ticker} s, con el último print en su lugar; una latencia de núcleo y bolsa para todos los núcleos, %{latency} ms; coincide un precio dentro de %{price} % y un momento dentro de %{time} s; los campos de salida fuera del modelo (SellShot, SellSpread y otros) dejan esas operaciones sin juzgar."
 analytics.ticks.long_title:
   ru: "Долгий подбор"
   en: "A long search"
