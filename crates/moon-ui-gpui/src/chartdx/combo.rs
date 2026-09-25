@@ -388,6 +388,7 @@ impl ComboLayer {
         let ttp = view.time_to_px;
         let cross_plan = plan_cross_bake(&self.tex.as_ref().unwrap().key, view, bw);
         let vol_key = self.vol_tex.as_ref().unwrap().key;
+        let bake_t = crate::diag::timer();
         let vol_plan = plan_volume_bake(&vol_key, view, bw, |bake_t0| {
             self.volume_scale_for_bake_window(bake_t0, tex_w as f32, ttp)
         });
@@ -554,6 +555,9 @@ impl ComboLayer {
         }
         let tex = self.tex.as_ref().unwrap();
         super::gpu::debug_dump_combo_texture_once(device, context, &tex._tex);
+        if vol_plan.full || cross_plan.full {
+            crate::diag::record_us(&crate::diag::CHART_COMBO_BAKE_US, bake_t);
+        }
     }
 
     /// Thin a dense full bake to what its bitmap can show and upload the picked rows, in draw
@@ -578,11 +582,13 @@ impl ComboLayer {
                 let c = &resident[slot];
                 (slot as u32, c.time_rel, c.price, c.side, c.qty)
             });
+        let lod_t = crate::diag::timer();
         if crosses {
             reduce_crosses(span_rows, cols, &mut self.lod_pick);
         } else {
             reduce_volume(span_rows, cols, &mut self.lod_pick);
         }
+        crate::diag::record_us(&crate::diag::CHART_COMBO_LOD_US, lod_t);
         let picked = if crosses {
             &self.lod_pick.cross
         } else {

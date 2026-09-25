@@ -523,3 +523,533 @@ fn sparse_columns_keep_the_last_row_per_texel_in_draw_order() {
     assert_eq!(pick.cross, want);
     assert!(pick.cross.contains(&600) && pick.cross.contains(&601));
 }
+
+/// Row key from the comparison-sort bake at 4f7bd250, kept beside `LodRow` so the oracle
+/// does not read the counting-sort scratch.
+#[derive(Clone, Copy)]
+struct OracleRow {
+    slot: u32,
+    col: i64,
+    row: i64,
+    side: u32,
+    qty: f32,
+}
+
+/// Scratch for the pre-change `key_rows` / `reduce_crosses` / `reduce_volume` bodies.
+#[derive(Default)]
+struct OraclePick {
+    cross: Vec<u32>,
+    volume: Vec<u32>,
+    rows: Vec<OracleRow>,
+    order: Vec<u32>,
+    kept: Vec<u32>,
+    keep: Vec<bool>,
+    covering: Vec<u32>,
+}
+
+/// `key_rows` as it was at 4f7bd250: shader texel keys, cull left to `drawn`.
+///
+/// Returns nothing. `out.rows` is replaced with the rows `drawn` kept.
+fn oracle_key_rows(
+    rows: impl IntoIterator<Item = (u32, f32, f32, u32, f32)>,
+    g: &super::BakeColumns,
+    out: &mut OraclePick,
+    drawn: impl Fn(f32, f32, f32, u32, f32) -> bool,
+) {
+    out.rows.clear();
+    for (slot, t, p, side, qty) in rows {
+        let sx = 0.0 + (t - g.time0) * g.time_to_px;
+        let col = sx.round_ties_even();
+        let row = ((0.0 + g.height) - (p - g.price0) * g.price_to_px).round_ties_even();
+        if !drawn(sx, col, row, side, qty) {
+            continue;
+        }
+        out.rows.push(OracleRow {
+            slot,
+            col: col as i64,
+            row: row as i64,
+            side,
+            qty,
+        });
+    }
+}
+
+/// `reduce_crosses` as it was at 4f7bd250 (comparison sorts, not counting sorts).
+///
+/// `out.cross` becomes the kept slots in ascending input order.
+fn oracle_reduce_crosses(
+    rows: impl IntoIterator<Item = (u32, f32, f32, u32, f32)>,
+    g: &super::BakeColumns,
+    out: &mut OraclePick,
+) {
+    out.cross.clear();
+    let cull = g.marker_half.max(8.0).max(g.marker_half + 1.0);
+    let (w, h) = (g.width_px as f32, g.height);
+    oracle_key_rows(rows, g, out, |_, col, row, _, _| {
+        col.is_finite()
+            && row.is_finite()
+            && col >= -cull
+            && col <= w + cull
+            && row >= -cull
+            && row <= h + cull
+    });
+    let OraclePick {
+        cross,
+        rows,
+        order,
+        kept,
+        keep,
+        ..
+    } = out;
+    let n = rows.len();
+    keep.clear();
+    keep.resize(n, false);
+    order.clear();
+    order.extend(0..n as u32);
+    order.sort_unstable_by_key(|&k| {
+        let r = &rows[k as usize];
+        (r.col, r.row, k)
+    });
+    kept.clear();
+    for (i, &k) in order.iter().enumerate() {
+        let r = &rows[k as usize];
+        let last_of_texel = order.get(i + 1).is_none_or(|&next| {
+            let q = &rows[next as usize];
+            (q.col, q.row) != (r.col, r.row)
+        });
+        if last_of_texel {
+            kept.push(k);
+        }
+    }
+    kept.sort_unstable_by_key(|&k| {
+        let r = &rows[k as usize];
+        (r.col, r.side.min(2), r.row, k)
+    });
+    let mut col_start = 0;
+    while col_start < kept.len() {
+        let col = rows[kept[col_start] as usize].col;
+        let col_end = col_start
+            + kept[col_start..]
+                .iter()
+                .take_while(|&&k| rows[k as usize].col == col)
+                .count();
+        if col_end - col_start <= super::LOD_MAX_ROWS {
+            for &k in &kept[col_start..col_end] {
+                keep[k as usize] = true;
+            }
+        } else {
+            let mut side_start = col_start;
+            while side_start < col_end {
+                let class = rows[kept[side_start] as usize].side.min(2);
+                let side_end = side_start
+                    + kept[side_start..col_end]
+                        .iter()
+                        .take_while(|&&k| rows[k as usize].side.min(2) == class)
+                        .count();
+                let side_rows = &kept[side_start..side_end];
+                let stride = side_rows.len().div_ceil(super::LOD_MAX_ROWS).max(1);
+                for (pos, &k) in side_rows.iter().enumerate() {
+                    if pos % stride == 0 {
+                        keep[k as usize] = true;
+                    }
+                }
+                keep[side_rows[side_rows.len() - 1] as usize] = true;
+                side_start = side_end;
+            }
+        }
+        col_start = col_end;
+    }
+    cross.extend((0..n).filter(|&k| keep[k]).map(|k| rows[k].slot));
+}
+
+/// `reduce_volume` as it was at 4f7bd250, including the full cover sum.
+///
+/// `out.volume` becomes the kept slots in ascending input order.
+fn oracle_reduce_volume(
+    rows: impl IntoIterator<Item = (u32, f32, f32, u32, f32)>,
+    g: &super::BakeColumns,
+    out: &mut OraclePick,
+) {
+    out.volume.clear();
+    let w = g.width_px as f32;
+    oracle_key_rows(rows, g, out, |sx, _, _, side, qty| {
+        sx >= -2.0 && sx <= w + 2.0 && qty > 0.0 && side < 2
+    });
+    let OraclePick {
+        volume,
+        rows,
+        order,
+        kept,
+        covering,
+        ..
+    } = out;
+    let n = rows.len();
+    let v = super::lod_volume_keep(g.volume_alpha) as u32;
+    let band_h = (g.height * 0.18).min(72.0);
+    let height_px = |r: &OracleRow| {
+        let inv = if r.side == 0 { g.buy_inv } else { g.sell_inv };
+        let norm = (r.qty * inv).clamp(0.0, 1.0);
+        let h = (norm.sqrt() * band_h).max(1.0).ceil();
+        if h.is_finite() {
+            (h as usize).min(super::LOD_BAR_MAX_PX)
+        } else {
+            super::LOD_BAR_MAX_PX
+        }
+    };
+    order.clear();
+    order.extend(0..n as u32);
+    order.sort_unstable_by_key(|&k| (rows[k as usize].col, k));
+    kept.clear();
+    let mut start = 0;
+    while start < order.len() {
+        let col = rows[order[start] as usize].col;
+        let end = start
+            + order[start..]
+                .iter()
+                .take_while(|&&k| rows[k as usize].col == col)
+                .count();
+        let group = &order[start..end];
+        let mut tallest = [u32::MAX; 3];
+        for &k in group {
+            let r = &rows[k as usize];
+            let best = &mut tallest[r.side.min(2) as usize];
+            if *best == u32::MAX || height_px(r) >= height_px(&rows[*best as usize]) {
+                *best = k;
+            }
+        }
+        covering.clear();
+        covering.resize(super::LOD_BAR_MAX_PX + 1, 0);
+        for &k in group.iter().rev() {
+            let hp = height_px(&rows[k as usize]);
+            let covered: u32 = covering[hp..].iter().sum();
+            if tallest.contains(&k) || covered < v {
+                covering[hp] += 1;
+                kept.push(k);
+            }
+        }
+        start = end;
+    }
+    kept.sort_unstable();
+    volume.extend(kept.iter().map(|&k| rows[k as usize].slot));
+}
+
+/// Compare both kept lists to the 4f7bd250 oracle. Cross is checked first.
+fn assert_matches_presort_oracle(
+    label: &str,
+    rows: &[(u32, f32, f32, u32, f32)],
+    g: &super::BakeColumns,
+) {
+    let mut oracle = OraclePick::default();
+    oracle_reduce_crosses(rows.iter().copied(), g, &mut oracle);
+    let want_cross = std::mem::take(&mut oracle.cross);
+    oracle_reduce_volume(rows.iter().copied(), g, &mut oracle);
+    let want_volume = std::mem::take(&mut oracle.volume);
+    assert!(
+        !want_cross.is_empty() || !want_volume.is_empty(),
+        "{label} oracle kept nothing"
+    );
+    let mut pick = super::LodPick::default();
+    super::reduce_crosses(rows.iter().copied(), g, &mut pick);
+    assert_eq!(pick.cross, want_cross, "{label} cross");
+    super::reduce_volume(rows.iter().copied(), g, &mut pick);
+    assert_eq!(pick.volume, want_volume, "{label} volume");
+}
+
+/// 98_304 trades over 3600s. Times and prices are integer so an identity bake is exact.
+fn dense_wheel_rows() -> Vec<(u32, f32, f32, u32, f32)> {
+    const ROWS: usize = 98_304;
+    let mut rng = Lcg(0x6100_d15e);
+    let mut rows = Vec::with_capacity(ROWS);
+    for slot in 0..ROWS {
+        let t = rng.below(3600) as f32;
+        let p = rng.below(600) as f32;
+        let side = rng.below(3) as u32;
+        let qty = 1.0 + rng.below(50) as f32;
+        rows.push((slot as u32, t, p, side, qty));
+    }
+    rows
+}
+
+/// 2300x900 bake. `time_to_px == 0` puts every finite time on column 0.
+/// Prices `0..600` map onto the height.
+fn window_bake(time_to_px: f32, alpha: f32, marker_half: f32) -> super::BakeColumns {
+    super::BakeColumns {
+        time0: 0.0,
+        time_to_px,
+        price0: 0.0,
+        price_to_px: 900.0 / 600.0,
+        height: 900.0,
+        width_px: 2300,
+        volume_alpha: alpha,
+        marker_half,
+        buy_inv: 0.02,
+        sell_inv: 0.02,
+    }
+}
+
+/// Identity bake (`col = t`, `row = 600 - p`) of `width` texels.
+fn identity_bake(width: u32, alpha: f32, marker_half: f32) -> super::BakeColumns {
+    super::BakeColumns {
+        time0: 0.0,
+        time_to_px: 1.0,
+        price0: 0.0,
+        price_to_px: 1.0,
+        height: 600.0,
+        width_px: width,
+        volume_alpha: alpha,
+        marker_half,
+        buy_inv: 0.02,
+        sell_inv: 0.02,
+    }
+}
+
+/// Last drawn slot per texel, ignoring the per-side sample. Valid only at <= 32 rows.
+fn identity_last_slots(rows: &[(u32, f32, f32, u32, f32)], g: &super::BakeColumns) -> Vec<u32> {
+    let cull = g.marker_half.max(8.0).max(g.marker_half + 1.0);
+    let (w, h) = (g.width_px as f32, g.height);
+    let mut last: std::collections::BTreeMap<(i64, i64), (usize, u32)> =
+        std::collections::BTreeMap::new();
+    for (index, &(slot, t, p, _, _)) in rows.iter().enumerate() {
+        let col = ((t - g.time0) * g.time_to_px).round_ties_even();
+        let row = (g.height - (p - g.price0) * g.price_to_px).round_ties_even();
+        if col.is_finite()
+            && row.is_finite()
+            && (-cull..=w + cull).contains(&col)
+            && (-cull..=h + cull).contains(&row)
+        {
+            last.insert((col as i64, row as i64), (index, slot));
+        }
+    }
+    let mut winners: Vec<(usize, u32)> = last.into_values().collect();
+    winners.sort_unstable();
+    winners.into_iter().map(|(_, slot)| slot).collect()
+}
+
+/// Copy `rows` and append the four cull corners, which are exact on an identity bake.
+fn with_cull_corners(
+    rows: &[(u32, f32, f32, u32, f32)],
+    g: &super::BakeColumns,
+) -> Vec<(u32, f32, f32, u32, f32)> {
+    let cull = g.marker_half.max(8.0).max(g.marker_half + 1.0);
+    let w = g.width_px as f32;
+    let spots = [
+        (-cull, -cull),
+        (-cull, g.height + cull),
+        (w + cull, -cull),
+        (w + cull, g.height + cull),
+    ];
+    let mut out = rows.to_vec();
+    for (col, row) in spots {
+        let slot = out.len() as u32;
+        let t = g.time0 + col / g.time_to_px;
+        let p = g.price0 + (g.height - row) / g.price_to_px;
+        out.push((slot, t, p, 0, 3.0));
+    }
+    out
+}
+
+/// `tick_volume.rs:counting_sort_by`: scattering with `order.clone().iter().rev()`
+/// reverses equal keys. Volume sorts by that function once, so the cover walk keeps
+/// the early bars in a column instead of the later ones and a wheel zoom draws the
+/// wrong bars. Crosses sort twice (row, then column), so this edit does not change
+/// which cross is last on a texel.
+#[test]
+fn counting_sort_presort_oracle_on_dense_windows() {
+    let g = identity_bake(2400, 0.3, 3.5);
+    let mut dup = Vec::with_capacity(530);
+    for slot in 0..500u32 {
+        dup.push((slot, 10.0, 20.0, slot % 3, 2.0));
+    }
+    for slot in 500..530u32 {
+        dup.push((slot, 11.0 + (slot - 500) as f32, 21.0, 0, 2.0));
+    }
+    let mut oracle = OraclePick::default();
+    oracle_reduce_crosses(dup.iter().copied(), &g, &mut oracle);
+    assert_eq!(
+        oracle.cross,
+        identity_last_slots(&dup, &g),
+        "duplicate texel oracle is the last drawn slot"
+    );
+    assert!(oracle.cross.contains(&499) && !oracle.cross.contains(&0));
+    assert_matches_presort_oracle("duplicate texels", &dup, &g);
+
+    let rows = dense_wheel_rows();
+    assert_eq!(rows.len(), 98_304);
+    assert_matches_presort_oracle(
+        "whole window",
+        &rows,
+        &window_bake(2300.0 / 3600.0, 0.3, 3.5),
+    );
+    assert_matches_presort_oracle(
+        "half window",
+        &rows,
+        &window_bake(2300.0 / 1800.0, 0.3, 3.5),
+    );
+    assert_matches_presort_oracle(
+        "five minute window",
+        &rows,
+        &window_bake(2300.0 / 300.0, 0.3, 3.5),
+    );
+    assert_matches_presort_oracle("one column", &rows, &window_bake(0.0, 0.3, 3.5));
+
+    let edge = identity_bake(2400, 0.3, 3.5);
+    let edged = with_cull_corners(&rows[..4_000], &edge);
+    assert_matches_presort_oracle("cull edges", &edged, &edge);
+    let wide = identity_bake(2400, 0.3, 40.0);
+    let wide_rows = with_cull_corners(&rows[..4_000], &wide);
+    assert_matches_presort_oracle("large marker half", &wide_rows, &wide);
+}
+
+/// Seeded rows: non-finite values, negative columns, side classes past 2, empty qty.
+fn edge_input_rows() -> Vec<(u32, f32, f32, u32, f32)> {
+    let mut rng = Lcg(0xB2E4_6E01);
+    let mut rows = Vec::new();
+    for i in 0..80u32 {
+        rows.push((i, 10.0, i as f32, 0, 4.0));
+    }
+    for _ in 0..240 {
+        let slot = rows.len() as u32;
+        let t = rng.below(40) as f32 - 4.0;
+        let p = rng.below(80) as f32;
+        let side = rng.below(6) as u32;
+        let qty = if rng.below(7) == 0 {
+            0.0
+        } else {
+            1.0 + rng.below(20) as f32
+        };
+        rows.push((slot, t, p, side, qty));
+    }
+    rows
+}
+
+/// Same rows plus NaN and infinite time and price. A kept non-finite price forces the fallback.
+fn with_nonfinite(rows: &[(u32, f32, f32, u32, f32)]) -> Vec<(u32, f32, f32, u32, f32)> {
+    let specs = [
+        (f32::NAN, 12.0),
+        (f32::INFINITY, 12.0),
+        (f32::NEG_INFINITY, 12.0),
+        (12.0, f32::NAN),
+        (12.0, f32::INFINITY),
+        (12.0, f32::NEG_INFINITY),
+    ];
+    let mut out = rows.to_vec();
+    for (t, p) in specs {
+        let slot = out.len() as u32;
+        out.push((slot, t, p, 0, 5.0));
+    }
+    out
+}
+
+/// `stack` equal bars at column 0 plus one bar at `far`, so the column span is `far + 1`.
+fn span_rows(far: f32, stack: u32) -> Vec<(u32, f32, f32, u32, f32)> {
+    let mut rows = Vec::with_capacity(stack as usize + 1);
+    for i in 0..stack {
+        rows.push((i, 0.0, (i % 80) as f32, 0, 4.0));
+    }
+    rows.push((stack, far, 0.0, 0, 4.0));
+    rows
+}
+
+/// `tick_volume.rs:cover_reached`: `covered > keep` instead of `covered >= keep` keeps
+/// bars the 8-bit composite had already hidden. A wheel zoom draws those extra bars.
+#[test]
+fn cover_reached_presort_oracle_on_edge_inputs() {
+    let rows = edge_input_rows();
+    let keep_tight = super::lod_volume_keep(0.3);
+    let keep_loose = super::lod_volume_keep(0.05);
+    let keep_opaque = super::lod_volume_keep(1.0);
+    assert!(keep_loose > keep_tight && keep_tight > keep_opaque);
+    let g = identity_bake(80, 0.3, 3.5);
+    let mut oracle = OraclePick::default();
+    oracle_reduce_volume(rows.iter().copied(), &g, &mut oracle);
+    let stacked = rows.iter().filter(|r| r.1 == 10.0 && r.4 == 4.0).count();
+    let kept = rows
+        .iter()
+        .filter(|r| r.1 == 10.0 && r.4 == 4.0 && oracle.volume.contains(&r.0))
+        .count();
+    assert!(
+        kept > 0 && kept < stacked,
+        "cover count dropped no stacked bar"
+    );
+    assert_matches_presort_oracle("alpha 0.3", &rows, &g);
+    assert_matches_presort_oracle("alpha 0.05", &rows, &identity_bake(80, 0.05, 3.5));
+    assert_matches_presort_oracle("alpha 1", &rows, &identity_bake(80, 1.0, 3.5));
+    assert_matches_presort_oracle(
+        "nonfinite fallback",
+        &with_nonfinite(&rows),
+        &identity_bake(80, 0.3, 3.5),
+    );
+
+    let stack = 80u32;
+    let n = stack as usize + 1;
+    let budget = n * 4 + 4096;
+    let under = span_rows((budget - 1) as f32, stack);
+    let over = span_rows(budget as f32, stack);
+    assert_matches_presort_oracle(
+        "bucket budget",
+        &under,
+        &identity_bake((budget - 1) as u32, 0.3, 3.5),
+    );
+    assert_matches_presort_oracle(
+        "past bucket budget",
+        &over,
+        &identity_bake(budget as u32, 0.3, 3.5),
+    );
+}
+
+/// Capacities of the scratch `reduce_crosses` / `reduce_volume` reuse across bakes.
+fn scratch_caps(pick: &super::LodPick) -> [usize; 8] {
+    [
+        pick.rows.capacity(),
+        pick.order.capacity(),
+        pick.kept.capacity(),
+        pick.keep.capacity(),
+        pick.covering.capacity(),
+        pick.counts.capacity(),
+        pick.scratch.capacity(),
+        pick.heights.capacity(),
+    ]
+}
+
+/// `tick_volume.rs:counting_sort_by`: a second bake of the same row count must not grow
+/// `LodPick` scratch. Growth here allocates on every wheel zoom.
+#[test]
+fn second_bake_keeps_lodpick_scratch_capacity() {
+    let rows = dense_wheel_rows();
+    let g = window_bake(2300.0 / 3600.0, 0.3, 3.5);
+    let mut pick = super::LodPick::default();
+    super::reduce_crosses(rows.iter().copied(), &g, &mut pick);
+    super::reduce_volume(rows.iter().copied(), &g, &mut pick);
+    let caps = scratch_caps(&pick);
+    super::reduce_crosses(rows.iter().copied(), &g, &mut pick);
+    super::reduce_volume(rows.iter().copied(), &g, &mut pick);
+    assert_eq!(scratch_caps(&pick), caps, "scratch grew on the second bake");
+}
+
+/// Ignored timing probe: median milliseconds, ASCII only, not an assertion.
+#[test]
+#[ignore]
+fn ignored_wheel_bake_reduce_median_ms() {
+    let rows = dense_wheel_rows();
+    for window in [3600.0f32, 1800.0, 300.0] {
+        let g = window_bake(2300.0 / window, 0.3, 3.5);
+        let mut pick = super::LodPick::default();
+        let mut cross_ms = Vec::with_capacity(20);
+        let mut volume_ms = Vec::with_capacity(20);
+        for _ in 0..20 {
+            let started = std::time::Instant::now();
+            super::reduce_crosses(rows.iter().copied(), &g, &mut pick);
+            cross_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+            let started = std::time::Instant::now();
+            super::reduce_volume(rows.iter().copied(), &g, &mut pick);
+            volume_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        cross_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        volume_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let cross = (cross_ms[9] + cross_ms[10]) / 2.0;
+        let volume = (volume_ms[9] + volume_ms[10]) / 2.0;
+        println!(
+            "[OK] window {window}s median reduce_crosses {cross:.3} ms reduce_volume {volume:.3} ms"
+        );
+    }
+}
