@@ -308,6 +308,8 @@ pub const LOD_MAX_ROWS: usize = 32;
 pub const LOD_VOLUME_CAP: usize = 64;
 /// Tallest volume bar in whole pixels (crosses.hlsl caps the band at 72 px).
 const LOD_BAR_MAX_PX: usize = 72;
+// Caching bar heights as u8 is lossless within the shader's pixel-height ceiling.
+const _: () = assert!(LOD_BAR_MAX_PX <= u8::MAX as usize);
 
 /// Bake transform in the shader's units: `price0` is the bake origin price including the
 /// vertical margin, `height` the full texture height including margins, `width_px` in texels.
@@ -350,6 +352,12 @@ pub struct LodPick {
     keep: Vec<bool>,
     /// Kept later bars in the current column, counted per whole-pixel height.
     covering: Vec<u32>,
+    /// Histogram, then exclusive bucket ends, for one counting-sort pass.
+    counts: Vec<u32>,
+    /// Scatter buffer paired with `order` / `kept`. Swapped, never copied, and retained.
+    scratch: Vec<u32>,
+    /// Whole-pixel volume-bar height of each keyed row, reused across `reduce_volume` calls.
+    heights: Vec<u8>,
 }
 
 /// Whether a full bake over `rows_in_span` rows is dense enough to reduce.
@@ -370,15 +378,37 @@ pub fn lod_volume_keep(alpha: f32) -> usize {
     }
 }
 
+/// Finite column/row span of the rows [`key_rows`] kept, in the same `as i64` texel keys.
+///
+/// `finite` is false when a kept column or row was NaN or infinite. Those keys stay stored for
+/// the comparison-sort fallback and are never turned into a bucket index.
+struct KeySpan {
+    finite: bool,
+    col_min: i64,
+    col_max: i64,
+    row_min: i64,
+    row_max: i64,
+}
+
 /// Key rows to their texel in the shader's f32 operation order (HLSL round() ties to even),
 /// keeping only rows `drawn` says the shader would not cull.
+///
+/// Column and row are computed and filtered before any bucket index. The returned span is the
+/// min/max of the finite keys actually kept.
 fn key_rows(
     rows: impl IntoIterator<Item = (u32, f32, f32, u32, f32)>,
     g: &BakeColumns,
     out: &mut LodPick,
     drawn: impl Fn(f32, f32, f32, u32, f32) -> bool,
-) {
+) -> KeySpan {
     out.rows.clear();
+    let mut span = KeySpan {
+        finite: true,
+        col_min: i64::MAX,
+        col_max: i64::MIN,
+        row_min: i64::MAX,
+        row_max: i64::MIN,
+    };
     for (slot, t, p, side, qty) in rows {
         let sx = 0.0 + (t - g.time0) * g.time_to_px;
         let col = sx.round_ties_even();
@@ -386,13 +416,170 @@ fn key_rows(
         if !drawn(sx, col, row, side, qty) {
             continue;
         }
+        let col_key = col as i64;
+        let row_key = row as i64;
+        if col.is_finite() && row.is_finite() {
+            span.col_min = span.col_min.min(col_key);
+            span.col_max = span.col_max.max(col_key);
+            span.row_min = span.row_min.min(row_key);
+            span.row_max = span.row_max.max(row_key);
+        } else {
+            span.finite = false;
+        }
         out.rows.push(LodRow {
             slot,
-            col: col as i64,
-            row: row as i64,
+            col: col_key,
+            row: row_key,
             side,
             qty,
         });
+    }
+    span
+}
+
+/// Bucket count of `min..=max` when it does not exceed `4 * n + 4096`.
+fn bucket_count(min: i64, max: i64, n: usize) -> Option<usize> {
+    if min > max {
+        return None;
+    }
+    let span = i128::from(max) - i128::from(min) + 1;
+    let buckets = usize::try_from(span).ok()?;
+    let budget = n.saturating_mul(4).saturating_add(4096);
+    (buckets <= budget).then_some(buckets)
+}
+
+/// `value - origin` for a span [`bucket_count`] already accepted.
+fn bucket_index(value: i64, origin: i64) -> usize {
+    usize::try_from(i128::from(value) - i128::from(origin))
+        .expect("bucket index fits the checked span")
+}
+
+/// Column buckets when every kept key was finite and the span fits the counting-sort budget.
+fn col_buckets(span: &KeySpan, n: usize) -> Option<usize> {
+    if span.finite {
+        bucket_count(span.col_min, span.col_max, n)
+    } else {
+        None
+    }
+}
+
+/// Both texel axes fit in the counting-sort budget, and every kept key was finite.
+fn counting_axes(span: &KeySpan, n: usize) -> Option<(usize, usize)> {
+    Some((
+        col_buckets(span, n)?,
+        bucket_count(span.row_min, span.row_max, n)?,
+    ))
+}
+
+/// Stable counting sort of `order` by `key` in `0..buckets`. Equal keys keep their order.
+///
+/// `counts` and `scratch` are cleared and reused. A second call with the same sizes allocates
+/// nothing.
+fn counting_sort_by(
+    order: &mut Vec<u32>,
+    scratch: &mut Vec<u32>,
+    counts: &mut Vec<u32>,
+    buckets: usize,
+    mut key: impl FnMut(u32) -> usize,
+) {
+    counts.clear();
+    counts.resize(buckets, 0);
+    for &k in &*order {
+        counts[key(k)] += 1;
+    }
+    let mut sum = 0u32;
+    for slot in &mut *counts {
+        let n = *slot;
+        *slot = sum;
+        sum += n;
+    }
+    scratch.clear();
+    scratch.resize(order.len(), 0);
+    for &k in &*order {
+        let b = key(k);
+        let at = counts[b];
+        scratch[at as usize] = k;
+        counts[b] = at + 1;
+    }
+    std::mem::swap(order, scratch);
+}
+
+/// Comparison sort by `(col, row, k)`. The key is total, so the unstable sort has one result.
+fn sort_crosses_tier_a(order: &mut [u32], rows: &[LodRow]) {
+    order.sort_unstable_by_key(|&k| {
+        let r = &rows[k as usize];
+        (r.col, r.row, k)
+    });
+}
+
+/// Comparison sort by `(col, side class, row, k)`.
+fn sort_crosses_tier_b(kept: &mut [u32], rows: &[LodRow]) {
+    kept.sort_unstable_by_key(|&k| {
+        let r = &rows[k as usize];
+        (r.col, r.side.min(2), r.row, k)
+    });
+}
+
+/// Comparison sort by `(col, k)`.
+fn sort_volume_by_col(order: &mut [u32], rows: &[LodRow]) {
+    order.sort_unstable_by_key(|&k| (rows[k as usize].col, k));
+}
+
+/// Whole-pixel volume-bar height, matching `volume_vertex`, clamped to [`LOD_BAR_MAX_PX`].
+fn bar_height_px(row: &LodRow, band_h: f32, buy_inv: f32, sell_inv: f32) -> u8 {
+    let inv = if row.side == 0 { buy_inv } else { sell_inv };
+    let norm = (row.qty * inv).clamp(0.0, 1.0);
+    let h = (norm.sqrt() * band_h).max(1.0).ceil();
+    if h.is_finite() {
+        (h as usize).min(LOD_BAR_MAX_PX) as u8
+    } else {
+        LOD_BAR_MAX_PX as u8
+    }
+}
+
+/// Whether `covering[hp..]` sums to at least `keep`, stopping once the running total does.
+fn cover_reached(covering: &[u32], hp: usize, keep: u32) -> bool {
+    let mut covered = 0u32;
+    for &count in &covering[hp..] {
+        covered += count;
+        // `keep == 0` is true on this first slot; the tail runs only while the sum is still short.
+        if covered >= keep {
+            return true;
+        }
+    }
+    false
+}
+
+/// Stable 3-way partition of each column by `side.min(2)`, preserving `(row, k)` order.
+///
+/// `kept` is already grouped by column and ordered by `(col, row, k)`.
+fn partition_kept_by_side(kept: &mut [u32], rows: &[LodRow], scratch: &mut Vec<u32>) {
+    // Every slot of each column range is written before it is read, so stale contents are never observed.
+    scratch.resize(kept.len(), 0);
+    let mut col_start = 0;
+    while col_start < kept.len() {
+        let col = rows[kept[col_start] as usize].col;
+        let col_end = col_start
+            + kept[col_start..]
+                .iter()
+                .take_while(|&&k| rows[k as usize].col == col)
+                .count();
+        let mut class_count = [0usize; 3];
+        for &k in &kept[col_start..col_end] {
+            class_count[rows[k as usize].side.min(2) as usize] += 1;
+        }
+        let mut cursor = [
+            col_start,
+            col_start + class_count[0],
+            col_start + class_count[0] + class_count[1],
+        ];
+        for &k in &kept[col_start..col_end] {
+            let class = rows[k as usize].side.min(2) as usize;
+            scratch[cursor[class]] = k;
+            cursor[class] += 1;
+        }
+        kept[col_start..col_end].copy_from_slice(&scratch[col_start..col_end]);
+        col_start = col_end;
     }
 }
 
@@ -406,7 +593,7 @@ pub fn reduce_crosses(
     out.cross.clear();
     let cull = g.marker_half.max(8.0).max(g.marker_half + 1.0);
     let (w, h) = (g.width_px as f32, g.height);
-    key_rows(rows, g, out, |_, col, row, _, _| {
+    let span = key_rows(rows, g, out, |_, col, row, _, _| {
         col.is_finite()
             && row.is_finite()
             && col >= -cull
@@ -414,12 +601,17 @@ pub fn reduce_crosses(
             && row >= -cull
             && row <= h + cull
     });
+    if out.rows.is_empty() {
+        return;
+    }
     let LodPick {
         cross,
         rows,
         order,
         kept,
         keep,
+        counts,
+        scratch,
         ..
     } = out;
     let n = rows.len();
@@ -427,12 +619,22 @@ pub fn reduce_crosses(
     keep.resize(n, false);
 
     // Tier A: the last row per texel wins, as it would in the draw.
+    // LSD counting sort: k ascending, stable by row, then stable by col => (col, row, k).
     order.clear();
     order.extend(0..n as u32);
-    order.sort_unstable_by_key(|&k| {
-        let r = &rows[k as usize];
-        (r.col, r.row, k)
-    });
+    let fast = counting_axes(&span, n);
+    if let Some((col_buckets, row_buckets)) = fast {
+        let row_min = span.row_min;
+        counting_sort_by(order, scratch, counts, row_buckets, |k| {
+            bucket_index(rows[k as usize].row, row_min)
+        });
+        let col_min = span.col_min;
+        counting_sort_by(order, scratch, counts, col_buckets, |k| {
+            bucket_index(rows[k as usize].col, col_min)
+        });
+    } else {
+        sort_crosses_tier_a(order, rows);
+    }
     kept.clear();
     for (i, &k) in order.iter().enumerate() {
         let r = &rows[k as usize];
@@ -446,10 +648,12 @@ pub fn reduce_crosses(
     }
 
     // Tier B: columns still holding too many distinct rows are sampled per side class.
-    kept.sort_unstable_by_key(|&k| {
-        let r = &rows[k as usize];
-        (r.col, r.side.min(2), r.row, k)
-    });
+    // `kept` is in (col, row, k) order, so a stable side-class partition matches the old key.
+    if fast.is_some() {
+        partition_kept_by_side(kept, rows, scratch);
+    } else {
+        sort_crosses_tier_b(kept, rows);
+    }
     let mut col_start = 0;
     while col_start < kept.len() {
         let col = rows[kept[col_start] as usize].col;
@@ -489,8 +693,10 @@ pub fn reduce_crosses(
 
 /// Reduce `(slot, time, price, side, qty)` rows to the volume bars a bitmap can show: those
 /// fewer than `lod_volume_keep` later kept bars at least as tall in pixels cover, plus the
-/// tallest per side. Rows the volume pass culls (off the band, empty, liquidations) are dropped
-/// first. A column keeps at most `V * (LOD_BAR_MAX_PX + 1) + 2` bars.
+/// tallest per side. Each kept row's whole-pixel height is computed once; the cover count walks
+/// up from that height and stops once it reaches the keep threshold. Rows the volume pass culls
+/// (off the band, empty, liquidations) are dropped first. A column keeps at most
+/// `V * (LOD_BAR_MAX_PX + 1) + 2` bars.
 pub fn reduce_volume(
     rows: impl IntoIterator<Item = (u32, f32, f32, u32, f32)>,
     g: &BakeColumns,
@@ -498,37 +704,49 @@ pub fn reduce_volume(
 ) {
     out.volume.clear();
     let w = g.width_px as f32;
-    key_rows(rows, g, out, |sx, _, _, side, qty| {
+    let span = key_rows(rows, g, out, |sx, _, _, side, qty| {
         sx >= -2.0 && sx <= w + 2.0 && qty > 0.0 && side < 2
     });
+    if out.rows.is_empty() {
+        return;
+    }
     let LodPick {
         volume,
         rows,
         order,
-        kept,
+        keep,
         covering,
+        counts,
+        scratch,
+        heights,
         ..
     } = out;
     let n = rows.len();
     // Volume: walking back from the last drawn bar, a bar stays visible unless `v` later kept
-    // bars in its column already cover it; the tallest bar per column and side is always kept.
+    // bars in its column already cover it. Heights are computed once; the cover count stops at `v`.
+    // The tallest bar per column and side is always kept.
     let v = lod_volume_keep(g.volume_alpha) as u32;
     // Whole-pixel bar height, as volume_vertex computes it.
     let band_h = (g.height * 0.18).min(72.0);
-    let height_px = |r: &LodRow| {
-        let inv = if r.side == 0 { g.buy_inv } else { g.sell_inv };
-        let norm = (r.qty * inv).clamp(0.0, 1.0);
-        let h = (norm.sqrt() * band_h).max(1.0).ceil();
-        if h.is_finite() {
-            (h as usize).min(LOD_BAR_MAX_PX)
-        } else {
-            LOD_BAR_MAX_PX
-        }
-    };
+    heights.clear();
+    heights.extend(
+        rows.iter()
+            .map(|r| bar_height_px(r, band_h, g.buy_inv, g.sell_inv)),
+    );
     order.clear();
     order.extend(0..n as u32);
-    order.sort_unstable_by_key(|&k| (rows[k as usize].col, k));
-    kept.clear();
+    // (col, k): the input is k ascending, so a stable counting sort by column matches it.
+    if let Some(buckets) = col_buckets(&span, n) {
+        let col_min = span.col_min;
+        counting_sort_by(order, scratch, counts, buckets, |k| {
+            bucket_index(rows[k as usize].col, col_min)
+        });
+    } else {
+        sort_volume_by_col(order, rows);
+    }
+    // Each index is kept at most once, so a flag scan in order matches the old sort.
+    keep.clear();
+    keep.resize(n, false);
     let mut start = 0;
     while start < order.len() {
         let col = rows[order[start] as usize].col;
@@ -543,24 +761,24 @@ pub fn reduce_volume(
         for &k in group {
             let r = &rows[k as usize];
             let best = &mut tallest[r.side.min(2) as usize];
-            if *best == u32::MAX || height_px(r) >= height_px(&rows[*best as usize]) {
+            if *best == u32::MAX || heights[k as usize] >= heights[*best as usize] {
                 *best = k;
             }
         }
-        covering.clear();
-        covering.resize(LOD_BAR_MAX_PX + 1, 0);
+        if covering.len() != LOD_BAR_MAX_PX + 1 {
+            covering.resize(LOD_BAR_MAX_PX + 1, 0);
+        }
+        covering.fill(0);
         for &k in group.iter().rev() {
-            let hp = height_px(&rows[k as usize]);
-            let covered: u32 = covering[hp..].iter().sum();
-            if tallest.contains(&k) || covered < v {
+            let hp = usize::from(heights[k as usize]);
+            if tallest.contains(&k) || !cover_reached(covering, hp, v) {
                 covering[hp] += 1;
-                kept.push(k);
+                keep[k as usize] = true;
             }
         }
         start = end;
     }
-    kept.sort_unstable();
-    volume.extend(kept.iter().map(|&k| rows[k as usize].slot));
+    volume.extend((0..n).filter(|&k| keep[k]).map(|k| rows[k].slot));
 }
 
 #[cfg(test)]

@@ -272,6 +272,11 @@ diag_counters!(
     // full cross bake drew, and `VOLUME_BAKE` counts full rebakes of the separate volume band.
     CHART_COMBO_BAKE_INSTANCES => "combo_bake_instances",
     CHART_COMBO_VOLUME_BAKE => "combo_volume_bake",
+    // CPU time, in microseconds, of a frame that ran at least one full bake (volume-scale scan,
+    // LOD reduce, upload, draw submit), including the other layer's incremental append in that
+    // frame. `CHART_COMBO_LOD_US` is the LOD reduce alone.
+    CHART_COMBO_BAKE_US => "combo_bake_us",
+    CHART_COMBO_LOD_US => "combo_lod_us",
     // The candle layer draws during each base pass. `UPLOAD_LEN` counts the rows actually shipped
     // after a candle-series revision: a live-edge trade batch ships only the changed tail, a
     // rebuild the whole list. `DRAW_INSTANCES` counts the candle instances submitted, only the
