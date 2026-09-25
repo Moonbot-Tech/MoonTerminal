@@ -1,5 +1,11 @@
 //! [`StrategiesView`] construction, change detection, and event/focus integration.
 
+use std::time::SystemTime;
+
+use super::session::{
+    collapse_strategies_expansion, rail_overlay_on_open, strategies_closed_for,
+    strategies_reopen_collapses,
+};
 use super::*;
 
 use crate::workspace::scope_marker::ScopeMarker;
@@ -223,10 +229,14 @@ impl StrategiesView {
     /// Create the Strategies view and subscribe it to search, tree, backend, and window events.
     ///
     /// A process-lifetime snapshot restores browsing state after the window is closed and
-    /// reopened. Construction then seeds the Auto rail's selected core into the `rail_expanded_core`
-    /// overlay when it belongs to the visible workspace scope, so a collapsed snapshot still opens
-    /// that server's list — the overlay, never the restored snapshot itself, which is why a rail
-    /// seed never survives into another window or scope.
+    /// reopened. In Auto, a close of at least fifteen minutes drops hand expansion, folder
+    /// expansion, folder selection, and the rail overlay, so every core row opens shut.
+    /// Search, filters, and strategy selection stay. `rail_seen_core` still records the
+    /// current rail selection on that path, so a later revision of the same selection does
+    /// not open the row. Any shorter close, and Classic, restore the snapshot and seed the
+    /// Auto rail's selected core into the `rail_expanded_core` overlay when it belongs to
+    /// the visible workspace scope. The overlay is never written into the restored snapshot,
+    /// which is why a rail seed never survives into another window or scope.
     ///
     /// Args:
     ///     backend: Shared state supplying strategy data and workspace scope.
@@ -245,6 +255,28 @@ impl StrategiesView {
         let display_zone =
             crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
         let session = backend.read(cx).ui_session.strategies.clone();
+        // The window is opening, so it is no longer closed. Read the stamp first: clearing
+        // it here is what stops time spent in the open window from counting toward the next gap.
+        let (closed_at, mode) = {
+            let backend = backend.read(cx);
+            (
+                backend.ui_session.strategies_closed_at,
+                backend
+                    .display_preset(crate::workspace::DisplayOwner::Singleton)
+                    .unwrap_or(moon_core::config::WorkspaceMode::Classic),
+            )
+        };
+        let collapse =
+            strategies_reopen_collapses(mode, strategies_closed_for(closed_at, SystemTime::now()));
+        let session = session.map(|mut state| {
+            if collapse {
+                collapse_strategies_expansion(&mut state);
+            }
+            state
+        });
+        backend.update(cx, |backend, _| {
+            backend.ui_session.strategies_closed_at = None;
+        });
         let search = cx.new(|cx| {
             let input = MoonInputState::new(window, cx).placeholder(t!("strat.search").to_string());
             match &session {
@@ -284,7 +316,9 @@ impl StrategiesView {
             None => HashSet::new(),
         };
         let rail_seed = rail_seed_core(selected_core, workspace_cores.as_deref());
-        let rail_expanded_core = rail_seed;
+        // Idle collapse keeps `rail_seen_core` so an unchanged rail revision does not
+        // reopen the row. The overlay itself stays empty: that is the open core row.
+        let rail_expanded_core = rail_overlay_on_open(collapse, rail_seed);
         let rail_seen_core = rail_seed;
 
         let tree_state = cx.new(|cx| MoonTreeState::new(cx));
@@ -490,6 +524,13 @@ impl StrategiesView {
 
         cx.on_release(|this, app| {
             this.persist_session(app);
+            // The window is gone. Stamp the wall clock after the snapshot so the next
+            // open can measure how long it stayed closed. `persist_session` does not
+            // touch this field; the next `StrategiesView::new` clears it.
+            let closed_at = SystemTime::now();
+            this.backend.update(app, |backend, _| {
+                backend.ui_session.strategies_closed_at = Some(closed_at);
+            });
         })
         .detach();
 
