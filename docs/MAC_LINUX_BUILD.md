@@ -1,26 +1,32 @@
 # macOS / Linux Build Notes
 
-Last updated: 2026-06-24.
+Last updated: 2026-09-25.
 
 This file describes the current public stack: `MoonTerminal` + `Moonbot-Tech/MoonUI`.
 
 ## General rules
 
-Public dependencies in `Cargo.toml` must remain git dependencies:
+Public dependencies in `crates/moon-ui-gpui/Cargo.toml` must remain git dependencies:
 
 ```toml
 gpui = { package = "moon-gpui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
-gpui_platform = { package = "moon-gpui-platform", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
+gpui_platform = { package = "moon-gpui-platform", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master", features = ["font-kit", "runtime_shaders"] }
 moon-ui = { package = "moon-ui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
 ```
 
 `Cargo.lock` is committed: third-party versions move only by a deliberate commit. MoonUI
 stays rolling — CI updates its pin on every run; locally that is `make update-moon-ui`. For
-diagnosis check the build stamp in the log:
+diagnosis check the build stamp logged at startup:
 
 ```text
-build: moonterminal=<git-sha>[+dirty] moonui=<git-sha|local:git-sha>[+dirty]
+build: moonterminal=<rev>[+dirty] release_base=<tag> moonui=<rev>
 ```
+
+`moonterminal` is `git rev-parse --short=12` of this repo, with `+dirty` when the worktree is
+dirty. `release_base` is the greatest stable `v*` tag reachable from HEAD (`vMAJOR.MINOR` or
+`vMAJOR.MINOR.PATCH`). `moonui` is the full git revision of `moon-gpui` in `Cargo.lock`, or
+`local:<rev>[+dirty]` taken from a sibling `../MoonUI` checkout when the lock has no such pin.
+A field that cannot be read is `unknown`.
 
 The build is reproducible for third-party dependencies at any moment; MoonUI freshness is a separate step.
 
@@ -50,23 +56,18 @@ cargo tree -i moon-ui
 
 ## macOS
 
-A full Xcode or an installed Metal toolchain is needed, where this works:
-
-```bash
-xcode-select -p
-xcrun --find metal
-```
-
-Command Line Tools alone are not enough: `moon-gpui-macos` compiles GPUI Metal shaders through
-`xcrun metal`.
+`crates/moon-ui-gpui/Cargo.toml` enables `gpui_platform`'s `runtime_shaders` feature on every
+build. With that feature, `moon-gpui-macos` stitches shader source at build time and compiles it
+at runtime; it calls `xcrun metal` only when the feature is off, which this crate never does.
+Command Line Tools are enough for the shader step. A full Xcode or the Metal toolchain is not
+required to compile.
 
 ### Canonical Mac Check
 
-This is the main path for a normal Mac stand and release/stabilization. It checks build-script
-compilation of GPUI Metal shaders through a real `metal`:
+This is the main path for a normal Mac stand. It is the same check as on Linux, and it does not
+compile shaders through `xcrun metal`:
 
 ```bash
-TOOLCHAINS=com.apple.dt.toolchain.Metal \
 cargo check -p moon-ui-gpui --bin moonterminal
 ```
 
@@ -75,12 +76,15 @@ access to the binary/bundle identity, and a remote CLI session easily hits
 `User interaction is not allowed`.
 
 ```bash
-TOOLCHAINS=com.apple.dt.toolchain.Metal \
 FEATURES=debug-tools \
 ./scripts/macos-bundle.sh
 
 open -n target/macos/MoonTerminal.app
 ```
+
+`scripts/macos-bundle.sh` defaults `TOOLCHAINS` to `com.apple.dt.toolchain.Metal` before the
+build. That variable does not turn `runtime_shaders` off, so the build still does not invoke
+`xcrun metal`.
 
 `scripts/macos-bundle.sh` does a release build, `.app`, stable bundle id `pro.moonbot.terminal`,
 an ad-hoc signature by default and `codesign --verify --deep --strict`.
@@ -100,9 +104,15 @@ locally — that is a run of the release workflow.
 
 ### Fresh Mac Live Smoke
 
-The first migration of an old `config.toml` reads the file from the current working directory, and the new
-`servers.enc/settings.toml` are written next to the executable. Therefore on a fresh Mac the first live-run with
-a legacy `config.toml` is done from `Contents/MacOS`, through a GUI session:
+On macOS the data root is `~/Library/Application Support/com.moonbot.moonterminal/`, not the
+directory of the executable (`paths::data_dir`, `APP_ID`). `servers.enc` is written in that
+root. `settings.toml`, `theme.toml` and `orders.toml` are written under its `cfg/` directory.
+On Windows the data root is the executable's directory, and the same `cfg/` layout applies there.
+
+A one-time migration still reads the oldest plaintext `config.toml` from the process working
+directory (`legacy_toml_path` is the relative path `config.toml`) and `config.enc` from beside
+the executable. Launch from the directory that contains `config.toml`, in a GUI session so
+Keychain can prompt. The `cd` below only matters when that file sits next to the bundled binary:
 
 ```bash
 cd "$HOME/MoonTerminal/target/macos/MoonTerminal.app/Contents/MacOS"
@@ -116,13 +126,13 @@ Password: <login password>
 Button: Always Allow
 ```
 
-After that these should appear:
+After that, look in Application Support, not in `Contents/MacOS`:
 
 ```text
 servers.enc
-settings.toml
-theme.toml
-orders.toml
+cfg/settings.toml
+cfg/theme.toml
+cfg/orders.toml
 ```
 
 Then the ordinary packaging smoke:
@@ -136,28 +146,18 @@ launch the binary again from GUI Terminal/`.command`; `launchctl asuser ... sete
 by the provider. An SSH-run is not a valid Keychain/live smoke: it can fail with
 `User interaction is not allowed` even though the `.app` works in the GUI.
 
-### CLT / Rented Mac Fallback
+### Command Line Tools
 
-Some rented Macs give only Command Line Tools without a working `xcrun metal`. Such a stand
-is good for checking the Rust/Metal backend code, but does NOT replace the canonical Mac check above.
+Command Line Tools are the normal macOS build. Passing
+`--features gpui_platform/runtime_shaders` does not select another shader path: that feature is
+already enabled on the `gpui_platform` dependency, and Cargo cannot turn a dependency feature
+off from the command line.
 
-Fallback commands:
-
-```bash
-cargo check -p moon-ui-gpui --bin moonterminal --features gpui_platform/runtime_shaders
-cargo build -p moon-ui-gpui --bin moonterminal --features gpui_platform/runtime_shaders
-```
-
-What this fallback covers:
-- compilation of terminal + MoonUI on the macOS target;
-- Metal backend types, `RawGpuAccess::Metal`, command buffer / encoder path;
-- linking of macOS dependencies.
-
-What it does NOT cover:
-- build-script compilation of GPUI Metal shaders through `xcrun metal`;
-- `.app` packaging/codesign;
-- Keychain GUI ACL;
-- a visual live check of the chart with your eyes.
+A CLT `cargo check -p moon-ui-gpui --bin moonterminal` type-checks the terminal and MoonUI on
+the macOS target, including Metal backend types (`RawGpuAccess::Metal`) and the command buffer /
+encoder path. It does not link a binary, and it does not cover build-script `xcrun metal`
+(that path exists in MoonUI only when `runtime_shaders` is off), `.app` packaging, Keychain
+GUI ACL, or a visual check of the chart.
 
 ### Fast Remote Dev Loop
 
@@ -168,11 +168,10 @@ side by side and keep the ignored `.cargo/config.toml`, so the terminal takes th
 rm -rf "$HOME/MoonTerminal" "$HOME/MoonUI"
 tar -xzf /tmp/moon-src-check.tgz -C "$HOME"
 cd "$HOME/MoonTerminal"
-cargo check -p moon-ui-gpui --bin moonterminal --features gpui_platform/runtime_shaders
+cargo check -p moon-ui-gpui --bin moonterminal
 ```
 
-If the Mac has a full Metal toolchain, run the canonical command with
-`TOOLCHAINS=com.apple.dt.toolchain.Metal` instead of the fallback command, and for live smoke launch the `.app` through a GUI session.
+For live smoke, launch the `.app` through a GUI session.
 
 ## Linux
 
