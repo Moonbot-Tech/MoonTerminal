@@ -119,7 +119,7 @@ pub(super) fn forget(
 }
 
 pub(super) fn init(conn: &Connection, cfg: &StrategiesStoreCfg) -> rusqlite::Result<State> {
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    crate::db::wal::enable(conn)?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
     conn.execute_batch(

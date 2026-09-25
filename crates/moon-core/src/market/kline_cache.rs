@@ -337,7 +337,7 @@ impl KlineCache {
 }
 
 fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    crate::db::wal::enable(conn)?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS chunks(

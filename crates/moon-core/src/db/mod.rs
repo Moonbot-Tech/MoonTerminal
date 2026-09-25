@@ -39,6 +39,7 @@ pub mod trace;
 mod trade_meta;
 pub mod tuner;
 pub mod valuation;
+pub(crate) mod wal;
 
 pub use dates::{fmt_unix, fmt_unix_date, fmt_unix_secs, parse_ymd};
 pub use quote::{
@@ -100,7 +101,7 @@ pub struct ReportsHandle {
 /// tables receive only the indexes needed by report reads; the obsolete
 /// `server_id` schema is dropped because no protocol-v4 writer can repopulate it.
 fn init_db(conn: &Connection) -> rusqlite::Result<()> {
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    wal::enable(conn)?;
     let _ = conn.busy_timeout(Duration::from_secs(3));
 
     conn.execute(
@@ -584,7 +585,7 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
                 // transaction to reclaim its hundreds of MB. Only the writer is blocked.
                 if rep_state.vacuum_pending {
                     let t = std::time::Instant::now();
-                    match conn.execute("VACUUM", []) {
+                    match wal::vacuum(&conn) {
                         Ok(_) => {
                             rep_state.vacuum_pending = false;
                             log::info!(
