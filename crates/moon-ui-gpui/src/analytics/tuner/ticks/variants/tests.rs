@@ -18,14 +18,19 @@ fn answer(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
+fn keys(names: &[&str]) -> Vec<String> {
+    names.iter().map(|k| (*k).to_string()).collect()
+}
+
 /// "Search" on `UseTakeProfit`: the switch lands, and so does the `TakeProfit` the answer
 /// completed for it — Save would otherwise write the switch with no per cent behind it — while
-/// every other cell of В1 stays.
+/// every cell the search did not vary stays.
 #[test]
 fn a_search_of_one_field_lands_the_values_it_completed() {
     let mut v1 = cells(&[("SellPrice", "1.5"), ("StopLoss", "-3")]);
     land_answer(
         &mut v1,
+        &keys(&["UseTakeProfit"]),
         &answer(&[("TakeProfit", "1"), ("UseTakeProfit", "YES")]),
     );
     assert_eq!(
@@ -39,22 +44,28 @@ fn a_search_of_one_field_lands_the_values_it_completed() {
     );
 }
 
-/// A search of one field that left it at its base answers without it: В1's cell stays.
+/// A searched field is searched anew from the strategies (LinKvo, 2026-09-25): an answer that
+/// leaves it at the strategies' own value empties its cell, whatever В1 had put there.
 #[test]
-fn a_field_left_at_its_base_keeps_what_v1_had() {
+fn a_searched_field_left_at_the_strategy_empties_its_cell() {
     let mut v1 = cells(&[("SellPrice", "1.5")]);
-    land_answer(&mut v1, &[]);
-    assert_eq!(v1, cells(&[("SellPrice", "1.5")]));
+    land_answer(&mut v1, &keys(&["SellPrice"]), &[]);
+    assert!(v1.is_empty(), "{v1:?}");
 }
 
-/// "Search all" lays its answer over В1 and never empties it (the developer, 2026-09-25): a
-/// search runs from В1 as it stands, so a cell it did not move is still В1's, and В1 is cleared
-/// only by the user.
+/// "Search all" replaces every searched cell by its answer and leaves the cells it did not
+/// search as they were.
 #[test]
-fn a_search_of_every_field_keeps_what_v1_had() {
-    let mut v1 = cells(&[("SellPrice", "1.5"), ("StopLoss", "-3")]);
-    land_answer(&mut v1, &answer(&[("SellPrice", "2")]));
-    assert_eq!(v1, cells(&[("SellPrice", "2"), ("StopLoss", "-3")]));
-    land_answer(&mut v1, &[]);
-    assert_eq!(v1, cells(&[("SellPrice", "2"), ("StopLoss", "-3")]));
+fn a_search_of_every_ticked_field_replaces_them_and_keeps_the_rest() {
+    let mut v1 = cells(&[
+        ("SellPrice", "1.5"),
+        ("StopLoss", "-3"),
+        ("MaxModifier", "5"),
+    ]);
+    land_answer(
+        &mut v1,
+        &keys(&["SellPrice", "StopLoss"]),
+        &answer(&[("SellPrice", "2")]),
+    );
+    assert_eq!(v1, cells(&[("SellPrice", "2"), ("MaxModifier", "5")]));
 }

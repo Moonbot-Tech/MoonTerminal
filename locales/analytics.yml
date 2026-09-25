@@ -2036,6 +2036,54 @@ analytics.ticks.stats_left_open:
   ru: "вне выборки сделок, которые стратегия как есть не закрывает внутри ленты: %{n}"
   en: "left out, deals the strategy as it stands does not close inside the tape: %{n}"
   es: "fuera de la muestra, operaciones que la estrategia tal cual no cierra dentro de la cinta: %{n}"
+analytics.ticks.stats_entry_points:
+  ru: "точек входа %{n} (на каждую — подбор всего выхода)"
+  en: "entry points %{n} (each with the whole exit searched)"
+  es: "puntos de entrada %{n} (cada uno con toda la salida buscada)"
+analytics.ticks.est_line:
+  ru: "«Подобрать всё»: ≈ %{time} · ≈ %{points} вариантов"
+  en: "\"Search all\": ≈ %{time} · ≈ %{points} variants"
+  es: "«Buscar todo»: ≈ %{time} · ≈ %{points} variantes"
+analytics.ticks.est_nested:
+  ru: "«Подобрать всё», вход × выход: ≈ %{time} · ≈ %{points} вариантов (точек входа ≈ %{entry}, на каждую — весь выход)"
+  en: "\"Search all\", entry × exit: ≈ %{time} · ≈ %{points} variants (≈ %{entry} entry points, the whole exit under each)"
+  es: "«Buscar todo», entrada × salida: ≈ %{time} · ≈ %{points} variantes (≈ %{entry} puntos de entrada, toda la salida en cada uno)"
+analytics.ticks.est_time_pending:
+  ru: "время замеряется"
+  en: "timing it"
+  es: "midiendo el tiempo"
+analytics.ticks.est_tip:
+  ru: "Оценка по отмеченным полям, сеткам, перезапускам и проходам. Отмечены и вход, и выход — на каждую точку входа подбирается весь выход, время растёт кратно. Время — по замеру одной точки на этой выборке, после каждого подбора уточняется. Порядок, не точное число."
+  en: "An estimate from the ticked fields, the grids, restarts and passes. With both the entry and the exit ticked, the whole exit is searched under every entry point, and the time multiplies. The time is one point measured on this sample, refined after every search. An order of magnitude, not an exact figure."
+  es: "Estimación a partir de los campos marcados, las rejillas, los reinicios y las pasadas. Con la entrada y la salida marcadas, se busca toda la salida en cada punto de entrada y el tiempo se multiplica. El tiempo sale de medir un punto en esta muestra y se afina tras cada búsqueda. Un orden de magnitud, no una cifra exacta."
+analytics.ticks.long_title:
+  ru: "Долгий подбор"
+  en: "A long search"
+  es: "Una búsqueda larga"
+analytics.ticks.long_body:
+  ru: "Подбор займёт примерно %{time} (≈ %{points} вариантов). Запустить?"
+  en: "The search will take roughly %{time} (≈ %{points} variants). Run it?"
+  es: "La búsqueda tardará aproximadamente %{time} (≈ %{points} variantes). ¿Ejecutarla?"
+analytics.ticks.long_body_unknown:
+  ru: "Подбор входа и выхода вместе: ≈ %{points} вариантов, время ещё не замерено — это может быть долго. Запустить?"
+  en: "Entry and exit searched together: ≈ %{points} variants, the time is not measured yet — it may take long. Run it?"
+  es: "Entrada y salida buscadas juntas: ≈ %{points} variantes, el tiempo aún no se midió; puede tardar. ¿Ejecutarla?"
+analytics.ticks.long_go:
+  ru: "Запустить"
+  en: "Run"
+  es: "Ejecutar"
+analytics.ticks.dur_s:
+  ru: "%{s} с"
+  en: "%{s} s"
+  es: "%{s} s"
+analytics.ticks.dur_m:
+  ru: "%{m} мин"
+  en: "%{m} min"
+  es: "%{m} min"
+analytics.ticks.dur_hm:
+  ru: "%{h} ч %{m} мин"
+  en: "%{h} h %{m} min"
+  es: "%{h} h %{m} min"
 analytics.ticks.stats_line:
   ru: "перезапусков %{restarts} · лучший — №%{best} · %{passes} · разных итогов %{distinct} · без разрешённой точки %{refused} · оценено точек %{evals}"
   en: "restarts %{restarts} · best from #%{best} · %{passes} · distinct ends %{distinct} · with no allowed point %{refused} · points scored %{evals}"
@@ -2097,13 +2145,13 @@ analytics.ticks.not_read:
   en: "not read"
   es: "no se lee"
 analytics.ticks.suggest_one_tip:
-  ru: "Подобрать только выделенное поле %{field}, галочка не учитывается; остальные поля держатся как в В1. Ответ пишется в ячейку %{field} столбца В1 — и в поля, которые включённый переключатель требует (UseTakeProfit → TakeProfit)"
-  en: "Search the selected field %{field} alone, ticked or not; the other fields stay as V1 has them. The answer goes into V1's %{field} cell — and into the fields a switch it turns on needs (UseTakeProfit → TakeProfit)"
-  es: "Buscar solo el campo seleccionado %{field}, marcado o no; los demás campos quedan como en V1. La respuesta va a la celda %{field} de V1 — y a los campos que requiere un interruptor que active (UseTakeProfit → TakeProfit)"
+  ru: "Подобрать только выделенное поле %{field}, галочка не учитывается. Поле подбирается заново от значений стратегии, что бы ни стояло в В1; остальные поля держатся как в В1. Ответ пишется в ячейку %{field} столбца В1 (совпал со стратегией — ячейка очищается) — и в поля, которые включённый переключатель требует (UseTakeProfit → TakeProfit)"
+  en: "Search the selected field %{field} alone, ticked or not. The field is searched anew from the strategy's values, whatever V1 holds; the other fields stay as V1 has them. The answer goes into V1's %{field} cell (emptied when it is the strategy's own value) — and into the fields a switch it turns on needs (UseTakeProfit → TakeProfit)"
+  es: "Buscar solo el campo seleccionado %{field}, marcado o no. El campo se busca de nuevo desde los valores de la estrategia, tenga lo que tenga V1; los demás campos quedan como en V1. La respuesta va a la celda %{field} de V1 (se vacía si coincide con la de la estrategia) — y a los campos que requiere un interruptor que active (UseTakeProfit → TakeProfit)"
 analytics.ticks.suggest_all_tip:
-  ru: "Подобрать все поля с галочкой в группах, прошедших порог воспроизводимости, — сейчас их %{n}. Подбор идёт от того, что уже стоит в В1, и пишет найденное поверх В1 — остальные ячейки В1 не трогает (очистить В1 — только ✕). Поле без галочки держится как в В1, кроме значения, которое требует включённый подбором переключатель (UseTakeProfit → TakeProfit): оно одно на все стратегии"
-  en: "Search every ticked field of the groups past the reproduction gate — %{n} now. The search starts from what V1 already holds and writes what it finds over V1, leaving V1's other cells alone (only ✕ clears V1). An unticked field stays as V1 has it, but for a value a switch the search turns on needs (UseTakeProfit → TakeProfit): one value for every strategy"
-  es: "Buscar todos los campos marcados de los grupos que pasan el umbral de reproducción — ahora %{n}. La búsqueda parte de lo que ya tiene V1 y escribe lo hallado sobre V1, sin tocar sus demás celdas (solo ✕ vacía V1). Un campo sin marcar queda como en V1, salvo el valor que requiere un interruptor que la búsqueda active (UseTakeProfit → TakeProfit): un valor para todas las estrategias"
+  ru: "Подобрать все поля с галочкой в группах, прошедших порог воспроизводимости, — сейчас их %{n}. Поле с галочкой подбирается заново от значений стратегии, что бы ни стояло в В1; его ячейка В1 получает ответ, а совпал он со стратегией — очищается. Поле без галочки держится как в В1 и его ячейка не трогается, кроме значения, которое требует включённый подбором переключатель (UseTakeProfit → TakeProfit): оно одно на все стратегии"
+  en: "Search every ticked field of the groups past the reproduction gate — %{n} now. A ticked field is searched anew from the strategy's values, whatever V1 holds; its V1 cell takes the answer, and is emptied when the answer is the strategy's own value. An unticked field stays as V1 has it and its cell is left alone, but for a value a switch the search turns on needs (UseTakeProfit → TakeProfit): one value for every strategy"
+  es: "Buscar todos los campos marcados de los grupos que pasan el umbral de reproducción — ahora %{n}. Un campo marcado se busca de nuevo desde los valores de la estrategia, tenga lo que tenga V1; su celda de V1 recibe la respuesta y se vacía si coincide con la de la estrategia. Un campo sin marcar queda como en V1 y su celda no se toca, salvo el valor que requiere un interruptor que la búsqueda active (UseTakeProfit → TakeProfit): un valor para todas las estrategias"
 analytics.ticks.suggest_one_none:
   ru: "Выберите поле: щёлкните по его имени в таблице"
   en: "Pick a field: click its name in the grid"

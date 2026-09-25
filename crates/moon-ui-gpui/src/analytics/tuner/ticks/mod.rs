@@ -38,6 +38,7 @@ use state::{DealRow, TapeStatus};
 mod cfg;
 pub(in crate::analytics::tuner) mod columns;
 mod delta_summary;
+mod estimate;
 pub(crate) mod fetch;
 mod grid;
 mod lags;

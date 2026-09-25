@@ -456,14 +456,22 @@ fn a_search_holds_each_deals_own_value_and_reports_a_value_one_strategy_lacks() 
         "{}",
         result.train.profit
     );
-    // Held over every base, the same take is no change at all.
-    let held: HashMap<String, String> = [("SellPrice".to_string(), "1".to_string())].into();
+    assert_eq!(result.searched, vec!["SellPrice".to_string()]);
+    // A held value of the searched field is set aside (LinKvo, 2026-09-25): the search starts
+    // from the strategies, and the answer is reported against them — the same take again, not
+    // "no change" because the held edits already had it.
+    let held: HashMap<String, String> = [("SellPrice".to_string(), "0.4".to_string())].into();
     let params = SearchParams {
         held: &held,
         ..params
     };
-    let result = suggest(&deals, &params, &SearchHandle::new()).expect("a result");
-    assert!(result.values.is_empty(), "{result:?}");
+    let again = suggest(&deals, &params, &SearchHandle::new()).expect("a result");
+    assert_eq!(again.values, result.values, "{again:?}");
+    assert!(
+        (again.train.profit - 40.0).abs() < 1e-6,
+        "{}",
+        again.train.profit
+    );
 }
 
 /// A floor no point can hold is not an answer: the search says it found nothing rather than

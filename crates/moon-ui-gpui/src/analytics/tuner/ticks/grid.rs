@@ -127,6 +127,10 @@ impl AnalyticsView {
                 });
             }
         }
+        // Under the fields: what "Search all" over the ticked ones scores and how long it takes —
+        // priced again whenever what a point costs under may have moved (`estimate.rs`).
+        self.ticks_measure_cost(cx);
+        let estimate = self.ticks_estimate_row(p, cx);
         v_flex()
             .w_full()
             .flex_1()
@@ -147,6 +151,7 @@ impl AnalyticsView {
                     .overflow_y_scroll()
                     .child(grid),
             )
+            .children(estimate)
             .into_any_element()
     }
 

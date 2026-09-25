@@ -69,15 +69,24 @@ impl AnalyticsView {
         let (status, status_color) = match &self.ticks.sugg {
             // Counted against the restarts the run was launched with, not the box's current
             // text.
-            SuggState::Running { handle, total } => (
-                t!(
+            SuggState::Running { handle, total } => {
+                let progress = t!(
                     "analytics.tuner.sugg_progress",
                     done = handle.completed(),
                     total = total
                 )
-                .to_string(),
-                p.text_soft,
-            ),
+                .to_string();
+                // A search of both groups: its entry points, each with a whole exit search, move
+                // long before a restart ends.
+                let progress = match handle.points() {
+                    0 => progress,
+                    n => format!(
+                        "{progress} · {}",
+                        t!("analytics.ticks.stats_entry_points", n = n)
+                    ),
+                };
+                (progress, p.text_soft)
+            }
             // A note first; else how the last search went, so a restart or pass count that
             // changed nothing can be seen to have changed nothing.
             SuggState::Idle => match (&self.ticks.sugg_note, &self.ticks.last_result) {

@@ -31,6 +31,8 @@ struct Signals {
     abandoned: AtomicBool,
     /// Packed `(step, done, total)` of a multi-stage run. See [`SearchHandle::stage`].
     stage: AtomicU64,
+    /// Outer points scored by a whole inner search. See [`SearchHandle::points`].
+    points: AtomicUsize,
 }
 
 /// Bits reserved for `done` and `total` in the packed stage word; `step` takes what is left.
@@ -93,6 +95,18 @@ impl SearchHandle {
     /// Record one finished restart. An abandoned restart never calls this.
     pub(crate) fn record_restart(&self) {
         self.0.completed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Points of an outer search each scored by a whole inner one — the Entry/Exit axis' entry
+    /// points, each with the exit searched under it — so a run whose restarts take minutes
+    /// still shows it is moving. Zero for a search with no inner one.
+    pub fn points(&self) -> usize {
+        self.0.points.load(Ordering::Relaxed)
+    }
+
+    /// Record one outer point scored by a whole inner search.
+    pub(crate) fn record_point(&self) {
+        self.0.points.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Whether any unit of work was dropped unfinished, i.e. the answer is less than was asked

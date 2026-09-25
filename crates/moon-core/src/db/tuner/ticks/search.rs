@@ -4,7 +4,9 @@
 //! strategy itself; the others from the strategy moved a few steps on a few fields, each walking
 //! the fields in an order of its own. A pass that moves no single field then tries PAIRS of the
 //! Entry group's number fields, one a step down and another a step up, so a corridor's distance
-//! can move between the base fields and the modifiers ([`descend`]).
+//! can move between the base fields and the modifiers ([`descend`]). A search of both groups
+//! scores every entry point by a descent of the exit under it ([`nested`]), so an entry that pays
+//! only with its own exit is reached.
 //!
 //! A point is a set of strategy values in the strategy's own spelling, laid over the values
 //! each deal's OWN strategy holds now ([`PreparedDeal::own`]) — a field the point leaves alone
@@ -111,8 +113,9 @@ pub fn common_horizon_ms(deals: &[PreparedDeal]) -> Option<i64> {
 /// What one search varies and how.
 pub struct SearchParams<'a> {
     /// Values held over every deal's own base ([`PreparedDeal::own`]) before the point is laid
-    /// on — the axis passes the variant's edits for every search, so a search runs on from what
-    /// the earlier ones found (the searched fields among them, which the point then overrides).
+    /// on — the axis passes the variant's edits for every search, so the fields it leaves alone
+    /// run at what the earlier searches found. The fields it varies are not held: their values
+    /// here are set aside, and each starts from the strategies ([`SearchResult::searched`]).
     /// Empty searches from the strategies as they stand.
     pub held: &'a HashMap<String, String>,
     /// Schema defaults for the keys a deal's base leaves out.
@@ -187,6 +190,9 @@ pub struct SearchStats {
     /// Deals the strategies as they stand leave open inside the tape, taken out of the sample
     /// before the search (`closing::closable_at_base`).
     pub left_open: usize,
+    /// Entry points scored by a whole search of the exit under them — a search of both groups
+    /// ([`nested`]); zero for a search of one.
+    pub entry_points: usize,
 }
 
 /// What the search found.
@@ -195,6 +201,10 @@ pub struct SearchResult {
     /// The winning values, in strategy spelling — only the fields that moved off the base of
     /// at least one deal.
     pub values: Vec<(String, String)>,
+    /// The fields the search varied, sorted: each one's answer is in `values`, or it is at the
+    /// strategies' own value — never at what the held edits had it at, which the search set
+    /// aside.
+    pub searched: Vec<String>,
     /// What they achieve on the deals they were fitted on.
     pub train: Tally,
     /// What they achieve on the deals held back, when any were.
@@ -738,6 +748,19 @@ pub fn suggest(
     handle: &SearchHandle,
 ) -> Result<SearchResult, SearchMiss> {
     let fields = varied(params);
+    // A searched field starts from the strategies, never from what the held edits put there
+    // (LinKvo, 2026-09-25: "a ticked field is searched anew, whatever В1 holds"): its held value
+    // is set aside, and only the fields the search leaves alone are held.
+    let held: HashMap<String, String> = params
+        .held
+        .iter()
+        .filter(|(key, _)| !fields.iter().any(|f| f.key == key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let params = &SearchParams {
+        held: &held,
+        ..*params
+    };
     // The strategies of the WHOLE sample stay the bases throughout, a strategy whose every deal
     // leaves the sample below among them: where each number field starts, what completes a point
     // (`deps`) and the parameters built per base are then the same for the filter and for every
@@ -802,18 +825,24 @@ pub fn suggest(
         bases.params(params.held, params.defaults, &full, params.kind, model)
     };
     let coupling = coupled::Coupling::of(&fields, &per_base_at);
-    let evaluate = |point: &Point| -> Option<Tally> {
-        let per_base = per_base_at(point);
-        // A point that inverts the corridor's two fields is never proposed, whatever the
-        // switch: the searched fields are gridded one by one, and nothing else ties them. Only
-        // a search of the Entry group can produce one — an Exit search leaves the strategy's
-        // own fields alone, whatever they hold.
-        if (params.vary_entry && inverts(&start_ordered, &per_base))
+    // A point that inverts the corridor's two fields is never proposed, whatever the switch: the
+    // searched fields are gridded one by one, and nothing else ties them. Only a search of the
+    // Entry group can produce one — an Exit search leaves the strategy's own fields alone,
+    // whatever they hold. Both rules read the entry alone, which is what lets the nested search
+    // refuse an entry point before it searches the exit under it.
+    let corridor_refuses = |per_base: &[(EntryParams, ExitParams)]| {
+        let refused = (params.vary_entry && inverts(&start_ordered, per_base))
             || guard
                 .as_ref()
-                .is_some_and(|g| !g.holds(&bases.of_deal, &per_base))
-        {
+                .is_some_and(|g| !g.holds(&bases.of_deal, per_base));
+        if refused {
             cornered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        refused
+    };
+    let evaluate = |point: &Point| -> Option<Tally> {
+        let per_base = per_base_at(point);
+        if corridor_refuses(&per_base) {
             return None;
         }
         // Counted here, past the refusals: what the stats call a scored point is a replay.
@@ -839,6 +868,15 @@ pub fn suggest(
     } else {
         Vec::new()
     };
+    // Both groups searched: every entry point is scored by a search of the exit under it
+    // (`nested`), each group with its own coupling — the Delta Modifiers diagonals are the exit's.
+    let (entry_fields, exit_fields): (Vec<&'static TickParam>, Vec<&'static TickParam>) =
+        fields.iter().partition(|f| f.group == ParamGroup::Entry);
+    let nested_on = !entry_fields.is_empty() && !exit_fields.is_empty();
+    let entry_coupling = coupled::Coupling::of(&entry_fields, &per_base_at);
+    let exit_coupling = coupled::Coupling::of(&exit_fields, &per_base_at);
+    let entry_scored = std::sync::atomic::AtomicUsize::new(0);
+    let refuses_entry = |entry: &Point| corridor_refuses(&per_base_at(entry));
     let runs: Vec<Run> = install(|| {
         (0..restarts)
             .into_par_iter()
@@ -859,18 +897,39 @@ pub fn suggest(
                     shuffle(&mut order, &mut state);
                     perturb(&mut point, params.grids, &order, &start, &mut state);
                 }
-                let walked = descend(
-                    point,
-                    params.grids,
-                    &order,
-                    &pairs,
-                    &coupling,
-                    &start,
-                    &evaluate,
-                    min_n,
-                    max_passes,
-                    handle,
-                )?;
+                let walked = if nested_on {
+                    // Each group in this restart's own order.
+                    let (entry, exit): (Vec<&'static TickParam>, Vec<&'static TickParam>) =
+                        order.iter().partition(|f| f.group == ParamGroup::Entry);
+                    let walk = nested::Nested {
+                        grids: params.grids,
+                        start: &start,
+                        entry: &entry,
+                        exit: &exit,
+                        pairs: &pairs,
+                        entry_coupling: &entry_coupling,
+                        exit_coupling: &exit_coupling,
+                        min_n,
+                        max_passes,
+                        handle,
+                        refused: &refuses_entry,
+                        searched: &entry_scored,
+                    };
+                    nested::descend_nested(point, &walk, &evaluate)
+                } else {
+                    descend(
+                        point,
+                        params.grids,
+                        &order,
+                        &pairs,
+                        &coupling,
+                        &start,
+                        &evaluate,
+                        min_n,
+                        max_passes,
+                        handle,
+                    )
+                }?;
                 handle.record_restart();
                 Some(Run {
                     restart,
@@ -921,6 +980,7 @@ pub fn suggest(
         evaluations: evaluations.load(std::sync::atomic::Ordering::Relaxed),
         refused,
         left_open: left_open.len(),
+        entry_points: entry_scored.load(std::sync::atomic::Ordering::Relaxed),
     };
     let (point, score) = (best.point, best.score);
     // The strategies as they stand against the answer, on the slice both were fitted on: a best
@@ -999,8 +1059,11 @@ pub fn suggest(
     } else {
         (None, 0)
     };
+    let mut searched: Vec<String> = fields.iter().map(|f| f.key.to_string()).collect();
+    searched.sort();
     Ok(SearchResult {
         values,
+        searched,
         train: train_tally,
         holdout,
         holdout_open,
@@ -1166,7 +1229,10 @@ mod closing;
 pub use self::closing::unguarded_strategies;
 mod coupled;
 mod deps;
+mod nested;
+mod size;
 pub(in crate::db::tuner::ticks) use self::deps::strategy_values;
+pub use self::size::{SearchSize, point_cost, search_size};
 
 #[cfg(test)]
 pub(in crate::db::tuner::ticks) mod test_grids;

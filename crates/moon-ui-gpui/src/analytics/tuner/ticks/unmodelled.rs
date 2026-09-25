@@ -136,12 +136,21 @@ impl AnalyticsView {
 
     /// Open the warning before a search when a strategy of the scope switches on an exit field
     /// the model does not have; answers whether it opened — the search then waits for Continue.
+    /// Only a search that varies an exit field is warned: the fields listed are the exit's, and a
+    /// search of the entry alone does not tune them (LinKvo, 2026-09-25: "I search the entry, and
+    /// it warns me about exit fields that take no part").
     pub(super) fn ticks_warn_before_search(
         &mut self,
         only: Option<&'static str>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if !self
+            .ticks_search_size(only)
+            .is_some_and(|size| size.exit_fields > 0)
+        {
+            return false;
+        }
         // A search runs on the loaded scope's deals, so a strategy the load has not read is not
         // one it searches: only the rows speak here.
         let (rows, _) = self.ticks_unmodelled_rows(self.ticks_search_strategies(), cx);

@@ -14,7 +14,7 @@
 //! own settings: the entry fills where the report says, and the stop fires when and where the
 //! core's did (`record::StopAnchor`) — the book the tape does not carry, answered by the fact.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,7 +26,6 @@ use super::state::SuggState;
 use super::tape::{PendingDeal, prepare_sample};
 use crate::analytics::bg::ReadLane;
 use moon_core::db::tuner::threshold_search::SearchHandle;
-use moon_core::db::tuner::ticks::TICK_PARAMS;
 use moon_core::db::tuner::ticks::params::{self, ParamGroup};
 use moon_core::db::tuner::ticks::search::{
     DEFAULT_MAX_PASSES, SearchMiss, SearchParams, check_corridors, suggest, train_len,
@@ -71,7 +70,7 @@ impl AnalyticsView {
     /// The replayable rows as the search and the columns take them, their tapes still packed:
     /// the caller hands them to [`prepare_sample`] off the UI thread, which unpacks them and
     /// cuts every tape at the sample's one exit horizon.
-    fn prepared_deals(&self) -> Vec<PendingDeal> {
+    pub(super) fn prepared_deals(&self) -> Vec<PendingDeal> {
         self.ticks
             .data
             .data()
@@ -239,8 +238,9 @@ impl AnalyticsView {
         )
     }
 
-    /// "Search all": every ticked field of the groups the gate lets through, from В1 as it
-    /// stands and into it ([`land_answer`]).
+    /// "Search all": every ticked field of the groups the gate lets through, each from the
+    /// strategies, the unticked ones held at В1's value; the answer goes into В1
+    /// ([`land_answer`]).
     pub(in crate::analytics::tuner) fn ticks_suggest(
         &mut self,
         window: &mut Window,
@@ -249,8 +249,9 @@ impl AnalyticsView {
         self.ticks_run_search(None, window, cx);
     }
 
-    /// "Search": the selected field alone, ticked or not, the rest of В1 held as it stands; the
-    /// answer goes into that cell of В1 and the cells of the values it completed ([`land_answer`]).
+    /// "Search": the selected field alone, ticked or not, from the strategies, the rest of В1 held
+    /// as it stands; the answer goes into that cell of В1 — emptied when it is the strategies'
+    /// own — and the cells of the values it completed ([`land_answer`]).
     pub(in crate::analytics::tuner) fn ticks_suggest_one(
         &mut self,
         window: &mut Window,
@@ -261,8 +262,9 @@ impl AnalyticsView {
         }
     }
 
-    /// A search asked for: first the warning when a strategy it runs on switches on an exit
-    /// field the model does not have (`unmodelled.rs`) — the search then starts on its Continue.
+    /// A search asked for: first the question when it is estimated long (`estimate.rs`), then
+    /// the warning when a strategy it runs on switches on an exit field the model does not have
+    /// (`unmodelled.rs`) — the search then starts on their answers.
     fn ticks_run_search(
         &mut self,
         only: Option<&'static str>,
@@ -272,6 +274,18 @@ impl AnalyticsView {
         if matches!(self.ticks.sugg, SuggState::Running { .. }) {
             return;
         }
+        if !self.ticks_confirm_long_search(only, window, cx) {
+            self.ticks_search_confirmed(only, window, cx);
+        }
+    }
+
+    /// A search past the question of its length: the warning, then the start.
+    pub(super) fn ticks_search_confirmed(
+        &mut self,
+        only: Option<&'static str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.ticks_warn_before_search(only, window, cx) {
             self.ticks_start_search(only, cx);
         }
@@ -290,7 +304,8 @@ impl AnalyticsView {
     }
 
     /// Run the search into В1: over every ticked field (`only` = `None`), or over one field with
-    /// every other held — at the strategies' value, or at В1's where В1 changes it.
+    /// every other held — at the strategies' value, or at В1's where В1 changes it. A searched
+    /// field starts from the strategies whatever В1 holds for it.
     pub(super) fn ticks_start_search(
         &mut self,
         only: Option<&'static str>,
@@ -307,43 +322,20 @@ impl AnalyticsView {
             return self.ticks_search_refused("analytics.ticks.sugg_one_kind", cx);
         };
         let model = super::model_cfg::current();
-        // Laid over every deal's own strategy before the search's point: В1 as it stands,
-        // whatever is searched (the developer, 2026-09-25). A search runs on from what the
-        // earlier ones found — В1's fields are its base, its unticked ones held at В1's value —
-        // not from the strategy as if В1 were empty.
+        // Laid over every deal's own strategy before the search's point: В1 as it stands. The
+        // fields the search leaves alone run at В1's value; the searched ones start from the
+        // strategies whatever В1 holds for them — the search sets their values aside
+        // (`SearchParams::held`, LinKvo 2026-09-25).
         let held: HashMap<String, String> = self.ticks.variant_changes().into_iter().collect();
-        let (vary_entry, vary_exit, locked) = match only {
-            None => (
-                self.ticks_group_searchable(ParamGroup::Entry),
-                self.ticks_group_searchable(ParamGroup::Exit),
-                self.ticks.locked.clone(),
-            ),
-            Some(key) => {
-                let Some(field) = TICK_PARAMS.iter().find(|f| f.key == key) else {
-                    return;
-                };
-                if !model.entry_method.reads(key) {
-                    return self.ticks_search_refused("analytics.ticks.sugg_not_read", cx);
-                }
-                if !self.ticks_group_searchable(field.group) {
-                    return self.ticks_search_refused("analytics.ticks.sugg_gated", cx);
-                }
-                let locked: HashSet<String> = TICK_PARAMS
-                    .iter()
-                    .map(|f| f.key)
-                    .filter(|k| *k != key)
-                    .map(str::to_string)
-                    .collect();
-                (
-                    field.group == ParamGroup::Entry,
-                    field.group == ParamGroup::Exit,
-                    locked,
-                )
-            }
+        let super::estimate::Scope {
+            vary_entry,
+            vary_exit,
+            locked,
+        } = match self.ticks_search_scope(only) {
+            Ok(scope) => scope,
+            Err(Some(key)) => return self.ticks_search_refused(key, cx),
+            Err(None) => return,
         };
-        if !(vary_entry || vary_exit) {
-            return self.ticks_search_refused("analytics.ticks.sugg_nothing", cx);
-        }
         if pending.is_empty() {
             return self.ticks_search_refused("analytics.ticks.sugg_no_tape", cx);
         }
@@ -399,6 +391,8 @@ impl AnalyticsView {
         probe::watch(handle.clone(), restarts, seq);
         self.poll_ticks_search(handle.clone(), seq, cx);
         let started = std::time::Instant::now();
+        // What the point cost the answer brings is measured under (`estimate.rs`).
+        let cost_key = self.ticks_cost_key();
         self.spawn_latest_db(
             &[ReadLane::TicksSearch],
             false,
@@ -421,9 +415,13 @@ impl AnalyticsView {
                     model,
                     keep_corridor,
                 };
-                suggest(&deals, &params, &handle)
+                // The search alone is timed for the point cost: the queue and the unpacking of
+                // the tapes above are no point's.
+                let searching = std::time::Instant::now();
+                let result = suggest(&deals, &params, &handle);
+                (result, searching.elapsed())
             },
-            move |this, result, cx| {
+            move |this, (result, searched_for), cx| {
                 log::info!(
                     target: moon_core::diagnostics::TICKS_AXIS_TARGET,
                     "[x] ticks search: #{seq} answered after {} ms ({}), current #{}",
@@ -440,7 +438,12 @@ impl AnalyticsView {
                 this.ticks.sugg = SuggState::Idle;
                 match result {
                     Ok(result) => {
-                        land_answer(&mut this.ticks.variant, &result.values);
+                        this.ticks_take_search_cost(
+                            cost_key,
+                            searched_for,
+                            result.stats.evaluations,
+                        );
+                        land_answer(&mut this.ticks.variant, &result.searched, &result.values);
                         this.ticks_reset_variant_inputs();
                         this.ticks.last_seed = Some(result.seed);
                         this.ticks.last_result = Some(result);
@@ -484,7 +487,8 @@ impl AnalyticsView {
                         // The answer sets the row idle without a new generation.
                         running = this.ticks.sugg_seq == seq
                             && matches!(this.ticks.sugg, SuggState::Running { .. });
-                        let done = handle.completed();
+                        // A search of both groups moves its entry points long before a restart.
+                        let done = (handle.completed(), handle.points());
                         if running && shown != Some(done) {
                             shown = Some(done);
                             cx.notify();
@@ -641,17 +645,22 @@ impl AnalyticsView {
     }
 }
 
-/// Lay a search's answer over В1 — a search of one field or of every one alike. Every search runs
-/// from В1 as it stands (`ticks_start_search`), and the answer holds what it moved off that: the
-/// searched fields, and every value it completed for a switch it turned on (`search::deps` —
-/// `UseTakeProfit` brings its `TakeProfit`), which the search scored and Save must write with
-/// it. A field it left where В1 had it is not in the answer and keeps В1's cell. В1 is never
-/// emptied here: only the user clears it (the developer, 2026-09-25).
+/// Lay a search's answer over В1 — a search of one field or of every one alike. A searched field
+/// is searched anew from the strategies, whatever В1 held for it (LinKvo, 2026-09-25), so its cell
+/// takes the answer, or is emptied when the answer leaves it at the strategies' own value. The
+/// fields the search left alone keep their cells, and so does every value it completed for a
+/// switch it turned on (`search::deps` — `UseTakeProfit` brings its `TakeProfit`) by taking it
+/// from the answer, which the search scored and Save must write with it.
 ///
 /// Args:
 ///     v1: В1's cells.
+///     searched: The fields the search varied
+///         ([`SearchResult::searched`](moon_core::db::tuner::ticks::search::SearchResult)).
 ///     values: The answer ([`SearchResult::values`](moon_core::db::tuner::ticks::search::SearchResult)).
-fn land_answer(v1: &mut HashMap<String, String>, values: &[(String, String)]) {
+fn land_answer(v1: &mut HashMap<String, String>, searched: &[String], values: &[(String, String)]) {
+    for key in searched {
+        v1.remove(key);
+    }
     v1.extend(values.iter().cloned());
 }
 
@@ -673,6 +682,14 @@ pub(super) fn search_stats_line(stats: &moon_core::db::tuner::ticks::SearchStats
         refused = stats.refused
     )
     .to_string();
+    // Both groups searched: how many entry points each ran a whole exit search.
+    let line = match stats.entry_points {
+        0 => line,
+        n => format!(
+            "{line} · {}",
+            t!("analytics.ticks.stats_entry_points", n = n)
+        ),
+    };
     // The deals taken out before the search: the sample it answers for is smaller by them.
     match stats.left_open {
         0 => line,
