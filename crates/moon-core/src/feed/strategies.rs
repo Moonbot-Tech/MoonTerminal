@@ -2,11 +2,14 @@
 //! field-value formatting/parsing, and kind names.
 
 use moonproto::{
-    FieldValue, StrategyFieldType, StrategyFieldUiKind, StrategyFields, StrategySchema,
-    StrategySnapshot,
+    FieldValue, StrategyFieldType, StrategyFieldUiKind, StrategyFields, StrategyKind,
+    StrategySchema, StrategySnapshot,
 };
 
-use super::{SchemaField, SchemaFieldUi, SchemaKind, SchemaSection, StrategySchemaModel};
+use super::{
+    STRATEGY_ADJUSTMENT_PREVIEW, SchemaField, SchemaFieldUi, SchemaKind, SchemaSection,
+    StrategyFieldChange, StrategySchemaModel,
+};
 
 /// Source-strategy parameters that affect the detect UI.
 /// When resolved by [`alert_params`], missing fields default to (false, 60): show the detect
@@ -338,6 +341,57 @@ pub(super) fn fv_from_str(
     }
 }
 
+/// One schema field the paste filter and the adjustment diff can hold after the schema borrow ends.
+///
+/// `visible_ordinals` is the raw kind list `StrategySchemaField::visible_strategy_kinds` reports.
+/// A paste accepts the field only when the strategy's kind is in that list. The diff uses the same
+/// list the way moonproto's `field_matches` does: a value missing on one side equals the schema
+/// default only when the field is visible for that side's kind.
+struct KnownStrategyField {
+    name: String,
+    type_id: StrategyFieldType,
+    default_value: Option<FieldValue>,
+    visible_ordinals: Vec<u8>,
+}
+
+/// MoonBot export keys that are bookkeeping, not strategy parameters.
+///
+/// `Active` is the checkbox and `FVersion` is the export format. Neither is a schema field, and
+/// naming them on the info line would make every paste look like it dropped a parameter.
+fn moonbot_service_key(key: &str) -> bool {
+    key.eq_ignore_ascii_case("Active") || key.eq_ignore_ascii_case("FVersion")
+}
+
+/// Schema fields, in schema order, with the kinds each one is visible for.
+fn known_fields(schema: &StrategySchema) -> Vec<KnownStrategyField> {
+    schema
+        .fields
+        .iter()
+        .map(|field| KnownStrategyField {
+            name: field.name.clone(),
+            type_id: field.type_id,
+            default_value: field.default_value.clone(),
+            visible_ordinals: field
+                .visible_strategy_kinds()
+                .map(|kind| kind.ordinal())
+                .collect(),
+        })
+        .collect()
+}
+
+/// The schema field `key` names, preferring an exact spelling over an ASCII case-insensitive one.
+///
+/// MoonBot's grid writes `BuyPrice` for a field the schema calls `buyPrice`. The lookup has to
+/// find that field, and the caller then stores it under the schema's own spelling: the wire writer
+/// and `field_matches` both compare names with `==`.
+fn paste_slot<'a>(known: &'a [KnownStrategyField], key: &str) -> Option<&'a KnownStrategyField> {
+    known.iter().find(|field| field.name == key).or_else(|| {
+        known
+            .iter()
+            .find(|field| field.name.eq_ignore_ascii_case(key))
+    })
+}
+
 /// Convert `(name, text)` pairs into strategy fields, dropping any the core could not be sent.
 ///
 /// Shared by the create and restore paths, which differ only in what they call the strategy in the
@@ -346,16 +400,42 @@ pub(super) fn fv_from_str(
 /// writer would have skipped anyway. Empty text is that very case rather than a defect —
 /// `ops::default_fields` spells "no schema default" as an empty string — so it passes silently,
 /// while text that means something and cannot be read does say so.
+///
+/// When `schema` is present, a key is sent only if a field visible for `kind` answers to it, and
+/// it is stored under that field's schema spelling. MoonBot service keys (`Active`, `FVersion`)
+/// are dropped at debug; every other dropped key is named once, on one info line. Without a schema
+/// there is nothing to match against, so the pairs pass through under the spelling they arrived
+/// with — dropping them would send an empty strategy and the core would fill every field with its
+/// default.
+///
+/// Args:
+///     schema: Live strategy schema, or `None` before the core has sent one.
+///     kind: Kind of the strategy being created or restored.
+///     pairs: Incoming `name=text` fields, in paste order.
+///     server_id: Core the log line is about.
+///     what: Short phrase naming the strategy, already including the verb (`create strategy 4`).
+///
+/// Returns:
+///     Fields safe to put on the snapshot. Never includes a name the schema does not show for
+///     `kind` when `schema` is `Some`.
 pub(super) fn fields_from_text(
     schema: Option<&StrategySchema>,
+    kind: StrategyKind,
     pairs: &[(String, String)],
     server_id: u64,
     what: &str,
 ) -> StrategyFields {
+    match schema {
+        Some(schema) => fields_from_known(&known_fields(schema), kind, pairs, server_id, what),
+        None => fields_from_untyped(pairs, server_id, what),
+    }
+}
+
+/// Pass pairs through when no schema can say which names exist.
+fn fields_from_untyped(pairs: &[(String, String)], server_id: u64, what: &str) -> StrategyFields {
     let mut fields = StrategyFields::new();
     for (name, val) in pairs {
-        let stype = schema.and_then(|s| s.field(name)).map(|f| f.type_id);
-        match fv_from_str(None, stype, val) {
+        match fv_from_str(None, None, val) {
             Some(value) => {
                 fields.insert(name.as_str(), value);
             }
@@ -367,6 +447,225 @@ pub(super) fn fields_from_text(
         }
     }
     fields
+}
+
+/// Keep the pairs a visible schema field answers to, under that field's own spelling.
+fn fields_from_known(
+    known: &[KnownStrategyField],
+    kind: StrategyKind,
+    pairs: &[(String, String)],
+    server_id: u64,
+    what: &str,
+) -> StrategyFields {
+    let mut fields = StrategyFields::new();
+    let mut taken: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    let mut service: Vec<String> = Vec::new();
+    for (name, val) in pairs {
+        let Some(slot) =
+            paste_slot(known, name).filter(|slot| slot.visible_ordinals.contains(&kind.ordinal()))
+        else {
+            if moonbot_service_key(name) {
+                service.push(name.clone());
+            } else {
+                dropped.push(name.clone());
+            }
+            continue;
+        };
+        if taken.iter().any(|seen| seen == &slot.name) {
+            dropped.push(name.clone());
+            continue;
+        }
+        match fv_from_str(None, Some(slot.type_id), val) {
+            Some(value) => {
+                taken.push(slot.name.clone());
+                fields.insert(slot.name.as_str(), value);
+            }
+            None if !val.trim().is_empty() => log::warn!(
+                "core {} {what}: field {name} omitted, {val:?} is not a value of its type",
+                super::core_label(server_id)
+            ),
+            None => {}
+        }
+    }
+    if !dropped.is_empty() {
+        log::info!(
+            "core {} {what}: dropped fields the schema does not show: {}",
+            super::core_label(server_id),
+            dropped.join(", ")
+        );
+    }
+    if !service.is_empty() {
+        log::debug!(
+            "core {} {what}: dropped MoonBot service fields: {}",
+            super::core_label(server_id),
+            service.join(", ")
+        );
+    }
+    fields
+}
+
+/// Zero moonproto uses when a schema field has no explicit default.
+///
+/// `field_matches` does `default_value.or_else(zero_for_type_id)`. The zero helper is crate-private
+/// on moonproto, and the public `StrategyFieldType` is that same type id with the flag bits already
+/// cleared, so this table is the copy the terminal can call.
+fn zero_for_type(type_id: StrategyFieldType) -> Option<FieldValue> {
+    Some(match type_id {
+        StrategyFieldType::Bool => FieldValue::Bool(false),
+        StrategyFieldType::Int32 => FieldValue::Int32(0),
+        StrategyFieldType::Int64 => FieldValue::Int64(0),
+        StrategyFieldType::UInt32 => FieldValue::UInt32(0),
+        StrategyFieldType::UInt64 => FieldValue::UInt64(0),
+        StrategyFieldType::Byte => FieldValue::Byte(0),
+        StrategyFieldType::Word => FieldValue::Word(0),
+        StrategyFieldType::Double => FieldValue::Double(0.0),
+        StrategyFieldType::Single => FieldValue::Single(0.0),
+        StrategyFieldType::String => FieldValue::String(String::new()),
+        StrategyFieldType::Unknown(_) => return None,
+    })
+}
+
+/// Value `side` effectively holds for `name`, treating a missing visible field as its default.
+///
+/// This is moonproto `field_matches` from the side that is missing the key: a present value is
+/// itself, and an absent one equals the schema default only when the field is visible for `kind`.
+/// `None` means "no value", which does not match a present value — the same `false` `field_matches`
+/// returns for an unknown name or a field hidden from that kind.
+fn effective_field(
+    present: Option<&FieldValue>,
+    spec: Option<&KnownStrategyField>,
+    kind: u8,
+) -> Option<FieldValue> {
+    if let Some(value) = present {
+        return Some(value.clone());
+    }
+    let spec = spec?;
+    if !spec.visible_ordinals.contains(&kind) {
+        return None;
+    }
+    spec.default_value
+        .clone()
+        .or_else(|| zero_for_type(spec.type_id))
+}
+
+fn show_field(value: Option<&FieldValue>) -> String {
+    match value {
+        Some(value) => fmt_field(value),
+        None => "absent".to_string(),
+    }
+}
+
+/// Fields, checkbox, folder and kind that differ between the snapshot we sent and the core's echo.
+///
+/// Compared with the same rules as moonproto `strategy_effectively_equal` / `field_matches`: a
+/// missing field equals the schema default when the field is visible for that side's kind, and
+/// `checked`, `path` and `kind` are compared on their own. Floats compare with `==`, as
+/// `field_matches` does, not with the serializer's epsilon.
+///
+/// Args:
+///     schema: Schema that was current when the echo arrived. `None` treats every missing key as
+///         absent rather than as a default, because there is no default to substitute.
+///     desired: Snapshot this terminal submitted.
+///     echo: Snapshot the core stored for the same id.
+///
+/// Returns:
+///     Differences in schema order, then any name only one side carries, then `checked`, `path`
+///     and `kind` when those differ. Empty when the two snapshots agree.
+pub(super) fn strategy_field_changes(
+    schema: Option<&StrategySchema>,
+    desired: &StrategySnapshot,
+    echo: &StrategySnapshot,
+) -> Vec<StrategyFieldChange> {
+    let known = schema.map(known_fields).unwrap_or_default();
+    field_changes_against(&known, desired, echo)
+}
+
+/// The comparison behind [`strategy_field_changes`], split out so a test can name defaults without
+/// building a moonproto schema blob.
+fn field_changes_against(
+    known: &[KnownStrategyField],
+    desired: &StrategySnapshot,
+    echo: &StrategySnapshot,
+) -> Vec<StrategyFieldChange> {
+    let mut names: Vec<String> = Vec::new();
+    for spec in known {
+        if desired.fields.get(&spec.name).is_some() || echo.fields.get(&spec.name).is_some() {
+            names.push(spec.name.clone());
+        }
+    }
+    for (name, _) in desired.fields.iter().chain(echo.fields.iter()) {
+        if !names.iter().any(|seen| seen == name.as_ref()) {
+            names.push(name.to_string());
+        }
+    }
+    let mut changes = Vec::new();
+    for name in &names {
+        let spec = known.iter().find(|field| field.name == *name);
+        let sent = effective_field(desired.fields.get(name), spec, desired.kind().ordinal());
+        let saved = effective_field(echo.fields.get(name), spec, echo.kind().ordinal());
+        if sent == saved {
+            continue;
+        }
+        changes.push(StrategyFieldChange {
+            name: name.clone(),
+            sent: show_field(sent.as_ref()),
+            saved: show_field(saved.as_ref()),
+        });
+    }
+    if desired.checked != echo.checked {
+        changes.push(StrategyFieldChange {
+            name: "checked".to_string(),
+            sent: yes_no(desired.checked).to_string(),
+            saved: yes_no(echo.checked).to_string(),
+        });
+    }
+    if desired.path != echo.path {
+        changes.push(StrategyFieldChange {
+            name: "path".to_string(),
+            sent: desired.path.to_string(),
+            saved: echo.path.to_string(),
+        });
+    }
+    if desired.kind() != echo.kind() {
+        changes.push(StrategyFieldChange {
+            name: "kind".to_string(),
+            sent: strat_kind_name(desired.kind().ordinal()).to_string(),
+            saved: strat_kind_name(echo.kind().ordinal()).to_string(),
+        });
+    }
+    changes
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "Yes" } else { "No" }
+}
+
+/// The `name: sent -> saved` list appended to the Adjusted log line, bounded the same way the
+/// banner is.
+///
+/// Args:
+///     changes: Differences from [`strategy_field_changes`], in report order.
+///
+/// Returns:
+///     Empty when nothing differed. Otherwise the first
+///     [`STRATEGY_ADJUSTMENT_PREVIEW`] entries joined by `, `, plus ` +N` when more remain.
+pub(super) fn format_adjustment_log(changes: &[StrategyFieldChange]) -> String {
+    if changes.is_empty() {
+        return String::new();
+    }
+    let shown = changes.len().min(STRATEGY_ADJUSTMENT_PREVIEW);
+    let mut text = changes
+        .iter()
+        .take(shown)
+        .map(|change| format!("{}: {} -> {}", change.name, change.sent, change.saved))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let rest = changes.len() - shown;
+    if rest > 0 {
+        text.push_str(&format!(" +{rest}"));
+    }
+    format!(" {text}")
 }
 
 /// Builds a decoupled model from moonproto `StrategySchema`: each kind contains its editor

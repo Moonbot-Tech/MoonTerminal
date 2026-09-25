@@ -523,6 +523,30 @@ pub struct StrategyEditRow {
     pub fields: Vec<(String, String)>,
 }
 
+/// How many adjusted fields a log line or a banner names before it ends with `+N`.
+pub const STRATEGY_ADJUSTMENT_PREVIEW: usize = 3;
+
+/// One place the core kept a different value from the snapshot this terminal sent.
+///
+/// `name` is the schema field, or `checked` / `path` / `kind` when that part of the snapshot
+/// differs. `sent` and `saved` are already formatted for display; this crate does not localize,
+/// so the UI wraps them with `t!`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrategyFieldChange {
+    pub name: String,
+    pub sent: String,
+    pub saved: String,
+}
+
+/// One resolved strategy edit plus, for [`StrategyEditResult::Adjusted`], the fields that differ.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StrategyEditResolution {
+    pub id: u64,
+    pub result: StrategyEditResult,
+    /// Empty unless `result` is [`StrategyEditResult::Adjusted`].
+    pub changes: Vec<StrategyFieldChange>,
+}
+
 /// One resolved strategy edit: the core's final verdict on a submission this terminal made.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StrategyEditNote {
@@ -532,6 +556,9 @@ pub struct StrategyEditNote {
     pub id: u64,
     pub result: StrategyEditResult,
     pub at_ms: i64,
+    /// Empty unless `result` is [`StrategyEditResult::Adjusted`]. The UI formats a bounded prefix
+    /// of this list; the full list stays here so `+N` counts what was actually different.
+    pub changes: Vec<StrategyFieldChange>,
 }
 
 /// Strategy-edit state published on its own cadence, faster than the heavy [`StrategyRow`]
@@ -545,7 +572,7 @@ pub struct StrategyEditNote {
 pub struct StrategyEditSnapshot {
     /// Absence means resolved: a strategy id with no row here has no open edit.
     pub open: Vec<StrategyEditRow>,
-    pub resolved: Vec<(u64, StrategyEditResult)>,
+    pub resolved: Vec<StrategyEditResolution>,
 }
 
 /// Cap on resolved strategy-edit notes retained per core.

@@ -10,6 +10,7 @@
 //! through `session.apply_strategies`.
 
 mod actions;
+mod adjusted;
 mod fields;
 mod filter;
 mod full_params;
@@ -59,7 +60,7 @@ use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
 use moon_core::feed::{
     SchemaField, SchemaFieldUi, SchemaSection, StrategyEditNote, StrategyEditPhase,
-    StrategyEditResult, StrategyEditRow, StrategyRow,
+    StrategyEditResult, StrategyEditRow, StrategyFieldChange, StrategyRow,
 };
 use moon_core::session::{CoreId, CoreStore};
 use rust_i18n::t;
@@ -69,6 +70,7 @@ use logic::*;
 use rules::{Rules, Values};
 use settings::StrategiesPrefs;
 
+pub(crate) use adjusted::adjusted_diff_suffix;
 pub(crate) use session::StrategiesSessionState;
 
 pub type Key = (CoreId, u64);

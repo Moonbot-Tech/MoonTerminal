@@ -989,13 +989,14 @@ impl CoreData {
                 self.strategy_edit_rev = self.strategy_edit_rev.wrapping_add(1);
                 let at_ms = now_unix_ms_i64();
                 let mut notes_pushed_this_apply = 0usize;
-                for (id, result) in snapshot.resolved {
+                for resolution in snapshot.resolved {
                     self.strategy_edit_note_seq = self.strategy_edit_note_seq.wrapping_add(1);
                     self.strategy_edit_notes.push_back(StrategyEditNote {
                         seq: self.strategy_edit_note_seq,
-                        id,
-                        result,
+                        id: resolution.id,
+                        result: resolution.result,
                         at_ms,
+                        changes: resolution.changes,
                     });
                     notes_pushed_this_apply += 1;
                 }

@@ -472,8 +472,13 @@ fn strategy_edit_toast_notification(
         T::Sent { coin } => {
             moon_ui::MoonNotification::info(t!("shell.strat_edit_sent", coin = coin).to_string())
         }
-        T::Adjusted { coin } => moon_ui::MoonNotification::warning(
-            t!("shell.strat_edit_adjusted", coin = coin).to_string(),
+        T::Adjusted { coin, changes } => moon_ui::MoonNotification::warning(
+            t!(
+                "shell.strat_edit_adjusted",
+                coin = coin,
+                diffs = crate::strategies::adjusted_diff_suffix(&changes)
+            )
+            .to_string(),
         )
         .autohide(false),
         T::Superseded { coin } => moon_ui::MoonNotification::warning(

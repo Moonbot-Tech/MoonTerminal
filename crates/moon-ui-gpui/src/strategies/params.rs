@@ -1684,7 +1684,8 @@ impl StrategiesView {
         edit_notes: &[(CoreId, StrategyEditNote)],
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let mut note_banner: Option<(StrategyEditResult, CoreId, u64)> = None;
+        let mut note_banner: Option<(StrategyEditResult, CoreId, u64, Vec<StrategyFieldChange>)> =
+            None;
         for (core, id) in row_pairs.iter().map(|(key, _)| *key) {
             let Some(note) = edit_notes
                 .iter()
@@ -1703,17 +1704,20 @@ impl StrategiesView {
                 Some(_) => note.result == StrategyEditResult::Superseded,
             };
             if outranks {
-                note_banner = Some((note.result, core, note.seq));
+                note_banner = Some((note.result, core, note.seq, note.changes.clone()));
             }
         }
 
-        if let Some((result, core, seq)) = note_banner {
-            let key = match result {
-                StrategyEditResult::Adjusted => "strat.edit_adjusted",
-                StrategyEditResult::Superseded => "strat.edit_superseded",
+        if let Some((result, core, seq, changes)) = note_banner {
+            let message = match result {
+                StrategyEditResult::Adjusted => t!(
+                    "strat.edit_adjusted",
+                    diffs = super::adjusted_diff_suffix(&changes)
+                )
+                .to_string(),
+                StrategyEditResult::Superseded => t!("strat.edit_superseded").to_string(),
                 StrategyEditResult::Confirmed => unreachable!("filtered above"),
             };
-            let message = t!(key).to_string();
             return Some(
                 h_flex()
                     .w_full()

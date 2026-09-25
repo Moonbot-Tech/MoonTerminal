@@ -1049,6 +1049,7 @@ pub(super) fn drain_commands(
                             next_id += 1;
                             let fields = fields_from_text(
                                 schema,
+                                StrategyKind::from_ordinal(spec.kind_ordinal),
                                 &spec.fields,
                                 server.id,
                                 &format!("create strategy {id}"),
@@ -1091,6 +1092,7 @@ pub(super) fn drain_commands(
                         }
                         let f = fields_from_text(
                             schema,
+                            StrategyKind::from_ordinal(kind_ordinal),
                             &fields,
                             server.id,
                             &format!("restore strategy {id}"),
