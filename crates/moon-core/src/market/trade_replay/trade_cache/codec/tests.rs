@@ -83,6 +83,33 @@ fn a_damaged_blob_is_refused() {
     );
 }
 
+/// A blob whose stream inflates past what its print count can take is refused at that bound,
+/// not inflated whole: a damaged row must not cost the reader the stream's full expansion.
+#[test]
+fn a_stream_longer_than_its_count_is_cut_at_the_bound() {
+    let mut blob = Vec::new();
+    put_varint(&mut blob, 10);
+    let mut enc = DeflateEncoder::new(blob, Compression::new(LEVEL));
+    enc.write_all(&vec![0u8; 4 << 20]).expect("deflate");
+    let blob = enc.finish().expect("deflate");
+    assert_eq!(decode(&blob).err(), Some(DecodeError::TooLong));
+}
+
+/// A count no stored stream could hold is refused off the blob's own size, before anything is
+/// sized from it: deflate expands at most [`MAX_DEFLATE_RATIO`] to one.
+#[test]
+fn a_count_the_blob_cannot_hold_is_refused_before_any_allocation() {
+    let mut blob = Vec::new();
+    put_varint(&mut blob, MAX_PRINTS);
+    let mut enc = DeflateEncoder::new(blob, Compression::new(LEVEL));
+    enc.write_all(&[0u8; 64]).expect("deflate");
+    let blob = enc.finish().expect("deflate");
+    assert_eq!(
+        decode(&blob).err(),
+        Some(DecodeError::Unholdable(MAX_PRINTS))
+    );
+}
+
 /// The layout earns its place: a dense tape packs well under the legacy width.
 #[test]
 fn a_dense_tape_packs_under_a_quarter_of_the_legacy_width() {
