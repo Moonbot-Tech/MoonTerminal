@@ -279,3 +279,39 @@ fn magnitude_expansion_is_exact_and_refuses_non_numbers() {
         assert_eq!(expand_magnitude(raw), None, "{raw}");
     }
 }
+
+/// The user's export: `SignalType=DropsDetection` is MoonBot's name for Drops, and `StrategyName`
+/// is the row title. Stripping either here would create the strategy under the wrong kind or with
+/// no name. Service keys stay in the clip; the create path drops them once it knows the schema.
+const USER_EXPORT: &str = "\
+#Begin_Folder DIPBUY - LONG REBOUND AFTER DROPS LLM
+##Begin_Strategy
+Active=0
+FVersion=12
+StrategyName=DROPS_02 - LONG REBOUND AFTER DROPS [94HQE5E7]
+LastEditDate=2026-09-25 12:00
+SignalType=DropsDetection
+buyPrice=0.3
+SellPrice=2.2
+##End_Strategy
+#End_Folder
+";
+
+#[test]
+fn the_user_export_keeps_drops_detection_and_the_strategy_name() {
+    let clip = parse(USER_EXPORT, &kinds()).expect("sample export");
+    assert_eq!(clip.len(), 1);
+    assert_eq!(clip[0].kind_ordinal, 2);
+    assert_eq!(clip[0].kind, "Drops");
+    assert_eq!(
+        clip[0].name,
+        "DROPS_02 - LONG REBOUND AFTER DROPS [94HQE5E7]"
+    );
+    assert!(
+        clip[0]
+            .fields
+            .contains(&("SignalType".into(), "DropsDetection".into()))
+    );
+    assert!(clip[0].fields.contains(&("Active".into(), "0".into())));
+    assert!(clip[0].fields.iter().any(|(key, _)| key == "FVersion"));
+}

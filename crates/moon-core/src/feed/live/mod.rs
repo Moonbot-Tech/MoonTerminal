@@ -46,8 +46,8 @@ use super::strategies::{
 use super::{
     ChartTextRows, ConnStatus, CoreCmd, CoreConfigEditEvent, CoreEndpoint, CoreLogLine,
     CoreStartupStatus, CoreTimeOffsetStatus, DetectRow, ExchangeId, FeedMsg, FeedTx,
-    LatestMarketRole, SharedMoonClient, StrategyEditPhase, StrategyEditResult, StrategyEditRow,
-    StrategyEditSnapshot, StrategyRow,
+    LatestMarketRole, SharedMoonClient, StrategyEditPhase, StrategyEditResolution,
+    StrategyEditResult, StrategyEditRow, StrategyEditSnapshot, StrategyRow,
 };
 use crate::config::{ServerConfig, TransportVersion};
 use crate::db::order_traces::{AskSink, TraceDbMsg};
@@ -274,26 +274,63 @@ fn strategy_edit_sig<'a>(
 /// moonproto removes the edit from its map in the same step that resolves it: by the time this
 /// runs, the live state has nothing left to read for the desired half. The log line exists to
 /// settle, on the first live run, whether the Delphi core renumbers `strategy_ver` when it
-/// adjusts or supersedes a submitted edit.
+/// adjusts or supersedes a submitted edit. An Adjusted line also names the fields that differ,
+/// as `name: sent -> saved`, because the revision pair alone stays equal when the core rewrites
+/// a value.
 fn record_strategy_edit_resolution(
     echo_snap: Option<&MoonStateSnapshot>,
-    desired_cache: &mut std::collections::HashMap<u64, (i32, u64)>,
+    desired_cache: &mut std::collections::HashMap<u64, moonproto::StrategySnapshot>,
     strategy_ids: &[u64],
     result: StrategyEditResult,
     core_id: u64,
-    notes: &mut Vec<(u64, StrategyEditResult)>,
+    notes: &mut Vec<StrategyEditResolution>,
 ) {
     for &id in strategy_ids {
         let desired = desired_cache.remove(&id);
-        let echo = echo_snap
-            .and_then(|s| s.strats().snapshot(id))
-            .map(|s| (s.strategy_ver, s.last_date));
-        log::info!(
-            "core {} strategy {id} edit {result:?}: desired(ver,last_date)={desired:?} echo(ver,last_date)={echo:?}",
-            crate::feed::core_label(core_id)
-        );
-        notes.push((id, result));
+        let echo_rev = echo_snap
+            .and_then(|snap| snap.strats().snapshot(id))
+            .map(|strategy| (strategy.strategy_ver, strategy.last_date));
+        let desired_rev = desired
+            .as_ref()
+            .map(|strategy| (strategy.strategy_ver, strategy.last_date));
+        let changes = if result == StrategyEditResult::Adjusted {
+            adjusted_field_changes(echo_snap, desired.as_ref(), id)
+        } else {
+            Vec::new()
+        };
+        if result == StrategyEditResult::Adjusted {
+            log::info!(
+                "core {} strategy {id} edit Adjusted: desired(ver,last_date)={desired_rev:?} echo(ver,last_date)={echo_rev:?}{}",
+                crate::feed::core_label(core_id),
+                super::strategies::format_adjustment_log(&changes),
+            );
+        } else {
+            log::info!(
+                "core {} strategy {id} edit {result:?}: desired(ver,last_date)={desired_rev:?} echo(ver,last_date)={echo_rev:?}",
+                crate::feed::core_label(core_id)
+            );
+        }
+        notes.push(StrategyEditResolution {
+            id,
+            result,
+            changes,
+        });
     }
+}
+
+/// Field differences for one Adjusted id, or nothing when either snapshot is already gone.
+fn adjusted_field_changes(
+    echo_snap: Option<&MoonStateSnapshot>,
+    desired: Option<&moonproto::StrategySnapshot>,
+    id: u64,
+) -> Vec<super::StrategyFieldChange> {
+    let (Some(desired), Some(snap)) = (desired, echo_snap) else {
+        return Vec::new();
+    };
+    let Some(echo) = snap.strats().snapshot(id).cloned() else {
+        return Vec::new();
+    };
+    super::strategies::strategy_field_changes(snap.strats().strategy_schema(), desired, &echo)
 }
 
 use account_reconciliation::{
@@ -616,13 +653,14 @@ pub(super) fn run(
     // latch is set on ANY edit event and cleared only once a publish actually goes out, so a
     // resolution arriving inside the 250 ms shadow of the previous publish is delayed, never
     // dropped, by the rate limit. `strat_edit_desired_cache` remembers each pending edit's desired
-    // (ver, last_date) from the moment it was submitted, because moonproto removes the edit from
-    // its map in the same step that resolves it.
+    // snapshot from the moment it was submitted, because moonproto removes the edit from its map
+    // in the same step that resolves it. The ver/last_date pair used to be enough to log the
+    // revision; naming the fields an Adjusted echo changed needs the values too.
     let mut last_strat_edit_pub = Instant::now();
     let mut last_strat_edit_sig: u64 = 0;
     let mut strat_edit_publish_pending = false;
-    let mut pending_strat_edit_notes: Vec<(u64, StrategyEditResult)> = Vec::new();
-    let mut strat_edit_desired_cache: std::collections::HashMap<u64, (i32, u64)> =
+    let mut pending_strat_edit_notes: Vec<StrategyEditResolution> = Vec::new();
+    let mut strat_edit_desired_cache: std::collections::HashMap<u64, moonproto::StrategySnapshot> =
         std::collections::HashMap::new();
     let mut last_strat_db_generation: Option<(u64, u64)> = None;
     let mut pending_strat_db_delivery: Option<((u64, u64), Receiver<bool>)> = None;
@@ -1466,10 +1504,7 @@ pub(super) fn run(
                             let strats = snap.strats();
                             for &id in strategy_ids {
                                 if let Some(edit) = strats.strategy_edit(id) {
-                                    strat_edit_desired_cache.insert(
-                                        id,
-                                        (edit.desired().strategy_ver, edit.desired().last_date),
-                                    );
+                                    strat_edit_desired_cache.insert(id, edit.desired().clone());
                                 }
                             }
                         }

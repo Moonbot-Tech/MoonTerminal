@@ -382,3 +382,271 @@ fn the_strategy_name_is_trimmed_before_the_length_cut() {
         "Foo Bar"
     );
 }
+
+/// Trimmed from the user's MoonBot export. The service keys and the mixed-case `SellPrice` are
+/// the ones the create path used to forward verbatim.
+const PASTE_SAMPLE: &str = "\
+#Begin_Folder DIPBUY - LONG REBOUND AFTER DROPS LLM
+##Begin_Strategy
+Active=0
+FVersion=12
+StrategyName=DROPS_02 - LONG REBOUND AFTER DROPS [94HQE5E7]
+LastEditDate=2026-09-25 12:00
+SignalType=DropsDetection
+DropsMaxTime=90
+buyPrice=0.3
+SellPrice=2.2
+OrderSize=300
+MaxPing=600
+##End_Strategy
+#End_Folder
+";
+
+/// Split one MoonBot strategy block into the pairs the create command receives.
+///
+/// Not the product parser. That lives in the UI crate and is what turns `DropsDetection` into the
+/// Drops kind. This only reads the `Key=Value` lines the builder is handed afterwards.
+fn moonbot_field_pairs(text: &str) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    let mut inside = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line == "##Begin_Strategy" {
+            inside = true;
+            continue;
+        }
+        if line == "##End_Strategy" {
+            break;
+        }
+        if !inside {
+            continue;
+        }
+        let (key, value) = line.split_once('=').expect("sample field");
+        pairs.push((key.to_string(), value.to_string()));
+    }
+    pairs
+}
+
+fn known(
+    name: &str,
+    type_id: StrategyFieldType,
+    default_value: Option<FieldValue>,
+    visible_ordinals: &[u8],
+) -> KnownStrategyField {
+    KnownStrategyField {
+        name: name.to_string(),
+        type_id,
+        default_value,
+        visible_ordinals: visible_ordinals.to_vec(),
+    }
+}
+
+/// Sending `Active` and `FVersion` makes every MoonBot paste come back Adjusted: the core drops a
+/// name its schema does not have, the echo lacks it, and `field_matches` returns false. Mapping
+/// `SellPrice` onto `sellPrice` is the same failure one step earlier — the writer never finds the
+/// mixed-case key, so the value the user typed is dropped too.
+#[test]
+fn pasted_sample_sends_only_schema_fields_in_schema_spelling() {
+    let pairs = moonbot_field_pairs(PASTE_SAMPLE);
+    assert!(
+        pairs
+            .iter()
+            .any(|(key, value)| key == "Active" && value == "0")
+    );
+    assert!(pairs.iter().any(|(key, _)| key == "FVersion"));
+    assert!(
+        pairs
+            .iter()
+            .any(|(key, value)| key == "SignalType" && value == "DropsDetection")
+    );
+    let drops = StrategyKind::DROPS.ordinal();
+    let schema = vec![
+        known("StrategyName", StrategyFieldType::String, None, &[drops]),
+        known("SignalType", StrategyFieldType::String, None, &[drops]),
+        known(
+            "buyPrice",
+            StrategyFieldType::Double,
+            Some(FieldValue::Double(0.0)),
+            &[drops],
+        ),
+        known(
+            "sellPrice",
+            StrategyFieldType::Double,
+            Some(FieldValue::Double(0.0)),
+            &[drops],
+        ),
+        known(
+            "orderSize",
+            StrategyFieldType::Int32,
+            Some(FieldValue::Int32(0)),
+            &[drops],
+        ),
+        known(
+            "DropsMaxTime",
+            StrategyFieldType::Int32,
+            Some(FieldValue::Int32(0)),
+            &[drops],
+        ),
+        // Present in the schema and in the paste, but hidden from this kind.
+        known("MaxPing", StrategyFieldType::Int32, None, &[99]),
+    ];
+    let fields = fields_from_known(&schema, StrategyKind::DROPS, &pairs, 1, "create strategy 1");
+    assert!(
+        fields.get("Active").is_none(),
+        "service key Active was sent"
+    );
+    assert!(
+        fields.get("FVersion").is_none(),
+        "service key FVersion was sent"
+    );
+    assert!(
+        fields.get("LastEditDate").is_none(),
+        "a key the schema does not know was sent"
+    );
+    assert!(
+        fields.get("MaxPing").is_none(),
+        "a field hidden from this kind was sent"
+    );
+    assert_eq!(
+        fields.get("SignalType"),
+        Some(&FieldValue::String("DropsDetection".into()))
+    );
+    assert_eq!(
+        fields.get("StrategyName"),
+        Some(&FieldValue::String(
+            "DROPS_02 - LONG REBOUND AFTER DROPS [94HQE5E7]".into()
+        ))
+    );
+    assert_eq!(fields.get("buyPrice"), Some(&FieldValue::Double(0.3)));
+    assert_eq!(fields.get("sellPrice"), Some(&FieldValue::Double(2.2)));
+    assert!(fields.get("SellPrice").is_none());
+    assert_eq!(fields.get("orderSize"), Some(&FieldValue::Int32(300)));
+    assert!(fields.get("OrderSize").is_none());
+    assert_eq!(fields.get("DropsMaxTime"), Some(&FieldValue::Int32(90)));
+
+    let mixed = fields_from_known(
+        &schema,
+        StrategyKind::DROPS,
+        &[("BuyPrice".into(), "0.2".into())],
+        1,
+        "create strategy 2",
+    );
+    assert_eq!(mixed.get("buyPrice"), Some(&FieldValue::Double(0.2)));
+    assert!(mixed.get("BuyPrice").is_none());
+
+    // No schema yet: there is no list to filter against, and dropping every key would create a
+    // strategy of defaults.
+    let untyped = fields_from_text(None, StrategyKind::DROPS, &pairs, 1, "create strategy 3");
+    assert!(untyped.get("Active").is_some());
+}
+
+fn snap(
+    checked: bool,
+    kind: StrategyKind,
+    path: &str,
+    fields: &[(&str, FieldValue)],
+) -> StrategySnapshot {
+    let mut built = StrategyFields::new();
+    for (name, value) in fields {
+        built.insert(*name, value.clone());
+    }
+    StrategySnapshot::new(1, 12, 5, checked, kind, path, built)
+}
+
+/// A paste that comes back Adjusted used to say only that the core saved something else. The note
+/// has to name the one field that actually differs, and it must not name a field the echo omitted
+/// because the value was already the schema default — that omission is how the core stores a
+/// default, and reporting it would flag every untouched field.
+#[test]
+fn an_adjustment_names_the_field_that_differs_and_ignores_a_default() {
+    let drops = StrategyKind::DROPS.ordinal();
+    let known = vec![
+        known(
+            "buyPrice",
+            StrategyFieldType::Double,
+            Some(FieldValue::Double(0.0)),
+            &[drops],
+        ),
+        known(
+            "stopLoss",
+            StrategyFieldType::Double,
+            Some(FieldValue::Double(-1.0)),
+            &[drops],
+        ),
+        known(
+            "keepAlert",
+            StrategyFieldType::Int32,
+            Some(FieldValue::Int32(60)),
+            &[drops],
+        ),
+        known("orderSize", StrategyFieldType::Int32, None, &[drops]),
+    ];
+    let desired = snap(
+        false,
+        StrategyKind::DROPS,
+        "folder",
+        &[
+            ("buyPrice", FieldValue::Double(0.2)),
+            ("stopLoss", FieldValue::Double(-1.0)),
+            ("orderSize", FieldValue::Int32(0)),
+        ],
+    );
+    let echo = snap(
+        false,
+        StrategyKind::DROPS,
+        "folder",
+        &[
+            ("buyPrice", FieldValue::Double(0.3)),
+            ("keepAlert", FieldValue::Int32(60)),
+        ],
+    );
+    let changes = field_changes_against(&known, &desired, &echo);
+    assert_eq!(
+        changes,
+        vec![StrategyFieldChange {
+            name: "buyPrice".to_string(),
+            sent: "0.2".to_string(),
+            saved: "0.3".to_string(),
+        }]
+    );
+
+    let bumped = snap(
+        false,
+        StrategyKind::DROPS,
+        "folder",
+        &[("orderSize", FieldValue::Int32(5))],
+    );
+    let omitted = snap(false, StrategyKind::DROPS, "folder", &[]);
+    let implicit = field_changes_against(&known, &bumped, &omitted);
+    assert_eq!(
+        implicit,
+        vec![StrategyFieldChange {
+            name: "orderSize".to_string(),
+            sent: "5".to_string(),
+            saved: "0".to_string(),
+        }]
+    );
+
+    let checked = snap(true, StrategyKind::DROPS, "folder", &[]);
+    assert_eq!(
+        field_changes_against(&[], &checked, &omitted)
+            .iter()
+            .map(|change| change.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["checked"]
+    );
+    let moved = snap(false, StrategyKind::DROPS, "other", &[]);
+    assert_eq!(
+        field_changes_against(&[], &omitted, &moved)
+            .iter()
+            .map(|change| change.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["path"]
+    );
+    let waves = snap(false, StrategyKind::WAVES, "folder", &[]);
+    let kind_change = field_changes_against(&[], &omitted, &waves);
+    assert_eq!(kind_change.len(), 1);
+    assert_eq!(kind_change[0].name, "kind");
+    assert_eq!(kind_change[0].sent, "Drops");
+    assert_eq!(kind_change[0].saved, "Waves");
+}

@@ -1573,9 +1573,9 @@ shell.strat_edit_sent:
   en: "Blacklist edit for %{coin} sent"
   es: "Edición de lista negra para %{coin} enviada"
 shell.strat_edit_adjusted:
-  ru: "%{coin}: ядро сохранило другое значение"
-  en: "%{coin}: core saved a different value"
-  es: "%{coin}: el núcleo guardó un valor distinto"
+  ru: "%{coin}: ядро сохранило другое значение%{diffs}"
+  en: "%{coin}: core saved a different value%{diffs}"
+  es: "%{coin}: el núcleo guardó un valor distinto%{diffs}"
 shell.strat_edit_superseded:
   ru: "%{coin}: правку опередила другая"
   en: "%{coin}: another edit changed it first"

@@ -258,9 +258,9 @@ strat.edit_timeout:
   en: "not confirmed by the core"
   es: "sin confirmar por el núcleo"
 strat.edit_adjusted:
-  ru: "ядро сохранило другие значения"
-  en: "the core saved different values"
-  es: "el núcleo guardó valores distintos"
+  ru: "ядро сохранило другие значения%{diffs}"
+  en: "the core saved different values%{diffs}"
+  es: "el núcleo guardó valores distintos%{diffs}"
 strat.edit_superseded:
   ru: "это изменение перекрыто другим, отправленным раньше"
   en: "another change sent first overwrote this one"

@@ -40,7 +40,7 @@ use crate::chartdx::ChartDataHandle;
 use crate::core_order::{CoreOrder, OrderedCores};
 use moon_core::config::{CoreGroup, WorkspaceMode};
 use moon_core::db::valuation::ValuationMode;
-use moon_core::feed::{StrategyEditOutcome, StrategyEditResult};
+use moon_core::feed::{StrategyEditOutcome, StrategyEditResult, StrategyFieldChange};
 use moon_core::market::MarketLimits;
 use moon_core::session::CoreId;
 use moon_ui::{DockAreaState, DockTopologyByName};
@@ -3012,9 +3012,11 @@ impl Backend {
             // `store()` is re-fetched per core rather than hoisted: different cores need
             // different `CoreData`, and the immutable borrow must end before the cursor map (a
             // different field) is written below.
+            let mut notes = Vec::new();
             if let Some(core_data) = self.session.store().core(core) {
                 for note in core_data.strategy_edit_notes_since(cursor) {
                     batch_max = batch_max.max(note.seq);
+                    notes.push(note.clone());
                 }
             }
             self.strategy_edit_note_cursor.insert(core, batch_max);
@@ -3029,8 +3031,14 @@ impl Backend {
                 match outcome {
                     StrategyEditOutcome::Resolved(StrategyEditResult::Confirmed) => continue,
                     StrategyEditOutcome::Resolved(StrategyEditResult::Adjusted) => {
+                        let changes = notes
+                            .iter()
+                            .find(|note| note.id == watch.id)
+                            .map(|note| note.changes.clone())
+                            .unwrap_or_default();
                         events.push(StrategyEditToast::Adjusted {
                             coin: watch.coin.clone(),
+                            changes,
                         });
                         continue; // resolved; drop the watch
                     }
@@ -3078,8 +3086,17 @@ pub(crate) struct PendingStrategyEditWatch {
 /// `MoonNotification` or touches a window -- that stays in `Shell::drain_strategy_edit_toasts`,
 /// the only place with window access.
 pub(crate) enum StrategyEditToast {
-    Sent { coin: String },
-    Adjusted { coin: String },
-    Superseded { coin: String },
-    TimedOut { coin: String },
+    Sent {
+        coin: String,
+    },
+    Adjusted {
+        coin: String,
+        changes: Vec<StrategyFieldChange>,
+    },
+    Superseded {
+        coin: String,
+    },
+    TimedOut {
+        coin: String,
+    },
 }
