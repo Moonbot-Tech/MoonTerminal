@@ -20,10 +20,12 @@
 use super::exit::sell_order::{archived_pre_spike_ask, archived_take};
 use super::exit::stops::stop_pct;
 use super::exit::{ExitParams, StopStep};
+use super::gap::TapeGap;
 use super::verify::{
     POINT_TIME_TOLERANCE_MS, Verdict, archived_stop_jump, is_stop_reason, stop_jump_level,
 };
 use super::{Deal, EntryParams, Fill};
+use crate::market::trade_replay::Coverage;
 
 /// The fact's stop, as a variant running the same one may lean on it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -119,20 +121,29 @@ pub struct OwnLines<'a> {
 
 /// Fill the model inputs the core's own record gives: the ask a MoonShot's take was lifted to,
 /// read back off the take as placed, the take itself, the level the entry order was placed at
-/// ([`entry_placement`]), the stop anchor, and the entry settings the trade ran with
-/// ([`Deal::own_entry`]).
+/// ([`entry_placement`]), the stop anchor, the entry settings the trade ran with
+/// ([`Deal::own_entry`]) and the hole of a long position's tape ([`Deal::gap`]).
 ///
 /// Args:
 ///     deal: The trade, filled in place.
 ///     entry: The entry parameters as of the buy.
 ///     exit: The sell parameters as of the buy.
 ///     lines: The trade's own archived lines.
-pub fn prepare_deal(deal: &mut Deal, entry: &EntryParams, exit: &ExitParams, lines: OwnLines<'_>) {
+///     covered: What the tape store holds of the trade's window.
+pub fn prepare_deal(
+    deal: &mut Deal,
+    entry: &EntryParams,
+    exit: &ExitParams,
+    lines: OwnLines<'_>,
+    covered: &Coverage,
+) {
     deal.pre_spike_ask = archived_pre_spike_ask(lines.exit, exit, deal.is_short);
     deal.archived_take = archived_take(lines.exit);
     deal.entry_placed = entry_placement(deal, lines);
     deal.stop_anchor = Some(StopAnchor::of(deal, exit, lines.exit));
     deal.own_entry = Some(entry.clone());
+    // After the anchor: the hole's proof of the fact's stop reads how long it stayed quiet.
+    deal.gap = TapeGap::of(deal, covered, exit, lines.exit);
 }
 
 /// The level the entry order stood at when the core created it ([`Deal::entry_placed`]).

@@ -429,6 +429,22 @@ impl Stops {
         }
     }
 
+    /// Up to when the fact proves this stop quiet (`record::StopAnchor`): `i64::MIN` when the walk
+    /// is not the trade's own stop, or there is none.
+    pub(super) fn quiet_until(&self) -> i64 {
+        match &self.trigger {
+            Trigger::Off => i64::MIN,
+            Trigger::Fast { quiet_until, .. } => *quiet_until,
+            Trigger::Book(book) => book.quiet_until,
+        }
+    }
+
+    /// Whether a rule of the stop moves with the price — the trailing stop, or a ladder rung
+    /// still to take: where it stands after a stretch of time is a function of the prints in it.
+    pub(super) fn follows_price(&self) -> bool {
+        self.trailing.is_some() || self.ladder.as_ref().is_some_and(Ladder::pending)
+    }
+
     /// The ladder's steps due before `until`, moving the stop's level when one is taken. The step
     /// is read on the ticker's arrivals before the print, and the stop's own arrivals up to it
     /// then read the new level — within one gap between prints, the order of the two is not

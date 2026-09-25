@@ -144,6 +144,11 @@ impl Ladder {
         moved
     }
 
+    /// Whether a step is still to be taken.
+    pub(super) fn pending(&self) -> bool {
+        self.rungs.iter().any(|r| !r.taken)
+    }
+
     /// Read a print: a taker sell stands for the bid.
     pub(super) fn see(&mut self, tick: &Tick) {
         if tick.side == TickSide::Sell {

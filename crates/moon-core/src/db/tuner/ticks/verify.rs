@@ -194,6 +194,8 @@ pub fn verify(
         {
             walked.exit
         }
+        // No level the line reached through the tape's hole is the rules' (`gap`).
+        ExitKind::InGap => walked.exit,
         _ => {
             // In time order: the take is stamped when it is armed, after any timer step
             // that fell due inside the sell delay.
@@ -246,6 +248,11 @@ pub fn verify(
     let (exit_ok, exit_dev, line_points) = if exit.unmodelled.is_some() {
         // A rule the model does not have was on: whatever the walk made of the trade is not
         // an answer about it (see `ExitParams::unmodelled`).
+        (None, None, None)
+    } else if closed.kind == ExitKind::InGap {
+        // A rule of the trade follows the price through its tape's hole, or its stop is not
+        // bounded by what the fact proves there: where the line or the stop stood at the close
+        // is a function of prints nobody holds (`gap`).
         (None, None, None)
     } else if missed_stop {
         (Some(false), None, None)
@@ -724,7 +731,7 @@ fn exit_rule_matches(kind: ExitKind, sell_reason: &str) -> bool {
         ExitKind::Take => reason.eq_ignore_ascii_case(REASON_TAKE),
         ExitKind::Line => REASONS_LINE.iter().any(|r| starts(r)),
         ExitKind::Stop => is_stop_reason(reason),
-        ExitKind::OpenAtWindowEnd => false,
+        ExitKind::OpenAtWindowEnd | ExitKind::InGap => false,
     }
 }
 

@@ -35,6 +35,7 @@ fn row(tape: TapeStatus) -> DealRow {
             buy_set_ms: None,
             corridor: None,
             entry_placed: None,
+            gap: None,
         },
         tape,
         verdict: None,

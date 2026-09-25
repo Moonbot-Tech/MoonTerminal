@@ -6,6 +6,7 @@ use crate::db::tuner::ticks::exit::line::walk;
 use crate::db::tuner::ticks::mshot::MshotParams;
 use crate::db::tuner::ticks::{Deltas, ExitKind, ModelSettings, simulate, verify};
 use crate::feed::types::{Side, Tick};
+use crate::market::trade_replay::Coverage;
 
 fn tick(t_ms: i64, price: f64) -> Tick {
     Tick {
@@ -59,6 +60,7 @@ fn stopped() -> Deal {
         buy_set_ms: None,
         corridor: None,
         entry_placed: None,
+        gap: None,
     }
 }
 
@@ -250,7 +252,13 @@ fn a_variant_running_the_trades_own_entry_fills_at_the_fact() {
     let mut d = stopped();
     d.kind = "MoonShot".into();
     let own = EntryParams::MoonShot(MshotParams::default());
-    prepare_deal(&mut d, &own, &book(), OwnLines::default());
+    prepare_deal(
+        &mut d,
+        &own,
+        &book(),
+        OwnLines::default(),
+        &Coverage::none(),
+    );
     // A tape the corridor never reaches: the model alone would not fill at all.
     let ticks = vec![
         tick(-20_000, 100.0),

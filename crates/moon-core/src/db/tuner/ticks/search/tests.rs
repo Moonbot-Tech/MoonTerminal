@@ -49,6 +49,7 @@ pub(super) fn prepared(uid: i64, peak: f64) -> PreparedDeal {
         buy_set_ms: None,
         corridor: None,
         entry_placed: None,
+        gap: None,
     };
     let t0 = deal.buy_ms;
     let ticks: Vec<Tick> = vec![

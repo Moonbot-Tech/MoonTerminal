@@ -34,6 +34,7 @@ fn deal() -> Deal {
         buy_set_ms: None,
         corridor: None,
         entry_placed: None,
+        gap: None,
     }
 }
 

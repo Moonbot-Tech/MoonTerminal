@@ -30,6 +30,7 @@ pub mod deals;
 pub mod deltas;
 pub mod entry;
 pub mod exit;
+pub mod gap;
 pub mod hook;
 pub mod mshot;
 pub mod params;
@@ -270,6 +271,11 @@ pub struct Deal {
     /// nothing to model on the entry side: the fill is the report's ([`simulate`]). `None`
     /// until the model inputs are filled, and in the verdict, which exists to test the model.
     pub own_entry: Option<EntryParams>,
+    /// The hole between a long position's two held ends and the fact's record of it
+    /// ([`gap::TapeGap`]); filled by the caller that holds the tape's coverage, `None` for a
+    /// window held whole. A variant that may have closed inside it is not judged on the trade
+    /// ([`ExitKind::InGap`]).
+    pub gap: Option<gap::TapeGap>,
 }
 
 impl Deal {
@@ -402,6 +408,16 @@ pub enum ExitKind {
     /// and counted in the caption. Under the strategy's own parameters this is the model
     /// failing to reproduce an exit the core made, and the verdict says so.
     OpenAtWindowEnd,
+    /// The variant may have closed inside the hole of a long position's tape ([`gap`]) — its sell
+    /// stood nearer the price than the fact's line there, its stop nearer than the fact's, or a
+    /// rule of it followed the price through the hole — at a moment and a price nobody holds. Or
+    /// its entry filled only after the hole began: whether the order waited through the hole
+    /// unfilled, or filled inside it, nobody can tell — even when the tape shows a fill on the
+    /// exit end, it shows one the order may never have lived to see. Not a trade, and no more a
+    /// loss than a win: like
+    /// [`Self::OpenAtWindowEnd`] it is out of the KPI, and a search point that leaves a trade
+    /// here is refused ([`Outcome::left_open`]).
+    InGap,
 }
 
 /// Where and when the modelled position closed, and by which rule.
@@ -420,7 +436,8 @@ pub struct Outcome {
     pub fill: Option<Fill>,
     pub exit: Option<Exit>,
     /// Signed result in per cent of the fill price, sign already flipped for a short. `None`
-    /// without a fill, with an [`ExitKind::OpenAtWindowEnd`] exit, or when either price is not
+    /// without a fill, with an [`ExitKind::OpenAtWindowEnd`] or [`ExitKind::InGap`] exit, or when
+    /// either price is not
     /// a price (see [`profit_pct`]) — none of those is a trade.
     pub profit_pct: Option<f64>,
 }
@@ -436,12 +453,13 @@ impl Outcome {
         self.profit_pct.is_some()
     }
 
-    /// Whether the position was bought and nothing closed it inside the tape.
+    /// Whether the position was bought and nothing closed it inside the tape — past its end, or
+    /// inside a hole of it ([`ExitKind::InGap`]): either way what the trade made is on no record.
     pub fn left_open(&self) -> bool {
         self.fill.is_some()
-            && self
-                .exit
-                .is_some_and(|exit| exit.kind == ExitKind::OpenAtWindowEnd)
+            && self.exit.is_some_and(|exit| {
+                matches!(exit.kind, ExitKind::OpenAtWindowEnd | ExitKind::InGap)
+            })
     }
 }
 
@@ -553,9 +571,19 @@ pub fn simulate(
             profit_pct: None,
         };
     };
-    let exit_result = ExitModel::new(exit).exit(deal, ticks, fill);
+    // An entry the tape shows filling only after a long position's hole began — on the first
+    // print past it, most often — filled somewhere in the hole, or never: nobody holds the prints
+    // that would say. The fact's own entry is at the buy, before any hole.
+    let exit_result = match &deal.gap {
+        Some(gap) if fill.t_ms > gap.from_ms => Exit {
+            t_ms: fill.t_ms,
+            price: f64::NAN,
+            kind: ExitKind::InGap,
+        },
+        _ => ExitModel::new(exit).exit(deal, ticks, fill),
+    };
     let profit_pct = match exit_result.kind {
-        ExitKind::OpenAtWindowEnd => None,
+        ExitKind::OpenAtWindowEnd | ExitKind::InGap => None,
         _ => profit_pct(deal, fill.price, exit_result.price),
     };
     Outcome {

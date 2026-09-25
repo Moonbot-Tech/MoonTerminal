@@ -227,6 +227,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             archived_take: None,
             // Filled with the model inputs, once the archive is in (`record::prepare_deal`).
             entry_placed: None,
+            gap: None,
             // Filled by `overlay_hook_detect` off the raw report row's comment.
             hook_depth_pct: None,
             hook_stated_take_pct: None,

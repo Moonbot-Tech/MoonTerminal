@@ -19,6 +19,10 @@ use super::pump_move::PumpMove;
 use super::sell_order::{PriceDown, SellLevel, armed_at};
 use super::stops::Stops;
 use super::{ExitParams, Side};
+use crate::db::tuner::ticks::gap::{
+    HOLE_PRICE_TOLERANCE, HOLE_TIME_SLACK_MS, TapeGap, fact_level_near, sell_not_nearer,
+    stop_not_nearer, trigger_not_quicker,
+};
 use crate::db::tuner::ticks::{Deal, Exit, ExitKind, Fill, reaches, round_to_step};
 use crate::feed::types::Tick;
 
@@ -172,6 +176,16 @@ impl Line {
             })
     }
 
+    /// The level the exchange held at `t_ms` — the last level sent that reached it by then;
+    /// `None` before the take was placed.
+    fn level_at(&self, t_ms: i64) -> Option<f64> {
+        self.points
+            .iter()
+            .rev()
+            .find(|p| p.t_ms <= t_ms)
+            .map(|p| p.price)
+    }
+
     fn close(self, exit: Exit) -> LineWalk {
         LineWalk {
             exit,
@@ -218,6 +232,8 @@ pub fn walk_held(
     let mut sell_level = SellLevel::new(params, deal, fill, side);
     let mut stops = Stops::new(deal, ticks, fill, params, side);
 
+    // A long position's hole, while the walk has yet to cross it.
+    let mut hole = deal.gap.as_ref().filter(|gap| gap.to_ms > fill.t_ms);
     let mut last_t = fill.t_ms;
     for (index, tick) in ticks.iter().enumerate() {
         let t_ms = tick.time_ms as i64;
@@ -232,32 +248,47 @@ pub fn walk_held(
         if let Some(exit) = stops.fired_by(t_ms) {
             return finish(line, exit, &stops);
         }
+        // The first print past a hole is not the market's next print: the rules ran through
+        // hours nobody holds. Everything due before the hole ran on the prints before it; what
+        // the hole itself did is judged against the fact (`cross_hole`), never sold on here.
+        if let Some(gap) = hole.filter(|gap| t_ms > gap.from_ms.max(fill.t_ms)) {
+            hole = None;
+            let from_ms = gap.from_ms.max(fill.t_ms);
+            let rules = Rules {
+                pump_move: &mut pump_move,
+                price_down: &mut price_down,
+                sell_level: &mut sell_level,
+            };
+            rules.step_through(from_ms, &ticks[..index], &mut line);
+            line.land(from_ms);
+            let held_through = hold_until_ms.is_some_and(|until| until >= gap.to_ms);
+            let rules = Rules {
+                pump_move: &mut pump_move,
+                price_down: &mut price_down,
+                sell_level: &mut sell_level,
+            };
+            if let Some(exit) = cross_hole(
+                gap,
+                from_ms,
+                rules,
+                &mut line,
+                &stops,
+                params,
+                side,
+                held_through,
+            ) {
+                return finish(line, exit, &stops);
+            }
+        }
         // The timer-driven rules moved the line at their own moments, between prints; every
         // step due by this print happened BEFORE it, and a step that also reached the book
         // before it is what this print meets.
-        //
-        // PriceDown steps, the pump move and SellLevel's moves, one per due moment, in the
-        // order they fell due — on a tie the pump move, then PriceDown, then SellLevel: each step
-        // chains off where the one before it left the line. (SellLevel ran as a pass of its own
-        // after the others until 2026-09-24, so a PriceDown step due after a SellLevel move went
-        // first, off the level the move then replaced.)
-        loop {
-            let due = [
-                pump_move.due(t_ms),
-                price_down.due(t_ms),
-                sell_level.due(t_ms),
-            ]
-            .into_iter()
-            .enumerate()
-            .filter_map(|(rule, due)| due.map(|due| (due, rule)))
-            .min();
-            match due {
-                None => break,
-                Some((due, 0)) => pump_move.step(due, seen, &mut line),
-                Some((due, 1)) => price_down.step(due, &mut line),
-                Some((due, _)) => sell_level.step(due, seen, &mut line),
-            }
-        }
+        let rules = Rules {
+            pump_move: &mut pump_move,
+            price_down: &mut price_down,
+            sell_level: &mut sell_level,
+        };
+        rules.step_through(t_ms, seen, &mut line);
         line.land(t_ms);
         // The stops come before the print-driven rule below moves anything.
         if let Some(exit) = stops.on_print(tick, t_ms, price) {
@@ -297,6 +328,124 @@ pub fn walk_held(
         },
         &stops,
     )
+}
+
+/// The rules that move the sell line on their own clocks.
+struct Rules<'r, 'a> {
+    pump_move: &'r mut PumpMove<'a>,
+    price_down: &'r mut PriceDown<'a>,
+    sell_level: &'r mut SellLevel<'a>,
+}
+
+impl Rules<'_, '_> {
+    /// Every step due by `t_ms`: PriceDown steps, the pump move and SellLevel's moves, one per
+    /// due moment, in the order they fell due — on a tie the pump move, then PriceDown, then
+    /// SellLevel: each step chains off where the one before it left the line. (SellLevel ran as
+    /// a pass of its own after the others until 2026-09-24, so a PriceDown step due after a
+    /// SellLevel move went first, off the level the move then replaced.)
+    ///
+    /// Args:
+    ///     seen: The prints up to `t_ms` — what the price-following rules read.
+    fn step_through(self, t_ms: i64, seen: &[Tick], line: &mut Line) {
+        loop {
+            let due = [
+                self.pump_move.due(t_ms),
+                self.price_down.due(t_ms),
+                self.sell_level.due(t_ms),
+            ]
+            .into_iter()
+            .enumerate()
+            .filter_map(|(rule, due)| due.map(|due| (due, rule)))
+            .min();
+            match due {
+                None => break,
+                Some((due, 0)) => self.pump_move.step(due, seen, line),
+                Some((due, 1)) => self.price_down.step(due, line),
+                Some((due, _)) => self.sell_level.step(due, seen, line),
+            }
+        }
+    }
+}
+
+/// Carry the walk across a long position's hole ([`TapeGap`]), from `from_ms` — its start, or the
+/// fill when the take came after it — to its end, the PriceDown steps it holds taken on their
+/// timer, which needs no print. `None` when the variant cannot have closed inside the hole; the
+/// exit [`ExitKind::InGap`] when it may have.
+///
+/// It may have when a rule of it follows the price through the hole (SellLevel or the pump move
+/// still to come, the trailing stop, a ladder rung still to take — their levels are functions of
+/// prints nobody holds); when its stop stands nearer the price than the fact's, or fires on a
+/// quicker trigger, and the fact does not prove the variant's own stop quiet; and when its sell
+/// stood nearer the price than the core's line at some moment of the hole, or the core's line is
+/// not on record for that moment. The core's own line and stop were not reached there, or the
+/// trade would have closed inside it.
+///
+/// Args:
+///     held_through: The walk holds the sell past the hole — the verdict judging where the line
+///         stood at the close: no print fills the sell there, so its comparison proves nothing
+///         the verdict needs.
+#[allow(clippy::too_many_arguments)]
+fn cross_hole(
+    gap: &TapeGap,
+    from_ms: i64,
+    rules: Rules<'_, '_>,
+    line: &mut Line,
+    stops: &Stops,
+    params: &ExitParams,
+    side: Side,
+    held_through: bool,
+) -> Option<Exit> {
+    let in_gap = Some(Exit {
+        t_ms: from_ms,
+        price: f64::NAN,
+        kind: ExitKind::InGap,
+    });
+    if rules.pump_move.due(i64::MAX).is_some()
+        || rules.sell_level.due(i64::MAX).is_some()
+        || stops.follows_price()
+    {
+        return in_gap;
+    }
+    if let Some(level) = stops.level().filter(|_| stops.quiet_until() < gap.to_ms) {
+        let bounded = gap.fact_stop.is_some_and(|fact| {
+            stop_not_nearer(level, fact.level, side.long)
+                && trigger_not_quicker(params.fast_stop_loss, params.stop_loss_ema, &fact)
+        });
+        if !bounded {
+            return in_gap;
+        }
+    }
+    while let Some(due) = rules.price_down.due(gap.to_ms) {
+        rules.price_down.step(due, line);
+    }
+    line.land(gap.to_ms);
+    if held_through {
+        return None;
+    }
+    // Every moment either line moved — the core's within the slack either side — and the hole's
+    // start: both are steps, so the comparison at each is the comparison throughout. Within the
+    // verdict's default tolerances the two lines are one line (`gap::fact_level_near`).
+    let fact_points = gap.fact_line.as_deref().unwrap_or_default();
+    let slack_ms = HOLE_TIME_SLACK_MS;
+    let price_tolerance = HOLE_PRICE_TOLERANCE;
+    let mut moments: Vec<i64> = std::iter::once(from_ms)
+        .chain(line.points.iter().map(|p| p.t_ms))
+        .chain(
+            fact_points
+                .iter()
+                .flat_map(|(t, _)| [t.saturating_sub(slack_ms), *t, t.saturating_add(slack_ms)]),
+        )
+        .filter(|t| (from_ms..=gap.to_ms).contains(t))
+        .collect();
+    moments.sort_unstable();
+    moments.dedup();
+    let reached = moments.into_iter().any(|t| match line.level_at(t) {
+        // No sell stood yet (`SellDelay`): nothing to reach.
+        None => false,
+        Some(variant) => fact_level_near(fact_points, t, slack_ms, side.long)
+            .is_none_or(|fact| !sell_not_nearer(variant, fact, side.long, price_tolerance)),
+    });
+    if reached { in_gap } else { None }
 }
 
 /// Close the line on `exit`, with the stop's level as it then stood.

@@ -940,6 +940,7 @@ pub(super) fn replay_row_with(
             exit: lines.exit_points.as_deref(),
             answered: lines.answered,
         },
+        &covered,
     );
     // The core's own clock for its PriceDown steps, as the last load calibrated it.
     row.deal.step_lag_ms = super::lags::step_lag_of(row.deal.core_uid);

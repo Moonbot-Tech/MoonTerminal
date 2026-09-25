@@ -125,6 +125,7 @@ fn dump_deal(
         "tick": deal.tick,
         "values": values,
         "held_exit": [held.exit.t_ms, held.exit.price, format!("{:?}", held.exit.kind)],
+        "gap": deal.gap.as_ref().map(|g| (g.from_ms, g.to_ms)),
         "held_points": held.points.iter().map(|p| (p.t_ms, p.price)).collect::<Vec<_>>(),
         "archive": exit_points,
         "entry": entry_points,
@@ -623,6 +624,8 @@ fn real_data_reproduction() {
     // reads as that in the summary rather than as a scope without tape.
     let mut no_venue = 0usize;
     let (mut fit_n, mut own_n, mut own_close) = (0usize, 0usize, 0usize);
+    // Long positions whose tape has a hole, and those the trade's own settings leave in it.
+    let (mut holes, mut own_in_gap) = (0usize, 0usize);
     // MoonShot entries replayed from the order's creation (`mshot`, `Deal::entry_placed`), and
     // how many of those the model reproduced.
     let (mut created_n, mut created_hits, mut stamped) = (0usize, 0usize, 0usize);
@@ -770,6 +773,7 @@ fn real_data_reproduction() {
                 exit: exit_points.as_deref(),
                 answered,
             },
+            &covered,
         );
         // The corridor the core saved against the model's band, `near` … `2 · far − near` off one
         // reference (`mshot`): the ratio of its edges is the band's width whatever the reference.
@@ -1049,6 +1053,8 @@ fn real_data_reproduction() {
         // variant column counts the same money the "Fact" column does.
         let fit = fit_for_search(&archived);
         let own = simulate(&deal, &ticks, &entry, &exit, entry_line.as_deref());
+        holes += usize::from(deal.gap.is_some());
+        own_in_gap += usize::from(own.exit.is_some_and(|e| e.kind == ExitKind::InGap));
         // `MOON_TICKS_VARIANT="SellPrice=1.6,PriceDownTimer=3"` replays the deal under those values
         // laid over its own, the way a variant column does, and prints the line it walked.
         if let Ok(spec) = std::env::var("MOON_TICKS_VARIANT") {
@@ -1289,6 +1295,7 @@ fn real_data_reproduction() {
     let mut unfit: Vec<(String, usize)> = unfit.into_iter().collect();
     unfit.sort_by_key(|u| std::cmp::Reverse(u.1));
     eprintln!("fit for the search: {fit_n} of {with_tape} · left out: {unfit:?}");
+    eprintln!("long positions with a hole: {holes} · own settings left in it: {own_in_gap}");
     eprintln!(
         "own settings replayed on the fit trades: {own_n} closed, mean {:.3} % against the fact's {:.3} %, within 0.05 pp on {own_close}",
         own_sum / own_n.max(1) as f64,

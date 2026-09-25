@@ -200,7 +200,9 @@ impl AnalyticsView {
                         fill_price: fill.price as f32,
                         exit: outcome
                             .exit
-                            .filter(|exit| exit.kind != ExitKind::OpenAtWindowEnd)
+                            .filter(|exit| {
+                                !matches!(exit.kind, ExitKind::OpenAtWindowEnd | ExitKind::InGap)
+                            })
                             .map(|exit| (exit.t_ms as f64, exit.price as f32)),
                         exit_path: picture
                             .sell_line

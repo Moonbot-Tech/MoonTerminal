@@ -1921,9 +1921,9 @@ analytics.ticks.params_title:
   en: "Parameters"
   es: "Parámetros"
 analytics.ticks.assumptions:
-  ru: "Модель не знает: стакан и очередь на уровне · правила выхода вне модели (лестница стопов, SellShot, SellSpread) · MShotRepeat* · опора ASK/BID — последний принт своей стороны"
-  en: "The model does not know: the book and the queue at a level · exit rules outside it (the stop ladder, SellShot, SellSpread) · MShotRepeat* · the ASK/BID reference is the last print of its side"
-  es: "El modelo no conoce: el libro y la cola en un nivel · reglas de salida fuera de él (escalera de stops, SellShot, SellSpread) · MShotRepeat* · la referencia ASK/BID es el último print de su lado"
+  ru: "Модель не знает: стакан и очередь на уровне · правила выхода вне модели (SellShot, SellSpread) · MShotRepeat* · опора ASK/BID — последний принт своей стороны · середину долгой позиции: вариант, чья линия или стоп стояли там ближе к цене, чем у факта, не судится"
+  en: "The model does not know: the book and the queue at a level · exit rules outside it (SellShot, SellSpread) · MShotRepeat* · the ASK/BID reference is the last print of its side · the middle of a long position: a variant whose line or stop stood nearer the price there than the fact's is not judged"
+  es: "El modelo no conoce: el libro y la cola en un nivel · reglas de salida fuera de él (SellShot, SellSpread) · MShotRepeat* · la referencia ASK/BID es el último print de su lado · el medio de una posición larga: una variante cuya línea o stop estuvo allí más cerca del precio que el del hecho no se juzga"
 analytics.ticks.group_entry:
   ru: "Вход"
   en: "Entry"
@@ -2089,9 +2089,9 @@ analytics.ticks.acc_tip_no_tape:
   en: "Without tape: %{n}, left out of the estimate."
   es: "Sin cinta: %{n}, fuera de la estimación."
 analytics.ticks.acc_tip_assumptions:
-  ru: "Допущения модели: стакана нет — очередь перед нашим ордером не моделируется, филл = касание принтом; стоп по стакану видит цену тикера раз в %{ticker} с, вместо неё — последний принт; задержка ядра и биржи — одна на все ядра, %{latency} мс; совпадением считается цена в пределах %{price} % и момент в пределах %{time} с; поля выхода вне модели (SellShot, SellSpread и другие) — такие сделки не судятся."
-  en: "The model assumes: no order book — the queue ahead of our order is not modelled, a fill is a touching print; a book-watching stop sees the ticker price every %{ticker} s, the last print standing in for it; one core and venue latency for every core, %{latency} ms; a match is a price within %{price} % and a moment within %{time} s; exit fields outside the model (SellShot, SellSpread and others) leave such trades unjudged."
-  es: "El modelo supone: sin libro de órdenes — la cola delante de nuestra orden no se modela, un llenado es un print que toca; un stop por libro ve el precio del ticker cada %{ticker} s, con el último print en su lugar; una latencia de núcleo y bolsa para todos los núcleos, %{latency} ms; coincide un precio dentro de %{price} % y un momento dentro de %{time} s; los campos de salida fuera del modelo (SellShot, SellSpread y otros) dejan esas operaciones sin juzgar."
+  ru: "Допущения модели: стакана нет — очередь перед нашим ордером не моделируется, филл = касание принтом; стоп по стакану видит цену тикера раз в %{ticker} с, вместо неё — последний принт; задержка ядра и биржи — одна на все ядра, %{latency} мс; совпадением считается цена в пределах %{price} % и момент в пределах %{time} с; поля выхода вне модели (SellShot, SellSpread и другие) — такие сделки не судятся; середина долгой позиции не хранится — вариант, чья линия или стоп стояли там ближе к цене, чем у факта, на такой сделке не судится."
+  en: "The model assumes: no order book — the queue ahead of our order is not modelled, a fill is a touching print; a book-watching stop sees the ticker price every %{ticker} s, the last print standing in for it; one core and venue latency for every core, %{latency} ms; a match is a price within %{price} % and a moment within %{time} s; exit fields outside the model (SellShot, SellSpread and others) leave such trades unjudged; the middle of a long position is not kept — a variant whose line or stop stood nearer the price there than the fact's is not judged on that trade."
+  es: "El modelo supone: sin libro de órdenes — la cola delante de nuestra orden no se modela, un llenado es un print que toca; un stop por libro ve el precio del ticker cada %{ticker} s, con el último print en su lugar; una latencia de núcleo y bolsa para todos los núcleos, %{latency} ms; coincide un precio dentro de %{price} % y un momento dentro de %{time} s; los campos de salida fuera del modelo (SellShot, SellSpread y otros) dejan esas operaciones sin juzgar; el medio de una posición larga no se guarda — una variante cuya línea o stop estuvo allí más cerca del precio que el del hecho no se juzga en esa operación."
 analytics.ticks.long_title:
   ru: "Долгий подбор"
   en: "A long search"

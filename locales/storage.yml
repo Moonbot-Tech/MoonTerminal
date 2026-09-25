@@ -129,17 +129,17 @@ storage.trades_min:
   en: "%{min} min"
   es: "%{min} min"
 storage.trades_margin_hint:
-  ru: "С каждого края сделки; у долгой — вокруг входа и вокруг выхода, середина свечами. Не меньше 30 с — столько нужно тюнеру."
-  en: "At each end of a trade; on a long one, around the entry and around the exit, candles between. At least 30 s — what the tuner needs."
-  es: "En cada extremo de una posición; en una larga, alrededor de la entrada y de la salida, velas entre ambas. Al menos 30 s: lo que necesita el afinador."
+  ru: "С каждого края сделки; у долгой — вокруг входа и вокруг выхода, середина свечами. Не меньше 30 с — столько нужно тюнеру; дальше этого после закрытия он выход варианта не судит."
+  en: "At each end of a trade; on a long one, around the entry and around the exit, candles between. At least 30 s — what the tuner needs; it judges a variant's exit no further than this past the close."
+  es: "En cada extremo de una posición; en una larga, alrededor de la entrada y de la salida, velas entre ambas. Al menos 30 s: lo que necesita el afinador, que no juzga la salida de una variante más allá de esto tras el cierre."
 storage.trades_long_position:
   ru: "Долгая сделка от"
   en: "Long trade from"
   es: "Posición larga desde"
 storage.trades_long_position_hint:
-  ru: "Дольше — трейды только вокруг входа и выхода."
-  en: "Held longer — prints around the entry and the exit only."
-  es: "Más larga — operaciones solo alrededor de la entrada y la salida."
+  ru: "Дольше — трейды только вокруг входа и выхода. Середину тюнер не видит: вариант, который мог выйти в ней, на такой сделке не судится."
+  en: "Held longer — prints around the entry and the exit only. The tuner does not see the middle: a variant that may have closed there is not judged on such a trade."
+  es: "Más larga — operaciones solo alrededor de la entrada y la salida. El afinador no ve el medio: una variante que pudo cerrar allí no se juzga en esa operación."
 storage.trades_autoload:
   ru: "Подгружать недостающую ленту при старте"
   en: "Fetch the missing tape at startup"
