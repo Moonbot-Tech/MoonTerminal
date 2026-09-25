@@ -1297,7 +1297,7 @@ pub(crate) fn store_fault(error: rusqlite::Error) -> FaultCause {
 ///     Returns the underlying SQLite error when the file or schema cannot be initialized.
 pub(crate) fn open_store(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    crate::db::wal::enable(&conn)?;
     // The cache has many small autocommits during backfill. A less frequent checkpoint reduces
     // checkpoint pressure while the fixed SQLite WAL implementation coordinates attached readers.
     conn.pragma_update(None, "wal_autocheckpoint", 8_192)?;

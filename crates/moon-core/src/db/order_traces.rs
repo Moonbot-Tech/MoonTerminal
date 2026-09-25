@@ -223,7 +223,7 @@ pub fn sink() -> Option<TraceSink> {
 /// Errors:
 ///     Any SQLite failure; a schema version this build does not know is one too.
 fn init(conn: &Connection) -> rusqlite::Result<()> {
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    super::wal::enable(conn)?;
     let _ = conn.busy_timeout(Duration::from_secs(3));
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

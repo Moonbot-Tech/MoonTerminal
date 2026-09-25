@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 
-/// Checkpoint WAL (TRUNCATE) and VACUUM to reclaim deleted-row space and
-/// truncate an oversized `-wal` file. Blocks writers during VACUUM and therefore
-/// runs only after an explicit user action.
+/// VACUUM to reclaim deleted-row space, then checkpoint (TRUNCATE) the frames it wrote so the
+/// `-wal` file does not stay the size of the database ([`super::wal::vacuum`]). Blocks writers
+/// during VACUUM and therefore runs only after an explicit user action.
 ///
 /// Args:
 ///     path: Database to compact; the reports path additionally requires the process lease.
@@ -22,8 +22,7 @@ pub fn compact_db(path: &Path) -> anyhow::Result<()> {
     }
     let conn = Connection::open(path)?;
     let _ = conn.busy_timeout(Duration::from_secs(30));
-    let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
-    conn.execute("VACUUM", [])?;
+    super::wal::vacuum(&conn)?;
     Ok(())
 }
 
