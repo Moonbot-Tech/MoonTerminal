@@ -93,7 +93,11 @@ fn a_field_is_inert_only_while_its_partner_is_zero_on_every_strategy() {
 /// the coefficient's grid up and down, the term's up.
 #[test]
 fn a_diagonal_runs_both_grids_from_the_smallest_step_to_the_largest() {
-    let paths = Coupling::diagonals(field("SellModifier"), field("Add1minDelta"));
+    let paths = Coupling::diagonals(
+        crate::db::tuner::ticks::search::test_grids::legacy(),
+        field("SellModifier"),
+        field("Add1minDelta"),
+    );
     assert_eq!(paths.len(), 2, "up and down");
     let pair = |p: &(String, String)| (p.0.clone(), p.1.clone());
     let s = |a: &str, b: &str| (a.to_string(), b.to_string());
@@ -134,6 +138,7 @@ fn the_descent_leaves_the_zero_corner_along_the_diagonal() {
     let coupling = Coupling::of(&order, &per_base);
     let walked = descend(
         Point::new(),
+        crate::db::tuner::ticks::search::test_grids::legacy(),
         &order,
         &[],
         &coupling,
@@ -151,6 +156,7 @@ fn the_descent_leaves_the_zero_corner_along_the_diagonal() {
 
     let alone = descend(
         Point::new(),
+        crate::db::tuner::ticks::search::test_grids::legacy(),
         &order,
         &[],
         &Coupling::none(),
@@ -182,6 +188,7 @@ fn an_inert_term_costs_no_replay() {
     let coupling = Coupling::of(&order, &per_base);
     descend(
         Point::new(),
+        crate::db::tuner::ticks::search::test_grids::legacy(),
         &order,
         &[],
         &coupling,

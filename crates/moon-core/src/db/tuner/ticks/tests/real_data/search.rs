@@ -3,13 +3,23 @@
 //! searches a selection — the Delta Modifiers section alone — every other field locked at each strategy's own
 //! value — so what the section can add over the strategies as they stand is read off a real
 //! replica, with no window. `MOON_TICKS_SEARCH_RESTARTS` sets the restarts (10 by default).
+//!
+//! The grids are the axis' own automatic ranges (`params::range`) over the live strategies of
+//! this machine and the searched strategy's values, cut into `MOON_TICKS_STEPS` steps (the
+//! axis default when unset); `MOON_TICKS_GRIDS=legacy` searches the ladders the axis used before
+//! 2026-09-25 instead, so the two can be held against each other on the same deals.
+//! `MOON_TICKS_SEARCH_ALL=1` searches the whole exit rather than the Delta Modifiers section.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::db::tuner::threshold_search::SearchHandle;
+use crate::db::tuner::ticks::ParamKind;
 use crate::db::tuner::ticks::params::ParamSection;
+use crate::db::tuner::ticks::params::range::{
+    Grids, Population, TickRange, field_span, resolve, steps_of,
+};
 pub(super) use crate::db::tuner::ticks::search::PreparedDeal;
 use crate::db::tuner::ticks::search::{
     DEFAULT_MAX_PASSES, SearchParams, clip_to_horizon, common_horizon_ms, suggest, variant_tally,
@@ -61,9 +71,10 @@ fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, 
     if let Some(horizon) = common_horizon_ms(&deals) {
         clip_to_horizon(&mut deals, horizon);
     }
+    let whole_exit = std::env::var_os("MOON_TICKS_SEARCH_ALL").is_some();
     let locked: HashSet<String> = TICK_PARAMS
         .iter()
-        .filter(|f| f.section != ParamSection::DeltaModifiers)
+        .filter(|f| !whole_exit && f.section != ParamSection::DeltaModifiers)
         .map(|f| f.key.to_string())
         .collect();
     let restarts = std::env::var("MOON_TICKS_SEARCH_RESTARTS")
@@ -71,6 +82,12 @@ fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, 
         .and_then(|v| v.parse().ok())
         .unwrap_or(10);
     let held = HashMap::new();
+    let legacy = std::env::var("MOON_TICKS_GRIDS").is_ok_and(|v| v == "legacy");
+    let grids = if legacy {
+        crate::db::tuner::ticks::search::test_grids::legacy().clone()
+    } else {
+        auto_grids(kind, &deals[0].own, defaults)
+    };
     let params = SearchParams {
         held: &held,
         defaults,
@@ -78,6 +95,7 @@ fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, 
         vary_entry: false,
         vary_exit: true,
         locked: &locked,
+        grids: &grids,
         restarts,
         min_n: None,
         seed: Some(1),
@@ -90,10 +108,16 @@ fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, 
     let answer = suggest(&deals, &params, &SearchHandle::new());
     let elapsed = started.elapsed().as_millis();
     eprintln!(
-        "search {kind} strategy {} on core {}: {} deal(s), Delta Modifiers only, {restarts} restart(s), {elapsed} ms",
+        "search {kind} strategy {} on core {}: {} deal(s), {}, {restarts} restart(s), {} grids, {elapsed} ms",
         deals[0].deal.strategy_id,
         deals[0].deal.core_name,
-        deals.len()
+        deals.len(),
+        if whole_exit {
+            "whole exit"
+        } else {
+            "Delta Modifiers only"
+        },
+        if legacy { "legacy" } else { "auto" }
     );
     let own = &deals[0].own;
     let section: Vec<(&str, &String)> = TICK_PARAMS
@@ -125,4 +149,43 @@ fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, 
         ),
         Err(miss) => eprintln!("  no answer: {miss:?}"),
     }
+}
+
+/// The axis' automatic grids for one strategy: the live strategies of `kind` on this machine, the
+/// strategy's own values as the selection, `MOON_TICKS_STEPS` steps per field.
+fn auto_grids(kind: &str, own: &HashMap<String, String>, defaults: &HashMap<String, f64>) -> Grids {
+    let deps = crate::feed::strategy_deps::FieldDeps::bundled();
+    let numbers: Vec<&'static str> = TICK_PARAMS
+        .iter()
+        .filter(|f| f.kind == ParamKind::Num)
+        .map(|f| f.key)
+        .collect();
+    let mut keys: Vec<String> = numbers.iter().map(|k| k.to_string()).collect();
+    for key in &numbers {
+        keys.extend(deps.conditions_of(key).map(str::to_string));
+    }
+    let live = crate::db::tuner::live_strategies(&keys);
+    let population = Population::of(&live, defaults, &deps);
+    let steps = steps_of(
+        std::env::var("MOON_TICKS_STEPS")
+            .ok()
+            .and_then(|v| v.parse().ok()),
+    );
+    let kinds = [kind.to_string()];
+    let mut grids = Grids::default();
+    for key in numbers {
+        let default = defaults.get(&key.to_ascii_lowercase()).copied();
+        let selected: Vec<f64> = own
+            .get(key)
+            .and_then(|v| v.trim().replace(',', ".").parse::<f64>().ok())
+            .or(default)
+            .into_iter()
+            .collect();
+        let span = field_span(&population.values(&kinds, key), default, &selected);
+        let points = resolve(span.as_ref(), &TickRange::default(), false, steps).points;
+        if !points.is_empty() {
+            grids.insert(key, points);
+        }
+    }
+    grids
 }

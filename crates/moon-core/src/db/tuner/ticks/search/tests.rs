@@ -113,6 +113,7 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
         vary_entry: false,
         vary_exit: true,
         locked: &locked,
+        grids: crate::db::tuner::ticks::search::test_grids::legacy(),
         restarts: 3,
         min_n: Some(4),
         seed: Some(7),
@@ -218,6 +219,7 @@ fn the_holdout_is_scored_but_never_fitted_on() {
         vary_entry: false,
         vary_exit: true,
         locked: &locked,
+        grids: crate::db::tuner::ticks::search::test_grids::legacy(),
         restarts: 1,
         min_n: Some(3),
         seed: Some(1),
@@ -250,6 +252,7 @@ fn a_cancelled_run_answers_nothing_and_nothing_varied_answers_nothing() {
         vary_entry: true,
         vary_exit: true,
         locked: &all,
+        grids: crate::db::tuner::ticks::search::test_grids::legacy(),
         restarts: 2,
         min_n: None,
         seed: Some(1),
@@ -269,6 +272,7 @@ fn a_cancelled_run_answers_nothing_and_nothing_varied_answers_nothing() {
     let none: HashSet<String> = HashSet::new();
     let params = SearchParams {
         locked: &none,
+        grids: crate::db::tuner::ticks::search::test_grids::legacy(),
         ..params
     };
     let handle = SearchHandle::new();
@@ -351,6 +355,7 @@ fn a_shift_does_not_search_the_path_only_fields() {
             vary_entry: true,
             vary_exit: false,
             locked: &locked,
+            grids: crate::db::tuner::ticks::search::test_grids::legacy(),
             restarts: 1,
             min_n: None,
             seed: Some(1),
@@ -431,6 +436,7 @@ fn a_search_holds_each_deals_own_value_and_reports_a_value_one_strategy_lacks() 
         vary_entry: false,
         vary_exit: true,
         locked: &locked,
+        grids: crate::db::tuner::ticks::search::test_grids::legacy(),
         restarts: 3,
         min_n: Some(2),
         seed: Some(7),
@@ -476,6 +482,7 @@ fn a_trade_floor_no_point_keeps_finds_nothing() {
         vary_entry: false,
         vary_exit: true,
         locked: &locked,
+        grids: crate::db::tuner::ticks::search::test_grids::legacy(),
         restarts: 3,
         min_n: Some(9),
         seed: Some(7),
@@ -626,8 +633,20 @@ fn a_pair_move_reaches_what_no_single_move_does() {
     let target = (9, 6);
     let evaluate = |point: &Point| -> Option<Tally> {
         let at = (
-            grid_index(price, point, &start).expect("price"),
-            grid_index(add, point, &start).expect("add"),
+            grid_index(
+                crate::db::tuner::ticks::search::test_grids::legacy(),
+                price,
+                point,
+                &start,
+            )
+            .expect("price"),
+            grid_index(
+                crate::db::tuner::ticks::search::test_grids::legacy(),
+                add,
+                point,
+                &start,
+            )
+            .expect("add"),
         );
         let mut tally = Tally::default();
         tally.push(if at == target {
@@ -642,6 +661,7 @@ fn a_pair_move_reaches_what_no_single_move_does() {
     let order = [price, add];
     let walked = descend(
         Point::new(),
+        crate::db::tuner::ticks::search::test_grids::legacy(),
         &order,
         &order,
         &coupled::Coupling::none(),
@@ -654,8 +674,18 @@ fn a_pair_move_reaches_what_no_single_move_does() {
     .expect("not stopped");
     assert_eq!(
         (
-            grid_index(price, &walked.point, &start),
-            grid_index(add, &walked.point, &start)
+            grid_index(
+                crate::db::tuner::ticks::search::test_grids::legacy(),
+                price,
+                &walked.point,
+                &start
+            ),
+            grid_index(
+                crate::db::tuner::ticks::search::test_grids::legacy(),
+                add,
+                &walked.point,
+                &start
+            )
         ),
         (Some(9), Some(6))
     );
@@ -664,6 +694,7 @@ fn a_pair_move_reaches_what_no_single_move_does() {
     // Without the pairs the walk stays where it began.
     let alone = descend(
         Point::new(),
+        crate::db::tuner::ticks::search::test_grids::legacy(),
         &order,
         &[],
         &coupled::Coupling::none(),
@@ -688,10 +719,23 @@ fn a_perturbed_start_stays_near_the_base() {
     for restart in 1..200 {
         let mut state = restart_seed(7, restart);
         let mut point = Point::new();
-        perturb(&mut point, &order, &start, &mut state);
+        perturb(
+            &mut point,
+            crate::db::tuner::ticks::search::test_grids::legacy(),
+            &order,
+            &start,
+            &mut state,
+        );
         assert!((1..=2).contains(&point.len()), "{point:?}");
         for f in order {
-            if let Some(at) = point.get(f.key).and_then(|_| grid_index(f, &point, &start)) {
+            if let Some(at) = point.get(f.key).and_then(|_| {
+                grid_index(
+                    crate::db::tuner::ticks::search::test_grids::legacy(),
+                    f,
+                    &point,
+                    &start,
+                )
+            }) {
                 assert!(at.abs_diff(start[f.key]) <= 3, "{} at {at}", f.key);
             }
         }
@@ -727,6 +771,7 @@ fn a_search_that_no_point_can_keep_the_corridor_of_says_so() {
         vary_entry: true,
         vary_exit: false,
         locked: &locked,
+        grids: crate::db::tuner::ticks::search::test_grids::legacy(),
         restarts: 2,
         min_n: Some(1),
         seed: Some(7),

@@ -70,12 +70,12 @@ impl ParamSection {
     }
 }
 
-/// How a parameter is typed and, for the search, which values it may take.
+/// How a parameter is typed. A number's candidate values are not fixed here: they come from
+/// what the live strategies hold of it, or from the range the user typed ([`range`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ParamKind {
-    /// A number; `grid` is the search's discrete candidate set (§5.1 of the spec — a proposal
-    /// to narrow to practice).
-    Num { grid: &'static [f64] },
+    /// A number.
+    Num,
     /// `YES` / `NO`.
     Bool,
     /// One of a fixed spelling set.
@@ -111,124 +111,13 @@ const NOT_SELL_PRICE: &[&str] = &[
 ];
 const ANY: &[&str] = &[];
 
-/// The corridor's two fields, `MShotPrice` and `MShotPriceMin`: every 0.05 of a per cent from
-/// 0.05 to 8 (LinKvo, 2026-09-24) — a strategy's own 1.7 is a step, not a snap to 1.75.
-const GRID_PRICE: &[f64] = &twentieths::<160>();
-const GRID_PRICE_MIN: &[f64] = GRID_PRICE;
-
-/// `5/100, 10/100, … 5·N/100`: each value divided rather than summed, so 1.7 is exactly the
-/// `1.7` a strategy spells, with no accumulated rounding.
-const fn twentieths<const N: usize>() -> [f64; N] {
-    let mut out = [0.0; N];
-    let mut i = 0;
-    while i < N {
-        out[i] = ((i + 1) * 5) as f64 / 100.0;
-        i += 1;
-    }
-    out
-}
-const GRID_WAIT_S: &[f64] = &[0.0, 0.1, 0.3, 0.5, 1.0, 2.0, 5.0];
-const GRID_ADJUST: &[f64] = &[
-    -0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4,
-    1.6, 1.8, 2.0,
-];
-/// The `MShotAdd*` modifiers, per cent per one per cent of the delta. Fine near zero — the
-/// 24-hour deltas run to tens of per cent, and their live coefficients sit at 0.001–0.002 — then
-/// a 0.05 step to 1.0 (the developer's call, 2026-09-24): the old 0.2 ceiling could not reach a
-/// live `MShotAddMarkDelta` of 0.5.
-const GRID_ADD: &[f64] = &[
-    0.0, 0.001, 0.002, 0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4,
-    0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0,
-];
-/// `MShotAddDistance`, per cent: finer below 50 — a live strategy's 10 sat between the old 0
-/// and 25 (2026-09-24).
-const GRID_DISTANCE: &[f64] = &[
-    0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 75.0, 100.0, 150.0, 200.0,
-];
-/// Measured against the 1 713 live strategies that set it (2026-09-22): median 1 %, and 300 of
-/// them sit outside 0.2…5 — up to 11 % — so the tail is covered rather than clipped.
-const GRID_SELL_PRICE: &[f64] = &[
-    0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5,
-    5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0,
-];
-const GRID_SELL_DELAY_MS: &[f64] = &[0.0, 100.0, 250.0, 500.0, 1000.0];
-/// `HookSellLevel`, per cent of the detect depth: 100 sells at the top the move started from,
-/// 50 in the middle. The live strategies on this machine use 50 and 100.
-const GRID_HOOK_LEVEL: &[f64] = &[
-    10.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 90.0, 100.0,
-];
-const GRID_PD_TIMER_S: &[f64] = &[
-    0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 60.0, 120.0,
-];
-/// 1 865 live strategies set it; 121 of them below 5 %, which the old floor cut off.
-const GRID_PD_PCT: &[f64] = &[
-    1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 70.0,
-    80.0, 90.0, 100.0,
-];
-const GRID_PD_DELAY_S: &[f64] = &[0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 30.0, 60.0];
-const GRID_DROP: &[f64] = &[
-    -1.0, -0.5, -0.2, -0.1, 0.0, 0.01, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0,
-];
-const GRID_SL_DELAY_S: &[f64] = &[0.0, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0];
-const GRID_SL_TIME_S: &[f64] = &[0.0, 60.0, 300.0, 900.0, 1800.0, 3600.0, 7200.0];
-const GRID_SL_COUNT: &[f64] = &[0.0, 1.0, 2.0, 3.0, 5.0, 10.0];
-/// Live values run to −15 (29 of 1 869 strategies sit outside the old −10 floor).
-const GRID_STOP: &[f64] = &[
-    -15.0, -12.0, -10.0, -7.0, -5.0, -4.0, -3.0, -2.5, -2.0, -1.5, -1.0, -0.75, -0.5, -0.3, -0.2,
-    -0.1,
-];
-const GRID_STOP_DELAY_S: &[f64] = &[0.0, 1.0, 2.0, 4.0, 6.0, 10.0, 20.0, 30.0];
-/// `TimeToSwitch2Stop` / `TimeToSwitchStop3`, whole seconds: the live ladders switch after 0–5 s
-/// (78 strategies with `UseSecondStop`, 2026-09-24); the rest reach the "stop by time" use.
-const GRID_SWITCH_S: &[f64] = &[
-    0.0, 1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0,
-];
-/// `PriceToSwitch2Stop` / `PriceToSwitchStop3`, per cent off the buy: live 0.3, 0.5 and 1.5.
-const GRID_SWITCH_PCT: &[f64] = &[0.1, 0.2, 0.3, 0.5, 0.8, 1.0, 1.3, 1.5, 2.0, 3.0, 5.0];
-/// `SecondStopLoss` / `StopLoss3`, per cent off the buy: a break-even step lives just over zero
-/// (live 0.25, 0.4, 0.8), a stop by time below it.
-const GRID_STEP_LEVEL: &[f64] = &[
-    -3.0, -2.0, -1.0, -0.5, -0.2, 0.0, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.8, 1.0, 1.5, 2.0,
-];
-/// `TrailingPercent`, negative: live −0.1 to −4 among the 81 strategies with `UseTrailing`.
-const GRID_TRAILING: &[f64] = &[
-    -10.0, -5.0, -4.0, -3.0, -2.0, -1.8, -1.5, -1.0, -0.8, -0.5, -0.3, -0.2, -0.1,
-];
-/// `TrailingEMA`, ticks: live 0, 2 and 4.
-const GRID_TRAILING_EMA: &[f64] = &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0];
-/// `TakeProfit` of the trailing, per cent off the buy: live 1, 2, 2.5 and 5.
-const GRID_TAKE_PROFIT: &[f64] = &[0.2, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 5.0, 10.0];
-/// `SellModifier`, per cent of the sell's price per one per cent of the summed deltas: live 0.03
-/// to 1.5 among the 201 strategies of 1 423 that set it (2026-09-25; 0.5 at 114 of them). Below
-/// zero a volatile coin's sell comes nearer the entry, which the core allows.
-const GRID_SELL_MODIFIER: &[f64] = &[
-    -0.5, -0.3, -0.2, -0.1, -0.05, 0.0, 0.03, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.75, 1.0,
-    1.5,
-];
-/// `StopLossModifier`: live 0.2 at 139 of 150 strategies, −0.3 and −0.1 at the rest.
-const GRID_STOP_MODIFIER: &[f64] = &[
-    -0.5, -0.3, -0.2, -0.1, -0.05, 0.0, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0,
-];
-/// `MaxModifier`, per cent of summed deltas; 0 caps nothing. Live 10 to 1 000 (30 at 47 of 127);
-/// the small steps are what lets a cap bite on a quiet coin.
-const GRID_MAX_MODIFIER: &[f64] = &[
-    0.0, 1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 100.0, 130.0, 200.0, 1000.0,
-];
-/// The `Add*` terms of the Delta Modifiers tab, per one per cent of their delta: live from 0.002
-/// (`Add3hDelta`) to 3 (`Add1minDelta`), none below zero (2026-09-25). The sum is taken as a
-/// magnitude, so a single term's sign moves nothing.
-const GRID_DELTA_ADD: &[f64] = &[
-    0.0, 0.001, 0.002, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0,
-    1.5, 2.0, 3.0,
-];
-
 /// Every parameter of the axis, grid order: the Entry group first, then Exit.
 pub const TICK_PARAMS: &[TickParam] = &[
     TickParam {
         key: "MShotPrice",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_PRICE },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -236,9 +125,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotPriceMin",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num {
-            grid: GRID_PRICE_MIN,
-        },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -254,7 +141,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotRaiseWait",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_WAIT_S },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -262,7 +149,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotReplaceDelay",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_WAIT_S },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -286,7 +173,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotAddHourlyDelta",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_ADD },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -294,7 +181,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotAdd3hDelta",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_ADD },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -302,7 +189,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotAdd15minDelta",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_ADD },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -310,7 +197,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotAdd5minDelta",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_ADD },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -318,7 +205,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotAdd1minDelta",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_ADD },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -326,7 +213,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotAdd24hDelta",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_ADD },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -334,7 +221,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotAddMarkDelta",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_ADD },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -342,7 +229,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotAddMarketDelta",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_ADD },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -350,7 +237,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotAddBTCDelta",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_ADD },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -358,7 +245,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotAddBTC5mDelta",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_ADD },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -366,7 +253,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotAddPriceBug",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_ADD },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -374,9 +261,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotAddDistance",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num {
-            grid: GRID_DISTANCE,
-        },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -384,9 +269,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "SellPrice",
         group: ParamGroup::Exit,
         section: ParamSection::SellOrder,
-        kind: ParamKind::Num {
-            grid: GRID_SELL_PRICE,
-        },
+        kind: ParamKind::Num,
         kinds: ANY,
         // A MoonHook carries no `SellPrice` at all — `HookSellLevel` below is its take — and a
         // Spread's take is the spread it detected, whatever the field says.
@@ -404,7 +287,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "MShotSellPriceAdjust",
         group: ParamGroup::Exit,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num { grid: GRID_ADJUST },
+        kind: ParamKind::Num,
         kinds: MSHOT,
         not_kinds: &[],
     },
@@ -412,9 +295,7 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "HookSellLevel",
         group: ParamGroup::Exit,
         section: ParamSection::StrategySettings,
-        kind: ParamKind::Num {
-            grid: GRID_HOOK_LEVEL,
-        },
+        kind: ParamKind::Num,
         kinds: HOOK,
         not_kinds: &[],
     },
@@ -422,29 +303,23 @@ pub const TICK_PARAMS: &[TickParam] = &[
         key: "SellDelay",
         group: ParamGroup::Exit,
         section: ParamSection::SellOrder,
-        kind: ParamKind::Num {
-            grid: GRID_SELL_DELAY_MS,
-        },
+        kind: ParamKind::Num,
         kinds: ANY,
         not_kinds: &[],
     },
-    exit_num("PriceDownTimer", ParamSection::SellOrder, GRID_PD_TIMER_S),
-    exit_num("PriceDownPercent", ParamSection::SellOrder, GRID_PD_PCT),
-    exit_num("PriceDownDelay", ParamSection::SellOrder, GRID_PD_DELAY_S),
+    exit_num("PriceDownTimer", ParamSection::SellOrder),
+    exit_num("PriceDownPercent", ParamSection::SellOrder),
+    exit_num("PriceDownDelay", ParamSection::SellOrder),
     exit_bool("PriceDownRelative", ParamSection::SellOrder),
-    exit_num("PriceDownAllowedDrop", ParamSection::SellOrder, GRID_DROP),
-    exit_num("SellLevelDelay", ParamSection::SellOrder, GRID_SL_DELAY_S),
-    exit_num(
-        "SellLevelDelayNext",
-        ParamSection::SellOrder,
-        GRID_SL_DELAY_S,
-    ),
-    exit_num("SellLevelTime", ParamSection::SellOrder, GRID_SL_TIME_S),
-    exit_num("SellLevelCount", ParamSection::SellOrder, GRID_SL_COUNT),
-    exit_num("SellLevelAdjust", ParamSection::SellOrder, GRID_DROP),
+    exit_num("PriceDownAllowedDrop", ParamSection::SellOrder),
+    exit_num("SellLevelDelay", ParamSection::SellOrder),
+    exit_num("SellLevelDelayNext", ParamSection::SellOrder),
+    exit_num("SellLevelTime", ParamSection::SellOrder),
+    exit_num("SellLevelCount", ParamSection::SellOrder),
+    exit_num("SellLevelAdjust", ParamSection::SellOrder),
     exit_bool("SellLevelRelative", ParamSection::SellOrder),
-    exit_num("SellLevelAllowedDrop", ParamSection::SellOrder, GRID_DROP),
-    exit_num("SellLevelWorkTime", ParamSection::SellOrder, GRID_SL_TIME_S),
+    exit_num("SellLevelAllowedDrop", ParamSection::SellOrder),
+    exit_num("SellLevelWorkTime", ParamSection::SellOrder),
     // The Stops section in the strategy window's order. `FastStopLoss` is read with the strategy's
     // value — the trigger hangs on it — but is no knob; `UseMarketOrder` is read by nothing (the
     // verdict tells a market stop by the fact's own reason, `StopLoss Market Sell`); nor are the panic sell's execution fields (`StopLossSpread`,
@@ -460,42 +335,32 @@ pub const TICK_PARAMS: &[TickParam] = &[
         kinds: ANY,
         not_kinds: &[],
     },
-    exit_num("StopLossDelay", ParamSection::Stops, GRID_STOP_DELAY_S),
-    exit_num("StopLoss", ParamSection::Stops, GRID_STOP),
+    exit_num("StopLossDelay", ParamSection::Stops),
+    exit_num("StopLoss", ParamSection::Stops),
     exit_bool("UseSecondStop", ParamSection::Stops),
-    exit_num("TimeToSwitch2Stop", ParamSection::Stops, GRID_SWITCH_S),
-    exit_num("PriceToSwitch2Stop", ParamSection::Stops, GRID_SWITCH_PCT),
-    exit_num("SecondStopLoss", ParamSection::Stops, GRID_STEP_LEVEL),
+    exit_num("TimeToSwitch2Stop", ParamSection::Stops),
+    exit_num("PriceToSwitch2Stop", ParamSection::Stops),
+    exit_num("SecondStopLoss", ParamSection::Stops),
     exit_bool("UseStopLoss3", ParamSection::Stops),
-    exit_num("TimeToSwitchStop3", ParamSection::Stops, GRID_SWITCH_S),
-    exit_num("PriceToSwitchStop3", ParamSection::Stops, GRID_SWITCH_PCT),
-    exit_num("StopLoss3", ParamSection::Stops, GRID_STEP_LEVEL),
+    exit_num("TimeToSwitchStop3", ParamSection::Stops),
+    exit_num("PriceToSwitchStop3", ParamSection::Stops),
+    exit_num("StopLoss3", ParamSection::Stops),
     exit_bool("UseTrailing", ParamSection::Stops),
-    exit_num("TrailingPercent", ParamSection::Stops, GRID_TRAILING),
-    exit_num("TrailingEMA", ParamSection::Stops, GRID_TRAILING_EMA),
+    exit_num("TrailingPercent", ParamSection::Stops),
+    exit_num("TrailingEMA", ParamSection::Stops),
     exit_bool("UseTakeProfit", ParamSection::Stops),
-    exit_num("TakeProfit", ParamSection::Stops, GRID_TAKE_PROFIT),
+    exit_num("TakeProfit", ParamSection::Stops),
     // The Delta Modifiers section: one capped sum of the trade's deltas, spent on the sell and on
     // the stop (`exit::delta_mods`). It is a product, and the search walks it as one
     // (`search::coupled`). `BuyModifier` and `DetectModifier` move the entry and the detect,
     // which the model takes from the fact for every kind but MoonShot, whose core ignores them.
-    exit_num(
-        "SellModifier",
-        ParamSection::DeltaModifiers,
-        GRID_SELL_MODIFIER,
-    ),
-    exit_num(
-        "StopLossModifier",
-        ParamSection::DeltaModifiers,
-        GRID_STOP_MODIFIER,
-    ),
+    exit_num("SellModifier", ParamSection::DeltaModifiers),
+    exit_num("StopLossModifier", ParamSection::DeltaModifiers),
     TickParam {
         key: "MaxModifier",
         group: ParamGroup::Exit,
         section: ParamSection::DeltaModifiers,
-        kind: ParamKind::Num {
-            grid: GRID_MAX_MODIFIER,
-        },
+        kind: ParamKind::Num,
         kinds: ANY,
         // One field, two families: a MoonShot's cap also bounds its `MShotAdd*` corridor
         // (`mshot_params`), so turning it in an Exit search would move the entry the search
@@ -521,16 +386,16 @@ pub const TICK_PARAMS: &[TickParam] = &[
 
 /// An `Add*` term of the Delta Modifiers section.
 const fn delta_add(key: &'static str) -> TickParam {
-    exit_num(key, ParamSection::DeltaModifiers, GRID_DELTA_ADD)
+    exit_num(key, ParamSection::DeltaModifiers)
 }
 
 /// A numeric field of the Exit group every kind understands.
-const fn exit_num(key: &'static str, section: ParamSection, grid: &'static [f64]) -> TickParam {
+const fn exit_num(key: &'static str, section: ParamSection) -> TickParam {
     TickParam {
         key,
         group: ParamGroup::Exit,
         section,
-        kind: ParamKind::Num { grid },
+        kind: ParamKind::Num,
         kinds: ANY,
         not_kinds: &[],
     }
@@ -845,6 +710,8 @@ pub(super) fn unmodelled_rule(v: &StrategyValues<'_>) -> Option<UnmodelledRule> 
         None
     }
 }
+
+pub mod range;
 
 #[cfg(test)]
 mod tests;

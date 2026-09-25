@@ -25,7 +25,7 @@ pub(in crate::analytics::tuner) fn order_for(state: &mut TicksState) -> &[usize]
             .filter(|&i| !state.only_fit || rows[i].fit())
             .collect();
         if let Some((key, desc)) = &state.sort {
-            sort_indices(rows, &state.plan[0], &mut order, key, *desc);
+            sort_indices(rows, &state.plan, &mut order, key, *desc);
         }
         state.order = Some(OrderCache {
             rows_rev: state.rows_rev,

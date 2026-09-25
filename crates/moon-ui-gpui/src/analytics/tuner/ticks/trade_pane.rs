@@ -1,8 +1,8 @@
 //! The trade pane under the deal table: the selected deal drawn as its trade window draws it —
 //! the same view (`trade_window::Host::Embedded`), not a second chart — with the trades the
-//! variant columns would have made beside the fact, В1 dashed and В2 dotted: the path each
-//! variant's entry order walked, its fill and exit, and — under the window's MoonShot zone switch
-//! — the corridor the model held around that order, placement by placement.
+//! variant column would have made beside the fact, dashed: the path the variant's entry order
+//! walked, its fill and exit, and — under the window's MoonShot zone switch — the corridor the
+//! model held around that order, placement by placement.
 //!
 //! Folded by default, behind a rail like the one between the halves of the tab; folded, a click
 //! on a row selects nothing and nothing is built. Open, a click on a row shows that deal; a
@@ -17,14 +17,14 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_chart::frozen_overlay::{OverlayBand, OverlayTrade};
-use moon_chart::layers::{SEG_PATTERN_DASH, SEG_PATTERN_DOT};
+use moon_chart::layers::SEG_PATTERN_DASH;
 use moon_core::db::tuner::ticks::ExitKind;
 use moon_core::db::tuner::ticks::search::{clip_to_horizon, variant_picture};
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
-use super::super::shared::{N_VAR, collapse_caret};
+use super::super::shared::collapse_caret;
 use crate::design;
 use crate::design::moon;
 use crate::trade_window::TradeWindowView;
@@ -48,13 +48,8 @@ pub(in crate::analytics::tuner) struct TradePane {
     model_seq: u64,
 }
 
-/// The pen of a variant's modelled trade: В1 dashed, В2 dotted — the fact keeps its solid lines.
-fn variant_pattern(index: usize) -> f32 {
-    match index {
-        0 => SEG_PATTERN_DASH,
-        _ => SEG_PATTERN_DOT,
-    }
-}
+/// The pen of the variant's modelled trade: dashed — the fact keeps its solid lines.
+const VARIANT_PATTERN: f32 = SEG_PATTERN_DASH;
 
 impl AnalyticsView {
     /// Fold or open the pane, and remember it. Folding drops the chart; opening shows the deal
@@ -126,8 +121,8 @@ impl AnalyticsView {
         );
     }
 
-    /// Replay every touched variant on the pane's deal and hand the trades to its view. Nothing
-    /// to replay — no view, no tape in memory for the deal, no variant touched — hands it none.
+    /// Replay the variant on the pane's deal and hand its trade to the view. Nothing to replay —
+    /// no view, no tape in memory for the deal, an untouched variant — hands it none.
     pub(in crate::analytics::tuner) fn ticks_refresh_model_trades(
         &mut self,
         cx: &mut Context<Self>,
@@ -137,8 +132,7 @@ impl AnalyticsView {
         };
         self.ticks.trade.model_seq = self.ticks.trade.model_seq.wrapping_add(1);
         let seq = self.ticks.trade.model_seq;
-        let changes: Vec<Vec<(String, String)>> =
-            (0..N_VAR).map(|i| self.ticks.variant_changes(i)).collect();
+        let changes = self.ticks.variant_changes();
         let job = self.ticks.data.data().and_then(|data| {
             let uid = self.ticks.trade.uid?;
             let row = data
@@ -146,7 +140,7 @@ impl AnalyticsView {
                 .iter()
                 .find(|r| r.deal.report_uid == uid)
                 .filter(|r| r.fit())?;
-            if changes.iter().all(Vec::is_empty) {
+            if changes.is_empty() {
                 return None;
             }
             Some((
@@ -166,7 +160,7 @@ impl AnalyticsView {
         let is_short = pending.deal.is_short;
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
-            let pictures = executor
+            let picture = executor
                 .spawn(async move {
                     // Unpacked here, off the UI thread, and cut as the columns cut it, so the
                     // picture shows what the column counted.
@@ -174,21 +168,13 @@ impl AnalyticsView {
                     if let Some(horizon_ms) = horizon_ms {
                         clip_to_horizon(std::slice::from_mut(&mut deal), horizon_ms);
                     }
-                    changes
-                        .iter()
-                        .map(|values| {
-                            (!values.is_empty())
-                                .then(|| variant_picture(&deal, &defaults, &kind, values, model))
-                        })
-                        .collect::<Vec<_>>()
+                    variant_picture(&deal, &defaults, &kind, &changes, model)
                 })
                 .await;
             let mut corridor: Vec<OverlayBand> = Vec::new();
-            let trades: Vec<OverlayTrade> = pictures
+            let trades: Vec<OverlayTrade> = Some(picture)
                 .into_iter()
-                .enumerate()
-                .filter_map(|(index, picture)| {
-                    let picture = picture?;
+                .filter_map(|picture| {
                     let outcome = picture.outcome;
                     let fill = outcome.fill?;
                     // Each placement's corridor until the next placement, the last one until the
@@ -216,7 +202,7 @@ impl AnalyticsView {
                             .filter(|exit| exit.kind != ExitKind::OpenAtWindowEnd)
                             .map(|exit| (exit.t_ms as f64, exit.price as f32)),
                         is_short,
-                        pattern: variant_pattern(index),
+                        pattern: VARIANT_PATTERN,
                     })
                 })
                 .collect();

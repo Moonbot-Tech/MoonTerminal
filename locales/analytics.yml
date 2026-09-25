@@ -2132,6 +2132,74 @@ analytics.ticks.cfg_gate_tip:
   ru: "Какая доля сделок должна воспроизводиться моделью, чтобы группу (вход или выход) можно было подбирать"
   en: "The share of trades the model must reproduce before a group (entry or exit) may be searched"
   es: "La cuota de operaciones que el modelo debe reproducir para que un grupo (entrada o salida) se pueda buscar"
+analytics.ticks.cfg_steps:
+  ru: "Шагов на параметр"
+  en: "Steps per field"
+  es: "Pasos por campo"
+analytics.ticks.cfg_steps_tip:
+  ru: "На сколько шагов режется автоматический диапазон поля (от %{min} до %{max}); шаг округляется до круглого числа и не мельче точности поля"
+  en: "How many steps a field's automatic range is cut into (%{min} to %{max}); the step is rounded to a round number and never finer than the field holds"
+  es: "En cuántos pasos se corta el rango automático de un campo (de %{min} a %{max}); el paso se redondea a un número redondo y nunca es más fino que el campo"
+analytics.ticks.range_from:
+  ru: "от"
+  en: "from"
+  es: "desde"
+analytics.ticks.range_to:
+  ru: "до"
+  en: "to"
+  es: "hasta"
+analytics.ticks.range_step:
+  ru: "шаг"
+  en: "step"
+  es: "paso"
+analytics.ticks.range_reset:
+  ru: "Вернуть диапазон поля на авто"
+  en: "Put the field's range back to automatic"
+  es: "Devolver el rango del campo a automático"
+analytics.ticks.range_reset_section:
+  ru: "Вернуть диапазоны раздела на авто"
+  en: "Put the section's ranges back to automatic"
+  es: "Devolver los rangos de la sección a automático"
+analytics.ticks.range_reset_all:
+  ru: "Вернуть все диапазоны на авто"
+  en: "Put every range back to automatic"
+  es: "Devolver todos los rangos a automático"
+analytics.ticks.range_points:
+  ru: "Значений в переборе: %{n}"
+  en: "Values to try: %{n}"
+  es: "Valores a probar: %{n}"
+analytics.ticks.range_hint:
+  ru: "серое — авто по живым стратегиям и выбранным; введённое — ваше, до сброса"
+  en: "grey is automatic, from the live strategies and the selected ones; typed is yours until the reset"
+  es: "lo gris es automático, de las estrategias activas y las elegidas; lo escrito es suyo hasta restablecer"
+analytics.ticks.range_no_data:
+  ru: "Нет данных для авто: поле не задано ни у одной стратегии и не имеет значения по умолчанию — задайте диапазон вручную"
+  en: "No data for an automatic range: no strategy sets the field and it has no default — type the range"
+  es: "Sin datos para un rango automático: ninguna estrategia fija el campo y no tiene valor por defecto — escriba el rango"
+analytics.ticks.range_err_inverted:
+  ru: "«от» больше «до» — подбор берёт авто"
+  en: "\"from\" is above \"to\" — the search takes the automatic range"
+  es: "\"desde\" es mayor que \"hasta\" — la búsqueda toma el rango automático"
+analytics.ticks.range_err_step:
+  ru: "Шаг должен быть больше нуля — подбор берёт авто"
+  en: "The step must be above zero — the search takes the automatic range"
+  es: "El paso debe ser mayor que cero — la búsqueda toma el rango automático"
+analytics.ticks.range_err_many:
+  ru: "Больше %{n} значений — подбор берёт авто"
+  en: "More than %{n} values — the search takes the automatic range"
+  es: "Más de %{n} valores — la búsqueda toma el rango automático"
+analytics.ticks.range_err_edges:
+  ru: "Только шаг, без «от» и «до», а авто для поля нет — задайте края"
+  en: "A step alone, with no \"from\" and \"to\", and no automatic range for the field — type the edges"
+  es: "Solo un paso, sin \"desde\" ni \"hasta\", y el campo no tiene rango automático — escriba los bordes"
+analytics.ticks.range_integer:
+  ru: "поле целое: введённое округляется до целых"
+  en: "a whole-number field: typed values are rounded to whole ones"
+  es: "campo entero: lo escrito se redondea a enteros"
+analytics.ticks.range_set_aside:
+  ru: "Диапазон не годится, подбор его не взял: %{fields}"
+  en: "Range unusable, the search did not take it: %{fields}"
+  es: "Rango no válido, la búsqueda no lo tomó: %{fields}"
 analytics.ticks.cfg_entry_section:
   ru: "Вход варианта"
   en: "A variant's entry"

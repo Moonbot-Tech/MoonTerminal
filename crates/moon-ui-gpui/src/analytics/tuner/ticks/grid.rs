@@ -1,7 +1,9 @@
 //! The parameter grid of the "Entry/Exit" axis, laid out as the "By filter" grid is: a tick per
 //! field that admits it to the search (the header's tick admits them all), the field's name —
 //! a click selects it for "Search" on one field — the value the selected strategies hold, which
-//! a click sends to В1, and the two variant columns with the copy arrows and the clear crosses.
+//! a click sends to В1, the variant column with its clear crosses, and the search range of each
+//! number field — from, to, step and the reset (`ranges.rs`) — where the second variant column
+//! stood until 2026-09-25.
 //!
 //! The rows come by the strategy editor's sections (`sections.rs`) — Strategy settings, Stops,
 //! Sell order, SellShot, SellSpread, Delta Modifiers — each with every knob and every field a
@@ -27,18 +29,20 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
-use super::super::shared::{N_VAR, TunerKind, collapse_caret, glyph_btn};
+use super::super::shared::{TunerKind, collapse_caret, glyph_btn};
 use super::sections::{GridSection, RowRole, layout};
 use super::state::{NowValue, TicksData};
 use crate::design;
 use crate::design::{moon, moon_alpha};
-use moon_core::db::tuner::ticks::params::{ParamGroup, ParamSection, TickParam};
+use moon_core::db::tuner::ticks::params::{ParamGroup, ParamKind, ParamSection, TickParam};
 
 /// Width of the strategy and variant cells, font-scaled px.
 const CELL_W: f32 = 60.0;
 /// Left inset of a field row, ui px: its tick sits under its section's tick, past the caret,
 /// so the row reads as inside the section.
 const ROW_INDENT: f32 = 30.0;
+/// Id prefix of the variant cells' boxes in `TicksState::inputs`.
+pub(super) const VARIANT_INPUT_PREFIX: &str = "v:";
 
 impl AnalyticsView {
     /// The grid panel: the shared toolbar (title, Copy, Save), the search row, then the
@@ -182,13 +186,13 @@ impl AnalyticsView {
         )
     }
 
-    /// The column headings: the master tick over every live knob, field · strategy · В1 → ✕ ·
-    /// В2 ← ✕.
+    /// The column headings: the master tick over every live knob, field · strategy · В1 ✕ ·
+    /// from · to · step and the reset of every range.
     fn ticks_grid_header(
         &self,
         keys: Vec<&'static str>,
         p: MoonPalette,
-        cx: &Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         let (all_on, some_on) = self.ticks_tick_state(&keys);
         let cell = |text: String| {
@@ -244,44 +248,20 @@ impl AnalyticsView {
                     }),
             )
             .child(cell(t!("analytics.tuner.strat_chip").to_string()));
-        for vi in 0..N_VAR {
-            head = head
-                .child(cell(t!("analytics.ticks.var_n", n = vi + 1).to_string()))
-                // The only two copy buttons, both "the WHOLE column": → carries В1 into В2, ←
-                // В2 into В1. Rows keep a matching spacer.
-                .child(if vi == 0 {
-                    glyph_btn(
-                        "an-ticks-cp-col",
-                        "→",
-                        t!("analytics.time.tip_to_v2").to_string(),
-                        p.amber,
-                        p,
-                        cx,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.ticks_copy_variant(0, 1, cx)))
-                } else {
-                    glyph_btn(
-                        "an-ticks-cpb-col",
-                        "←",
-                        t!("analytics.time.tip_to_v1").to_string(),
-                        p.amber,
-                        p,
-                        cx,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.ticks_copy_variant(1, 0, cx)))
-                })
-                .child(
-                    glyph_btn(
-                        SharedString::from(format!("an-ticks-clr-col-{vi}")),
-                        "✕",
-                        t!("analytics.time.tip_clear_all").to_string(),
-                        p.orange,
-                        p,
-                        cx,
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| this.ticks_clear_variant(vi, cx))),
-                );
-        }
+        head = head
+            .child(cell(t!("analytics.ticks.var_n", n = 1).to_string()))
+            .child(
+                glyph_btn(
+                    "an-ticks-clr-col",
+                    "✕",
+                    t!("analytics.time.tip_clear_all").to_string(),
+                    p.orange,
+                    p,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.ticks_clear_variant(cx))),
+            )
+            .child(self.ticks_range_header(cx));
         head.into_any_element()
     }
 
@@ -341,7 +321,7 @@ impl AnalyticsView {
         first: bool,
         noted: &mut Vec<ParamGroup>,
         p: MoonPalette,
-        cx: &Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         let title = crate::strategies::sections::section_display_title(
             section.section.schema_title(),
@@ -409,6 +389,14 @@ impl AnalyticsView {
         let id = format!("{:?}", section.section);
         let which = section.section;
         let collapsed = !self.ticks.open_sections.contains(&which);
+        // The section's reset takes every number knob of it back to its automatic range.
+        let numbers: Vec<&'static str> = section
+            .knobs()
+            .filter(|k| k.kind == ParamKind::Num)
+            .map(|k| k.key)
+            .collect();
+        let reset = self.ticks_range_section_reset(&id, numbers, cx);
+        let has_note = note.is_some();
         h_flex()
             .w_full()
             .px(design::ui_px(cx, 8.0))
@@ -471,12 +459,14 @@ impl AnalyticsView {
                         .child(note),
                 )
             })
+            .when(!has_note, |el| el.child(div().flex_1()))
+            .child(reset)
             .into_any_element()
     }
 
     /// A field the search does not turn: a greyed, disabled tick, the name with why in its
-    /// tooltip, the strategies' value, and blanks where the variant cells stand, so the columns
-    /// stay in line.
+    /// tooltip, the strategies' value, and blanks where the variant cell and the range stand, so
+    /// the columns stay in line.
     fn ticks_fixed_row(
         &self,
         key: &str,
@@ -547,17 +537,16 @@ impl AnalyticsView {
                     .text_color(moon_alpha(p.text_muted, 0.8))
                     .child(value),
             );
-        for _ in 0..N_VAR {
-            row = row
-                .child(div().w(design::font_w_px(cx, CELL_W)).flex_none())
-                .child(div().w(design::ui_px(cx, 12.0)).flex_none())
-                .child(div().w(design::ui_px(cx, 12.0)).flex_none());
-        }
+        row = row
+            .child(div().w(design::font_w_px(cx, CELL_W)).flex_none())
+            .child(div().w(design::ui_px(cx, 12.0)).flex_none())
+            .child(self.ticks_range_blank(cx));
         row.into_any_element()
     }
 
-    /// One field: its tick, its name, the strategies' value, an input per variant with its
-    /// clear cross.
+    /// One field: its tick, its name, the strategies' value, the variant's input with its clear
+    /// cross, and its search range — a number's; a switch or a list has no range, and a blank
+    /// keeps the columns in line.
     fn ticks_field_row(
         &mut self,
         key: &'static str,
@@ -569,9 +558,10 @@ impl AnalyticsView {
         let read = super::model_cfg::current().entry_method.reads(key);
         let selected = self.ticks.sel_field == Some(key);
         let on = !self.ticks.locked.contains(key);
-        let inputs: Vec<Entity<MoonInputState>> = (0..N_VAR)
-            .map(|i| self.ticks_cell_input(i, key, window, cx))
-            .collect();
+        let input = self.ticks_cell_input(key, window, cx);
+        let is_number = moon_core::db::tuner::ticks::TICK_PARAMS
+            .iter()
+            .any(|f| f.key == key && f.kind == ParamKind::Num);
         let mut row = h_flex()
             .id(SharedString::from(format!("an-ticks-field-{key}")))
             .w_full()
@@ -653,7 +643,7 @@ impl AnalyticsView {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.ticks.locked.insert(key.to_string());
                     this.persist_ticks_settings(cx);
-                    this.ticks_set_cell(0, key, value.clone(), cx);
+                    this.ticks_set_cell(key, value.clone(), cx);
                 }))
                 .into_any_element(),
             Some(NowValue::Differs) => div()
@@ -672,44 +662,47 @@ impl AnalyticsView {
                 .child("—")
                 .into_any_element(),
         });
-        for (vi, input) in inputs.iter().enumerate() {
-            row = row
-                .child(
-                    div()
-                        .w(design::font_w_px(cx, CELL_W))
-                        .flex_none()
-                        .font_family(design::mono())
-                        .child(
-                            MoonInput::new(SharedString::from(format!("an-ticks-in-v{vi}-{key}")))
-                                .state(input)
-                                .size(design::dense_input_size(cx)),
-                        ),
+        row = row
+            .child(
+                div()
+                    .w(design::font_w_px(cx, CELL_W))
+                    .flex_none()
+                    .font_family(design::mono())
+                    .child(
+                        MoonInput::new(SharedString::from(format!("an-ticks-in-v-{key}")))
+                            .state(&input)
+                            .size(design::dense_input_size(cx)),
+                    ),
+            )
+            .child(
+                glyph_btn(
+                    SharedString::from(format!("an-ticks-clr-{key}")),
+                    "✕",
+                    t!("analytics.time.tip_clear").to_string(),
+                    p.orange,
+                    p,
+                    cx,
                 )
-                // Under the header's copy arrow.
-                .child(div().w(design::ui_px(cx, 12.0)).flex_none())
-                .child(
-                    glyph_btn(
-                        SharedString::from(format!("an-ticks-clr-{vi}-{key}")),
-                        "✕",
-                        t!("analytics.time.tip_clear").to_string(),
-                        p.orange,
-                        p,
-                        cx,
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.ticks_set_cell(vi, key, String::new(), cx)
-                    })),
-                );
-        }
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.ticks_set_cell(key, String::new(), cx)),
+                ),
+            )
+            .child(if is_number {
+                self.ticks_range_cells(key, p, window, cx)
+            } else {
+                self.ticks_range_blank(cx)
+            });
         row.into_any_element()
     }
 
     /// Set one variant cell from outside its box — the strategy chip, a row's cross — and have
     /// the box show it.
-    fn ticks_set_cell(&mut self, index: usize, key: &str, value: String, cx: &mut Context<Self>) {
-        self.set_ticks_variant(index, key, value, cx);
+    fn ticks_set_cell(&mut self, key: &str, value: String, cx: &mut Context<Self>) {
+        self.set_ticks_variant(key, value, cx);
         // The box is recreated from the stored value on the next frame.
-        self.ticks.inputs.remove(&format!("v{index}:{key}"));
+        self.ticks
+            .inputs
+            .remove(&format!("{VARIANT_INPUT_PREFIX}{key}"));
         cx.notify();
     }
 
@@ -717,19 +710,15 @@ impl AnalyticsView {
     /// kept across repaints; a change stores the value and rescores the columns.
     fn ticks_cell_input(
         &mut self,
-        index: usize,
         key: &'static str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<MoonInputState> {
-        let id = format!("v{index}:{key}");
+        let id = format!("{VARIANT_INPUT_PREFIX}{key}");
         if let Some(state) = self.ticks.inputs.get(&id) {
             return state.clone();
         }
-        let value = self.ticks.variants[index]
-            .get(key)
-            .cloned()
-            .unwrap_or_default();
+        let value = self.ticks.variant.get(key).cloned().unwrap_or_default();
         let state = cx.new(|cx| MoonInputState::new(window, cx).default_value(value));
         cx.subscribe_in(
             &state,
@@ -742,10 +731,8 @@ impl AnalyticsView {
                         | MoonInputEvent::PressEnter { .. }
                 ) {
                     let value = state.read(cx).value().to_string();
-                    if this.ticks.variants[index].get(key).map(String::as_str)
-                        != Some(value.as_str())
-                    {
-                        this.set_ticks_variant(index, key, value, cx);
+                    if this.ticks.variant.get(key).map(String::as_str) != Some(value.as_str()) {
+                        this.set_ticks_variant(key, value, cx);
                     }
                     if !matches!(ev, MoonInputEvent::Change) {
                         cx.notify();

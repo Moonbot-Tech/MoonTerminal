@@ -216,20 +216,18 @@ fn covered_and_fetchable_count_what_the_captions_say() {
 fn variant_edits_fold_to_sorted_changes_and_empty_cells_clear() {
     let mut state = TicksState::default();
     assert!(!state.has_changes());
-    state.set_variant(0, "SellPrice", " 0.5 ".into());
-    state.set_variant(0, "MShotPrice", "2".into());
-    state.set_variant(1, "StopLoss", "-1".into());
+    state.set_variant("SellPrice", " 0.5 ".into());
+    state.set_variant("MShotPrice", "2".into());
     assert_eq!(
-        state.variant_changes(0),
+        state.variant_changes(),
         vec![
             ("MShotPrice".to_string(), "2".to_string()),
             ("SellPrice".to_string(), "0.5".to_string()),
         ]
     );
     assert!(state.has_changes());
-    state.set_variant(0, "MShotPrice", "   ".into());
-    assert_eq!(state.variant_changes(0).len(), 1, "a blank clears the cell");
-    assert_eq!(state.variant_changes(1).len(), 1);
+    state.set_variant("MShotPrice", "   ".into());
+    assert_eq!(state.variant_changes().len(), 1, "a blank clears the cell");
 }
 
 #[test]
@@ -252,8 +250,8 @@ fn the_share_gate_answers_per_group_and_only_once_something_answered() {
 #[test]
 fn invalidate_stops_the_search_and_drops_the_variant_scores_but_keeps_the_edits() {
     let mut state = state();
-    state.set_variant(0, "SellPrice", "1".into());
-    state.var_stats[0] = Some(moon_core::db::tuner::VarStats::default());
+    state.set_variant("SellPrice", "1".into());
+    state.var_stats = Some(moon_core::db::tuner::VarStats::default());
     let handle = moon_core::db::tuner::threshold_search::SearchHandle::new();
     state.sugg = super::super::state::SuggState::Running {
         handle: handle.clone(),
@@ -270,7 +268,7 @@ fn invalidate_stops_the_search_and_drops_the_variant_scores_but_keeps_the_edits(
     state.invalidate();
     assert!(handle.is_cancelled());
     assert!(matches!(state.sugg, super::super::state::SuggState::Idle));
-    assert!(state.var_stats[0].is_none());
+    assert!(state.var_stats.is_none());
     assert!(
         state.last_result.is_none(),
         "the last search's holdout is of the previous scope's deals"

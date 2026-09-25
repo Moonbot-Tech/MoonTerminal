@@ -23,7 +23,8 @@ use serde_compat::{
     de_connector_thickness, de_hvol_price_frame_pct, de_hvol_side, de_hvol_tf_s, de_hvol_width,
     de_lenient_chart_labels, de_lenient_false, de_lenient_graphics, de_lenient_map,
     de_lenient_seed, de_lenient_true, de_lenient_u32, de_marker_scale,
-    de_strategies_tree_text_step, de_table_sort_map, de_trade_history_style, de_trade_volume_alpha,
+    de_strategies_tree_text_step, de_table_sort_map, de_tick_ranges, de_trade_history_style,
+    de_trade_volume_alpha,
 };
 pub use serde_compat::{de_lenient, de_lenient_bool};
 
@@ -655,6 +656,15 @@ pub struct TicksAxisLayout {
     /// the variant columns and the search run on; `None` = the axis default. The tape of an
     /// older trade cannot be fetched again, and one short tail cut every variant's exit at it.
     pub min_tail_s: Option<u32>,
+    /// Steps per field the automatic search ranges are cut into; `None` = the axis default
+    /// (`params::range::steps_of`).
+    #[serde(deserialize_with = "de_lenient")]
+    pub steps_per_param: Option<u32>,
+    /// The search ranges the user typed over the automatic ones, by field key — only fields with
+    /// a slot typed; a malformed entry is dropped alone.
+    #[serde(deserialize_with = "de_tick_ranges")]
+    pub ranges:
+        std::collections::BTreeMap<String, crate::db::tuner::ticks::params::range::TickRange>,
 }
 
 /// Complete window layout.

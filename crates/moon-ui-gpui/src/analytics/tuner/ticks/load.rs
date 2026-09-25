@@ -1,6 +1,7 @@
 //! Background loads of the "Entry/Exit" axis, in two stages.
 //!
-//! Stage A reads the scope's deals and the grid's "now" values off the database. Its
+//! Stage A reads the scope's deals, the grid's "now" values and the search ranges' automatic
+//! spans (over the live strategies, `params::range`) off the database. Its
 //! completion resolves, on the UI thread, where each deal's prints live — the core's exchange
 //! key and the coin's market, which only the live market source knows — and publishes the rows
 //! at once, without their tape (stage B). Stage C then asks the replay worker for the held tape of every row in
@@ -12,7 +13,7 @@
 //!
 //! This file only ever WRITES `TicksState`; the rendering only reads it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -27,10 +28,11 @@ use crate::analytics::bg::ReadLane;
 use crate::analytics::refresh::{CatchUpOutcome, report_result_is_stale};
 use moon_core::db::ReadFail;
 use moon_core::db::order_traces::{TraceEntry, read_many};
+use moon_core::db::tuner::ticks::params::range::{FieldSpan, Population, field_span};
 use moon_core::db::tuner::ticks::unmodelled::watched_keys;
 use moon_core::db::tuner::ticks::{
-    Deal, DealsRead, EntryParams, ModelSettings, OwnLines, deltas, entry_model_for, infer_tick,
-    model_window, params, prepare_deal, required_spans, verify,
+    Deal, DealsRead, EntryParams, ModelSettings, OwnLines, ParamKind, TICK_PARAMS, deltas,
+    entry_model_for, infer_tick, model_window, params, prepare_deal, required_spans, verify,
 };
 use moon_core::db::tuner::{strategy_current_values, strategy_values_at};
 use moon_core::feed::report_traces::ArchivedLineKind;
@@ -49,8 +51,8 @@ use moon_core::market::trade_replay::{
 const HELD_ANSWER_WAIT: Duration = Duration::from_secs(240);
 
 /// What stage A brings back: the deals, the grid's "now" values, the strategies' own values, the
-/// exit fields outside the model they switch on, the selected strategies' values and the rules
-/// all of it was read under — the grid chooses its rows by them.
+/// exit fields outside the model they switch on, the selected strategies' values, the rules all
+/// of it was read under — the grid chooses its rows by them — and the search ranges' spans.
 type StageA = (
     Result<DealsRead, ReadFail>,
     HashMap<String, NowValue>,
@@ -58,14 +60,18 @@ type StageA = (
     Arc<UnmodelledMap>,
     Vec<SelectedValues>,
     FieldDeps,
+    Arc<HashMap<&'static str, FieldSpan>>,
 );
 
-/// What stage B publishes beside the rows: the strategies' values and the grid's layout.
+/// What stage B publishes beside the rows: the strategies' values, the grid's layout and the
+/// search ranges' spans and integer fields.
 struct ScopeView {
     now: HashMap<String, NowValue>,
     own: OwnValues,
     unmodelled: Arc<UnmodelledMap>,
     grid: Arc<[super::sections::GridSection]>,
+    spans: Arc<HashMap<&'static str, FieldSpan>>,
+    integers: Arc<HashSet<&'static str>>,
 }
 
 impl AnalyticsView {
@@ -184,9 +190,20 @@ impl AnalyticsView {
                     &defaults,
                     &deps,
                 );
-                (deals, now, own, Arc::new(unmodelled), selected, deps)
+                let kinds: Vec<String> = deals
+                    .as_ref()
+                    .map(|read| {
+                        let mut kinds: Vec<String> =
+                            read.deals.iter().map(|d| d.kind.clone()).collect();
+                        kinds.sort();
+                        kinds.dedup();
+                        kinds
+                    })
+                    .unwrap_or_default();
+                let spans = Arc::new(range_spans(&kinds, &selected, &defaults, &deps));
+                (deals, now, own, Arc::new(unmodelled), selected, deps, spans)
             },
-            move |this, (deals, now, own, unmodelled, selected, deps): StageA, cx| {
+            move |this, (deals, now, own, unmodelled, selected, deps, spans): StageA, cx| {
                 if this.ticks.seq != req {
                     return;
                 }
@@ -208,6 +225,9 @@ impl AnalyticsView {
                         return;
                     }
                 };
+                let integers = Arc::new(super::sections::integer_keys(
+                    this.backend.read(cx).session.store(),
+                ));
                 let grid = super::sections::grid_for(
                     this.backend.read(cx).session.store(),
                     &read.deals,
@@ -228,6 +248,8 @@ impl AnalyticsView {
                         own,
                         unmodelled,
                         grid,
+                        spans,
+                        integers,
                     },
                     addresses,
                     cx,
@@ -342,6 +364,8 @@ impl AnalyticsView {
                     own: scope.own,
                     unmodelled: scope.unmodelled,
                     grid: scope.grid,
+                    spans: scope.spans,
+                    integers: scope.integers,
                 };
                 data.retain_within_cap();
                 data.refresh_summary();
@@ -651,6 +675,60 @@ fn now_values(
 
 /// A selected strategy's current values, by `(strategy_id, core)`.
 type SelectedValues = ((i64, Option<u64>), Arc<HashMap<String, String>>);
+
+/// Each number knob's automatic search span: the live strategies of the scope's `kinds`, read
+/// once per state of the strategies file (`live_strategies`), under the field rules `deps`,
+/// widened to the schema default and the selected strategies' values — a strategy that leaves a
+/// field out holds its default. A field nothing is known of is left out.
+fn range_spans(
+    kinds: &[String],
+    selected: &[SelectedValues],
+    defaults: &HashMap<String, f64>,
+    deps: &FieldDeps,
+) -> HashMap<&'static str, FieldSpan> {
+    let numbers: Vec<&'static str> = TICK_PARAMS
+        .iter()
+        .filter(|f| f.kind == ParamKind::Num)
+        .map(|f| f.key)
+        .collect();
+    // The knobs and every field their rules read, so "in effect" is asked of real values.
+    let mut keys: Vec<String> = numbers.iter().map(|k| k.to_string()).collect();
+    for key in &numbers {
+        for condition in deps.conditions_of(key) {
+            if !keys.iter().any(|k| k.eq_ignore_ascii_case(condition)) {
+                keys.push(condition.to_string());
+            }
+        }
+    }
+    let started = std::time::Instant::now();
+    let live = moon_core::db::tuner::live_strategies(&keys);
+    let population = Population::of(&live, defaults, deps);
+    let spans: HashMap<&'static str, FieldSpan> = numbers
+        .iter()
+        .filter_map(|&key| {
+            let default = defaults.get(&key.to_ascii_lowercase()).copied();
+            let own: Vec<f64> = selected
+                .iter()
+                .filter_map(|(_, values)| {
+                    values
+                        .get(key)
+                        .and_then(|text| text.trim().replace(',', ".").parse::<f64>().ok())
+                        .or(default)
+                })
+                .collect();
+            let span = field_span(&population.values(kinds, key), default, &own)?;
+            Some((key, span))
+        })
+        .collect();
+    log::info!(
+        target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+        "[x] ticks ranges: {} span(s) over {} live strategies of kinds {kinds:?} in {} ms",
+        spans.len(),
+        live.len(),
+        started.elapsed().as_millis()
+    );
+    spans
+}
 
 /// Every strategy of `deals` as it stands now, read once per `(strategy_id, core)` — the base
 /// each deal's variants run over ([`TicksData::own`]). A strategy that cannot be read gets an

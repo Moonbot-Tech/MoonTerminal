@@ -271,6 +271,16 @@ impl AnalyticsView {
             window,
             cx,
         );
+        // The ranges' placeholders follow the steps on Enter or when the box loses focus — the
+        // box's commit repaints the grid; a search started before takes the steps as typed.
+        let steps_input = self.ticks_text_input(
+            "x-cfg-steps",
+            self.ticks.steps.clone(),
+            moon_core::db::tuner::ticks::params::range::DEFAULT_STEPS.to_string(),
+            |this, value| this.ticks.steps = value,
+            window,
+            cx,
+        );
         let train_pct = self.ticks.train_pct;
         let tr_view = cx.entity();
         let tr_items = crate::panels::radio_items(
@@ -364,6 +374,20 @@ impl AnalyticsView {
                 t!("analytics.ticks.cfg_gate").to_string(),
                 Some(t!("analytics.ticks.cfg_gate_tip").to_string()),
                 box_of("tun-cfg-gate-x", &gate_input, 76.0),
+                p,
+                cx,
+            ))
+            .child(popup_row(
+                t!("analytics.ticks.cfg_steps").to_string(),
+                Some(
+                    t!(
+                        "analytics.ticks.cfg_steps_tip",
+                        min = moon_core::db::tuner::ticks::params::range::MIN_STEPS,
+                        max = moon_core::db::tuner::ticks::params::range::MAX_STEPS
+                    )
+                    .to_string(),
+                ),
+                box_of("tun-cfg-steps-x", &steps_input, 76.0),
                 p,
                 cx,
             ))

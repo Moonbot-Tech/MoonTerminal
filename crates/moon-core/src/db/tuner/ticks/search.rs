@@ -1,5 +1,5 @@
 //! The search of the "Entry/Exit" axis: coordinate descent with restarts over the discrete
-//! grids of [`TICK_PARAMS`], scoring a point by REPLAYING every covered deal under it — the shape
+//! grids the caller hands it ([`SearchParams::grids`], `params::range`), scoring a point by REPLAYING every covered deal under it — the shape
 //! of `threshold_search`, with the SQL mask replaced by [`simulate`]. Restart 0 starts from the
 //! strategy itself; the others from the strategy moved a few steps on a few fields, each walking
 //! the fields in an order of its own. A pass that moves no single field then tries PAIRS of the
@@ -38,6 +38,7 @@ use std::sync::Arc;
 use rayon::prelude::*;
 
 use super::mshot::{CorridorStep, EntryMethod, MshotEntry, MshotParams};
+use super::params::range::Grids;
 use super::params::{
     ParamGroup, ParamKind, StrategyValues, TICK_PARAMS, TickParam, exit_params, mshot_params,
 };
@@ -123,6 +124,9 @@ pub struct SearchParams<'a> {
     pub vary_exit: bool,
     /// Field keys held at each deal's base value.
     pub locked: &'a HashSet<String>,
+    /// Each number field's candidate values (`params::range::resolve`); a number field without
+    /// one has nothing to try and is not varied.
+    pub grids: &'a Grids,
     /// Restart count, at least 1.
     pub restarts: usize,
     /// Minimum trades a point must keep, or one tenth of the fitted sample.
@@ -225,6 +229,7 @@ struct Walked {
 #[allow(clippy::too_many_arguments)]
 fn descend(
     mut point: Point,
+    grids: &Grids,
     order: &[&'static TickParam],
     pairs: &[&'static TickParam],
     coupling: &coupled::Coupling<'_>,
@@ -248,8 +253,8 @@ fn descend(
                 continue;
             }
             let mut current = point.get(field.key).cloned();
-            for index in 0..arity(&field.kind) {
-                let candidate = spell(&field.kind, index);
+            for index in 0..grids.arity(field) {
+                let candidate = grids.spell(field, index);
                 if current.as_deref() == Some(candidate.as_str()) {
                     continue;
                 }
@@ -280,18 +285,18 @@ fn descend(
                         continue;
                     }
                     let (Some(d), Some(u)) = (
-                        grid_index(down, &point, start),
-                        grid_index(up, &point, start),
+                        grid_index(grids, down, &point, start),
+                        grid_index(grids, up, &point, start),
                     ) else {
                         continue;
                     };
-                    if d == 0 || u + 1 >= arity(&up.kind) {
+                    if d == 0 || u + 1 >= grids.arity(up) {
                         continue;
                     }
                     let (was_down, was_up) =
                         (point.get(down.key).cloned(), point.get(up.key).cloned());
-                    point.insert(down.key, spell(&down.kind, d - 1));
-                    point.insert(up.key, spell(&up.kind, u + 1));
+                    point.insert(down.key, grids.spell(down, d - 1));
+                    point.insert(up.key, grids.spell(up, u + 1));
                     let trial = evaluate(&point);
                     if better_score(&trial, &score, min_n) {
                         score = trial;
@@ -307,7 +312,7 @@ fn descend(
                 if !coupling.is_stuck(coefficient, term, &point) {
                     continue;
                 }
-                for path in coupled::Coupling::diagonals(coefficient, term) {
+                for path in coupled::Coupling::diagonals(grids, coefficient, term) {
                     improved |= coupled::walk_path(
                         &mut point,
                         (coefficient, term),
@@ -348,15 +353,16 @@ fn restore(point: &mut Point, key: &'static str, was: Option<String>) {
 /// Where a number field stands on its grid: the step the point holds, else the base's
 /// (`start`). `None` for a field that is not a number, or a base with no value to snap.
 fn grid_index(
+    grids: &Grids,
     field: &TickParam,
     point: &Point,
     start: &HashMap<&'static str, usize>,
 ) -> Option<usize> {
-    let ParamKind::Num { .. } = &field.kind else {
+    if field.kind != ParamKind::Num {
         return None;
-    };
+    }
     match point.get(field.key) {
-        Some(value) => (0..arity(&field.kind)).find(|&i| spell(&field.kind, i) == *value),
+        Some(value) => (0..grids.arity(field)).find(|&i| grids.spell(field, i) == *value),
         None => start.get(field.key).copied(),
     }
 }
@@ -381,6 +387,7 @@ fn shuffle<T>(items: &mut [T], state: &mut u64) {
 /// steps either way from where it stands (`start`), any other field to a value of its own.
 fn perturb(
     point: &mut Point,
+    grids: &Grids,
     order: &[&'static TickParam],
     start: &HashMap<&'static str, usize>,
     state: &mut u64,
@@ -391,9 +398,14 @@ fn perturb(
     let moves = 1 + (next_random(state) % 3) as usize;
     for _ in 0..moves {
         let field = order[(next_random(state) % order.len() as u64) as usize];
-        let n = arity(&field.kind);
+        let n = grids.arity(field);
+        // A field with nothing to try is not varied (`varied`); guarded all the same, as the
+        // modulo and the `n - 1` below would not survive it.
+        if n == 0 {
+            continue;
+        }
         let index = match (&field.kind, start.get(field.key)) {
-            (ParamKind::Num { .. }, Some(&at)) => {
+            (ParamKind::Num, Some(&at)) => {
                 let step = 1 + (next_random(state) % 3) as usize;
                 if next_random(state) % 2 == 0 {
                     at.saturating_sub(step)
@@ -403,7 +415,7 @@ fn perturb(
             }
             _ => (next_random(state) % n as u64) as usize,
         };
-        point.insert(field.key, spell(&field.kind, index));
+        point.insert(field.key, grids.spell(field, index));
     }
 }
 
@@ -448,36 +460,13 @@ fn params_of(
     (entry, exit_params(&sv, model))
 }
 
-/// The spelling of one grid value in the strategy's format.
-fn spell(kind: &ParamKind, index: usize) -> String {
-    match kind {
-        ParamKind::Num { grid } => {
-            let v = grid[index];
-            if v.fract() == 0.0 {
-                format!("{v:.0}")
-            } else {
-                format!("{v}")
-            }
-        }
-        ParamKind::Bool => (if index == 0 { "NO" } else { "YES" }).to_string(),
-        ParamKind::Enum(options) => options[index].to_string(),
-    }
-}
-
-/// How many values a field's grid offers.
-fn arity(kind: &ParamKind) -> usize {
-    match kind {
-        ParamKind::Num { grid } => grid.len(),
-        ParamKind::Bool => 2,
-        ParamKind::Enum(options) => options.len(),
-    }
-}
-
-/// The fields one search varies: those it offers ([`deps::offered`]) less the locked.
+/// The fields one search varies: those it offers ([`deps::offered`]) less the locked and the
+/// number fields with nothing to try — no grid, as for a field nothing is known of.
 fn varied<'a>(p: &SearchParams<'a>) -> Vec<&'static super::params::TickParam> {
     deps::offered(p)
         .into_iter()
         .filter(|f| !p.locked.contains(f.key))
+        .filter(|f| p.grids.arity(f) > 0)
         .collect()
 }
 
@@ -843,7 +832,7 @@ pub fn suggest(
     let pairs: Vec<&'static TickParam> = if params.vary_entry {
         fields
             .iter()
-            .filter(|f| f.group == ParamGroup::Entry && matches!(f.kind, ParamKind::Num { .. }))
+            .filter(|f| f.group == ParamGroup::Entry && f.kind == ParamKind::Num)
             .copied()
             .collect()
     } else {
@@ -867,10 +856,19 @@ pub fn suggest(
                 if restart > 0 {
                     let mut state = restart_seed(seed, restart);
                     shuffle(&mut order, &mut state);
-                    perturb(&mut point, &order, &start, &mut state);
+                    perturb(&mut point, params.grids, &order, &start, &mut state);
                 }
                 let walked = descend(
-                    point, &order, &pairs, &coupling, &start, &evaluate, min_n, max_passes, handle,
+                    point,
+                    params.grids,
+                    &order,
+                    &pairs,
+                    &coupling,
+                    &start,
+                    &evaluate,
+                    min_n,
+                    max_passes,
+                    handle,
                 )?;
                 handle.record_restart();
                 Some(Run {
@@ -1167,6 +1165,9 @@ mod closing;
 pub use self::closing::unguarded_strategies;
 mod coupled;
 mod deps;
+pub(in crate::db::tuner::ticks) use self::deps::strategy_values;
 
+#[cfg(test)]
+pub(in crate::db::tuner::ticks) mod test_grids;
 #[cfg(test)]
 mod tests;

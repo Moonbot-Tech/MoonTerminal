@@ -19,10 +19,11 @@
 //! one value for all of them, and one strategy that applies the sum is enough for the field to
 //! move a column.
 
-use super::{Point, better_score, restore, spell};
+use super::{Point, better_score, restore};
 use crate::db::metrics::Tally;
 use crate::db::tuner::threshold_search::SearchHandle;
-use crate::db::tuner::ticks::params::{ParamKind, ParamSection, TickParam};
+use crate::db::tuner::ticks::params::range::Grids;
+use crate::db::tuner::ticks::params::{ParamSection, TickParam};
 use crate::db::tuner::ticks::{EntryParams, ExitParams};
 
 /// The model parameters of every strategy of the sample at a point, completed as a scored
@@ -144,16 +145,13 @@ impl<'a> Coupling<'a> {
     /// grid goes below zero — against the term's grid above zero, both spanned end to end over
     /// the longer of the two, so a path runs from the smallest product to the largest.
     pub(super) fn diagonals(
+        grids: &Grids,
         coefficient: &TickParam,
         term: &TickParam,
     ) -> Vec<Vec<(String, String)>> {
-        let (Some(up), Some(down), Some(terms)) = (
-            steps(coefficient, |v| v > 0.0),
-            steps(coefficient, |v| v < 0.0),
-            steps(term, |v| v > 0.0),
-        ) else {
-            return Vec::new();
-        };
+        let up = steps(grids, coefficient, |v| v > 0.0);
+        let down = steps(grids, coefficient, |v| v < 0.0);
+        let terms = steps(grids, term, |v| v > 0.0);
         [up, down]
             .into_iter()
             .filter(|side| !side.is_empty() && !terms.is_empty())
@@ -169,8 +167,8 @@ impl<'a> Coupling<'a> {
                             }
                         };
                         (
-                            spell(&coefficient.kind, side[at(side.len())]),
-                            spell(&term.kind, terms[at(terms.len())]),
+                            grids.spell(coefficient, side[at(side.len())]),
+                            grids.spell(term, terms[at(terms.len())]),
                         )
                     })
                     .collect::<Vec<_>>()
@@ -224,15 +222,13 @@ fn silent(exit: &ExitParams) -> bool {
     }
 }
 
-/// The grid indices of a number field whose value passes `keep`, nearest zero first; `None`
-/// for a field that is not a number.
-fn steps(field: &TickParam, keep: impl Fn(f64) -> bool) -> Option<Vec<usize>> {
-    let ParamKind::Num { grid } = &field.kind else {
-        return None;
-    };
+/// The grid indices of a number field whose value passes `keep`, nearest zero first; none for
+/// a field that is not a number or has no grid.
+fn steps(grids: &Grids, field: &TickParam, keep: impl Fn(f64) -> bool) -> Vec<usize> {
+    let grid = grids.values(field);
     let mut out: Vec<usize> = (0..grid.len()).filter(|&i| keep(grid[i])).collect();
     out.sort_by(|&a, &b| grid[a].abs().total_cmp(&grid[b].abs()));
-    Some(out)
+    out
 }
 
 /// Walk one path of two fields as one move: each step sets both, and a step that beats the

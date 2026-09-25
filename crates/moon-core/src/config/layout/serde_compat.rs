@@ -473,3 +473,57 @@ where
         Some(Flag::Other(_)) | None => false,
     })
 }
+
+/// Read the search ranges the user typed on the "Entry/Exit" axis, discarding only the malformed
+/// entries: one hand-edited range must cost that field its range, not every setting of the axis.
+///
+/// Args:
+///     d: Serde deserializer positioned at the complete `ranges` value.
+///
+/// Returns:
+///     Every well-formed entry, or an empty map when the outer value is not a map.
+///
+/// Errors:
+///     Propagates only deserializer failures that cannot be consumed as ignored input.
+pub(super) fn de_tick_ranges<'de, D>(
+    d: D,
+) -> Result<
+    std::collections::BTreeMap<String, crate::db::tuner::ticks::params::range::TickRange>,
+    D::Error,
+>
+where
+    D: serde::Deserializer<'de>,
+{
+    use crate::db::tuner::ticks::params::range::TickRange;
+
+    /// One usable range or an ignored malformed entry.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        /// Exact range shape.
+        Valid(TickRange),
+        /// Any unsupported entry shape.
+        Other(serde::de::IgnoredAny),
+    }
+
+    /// The expected map or an ignored malformed outer value.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        /// Field keys mapped to independently recoverable entries.
+        Map(std::collections::BTreeMap<String, Entry>),
+        /// Any unsupported outer shape.
+        Other(serde::de::IgnoredAny),
+    }
+
+    Ok(match Stored::deserialize(d)? {
+        Stored::Map(entries) => entries
+            .into_iter()
+            .filter_map(|(key, entry)| match entry {
+                Entry::Valid(range) if !range.is_auto() => Some((key, range)),
+                Entry::Valid(_) | Entry::Other(_) => None,
+            })
+            .collect(),
+        Stored::Other(_) => std::collections::BTreeMap::new(),
+    })
+}

@@ -1,6 +1,6 @@
-//! The variant columns and the search of the "Entry/Exit" axis: the edits behind В1/В2, their
-//! debounced rescore over the replayable rows, the search that fills В1, and the write of В1
-//! through the shared confirmation dialog.
+//! The variant column and the search of the "Entry/Exit" axis: the edits behind В1, their
+//! debounced rescore over the replayable rows, the search that fills В1 over the grids the
+//! ranges resolve to (`ranges.rs`), and the write of В1 through the shared confirmation dialog.
 //!
 //! Every score here is a replay — `variant_tally` over the fit rows whose tape is in memory
 //! (`TicksData::replayable`) — so the columns describe the SAME subset the "Fact · fit" column
@@ -22,7 +22,6 @@ use gpui::*;
 use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
-use super::super::shared::N_VAR;
 use super::state::SuggState;
 use super::tape::{PendingDeal, prepare_sample};
 use crate::analytics::bg::ReadLane;
@@ -80,7 +79,7 @@ impl AnalyticsView {
             .unwrap_or_default()
     }
 
-    /// Arm a debounced rescore of the variant columns — every edit of a cell, every row that
+    /// Arm a debounced rescore of the variant column — every edit of a cell, every row that
     /// joins the replayable set, goes through here.
     pub(in crate::analytics::tuner) fn arm_ticks_variants(&mut self, cx: &mut Context<Self>) {
         if !self.ticks.tape_reading
@@ -92,11 +91,11 @@ impl AnalyticsView {
         }
         self.latest_reads.cancel(&[ReadLane::TicksVariants]);
         self.ticks.var_seq = self.ticks.var_seq.wrapping_add(1);
-        // Nothing to score: an untouched pair of columns costs no clone of the rows and no
-        // replay — a fetch over hundreds of rows re-arms this once per row.
-        if (0..N_VAR).all(|i| self.ticks.variant_changes(i).is_empty()) {
-            self.ticks.var_stats = Default::default();
-            self.set_ticks_plan(Default::default());
+        // Nothing to score: an untouched column costs no clone of the rows and no replay — a
+        // fetch over hundreds of rows re-arms this once per row.
+        if self.ticks.variant_changes().is_empty() {
+            self.ticks.var_stats = None;
+            self.set_ticks_plan(HashMap::new());
             // The trade pane's modelled trades go with the columns.
             self.ticks_refresh_model_trades(cx);
             return;
@@ -115,15 +114,14 @@ impl AnalyticsView {
         }));
     }
 
-    /// Score every touched variant over the replayable rows.
+    /// Score the touched variant over the replayable rows.
     fn run_ticks_variants(&mut self, req: u64, cx: &mut Context<Self>) {
         let pending = self.prepared_deals();
         let Some(data) = self.ticks.data.data() else {
             return;
         };
         let kind = data.single_kind().unwrap_or_default().to_string();
-        let changes: Vec<Vec<(String, String)>> =
-            (0..N_VAR).map(|i| self.ticks.variant_changes(i)).collect();
+        let values = self.ticks.variant_changes();
         let defaults = self.filter_defaults(cx);
         let model = super::model_cfg::current();
         let n = pending.len();
@@ -133,40 +131,24 @@ impl AnalyticsView {
             cx,
             move || {
                 let deals = prepare_sample(pending);
-                changes
-                    .iter()
-                    .map(|values| {
-                        if values.is_empty() || deals.is_empty() {
-                            return None;
-                        }
-                        let (tally, spent, money) =
-                            variant_tally_by_deal(&deals, &defaults, &kind, values, model);
-                        let plan: HashMap<i64, (f64, f64)> = money
-                            .into_iter()
-                            .filter_map(|(uid, value)| Some((uid, value?)))
-                            .collect();
-                        Some((stats_of(tally, spent), plan))
-                    })
-                    .collect::<Vec<_>>()
+                if values.is_empty() || deals.is_empty() {
+                    return None;
+                }
+                let (tally, spent, money) =
+                    variant_tally_by_deal(&deals, &defaults, &kind, &values, model);
+                let plan: HashMap<i64, (f64, f64)> = money
+                    .into_iter()
+                    .filter_map(|(uid, value)| Some((uid, value?)))
+                    .collect();
+                Some((stats_of(tally, spent), plan))
             },
-            move |this, stats, cx| {
+            move |this, scored, cx| {
                 if this.ticks.var_seq != req {
                     return;
                 }
-                let mut plan: [HashMap<i64, (f64, f64)>; N_VAR] = Default::default();
-                for ((slot, value), plan) in this
-                    .ticks
-                    .var_stats
-                    .iter_mut()
-                    .zip(stats)
-                    .zip(plan.iter_mut())
-                {
-                    *slot = value.map(|(stats, deals)| {
-                        *plan = deals;
-                        stats
-                    });
-                }
-                this.set_ticks_plan(plan);
+                let (stats, plan) = scored.unzip();
+                this.ticks.var_stats = stats;
+                this.set_ticks_plan(plan.unwrap_or_default());
                 this.ticks.var_n = n;
                 // The trade pane draws what the columns now count.
                 this.ticks_refresh_model_trades(cx);
@@ -175,8 +157,8 @@ impl AnalyticsView {
         );
     }
 
-    /// Take the variants' per-deal results; a table sorted by the plan column is re-sorted.
-    fn set_ticks_plan(&mut self, plan: [HashMap<i64, (f64, f64)>; N_VAR]) {
+    /// Take the variant's per-deal results; a table sorted by the plan column is re-sorted.
+    fn set_ticks_plan(&mut self, plan: HashMap<i64, (f64, f64)>) {
         self.ticks.plan = plan;
         if self
             .ticks
@@ -188,50 +170,32 @@ impl AnalyticsView {
         }
     }
 
-    /// One cell of a variant changed: store it and rescore.
+    /// One cell of the variant changed: store it and rescore.
     pub(in crate::analytics::tuner) fn set_ticks_variant(
         &mut self,
-        index: usize,
         key: &str,
         value: String,
         cx: &mut Context<Self>,
     ) {
-        self.ticks.set_variant(index, key, value);
+        self.ticks.set_variant(key, value);
         self.arm_ticks_variants(cx);
     }
 
-    /// Copy one variant column over the other — В1 into В2 keeps a found point while another is
-    /// tried, В2 into В1 brings a kept one back for Save.
-    pub(in crate::analytics::tuner) fn ticks_copy_variant(
-        &mut self,
-        from: usize,
-        to: usize,
-        cx: &mut Context<Self>,
-    ) {
-        self.ticks.variants[to] = self.ticks.variants[from].clone();
-        self.ticks_reset_inputs_of(to);
+    /// Clear the variant column.
+    pub(in crate::analytics::tuner) fn ticks_clear_variant(&mut self, cx: &mut Context<Self>) {
+        self.ticks.variant.clear();
+        self.ticks.var_stats = None;
+        self.ticks.plan.clear();
+        self.ticks_reset_variant_inputs();
         self.arm_ticks_variants(cx);
         cx.notify();
     }
 
-    /// Clear one variant column.
-    pub(in crate::analytics::tuner) fn ticks_clear_variant(
-        &mut self,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) {
-        self.ticks.variants[index].clear();
-        self.ticks.var_stats[index] = None;
-        self.ticks.plan[index].clear();
-        self.ticks_reset_inputs_of(index);
-        self.arm_ticks_variants(cx);
-        cx.notify();
-    }
-
-    /// Drop the input boxes of a variant column so they are recreated from the stored values.
-    fn ticks_reset_inputs_of(&mut self, index: usize) {
-        let prefix = format!("v{index}:");
-        self.ticks.inputs.retain(|id, _| !id.starts_with(&prefix));
+    /// Drop the input boxes of the variant column so they are recreated from the stored values.
+    fn ticks_reset_variant_inputs(&mut self) {
+        self.ticks
+            .inputs
+            .retain(|id, _| !id.starts_with(super::grid::VARIANT_INPUT_PREFIX));
     }
 
     /// Whether a group may be searched: the kind's support and the share gate.
@@ -363,7 +327,7 @@ impl AnalyticsView {
                 }
                 // The other fields as В1 has them: the one field is searched in the variant it
                 // will land in, not in the strategy as it stands.
-                held.extend(self.ticks.variant_changes(0));
+                held.extend(self.ticks.variant_changes());
                 let locked: HashSet<String> = TICK_PARAMS
                     .iter()
                     .map(|f| f.key)
@@ -396,6 +360,9 @@ impl AnalyticsView {
             .filter(|n| *n > 0);
         let train_frac = super::super::filter::state::train_frac(self.ticks.train_pct);
         let keep_corridor = self.ticks.keep_corridor;
+        // The grids are resolved now, from the ranges as they stand: a range edited while the
+        // search runs is the next search's.
+        let (grids, set_aside) = self.ticks_search_grids();
         // A floor over the slice the search fits on no point can keep: say so before a run that
         // can only come back empty. Counted on every replayable row: the search then drops the
         // deals the strategies as they stand leave open (`closing::closable_at_base`), so a floor
@@ -414,12 +381,20 @@ impl AnalyticsView {
             total: restarts,
         };
         self.ticks.sugg_seq = self.ticks.sugg_seq.wrapping_add(1);
-        self.ticks.sugg_note = None;
+        // A typed range the search set aside for the automatic one is said, not swallowed.
+        self.ticks.sugg_note = (!set_aside.is_empty()).then(|| {
+            t!(
+                "analytics.ticks.range_set_aside",
+                fields = set_aside.join(", ")
+            )
+            .to_string()
+        });
         let seq = self.ticks.sugg_seq;
         log::info!(
             target: moon_core::diagnostics::TICKS_AXIS_TARGET,
-            "[x] ticks search: start #{seq}, {restarts} restart(s) x {max_passes} pass(es) over {} deal(s), entry {vary_entry}, exit {vary_exit}",
-            pending.len()
+            "[x] ticks search: start #{seq}, {restarts} restart(s) x {max_passes} pass(es) over {} deal(s), entry {vary_entry}, exit {vary_exit}, {} steps per field, typed ranges set aside {set_aside:?}",
+            pending.len(),
+            self.ticks.steps_per_param()
         );
         probe::watch(handle.clone(), restarts, seq);
         self.poll_ticks_search(handle.clone(), seq, cx);
@@ -437,6 +412,7 @@ impl AnalyticsView {
                     vary_entry,
                     vary_exit,
                     locked: &locked,
+                    grids: &grids,
                     restarts,
                     min_n,
                     seed,
@@ -464,8 +440,8 @@ impl AnalyticsView {
                 this.ticks.sugg = SuggState::Idle;
                 match result {
                     Ok(result) => {
-                        land_answer(&mut this.ticks.variants[0], only, &result.values);
-                        this.ticks_reset_inputs_of(0);
+                        land_answer(&mut this.ticks.variant, only, &result.values);
+                        this.ticks_reset_variant_inputs();
                         this.ticks.last_seed = Some(result.seed);
                         this.ticks.last_result = Some(result);
                         this.arm_ticks_variants(cx);
@@ -540,7 +516,7 @@ impl AnalyticsView {
         if targets.is_empty() {
             return;
         }
-        let changes = self.ticks.variant_changes(0);
+        let changes = self.ticks.variant_changes();
         if changes.is_empty() {
             log::info!("analytics: 'Save' (ticks) - no variant to write");
             return;
@@ -560,7 +536,7 @@ impl AnalyticsView {
         let Some(target) = self.selected_targets().into_iter().next() else {
             return;
         };
-        let changes = self.ticks.variant_changes(0);
+        let changes = self.ticks.variant_changes();
         let mut warns = self.ticks_change_warnings(&changes, cx);
         warns.extend(self.ticks_unguarded_warning(std::slice::from_ref(&target), &changes, cx));
         warns.extend(self.ticks_unmodelled_warns(std::slice::from_ref(&target), cx));

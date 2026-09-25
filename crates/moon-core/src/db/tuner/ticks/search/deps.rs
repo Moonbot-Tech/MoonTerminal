@@ -26,8 +26,9 @@
 
 use std::collections::HashMap;
 
-use super::{Point, SearchParams, spell};
+use super::{Point, SearchParams};
 use crate::db::tuner::ticks::TICK_PARAMS;
+use crate::db::tuner::ticks::params::range::Grids;
 use crate::db::tuner::ticks::params::{ParamGroup, ParamKind, TickParam};
 use crate::feed::strategy_deps::{FieldDeps, Values};
 
@@ -92,9 +93,10 @@ pub(super) fn dependents_of(
     let start: HashMap<&'static str, usize> = offered
         .iter()
         .filter_map(|f| {
-            let ParamKind::Num { grid } = &f.kind else {
+            let grid = params.grids.values(f);
+            if grid.is_empty() {
                 return None;
-            };
+            }
             // The schema's defaults are keyed lowercase (`strategy_field_defaults`).
             let default = params.defaults.get(&f.key.to_ascii_lowercase()).copied();
             let mut values: Vec<f64> = match params.held.get(f.key).and_then(parse) {
@@ -109,7 +111,7 @@ pub(super) fn dependents_of(
             Some((f.key, super::nearest_step(grid, value)))
         })
         .collect();
-    let dependents = Dependents::new(&offered, &start);
+    let dependents = Dependents::new(params.grids, &offered, &start);
     (start, dependents)
 }
 
@@ -121,14 +123,19 @@ pub(super) struct Dependents {
 
 impl Dependents {
     /// Args:
+    ///     grids: The search's grids.
     ///     fields: The fields the search offers ([`offered`]), varied or locked.
     ///     start: Where each number field starts on its grid; one without a start is never
     ///         completed.
-    pub(super) fn new(fields: &[&'static TickParam], start: &HashMap<&'static str, usize>) -> Self {
+    pub(super) fn new(
+        grids: &Grids,
+        fields: &[&'static TickParam],
+        start: &HashMap<&'static str, usize>,
+    ) -> Self {
         let numbers = fields
             .iter()
-            .filter(|f| matches!(f.kind, ParamKind::Num { .. }))
-            .filter_map(|f| Some((*f, spell(&f.kind, *start.get(f.key)?))))
+            .filter(|f| f.kind == ParamKind::Num)
+            .filter_map(|f| Some((*f, grids.spell(f, *start.get(f.key)?))))
             .collect();
         Self {
             rules: FieldDeps::bundled(),
@@ -197,6 +204,16 @@ impl Dependents {
             .map(|(key, value)| (*key, value.clone()))
             .collect()
     }
+}
+
+/// One strategy's values as it stands, as the rules read them ([`effective`] with nothing laid
+/// over) — what the search's automatic ranges ask "is this field in effect here" of
+/// (`params::range::Population`).
+pub(in crate::db::tuner::ticks) fn strategy_values(
+    own: &HashMap<String, String>,
+    defaults: &HashMap<String, f64>,
+) -> Values {
+    effective(own, &HashMap::new(), &Point::new(), defaults)
 }
 
 /// One strategy's values as the rules read them: its own, `held` over them, the point over that,

@@ -2370,3 +2370,76 @@ fn the_ticks_axis_settings_round_trip_and_never_cost_the_layout() {
     assert_eq!(broken.analytics_period.as_deref(), Some("p-cur-month"));
     assert_eq!(broken.analytics_ticks, None);
 }
+
+/// The search ranges typed on the Entry/Exit axis and its steps per field survive a restart; a
+/// block written before they existed reads them empty; a malformed range costs that field its
+/// range and nothing else of the axis, and a malformed step count only itself.
+#[test]
+fn the_ticks_axis_ranges_round_trip_and_a_bad_one_costs_only_itself() {
+    use crate::db::tuner::ticks::params::range::TickRange;
+    let saved = WindowLayout {
+        analytics_ticks: Some(TicksAxisLayout {
+            iters: Some(40),
+            steps_per_param: Some(30),
+            ranges: [
+                (
+                    "SellPrice".to_string(),
+                    TickRange {
+                        from: Some(0.5),
+                        to: Some(3.0),
+                        step: None,
+                    },
+                ),
+                (
+                    "SellLevelCount".to_string(),
+                    TickRange {
+                        step: Some(1.0),
+                        ..TickRange::default()
+                    },
+                ),
+            ]
+            .into(),
+            ..TicksAxisLayout::default()
+        }),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&saved).expect("the layout must serialize");
+    let decoded: WindowLayout = toml::from_str(&encoded).expect("its own output must load back");
+    assert_eq!(decoded.analytics_ticks, saved.analytics_ticks);
+
+    let before: WindowLayout = toml::from_str(
+        "[analytics_ticks]
+iters = 40
+",
+    )
+    .expect("a block without the ranges");
+    let before = before.analytics_ticks.expect("the block");
+    assert!(before.ranges.is_empty() && before.steps_per_param.is_none());
+
+    let bad = toml::from_str::<WindowLayout>(
+        "[analytics_ticks]
+iters = 40
+steps_per_param = \"lots\"
+         [analytics_ticks.ranges.SellPrice]
+from = 0.5
+to = 3
+         [analytics_ticks.ranges.StopLoss]
+from = \"low\"
+",
+    )
+    .expect("a malformed range must not reject the document")
+    .analytics_ticks
+    .expect("a malformed range must not cost the axis its block");
+    assert_eq!(bad.iters, Some(40));
+    assert_eq!(bad.steps_per_param, None);
+    assert_eq!(
+        bad.ranges.get("SellPrice"),
+        Some(&TickRange {
+            from: Some(0.5),
+            to: Some(3.0),
+            step: None,
+        }),
+        "an integer edge reads as a number"
+    );
+    assert!(!bad.ranges.contains_key("StopLoss"));
+}

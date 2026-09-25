@@ -31,7 +31,11 @@ fn deps() -> Dependents {
     let start: HashMap<&'static str, usize> = [("TrailingPercent", 0), ("TakeProfit", 2)]
         .into_iter()
         .collect();
-    Dependents::new(&fields, &start)
+    Dependents::new(
+        crate::db::tuner::ticks::search::test_grids::legacy(),
+        &fields,
+        &start,
+    )
 }
 
 /// A switch turned on with no value behind it gets one: the take profit's per cent at its start.
@@ -105,7 +109,11 @@ fn a_completion_reaches_every_strategy_whatever_the_order() {
     let start: HashMap<&'static str, usize> = [("PriceDownTimer", 3), ("PriceDownPercent", 4)]
         .into_iter()
         .collect();
-    let deps = Dependents::new(&fields, &start);
+    let deps = Dependents::new(
+        crate::db::tuner::ticks::search::test_grids::legacy(),
+        &fields,
+        &start,
+    );
     let off = own(&[("PriceDownTimer", "0")]);
     let pct = own(&[("PriceDownPercent", "10")]);
     for owns in [[&off, &pct], [&pct, &off]] {
@@ -125,7 +133,11 @@ fn a_completion_reaches_every_strategy_whatever_the_order() {
 fn a_field_at_its_default_is_not_completed_from_other_strategies() {
     let fields = [field("MShotAddBTCDelta")];
     let start: HashMap<&'static str, usize> = [("MShotAddBTCDelta", 1)].into_iter().collect();
-    let deps = Dependents::new(&fields, &start);
+    let deps = Dependents::new(
+        crate::db::tuner::ticks::search::test_grids::legacy(),
+        &fields,
+        &start,
+    );
     let set = own(&[("MShotAddBTCDelta", "0.03")]);
     let bare = own(&[]);
     let out = deps.complete(
@@ -178,6 +190,7 @@ fn a_search_of_one_field_completes_what_the_variant_switched_on() {
         vary_entry: false,
         vary_exit: true,
         locked: &locked,
+        grids: crate::db::tuner::ticks::search::test_grids::legacy(),
         restarts: 1,
         min_n: Some(4),
         seed: Some(3),
@@ -218,7 +231,11 @@ fn a_field_is_completed_only_for_a_switch_the_variant_turns_on() {
         field("TakeProfit"),
     ];
     let start: HashMap<&'static str, usize> = [("TakeProfit", 2)].into_iter().collect();
-    let deps = Dependents::new(&fields, &start);
+    let deps = Dependents::new(
+        crate::db::tuner::ticks::search::test_grids::legacy(),
+        &fields,
+        &start,
+    );
     let stored_on = own(&[("UseTrailing", "YES"), ("UseTakeProfit", "YES")]);
     let out = deps.complete(&point(&[]), &[&stored_on], &HashMap::new(), &HashMap::new());
     assert!(!out.contains_key("TakeProfit"), "{out:?}");
@@ -237,10 +254,7 @@ fn a_field_is_completed_only_for_a_switch_the_variant_turns_on() {
 fn every_condition_of_a_number_knob_has_a_fallback() {
     let rules = FieldDeps::bundled();
     let mut missing: Vec<String> = Vec::new();
-    for knob in TICK_PARAMS
-        .iter()
-        .filter(|f| matches!(f.kind, ParamKind::Num { .. }))
-    {
+    for knob in TICK_PARAMS.iter().filter(|f| f.kind == ParamKind::Num) {
         for condition in rules.conditions_of(knob.key) {
             let known = CONDITION_FALLBACKS.iter().any(|(k, _)| *k == condition);
             if !known && !missing.iter().any(|m| m == condition) {
@@ -257,7 +271,11 @@ fn every_condition_of_a_number_knob_has_a_fallback() {
 fn a_sell_at_last_price_switched_on_brings_its_adjustment() {
     let fields = [field("MShotSellPriceAdjust")];
     let start: HashMap<&'static str, usize> = [("MShotSellPriceAdjust", 0)].into_iter().collect();
-    let deps = Dependents::new(&fields, &start);
+    let deps = Dependents::new(
+        crate::db::tuner::ticks::search::test_grids::legacy(),
+        &fields,
+        &start,
+    );
     let bare = own(&[]);
     let out = deps.complete(&point(&[]), &[&bare], &HashMap::new(), &HashMap::new());
     assert!(out.is_empty(), "{out:?}");

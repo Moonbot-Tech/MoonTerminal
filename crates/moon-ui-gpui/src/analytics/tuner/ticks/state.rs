@@ -6,17 +6,17 @@
 //! Split from the rendering (`ticks/mod.rs`) like every other axis: the load paths write here,
 //! the render path only reads.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::Entity;
 use moon_ui::MoonInputState;
 
-use super::super::shared::N_VAR;
 use super::tape::{PackedTape, PendingDeal};
 use crate::load_state::LoadState;
 use moon_core::db::tuner::VarStats;
 use moon_core::db::tuner::threshold_search::SearchHandle;
+use moon_core::db::tuner::ticks::params::range::{FieldSpan, TickRange};
 use moon_core::db::tuner::ticks::params::{ParamGroup, ParamSection};
 use moon_core::db::tuner::ticks::search::SearchResult;
 use moon_core::db::tuner::ticks::{Deal, Verdict, fit_for_search};
@@ -180,6 +180,12 @@ pub(in crate::analytics::tuner) struct TicksData {
     /// The parameter grid's rows by section (`sections::layout`), published with the rows so a
     /// layout never meets another scope's "now" values or kinds.
     pub(in crate::analytics::tuner) grid: Arc<[super::sections::GridSection]>,
+    /// Each number knob's automatic search span over the live strategies and the selection
+    /// (`params::range::field_span`), by key; a field nothing is known of is absent.
+    pub(in crate::analytics::tuner) spans: Arc<HashMap<&'static str, FieldSpan>>,
+    /// The number knobs the schema types as integers — their typed ranges are cut to whole
+    /// numbers.
+    pub(in crate::analytics::tuner) integers: Arc<HashSet<&'static str>>,
 }
 
 /// What [`TicksData::tape_budget`] counts.
@@ -316,13 +322,14 @@ impl Drop for TicksState {
 /// State of the "Entry/Exit" mode.
 pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) data: LoadState<TicksData>,
-    /// The variant columns' edits: field key to value in strategy spelling. An empty map is
-    /// an untouched column, drawn as the base.
-    pub(in crate::analytics::tuner) variants: [HashMap<String, String>; N_VAR],
-    /// The KPI of each variant over the replayable rows, `None` until computed or while the
-    /// variant is untouched.
-    pub(in crate::analytics::tuner) var_stats: [Option<VarStats>; N_VAR],
-    /// How many replayable rows the variant KPIs were computed over, for their captions.
+    /// The variant column's edits (В1): field key to value in strategy spelling. An empty map is
+    /// an untouched column, drawn as the base. One column: the second one went on 2026-09-25,
+    /// its place in the grid taken by the search ranges.
+    pub(in crate::analytics::tuner) variant: HashMap<String, String>,
+    /// The variant's KPI over the replayable rows, `None` until computed or while the variant is
+    /// untouched.
+    pub(in crate::analytics::tuner) var_stats: Option<VarStats>,
+    /// How many replayable rows the variant KPI was computed over, for its caption.
     pub(in crate::analytics::tuner) var_n: usize,
     /// Generation of the variant KPI recompute; a stale completion is dropped.
     pub(in crate::analytics::tuner) var_seq: u64,
@@ -330,8 +337,17 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) var_task: Option<gpui::Task<()>>,
     /// The grid's and the row's input boxes, created lazily and kept across repaints.
     pub(in crate::analytics::tuner) inputs: HashMap<String, Entity<MoonInputState>>,
+    /// The placeholder each range cell's box was last given, by its id in `inputs` — set again
+    /// only when what the search takes there moved (`ranges.rs`).
+    pub(in crate::analytics::tuner) placeholders: HashMap<String, String>,
     /// Unticked rows: held at base by the search, bar what a switch it turns on needs. Persisted.
     pub(in crate::analytics::tuner) locked: HashSet<String>,
+    /// The search ranges typed over the automatic ones, by field key; a field absent is fully
+    /// automatic. Persisted.
+    pub(in crate::analytics::tuner) ranges: BTreeMap<String, TickRange>,
+    /// Steps per field the automatic ranges are cut into, as typed; empty = the default.
+    /// Persisted.
+    pub(in crate::analytics::tuner) steps: String,
     /// The field "Search" on one field varies — the one whose name was clicked last.
     pub(in crate::analytics::tuner) sel_field: Option<&'static str>,
     /// The search settings, as typed; all but the minimum trades persist.
@@ -402,11 +418,11 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) tape_reading: bool,
     /// The trade pane under the table (`trade_pane.rs`).
     pub(in crate::analytics::tuner) trade: super::trade_pane::TradePane,
-    /// Each variant's result per deal, by `ReportUID`, as `(money in the sample's unit, per cent)`
-    /// — what the column counted for that deal (`variant_tally_by_deal`). A deal absent is one the variant makes
-    /// no trade of, or one outside the replayed sample. Scored with the columns, cleared with
-    /// them.
-    pub(in crate::analytics::tuner) plan: [HashMap<i64, (f64, f64)>; N_VAR],
+    /// The variant's result per deal, by `ReportUID`, as `(money in the sample's unit, per cent)`
+    /// — what the column counted for that deal (`variant_tally_by_deal`). A deal absent is one
+    /// the variant makes no trade of, or one outside the replayed sample. Scored with the
+    /// column, cleared with it.
+    pub(in crate::analytics::tuner) plan: HashMap<i64, (f64, f64)>,
     /// `sections::schema_signature` of the store when the latest load chose the keys of its
     /// "now" values — set when the load is ASKED, so a load already running under a new schema
     /// is not asked for again (`grid.rs`).
@@ -422,13 +438,16 @@ impl Default for TicksState {
     fn default() -> Self {
         Self {
             data: LoadState::default(),
-            variants: Default::default(),
-            var_stats: Default::default(),
+            variant: HashMap::new(),
+            var_stats: None,
             var_n: 0,
             var_seq: 0,
             var_task: None,
             inputs: HashMap::new(),
+            placeholders: HashMap::new(),
             locked: HashSet::new(),
+            ranges: BTreeMap::new(),
+            steps: String::new(),
             sel_field: None,
             iters: String::new(),
             min_trades: String::new(),
@@ -457,7 +476,7 @@ impl Default for TicksState {
             judged_under: None,
             tape_seq: 0,
             trade: Default::default(),
-            plan: Default::default(),
+            plan: HashMap::new(),
             keys_sig: None,
             schema_reload: None,
             open_sections: HashSet::new(),
@@ -491,6 +510,16 @@ impl TicksState {
         self.locked = saved.locked.iter().cloned().collect();
         self.trade.open = saved.trade_open;
         self.keep_corridor = !saved.allow_closer_corridor;
+        self.steps = saved
+            .steps_per_param
+            .map(|n| n.to_string())
+            .unwrap_or_default();
+        self.ranges = saved.ranges.clone();
+    }
+
+    /// Steps per field the automatic ranges are cut into, out of the typed box.
+    pub(in crate::analytics::tuner) fn steps_per_param(&self) -> u32 {
+        moon_core::db::tuner::ticks::params::range::steps_of(self.steps.trim().parse::<u32>().ok())
     }
 
     /// The axis' settings as the layout persists them, the model's from their process-wide
@@ -510,6 +539,8 @@ impl TicksState {
             trade_open: self.trade.open,
             allow_closer_corridor: !self.keep_corridor,
             min_tail_s: Some(super::tail::current_s()),
+            steps_per_param: number(&self.steps),
+            ranges: self.ranges.clone(),
         }
     }
 
@@ -550,8 +581,8 @@ impl TicksState {
         self.order = None;
         self.var_seq = self.var_seq.wrapping_add(1);
         self.var_task = None;
-        self.var_stats = Default::default();
-        self.plan = Default::default();
+        self.var_stats = None;
+        self.plan.clear();
         if let Some(data) = self.data.data_mut() {
             for row in &mut data.rows {
                 if row.tape == TapeStatus::Fetching {
@@ -583,11 +614,9 @@ impl TicksState {
 
     /// The variant's changes over the base as `(key, value)` pairs, sorted — what Save writes
     /// and what the KPI is computed for.
-    pub(in crate::analytics::tuner) fn variant_changes(
-        &self,
-        index: usize,
-    ) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self.variants[index]
+    pub(in crate::analytics::tuner) fn variant_changes(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self
+            .variant
             .iter()
             .filter(|(_, v)| !v.trim().is_empty())
             .map(|(k, v)| (k.clone(), v.trim().to_string()))
@@ -596,22 +625,17 @@ impl TicksState {
         out
     }
 
-    /// Whether the first variant holds anything to write.
+    /// Whether the variant holds anything to write.
     pub(in crate::analytics::tuner) fn has_changes(&self) -> bool {
-        !self.variant_changes(0).is_empty()
+        !self.variant_changes().is_empty()
     }
 
-    /// Set one cell of a variant; an empty value clears it.
-    pub(in crate::analytics::tuner) fn set_variant(
-        &mut self,
-        index: usize,
-        key: &str,
-        value: String,
-    ) {
+    /// Set one cell of the variant; an empty value clears it.
+    pub(in crate::analytics::tuner) fn set_variant(&mut self, key: &str, value: String) {
         if value.trim().is_empty() {
-            self.variants[index].remove(key);
+            self.variant.remove(key);
         } else {
-            self.variants[index].insert(key.to_string(), value);
+            self.variant.insert(key.to_string(), value);
         }
     }
 

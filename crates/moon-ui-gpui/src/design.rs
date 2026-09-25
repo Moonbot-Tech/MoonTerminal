@@ -719,6 +719,26 @@ pub fn dense_input_size(cx: &App) -> MoonInputSize {
     }
 }
 
+/// A square icon-only button as tall as a [`dense_input_size`] box — the reset beside the tuner
+/// grid's range cells, which must not make its row taller than the cells it sits with. Pass
+/// [`dense_glyph_btn_w`] to its `width` for the square.
+pub fn dense_glyph_btn_size() -> MoonButtonSize {
+    let m = MoonSize::Xs.control_metrics();
+    MoonButtonSize::Custom {
+        height: m.line_height,
+        radius: m.radius,
+        font_size: m.font_size,
+        line_height: m.line_height,
+        gap: m.gap,
+    }
+}
+
+/// Rendered width of the square [`dense_glyph_btn_size`] button: its own drawn height, for a
+/// RENDERED width (`MoonButton::width`), as [`glyph_btn_w`] is.
+pub fn dense_glyph_btn_w(cx: &App) -> f32 {
+    ui_value(cx, MoonSize::Xs.control_metrics().line_height)
+}
+
 pub fn ui_value(cx: &App, value: f32) -> f32 {
     MoonTheme::active_tokens(cx).ui(value)
 }

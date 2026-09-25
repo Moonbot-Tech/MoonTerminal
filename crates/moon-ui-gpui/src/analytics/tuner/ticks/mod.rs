@@ -43,6 +43,7 @@ mod grid;
 mod lags;
 mod load;
 pub(in crate::analytics) mod model_cfg;
+mod ranges;
 pub(in crate::analytics::tuner) mod rows;
 mod sections;
 pub(in crate::analytics) mod state;
@@ -496,7 +497,7 @@ impl AnalyticsView {
 
     /// The KPI matrix: the rows fit for the search as the baseline — captioned with how many of
     /// the covered ones that is, the ✓ shares of both groups (the model's own account of itself)
-    /// and the exit horizon — then В1 and В2 over the rows whose tape is in memory. The whole
+    /// and the exit horizon — then В1 over the rows whose tape is in memory. The whole
     /// scope is not a column: the axis works on the fit rows alone. An untouched variant is the
     /// strategy as it stands, and shows the baseline.
     fn ticks_kpi(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
@@ -538,25 +539,20 @@ impl AnalyticsView {
         let base = VarLabel::with_sub(t!("analytics.ticks.subset").to_string(), subset_sub);
         let baseline: Option<moon_core::db::tuner::VarStats> =
             self.ticks.kpi.data().and_then(|k| k.first().cloned());
-        let mut labels = Vec::with_capacity(self.ticks.var_stats.len());
         let mut stats: Vec<moon_core::db::tuner::VarStats> = baseline.iter().cloned().collect();
-        for (i, var) in self.ticks.var_stats.iter().enumerate() {
-            let title = t!("analytics.ticks.var_n", n = i + 1).to_string();
-            let Some(var) = var else {
-                labels.push(VarLabel::with_sub(
-                    title,
-                    t!("analytics.ticks.var_untouched").to_string(),
-                ));
+        let title = t!("analytics.ticks.var_n", n = 1).to_string();
+        let label = match &self.ticks.var_stats {
+            None => {
                 stats.extend(baseline.iter().cloned());
-                continue;
-            };
-            let mut sub = t!(
-                "analytics.ticks.var_sub",
-                n = var.n,
-                m = self.ticks.var_n.max(replayable)
-            )
-            .to_string();
-            if i == 0 {
+                VarLabel::with_sub(title, t!("analytics.ticks.var_untouched").to_string())
+            }
+            Some(var) => {
+                let mut sub = t!(
+                    "analytics.ticks.var_sub",
+                    n = var.n,
+                    m = self.ticks.var_n.max(replayable)
+                )
+                .to_string();
                 if let Some((holdout, open)) = self
                     .ticks
                     .last_result
@@ -576,10 +572,11 @@ impl AnalyticsView {
                         sub = format!("{sub} · {}", t!("analytics.ticks.holdout_open", n = open));
                     }
                 }
+                stats.push(var.clone());
+                VarLabel::with_sub(title, sub)
             }
-            labels.push(VarLabel::with_sub(title, sub));
-            stats.push(var.clone());
-        }
+        };
+        let labels = [label];
         let state = match &self.ticks.kpi {
             crate::load_state::LoadState::NotReady => crate::load_state::LoadState::NotReady,
             crate::load_state::LoadState::Failed(e) => {
@@ -631,21 +628,20 @@ fn column_title(col: &DealCol) -> String {
     }
 }
 
-/// What the plan column shows for one deal: each variant's `(money, per cent)` where the variant
-/// was scored, `None` in an outer slot for a variant not scored at all.
+/// What the plan column shows for one deal: the variant's `(money, per cent)` where it was
+/// scored, `None` in the outer slot while the variant is not scored at all.
 #[derive(Clone, Copy)]
-struct PlanCell([Option<Option<(f64, f64)>>; 2]);
+struct PlanCell(Option<Option<(f64, f64)>>);
 
 impl PlanCell {
-    /// The deal's plan under both variants, from the state the columns were scored into.
+    /// The deal's plan under the variant, from the state the column was scored into.
     fn of(state: &state::TicksState, uid: i64) -> Self {
-        Self(std::array::from_fn(|i| {
+        Self(
             state
                 .var_stats
-                .get(i)
-                .and_then(|s| s.as_ref())
-                .map(|_| state.plan[i].get(&uid).copied())
-        }))
+                .as_ref()
+                .map(|_| state.plan.get(&uid).copied()),
+        )
     }
 
     /// The cell's text, colour and tooltip: В1's result — per cent in percent mode, the
@@ -659,18 +655,16 @@ impl PlanCell {
             None => "—".to_string(),
         };
         let tip = || {
-            let parts: Vec<String> = self
-                .0
-                .iter()
-                .enumerate()
-                .filter_map(|(i, v)| {
-                    v.map(|v| format!("{} {}", t!("analytics.ticks.var_n", n = i + 1), money(v)))
-                })
-                .collect();
-            (!parts.is_empty())
-                .then(|| format!("{} · {}", parts.join(" · "), t!("analytics.ticks.plan_tip")))
+            self.0.map(|v| {
+                format!(
+                    "{} {} · {}",
+                    t!("analytics.ticks.var_n", n = 1),
+                    money(v),
+                    t!("analytics.ticks.plan_tip")
+                )
+            })
         };
-        match self.0[0] {
+        match self.0 {
             None => (String::new(), p.text_muted, tip()),
             Some(None) => ("—".to_string(), p.text_muted, tip()),
             Some(Some(v)) => (

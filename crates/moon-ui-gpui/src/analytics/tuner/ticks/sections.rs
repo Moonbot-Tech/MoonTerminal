@@ -266,6 +266,42 @@ pub(in crate::analytics::tuner) fn schema_keys(store: &CoreStore) -> Vec<String>
     seen.into_iter().map(str::to_string).collect()
 }
 
+/// The number knobs every connected core's schema types as an integer (`Int32`, `Int64`) —
+/// wherever it lists them at all: a typed range on such a field is cut to whole numbers
+/// (`params::range::resolve`). A field one schema types otherwise is not among them.
+pub(in crate::analytics::tuner) fn integer_keys(store: &CoreStore) -> HashSet<&'static str> {
+    let mut integer: HashSet<&'static str> = HashSet::new();
+    let mut other: HashSet<&'static str> = HashSet::new();
+    let knob = |name: &str| {
+        moon_core::db::tuner::ticks::TICK_PARAMS
+            .iter()
+            .find(|f| f.key.eq_ignore_ascii_case(name))
+            .map(|f| f.key)
+    };
+    for (_, core) in store.cores() {
+        let Some(schema) = core.schema.as_ref() else {
+            continue;
+        };
+        for field in schema
+            .kinds
+            .iter()
+            .flat_map(|k| &k.sections)
+            .flat_map(|s| &s.fields)
+        {
+            let Some(key) = knob(&field.name) else {
+                continue;
+            };
+            if field.type_name.starts_with("Int") {
+                integer.insert(key);
+            } else {
+                other.insert(key);
+            }
+        }
+    }
+    integer.retain(|key| !other.contains(key));
+    integer
+}
+
 /// A signature of the schemas the store holds: which cores have one, at which revision. It moves
 /// whenever a core's schema arrives, changes or goes, and is independent of the order the store
 /// lists its cores in.

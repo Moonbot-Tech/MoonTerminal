@@ -289,28 +289,145 @@ fn flatten_values(raw: &str, keys: &[String]) -> Option<std::collections::HashMa
         return None;
     };
     for key in keys {
-        let Some(v) = map.get(key) else { continue };
-        let s = match v {
-            serde_json::Value::String(s) => s.clone(),
-            serde_json::Value::Number(n) => n.to_string(),
-            serde_json::Value::Bool(b) => if *b { "YES" } else { "NO" }.to_string(),
-            // A list-valued field (a coin list spelled as a JSON array) flattens to the
-            // comma form the callers parse. Dropping it here while the SQL column reads it
-            // is what makes one screen count coins the other cannot see.
-            serde_json::Value::Array(items) => items
-                .iter()
-                .filter_map(|i| match i {
-                    serde_json::Value::String(s) => Some(s.clone()),
-                    serde_json::Value::Number(n) => Some(n.to_string()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join(","),
-            _ => continue,
+        let Some(text) = map.get(key).and_then(value_text) else {
+            continue;
         };
-        out.insert(key.clone(), s);
+        out.insert(key.clone(), text);
     }
     Some(out)
+}
+
+/// One `raw_json` value in strategy format: a string as is, a number in its shortest form, a
+/// boolean as `YES`/`NO`, a list in the comma form; `None` for anything else.
+fn value_text(v: &serde_json::Value) -> Option<String> {
+    Some(match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => if *b { "YES" } else { "NO" }.to_string(),
+        // A list-valued field (a coin list spelled as a JSON array) flattens to the comma form
+        // the callers parse. Dropping it here while the SQL column reads it is what makes one
+        // screen count coins the other cannot see.
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|i| match i {
+                serde_json::Value::String(s) => Some(s.clone()),
+                serde_json::Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(","),
+        _ => return None,
+    })
+}
+
+/// One live strategy as the search's automatic ranges read it
+/// (`ticks::params::range::Population`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveStrategy {
+    /// `SignalType` — the spelling a deal's kind has (`strategy_kinds`), not the `kind` column,
+    /// which spells some kinds otherwise (`PumpDetection` for `PumpsDetection`).
+    pub kind: String,
+    /// The asked fields the strategy's dump holds, by LOWERCASE name, in strategy format.
+    pub values: std::collections::HashMap<String, String>,
+}
+
+/// What [`live_strategies`] last read, and the state of the file it read it from.
+struct LiveCache {
+    signature: (i64, i64, i64),
+    keys: Vec<String>,
+    strategies: std::sync::Arc<Vec<LiveStrategy>>,
+}
+
+static LIVE_CACHE: std::sync::Mutex<Option<LiveCache>> = std::sync::Mutex::new(None);
+
+/// Every live strategy of every core — the current version of each one not deleted — with the
+/// fields `keys` names (matched without regard to case), one per distinct content: a strategy
+/// copied onto many cores is one strategy (1 423 live, 1 108 distinct here, 2026-09-25).
+///
+/// Read once per state of the file (the count of heads, the newest head update and the newest
+/// version): the axis loads on every move of the report, the strategies change far more rarely.
+/// Measured 2026-09-25 on this machine: 1 423 heads, 4.3 MB of JSON, ~60 ms in Python.
+///
+/// Returns:
+///     The strategies, empty when the file is absent or will not read.
+pub fn live_strategies(keys: &[String]) -> std::sync::Arc<Vec<LiveStrategy>> {
+    let Some(conn) = open_strategies_ro() else {
+        return std::sync::Arc::default();
+    };
+    let signature = conn
+        .query_row(
+            "SELECT (SELECT count(*) FROM strategies),
+                    (SELECT coalesce(max(updated_ms), 0) FROM strategies),
+                    (SELECT coalesce(max(id), 0) FROM strategy_versions)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap_or((-1, -1, -1));
+    let mut cache = LIVE_CACHE.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(hit) = cache
+        .as_ref()
+        .filter(|c| signature.0 >= 0 && c.signature == signature && c.keys == keys)
+    {
+        return std::sync::Arc::clone(&hit.strategies);
+    }
+    let started = std::time::Instant::now();
+    let wanted: std::collections::HashSet<String> =
+        keys.iter().map(|k| k.to_ascii_lowercase()).collect();
+    let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let mut out: Vec<LiveStrategy> = Vec::new();
+    let read = conn
+        .prepare(
+            "SELECT s.content_hash, v.raw_json FROM strategies s
+               JOIN strategy_versions v
+                 ON v.core_uid = s.core_uid AND v.strategy_id = s.strategy_id
+              WHERE s.deleted = 0 AND v.valid_to IS NULL",
+        )
+        .and_then(|mut stmt| {
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+            for row in rows {
+                let (hash, raw) = row?;
+                if !seen.insert(hash) {
+                    continue;
+                }
+                let Ok(serde_json::Value::Object(map)) = serde_json::from_str(&raw) else {
+                    continue;
+                };
+                let kind = map
+                    .get("SignalType")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let values = map
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        let lower = key.to_ascii_lowercase();
+                        wanted
+                            .contains(&lower)
+                            .then(|| value_text(value).map(|text| (lower, text)))
+                            .flatten()
+                    })
+                    .collect();
+                out.push(LiveStrategy { kind, values });
+            }
+            Ok(())
+        });
+    if let Err(error) = read {
+        log::warn!("[x] tuner: live strategies unreadable: {error}");
+        return std::sync::Arc::default();
+    }
+    log::info!(
+        target: crate::diagnostics::TICKS_AXIS_TARGET,
+        "[x] ticks ranges: read {} distinct live strategies in {} ms",
+        out.len(),
+        started.elapsed().as_millis()
+    );
+    let strategies = std::sync::Arc::new(out);
+    *cache = Some(LiveCache {
+        signature,
+        keys: keys.to_vec(),
+        strategies: std::sync::Arc::clone(&strategies),
+    });
+    strategies
 }
 
 /// Threshold parameters of the SELECTED strategy for tuner fields.
