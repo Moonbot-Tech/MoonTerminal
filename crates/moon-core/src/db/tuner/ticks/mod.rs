@@ -667,13 +667,27 @@ pub fn simulate(
     // An entry the tape shows filling only after a long position's hole began — on the first
     // print past it, most often — filled somewhere in the hole, or never: nobody holds the prints
     // that would say. The fact's own entry is at the buy, before any hole.
+    // The test reads the entry fill, not the booked take: whether the position was held into the
+    // hole is decided at entry — which is also why `Outcome::fill` stays unshifted on purpose.
     let exit_result = match &deal.gap {
         Some(gap) if fill.t_ms > gap.from_ms => Exit {
             t_ms: fill.t_ms,
             price: f64::NAN,
             kind: ExitKind::InGap,
         },
-        _ => ExitModel::new(exit).exit(deal, ticks, fill),
+        _ => {
+            // The fact's own entry times its sell from the booked take, as the core does
+            // (`record::StopAnchor::entry_ms`); a modelled entry keeps its own fill.
+            let sell_fill = if fill == fact_fill {
+                Fill {
+                    t_ms: deal.stop_anchor.map_or(fill.t_ms, |a| a.entry_ms),
+                    price: fill.price,
+                }
+            } else {
+                fill
+            };
+            ExitModel::new(exit).exit(deal, ticks, sell_fill)
+        }
     };
     let profit_pct = match exit_result.kind {
         ExitKind::OpenAtWindowEnd | ExitKind::InGap => None,

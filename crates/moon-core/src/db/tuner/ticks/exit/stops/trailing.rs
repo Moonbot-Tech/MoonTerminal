@@ -16,7 +16,8 @@
 //!   level, and it sells only while the middle is still beyond that level — a middle that fell
 //!   through it in one tick sells nothing. A short's levels off the buy are divisions.
 //! - It fires on the middle crossing the line, at the ticker's arrival; a stop past its own level
-//!   at the same moment goes first ([`super::Stops`]).
+//!   at the same moment goes first ([`super::Stops`]). The sale is a market one, so it prices at
+//!   the bid proxy for a long (the ask proxy for a short), the middle while that side is unseen.
 //!
 //! The tape carries no book, so the middle is read off the prints the way the book stop reads its
 //! BID: the last taker sell stands for the bid, the last taker buy for the ask, sampled on the
@@ -164,13 +165,19 @@ impl Trailing {
         }
     }
 
+    /// The side a market sale fills into: the bid proxy for a long, the ask proxy for a short.
+    fn sold_into(&self) -> Option<f64> {
+        if self.long { self.bid } else { self.ask }
+    }
+
     /// The line under the peak, never lower than the take profit's level ([`trailing_level`]).
     fn line(&self, peak: f64) -> f64 {
         line_of(peak, self.pct, self.take, self.long)
     }
 
     /// The ticker's arrivals strictly before `until`, and the first that crossed the line: the
-    /// trailing stop, at that moment and the middle's price.
+    /// trailing stop, at that moment. It fires on the middle but sells at the bid proxy for a long
+    /// (the ask proxy for a short), falling back to the middle while that side has no print yet.
     pub(super) fn before(&mut self, until: i64) -> Option<Exit> {
         while self.next_sample < until {
             let at = self.next_sample;
@@ -215,7 +222,7 @@ impl Trailing {
             if crossed && above_take && at > self.quiet_until {
                 return Some(Exit {
                     t_ms: at,
-                    price: mid,
+                    price: self.sold_into().unwrap_or(mid),
                     kind: ExitKind::Stop,
                 });
             }

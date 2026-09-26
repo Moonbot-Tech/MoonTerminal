@@ -49,9 +49,9 @@ fn far_take() -> f64 {
 
 /// The middle 100.1 at the first arrival (2 150) starts the peak; 102.1 at the second (4 300)
 /// raises it; 101.0 at the third (6 450) is under 102.1 · 0.99 = 101.079 and sells — at the
-/// arrival, at the middle.
+/// arrival, into the bid: the middle crossed, but the market sale fills at the bid proxy 100.9.
 #[test]
-fn the_line_follows_the_peak_of_the_middle_and_sells_on_it() {
+fn the_line_follows_the_peak_of_the_middle_and_sells_into_the_bid() {
     let ticks = tape(&[
         (100, 100.0, 100.2),
         (3_000, 102.0, 102.2),
@@ -60,7 +60,10 @@ fn the_line_follows_the_peak_of_the_middle_and_sells_on_it() {
     ]);
     let w = walk(&deal(false), &ticks, fill(), far_take(), &trailing());
     assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 6_450), "{w:?}");
-    assert!((w.exit.price - 101.0).abs() < 1e-4, "{w:?}");
+    assert!(
+        (w.exit.price - 100.9).abs() < 1e-4,
+        "the bid, not the middle 101.0: {w:?}"
+    );
 }
 
 /// `TrailingEMA` 4: a step moves the peak a fifth of the way, 100.1 → 100.5, so the line stays at
@@ -148,6 +151,24 @@ fn a_short_trails_the_lowest_middle() {
     // 97.9 · 1.01 = 98.879; the middle 99.0 is above it at 6 450.
     let w = walk(&deal(true), &ticks, fill(), 50.0, &trailing());
     assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 6_450), "{w:?}");
+}
+
+/// A short's trailing buys back into the ask: the middle 99.0 crossed the line at 6 450, the sale
+/// fills at the ask proxy 99.1 — the price an anchored stop would be held against.
+#[test]
+fn a_short_trailing_sells_into_the_ask() {
+    let ticks = tape(&[
+        (100, 99.8, 100.0),
+        (3_000, 97.8, 98.0),
+        (5_000, 98.9, 99.1),
+        (9_000, 98.9, 99.1),
+    ]);
+    let w = walk(&deal(true), &ticks, fill(), 50.0, &trailing());
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 6_450), "{w:?}");
+    assert!(
+        (w.exit.price - 99.1).abs() < 1e-4,
+        "the ask, not the middle 99.0: {w:?}"
+    );
 }
 
 /// The line under a peak, floored at the take profit's level off the buy — a short's by division.

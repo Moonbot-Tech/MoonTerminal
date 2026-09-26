@@ -23,6 +23,7 @@ use self::ladder::Ladder;
 use self::trailing::Trailing;
 use super::delta_mods::modifier_sum;
 use super::{ExitParams, Side};
+use crate::db::tuner::ticks::verify::{StopGroup, stop_group};
 use crate::db::tuner::ticks::{Deal, Exit, ExitKind, Fill, reaches};
 use crate::feed::types::Tick;
 
@@ -329,10 +330,32 @@ impl Stops {
         // What the fact proves about the stop when this walk runs the trade's own
         // (`record::StopAnchor`): it fired when the core's did, at the price the core sold at, and
         // not a moment before — nor before the close, on a trade it never stopped. The book the
-        // stop watches is not on the tape; the fact is the book's own answer.
-        let anchor = deal.stop_anchor.filter(|a| a.holds(deal, fill, params));
-        let quiet_until = anchor.map_or(i64::MIN, |a| a.quiet_until_ms);
-        let fired = anchor.and_then(|a| a.fired);
+        // stop watches is not on the tape; the fact is the book's own answer. The stop and the
+        // trailing each lean on the fact only under their own settings, and the fact's firing
+        // goes to the walk only when the group its reason names holds.
+        let stop_holds = deal
+            .stop_anchor
+            .is_some_and(|a| a.holds(deal, fill, params));
+        let trailing_holds = deal
+            .stop_anchor
+            .is_some_and(|a| a.holds_trailing(fill, params));
+        let quiet_of = |holds: bool| {
+            deal.stop_anchor
+                .filter(|_| holds)
+                .map_or(i64::MIN, |a| a.quiet_until_ms)
+        };
+        let quiet_until = quiet_of(stop_holds);
+        let trailing_quiet_until = quiet_of(trailing_holds);
+        let group_holds = match stop_group(&deal.sell_reason) {
+            Some(StopGroup::Stop) => stop_holds,
+            Some(StopGroup::Trailing) => trailing_holds,
+            Some(StopGroup::Either) => stop_holds && trailing_holds,
+            None => false,
+        };
+        let fired = deal
+            .stop_anchor
+            .filter(|_| group_holds)
+            .and_then(|a| a.fired);
         // The ticker's clock of both proxies is run back to the tape's first print, so the stop's
         // and the trailing's arrivals fall on the same moments.
         let first_ms = ticks
@@ -351,7 +374,7 @@ impl Stops {
             fill.t_ms,
             first_ms,
             params,
-            quiet_until,
+            trailing_quiet_until,
         )
         .map(|mut trailing| {
             // The spread the prints before the fill leave; they never step the peak.

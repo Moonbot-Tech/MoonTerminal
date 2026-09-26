@@ -348,3 +348,59 @@ fn the_fact_sell_starts_at_the_archived_take() {
     assert_eq!(start(Some(&[(-7, 101.0)]), &p), 0, "never before the buy");
     assert_eq!(start(None, &p), 0);
 }
+
+// ---- a take placed through the market -------------------------------------------------------
+
+/// A long's take at 101 goes live with the market already at 102: it fills at the market, on the
+/// first live print 102.5, not at its level; a short's take at 99 under a market at 98 fills at
+/// 97.5.
+#[test]
+fn a_take_through_the_market_when_it_goes_live_fills_at_the_market() {
+    let ticks = tape(&[(0, 102.0), (500, 102.5)]);
+    let long = walk(&deal(false), &ticks, fill(), 101.0, &params());
+    assert_eq!(
+        (long.exit.kind, long.exit.t_ms),
+        (ExitKind::Take, 500),
+        "{long:?}"
+    );
+    assert!(
+        (long.exit.price - 102.5).abs() < 1e-9,
+        "the market, {long:?}"
+    );
+    let ticks = tape(&[(0, 98.0), (500, 97.5)]);
+    let short = walk(&deal(true), &ticks, fill(), 99.0, &params());
+    assert_eq!(
+        (short.exit.kind, short.exit.t_ms),
+        (ExitKind::Take, 500),
+        "{short:?}"
+    );
+    assert!(
+        (short.exit.price - 97.5).abs() < 1e-9,
+        "the market, {short:?}"
+    );
+}
+
+/// A take resting short of the market when it went live and crossed later by a jump is a resting
+/// limit: it fills at its level, 101, not at the jump's 102.
+#[test]
+fn a_take_crossed_only_after_it_rests_fills_at_its_level() {
+    let ticks = tape(&[(0, 100.2), (500, 102.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 101.0, &params());
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Take, 500), "{w:?}");
+    assert!((w.exit.price - 101.0).abs() < 1e-9, "its level, {w:?}");
+}
+
+/// The trade's own settings, its take through the market when it went live: the core sold at the
+/// market's 102.5 and the verdict prices the take there too — the exit is reproduced.
+#[test]
+fn verify_prices_a_marketable_take_at_the_market() {
+    let mut d = deal(false);
+    d.sell_reason = verify::REASON_TAKE.into();
+    d.close_ms = 500;
+    d.sell_price = 102.5;
+    let ticks = tape(&[(0, 102.0), (500, 102.5), (5_000, 102.5)]);
+    let v = verify(&d, &ticks, &EntryParams::Fact, &params(), None, None);
+    assert_eq!(v.exit_kind, Some(ExitKind::Take), "{v:?}");
+    assert_eq!(v.exit, Some(true), "{v:?}");
+    assert!(v.exit_dev_pct.is_some_and(|dev| dev.abs() < 1e-6), "{v:?}");
+}

@@ -24,7 +24,8 @@ use super::exit::{ExitParams, StopStep};
 use super::gap::TapeGap;
 use super::hook::KIND_MOONHOOK;
 use super::verify::{
-    POINT_TIME_TOLERANCE_MS, Verdict, archived_stop_jump, is_stop_reason, stop_jump_level,
+    POINT_TIME_TOLERANCE_MS, Verdict, archived_stop_jump, fact_sell_start, is_stop_reason,
+    stop_jump_level,
 };
 use super::{Deal, EntryParams, Fill};
 use crate::market::trade_replay::Coverage;
@@ -32,7 +33,8 @@ use crate::market::trade_replay::Coverage;
 /// The fact's stop, as a variant running the same one may lean on it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StopAnchor {
-    /// The entry the fact's stop counted from — the buy's price and moment.
+    /// The entry the fact's stop counted from: the buy's price, and the moment the core booked
+    /// the take, where it starts every sell timer (`verify::fact_sell_start`).
     pub entry_price: f64,
     pub entry_ms: i64,
     /// The stop the fact ran: its adjusted distance ([`stop_pct`]), delay and trigger.
@@ -47,6 +49,11 @@ pub struct StopAnchor {
     pub fired: Option<(i64, f64)>,
     /// Up to when the fact proves the stop quiet: its activation, or the close.
     pub quiet_until_ms: i64,
+    /// The trailing stop the fact ran (`ExitParams::trailing_pct`, `trailing_ema`,
+    /// `trailing_take_profit_pct`): a variant leans on the fact's trailing only under these.
+    pub trailing_pct: f64,
+    pub trailing_ema: f64,
+    pub trailing_take_profit_pct: Option<f64>,
 }
 
 impl StopAnchor {
@@ -64,7 +71,9 @@ impl StopAnchor {
     ///     exit: The sell parameters of the fact.
     ///     exit_points: The archived Exit line, when the archive holds it.
     pub fn of(deal: &Deal, exit: &ExitParams, exit_points: Option<&[(i64, f64)]>) -> Self {
-        let pct = stop_pct(exit, deal, deal.buy_ms);
+        // Every sell timer runs from the booked take, not the buy — as the verdict times them.
+        let sell_start_ms = fact_sell_start(deal, exit, exit_points).t_ms;
+        let pct = stop_pct(exit, deal, sell_start_ms);
         // The verdict's own test of a stopped fact (`verify::is_stop_reason`), not a copy.
         let stopped = is_stop_reason(&deal.sell_reason);
         let fired = stopped.then(|| {
@@ -76,7 +85,7 @@ impl StopAnchor {
         });
         Self {
             entry_price: deal.buy_price,
-            entry_ms: deal.buy_ms,
+            entry_ms: sell_start_ms,
             stop_pct: pct,
             delay_s: exit.stop_loss_delay_s,
             fast: exit.fast_stop_loss,
@@ -85,7 +94,19 @@ impl StopAnchor {
             third: exit.third_stop,
             fired,
             quiet_until_ms: fired.map_or(deal.close_ms, |(t, _)| t),
+            trailing_pct: exit.trailing_pct,
+            trailing_ema: exit.trailing_ema,
+            trailing_take_profit_pct: exit.trailing_take_profit_pct,
         }
+    }
+
+    /// Whether a walk from `fill` under `params` starts where the fact's sell did — to the
+    /// price, and within the point tolerance in time.
+    fn same_entry(&self, fill: Fill, params: &ExitParams) -> bool {
+        // The stop the fact ran is the one its own fill placed: read at the fact's moment, a
+        // walk filling a few milliseconds off it is still the same stop.
+        fill.price == self.entry_price
+            && (fill.t_ms - self.entry_ms).abs() <= params.model.point_time_ms
     }
 
     /// Whether a walk from `fill` under `params` runs the fact's own stop — the same entry (to
@@ -96,16 +117,29 @@ impl StopAnchor {
     ///     fill: The walk's entry.
     ///     params: The walk's sell parameters.
     pub fn holds(&self, deal: &Deal, fill: Fill, params: &ExitParams) -> bool {
-        // The stop the fact ran is the one its own fill placed: read at the fact's moment, a
-        // walk filling a few milliseconds off it is still the same stop.
-        fill.price == self.entry_price
-            && (fill.t_ms - self.entry_ms).abs() <= params.model.point_time_ms
+        self.same_entry(fill, params)
             && stop_pct(params, deal, self.entry_ms) == self.stop_pct
             && params.stop_loss_delay_s == self.delay_s
             && params.fast_stop_loss == self.fast
             && params.stop_loss_ema == self.ema
             && params.second_stop == self.second
             && params.third_stop == self.third
+    }
+
+    /// Whether a walk from `fill` under `params` runs the fact's own trailing stop — the same
+    /// entry as [`Self::holds`], the same trailing settings (the EMA as the core rounds it) and
+    /// the same `StopLossDelay`: the trailing's peak restarts at fill + delay, so another delay
+    /// is another trailing line and inherits neither the fact's firing nor its quiet window.
+    ///
+    /// Args:
+    ///     fill: The walk's entry.
+    ///     params: The walk's sell parameters.
+    pub fn holds_trailing(&self, fill: Fill, params: &ExitParams) -> bool {
+        self.same_entry(fill, params)
+            && params.stop_loss_delay_s == self.delay_s
+            && params.trailing_pct == self.trailing_pct
+            && params.trailing_ema.max(0.0).round() == self.trailing_ema.max(0.0).round()
+            && params.trailing_take_profit_pct == self.trailing_take_profit_pct
     }
 }
 

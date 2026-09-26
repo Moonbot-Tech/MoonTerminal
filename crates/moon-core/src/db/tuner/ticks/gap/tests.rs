@@ -100,6 +100,9 @@ fn the_facts_stop_bounds_the_hole_at_its_deepest_level() {
         third: None,
         fired: Some((HOUR, 98.0)),
         quiet_until_ms: HOUR,
+        trailing_pct: 0.0,
+        trailing_ema: 0.0,
+        trailing_take_profit_pct: None,
     });
     let gap = TapeGap::of(&d, &covered, &exit, None).expect("a hole");
     assert_eq!(gap.fact_stop, None);
