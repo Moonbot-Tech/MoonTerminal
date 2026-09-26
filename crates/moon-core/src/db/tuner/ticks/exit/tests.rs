@@ -34,6 +34,8 @@ pub(super) fn deal(short: bool) -> Deal {
         is_short: short,
         sell_reason: "Auto Price Down".into(),
         fact_pnl: 5.0,
+        sizing: None,
+        pnl_pct: false,
         profit: None,
         deltas: Deltas::default(),
         tick: None,

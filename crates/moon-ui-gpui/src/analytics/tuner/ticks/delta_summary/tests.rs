@@ -20,6 +20,8 @@ fn row(tape: TapeStatus) -> DealRow {
             is_short: false,
             sell_reason: String::new(),
             fact_pnl: 0.0,
+            sizing: None,
+            pnl_pct: false,
             profit: None,
             deltas: Deltas::default(),
             delta_track: None,

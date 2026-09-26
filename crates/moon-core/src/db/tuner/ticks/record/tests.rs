@@ -45,6 +45,8 @@ fn stopped() -> Deal {
         is_short: false,
         sell_reason: BOOK_REASON.into(),
         fact_pnl: -3.0,
+        sizing: None,
+        pnl_pct: false,
         profit: None,
         deltas: Deltas::default(),
         tick: None,

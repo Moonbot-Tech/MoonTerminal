@@ -93,7 +93,10 @@ fn cell_agg(factor: &str, money: bool) -> String {
 ///
 /// Both cases leave the trade out of `fee_trades` as well, which is what makes the shortfall
 /// visible as an approximate figure instead of a confidently wrong one.
-const FEE_ROW: &str = "CASE WHEN o.prices_in_money_quote
+///
+/// The tuner's Entry/Exit axis reads the same expression per deal (`tuner::ticks::deals`): what
+/// the fact paid is what a modelled variant of it is charged, so one definition serves both.
+pub(in crate::db) const FEE_ROW: &str = "CASE WHEN o.prices_in_money_quote
                              AND COALESCE(o.sellreason,'') <> 'LIQUIDATION'
                              AND o.boughtq > 0 AND o.buyprice > 0 AND o.sellprice > 0
                         THEN o.boughtq

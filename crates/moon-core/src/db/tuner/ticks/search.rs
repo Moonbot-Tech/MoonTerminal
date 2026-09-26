@@ -16,11 +16,12 @@
 //! Save writes. Only the fields of the groups the caller switched on are searched, minus the
 //! ones it locked.
 //!
-//! The objective is the total money result over the fitted deals with at least `min_n` of them
-//! still trading, ties broken by the profit factor — `metrics::Tally`, the same figures the KPI
-//! matrix prints. A deal the variant never fills is not a trade and drops out of `n`; the caller
-//! prints "by N of M" beside the column so a variant that wins by trading less is visible as
-//! such. A point that buys a deal and does not close it inside its tape, or leaves a strategy
+//! The objective is the total result over the fitted deals, in the scope's metric and net of
+//! each deal's own execution cost as the "Fact" column counts it
+//! ([`super::Outcome::profit_metric`]), with at least `min_n` of them still trading, ties broken
+//! by the profit factor — `metrics::Tally`, the same figures the KPI matrix prints. A deal the
+//! variant never fills is not a trade and drops out of `n`; the caller prints "by N of M" beside
+//! the column so a variant that wins by trading less is visible as such. A point that buys a deal and does not close it inside its tape, or leaves a strategy
 //! with nothing standing to close a trade, is refused outright ([`closing`], the developer,
 //! 2026-09-24): dropping the deal would reward the loss it carries past the tape. A switch the
 //! point turns on brings the values it needs ([`deps`]).
@@ -542,8 +543,9 @@ impl<'a> Bases<'a> {
     }
 }
 
-/// Every deal's result under one point, in order — `(money, spent)`, `None` where the point
-/// makes no trade of the deal — and whether it bought the deal and left it open.
+/// Every deal's result under one point, in order — `(result, spent)`, the result in the scope's
+/// metric as the "Fact" column holds it ([`super::Outcome::profit_metric`]), `None` where the
+/// point makes no trade of the deal — and whether it bought the deal and left it open.
 ///
 /// Args:
 ///     deals: The deals.
@@ -561,8 +563,8 @@ fn results(
             let (entry, exit) = &params[base];
             let outcome = simulate(&d.deal, &d.ticks, entry, exit, d.entry_line.as_deref());
             let result = outcome
-                .profit_money(&d.deal)
-                .map(|money| (money, d.deal.spent));
+                .profit_metric(&d.deal)
+                .map(|value| (value, d.deal.spent));
             (result, outcome.left_open())
         })
         .collect()
@@ -1189,7 +1191,10 @@ pub fn variant_picture(
 /// where the variant makes no trade of the deal.
 pub type DealResults = Vec<(i64, Option<(f64, f64)>)>;
 
-/// Every deal's result under one variant — `(money, per cent)`, money in the sample's unit —
+/// Every deal's result under one variant — `(money, per cent)`: money in the deal's own money
+/// (the sample's unit, except under the percent metric, where each row keeps its quote and only
+/// the per cent is read) and per cent of the deal's spend, both net of the fact's cost
+/// ([`super::Outcome::profit_money`]) —
 /// what the deal table's plan column shows. `None` where the variant makes no trade of the deal
 /// (no fill, or still open where the tape ends): the same rule that leaves the deal out of
 /// [`variant_tally`].
@@ -1215,24 +1220,33 @@ pub fn variant_tally_by_deal(
         model.sanitized(),
     );
     install(|| {
-        let money: DealResults = deals
+        let scored: Vec<_> = deals
             .par_iter()
             .zip(bases.of_deal.par_iter())
             .map(|(d, &base)| {
                 let (entry, exit) = &per_base[base];
                 let outcome = simulate(&d.deal, &d.ticks, entry, exit, d.entry_line.as_deref());
-                let result = outcome.profit_money(&d.deal).zip(outcome.profit_pct);
-                (d.deal.report_uid, result)
+                // A deal that spent nothing has no per cent. The percent projection admits only
+                // `spentbtc > 0`, so the zero is never a percent-metric cell or tally value.
+                let result = outcome.profit_money(&d.deal).map(|money| {
+                    let on_spent = outcome.profit_on_spent(&d.deal).unwrap_or(0.0);
+                    (money, on_spent)
+                });
+                (d.deal.report_uid, result, outcome.profit_metric(&d.deal))
             })
             .collect();
         let mut tally = Tally::default();
         let mut spent = 0.0;
-        for (deal, (_, value)) in deals.iter().zip(&money) {
-            if let Some((value, _)) = value {
+        for (deal, (_, _, value)) in deals.iter().zip(&scored) {
+            if let Some(value) = value {
                 tally.push(*value);
                 spent += deal.deal.spent;
             }
         }
+        let money = scored
+            .into_iter()
+            .map(|(uid, result, _)| (uid, result))
+            .collect();
         (tally, spent, money)
     })
 }

@@ -44,6 +44,8 @@ pub(super) fn deal() -> Deal {
         is_short: false,
         sell_reason: "Sell Price".into(),
         fact_pnl: 10.0,
+        sizing: None,
+        pnl_pct: false,
         profit: None,
         deltas: Deltas::default(),
         tick: None,
@@ -1008,6 +1010,106 @@ fn simulate_chains_entry_and_exit_and_signs_the_result() {
     // Filled at 101, taken at 101 / 1.01 = 100: 1 − 1/1.01 of the fill.
     let pct = short.profit_pct.unwrap();
     assert!((pct - 100.0 * (1.0 - 1.0 / 1.01)).abs() < 1e-9, "{pct}");
+}
+
+/// An outcome that filled at `fill` and closed at `exit` on the take.
+fn closed_at(deal: &Deal, fill: f64, exit: f64) -> Outcome {
+    Outcome {
+        fill: Some(Fill {
+            t_ms: deal.buy_ms,
+            price: fill,
+        }),
+        exit: Some(Exit {
+            t_ms: deal.close_ms,
+            price: exit,
+            kind: ExitKind::Take,
+        }),
+        profit_pct: profit_pct(deal, fill, exit),
+    }
+}
+
+/// A 5× margin deal: 1 000 spent, a 5 000 position bought at 99 and sold at 100, 48 booked.
+fn margin_deal() -> Deal {
+    let notional = 5_000.0;
+    let gross = notional * (100.0 - 99.0) / 99.0;
+    Deal {
+        sizing: Some(Sizing {
+            notional,
+            cost: gross - 48.0,
+        }),
+        fact_pnl: 48.0,
+        ..deal()
+    }
+}
+
+#[test]
+fn a_variant_that_repeats_the_fact_makes_the_fact_profit() {
+    let deal = margin_deal();
+    let money = closed_at(&deal, 99.0, 100.0).profit_money(&deal).unwrap();
+    assert!((money - 48.0).abs() < 1e-9, "{money}");
+}
+
+#[test]
+fn a_variant_move_is_leveraged_and_pays_the_fact_cost() {
+    let deal = margin_deal();
+    let cost = deal.sizing.unwrap().cost;
+    // One per cent more from the same fill: 1 % of the 5 000 position, not of the 1 000 spent.
+    let fact = closed_at(&deal, 99.0, 100.0).profit_money(&deal).unwrap();
+    let further = closed_at(&deal, 99.0, 100.99).profit_money(&deal).unwrap();
+    assert!((further - fact - 50.0).abs() < 1e-9, "{further} vs {fact}");
+    // A break-even exit still pays the cost.
+    let flat = closed_at(&deal, 99.0, 99.0).profit_money(&deal).unwrap();
+    assert!((flat + cost).abs() < 1e-9, "{flat}");
+}
+
+#[test]
+fn a_percent_scope_scores_a_variant_on_its_spend() {
+    let deal = Deal {
+        pnl_pct: true,
+        fact_pnl: 4.8,
+        ..margin_deal()
+    };
+    let outcome = closed_at(&deal, 99.0, 100.0);
+    // The report's Profit column: 48 booked on 1 000 spent, as `fact_pnl` holds it.
+    let metric = outcome.profit_metric(&deal).unwrap();
+    assert!((metric - deal.fact_pnl).abs() < 1e-9, "{metric}");
+    let money_scope = Deal {
+        pnl_pct: false,
+        ..deal.clone()
+    };
+    assert!((outcome.profit_metric(&money_scope).unwrap() - 48.0).abs() < 1e-9);
+}
+
+#[test]
+fn a_deal_sized_on_its_spend_still_repeats_the_fact() {
+    // An inverse row: 1 000 spent, bought at 99, sold at 100 short, 12 lost net.
+    let sizing = Sizing::on_spend(99.0, 100.0, true, 1_000.0, -12.0).unwrap();
+    let deal = Deal {
+        is_short: true,
+        sizing: Some(sizing),
+        fact_pnl: -12.0,
+        ..deal()
+    };
+    let money = closed_at(&deal, 99.0, 100.0).profit_money(&deal).unwrap();
+    assert!((money + 12.0).abs() < 1e-9, "{money}");
+    assert_eq!(Sizing::on_spend(99.0, 100.0, false, 0.0, 1.0), None);
+    assert_eq!(Sizing::on_spend(0.0, 100.0, false, 1_000.0, 1.0), None);
+}
+
+#[test]
+fn a_deal_without_sizing_keeps_the_move_on_its_spend() {
+    let deal = deal();
+    let money = closed_at(&deal, 99.0, 100.0).profit_money(&deal).unwrap();
+    assert!((money - 1_000.0 / 99.0).abs() < 1e-9, "{money}");
+    let spent_nothing = Deal {
+        spent: 0.0,
+        pnl_pct: true,
+        ..deal
+    };
+    assert_eq!(
+        closed_at(&spent_nothing, 99.0, 100.0).profit_metric(&spent_nothing),
+        None
+    );
 }
 
 #[test]

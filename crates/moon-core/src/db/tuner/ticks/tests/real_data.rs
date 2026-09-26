@@ -38,6 +38,7 @@ use crate::market::kline_cache::KlineCache;
 use crate::market::trade_replay::{Coverage, TickQuery, long_position_ms, query_held};
 use crate::symbol::{coin_match_key, coin_of_market};
 
+mod money;
 mod search;
 
 /// One trade's d1m and d5m errors at the report's stamp (`StampCheck::error`).

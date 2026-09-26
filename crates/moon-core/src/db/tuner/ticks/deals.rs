@@ -16,7 +16,7 @@ use rusqlite::Connection;
 
 use super::hook::parse_hook_detect;
 use super::scope::{is_service_row, is_tunable, sold_more_than_bought};
-use super::{Deal, Deltas};
+use super::{Deal, Deltas, Sizing};
 use crate::db::analytics::Query;
 use crate::db::read_fail::read_fail_on;
 use crate::db::tuner::strategy_kinds;
@@ -115,14 +115,20 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
         .map(|c| format!("o.\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
+    // The execution cost is the Calendar's own expression, NULL wherever quantity × price is not
+    // money; the notional beside it is that expression's gross leg over the entry price, and is
+    // read only where the cost is not NULL.
+    let cost_sql = crate::db::analytics::FEE_ROW;
     let sql = format!(
         "SELECT o.\"reportuid\", o.\"core_uid\", o.\"strategyid\", o.\"coin\",
                 o.\"buydatems\", o.\"closedatems\", o.\"buyprice\", o.\"sellprice\",
                 o.\"spentbtc\", o.\"isshort\", o.\"sellreason\", COALESCE(o.pnl, 0), {deltas},
                 o.\"core_name\", o.\"quantity\", o.\"boughtq\",
-                o.\"buysetdatems\", o.\"buycorridordown\", o.\"buycorridorup\"
+                o.\"buysetdatems\", o.\"buycorridordown\", o.\"buycorridorup\",
+                {cost_sql}, o.\"boughtq\" * o.\"buyprice\" * o.quote_rate
          FROM {src}"
     );
+    let pnl_pct = q.metric == crate::db::ProfitMetric::Percent;
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let mut rows = stmt
         .query(rusqlite::params![q.from, q.to])
@@ -193,6 +199,30 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
         let buy_set_ms = Some(int(name_at + 3)?).filter(|&set| set > 0 && set <= buy_ms);
         let corridor = Some((num(name_at + 4)?, num(name_at + 5)?))
             .filter(|&(down, up)| down > 0.0 && up > 0.0);
+        let cost = r
+            .get::<_, Option<f64>>(name_at + 6)
+            .map_err(fail)?
+            .filter(|v| v.is_finite());
+        let spent = num(8)?;
+        let fact_pnl = num(11)?;
+        let is_short = int(9)? != 0;
+        let (buy_price, sell_price) = (num(6)?, num(7)?);
+        let calendar = match cost {
+            Some(cost) => Some(num(name_at + 7)?)
+                .filter(|&notional| notional > 0.0)
+                .map(|notional| Sizing { notional, cost }),
+            None => None,
+        };
+        // Where the Calendar's expression gives no cost (quantity × price is not money, or no
+        // bought quantity), the fact's own result prices it; `pnl` is a per cent of the spend
+        // under the percent metric, money otherwise.
+        let fact_money = if pnl_pct {
+            fact_pnl / 100.0 * spent
+        } else {
+            fact_pnl
+        };
+        let sizing = calendar
+            .or_else(|| Sizing::on_spend(buy_price, sell_price, is_short, spent, fact_money));
         out.deals.push(Deal {
             report_uid,
             core_uid: int(1)? as u64,
@@ -210,12 +240,14 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             buy_set_ms,
             corridor,
             close_ms,
-            buy_price: num(6)?,
-            sell_price: num(7)?,
-            spent: num(8)?,
-            is_short: int(9)? != 0,
+            buy_price,
+            sell_price,
+            spent,
+            sizing,
+            pnl_pct,
+            is_short,
             sell_reason,
-            fact_pnl: num(11)?,
+            fact_pnl,
             // Filled by `overlay_usdt_profit` off the USDT source, when there is one.
             profit: None,
             deltas,
