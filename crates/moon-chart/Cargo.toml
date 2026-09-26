@@ -15,3 +15,6 @@ moon-core = { path = "../moon-core" }
 # Only for #[derive(Pod/Zeroable)] on instance types and ChartUniform. wgpu is no longer used:
 # the wgpu chart engine was removed with the egui binary; own-pass DX11 (chartdx) does the rendering.
 bytemuck = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

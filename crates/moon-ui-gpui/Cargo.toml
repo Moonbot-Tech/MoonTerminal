@@ -167,3 +167,6 @@ core-graphics = "0.24"
 # test build only and never the shipped binary. MoonUI's own `moon-ui-components` declares it the
 # same way.
 gpui = { package = "moon-gpui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master", features = ["test-support"] }
+
+[lints]
+workspace = true
