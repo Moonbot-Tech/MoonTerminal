@@ -278,8 +278,9 @@ impl AnalyticsView {
         head.into_any_element()
     }
 
-    /// Why a search group is not searched, when it is not — the kinds whose entry is taken from
-    /// the fact, or a share of reproduced trades under the gate — with the colour to say it in.
+    /// What a search group's heading warns of, when it does — the kinds whose entry is taken from
+    /// the fact (not searched), or a share of reproduced trades under the gate (searched, but its
+    /// answer speaks for fewer trades) — with the colour to say it in.
     fn ticks_group_note(
         &self,
         group: ParamGroup,
@@ -302,6 +303,14 @@ impl AnalyticsView {
             ParamGroup::Entry => t!("analytics.ticks.group_entry"),
             ParamGroup::Exit => t!("analytics.ticks.group_exit"),
         };
+        // Answered, but no trade fit for the search — whatever the share and the gate: the search
+        // has nothing to learn on and refuses the group (`TicksData::group_searchable`).
+        if n > 0 && !d.group_searchable(group) {
+            return Some((
+                format!("{name}: {}", t!("analytics.ticks.vary_none")),
+                p.orange,
+            ));
+        }
         match d.group_passes(group, gate) {
             Some(false) => Some((
                 format!(

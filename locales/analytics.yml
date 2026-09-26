@@ -2017,9 +2017,13 @@ analytics.ticks.holdout:
   en: "holdout: %{n} trades, %{profit}"
   es: "holdout: %{n} operaciones, %{profit}"
 analytics.ticks.vary_gated:
-  ru: "Модель воспроизводит факт лишь в %{hits} из %{n} сделок — меньше %{gate} %, подбирать по ней нельзя"
-  en: "The model reproduces the fact on only %{hits} of %{n} trades — under %{gate} %, so it cannot be searched over"
-  es: "El modelo reproduce el hecho solo en %{hits} de %{n} operaciones — menos del %{gate} %, no se puede buscar sobre él"
+  ru: "Модель воспроизводит факт лишь в %{hits} из %{n} сделок — меньше %{gate} %: подбор идёт, но его ответ говорит только за воспроизведённые сделки"
+  en: "The model reproduces the fact on only %{hits} of %{n} trades — under %{gate} %: the search runs, but its answer speaks for the reproduced trades alone"
+  es: "El modelo reproduce el hecho solo en %{hits} de %{n} operaciones — menos del %{gate} %: la búsqueda se ejecuta, pero su respuesta vale solo para las operaciones reproducidas"
+analytics.ticks.vary_none:
+  ru: "Нет ни одной годной сделки (модель воспроизвела и вход, и выход) — подбирать не по чему"
+  en: "No trade is fit for the search (entry and exit both reproduced) — there is nothing to search on"
+  es: "Ninguna operación es apta para la búsqueda (entrada y salida reproducidas) — no hay sobre qué buscar"
 analytics.ticks.vary_unknown:
   ru: "Доля воспроизведения ещё не посчитана — нет сделок с лентой"
   en: "The reproduction share is not known yet — no trades with tape"
@@ -2185,9 +2189,9 @@ analytics.ticks.suggest_one_tip:
   en: "Search the selected field %{field} alone, ticked or not. The field is searched anew from the strategy's values, whatever V1 holds; the other fields stay as V1 has them. The answer goes into V1's %{field} cell (emptied when it is the strategy's own value) — and into the fields a switch it turns on needs (UseTakeProfit → TakeProfit)"
   es: "Buscar solo el campo seleccionado %{field}, marcado o no. El campo se busca de nuevo desde los valores de la estrategia, tenga lo que tenga V1; los demás campos quedan como en V1. La respuesta va a la celda %{field} de V1 (se vacía si coincide con la de la estrategia) — y a los campos que requiere un interruptor que active (UseTakeProfit → TakeProfit)"
 analytics.ticks.suggest_all_tip:
-  ru: "Подобрать все поля с галочкой в группах, прошедших порог воспроизводимости, — сейчас их %{n}. Поле с галочкой подбирается заново от значений стратегии, что бы ни стояло в В1; его ячейка В1 получает ответ, а совпал он со стратегией — очищается. Поле без галочки держится как в В1 и его ячейка не трогается, кроме значения, которое требует включённый подбором переключатель (UseTakeProfit → TakeProfit): оно одно на все стратегии"
-  en: "Search every ticked field of the groups past the reproduction gate — %{n} now. A ticked field is searched anew from the strategy's values, whatever V1 holds; its V1 cell takes the answer, and is emptied when the answer is the strategy's own value. An unticked field stays as V1 has it and its cell is left alone, but for a value a switch the search turns on needs (UseTakeProfit → TakeProfit): one value for every strategy"
-  es: "Buscar todos los campos marcados de los grupos que pasan el umbral de reproducción — ahora %{n}. Un campo marcado se busca de nuevo desde los valores de la estrategia, tenga lo que tenga V1; su celda de V1 recibe la respuesta y se vacía si coincide con la de la estrategia. Un campo sin marcar queda como en V1 y su celda no se toca, salvo el valor que requiere un interruptor que la búsqueda active (UseTakeProfit → TakeProfit): un valor para todas las estrategias"
+  ru: "Подобрать все поля с галочкой в группах, которые можно подбирать (есть модель и хоть одна воспроизведённая сделка), — сейчас их %{n}. Поле с галочкой подбирается заново от значений стратегии, что бы ни стояло в В1; его ячейка В1 получает ответ, а совпал он со стратегией — очищается. Поле без галочки держится как в В1 и его ячейка не трогается, кроме значения, которое требует включённый подбором переключатель (UseTakeProfit → TakeProfit): оно одно на все стратегии"
+  en: "Search every ticked field of the searchable groups (a model, and at least one reproduced trade) — %{n} now. A ticked field is searched anew from the strategy's values, whatever V1 holds; its V1 cell takes the answer, and is emptied when the answer is the strategy's own value. An unticked field stays as V1 has it and its cell is left alone, but for a value a switch the search turns on needs (UseTakeProfit → TakeProfit): one value for every strategy"
+  es: "Buscar todos los campos marcados de los grupos que se pueden buscar (con modelo y al menos una operación reproducida) — ahora %{n}. Un campo marcado se busca de nuevo desde los valores de la estrategia, tenga lo que tenga V1; su celda de V1 recibe la respuesta y se vacía si coincide con la de la estrategia. Un campo sin marcar queda como en V1 y su celda no se toca, salvo el valor que requiere un interruptor que la búsqueda active (UseTakeProfit → TakeProfit): un valor para todas las estrategias"
 analytics.ticks.suggest_one_none:
   ru: "Выберите поле: щёлкните по его имени в таблице"
   en: "Pick a field: click its name in the grid"
@@ -2196,10 +2200,18 @@ analytics.ticks.sugg_not_read:
   ru: "Выбранный способ входа это поле не читает — подбирать нечего"
   en: "The entry method in force does not read this field — nothing to search"
   es: "El método de entrada activo no lee este campo — nada que buscar"
-analytics.ticks.sugg_gated:
-  ru: "Группа этого поля не проходит порог воспроизводимости — подбор по ней закрыт"
-  en: "This field's group is under the reproduction gate — it cannot be searched"
-  es: "El grupo de este campo está bajo el umbral de reproducción — no se puede buscar"
+analytics.ticks.sugg_unanswered:
+  ru: "Нет ни одной годной сделки (модель воспроизвела и вход, и выход) — подбирать не по чему"
+  en: "No trade is fit for the search (entry and exit both reproduced) — there is nothing to search on"
+  es: "Ninguna operación es apta para la búsqueda (entrada y salida reproducidas) — no hay sobre qué buscar"
+analytics.ticks.sugg_no_entry_model:
+  ru: "Вход этого вида стратегий не моделируется — берётся из факта, подбирать нечего"
+  en: "This kind's entry is not modelled — it is taken from the fact, there is nothing to search"
+  es: "La entrada de este tipo no se modela — se toma del hecho, no hay nada que buscar"
+analytics.ticks.gate_warn:
+  ru: "%{group}: модель воспроизводит лишь %{hits} из %{n} сделок (меньше %{gate} %) — подбор учится только на годных сделках, за остальную историю его ответ не говорит"
+  en: "%{group}: the model reproduces only %{hits} of %{n} trades (under %{gate} %) — the search learns on the fit trades alone and does not speak for the rest of the history"
+  es: "%{group}: el modelo reproduce solo %{hits} de %{n} operaciones (menos del %{gate} %) — la búsqueda aprende solo de las operaciones aptas y no responde por el resto del historial"
 analytics.ticks.cfg_passes:
   ru: "Проходов на перезапуск"
   en: "Passes per restart"
@@ -2209,13 +2221,13 @@ analytics.ticks.cfg_passes_tip:
   en: "How many times the descent visits every field before a restart counts as converged"
   es: "Cuántas veces el descenso recorre todos los campos antes de dar un reinicio por convergido"
 analytics.ticks.cfg_gate:
-  ru: "Порог группы, %"
-  en: "Group gate, %"
-  es: "Umbral del grupo, %"
+  ru: "Порог предупреждения, %"
+  en: "Warning share, %"
+  es: "Umbral de aviso, %"
 analytics.ticks.cfg_gate_tip:
-  ru: "Какая доля сделок должна воспроизводиться моделью, чтобы группу (вход или выход) можно было подбирать"
-  en: "The share of trades the model must reproduce before a group (entry or exit) may be searched"
-  es: "La cuota de operaciones que el modelo debe reproducir para que un grupo (entrada o salida) se pueda buscar"
+  ru: "Ниже этой доли воспроизведённых сделок заголовок группы (вход или выход) предупреждает, что ответ подбора говорит только за них; подбор при этом разрешён"
+  en: "Under this share of reproduced trades the group's heading (entry or exit) warns that the search's answer speaks for them alone; the search still runs"
+  es: "Por debajo de esta cuota de operaciones reproducidas el encabezado del grupo (entrada o salida) avisa de que la respuesta de la búsqueda vale solo para ellas; la búsqueda se ejecuta igualmente"
 analytics.ticks.cfg_steps:
   ru: "Шагов на параметр"
   en: "Steps per field"

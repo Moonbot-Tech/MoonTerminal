@@ -65,7 +65,7 @@ pub(super) struct Scope {
 
 impl AnalyticsView {
     /// The scope of a search of `only`, or of every ticked field: every ticked field of the
-    /// groups the gate lets through, or the one field with every other held. `Err` carries the
+    /// searchable groups, or the one field with every other held. `Err` carries the
     /// locale key of why it cannot start — `None` for a field the grid does not know.
     pub(super) fn ticks_search_scope(
         &self,
@@ -83,7 +83,15 @@ impl AnalyticsView {
                     return Err(Some("analytics.ticks.sugg_not_read"));
                 }
                 if !self.ticks_group_searchable(field.group) {
-                    return Err(Some("analytics.ticks.sugg_gated"));
+                    // Two causes, two answers: a kind whose entry is taken from the fact, or a
+                    // group the model reproduced no trade of.
+                    let no_entry_model = field.group == ParamGroup::Entry
+                        && self.ticks.data.data().is_some_and(|d| !d.entry_modelled());
+                    return Err(Some(if no_entry_model {
+                        "analytics.ticks.sugg_no_entry_model"
+                    } else {
+                        "analytics.ticks.sugg_unanswered"
+                    }));
                 }
                 let locked = TICK_PARAMS
                     .iter()

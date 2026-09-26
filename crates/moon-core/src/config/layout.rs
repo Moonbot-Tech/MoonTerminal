@@ -639,8 +639,9 @@ pub struct TicksAxisLayout {
     pub seed: Option<String>,
     /// Passes of coordinate descent per restart; `None` = the search's default.
     pub passes: Option<u32>,
-    /// The share of reproduced trades, per cent, a parameter group needs before it may be
-    /// searched; `None` = the axis default.
+    /// The share of reproduced trades, per cent, under which a parameter group's heading warns
+    /// that the search's answer speaks for fewer trades (it no longer locks the group out);
+    /// `None` = the axis default.
     pub gate_pct: Option<u32>,
     /// Strategy fields the search holds at their base value — the unticked grid rows.
     pub locked: Vec<String>,

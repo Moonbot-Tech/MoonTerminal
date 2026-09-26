@@ -243,10 +243,54 @@ fn the_share_gate_answers_per_group_and_only_once_something_answered() {
     assert_eq!(data.group_passes(ParamGroup::Exit, 0.8), Some(false));
     // The gate is the search settings' own: lowered, the exit group passes too.
     assert_eq!(data.group_passes(ParamGroup::Exit, 0.7), Some(true));
+    // The warning, whatever the search makes of it: the exit under the gate, even with nothing
+    // reproduced — the worst case; the entry of a scope without an entry model never.
+    assert_eq!(data.under_gate(ParamGroup::Exit, 0.8), Some((7, 10)));
+    assert_eq!(
+        data.under_gate(ParamGroup::Exit, 0.7),
+        None,
+        "over the gate: no warning"
+    );
+    assert_eq!(
+        data.under_gate(ParamGroup::Entry, 0.9),
+        None,
+        "no kind, no entry model: no warning"
+    );
+    data.exit_share = (0, 10);
+    assert_eq!(data.under_gate(ParamGroup::Exit, 0.8), Some((0, 10)));
     data.kinds = vec!["MoonShot".into()];
     assert_eq!(data.single_kind(), Some("MoonShot"));
     data.kinds.push("Spread".into());
     assert_eq!(data.single_kind(), None);
+}
+
+/// A group is searched when its kinds have a model of it and a trade is fit for the search —
+/// under the share gate or not: the gate only warns.
+#[test]
+fn a_group_is_searched_with_a_model_and_a_fit_trade_whatever_its_share() {
+    use moon_core::db::tuner::ticks::params::ParamGroup;
+    let mut st = state();
+    let data = st.data.data_mut().unwrap();
+    // Row 2 is covered, reproduced on both sides and holds enough tape past its close.
+    assert_eq!(data.fit(), 1);
+    data.entry_share = (1, 10);
+    data.exit_share = (1, 10);
+    assert!(
+        data.group_searchable(ParamGroup::Exit),
+        "under the gate, searched"
+    );
+    assert!(
+        !data.group_searchable(ParamGroup::Entry),
+        "no kind, no entry model"
+    );
+    data.kinds = vec!["MoonShot".into()];
+    assert!(data.group_searchable(ParamGroup::Entry));
+    // No fit trade — the exit missed on the only covered one — and neither group has anything
+    // to learn on, the entry included: a fit trade needs its exit reproduced as well.
+    data.rows[1].verdict = Some(verdict(Some(true), Some(false)));
+    assert_eq!(data.fit(), 0);
+    assert!(!data.group_searchable(ParamGroup::Exit));
+    assert!(!data.group_searchable(ParamGroup::Entry));
 }
 
 #[test]

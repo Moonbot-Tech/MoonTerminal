@@ -22,9 +22,11 @@ use moon_core::db::tuner::ticks::search::SearchResult;
 use moon_core::db::tuner::ticks::{Deal, Verdict, fit_for_search};
 use moon_core::market::trade_replay::TickStatus;
 
-/// Share of hits a group needs before it may be searched, per cent, when the search settings do
-/// not say: a model that cannot reproduce the fact must not be asked what would have been
-/// better. The spec's proposal, to be tuned by practice (`TicksState::gate_pct`).
+/// Share of hits under which a group is flagged, per cent, when the search settings do not say.
+/// A warning, not a lock (LinKvo, 2026-09-26): the search learns on the reproduced trades alone
+/// (`fit_for_search`), and the accuracy line under the grid says how much of the history that
+/// is — a group under the share may still be searched, its heading says the answer speaks for
+/// fewer trades (`TicksState::gate_pct`).
 pub(in crate::analytics::tuner) const DEFAULT_GATE_PCT: u32 = 80;
 
 /// Bytes of tape kept in memory across every fit row, for the variants and the search — what
@@ -248,7 +250,7 @@ impl TicksData {
     }
 
     /// The share gate per group: whether the model reproduces at least `gate` (a fraction) of
-    /// the fact to be searched over. `None` when nothing answered yet.
+    /// the fact — below it the group's heading warns. `None` when nothing answered yet.
     pub(in crate::analytics::tuner) fn group_passes(
         &self,
         group: ParamGroup,
@@ -256,6 +258,36 @@ impl TicksData {
     ) -> Option<bool> {
         let (hits, n) = self.share_of(group);
         (n > 0).then(|| hits as f64 / n as f64 >= gate)
+    }
+
+    /// Whether the kinds of the scope have a model of the group: every kind has an exit, the
+    /// entry only where [`Self::entry_modelled`].
+    fn group_modelled(&self, group: ParamGroup) -> bool {
+        match group {
+            ParamGroup::Entry => self.entry_modelled(),
+            ParamGroup::Exit => true,
+        }
+    }
+
+    /// Whether a group may be searched: its kinds have a model of it, and at least one trade is
+    /// fit for the search ([`Self::fit`]) — the search learns on those alone (`fit_for_search`,
+    /// which needs the exit reproduced for an entry search too), so without one there is nothing
+    /// to learn on. The share gate does not lock it ([`DEFAULT_GATE_PCT`], [`Self::under_gate`]).
+    pub(in crate::analytics::tuner) fn group_searchable(&self, group: ParamGroup) -> bool {
+        self.group_modelled(group) && self.fit() > 0
+    }
+
+    /// `(hits, answered)` of a modelled group under the share gate — none reproduced included,
+    /// the worst case — which the grid heading, the search's tooltips and the write dialogs warn
+    /// of: the search learns on the reproduced trades alone. `None` for a group at or over the
+    /// gate, or with no model.
+    pub(in crate::analytics::tuner) fn under_gate(
+        &self,
+        group: ParamGroup,
+        gate: f64,
+    ) -> Option<(usize, usize)> {
+        (self.group_modelled(group) && self.group_passes(group, gate) == Some(false))
+            .then(|| self.share_of(group))
     }
 
     /// `(hits, answered)` of one group over the covered rows.

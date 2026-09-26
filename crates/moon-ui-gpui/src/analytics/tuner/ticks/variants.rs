@@ -197,20 +197,19 @@ impl AnalyticsView {
             .retain(|id, _| !id.starts_with(super::grid::VARIANT_INPUT_PREFIX));
     }
 
-    /// Whether a group may be searched: the kind's support and the share gate.
+    /// Whether a group may be searched ([`super::state::TicksData::group_searchable`]): the
+    /// kind's support and a reproduced trade to learn from — the share gate only warns.
     pub(in crate::analytics::tuner) fn ticks_group_searchable(&self, group: ParamGroup) -> bool {
-        let Some(data) = self.ticks.data.data() else {
-            return false;
-        };
-        let supported = match group {
-            ParamGroup::Entry => data.entry_modelled(),
-            ParamGroup::Exit => true,
-        };
-        supported && data.group_passes(group, self.ticks.gate()) == Some(true)
+        self.ticks
+            .data
+            .data()
+            .is_some_and(|data| data.group_searchable(group))
     }
 
     /// The tooltips of "Search" and "Search all": what each varies and where its answer lands —
-    /// the selected field by name, the number of ticked fields the gate lets through. A scope of
+    /// the selected field by name, the number of ticked fields of the searchable groups, and on
+    /// both the groups searched under the share gate ([`Self::ticks_gate_warnings`]) — the grid
+    /// heading that says so can be scrolled away by the time the button is pressed. A scope of
     /// several kinds, which neither searches, says so on both.
     pub(super) fn ticks_search_tips(&self) -> (String, String) {
         let data = self.ticks.data.data();
@@ -224,21 +223,84 @@ impl AnalyticsView {
         };
         let entry_on = data.is_some_and(|d| d.entry_modelled());
         let ticked = data.map_or(0, |d| {
+            // Once per group, not per knob: `group_searchable` counts the fit rows, and the
+            // tooltips are built on every paint of the search row.
+            let (entry_ok, exit_ok) = (
+                d.group_searchable(ParamGroup::Entry),
+                d.group_searchable(ParamGroup::Exit),
+            );
             d.grid
                 .iter()
                 .flat_map(super::sections::GridSection::knobs)
                 .filter(|k| super::grid::knob_ticks(k, entry_on))
                 .filter(|k| !self.ticks.locked.contains(k.key))
-                .filter(|k| self.ticks_group_searchable(k.group))
+                .filter(|k| match k.group {
+                    ParamGroup::Entry => entry_ok,
+                    ParamGroup::Exit => exit_ok,
+                })
                 .count()
         });
-        (
-            one,
-            t!("analytics.ticks.suggest_all_tip", n = ticked).to_string(),
-        )
+        let all = t!("analytics.ticks.suggest_all_tip", n = ticked).to_string();
+        let gated = self.ticks_gate_warnings([ParamGroup::Entry, ParamGroup::Exit]);
+        if gated.is_empty() {
+            return (one, all);
+        }
+        let with = |tip: String| format!("{tip}\n\n{}", gated.join("\n"));
+        (with(one), with(all))
     }
 
-    /// "Search all": every ticked field of the groups the gate lets through, each from the
+    /// One line per group of `groups` under the share gate, none reproduced included: the search
+    /// learns on the fit trades alone (`TicksData::under_gate`). The search's tooltips and the
+    /// write dialogs carry it — the gate no longer locks such a group out, so a variant searched
+    /// on a small share of the fact can reach a live strategy, and the dialog is the last place
+    /// to say so.
+    fn ticks_gate_warnings(&self, groups: impl IntoIterator<Item = ParamGroup>) -> Vec<String> {
+        let Some(data) = self.ticks.data.data() else {
+            return Vec::new();
+        };
+        let gate = self.ticks.gate();
+        let mut seen = Vec::new();
+        groups
+            .into_iter()
+            .filter(|group| {
+                let first = !seen.contains(group);
+                seen.push(*group);
+                first
+            })
+            .filter_map(|group| {
+                let (hits, n) = data.under_gate(group, gate)?;
+                let name = match group {
+                    ParamGroup::Entry => t!("analytics.ticks.group_entry"),
+                    ParamGroup::Exit => t!("analytics.ticks.group_exit"),
+                };
+                Some(
+                    t!(
+                        "analytics.ticks.gate_warn",
+                        group = name,
+                        hits = hits,
+                        n = n,
+                        gate = (gate * 100.0).round() as i64
+                    )
+                    .to_string(),
+                )
+            })
+            .collect()
+    }
+
+    /// The groups a variant's changes move — the gate's warning at write time is about them.
+    fn changed_groups(changes: &[(String, String)]) -> Vec<ParamGroup> {
+        changes
+            .iter()
+            .filter_map(|(key, _)| {
+                moon_core::db::tuner::ticks::TICK_PARAMS
+                    .iter()
+                    .find(|f| f.key == key.as_str())
+                    .map(|f| f.group)
+            })
+            .collect()
+    }
+
+    /// "Search all": every ticked field of the searchable groups, each from the
     /// strategies, the unticked ones held at В1's value; the answer goes into В1
     /// ([`land_answer`]).
     pub(in crate::analytics::tuner) fn ticks_suggest(
@@ -528,6 +590,7 @@ impl AnalyticsView {
         let mut warns = self.ticks_change_warnings(&changes, cx);
         warns.extend(self.ticks_unguarded_warning(&targets, &changes, cx));
         warns.extend(self.ticks_unmodelled_warns(&targets, cx));
+        warns.extend(self.ticks_gate_warnings(Self::changed_groups(&changes)));
         self.open_change_dialog(targets, changes, None, Vec::new(), warns, false, cx);
     }
 
@@ -544,6 +607,7 @@ impl AnalyticsView {
         let mut warns = self.ticks_change_warnings(&changes, cx);
         warns.extend(self.ticks_unguarded_warning(std::slice::from_ref(&target), &changes, cx));
         warns.extend(self.ticks_unmodelled_warns(std::slice::from_ref(&target), cx));
+        warns.extend(self.ticks_gate_warnings(Self::changed_groups(&changes)));
         self.open_copy_with(target, changes, warns, window, cx);
     }
 
