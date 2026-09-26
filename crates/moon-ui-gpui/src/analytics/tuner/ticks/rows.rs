@@ -41,6 +41,26 @@ pub(in crate::analytics::tuner) fn order_for(state: &mut TicksState) -> &[usize]
         .unwrap_or(&[])
 }
 
+/// A fixed-decimal signed figure whose sign is the rounded value's.
+///
+/// Rounding happens before the sign, so a value that rounds to zero is unsigned and
+/// [`moon_core::util::fmt::DeltaSign::Zero`] — `{:+.2}` would print `-0.00` and a colour picked
+/// from the raw value would disagree with the text.
+///
+/// Args:
+///     value: Raw signed figure.
+///     decimals: Places to round and show.
+///
+/// Returns:
+///     The text and the sign that text represents. Non-finite input is an em dash at zero.
+pub(in crate::analytics::tuner) fn paint_fixed(
+    value: f64,
+    decimals: usize,
+) -> (String, moon_core::util::fmt::DeltaSign) {
+    moon_core::util::fmt::signed_fixed(value, decimals)
+        .unwrap_or_else(|| ("—".to_string(), moon_core::util::fmt::DeltaSign::Zero))
+}
+
 /// Result of a deal in per cent of what was spent, as the report has it.
 pub(in crate::analytics::tuner) fn result_pct(row: &DealRow) -> f64 {
     let d = &row.deal;

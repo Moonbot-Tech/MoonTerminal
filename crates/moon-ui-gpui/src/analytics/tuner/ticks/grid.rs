@@ -482,6 +482,12 @@ impl AnalyticsView {
                 )
             })
             .when(!has_note, |el| el.child(div().flex_1()))
+            // The same slots as a field row — strategy, В1, the clear cross — so a collapsed
+            // section still sits on the header's grid instead of leaving those headings over
+            // the section title. Empty: a section has no per-field values.
+            .child(div().w(design::font_w_px(cx, CELL_W)).flex_none())
+            .child(div().w(design::font_w_px(cx, CELL_W)).flex_none())
+            .child(div().w(design::ui_px(cx, 12.0)).flex_none())
             .child(reset)
             .into_any_element()
     }

@@ -22,7 +22,7 @@ use super::model_cfg;
 use super::tape::prepare_sample;
 use super::variants::{passes_of, restarts_of};
 use crate::design;
-use crate::design::moon;
+use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::ticks::params::ParamGroup;
 use moon_core::db::tuner::ticks::search::{SearchParams, SearchSize, point_cost, search_size};
 use moon_core::db::tuner::ticks::{ModelSettings, TICK_PARAMS};
@@ -176,41 +176,52 @@ impl AnalyticsView {
                 "analytics.ticks.est_nested",
                 points = count_text(size.points),
                 entry = count_text(size.entry_points),
-                time = time_text
+                time = time_text.clone()
             )
         } else {
             t!(
                 "analytics.ticks.est_line",
                 points = count_text(size.points),
-                time = time_text
+                time = time_text.clone()
             )
         }
         .to_string();
+        let short = if size.nested() {
+            t!("analytics.ticks.est_short_nested", time = time_text)
+        } else {
+            t!("analytics.ticks.est_short", time = time_text)
+        }
+        .to_string();
         let long = time.is_some_and(|t| t > LONG_SEARCH);
+        let tone = if long { p.amber } else { p.text_muted };
+        // One compact tag. The nested count ("≈ 209 169 000 variants…") does not fit a pane;
+        // it stays in the tooltip with the rest of the breakdown.
         Some(
-            div()
-                .id("an-ticks-estimate")
+            h_flex()
                 .w_full()
                 .flex_none()
-                .px(design::ui_px(cx, 12.0))
+                .px(design::ui_px(cx, 8.0))
                 .py(design::ui_px(cx, 4.0))
                 .border_t_1()
                 .border_color(moon(p.border))
-                // Wrapped, left-aligned, two lines at most: the nested line does not fit one
-                // (LinKvo, 2026-09-25). A tail past them ends in an ellipsis — the time leads the
-                // line, so it is never the part cut — and the tooltip carries the whole line.
-                .whitespace_normal()
-                .text_left()
-                .line_clamp(2)
-                .text_ellipsis()
-                .text_size(design::t_caption(cx))
-                .font_family(design::ui_font())
-                .text_color(moon(if long { p.amber } else { p.text_muted }))
-                .tooltip(crate::panels::common::text_tooltip(format!(
-                    "{text}\n\n{}",
-                    t!("analytics.ticks.est_tip")
-                )))
-                .child(text)
+                .child(
+                    div()
+                        .id("an-ticks-estimate")
+                        .max_w_full()
+                        .px(design::ui_px(cx, 8.0))
+                        .py(design::ui_px(cx, 2.0))
+                        .rounded(design::ui_px(cx, 4.0))
+                        .bg(moon_alpha(tone, if long { 0.16 } else { 0.08 }))
+                        .text_size(design::t_caption(cx))
+                        .font_family(design::ui_font())
+                        .text_color(moon(tone))
+                        .truncate()
+                        .tooltip(crate::panels::common::text_tooltip(format!(
+                            "{text}\n\n{}",
+                            t!("analytics.ticks.est_tip")
+                        )))
+                        .child(short),
+                )
                 .into_any_element(),
         )
     }

@@ -8,7 +8,7 @@ use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
-use super::super::summary::{fmt_signed, fmt_signed_plain, sign_color};
+use super::super::summary::{fmt_signed, sign_color};
 use super::super::{AnalyticsView, LoadState};
 use super::shared::{card, collapse_caret};
 use crate::design;
@@ -23,8 +23,177 @@ enum CellFormat {
     Integer,
     /// Signed profit carrying the active percent suffix when applicable.
     Profit,
-    /// Signed dimensionless value that never carries a profit suffix.
-    Ratio,
+}
+
+/// Which Fact-vs-variants row is being painted. Loss rows store a positive magnitude.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MetricKind {
+    Trades,
+    Profit,
+    Average,
+    Winrate,
+    ProfitFactor,
+    AvgWin,
+    AvgLoss,
+    MaxDrawdown,
+}
+
+/// How a painted figure takes its colour. The same rule in every column: a loss is never green
+/// because a variant matched the fact, and a profit is never black in one column and orange
+/// in the next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FigureTone {
+    /// A count, a defined win rate, or a defined profit factor.
+    Neutral,
+    /// An em dash: the ratio or average has nothing to divide by.
+    Muted,
+    /// Green, orange, or muted from the signed figure, via [`sign_color`].
+    Signed,
+}
+
+/// One KPI cell: the text, and the tone that colours every column the same way.
+#[derive(Debug, PartialEq)]
+struct Figure {
+    text: KpiCellText,
+    tone: FigureTone,
+    /// Value [`sign_color`] reads when `tone` is [`FigureTone::Signed`].
+    signed: f64,
+}
+
+/// Paint one KPI from a column's stats.
+///
+/// Avg loss and max drawdown are stored as positive magnitudes. They are shown as a negative
+/// loss, the way the Summary tile draws drawdown, so a loss is never a green plus. Win rate,
+/// profit factor and average win are undefined without the trades they divide by, and then
+/// read as an em dash; a defined win rate keeps its percent sign. Profit factor is also
+/// undefined when the win sum and the loss sum are both zero (only break-even trades): the
+/// shared formula returns a finite 0 there. All-winners stay at 99, which is what that
+/// formula reports when the loss sum is zero and the win sum is not.
+///
+/// Args:
+///     kind: Which matrix row.
+///     stats: The column's aggregate.
+///
+/// Returns:
+///     Display text, optional exact tooltip, and the colour tone.
+fn figure_of(kind: MetricKind, stats: &VarStats) -> Figure {
+    let dash = || Figure {
+        text: KpiCellText {
+            display: "—".to_string(),
+            tooltip: None,
+        },
+        tone: FigureTone::Muted,
+        signed: 0.0,
+    };
+    let signed = |value: f64| Figure {
+        text: format_kpi_cell(CellFormat::Profit, value),
+        tone: FigureTone::Signed,
+        signed: value,
+    };
+    match kind {
+        MetricKind::Trades => Figure {
+            text: format_kpi_cell(CellFormat::Integer, stats.n as f64),
+            tone: FigureTone::Neutral,
+            signed: 0.0,
+        },
+        MetricKind::Profit => signed(stats.profit),
+        MetricKind::Average => {
+            if stats.n <= 0 {
+                dash()
+            } else {
+                signed(stats.avg)
+            }
+        }
+        MetricKind::Winrate => {
+            if stats.n <= 0 {
+                dash()
+            } else {
+                Figure {
+                    text: KpiCellText {
+                        display: format!("{:.1}%", stats.winrate()),
+                        tooltip: None,
+                    },
+                    tone: FigureTone::Neutral,
+                    signed: 0.0,
+                }
+            }
+        }
+        MetricKind::ProfitFactor => {
+            if profit_factor_undefined(stats) {
+                dash()
+            } else {
+                Figure {
+                    text: plain_factor(stats.pf),
+                    tone: FigureTone::Neutral,
+                    signed: 0.0,
+                }
+            }
+        }
+        MetricKind::AvgWin => {
+            if stats.wins <= 0 {
+                dash()
+            } else {
+                signed(stats.avg_win)
+            }
+        }
+        // No losing trades: an average loss does not exist. Zero drawdown on an empty
+        // column is the same absence.
+        MetricKind::AvgLoss => {
+            let losses = stats.n - stats.wins;
+            if losses <= 0 {
+                dash()
+            } else {
+                signed(-stats.avg_loss.abs())
+            }
+        }
+        MetricKind::MaxDrawdown => {
+            if stats.n <= 0 {
+                dash()
+            } else {
+                signed(-stats.max_dd.abs())
+            }
+        }
+    }
+}
+
+/// Whether the profit-factor cell has nothing to show.
+///
+/// Empty samples and non-finite values are undefined. So is a non-empty sample whose win
+/// sum and loss sum are both zero: `profit_factor` returns the finite fallback 0, and a
+/// cell of `0.00` would read as a defined ratio. All-losers stay defined — their loss
+/// average is positive, so the fallback 0 is a real zero. All-winners stay defined too:
+/// their win count is positive and the formula reports 99.
+///
+/// Args:
+///     stats: The column's aggregate. `avg_loss` is the positive loss average; it is zero
+///         when the loss sum is zero.
+///
+/// Returns:
+///     Whether the cell is an em dash.
+fn profit_factor_undefined(stats: &VarStats) -> bool {
+    stats.n <= 0 || !stats.pf.is_finite() || (stats.wins == 0 && stats.avg_loss == 0.0)
+}
+
+/// Profit factor without a forced plus, two decimals under the SI threshold.
+///
+/// Args:
+///     value: Finite profit factor.
+///
+/// Returns:
+///     Display text and, above the SI threshold, the exact value for the tooltip.
+fn plain_factor(value: f64) -> KpiCellText {
+    let exact = format!("{value:.2}");
+    if value.abs() >= 1_000.0 {
+        KpiCellText {
+            display: compact_si(value),
+            tooltip: Some(exact),
+        }
+    } else {
+        KpiCellText {
+            display: exact,
+            tooltip: None,
+        }
+    }
 }
 
 /// Fixed-width KPI text plus the optional unabridged value shown on hover.
@@ -52,7 +221,6 @@ fn format_kpi_cell(format: CellFormat, value: f64) -> KpiCellText {
     let exact = match format {
         CellFormat::Integer => format!("{}", value as i64),
         CellFormat::Profit => fmt_signed(value),
-        CellFormat::Ratio => fmt_signed_plain(value),
     };
     let (display, tooltip) = if value.is_finite() && value.abs() >= 1_000.0 {
         let compact = compact_si(value);
@@ -65,13 +233,6 @@ fn format_kpi_cell(format: CellFormat, value: f64) -> KpiCellText {
                     compact
                 };
                 format!("{signed}{}", crate::analytics::pnl_suffix())
-            }
-            CellFormat::Ratio => {
-                if value > 0.0 {
-                    format!("+{compact}")
-                } else {
-                    compact
-                }
             }
         };
         (display, Some(exact))
@@ -87,18 +248,37 @@ fn format_kpi_cell(format: CellFormat, value: f64) -> KpiCellText {
 pub(super) struct VarLabel {
     pub(super) title: String,
     pub(super) sub: Option<String>,
+    /// Full heading, shown on hover when the visible label is shortened to one line.
+    pub(super) tip: Option<String>,
 }
 
 impl VarLabel {
     pub(super) fn new(title: String) -> Self {
-        Self { title, sub: None }
+        Self {
+            title,
+            sub: None,
+            tip: None,
+        }
     }
 
     pub(super) fn with_sub(title: String, sub: String) -> Self {
         Self {
             title,
             sub: Some(sub),
+            tip: None,
         }
+    }
+
+    /// Attach the unabridged heading. The visible title stays short.
+    ///
+    /// Args:
+    ///     tip: Hover text.
+    ///
+    /// Returns:
+    ///     The same label with a tooltip.
+    pub(super) fn with_tip(mut self, tip: String) -> Self {
+        self.tip = Some(tip);
+        self
     }
 }
 
@@ -141,7 +321,8 @@ pub(super) fn kpi_matrix_card(
 
 /// [`kpi_matrix_card`] with column 0 headed `base` rather than "Fact" — for an axis whose
 /// baseline is not the whole fact (the Entry/Exit axis compares its variants with the trades the
-/// model reproduces). Every variant is still coloured against column 0.
+/// model reproduces). Every column uses the same sign colour; a variant is not tinted
+/// against column 0.
 pub(super) fn kpi_matrix_card_over(
     stats: &LoadState<Vec<VarStats>>,
     scope: String,
@@ -176,80 +357,68 @@ pub(super) fn kpi_matrix_card_over(
             );
         }
     };
-    // How a cell's number reads: an integer count, a profit value (carries the active
-    // exact quote/percent unit), or a dimensionless ratio (profit factor, winrate) that must NOT
-    // pick up the "%" suffix in percent mode.
-    // (label, value, higher=better; None — no comparison against the fact; cell format)
-    type Row = (String, fn(&VarStats) -> f64, Option<bool>, CellFormat);
     // The first two entries are the headline pair (trades + profit); collapsed mode shows
     // exactly these via `COLLAPSED_ROWS`. Keep them first if this vec is ever reordered.
+    // Colour is the sign of the painted figure in every column — see [`figure_of`].
     const COLLAPSED_ROWS: usize = 2;
-    let rows: Vec<Row> = vec![
-        (
-            t!("analytics.kpi.trades").to_string(),
-            |s| s.n as f64,
-            None,
-            CellFormat::Integer,
-        ),
+    let rows: Vec<(String, MetricKind)> = vec![
+        (t!("analytics.kpi.trades").to_string(), MetricKind::Trades),
         (
             t!(
                 "analytics.kpi.profit",
                 unit = crate::analytics::pnl_unit_label()
             )
             .to_string(),
-            |s| s.profit,
-            Some(true),
-            CellFormat::Profit,
+            MetricKind::Profit,
         ),
-        // Order mirrors the strategy table on the left of this screen; kept by hand, since
-        // these rows carry comparison flags the table's descriptors have no notion of.
+        // Order mirrors the strategy table on the left of this screen.
         (
             t!("analytics.kpi.avg_short").to_string(),
-            |s| s.avg,
-            Some(true),
-            CellFormat::Profit,
+            MetricKind::Average,
         ),
-        (
-            t!("analytics.kpi.winrate").to_string(),
-            |s| s.winrate(),
-            Some(true),
-            CellFormat::Ratio,
-        ),
-        (
-            t!("analytics.col.pf").to_string(),
-            |s| s.pf,
-            Some(true),
-            CellFormat::Ratio,
-        ),
+        (t!("analytics.kpi.winrate").to_string(), MetricKind::Winrate),
+        (t!("analytics.col.pf").to_string(), MetricKind::ProfitFactor),
         (
             t!("analytics.tuner.avg_win").to_string(),
-            |s| s.avg_win,
-            Some(true),
-            CellFormat::Profit,
+            MetricKind::AvgWin,
         ),
         (
             t!("analytics.tuner.avg_loss").to_string(),
-            |s| s.avg_loss,
-            Some(false),
-            CellFormat::Profit,
+            MetricKind::AvgLoss,
         ),
         (
             t!("analytics.kpi.maxdd").to_string(),
-            |s| s.max_dd,
-            Some(false),
-            CellFormat::Profit,
+            MetricKind::MaxDrawdown,
         ),
     ];
     let col_w = 92.0;
-    // Tall enough for a heading WITH its second line, always — so a variant that gains or
-    // loses that line does not move the rows underneath it.
+    let headings: Vec<VarLabel> = (0..stats.len())
+        .map(|i| {
+            if i == 0 {
+                base.clone()
+            } else {
+                var_labels
+                    .get(i - 1)
+                    .cloned()
+                    .unwrap_or_else(|| VarLabel::new(format!("v{i}")))
+            }
+        })
+        .collect();
+    // A second line only when some heading still carries one. A short title plus a tooltip
+    // stays on one line, so a narrow pane does not wrap "2 of 2 with tape…" onto an ellipsis.
+    let head_h = if headings.iter().any(|label| label.sub.is_some()) {
+        34.0
+    } else {
+        22.0
+    };
     let mut head = h_flex()
         .w_full()
         .px(design::ui_px(cx, 8.0))
-        .h(design::fit_h_px(cx, 34.0, 12.0, 5.0))
+        .h(design::fit_h_px(cx, head_h, 12.0, 5.0))
         .items_center()
         .gap(design::ui_px(cx, 8.0))
         .text_size(design::t_caption(cx))
+        .font_family(design::ui_font())
         .text_color(moon(p.text_soft))
         .bg(moon(p.table_head))
         .child(
@@ -257,30 +426,28 @@ pub(super) fn kpi_matrix_card_over(
                 .flex_1()
                 .child(t!("analytics.tuner.metric").to_string()),
         );
-    for i in 0..stats.len() {
-        // Column 0 is the baseline; then the supplied labels, otherwise "v{i}".
-        let label = if i == 0 {
-            base.clone()
-        } else {
-            var_labels
-                .get(i - 1)
-                .cloned()
-                .unwrap_or_else(|| VarLabel::new(format!("v{i}")))
+    for (i, label) in headings.into_iter().enumerate() {
+        let tip = label.tip.clone();
+        let column = v_flex()
+            .w(design::font_w_px(cx, col_w))
+            .flex_none()
+            .items_end()
+            .child(div().truncate().child(label.title))
+            .children(label.sub.map(|s| {
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(p.text_muted))
+                    .truncate()
+                    .child(s)
+            }));
+        let column = match tip {
+            Some(tip) => column
+                .id(SharedString::from(format!("an-tuner-kpi-head-{i}")))
+                .tooltip(crate::panels::common::text_tooltip(tip))
+                .into_any_element(),
+            None => column.into_any_element(),
         };
-        head = head.child(
-            v_flex()
-                .w(design::font_w_px(cx, col_w))
-                .flex_none()
-                .items_end()
-                .child(div().child(label.title))
-                .children(label.sub.map(|s| {
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(p.text_muted))
-                        .truncate()
-                        .child(s)
-                })),
-        );
+        head = head.child(column);
     }
 
     // Collapsed keeps only the headline rows; the column headings stay, so the Fact-vs-variant
@@ -291,8 +458,7 @@ pub(super) fn kpi_matrix_card_over(
         rows.len()
     };
     let mut body = v_flex().w_full().child(head);
-    for (row_index, (label, get, better, cell)) in rows.into_iter().take(shown).enumerate() {
-        let fact = get(&stats[0]);
+    for (row_index, (label, kind)) in rows.into_iter().take(shown).enumerate() {
         let mut row = h_flex()
             .w_full()
             .px(design::ui_px(cx, 8.0))
@@ -301,26 +467,26 @@ pub(super) fn kpi_matrix_card_over(
             .gap(design::ui_px(cx, 8.0))
             .border_t_1()
             .border_color(moon_alpha(p.border, 0.5))
-            .child(div().flex_1().text_color(moon(p.text_soft)).child(label));
+            .child(
+                div()
+                    .flex_1()
+                    .font_family(design::ui_font())
+                    .text_color(moon(p.text_soft))
+                    .child(label),
+            );
         for (i, s) in stats.iter().enumerate() {
-            let v = get(s);
-            let text = format_kpi_cell(cell, v);
-            let color = match better {
-                // A variant is coloured against the fact; the fact itself by sign.
-                Some(hb) if i > 0 => {
-                    if (v > fact) == hb && v != fact {
-                        p.green
-                    } else if v != fact {
-                        p.orange
-                    } else {
-                        p.text
-                    }
-                }
-                Some(_) => sign_color(p, v),
-                None => p.text,
+            let figure = figure_of(kind, s);
+            let color = match figure.tone {
+                FigureTone::Signed => sign_color(p, figure.signed),
+                FigureTone::Muted => p.text_muted,
+                FigureTone::Neutral => p.text,
             };
             // Screen readers receive the exact value while static cells stay out of the tab order.
-            let accessibility_label = text.tooltip.clone().unwrap_or_else(|| text.display.clone());
+            let accessibility_label = figure
+                .text
+                .tooltip
+                .clone()
+                .unwrap_or_else(|| figure.text.display.clone());
             let mut value = div()
                 .id(("an-tuner-kpi-value", row_index * stats.len() + i))
                 .role(Role::Label)
@@ -330,9 +496,10 @@ pub(super) fn kpi_matrix_card_over(
                 .flex_none()
                 .truncate()
                 .text_right()
+                .font_family(design::mono())
                 .text_color(moon(color))
-                .child(text.display);
-            if let Some(tooltip) = text.tooltip {
+                .child(figure.text.display);
+            if let Some(tooltip) = figure.text.tooltip {
                 value = value.tooltip(crate::panels::common::text_tooltip(tooltip));
             }
             row = row.child(value);

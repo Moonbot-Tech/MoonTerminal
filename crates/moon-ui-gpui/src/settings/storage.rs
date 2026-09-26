@@ -210,8 +210,8 @@ impl SettingsView {
     }
 
     /// Moves the prints kept around a trade, per end, `delta` steps along
-    /// `TRADE_MARGIN_STEPS_S` (30 s … 120 min, including 65 s, not a fixed amount), and updates
-    /// live state and storage.toml.
+    /// `TRADE_MARGIN_STEPS_S` (30 s … 120 min, not a fixed amount), and updates live state
+    /// and storage.toml.
     fn adjust_trades_margin_step(&mut self, delta: i32, cx: &mut Context<Self>) {
         let v = storage_cfg::step_trade_margin_s(self.storage.cfg.trade_replay.margin_s, delta);
         if self.storage.cfg.trade_replay.margin_s != v {
@@ -241,8 +241,8 @@ impl SettingsView {
     }
 
     /// The stepper's label for a margin: a whole number of minutes when the step divides by
-    /// 60, seconds otherwise. 65 s is a step and must not read as "1 min", which is what 60 s
-    /// already says.
+    /// 60, seconds otherwise. A step that is not a whole minute must not read as the minute
+    /// beside it — 60 s already says "1 min".
     fn trades_margin_label(secs: u32) -> String {
         if secs.is_multiple_of(60) {
             t!("storage.trades_min", min = secs / 60).to_string()
@@ -554,6 +554,11 @@ impl SettingsView {
                         if this.storage.cfg.trade_replay.autoload_missing != v {
                             this.storage.cfg.trade_replay.autoload_missing = v;
                             moon_core::market::trade_replay::set_tape_autoload(v);
+                            // Immediately, not on the next coordination tick: the pass may
+                            // already have handed its rows to the fetch job.
+                            if !v {
+                                crate::analytics::tape_autoload::switched_off();
+                            }
                             storage_cfg::save(&this.storage.cfg);
                             cx.notify();
                         }
