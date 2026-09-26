@@ -27,6 +27,8 @@ pub(super) enum TunerKind {
     Time,
     /// "By coin" — the `CoinsBlackList` field the picker builds.
     Coins,
+    /// "Entry/Exit" — the tape replay; named by how it evaluates, not by what it shows.
+    Ticks,
 }
 
 /// A write target: a strategy ON A SPECIFIC core. `core` is the list row's `core_uid`,

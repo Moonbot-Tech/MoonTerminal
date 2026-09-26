@@ -135,6 +135,22 @@ pub(super) fn kpi_matrix_card(
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
+    let fact = VarLabel::new(t!("analytics.tuner.fact").to_string());
+    kpi_matrix_card_over(stats, scope, &fact, var_labels, collapsed, p, cx)
+}
+
+/// [`kpi_matrix_card`] with column 0 headed `base` rather than "Fact" — for an axis whose
+/// baseline is not the whole fact (the Entry/Exit axis compares its variants with the trades the
+/// model reproduces). Every variant is still coloured against column 0.
+pub(super) fn kpi_matrix_card_over(
+    stats: &LoadState<Vec<VarStats>>,
+    scope: String,
+    base: &VarLabel,
+    var_labels: &[VarLabel],
+    collapsed: bool,
+    p: MoonPalette,
+    cx: &Context<AnalyticsView>,
+) -> AnyElement {
     // The collapse caret is part of the title bar in EVERY state — built up front so it does
     // not blink out while the matrix is loading or after a read error.
     let caret = collapse_caret(
@@ -242,9 +258,9 @@ pub(super) fn kpi_matrix_card(
                 .child(t!("analytics.tuner.metric").to_string()),
         );
     for i in 0..stats.len() {
-        // Column 0 is always "Fact"; then the supplied labels, otherwise "v{i}".
+        // Column 0 is the baseline; then the supplied labels, otherwise "v{i}".
         let label = if i == 0 {
-            VarLabel::new(t!("analytics.tuner.fact").to_string())
+            base.clone()
         } else {
             var_labels
                 .get(i - 1)

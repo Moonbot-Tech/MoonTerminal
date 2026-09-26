@@ -35,7 +35,7 @@ const SETTINGS_POPUP_W: f32 = 250.0;
 
 /// Which settings box of a suggestion row is being built.
 #[derive(Clone, Copy, PartialEq)]
-enum CfgInput {
+pub(super) enum CfgInput {
     /// Restart count of the joint search ("By filter" only).
     Restarts,
     /// Minimum trades a suggestion must retain.
@@ -61,6 +61,9 @@ fn cfg_input_id(kind: TunerKind, which: CfgInput) -> &'static str {
         (TunerKind::Coins, CfgInput::Restarts) => "c-cfg-it",
         (TunerKind::Coins, CfgInput::MinTrades) => "c-cfg-mn",
         (TunerKind::Coins, CfgInput::Seed) => "c-cfg-seed",
+        (TunerKind::Ticks, CfgInput::Restarts) => "x-cfg-it",
+        (TunerKind::Ticks, CfgInput::MinTrades) => "x-cfg-mn",
+        (TunerKind::Ticks, CfgInput::Seed) => "x-cfg-seed",
     }
 }
 
@@ -89,7 +92,7 @@ fn short_seed(seed: u64) -> String {
 ///
 /// 100% is spelled out as "off" rather than shown as a number, because a percentage that happens
 /// to be the whole period reads as a setting in effect when it is the absence of one.
-fn train_label(pct: usize) -> String {
+pub(super) fn train_label(pct: usize) -> String {
     if pct >= 100 {
         t!("analytics.tuner.train_off").to_string()
     } else {
@@ -110,13 +113,14 @@ impl AnalyticsView {
             TunerKind::Filter => "f",
             TunerKind::Time => "t",
             TunerKind::Coins => "c",
+            TunerKind::Ticks => "x",
         };
         // `None` — the axis has nothing to round. The coin list is text; a rounding control
         // beside it would be a switch that does nothing.
         let round = match kind {
             TunerKind::Filter => Some(self.tuner.round_results),
             TunerKind::Time => Some(self.time_tuner.round_results),
-            TunerKind::Coins => None,
+            TunerKind::Coins | TunerKind::Ticks => None,
         };
         let mut header = h_flex()
             .w_full()
@@ -163,7 +167,7 @@ impl AnalyticsView {
                                             this.time_tuner.invalidate_suggest();
                                         }
                                         // No rounding on this axis — the control is hidden.
-                                        TunerKind::Coins => {}
+                                        TunerKind::Coins | TunerKind::Ticks => {}
                                     }
                                     cx.notify();
                                 });
@@ -190,6 +194,7 @@ impl AnalyticsView {
                                 TunerKind::Filter => this.open_copy_dialog(window, cx),
                                 TunerKind::Time => this.time_open_copy_dialog(window, cx),
                                 TunerKind::Coins => this.coins_open_copy_dialog(window, cx),
+                                TunerKind::Ticks => this.ticks_open_copy_dialog(window, cx),
                             }
                             cx.notify();
                         }))
@@ -206,6 +211,8 @@ impl AnalyticsView {
                     // The list differs from what the strategies hold — the same condition
                     // the coin table's "changed" badge and its Revert button read.
                     TunerKind::Coins => self.coins.has_changes(),
+                    // The first variant column holds something to write.
+                    TunerKind::Ticks => self.ticks.has_changes(),
                 };
                 MoonButton::new(SharedString::from(format!("tun-save-{k}")))
                     .variant(if dirty {
@@ -220,6 +227,7 @@ impl AnalyticsView {
                             TunerKind::Filter => this.open_save_dialog(cx),
                             TunerKind::Time => this.time_open_save_dialog(cx),
                             TunerKind::Coins => this.coins_open_save_dialog(cx),
+                            TunerKind::Ticks => this.ticks_open_save_dialog(cx),
                         }
                         cx.notify();
                     }))
@@ -247,6 +255,7 @@ impl AnalyticsView {
             // The coin axis does not draw this row yet — its own controls arrive with the
             // selection metrics. Answering here keeps the match exhaustive rather than letting a
             // fourth axis compile into a silent default.
+            TunerKind::Ticks => self.ticks_config_row(p, window, cx),
             TunerKind::Coins => div().into_any_element(),
         }
     }
@@ -837,7 +846,7 @@ impl AnalyticsView {
     }
 
     /// A suggestion settings box for the `kind` axis, with a lazy cache in that axis's state.
-    fn shell_cfg_input(
+    pub(super) fn shell_cfg_input(
         &mut self,
         kind: TunerKind,
         which: CfgInput,
@@ -849,6 +858,7 @@ impl AnalyticsView {
         let cached = match kind {
             TunerKind::Filter => self.tuner.inputs.get(id),
             TunerKind::Time => self.time_tuner.inputs.get(id),
+            TunerKind::Ticks => self.ticks.inputs.get(id),
             TunerKind::Coins => None,
         };
         if let Some(state) = cached {
@@ -859,8 +869,11 @@ impl AnalyticsView {
             (TunerKind::Filter, CfgInput::Seed) => self.tuner.seed.clone(),
             (TunerKind::Filter, CfgInput::Restarts) => self.tuner.iters.clone(),
             (TunerKind::Time, CfgInput::MinTrades) => self.time_tuner.min_trades.clone(),
-            // The time row draws only the minimum-trades box, and the coin axis draws no row at
-            // all, so neither has a value for the rest.
+            (TunerKind::Ticks, CfgInput::Restarts) => self.ticks.iters.clone(),
+            (TunerKind::Ticks, CfgInput::MinTrades) => self.ticks.min_trades.clone(),
+            (TunerKind::Ticks, CfgInput::Seed) => self.ticks.seed.clone(),
+            // The time row draws only the minimum-trades box and the coin axis no row at all,
+            // so neither has a value for the rest.
             (TunerKind::Time, _) | (TunerKind::Coins, _) => String::new(),
         };
         let ph = placeholder.to_string();
@@ -915,6 +928,17 @@ impl AnalyticsView {
                             this.time_tuner.min_trades = value;
                             this.time_tuner.invalidate_suggest();
                         }
+                        (TunerKind::Ticks, CfgInput::Restarts) => {
+                            this.ticks.iters = value;
+                            this.persist_ticks_settings(cx);
+                        }
+                        (TunerKind::Ticks, CfgInput::MinTrades) => {
+                            this.ticks.min_trades = value;
+                        }
+                        (TunerKind::Ticks, CfgInput::Seed) => {
+                            this.ticks.seed = value;
+                            this.persist_ticks_settings(cx);
+                        }
                         (TunerKind::Time, _) | (TunerKind::Coins, _) => {}
                     }
                     if !matches!(ev, MoonInputEvent::Change) {
@@ -927,9 +951,22 @@ impl AnalyticsView {
         match kind {
             TunerKind::Filter => self.tuner.inputs.insert(id.to_string(), state.clone()),
             TunerKind::Time => self.time_tuner.inputs.insert(id.to_string(), state.clone()),
+            TunerKind::Ticks => self.ticks.inputs.insert(id.to_string(), state.clone()),
             TunerKind::Coins => None,
         };
         state
+    }
+
+    /// Drop one settings box from its axis' cache, so the next frame builds it from the stored
+    /// value — after the value was set from outside the box.
+    pub(super) fn shell_forget_cfg_input(&mut self, kind: TunerKind, which: CfgInput) {
+        let id = cfg_input_id(kind, which);
+        match kind {
+            TunerKind::Filter => self.tuner.inputs.remove(id),
+            TunerKind::Time => self.time_tuner.inputs.remove(id),
+            TunerKind::Ticks => self.ticks.inputs.remove(id),
+            TunerKind::Coins => None,
+        };
     }
 
     /// Copy the seed the last completed search ran with into the seed box, pinning it.
@@ -957,7 +994,7 @@ impl AnalyticsView {
     ///     cx: GPUI context used to update the backend layout.
     ///     pick: The layout field this setting lives in.
     ///     value: Its normalized value, or `None` where the setting has no usable value.
-    fn persist_setting<T: PartialEq>(
+    pub(super) fn persist_setting<T: PartialEq>(
         &self,
         cx: &mut Context<Self>,
         pick: impl Fn(&mut moon_core::config::WindowLayout) -> &mut T,

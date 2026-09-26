@@ -849,6 +849,7 @@ fn current_strategy_column_masks_cannot_discard_the_saved_layout() {
             filter: 3,
             coins: 7,
             time: 11,
+            ticks: Some(13),
         }),
         ..WindowLayout::default()
     };
@@ -857,7 +858,20 @@ fn current_strategy_column_masks_cannot_discard_the_saved_layout() {
     let masks = decoded
         .analytics_strat_cols_modes2
         .expect("current masks survive");
-    assert_eq!((masks.filter, masks.coins, masks.time), (3, 7, 11));
+    assert_eq!(
+        (masks.filter, masks.coins, masks.time, masks.ticks),
+        (3, 7, 11, Some(13))
+    );
+    // A file written before the fourth axis existed still loads: the missing slot reads `None`.
+    let older: WindowLayout = toml::from_str(
+        "analytics_strat_cols_modes2 = { filter = 3, coins = 7, time = 11 }
+",
+    )
+    .expect("a three-slot key must load");
+    let masks = older
+        .analytics_strat_cols_modes2
+        .expect("older masks survive");
+    assert_eq!((masks.time, masks.ticks), (11, None));
 
     for written in ["17", "true", "[1, 2]", "{ filter = \"bad\" }"] {
         let doc = format!(
@@ -2197,6 +2211,8 @@ fn trade_window_fit_and_hide_rail_default_off_and_round_trip() {
     assert_eq!(off.trade_window_ticks, Some(false));
 }
 
+/// The corridor switch reads absent as OFF, the tuner pane's rail reads absent as HIDDEN, and
+/// both survive a round trip without touching the window's own rail switch.
 #[test]
 fn the_corridor_and_the_tuner_panes_rail_read_their_own_defaults() {
     let old: WindowLayout = toml::from_str("").expect("legacy layout");
@@ -2212,6 +2228,23 @@ fn the_corridor_and_the_tuner_panes_rail_read_their_own_defaults() {
     assert_eq!(reopened.trade_window_hide_rail, None);
     let bad: WindowLayout = toml::from_str("trade_window_moonshot_zone = 1").expect("lenient");
     assert_eq!(bad.trade_window_moonshot_zone, None);
+}
+
+/// The trade captions read absent as ON in a window and OFF in the tuner pane, and each slot
+/// survives a round trip without touching the other.
+#[test]
+fn the_trade_captions_read_their_own_defaults_per_host() {
+    let old: WindowLayout = toml::from_str("").expect("legacy layout");
+    assert!(old.trade_window_labels.unwrap_or(true));
+    assert!(!old.analytics_trade_labels.unwrap_or(false));
+    let saved: WindowLayout =
+        toml::from_str("trade_window_labels = false\nanalytics_trade_labels = true").expect("set");
+    let encoded = toml::to_string(&saved).expect("serialize preference");
+    let reopened: WindowLayout = toml::from_str(&encoded).expect("reopen preference");
+    assert_eq!(reopened.trade_window_labels, Some(false));
+    assert_eq!(reopened.analytics_trade_labels, Some(true));
+    let bad: WindowLayout = toml::from_str("analytics_trade_labels = \"on\"").expect("lenient");
+    assert_eq!(bad.analytics_trade_labels, None);
 }
 
 /// `layout.rs:ChartGraphicsCfg::candle_volume_sides` — the serde default is OFF while `Default`
@@ -2301,4 +2334,129 @@ fn a_hand_written_figure_alert_setting_cannot_discard_the_saved_layout() {
     assert_eq!(resolve_alert_duration_s(Some(9_999)), ALERT_DURATION_S_MAX);
     assert_eq!(resolve_alert_repeat(Some(0)), 0);
     assert_eq!(resolve_alert_repeat(Some(9_999)), ALERT_REPEAT_MAX);
+}
+
+/// The Entry/Exit axis' settings survive their own round trip, a config without them opens on
+/// the defaults, and a block written wrong costs only itself.
+#[test]
+fn the_ticks_axis_settings_round_trip_and_never_cost_the_layout() {
+    let saved = WindowLayout {
+        analytics_ticks: Some(TicksAxisLayout {
+            iters: Some(40),
+            locked: vec!["SellPrice".to_string()],
+            trade_open: true,
+            allow_closer_corridor: true,
+            model: crate::db::tuner::ticks::ModelSettings {
+                latency_ms: 250.0,
+                entry_method: crate::db::tuner::ticks::EntryMethod::Shift,
+                ..Default::default()
+            },
+            ..TicksAxisLayout::default()
+        }),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&saved).expect("the layout must serialize");
+    let decoded: WindowLayout = toml::from_str(&encoded).expect("its own output must load back");
+    assert_eq!(decoded.analytics_ticks, saved.analytics_ticks);
+
+    let old: WindowLayout = toml::from_str("analytics_period = \"p-cur-month\"\n").unwrap();
+    assert_eq!(old.analytics_ticks, None);
+
+    // A block written before the corridor switch existed keeps the guard on.
+    let before: WindowLayout =
+        toml::from_str("[analytics_ticks]\niters = 40\n").expect("a block without the switch");
+    assert!(
+        !before
+            .analytics_ticks
+            .expect("the block")
+            .allow_closer_corridor
+    );
+
+    let partial: WindowLayout =
+        toml::from_str("[analytics_ticks.model]\nlatency_ms = 150.0\n").expect("a partial block");
+    let model = partial.analytics_ticks.expect("the block").model;
+    assert_eq!(model.latency_ms, 150.0);
+    assert_eq!(
+        model.ticker_period_ms,
+        crate::db::tuner::ticks::exit::stops::TICKER_PERIOD_MS
+    );
+
+    let broken: WindowLayout =
+        toml::from_str("analytics_period = \"p-cur-month\"\n[analytics_ticks]\niters = \"many\"\n")
+            .expect("a malformed block must not reject the document");
+    assert_eq!(broken.analytics_period.as_deref(), Some("p-cur-month"));
+    assert_eq!(broken.analytics_ticks, None);
+}
+
+/// The search ranges typed on the Entry/Exit axis and its steps per field survive a restart; a
+/// block written before they existed reads them empty; a malformed range costs that field its
+/// range and nothing else of the axis, and a malformed step count only itself.
+#[test]
+fn the_ticks_axis_ranges_round_trip_and_a_bad_one_costs_only_itself() {
+    use crate::db::tuner::ticks::params::range::TickRange;
+    let saved = WindowLayout {
+        analytics_ticks: Some(TicksAxisLayout {
+            iters: Some(40),
+            steps_per_param: Some(30),
+            ranges: [
+                (
+                    "SellPrice".to_string(),
+                    TickRange {
+                        from: Some(0.5),
+                        to: Some(3.0),
+                        step: None,
+                    },
+                ),
+                (
+                    "SellLevelCount".to_string(),
+                    TickRange {
+                        step: Some(1.0),
+                        ..TickRange::default()
+                    },
+                ),
+            ]
+            .into(),
+            ..TicksAxisLayout::default()
+        }),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&saved).expect("the layout must serialize");
+    let decoded: WindowLayout = toml::from_str(&encoded).expect("its own output must load back");
+    assert_eq!(decoded.analytics_ticks, saved.analytics_ticks);
+
+    let before: WindowLayout = toml::from_str(
+        "[analytics_ticks]
+iters = 40
+",
+    )
+    .expect("a block without the ranges");
+    let before = before.analytics_ticks.expect("the block");
+    assert!(before.ranges.is_empty() && before.steps_per_param.is_none());
+
+    let bad = toml::from_str::<WindowLayout>(
+        "[analytics_ticks]
+iters = 40
+steps_per_param = \"lots\"
+         [analytics_ticks.ranges.SellPrice]
+from = 0.5
+to = 3
+         [analytics_ticks.ranges.StopLoss]
+from = \"low\"
+",
+    )
+    .expect("a malformed range must not reject the document")
+    .analytics_ticks
+    .expect("a malformed range must not cost the axis its block");
+    assert_eq!(bad.iters, Some(40));
+    assert_eq!(bad.steps_per_param, None);
+    assert_eq!(
+        bad.ranges.get("SellPrice"),
+        Some(&TickRange {
+            from: Some(0.5),
+            to: Some(3.0),
+            step: None,
+        }),
+        "an integer edge reads as a number"
+    );
+    assert!(!bad.ranges.contains_key("StopLoss"));
 }

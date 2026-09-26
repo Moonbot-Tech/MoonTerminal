@@ -129,25 +129,33 @@ storage.trades_min:
   en: "%{min} min"
   es: "%{min} min"
 storage.trades_margin_hint:
-  ru: "С каждого края сделки; у долгой — вокруг входа и вокруг выхода, середина свечами. Не меньше 30 с — столько нужно тюнеру."
-  en: "At each end of a trade; on a long one, around the entry and around the exit, candles between. At least 30 s — what the tuner needs."
-  es: "En cada extremo de una posición; en una larga, alrededor de la entrada y de la salida, velas entre ambas. Al menos 30 s: lo que necesita el afinador."
+  ru: "С каждого края сделки; у долгой — вокруг входа и вокруг выхода, середина свечами. Не меньше 30 с — столько нужно тюнеру; дальше этого после закрытия он выход варианта не судит."
+  en: "At each end of a trade; on a long one, around the entry and around the exit, candles between. At least 30 s — what the tuner needs; it judges a variant's exit no further than this past the close."
+  es: "En cada extremo de una posición; en una larga, alrededor de la entrada y de la salida, velas entre ambas. Al menos 30 s: lo que necesita el afinador, que no juzga la salida de una variante más allá de esto tras el cierre."
 storage.trades_long_position:
   ru: "Долгая сделка от"
   en: "Long trade from"
   es: "Posición larga desde"
 storage.trades_long_position_hint:
-  ru: "Дольше — трейды только вокруг входа и выхода."
-  en: "Held longer — prints around the entry and the exit only."
-  es: "Más larga — operaciones solo alrededor de la entrada y la salida."
+  ru: "Дольше — трейды только вокруг входа и выхода. Середину тюнер не видит: вариант, который мог выйти в ней, на такой сделке не судится."
+  en: "Held longer — prints around the entry and the exit only. The tuner does not see the middle: a variant that may have closed there is not judged on such a trade."
+  es: "Más larga — operaciones solo alrededor de la entrada y la salida. El afinador no ve el medio: una variante que pudo cerrar allí no se juzga en esa operación."
+storage.trades_autoload:
+  ru: "Подгружать недостающую ленту при старте"
+  en: "Fetch the missing tape at startup"
+  es: "Descargar la cinta que falta al arrancar"
+storage.trades_autoload_hint:
+  ru: "Трейды сделок стратегий, закрытых пока терминал не работал, — насколько биржа ещё отдаёт (Binance фьючерсы 48 ч, остальные до 30 дней; Bybit и Hyperliquid истории не дают). Тратит лимит запросов; останавливается кнопкой тюнера."
+  en: "Prints of strategy trades that closed while the terminal was not running — as far back as the venue still serves (Binance futures 48 h, others up to 30 days; Bybit and Hyperliquid serve no history). Spends the request budget; stops with the tuner's button."
+  es: "Operaciones de posiciones de estrategias cerradas mientras el terminal no estaba en marcha — hasta donde la bolsa aún sirve (futuros Binance 48 h, el resto hasta 30 días; Bybit e Hyperliquid no dan historial). Gasta el límite de peticiones; se para con el botón del afinador."
 storage.trades_cleanup_at_startup:
   ru: "Чистка при старте"
   en: "Clean up at startup"
   es: "Limpiar al arrancar"
 storage.trades_cleanup_at_startup_hint:
-  ru: "То же, что кнопка «Чистка». Со следующего запуска."
-  en: "Same as the \"Clean up\" button. From the next launch."
-  es: "Lo mismo que el botón «Limpiar». Desde el próximo arranque."
+  ru: "То же, что кнопка «Чистка», перед подгрузкой ленты. Со следующего запуска."
+  en: "Same as the \"Clean up\" button, before the tape fetch. From the next launch."
+  es: "Lo mismo que el botón «Limpiar», antes de descargar la cinta. Desde el próximo arranque."
 storage.trades_cleanup:
   ru: "Чистка"
   en: "Clean up"

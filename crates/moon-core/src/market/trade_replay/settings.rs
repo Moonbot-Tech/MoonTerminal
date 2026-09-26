@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 /// Live value of `[trade_replay] margin_s` — how many seconds of prints a window asks for
 /// around a trade, per end ([`super::ReplayWindow::margin_ms`]).
 static MARGIN_S: AtomicU32 = AtomicU32::new(crate::config::storage::DEFAULT_TRADE_MARGIN_S);
+/// Live value of `[trade_replay] autoload_missing`.
+static TAPE_AUTOLOAD: AtomicBool = AtomicBool::new(false);
 /// Live value of `[trade_replay] long_position_min`.
 static LONG_POSITION_MIN: AtomicU32 =
     AtomicU32::new(crate::config::storage::DEFAULT_LONG_POSITION_MIN);
@@ -24,13 +26,15 @@ fn init() {
     INIT.get_or_init(|| {
         let cfg = crate::config::storage::load();
         MARGIN_S.store(cfg.trade_replay.margin_s, Ordering::Relaxed);
+        TAPE_AUTOLOAD.store(cfg.trade_replay.autoload_missing, Ordering::Relaxed);
         LONG_POSITION_MIN.store(cfg.trade_replay.long_position_min, Ordering::Relaxed);
         CLEANUP_AT_STARTUP.store(cfg.trade_replay.cleanup_at_startup, Ordering::Relaxed);
         // Once per launch, so a file migrated from `margin_min` shows what it was read as.
         log::info!(
-            "[x] trade-replay settings: margin {} s, long position from {} min, cleanup at startup {}",
+            "[x] trade-replay settings: margin {} s, long position from {} min, tape autoload {}, cleanup at startup {}",
             cfg.trade_replay.margin_s,
             cfg.trade_replay.long_position_min,
+            cfg.trade_replay.autoload_missing,
             cfg.trade_replay.cleanup_at_startup
         );
     });
@@ -56,6 +60,19 @@ pub fn set_margin_s(secs: u32) {
         crate::config::storage::snap_trade_margin_s(secs),
         Ordering::Relaxed,
     );
+}
+
+/// Whether the terminal fetches the tape of recent closed trades on its own once the cores are
+/// up — `[trade_replay] autoload_missing`.
+pub fn tape_autoload() -> bool {
+    init();
+    TAPE_AUTOLOAD.load(Ordering::Relaxed)
+}
+
+/// Move the live autoload switch; the Storage tab writes the file beside this.
+pub fn set_tape_autoload(on: bool) {
+    init();
+    TAPE_AUTOLOAD.store(on, Ordering::Relaxed);
 }
 
 /// How long a position must be held to be walked as its two ends — `[trade_replay]

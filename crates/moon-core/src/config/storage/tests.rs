@@ -16,8 +16,11 @@ max_mb = 512
     assert_eq!(cfg.trade_replay.margin_s, DEFAULT_TRADE_MARGIN_S);
     assert_eq!(cfg.trade_replay.max_mb, 512);
     assert!(cfg.trade_replay.persist_trades);
-    // The long-position threshold came after the margin and reads as the five minutes it was as
-    // a constant; the startup cleanup may not switch itself on.
+    // The autoload switch came after the margin and reads as OFF from a file without it: it
+    // spends the venues' budget, and may not switch itself on.
+    assert!(!cfg.trade_replay.autoload_missing);
+    // The long-position threshold came later still and reads as the five minutes it was as a
+    // constant; the startup cleanup, like the autoload, may not switch itself on.
     assert_eq!(
         cfg.trade_replay.long_position_min,
         DEFAULT_LONG_POSITION_MIN
@@ -64,11 +67,13 @@ fn old_storage_toml_with_margin_min_reads_as_seconds() {
 persist_trades = false
 max_mb = 64
 margin_min = 15
+autoload_missing = true
 ";
     let cfg: StorageCfg = toml::from_str(text).expect("old file parses");
     assert_eq!(cfg.trade_replay.margin_s, 900);
     assert!(!cfg.trade_replay.persist_trades);
     assert_eq!(cfg.trade_replay.max_mb, 64);
+    assert!(cfg.trade_replay.autoload_missing);
     // A migrated value off the list lands on the nearest step where `load` snaps it — the
     // lower one on a tie, so 45 minutes becomes 30, not 60.
     let odd: StorageCfg = toml::from_str("[trade_replay]\nmargin_min = 45\n").expect("parses");

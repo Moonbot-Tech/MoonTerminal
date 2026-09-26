@@ -41,6 +41,7 @@ mod coins;
 /// "By filter": the threshold grid, its histogram and its auto-suggestion.
 mod filter;
 /// "By time": the weekly schedule grid, the hour profile and the sliders.
+pub(in crate::analytics) mod ticks;
 mod time;
 
 // State types held by `AnalyticsView` (the parent).
@@ -50,6 +51,7 @@ pub(super) use filter::state::TunerState;
 pub(super) use list::{
     StratListFilter, VisibleRows, core_names_changed, published_groups, restore_strat_sort,
 };
+pub(super) use ticks::state::TicksState;
 pub(super) use time::state::TimeTunerState;
 
 // Column descriptors of the comparison tables — re-exported so the submodules (`list`) take
@@ -74,6 +76,7 @@ pub(super) use strat_columns::{STRAT_COLS_ALL, STRAT_COLS_DEFAULT, STRAT_COLS_DE
 use super::AnalyticsView;
 use super::refresh::RefreshUrgency;
 use crate::design;
+use crate::design::moon;
 use moon_core::config::layout::StratColsByMode;
 
 /// Parse a strategy-list row key `"strategyid@core_uid"` (the list is split PER CORE)
@@ -109,14 +112,20 @@ pub(super) enum StratMode {
     Filters,
     Coins,
     Time,
+    /// "Entry/Exit" — the tape replay.
+    Ticks,
 }
 
 /// Every axis, for the code that has to touch all of them (seeding the per-axis column masks).
 ///
 /// A fourth axis added to `StratMode` without a slot in `cols_slot` fails to compile, and
 /// without an entry here fails this array's length — so neither can be forgotten silently.
-pub(super) const STRAT_MODES: [StratMode; 3] =
-    [StratMode::Filters, StratMode::Coins, StratMode::Time];
+pub(super) const STRAT_MODES: [StratMode; 4] = [
+    StratMode::Filters,
+    StratMode::Coins,
+    StratMode::Time,
+    StratMode::Ticks,
+];
 
 impl StratMode {
     /// This axis' slot in the persisted per-axis column masks.
@@ -128,6 +137,9 @@ impl StratMode {
             StratMode::Filters => &mut m.filter,
             StratMode::Coins => &mut m.coins,
             StratMode::Time => &mut m.time,
+            // A slot never chosen takes the axis default the moment it is asked for, so the
+            // reference handed out is always a real mask.
+            StratMode::Ticks => m.ticks.get_or_insert(StratMode::Ticks.default_cols()),
         }
     }
 
@@ -272,6 +284,7 @@ impl AnalyticsView {
         // The coin lists were edited against the PREVIOUS strategy; carried over they would
         // read as "this strategy's coins". `invalidate` retires them along with the numbers.
         self.coins.invalidate();
+        self.ticks.invalidate();
         self.coin_lists.invalidate();
         self.reload_axis(self.strat_mode, cx);
         cx.notify();
@@ -373,6 +386,7 @@ impl AnalyticsView {
         self.time_tuner.reset_grid();
         self.time_tuner.invalidate();
         self.coins.invalidate();
+        self.ticks.invalidate();
         self.coin_lists.invalidate();
         self.write_error = None;
     }
@@ -396,11 +410,34 @@ impl AnalyticsView {
         if self.sel_strategy.is_some() {
             return false;
         }
+        // The search probe (`ticks/variants/probe.rs`) observes the Entry/Exit axis.
+        if std::env::var("MOON_TUNER_SEARCH_PROBE").is_ok_and(|v| v.starts_with("search")) {
+            self.strat_mode = StratMode::Ticks;
+        }
         // Addressed by the row KEY — `strategyid@core_uid`, the identity the whole page uses
         // — not by name: a name is a label, and the same one routinely sits on several cores
         // with entirely different lists, so naming one picks whichever copy comes first.
         // A bare `strategyid` is accepted too and takes the first core carrying it.
-        let want = super::probe_select_spec().unwrap_or("");
+        let spec = super::probe_select_spec().unwrap_or("");
+        // `select:K1,K2,…` — the first key is the anchor, the rest join it as a Ctrl-click would.
+        let mut keys = spec.split(',');
+        let want = keys.next().unwrap_or("");
+        let extras: Vec<(String, String)> = self
+            .strategy_data
+            .data()
+            .map(|d| {
+                // Each by its key, or its bare id on the first core carrying it, as the anchor.
+                keys.filter_map(|k| {
+                    d.strategies.iter().find(|g| g.key == k).or_else(|| {
+                        d.strategies
+                            .iter()
+                            .find(|g| g.key.split('@').next() == Some(k))
+                    })
+                })
+                .map(|g| (g.key.clone(), g.name.clone()))
+                .collect()
+            })
+            .unwrap_or_default();
         let pick = self.strategy_data.data().and_then(|d| {
             if want.is_empty() {
                 // Nothing addressed: take the BIGGEST blacklist, since the unnamed form
@@ -424,6 +461,7 @@ impl AnalyticsView {
         });
         match pick {
             Some(sel) => {
+                self.sel_extra = extras;
                 self.set_sel_strategy(Some(sel), cx);
                 true
             }
@@ -481,6 +519,7 @@ impl AnalyticsView {
         // adding or removing a strategy retires both — including any unsaved tick, whose
         // baseline (the union of the selected strategies' saved lists) just changed.
         self.coins.invalidate();
+        self.ticks.invalidate();
         self.coin_lists.invalidate();
         // The write banner speaks about an edit that was kept for a retry. `invalidate` has
         // just thrown that edit away with the scope it belonged to, so the banner would go on
@@ -645,11 +684,18 @@ impl AnalyticsView {
         // "Coins" builds its table before the immutable reads of the right column
         // (the lazy search input needs &mut self).
         let coins_card = (mode == StratMode::Coins).then(|| self.coins_card(p, window, cx));
+        // "Entry/Exit" likewise: its table settles the sort cache, which needs &mut self.
+        let ticks_card = (mode == StratMode::Ticks).then(|| self.ticks_card(p, window, cx));
         // The right column's fold is one flag for every axis, and the rail carrying its caret is
         // built in BOTH states — collapsed, it is the only control left that can bring the column
         // back. The column below is then simply not built: `left` is already `.flex_1()`, so it
         // takes the freed width with no width arithmetic anywhere.
         let side_collapsed = self.side_collapsed;
+        // "Entry/Exit" draws no grid and no matrix without a selected strategy: its grid would
+        // list every field of every strategy and its matrix would judge variants of nothing. The
+        // column stays, empty, and says what it waits for.
+        let side_empty =
+            mode == StratMode::Ticks && self.visible_target_count(self.read_core_ids()) == 0;
         let rail = self.side_rail(p, cx);
         let mut left = v_flex()
             .flex_1()
@@ -663,6 +709,16 @@ impl AnalyticsView {
             // The coin table sits UNDER the list, where the histogram sits in "Filters":
             // both are "the detail behind the selected strategy".
             StratMode::Coins => left = left.children(coins_card),
+            // The deal table, in the same slot: the trades behind the selected strategy — and
+            // under it, behind a rail of its own, the pane drawing the selected deal.
+            StratMode::Ticks => {
+                left = left
+                    .children(ticks_card)
+                    .child(self.ticks_trade_rail(p, cx));
+                if self.ticks.trade.open {
+                    left = left.child(self.ticks_trade_pane(p, cx));
+                }
+            }
             StratMode::Time => unreachable!("Time mode returns early above"),
         }
 
@@ -706,7 +762,39 @@ impl AnalyticsView {
                         .child(pick),
                 );
             }
-            StratMode::Filters | StratMode::Coins => {}
+            StratMode::Ticks if !side_collapsed => {
+                // The matrix on top, the parameter grid with its search row below — the same
+                // right column as the filter axis; without a strategy, the column's note alone.
+                let side = if side_empty {
+                    div()
+                        .size_full()
+                        .rounded(design::ui_px(cx, 8.0))
+                        .bg(moon(p.panel))
+                        .border_1()
+                        .border_color(moon(p.border))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(crate::load_state::muted(
+                            t!("analytics.ticks.side_pick_strategy").to_string(),
+                            10.0,
+                            p,
+                            cx,
+                        ))
+                        .into_any_element()
+                } else {
+                    self.ticks_side(p, window, cx)
+                };
+                main = main.child(
+                    v_flex()
+                        .w(design::font_w_px(cx, 470.0))
+                        .flex_none()
+                        .h_full()
+                        .min_h_0()
+                        .child(side),
+                );
+            }
+            StratMode::Filters | StratMode::Coins | StratMode::Ticks => {}
             StratMode::Time => unreachable!("Time mode returns early above"),
         }
         // The save confirmation window — an overlay on top of the tab.
@@ -733,6 +821,7 @@ impl AnalyticsView {
             }
             StratMode::Time => self.reload_time(cx),
             StratMode::Coins => self.reload_coins(cx),
+            StratMode::Ticks => self.reload_ticks(cx),
         }
     }
 
@@ -752,6 +841,7 @@ impl AnalyticsView {
             StratMode::Filters => self.reload_tuner_after_report(show_overlay, cx),
             StratMode::Time => self.reload_time_after_report(show_overlay, cx),
             StratMode::Coins => self.reload_coins_after_report(show_overlay, cx),
+            StratMode::Ticks => self.reload_ticks_after_report(show_overlay, cx),
         }
     }
 
@@ -767,6 +857,7 @@ impl AnalyticsView {
             StratMode::Filters => self.tuner.needs_reload(),
             StratMode::Time => self.time_tuner.needs_reload(),
             StratMode::Coins => self.coins.needs_reload(),
+            StratMode::Ticks => self.ticks.needs_reload(),
         }
     }
 
@@ -790,6 +881,7 @@ impl AnalyticsView {
             StratMode::Filters => self.reload_tuner(cx),
             StratMode::Time => self.reload_time(cx),
             StratMode::Coins => self.reload_coins(cx),
+            StratMode::Ticks => self.reload_ticks(cx),
         }
     }
 }

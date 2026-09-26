@@ -83,43 +83,20 @@ impl AnalyticsView {
         q
     }
 
-    /// Read numeric strategy-field defaults used to hide unconfigured threshold chips.
+    /// Read numeric strategy-field defaults used to hide unconfigured threshold chips — the
+    /// same table the Entry/Exit model fills defaulted fields from
+    /// (`ticks::fetch::strategy_field_defaults`).
     ///
     /// Args:
     ///     cx: GPUI context used to read the backend schema store.
     ///
     /// Returns:
     ///     Lowercase field names mapped to their first available core-schema default.
-    fn filter_defaults(&self, cx: &Context<Self>) -> HashMap<String, f64> {
-        let backend = self.backend.read(cx);
-        let store = backend.session.store();
-        let mut defaults = HashMap::new();
-        for (_, core) in store.cores() {
-            let Some(schema) = core.schema.as_ref() else {
-                continue;
-            };
-            for kind in &schema.kinds {
-                for section in &kind.sections {
-                    for field in &section.fields {
-                        let Some(default) = field.default.as_ref() else {
-                            continue;
-                        };
-                        if let Ok(value) = default
-                            .trim()
-                            .trim_end_matches('%')
-                            .replace(',', ".")
-                            .parse::<f64>()
-                        {
-                            defaults
-                                .entry(field.name.to_ascii_lowercase())
-                                .or_insert(value);
-                        }
-                    }
-                }
-            }
-            break;
-        }
-        defaults
+    pub(in crate::analytics::tuner) fn filter_defaults(
+        &self,
+        cx: &Context<Self>,
+    ) -> HashMap<String, f64> {
+        super::ticks::strategy_field_defaults(self.backend.read(cx))
     }
 
     /// Recompute only KPI and selected strategy thresholds after a local tuner edit.

@@ -324,6 +324,16 @@ impl MarketDataSource {
         })
     }
 
+    /// The ONE open kline cache, or `None` before the terminal supplied its path — for a reader
+    /// that needs history bars without a replay address (the tuner's live deltas).
+    pub fn kline_cache(&self) -> Option<crate::market::kline_cache::KlineCache> {
+        self.inner
+            .read()
+            .expect("market source poisoned")
+            .kline_cache
+            .clone()
+    }
+
     /// The catalog-verified market a report row's `coin` names on `core`, or `None`.
     ///
     /// Supports both historical formats of the stored value: a base (`M`) and an already complete
@@ -508,12 +518,14 @@ impl MarketDataSource {
         inner.clients.get(&core).and_then(SharedMoonClient::get)
     }
 
-    /// Return the market price step from MoonProto's `chart_price_step`.
-    ///
-    /// It is the market's own tick, used where a price difference has to be judged against what the
-    /// exchange can actually express — the sells-to-rectangle band, for one. `None` means the
-    /// provider, snapshot, or market is unavailable, or the step is non-positive; callers then fall
-    /// back to their own rule rather than inventing a step.
+    /// Return MoonProto's `chart_price_step` for a market: the CHART's aggregation step, not the
+    /// exchange's tick. moonproto derives it from the ask as `max(eps, ask / 5000)` (Delphi
+    /// `AddNewAksPrice`), so it is off the market's price grid — COOL at ~0.0019 reads
+    /// 0.00000038 against a tick of 0.000001 (2026-09-26). It suits what the chart groups by (the
+    /// HVol bins); a caller that needs the price grid itself — a level an order can stand at —
+    /// must not read it as one. `None` means the provider, snapshot, or market is unavailable, or
+    /// the step is non-positive; callers then fall back to their own rule rather than inventing a
+    /// step.
     pub fn price_step(&self, core: CoreId, market: &str) -> Option<f64> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");

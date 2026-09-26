@@ -67,14 +67,20 @@ pub struct TradeReplayStoreCfg {
     /// fetches, what a close copies out of the core's ring, and what the file keeps. One of
     /// [`TRADE_MARGIN_STEPS_S`]: a hand-edited value is snapped to the nearest step on load.
     pub margin_s: u32,
+    /// Whether the terminal fetches, once the cores are up, the tape of every recent closed
+    /// trade with millisecond stamps that the venues still serve — what the close-time capture
+    /// missed because the terminal was not running. Off by default: it spends the venues' public
+    /// request budget without being asked. A file written before the field reads as off.
+    pub autoload_missing: bool,
     /// Minutes a position may be held and still count as SHORT; held past them it is LONG —
-    /// walked as its two ends with bars between, by a trade window and by the close-time capture.
+    /// walked as its two ends with bars between, both by a trade window and by the tuner's fetch, whose clusters stay within it.
     /// Bounded to [`LONG_POSITION_MIN_RANGE`] on load; a file written before the field reads
     /// as the default, which is what the threshold was while it was a constant.
     pub long_position_min: u32,
-    /// Whether the terminal runs the Storage tab's cleanup on its own once the cores are up.
-    /// Off by default: it rewrites the file unasked. A file written before the field reads as
-    /// off.
+    /// Whether the terminal runs the Storage tab's cleanup on its own once the cores are up —
+    /// before the tape autoload, so what the cleanup removes is not what the autoload just
+    /// fetched. Off by default: it rewrites the file unasked. A file written before the field
+    /// reads as off.
     pub cleanup_at_startup: bool,
 }
 
@@ -117,6 +123,7 @@ impl Default for TradeReplayStoreCfg {
             persist_trades: true,
             max_mb: DEFAULT_TRADES_MAX_MB,
             margin_s: DEFAULT_TRADE_MARGIN_S,
+            autoload_missing: false,
             long_position_min: DEFAULT_LONG_POSITION_MIN,
             cleanup_at_startup: false,
         }
@@ -133,6 +140,7 @@ struct TradeReplayStoreRaw {
     max_mb: u32,
     margin_s: Option<u32>,
     margin_min: Option<u32>,
+    autoload_missing: bool,
     long_position_min: u32,
     cleanup_at_startup: bool,
 }
@@ -145,6 +153,7 @@ impl Default for TradeReplayStoreRaw {
             max_mb: d.max_mb,
             margin_s: None,
             margin_min: None,
+            autoload_missing: d.autoload_missing,
             long_position_min: d.long_position_min,
             cleanup_at_startup: d.cleanup_at_startup,
         }
@@ -161,6 +170,7 @@ impl From<TradeReplayStoreRaw> for TradeReplayStoreCfg {
             persist_trades: raw.persist_trades,
             max_mb: raw.max_mb,
             margin_s,
+            autoload_missing: raw.autoload_missing,
             long_position_min: raw.long_position_min,
             cleanup_at_startup: raw.cleanup_at_startup,
         }

@@ -150,7 +150,7 @@ fn restore_edges_upto(saved: Option<u32>, max: usize) -> usize {
 pub(in crate::analytics::tuner) const TRAIN_OPTIONS: [usize; 6] = [100, 90, 80, 70, 60, 50];
 
 /// Train share used when nothing is chosen or a stored value is not on offer.
-pub(super) const DEFAULT_TRAIN: usize = 100;
+pub(in crate::analytics::tuner) const DEFAULT_TRAIN: usize = 100;
 
 /// Return `v` when the dropdown offers it, otherwise the default share.
 pub(super) fn train_of(v: usize) -> usize {

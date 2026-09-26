@@ -44,7 +44,7 @@ use crate::venue::{Brand, Venue};
 pub use coverage::Coverage;
 pub use settings::{
     cleanup_at_startup, long_position_ms, margin_ms, set_cleanup_at_startup, set_long_position_min,
-    set_margin_s,
+    set_margin_s, set_tape_autoload, tape_autoload,
 };
 pub use worker::{TickAnswer, TickQuery, query_held};
 
@@ -291,8 +291,8 @@ impl ReplayIntent {
     /// answered from. A model's requester reads the tiles, not the answer: an answer straight
     /// from the ring — the candle stage's core-first, the tick stage's own read, the mid-walk
     /// upgrade — reached nobody, since none of them files a tile and the close-time capture that
-    /// would have filed it never ran for a trade that closed while the terminal was down.
-    /// Filed, the ring's stretch is what the walk no longer asks the venue
+    /// would have filed it never ran for a trade that closed while the terminal was down (the
+    /// autoload's rows). Filed, the ring's stretch is what the walk no longer asks the venue
     /// for, and the held query finds it. A chart keeps the ring as an answer: its window shows
     /// the series it is sent.
     pub(crate) fn files_core(self) -> bool {

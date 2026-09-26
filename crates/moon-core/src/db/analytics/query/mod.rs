@@ -502,12 +502,27 @@ const UNIFIED_COLS: &[&str] = &[
     // with `quote_rate` below before it meets a projected sum. `lev` is NOT listed: it already
     // arrives through `tuner::FIELDS`, and naming it twice would project two identical columns.
     "boughtq",
+    // Beside `boughtq` so a reader can tell a sale that moved MORE coins than the entry bought
+    // — a spot position topped up from the wallet balance — from an ordinary one.
+    "quantity",
     "buyprice",
     "sellprice",
     // Funding is booked as a pseudo-order (`buydate == closedate`, entry price == exit price,
     // `spentbtc == boughtq`). It carries real money, so it belongs in profit — but it is not a
     // trade, and counting it would inflate trade counts, turnover and win rate alike.
     "sellreason",
+    // The trade's identity in the order-trace archive and its millisecond stamps: the
+    // Entry/Exit tuner replays the tape around each row and keys the archive by `reportuid`.
+    // NULL on a replica that predates the columns, which that axis then counts as "no stamp".
+    "reportuid",
+    "buydatems",
+    "closedatems",
+    // The entry order's creation and the corridor the core last saved for it — the same tuner
+    // starts its MoonShot replay at the creation. Cores file them since 2026-09-21 and never
+    // backfill; NULL on an older replica, zero on an older row.
+    "buysetdatems",
+    "buycorridordown",
+    "buycorridorup",
 ];
 
 /// Money projection resolved by quote coverage before one analytical scan.

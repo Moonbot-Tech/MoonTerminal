@@ -29,8 +29,8 @@ mod time;
 
 pub use fields::{FIELDS, FieldClass, FieldSpec, slot_type_for};
 pub use strategy_read::{
-    StratFilters, strategy_cores, strategy_current_values, strategy_current_values_opt,
-    strategy_filters, strategy_kinds,
+    LiveStrategy, StratFilters, live_strategies, strategy_cores, strategy_current_values,
+    strategy_current_values_opt, strategy_filters, strategy_kinds, strategy_values_at,
 };
 pub use time::{
     SliderProfiles, TimeAxes, TimeSuggest, TimeWindow, format_week_span, format_working_time,
@@ -402,6 +402,37 @@ fn tuner_read_on<T>(
     })
 }
 
+/// A SECOND unified source beside the tuner's own, with the money columns VALUED IN USDT and
+/// nothing else changed: the Entry/Exit axis shows a deal's profit as money beside its per
+/// cent, and that money must read the same for a BTC-quoted core and a USDT one. It is not
+/// the scan's source — the projection it carries is a money projection, and `pnl` under it
+/// would be money whatever the metric (`unified_from_mode` derives per cent from the
+/// projection, not from the query) — so the scan keeps [`tuner_source_on`] and reads only the
+/// USDT `profitbtc` off this one, in the same snapshot. `None` when the scope's money cannot
+/// be valued in USDT at all (`usdt_projection_on`: a non-USDT quote without valuation
+/// coverage, a mixed scope that splits) — the scan still serves the axis then, and the money
+/// column stays empty rather than showing another currency under a USDT heading.
+///
+/// Args:
+///     conn: The snapshot the scan runs in.
+///     q: Report scope and period, floored or not — floored here like the scan's.
+///
+/// Returns:
+///     The `FROM` source, `None` when the money cannot be USDT, or `NotReady` when no source
+///     can answer.
+pub(super) fn tuner_source_usdt_on(conn: &Connection, q: &Query) -> ReadResult<Option<String>> {
+    let mut money = q.clone();
+    money.floor_all_history();
+    money.metric = crate::db::ProfitMetric::Quote;
+    money.prefer_usdt = true;
+    let Some(projection) = crate::db::analytics::usdt_projection_on(conn, &money)? else {
+        return Ok(None);
+    };
+    crate::db::analytics::unified_from_mode(conn, &money, projection)?
+        .map(Some)
+        .ok_or(ReadFail::NotReady)
+}
+
 /// Open a reader and materialize tuner rows in the same snapshot as quote preflight.
 ///
 /// The snapshot ends when `read` returns, before the caller performs CPU-heavy optimization.
@@ -637,7 +668,7 @@ fn variant_stats_sql(src: &str, variants: &[Variant]) -> String {
 ///
 /// Returns:
 ///     Complete KPI values for one variant.
-fn stats_from_tally(tally: Tally, spent: f64) -> VarStats {
+pub(crate) fn stats_from_tally(tally: Tally, spent: f64) -> VarStats {
     let mut stats = VarStats {
         n: tally.n,
         wins: tally.wins,

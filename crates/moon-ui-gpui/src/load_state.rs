@@ -54,6 +54,20 @@ impl<T> LoadState<T> {
         }
     }
 
+    /// The renderable data for an in-place edit — a row's status after a fetch — without
+    /// republishing the whole value. Copies on write only when something else still holds
+    /// the previous snapshot (a render in flight).
+    pub(crate) fn data_mut(&mut self) -> Option<&mut T>
+    where
+        T: Clone,
+    {
+        match self {
+            LoadState::Ready(v) => Some(Arc::make_mut(v)),
+            LoadState::Loading { stale } => stale.as_mut().map(Arc::make_mut),
+            LoadState::NotReady | LoadState::Failed(_) => None,
+        }
+    }
+
     /// Mark a new request as started, carrying forward only data still worth
     /// showing. Both completed non-data states drop it.
     pub(crate) fn begin(&mut self) {
@@ -502,7 +516,9 @@ fn fail_detail_row(label: String, value: SharedString, p: MoonPalette, cx: &App)
 }
 
 /// Render a non-error placeholder using the shared muted body style.
-fn muted(text: String, pad: f32, p: MoonPalette, cx: &App) -> AnyElement {
+/// A muted one-line placeholder — the shape every `Note` that is not a failure renders as,
+/// for a panel that words its own empty state.
+pub(crate) fn muted(text: String, pad: f32, p: MoonPalette, cx: &App) -> AnyElement {
     div()
         .p(design::ui_px(cx, pad))
         .text_color(moon(p.text_muted))

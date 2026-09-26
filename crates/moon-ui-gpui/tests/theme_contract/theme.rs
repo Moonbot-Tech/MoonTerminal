@@ -255,6 +255,13 @@ fn popover_contents_do_not_paint_a_second_surface() {
             "analytics/tuner/shell.rs",
             r#".id("tun-cfg-popup")"#,
         ),
+        // The Entry/Exit axis' two popovers — the search settings and the model settings — share
+        // one content root.
+        (
+            "analytics/tuner/ticks/cfg.rs",
+            "analytics/tuner/ticks/cfg.rs",
+            "fn popup_frame(",
+        ),
         (
             "controls/metric.rs",
             "controls/metric.rs",

@@ -1532,9 +1532,9 @@ fn tick_stage_for(
 /// exit's ticks were comfortably inside retention.
 ///
 /// Free. Not a gate of the tick stage — a window past the retention is still served from the
-/// tiles ([`tick_stage_for`]) — but of a model's fetch ([`super::ReplayIntent::Model`], the
-/// tuner's): it is asked before a row is queued or called fetchable, so a row the venue would
-/// refuse anyway pays no candle page ahead of the refusal.
+/// tiles ([`tick_stage_for`]) — but of the tuner's fetch: its startup autoload asks it before
+/// queueing a row at all, and its load before calling a row it holds no tape for fetchable, so a
+/// row the venue would refuse anyway pays no candle page ahead of the refusal.
 ///
 /// Args:
 ///     route: The trade route in question.

@@ -47,7 +47,7 @@ pub use quote::{
     QuoteCurrency, QuoteScope, QuoteSpend, QuoteTotal, QuoteVolume, TradedVolume, UsdtTotal,
     ValuationCoverage,
 };
-pub use read_cancel::{ReadCancellation, with_read_cancellation};
+pub use read_cancel::{ReadCancellation, current_is_cancelled, with_read_cancellation};
 pub use read_fail::{FailCode, FailKind, ReadFail, ReadResult};
 pub use reader_budget::ReportReader;
 pub(crate) use rep::ReportStart;

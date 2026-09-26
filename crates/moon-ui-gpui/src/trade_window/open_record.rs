@@ -51,10 +51,6 @@ pub(crate) enum RecordKey {
     /// [`ChartTradeRecord::record_id`].
     RecordId(i64),
     /// [`ChartTradeRecord::report_uid`]; a row replicated without one can never match.
-    #[expect(
-        dead_code,
-        reason = "the tuner's Entry/Exit axis, its consumer, lands separately"
-    )]
     ReportUid(i64),
 }
 

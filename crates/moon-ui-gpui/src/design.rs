@@ -697,6 +697,48 @@ pub const BODY_LG_STEP: f32 = 1.0;
 /// reviewed design measured every such field at.
 pub const INPUT_SIZE: MoonInputSize = MoonInputSize::Small;
 
+/// The `MoonInput` size of a cell in a dense grid whose rows carry caption text: the
+/// [`MoonSize::Xs`] tier's metrics — the tier caption text belongs to — with the text at
+/// [`t_caption`] and no vertical padding, so the box is one caption line tall and a row holding
+/// it stands as high as its text-only neighbours.
+///
+/// `height` is the tier's LINE height, not 0: the input draws its box from the size `height`
+/// selects, never from `Custom`'s own `h` (that lands on the multi-line height,
+/// `docs-internal/FORK_BUGS.md`), and the box comes out one scaled line tall — 19 px against a
+/// 19.5 px caption line at the design scale (`design/tests.rs`).
+pub fn dense_input_size(cx: &App) -> MoonInputSize {
+    let m = MoonSize::Xs.control_metrics();
+    MoonInputSize::Custom {
+        height: m.line_height,
+        radius: m.radius,
+        font_size: font_base_for(cx, f32::from(t_caption(cx))),
+        line_height: m.line_height,
+        pad_x: m.pad_x,
+        pad_y: 0.0,
+        gap: m.gap,
+    }
+}
+
+/// A square icon-only button as tall as a [`dense_input_size`] box — the reset beside the tuner
+/// grid's range cells, which must not make its row taller than the cells it sits with. Pass
+/// [`dense_glyph_btn_w`] to its `width` for the square.
+pub fn dense_glyph_btn_size() -> MoonButtonSize {
+    let m = MoonSize::Xs.control_metrics();
+    MoonButtonSize::Custom {
+        height: m.line_height,
+        radius: m.radius,
+        font_size: m.font_size,
+        line_height: m.line_height,
+        gap: m.gap,
+    }
+}
+
+/// Rendered width of the square [`dense_glyph_btn_size`] button: its own drawn height, for a
+/// RENDERED width (`MoonButton::width`), as [`glyph_btn_w`] is.
+pub fn dense_glyph_btn_w(cx: &App) -> f32 {
+    ui_value(cx, MoonSize::Xs.control_metrics().line_height)
+}
+
 pub fn ui_value(cx: &App, value: f32) -> f32 {
     MoonTheme::active_tokens(cx).ui(value)
 }

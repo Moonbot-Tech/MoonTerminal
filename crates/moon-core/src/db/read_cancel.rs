@@ -82,11 +82,14 @@ pub fn with_read_cancellation<T>(cancellation: ReadCancellation, read: impl FnOn
     read()
 }
 
-/// Whether the current thread's request token has been cancelled.
+/// Whether the read this thread is running has been cancelled — for work that is not an
+/// SQLite statement (a wait on another thread's answer, a per-row loop) and so never meets the
+/// progress handler.
 ///
 /// Returns:
-///     True when a token is installed and [`ReadCancellation::is_cancelled`].
-pub(super) fn current_is_cancelled() -> bool {
+///     True when a token is installed and [`ReadCancellation::is_cancelled`]; `false` outside
+///     any [`with_read_cancellation`] scope.
+pub fn current_is_cancelled() -> bool {
     CURRENT.with(|current| {
         current
             .borrow()

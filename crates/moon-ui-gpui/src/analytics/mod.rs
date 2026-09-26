@@ -35,6 +35,8 @@ mod toolbar;
 /// The former flat set of `strategies`/`tuner*`/`strat_time`/`time_tuner` modules at the
 /// analytics root now lives under `tuner/`.
 mod tuner;
+/// The tape autoload of the Entry/Exit axis, driven from the coordination tick.
+pub(crate) use tuner::ticks::fetch::autoload as tape_autoload;
 
 // Pages reach these through the familiar `super::…`, unaware of the `period` module.
 pub(in crate::analytics) use period::{
@@ -622,11 +624,18 @@ pub struct AnalyticsView {
     /// user left inside it. Forcing either value here would destroy a choice they made on
     /// purpose and persisted.
     side_collapsed: bool,
+    /// The shell colour the window's clear colour was last set to. The window paints no
+    /// background of its own (`MoonBackgroundPolicy::NoFill`) so the chart of the tuner's trade
+    /// pane — drawn UNDER the GPUI scene — shows through; the clear colour stands in for the
+    /// root's fill and follows the palette from `render`, set only when it moved.
+    clear_shell: Option<u32>,
     /// Threshold tuner (Filters mode), with its state defined in its own module.
     tuner: tuner::TunerState,
     /// The "By coin" mode: the table's view controls, the picked coins that define
     /// variant v1, and the two background results it renders from.
     coins: tuner::CoinsState,
+    /// "Entry/Exit" axis: the deals, their tape and the model's verdicts.
+    ticks: tuner::TicksState,
     /// The coin picker's read: the selected strategies' blacklist, with the core each coin
     /// belongs to and when it was added.
     coin_lists: tuner::CoinListsState,
@@ -867,6 +876,14 @@ impl AnalyticsView {
         let saved_tuner_train = backend.read(cx).layout.analytics_tuner_train;
         let saved_tuner_fields = backend.read(cx).layout.analytics_tuner_fields.clone();
         let saved_tuner_compose = backend.read(cx).layout.analytics_tuner_compose;
+        // The "Entry/Exit" axis' settings. The model's are process-wide — every replay path
+        // reads them (`ticks::model_cfg`) — and the saved ones are what the last window left.
+        let mut ticks = tuner::TicksState::default();
+        if let Some(saved) = backend.read(cx).layout.analytics_ticks.as_ref() {
+            ticks.restore(saved);
+            tuner::ticks::model_cfg::replace(saved.model);
+            tuner::ticks::tail::replace(saved.min_tail_s);
+        }
         // Strategy-list sort is process-persistent. Unknown keys return to the same
         // profit-descending default used before this preference existed.
         let saved_strat_sort =
@@ -1063,6 +1080,7 @@ impl AnalyticsView {
             kpi_collapsed: saved_kpi_collapsed,
             hist_collapsed: saved_hist_collapsed,
             side_collapsed: saved_side_collapsed,
+            clear_shell: None,
             tuner: tuner::TunerState::load(
                 saved_tuner_iters,
                 saved_tuner_edges,
@@ -1072,6 +1090,7 @@ impl AnalyticsView {
                 saved_tuner_compose,
             ),
             coins: tuner::CoinsState::load(saved_coin_sort),
+            ticks,
             coin_lists: tuner::CoinListsState::default(),
             time_tuner: tuner::TimeTunerState::load(),
             cal_from,
@@ -1135,7 +1154,7 @@ impl AnalyticsView {
     /// every period bound moves. But the SCOPE (period, filters) does not, so this is a
     /// writer-driven catch-up, not a user reload: the visible snapshot stays on screen, with no
     /// blocking overlay, until the replacement lands. The observer retires EVERY in-flight read
-    /// identity for the old axis — `seq`, `cal_seq`, `cancel_latest_reads`, plus `time_tuner`,
+    /// identity for the old axis — `seq`, `cal_seq`, `cancel_reads_for_axis_move`, plus `time_tuner`,
     /// `coins` and `coin_lists` `invalidate()` for the axes that keep their own request
     /// generations — because a cancelled read is not silently dropped: the DB layer raises a
     /// real SQLite interrupt that gets classified as a durable `Settled` failure, so a read
@@ -1151,8 +1170,10 @@ impl AnalyticsView {
     /// is captioned as fitted across the move. A minutes-long composition is the most expensive
     /// thing this window does, and a report generation advance — a strictly larger change —
     /// already does not retire it (`TunerState::mark_report_stale`).
-    /// `TunerState::invalidate_for_axis` is that path. With no joint run live the tuner is
-    /// invalidated exactly as before: drafts cleared, every identity retired.
+    /// `TunerState::invalidate_for_axis` is that path. The Entry/Exit search is the other: its lane
+    /// is left out of the cancel and `TicksState::invalidate_for_axis` keeps it running. With no
+    /// joint run live the tuner is invalidated exactly as before: drafts cleared, every identity
+    /// retired.
     ///
     /// Args:
     ///     cx: Analytics window context used to schedule a catch-up only when the axis moved.
@@ -1168,10 +1189,11 @@ impl AnalyticsView {
         self.axis = axis;
         self.seq = self.seq.wrapping_add(1);
         self.cal_seq = self.cal_seq.wrapping_add(1);
-        self.cancel_latest_reads();
+        self.cancel_reads_for_axis_move();
         self.tuner.invalidate_for_axis();
         self.time_tuner.invalidate();
         self.coins.invalidate();
+        self.ticks.invalidate_for_axis();
         self.coin_lists.invalidate();
         self.mark_report_data_stale();
         self.request_report_refresh(RefreshUrgency::Writer, false, cx);
@@ -1230,6 +1252,7 @@ impl AnalyticsView {
         self.tuner.mark_report_stale();
         self.time_tuner.mark_report_stale();
         self.coins.mark_report_stale();
+        self.ticks.mark_report_stale();
     }
 
     /// Acknowledge every committed generation visible when a refresh begins.
@@ -1674,6 +1697,7 @@ impl AnalyticsView {
         // starting it now would plan against the PREVIOUS period's coins (or, on a first
         // show, against none at all). It is armed from the completion handler below.
         self.coins.invalidate();
+        self.ticks.invalidate();
         // The list panels ride the same reload, so they are retired with it — otherwise a
         // reply already in flight for the previous scope lands under the new heading.
         self.coin_lists.invalidate();
@@ -2360,7 +2384,10 @@ pub fn open(
     if let Ok(handle) = cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| AnalyticsView::new(b, window, cx));
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
+        // NoFill: the tuner's trade pane draws a chart UNDER the GPUI scene, and an opaque root
+        // (or any fill above the pane) hides it whole. The clear colour is the shell's, the fill
+        // the root used to paint; `AnalyticsView::render` keeps it on the palette.
+        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::NoFill))
     }) {
         backend.update(cx, |bk, _| bk.analytics_window = Some(handle));
         crate::window::windowing::activate_new_window(handle.into(), cx);

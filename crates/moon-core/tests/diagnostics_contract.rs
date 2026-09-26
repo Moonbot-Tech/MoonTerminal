@@ -46,6 +46,10 @@ const ENV_ALLOW: &[(&str, &str)] = &[
         "names the route, market and slice an #[ignore] test walks against the live venue by hand; a switch in a user's file must not send requests",
     ),
     (
+        "MOON_TUNER_SEARCH_PROBE",
+        "PRESSES the Entry/Exit axis's Search on its own at startup; a switch in a user's file must not start a search",
+    ),
+    (
         "MOON_CRASH_PROBE",
         "raises a real access violation to exercise the crash report; a switch that kills the          process must never be a key in a file a user edits",
     ),

@@ -143,7 +143,13 @@ pub(in crate::analytics) fn restore_strat_columns(
     previous: Option<moon_core::config::layout::StratColsByMode>,
     legacy_single: Option<u16>,
 ) -> moon_core::config::layout::StratColsByMode {
-    if let Some(current) = current {
+    if let Some(mut current) = current {
+        // The Entry/Exit slot postdates the key: a file saved before it has no value there,
+        // and the axis then takes its default. A saved zero is a deliberate all-hidden mask,
+        // kept like the other three slots keep theirs.
+        current
+            .ticks
+            .get_or_insert(super::StratMode::Ticks.default_cols());
         return current;
     }
     let mut restored = previous.unwrap_or_else(|| {

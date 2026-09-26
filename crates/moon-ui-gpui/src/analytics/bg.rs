@@ -29,6 +29,14 @@ pub(super) enum ReadLane {
     CoinKpi,
     CoinPicked,
     Time,
+    /// The Entry/Exit axis' database stage.
+    Ticks,
+    /// The Entry/Exit axis' replay stage.
+    TicksReplay,
+    /// The Entry/Exit axis' variant columns, rescored after an edit.
+    TicksVariants,
+    /// The Entry/Exit axis' search.
+    TicksSearch,
 }
 
 /// Active cancellation tokens keyed by the UI state each request may publish.
@@ -119,20 +127,33 @@ impl Drop for LatestReads {
     }
 }
 
+/// Every lane a shared scope change retires, the Entry/Exit search aside.
+const SCOPE_LANES: [ReadLane; 12] = [
+    ReadLane::Summary,
+    ReadLane::StrategyBase,
+    ReadLane::Calendar,
+    ReadLane::FilterKpi,
+    ReadLane::FilterHistogram,
+    ReadLane::Coins,
+    ReadLane::CoinKpi,
+    ReadLane::CoinPicked,
+    ReadLane::Time,
+    ReadLane::Ticks,
+    ReadLane::TicksReplay,
+    ReadLane::TicksVariants,
+];
+
 impl AnalyticsView {
     /// Cancel every replaceable read affected by a shared Analytics scope change.
     pub(super) fn cancel_latest_reads(&mut self) {
-        self.latest_reads.cancel(&[
-            ReadLane::Summary,
-            ReadLane::StrategyBase,
-            ReadLane::Calendar,
-            ReadLane::FilterKpi,
-            ReadLane::FilterHistogram,
-            ReadLane::Coins,
-            ReadLane::CoinKpi,
-            ReadLane::CoinPicked,
-            ReadLane::Time,
-        ]);
+        self.latest_reads.cancel(&SCOPE_LANES);
+        self.latest_reads.cancel(&[ReadLane::TicksSearch]);
+    }
+
+    /// Cancel every read a report-axis move retires — all of [`Self::cancel_latest_reads`]'
+    /// but the Entry/Exit search, which outlives the move (`TicksState::invalidate_for_axis`).
+    pub(super) fn cancel_reads_for_axis_move(&mut self) {
+        self.latest_reads.cancel(&SCOPE_LANES);
     }
 
     /// Cancel replaceable Strategy-axis reads when its selection scope changes.
@@ -144,6 +165,10 @@ impl AnalyticsView {
             ReadLane::CoinKpi,
             ReadLane::CoinPicked,
             ReadLane::Time,
+            ReadLane::Ticks,
+            ReadLane::TicksReplay,
+            ReadLane::TicksVariants,
+            ReadLane::TicksSearch,
         ]);
     }
 

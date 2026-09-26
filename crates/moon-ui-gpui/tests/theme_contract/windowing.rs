@@ -879,8 +879,8 @@ fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
             "the trade window must never route a trading or figure action through `{forbidden}`"
         );
     }
-    // Every host builds the view through the one constructor, so the pin is checked there, and
-    // the window opener must go through it.
+    // Both hosts — a window of its own and the tuner's pane — build the view through the one
+    // constructor, so the pin is checked there, and the window opener must go through it.
     assert!(
         code_only(braced_body(
             &trade_window,

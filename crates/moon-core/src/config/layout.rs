@@ -23,7 +23,8 @@ use serde_compat::{
     de_connector_thickness, de_hvol_price_frame_pct, de_hvol_side, de_hvol_tf_s, de_hvol_width,
     de_lenient_chart_labels, de_lenient_false, de_lenient_graphics, de_lenient_map,
     de_lenient_seed, de_lenient_true, de_lenient_u32, de_marker_scale,
-    de_strategies_tree_text_step, de_table_sort_map, de_trade_history_style, de_trade_volume_alpha,
+    de_strategies_tree_text_step, de_table_sort_map, de_tick_ranges, de_trade_history_style,
+    de_trade_volume_alpha,
 };
 pub use serde_compat::{de_lenient, de_lenient_bool};
 
@@ -361,6 +362,10 @@ pub struct StratColsByMode {
     pub filter: u16,
     pub coins: u16,
     pub time: u16,
+    /// The "Entry/Exit" axis. Added after the key shipped, so a file saved before it has no
+    /// value here: `None` is "never chosen" and the UI substitutes the axis default, while a
+    /// saved `Some(0)` is the deliberate all-hidden mask the other three slots also allow.
+    pub ticks: Option<u16>,
 }
 
 impl Default for StratColsByMode {
@@ -371,6 +376,7 @@ impl Default for StratColsByMode {
             filter: 0,
             coins: 0,
             time: 0,
+            ticks: None,
         }
     }
 }
@@ -619,6 +625,49 @@ pub struct TableSortPreference {
     pub ascending: bool,
 }
 
+/// The "Entry/Exit" tuner's persisted settings ([`WindowLayout::analytics_ticks`]). Every field
+/// has a default, so a block missing any of them reads the rest.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TicksAxisLayout {
+    /// Restart count of the search; `None` = the axis default.
+    pub iters: Option<u32>,
+    /// Percentage of the period the search may fit on; `None` = the whole period.
+    pub train: Option<u32>,
+    /// Base seed of the restarts, as text (see [`WindowLayout::analytics_tuner_seed`]); `None`
+    /// draws one per search.
+    pub seed: Option<String>,
+    /// Passes of coordinate descent per restart; `None` = the search's default.
+    pub passes: Option<u32>,
+    /// The share of reproduced trades, per cent, under which a parameter group's heading warns
+    /// that the search's answer speaks for fewer trades (it no longer locks the group out);
+    /// `None` = the axis default.
+    pub gate_pct: Option<u32>,
+    /// Strategy fields the search holds at their base value — the unticked grid rows.
+    pub locked: Vec<String>,
+    /// The model's own settings.
+    pub model: crate::db::tuner::ticks::ModelSettings,
+    /// Whether the trade pane under the deal table is open.
+    pub trade_open: bool,
+    /// Whether the search may bring a trade's entry corridor nearer the price than the trade's
+    /// own. Off by default — and stored this way round so that a config written before the
+    /// switch existed reads it off, the guard on (`SearchParams::keep_corridor`).
+    pub allow_closer_corridor: bool,
+    /// The shortest tape past the close, seconds, a deal must hold to be worked on — the sample
+    /// the variant columns and the search run on; `None` = the axis default. The tape of an
+    /// older trade cannot be fetched again, and one short tail cut every variant's exit at it.
+    pub min_tail_s: Option<u32>,
+    /// Steps per field the automatic search ranges are cut into; `None` = the axis default
+    /// (`params::range::steps_of`).
+    #[serde(deserialize_with = "de_lenient")]
+    pub steps_per_param: Option<u32>,
+    /// The search ranges the user typed over the automatic ones, by field key — only fields with
+    /// a slot typed; a malformed entry is dropped alone.
+    #[serde(deserialize_with = "de_tick_ranges")]
+    pub ranges:
+        std::collections::BTreeMap<String, crate::db::tuner::ticks::params::range::TickRange>,
+}
+
 /// Complete window layout.
 ///
 /// Every field is `Option` or carries `#[serde(default)]` on purpose, and prefers a type wider
@@ -809,6 +858,15 @@ pub struct WindowLayout {
     /// opened for. Apart from [`Self::trade_window_hide_rail`], which a window of its own keeps.
     #[serde(default, deserialize_with = "de_lenient")]
     pub analytics_trade_hide_rail: Option<bool>,
+    /// Print the trade's own captions — its strategy, the detect it fired on, why it closed —
+    /// at the top of trade windows; absent means ON.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub trade_window_labels: Option<bool>,
+    /// The same captions in the trade pane under the tuner's deal table; absent means OFF, as
+    /// the pane's rail is hidden — the pane is opened for the picture. Apart from
+    /// [`Self::trade_window_labels`], which a window of its own keeps.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub analytics_trade_labels: Option<bool>,
 
     /// Selected Profit Monitor period id.
     #[serde(default, deserialize_with = "de_lenient")]
@@ -1110,6 +1168,12 @@ pub struct WindowLayout {
     /// file.
     #[serde(default, deserialize_with = "de_lenient_bool")]
     pub analytics_tuner_compose: bool,
+    /// The "Entry/Exit" tuner's settings: its search's and its model's. `None` — every config
+    /// written before the axis had settings — opens on the defaults. Read leniently: the block
+    /// is hand-editable, and a malformed one must cost only itself, never the window positions
+    /// around it.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub analytics_ticks: Option<TicksAxisLayout>,
     /// Visible screener columns (keys in canonical order). None = all.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,

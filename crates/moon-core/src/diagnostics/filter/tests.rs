@@ -276,3 +276,14 @@ fn the_hotkey_area_raises_dispatch_tracing_and_nothing_else() {
         "off by default, like every other area"
     );
 }
+
+/// The tuner's fetch line is written with `TICKS_AXIS_TARGET` as its explicit target, so the
+/// base filter must raise exactly that target — a drift between the two mutes the line silently.
+#[test]
+fn the_ticks_fetch_target_is_raised_by_the_base_filter() {
+    let directive = format!("{TICKS_AXIS_TARGET}=info");
+    assert!(
+        DEFAULT_BASE_FILTER.contains(&directive),
+        "{DEFAULT_BASE_FILTER:?} does not raise {directive:?}"
+    );
+}
