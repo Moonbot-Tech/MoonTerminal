@@ -52,10 +52,11 @@ pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};
 pub use record::{OwnLines, StopAnchor, entry_placement, fit_for_search, prepare_deal};
 pub use scope::{is_service_row, is_tunable};
 pub use search::{
-    PreparedDeal, SearchMiss, SearchParams, SearchResult, SearchStats, suggest, variant_tally,
+    PreparedDeal, SearchMiss, SearchParams, SearchResult, SearchStats, VariantScore, comparable,
+    fact_tally, suggest, variant_tally,
 };
 pub use settings::ModelSettings;
-pub use stats::{fact_stats, stats_of};
+pub use stats::{fact_stats, fact_tally_of, stats_of};
 pub use verify::{Verdict, verify};
 
 /// Relative tolerance under which a modelled price counts as reproducing the fact: 0.05 %.

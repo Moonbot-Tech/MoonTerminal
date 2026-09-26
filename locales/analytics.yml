@@ -2012,10 +2012,6 @@ analytics.ticks.var_sub:
   ru: "по %{n} из %{m} годных"
   en: "%{n} of %{m} reproduced"
   es: "%{n} de %{m} reproducidas"
-analytics.ticks.holdout:
-  ru: "holdout: %{n} сделок, %{profit}"
-  en: "holdout: %{n} trades, %{profit}"
-  es: "holdout: %{n} operaciones, %{profit}"
 analytics.ticks.vary_gated:
   ru: "Модель воспроизводит факт лишь в %{hits} из %{n} сделок — меньше %{gate} %: подбор идёт, но его ответ говорит только за воспроизведённые сделки"
   en: "The model reproduces the fact on only %{hits} of %{n} trades — under %{gate} %: the search runs, but its answer speaks for the reproduced trades alone"
@@ -2152,6 +2148,86 @@ analytics.ticks.holdout_open:
   ru: "открытыми остались %{n}"
   en: "%{n} left open"
   es: "%{n} quedaron abiertas"
+analytics.ticks.holdout_vs_fact:
+  ru: "отложено %{n}: %{profit} против факта %{fact}"
+  en: "holdout %{n}: %{profit} vs fact %{fact}"
+  es: "reservado %{n}: %{profit} frente al hecho %{fact}"
+analytics.ticks.holdout_loses:
+  ru: "вне выборки хуже факта"
+  en: "loses to fact out of sample"
+  es: "pierde frente al hecho fuera de muestra"
+analytics.ticks.train_below_fact:
+  ru: "хуже факта даже на обучении"
+  en: "below fact even on train"
+  es: "por debajo del hecho incluso en entrenamiento"
+analytics.ticks.whole_period:
+  ru: "весь период, без проверки вне выборки"
+  en: "whole period, no out-of-sample check"
+  es: "todo el período, sin comprobación fuera de muestra"
+analytics.ticks.answers_for:
+  ru: "модель воспроизводит %{hits} из %{n} сделок (неоценённые — против)"
+  en: "the model reproduces %{hits} of %{n} deals (not judged count against)"
+  es: "el modelo reproduce %{hits} de %{n} operaciones (las no evaluadas cuentan en contra)"
+analytics.ticks.warn_holdout_loses:
+  ru: "Найденная точка хуже факта на отложенных сделках."
+  en: "The found point loses to the fact on the held-back deals."
+  es: "El punto encontrado pierde frente al hecho en las operaciones reservadas."
+analytics.ticks.var_open:
+  ru: "открытыми осталось: %{n} — колонка не оценена"
+  en: "left open: %{n} — column not scored"
+  es: "quedaron abiertas: %{n} — columna sin evaluar"
+analytics.ticks.var_untraded:
+  ru: "без результата: %{n}"
+  en: "not scored: %{n}"
+  es: "sin resultado: %{n}"
+analytics.ticks.set_counts:
+  ru: "сделок: %{n} · не закрыты базой: %{base_open} · без ленты: %{no_tape} (не входят ни в одну колонку)"
+  en: "deals: %{n} · not closed by the base: %{base_open} · without tape: %{no_tape} (in no column)"
+  es: "operaciones: %{n} · sin cerrar por la base: %{base_open} · sin cinta: %{no_tape} (en ninguna columna)"
+analytics.ticks.set_counts_pending:
+  ru: "%{n} сделок · %{no_tape} без ленты"
+  en: "%{n} deals · %{no_tape} without tape"
+  es: "%{n} operaciones · %{no_tape} sin cinta"
+analytics.ticks.set_counts_short:
+  ru: "сделок: %{n}"
+  en: "deals: %{n}"
+  es: "operac.: %{n}"
+analytics.ticks.var_open_short:
+  ru: "открыто: %{n}, без оценки"
+  en: "open: %{n}, not scored"
+  es: "abiertas: %{n}, sin evaluar"
+analytics.ticks.holdout_short:
+  ru: "вне %{profit} / факт %{fact}"
+  en: "oos %{profit} / fact %{fact}"
+  es: "fuera %{profit} / hecho %{fact}"
+analytics.ticks.holdout_loses_short:
+  ru: "вне < факта"
+  en: "oos < fact"
+  es: "fuera < hecho"
+analytics.ticks.train_below_short:
+  ru: "обуч. < факта"
+  en: "train < fact"
+  es: "entren. < hecho"
+analytics.ticks.untraded_short:
+  ru: "без результата: %{n}"
+  en: "no result: %{n}"
+  es: "sin resultado: %{n}"
+analytics.ticks.whole_period_short:
+  ru: "без проверки вне"
+  en: "no oos check"
+  es: "sin prueba fuera"
+analytics.ticks.search_base_open:
+  ru: "%{n} открыты у её базы, не в счёте"
+  en: "%{n} open at its base, left out"
+  es: "%{n} abiertas en su base, fuera del cómputo"
+analytics.ticks.warn_whole_period:
+  ru: "Найденная точка подобрана и оценена на одних и тех же сделках: проверки вне выборки нет."
+  en: "The found point was fitted and judged on the same deals: no out-of-sample check."
+  es: "El punto encontrado se ajustó y evaluó con las mismas operaciones: no hay comprobación fuera de muestra."
+analytics.ticks.holdout_small:
+  ru: "отложено сделок: %{n} — это не проверка вне выборки"
+  en: "held back: %{n} deals — no out-of-sample check"
+  es: "reservadas: %{n} operaciones — no es una comprobación fuera de muestra"
 analytics.ticks.unguarded_warn:
   ru: "Без защиты: %{n} из %{m} стратегий — ни стопа, ни трейлинга без ТП; сделка может не закрыться"
   en: "Unguarded: %{n} of %{m} strategies — no stop and no trailing without a take profit; a trade may never close"

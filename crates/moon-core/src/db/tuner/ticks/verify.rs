@@ -786,11 +786,11 @@ pub(super) fn reason_starts_with(reason: &str, prefix: &str) -> bool {
         .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }
 
-/// Share of ✓ over verdicts that answered, as `(hits, answered)`; the caption prints it and
-/// the gate compares it with the threshold. Unanswered verdicts are out of both counts.
+/// Share of ✓ over every verdict, as `(hits, total)`; the caption prints it and the gate
+/// compares it with the threshold. A verdict not judged counts against the share: it is in the
+/// total and never a hit.
 pub fn share(verdicts: impl IntoIterator<Item = Option<bool>>) -> (usize, usize) {
-    verdicts
-        .into_iter()
-        .flatten()
-        .fold((0, 0), |(hits, n), ok| (hits + usize::from(ok), n + 1))
+    verdicts.into_iter().fold((0, 0), |(hits, n), ok| {
+        (hits + usize::from(ok == Some(true)), n + 1)
+    })
 }

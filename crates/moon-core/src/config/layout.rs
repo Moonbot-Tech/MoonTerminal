@@ -634,6 +634,9 @@ pub struct TicksAxisLayout {
     pub iters: Option<u32>,
     /// Percentage of the period the search may fit on; `None` = the whole period.
     pub train: Option<u32>,
+    /// Whether `train` was written under the 70 % default: a layout without it carries the old
+    /// 100 % default for every user, which the axis then reads as unset, once.
+    pub train_v2: bool,
     /// Base seed of the restarts, as text (see [`WindowLayout::analytics_tuner_seed`]); `None`
     /// draws one per search.
     pub seed: Option<String>,

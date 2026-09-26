@@ -22,16 +22,18 @@ use gpui::*;
 use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
-use super::state::SuggState;
+use super::state::{CutCache, CutKey, SuggState};
 use super::tape::{PendingDeal, prepare_sample};
 use crate::analytics::bg::ReadLane;
+use moon_core::db::tuner::VarStats;
 use moon_core::db::tuner::threshold_search::SearchHandle;
+use moon_core::db::tuner::ticks::params::range::Grids;
 use moon_core::db::tuner::ticks::params::{self, ParamGroup};
 use moon_core::db::tuner::ticks::search::{
-    DEFAULT_MAX_PASSES, SearchMiss, SearchParams, check_corridors, suggest, train_len,
-    variant_tally_by_deal,
+    DEFAULT_MAX_PASSES, MIN_HOLDOUT, SearchMiss, SearchParams, check_corridors, comparable,
+    default_min_n, suggest, train_len, variant_tally_by_deal,
 };
-use moon_core::db::tuner::ticks::stats_of;
+use moon_core::db::tuner::ticks::{fact_stats, stats_of};
 
 mod probe;
 pub(super) use probe::painted as probe_painted;
@@ -52,6 +54,38 @@ pub(super) fn restarts_of(text: &str) -> usize {
         .parse::<usize>()
         .unwrap_or(DEFAULT_RESTARTS)
         .clamp(1, 10_000)
+}
+
+/// One variant scored over the comparable deal set, with the fact over that same set.
+struct Scored {
+    stats: VarStats,
+    plan: HashMap<i64, (f64, f64)>,
+    open: usize,
+    untraded: usize,
+    n: usize,
+    /// The cut the score was taken over, fresh or reused.
+    cut: CutCache,
+}
+
+/// A variant's score over the kept deals of `cut`, as the column takes it.
+fn scored_of(
+    score: moon_core::db::tuner::ticks::search::VariantScore,
+    money: moon_core::db::tuner::ticks::search::DealResults,
+    n: usize,
+    cut: CutCache,
+) -> Scored {
+    let plan: HashMap<i64, (f64, f64)> = money
+        .into_iter()
+        .filter_map(|(uid, value)| Some((uid, value?)))
+        .collect();
+    Scored {
+        stats: stats_of(score.tally, score.spent),
+        plan,
+        open: score.open,
+        untraded: score.untraded,
+        n,
+        cut,
+    }
 }
 
 /// Restarts when the box is empty.
@@ -93,7 +127,7 @@ impl AnalyticsView {
         // Nothing to score: an untouched column costs no clone of the rows and no replay — a
         // fetch over hundreds of rows re-arms this once per row.
         if self.ticks.variant_changes().is_empty() {
-            self.ticks.var_stats = None;
+            self.ticks.clear_var_score();
             self.set_ticks_plan(HashMap::new());
             // The trade pane's modelled trades go with the columns.
             self.ticks_refresh_model_trades(cx);
@@ -113,7 +147,8 @@ impl AnalyticsView {
         }));
     }
 
-    /// Score the touched variant over the replayable rows.
+    /// Score the touched variant over the replayable rows the strategies as they stand close
+    /// (`search::comparable`), and the fact over the same rows: one deal set for both columns.
     fn run_ticks_variants(&mut self, req: u64, cx: &mut Context<Self>) {
         let pending = self.prepared_deals();
         let Some(data) = self.ticks.data.data() else {
@@ -123,7 +158,20 @@ impl AnalyticsView {
         let values = self.ticks.variant_changes();
         let defaults = self.filter_defaults(cx);
         let model = super::model_cfg::current();
-        let n = pending.len();
+        let mut sorted_defaults: Vec<(String, f64)> =
+            defaults.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        sorted_defaults.sort_by(|a, b| a.0.cmp(&b.0));
+        let key = CutKey {
+            rows_rev: self.ticks.rows_rev,
+            deals: pending
+                .iter()
+                .map(|p| (p.deal.report_uid, p.trail_ms))
+                .collect(),
+            kind: kind.clone(),
+            model,
+            defaults: sorted_defaults,
+        };
+        let cached = self.ticks.cut_cache.clone().filter(|c| c.key == key);
         self.spawn_latest_db(
             &[ReadLane::TicksVariants],
             false,
@@ -133,22 +181,63 @@ impl AnalyticsView {
                 if values.is_empty() || deals.is_empty() {
                     return None;
                 }
-                let (tally, spent, money) =
+                // The cut depends on the sample alone: a cached one is reused as it is.
+                if let Some(cut) = cached {
+                    let deals: Vec<_> = deals
+                        .into_iter()
+                        .filter(|d| cut.kept.contains(&d.deal.report_uid))
+                        .collect();
+                    let (score, money) =
+                        variant_tally_by_deal(&deals, &defaults, &kind, &values, model);
+                    return Some(scored_of(score, money, deals.len(), cut));
+                }
+                // The base is the strategies as they stand: nothing held, nothing searched.
+                let (held, locked, grids) = (HashMap::new(), Default::default(), Grids::default());
+                let base = SearchParams {
+                    held: &held,
+                    defaults: &defaults,
+                    kind: &kind,
+                    vary_entry: false,
+                    vary_exit: false,
+                    locked: &locked,
+                    grids: &grids,
+                    restarts: 1,
+                    min_n: None,
+                    seed: None,
+                    train_frac: 1.0,
+                    max_passes: 1,
+                    model,
+                    keep_corridor: false,
+                };
+                let (deals, base_open) = comparable(&deals, &base);
+                let cut = CutCache {
+                    key,
+                    kept: Arc::new(deals.iter().map(|d| d.deal.report_uid).collect()),
+                    base_open,
+                    fact: fact_stats(deals.iter().map(|d| &d.deal)),
+                };
+                let (score, money) =
                     variant_tally_by_deal(&deals, &defaults, &kind, &values, model);
-                let plan: HashMap<i64, (f64, f64)> = money
-                    .into_iter()
-                    .filter_map(|(uid, value)| Some((uid, value?)))
-                    .collect();
-                Some((stats_of(tally, spent), plan))
+                Some(scored_of(score, money, deals.len(), cut))
             },
             move |this, scored, cx| {
                 if this.ticks.var_seq != req {
                     return;
                 }
-                let (stats, plan) = scored.unzip();
-                this.ticks.var_stats = stats;
-                this.set_ticks_plan(plan.unwrap_or_default());
-                this.ticks.var_n = n;
+                this.ticks.clear_var_score();
+                match scored {
+                    Some(s) => {
+                        this.ticks.var_stats = Some(s.stats);
+                        this.ticks.var_open = s.open;
+                        this.ticks.var_untraded = s.untraded;
+                        this.ticks.set_fact = Some(s.cut.fact.clone());
+                        this.ticks.base_open = s.cut.base_open;
+                        this.ticks.var_n = s.n;
+                        this.ticks.cut_cache = Some(s.cut);
+                        this.set_ticks_plan(s.plan);
+                    }
+                    None => this.set_ticks_plan(HashMap::new()),
+                }
                 // The trade pane draws what the columns now count.
                 this.ticks_refresh_model_trades(cx);
                 cx.notify();
@@ -183,7 +272,7 @@ impl AnalyticsView {
     /// Clear the variant column.
     pub(in crate::analytics::tuner) fn ticks_clear_variant(&mut self, cx: &mut Context<Self>) {
         self.ticks.variant.clear();
-        self.ticks.var_stats = None;
+        self.ticks.clear_var_score();
         self.ticks.plan.clear();
         self.ticks_reset_variant_inputs();
         self.arm_ticks_variants(cx);
@@ -249,7 +338,9 @@ impl AnalyticsView {
         (with(one), with(all))
     }
 
-    /// One line per group of `groups` under the share gate, none reproduced included: the search
+    /// Per group of `groups` the share of deals the model reproduces (not-judged ones counted
+    /// against), plus a line for a group under the share gate, none reproduced included, and one
+    /// when the last search's point loses to the fact out of sample. The search
     /// learns on the fit trades alone (`TicksData::under_gate`). The search's tooltips and the
     /// write dialogs carry it — the gate no longer locks such a group out, so a variant searched
     /// on a small share of the fact can reach a live strategy, and the dialog is the last place
@@ -260,20 +351,28 @@ impl AnalyticsView {
         };
         let gate = self.ticks.gate();
         let mut seen = Vec::new();
-        groups
+        let mut warns: Vec<String> = groups
             .into_iter()
             .filter(|group| {
                 let first = !seen.contains(group);
                 seen.push(*group);
                 first
             })
-            .filter_map(|group| {
-                let (hits, n) = data.under_gate(group, gate)?;
+            .flat_map(|group| {
                 let name = match group {
                     ParamGroup::Entry => t!("analytics.ticks.group_entry"),
                     ParamGroup::Exit => t!("analytics.ticks.group_exit"),
                 };
-                Some(
+                // What the search answers for, always — not-judged deals count against it.
+                let modelled = group != ParamGroup::Entry || data.entry_modelled();
+                let (hits, n) = data.share_of(group);
+                let answers = (modelled && n > 0).then(|| {
+                    format!(
+                        "{name}: {}",
+                        t!("analytics.ticks.answers_for", hits = hits, n = n)
+                    )
+                });
+                let under = data.under_gate(group, gate).map(|(hits, n)| {
                     t!(
                         "analytics.ticks.gate_warn",
                         group = name,
@@ -281,10 +380,21 @@ impl AnalyticsView {
                         n = n,
                         gate = (gate * 100.0).round() as i64
                     )
-                    .to_string(),
-                )
+                    .to_string()
+                });
+                answers.into_iter().chain(under)
             })
-            .collect()
+            .collect();
+        // Only while the column still is the search's point: a hand edit since is some other.
+        if let Some(r) = self.ticks.current_result() {
+            if r.holdout_loses {
+                warns.push(t!("analytics.ticks.warn_holdout_loses").to_string());
+            }
+            if r.holdout.as_ref().is_none_or(|h| h.n < MIN_HOLDOUT) {
+                warns.push(t!("analytics.ticks.warn_whole_period").to_string());
+            }
+        }
+        warns
     }
 
     /// The groups a variant's changes move — the gate's warning at write time is about them.
@@ -489,7 +599,15 @@ impl AnalyticsView {
                     "[x] ticks search: #{seq} answered after {} ms ({}), current #{}",
                     started.elapsed().as_millis(),
                     match &result {
-                        Ok(found) => format!("found {:?}", found.values),
+                        Ok(found) => format!(
+                            "found {:?}, train {:.4} vs fact {:.4}, holdout {:?} vs fact {:?}, holdout_loses {}",
+                            found.values,
+                            found.train.profit,
+                            found.fact_train.profit,
+                            found.holdout.as_ref().map(|h| h.profit),
+                            found.fact_holdout.as_ref().map(|f| f.profit),
+                            found.holdout_loses
+                        ),
                         Err(miss) => format!("nothing: {miss:?}"),
                     },
                     this.ticks.sugg_seq
@@ -509,16 +627,19 @@ impl AnalyticsView {
                         this.ticks_reset_variant_inputs();
                         this.ticks.last_seed = Some(result.seed);
                         this.ticks.last_result = Some(result);
+                        this.ticks.result_variant = this.ticks.variant_changes();
                         this.arm_ticks_variants(cx);
                     }
                     // Why nothing: the floor no point kept — the typed one, or the search's own
-                    // tenth of the training slice —, the corridor none kept, no point that
-                    // closed every trade it bought, or nothing at all.
+                    // half of the training slice (`default_min_n`) —, the corridor none kept, no
+                    // point that closed every trade it bought, or nothing at all. The previous
+                    // answer's verdict no longer speaks for the column either.
                     Err(miss) => {
+                        this.ticks.last_result = None;
                         this.ticks.sugg_note = Some(match miss {
                             SearchMiss::Floor => t!(
                                 "analytics.ticks.sugg_floor",
-                                n = min_n.unwrap_or((train_n as i64 / 10).max(1))
+                                n = min_n.unwrap_or_else(|| default_min_n(train_n))
                             )
                             .to_string(),
                             SearchMiss::Corridor => t!("analytics.ticks.sugg_corridor").to_string(),

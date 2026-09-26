@@ -154,7 +154,7 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
     assert!((1..=3).contains(&stats.distinct));
     assert!(stats.evaluations >= 3);
     // The same values through the variant column.
-    let (tally, spent) = variant_tally(
+    let VariantScore { tally, spent, .. } = variant_tally(
         &deals,
         &defaults,
         "PumpsDetection",
@@ -202,7 +202,14 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
         picture.sell_line
     );
     // And the deal table's plan column: every deal's money, summing to the column's tally.
-    let (by_tally, by_spent, money) = variant_tally_by_deal(
+    let (
+        VariantScore {
+            tally: by_tally,
+            spent: by_spent,
+            ..
+        },
+        money,
+    ) = variant_tally_by_deal(
         &deals,
         &defaults,
         "PumpsDetection",
@@ -258,6 +265,56 @@ fn the_holdout_is_scored_but_never_fitted_on() {
     assert_eq!(result.train.n, 6);
     let holdout = result.holdout.expect("a holdout");
     assert_eq!(holdout.n, 0, "neither held-back deal reaches 1 %");
+    // search.rs `suggest`: the fact is tallied over the same two slices — six fitted deals and
+    // two held back at 2.0 each — and an answer that leaves held-back deals open loses there.
+    assert_eq!(result.fact_train.n, 6);
+    assert!((result.fact_train.profit - 12.0).abs() < 1e-9);
+    let fact_holdout = result.fact_holdout.expect("a fact holdout");
+    assert_eq!(fact_holdout.n, 2);
+    assert!((fact_holdout.profit - 4.0).abs() < 1e-9);
+    assert_eq!(result.holdout_open, 2);
+    assert!(result.holdout_loses);
+}
+
+/// search.rs `VariantScore::push`: a deal the variant bought and left open, or never traded, is
+/// counted beside the tally instead of silently dropping out — dropping it would let a variant
+/// that leaves its losers open read better than the fact over fewer deals.
+#[test]
+fn a_variant_accounts_for_every_deal_the_fact_is_tallied_over() {
+    // Three tapes peak at 101 and take at 1 %; two peak at 100.5 and end flat, open under a take
+    // of 1 % and a stop of -50 %.
+    let deals: Vec<PreparedDeal> = (1..=3)
+        .map(|uid| prepared(uid, 101.0))
+        .chain((4..=5).map(|uid| prepared(uid, 100.5)))
+        .collect();
+    let score = variant_tally(
+        &deals,
+        &HashMap::new(),
+        "PumpsDetection",
+        &[("SellPrice".to_string(), "1".to_string())],
+        ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+    );
+    assert_eq!(score.tally.n, 3);
+    assert_eq!(score.open, 2, "{score:?}");
+    assert_eq!(score.untraded, 0, "{score:?}");
+    let fact = fact_tally(&deals);
+    assert_eq!(
+        fact.n as usize,
+        score.tally.n as usize + score.open + score.untraded
+    );
+}
+
+/// search.rs `default_min_n`: the floor is half the train deals, never under one — at a tenth
+/// a point could keep a handful of trades and read as the best.
+#[test]
+fn the_default_trade_floor_is_half_the_train_deals() {
+    assert_eq!(default_min_n(10), 5);
+    assert_eq!(default_min_n(7), 3);
+    assert_eq!(default_min_n(1), 1);
+    assert_eq!(default_min_n(0), 1);
 }
 
 #[test]
@@ -415,7 +472,7 @@ fn a_field_the_strategies_disagree_on_runs_at_each_deals_own_value() {
     // run every deal at its own strategy's take — 10 on the first deal, 2 on the second — and
     // not at a default for a field no one strategy holds for all.
     let deals = vec![with_take(1, "1"), with_take(2, "0.2")];
-    let (tally, _, money) = variant_tally_by_deal(
+    let (VariantScore { tally, .. }, money) = variant_tally_by_deal(
         &deals,
         &HashMap::new(),
         "PumpsDetection",
@@ -452,7 +509,7 @@ fn a_search_holds_each_deals_own_value_and_reports_a_value_one_strategy_lacks() 
         latency_ms: 0.0,
         ..ModelSettings::default()
     };
-    let (tally, _) = variant_tally(&deals, &defaults, "PumpsDetection", &[], model);
+    let tally = variant_tally(&deals, &defaults, "PumpsDetection", &[], model).tally;
     assert!((tally.profit - 24.0).abs() < 1e-6, "{}", tally.profit);
     locked.remove("SellPrice");
     let params = SearchParams {

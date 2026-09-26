@@ -145,8 +145,9 @@ fn restore_edges_upto(saved: Option<u32>, max: usize) -> usize {
 
 /// Selectable train shares, as a PERCENTAGE of the period the search may fit on.
 ///
-/// 100 is "no split at all", which is why it leads the list: holding trades back is the opt-in,
-/// and every scope small enough that a split would starve the search keeps working untouched.
+/// 100 is "no split at all", which is why it leads the list: on the By-filter axis holding
+/// trades back is the opt-in, and every scope small enough that a split would starve the search
+/// keeps working untouched. The Entry/Exit axis holds back by default (`TICKS_DEFAULT_TRAIN`).
 pub(in crate::analytics::tuner) const TRAIN_OPTIONS: [usize; 6] = [100, 90, 80, 70, 60, 50];
 
 /// Train share used when nothing is chosen or a stored value is not on offer.

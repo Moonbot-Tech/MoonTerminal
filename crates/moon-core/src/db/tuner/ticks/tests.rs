@@ -1440,9 +1440,11 @@ fn verify_takes_a_level_placed_through_the_market() {
 }
 
 #[test]
-fn share_counts_only_answered_verdicts() {
-    assert_eq!(share([Some(true), None, Some(false), Some(true)]), (2, 3));
-    assert_eq!(share([None, None]), (0, 0));
+fn share_counts_a_verdict_not_judged_against_the_share() {
+    // verify.rs `share`: a deal not judged (None) is in the total and never a hit — dropping it
+    // from the denominator would print 2/3 for a sample where only half the deals reproduced.
+    assert_eq!(share([Some(true), None, Some(false), Some(true)]), (2, 4));
+    assert_eq!(share([None, None]), (0, 2));
 }
 
 // ---- parameters out of a strategy ----------------------------------------------------------

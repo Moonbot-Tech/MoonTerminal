@@ -14,13 +14,23 @@ use crate::db::tuner::{VarStats, stats_from_tally};
 /// Args:
 ///     deals: The rows, chronological by close.
 pub fn fact_stats<'a>(deals: impl IntoIterator<Item = &'a Deal>) -> VarStats {
+    let (tally, spent) = fact_tally_of(deals);
+    stats_from_tally(tally, spent)
+}
+
+/// The fact of `deals` as a tally — every deal's reported result, in the order given — and
+/// the sum of their spend: what [`fact_stats`] draws, for a caller that compares tallies.
+///
+/// Args:
+///     deals: The rows, chronological by close.
+pub fn fact_tally_of<'a>(deals: impl IntoIterator<Item = &'a Deal>) -> (Tally, f64) {
     let mut tally = Tally::default();
     let mut spent = 0.0;
     for deal in deals {
         tally.push(deal.fact_pnl);
         spent += deal.spent;
     }
-    stats_from_tally(tally, spent)
+    (tally, spent)
 }
 
 /// The KPI of one variant out of its tally and the spend of the deals it traded — the shape

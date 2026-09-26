@@ -506,7 +506,7 @@ impl AnalyticsView {
     /// scope is not a column: the axis works on the fit rows alone. An untouched variant is the
     /// strategy as it stands, and shows the baseline.
     fn ticks_kpi(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        let (fit, covered, entry, exit, replayable, horizon) = self
+        let (fit, covered, entry, exit, replayable, horizon, entry_on) = self
             .ticks
             .data
             .data()
@@ -518,6 +518,7 @@ impl AnalyticsView {
                     d.exit_share,
                     d.replayable().count(),
                     d.exit_horizon_ms(),
+                    d.entry_modelled(),
                 )
             })
             .unwrap_or_default();
@@ -534,7 +535,12 @@ impl AnalyticsView {
             "analytics.ticks.subset_sub",
             n = fit,
             m = covered,
-            entry = share(entry),
+            // A kind without an entry model reproduces no entry: its share would read 0 %.
+            entry = if entry_on {
+                share(entry)
+            } else {
+                "—".to_string()
+            },
             exit = share(exit)
         )
         .to_string();
@@ -543,9 +549,40 @@ impl AnalyticsView {
         }
         // One short title. The share line is a hover: inside a 92px column it wrapped and
         // truncated ("2 of 2 with tape…").
-        let base = VarLabel::new(t!("analytics.ticks.subset").to_string()).with_tip(subset_sub);
-        let baseline: Option<moon_core::db::tuner::VarStats> =
-            self.ticks.kpi.data().and_then(|k| k.first().cloned());
+        // Once a variant is scored the "Fact" is over its very deals (`variants.rs`); the counts
+        // of what sits out of every column are on screen, not in a tooltip.
+        let set_n = match self.ticks.set_fact {
+            Some(_) => self.ticks.var_n,
+            None => replayable,
+        };
+        let no_tape = fit.saturating_sub(replayable);
+        // Until the cut has run nobody knows how many the base leaves open: no "0" is claimed.
+        let set_counts = match self.ticks.set_fact {
+            Some(_) => t!(
+                "analytics.ticks.set_counts",
+                n = set_n,
+                base_open = self.ticks.base_open,
+                no_tape = no_tape
+            ),
+            None => t!(
+                "analytics.ticks.set_counts_pending",
+                n = set_n,
+                no_tape = no_tape
+            ),
+        }
+        .to_string();
+        // A ~92px column: the visible line carries a short token, the tooltip the whole text.
+        let base = VarLabel::new(t!("analytics.ticks.subset").to_string())
+            .with_tip(format!("{subset_sub}\n{set_counts}"))
+            .sub_line(
+                t!("analytics.ticks.set_counts_short", n = set_n).to_string(),
+                false,
+            );
+        let baseline: Option<moon_core::db::tuner::VarStats> = self
+            .ticks
+            .set_fact
+            .clone()
+            .or_else(|| self.ticks.kpi.data().and_then(|k| k.first().cloned()));
         let mut stats: Vec<moon_core::db::tuner::VarStats> = baseline.iter().cloned().collect();
         let title = t!("analytics.ticks.var_n", n = 1).to_string();
         let label = match &self.ticks.var_stats {
@@ -554,33 +591,35 @@ impl AnalyticsView {
                 VarLabel::new(title).with_tip(t!("analytics.ticks.var_untouched").to_string())
             }
             Some(var) => {
-                let mut sub = t!(
-                    "analytics.ticks.var_sub",
-                    n = var.n,
-                    m = self.ticks.var_n.max(replayable)
-                )
-                .to_string();
-                if let Some((holdout, open)) = self
-                    .ticks
-                    .last_result
-                    .as_ref()
-                    .and_then(|r| r.holdout.as_ref().map(|h| (h, r.holdout_open)))
-                {
-                    sub = format!(
-                        "{sub} · {}",
-                        t!(
-                            "analytics.ticks.holdout",
-                            n = holdout.n,
-                            profit = super::super::summary::fmt_signed(holdout.profit)
-                        )
-                    );
-                    // Deals held back the answer left open: the holdout cannot count them.
-                    if open > 0 {
-                        sub = format!("{sub} · {}", t!("analytics.ticks.holdout_open", n = open));
-                    }
-                }
+                let sub =
+                    t!("analytics.ticks.var_sub", n = var.n, m = self.ticks.var_n).to_string();
+                let parts = self.ticks_variant_parts();
+                // Warning first, at most two short tokens on screen; every part in the tooltip.
+                let tip = std::iter::once(sub)
+                    .chain(parts.iter().map(|part| part.long.clone()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let shown = &parts[..parts.len().min(2)];
                 stats.push(var.clone());
-                VarLabel::new(title).with_tip(sub)
+                let label = VarLabel::new(title).with_tip(tip);
+                let label = if shown.is_empty() {
+                    label
+                } else {
+                    label.sub_line(
+                        shown
+                            .iter()
+                            .map(|part| part.short.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" · "),
+                        shown.iter().any(|part| part.warn),
+                    )
+                };
+                // A variant that leaves a deal open cannot be scored honestly: no number shows.
+                if self.ticks.var_open > 0 {
+                    label.blanked()
+                } else {
+                    label
+                }
             }
         };
         let labels = [label];
@@ -615,6 +654,117 @@ impl AnalyticsView {
             p,
             cx,
         )
+    }
+}
+
+/// One part of the variant column's second line: the short token the ~92px column shows, the
+/// full text its tooltip carries, and whether it warns.
+struct VarPart {
+    short: String,
+    long: String,
+    warn: bool,
+}
+
+impl AnalyticsView {
+    /// The variant column's parts, in the order the line shows them: a column not scored, a
+    /// search answer that loses to the fact out of sample or on train, the holdout against the
+    /// fact, the deals without a result, no out-of-sample check, the search base's own cut.
+    /// The search's verdict speaks only while the column still is its point
+    /// ([`state::TicksState::current_result`]).
+    fn ticks_variant_parts(&self) -> Vec<VarPart> {
+        use moon_core::db::tuner::ticks::search::MIN_HOLDOUT;
+        let fmt = super::super::summary::fmt_signed;
+        let part = |short: String, long: String, warn: bool| VarPart { short, long, warn };
+        let mut parts = Vec::new();
+        let open = self.ticks.var_open;
+        if open > 0 {
+            parts.push(part(
+                t!("analytics.ticks.var_open_short", n = open).to_string(),
+                t!("analytics.ticks.var_open", n = open).to_string(),
+                true,
+            ));
+        }
+        let result = self.ticks.current_result();
+        if let Some(r) = result
+            && r.holdout_loses
+        {
+            parts.push(part(
+                t!("analytics.ticks.holdout_loses_short").to_string(),
+                t!("analytics.ticks.holdout_loses").to_string(),
+                true,
+            ));
+        }
+        if let Some(r) = result
+            && r.train.profit < r.fact_train.profit
+        {
+            parts.push(part(
+                t!("analytics.ticks.train_below_short").to_string(),
+                t!("analytics.ticks.train_below_fact").to_string(),
+                true,
+            ));
+        }
+        match result.and_then(|r| r.holdout.as_ref().map(|h| (r, h))) {
+            // Deals the answer left open are not in its holdout, all are in the fact's: the
+            // two profits are over different sets and are not printed side by side.
+            Some((r, _)) if r.holdout_open > 0 => {
+                let text = t!("analytics.ticks.holdout_open", n = r.holdout_open).to_string();
+                parts.push(part(text.clone(), text, true));
+            }
+            Some((r, holdout)) if holdout.n >= MIN_HOLDOUT => {
+                let fact = r
+                    .fact_holdout
+                    .as_ref()
+                    .map_or_else(|| "—".to_string(), |f| fmt(f.profit));
+                parts.push(part(
+                    t!(
+                        "analytics.ticks.holdout_short",
+                        profit = fmt(holdout.profit),
+                        fact = fact.clone()
+                    )
+                    .to_string(),
+                    t!(
+                        "analytics.ticks.holdout_vs_fact",
+                        n = holdout.n,
+                        profit = fmt(holdout.profit),
+                        fact = fact
+                    )
+                    .to_string(),
+                    false,
+                ));
+            }
+            _ => {}
+        }
+        let untraded = self.ticks.var_untraded;
+        if untraded > 0 {
+            parts.push(part(
+                t!("analytics.ticks.untraded_short", n = untraded).to_string(),
+                t!("analytics.ticks.var_untraded", n = untraded).to_string(),
+                false,
+            ));
+        }
+        if let Some(r) = result {
+            // No holdout, or one too small to be a check: fitted and judged on the same deals.
+            match &r.holdout {
+                None => parts.push(part(
+                    t!("analytics.ticks.whole_period_short").to_string(),
+                    t!("analytics.ticks.whole_period").to_string(),
+                    true,
+                )),
+                Some(h) if h.n < MIN_HOLDOUT => parts.push(part(
+                    t!("analytics.ticks.whole_period_short").to_string(),
+                    t!("analytics.ticks.holdout_small", n = h.n).to_string(),
+                    true,
+                )),
+                Some(_) => {}
+            }
+            // The search's base can hold edits the "Fact" column's does not: its own cut.
+            if r.stats.left_open > 0 {
+                let text =
+                    t!("analytics.ticks.search_base_open", n = r.stats.left_open).to_string();
+                parts.push(part(text.clone(), text, false));
+            }
+        }
+        parts
     }
 }
 
