@@ -456,8 +456,8 @@ struct CoreTrack {
 impl CoreTrack {
     /// Average `(process, system)` CPU over the last `CPU_WINDOW_SECS` seconds.
     ///
-    /// A zero sample count is unknown CPU, not 0%. `checked_div` would report zero.
-    #[allow(clippy::manual_checked_ops)]
+    /// A zero sample count is unknown CPU, not 0%. `checked_div` returns `None`
+    /// for that divisor, which is that unknown state.
     fn averaged(&self, now_sec: i64) -> (Option<u8>, Option<u8>) {
         let (mut proc, mut system, mut n) = (0u32, 0u32, 0u32);
         for bucket in &self.cpu {
@@ -467,14 +467,10 @@ impl CoreTrack {
                 n += bucket.samples;
             }
         }
-        if n == 0 {
-            (None, None)
-        } else {
-            (
-                Some((proc / n).min(255) as u8),
-                Some((system / n).min(255) as u8),
-            )
-        }
+        (
+            proc.checked_div(n).map(|v| v.min(255) as u8),
+            system.checked_div(n).map(|v| v.min(255) as u8),
+        )
     }
 }
 
