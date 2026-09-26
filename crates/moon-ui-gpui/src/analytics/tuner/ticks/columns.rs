@@ -10,12 +10,16 @@ pub(in crate::analytics::tuner) struct DealCol {
     pub(in crate::analytics::tuner) key: &'static str,
     /// Locale key of the heading.
     pub(in crate::analytics::tuner) label: &'static str,
-    /// Preferred width, font-scaled px; the coin column is the flexible remainder.
+    /// Preferred width, font-scaled px. The coin column has its own explicit width; the one
+    /// flexible column is whichever row sets [`DealCol::fill`].
     pub(in crate::analytics::tuner) w: f32,
     /// How narrow the column may be squeezed.
     pub(in crate::analytics::tuner) min_w: f32,
     /// Numbers right-align, marks and words centre or lead.
     pub(in crate::analytics::tuner) align: Align,
+    /// The one flexible column. Every other column has an explicit width; a fill here is what
+    /// takes the free width a short coin name would otherwise leave unused.
+    pub(in crate::analytics::tuner) fill: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -41,13 +45,21 @@ pub(in crate::analytics::tuner) const COL_REASON: &str = "reason";
 pub(in crate::analytics::tuner) const COL_TAPE: &str = "tape";
 pub(in crate::analytics::tuner) const COL_MODEL: &str = "model";
 
-const fn col(key: &'static str, label: &'static str, w: f32, min_w: f32, align: Align) -> DealCol {
+const fn col(
+    key: &'static str,
+    label: &'static str,
+    w: f32,
+    min_w: f32,
+    align: Align,
+    fill: bool,
+) -> DealCol {
     DealCol {
         key,
         label,
         w,
         min_w,
         align,
+        fill,
     }
 }
 
@@ -61,31 +73,44 @@ pub(in crate::analytics::tuner) const DEAL_COLS: &[DealCol] = &[
     col(
         COL_KIND,
         "analytics.ticks.col.kind",
-        76.0,
-        52.0,
+        88.0,
+        64.0,
         Align::Left,
+        false,
     ),
-    col(COL_CORE, "analytics.col.core", 72.0, 48.0, Align::Left),
+    // The core name is the long text ("VLTR$18 ~ F-BG / …"). It is the fill: the coin is a
+    // short ticker and used to take the free width while this column stayed at 72px.
+    col(
+        COL_CORE,
+        "analytics.col.core",
+        180.0,
+        120.0,
+        Align::Left,
+        true,
+    ),
     col(
         COL_RESULT,
         "analytics.ticks.col.result",
-        58.0,
-        48.0,
+        64.0,
+        52.0,
         Align::Right,
+        false,
     ),
     col(
         COL_PROFIT,
         "analytics.ticks.col.profit",
-        96.0,
-        60.0,
+        108.0,
+        72.0,
         Align::Right,
+        false,
     ),
     col(
         COL_PLAN,
         "analytics.ticks.col.plan",
         104.0,
-        60.0,
+        72.0,
         Align::Right,
+        false,
     ),
     col(
         COL_DURATION,
@@ -93,20 +118,23 @@ pub(in crate::analytics::tuner) const DEAL_COLS: &[DealCol] = &[
         52.0,
         44.0,
         Align::Right,
+        false,
     ),
     col(
         COL_HELD,
         "analytics.ticks.col.held",
-        76.0,
-        60.0,
+        84.0,
+        64.0,
         Align::Center,
+        false,
     ),
     col(
         COL_REASON,
         "analytics.ticks.col.reason",
+        168.0,
         96.0,
-        60.0,
         Align::Left,
+        false,
     ),
     col(
         COL_TAPE,
@@ -114,16 +142,21 @@ pub(in crate::analytics::tuner) const DEAL_COLS: &[DealCol] = &[
         40.0,
         36.0,
         Align::Center,
+        false,
     ),
     col(
         COL_MODEL,
         "analytics.ticks.col.model",
-        44.0,
+        48.0,
         40.0,
         Align::Center,
+        false,
     ),
 ];
 
+/// Preferred width of the coin column (font-scaled px). Explicit, so the core column can be
+/// the fill without a second flexible column.
+pub(in crate::analytics::tuner) const DEAL_COIN_W: f32 = 88.0;
 /// Width the coin column never drops below (font-scaled px).
 pub(in crate::analytics::tuner) const DEAL_COIN_MIN_W: f32 = 64.0;
 pub(in crate::analytics::tuner) const DEAL_ROW_PAD_X: f32 = 8.0;

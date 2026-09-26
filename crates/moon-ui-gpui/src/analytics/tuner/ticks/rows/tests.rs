@@ -1,6 +1,6 @@
 use super::super::columns::{COL_HELD, COL_MODEL, COL_PROFIT, COL_RESULT, COL_TAPE, COL_TIME};
 use super::super::state::{DealRow, TapeStatus, TicksData, TicksState};
-use super::{order_for, result_pct};
+use super::{order_for, paint_fixed, result_pct};
 use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};
 use moon_core::market::trade_replay::TickStatus;
 
@@ -515,4 +515,20 @@ fn a_reproduced_row_with_a_short_tail_is_not_fit() {
     assert!(!row.fit());
     row.held = Some((60_000, 7_200_000));
     assert!(row.fit());
+}
+
+/// A percent that rounds to zero must not read `-0.00`. The sign the colour uses is the same
+/// rounded value, so the cell cannot be red and unsigned at once.
+#[test]
+fn a_percent_that_rounds_to_zero_is_unsigned() {
+    use moon_core::util::fmt::DeltaSign;
+    let (text, sign) = paint_fixed(-0.004, 2);
+    assert_eq!(text, "0.00");
+    assert_eq!(sign, DeltaSign::Zero);
+    let (text, sign) = paint_fixed(-3.414, 2);
+    assert_eq!(text, "-3.41");
+    assert_eq!(sign, DeltaSign::Negative);
+    let (text, sign) = paint_fixed(1.2, 2);
+    assert_eq!(text, "+1.20");
+    assert_eq!(sign, DeltaSign::Positive);
 }

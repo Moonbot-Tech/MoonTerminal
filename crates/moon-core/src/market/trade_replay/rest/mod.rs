@@ -53,8 +53,77 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 pub enum FetchError {
     /// The venue does not know this symbol. Permanent for this market; retrying cannot help.
     UnknownSymbol,
-    /// Transport, service, rate-limit or malformed-response failure that may recover.
+    /// Transport, service, or malformed-response failure that may recover.
     Transient(String),
+    /// HTTP 429 or 418. The wait is the venue's `Retry-After` when `retry_after_s` is `Some`,
+    /// and the gate's backoff curve otherwise. Recorded on the gate by the worker, not here.
+    Throttled {
+        /// Parsed `Retry-After` seconds, or `None` when the header was missing or not an integer.
+        retry_after_s: Option<u32>,
+        /// Short ASCII diagnostic, including the status.
+        diagnostic: String,
+    },
+}
+
+/// What a response's rate-limit headers said, for the worker to apply to [`super::gate::ReplayGate`].
+///
+/// Published on the calling thread by [`decode_and_classify`] (and Hyperliquid's own fetch,
+/// which does not go through that function) and read once, immediately, by the worker. A
+/// transport failure publishes the empty notice, so a previous response cannot be applied twice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExchangeNotice {
+    /// HTTP status, or 0 when the call never produced a response.
+    pub status: u16,
+    /// `X-MBX-USED-WEIGHT-1M` when it parsed as an integer.
+    pub used_weight_1m: Option<u32>,
+    /// `Retry-After` in seconds when it parsed as an integer.
+    pub retry_after_s: Option<u32>,
+}
+
+std::thread_local! {
+    static EXCHANGE_NOTICE: std::cell::Cell<ExchangeNotice> = const {
+        std::cell::Cell::new(ExchangeNotice {
+            status: 0,
+            used_weight_1m: None,
+            retry_after_s: None,
+        })
+    };
+}
+
+/// The notice from the response this thread last decoded.
+///
+/// Meaningful until the next [`fetch_klines`] or [`fetch_trades`] on this thread, which clears
+/// it before the call. Other threads have their own notice.
+///
+/// Returns:
+///     The last published notice, or the empty one.
+pub fn exchange_notice() -> ExchangeNotice {
+    EXCHANGE_NOTICE.with(|cell| cell.get())
+}
+
+fn publish_exchange_notice(notice: ExchangeNotice) {
+    EXCHANGE_NOTICE.with(|cell| cell.set(notice));
+}
+
+fn clear_exchange_notice() {
+    publish_exchange_notice(ExchangeNotice::default());
+}
+
+/// Read the two headers the gate acts on. Header names are matched case-insensitively.
+///
+/// Args:
+///     status: HTTP status.
+///     headers: The response's header map.
+///
+/// Returns:
+///     Parsed weight and `Retry-After`, with absent or non-integer values left as `None`.
+fn notice_from_headers(status: u16, headers: &ureq::http::HeaderMap) -> ExchangeNotice {
+    let text = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
+    ExchangeNotice {
+        status,
+        used_weight_1m: super::gate::parse_u32_header(text("x-mbx-used-weight-1m")),
+        retry_after_s: super::gate::parse_u32_header(text("retry-after")),
+    }
 }
 
 /// Build the HTTPS client used for every replay request.
@@ -100,6 +169,7 @@ pub fn fetch_klines(
     to_ms: i64,
     max_rows: usize,
 ) -> Result<Vec<ChartCandle>, FetchError> {
+    clear_exchange_notice();
     let value = match route {
         KlineRoute::BinanceSpot | KlineRoute::BinanceUsdM | KlineRoute::BinanceCoinM => {
             binance::fetch(agent, route, market, from_ms, to_ms, max_rows)?
@@ -237,6 +307,7 @@ pub fn fetch_trades(
     to_ms: i64,
     cursor: Option<TradeCursor>,
 ) -> Result<TradePage, FetchError> {
+    clear_exchange_notice();
     match route {
         TradeRoute::BinanceSpotAggTrades
         | TradeRoute::BinanceUsdMAggTrades
@@ -293,6 +364,19 @@ pub(super) fn decode_and_classify(
     classify: impl FnOnce(u16, &Value) -> Result<(), FetchError>,
 ) -> Result<Value, FetchError> {
     let status = response.status().as_u16();
+    let notice = notice_from_headers(status, response.headers());
+    // Published before the body is read, so a 429 and a JSON failure still carry the weight
+    // header. The worker reads it on this same thread before the next fetch clears it.
+    publish_exchange_notice(notice);
+    if status == 429 || status == 418 {
+        // Drain the body so the connection can be reused, then stop. The status is the
+        // classification: a rate-limit body is not an unknown-symbol verdict.
+        let _ = response.into_body().read_to_string();
+        return Err(FetchError::Throttled {
+            retry_after_s: notice.retry_after_s,
+            diagnostic: format!("{venue} HTTP {status}"),
+        });
+    }
     let body: Value = response
         .into_body()
         .read_json()

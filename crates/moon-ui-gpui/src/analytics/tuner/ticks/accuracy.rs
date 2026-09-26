@@ -78,7 +78,13 @@ impl Accuracy {
 
 /// A share as the line prints it: one decimal, or a dash with nothing to count.
 fn pct_text(pct: Option<f64>) -> String {
-    pct.map_or_else(|| "—".to_string(), |pct| format!("{pct:.1} %"))
+    let Some(pct) = pct else {
+        return "—".to_string();
+    };
+    match moon_core::util::fmt::round_to(pct, 1) {
+        Some(pct) => format!("{pct:.1} %"),
+        None => "—".to_string(),
+    }
 }
 
 /// The tooltip: what each share counts, then what the model assumes, with its numbers.

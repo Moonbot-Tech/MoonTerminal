@@ -111,6 +111,24 @@ margin_s = 36000
     assert_eq!(sanitize(back).trade_replay.margin_s, 30);
 }
 
+/// A file written while 65 s was the default loads as 30 s. The nearest remaining step is
+/// 60 s, and taking that step would keep a wider tape than the default that replaced 65.
+#[test]
+fn a_stored_65s_margin_loads_as_30_not_the_nearest_step() {
+    let stored: StorageCfg = toml::from_str("[trade_replay]\nmargin_s = 65\n").expect("parses");
+    assert_eq!(stored.trade_replay.margin_s, RETIRED_TRADE_MARGIN_S);
+    assert_eq!(
+        snap_trade_margin_s(stored.trade_replay.margin_s),
+        60,
+        "the generic snap is the wrong landing"
+    );
+    assert_eq!(
+        sanitize(stored).trade_replay.margin_s,
+        DEFAULT_TRADE_MARGIN_S
+    );
+    assert_eq!(DEFAULT_TRADE_MARGIN_S, 30);
+}
+
 /// A file written while the steps started at 5 s — the default of 2026-09-21 is on disk in
 /// every terminal that never touched the setting — loads at the new floor, 30 s: the tuner's
 /// run-up and tail, which the setting is no longer padded to behind the tab's back.
@@ -144,9 +162,10 @@ fn snap_and_step_walk_the_step_list() {
     assert_eq!(snap_trade_margin_s(44), 30);
     assert_eq!(snap_trade_margin_s(45), 30, "tie goes to the lower step");
     assert_eq!(snap_trade_margin_s(46), 60);
-    assert_eq!(snap_trade_margin_s(65), 65);
+    // 65 is no longer a step. The generic snap lands on 60 — the load path must not use it.
+    assert_eq!(snap_trade_margin_s(RETIRED_TRADE_MARGIN_S), 60);
     assert_eq!(snap_trade_margin_s(62), 60);
-    assert_eq!(snap_trade_margin_s(63), 65);
+    assert_eq!(snap_trade_margin_s(63), 60);
     assert_eq!(snap_trade_margin_s(u32::MAX), MAX_TRADE_MARGIN_S);
 
     assert_eq!(step_trade_margin_s(900, 1), 1800);
@@ -158,9 +177,8 @@ fn snap_and_step_walk_the_step_list() {
         "the top absorbs the rest"
     );
     assert_eq!(step_trade_margin_s(30, -1), 30, "so does the bottom");
-    assert_eq!(step_trade_margin_s(60, 1), 65);
-    assert_eq!(step_trade_margin_s(65, 1), 180);
-    assert_eq!(step_trade_margin_s(65, -1), 60);
+    assert_eq!(step_trade_margin_s(60, 1), 180);
+    assert_eq!(step_trade_margin_s(60, -1), 30);
     assert_eq!(
         step_trade_margin_s(2700, 1),
         3600,

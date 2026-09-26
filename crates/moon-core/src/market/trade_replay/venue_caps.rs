@@ -252,6 +252,42 @@ impl KlineRoute {
             Self::Hyperliquid => 500,
         }
     }
+
+    /// Documented request weight of one page this route sends at [`Self::max_rows`].
+    ///
+    /// Binance USD-M and COIN-M klines weigh by `limit`: 1 below 100, 2 below 500, 5 through
+    /// 1 000, and 10 above that, so the 1 500-row page this route asks for weighs 10. Spot
+    /// klines weigh 2 flat (`binance-spot-api-docs` rest-api.md, read 2026-09-26). Every other
+    /// venue is not on the Binance weight ledger and weighs nothing here.
+    ///
+    /// Returns:
+    ///     Weight charged against the host's IP budget, or 0 when the host has no such budget.
+    pub const fn request_weight(self) -> u32 {
+        match self {
+            Self::BinanceUsdM | Self::BinanceCoinM => futures_kline_weight(self.max_rows()),
+            Self::BinanceSpot => 2,
+            _ => 0,
+        }
+    }
+}
+
+/// USD-M and COIN-M `GET /klines` weight for a `limit` of `rows`.
+///
+/// The vendor's brackets, which make a 1 500-row page weigh 10: `[1, 100)` is 1, `[100, 500)`
+/// is 2, `[500, 1000]` is 5, and anything above 1 000 is 10.
+///
+/// Args:
+///     rows: The `limit` query value.
+///
+/// Returns:
+///     Request weight.
+pub(crate) const fn futures_kline_weight(rows: usize) -> u32 {
+    match rows {
+        0..=99 => 1,
+        100..=499 => 2,
+        500..=1_000 => 5,
+        _ => 10,
+    }
 }
 
 /// Route serving PUBLIC individual trades over a bounded past window.
@@ -328,19 +364,20 @@ impl TradeRoute {
     /// Least time between two pages of this route on its host.
     ///
     /// Binance's futures `aggTrades` weigh 20 against an IP budget of 2 400 per minute (both
-    /// arms' documentation), so more than two pages a second is a refusal — measured on the
-    /// live endpoint (2026-09-20): the default 100 ms floor answered 429 after ~80 pages, and
-    /// every refusal then cost the batch a 30–600 s backoff on the whole host. 650 ms is ~92
-    /// pages a minute, ~1 850 of the budget, leaving a quarter for the candle pages of the
-    /// same host (weight up to 10 each) that a chart window or the next request issues beside
-    /// the walk. Every other route's documented limit is met by the gate's default floor.
+    /// arms' `exchangeInfo`, read 2026-09-26). The planned pace stays at or under 75% of that
+    /// budget, 1 800 weight per minute, which is one page every 670 ms: 90 pages in a minute
+    /// spend exactly 1 800, and 667 ms would not. Kline pages on the same host are not free —
+    /// a 1 500-row page weighs 10 — and [`super::gate::ReplayGate::pace_weighted`] counts both
+    /// against that 1 800, so the floor alone is not the whole budget. Spot aggTrades weigh 4
+    /// (spot rest-api.md, 2026-09-26) and the default floor already sits under 75% of spot's
+    /// 6 000. Every other route's documented limit is met by the gate's default floor.
     ///
     /// Returns:
     ///     The floor to pace a page of this route with.
     pub const fn page_interval(self) -> std::time::Duration {
         match self {
             Self::BinanceUsdMAggTrades | Self::BinanceCoinMAggTrades => {
-                std::time::Duration::from_millis(650)
+                std::time::Duration::from_millis(670)
             }
             // Not a weight limit: under back-to-back requests the futures trades endpoint
             // answered a repeat of the previous page for a changed `offset` (2026-09-21, see
@@ -352,6 +389,21 @@ impl TradeRoute {
             | Self::BitgetSpotFills
             | Self::BitgetMixFills
             | Self::OkxHistoryTrades => super::gate::MIN_INTERVAL,
+        }
+    }
+
+    /// Documented request weight of one page of this route.
+    ///
+    /// Futures `aggTrades` weigh 20. Spot `aggTrades` weigh 4. Other venues are not on the
+    /// Binance weight ledger.
+    ///
+    /// Returns:
+    ///     Weight charged against the host's IP budget, or 0 when the host has no such budget.
+    pub const fn request_weight(self) -> u32 {
+        match self {
+            Self::BinanceUsdMAggTrades | Self::BinanceCoinMAggTrades => 20,
+            Self::BinanceSpotAggTrades => 4,
+            _ => 0,
         }
     }
 

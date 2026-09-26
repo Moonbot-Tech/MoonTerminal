@@ -26,8 +26,10 @@
 //! lack — the other order would fetch first and cut second.
 //!
 //! The read and the resolution run on the background executor; the tick only decides whether
-//! one is due. "Stop" on the axis' button cancels what remains ([`cancel`]); flipping the
-//! switch off and on again re-arms it.
+//! one is due. "Stop" on the axis' button cancels the whole batch ([`cancel`]). Flipping the
+//! switch off re-arms the pass and drops every row this autoload queued ([`switched_off`]);
+//! rows the user queued with "Fetch trades" in the same batch stay. Flipping it on again
+//! starts over.
 
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -98,6 +100,26 @@ fn lock() -> std::sync::MutexGuard<'static, Autoload> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The switch went off: re-arm so a later on starts from a fresh read, and drop every row this
+/// autoload queued. A pass still running adds nothing when it comes back. Rows the user queued
+/// in the same batch stay.
+///
+/// The autoload lock is taken and released before the job lock, the same order a pass uses
+/// when it hands rows over, so the two cannot deadlock. A pass that already passed its
+/// generation check and is inside the hand-over finishes that enqueue, then this drop removes
+/// what it just added.
+pub(crate) fn switched_off() {
+    {
+        let mut st = lock();
+        if !matches!(st.phase, Phase::Armed) {
+            st.generation += 1;
+        }
+        st.phase = Phase::Armed;
+        st.result = None;
+    }
+    job::stop_autoload();
+}
+
 /// Stop adding rows: what the job already has stays the job's to finish or to drop, and a pass
 /// still running adds nothing when it comes back.
 pub(crate) fn cancel() {
@@ -113,17 +135,16 @@ pub(crate) fn cancel() {
 /// due — a switch read and a clock compare.
 pub(crate) fn tick(backend: &Backend, cx: &App) {
     let on = moon_core::market::trade_replay::tape_autoload();
-    let mut st = lock();
     if !on {
-        // Off re-arms: switched on again later, it starts over from a fresh read; a pass still
-        // running under the old generation is not heard.
-        if !matches!(st.phase, Phase::Armed) {
-            st.generation += 1;
+        // Off re-arms and drops what this autoload queued. Already armed: nothing to do, and
+        // the job is not locked on every tick while the switch stays off.
+        let leave = { !matches!(lock().phase, Phase::Armed) };
+        if leave {
+            switched_off();
         }
-        st.phase = Phase::Armed;
-        st.result = None;
         return;
     }
+    let mut st = lock();
     let now = Instant::now();
     match std::mem::take(&mut st.phase) {
         Phase::Armed => {
@@ -243,7 +264,7 @@ fn run_pass(
             unresolved.push(deal);
             continue;
         };
-        let Some(row) = resolver.queued_row(deal.clone(), address) else {
+        let Some(row) = resolver.queued_row(deal.clone(), address, job::RowOrigin::Autoload) else {
             unresolved.push(deal);
             continue;
         };

@@ -775,12 +775,21 @@ impl AnalyticsView {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(crate::load_state::muted(
-                            t!("analytics.ticks.side_pick_strategy").to_string(),
-                            10.0,
-                            p,
-                            cx,
-                        ))
+                        // Full width so the sentence wraps inside the column, centred per line;
+                        // an intrinsic-width child overflows the 470 px column.
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .text_center()
+                                .font_family(design::ui_font())
+                                .child(crate::load_state::muted(
+                                    t!("analytics.ticks.side_pick_strategy").to_string(),
+                                    10.0,
+                                    p,
+                                    cx,
+                                )),
+                        )
                         .into_any_element()
                 } else {
                     self.ticks_side(p, window, cx)

@@ -328,7 +328,10 @@ impl AnalyticsView {
                                         if fetch_active {
                                             this.ticks_fetch_stop(cx);
                                         } else {
-                                            this.ticks_fetch_missing(cx);
+                                            this.ticks_fetch_missing(
+                                                fetch::job::RowOrigin::User,
+                                                cx,
+                                            );
                                         }
                                         cx.notify();
                                     }))
@@ -468,7 +471,7 @@ impl AnalyticsView {
                 COL_COIN,
                 None,
             ))
-            .children(DEAL_COLS.iter().map(|c| {
+            .children(shown_deal_cols(self.ticks.var_stats.is_some()).map(|c| {
                 sortable(
                     SharedString::from(format!("an-ticks-hdr-{}", c.key)),
                     column_title(c),
@@ -538,7 +541,9 @@ impl AnalyticsView {
         if let Some(horizon) = horizon {
             subset_sub.push_str(&t!("analytics.ticks.horizon", h = duration_text(horizon)));
         }
-        let base = VarLabel::with_sub(t!("analytics.ticks.subset").to_string(), subset_sub);
+        // One short title. The share line is a hover: inside a 92px column it wrapped and
+        // truncated ("2 of 2 with tape…").
+        let base = VarLabel::new(t!("analytics.ticks.subset").to_string()).with_tip(subset_sub);
         let baseline: Option<moon_core::db::tuner::VarStats> =
             self.ticks.kpi.data().and_then(|k| k.first().cloned());
         let mut stats: Vec<moon_core::db::tuner::VarStats> = baseline.iter().cloned().collect();
@@ -546,7 +551,7 @@ impl AnalyticsView {
         let label = match &self.ticks.var_stats {
             None => {
                 stats.extend(baseline.iter().cloned());
-                VarLabel::with_sub(title, t!("analytics.ticks.var_untouched").to_string())
+                VarLabel::new(title).with_tip(t!("analytics.ticks.var_untouched").to_string())
             }
             Some(var) => {
                 let mut sub = t!(
@@ -575,7 +580,7 @@ impl AnalyticsView {
                     }
                 }
                 stats.push(var.clone());
-                VarLabel::with_sub(title, sub)
+                VarLabel::new(title).with_tip(sub)
             }
         };
         let labels = [label];
@@ -671,13 +676,7 @@ impl PlanCell {
             Some(None) => ("—".to_string(), p.text_muted, tip()),
             Some(Some(v)) => (
                 money(Some(v)),
-                if pick(v) > 0.0 {
-                    p.green
-                } else if pick(v) < 0.0 {
-                    p.red
-                } else {
-                    p.text_muted
-                },
+                super::super::summary::sign_color(p, pick(v)),
                 tip(),
             ),
         }
@@ -747,12 +746,18 @@ fn tape_mark(tape: TapeStatus) -> (&'static str, String) {
 /// over their cells; the two used to set the shrink rule differently and drifted apart on a
 /// narrow table.
 fn deal_cell(col: &DealCol, scale: f32) -> Div {
-    let el = div()
-        .flex_none()
-        .flex_shrink_1()
-        .w(px(col.w * scale))
-        .min_w(px(col.min_w * scale))
-        .truncate();
+    // One fill column, and only where every other column already has an explicit width.
+    // A fill also overrides a persisted user width; this table does not persist widths.
+    let el = if col.fill {
+        div().flex_1().min_w(px(col.min_w * scale))
+    } else {
+        div()
+            .flex_none()
+            .flex_shrink_1()
+            .w(px(col.w * scale))
+            .min_w(px(col.min_w * scale))
+    }
+    .truncate();
     match col.align {
         Align::Right => el.text_right(),
         Align::Center => el.text_center(),
@@ -760,9 +765,23 @@ fn deal_cell(col: &DealCol, scale: f32) -> Div {
     }
 }
 
-/// The box of the coin column — the flexible remainder, with the same floor in both rows.
+/// The coin column: an explicit width, so the core name can take the free space.
 fn coin_cell(scale: f32) -> Div {
-    div().flex_1().min_w(px(DEAL_COIN_MIN_W * scale)).truncate()
+    div()
+        .flex_none()
+        .flex_shrink_1()
+        .w(px(DEAL_COIN_W * scale))
+        .min_w(px(DEAL_COIN_MIN_W * scale))
+        .truncate()
+}
+
+/// Columns drawn for this table. The plan column is В1's per-deal result; while the variant
+/// is untouched every cell is empty, and the column is hidden so the core and the close
+/// reason can use the width.
+fn shown_deal_cols(show_plan: bool) -> impl Iterator<Item = &'static DealCol> {
+    DEAL_COLS
+        .iter()
+        .filter(move |col| show_plan || col.key != COL_PLAN)
 }
 
 /// The status line's coverage part: how many rows have their tape, out of how many, how many of
@@ -807,7 +826,10 @@ fn model_mark(row: &DealRow) -> (String, String) {
         None => "·",
     };
     let dev = |d: Option<f64>| match d {
-        Some(d) => format!("{d:+.3} %"),
+        Some(d) => {
+            let (text, _) = rows::paint_fixed(d, 3);
+            format!("{text} %")
+        }
         None => "—".to_string(),
     };
     (
@@ -837,7 +859,13 @@ fn deal_row(
     let d = &row.deal;
     let result = rows::result_pct(row);
     let cell = |col: &DealCol, text: String, color: u32, tip: Option<String>| {
-        let el = deal_cell(col, scale).text_color(moon(color)).child(text);
+        let el = deal_cell(col, scale).text_color(moon(color));
+        let el = if matches!(col.key, COL_RESULT | COL_PROFIT | COL_PLAN) {
+            el.font_family(design::mono())
+        } else {
+            el.font_family(design::ui_font())
+        };
+        let el = el.child(text);
         match tip {
             Some(tip) if !tip.is_empty() => el
                 .id(SharedString::from(format!(
@@ -852,6 +880,9 @@ fn deal_row(
     let (tape_glyph, tape_tip) = tape_mark(row.tape);
     let (model_glyph, model_tip) = model_mark(row);
     let text = p.text;
+    // The outer slot is `Some` only once В1 has been scored. Until then the plan column is
+    // empty on every row and is not drawn.
+    let show_plan = plan.0.is_some();
     let mut el = h_flex()
         .id(SharedString::from(format!("an-tickrow-{}", d.report_uid)))
         .w_full()
@@ -863,43 +894,32 @@ fn deal_row(
         .border_t_1()
         .border_color(moon_alpha(p.border, 0.5))
         .child(coin_cell(scale).child(d.coin.clone()));
-    for col in DEAL_COLS {
+    for col in shown_deal_cols(show_plan) {
         let (value, color, tip) = match col.key {
             COL_KIND => (d.kind.clone(), p.text_muted, Some(d.kind.clone())),
             COL_PLAN => plan.render(p),
             // The core by the name the report carries; a row that carries none names it by
-            // its uid, which is still an address.
-            COL_CORE => (
-                if d.core_name.trim().is_empty() {
+            // its uid, which is still an address. The full name is the tooltip: the cell
+            // still truncates when the pane is narrow.
+            COL_CORE => {
+                let name = if d.core_name.trim().is_empty() {
                     format!("#{}", d.core_uid)
                 } else {
                     d.core_name.clone()
-                },
-                p.text_muted,
-                None,
-            ),
-            COL_RESULT => (
-                format!("{result:+.2}"),
-                if result > 0.0 {
-                    p.green
-                } else if result < 0.0 {
-                    p.red
-                } else {
-                    p.text_muted
-                },
-                None,
-            ),
+                };
+                (name.clone(), p.text_muted, Some(name))
+            }
+            COL_RESULT => {
+                let (text, sign) = rows::paint_fixed(result, 2);
+                (text, sign.pick(p.green, p.orange, p.text_muted), None)
+            }
             // A dash where the scope's money cannot be valued in USDT (`Deal::profit`).
+            // Colour follows the same rounded sign as the text, and the same orange a loss
+            // uses in Summary — not a separate red.
             COL_PROFIT => match d.profit {
                 Some(profit) => (
                     super::super::summary::fmt_signed_plain(profit),
-                    if profit > 0.0 {
-                        p.green
-                    } else if profit < 0.0 {
-                        p.red
-                    } else {
-                        p.text_muted
-                    },
+                    super::super::summary::sign_color(p, profit),
                     None,
                 ),
                 None => ("—".to_string(), p.text_muted, None),

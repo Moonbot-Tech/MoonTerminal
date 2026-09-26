@@ -51,9 +51,13 @@ fn field_line(field: &deltas::FieldQuality) -> String {
     let coverage = field
         .coverage_median
         .map_or_else(|| "—".to_string(), |c| format!("{:.0}", c * 100.0));
-    let error = field
-        .error_median
-        .map_or_else(|| "—".to_string(), |e| format!("{e:.3}"));
+    let error = field.error_median.map_or_else(
+        || "—".to_string(),
+        |e| {
+            let (text, _) = super::rows::paint_fixed(e, 3);
+            text
+        },
+    );
     let mut line = t!(
         "analytics.ticks.deltas_tip_field",
         name = name,

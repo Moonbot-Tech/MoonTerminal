@@ -106,6 +106,7 @@ impl FetchResolver {
         &self,
         deal: Deal,
         address: Arc<RowAddress>,
+        origin: job::RowOrigin,
     ) -> Option<job::QueuedRow> {
         let window = model_window(&deal, margin_ms(), long_position_ms())?;
         let replay_address = self.source.replay_address(address.core_uid).ok()?;
@@ -122,6 +123,7 @@ impl FetchResolver {
             replay_address,
             tick_value,
             window,
+            origin,
         ))
     }
 }
@@ -166,7 +168,16 @@ impl AnalyticsView {
     /// Queue every fetchable row of the table with the job, oldest first: a fresh batch when
     /// none runs, or added to the running one — the startup autoload's, or a previous window's
     /// — which already knows some of them and takes the rest.
-    pub(in crate::analytics::tuner) fn ticks_fetch_missing(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// Args:
+    ///     origin: Who is asking. The button passes [`job::RowOrigin::User`]; a table load while
+    ///         the autoload switch is on passes [`job::RowOrigin::Autoload`], so unticking the
+    ///         switch drops those rows and leaves a button's rows in the same batch.
+    pub(in crate::analytics::tuner) fn ticks_fetch_missing(
+        &mut self,
+        origin: job::RowOrigin,
+        cx: &mut Context<Self>,
+    ) {
         // Until the tape stage has folded, every row reads "missing": queuing them would ask the
         // venue for tape the tiles already hold.
         if self.ticks.tape_reading {
@@ -179,7 +190,7 @@ impl AnalyticsView {
         let resolver = FetchResolver::of(backend);
         let mut rows: Vec<job::QueuedRow> = data
             .fetchable()
-            .filter_map(|row| resolver.queued_row(row.deal.clone(), row.address.clone()?))
+            .filter_map(|row| resolver.queued_row(row.deal.clone(), row.address.clone()?, origin))
             .collect();
         // Oldest first, so the ones nearest the venues' retention edge go before it moves; the
         // job pops from the end.
@@ -307,6 +318,7 @@ impl AnalyticsView {
             .into_iter()
             .filter_map(|event| match event {
                 job::JobEvent::Started(uid) if active => Some((uid, RowEdit::MarkFetching)),
+                job::JobEvent::Released(uid) => Some((uid, RowEdit::UnmarkFetching)),
                 job::JobEvent::Row(answer) => {
                     answered = true;
                     Some((answer.deal.report_uid, RowEdit::Replay(answer)))

@@ -564,7 +564,7 @@ impl AnalyticsView {
                 // and the startup pass covers only its own horizon (30 days, every core) —
                 // a wider period on the table would otherwise sit behind a button.
                 if moon_core::market::trade_replay::tape_autoload() {
-                    this.ticks_fetch_missing(cx);
+                    this.ticks_fetch_missing(super::fetch::job::RowOrigin::Autoload, cx);
                 }
                 // The replayable set may have changed under the variant columns: rescore them.
                 this.arm_ticks_variants(cx);

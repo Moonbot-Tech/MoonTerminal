@@ -2052,6 +2052,14 @@ analytics.ticks.stats_entry_points:
   ru: "точек входа %{n} (на каждую — подбор всего выхода)"
   en: "entry points %{n} (each with the whole exit searched)"
   es: "puntos de entrada %{n} (cada uno con toda la salida buscada)"
+analytics.ticks.est_short:
+  ru: "«Подобрать всё» ≈ %{time}"
+  en: "\"Search all\" ≈ %{time}"
+  es: "«Buscar todo» ≈ %{time}"
+analytics.ticks.est_short_nested:
+  ru: "«Подобрать всё», вход × выход ≈ %{time}"
+  en: "\"Search all\", entry × exit ≈ %{time}"
+  es: "«Buscar todo», entrada × salida ≈ %{time}"
 analytics.ticks.est_line:
   ru: "«Подобрать всё»: ≈ %{time} · ≈ %{points} вариантов"
   en: "\"Search all\": ≈ %{time} · ≈ %{points} variants"
