@@ -157,14 +157,14 @@ pub struct ExitParams {
     pub sell_modifier: f64,
     /// `MaxModifier` — ceiling on the summed modifiers BEFORE the coefficient:
     /// `Min(MaxModifier, |Σ Pn · Dn|)` — the core caps the sum's magnitude, so the sum is never
-    /// negative (`exit::delta_mods::modifier_sum`). 0 means no ceiling. Live strategies keep it
-    /// around 70 % (median of 526 that set it), so it rarely binds. The same field caps the
+    /// negative (`exit::delta_mods::modifier_sum`). 0 means no ceiling. Set on 127 of 1 423 live
+    /// strategies (2026-09-25), 10…1000, so it rarely binds. The same field caps the
     /// MoonShot corridor's `MShotAdd*` sum (`MshotParams::max_modifier`).
     pub max_modifier: f64,
     /// `StopLossModifier` — the same summed modifiers, applied to the STOP instead of the sell:
     /// the stop goes DEEPER by `StopLossModifier · Σ`, as the core's FAQ spells it:
-    /// `StopLoss adjusted [-1.00% - (10.00*0.98=9.75%) => -10.75%]`. Set on 415 of 1869 live
-    /// strategies, median 0.3.
+    /// `StopLoss adjusted [-1.00% - (10.00*0.98=9.75%) => -10.75%]`. Set on 150 of 1 423 live
+    /// strategies (2026-09-25), 0.2 on 139 of them.
     pub stop_loss_modifier: f64,
     /// The `Add*Delta` family of the Delta Modifiers tab — the same shape as MoonShot's
     /// `MShotAdd*` corridor modifiers, different fields: these move the ORDER PRICE, those the

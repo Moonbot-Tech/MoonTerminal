@@ -68,8 +68,8 @@ pub const POINT_TIME_TOLERANCE_MS: i64 = 1_000;
 pub const BOOK_STOP_TIME_TOLERANCE_MS: i64 = 2_300;
 
 /// Tolerance on a STOP's level: the modelled level against the one the core fixed carries
-/// `StopLossModifier` over deltas the model only partly re-reads live — the coin's ranges where
-/// the deal has a track, the BTC, market, mark and price-bug terms as the report's one snapshot
+/// `StopLossModifier` over deltas the model only partly re-reads live — the coin's and BTC's where
+/// the deal has a track, the market, mark and price-bug terms as the report's one snapshot
 /// (`exit::delta_mods::modifier_sum`) — and the residual sits right there wherever the record
 /// did not keep the core's own sum (`Deal::fact_modifier`). Where it did, the sum is the one
 /// that places the recorded level to the price step, and a stop read off the take's band carries

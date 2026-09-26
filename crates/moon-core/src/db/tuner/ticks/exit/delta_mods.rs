@@ -39,8 +39,8 @@ impl ExitModel<'_> {
 /// The core sums the deltas as they stand when it places the sell: on 121 of its printed sums
 /// (2026-09-22) the report's snapshot, stamped at the entry order's placement for every kind but
 /// MoonShot, drifted from the core's number the more, the longer the entry order waited. So the
-/// sum is read at `at_ms` through the deal's live coin deltas ([`Deal::deltas_at`]); the BTC,
-/// market, mark and price-bug terms stay the snapshot. Where the record kept the core's own sum
+/// sum is read at `at_ms` through the deal's live deltas ([`Deal::deltas_at`]) — the coin's and
+/// BTC's; the market, mark and price-bug terms stay the snapshot. Where the record kept the core's own sum
 /// ([`Deal::fact_modifier`]), what the deltas miss of it is added back — scaled to these
 /// coefficients ([`FactModifier::residual_for`]), so the fact's own parameters read a sum that
 /// places the core's level to the price step, and a variant's the model's sum moved by the same
