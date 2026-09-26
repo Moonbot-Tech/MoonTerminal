@@ -481,3 +481,183 @@ fn folder_projection_preserves_real_empty_and_nested_folders() {
         ["Group", "Group/Empty", "Other/Child"]
     );
 }
+
+fn conn_fault(error: moonproto::ConnectError, info: Option<moonproto::ServerInfo>) -> ConnFault {
+    super::conn_fault_from_proto(error, info, moonproto::StartupStatus::default())
+}
+
+/// The strategy-schema step announces itself by its wire command, not by the enum variant.
+///
+/// Both spellings are one step. A different case, or a name this build has never seen, stays
+/// unnamed: guessing `BaseCheck` would put a "wrong core build" verdict on a step the terminal
+/// simply does not know yet. The raw name is kept either way, so the panel can still show what
+/// the core said.
+#[test]
+fn conn_fault_names_both_schema_spellings_and_leaves_an_unknown_step_unnamed() {
+    let named = |raw: &'static str| {
+        let fault = conn_fault(
+            moonproto::ConnectError::Init(moonproto::InitError::CriticalStepTimedOut(raw)),
+            None,
+        );
+        match fault.kind {
+            ConnFaultKind::InitStepTimedOut { step, raw_step } => (step, raw_step),
+            other => panic!("a timed-out step was stored as {other:?}"),
+        }
+    };
+
+    assert_eq!(
+        named("StrategySchema"),
+        (
+            Some(CoreInitStep::StrategySchema),
+            "StrategySchema".to_string()
+        )
+    );
+    assert_eq!(
+        named("TStratSchemaRequest"),
+        (
+            Some(CoreInitStep::StrategySchema),
+            "TStratSchemaRequest".to_string()
+        )
+    );
+    assert_eq!(named("NotARealStep"), (None, "NotARealStep".to_string()));
+    assert_eq!(named("basecheck"), (None, "basecheck".to_string()));
+}
+
+/// Stopping the attempt ourselves is not a verdict about the core, and missing the handshake
+/// keeps the deadline that actually expired.
+///
+/// `Canceled` and a closed send channel are both "we stopped". Folding `NotAuthenticated` into
+/// that same arm would hide a core that never authorized. The deadline is stored in milliseconds:
+/// a second and a half reported as one second, or as nanoseconds, is a different failure than the
+/// one the transport hit.
+#[test]
+fn conn_fault_stopped_attempt_is_aborted_and_a_timeout_keeps_milliseconds() {
+    let kind = |error| conn_fault(error, None).kind;
+    assert_eq!(
+        kind(moonproto::ConnectError::Canceled),
+        ConnFaultKind::Aborted
+    );
+    assert_eq!(
+        kind(moonproto::ConnectError::Init(
+            moonproto::InitError::SendChannelClosed
+        )),
+        ConnFaultKind::Aborted
+    );
+    assert_eq!(
+        kind(moonproto::ConnectError::Init(
+            moonproto::InitError::NotAuthenticated
+        )),
+        ConnFaultKind::NotAuthenticated
+    );
+    assert_eq!(
+        kind(moonproto::ConnectError::ConnectTimedOut {
+            timeout: std::time::Duration::from_millis(1_500),
+        }),
+        ConnFaultKind::ConnectTimedOut { timeout_ms: 1_500 }
+    );
+}
+
+/// A step the core rejected keeps the core's own text, and an unrecognised step is not renamed.
+///
+/// Dropping the message leaves the panel with a stage and no reason. Mapping an unknown name onto
+/// `AuthCheck` would accuse the account of a failure that happened somewhere else.
+#[test]
+fn conn_fault_failed_step_keeps_the_cores_text_and_does_not_guess() {
+    let failed = |step: &'static str, message: &str| {
+        conn_fault(
+            moonproto::ConnectError::Init(moonproto::InitError::CriticalStepFailed {
+                step,
+                message: message.to_string(),
+            }),
+            None,
+        )
+        .kind
+    };
+    assert_eq!(
+        failed("AuthCheck", "account refused"),
+        ConnFaultKind::InitStepFailed {
+            step: Some(CoreInitStep::AuthCheck),
+            raw_step: "AuthCheck".to_string(),
+            message: "account refused".to_string(),
+        }
+    );
+    assert_eq!(
+        failed("FutureStep", "nope"),
+        ConnFaultKind::InitStepFailed {
+            step: None,
+            raw_step: "FutureStep".to_string(),
+            message: "nope".to_string(),
+        }
+    );
+}
+
+/// A blank key and a key that is not an export are different faults, and neither invents a core.
+///
+/// No client was built, so there is no identity and no startup to carry. Collapsing the two onto
+/// one `empty` flag would tell the user they left the field blank when they pasted garbage, or
+/// the reverse.
+#[test]
+fn conn_fault_blank_key_differs_from_a_pasted_key() {
+    let blank = super::key_fault(true);
+    let pasted = super::key_fault(false);
+    assert_eq!(blank.kind, ConnFaultKind::KeyUnparsable { empty: true });
+    assert_eq!(pasted.kind, ConnFaultKind::KeyUnparsable { empty: false });
+    assert!(!blank.identity.has_identity);
+    assert_eq!(blank.identity.server_version, None);
+    assert_eq!(blank.identity.moonproto_version, None);
+    assert_eq!(blank.startup, CoreStartupStatus::default());
+    assert_eq!(pasted.identity, blank.identity);
+    assert_eq!(pasted.startup, blank.startup);
+}
+
+/// A version number with no bot id is not proof the core answered, and a stall is not a step timeout.
+///
+/// The payload and the startup mask are published on different paths. Treating "some version
+/// arrived" as `has_identity` manufactures an answer out of a payload that never identified the
+/// core, and swapping the two version fields puts the protocol number where the core build goes.
+/// A stall stored as `InitStepTimedOut` would then read that same snapshot as evidence about the
+/// core.
+#[test]
+fn conn_fault_stall_does_not_invent_an_identity_from_a_version() {
+    let info = moonproto::ServerInfo {
+        server_version: Some(42),
+        moonproto_version: Some(9),
+        ..moonproto::ServerInfo::default()
+    };
+    let startup = CoreStartupStatus {
+        current_step: Some(CoreInitStep::AuthCheck),
+        elapsed_ms: 42_000,
+        ..CoreStartupStatus::default()
+    };
+    let fault = super::stall_fault(Some(info), startup);
+    assert_eq!(fault.kind, ConnFaultKind::StartupStalled);
+    assert!(!fault.identity.has_identity);
+    assert_eq!(fault.identity.server_version, Some(42));
+    assert_eq!(fault.identity.moonproto_version, Some(9));
+    assert_eq!(fault.startup.current_step, Some(CoreInitStep::AuthCheck));
+    assert_eq!(fault.startup.elapsed_ms, 42_000);
+}
+
+/// A local bind failure counts the sweeps and freezes the startup it was detected on.
+///
+/// The count is how many complete 200-port sweeps failed. Hard-coding it, or dropping the
+/// snapshot, would show either "never tried" or a startup from a different moment. Sent and
+/// received packet counts are different numbers so a swap in the frozen snapshot is visible.
+#[test]
+fn conn_fault_bind_failure_counts_sweeps_and_keeps_its_startup() {
+    let mut startup = moonproto::StartupStatus::default();
+    startup.current_local_udp_port = Some(31_111);
+    startup.current_port_sent_packets = 4;
+    startup.current_port_received_packets = 7;
+    let fault = super::bind_fault(3, None, startup);
+    assert_eq!(
+        fault.kind,
+        ConnFaultKind::LocalBindFailed {
+            consecutive_failures: 3
+        }
+    );
+    assert!(!fault.identity.has_identity);
+    assert_eq!(fault.startup.current_local_udp_port, Some(31_111));
+    assert_eq!(fault.startup.current_port_sent_packets, 4);
+    assert_eq!(fault.startup.current_port_received_packets, 7);
+}
