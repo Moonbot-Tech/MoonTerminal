@@ -60,8 +60,10 @@ use windows::core::PCWSTR;
 #[cfg(windows)]
 fn monitor_refresh_hz() -> u32 {
     unsafe {
-        let mut mode = DEVMODEW::default();
-        mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+        let mut mode = DEVMODEW {
+            dmSize: std::mem::size_of::<DEVMODEW>() as u16,
+            ..DEVMODEW::default()
+        };
         if EnumDisplaySettingsW(PCWSTR::null(), ENUM_CURRENT_SETTINGS, &mut mode).as_bool()
             && mode.dmDisplayFrequency > 1
         {

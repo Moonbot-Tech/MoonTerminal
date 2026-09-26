@@ -1047,6 +1047,8 @@ fn compact_first_line(v: &str) -> String {
     }
 }
 
+// `Content` owns the prepared parameter body. Boxing it allocates on every selection change.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum ParamsPanelModel {
     NoSelection,
     NoSchema,

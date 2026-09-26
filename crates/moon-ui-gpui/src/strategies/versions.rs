@@ -871,6 +871,8 @@ impl StrategiesView {
             *stamp_counts.entry(s.as_str()).or_insert(0) += 1;
         }
         let mut previous_taken = false;
+        // `i` indexes the version list and the bare-stamp list together.
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n_versions {
             let v = &self.versions.list[i];
             let slot = if v.valid_to.is_none() {

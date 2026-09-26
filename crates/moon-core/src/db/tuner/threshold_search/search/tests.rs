@@ -216,6 +216,8 @@ fn one_restart_reference(s: &Search, allow: &[bool], restart: usize, rng: &mut R
         }
     }
     let mut profit = 0.0f64;
+    // `t` indexes the failure flag and the profit column together. A one-slice iterator drops one.
+    #[allow(clippy::needless_range_loop)]
     for t in 0..n {
         if fail[t] == 0 {
             profit += s.cols.profits[t];

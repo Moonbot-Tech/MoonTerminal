@@ -77,12 +77,11 @@ impl ChartPanel {
 
     /// Ask the core for strategy-filter rows on this panel's active market, or clear the request.
     pub(super) fn sync_chart_text(&mut self, cx: &mut App) {
-        let want = if self.historical {
-            None
-        } else if !self
-            .settings_sig
-            .chart_labels
-            .any_drawn(|f| f == ChartLabelField::StrategyFilters)
+        let want = if self.historical
+            || !self
+                .settings_sig
+                .chart_labels
+                .any_drawn(|f| f == ChartLabelField::StrategyFilters)
         {
             None
         } else {

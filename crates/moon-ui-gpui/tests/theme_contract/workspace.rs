@@ -369,7 +369,7 @@ fn main_open_requests_revalidate_live_group_before_signature_and_consume() {
         "pub(crate) fn pending_open_main_request_for_group(",
     ));
     assert!(
-        pending.contains("self.current_open_main_group().as_deref() == Some(group)")
+        pending.contains("self.current_open_main_group() == Some(group)")
             && pending.contains("self.open_main_request.pending_target()"),
         "read-phase routing must use the target core's current live group"
     );
@@ -378,7 +378,7 @@ fn main_open_requests_revalidate_live_group_before_signature_and_consume() {
         "pub(crate) fn pending_open_main_revision_for_group(",
     ));
     assert!(
-        signature.contains("self.current_open_main_group().as_deref() == Some(group)"),
+        signature.contains("self.current_open_main_group() == Some(group)"),
         "ChartTabs signatures must wake only the target core's current group"
     );
     let take = code_only(braced_body(

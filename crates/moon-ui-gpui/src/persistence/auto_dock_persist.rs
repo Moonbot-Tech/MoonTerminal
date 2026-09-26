@@ -10,7 +10,9 @@ use moon_core::config::{paths, write_file_atomic};
 use moon_ui::DockTopologyByName;
 
 /// Classified startup result for the shared Auto topology file.
+// `Loaded` owns the topology read once at startup. Boxing it does not shrink the steady state.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum AutoDockLoad {
     /// No file exists yet, so first Auto entry may seed and persist the requested default.
     Missing,

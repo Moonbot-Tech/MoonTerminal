@@ -555,6 +555,8 @@ pub(super) fn table(
         palette,
         cx,
     );
+    // The virtual-list closure shares this UI-thread list. The entry type is not `Send`.
+    #[allow(clippy::arc_with_non_send_sync)]
     let entries = Arc::new(entries);
     let row_count = entries.len();
     let list_entries = entries.clone();

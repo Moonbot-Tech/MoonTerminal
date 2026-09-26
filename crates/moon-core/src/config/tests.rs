@@ -85,9 +85,11 @@ fn a_malformed_core_list_is_refused() {
 /// a pinned layout was impossible.
 #[test]
 fn a_plaintext_config_keeps_the_settings_it_was_given() {
-    let mut settings = super::schema::SettingsFile::default();
-    settings.charts_split_by_core = false;
-    settings.chart_stack_height = 321;
+    let settings = super::schema::SettingsFile {
+        charts_split_by_core: false,
+        chart_stack_height: 321,
+        ..super::schema::SettingsFile::default()
+    };
 
     let config = AppConfig::build_plaintext_config(
         None,

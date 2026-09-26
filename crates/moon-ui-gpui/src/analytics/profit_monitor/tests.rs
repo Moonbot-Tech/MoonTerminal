@@ -275,6 +275,8 @@ fn retired_bot_preference_falls_back_to_core() {
 /// scale multiplier, or shifting a threshold makes the budget or one adjacent pair red and blocks
 /// or clips the narrow window.
 #[test]
+// The compared values are named constants. The assertion reddens when a layout constant stops fitting.
+#[allow(clippy::assertions_on_constants)]
 fn responsive_layout_degrades_at_the_documented_boundaries() {
     assert!(
         super::MIN_WINDOW_WIDTH

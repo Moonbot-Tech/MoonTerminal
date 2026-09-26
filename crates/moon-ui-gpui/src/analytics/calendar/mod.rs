@@ -9,6 +9,7 @@
 //!   row on top (with the delta to the previous month), a plus/minus-day bar
 //!   below. Clicking a day switches to "Day" mode;
 //! - "Day" — hour-by-hour detail of a single day. See `day`.
+//!
 //! Each mode builds its own query (`cal_query` in mod.rs); the window's period
 //! bar is hidden here.
 

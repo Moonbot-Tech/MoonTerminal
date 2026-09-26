@@ -442,7 +442,9 @@ fn icon_workspace_summary(configured: usize) -> String {
 }
 
 /// One flattened virtual-list item in the all-core rail.
+// `Exchange` holds the logo and the core list for one heading. The rail rebuilds these by value.
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 enum RailItem {
     /// Current group aggregate scope.
     Overview { selected: bool },

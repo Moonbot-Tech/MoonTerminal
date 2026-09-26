@@ -632,6 +632,7 @@ pub(super) fn split_order_for_market(
 /// - an enabled stop's level comes from wire (≠0) → disable memory → strategy field
 ///   ("StopLoss"/"TrailingStop", whose strategy percentages are negative → abs) → ClientSettings
 ///   default (SL `price_drop_level` / TS `trailing_drop`). VStop uses wire/memory only.
+///
 /// The runtime compares against the live model through send-if-changed. SL/TS → `update_stops`,
 /// VStop → `update_vstop`.
 pub(super) fn set_order_stop(
@@ -961,7 +962,7 @@ fn restore_from_wire_or_memory(
     if level != 0.0 && level.is_finite() {
         return Some((fixed, level, extra));
     }
-    stop_memory_get(server_id, uid, kind).map(|(f, l, s)| (f, l, s))
+    stop_memory_get(server_id, uid, kind)
 }
 
 /// Explicit per-order stop overrides made FROM THE TERMINAL, scoped to the session.

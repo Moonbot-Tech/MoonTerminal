@@ -294,7 +294,7 @@ fn report_revision_decision_stays_wired_to_the_coordination_loop() {
         "consume_report_commit(coord_valuation_status_dirty.as_deref()",
     );
     let observe = position(&source, "let revision = report_revision_gate.observe(");
-    let wake = position(&source, "if revision.wake_valuation {");
+    let wake = position(&source, "if revision.wake_valuation");
     let notify = position(&source, "if revision.notify {");
 
     assert!(immediate < background);

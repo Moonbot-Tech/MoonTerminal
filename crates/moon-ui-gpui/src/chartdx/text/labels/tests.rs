@@ -452,11 +452,13 @@ fn arb_inputs(
 #[test]
 fn the_column_prints_one_line_per_venue() {
     let cfg = cfg_of(&[ChartLabelField::ArbColumn]);
-    let mut view = ArbViewCfg::default();
-    view.venues = vec![
-        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(4)),
-        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(9)),
-    ];
+    let view = ArbViewCfg {
+        venues: vec![
+            moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(4)),
+            moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(9)),
+        ],
+        ..ArbViewCfg::default()
+    };
 
     let texts = texts_with(
         &cfg,
@@ -501,10 +503,12 @@ fn each_line_addresses_its_own_run() {
 #[test]
 fn the_roster_decides_what_each_line_prints() {
     let cfg = cfg_of(&[ChartLabelField::ArbColumn]);
-    let mut view = ArbViewCfg::default();
-    view.venues = vec![moon_core::config::ArbVenueCfg::new(
-        moon_core::market::ArbVenue::from_code(4),
-    )];
+    let mut view = ArbViewCfg {
+        venues: vec![moon_core::config::ArbVenueCfg::new(
+            moon_core::market::ArbVenue::from_code(4),
+        )],
+        ..ArbViewCfg::default()
+    };
 
     view.show = moon_core::config::ArbShow::Price;
     let price_only = texts_with(&cfg, arb_inputs(vec![arb_quote(4, 101.0)], view.clone()));
@@ -544,11 +548,13 @@ fn the_venue_name_is_the_lines_prefix() {
 #[test]
 fn the_column_lines_its_cells_up() {
     let cfg = cfg_of(&[ChartLabelField::ArbColumn]);
-    let mut view = ArbViewCfg::default();
-    view.venues = vec![
-        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(4)),
-        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(101)),
-    ];
+    let view = ArbViewCfg {
+        venues: vec![
+            moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(4)),
+            moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(101)),
+        ],
+        ..ArbViewCfg::default()
+    };
     // "BinanceF" is eight characters and "UpBit" five; the prices differ in width too.
     let quotes = vec![arb_quote(4, 9.5), arb_quote(101, 101.25)];
 
@@ -590,14 +596,14 @@ fn the_column_lines_its_cells_up() {
 #[test]
 fn the_roster_floor_drops_quiet_venues() {
     let cfg = cfg_of(&[ChartLabelField::ArbColumn]);
-    let mut view = ArbViewCfg {
+    let view = ArbViewCfg {
         min_abs_pct: 1.0,
+        venues: vec![
+            moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(4)),
+            moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(9)),
+        ],
         ..ArbViewCfg::default()
     };
-    view.venues = vec![
-        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(4)),
-        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(9)),
-    ];
 
     let texts = texts_with(
         &cfg,

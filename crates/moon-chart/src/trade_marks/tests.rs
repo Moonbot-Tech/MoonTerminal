@@ -141,9 +141,11 @@ fn normalize_folds_the_band_fields_onto_the_one_switch() {
     use moon_core::market::candles::{
         VOLUME_STYLE_HILLS, VOLUME_STYLE_LEGACY_BARS, VOLUME_STYLE_OFF,
     };
-    let mut cfg = ChartGraphicsCfg::default();
-    cfg.candle_volume_style = VOLUME_STYLE_LEGACY_BARS;
-    cfg.candle_volume_sides = false;
+    let mut cfg = ChartGraphicsCfg {
+        candle_volume_style: VOLUME_STYLE_LEGACY_BARS,
+        candle_volume_sides: false,
+        ..ChartGraphicsCfg::default()
+    };
     let out = normalize_chart_graphics(cfg);
     assert_eq!(out.candle_volume_style, VOLUME_STYLE_HILLS);
     assert!(out.candle_volume_sides);

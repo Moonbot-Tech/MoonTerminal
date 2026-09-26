@@ -493,7 +493,12 @@ fn run_worker(
             if current.expire_stale(now_ms) {
                 current.publish_snapshot(&generation, &dirty, now_ms);
             }
-            match attempt(
+            // Only `Ran { more: true }` short-circuits, and it must: the remaining currencies
+            // would otherwise be resolved a minute apart. Everything else falls through,
+            // `Attempt::CacheLost` included — a provider failure while the derived cache is
+            // also unhealthy belongs to the recovery stage below, whose own fault is the one
+            // that matters in that window.
+            if let Attempt::Done(StageTurn::Ran { more: true }) = attempt(
                 &mut status,
                 &mut sink,
                 ValuationStage::CurrentRates,
@@ -501,13 +506,7 @@ fn run_worker(
                 &mut retry_after,
                 || refresh_current_rates(source.as_ref(), &generation, &dirty, &mut current),
             ) {
-                // Only `Ran { more: true }` short-circuits, and it must: the remaining currencies
-                // would otherwise be resolved a minute apart. Everything else falls through,
-                // `Attempt::CacheLost` included — a provider failure while the derived cache is
-                // also unhealthy belongs to the recovery stage below, whose own fault is the one
-                // that matters in that window.
-                Attempt::Done(StageTurn::Ran { more: true }) => continue,
-                _ => {}
+                continue;
             }
         } else {
             // Current-rate mode is disabled, so this stage issues no provider request at all — the

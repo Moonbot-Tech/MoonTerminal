@@ -34,6 +34,9 @@ pub(super) struct ImportReady {
 }
 
 /// State of an open import preview.
+// `Ready` owns the import plan for the open dialog. Boxing it allocates on that cold path only
+// after every match site changes, which is a wider edit than this lint.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum ImportState {
     /// The clipboard passed the MoonBot sniff and is being parsed and planned in the background.
     Loading,

@@ -297,6 +297,8 @@ impl App {
     }
 
     /// Validate initData HMAC and paired identity. Body is not consumed.
+    // Failures are HTTP responses. Boxing `Response<Body>` would change every `?` on this path.
+    #[allow(clippy::result_large_err)]
     fn authenticate(
         &self,
         request: &Request<Body>,
@@ -360,6 +362,8 @@ fn check_peer_and_headers(headers: &HeaderMap, host: Option<&str>) -> Result<(),
 }
 
 /// Require `application/json` (optional charset) on API POSTs.
+// The error is the HTTP response itself. Boxing it changes the helper's `Result`.
+#[allow(clippy::result_large_err)]
 fn require_json_content_type(headers: &HeaderMap) -> Result<(), Response<Body>> {
     let value = headers
         .get("content-type")
@@ -376,6 +380,8 @@ fn require_json_content_type(headers: &HeaderMap) -> Result<(), Response<Body>> 
 }
 
 /// Read a JSON object body capped at [`MAX_BODY_BYTES`].
+// The error is the HTTP response itself. Boxing it changes the helper's `Result`.
+#[allow(clippy::result_large_err)]
 fn read_limited_json_object(request: Request<Body>) -> Result<Value, Response<Body>> {
     if let Some(len) = request.body().len() {
         if len > MAX_BODY_BYTES {

@@ -923,7 +923,7 @@ impl ChartDataState {
                     // core streams some, and the hide-candles zone below refuses to blank a bucket
                     // that has no crosses to replace it. Re-stamped on every full range read; an
                     // incremental drain returns just the live edge, so it only fills a NaN (below).
-                    pr.combo_left_rel = history.combo_left_rel_ms.map(|v| v).unwrap_or(f32::NAN);
+                    pr.combo_left_rel = history.combo_left_rel_ms.unwrap_or(f32::NAN);
                     // Restart the pan budget from the reset that ACTUALLY happened, whatever raised
                     // it. Stamping back where the decision was made would also credit a frame whose
                     // read returned nothing, and would miss the capacity-driven re-read that resets

@@ -581,8 +581,8 @@ impl AnalyticsView {
             .unwrap_or_else(|| Arc::new(StratFilters::default()));
         let mut grid = v_flex().w_full().child(head);
         let mut last_class: Option<FieldClass> = None;
-        for fi in 0..FIELDS.len() {
-            let class = FIELDS[fi].class;
+        for (fi, field) in FIELDS.iter().enumerate() {
+            let class = field.class;
             // Headers: the MoonBot section (the parent), then the indented
             // subgroup (BV/SV inside Volumes, the Δ2/Δ3 slots inside Deltas).
             let sub = class.parent() != class;

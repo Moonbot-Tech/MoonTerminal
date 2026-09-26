@@ -4,6 +4,8 @@ use super::*;
 /// detects_view.toml and for Copy/Paste): active size, per-size w/h/chart/rail,
 /// and every flag in every slot.
 #[test]
+// Nested slot writes cannot move into one literal; each field stays beside the round-trip it proves.
+#[allow(clippy::field_reassign_with_default)]
 fn detect_view_roundtrip_preserves_every_field() {
     let mut cfg = DetectViewCfg::default();
     cfg.size = DETECT_SIZE_LARGE;

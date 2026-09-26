@@ -1308,9 +1308,7 @@ impl Render for AddChartStack {
             border,
             // An empty retained COMPRESS slot maps to `None`, so render shows a transparent tile.
             move |s, ix| {
-                let Some(&real_ix) = panel_order.get(ix) else {
-                    return None;
-                };
+                let &real_ix = panel_order.get(ix)?;
                 s.charts
                     .get(real_ix)
                     .filter(|e| !e.vacated)

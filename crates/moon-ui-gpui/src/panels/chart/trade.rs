@@ -633,9 +633,7 @@ impl ChartPanel {
         if !self.order_gestures_allowed(cx) {
             return None;
         }
-        let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
-            return None;
-        };
+        let pane = self.input.pane_at(pos.0, pos.1)?;
         // No line lives in the horizontal-volume zone — lines run from their start to the plot's
         // right edge and on into the book, never left of the plot — so nothing there is a hit. Said
         // HERE rather than at each caller: a press in the zone is neither a grab nor a cancel,
@@ -644,16 +642,11 @@ impl ChartPanel {
         if self.hvol_pane_at(pos).is_some() {
             return None;
         }
-        let Some((core, market)) = self
+        let (core, market) = self
             .chart
-            .with_container(|container| container.target(pane))
-        else {
-            return None;
-        };
-        let Some(plot) = self.local_plot_rect(pane) else {
-            return None;
-        };
-        let Some((center, range, epoch_ms, left_rel, window_ms)) =
+            .with_container(|container| container.target(pane))?;
+        let plot = self.local_plot_rect(pane)?;
+        let (center, range, epoch_ms, left_rel, window_ms) =
             self.chart.with_container(|container| {
                 container.pane(pane).map(|pane| {
                     let (left, window) = pane.view.visible_x(plot.w);
@@ -665,10 +658,7 @@ impl ChartPanel {
                         window,
                     )
                 })
-            })
-        else {
-            return None;
-        };
+            })?;
         if plot.h <= 1.0 || !(range > 0.0) || !(window_ms > 0.0) {
             return None;
         }

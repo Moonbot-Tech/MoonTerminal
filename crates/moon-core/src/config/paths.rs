@@ -6,8 +6,9 @@
 //!   and settings:
 //!     - macOS: `~/Library/Application Support/com.moonbot.moonterminal/`
 //!     - Linux: `~/.config/com.moonbot.moonterminal/`
-//!   `servers.enc` is encrypted with its own file key, wrapped by one slot per machine (each
-//!   machine's key lives in its OS keyring) plus an optional password slot; see `crypto/`.
+//!
+//! `servers.enc` is encrypted with its own file key, wrapped by one slot per machine (each
+//! machine's key lives in its OS keyring) plus an optional password slot; see `crypto/`.
 //!
 //! All paths are based on `data_dir()`; on Windows, `data_dir() == exe_dir()`.
 //!
