@@ -885,9 +885,10 @@ pub struct TradeReplaySeries {
     /// klines, not bars aggregated from [`Self::ticks`], so the bar layer covers the WHOLE window
     /// even where the points, per [`Self::partial`], do not.
     ///
-    /// Stored whole; DRAWN only where the points are not. [`Self::read_into`] withholds every bar
-    /// lying wholly inside the span [`Self::ticks`] covers, so the two layers never overlay each
-    /// other and the bars are left holding exactly the edges the points never reached.
+    /// Stored whole; DRAWN only where the points are not. [`Self::read_into`] cuts every bar
+    /// to the pieces that sit outside [`Self::covered`], so a body or wick never crosses the
+    /// prints. A minute the walk only partly covers keeps its uncovered side; a gap the walk
+    /// did not cover keeps its bar. The bars still hold the ground the points never reached.
     pub candles: Vec<ChartCandle>,
     /// Trade points in ascending time. Empty when [`Self::source`] is
     /// [`TradeReplaySource::Klines1m`]; carried alongside [`Self::candles`] for
@@ -1129,8 +1130,18 @@ impl TradeReplaySeries {
                 }
                 // WHERE THE POINTS ARE, THE BARS STEP ASIDE. A tick series carries the exchange's
                 // own one-minute klines for the WHOLE window (see `Self::candles`), which is what
-                // keeps the edges the points never reached drawn — but inside the covered span
-                // the two layers are the same trades told twice, drawn on top of each other.
+                // keeps the ground the points never reached drawn — but inside a covered span the
+                // two layers are the same trades told twice.
+                //
+                // A bar that only partly overlaps a span is cut to the uncovered pieces. Keeping
+                // that minute whole paints its body and wick across the prints (a short trade is
+                // two full minute candles sitting on the ticks). Dropping the minute drops the
+                // gap inside it too, and a missing tile or a budget stop must still show a bar.
+                // The piece keeps the minute's OHLC — the uncovered seconds have no prints of
+                // their own to rebuild it — and its turnover is only that piece's share of the
+                // minute, so the volume band does not squeeze the whole minute into the stub.
+                // A piece the full bar wide stays on the series timeframe (`candle_tf_ms` 0); a
+                // stub carries its own width.
                 //
                 // Decided from the WALK's own interval, never from pixels and never from the rows:
                 // `Self::covered` is what the tick stage proved exhaustive, while the extrema of
@@ -1138,15 +1149,18 @@ impl TradeReplaySeries {
                 // publish no trade in would keep its bar under a row-derived rule and read as a
                 // stray candle floating inside the trace. Empty there is a `Klines1m` series,
                 // which is what keeps a still-loading window whole: the bar-only stage walked no
-                // ticks, so nothing is hidden until the upgrade lands. Per SPAN, never over the
+                // ticks, so nothing is cut until the upgrade lands. Per SPAN, never over the
                 // hull: a long position's two stretches keep the middle's bars drawn.
                 //
                 // Applied AFTER the aggregation above so one rule covers both paths, and to the
-                // OUTPUT timeframe, which is the width the caller actually draws. `candle_tf_ms`
-                // is never filled on this path, so there is no parallel array to desync.
+                // OUTPUT timeframe, which is the width the caller actually draws.
                 if !self.covered.is_empty() {
-                    out.candles
-                        .retain(|c| !bar_inside(c.t_open_ms, tf_ms, &self.covered));
+                    withhold_covered_bars(
+                        &mut out.candles,
+                        &mut out.candle_tf_ms,
+                        tf_ms,
+                        &self.covered,
+                    );
                 }
                 read.candles_changed = true;
             }
@@ -1170,26 +1184,92 @@ impl TradeReplaySeries {
     }
 }
 
-/// Whether one bar lies WHOLLY inside one covered span.
+/// Replace `candles` with the pieces that sit outside `covered`, and write each piece's width.
 ///
-/// A bar that STRADDLES an edge stays drawn: half of it is over ground the points never reached,
-/// so it is context rather than an overlay, and dropping it would leave a gap the user reads as
-/// missing data. That is also what makes the window's own caption honest — the edges really are
-/// the part still closed by candles.
+/// Coverage is inclusive milliseconds. A bar is the half-open interval `[open, open + tf)`.
+/// A piece that is the whole bar is stored at `tf_out` 0 so the chart uses the series
+/// timeframe; a stub stores its own width in milliseconds. Turnover is scaled by the piece's
+/// share of the bar. OHLC is the bar's own: the uncovered seconds have no prints to split it.
 ///
 /// Args:
-///     t_open_ms: The bar's opening stamp; a non-finite one is never inside anything.
-///     tf_ms: The bar's width, at the timeframe it is DRAWN at.
-///     covered: [`TradeReplaySeries::covered`].
+///     candles: Bars at the timeframe the caller draws, replaced in place.
+///     tf_out: Parallel widths, cleared and filled one entry per surviving piece.
+///     tf_ms: That timeframe, in milliseconds.
+///     covered: The tick walk's exhaustive spans.
+fn withhold_covered_bars(
+    candles: &mut Vec<ChartCandle>,
+    tf_out: &mut Vec<f32>,
+    tf_ms: i64,
+    covered: &Coverage,
+) {
+    let src = std::mem::take(candles);
+    tf_out.clear();
+    let width = tf_ms.max(1);
+    for candle in src {
+        if !candle.t_open_ms.is_finite() {
+            continue;
+        }
+        let open = candle.t_open_ms as i64;
+        for (start, piece_w) in uncovered_pieces(open, width, covered) {
+            let whole = start == open && piece_w == width;
+            let mut piece = candle;
+            if !whole {
+                piece.t_open_ms = start as f64;
+                let share = piece_w as f64 / width as f64;
+                piece.volume = (f64::from(piece.volume) * share) as f32;
+                piece.quote_volume = (f64::from(piece.quote_volume) * share) as f32;
+            }
+            candles.push(piece);
+            tf_out.push(if whole { 0.0 } else { piece_w as f32 });
+        }
+    }
+}
+
+/// The parts of the half-open bar `[open, open + width)` that no covered span contains.
+///
+/// Args:
+///     open: The bar's opening millisecond.
+///     width: The bar's width in milliseconds. Zero yields nothing.
+///     covered: Inclusive spans, disjoint and ascending.
 ///
 /// Returns:
-///     `true` when the whole bar sits inside one span.
-fn bar_inside(t_open_ms: f64, tf_ms: i64, covered: &Coverage) -> bool {
-    if !t_open_ms.is_finite() {
-        return false;
+///     `(start_ms, width_ms)` pieces, ascending, each of positive width.
+fn uncovered_pieces(open: i64, width: i64, covered: &Coverage) -> Vec<(i64, i64)> {
+    if width <= 0 {
+        return Vec::new();
     }
-    let open = t_open_ms as i64;
-    covered.contains((open, open.saturating_add(tf_ms.max(1)) - 1))
+    let mut pieces = vec![(open, open.saturating_add(width))];
+    for &(from, to) in covered.spans() {
+        let cut_lo = from;
+        let cut_hi = to.saturating_add(1);
+        if cut_lo >= cut_hi {
+            continue;
+        }
+        let mut next = Vec::with_capacity(pieces.len() + 1);
+        for (lo, hi) in pieces {
+            if cut_hi <= lo || cut_lo >= hi {
+                next.push((lo, hi));
+                continue;
+            }
+            if cut_lo > lo {
+                next.push((lo, cut_lo));
+            }
+            if cut_hi < hi {
+                next.push((cut_hi, hi));
+            }
+        }
+        pieces = next;
+        if pieces.is_empty() {
+            break;
+        }
+    }
+    pieces
+        .into_iter()
+        .filter_map(|(lo, hi)| {
+            let piece_w = hi.saturating_sub(lo);
+            (piece_w > 0).then_some((lo, piece_w))
+        })
+        .collect()
 }
 
 /// Lowest and highest finite positive price across a run of trade points.

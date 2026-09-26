@@ -591,31 +591,93 @@ fn replay_repeat_keeps_candle_range_after_bars_are_already_shipped() {
     );
 }
 
-/// `market/trade_replay/mod.rs:bar_inside` must reject only wholly contained bars; relaxing it
-/// to an overlap drops the right edge candle and leaves a blank gutter beside the tick trace.
+/// `read_into` must keep candle geometry out of the tick span.
+///
+/// Breakage: a bar that only partly overlaps the prints used to stay whole, so a short trade
+/// drew two one-minute candles across the ticks. Cutting the bar to its uncovered side removes
+/// that overlay. Dropping the bar instead would also drop a gap the walk never covered.
 #[test]
-fn replay_ticks_keep_both_straddling_edge_candles() {
+fn replay_candles_stay_off_the_tick_span_and_a_gap_keeps_its_bar() {
     let mut series = bars_only_series();
     series.source = TradeReplaySource::Ticks;
-    series.covered = Coverage::one((MINUTE_MS / 2, 5 * MINUTE_MS / 2));
+    // Five minutes. Ticks cover [30s, 90s] and [150s, 210s]. The open interval between
+    // those spans is a gap (a missing tile, a budget stop) and must still draw.
+    series.candles = (0..5)
+        .map(|minute| {
+            let mut bar = candle(minute * MINUTE_MS, 90.0, 110.0, 100.0);
+            bar.quote_volume = 60_000.0;
+            bar.volume = 60_000.0;
+            bar
+        })
+        .collect();
+    let spans = [(30_000, 90_000), (150_000, 210_000)];
+    series.covered = Coverage::from_spans(spans);
     let mut out = ChartHistoryBuffers::default();
 
     series.read_into(
         0.0,
         0.0,
-        (2 * MINUTE_MS) as f32,
+        (4 * MINUTE_MS) as f32,
         Some(&candle_params(0)),
         &mut out,
     );
 
+    let drawn = drawn_half_open(&out);
+    for &(open, end) in &drawn {
+        for &(from, to) in &spans {
+            assert!(
+                end <= from || open > to,
+                "candle [{open}, {end}) overlaps covered [{from}, {to}]"
+            );
+        }
+    }
+    // Minute 0 loses its covered tail. The gap (90_001..=149_999) is two stubs, one from
+    // each minute the spans bite. Minute 4 never meets a span and stays a full bar.
     assert_eq!(
+        drawn,
+        vec![
+            (0, 30_000),
+            (90_001, 120_000),
+            (120_000, 150_000),
+            (210_001, 240_000),
+            (240_000, 300_000),
+        ]
+    );
+    assert_eq!(
+        out.candle_tf_ms,
+        vec![30_000.0, 29_999.0, 30_000.0, 29_999.0, 0.0],
+        "a full bar keeps the series timeframe; a stub carries its own width"
+    );
+    let quote = |open: i64| {
         out.candles
             .iter()
-            .map(|candle| candle.t_open_ms as i64)
-            .collect::<Vec<_>>(),
-        vec![0, 2 * MINUTE_MS],
-        "only the wholly covered middle candle may step aside; both straddling edge candles close the tick trace"
+            .find(|candle| candle.t_open_ms as i64 == open)
+            .map(|candle| candle.quote_volume)
+            .unwrap_or(f32::NAN)
+    };
+    assert!(
+        (quote(0) - 30_000.0).abs() < 1.0,
+        "the stub takes its share of the minute, not the whole minute"
     );
+    assert!(
+        (quote(240_000) - 60_000.0).abs() < 1.0,
+        "a bar outside the ticks keeps its turnover"
+    );
+}
+
+/// Half-open `[open, end)` of each candle on the draw list, using the series minute where
+/// the parallel width is 0.
+fn drawn_half_open(out: &ChartHistoryBuffers) -> Vec<(i64, i64)> {
+    out.candles
+        .iter()
+        .enumerate()
+        .map(|(index, candle)| {
+            let own = out.candle_tf_ms.get(index).copied().unwrap_or(0.0);
+            let width = if own > 0.0 { own as i64 } else { MINUTE_MS };
+            let open = candle.t_open_ms as i64;
+            (open, open + width)
+        })
+        .collect()
 }
 
 /// `market/trade_replay/mod.rs:TradeReplaySeries::read_into` must leave a `covered: None`
@@ -1203,5 +1265,10 @@ fn replay_with_split_coverage_keeps_the_middle_bars() {
             .collect::<Vec<_>>(),
         vec![MINUTE_MS],
         "the first and third minutes are covered by ticks; the middle minute stays a bar"
+    );
+    assert_eq!(
+        out.candle_tf_ms,
+        vec![0.0],
+        "a minute that sits wholly in the gap keeps the series width"
     );
 }

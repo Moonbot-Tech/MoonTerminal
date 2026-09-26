@@ -82,7 +82,9 @@ fn candles_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid:
     if cd.t_open >= cs.hide_start {
         return cull_out(); // Omit the candle in the "trades only" zone.
     }
-    let foreign_tf = cd.tf_rel > 0.0 && abs(cd.tf_rel - cs.tf_rel) > 0.5;
+    // Wider own timeframe: coarse history tail, muted. Narrower: a clipped trade-window
+    // candle, series color. Width still follows tf_rel when the candle carries one.
+    let foreign_tf = cd.tf_rel > cs.tf_rel + 0.5;
     var tf_rel = cs.tf_rel;
     if cd.tf_rel > 0.0 {
         tf_rel = cd.tf_rel;
