@@ -6,7 +6,7 @@ taskbar/dock semantics, restore, and chart own-pass.
 
 ## Where windows are created
 
-Open new terminal windows through `crates/moon-ui-gpui/src/windowing.rs`.
+Open new terminal windows through `crates/moon-ui-gpui/src/window/windowing.rs`.
 
 Do not assemble `gpui::WindowOptions` by hand in panels, Settings, or
 the Strategies editor without an explicit reason. Otherwise it is easy to forget `app_id`,
@@ -25,6 +25,10 @@ Current factories:
 - `debug_window_options` - debug/perf/chart diagnostic windows.
 - `profit_monitor_window_options` - independent desktop Profit Monitor without its own taskbar
   button; minimizing a Main/group window never minimizes it.
+- `trade_window_options` - one closed trade replayed beside Main. Independent and hidden from
+  the taskbar, like a detached chart, with a minimum size the detached-chart factory does not take.
+- `login_window_options` - the startup login prompt. Standalone, with the application icon and
+  a taskbar button, because it can open before any group window exists.
 
 ## Auto workspace: rail, dock, and group windows
 
@@ -174,7 +178,8 @@ Backend mapping:
 
 - Windows: `WindowRelationship::Owned` becomes a Win32 owned window through
   the owner `HWND`, without modal blocking of the parent. Dialog remains a separate modal
-  logic. `AppUserModelID` is set to `MoonTerminal`.
+  logic. A group window's `AppUserModelID` is `MoonTerminal.<group>` when the group name is
+  non-empty (`group_app_id`); every other factory sets `MoonTerminal`.
 - macOS: an owned floating window is added as an AppKit child window over the owner and
   is excluded from the native Windows menu.
 - Wayland: the owner becomes an xdg parent.
@@ -318,6 +323,7 @@ on a click on the chart. On a multi-monitor setup this looks like the main windo
 on another screen. Therefore chart windows open only through
 `detached_chart_window_options(...)`: their API has no owner, the window is
 independent, and the separate taskbar button is suppressed by the shared mechanism (see below).
+Trade windows follow that same ownership rule through `trade_window_options(...)`.
 
 Final taskbar policy:
 
@@ -326,7 +332,9 @@ Final taskbar policy:
   `detached_panel_window_options` - hidden from the taskbar when there is an owner; on
   restore without an owner they become independent and may get a taskbar entry;
 - `detached_chart_window_options` - always independent, but hidden from the taskbar;
-- `profit_monitor_window_options` - the same combination: always independent, but hidden from the taskbar.
+- `trade_window_options` - the same combination, plus a minimum size;
+- `profit_monitor_window_options` - the same combination: always independent, but hidden from the taskbar;
+- `login_window_options` - always independent, and shown on the taskbar.
 
 The current `Settings`, `Strategies` and `Assets` windows count as
 `Tool/secondary`, so they open through `tool_window_options(...)`. If
@@ -344,7 +352,12 @@ an iconic window) and Alt+Tab, which the window keeps because hidden taskbar vis
 `WS_EX_APPWINDOW` and never applies the tool-window style. Do not copy that OS policy to ordinary
 tool windows.
 
-Both independent branches - detached charts and Profit Monitor - suppress the taskbar button with ONE
+The login prompt is the other exception to tool-window ownership. It draws
+`MoonWindowFrame::tool(...)` chrome, but it opens through `login_window_options`, not
+`tool_window_options`. It can be the first and only window of the session, so it stays
+independent, keeps a taskbar button, and carries the application icon.
+
+Detached charts, trade windows, and Profit Monitor suppress the taskbar button with ONE
 mechanism: `WindowTaskbarVisibility::Hidden` plus `hide_window_from_taskbar_soon`.
 `WindowTaskbarVisibility::Hidden` by itself is not a guarantee: it only clears `WS_EX_APPWINDOW`,
 which an unowned top-level window does not even need in order to get a button. `ITaskbarList::DeleteTab` removes
@@ -369,7 +382,7 @@ must not place an opaque quad over the plot/body.
 
 Rule:
 
-- chart/debug/detached-chart root: `MoonBackgroundPolicy::NoFill`;
+- chart/debug/detached-chart/trade-window root: `MoonBackgroundPolicy::NoFill`;
 - header/chrome may be painted with `.bg(...)`;
 - the body around `ChartPanel` must not be painted with `.bg(...)`;
 - ordinary non-chart windows/panels may be opaque.

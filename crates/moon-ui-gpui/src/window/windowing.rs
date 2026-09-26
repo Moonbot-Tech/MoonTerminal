@@ -1,8 +1,9 @@
 //! Platform-level window support: `WindowOptions` factories for every terminal window type
-//! (trading, tool, independent Profit Monitor, detached panel, detached chart, and debug), display
-//! selection from saved geometry or the owner window, theme-aware clear colors, Windows DWM frame
-//! configuration, and HWND/geometry helpers. It also provides Windows AppUserModelIDs and group
-//! icons embedded in the executable by `build.rs` through `embed_group_icons`.
+//! (trading, tool, independent Profit Monitor, detached panel, detached chart, trade window,
+//! login, and debug), display selection from saved geometry or the owner window, theme-aware
+//! clear colors, Windows DWM frame configuration, and HWND/geometry helpers. It also provides
+//! Windows AppUserModelIDs and group icons embedded in the executable by `build.rs` through
+//! `embed_group_icons`.
 
 use std::sync::{
     Arc,
@@ -263,7 +264,7 @@ pub(crate) fn detached_panel_window_options(
 ///
 /// The project keeps chart windows neither owned nor tool windows so PowerToys FancyZones can
 /// discover and snap them. `WindowTaskbarVisibility::Hidden` avoids an app-window taskbar style,
-/// while [`hide_window_from_taskbar`] removes the taskbar item after the native window appears.
+/// while [`hide_window_from_taskbar_soon`] removes the taskbar item after the native window appears.
 /// Keeping the window independent also avoids raising the group window when the chart is clicked.
 ///
 /// # Arguments
