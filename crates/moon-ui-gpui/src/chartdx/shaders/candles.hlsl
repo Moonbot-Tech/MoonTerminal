@@ -82,9 +82,10 @@ CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     if (cd.t_open >= cs_hide_start) {
         return cull_out(); // Omit the candle in the "trades only" zone.
     }
-    // The history tail is completed with higher timeframes: those candles carry their own
-    // tf_rel (width) and muted colors to distinguish them from the selected timeframe.
-    bool foreign_tf = cd.tf_rel > 0.0 && abs(cd.tf_rel - cs_tf_rel) > 0.5;
+    // A wider own timeframe is the coarse history tail and is muted. A narrower own width
+    // is a trade-window candle cut to the uncovered side of a tick span; it keeps the
+    // series color. Width still follows tf_rel whenever the candle carries one.
+    bool foreign_tf = cd.tf_rel > cs_tf_rel + 0.5;
     float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs_tf_rel;
     float x0 = cv_bounds.x + (cd.t_open - cv_view_time0) * cv_time_to_px;
     float x1 = x0 + tf_rel * cv_time_to_px;

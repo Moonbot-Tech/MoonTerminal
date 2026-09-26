@@ -139,6 +139,9 @@ fn snap_and_step_walk_the_step_list() {
     assert_eq!(snap_trade_margin_s(44), 30);
     assert_eq!(snap_trade_margin_s(45), 30, "tie goes to the lower step");
     assert_eq!(snap_trade_margin_s(46), 60);
+    assert_eq!(snap_trade_margin_s(65), 65);
+    assert_eq!(snap_trade_margin_s(62), 60);
+    assert_eq!(snap_trade_margin_s(63), 65);
     assert_eq!(snap_trade_margin_s(u32::MAX), MAX_TRADE_MARGIN_S);
 
     assert_eq!(step_trade_margin_s(900, 1), 1800);
@@ -150,6 +153,9 @@ fn snap_and_step_walk_the_step_list() {
         "the top absorbs the rest"
     );
     assert_eq!(step_trade_margin_s(30, -1), 30, "so does the bottom");
+    assert_eq!(step_trade_margin_s(60, 1), 65);
+    assert_eq!(step_trade_margin_s(65, 1), 180);
+    assert_eq!(step_trade_margin_s(65, -1), 60);
     assert_eq!(
         step_trade_margin_s(2700, 1),
         3600,

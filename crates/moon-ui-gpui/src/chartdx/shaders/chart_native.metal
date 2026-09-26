@@ -274,7 +274,9 @@ vertex CandleOut candles_vertex(uint vid [[vertex_id]], uint iid [[instance_id]]
     if (cd.t_open >= cs.hide_start) {
         return candle_cull_out(); // Omit the candle in the "trades only" zone.
     }
-    bool foreign_tf = cd.tf_rel > 0.0 && fabs(cd.tf_rel - cs.tf_rel) > 0.5;
+    // Wider own timeframe: coarse history tail, muted. Narrower: a clipped trade-window
+    // candle, series color. Width still follows tf_rel when the candle carries one.
+    bool foreign_tf = cd.tf_rel > cs.tf_rel + 0.5;
     float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs.tf_rel;
     float x0 = cv.bounds.x + (cd.t_open - cv.view_time0) * cv.time_to_px;
     float x1 = x0 + tf_rel * cv.time_to_px;
