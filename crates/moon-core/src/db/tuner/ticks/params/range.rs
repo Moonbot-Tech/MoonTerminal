@@ -255,9 +255,9 @@ impl FieldSpan {
 fn round_step(raw: f64, decimals: u32) -> f64 {
     let quantum = quantum(decimals);
     let raw = raw.max(quantum);
-    let mut power = raw.log10().floor() as i32 - 1;
+    let first = raw.log10().floor() as i32 - 1;
     // Past ten decades up there is always 10^power itself, a multiple of any quantum ≤ 1.
-    for _ in 0..12 {
+    for power in first..first + 12 {
         for mantissa in [1.0, 2.0, 2.5, 5.0] {
             let candidate = snap(mantissa * 10f64.powi(power), MAX_DECIMALS + 4);
             let multiple = candidate / quantum;
@@ -265,7 +265,6 @@ fn round_step(raw: f64, decimals: u32) -> f64 {
                 return candidate;
             }
         }
-        power += 1;
     }
     raw
 }

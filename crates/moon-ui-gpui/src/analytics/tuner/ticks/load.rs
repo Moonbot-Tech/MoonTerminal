@@ -266,7 +266,7 @@ impl AnalyticsView {
         deals: &[Deal],
         cx: &Context<Self>,
     ) -> HashMap<(u64, String), Option<Arc<RowAddress>>> {
-        let mut resolver = super::fetch::FetchResolver::of(&self.backend.read(cx));
+        let mut resolver = super::fetch::FetchResolver::of(self.backend.read(cx));
         deals
             .iter()
             .map(|deal| ((deal.core_uid, deal.coin.clone()), resolver.address(deal)))
@@ -282,6 +282,7 @@ impl AnalyticsView {
     /// whole table again: the table and the KPI blinked empty for the length of that, and the
     /// work grew with the table, not with what changed. A row the model already judged under
     /// the settings in force keeps its verdict; stage C reads and replays only the others.
+    #[allow(clippy::too_many_arguments)]
     fn start_replay_stage(
         &mut self,
         req: u64,
@@ -505,11 +506,12 @@ impl AnalyticsView {
                     // continuation read `Missing`, and its refusal is the walk's own word.
                     // Nor is a row whose held query went unanswered: the tile store was not
                     // read for it, so "cannot be fetched" would be said of a store never asked.
-                    if answered && row.tape == TapeStatus::Missing {
-                        if let Some(address) = row.address.as_ref() {
-                            row.tape = unservable_status(address, &row.deal, now_ms)
-                                .unwrap_or(TapeStatus::Missing);
-                        }
+                    if answered
+                        && row.tape == TapeStatus::Missing
+                        && let Some(address) = row.address.as_ref()
+                    {
+                        row.tape = unservable_status(address, &row.deal, now_ms)
+                            .unwrap_or(TapeStatus::Missing);
                     }
                 }
                 log_replay(&rows);

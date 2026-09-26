@@ -420,7 +420,7 @@ fn perturb(
         let index = match (&field.kind, start.get(field.key)) {
             (ParamKind::Num, Some(&at)) => {
                 let step = 1 + (next_random(state) % 3) as usize;
-                if next_random(state) % 2 == 0 {
+                if next_random(state).is_multiple_of(2) {
                     at.saturating_sub(step)
                 } else {
                     (at + step).min(n - 1)

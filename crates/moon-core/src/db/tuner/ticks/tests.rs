@@ -1680,8 +1680,10 @@ fn a_moonshot_lifted_to_the_ask_needs_the_recorded_ask() {
 /// (the core developer via LinKvo, 2026-09-24).
 #[test]
 fn a_negative_coefficient_takes_the_sell_under_its_floor() {
-    let mut mods = Modifiers::default();
-    mods.add_1h = 1.0;
+    let mods = Modifiers {
+        add_1h: 1.0,
+        ..Modifiers::default()
+    };
     let params = ExitParams {
         sell_price_pct: 1.0,
         sell_modifier: -0.5,
@@ -1806,8 +1808,10 @@ fn an_unknown_take_leaves_the_exit_unanswered() {
 /// => -10.75%]`: the configured stop, deepened by `StopLossModifier · Σ`.
 #[test]
 fn the_stop_modifier_deepens_the_stop_by_the_summed_deltas() {
-    let mut mods = Modifiers::default();
-    mods.add_1h = 1.0;
+    let mods = Modifiers {
+        add_1h: 1.0,
+        ..Modifiers::default()
+    };
     let params = ExitParams {
         stop_loss_pct: -2.0,
         stop_loss_modifier: 0.2,
@@ -1847,8 +1851,10 @@ fn the_stop_modifier_deepens_the_stop_by_the_summed_deltas() {
 /// than one a hair from the entry that the next print would trip.
 #[test]
 fn an_adjustment_through_the_entry_leaves_no_stop() {
-    let mut mods = Modifiers::default();
-    mods.add_1h = 1.0;
+    let mods = Modifiers {
+        add_1h: 1.0,
+        ..Modifiers::default()
+    };
     let base = ExitParams {
         stop_loss_pct: -2.0,
         stop_loss_modifier: -0.3,
@@ -1912,8 +1918,10 @@ fn an_adjustment_through_the_entry_leaves_no_stop() {
 /// where the next print fires it.
 #[test]
 fn a_cancelled_stop_does_not_fire_at_the_entry() {
-    let mut mods = Modifiers::default();
-    mods.add_1h = 1.0;
+    let mods = Modifiers {
+        add_1h: 1.0,
+        ..Modifiers::default()
+    };
     let params = ExitParams {
         stop_loss_pct: -2.0,
         stop_loss_modifier: -0.2,
@@ -1954,8 +1962,10 @@ fn a_cancelled_stop_does_not_fire_at_the_entry() {
 /// divides the fill by it).
 #[test]
 fn a_short_stop_sits_above_with_the_modifier() {
-    let mut mods = Modifiers::default();
-    mods.add_1h = 1.0;
+    let mods = Modifiers {
+        add_1h: 1.0,
+        ..Modifiers::default()
+    };
     let params = ExitParams {
         stop_loss_pct: -2.0,
         stop_loss_modifier: 0.2,
@@ -1987,8 +1997,10 @@ fn a_short_stop_sits_above_with_the_modifier() {
 /// FAQ: a summed delta of 5 % with `SellModifier = 0.2` places the sell 1 % higher.
 #[test]
 fn sell_modifiers_lift_the_take_by_the_faq_example() {
-    let mut mods = Modifiers::default();
-    mods.add_1h = 1.0;
+    let mods = Modifiers {
+        add_1h: 1.0,
+        ..Modifiers::default()
+    };
     let params = ExitParams {
         sell_price_pct: 1.0,
         sell_modifier: 0.2,

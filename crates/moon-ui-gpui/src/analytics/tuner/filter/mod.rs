@@ -96,7 +96,7 @@ impl AnalyticsView {
         &self,
         cx: &Context<Self>,
     ) -> HashMap<String, f64> {
-        super::ticks::strategy_field_defaults(&self.backend.read(cx))
+        super::ticks::strategy_field_defaults(self.backend.read(cx))
     }
 
     /// Recompute only KPI and selected strategy thresholds after a local tuner edit.

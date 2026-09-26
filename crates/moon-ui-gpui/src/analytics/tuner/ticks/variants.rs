@@ -103,7 +103,7 @@ impl AnalyticsView {
         self.ticks.var_task = Some(cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             executor.timer(VARIANT_DEBOUNCE).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     if this.ticks.var_seq == req {
                         this.run_ticks_variants(req, cx);

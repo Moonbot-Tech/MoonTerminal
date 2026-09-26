@@ -176,7 +176,7 @@ impl AnalyticsView {
             return;
         };
         let backend = self.backend.read(cx);
-        let resolver = FetchResolver::of(&backend);
+        let resolver = FetchResolver::of(backend);
         let mut rows: Vec<job::QueuedRow> = data
             .fetchable()
             .filter_map(|row| resolver.queued_row(row.deal.clone(), row.address.clone()?))
@@ -185,7 +185,7 @@ impl AnalyticsView {
         // job pops from the end.
         rows.reverse();
         let wanted: HashSet<i64> = rows.iter().map(|r| r.deal.report_uid).collect();
-        let defaults = strategy_field_defaults(&backend);
+        let defaults = strategy_field_defaults(backend);
         if job::enqueue(rows, defaults) > 0 {
             self.attach_fetch_listener(cx);
         }

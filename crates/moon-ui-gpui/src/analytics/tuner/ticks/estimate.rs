@@ -238,7 +238,7 @@ impl AnalyticsView {
         self.ticks.cost_task = Some(cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             executor.timer(COST_DEBOUNCE).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| this.run_ticks_cost(key, cx));
             });
         }));

@@ -214,7 +214,7 @@ impl AnalyticsView {
                     })
                 })
                 .collect();
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     if this.ticks.trade.model_seq != seq {
                         return;
