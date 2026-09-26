@@ -245,20 +245,28 @@ pub struct Deal {
     /// starts. FLOCK 2026-09-21 (HookN0, short): the model's `SellPrice` take at −1.0 %, the
     /// core's at −2.2 %, every PriceDown step then a different level.
     pub archived_take: Option<f64>,
+    /// The core's own delta-modifier sum on this trade, read back off its record — the take it
+    /// placed, else the stop level it printed — as what the model's deltas miss of it
+    /// ([`exit::delta_mods::FactModifier`]). Every sum the model forms goes through it
+    /// ([`exit::delta_mods::modifier_sum`]), the fact's and every variant's; filled with the rest
+    /// of the model inputs, `None` where the trade runs no `Add*` term or the record holds
+    /// neither reading.
+    pub fact_modifier: Option<exit::delta_mods::FactModifier>,
     /// The level the entry order stood at when the core created it — where a replay from the
     /// creation places the fact's order ([`record::entry_placement`]); filled with the rest of
     /// the model inputs, `None` before them and wherever the record does not prove it.
     pub entry_placed: Option<f64>,
-    /// The detect depth of a MoonHook trade, per cent, as the core wrote it into the report's
-    /// `comment` — the base of that kind's take rule ([`hook::hook_take_pct`]). `None` for
-    /// every other kind, and for a hook row whose comment the scan could not read.
+    /// The detect depth of a MoonHook trade, per cent — the base of that kind's take rule
+    /// ([`hook::hook_take_pct`]). The scan reads the `Depth` the core wrote into the report's
+    /// `comment`; the model inputs then replace it with the depth the take was placed off, where
+    /// the comment states that take ([`record::placed_hook_depth`]). `None` for every other kind,
+    /// and for a hook row whose comment the scan could not read.
     pub hook_depth_pct: Option<f64>,
-    /// The take the core actually placed on a hook trade, per cent from the buy, as the same
-    /// comment states it. Never an input of the model, and nothing asserts it: the ignored
-    /// `tests::real_data` harness prints it beside the formula's own number so a developer can
-    /// see the two drift apart on real trades. It could not stand in for the formula anyway —
-    /// a variant asks about a level the core never used, and this number answers only for the
-    /// one it did.
+    /// The take the core actually placed on a hook trade, per cent from the buy before the delta
+    /// modifiers, as the same comment states it. It does not stand in for the formula — a
+    /// variant asks about a level the core never used — but it fixes the depth the formula runs
+    /// on ([`record::placed_hook_depth`]), and through it every variant's `HookSellLevel` scales
+    /// from the core's own take.
     pub hook_stated_take_pct: Option<f64>,
     /// How much later than `PriceDownDelay` the deal's CORE makes the next PriceDown step after
     /// one that moved the order, milliseconds — its replace round trip, calibrated by the caller

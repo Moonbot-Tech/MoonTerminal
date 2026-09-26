@@ -85,14 +85,12 @@ impl FetchResolver {
                 let market = self
                     .source
                     .resolve_market(deal.core_uid, quote, &deal.coin)?;
-                let tick = self.source.price_step(deal.core_uid, &market);
                 Some(Arc::new(RowAddress {
                     core_uid: deal.core_uid,
                     venue: address.venue,
                     exchange_key: address.exchange_key,
                     market,
                     btc_market,
-                    tick,
                 }))
             });
         self.addresses.insert(key, address.clone());

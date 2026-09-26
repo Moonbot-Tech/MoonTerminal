@@ -70,7 +70,10 @@ pub const BOOK_STOP_TIME_TOLERANCE_MS: i64 = 2_300;
 /// Tolerance on a STOP's level: the modelled level against the one the core fixed carries
 /// `StopLossModifier` over deltas the model only partly re-reads live — the coin's ranges where
 /// the deal has a track, the BTC, market, mark and price-bug terms as the report's one snapshot
-/// (`exit::delta_mods::modifier_sum`) — and the residual sits right there.
+/// (`exit::delta_mods::modifier_sum`) — and the residual sits right there wherever the record
+/// did not keep the core's own sum (`Deal::fact_modifier`). Where it did, the sum is the one
+/// that places the recorded level to the price step, and a stop read off the take's band carries
+/// that band's width times `StopLossModifier / SellModifier`.
 pub const STOP_PRICE_TOLERANCE: f64 = 0.003;
 
 /// How much BETTER than the modelled level the fact's fill may be and still be that level's
@@ -493,7 +496,8 @@ fn is_fill_point(deal: &Deal, exit: &ExitParams, last: (i64, f64), prev: (i64, f
 ///
 /// The level tolerance is [`STOP_PRICE_TOLERANCE`] rather than the line's: the modelled level
 /// carries `StopLossModifier` over deltas the model only partly re-reads live (see
-/// `exit::delta_mods::modifier_sum`), and the residual sits right there.
+/// `exit::delta_mods::modifier_sum`), and the residual sits right there where the record kept
+/// no sum of the core's own.
 ///
 /// Archived moves from the activation on — the first move past the level [`stop_jump_level`]
 /// gives: the stop's, or for a trailing stop's reason its own line under the printed peak — are

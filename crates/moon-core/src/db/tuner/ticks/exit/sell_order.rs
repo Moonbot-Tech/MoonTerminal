@@ -106,7 +106,7 @@ impl ExitModel<'_> {
     /// A hook whose depth or level is unknown falls back to `SellPrice` so the line still has
     /// somewhere to step down from — and [`Self::take_known`] answers `false` for it, which is
     /// what keeps that fallback out of the verdict.
-    fn base_take_pct(&self, deal: &Deal) -> f64 {
+    pub(super) fn base_take_pct(&self, deal: &Deal) -> f64 {
         if deal.kind == KIND_MOONHOOK && self.params.hook_sell_level_pct > 0.0 {
             if let Some(depth) = deal.hook_depth_pct.filter(|d| d.is_finite() && *d > 0.0) {
                 return hook_take_pct(depth, self.params.hook_sell_level_pct);

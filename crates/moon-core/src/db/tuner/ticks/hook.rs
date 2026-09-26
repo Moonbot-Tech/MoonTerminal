@@ -19,8 +19,9 @@
 //! that number on 90 of 118 trades within 0.01 pp, with the buy price as the base (median of
 //! fact against prediction +0.003 %). The remaining 28 all sit HIGHER than the formula, never
 //! lower; the depth in the comment is written at close time while the take was placed at fill
-//! time, and the detect's state in between is not in the report. See
-//! `docs-internal/STRATEGY_FORMULAS/moonhook.md`.
+//! time, and the detect's state in between is not in the report. So the model runs the formula
+//! on the depth the stated take implies (`record::placed_hook_depth`) wherever the comment
+//! states one. See `docs-internal/STRATEGY_FORMULAS/moonhook.md`.
 //!
 //! The archive cannot stand in for this: the core files a line only when it was RE-PLACED, and
 //! a take that never moved has none — 0 of 155 take-closed trades on the same sample carry an
@@ -34,10 +35,10 @@ pub const KIND_MOONHOOK: &str = "MoonHook";
 pub struct HookDetect {
     /// `Depth: X%` — the detect's depth, per cent. The base of the take rule.
     pub depth_pct: f64,
-    /// `SellPrice: Y%` — the take the core actually placed, per cent from the buy. Not an
-    /// input of the model: it is the yardstick the formula is checked against, and the fact a
-    /// variant must NOT be judged by (a variant asks what another `HookSellLevel` would have
-    /// done, and the core's number answers only for the one it used).
+    /// `SellPrice: Y%` — the take the core actually placed, per cent from the buy, before the
+    /// delta modifiers. Never a variant's take (a variant asks what another `HookSellLevel`
+    /// would have done, and the core's number answers only for the one it used), but the depth
+    /// the formula runs on is read back off it (`record::placed_hook_depth`).
     pub stated_take_pct: Option<f64>,
 }
 

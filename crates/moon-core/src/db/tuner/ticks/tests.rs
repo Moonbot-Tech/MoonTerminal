@@ -49,6 +49,7 @@ pub(super) fn deal() -> Deal {
         tick: None,
         pre_spike_ask: None,
         archived_take: None,
+        fact_modifier: None,
         hook_depth_pct: None,
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,
@@ -1560,6 +1561,7 @@ fn a_hook_without_its_depth_is_not_a_known_take() {
     // a variant of a hook whose depth is unknown has nowhere to put its take.
     assert!(!model.take_known(&Deal {
         archived_take: Some(101.0),
+        fact_modifier: None,
         ..no_depth
     }));
 }
@@ -1571,6 +1573,7 @@ fn a_spread_takes_the_level_its_core_recorded() {
     let spread = Deal {
         kind: "Spread".into(),
         archived_take: Some(102.3),
+        fact_modifier: None,
         ..deal()
     };
     let far = ExitParams {
@@ -1586,6 +1589,7 @@ fn a_spread_takes_the_level_its_core_recorded() {
     assert!((model.take_level(&spread, &[], fill) - 102.3).abs() < 1e-9);
     let unrecorded = Deal {
         archived_take: None,
+        fact_modifier: None,
         ..spread
     };
     assert!(!model.take_known(&unrecorded));

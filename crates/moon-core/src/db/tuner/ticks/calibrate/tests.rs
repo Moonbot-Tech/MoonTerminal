@@ -24,6 +24,7 @@ fn deal() -> Deal {
         tick: None,
         pre_spike_ask: None,
         archived_take: None,
+        fact_modifier: None,
         hook_depth_pct: None,
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,

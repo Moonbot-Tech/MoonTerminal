@@ -17,10 +17,12 @@
 //! proxy, and the verdict (which replays the proxy, never the anchor) is what says how far the
 //! proxy may be trusted.
 
+use super::exit::delta_mods::FactModifier;
 use super::exit::sell_order::{archived_pre_spike_ask, archived_take};
 use super::exit::stops::stop_pct;
 use super::exit::{ExitParams, StopStep};
 use super::gap::TapeGap;
+use super::hook::KIND_MOONHOOK;
 use super::verify::{
     POINT_TIME_TOLERANCE_MS, Verdict, archived_stop_jump, is_stop_reason, stop_jump_level,
 };
@@ -120,7 +122,9 @@ pub struct OwnLines<'a> {
 }
 
 /// Fill the model inputs the core's own record gives: the ask a MoonShot's take was lifted to,
-/// read back off the take as placed, the take itself, the level the entry order was placed at
+/// read back off the take as placed, the take itself, the depth a MoonHook's take was placed
+/// off ([`placed_hook_depth`]), the core's delta-modifier sum ([`FactModifier`]), the level the
+/// entry order was placed at
 /// ([`entry_placement`]), the stop anchor, the entry settings the trade ran with
 /// ([`Deal::own_entry`]) and the hole of a long position's tape ([`Deal::gap`]).
 ///
@@ -139,6 +143,12 @@ pub fn prepare_deal(
 ) {
     deal.pre_spike_ask = archived_pre_spike_ask(lines.exit, exit, deal.is_short);
     deal.archived_take = archived_take(lines.exit);
+    // Before the core's sum, which is read against the take this depth places.
+    if let Some(depth) = placed_hook_depth(deal, exit) {
+        deal.hook_depth_pct = Some(depth);
+    }
+    // Before the stop anchor: the fact's stop distance is spent from this sum.
+    deal.fact_modifier = FactModifier::of(deal, exit, lines.exit);
     deal.entry_placed = entry_placement(deal, lines);
     deal.stop_anchor = Some(StopAnchor::of(deal, exit, lines.exit));
     deal.own_entry = Some(entry.clone());
@@ -178,9 +188,37 @@ pub fn entry_placement(deal: &Deal, lines: OwnLines<'_>) -> Option<f64> {
     (level.is_finite() && level > 0.0).then_some(level)
 }
 
+/// The depth a MoonHook trade's take was placed off ([`Deal::hook_depth_pct`]): the take the
+/// core states in the comment (`SellPrice: Y%`, before the delta modifiers) over the trade's own
+/// `HookSellLevel`, so the rule places the core's take at the fact's parameters and a variant's
+/// level scales from it. The comment's `Depth` is written at the close, while the take was placed
+/// at the fill: on the take-closed hooks of 2026-09-25 whose strategy runs no `SellModifier`, the
+/// sale sat on the stated take to its hundredth (GEOD 7.467 % against 7.47 %, W3GG 28.567 against
+/// 28.56), a tenth to a half above `Depth · HookSellLevel` (5.55, 19.64).
+///
+/// `None` — the comment's depth stays — for every other kind, without a stated take, and where
+/// the take is not `HookSellLevel` of the depth (`HookSellFixed`, a level of zero).
+pub fn placed_hook_depth(deal: &Deal, exit: &ExitParams) -> Option<f64> {
+    if deal.kind != KIND_MOONHOOK || exit.hook_sell_fixed || exit.hook_sell_level_pct <= 0.0 {
+        return None;
+    }
+    let stated = deal
+        .hook_stated_take_pct
+        .filter(|pct| pct.is_finite() && *pct > 0.0)?;
+    Some(stated * 100.0 / exit.hook_sell_level_pct)
+}
+
 /// The deal as the verdict replays it: without what the fact proves ([`Deal::stop_anchor`],
 /// [`Deal::own_entry`]) — the verdict exists to test the model, and a model handed the fact
 /// passes by construction.
+///
+/// What stays are the inputs the model cannot rebuild and reads off the record as the core's
+/// own numbers, exactly as every variant reads them: the archived take and pre-spike ask, the
+/// placed hook depth, the core's delta-modifier sum ([`Deal::fact_modifier`]). Each fixes a LEVEL
+/// the core placed; the verdict then judges what the rules did from it — which rule reached the
+/// tape first, and when. Where the sum was read off the very level being judged — a take-closed
+/// sale, or a stop printing its own level with no take on record — that level agrees by
+/// construction, and the verdict judges the order and the moment alone.
 pub fn unanchored(deal: &Deal) -> Deal {
     Deal {
         stop_anchor: None,

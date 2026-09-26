@@ -225,6 +225,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             tick: None,
             pre_spike_ask: None,
             archived_take: None,
+            fact_modifier: None,
             // Filled with the model inputs, once the archive is in (`record::prepare_deal`).
             entry_placed: None,
             gap: None,

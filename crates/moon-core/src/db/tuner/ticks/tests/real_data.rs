@@ -87,7 +87,8 @@ fn held_ticks(exchange_key: &str, market: &str, spans: &Coverage) -> (Vec<Tick>,
 /// One deal as the verdict saw it, for an analysis outside the probe: a JSON line in
 /// `<dir>/deals.jsonl` (the row, the strategy's raw values, the held walk's points, the archived
 /// Entry and Exit lines, the entry order's creation, placement and saved corridor, the MoonShot
-/// bounds) and its prints as `t,price,qty,side` in `<dir>/ticks/<uid>.csv`.
+/// bounds, the model's own take and the delta-modifier sum around the fill) and its prints as
+/// `t,price,qty,side` in `<dir>/ticks/<uid>.csv`.
 #[allow(clippy::too_many_arguments)]
 fn dump_deal(
     dir: &str,
@@ -111,6 +112,17 @@ fn dump_deal(
         .and_then(|jump_at| verify::archived_stop_jump(deal, jump_at, exit_points));
     let dir = PathBuf::from(dir);
     let _ = std::fs::create_dir_all(dir.join("ticks"));
+    let sum_around_fill: Vec<(i64, f64)> = [
+        -60_000i64, -10_000, -2_000, -500, 0, 250, 500, 1_000, 2_000, 5_000,
+    ]
+    .iter()
+    .map(|dt| {
+        (
+            *dt,
+            super::super::exit::delta_mods::modifier_sum(exit, deal, deal.buy_ms + dt),
+        )
+    })
+    .collect();
     let row = serde_json::json!({
         "uid": deal.report_uid,
         "core": deal.core_name,
@@ -133,6 +145,27 @@ fn dump_deal(
         "order_open_ms": deal.order_open_ms(),
         "entry_placed": deal.entry_placed,
         "corridor": deal.corridor,
+        // The take the rules place off the fact's fill, modifiers and all, beside what they are
+        // built from — the check against the archive's first point outside the probe.
+        "model_take": ExitModel::new(exit).take_level(
+            deal,
+            ticks,
+            Fill {
+                t_ms: deal.buy_ms,
+                price: deal.buy_price,
+            },
+        ),
+        "modifier_sum": super::super::exit::delta_mods::modifier_sum(exit, deal, deal.buy_ms),
+        // The same sum around the fill, for when the core actually reads the deltas: offsets in
+        // ms from the fill. `tracked` says only that the deal HAS a live track — outside its
+        // covered stretches the track answers with the snapshot, so an offset may still read it.
+        "modifier_sum_at": sum_around_fill,
+        "tracked": deal.delta_track.is_some(),
+        // Whether the record held a reading of the core's sum — the sum above is then inside the
+        // band that reading allows, the model's own where it already was.
+        "fact_modifier": deal.fact_modifier.is_some(),
+        "hook_depth": deal.hook_depth_pct,
+        "hook_stated": deal.hook_stated_take_pct,
         "stop": {
             "pct": stop,
             "level": level,
@@ -569,23 +602,36 @@ fn real_data_reproduction() {
     );
 
     // Every (exchange, market) pair the tape holds — the deal's market spelling is not in the
-    // report, so a coin is tried under each market of its core's exchange that stores it.
-    let spans_db =
-        Connection::open_with_flags(paths::trades_db_path(), OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .expect("trades.sqlite");
-    let pairs: Vec<(String, String)> = spans_db
-        .prepare("SELECT DISTINCT exchange, market FROM spans")
-        .expect("spans")
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-        .expect("pairs")
-        .flatten()
-        .collect();
+    // report, so a coin is tried under each market of its core's exchange that stores it. Asked
+    // of the cache's own worker through the same handle `query_held` reads the prints through
+    // (`handle`, which honours `persist_trades`), so the list covers whatever tables the file
+    // keeps them in (legacy `spans` and packed `packs`) and opens nothing the read would not.
+    let pairs: Vec<(String, String)> = match crate::market::trade_replay::trade_cache::handle()
+        .and_then(|cache| cache.inventory())
+    {
+        Some(Ok(inventory)) => inventory.keys,
+        other => {
+            eprintln!("trades.sqlite gave no market list ({other:?}); nothing to replay");
+            return;
+        }
+    };
+    eprintln!("markets with a held tape: {}", pairs.len());
     let margin_ms = crate::market::trade_replay::margin_ms();
     let venue_of_core = core_venues();
     eprintln!("core venues (from the identity lines of the logs): {venue_of_core:?}");
 
     let keys = param_keys();
-    let defaults = HashMap::new();
+    // `MOON_TICKS_DEFAULTS=selldelay=0,mshotsellatlastprice=1`: the strategy-field defaults the
+    // app reads off the live schema (`strategy_field_defaults`), which a data root does not keep.
+    let defaults: HashMap<String, f64> = std::env::var("MOON_TICKS_DEFAULTS")
+        .map(|spec| {
+            spec.split(',')
+                .filter_map(|pair| pair.split_once('='))
+                .filter_map(|(k, v)| Some((k.trim().to_ascii_lowercase(), v.trim().parse().ok()?)))
+                .collect()
+        })
+        .unwrap_or_default();
+    eprintln!("strategy-field defaults: {defaults:?}");
     let core_lags = core_step_lags(&read.deals, &keys, &defaults);
     // `MOON_TICKS_LATENCY_BASE_MS=<ms>`: each core's latency is that plus its own archived
     // replace round trip, instead of one number for every core.
@@ -1041,8 +1087,9 @@ fn real_data_reproduction() {
             tick = deal.tick,
             hook_depth = round3(deal.hook_depth_pct),
             hook_stated = round3(deal.hook_stated_take_pct),
-            // The formula against the core's own number, for the same trade — the check that
-            // keeps `docs-internal/STRATEGY_FORMULAS/moonhook.md` honest over time.
+            // The formula against the core's own number, for the same trade. The depth is the one
+            // the stated take implies (`record::placed_hook_depth`), so the two agree wherever
+            // the comment states a take; a gap left is a row without one.
             hook_model = round3(
                 deal.hook_depth_pct
                     .map(|d| super::super::hook::hook_take_pct(d, exit.hook_sell_level_pct))

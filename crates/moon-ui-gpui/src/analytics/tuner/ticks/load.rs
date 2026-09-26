@@ -512,6 +512,7 @@ impl AnalyticsView {
                         }
                     }
                 }
+                log_replay(&rows);
                 // Rows the job answered while the batch was read: read again, each behind
                 // whatever walk is running. A row the job answers during THIS loop is kept
                 // covered by the fold (`update_rows`), not re-read once more.
@@ -894,7 +895,11 @@ pub(super) fn replay_row_with(
         return;
     }
     row.tape = TapeStatus::Covered;
-    row.deal.tick = address.tick.or_else(|| infer_tick(&ticks));
+    // The price grid off the prints themselves, as the `real_data` bench reads it: the live
+    // catalog has no tick to give — its `price_step` is the chart's `ask / 5000`, off the grid, and
+    // rounding every level to it moved the lines off the core's on every row (2026-09-26: the
+    // axis ✓ 65 % where the bench on the same trades read 92 %).
+    row.deal.tick = infer_tick(&ticks);
     let keys = params::param_keys();
     let values = strategy_values_at(
         row.deal.strategy_id,
@@ -953,6 +958,34 @@ pub(super) fn replay_row_with(
         lines.exit_points.as_deref(),
     ));
     row.ticks = Some(tape::PackedTape::pack(ticks));
+}
+
+/// One line per load on what its replay came to — the rows, those it covered, the exit share and
+/// each core's step lag — to hold against the `real_data` bench over the same trades. Read off
+/// the replayed rows alone: no second read of the database.
+fn log_replay(rows: &[DealRow]) {
+    let mut lags: Vec<(&str, f64)> = rows
+        .iter()
+        .map(|r| (r.deal.core_name.as_str(), r.deal.step_lag_ms))
+        .collect();
+    lags.sort_by(|a, b| a.0.cmp(b.0));
+    lags.dedup_by(|a, b| a.0 == b.0);
+    let covered = rows
+        .iter()
+        .filter(|r| r.tape == TapeStatus::Covered)
+        .count();
+    let exit = verify::share(
+        rows.iter()
+            .filter_map(|r| r.verdict.as_ref())
+            .map(|v| v.exit),
+    );
+    log::info!(
+        target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+        "[x] ticks replay: {} row(s), {covered} covered, exit ✓ {}/{} · step lag {lags:?}",
+        rows.len(),
+        exit.0,
+        exit.1,
+    );
 }
 
 /// One line per load on what the table holds of its tape — the numbers the memory budget
