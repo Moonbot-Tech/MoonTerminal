@@ -40,18 +40,18 @@ const TEST_JOB: &str = "tests";
 /// Every job that compiles the workspace and therefore runs the lockfile contract's three steps
 /// (verify -> refresh MoonUI -> assert nothing else moved). `audit` is deliberately excluded: it
 /// runs cargo-deny over the already-committed lock and never touches it.
-const COMPILING_JOBS: [&str; 3] = ["windows", TEST_JOB, "macos-probe"];
+const COMPILING_JOBS: [&str; 4] = ["windows", TEST_JOB, "macos-probe", "clippy"];
 
-/// The two compiling jobs that BLOCK a merge — the Windows `.exe` release gate and the `tests`
-/// gate — and so must neither be silently skipped nor downgraded to a probe. `macos-probe` is
-/// deliberately excluded here even though it shares the same `if:` condition: it already carries
+/// The compiling jobs that BLOCK a merge — the Windows `.exe` release gate, the `tests` gate, and
+/// the `clippy` gate — and so must neither be silently skipped nor downgraded to a probe.
+/// `macos-probe` is deliberately excluded here even though it shares the same `if:` condition: it already carries
 /// `continue-on-error: true` and never blocks, so there is no gate left for a quiet skip to hide
 /// behind, and it needs no guard of its own.
-const GATING_JOBS: [&str; 2] = ["windows", TEST_JOB];
+const GATING_JOBS: [&str; 3] = ["windows", TEST_JOB, "clippy"];
 
 /// The only job-level `if:` a `GATING_JOBS` member may carry, normalized the same way
 /// [`normalize_if_condition`] normalizes what it reads from `build.yml`. The weekly `schedule:`
-/// trigger (`build.yml`'s `on:` header) exists for the `audit` job alone, so the two gates skip
+/// trigger (`build.yml`'s `on:` header) exists for the `audit` job alone, so these gates skip
 /// it and nothing else.
 const EXPECTED_SCHEDULE_EXCLUSION: &str = "github.event_name != 'schedule'";
 
@@ -87,6 +87,9 @@ const AUDIT_JOB: &str = "audit";
 
 /// The formatting gate's job key, separate from compilation and test gates.
 const FMT_JOB: &str = "fmt";
+
+/// The clippy gate's job key. It compiles, so it is also in [`COMPILING_JOBS`] and [`GATING_JOBS`].
+const CLIPPY_JOB: &str = "clippy";
 
 fn workspace_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -480,6 +483,58 @@ fn the_fmt_job_is_a_gate_that_actually_runs_cargo_fmt() {
         "job `{FMT_JOB}` must run the documented formatting check, not a command that leaves \
          unformatted code able to merge: `{command}`"
     );
+}
+
+/// Breakage guarded: changing `.github/workflows/build.yml`'s `clippy` job command away from
+/// `cargo clippy --workspace --all-targets --locked -- -D warnings`, dropping `--locked` or
+/// `-D warnings`, or demoting the job with `continue-on-error: true`. A warning would then merge
+/// while the check still looked green.
+#[test]
+fn the_clippy_job_is_a_gate_that_actually_runs_cargo_clippy() {
+    let text = workflow_text();
+    let body = job_body(&text, CLIPPY_JOB)
+        .unwrap_or_else(|| panic!("build.yml must keep a `{CLIPPY_JOB}:` lint job"));
+
+    for line in &body {
+        let Some(value) = line.trim().strip_prefix("continue-on-error:") else {
+            continue;
+        };
+        assert_eq!(
+            value.trim(),
+            "false",
+            "job `{CLIPPY_JOB}` runs the lint gate, so a failure must block: `{}`",
+            line.trim()
+        );
+    }
+
+    let skipped = body.iter().find(|line| line.starts_with("    if:"));
+    let line = skipped.unwrap_or_else(|| {
+        panic!("job `{CLIPPY_JOB}` compiles, so it must skip the audit-only weekly schedule")
+    });
+    assert_eq!(
+        normalize_if_condition(line),
+        EXPECTED_SCHEDULE_EXCLUSION,
+        "job `{CLIPPY_JOB}` must run on push, pull_request, and workflow_dispatch: `{}`",
+        line.trim()
+    );
+
+    let command = body
+        .iter()
+        .filter_map(|line| line.trim().strip_prefix("run:"))
+        .map(str::trim)
+        .find(|command| command.contains("cargo clippy"))
+        .unwrap_or_else(|| panic!("job `{CLIPPY_JOB}` must run cargo clippy"));
+    assert_eq!(
+        command, "cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "job `{CLIPPY_JOB}` must deny warnings on the whole workspace: `{command}`"
+    );
+    for sep in [";", "&&", "||", "|"] {
+        assert!(
+            !command.contains(sep),
+            "job `{CLIPPY_JOB}` must not chain anything onto clippy — `{sep}` can swallow a \
+             failure: `{command}`"
+        );
+    }
 }
 
 /// Breakage guarded: a well-meaning reorder in `.github/workflows/build.yml`'s lockfile contract

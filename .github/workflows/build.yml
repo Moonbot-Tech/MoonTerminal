@@ -3,9 +3,10 @@ name: build
 permissions:
   contents: read
 
-# Six jobs, five of which gate a merge:
+# Seven jobs, six of which gate a merge:
 #   Windows .exe — the real release binary, uploaded as an artifact.
 #   Tests        — `cargo test --workspace`. Blocking: a red suite is a red PR.
+#   Clippy       — `cargo clippy --workspace --all-targets --locked -- -D warnings`. Blocking.
 #   Audit        — cargo-deny over the committed lockfile. Blocking.
 #   Tour         — deterministic interactive and AI documentation. Blocking.
 #   Fmt          — `cargo fmt --all -- --check`. Blocking.
@@ -15,7 +16,7 @@ permissions:
 #                  .dmg ships, unevenly: arm64 is compiled, the Intel slice only
 #                  type-checked. Read its log; it never blocks.
 #
-# THE LOCKFILE CONTRACT, which the three compiling jobs implement in the same three steps.
+# THE LOCKFILE CONTRACT, which the four compiling jobs implement in the same three steps.
 # `Cargo.lock` is committed, so third-party versions move only in a deliberate commit. Each job
 # then, in this order and no other:
 #   1. verifies the committed lock still agrees with the manifests (`cargo fetch --locked`),
@@ -55,9 +56,9 @@ on:
   workflow_dispatch:
   # A freeze makes exactly one thing worse: an advisory can be published against a pinned version
   # long after the last PR, and nothing would notice. This weekly run exists for the audit job
-  # alone — the three compiling jobs skip it, so it costs a couple of runner-minutes and writes
+  # alone — the four compiling jobs skip it, so it costs a couple of runner-minutes and writes
   # no cache. Side effect worth knowing when you read a commit's checks: each cron run attaches
-  # three `Skipped` entries to main's HEAD, so a commit whose gates really did pass can later
+  # four `Skipped` entries to main's HEAD, so a commit whose gates really did pass can later
   # display them as skipped.
   schedule:
     - cron: "0 6 * * 1"
@@ -77,7 +78,7 @@ env:
 
 # Every job restores the cargo cache but only `main` writes it (`save-if` below).
 # A cache saved from a branch is readable only by that branch, so on any run whose
-# manifest hash is new it is written once and never read again. Three jobs at ~1 GiB
+# manifest hash is new it is written once and never read again. Four jobs at ~1 GiB
 # a piece fill the repository's 10 GB Actions quota fast, and once over it GitHub
 # evicts by least-recent-use — which takes the live caches, not the dead ones.
 jobs:
@@ -142,6 +143,32 @@ jobs:
         run: bash .github/scripts/assert-only-moonui-moved.sh
       - name: Run test suite
         run: cargo test --workspace --no-fail-fast --target x86_64-pc-windows-msvc
+
+  clippy:
+    name: Clippy (x86_64-msvc)
+    runs-on: windows-latest
+    # Compiles the workspace, so the weekly audit cron skips it like the other compiling jobs.
+    if: github.event_name != 'schedule'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The lockfile contract — see the header. `--locked` on the clippy step then refuses any
+      # further rewrite after the MoonUI refresh has been checked.
+      - name: Verify the committed lockfile agrees with the manifests
+        run: cargo fetch --locked
+      - name: Refresh MoonUI only
+        run: cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui
+      - name: Assert the refresh moved MoonUI and nothing else
+        shell: bash
+        run: bash .github/scripts/assert-only-moonui-moved.sh
+      - name: Lint the workspace
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   macos-probe:
     name: macOS probe (arm64 build, x86_64 check) — diagnostic

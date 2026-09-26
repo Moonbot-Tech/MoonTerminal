@@ -34,7 +34,8 @@ A SessionStart hook injects this file, and `CONTRIBUTING.md` beside it, into eve
 ## Before you push
 
 6. `cargo test --workspace` is green on your machine before the push, not just on CI afterwards.
-7. Run `cargo clippy` — CI does not (→ `CONTRIBUTING.md` § Commits and PRs).
+7. `cargo clippy --workspace --all-targets -- -D warnings` must pass; CI runs that command
+   (→ `CONTRIBUTING.md` § Commits and PRs and § Build and checks).
 8. The tree is rustfmt-clean: run `cargo fmt --all` (or `make fmt`) before you push
    (→ `CONTRIBUTING.md` § Commits and PRs).
 9. Read `git status` before every push; never `git add -f` — fix the over-broad ignore instead.

@@ -105,14 +105,15 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   she posts the mark together with a comment. A listed author turns a wrong or stuck mark green by
   writing `/override` in the pull request. CI still only reports: nothing but you reading it stops
   a red merge. Branch from fresh `main`, open a PR, squash-merge — history stays linear.
-- **CI runs `fmt`, not `clippy`.** Run `cargo clippy` yourself before pushing. The tree **is**
+- **CI runs `fmt` and `clippy`.** The tree **is**
   rustfmt-clean: `cargo fmt --all` is the correct command, `rustfmt.toml`
   (`style_edition = "2024"`) is the authority, and CI enforces it via the `Fmt` job — which does
   not need the optional `private/uidoc` overlay to pass; `cargo fmt` must (and does) work without
   it. Blame history across the tree-wide reformat is preserved by `.git-blame-ignore-revs` —
   enable it locally with `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
-- Five CI gates, all on every PR and all meant to be green before you merge: the Windows
+- Six CI gates, all on every PR and all meant to be green before you merge: the Windows
   `.exe` job (~15 min), `Tests (x86_64-msvc)` running `cargo test --workspace`,
+  `Clippy (x86_64-msvc)` running `cargo clippy --workspace --all-targets --locked -- -D warnings`,
   `Dependency audit (cargo-deny)`, `Tour` building the knowledge site, and `Fmt` running
   `cargo fmt --all -- --check`. They run in parallel. The macOS job is diagnostic
   (`continue-on-error`) — read its log, but it does not block. "Gate" is a convention here, not
@@ -184,6 +185,8 @@ unnoticed.
 ```
 make build | run | release | check | fmt
 ```
+
+- `cargo clippy --workspace --all-targets -- -D warnings` must pass before a PR.
 
 - Windows needs **VS 2022 Build Tools** (`vcvars64`). Resolve it with
   `vswhere -latest -find '**\vcvars64.bat'` — machines here carry both BuildTools and Community.
