@@ -79,9 +79,10 @@ impl BaseCache {
             anyhow::bail!("chart base cache cannot rebuild zero-sized target");
         }
         let generation = gpu.device_generation();
-        let recreate = self.tex.as_ref().map_or(true, |tex| {
-            tex.w != w || tex.h != h || tex.generation != generation
-        });
+        let recreate = self
+            .tex
+            .as_ref()
+            .is_none_or(|tex| tex.w != w || tex.h != h || tex.generation != generation);
         if recreate {
             self.tex = Some(Self::create_tex(device, w, h, generation));
         }

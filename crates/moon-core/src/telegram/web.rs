@@ -254,7 +254,7 @@ impl App {
                 ) && request.uri().path().starts_with("/api/")
                 {
                     status_response(StatusCode::NOT_FOUND, "not_found")
-                } else if request.method() != &Method::GET {
+                } else if request.method() != Method::GET {
                     status_response(StatusCode::METHOD_NOT_ALLOWED, "method")
                 } else {
                     status_response(StatusCode::NOT_FOUND, "not_found")

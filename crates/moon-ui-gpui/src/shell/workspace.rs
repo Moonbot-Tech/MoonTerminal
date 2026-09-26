@@ -9,7 +9,7 @@ use gpui::*;
 use moon_core::config::{
     AUTO_WORKSPACE_RAIL_WIDTH_MAX, AUTO_WORKSPACE_RAIL_WIDTH_MIN, WorkspaceMode,
 };
-use moon_core::feed::{ConnStatus, CoreStartupStatus};
+use moon_core::feed::ConnStatus;
 use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 use moon_ui::{
@@ -103,11 +103,11 @@ fn auto_workspace_activation_fallback(activated: bool) -> Option<&'static str> {
 ///
 /// Returns:
 ///     The eligible name to persist, or `None` for Classic, programmatic, or ineligible events.
-pub(super) fn auto_workspace_tab_to_persist<'a>(
+pub(super) fn auto_workspace_tab_to_persist(
     auto: bool,
     applying_topology: bool,
-    panel_name: &'a str,
-) -> Option<&'a str> {
+    panel_name: &str,
+) -> Option<&str> {
     (auto && !applying_topology && auto_workspace_tab_is_eligible(panel_name)).then_some(panel_name)
 }
 
@@ -583,7 +583,7 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             cx.background_spawn(async { crate::media::exchange_logos::prewarm() })
                 .await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.exchange_logos_ready = true;
                     cx.notify();
@@ -1088,9 +1088,7 @@ impl Shell {
                         availability: backend.workspace_core_availability(&server.group, server.id),
                         ready: core.is_some_and(|core| core.status == ConnStatus::Ready),
                         connection: core.map(|core| core.status.clone()),
-                        startup: core
-                            .map(|core| core.startup)
-                            .unwrap_or_else(CoreStartupStatus::default),
+                        startup: core.map(|core| core.startup).unwrap_or_default(),
                         fault: core.and_then(|core| core.fault.clone()),
                         // Fed the WHOLE fleet, not the membership-filtered rows below: a hidden
                         // core still connects, so a transport suggestion computed over a subset
@@ -1467,7 +1465,7 @@ fn render_rail_item(
             let controls = (run.exchange_controls
                 && density != WorkspaceRailDensity::Icon
                 && !cores.is_empty())
-            .then(|| RunScope {
+            .then_some(RunScope {
                 key: RunKey::Section(section),
                 cores,
                 reserve: run.slots,

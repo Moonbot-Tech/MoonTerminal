@@ -220,9 +220,10 @@ impl OrderBookLayer {
         let tex_w = bw.round().max(1.0) as u32;
         let v_margin = book_v_margin_px(bh);
         let tex_h_total = bh.round().max(1.0) as u32 + 2 * v_margin as u32;
-        let need_new = self.tex.as_ref().map_or(true, |t| {
-            t.tex_w != tex_w || t.key.tex_h_total != tex_h_total
-        });
+        let need_new = self
+            .tex
+            .as_ref()
+            .is_none_or(|t| t.tex_w != tex_w || t.key.tex_h_total != tex_h_total);
         if need_new {
             self.tex = Some(Self::create_tex(device, tex_w, tex_h_total, v_margin));
         }

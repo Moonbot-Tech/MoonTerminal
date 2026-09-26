@@ -116,9 +116,8 @@ fn live_order_on_market(backend: &Backend, core: CoreId, market: &str) -> Option
     let orders = &store.core(core)?.orders;
     let on_market = || orders.iter().filter(|o| o.market == market);
     on_market()
-        .filter(|o| crate::panels::orders::executed(o))
-        .last()
-        .or_else(|| on_market().last())
+        .rfind(|o| crate::panels::orders::executed(o))
+        .or_else(|| on_market().next_back())
         .map(|o| o.uid)
 }
 

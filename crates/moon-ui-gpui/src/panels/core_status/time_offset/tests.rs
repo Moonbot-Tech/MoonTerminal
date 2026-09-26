@@ -48,7 +48,7 @@ fn unknown_never_renders_as_utc() {
 /// `tz_offset_rank`: every measured value, whatever its sign, sorts before `Unknown`.
 #[test]
 fn the_rank_puts_unknown_last() {
-    let mut cells = vec![
+    let mut cells = [
         TzOffsetCell::Unknown,
         TzOffsetCell::Measured { offset_secs: 7_200 },
         TzOffsetCell::Measured {

@@ -898,7 +898,7 @@ impl ChartPanel {
         // denotes manual/join orders. The row's `coin` was resolved with this core's exchange
         // rules and is what the menu writes into the coin blacklists.
         let b = self.backend.read(cx);
-        if !self.workspace_action_allowed(&b, core) {
+        if !self.workspace_action_allowed(b, core) {
             return false;
         }
         let order = b
@@ -1312,7 +1312,7 @@ impl ChartPanel {
         if hit.on_start_cross {
             return false;
         }
-        if !self.workspace_action_allowed(&self.backend.read(cx), hit.core) {
+        if !self.workspace_action_allowed(self.backend.read(cx), hit.core) {
             return false;
         }
         let price = hit.price as f64;

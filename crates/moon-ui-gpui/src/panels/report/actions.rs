@@ -267,7 +267,7 @@ impl ReportPanel {
         let prefs = {
             let backend = self.backend.read(cx);
             next_prefs_for_period_pick(
-                crate::persistence::table_persist::report_filters(&backend, &id),
+                crate::persistence::table_persist::report_filters(backend, &id),
                 period_bucket,
                 picked_period,
                 &super::state::ReportFilterSet {
@@ -700,7 +700,7 @@ impl ReportPanel {
         let indices = selection::ordered_source_indices(
             &self.cols,
             &source_indices,
-            &self.table_state.read(cx),
+            self.table_state.read(cx),
         );
         if self.selection.len() == 0 || indices.is_empty() {
             return;
@@ -968,7 +968,7 @@ impl ReportPanel {
                         .autohide(false)
                 }
             };
-            let _ = cx.update(|app| {
+            cx.update(|app| {
                 let _ = handle.update(app, |_, window, app| {
                     use moon_ui::MoonWindowExt as _;
                     window.push_notification(note, app);

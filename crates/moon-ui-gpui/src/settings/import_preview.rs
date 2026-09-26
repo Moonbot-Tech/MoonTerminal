@@ -125,7 +125,7 @@ impl SettingsView {
                     Ok::<_, moonbot_import::ImportError>(plan)
                 })
                 .await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     // Do not resurrect the preview if the settings window closed during loading.
                     if !matches!(this.import, Some(ImportState::Loading)) {
@@ -360,11 +360,11 @@ impl SettingsView {
                         .checked(*on)
                         .label(name.clone())
                         .on_change(cx.listener(move |this, ch: &bool, _, cx| {
-                            if let Some(ImportState::Ready(st)) = this.import.as_mut() {
-                                if let Some(c) = st.cores.get_mut(idx) {
-                                    c.2 = *ch;
-                                    cx.notify();
-                                }
+                            if let Some(ImportState::Ready(st)) = this.import.as_mut()
+                                && let Some(c) = st.cores.get_mut(idx)
+                            {
+                                c.2 = *ch;
+                                cx.notify();
                             }
                         })),
                 );

@@ -357,14 +357,15 @@ impl Shell {
                 let Some((group, ix)) = this.size_edit.as_ref() else {
                     return;
                 };
-                if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>() {
-                    if v > 0.0 && *ix < 6 {
-                        this.backend.update(cx, |b, bcx| {
-                            b.set_order_size_value(group, *ix, v);
-                            b.order_size_rev = b.order_size_rev.wrapping_add(1);
-                            bcx.notify();
-                        });
-                    }
+                if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>()
+                    && v > 0.0
+                    && *ix < 6
+                {
+                    this.backend.update(cx, |b, bcx| {
+                        b.set_order_size_value(group, *ix, v);
+                        b.order_size_rev = b.order_size_rev.wrapping_add(1);
+                        bcx.notify();
+                    });
                 }
                 return;
             }
@@ -375,18 +376,19 @@ impl Shell {
                 return;
             };
             let raw = inp.read(cx).value().to_string();
-            if let Ok(v) = raw.trim().replace(',', ".").parse::<f64>() {
-                if v > 0.0 && ix < 6 {
-                    this.backend.update(cx, |b, bcx| {
-                        b.set_order_size_value(&group, ix, v);
-                        if let Err(error) = b.config.save() {
-                            log::warn!("save order size failed: {error}");
-                        } else {
-                            b.config_dirty = false;
-                        }
-                        bcx.notify();
-                    });
-                }
+            if let Ok(v) = raw.trim().replace(',', ".").parse::<f64>()
+                && v > 0.0
+                && ix < 6
+            {
+                this.backend.update(cx, |b, bcx| {
+                    b.set_order_size_value(&group, ix, v);
+                    if let Err(error) = b.config.save() {
+                        log::warn!("save order size failed: {error}");
+                    } else {
+                        b.config_dirty = false;
+                    }
+                    bcx.notify();
+                });
             }
             cx.notify();
         })
@@ -405,20 +407,20 @@ impl Shell {
             };
             if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>()
                 && v.is_finite()
+                && v >= 0.0
+                && ix < 6
             {
-                if v >= 0.0 && ix < 6 {
-                    this.backend.update(cx, |b, bcx| {
-                        b.edit_group_exit(
-                            &group,
-                            ClientSettingsEdit::SetFixedSellPct {
-                                slot: ix + 1,
-                                pct: v,
-                            },
-                        );
-                        b.order_size_rev = b.order_size_rev.wrapping_add(1);
-                        bcx.notify();
-                    });
-                }
+                this.backend.update(cx, |b, bcx| {
+                    b.edit_group_exit(
+                        &group,
+                        ClientSettingsEdit::SetFixedSellPct {
+                            slot: ix + 1,
+                            pct: v,
+                        },
+                    );
+                    b.order_size_rev = b.order_size_rev.wrapping_add(1);
+                    bcx.notify();
+                });
             }
             cx.notify();
         })

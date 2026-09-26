@@ -757,12 +757,12 @@ impl RenderState {
         // normal path: the shot restores the caption itself as soon as it has its picture, and this
         // only fires when that chain never completed. Leaving it armed would keep the EXCHANGE on
         // the user's own screen, where the core name belongs.
-        if let Some(deadline) = self.shot_caption_until {
-            if now >= deadline {
-                self.shot_caption_until = None;
-                self.shot_caption_frames = 0;
-                wants_present = true;
-            }
+        if let Some(deadline) = self.shot_caption_until
+            && now >= deadline
+        {
+            self.shot_caption_until = None;
+            self.shot_caption_frames = 0;
+            wants_present = true;
         }
         // Preserve independent reasons to update the camera before adding an overlay-only present.
         let camera_present = wants_present;

@@ -111,7 +111,7 @@ pub(crate) fn window_hwnd(window: &Window) -> Option<isize> {
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
         return None;
     };
-    Some(handle.hwnd.get() as isize)
+    Some(handle.hwnd.get())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -526,16 +526,14 @@ pub(crate) fn saved_or_owner_display_id(
     if let Some(id) = saved_uuid.and_then(|saved| display_id_for_uuid(saved, cx)) {
         return Some(id);
     }
-    if WINDOW_COORDS_ARE_GLOBAL {
-        if let Some(origin) = saved_origin {
-            if let Some(d) = cx
-                .displays()
-                .into_iter()
-                .find(|d| d.bounds().contains(&origin))
-            {
-                return Some(d.id());
-            }
-        }
+    if WINDOW_COORDS_ARE_GLOBAL
+        && let Some(origin) = saved_origin
+        && let Some(d) = cx
+            .displays()
+            .into_iter()
+            .find(|d| d.bounds().contains(&origin))
+    {
+        return Some(d.id());
     }
     let owner_id = owner_display.or_else(|| owner_display_id(owner, cx));
     owner_id.or_else(|| cx.primary_display().map(|display| display.id()))

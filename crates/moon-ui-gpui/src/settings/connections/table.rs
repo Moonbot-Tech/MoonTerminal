@@ -209,11 +209,11 @@ fn draft_checkbox_weak(
             let _ = weak.update(cx, |this, ctx| {
                 let changed = this.backend.update(ctx, |b, bcx| {
                     let mut changed = false;
-                    if let Some(p) = b.preview.as_mut() {
-                        if apply(p, v) {
-                            bcx.notify();
-                            changed = true;
-                        }
+                    if let Some(p) = b.preview.as_mut()
+                        && apply(p, v)
+                    {
+                        bcx.notify();
+                        changed = true;
                     }
                     changed
                 });
@@ -260,11 +260,11 @@ fn srv_check(
             .unwrap_or(false)
     };
     let mut checkbox = draft_checkbox_weak(weak, id, cur, move |p, v| {
-        if let Some(s) = p.servers.get_mut(i) {
-            if get(s) != v {
-                set(s, v);
-                return true;
-            }
+        if let Some(s) = p.servers.get_mut(i)
+            && get(s) != v
+        {
+            set(s, v);
+            return true;
         }
         false
     });
@@ -331,19 +331,19 @@ fn paste_key_affix(
             key_state.update(cx, |st, c| st.set_value(text.clone(), window, c));
             let _ = weak.update(cx, |this, ctx| {
                 this.backend.update(ctx, |b, bcx| {
-                    if let Some(pv) = b.preview.as_mut() {
-                        if let Some(s) = pv.servers.get_mut(i) {
-                            s.transport = moon_core::config::seeded_transport(s.transport, &text);
-                            s.key = Secret::new(text.clone());
-                            // A new key can point this row at a DIFFERENT Moonbot, and strategy ids
-                            // are unique per host, not globally — so the pinned id would silently
-                            // name whatever strategy inherited that number there. The NAME survives
-                            // and re-pins itself against the new host's list.
-                            if let Some(manual) = s.manual_strategy.as_mut() {
-                                manual.id = 0;
-                            }
-                            bcx.notify();
+                    if let Some(pv) = b.preview.as_mut()
+                        && let Some(s) = pv.servers.get_mut(i)
+                    {
+                        s.transport = moon_core::config::seeded_transport(s.transport, &text);
+                        s.key = Secret::new(text.clone());
+                        // A new key can point this row at a DIFFERENT Moonbot, and strategy ids
+                        // are unique per host, not globally — so the pinned id would silently
+                        // name whatever strategy inherited that number there. The NAME survives
+                        // and re-pins itself against the new host's list.
+                        if let Some(manual) = s.manual_strategy.as_mut() {
+                            manual.id = 0;
                         }
+                        bcx.notify();
                     }
                 });
                 // A nonempty-to-nonempty paste must refresh every duplicate marker.
@@ -502,12 +502,12 @@ impl SettingsView {
     ///     Nothing; the method removes the row when it exists and clears row-owned transient state.
     pub(super) fn delete_server(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.backend.update(cx, |b, bcx| {
-            if let Some(p) = b.preview.as_mut() {
-                if i < p.servers.len() {
-                    p.servers.remove(i);
-                    sync_groups_from_servers(&p.servers, &mut p.groups);
-                    bcx.notify();
-                }
+            if let Some(p) = b.preview.as_mut()
+                && i < p.servers.len()
+            {
+                p.servers.remove(i);
+                sync_groups_from_servers(&p.servers, &mut p.groups);
+                bcx.notify();
             }
         });
         let rows = build_conn(&self.backend, window, cx);
@@ -581,7 +581,7 @@ fn feed_popover(
     let feed = {
         let b = view.backend.read(cx);
         let s = b.preview.as_ref().unwrap_or(&b.config).servers.get(i);
-        s.map(|s| s.feed.clone()).unwrap_or_default()
+        s.map(|s| s.feed).unwrap_or_default()
     };
     let on = FEED_FLAGS.iter().filter(|(_, g, _)| g(&feed)).count();
     let tinted = on < FEED_FLAGS.len();
@@ -610,11 +610,11 @@ fn feed_popover(
                 })
                 .on_click(move |_, _, cx| {
                     backend.update(cx, |b, bcx| {
-                        if let Some(p) = b.preview.as_mut() {
-                            if let Some(s) = p.servers.get_mut(i) {
-                                set(&mut s.feed, !cur);
-                                bcx.notify();
-                            }
+                        if let Some(p) = b.preview.as_mut()
+                            && let Some(s) = p.servers.get_mut(i)
+                        {
+                            set(&mut s.feed, !cur);
+                            bcx.notify();
                         }
                     });
                 }),

@@ -108,35 +108,25 @@ impl StackOrientation {
 /// chart prints, and `startup::action_buttons_migration` turns whatever a tab stored here into
 /// caption rows and clears the key. Nothing writes it again; the type survives so that one pass can
 /// still read a profile written before the move.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Default)]
 pub enum ChartBtnPos {
     Hide,
     Left,
     Center,
+    #[default]
     Right,
-}
-
-impl Default for ChartBtnPos {
-    fn default() -> Self {
-        ChartBtnPos::Right
-    }
 }
 
 /// Per-tab price-axis position relative to the chart and order book. `Left` places the gutter left
 /// of the plot and is the historical default. `Right` places it to the right beyond the order book,
 /// so the axis does not separate the plot from the book. `Hide` removes the axis and returns its
 /// space to the plot. A missing specification value means `Left`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Default)]
 pub enum PriceAxisPos {
     Hide,
+    #[default]
     Left,
     Right,
-}
-
-impl Default for PriceAxisPos {
-    fn default() -> Self {
-        PriceAxisPos::Left
-    }
 }
 
 /// Persistent state for one chart tab. `num == 0` identifies Main; `num >= 1` identifies numbered
@@ -338,7 +328,7 @@ impl ChartTabSpec {
     /// Returns the canonical tab key from `bucket`, or derives it from legacy `core`: Some(core)
     /// becomes Core and None becomes Shared.
     pub fn bucket(&self) -> ChartBucket {
-        self.bucket.clone().unwrap_or_else(|| match self.core {
+        self.bucket.clone().unwrap_or(match self.core {
             Some(id) => ChartBucket::Core(id),
             None => ChartBucket::Shared,
         })
@@ -388,17 +378,17 @@ pub fn remap_core_ids(specs: &mut [ChartTabSpec], servers: &[ServerConfig]) {
     };
     let mut remapped = 0usize;
     for spec in specs.iter_mut() {
-        if let Some(ChartBucket::Core(n)) = spec.bucket {
-            if let Some(uid) = pos_to_uid(n) {
-                spec.bucket = Some(ChartBucket::Core(uid));
-                remapped += 1;
-            }
+        if let Some(ChartBucket::Core(n)) = spec.bucket
+            && let Some(uid) = pos_to_uid(n)
+        {
+            spec.bucket = Some(ChartBucket::Core(uid));
+            remapped += 1;
         }
-        if let Some(n) = spec.core {
-            if let Some(uid) = pos_to_uid(n) {
-                spec.core = Some(uid);
-                remapped += 1;
-            }
+        if let Some(n) = spec.core
+            && let Some(uid) = pos_to_uid(n)
+        {
+            spec.core = Some(uid);
+            remapped += 1;
         }
     }
     log::info!(

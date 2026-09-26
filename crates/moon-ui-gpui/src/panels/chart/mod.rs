@@ -597,7 +597,7 @@ impl ChartPanel {
         // A fresh panel holds no override yet, so its effective values ARE its kind's defaults.
         let settings_sig = {
             let b = backend.read(cx);
-            chart_settings_sig(&b, None, None, None, kind)
+            chart_settings_sig(b, None, None, None, kind)
         };
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
@@ -648,7 +648,7 @@ impl ChartPanel {
                 (
                     sig,
                     chart_settings_sig(
-                        &b,
+                        b,
                         this.chart_graphics,
                         this.candle_view,
                         this.chart_labels.clone(),
@@ -831,7 +831,7 @@ impl ChartPanel {
         // A fresh panel holds no override yet, so its effective values ARE the global defaults.
         let settings_sig = {
             let b = backend.read(cx);
-            chart_settings_sig(&b, None, None, None, kind)
+            chart_settings_sig(b, None, None, None, kind)
         };
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
@@ -881,7 +881,7 @@ impl ChartPanel {
                 (
                     sig,
                     chart_settings_sig(
-                        &b,
+                        b,
                         this.chart_graphics,
                         this.candle_view,
                         this.chart_labels.clone(),
@@ -1508,7 +1508,7 @@ impl ChartPanel {
             self.settings_sig = {
                 let b = self.backend.read(cx);
                 chart_settings_sig(
-                    &b,
+                    b,
                     self.chart_graphics,
                     cfg,
                     self.chart_labels.clone(),
@@ -1540,7 +1540,7 @@ impl ChartPanel {
         self.settings_sig = {
             let b = self.backend.read(cx);
             chart_settings_sig(
-                &b,
+                b,
                 cfg,
                 self.candle_view,
                 self.chart_labels.clone(),
@@ -1573,7 +1573,7 @@ impl ChartPanel {
         self.settings_sig = {
             let b = self.backend.read(cx);
             chart_settings_sig(
-                &b,
+                b,
                 self.chart_graphics,
                 self.candle_view,
                 cfg,
@@ -1867,7 +1867,7 @@ impl ChartPanel {
         let settings_sig = {
             let b = self.backend.read(cx);
             chart_settings_sig(
-                &b,
+                b,
                 self.chart_graphics,
                 self.candle_view,
                 self.chart_labels.clone(),

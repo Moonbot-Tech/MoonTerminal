@@ -552,7 +552,7 @@ impl ChartView {
         let area_delta = area_w - self.last_phase_area_w;
         // Every shrink matters for the six-hour lower bound; sub-pixel growth can safely retain
         // the previous scale because it only increases the visible history.
-        let area_changed = area_delta < 0.0 || area_delta >= 0.5;
+        let area_changed = !(0.0..0.5).contains(&area_delta);
         let present_changed = (present_hz - self.last_phase_present_hz).abs() >= 0.5;
         let phase_changed = area_changed || present_changed;
         if phase_changed || self.x_init_pending {

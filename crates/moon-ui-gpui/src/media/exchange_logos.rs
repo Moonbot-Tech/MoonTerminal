@@ -132,7 +132,7 @@ pub(crate) fn prewarm() {
 /// Returns:
 ///     Nothing; concurrent callers block until the winning initializer completes.
 fn prewarm_once(gate: &OnceLock<()>, warm: impl FnOnce()) {
-    gate.get_or_init(|| warm());
+    gate.get_or_init(warm);
 }
 
 #[cfg(test)]

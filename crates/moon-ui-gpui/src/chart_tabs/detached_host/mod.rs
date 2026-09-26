@@ -218,7 +218,7 @@ impl DetachedChartHost {
         // Restore this detached panel's saved per-tab display settings from charts.json.
         let (group2, num2, bucket2) = (group.clone(), num, bucket.clone());
         let saved = backend.read(cx).chart_specs.iter().find_map(|s| {
-            s.matches(&group2, num2, &bucket2).then(|| {
+            s.matches(&group2, num2, &bucket2).then_some({
                 (
                     s.layout_mode,
                     s.layout_height_fit,
@@ -555,7 +555,8 @@ impl DetachedChartHost {
         cx: &mut Context<Self>,
     ) -> bool {
         use crate::hotkeys::HotkeyAction;
-        let handled = match action {
+
+        match action {
             // Resolved against THIS window's own hover trail, exactly as in the group window: a
             // detached host owns a stack rather than a single chart, so it names no panel either.
             HotkeyAction::ChartShot => {
@@ -629,8 +630,7 @@ impl DetachedChartHost {
                     crate::hotkeys::apply(other, b, bcx, &self.group, target.clone(), active_core)
                 })
             }
-        };
-        handled
+        }
     }
 
     /// Return whether this window is a detached Custom tab whose spec has `custom_coins`.
@@ -739,16 +739,14 @@ impl DetachedChartHost {
                 .chart_specs
                 .iter_mut()
                 .find(|s| s.matches(&group, num, &bucket))
-            {
-                if s.custom_coins.as_deref() != Some(coins.as_slice())
+                && (s.custom_coins.as_deref() != Some(coins.as_slice())
                     || s.compare_anchor != anchor
-                    || s.compare_orderbook_only != broom
-                {
-                    s.custom_coins = Some(coins);
-                    s.compare_anchor = anchor;
-                    s.compare_orderbook_only = broom;
-                    b.chart_specs_dirty = true;
-                }
+                    || s.compare_orderbook_only != broom)
+            {
+                s.custom_coins = Some(coins);
+                s.compare_anchor = anchor;
+                s.compare_orderbook_only = broom;
+                b.chart_specs_dirty = true;
             }
         });
     }

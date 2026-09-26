@@ -198,12 +198,12 @@ impl Backend {
         if self.telegram.service.is_none() {
             return;
         }
-        if self.telegram.configuration_pending {
-            if let Some(service) = self.telegram.service.as_ref() {
-                let configured = service.configure(&self.config.telegram);
-                let localized = service.set_labels(telegram_labels());
-                self.telegram.configuration_pending = !configured || !localized;
-            }
+        if self.telegram.configuration_pending
+            && let Some(service) = self.telegram.service.as_ref()
+        {
+            let configured = service.configure(&self.config.telegram);
+            let localized = service.set_labels(telegram_labels());
+            self.telegram.configuration_pending = !configured || !localized;
         }
         let mut changed = false;
         for _ in 0..64 {
@@ -228,10 +228,11 @@ impl Backend {
                     let saved = candidate.save_telegram().is_ok();
                     if saved {
                         self.config = candidate;
-                        if newly_paired && let Some(preview) = self.preview.as_mut() {
-                            if !preview.telegram.authorized_chat_ids.contains(&chat_id) {
-                                preview.telegram.authorized_chat_ids.push(chat_id);
-                            }
+                        if newly_paired
+                            && let Some(preview) = self.preview.as_mut()
+                            && !preview.telegram.authorized_chat_ids.contains(&chat_id)
+                        {
+                            preview.telegram.authorized_chat_ids.push(chat_id);
                         }
                         if let Some(service) = self.telegram.service.as_ref() {
                             self.telegram.configuration_pending |=

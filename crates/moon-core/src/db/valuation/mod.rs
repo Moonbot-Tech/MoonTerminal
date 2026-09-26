@@ -1132,10 +1132,10 @@ fn retire_live_family(files: &[PathBuf; 3], pending: &Path) -> std::io::Result<(
     }
     for path in files {
         if path.try_exists()? {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("live valuation member remains: {}", path.display()),
-            ));
+            return Err(std::io::Error::other(format!(
+                "live valuation member remains: {}",
+                path.display()
+            )));
         }
     }
     Ok(())
@@ -1388,7 +1388,7 @@ fn attach_store(conn: &Connection, path: &Path) -> ReadResult<bool> {
     let _lifecycle = CACHE_LIFECYCLE
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match std::fs::metadata(&path) {
+    match std::fs::metadata(path) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => {

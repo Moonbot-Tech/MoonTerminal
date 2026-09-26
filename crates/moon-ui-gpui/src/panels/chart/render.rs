@@ -475,12 +475,10 @@ impl Render for ChartPanel {
                             f32::from(bounds.size.height) * zoom,
                             platform_sf,
                         );
-                        if is_main {
-                            if let Some(probe) = firetest_probe {
-                                backend.update(cx, |b, _| {
-                                    crate::firetest::observe_chart_probe(b, probe);
-                                });
-                            }
+                        if is_main && let Some(probe) = firetest_probe {
+                            backend.update(cx, |b, _| {
+                                crate::firetest::observe_chart_probe(b, probe);
+                            });
                         }
                     },
                 )

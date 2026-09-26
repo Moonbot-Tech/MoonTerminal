@@ -662,7 +662,7 @@ impl MarketDataSource {
                     out.mark = m
                         .price
                         .mark_price_found
-                        .then(|| m.price.mark_price)
+                        .then_some(m.price.mark_price)
                         .and_then(positive);
                     out.price_step = positive(m.price.chart_price_step);
                     out.vol_24h = positive(m.volume);

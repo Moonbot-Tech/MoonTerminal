@@ -443,11 +443,11 @@ impl SettingsView {
             .on_hover(cx.listener(move |this, entered: &bool, _window, cx| {
                 let next = entered.then(|| row_id.clone());
                 // A leave clears only this row: the next row's enter may already have landed.
-                if *entered || this.hotkeys_hover_row.as_deref() == Some(row_id.as_str()) {
-                    if this.hotkeys_hover_row != next {
-                        this.hotkeys_hover_row = next;
-                        cx.notify();
-                    }
+                if (*entered || this.hotkeys_hover_row.as_deref() == Some(row_id.as_str()))
+                    && this.hotkeys_hover_row != next
+                {
+                    this.hotkeys_hover_row = next;
+                    cx.notify();
                 }
             }))
             .w_full()

@@ -446,7 +446,7 @@ impl MarketDataSource {
         let zone_unbounded = candle_params.is_some_and(|cp| {
             cp.trades_from_rel_ms == crate::market::candles::TRADES_FROM_UNBOUNDED
         });
-        let display_trades = candle_params.map_or(true, |cp| cp.trades_from_rel_ms.is_finite());
+        let display_trades = candle_params.is_none_or(|cp| cp.trades_from_rel_ms.is_finite());
         let trades_from_rel = if zone_unbounded {
             crate::market::candles::TRADES_FROM_UNBOUNDED
         } else {
@@ -718,15 +718,14 @@ impl MarketDataSource {
                             subscribed: false,
                         },
                     );
-                    if !entry.subscribed || entry.kind_min != deep_kind_min {
-                        if client
+                    if (!entry.subscribed || entry.kind_min != deep_kind_min)
+                        && client
                             .streams()
                             .subscribe_candles([market], deep_kind)
                             .is_ok()
-                        {
-                            entry.subscribed = true;
-                            entry.kind_min = deep_kind_min;
-                        }
+                    {
+                        entry.subscribed = true;
+                        entry.kind_min = deep_kind_min;
                     }
                     entry.last_want = now_i;
                 }
@@ -783,7 +782,7 @@ impl MarketDataSource {
                 let native_kind = deep_history_kind(native_kind_min);
                 let have_native = snapshot
                     .tf_candles(market, native_kind)
-                    .map_or(false, |r| !r.is_empty());
+                    .is_some_and(|r| !r.is_empty());
                 let cache_covers =
                     cursor.cache_rows_kind == native_kind_min && cursor.cache_rows.len() >= 30;
                 if !have_native && !cache_covers {
@@ -865,7 +864,7 @@ impl MarketDataSource {
                     crate::market::candles::bucket_open_ms(now_unix_ms, base_tf_native_ms);
                 let deep_stale = rows
                     .and_then(|r| r.last())
-                    .map_or(true, |r| (r.unix_millis() as f64) < cur_bucket_ms);
+                    .is_none_or(|r| (r.unix_millis() as f64) < cur_bucket_ms);
                 let kind_changed = cursor.last_deep_kind != Some(deep_kind);
                 let retry_delay =
                     Duration::from_secs(cursor.deep_retry_delay_s.max(HISTORY_RETRY_MIN_S) as u64);
@@ -873,7 +872,7 @@ impl MarketDataSource {
                     && (kind_changed
                         || cursor
                             .last_deep_request
-                            .map_or(true, |t| t.elapsed() > retry_delay))
+                            .is_none_or(|t| t.elapsed() > retry_delay))
                 {
                     cursor.last_deep_request = Some(Instant::now());
                     cursor.last_deep_kind = Some(deep_kind);
@@ -1069,19 +1068,18 @@ impl MarketDataSource {
                                 times.last().copied().unwrap_or(i64::MIN);
                             cursor.cache_written_len = times.len();
                         }
-                        (Some(_), None) => {
+                        (Some(_), None)
                             // The provider exchange identity is unavailable, so the cache cannot
                             // address these rows. Make this visible in the log once per panel. Keep
                             // the real signature unchanged, but use the initial marker to suppress
                             // repeated logging.
-                            if cursor.cache_written_sig == 0 {
+                            if cursor.cache_written_sig == 0 => {
                                 cursor.cache_written_sig = 1;
                                 log::warn!(
                                     "kline cache: провайдер {provider} без ExchangeId — \
                                      ряды {market} не кэшируются"
                                 );
                             }
-                        }
                         _ => {}
                     }
                 }
@@ -1236,10 +1234,10 @@ impl MarketDataSource {
                     .unwrap_or(0.0);
                 let warn_due = cursor
                     .last_gap_diag
-                    .map_or(true, |t| t.elapsed() > Duration::from_secs(30));
+                    .is_none_or(|t| t.elapsed() > Duration::from_secs(30));
                 let scan_due = cursor
                     .last_gap_scan
-                    .map_or(true, |t| t.elapsed() > Duration::from_secs(30));
+                    .is_none_or(|t| t.elapsed() > Duration::from_secs(30));
                 // Detect gaps inside the sequence where the next candle begins after the previous
                 // one ends. This is where the scroll-to-history then return-to-live gap was hidden.
                 let mut max_hole = 0.0f64;
@@ -1546,7 +1544,7 @@ pub(crate) fn deep_writeback_start(
     if !same_key
         || since_full >= DEEP_FULL_WRITEBACK_EVERY
         || written_last == i64::MIN
-        || times.first().map_or(true, |f| *f < written_first)
+        || times.first().is_none_or(|f| *f < written_first)
         || times.len() < written_len
     {
         0
@@ -1679,9 +1677,9 @@ pub(crate) fn poll_cache_prefix(
     cursor.cache_want_from = Some(want_from);
     // A read that did not happen must not be remembered as a completed one; retry it, but no more
     // often than every `CACHE_RETRY_MS` so a busy worker is not asked again on every frame.
-    let retry_due = cursor.cache_retry_at.map_or(true, |t| {
-        t.elapsed() >= Duration::from_millis(CACHE_RETRY_MS)
-    });
+    let retry_due = cursor
+        .cache_retry_at
+        .is_none_or(|t| t.elapsed() >= Duration::from_millis(CACHE_RETRY_MS));
     if cursor.cache_pending.is_some() || !retry_due {
         return;
     }

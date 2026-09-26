@@ -50,7 +50,7 @@ pub(crate) fn rescan(cx: &mut App, done: impl FnOnce(&mut App) + 'static) {
         let catalog = cx
             .background_spawn(async move { sources::scan(&dir) })
             .await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             install(catalog);
             done(cx);
         });

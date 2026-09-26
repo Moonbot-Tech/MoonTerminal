@@ -91,7 +91,7 @@ pub(super) fn core_legend(
     let text_w = |s: &str| design::mono_caption_text_width(cx, s, 400.0);
     // Always keep room for the tail: a row that packs to the last pixel and then discovers it
     // must say "+3 more" has nowhere to put it.
-    let tail_w = text_w(&t!("analytics.popup_more", n = order.len()).to_string()) + gap;
+    let tail_w = text_w(t!("analytics.popup_more", n = order.len()).as_ref()) + gap;
     let mut used = 0.0;
     let mut shown = 0usize;
     for &ci in &order {

@@ -146,9 +146,9 @@ impl HttpSpotRateSource {
             .get("https://data-api.binance.vision/api/v3/klines")
             .query("symbol", symbol)
             .query("interval", "1m")
-            .query("startTime", &start_ms.to_string())
-            .query("endTime", &end_ms.to_string())
-            .query("limit", &limit.to_string())
+            .query("startTime", start_ms.to_string())
+            .query("endTime", end_ms.to_string())
+            .query("limit", limit.to_string())
             .call()
             .map_err(classify_http_error)?;
         let status = response.status().as_u16();
@@ -182,9 +182,9 @@ impl HttpSpotRateSource {
             .query("category", "spot")
             .query("symbol", symbol)
             .query("interval", "1")
-            .query("start", &start_ms.to_string())
-            .query("end", &end_ms.to_string())
-            .query("limit", &limit.to_string())
+            .query("start", start_ms.to_string())
+            .query("end", end_ms.to_string())
+            .query("limit", limit.to_string())
             .call()
             .map_err(classify_http_error)?;
         let status = response.status().as_u16();

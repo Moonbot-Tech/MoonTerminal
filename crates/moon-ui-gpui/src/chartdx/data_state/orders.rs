@@ -79,16 +79,18 @@ impl ChartDataState {
         // Which venues have a core behind them, for the column's dimming. Read ONCE for the sync,
         // like the caption gates beside it: it is a property of the connected cores, not of a pane,
         // and a walk per pane would repeat it for every chart in a stack.
-        let arb_reachable: Vec<(u8, String)> = labels_cfg
-            .any_drawn(|f| f == ChartLabelField::ArbColumn)
-            .then(|| {
-                session
-                    .core_venues()
-                    .values()
-                    .map(|venue| (venue.id.code, venue.dex.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let arb_reachable: Vec<(u8, String)> =
+            if labels_cfg.any_drawn(|f| f == ChartLabelField::ArbColumn) {
+                {
+                    session
+                        .core_venues()
+                        .values()
+                        .map(|venue| (venue.id.code, venue.dex.clone()))
+                        .collect()
+                }
+            } else {
+                Default::default()
+            };
         // The LATEST detect this core fired, which is a live event. Same argument as the position
         // captions above.
         let wants_detect_cfg = !frozen
@@ -238,7 +240,7 @@ impl ChartDataState {
             // The fill arrow goes too, as in the live chart's archived pass below: the frozen
             // store draws only in the lines style now (`frozen_store_drawn`), where the exit
             // line starting at the fill already says the entry filled.
-            let frozen_graphics = frozen.then(|| moon_core::config::ChartGraphicsCfg {
+            let frozen_graphics = frozen.then_some(moon_core::config::ChartGraphicsCfg {
                 hide_closed_sell_line: false,
                 hide_entry_fill_arrow: true,
                 ..self.chart_graphics
@@ -735,18 +737,18 @@ fn build_order_labels(
                     notional: None,
                 });
             }
-            if let Some(bp) = buy {
-                if bp > 0.0 {
-                    let pct = signed_pct(sp, bp, short);
-                    push(
-                        LineKind::Sell,
-                        sp,
-                        with_tag(fmt_pct(pct)),
-                        short,
-                        pct_color(theme, pct),
-                        PRIO_SELL_PCT,
-                    );
-                }
+            if let Some(bp) = buy
+                && bp > 0.0
+            {
+                let pct = signed_pct(sp, bp, short);
+                push(
+                    LineKind::Sell,
+                    sp,
+                    with_tag(fmt_pct(pct)),
+                    short,
+                    pct_color(theme, pct),
+                    PRIO_SELL_PCT,
+                );
             }
             let remaining = o.exit_size();
             if remaining > 0.0 && sp > 0.0 {
@@ -766,18 +768,18 @@ fn build_order_labels(
         }
         // Show stop percentage from the buy price above the line for shorts and below for longs.
         // The primary label bypasses YTextFill, matching the Delphi stop-loss label block.
-        if let (Some(stp), Some(bp)) = (stop, buy) {
-            if bp > 0.0 {
-                let pct = signed_pct(stp, bp, short);
-                push(
-                    LineKind::Stop,
-                    stp,
-                    with_tag(fmt_pct(pct)),
-                    short,
-                    pct_color(theme, pct),
-                    PRIO_STOP_PCT,
-                );
-            }
+        if let (Some(stp), Some(bp)) = (stop, buy)
+            && bp > 0.0
+        {
+            let pct = signed_pct(stp, bp, short);
+            push(
+                LineKind::Stop,
+                stp,
+                with_tag(fmt_pct(pct)),
+                short,
+                pct_color(theme, pct),
+                PRIO_STOP_PCT,
+            );
         }
     }
 }

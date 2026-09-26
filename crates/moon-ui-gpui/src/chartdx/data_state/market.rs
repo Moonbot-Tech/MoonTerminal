@@ -923,10 +923,7 @@ impl ChartDataState {
                     // core streams some, and the hide-candles zone below refuses to blank a bucket
                     // that has no crosses to replace it. Re-stamped on every full range read; an
                     // incremental drain returns just the live edge, so it only fills a NaN (below).
-                    pr.combo_left_rel = history
-                        .combo_left_rel_ms
-                        .map(|v| v as f32)
-                        .unwrap_or(f32::NAN);
+                    pr.combo_left_rel = history.combo_left_rel_ms.map(|v| v).unwrap_or(f32::NAN);
                     // Restart the pan budget from the reset that ACTUALLY happened, whatever raised
                     // it. Stamping back where the decision was made would also credit a frame whose
                     // read returned nothing, and would miss the capacity-driven re-read that resets
@@ -953,10 +950,10 @@ impl ChartDataState {
                     // NaN — with filled candles that paints candle bodies over crosses of the same
                     // colour, and nothing re-stamps it until the next reset. Close the NaN from
                     // the drain; a later reset re-stamps it anyway.
-                    if pr.combo_left_rel.is_nan() {
-                        if let Some(left) = history.combo_left_rel_ms {
-                            pr.combo_left_rel = left;
-                        }
+                    if pr.combo_left_rel.is_nan()
+                        && let Some(left) = history.combo_left_rel_ms
+                    {
+                        pr.combo_left_rel = left;
                     }
                     pr.gpu_prepare_dirty = true;
                     pixels_changed |= damage;

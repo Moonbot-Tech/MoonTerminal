@@ -326,10 +326,10 @@ impl AnalyticsView {
             }
             // In Classic, a missing target core applies the copy to every core containing the
             // strategy; Auto rejects that legacy aggregate target before reaching this loop.
-            if let Some(tc) = target_core {
-                if cid != tc {
-                    continue;
-                }
+            if let Some(tc) = target_core
+                && cid != tc
+            {
+                continue;
             }
             let Some(row) = cd.strategies.iter().find(|r| r.id == sid) else {
                 continue;
@@ -807,32 +807,32 @@ impl AnalyticsView {
         };
         let mut list = v_flex().w_full().gap_0();
         // Copy dialog: the editable name of the new strategy as the first row.
-        if dlg.copy {
-            if let Some(input) = self.tuner.inputs.get("copy-name") {
-                list = list.child(
-                    h_flex()
-                        .w_full()
-                        .px(design::ui_px(cx, 10.0))
-                        .py(design::ui_px(cx, 5.0))
-                        .gap(design::ui_px(cx, 8.0))
-                        .items_center()
-                        .child(
-                            div()
-                                .flex_none()
-                                .font_family(design::ui_font())
-                                .text_size(design::t_caption(cx))
-                                .text_color(moon(p.text_muted))
-                                .child(t!("analytics.tuner.copy_name_lbl").to_string()),
-                        )
-                        .child(
-                            div().flex_1().min_w_0().child(
-                                MoonInput::new("tun-copy-name")
-                                    .state(input)
-                                    .size(design::INPUT_SIZE),
-                            ),
+        if dlg.copy
+            && let Some(input) = self.tuner.inputs.get("copy-name")
+        {
+            list = list.child(
+                h_flex()
+                    .w_full()
+                    .px(design::ui_px(cx, 10.0))
+                    .py(design::ui_px(cx, 5.0))
+                    .gap(design::ui_px(cx, 8.0))
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_family(design::ui_font())
+                            .text_size(design::t_caption(cx))
+                            .text_color(moon(p.text_muted))
+                            .child(t!("analytics.tuner.copy_name_lbl").to_string()),
+                    )
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            MoonInput::new("tun-copy-name")
+                                .state(input)
+                                .size(design::INPUT_SIZE),
                         ),
-                );
-            }
+                    ),
+            );
         }
         // Bulk: name the strategies that will be written — some may be filtered out of the list,
         // and the count-only title would otherwise let a hidden target be written unseen.

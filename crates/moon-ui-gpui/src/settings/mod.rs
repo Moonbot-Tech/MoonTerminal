@@ -317,11 +317,11 @@ impl SettingsView {
                 let v = *ch;
                 let changed = this.backend.update(cx, |b, bcx| {
                     let mut changed = false;
-                    if let Some(p) = b.preview.as_mut() {
-                        if apply(p, v) {
-                            bcx.notify();
-                            changed = true;
-                        }
+                    if let Some(p) = b.preview.as_mut()
+                        && apply(p, v)
+                    {
+                        bcx.notify();
+                        changed = true;
                     }
                     changed
                 });
@@ -936,13 +936,12 @@ pub fn open_on_tab(
     tab: Tab,
     cx: &mut App,
 ) {
-    if let Some(handle) = backend.read(cx).settings_window {
-        if handle
+    if let Some(handle) = backend.read(cx).settings_window
+        && handle
             .update(cx, |_, window, _| window.activate_window())
             .is_ok()
-        {
-            return;
-        }
+    {
+        return;
     }
     if backend.read(cx).preview.is_some() {
         return;

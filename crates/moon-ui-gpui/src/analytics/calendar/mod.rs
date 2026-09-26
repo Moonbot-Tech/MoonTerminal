@@ -480,14 +480,14 @@ impl AnalyticsView {
                     .into_any_element();
             }
         };
-        if self.cal_mode == CalMode::Month {
-            if let Err(note) = self.cal_prev.view(|_| false) {
-                return v_flex()
-                    .size_full()
-                    .child(self.cal_nav(p, cx))
-                    .child(note_el("analytics-calendar-prev-read", note, 18.0, p, cx))
-                    .into_any_element();
-            }
+        if self.cal_mode == CalMode::Month
+            && let Err(note) = self.cal_prev.view(|_| false)
+        {
+            return v_flex()
+                .size_full()
+                .child(self.cal_nav(p, cx))
+                .child(note_el("analytics-calendar-prev-read", note, 18.0, p, cx))
+                .into_any_element();
         };
         // Frame: the nav bar (like Summary's period bar) + the mode's content.
         let content = match self.cal_mode {

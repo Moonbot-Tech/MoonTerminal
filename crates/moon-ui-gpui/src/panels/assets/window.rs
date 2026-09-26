@@ -49,13 +49,12 @@ pub fn open(
     cx: &mut App,
 ) {
     // Focus the existing singleton instead of opening a duplicate.
-    if let Some(handle) = backend.read(cx).assets_window {
-        if handle
+    if let Some(handle) = backend.read(cx).assets_window
+        && handle
             .update(cx, |_, window, _| window.activate_window())
             .is_ok()
-        {
-            return;
-        }
+    {
+        return;
     }
     let saved = backend.read(cx).layout.assets_window;
     let bounds = saved.map_or(

@@ -220,11 +220,11 @@ impl Backend {
     /// Sets the core's default Alerts-strategy ID. A changed value marks the configuration for the
     /// coordination loop's routine save; an unknown core or unchanged value is ignored.
     pub(crate) fn set_alert_def_strategy(&mut self, core: CoreId, strategy_id: u64) {
-        if let Some(s) = self.config.servers.iter_mut().find(|s| s.id == core) {
-            if s.default_alert_strategy != strategy_id {
-                s.default_alert_strategy = strategy_id;
-                self.config_dirty = true;
-            }
+        if let Some(s) = self.config.servers.iter_mut().find(|s| s.id == core)
+            && s.default_alert_strategy != strategy_id
+        {
+            s.default_alert_strategy = strategy_id;
+            self.config_dirty = true;
         }
     }
 
@@ -344,12 +344,12 @@ impl Backend {
     /// is cleared even if the figure was already absent; command-send errors are ignored.
     pub(crate) fn remove_figure(&mut self, core: CoreId, market: &str, id: u64) {
         let removed = self.figures.borrow_mut().remove(core, market, id);
-        if let Some(fig) = removed {
-            if fig.alert {
-                let _ = self
-                    .session
-                    .chart_alert_delete(core, market.to_string(), id);
-            }
+        if let Some(fig) = removed
+            && fig.alert
+        {
+            let _ = self
+                .session
+                .chart_alert_delete(core, market.to_string(), id);
         }
         if self
             .fig_selected

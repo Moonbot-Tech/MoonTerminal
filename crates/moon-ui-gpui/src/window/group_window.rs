@@ -126,13 +126,12 @@ fn spawn_group_window_inner(
     publish_workspace_change: bool,
 ) {
     // Focus an existing live window. handle.update returns an error for a window already closed.
-    if let Some(handle) = backend.read(cx).group_windows.get(&group).copied() {
-        if handle
+    if let Some(handle) = backend.read(cx).group_windows.get(&group).copied()
+        && handle
             .update(cx, |_, window, _| window.activate_window())
             .is_ok()
-        {
-            return;
-        }
+    {
+        return;
     }
     // Do not open a Main market automatically at startup. Main starts empty until the user selects
     // one; the former behavior used server.market with BTCUSDT as fallback.

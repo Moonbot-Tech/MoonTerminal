@@ -628,7 +628,7 @@ impl ProfitMonitorView {
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             executor.timer(wait).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     if this.clock_timer_generation != generation {
                         return;
@@ -751,7 +751,7 @@ impl ProfitMonitorView {
                     moon_core::db::analytics::profit_monitor_snapshot(&query)
                 })
                 .await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.db_active = false;
                     if this.seq == request {
@@ -842,7 +842,7 @@ impl ProfitMonitorView {
                 cx.spawn(async move |this, cx| {
                     let executor = cx.update(|cx| cx.background_executor().clone());
                     executor.timer(wait).await;
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let _ = this.update(cx, |this, cx| {
                             this.refresh.timer_fired();
                             this.schedule_refresh(cx);

@@ -460,7 +460,7 @@ fn retry_delay(consecutive_failures: u32) -> Duration {
 /// Returns:
 ///     `true` for the first few attempts and then periodically.
 const fn should_log(attempt: u32) -> bool {
-    matches!(attempt, 1 | 2 | 3 | 5 | 10) || (attempt > 10 && attempt % 20 == 0)
+    matches!(attempt, 1 | 2 | 3 | 5 | 10) || (attempt > 10 && attempt.is_multiple_of(20))
 }
 
 /// Emit one failing-run line in the shape every stage shares.

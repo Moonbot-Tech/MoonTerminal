@@ -82,7 +82,7 @@ impl LogPanel {
                 LogSource::Aggregate | LogSource::Exchange(_) | LogSource::Local => None,
             })
             .collect();
-        let sections = crate::controls::core_menu_sections(&cores, &venues);
+        let sections = crate::controls::core_menu_sections(&cores, venues);
         let view = cx.entity();
         let mut items = Vec::with_capacity(sources.len() + sections.len() + 1);
         for (index, item) in sources

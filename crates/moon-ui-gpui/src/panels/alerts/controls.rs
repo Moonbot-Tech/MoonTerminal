@@ -91,7 +91,7 @@ impl AlertsPanel {
                     &cores,
                     selection,
                     crate::controls::CoreAllRowMode::ImplicitOrComplete,
-                    &t!("alerts.all_cores").to_string(),
+                    t!("alerts.all_cores").as_ref(),
                     &|n| t!("alerts.cores_n", n = n).to_string(),
                 )
                 .label
@@ -118,7 +118,7 @@ impl AlertsPanel {
             crate::controls::core_combo(
                 "alerts-cores",
                 &cores,
-                &venues,
+                venues,
                 selection,
                 crate::controls::CoreAllRowMode::ImplicitOrComplete,
                 t!("alerts.all_cores").to_string(),

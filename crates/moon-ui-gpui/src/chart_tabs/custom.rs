@@ -651,7 +651,7 @@ impl ChartTabs {
             specs
                 .iter()
                 .find(|s| s.matches(&self.group, num, bucket))
-                .map_or(true, |s| {
+                .is_none_or(|s| {
                     s.custom_coins.as_deref() != Some(coins.as_slice())
                         || s.compare_anchor != anchor
                         || s.compare_orderbook_only != broom
@@ -669,12 +669,12 @@ impl ChartTabs {
 
     /// Re-persist the active custom tab's tickers after its composition changes.
     pub(super) fn persist_custom_active(&mut self, cx: &mut Context<Self>) {
-        if let Tab::Custom(n, b) = self.active.clone() {
-            if let Some(stack) = self.add_stack(n, &b) {
-                let coins = stack.read(cx).coins(cx);
-                let label = self.custom_label(n);
-                self.persist_custom(cx, n, &b, &coins, &label);
-            }
+        if let Tab::Custom(n, b) = self.active.clone()
+            && let Some(stack) = self.add_stack(n, &b)
+        {
+            let coins = stack.read(cx).coins(cx);
+            let label = self.custom_label(n);
+            self.persist_custom(cx, n, &b, &coins, &label);
         }
     }
 
@@ -867,7 +867,7 @@ impl ChartTabs {
                 cx.spawn(async move |this, cx| {
                     let executor = cx.update(|cx| cx.background_executor().clone());
                     executor.timer(Duration::from_secs(5)).await;
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         this.update(cx, |this, cx| {
                             // Is the timer still current, with the tab still inactive in the strip?
                             let still = this.custom_gate_gen.get(&n) == Some(&want_gen)

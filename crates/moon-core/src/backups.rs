@@ -264,7 +264,7 @@ fn launch_settings_job() {
         "settings",
         &SETTINGS_JOB_ACTIVE,
         false,
-        |now_ms| crate::config::backup_due_at(now_ms),
+        crate::config::backup_due_at,
     );
 }
 

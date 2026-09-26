@@ -364,11 +364,11 @@ pub(super) fn distinct_core_colors(
     let mut out = vec![None; configured.len()];
     let mut taken: Vec<Hsla> = Vec::with_capacity(configured.len());
     for &i in &order {
-        if let Some(c) = configured[i].1.map(rgb) {
-            if !taken.iter().any(|&t| too_close(t, c)) {
-                taken.push(c);
-                out[i] = Some(c);
-            }
+        if let Some(c) = configured[i].1.map(rgb)
+            && !taken.iter().any(|&t| too_close(t, c))
+        {
+            taken.push(c);
+            out[i] = Some(c);
         }
     }
     // Mid-shade first (index 2 of `SHADES`, the saturated one the picker leads with), then the

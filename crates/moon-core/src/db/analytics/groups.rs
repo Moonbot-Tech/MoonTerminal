@@ -237,8 +237,8 @@ pub(in crate::db) fn coin_groups_from_source(
     q: &Query,
     src: &str,
 ) -> ReadResult<Vec<GroupStat>> {
-    let raw_src = raw_source(conn, &q)?;
-    groups(conn, &src, raw_src.as_deref(), &q, false, false)
+    let raw_src = raw_source(conn, q)?;
+    groups(conn, src, raw_src.as_deref(), q, false, false)
 }
 
 /// Build the lens-neutral source used by raw-profit and average-order enrichments.

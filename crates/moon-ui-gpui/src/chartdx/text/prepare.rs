@@ -115,54 +115,52 @@ impl RenderState {
             } else {
                 0.0
             };
-            if band_on {
-                if let Some(stats) = volume_stats {
-                    let band = volume_band_h;
-                    // The band is LINEAR and its second line sits at the ratio itself, mirroring
-                    // the sides shader exactly.
-                    let avg_frac = volume_style.m[3].clamp(0.0, 1.0);
-                    // Moonbot's `Ind. Pos`: the scale is a bracket whose stem the shader stands
-                    // at the same offset this reads, and each label prints to the RIGHT of the
-                    // tick at its level — on either side, so the right-hand bracket's labels run
-                    // into the margin, exactly as the reference prints them.
-                    let bracket_x = plot_left
-                        + moon_chart::volume_bars::scale_bracket_offset(plot_w, volume_scale_right);
-                    let label_x = bracket_x
-                        + moon_chart::volume_bars::VOLUME_SCALE_TICK_PX
-                        + moon_chart::volume_bars::VOLUME_SCALE_LABEL_GAP_PX;
-                    let label_ax = 0.0;
-                    for (frac, value) in [(1.0f32, stats.max), (avg_frac, stats.avg)] {
-                        // Too close to the band floor to read: skip rather than overprint. The
-                        // room a label needs follows its own line height, so the larger, bolder
-                        // scale face cannot start hanging past the plot's bottom edge unnoticed.
-                        if !super::volume_scale_label_fits(band, frac) {
-                            continue;
-                        }
-                        // The room a label has is what lies between its tick and the plot's
-                        // right edge — the right-hand bracket leaves it the margin only.
-                        let Some(label) = super::volume_scale_label(
-                            value,
-                            &self.panes[idx].quote,
-                            plot_right - label_x,
-                            |text| {
-                                super::measure_sized_text_run(
-                                    &mut self.text_runs,
-                                    self.text_run_cursor,
-                                    ctx,
-                                    text,
-                                    VOLUME_SCALE_FONT_SIZE,
-                                    VOLUME_SCALE_LINE_H,
-                                    VOLUME_SCALE_WEIGHT,
-                                )
-                                .width
-                                .as_f32()
-                            },
-                        ) else {
-                            continue;
-                        };
-                        let y = plot_bottom - band * frac;
-                        self.draw_volume_scale_text(ctx, &label, label_x, y, label_ax, 0.5, ink)?;
+            if band_on && let Some(stats) = volume_stats {
+                let band = volume_band_h;
+                // The band is LINEAR and its second line sits at the ratio itself, mirroring
+                // the sides shader exactly.
+                let avg_frac = volume_style.m[3].clamp(0.0, 1.0);
+                // Moonbot's `Ind. Pos`: the scale is a bracket whose stem the shader stands
+                // at the same offset this reads, and each label prints to the RIGHT of the
+                // tick at its level — on either side, so the right-hand bracket's labels run
+                // into the margin, exactly as the reference prints them.
+                let bracket_x = plot_left
+                    + moon_chart::volume_bars::scale_bracket_offset(plot_w, volume_scale_right);
+                let label_x = bracket_x
+                    + moon_chart::volume_bars::VOLUME_SCALE_TICK_PX
+                    + moon_chart::volume_bars::VOLUME_SCALE_LABEL_GAP_PX;
+                let label_ax = 0.0;
+                for (frac, value) in [(1.0f32, stats.max), (avg_frac, stats.avg)] {
+                    // Too close to the band floor to read: skip rather than overprint. The
+                    // room a label needs follows its own line height, so the larger, bolder
+                    // scale face cannot start hanging past the plot's bottom edge unnoticed.
+                    if !super::volume_scale_label_fits(band, frac) {
+                        continue;
                     }
+                    // The room a label has is what lies between its tick and the plot's
+                    // right edge — the right-hand bracket leaves it the margin only.
+                    let Some(label) = super::volume_scale_label(
+                        value,
+                        &self.panes[idx].quote,
+                        plot_right - label_x,
+                        |text| {
+                            super::measure_sized_text_run(
+                                &mut self.text_runs,
+                                self.text_run_cursor,
+                                ctx,
+                                text,
+                                VOLUME_SCALE_FONT_SIZE,
+                                VOLUME_SCALE_LINE_H,
+                                VOLUME_SCALE_WEIGHT,
+                            )
+                            .width
+                            .as_f32()
+                        },
+                    ) else {
+                        continue;
+                    };
+                    let y = plot_bottom - band * frac;
+                    self.draw_volume_scale_text(ctx, &label, label_x, y, label_ax, 0.5, ink)?;
                 }
             }
             // Horizontal volumes: the zone's corner caption names the time window and the price
@@ -930,28 +928,28 @@ impl RenderState {
                     }
                     // Draw the cursor's percentage deviation from the nearest book side right of
                     // the separator, below the line.
-                    if let Some(r) = cursor_ref {
-                        if r > 0.0 {
-                            let pct = (cursor_price - r) / r * 100.0;
-                            let m = self.draw_label_text(
-                                ctx,
-                                &fmt_pct(pct),
-                                right_x,
-                                cy_log + gap,
-                                0.0,
-                                0.0,
-                                cur_col,
-                            )?;
-                            placed.push(PlacedLabel {
-                                x: right_x,
-                                y: cy_log + gap,
-                                ax: 0.0,
-                                ay: 0.0,
-                                w: m.width.as_f32(),
-                                h: m.line_height.as_f32(),
-                                solid: true,
-                            });
-                        }
+                    if let Some(r) = cursor_ref
+                        && r > 0.0
+                    {
+                        let pct = (cursor_price - r) / r * 100.0;
+                        let m = self.draw_label_text(
+                            ctx,
+                            &fmt_pct(pct),
+                            right_x,
+                            cy_log + gap,
+                            0.0,
+                            0.0,
+                            cur_col,
+                        )?;
+                        placed.push(PlacedLabel {
+                            x: right_x,
+                            y: cy_log + gap,
+                            ax: 0.0,
+                            ay: 0.0,
+                            w: m.width.as_f32(),
+                            h: m.line_height.as_f32(),
+                            solid: true,
+                        });
                     }
                 }
             } else {

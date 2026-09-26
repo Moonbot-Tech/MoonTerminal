@@ -1353,7 +1353,7 @@ impl AnalyticsView {
                 cx.spawn(async move |this, cx| {
                     let executor = cx.update(|cx| cx.background_executor().clone());
                     executor.timer(wait).await;
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let _ = this.update(cx, |this, cx| {
                             this.report_refresh.timer_fired();
                             this.schedule_report_refresh(cx);
@@ -1446,7 +1446,7 @@ impl AnalyticsView {
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             executor.timer(wait).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.core_refresh_timer_armed = false;
                     if !this.core_refresh_needed {
@@ -1617,7 +1617,7 @@ impl AnalyticsView {
             cx.spawn(async move |this, cx| {
                 let executor = cx.update(|cx| cx.background_executor().clone());
                 executor.timer(BUSY_OVERLAY_DELAY).await;
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let _ = this.update(cx, |this, cx| {
                         // Detached timers outlive their batches, so match the captured start time
                         // before repainting; a later batch has its own delay and timer.
@@ -2344,13 +2344,12 @@ pub fn open(
     owner_display: Option<DisplayId>,
     cx: &mut App,
 ) {
-    if let Some(handle) = backend.read(cx).analytics_window {
-        if handle
+    if let Some(handle) = backend.read(cx).analytics_window
+        && handle
             .update(cx, |_, window, _| window.activate_window())
             .is_ok()
-        {
-            return;
-        }
+    {
+        return;
     }
     let saved = backend.read(cx).layout.analytics_window;
     let bounds = saved.map_or(

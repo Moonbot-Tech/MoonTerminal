@@ -193,12 +193,11 @@ impl AnalyticsView {
                 for h in 0..24usize {
                     if let Some(c) =
                         hour_start(d, h as u32, self.bound_zone()).and_then(|start| map.get(&start))
+                        && c.has_activity()
                     {
-                        if c.has_activity() {
-                            hour_max = hour_max.max(c.totals.profit.abs());
-                            hour_sum[h] += c.totals.profit;
-                            hour_cnt[h] += 1;
-                        }
+                        hour_max = hour_max.max(c.totals.profit.abs());
+                        hour_sum[h] += c.totals.profit;
+                        hour_cnt[h] += 1;
                     }
                 }
                 let next = next_day(d, self.bound_zone());

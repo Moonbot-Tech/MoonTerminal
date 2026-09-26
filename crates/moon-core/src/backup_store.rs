@@ -193,7 +193,7 @@ impl<'a> SnapshotStore<'a> {
             return false;
         };
         let mut found = Vec::<OsString>::new();
-        while let Some(entry) = entries.next() {
+        for entry in entries.by_ref() {
             let Ok(entry) = entry else {
                 return false;
             };

@@ -1161,7 +1161,7 @@ impl<'a> MonoBodyTextMeasurer<'a> {
     pub(crate) fn new(cx: &'a App) -> Self {
         let tokens = MoonTheme::active_tokens(cx);
         let size = px(tokens.font(base_text(cx)));
-        let family = SharedString::from(tokens.font_family(true));
+        let family = tokens.font_family(true);
         let text_system = cx.text_system();
         let mut fonts = HashMap::with_capacity(2);
         for weight in [FontWeight::NORMAL, FontWeight::SEMIBOLD] {

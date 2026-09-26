@@ -117,7 +117,7 @@ impl SettingsView {
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let info = executor.spawn(async move { collect_info() }).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.storage.inflight = false;
                     this.storage.info = Some(info);
@@ -149,7 +149,7 @@ impl SettingsView {
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let result = executor.spawn(async move { job() }).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.storage.busy = false;
                     this.status = Some(match result {
@@ -244,7 +244,7 @@ impl SettingsView {
     /// 60, seconds otherwise. 65 s is a step and must not read as "1 min", which is what 60 s
     /// already says.
     fn trades_margin_label(secs: u32) -> String {
-        if secs % 60 == 0 {
+        if secs.is_multiple_of(60) {
             t!("storage.trades_min", min = secs / 60).to_string()
         } else {
             t!("storage.trades_sec", s = secs).to_string()

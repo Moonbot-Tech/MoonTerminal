@@ -193,10 +193,8 @@ impl Container {
             .pane
             .as_ref()
             .is_some_and(|p| !p.pinned && p.source.deadline_ms().is_some_and(|d| now_ms >= d));
-        if remove {
-            if let Some(p) = self.pane.take() {
-                return vec![(p.core, p.market)];
-            }
+        if remove && let Some(p) = self.pane.take() {
+            return vec![(p.core, p.market)];
         }
         Vec::new()
     }

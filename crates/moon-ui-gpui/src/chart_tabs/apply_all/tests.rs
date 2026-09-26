@@ -82,7 +82,7 @@ fn an_empty_target_set_addresses_nothing() {
 /// to store a value that has nowhere to be stored — and cannot perform a press another popup armed.
 #[test]
 fn only_values_that_have_a_default_can_become_one() {
-    let storable = vec![StackSetting::CandleView(CandleViewCfg::default())];
+    let storable = [StackSetting::CandleView(CandleViewCfg::default())];
     assert!(storable.iter().all(|v| v.global_slot().is_some()));
     let layout = layout_values(
         &loud_snapshot(),

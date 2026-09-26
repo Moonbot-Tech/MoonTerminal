@@ -202,10 +202,11 @@ impl StrategiesView {
         }
         // A removed strategy changes the captured identity just as surely as a hidden core. Check
         // every row before the first per-core command so no surviving subset can be sent.
-        if {
+        let res = {
             let store = self.backend.read(cx).session.store();
             !strategy_targets_exist(&plan.targets, |(core, id)| row(store, core, id).is_some())
-        } {
+        };
+        if res {
             return;
         }
         let applied_cores: HashSet<CoreId> = plan.actions.iter().map(|(core, _)| *core).collect();
@@ -447,10 +448,11 @@ impl StrategiesView {
         {
             return;
         }
-        if {
+        let res = {
             let store = self.backend.read(cx).session.store();
             !strategy_targets_exist(&plan.targets, |(core, id)| row(store, core, id).is_some())
-        } {
+        };
+        if res {
             return;
         }
         // Drafts the core would refuse are dropped HERE rather than in the captured plan: sending

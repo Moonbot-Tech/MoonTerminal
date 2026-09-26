@@ -195,14 +195,12 @@ impl ReleaseDiscovery {
 
         let page_two_due =
             staged[1].is_none() || first_changed || now_unix >= self.page_two_refresh_at;
-        if page_two_due && first_low {
-            if first_changed || staged[1].is_none() {
-                return Err(DiscoveryError::new(
-                    DiscoveryRetry::RateLimited,
-                    defer_until,
-                    anyhow!("GitHub release scan deferred before its required second page"),
-                ));
-            }
+        if page_two_due && first_low && (first_changed || staged[1].is_none()) {
+            return Err(DiscoveryError::new(
+                DiscoveryRetry::RateLimited,
+                defer_until,
+                anyhow!("GitHub release scan deferred before its required second page"),
+            ));
         }
         let mut next_page_two_refresh_at = self.page_two_refresh_at;
         if page_two_due && !first_low {

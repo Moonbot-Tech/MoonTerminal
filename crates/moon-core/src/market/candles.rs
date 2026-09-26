@@ -1321,9 +1321,7 @@ impl CandleSeries {
         // Buckets from here on are ours to accumulate into; earlier ones keep a base candle whose
         // volume is already complete. See `push_trades`.
         self.live_from = local
-            .iter()
-            .skip(usize::from(skip_partial_first))
-            .next()
+            .get(usize::from(skip_partial_first))
             .map_or(f64::INFINITY, |c| c.t_open_ms);
 
         local.clear();

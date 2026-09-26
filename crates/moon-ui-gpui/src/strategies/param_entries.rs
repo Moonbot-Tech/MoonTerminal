@@ -96,18 +96,18 @@ pub(super) fn flatten_params(
             if multi && lname == "strategyname" {
                 continue;
             }
-            if let Some(c) = common {
-                if !c.contains(&lname) {
-                    continue;
-                }
+            if let Some(c) = common
+                && !c.contains(&lname)
+            {
+                continue;
             }
             if differ && lname == "signaltype" {
                 continue;
             }
-            if let Some(ch) = changed {
-                if !ch.contains_key(&lname) {
-                    continue;
-                }
+            if let Some(ch) = changed
+                && !ch.contains_key(&lname)
+            {
+                continue;
             }
             fields.push(f.clone());
         }

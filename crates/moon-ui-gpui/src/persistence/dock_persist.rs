@@ -130,10 +130,10 @@ pub(crate) fn save_all_to_path(map: &DockMap, path: &Path) -> bool {
 ///
 /// Missing, non-panel, or non-string metadata falls back to the empty group name.
 fn group_of(info: &PanelInfo) -> String {
-    if let PanelInfo::Panel(v) = info {
-        if let Some(g) = v.get("group").and_then(|g| g.as_str()) {
-            return g.to_string();
-        }
+    if let PanelInfo::Panel(v) = info
+        && let Some(g) = v.get("group").and_then(|g| g.as_str())
+    {
+        return g.to_string();
     }
     String::new()
 }

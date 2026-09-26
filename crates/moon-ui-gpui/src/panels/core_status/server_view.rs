@@ -243,51 +243,50 @@ pub(super) fn grouped_server_view(
     let tree = MoonTree::custom(state, move |entry, meta, _window, app| {
         let p = MoonPalette::active(app);
         if entry.is_root() {
-            if let Some(server_index) = server_positions.get(entry.item().id()).copied() {
-                if let Some(group) = groups.get(server_index) {
-                    let editing_input = (editing == Some(group.key))
-                        .then(|| edit_input.clone())
-                        .flatten();
-                    // Highlight follows the body-click selection (chart target).
-                    return MoonListItem::new(meta.index)
-                        .selected(chart_selected == Some(group.key))
-                        .child(server_row(
-                            group,
-                            ip_masked,
-                            entry.is_expanded(),
-                            editing_input,
-                            widths,
-                            &weak_view,
-                            &backend,
-                            p,
-                            app,
-                        ));
-                }
-            }
-        } else if let Some(&(server_index, core_index)) = core_positions.get(entry.item().id()) {
-            if let Some(core) = groups
-                .get(server_index)
-                .and_then(|group| group.cores.get(core_index))
+            if let Some(server_index) = server_positions.get(entry.item().id()).copied()
+                && let Some(group) = groups.get(server_index)
             {
-                // The highlight follows the SELECTION now, not the chart: a plain click still
-                // charts the core and selects it alone, so the single-click case looks exactly as
-                // it did, while a Ctrl or Shift click builds a set the chart has no opinion about.
+                let editing_input = (editing == Some(group.key))
+                    .then(|| edit_input.clone())
+                    .flatten();
+                // Highlight follows the body-click selection (chart target).
                 return MoonListItem::new(meta.index)
-                    .selected(selection.contains(Some(core.id)))
-                    .child(core_row(
-                        core,
+                    .selected(chart_selected == Some(group.key))
+                    .child(server_row(
+                        group,
+                        ip_masked,
+                        entry.is_expanded(),
+                        editing_input,
                         widths,
-                        TreeSelection {
-                            order: &order,
-                            cores: &order_cores,
-                            selection: &selection,
-                        },
                         &weak_view,
                         &backend,
                         p,
                         app,
                     ));
             }
+        } else if let Some(&(server_index, core_index)) = core_positions.get(entry.item().id())
+            && let Some(core) = groups
+                .get(server_index)
+                .and_then(|group| group.cores.get(core_index))
+        {
+            // The highlight follows the SELECTION now, not the chart: a plain click still
+            // charts the core and selects it alone, so the single-click case looks exactly as
+            // it did, while a Ctrl or Shift click builds a set the chart has no opinion about.
+            return MoonListItem::new(meta.index)
+                .selected(selection.contains(Some(core.id)))
+                .child(core_row(
+                    core,
+                    widths,
+                    TreeSelection {
+                        order: &order,
+                        cores: &order_cores,
+                        selection: &selection,
+                    },
+                    &weak_view,
+                    &backend,
+                    p,
+                    app,
+                ));
         }
         MoonListItem::new(meta.index)
             .selected(false)

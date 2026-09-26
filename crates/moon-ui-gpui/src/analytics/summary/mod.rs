@@ -447,7 +447,7 @@ impl AnalyticsView {
     /// Row of KPI tiles with deltas against the previous period.
     fn kpi_row(&self, d: &Summary, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let (cur, prev) = (&d.cur, &d.prev);
-        let profit_el = colored_value(p, cur.profit, format!("{}", fmt_signed(cur.profit)));
+        let profit_el = colored_value(p, cur.profit, fmt_signed(cur.profit).to_string());
         let dd_el = div()
             .text_color(moon(p.orange))
             .child(format!(

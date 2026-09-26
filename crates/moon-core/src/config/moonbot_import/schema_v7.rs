@@ -237,7 +237,7 @@ pub fn parse_payload(payload: &[u8]) -> Result<MoonBotConfig, ImportError> {
         }
         match kind {
             // Signals/Trading/Visual must be present, but their contents are skipped.
-            1 | 2 | 3 => {}
+            1..=3 => {}
             4 => theme = Some(parse_theme(sub)?),
             5 => ini = Some(parse_ini(sub)?),
             6 => ui = Some(parse_ui(sub)?),

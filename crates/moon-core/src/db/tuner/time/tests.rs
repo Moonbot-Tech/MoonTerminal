@@ -166,8 +166,8 @@ fn suggest_time_never_worse_than_base() {
         .iter()
         .filter(|&&(wd, mn, _)| {
             s.week_span
-                .map_or(true, |(f, t)| span_ok(wd * 1440 + mn, f as i64, t as i64))
-                && s.tod.map_or(true, |tw| match tw {
+                .is_none_or(|(f, t)| span_ok(wd * 1440 + mn, f as i64, t as i64))
+                && s.tod.is_none_or(|tw| match tw {
                     TimeWindow::Day(f, t) => span_ok(mn, f as i64, t as i64),
                     TimeWindow::Hour(f, t) => span_ok(mn % 60, f as i64, t as i64),
                 })

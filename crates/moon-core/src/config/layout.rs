@@ -2203,7 +2203,7 @@ impl WindowLayout {
             |_| false,
         );
         let moved = match self.kind_defaults_mut(kind) {
-            Some(d) => std::mem::replace(&mut d.candle_view, Some(value)) != Some(value),
+            Some(d) => d.candle_view.replace(value) != Some(value),
             None => std::mem::replace(&mut self.candle_view, value) != value,
         };
         split || moved
@@ -2221,7 +2221,7 @@ impl WindowLayout {
             |_| false,
         );
         let moved = match self.kind_defaults_mut(kind) {
-            Some(d) => std::mem::replace(&mut d.chart_graphics, Some(value)) != Some(value),
+            Some(d) => d.chart_graphics.replace(value) != Some(value),
             None => std::mem::replace(&mut self.chart_graphics, value) != value,
         };
         split || moved

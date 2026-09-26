@@ -432,12 +432,14 @@ impl ComboLayer {
         let v_margin = combo_v_margin_px(bh);
         let tex_h_total = tex_h + 2 * v_margin as u32;
         let band_px = volume_band_px(bh);
-        if self.tex.as_ref().map_or(true, |c| {
-            c.key.tex_w != tex_w || c.key.tex_h_total != tex_h_total
-        }) {
+        if self
+            .tex
+            .as_ref()
+            .is_none_or(|c| c.key.tex_w != tex_w || c.key.tex_h_total != tex_h_total)
+        {
             self.tex = Some(Self::create_tex(device, tex_w, tex_h_total, v_margin));
         }
-        if self.vol_tex.as_ref().map_or(true, |c| {
+        if self.vol_tex.as_ref().is_none_or(|c| {
             c.key.tex_w != tex_w || c.key.band_px != band_px || c.key.chart_h != tex_h
         }) {
             self.vol_tex = Some(Self::create_vol_tex(device, tex_w, band_px, tex_h));
@@ -1071,10 +1073,10 @@ impl ComboLayer {
             tex_w_bits: tex_w.to_bits(),
             time_to_px_bits: time_to_px.to_bits(),
         };
-        if let Some((cached_key, cached)) = self.volume_window_cache {
-            if cached_key == key {
-                return cached;
-            }
+        if let Some((cached_key, cached)) = self.volume_window_cache
+            && cached_key == key
+        {
+            return cached;
         }
         let time_left = bake_t0 - 2.0 / time_to_px;
         let time_right = bake_t0 + (tex_w + 2.0) / time_to_px;

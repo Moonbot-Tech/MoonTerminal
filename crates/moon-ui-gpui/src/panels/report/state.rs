@@ -367,7 +367,7 @@ impl ReportPanel {
                         .and_then(|connection| db::load_comment_pane(&connection, detached))
                 })
                 .await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     if this.detached != detached
                         || this.show_comment != expected
@@ -405,7 +405,7 @@ impl ReportPanel {
             let metadata = executor
                 .spawn(async move { ReportInitialMetadata::load() })
                 .await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     let ReportInitialMetadata {
                         cores,

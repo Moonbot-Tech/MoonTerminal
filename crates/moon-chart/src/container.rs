@@ -39,7 +39,7 @@ impl PaneSource {
             PaneSource::Manual => None,
             // Lazy on purpose: the eager form still computes the infinity this keeps out.
             PaneSource::AddToChart { born_ms, ttl_ms } => {
-                ttl_ms.is_finite().then(|| born_ms + ttl_ms)
+                ttl_ms.is_finite().then_some(born_ms + ttl_ms)
             }
         }
     }

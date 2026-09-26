@@ -410,7 +410,7 @@ impl ReportAxis {
     ///     the honest signal that the uncorrected single-branch predicate is still correct.
     pub fn measured_groups(&self, at: i64) -> Vec<(i32, Vec<u64>)> {
         let mut by_offset: HashMap<i32, Vec<u64>> = HashMap::new();
-        for (&core_uid, _) in self.segments.iter() {
+        for &core_uid in self.segments.keys() {
             if let Some(offset) = self.offset_secs(core_uid, at) {
                 by_offset.entry(offset).or_default().push(core_uid);
             }

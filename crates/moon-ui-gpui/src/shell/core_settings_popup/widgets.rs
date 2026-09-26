@@ -143,10 +143,10 @@ pub(super) fn cs_checkbox(
         .on_change(move |ch: &bool, _w, app| {
             let on = *ch;
             let b = backend.read(app);
-            if let Some(core) = resolve_core_settings_write(seeded, b.active_trade_core(&group)) {
-                if let Err(e) = b.session.edit_client_settings(core, edit(on)) {
-                    log::warn!("core settings edit failed: {e:#}");
-                }
+            if let Some(core) = resolve_core_settings_write(seeded, b.active_trade_core(&group))
+                && let Err(e) = b.session.edit_client_settings(core, edit(on))
+            {
+                log::warn!("core settings edit failed: {e:#}");
             }
         })
 }
