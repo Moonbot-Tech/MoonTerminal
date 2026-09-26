@@ -162,14 +162,6 @@ pub const TICK_PARAMS: &[TickParam] = &[
         not_kinds: &[],
     },
     TickParam {
-        key: "FastShotAlgo",
-        group: ParamGroup::Entry,
-        section: ParamSection::StrategySettings,
-        kind: ParamKind::Bool,
-        kinds: MSHOT,
-        not_kinds: &[],
-    },
-    TickParam {
         key: "MShotAddHourlyDelta",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
@@ -218,14 +210,6 @@ pub const TICK_PARAMS: &[TickParam] = &[
         not_kinds: &[],
     },
     TickParam {
-        key: "MShotAddMarkDelta",
-        group: ParamGroup::Entry,
-        section: ParamSection::StrategySettings,
-        kind: ParamKind::Num,
-        kinds: MSHOT,
-        not_kinds: &[],
-    },
-    TickParam {
         key: "MShotAddMarketDelta",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
@@ -243,14 +227,6 @@ pub const TICK_PARAMS: &[TickParam] = &[
     },
     TickParam {
         key: "MShotAddBTC5mDelta",
-        group: ParamGroup::Entry,
-        section: ParamSection::StrategySettings,
-        kind: ParamKind::Num,
-        kinds: MSHOT,
-        not_kinds: &[],
-    },
-    TickParam {
-        key: "MShotAddPriceBug",
         group: ParamGroup::Entry,
         section: ParamSection::StrategySettings,
         kind: ParamKind::Num,
@@ -448,6 +424,16 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "PumpMovePersent",
     // The corridor family's one modifier the grid does not offer (no live strategy sets it).
     "MShotAdd5sDelta",
+    // Entry fields the MoonShot model reads at the strategy's value but cannot answer a variant
+    // of honestly, so the search never varies them. `FastShotAlgo` moves nothing in the model
+    // (it folds the core's timer into the latency), yet any changed entry field swaps the fact's
+    // own fill for the model's, so a toggle would still move the score. `MShotAddMarkDelta` and
+    // `MShotAddPriceBug` read `dmark` / `pricebug`, which have no history here: the report's
+    // snapshot at the buy is applied to the order's whole life (`deltas::NotComputed`), and a
+    // search would fit the corridor to a value that did not exist before the spike.
+    "FastShotAlgo",
+    "MShotAddMarkDelta",
+    "MShotAddPriceBug",
 ];
 
 /// The switches of the sell rules the model does NOT have — read only to tell that one is on,

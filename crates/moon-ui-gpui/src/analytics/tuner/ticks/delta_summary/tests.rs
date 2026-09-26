@@ -33,6 +33,7 @@ fn row(tape: TapeStatus) -> DealRow {
             hook_depth_pct: None,
             hook_stated_take_pct: None,
             step_lag_ms: 0.0,
+            round_trip_ms: None,
             stop_anchor: None,
             own_entry: None,
             buy_set_ms: None,

@@ -282,6 +282,12 @@ pub struct Deal {
     /// one that moved the order, milliseconds — its replace round trip, calibrated by the caller
     /// off the core's own archived lines ([`calibrate`]); 0 runs the steps on the plain schedule.
     pub step_lag_ms: f64,
+    /// The deal's CORE's replace round trip, milliseconds — how long a re-placed entry order
+    /// takes to reach the exchange, calibrated by the caller off the core's own archived Entry
+    /// lines ([`calibrate::replace_round_trip_samples`]). The entry model replays the core's
+    /// re-places on it ([`mshot::entry_latency_ms`]); `None` — too few re-places archived, or no
+    /// caller calibrated it — runs them on the model settings' one latency.
+    pub round_trip_ms: Option<f64>,
     /// What the fact proves about the stop, for a variant that runs the same one
     /// ([`record::StopAnchor`]); filled with the rest of the model inputs, `None` before.
     pub stop_anchor: Option<StopAnchor>,

@@ -265,6 +265,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             hook_depth_pct: None,
             hook_stated_take_pct: None,
             step_lag_ms: 0.0,
+            round_trip_ms: None,
             // Filled with the model inputs, once the archive and the parameters are in.
             stop_anchor: None,
             own_entry: None,

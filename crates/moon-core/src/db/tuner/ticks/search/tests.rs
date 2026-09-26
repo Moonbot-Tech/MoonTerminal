@@ -45,6 +45,7 @@ pub(super) fn prepared(uid: i64, peak: f64) -> PreparedDeal {
         hook_depth_pct: None,
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,
+        round_trip_ms: None,
         stop_anchor: None,
         delta_track: None,
         bars: None,
@@ -391,16 +392,21 @@ fn a_shift_does_not_search_the_path_only_fields() {
     };
     let shift = keys(super::super::mshot::EntryMethod::Shift);
     let model = keys(super::super::mshot::EntryMethod::Model);
-    for path_only in [
-        "MShotRaiseWait",
-        "MShotReplaceDelay",
-        "MShotUsePrice",
-        "FastShotAlgo",
-    ] {
+    for path_only in ["MShotRaiseWait", "MShotReplaceDelay", "MShotUsePrice"] {
         assert!(!shift.contains(&path_only), "{path_only} {shift:?}");
         assert!(model.contains(&path_only), "{path_only} {model:?}");
     }
     assert!(shift.contains(&"MShotPrice") && shift.contains(&"MShotAddDistance"));
+    // Read at the strategy's value, never varied: the model ignores `FastShotAlgo`, and the
+    // mark price and the price bug have no history to replay a corridor on — even with a grid.
+    for fixed in ["FastShotAlgo", "MShotAddMarkDelta", "MShotAddPriceBug"] {
+        assert!(!shift.contains(&fixed), "{fixed} {shift:?}");
+        assert!(!model.contains(&fixed), "{fixed} {model:?}");
+        assert!(
+            crate::db::tuner::ticks::params::is_model_only(fixed),
+            "{fixed}"
+        );
+    }
 }
 
 #[test]

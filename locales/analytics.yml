@@ -2101,9 +2101,9 @@ analytics.ticks.acc_tip_no_tape:
   en: "Without tape: %{n}, left out of the estimate."
   es: "Sin cinta: %{n}, fuera de la estimación."
 analytics.ticks.acc_tip_assumptions:
-  ru: "Допущения модели: стакана нет — очередь перед нашим ордером не моделируется, филл = касание принтом; стоп по стакану видит цену тикера раз в %{ticker} с, вместо неё — последний принт; задержка ядра и биржи — одна на все ядра, %{latency} мс; совпадением считается цена в пределах %{price} % и момент в пределах %{time} с; поля выхода вне модели (SellShot, SellSpread и другие) — такие сделки не судятся; середина долгой позиции не хранится — вариант, чья линия или стоп стояли там ближе к цене, чем у факта, на такой сделке не судится."
-  en: "The model assumes: no order book — the queue ahead of our order is not modelled, a fill is a touching print; a book-watching stop sees the ticker price every %{ticker} s, the last print standing in for it; one core and venue latency for every core, %{latency} ms; a match is a price within %{price} % and a moment within %{time} s; exit fields outside the model (SellShot, SellSpread and others) leave such trades unjudged; the middle of a long position is not kept — a variant whose line or stop stood nearer the price there than the fact's is not judged on that trade."
-  es: "El modelo supone: sin libro de órdenes — la cola delante de nuestra orden no se modela, un llenado es un print que toca; un stop por libro ve el precio del ticker cada %{ticker} s, con el último print en su lugar; una latencia de núcleo y bolsa para todos los núcleos, %{latency} ms; coincide un precio dentro de %{price} % y un momento dentro de %{time} s; los campos de salida fuera del modelo (SellShot, SellSpread y otros) dejan esas operaciones sin juzgar; el medio de una posición larga no se guarda — una variante cuya línea o stop estuvo allí más cerca del precio que el del hecho no se juzga en esa operación."
+  ru: "Допущения модели: стакана нет — очередь перед нашим ордером не моделируется, филл = касание принтом; стоп по стакану видит цену тикера раз в %{ticker} с, вместо неё — последний принт; перестановка входа идёт до биржи столько, сколько у своего ядра по архиву, у ядра без замеров и у продажи — %{latency} мс; совпадением считается цена в пределах %{price} % и момент в пределах %{time} с; поля выхода вне модели (SellShot, SellSpread и другие) — такие сделки не судятся; середина долгой позиции не хранится — вариант, чья линия или стоп стояли там ближе к цене, чем у факта, на такой сделке не судится."
+  en: "The model assumes: no order book — the queue ahead of our order is not modelled, a fill is a touching print; a book-watching stop sees the ticker price every %{ticker} s, the last print standing in for it; an entry re-place takes its own core's archived round trip to reach the venue, %{latency} ms for a core without one and for the sell; a match is a price within %{price} % and a moment within %{time} s; exit fields outside the model (SellShot, SellSpread and others) leave such trades unjudged; the middle of a long position is not kept — a variant whose line or stop stood nearer the price there than the fact's is not judged on that trade."
+  es: "El modelo supone: sin libro de órdenes — la cola delante de nuestra orden no se modela, un llenado es un print que toca; un stop por libro ve el precio del ticker cada %{ticker} s, con el último print en su lugar; un reemplazo de la entrada tarda en llegar a la bolsa el viaje de ida y vuelta archivado de su propio núcleo, %{latency} ms para un núcleo sin él y para la venta; coincide un precio dentro de %{price} % y un momento dentro de %{time} s; los campos de salida fuera del modelo (SellShot, SellSpread y otros) dejan esas operaciones sin juzgar; el medio de una posición larga no se guarda — una variante cuya línea o stop estuvo allí más cerca del precio que el del hecho no se juzga en esa operación."
 analytics.ticks.long_title:
   ru: "Долгий подбор"
   en: "A long search"
@@ -2365,9 +2365,9 @@ analytics.ticks.model_latency:
   en: "Replace latency, ms"
   es: "Latencia de reemplazo, ms"
 analytics.ticks.model_latency_tip:
-  ru: "Сколько перестановка ордера (входа и продажи) идёт до биржи; принт в это время бьёт по старому уровню"
-  en: "How long a re-place (of the entry or of the sell) takes to reach the exchange; a print in between meets the old level"
-  es: "Cuánto tarda un reemplazo (de la entrada o de la venta) en llegar al exchange; un print entretanto encuentra el nivel viejo"
+  ru: "Сколько перестановка продажи — и входа у ядра без замеров в архиве — идёт до биржи; принт в это время бьёт по старому уровню"
+  en: "How long a re-place of the sell — and of the entry on a core with no archived round trip — takes to reach the exchange; a print in between meets the old level"
+  es: "Cuánto tarda un reemplazo de la venta — y de la entrada en un núcleo sin viaje de ida y vuelta archivado — en llegar al exchange; un print entretanto encuentra el nivel viejo"
 analytics.ticks.model_replace_window:
   ru: "Окно цены перестановки, мс"
   en: "Re-place price window, ms"

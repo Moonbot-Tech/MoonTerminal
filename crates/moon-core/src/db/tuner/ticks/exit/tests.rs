@@ -45,6 +45,7 @@ pub(super) fn deal(short: bool) -> Deal {
         hook_depth_pct: None,
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,
+        round_trip_ms: None,
         stop_anchor: None,
         delta_track: None,
         bars: None,

@@ -25,7 +25,8 @@ use super::verify::{
 pub struct ModelSettings {
     /// How a MoonShot variant's entry is replayed.
     pub entry_method: EntryMethod,
-    /// How long a replacement — of the entry order or of the sell — takes to reach the book.
+    /// How long a replacement — of the sell, and of the entry order on a core with no measured
+    /// round trip (`Deal::round_trip_ms`) — takes to reach the book.
     pub latency_ms: f64,
     /// The window a re-placed entry order's price is read off.
     pub replace_window_ms: i64,

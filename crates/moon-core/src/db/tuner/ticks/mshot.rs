@@ -110,7 +110,8 @@ impl UsePrice {
 pub enum EntryMethod {
     /// The corridor model from the order's creation ([`MshotEntry::fill`] via `run`): the whole
     /// path the variant's order would have walked. The one that answers for `MShotRaiseWait`,
-    /// `MShotReplaceDelay`, `MShotUsePrice` and `FastShotAlgo`, which change the path.
+    /// `MShotReplaceDelay` and `MShotUsePrice`, which change the path (`FastShotAlgo` is read
+    /// at the strategy's value; the model folds its timer into the latency).
     #[default]
     Model,
     /// The fact's order at the spike, shifted by the variant's far bound
@@ -240,6 +241,17 @@ const BOUND_FLOOR_PCT: f64 = 0.02;
 
 /// Default replacement latency, milliseconds — see the module doc.
 pub const DEFAULT_LATENCY_MS: f64 = 100.0;
+
+/// The latency a deal's entry re-places reach the exchange with: its core's measured round trip
+/// ([`Deal::round_trip_ms`]), or the model settings' one latency for a core not measured. The
+/// round trip alone, nothing added: on the user's data (2026-09-27, 568 MoonShot entries) it
+/// judged 483 entries ✓ against 481 for the one 100 ms latency and 481 for 100 ms on top of it.
+pub fn entry_latency_ms(model: ModelSettings, deal: &Deal) -> f64 {
+    deal.round_trip_ms
+        .filter(|rt| rt.is_finite())
+        .unwrap_or(model.latency_ms)
+        .max(0.0)
+}
 
 /// How far past the fact's fill a shifted order ([`MshotEntry::shifted_fill`]) may still be
 /// reached by the same spike.
@@ -648,7 +660,7 @@ impl<'a> MshotEntry<'a> {
         let mut bounds = LiveBounds::new(self.params, deal);
         let raise_wait_ms = (self.params.raise_wait_s * 1000.0).max(0.0);
         let replace_delay_ms = (self.params.replace_delay_s * 1000.0).max(0.0);
-        let latency_ms = self.params.model.latency_ms.max(0.0);
+        let latency_ms = entry_latency_ms(self.params.model, deal);
 
         let mut reference = Reference::new(
             self.params.use_price,

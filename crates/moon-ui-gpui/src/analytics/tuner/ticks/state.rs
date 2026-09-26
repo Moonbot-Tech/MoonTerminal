@@ -114,6 +114,7 @@ impl DealRow {
         self.deal.fact_modifier = answer.deal.fact_modifier;
         self.deal.entry_placed = answer.deal.entry_placed;
         self.deal.step_lag_ms = answer.deal.step_lag_ms;
+        self.deal.round_trip_ms = answer.deal.round_trip_ms;
         self.deal.stop_anchor = answer.deal.stop_anchor;
         self.deal.own_entry = answer.deal.own_entry;
         self.deal.gap = answer.deal.gap;
