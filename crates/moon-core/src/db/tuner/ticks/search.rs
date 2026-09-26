@@ -46,6 +46,7 @@ use super::params::{
     ParamGroup, ParamKind, StrategyValues, TICK_PARAMS, TickParam, exit_params, mshot_params,
 };
 use super::settings::ModelSettings;
+use super::unmodelled::same_value;
 use super::{Deal, Deltas, EntryParams, ExitModel, ExitParams, Outcome, entry_model_for, simulate};
 use crate::db::metrics::Tally;
 use crate::db::tuner::threshold_search::search::{install, restart_seed};
@@ -524,11 +525,20 @@ impl<'a> Bases<'a> {
             .collect()
     }
 
-    /// Whether `value` of `key` is something at least one base, under `held`, does not hold.
+    /// Whether `value` of `key` is something at least one base, under `held`, does not hold — as
+    /// a value, not as text: the search spells its points itself (`1`), a strategy as the core
+    /// wrote it (`1.0`), and the two are one value (PriceDownTimer on HookTest01, 2026-09-26,
+    /// landed in В1 as a change of `1.0` to `1`). A base leaving the field out — or holding it
+    /// blank, which `same_value` would read as a boolean `false` — moves on any value: a value the
+    /// search completed for a switch it turned on (`deps`) is written with it even where it
+    /// equals the schema's default.
     fn moves(&self, held: &HashMap<String, String>, key: &str, value: &str) -> bool {
-        self.owns
-            .iter()
-            .any(|own| held.get(key).or_else(|| own.get(key)).map(String::as_str) != Some(value))
+        self.owns.iter().any(|own| {
+            held.get(key)
+                .or_else(|| own.get(key))
+                .filter(|base| !base.trim().is_empty())
+                .is_none_or(|base| !same_value(base, value))
+        })
     }
 }
 

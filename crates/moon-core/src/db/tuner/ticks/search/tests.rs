@@ -818,3 +818,26 @@ fn a_search_that_no_point_can_keep_the_corridor_of_says_so() {
     let result = suggest(&deals, &params, &SearchHandle::new());
     assert!(!matches!(result, Err(SearchMiss::Corridor)), "{result:?}");
 }
+
+/// A value is compared as a value: a strategy's `1.0` and the search's `1` are one, so the field
+/// does not land in В1 as a change. Another value is one, and so is any value of a field the
+/// strategy leaves out — a switch's completed value is written with it.
+#[test]
+fn a_value_moves_as_a_value_not_as_text() {
+    let own: HashMap<String, String> = [("PriceDownTimer".to_string(), "1.0".to_string())].into();
+    let bases = Bases {
+        owns: vec![&own],
+        of_deal: vec![0],
+    };
+    let held = HashMap::new();
+    assert!(!bases.moves(&held, "PriceDownTimer", "1"));
+    assert!(bases.moves(&held, "PriceDownTimer", "2"));
+    assert!(bases.moves(&held, "TakeProfit", "1"));
+    // A blank base is no value: `0` is a change of it, not a spelling of it.
+    let blank: HashMap<String, String> = [("UseTrailing".to_string(), String::new())].into();
+    let bases = Bases {
+        owns: vec![&blank],
+        of_deal: vec![0],
+    };
+    assert!(bases.moves(&held, "UseTrailing", "0"));
+}

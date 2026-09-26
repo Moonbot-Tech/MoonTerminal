@@ -320,7 +320,7 @@ fn also_holds(
 
 /// Whether two spellings of a field's value are the same value: as booleans when both are one
 /// (`YES`, `1`, `True`…), as numbers when both are (`0.0` and `0`), else as text.
-fn same_value(a: &str, b: &str) -> bool {
+pub(super) fn same_value(a: &str, b: &str) -> bool {
     if let (Some(x), Some(y)) = (as_bool(a), as_bool(b)) {
         return x == y;
     }
