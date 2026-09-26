@@ -103,16 +103,23 @@ pub const DEFAULT_TRADES_MAX_MB: u32 = 256;
 /// (`trade_replay::MODEL_PAD_MS`): one setting sizes the chart's window, the close-time capture,
 /// the tuner's fetch and the cleanup alike, and none of them pads it behind the tab's back (the
 /// developer's call, 2026-09-23; the steps started at 5 s before that, and the tuner lifted
-/// them to a minute on its own). 65 s is a step so the default survives the snap; it is not
-/// the floor. The ceiling is two hours: the bar context after an exit is two hours at least,
-/// and prints past the bars would have nowhere to draw.
-pub const TRADE_MARGIN_STEPS_S: &[u32] = &[30, 60, 65, 180, 300, 600, 900, 1800, 3600, 7200];
+/// them to a minute on its own). The ceiling is two hours: the bar context after an exit is two
+/// hours at least, and prints past the bars would have nowhere to draw.
+pub const TRADE_MARGIN_STEPS_S: &[u32] = &[30, 60, 180, 300, 600, 900, 1800, 3600, 7200];
 
-/// Default seconds of prints around a trade, per end. 65 s (the user's call, 2026-09-26;
-/// 30 s from 2026-09-23, 5 s from 2026-09-21, 15 minutes before that). Not the floor of
-/// [`TRADE_MARGIN_STEPS_S`]: 30 s stays the tuner's pad and a step, so a file that already
-/// stores 30 keeps 30. A file with no margin key at all takes this default.
-pub const DEFAULT_TRADE_MARGIN_S: u32 = 65;
+/// Default seconds of prints around a trade, per end. 30 s, which is also the floor of
+/// [`TRADE_MARGIN_STEPS_S`] (the user's call, 2026-09-26, back from 65 s the same day; 30 s
+/// from 2026-09-23, 5 s from 2026-09-21, 15 minutes before that). A file with no margin key
+/// at all takes this default. A file that still stores the retired 65 s default is rewritten
+/// to 30 on load — see [`RETIRED_TRADE_MARGIN_S`].
+pub const DEFAULT_TRADE_MARGIN_S: u32 = 30;
+
+/// The margin a settings file stored while 65 s was the default, for part of 2026-09-26.
+///
+/// It is not a step any more. The nearest remaining step is 60 s, and loading it that way
+/// would keep a wider tape than the default that replaced it, so [`sanitize`] rewrites this
+/// one value to [`DEFAULT_TRADE_MARGIN_S`] before the snap.
+const RETIRED_TRADE_MARGIN_S: u32 = 65;
 
 /// Ceiling on [`TradeReplayStoreCfg::margin_s`] — the last of [`TRADE_MARGIN_STEPS_S`].
 pub const MAX_TRADE_MARGIN_S: u32 = 7200;
@@ -265,8 +272,12 @@ pub fn load() -> StorageCfg {
 
 /// Bound what a hand-edited file may carry: the long-position threshold is clamped to
 /// [`LONG_POSITION_MIN_RANGE`], and the margin is snapped onto [`TRADE_MARGIN_STEPS_S`],
-/// which also caps it at [`MAX_TRADE_MARGIN_S`].
+/// which also caps it at [`MAX_TRADE_MARGIN_S`]. The retired 65 s default is rewritten to
+/// [`DEFAULT_TRADE_MARGIN_S`] first, so the snap cannot land it on 60 s.
 fn sanitize(mut cfg: StorageCfg) -> StorageCfg {
+    if cfg.trade_replay.margin_s == RETIRED_TRADE_MARGIN_S {
+        cfg.trade_replay.margin_s = DEFAULT_TRADE_MARGIN_S;
+    }
     cfg.trade_replay.margin_s = snap_trade_margin_s(cfg.trade_replay.margin_s);
     cfg.trade_replay.long_position_min =
         clamp_long_position_min(cfg.trade_replay.long_position_min);

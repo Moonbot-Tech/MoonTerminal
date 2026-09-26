@@ -488,6 +488,21 @@ pub(crate) enum TickVerdict {
 pub(crate) trait TickObserver {
     fn claim(&mut self, host: &str) -> Result<(), u32>;
     fn pace(&mut self, host: &str);
+    /// Whether a page that already came back closed this host for further sends.
+    ///
+    /// The opening [`Self::claim`] is the one check a stage owes before it sends anything.
+    /// This one is the stop a response just installed — a used-weight header over 75%, or a
+    /// 429 whose wait was recorded by the fetch — so the next page is not sent into it. A
+    /// test double that never records such a stop leaves the default, which is open.
+    ///
+    /// Args:
+    ///     host: The route's host, ignored by a double that has no gate.
+    ///
+    /// Returns:
+    ///     `true` when another page must not be sent.
+    fn host_closed(&mut self, _host: &str) -> bool {
+        false
+    }
     /// Publish the completed stretches so far without claiming unfetched time between tiles.
     fn progress(&mut self, _ticks: &[Tick], _covered: &Coverage) {}
 }
@@ -507,6 +522,9 @@ struct GateObserver<'a> {
     host: &'static str,
     /// The route's own floor between pages — see `TradeRoute::page_interval`.
     page_interval: Duration,
+    /// Documented weight of one page, spent against the host's budget. Zero for a venue
+    /// that is not on the Binance weight ledger.
+    page_weight: u32,
     progress: &'a mut TickProgress<'a>,
 }
 
@@ -516,7 +534,13 @@ impl TickObserver for GateObserver<'_> {
     }
 
     fn pace(&mut self, _host: &str) {
-        self.gate.pace_at(self.host, self.page_interval);
+        self.gate
+            .pace_weighted(self.host, self.page_interval, self.page_weight);
+    }
+
+    /// The real gate, read without counting as the stage's opening claim.
+    fn host_closed(&mut self, _host: &str) -> bool {
+        self.gate.claim(self.host, Instant::now()).is_err()
     }
 
     /// Forward progress to this request's own reply channel.
@@ -981,6 +1005,73 @@ struct Served {
     tick_stage: Option<TickStage>,
 }
 
+/// What the response this thread just decoded asked the gate to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NoticeEffect {
+    /// No rate-limit header the gate acts on.
+    None,
+    /// HTTP 429 or 418. `Retry-After` when it parsed, otherwise the backoff curve.
+    Throttled,
+    /// `X-MBX-USED-WEIGHT-1M` over 75% of the host's limit, until the next UTC minute.
+    WeightStop,
+}
+
+/// Apply the calling thread's [`rest::exchange_notice`] to `host`.
+///
+/// A 429 or 418 honours `Retry-After` when the header is an integer number of seconds, and
+/// the 30–600 s curve when it is missing or not. Every response, including those, then
+/// applies `X-MBX-USED-WEIGHT-1M`: over 75% the host stays stopped until the next UTC minute
+/// when that is the longer wait, and a longer ban or curve is not shortened. The notice is
+/// empty when the call never produced a response, and then this records nothing.
+///
+/// Args:
+///     gate: The process-wide replay gate.
+///     host: Stable host key, from the route.
+///
+/// Returns:
+///     Which wait, if any, was recorded.
+fn absorb_notice(gate: &ReplayGate, host: &'static str) -> NoticeEffect {
+    let notice = rest::exchange_notice();
+    let now = Instant::now();
+    let throttled = notice.status == 429 || notice.status == 418;
+    if throttled {
+        match notice.retry_after_s {
+            Some(seconds) => gate.honour_retry_after(host, now, seconds),
+            None => gate.refuse(host, now),
+        }
+    }
+    if let Some(used) = notice.used_weight_1m {
+        let unix_ms = crate::util::time::now_unix_ms_i64();
+        if unix_ms > 0 && gate.note_used_weight(host, used, now, (unix_ms as u64) / 1_000) {
+            return match throttled {
+                true => NoticeEffect::Throttled,
+                false => NoticeEffect::WeightStop,
+            };
+        }
+    }
+    match throttled {
+        true => NoticeEffect::Throttled,
+        false => NoticeEffect::None,
+    }
+}
+
+/// A candle job the gate will not send, carrying the wait [`ReplayGate::refused_for`] names.
+///
+/// Args:
+///     gate: The process-wide replay gate.
+///     host: Stable host key, from the route.
+///
+/// Returns:
+///     A failed candle outcome with no tick stage.
+fn rate_limited(gate: &ReplayGate, host: &'static str) -> Served {
+    Served {
+        outcome: TradeReplayOutcome::Failed(TradeReplayFailure::RateLimited {
+            retry_in_s: gate.refused_for(host, Instant::now()).unwrap_or(1),
+        }),
+        tick_stage: None,
+    }
+}
+
 /// The status an abandoned walk with nothing to serve is answered with: the gate's own refusal
 /// carries how long the host stays refused, read off the gate without taking a permit; every
 /// other reason is a plain failure a reopen retries.
@@ -1322,7 +1413,8 @@ fn serve(
     // Whether the WINDOW ITSELF closed mid-fetch, as opposed to `complete` going false for the
     // forming-bar drop below: only this one discards the tick upgrade outright.
     let mut cancelled = false;
-    for (from_ms, to_ms) in pages(request.window, BAR_MS, route.max_rows()) {
+    let page_spans = pages(request.window, BAR_MS, route.max_rows());
+    for (index, (from_ms, to_ms)) in page_spans.iter().copied().enumerate() {
         if request.cancel.load(Ordering::Relaxed) {
             // The window is gone, or a Retry superseded this request. Whatever was fetched is
             // still worth merging into the shared cache, so fall through rather than discarding a
@@ -1339,7 +1431,16 @@ fn serve(
                 tick_stage: None,
             };
         }
-        gate.pace(route.host());
+        // The opening claim is before the loop. A later page looks again: the previous
+        // response, or the other lane of this host, may have stopped it since.
+        if index > 0 && gate.claim(route.host(), Instant::now()).is_err() {
+            return rate_limited(gate, route.host());
+        }
+        gate.pace_weighted(
+            route.host(),
+            super::gate::MIN_INTERVAL,
+            route.request_weight(),
+        );
         match rest::fetch_klines(
             agent,
             route,
@@ -1349,25 +1450,46 @@ fn serve(
             to_ms,
             route.max_rows(),
         ) {
-            Ok(page) => rows.extend(page),
+            Ok(page) => {
+                rows.extend(page);
+                // Record the header. The next iteration's claim is what refuses another page,
+                // including when a stop was already in force and this call did not install a
+                // new one. The last page is kept: it was already paid for.
+                let _ = absorb_notice(gate, route.host());
+            }
             Err(rest::FetchError::UnknownSymbol) => {
                 // The venue ANSWERED; it simply does not list this symbol, and a refusal on
-                // record for the host is stale.
+                // record for the host is stale. A weight header on that answer can still stop
+                // the host for every other market that shares it.
                 gate.clear(route.host(), asked_at);
+                let _ = absorb_notice(gate, route.host());
                 return Served {
                     outcome: TradeReplayOutcome::Failed(TradeReplayFailure::UnknownSymbol),
                     tick_stage: None,
                 };
             }
+            Err(rest::FetchError::Throttled { diagnostic, .. }) => {
+                let _ = absorb_notice(gate, route.host());
+                log::warn!("[x] trade-replay {diagnostic} on {}", route.host());
+                return rate_limited(gate, route.host());
+            }
             Err(rest::FetchError::Transient(diagnostic)) => {
-                // The venue's own failure or refusal: what starts the host's backoff.
-                gate.refuse(route.host(), Instant::now());
-                return Served {
-                    outcome: TradeReplayOutcome::Failed(TradeReplayFailure::Transient {
-                        diagnostic,
-                    }),
-                    tick_stage: None,
-                };
+                // A 5xx that already reports the IP over 75% waits out the minute. Anything
+                // else is the curve: the venue's own failure is what starts the backoff.
+                match absorb_notice(gate, route.host()) {
+                    NoticeEffect::WeightStop | NoticeEffect::Throttled => {
+                        return rate_limited(gate, route.host());
+                    }
+                    NoticeEffect::None => {
+                        gate.refuse(route.host(), Instant::now());
+                        return Served {
+                            outcome: TradeReplayOutcome::Failed(TradeReplayFailure::Transient {
+                                diagnostic,
+                            }),
+                            tick_stage: None,
+                        };
+                    }
+                }
             }
         }
     }
@@ -1718,6 +1840,9 @@ fn serve_ticks(
     // Whether a reopen must re-walk: the venue refused mid-walk, or the walk was abandoned and
     // what follows is served from the store alone.
     let mut retry_on_reopen = false;
+    // A weight stop or a 429 cut the walk. A non-empty harvest is still served — the prints
+    // were paid for — but it is not a settled tape: the tuner defers on RateLimited.
+    let mut host_limited = false;
     // The reason the walk stopped without a harvest, when it did — what to print if the store
     // cannot stand in for it either.
     let mut abandoned: Option<TickAbandon> = None;
@@ -1792,6 +1917,7 @@ fn serve_ticks(
             gate,
             host: route.host(),
             page_interval: route.page_interval(),
+            page_weight: route.request_weight(),
             progress: &mut publish_progress,
         };
         let upgrade = CoreUpgradeProbe::new(Instant::now());
@@ -1820,8 +1946,44 @@ fn serve_ticks(
             },
             |trade| Instant::now() >= if trade { trade_deadline } else { deadline },
             &mut observer,
-            |from_ms, to_ms, cursor| {
-                rest::fetch_trades(agent, route, &request.market, from_ms, to_ms, cursor)
+            |from_ms, to_ms, cursor| match rest::fetch_trades(
+                agent,
+                route,
+                &request.market,
+                from_ms,
+                to_ms,
+                cursor,
+            ) {
+                Ok(page) => {
+                    // A weight stop leaves this page in the harvest. The next iteration's
+                    // claim is what refuses to send another one.
+                    let _ = absorb_notice(gate, route.host());
+                    Ok(page)
+                }
+                Err(rest::FetchError::Throttled { diagnostic, .. }) => {
+                    let _ = absorb_notice(gate, route.host());
+                    Err(rest::FetchError::Throttled {
+                        retry_after_s: None,
+                        diagnostic,
+                    })
+                }
+                Err(rest::FetchError::Transient(diagnostic)) => {
+                    match absorb_notice(gate, route.host()) {
+                        // The header already named the wait. Returning Transient would have the
+                        // walk record a curve refusal on top of it.
+                        NoticeEffect::WeightStop | NoticeEffect::Throttled => {
+                            Err(rest::FetchError::Throttled {
+                                retry_after_s: None,
+                                diagnostic,
+                            })
+                        }
+                        NoticeEffect::None => Err(rest::FetchError::Transient(diagnostic)),
+                    }
+                }
+                Err(rest::FetchError::UnknownSymbol) => {
+                    let _ = absorb_notice(gate, route.host());
+                    Err(rest::FetchError::UnknownSymbol)
+                }
             },
         );
         if let Some(mut series) = upgrade.ready.into_inner() {
@@ -1849,7 +2011,13 @@ fn serve_ticks(
                 // answer, not a refusal, and the host is fine.
                 match stop {
                     Some(TickAbandon::Transient) => gate.refuse(route.host(), Instant::now()),
-                    _ if !venue_refused => gate.clear(route.host(), asked_at),
+                    // The wait is already the header's: a curve refusal here would replace a
+                    // Retry-After or a minute-boundary stop, and a clear would try to erase it.
+                    // `clear` still runs for an unknown symbol, which is an answer.
+                    Some(TickAbandon::RateLimited) => host_limited = true,
+                    _ if !venue_refused || matches!(stop, Some(TickAbandon::UnknownSymbol)) => {
+                        gate.clear(route.host(), asked_at)
+                    }
                     _ => {}
                 }
                 // Clipped to what the walk actually finished (`covered`), not to the request
@@ -1861,7 +2029,7 @@ fn serve_ticks(
                 ticks.retain(|t| t.time_ms.is_finite() && covered.contains_ms(t.time_ms as i64));
                 harvest_coverage = Some(covered);
                 harvest_ticks = ticks;
-                retry_on_reopen = venue_refused;
+                retry_on_reopen = venue_refused || host_limited;
                 complete = walked_whole;
             }
             TickVerdict::Abandoned(reason) => {
@@ -1877,8 +2045,8 @@ fn serve_ticks(
                     TickAbandon::Empty | TickAbandon::UnknownSymbol => {
                         gate.clear(route.host(), asked_at)
                     }
-                    TickAbandon::RateLimited
-                    | TickAbandon::Cancelled
+                    TickAbandon::RateLimited => host_limited = true,
+                    TickAbandon::Cancelled
                     | TickAbandon::Deadline
                     | TickAbandon::OverPageBudget
                     | TickAbandon::OverTickBudget => {}
@@ -1984,19 +2152,23 @@ fn serve_ticks(
     // ticks short of the requested window on one or both edges.
     let partial = !complete || !covered.contains((request.window.from_ms, request.window.to_ms));
     let (ticks, bucket_ms) = fit_ticks(ticks, TICK_BUDGET);
-    Ok((
-        compose_ticks(
-            request,
-            request.address.venue,
-            ticks,
-            bucket_ms,
-            side_slots,
-            partial,
-            covered,
-            stage.candles.clone(),
-        ),
-        retry_on_reopen,
-    ))
+    let mut series = compose_ticks(
+        request,
+        request.address.venue,
+        ticks,
+        bucket_ms,
+        side_slots,
+        partial,
+        covered,
+        stage.candles.clone(),
+    );
+    if host_limited {
+        series.tick_status = TickStatus::RateLimited {
+            retry_in_s: gate.refused_for(route.host(), Instant::now()).unwrap_or(1),
+        };
+        retry_on_reopen = true;
+    }
+    Ok((series, retry_on_reopen))
 }
 
 /// What the store proves exhaustive inside `focus`, seeded by a walk's own `harvest`: every
@@ -2443,6 +2615,15 @@ where
                 interrupted = Some((slice_from, slice_to, start_len, cursor));
                 break 'walk;
             }
+            // A page that already came back over the IP's weight share stopped the host.
+            // The first page was claimed before the loop; every later one has to look again,
+            // or the walk keeps sending into a minute the header just closed.
+            if pages_fetched > 0 && observer.host_closed(route.host()) {
+                complete = false;
+                stop_reason = Some(TickAbandon::RateLimited);
+                interrupted = Some((slice_from, slice_to, start_len, cursor));
+                break 'walk;
+            }
             observer.pace(route.host());
             let page = match fetch(slice_from, slice_to, cursor) {
                 Ok(page) => page,
@@ -2450,6 +2631,20 @@ where
                     complete = false;
                     venue_refused = true;
                     stop_reason = Some(TickAbandon::UnknownSymbol);
+                    interrupted = Some((slice_from, slice_to, start_len, cursor));
+                    break 'walk;
+                }
+                Err(rest::FetchError::Throttled { diagnostic, .. }) => {
+                    // The fetch already recorded Retry-After or the weight stop. This arm
+                    // must not look like a curve refusal: serve_ticks would replace that wait.
+                    log::warn!(
+                        "[x] trade-replay tick page limited on {} {}..{}: {diagnostic}",
+                        route.host(),
+                        slice_from,
+                        slice_to
+                    );
+                    complete = false;
+                    stop_reason = Some(TickAbandon::RateLimited);
                     interrupted = Some((slice_from, slice_to, start_len, cursor));
                     break 'walk;
                 }

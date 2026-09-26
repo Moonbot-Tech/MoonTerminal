@@ -49,6 +49,15 @@ pub(super) fn fetch(
         .send_json(&payload)
         .map_err(|error| FetchError::Transient(error.to_string()))?;
     let status = response.status().as_u16();
+    let notice = super::notice_from_headers(status, response.headers());
+    super::publish_exchange_notice(notice);
+    if status == 429 || status == 418 {
+        let _ = response.into_body().read_to_string();
+        return Err(FetchError::Throttled {
+            retry_after_s: notice.retry_after_s,
+            diagnostic: format!("hyperliquid HTTP {status}"),
+        });
+    }
     classify(status)?;
     response
         .into_body()
