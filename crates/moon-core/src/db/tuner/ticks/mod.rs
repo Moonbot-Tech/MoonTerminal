@@ -197,9 +197,18 @@ pub struct Deal {
     pub buy_price: f64,
     pub sell_price: f64,
     /// `spentbtc` — what the entry cost, in the scan's own money unit (the row's quote, or
-    /// USDT where the scan's projection converts a valued scope); the money KPI of a variant
-    /// is `profit_pct * spent` so the columns stay in the units of the "Fact" column.
+    /// USDT where the scan's projection converts a valued scope). On a core that books margin it
+    /// is the margin, not the position ([`Sizing::notional`]).
     pub spent: f64,
+    /// The fact's position as money, which a variant's result is measured on
+    /// ([`Outcome::profit_money`]): the Calendar's notional and cost, or [`Sizing::on_spend`]
+    /// on a row the Calendar's expression leaves out. `None` only without a spend or a price, and such a
+    /// deal's variant keeps the modelled move on its spend, gross of cost.
+    pub sizing: Option<Sizing>,
+    /// Whether the scope measures a result in per cent of the spend (`ProfitMetric::Percent`) —
+    /// what `fact_pnl` holds, and so what a variant's tally pushes to stand beside it
+    /// ([`Outcome::profit_metric`]).
+    pub pnl_pct: bool,
     pub is_short: bool,
     /// `sellreason` as the core wrote it (`"Auto Price Down"`, `"Sell Price"`, …).
     pub sell_reason: String,
@@ -395,6 +404,52 @@ pub fn model_window_at(
     from_creation.or_else(|| replay_window_ms(buy_ms, close_ms, margin_ms).map(with_threshold))
 }
 
+/// The fact's position as money, in the scope's money unit — read per deal through the
+/// Calendar's fee definition (`analytics::FEE_ROW`), so the tuner and the Calendar agree on what
+/// a trade cost; a row that expression leaves out is sized on its spend ([`Sizing::on_spend`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sizing {
+    /// `boughtq × buyprice`, valued like the row's money: the position traded (the spend itself
+    /// on a row sized by [`Sizing::on_spend`], which carries no leverage). The spend
+    /// understates it by the leverage wherever a core books the margin (BB1, `lev` 5: the
+    /// notional is 5 × `spentbtc`, 2026-09-26), and the leverage differs from coin to coin.
+    pub notional: f64,
+    /// What the fact paid to execute: its gross move on the notional minus the profit it booked
+    /// — the fees both ways, and a perpetual's funding inside the position.
+    pub cost: f64,
+}
+
+impl Sizing {
+    /// The sizing of a deal the Calendar's expression leaves out — quantity × price is not money
+    /// (an inverse COIN-M row), or the row carries no bought quantity: the spend stands for the
+    /// position, and the cost is whatever lands the fact's own move on the
+    /// fact's own result. A variant that repeats the fact still makes exactly the fact and pays
+    /// its fees; only the leverage on the variant's DIFFERENCE from the fact stays unknown.
+    /// `None` without a spend or a price.
+    ///
+    /// Args:
+    ///     buy_price, sell_price, is_short: The fact's fill, exit and side.
+    ///     spent: The row's spend, in the scope's money.
+    ///     fact_money: The fact's result in the same money.
+    pub fn on_spend(
+        buy_price: f64,
+        sell_price: f64,
+        is_short: bool,
+        spent: f64,
+        fact_money: f64,
+    ) -> Option<Self> {
+        if !(spent > 0.0 && buy_price > 0.0 && sell_price > 0.0 && fact_money.is_finite()) {
+            return None;
+        }
+        let side = if is_short { -1.0 } else { 1.0 };
+        let gross = (sell_price - buy_price) / buy_price * side * spent;
+        Some(Self {
+            notional: spent,
+            cost: gross - fact_money,
+        })
+    }
+}
+
 /// Where and when the modelled entry order filled.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fill {
@@ -452,9 +507,32 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    /// Money result in the row's quote currency, or `None` when the outcome is not a trade.
+    /// Money result in the scope's money unit, or `None` when the outcome is not a trade: the
+    /// modelled move on the fact's notional less the fact's execution cost ([`Sizing`]), so a
+    /// variant that fills and exits where the fact did makes exactly the fact's profit. A deal
+    /// without a sizing keeps the move on its spend.
     pub fn profit_money(&self, deal: &Deal) -> Option<f64> {
-        self.profit_pct.map(|pct| pct / 100.0 * deal.spent)
+        self.profit_pct.map(|pct| match deal.sizing {
+            Some(sizing) => pct / 100.0 * sizing.notional - sizing.cost,
+            None => pct / 100.0 * deal.spent,
+        })
+    }
+
+    /// The result in per cent of the deal's spend — the report's `Profit` column, net of cost
+    /// and with the leverage in it. `None` when the outcome is not a trade or nothing was spent.
+    pub fn profit_on_spent(&self, deal: &Deal) -> Option<f64> {
+        let money = self.profit_money(deal)?;
+        (deal.spent > 0.0).then(|| money / deal.spent * 100.0)
+    }
+
+    /// The result in the scope's active metric — the unit of `Deal::fact_pnl` — which is what a
+    /// variant's tally holds, so its column and the "Fact" column add the same kind of number.
+    pub fn profit_metric(&self, deal: &Deal) -> Option<f64> {
+        if deal.pnl_pct {
+            self.profit_on_spent(deal)
+        } else {
+            self.profit_money(deal)
+        }
     }
 
     /// Whether the outcome is a closed trade the KPI may count.

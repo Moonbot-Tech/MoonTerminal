@@ -41,6 +41,7 @@ pub use profit_monitor::{
 };
 pub use query::{ANALYTICS_HORIZON_SECS, ANALYTICS_MAX_SPAN_SECS, PreviousPeriodBasis, Query};
 
+pub(in crate::db) use calendar::FEE_ROW;
 use groups::groups;
 pub(in crate::db) use groups::{coin_groups_from_source, strategies_for_coins_on};
 use query::ProjectionMode;

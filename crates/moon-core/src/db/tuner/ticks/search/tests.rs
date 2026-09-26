@@ -34,6 +34,8 @@ pub(super) fn prepared(uid: i64, peak: f64) -> PreparedDeal {
         is_short: false,
         sell_reason: "Sell Price".into(),
         fact_pnl: 2.0,
+        sizing: None,
+        pnl_pct: false,
         profit: None,
         deltas: Deltas::default(),
         tick: None,

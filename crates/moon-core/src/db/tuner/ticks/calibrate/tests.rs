@@ -19,6 +19,8 @@ fn deal() -> Deal {
         is_short: false,
         sell_reason: "Auto Price Down".into(),
         fact_pnl: 0.2,
+        sizing: None,
+        pnl_pct: false,
         profit: None,
         deltas: Deltas::default(),
         tick: None,

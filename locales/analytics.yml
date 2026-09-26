@@ -1837,9 +1837,9 @@ analytics.ticks.col.plan:
   en: "plan V1"
   es: "plan V1"
 analytics.ticks.plan_tip:
-  ru: "что вариант даёт этой сделке — как её считает колонка варианта, без комиссий; прочерк — вариант её не торгует или она вне выборки"
-  en: "what the variant makes of this trade — as the variant's column counts it, before fees; a dash — the variant makes no trade of it, or it is outside the sample"
-  es: "lo que la variante obtiene de esta operación — como la cuenta la columna de la variante, sin comisiones; un guion — la variante no la opera o queda fuera de la muestra"
+  ru: "что вариант даёт этой сделке — как её считает колонка варианта: движение цены на размер позиции сделки (с плечом) за вычетом комиссий, которые заплатил факт; прочерк — вариант её не торгует или она вне выборки"
+  en: "what the variant makes of this trade — as the variant's column counts it: the price move on the trade's position (leverage included) less the fees the fact paid; a dash — the variant makes no trade of it, or it is outside the sample"
+  es: "lo que la variante obtiene de esta operación — como la cuenta la columna de la variante: el movimiento del precio sobre la posición de la operación (con apalancamiento) menos las comisiones que pagó el hecho; un guion — la variante no la opera o queda fuera de la muestra"
 analytics.ticks.col.result:
   ru: "%"
   en: "%"

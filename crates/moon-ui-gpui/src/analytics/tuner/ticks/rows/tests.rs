@@ -20,6 +20,8 @@ fn deal(uid: i64, buy_ms: i64, buy: f64, sell: f64, short: bool) -> Deal {
         is_short: short,
         sell_reason: String::new(),
         fact_pnl: 0.0,
+        sizing: None,
+        pnl_pct: false,
         profit: None,
         deltas: Deltas::default(),
         tick: None,
