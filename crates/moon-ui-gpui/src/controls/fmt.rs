@@ -33,9 +33,7 @@ pub fn fmt_field2_signed(v: f32) -> String {
 /// Trailing zeros are removed, which also hides floating-point noise such as 0.6000000238.
 pub fn fmt_adaptive(v: f64) -> String {
     let a = v.abs();
-    let decimals: usize = if a == 0.0 {
-        0
-    } else if a >= 100.0 {
+    let decimals: usize = if a == 0.0 || a >= 100.0 {
         0
     } else if a >= 10.0 {
         1

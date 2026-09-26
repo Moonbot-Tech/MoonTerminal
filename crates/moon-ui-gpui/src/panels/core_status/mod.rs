@@ -59,9 +59,10 @@ use moon_core::session::core_update::CoreUpdatePhase;
 use rust_i18n::t;
 
 /// Chart X-axis span selectable in the detached window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ChartWindow {
     /// Last five minutes.
+    #[default]
     Min5,
     /// Last hour.
     Hour1,
@@ -82,12 +83,6 @@ impl ChartWindow {
             Self::Min5 => "core_status.chart_5m",
             Self::Hour1 => "core_status.chart_1h",
         }
-    }
-}
-
-impl Default for ChartWindow {
-    fn default() -> Self {
-        Self::Min5
     }
 }
 
@@ -1358,7 +1353,7 @@ impl CoreStatusView {
                     cores,
                     selection,
                     crate::controls::CoreAllRowMode::ImplicitOrComplete,
-                    &t!("core_status.all_cores").to_string(),
+                    t!("core_status.all_cores").as_ref(),
                     &|n| t!("core_status.cores_n", n = n).to_string(),
                 )
                 .label
@@ -1386,7 +1381,7 @@ impl CoreStatusView {
             crate::controls::core_combo(
                 "core-status-core",
                 cores,
-                &venues,
+                venues,
                 selection,
                 crate::controls::CoreAllRowMode::ImplicitOrComplete,
                 t!("core_status.all_cores").to_string(),

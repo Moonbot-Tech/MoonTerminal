@@ -314,14 +314,13 @@ pub(super) fn scroll_wheel(
     // In an AddToChart stack, wheel input over the left price-axis strip scrolls the stack rather
     // than zooming: leave the event unconsumed so it bubbles to MoonVirtualList. Over the graph or
     // book, handle zoom below and stop propagation so the stack does not scroll too.
-    if this.num.is_some() && within {
-        if let Some(idx) = this.input.pane_at(pos.0, pos.1) {
-            if let Some((_, rect)) = this.input.pane_rects.iter().find(|(i, _)| *i == idx) {
-                if pos.0 <= rect.x + moon_chart::PRICE_AXIS_W * sf {
-                    return;
-                }
-            }
-        }
+    if this.num.is_some()
+        && within
+        && let Some(idx) = this.input.pane_at(pos.0, pos.1)
+        && let Some((_, rect)) = this.input.pane_rects.iter().find(|(i, _)| *i == idx)
+        && pos.0 <= rect.x + moon_chart::PRICE_AXIS_W * sf
+    {
+        return;
     }
     // Lines represent discrete mouse-wheel clicks, commonly +/-1 or +/-3 on Windows. Pixels are
     // precise trackpad/Magic Mouse input on macOS, delivered as a continuous inertial stream.
@@ -1084,10 +1083,8 @@ pub(super) fn mouse_move(
     }
     let cursor_changed =
         prev_cursor != this.input.cursor || prev_hovered != this.input.hovered_pane;
-    if cursor_changed {
-        if this.sync_native_cursor(cx) {
-            crate::diag::bump(&crate::diag::CHART_CURSOR_UPDATE);
-        }
+    if cursor_changed && this.sync_native_cursor(cx) {
+        crate::diag::bump(&crate::diag::CHART_CURSOR_UPDATE);
     }
     // Dragging changes cameras/axes and GPUI-side controls. Cursor-only motion remains in retained
     // gpu_canvas, which presents the crosshair/readout without cx.notify().

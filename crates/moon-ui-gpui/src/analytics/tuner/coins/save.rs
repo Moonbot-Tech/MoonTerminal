@@ -169,7 +169,7 @@ impl AnalyticsView {
                     (targets, live, unresolved)
                 })
                 .await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     'completion: {
                         let now: Vec<(i64, Option<u64>)> = this
@@ -245,11 +245,9 @@ impl AnalyticsView {
                             let empties = per_target.iter().any(|v| {
                                 v.iter().any(|(k, val)| k == key && val.trim().is_empty())
                             });
-                            if empties {
-                                if let Some(Some(note)) = notes.get_mut(i) {
-                                    note.push_str(" · ");
-                                    note.push_str(&t!("analytics.tuner.save_clears"));
-                                }
+                            if empties && let Some(Some(note)) = notes.get_mut(i) {
+                                note.push_str(" · ");
+                                note.push_str(&t!("analytics.tuner.save_clears"));
                             }
                         }
                         let mut warns = Vec::new();

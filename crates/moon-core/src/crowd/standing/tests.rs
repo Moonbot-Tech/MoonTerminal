@@ -21,7 +21,7 @@ fn a_row_carries_both_sides_of_the_minute() {
 
 #[test]
 fn the_loud_come_first() {
-    let mut rows = vec![
+    let mut rows = [
         Standing::live("BTC", &stat(10.0, 5.0)),
         Standing::live("ETH", &stat(100.0, 5.0)),
     ];

@@ -92,7 +92,7 @@ pub(in crate::firetest) fn start_mouse_storm(
                 let elapsed = start.elapsed();
                 if target > elapsed {
                     std::thread::sleep(target - elapsed);
-                } else if sent % 128 == 0 {
+                } else if sent.is_multiple_of(128) {
                     std::thread::yield_now();
                 }
             }

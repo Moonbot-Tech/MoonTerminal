@@ -1110,7 +1110,7 @@ fn corrupt_replica_fails_report_query_instead_of_truncating() {
 
     let res = query_reports(&conn, &filter, "closedate", true, 5_000);
     assert!(
-        !matches!(res, Ok(_)),
+        !res.is_ok(),
         "сбой чтения обязан вернуть ошибку, а не частичную/пустую таблицу: \
          такой файл экспорта неотличим от полного"
     );
@@ -1158,7 +1158,7 @@ fn corrupt_replica_fails_report_totals_instead_of_zeroing() {
 
     let res = query_totals(&conn, &filter);
     assert!(
-        !matches!(res, Ok(_)),
+        !res.is_ok(),
         "сбой агрегата обязан вернуть ошибку, а не (0.0, 0)"
     );
 

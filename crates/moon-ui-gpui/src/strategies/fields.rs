@@ -80,10 +80,10 @@ impl StrategiesView {
         cx: &mut Context<Self>,
     ) -> Entity<MoonColorPickerState> {
         let rgb_val = parse_hex_rgb(hex);
-        if let Some((cached, state)) = self.field_colors.get(&id) {
-            if *cached == rgb_val {
-                return state.clone();
-            }
+        if let Some((cached, state)) = self.field_colors.get(&id)
+            && *cached == rgb_val
+        {
+            return state.clone();
         }
         let state = crate::controls::color_picker::shared_color_state(rgb_val, window, cx);
         let prefix = hex_alpha_prefix(hex);

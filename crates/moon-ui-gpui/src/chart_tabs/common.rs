@@ -85,7 +85,9 @@ pub(crate) fn seg_row(
 /// Not `Copy`: the caption configuration it carries owns a name string per row, and a value that
 /// silently copies a heap-owning payload through a walk that touches every tab is a cost nobody
 /// sees until it is large.
+// Caption rows own strings. Boxing one arm would allocate on every tab-settings copy.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum StackSetting {
     /// Layout mode plus separate Fit and Scroll heights.
     Layout(Option<StackLayoutMode>, Option<u16>, Option<u16>),

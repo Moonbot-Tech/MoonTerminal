@@ -255,23 +255,21 @@ impl Runtime {
                         run.cancel_submit_ms.unwrap_or_default(),
                     );
                 }
-                if run.closed_store_ms.is_none() {
-                    if let Some(state) = core.order_lines.order_state(uid) {
-                        if let (Some(closed_store_ms), Some(closed_rev)) =
-                            (state.closed_store_ms, state.closed_rev)
-                        {
-                            let closed_ms_i64 = closed_store_ms.round() as i64;
-                            run.closed_store_ms = Some(closed_ms_i64);
-                            run.closed_order_lines_rev = Some(closed_rev);
-                            run.closed_reason = state.closed_reason;
-                            firetest_info(&format!(
-                                "[firetest] order_cancel_lag closed uid={uid} order_lines_rev={} reason={:?} cancel_to_order_lines_ms={}",
-                                closed_rev,
-                                state.closed_reason,
-                                closed_ms_i64 - run.cancel_submit_ms.unwrap_or(closed_ms_i64)
-                            ));
-                        }
-                    }
+                if run.closed_store_ms.is_none()
+                    && let Some(state) = core.order_lines.order_state(uid)
+                    && let (Some(closed_store_ms), Some(closed_rev)) =
+                        (state.closed_store_ms, state.closed_rev)
+                {
+                    let closed_ms_i64 = closed_store_ms.round() as i64;
+                    run.closed_store_ms = Some(closed_ms_i64);
+                    run.closed_order_lines_rev = Some(closed_rev);
+                    run.closed_reason = state.closed_reason;
+                    firetest_info(&format!(
+                        "[firetest] order_cancel_lag closed uid={uid} order_lines_rev={} reason={:?} cancel_to_order_lines_ms={}",
+                        closed_rev,
+                        state.closed_reason,
+                        closed_ms_i64 - run.cancel_submit_ms.unwrap_or(closed_ms_i64)
+                    ));
                 }
                 let Some(closed_rev) = run.closed_order_lines_rev else {
                     self.wait_log("order_cancel_lag waiting for cancelled order snapshot");

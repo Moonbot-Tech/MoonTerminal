@@ -420,7 +420,7 @@ impl Backend {
         &self,
         group: &str,
     ) -> Option<&(CoreId, String)> {
-        (self.current_open_main_group().as_deref() == Some(group))
+        (self.current_open_main_group() == Some(group))
             .then_some(())
             .and(self.open_main_request.pending_target())
     }
@@ -433,7 +433,7 @@ impl Backend {
     /// Returns:
     ///     Request revision when the pending core currently belongs to `group`, otherwise zero.
     pub(crate) fn pending_open_main_revision_for_group(&self, group: &str) -> u64 {
-        if self.current_open_main_group().as_deref() == Some(group) {
+        if self.current_open_main_group() == Some(group) {
             self.open_main_request.revision()
         } else {
             0
@@ -1792,12 +1792,11 @@ impl Backend {
     ///
     /// `force` recomputes immediately when sorting changes the first core.
     pub(crate) fn refresh_header_ticker_default(&mut self, force: bool) {
-        if !force {
-            if let Some((core, _)) = &self.header_ticker_default {
-                if self.session.sessions().iter().any(|s| s.id == *core) {
-                    return;
-                }
-            }
+        if !force
+            && let Some((core, _)) = &self.header_ticker_default
+            && self.session.sessions().iter().any(|s| s.id == *core)
+        {
+            return;
         }
         let now = Instant::now();
         if !force
@@ -1829,12 +1828,11 @@ impl Backend {
     /// otherwise the precomputed default cache is returned. Rendering neither searches markets nor
     /// mutates the backend.
     pub(crate) fn header_ticker(&self) -> Option<(CoreId, String)> {
-        if let Some(sel) = &self.layout.header_ticker {
-            if let Some(core) = self.core_of_uid(sel.core_uid) {
-                if self.session.sessions().iter().any(|s| s.id == core) {
-                    return Some((core, sel.market.clone()));
-                }
-            }
+        if let Some(sel) = &self.layout.header_ticker
+            && let Some(core) = self.core_of_uid(sel.core_uid)
+            && self.session.sessions().iter().any(|s| s.id == core)
+        {
+            return Some((core, sel.market.clone()));
         }
         self.header_ticker_default
             .as_ref()
@@ -2232,16 +2230,15 @@ impl Backend {
     }
 
     fn chart_text_market_for(&self, core: CoreId) -> Option<String> {
-        if let Some(last) = self.chart_text_last.get(&core) {
-            if self
+        if let Some(last) = self.chart_text_last.get(&core)
+            && self
                 .chart_text_refs
                 .get(&(core, last.clone()))
                 .copied()
                 .unwrap_or(0)
                 > 0
-            {
-                return Some(last.clone());
-            }
+        {
+            return Some(last.clone());
         }
         self.chart_text_refs
             .iter()
@@ -2323,7 +2320,8 @@ impl Backend {
         let mut want: Vec<(CoreId, String)> = self
             .chart_orderbook_refs
             .iter()
-            .filter_map(|((core, market), count)| (*count > 0).then(|| (*core, market.clone())))
+            .filter(|&((_core, _market), count)| *count > 0)
+            .map(|((core, market), _count)| (*core, market.clone()))
             .collect();
         want.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         if self.desired_orderbook != want {
@@ -2336,7 +2334,8 @@ impl Backend {
         let mut desired: Vec<(CoreId, String)> = self
             .chart_market_refs
             .iter()
-            .filter_map(|((core, market), count)| (*count > 0).then(|| (*core, market.clone())))
+            .filter(|&((_core, _market), count)| *count > 0)
+            .map(|((core, market), _count)| (*core, market.clone()))
             .collect();
         desired.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         if self.desired != desired {
@@ -2454,10 +2453,10 @@ impl Backend {
         // trimming — `warn_last_prune_ms == 0` fires it on the first tick.
         if now_ms - self.warn_last_prune_ms >= WARN_PRUNE_INTERVAL_MS {
             self.warn_last_prune_ms = now_ms;
-            if let Some(store) = self.warn_store.as_ref() {
-                if let Err(err) = store.prune_slices(now_ms - WARN_SLICE_RETENTION_MS) {
-                    log::warn!("core warning slice prune failed: {err}");
-                }
+            if let Some(store) = self.warn_store.as_ref()
+                && let Err(err) = store.prune_slices(now_ms - WARN_SLICE_RETENTION_MS)
+            {
+                log::warn!("core warning slice prune failed: {err}");
             }
         }
         // Persist each closed episode plus its full topology (collect the follow-up re-captures into a

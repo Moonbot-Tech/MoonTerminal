@@ -675,8 +675,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                 20_000,
             );
             cx.update(|cx| {
-                if let Some(guard) = &coord_instance {
-                    if super::instance::poll_activation(guard) {
+                if let Some(guard) = &coord_instance
+                    && super::instance::poll_activation(guard) {
                         let handles: Vec<_> = coord_backend
                             .read(cx)
                             .group_windows
@@ -687,7 +687,6 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                             let _ = handle.update(cx, |_, window, _| window.activate_window());
                         }
                     }
-                }
                 let mut edges = TickEdges::default();
                 consume_report_commit(coord_report_immediate_dirty.as_deref(), || {
                     edges.immediate_report = true;
@@ -703,11 +702,10 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                 });
                 let revision = report_revision_gate.observe(edges, Instant::now());
                 let (show_reqs, open_debug_10) = coord_backend.update(cx, |b, cx| {
-                    if revision.wake_valuation {
-                        if let Some(valuation) = &b.valuation {
+                    if revision.wake_valuation
+                        && let Some(valuation) = &b.valuation {
                             valuation.wake();
                         }
-                    }
                     b.tick_telegram(cx);
                     // The startup cleanup of the trade tape, then the tape autoload of the
                     // tuner's Entry/Exit axis — in that order, the autoload waits for the

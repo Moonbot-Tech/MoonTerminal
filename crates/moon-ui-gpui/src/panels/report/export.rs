@@ -341,11 +341,11 @@ fn write_xlsx(
             }
             // Write identifier columns as text so Excel cannot convert large i64 values to imprecise
             // scientific notation.
-            if id_text_col(name) {
-                if let Value::Integer(n) = val {
-                    ws.write_string(r, c, n.to_string())?;
-                    continue;
-                }
+            if id_text_col(name)
+                && let Value::Integer(n) = val
+            {
+                ws.write_string(r, c, n.to_string())?;
+                continue;
             }
             match val {
                 Value::Integer(n) => {

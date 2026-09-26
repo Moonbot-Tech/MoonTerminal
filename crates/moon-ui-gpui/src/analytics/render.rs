@@ -252,14 +252,14 @@ fn quote_split_note(
             if coverage.unavailable_orders > 0 {
                 text.push_str(" · ");
                 text.push_str(
-                    &t!(
+                    t!(
                         mode.key(
                             "analytics.quote_valuation_unavailable",
                             "report.valuation_current_unavailable"
                         ),
                         n = coverage.unavailable_orders
                     )
-                    .to_string(),
+                    .as_ref(),
                 );
             }
             // Without this the ratio above simply stops moving, which reads as a slow backfill
@@ -268,13 +268,13 @@ fn quote_split_note(
             if let Some(facts) = stalled {
                 text.push_str(" · ");
                 text.push_str(
-                    &t!(
+                    t!(
                         "analytics.quote_valuation_stalled",
                         stage = facts.stage,
                         kind = facts.kind,
                         minutes = facts.minutes
                     )
-                    .to_string(),
+                    .as_ref(),
                 );
             }
             text

@@ -1044,6 +1044,9 @@ pub(super) fn drain_commands(
                             .map(|spec| anchor_on_core(spec.insert_after, server.id))
                             .collect();
                         let positions = plan_insert_positions(&ids, &anchors);
+                        // `next_id` is the next strategy id, not a loop index. The suggested zip
+                        // recomputes that start and is harder to see fail closed.
+                        #[allow(clippy::explicit_counter_loop)]
                         for (spec, at) in specs.iter().zip(positions) {
                             let id = next_id;
                             next_id += 1;

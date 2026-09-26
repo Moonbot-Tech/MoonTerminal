@@ -1183,7 +1183,9 @@ pub enum ProfitUnit {
 }
 
 /// Type-level boundary between comparable analytics and split raw totals.
+// `Split` is the quote breakdown by value. Boxing it changes every match on this public enum.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum ProfitScope<T> {
     /// Scalar data whose values share one explicit unit.
     Comparable { unit: ProfitUnit, data: T },

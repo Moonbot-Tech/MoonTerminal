@@ -697,7 +697,7 @@ fn upsert_one(
             }
         }
         for r in day_rows {
-            merged.insert((r.t_open_ms as i64 - day_start) as u32, r.clone());
+            merged.insert((r.t_open_ms as i64 - day_start) as u32, *r);
         }
         let blob = pack_rows_v2(merged.values(), day_start);
         conn.execute(

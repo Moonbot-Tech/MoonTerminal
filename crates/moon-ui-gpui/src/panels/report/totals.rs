@@ -185,16 +185,16 @@ fn traded_volume_amount(volume: &db::TradedVolume) -> Option<VolumeAmountText> {
     // persisted figure for a rate-derived USDT one, and under the current-rate mode take that
     // mode's wording with it. A unified figure also exists only over a fully reconstructed and
     // fully valued scope, which is why it can never carry a gap.
-    if matches!(volume.scope(), db::QuoteScope::Mixed) {
-        if let Some(usdt) = volume.usdt {
-            let (visible, exact) = native_volume(usdt, db::QuoteCurrency::usdt());
-            return Some(VolumeAmountText {
-                visible,
-                exact,
-                unified: true,
-                gap: None,
-            });
-        }
+    if matches!(volume.scope(), db::QuoteScope::Mixed)
+        && let Some(usdt) = volume.usdt
+    {
+        let (visible, exact) = native_volume(usdt, db::QuoteCurrency::usdt());
+        return Some(VolumeAmountText {
+            visible,
+            exact,
+            unified: true,
+            gap: None,
+        });
     }
     let mut visible = Vec::new();
     let mut exact = Vec::new();
@@ -559,37 +559,37 @@ pub(super) fn footer_facts(
             true,
         ));
     }
-    if unified.is_none() {
-        if let Some(coverage) = mixed.then_some(totals.valuation).flatten() {
-            if coverage.eligible_orders > 0 {
-                tail.push(fact(
-                    t!(
-                        mode.key(
-                            "report.valuation_progress",
-                            "report.valuation_current_progress"
-                        ),
-                        ready = coverage.valued_orders,
-                        total = coverage.eligible_orders
-                    )
-                    .to_string(),
-                    FactTone::Warn,
-                    false,
-                ));
-            }
-            if coverage.unavailable_orders > 0 {
-                tail.push(fact(
-                    t!(
-                        mode.key(
-                            "report.valuation_unavailable",
-                            "report.valuation_current_unavailable"
-                        ),
-                        n = coverage.unavailable_orders
-                    )
-                    .to_string(),
-                    FactTone::Warn,
-                    false,
-                ));
-            }
+    if unified.is_none()
+        && let Some(coverage) = mixed.then_some(totals.valuation).flatten()
+    {
+        if coverage.eligible_orders > 0 {
+            tail.push(fact(
+                t!(
+                    mode.key(
+                        "report.valuation_progress",
+                        "report.valuation_current_progress"
+                    ),
+                    ready = coverage.valued_orders,
+                    total = coverage.eligible_orders
+                )
+                .to_string(),
+                FactTone::Warn,
+                false,
+            ));
+        }
+        if coverage.unavailable_orders > 0 {
+            tail.push(fact(
+                t!(
+                    mode.key(
+                        "report.valuation_unavailable",
+                        "report.valuation_current_unavailable"
+                    ),
+                    n = coverage.unavailable_orders
+                )
+                .to_string(),
+                FactTone::Warn,
+                false,
+            ));
         }
     }
     if let Some(amount) = traded_volume_amount(&totals.traded_volume) {

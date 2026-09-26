@@ -464,10 +464,10 @@ fn merge_axis(cluster: &mut WarnCluster, episode: &WarnEpisode) {
         // history, so it has nothing to draw on a time axis.
         WarnAxis::ApiExpiry | WarnAxis::ApiQuota => {}
     }
-    if let Some(core) = episode.core_id {
-        if !cluster.cores.contains(&core) {
-            cluster.cores.push(core);
-        }
+    if let Some(core) = episode.core_id
+        && !cluster.cores.contains(&core)
+    {
+        cluster.cores.push(core);
     }
 }
 

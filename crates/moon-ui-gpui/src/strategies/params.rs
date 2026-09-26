@@ -1047,6 +1047,8 @@ fn compact_first_line(v: &str) -> String {
     }
 }
 
+// `Content` owns the prepared parameter body. Boxing it allocates on every selection change.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum ParamsPanelModel {
     NoSelection,
     NoSchema,
@@ -1344,16 +1346,16 @@ impl StrategiesView {
         // total: Apply and Revert both empty `field_edits` for it. Only `Staged` is retired this
         // way — `ClearedOnly` has already discarded stale drafts and `Identical` never had any,
         // so testing either here would vanish the note the very frame it is set.
-        if let Some((key, outcome, _)) = self.versions.staged_note {
-            if matches!(outcome, StagedOutcome::Staged(_)) {
-                let remaining = self
-                    .field_edits
-                    .keys()
-                    .filter(|(core, id, _)| (*core, *id) == key)
-                    .count();
-                if remaining == 0 {
-                    self.versions.staged_note = None;
-                }
+        if let Some((key, outcome, _)) = self.versions.staged_note
+            && matches!(outcome, StagedOutcome::Staged(_))
+        {
+            let remaining = self
+                .field_edits
+                .keys()
+                .filter(|(core, id, _)| (*core, *id) == key)
+                .count();
+            if remaining == 0 {
+                self.versions.staged_note = None;
             }
         }
         let p = MoonPalette::active(cx);
@@ -1613,10 +1615,10 @@ impl StrategiesView {
                     if multi && lname == "strategyname" {
                         continue;
                     }
-                    if let Some(c) = &common {
-                        if !c.contains(&lname) {
-                            continue;
-                        }
+                    if let Some(c) = &common
+                        && !c.contains(&lname)
+                    {
+                        continue;
                     }
                     if differ && lname == "signaltype" {
                         continue;
@@ -1660,10 +1662,10 @@ impl StrategiesView {
         // either doing visibly nothing, or, worse, silently staging into a retained state left
         // over from an earlier per-section visit that this pane is not displaying. Editing a
         // formula in full mode goes through the row's own edit-in-sections button, which switches back.
-        if !self.prefs.params_full {
-            if let Some(helper) = self.formula_helper(cx) {
-                pane_body = pane_body.child(helper);
-            }
+        if !self.prefs.params_full
+            && let Some(helper) = self.formula_helper(cx)
+        {
+            pane_body = pane_body.child(helper);
         }
         col = col.child(pane_body);
         col.into_any_element()
@@ -2418,16 +2420,14 @@ impl StrategiesView {
         {
             let b = self.backend.read(cx);
             let store = b.session.store();
-            if let Some(sections) = selected_sections(self, store) {
-                if let Some(f) = sections
+            if let Some(sections) = selected_sections(self, store)
+                && let Some(f) = sections
                     .iter()
                     .flat_map(|s| &s.fields)
                     .find(|f| f.name == field)
-                {
-                    if f.type_name != "String" || !matches!(f.ui, SchemaFieldUi::Edit) {
-                        return None;
-                    }
-                }
+                && (f.type_name != "String" || !matches!(f.ui, SchemaFieldUi::Edit))
+            {
+                return None;
             }
         }
         let p = MoonPalette::active(cx);

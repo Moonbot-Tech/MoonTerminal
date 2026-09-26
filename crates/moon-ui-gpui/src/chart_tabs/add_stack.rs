@@ -656,20 +656,21 @@ impl AddChartStack {
         // In COMPRESS mode, automatic AddToChart tabs place a new chart in the FIRST retained empty
         // slot without moving or resizing neighbors. Custom tabs set `hold_vacated = false` and do
         // not use this path.
-        if compress && self.hold_vacated {
-            if let Some(i) = self.charts.iter().position(|e| e.vacated) {
-                self.charts[i].core = core;
-                self.charts[i].market = market.to_string();
-                self.charts[i].arrived_at = Instant::now();
-                self.charts[i].vacated = false;
-                self.charts[i].owner = owner;
-                self.touch_count_change(); // A chart reused an empty slot; reset the debounce.
-                self.flash_arrival(i, cx);
-                let panel = self.charts[i].panel.clone();
-                Self::show_market_with_history(&panel, core, market, ttl_ms, cx);
-                cx.notify();
-                return;
-            }
+        if compress
+            && self.hold_vacated
+            && let Some(i) = self.charts.iter().position(|e| e.vacated)
+        {
+            self.charts[i].core = core;
+            self.charts[i].market = market.to_string();
+            self.charts[i].arrived_at = Instant::now();
+            self.charts[i].vacated = false;
+            self.charts[i].owner = owner;
+            self.touch_count_change(); // A chart reused an empty slot; reset the debounce.
+            self.flash_arrival(i, cx);
+            let panel = self.charts[i].panel.clone();
+            Self::show_market_with_history(&panel, core, market, ttl_ms, cx);
+            cx.notify();
+            return;
         }
 
         // Append a new chart; render sorting raises pinned charts in FIT-stretch mode.
@@ -964,10 +965,8 @@ impl AddChartStack {
         for e in &self.charts {
             e.panel.update(cx, |p, pcx| {
                 p.set_default_x_ppm(ppm);
-                if apply {
-                    if let Some(v) = ppm {
-                        p.apply_x_ppm(v, pcx);
-                    }
+                if apply && let Some(v) = ppm {
+                    p.apply_x_ppm(v, pcx);
                 }
             });
         }
@@ -1309,9 +1308,7 @@ impl Render for AddChartStack {
             border,
             // An empty retained COMPRESS slot maps to `None`, so render shows a transparent tile.
             move |s, ix| {
-                let Some(&real_ix) = panel_order.get(ix) else {
-                    return None;
-                };
+                let &real_ix = panel_order.get(ix)?;
                 s.charts
                     .get(real_ix)
                     .filter(|e| !e.vacated)

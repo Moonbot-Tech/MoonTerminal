@@ -241,7 +241,7 @@ pub fn authorize_paired_identity(
     authorized_chat_ids: &[i64],
 ) -> Result<i64, InitDataError> {
     let chat_id = signed.pairing_chat_id();
-    if authorized_chat_ids.iter().any(|id| *id == chat_id) {
+    if authorized_chat_ids.contains(&chat_id) {
         Ok(chat_id)
     } else {
         Err(InitDataError::Unpaired)

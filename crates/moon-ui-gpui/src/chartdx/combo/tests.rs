@@ -433,7 +433,7 @@ fn new_row_in_span_damages_without_eviction() {
         cross(30.0, 0, 1.0),
     ]);
     let old = logical_ring(&layer);
-    assert!(old.len() + 1 <= 8, "fixture must not evict");
+    assert!(old.len() < 8, "fixture must not evict");
     assert!(
         damage_of(&layer, &[cross(120.0, 0, 4.0)], cross_span, volume_span),
         "a new row inside the volume span must damage without eviction"

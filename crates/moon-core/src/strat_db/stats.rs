@@ -417,7 +417,7 @@ pub fn deleted_heads() -> Vec<HeadRow> {
     )) else {
         return Vec::new();
     };
-    stmt.query_map([], |r| head_from_row(r))
+    stmt.query_map([], head_from_row)
         .map(|rows| rows.flatten().collect())
         .unwrap_or_default()
 }
@@ -446,7 +446,7 @@ pub fn head_row(core_uid: u64, strategy_id: i64) -> Option<HeadRow> {
     conn.query_row(
         &format!("SELECT {HEAD_COLS} FROM strategies WHERE core_uid=?1 AND strategy_id=?2"),
         rusqlite::params![core_uid as i64, strategy_id],
-        |r| head_from_row(r),
+        head_from_row,
     )
     .optional()
     .ok()

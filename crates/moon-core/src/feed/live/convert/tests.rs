@@ -34,6 +34,8 @@ fn startup_status_maps_local_port_and_physical_packet_fields() {
 /// `KernelHealth` between releases; an exhaustive literal here turns every such
 /// addition into a red CI run on a commit that touched nothing near it.
 #[test]
+// `..Default::default()` keeps this compiling when `KernelHealth` grows a field the converter ignores.
+#[allow(clippy::needless_update)]
 fn kernel_health_maps_each_field_by_scope() {
     let h = moonproto::state::KernelHealth {
         process_cpu_percent: 12,

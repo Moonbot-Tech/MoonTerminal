@@ -1110,6 +1110,10 @@ pub fn apply(
         // no switch, no pill and no summary on screen to say it happened — and the next order
         // would go out under it. Refusing lets the key propagate, exactly like the no-core arm.
         A::ManualStrategy(_) if b.is_auto_overview_scope(group) => false,
+        // Clippy's suggested collapsible_match rewrite does not compile: folding
+        // the inner `if` into this match leaves `Some(_)` uncovered because the
+        // previous `ManualStrategy` arm is a guard.
+        #[allow(clippy::collapsible_match)]
         A::ManualStrategy(i) => match active_core {
             Some(core) => {
                 if crate::controls::select_manual_strategy(b, core, i) {

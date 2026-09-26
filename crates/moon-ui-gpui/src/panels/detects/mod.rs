@@ -531,9 +531,7 @@ impl DetectsPanel {
                 })
                 .is_ok()
             });
-            if !alive {
-                return;
-            }
+            if !alive {}
         })
         .detach();
     }

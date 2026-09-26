@@ -187,9 +187,7 @@ impl StrategiesView {
             return Some(tree::ui::TreeNote::CoreNotCut);
         }
         self.copy_folders(folders, cx);
-        if self.clipboard.is_none() {
-            return None;
-        }
+        self.clipboard.as_ref()?;
         let marks: Vec<(CoreId, Vec<String>)> = folders
             .iter()
             .map(|(core, path)| (*core, ops::split_path(path)))

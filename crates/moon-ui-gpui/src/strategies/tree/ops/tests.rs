@@ -295,7 +295,7 @@ fn the_text_clipboard_drops_the_source_anchor() {
 #[test]
 fn copy_rows_flattens_to_target() {
     // A multi-selection from different folders has empty relative paths, so paste puts all in target.
-    let rows = vec![
+    let rows = [
         row(1, "a", "grpA/p1", false),
         row(2, "b", "grpB/sub/p2", false),
     ];
@@ -429,7 +429,7 @@ fn tree_ops_move_folder(rows: &[StrategyRow], folder: &str, target: &str) -> Vec
 #[test]
 fn move_to_flattens_to_target() {
     // Moving a multi-selection from different folders puts every row directly in the target.
-    let rows = vec![
+    let rows = [
         row(1, "a", "src/p1", false),
         row(2, "b", "other/grp/p2", false),
     ];

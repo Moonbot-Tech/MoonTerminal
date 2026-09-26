@@ -374,6 +374,8 @@ pub fn calendar_data(
 }
 
 /// Preflight result that prevents unsafe raw-money analytics from carrying scalar data.
+// `Split` carries the full quote breakdown. Boxing it would touch every analytics consumer.
+#[allow(clippy::large_enum_variant)]
 enum ScopeDecision {
     /// Scalar values share this explicit unit.
     Comparable {

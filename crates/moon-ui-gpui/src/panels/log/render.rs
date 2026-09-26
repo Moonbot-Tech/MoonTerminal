@@ -417,7 +417,7 @@ pub(super) fn exchange_core_ids(b: &Backend, group: &str, exchange: ExchangeId) 
             .iter()
             .map(|server| (server.id, server.group.as_str())),
         &live,
-        &venues,
+        venues,
         group,
         exchange,
     )

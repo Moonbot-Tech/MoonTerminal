@@ -25,11 +25,10 @@ fn callback_exchange_list_flag_defaults_to_collapsed() {
     let mut request = ReportRequest::new(Period::Today, false);
     assert!(!request.exchanges_open);
     assert_eq!(request.callback(), "r:e:t:0");
-    assert_eq!(
-        ReportRequest::parse_callback("r:e:t:0")
+    assert!(
+        !ReportRequest::parse_callback("r:e:t:0")
             .unwrap()
-            .exchanges_open,
-        false
+            .exchanges_open
     );
     request.exchanges_open = true;
     assert_eq!(request.callback(), "r:ek:t:0");

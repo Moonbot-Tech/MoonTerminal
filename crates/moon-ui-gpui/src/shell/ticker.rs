@@ -76,7 +76,7 @@ impl Shell {
         let query = self.ticker_input.read(cx).value().to_string();
         let results = {
             let b = self.backend.read(cx);
-            coin_search::search(&b, &self.group, None, &query)
+            coin_search::search(b, &self.group, None, &query)
         };
         let backend = self.backend.clone();
         let view = cx.entity();

@@ -455,6 +455,9 @@ struct CoreTrack {
 
 impl CoreTrack {
     /// Average `(process, system)` CPU over the last `CPU_WINDOW_SECS` seconds.
+    ///
+    /// A zero sample count is unknown CPU, not 0%. `checked_div` returns `None`
+    /// for that divisor, which is that unknown state.
     fn averaged(&self, now_sec: i64) -> (Option<u8>, Option<u8>) {
         let (mut proc, mut system, mut n) = (0u32, 0u32, 0u32);
         for bucket in &self.cpu {
@@ -464,14 +467,10 @@ impl CoreTrack {
                 n += bucket.samples;
             }
         }
-        if n == 0 {
-            (None, None)
-        } else {
-            (
-                Some((proc / n).min(255) as u8),
-                Some((system / n).min(255) as u8),
-            )
-        }
+        (
+            proc.checked_div(n).map(|v| v.min(255) as u8),
+            system.checked_div(n).map(|v| v.min(255) as u8),
+        )
     }
 }
 
@@ -1156,11 +1155,7 @@ fn server_snapshot(samples: &[CoreSample], ip: IpAddr) -> WarnSnapshot {
         sys_cpu: freshest_u8(|sys| sys.system_cpu_percent)
             .unwrap_or(0)
             .min(100),
-        occ_mem: if total > 0 {
-            (used_sum * 100 / total).min(100) as u8
-        } else {
-            0
-        },
+        occ_mem: (used_sum * 100).checked_div(total).unwrap_or(0).min(100) as u8,
         free_mb: free.unwrap_or(0),
         used_mb: used_sum.min(u64::from(u32::MAX)) as u32,
         logical_cpus: freshest_u8(|sys| sys.logical_cpu_count).unwrap_or(0),
@@ -1255,11 +1250,7 @@ fn build_ring_samples(samples: &[CoreSample]) -> Vec<RingSample> {
         // per-core lines stay consistent with it (total unavailable → 0).
         let free = freshest(&|sys| sys.free_physical_memory_mb).map(u64::from);
         let total = free.map(|free| used_sum + free).unwrap_or(0);
-        let occ = if total > 0 {
-            (used_sum * 100 / total).min(100) as u8
-        } else {
-            0
-        };
+        let occ = (used_sum * 100).checked_div(total).unwrap_or(0).min(100) as u8;
         out.push(RingSample {
             subject: RingSubject::Server(*ip),
             cpu: sys_cpu,
@@ -1270,7 +1261,10 @@ fn build_ring_samples(samples: &[CoreSample]) -> Vec<RingSample> {
         for sample in cores {
             let proc_cpu = sample.sys.process_cpu_percent.unwrap_or(0).min(100);
             let proc_mem = match sample.sys.used_memory_mb {
-                Some(used) if total > 0 => (u64::from(used) * 100 / total).min(100) as u8,
+                Some(used) => (u64::from(used) * 100)
+                    .checked_div(total)
+                    .unwrap_or(0)
+                    .min(100) as u8,
                 _ => 0,
             };
             // Per-core pings, but only while Ready — a dropped core keeps its last (possibly

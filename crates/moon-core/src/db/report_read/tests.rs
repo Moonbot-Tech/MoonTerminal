@@ -2807,7 +2807,7 @@ fn chart_history_preserves_optional_millisecond_columns_and_legacy_rows() {
 
 thread_local! {
     static CHART_HISTORY_SQL: std::cell::RefCell<Vec<String>> =
-        std::cell::RefCell::new(Vec::new());
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Keep expanded chart-history SELECTs so the test can `EXPLAIN` the statement the function prepared.

@@ -361,7 +361,7 @@ impl ReportPanel {
                 cx.spawn(async move |this, cx| {
                     let executor = cx.update(|cx| cx.background_executor().clone());
                     executor.timer(wait).await;
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let _ = this.update(cx, |this, cx| {
                             if this.generation_refresh.timer_fired(timer_token) {
                                 cx.notify();
@@ -425,7 +425,7 @@ impl ReportPanel {
                 })
                 .await;
 
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     if !report_query_result_is_current(
                         request_id,

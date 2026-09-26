@@ -239,10 +239,10 @@ impl ScreenerView {
                 continue;
             }
             names.insert(s.id, SharedString::from(s.name.clone()));
-            if let ScrSource::Core(only) = self.source {
-                if s.id != only {
-                    continue;
-                }
+            if let ScrSource::Core(only) = self.source
+                && s.id != only
+            {
+                continue;
             }
             let Some(provider) = source.provider_of(s.id) else {
                 continue;
@@ -509,7 +509,7 @@ impl ScreenerView {
                 .map(|(_, n)| n.clone())
                 .unwrap_or_else(|| format!("#{id}")),
         };
-        let sections = crate::controls::core_menu_sections(&cores, &venues);
+        let sections = crate::controls::core_menu_sections(&cores, venues);
         let view = cx.entity();
         let all_view = view.clone();
         let mut items = vec![
@@ -764,13 +764,12 @@ pub fn open(
     cx: &mut App,
 ) {
     // Focus an existing live window instead of opening a duplicate.
-    if let Some(handle) = backend.read(cx).screener_window {
-        if handle
+    if let Some(handle) = backend.read(cx).screener_window
+        && handle
             .update(cx, |_, window, _| window.activate_window())
             .is_ok()
-        {
-            return;
-        }
+    {
+        return;
     }
     let saved = backend.read(cx).layout.screener_window;
     let bounds = saved.map_or(

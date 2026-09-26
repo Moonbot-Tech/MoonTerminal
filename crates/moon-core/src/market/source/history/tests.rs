@@ -247,9 +247,11 @@ fn visible_fit_windowed_coarse_scan_equals_a_full_scan() {
         .filter(|(_, tf)| f64::from(*tf) == hour)
         .map(|(c, _)| c.t_open_ms)
         .collect();
-    let mut cursor = ChartHistoryCursor::default();
-    cursor.coarse_fill = fill.clone();
-    cursor.coarse_fill_max_tf = Some(hour);
+    let cursor = ChartHistoryCursor {
+        coarse_fill: fill.clone(),
+        coarse_fill_max_tf: Some(hour),
+        ..ChartHistoryCursor::default()
+    };
     let last = t;
     let mut overhang_hits = 0;
     for q in 0..3_000 {

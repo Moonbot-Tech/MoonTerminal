@@ -334,11 +334,11 @@ fn group_header_row(
                         let n = nm_act.clone();
                         let _ = weak.update(cx, |this, ctx| {
                             this.backend.update(ctx, |b, bcx| {
-                                if let Some(p) = b.preview.as_mut() {
-                                    if let Some(gc) = p.groups.iter_mut().find(|g| g.name == n) {
-                                        gc.active = v;
-                                        bcx.notify();
-                                    }
+                                if let Some(p) = b.preview.as_mut()
+                                    && let Some(gc) = p.groups.iter_mut().find(|g| g.name == n)
+                                {
+                                    gc.active = v;
+                                    bcx.notify();
                                 }
                             });
                             ctx.notify();
@@ -468,11 +468,11 @@ fn icon_picker_grid(
                     let n = nm.clone();
                     let _ = weak_ico.update(cx, |this, ctx| {
                         this.backend.update(ctx, |b, bcx| {
-                            if let Some(p) = b.preview.as_mut() {
-                                if let Some(g) = p.groups.iter_mut().find(|g| g.name == n) {
-                                    g.icon = id;
-                                    bcx.notify();
-                                }
+                            if let Some(p) = b.preview.as_mut()
+                                && let Some(g) = p.groups.iter_mut().find(|g| g.name == n)
+                            {
+                                g.icon = id;
+                                bcx.notify();
                             }
                         });
                         this.picking = None;
@@ -787,7 +787,7 @@ impl SettingsView {
                             };
                             let st = factory_status.get(core_id).cloned();
                             let built = server_row(
-                                &view_ref,
+                                view_ref,
                                 &factory_weak,
                                 row,
                                 *draft_index,

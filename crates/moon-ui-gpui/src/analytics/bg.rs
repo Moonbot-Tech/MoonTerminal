@@ -203,7 +203,7 @@ impl AnalyticsView {
         }
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { db() }).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.db_ops = this.db_ops.saturating_sub(1);
                     store(this, result, cx);
@@ -243,7 +243,7 @@ impl AnalyticsView {
             let result = cx
                 .background_spawn(async move { with_read_cancellation(worker_cancellation, db) })
                 .await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.latest_reads.finish(&cancellation);
                     this.db_ops = this.db_ops.saturating_sub(1);

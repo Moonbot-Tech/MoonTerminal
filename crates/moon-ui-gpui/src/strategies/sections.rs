@@ -184,15 +184,13 @@ impl StrategiesView {
                         let label = section_label_key(&section.title)
                             .filter(|_| self.prefs.human_labels)
                             .map_or(0.0, |key| {
-                                design::ui_caption_text_width(cx, &t!(key).to_string(), 400.0)
+                                design::ui_caption_text_width(cx, t!(key).as_ref(), 400.0)
                             });
                         raw.max(label)
                     })
                     .reduce(f32::max)
             })
-            .unwrap_or_else(|| {
-                design::ui_body_text_width(cx, &t!("strat.sections").to_string(), 600.0)
-            })
+            .unwrap_or_else(|| design::ui_body_text_width(cx, t!("strat.sections").as_ref(), 600.0))
     }
 
     /// Render schema sections using dependency values shared with the parameters panel.

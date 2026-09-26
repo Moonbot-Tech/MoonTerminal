@@ -117,11 +117,11 @@ impl StrategiesView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if let Some(section) = self.pending_param_scroll.take() {
-            if let Some(ix) = resolve_scroll_target(&flat, section) {
-                self.params_scroll
-                    .scroll_to_item_strict(ix, ScrollStrategy::Top);
-            }
+        if let Some(section) = self.pending_param_scroll.take()
+            && let Some(ix) = resolve_scroll_target(&flat, section)
+        {
+            self.params_scroll
+                .scroll_to_item_strict(ix, ScrollStrategy::Top);
         }
 
         let frozen = self.viewing_version();

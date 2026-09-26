@@ -62,8 +62,8 @@ fn stale_completion_preserves_newer_lane_owner() {
 fn dropping_the_registry_cancels_detached_requests() {
     let token = {
         let mut reads = LatestReads::default();
-        let token = reads.replace(&[ReadLane::Summary]);
-        token
+
+        reads.replace(&[ReadLane::Summary])
     };
 
     assert!(token.is_cancelled());

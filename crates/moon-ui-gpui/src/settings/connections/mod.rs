@@ -197,16 +197,15 @@ fn conn_input(
         if matches!(ev, MoonInputEvent::Change) {
             let val = emitter.read(cx).value().to_string();
             this.backend.update(cx, |b, bcx| {
-                if let Some(p) = b.preview.as_mut() {
-                    if let Some(s) = p.servers.get_mut(i) {
-                        if get(s) != val {
-                            set(s, val);
-                            if sync_groups {
-                                sync_groups_from_servers(&p.servers, &mut p.groups);
-                            }
-                            bcx.notify();
-                        }
+                if let Some(p) = b.preview.as_mut()
+                    && let Some(s) = p.servers.get_mut(i)
+                    && get(s) != val
+                {
+                    set(s, val);
+                    if sync_groups {
+                        sync_groups_from_servers(&p.servers, &mut p.groups);
                     }
+                    bcx.notify();
                 }
             });
             // This keystroke may have re-ranked the list under the field being typed into; the
@@ -233,11 +232,11 @@ fn conn_color(
     init: [u8; 3],
 ) -> Entity<MoonColorPickerState> {
     super::draft_color(window, cx, init, move |p, c| {
-        if let Some(s) = p.servers.get_mut(i) {
-            if s.color != c {
-                s.color = c;
-                return true;
-            }
+        if let Some(s) = p.servers.get_mut(i)
+            && s.color != c
+        {
+            s.color = c;
+            return true;
         }
         false
     })

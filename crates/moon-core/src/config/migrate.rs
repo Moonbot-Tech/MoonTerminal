@@ -51,7 +51,7 @@ fn config_from_legacy_enc(plain: &[u8], uid_floor: Option<u64>) -> anyhow::Resul
         groups: Vec<GroupConfig>,
     }
 
-    let old: Old = toml::from_str(std::str::from_utf8(&plain)?)?;
+    let old: Old = toml::from_str(std::str::from_utf8(plain)?)?;
     let servers = old
         .servers
         .into_iter()

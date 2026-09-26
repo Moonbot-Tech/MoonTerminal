@@ -150,6 +150,8 @@ enum SequenceOp {
 }
 
 /// Pure next action selected from a retained settings snapshot.
+// `Send` owns the settings snapshot this queue is about to write. Boxing it allocates on that path.
+#[allow(clippy::large_enum_variant)]
 enum SequenceAction {
     /// No work is currently possible or required.
     Idle,

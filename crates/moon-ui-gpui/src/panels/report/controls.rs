@@ -536,7 +536,7 @@ impl ReportPanel {
                     &cores,
                     selection,
                     crate::controls::CoreAllRowMode::ImplicitOrComplete,
-                    &t!("report.all_cores").to_string(),
+                    t!("report.all_cores").as_ref(),
                     &|n| t!("report.cores_n", n = n).to_string(),
                 )
                 .label
@@ -557,7 +557,7 @@ impl ReportPanel {
             let combo = crate::controls::core_combo(
                 "rep-core",
                 &cores,
-                &venues,
+                venues,
                 selection,
                 crate::controls::CoreAllRowMode::ImplicitOrComplete,
                 t!("report.all_cores").to_string(),

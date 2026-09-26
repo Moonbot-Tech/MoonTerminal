@@ -729,9 +729,9 @@ pub fn build_order_geometry(
             // the per-tab flag would leave a row of dots marking steps of a staircase that is no
             // longer there.
             if st.knots && !has_server_trace && show_move_history {
-                for i in 1..n {
+                for point in points.iter().skip(1) {
                     markers.push(MarkerInstance::at_price(
-                        to_rel(points[i].0),
+                        to_rel(point.0),
                         cur_p,
                         st.knot_size * highlight_marker_mul,
                         st.marker_thickness * highlight_thickness_mul,

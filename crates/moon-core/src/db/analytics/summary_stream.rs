@@ -136,11 +136,7 @@ impl GroupAccumulator {
             self.worst = Some(self.worst.map_or(value, |worst| worst.min(value)));
         }
         if let Some(name) = &row.core_name {
-            if self
-                .core_name
-                .as_ref()
-                .map_or(true, |current| name > current)
-            {
+            if self.core_name.as_ref().is_none_or(|current| name > current) {
                 self.core_name = Some(name.clone());
             }
         }

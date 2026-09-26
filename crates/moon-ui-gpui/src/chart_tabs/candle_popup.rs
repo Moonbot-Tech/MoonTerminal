@@ -87,6 +87,8 @@ fn zone_step_text(step: u16, max_label: &str) -> String {
 }
 
 /// Build a multiline hint below a control.
+// `t!` is not a `str`. The suggested rewrite drops `key` and calls a different macro.
+#[allow(clippy::unnecessary_to_owned)]
 fn hint_block(key: &str, p: MoonPalette, cx: &App) -> impl IntoElement {
     v_flex().children(
         t!(key)

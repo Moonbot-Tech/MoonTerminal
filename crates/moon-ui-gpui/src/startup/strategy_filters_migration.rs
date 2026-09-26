@@ -79,10 +79,10 @@ pub(super) fn migrate_strategy_filters(
             );
         }
     }
-    if let Some(mut cfg) = layout.stored_chart_labels(ChartTabKind::AddTo).cloned() {
-        if append_if_missing(&mut cfg) == Some(true) {
-            layout.store_chart_labels(ChartTabKind::AddTo, cfg);
-        }
+    if let Some(mut cfg) = layout.stored_chart_labels(ChartTabKind::AddTo).cloned()
+        && append_if_missing(&mut cfg) == Some(true)
+    {
+        layout.store_chart_labels(ChartTabKind::AddTo, cfg);
     }
     for spec in specs.iter_mut() {
         let kind = crate::chart_tabs::apply_all::spec_kind(spec);

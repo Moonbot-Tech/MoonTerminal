@@ -18,7 +18,9 @@ pub(crate) struct OpenMainRequest {
 }
 
 /// Durable history policy applied to one exact Main-chart target.
+// `Report` owns the filter snapshot for one click. Boxing it changes every history-scope match.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ChartHistoryScope {
     /// Load all durable closed trades for the exact target core and market aliases.
     #[default]

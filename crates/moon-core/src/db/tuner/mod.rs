@@ -881,7 +881,7 @@ pub fn suggest_field(
 
 /// Best range for one field over `(value, profit)` samples.
 fn best_range(
-    vals: &mut Vec<(f64, f64)>,
+    vals: &mut [(f64, f64)],
     min_n: usize,
     edges: usize,
     round: bool,

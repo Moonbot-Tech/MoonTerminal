@@ -84,11 +84,11 @@ pub(super) fn build(
         if matches!(ev, MoonInputEvent::Change) {
             let val = emitter.read(cx).value().to_string();
             this.backend.update(cx, |b, bcx| {
-                if let Some(p) = b.preview.as_mut() {
-                    if p.telegram.token.expose() != val {
-                        p.telegram.token = Secret::new(val);
-                        bcx.notify();
-                    }
+                if let Some(p) = b.preview.as_mut()
+                    && p.telegram.token.expose() != val
+                {
+                    p.telegram.token = Secret::new(val);
+                    bcx.notify();
                 }
             });
         }

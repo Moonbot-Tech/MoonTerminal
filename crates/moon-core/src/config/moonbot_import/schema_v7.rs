@@ -237,7 +237,7 @@ pub fn parse_payload(payload: &[u8]) -> Result<MoonBotConfig, ImportError> {
         }
         match kind {
             // Signals/Trading/Visual must be present, but their contents are skipped.
-            1 | 2 | 3 => {}
+            1..=3 => {}
             4 => theme = Some(parse_theme(sub)?),
             5 => ini = Some(parse_ini(sub)?),
             6 => ui = Some(parse_ui(sub)?),
@@ -409,6 +409,8 @@ pub(super) mod build {
     }
 
     /// Builds a UI v3 body with specified hotkey values and fixed values for everything else.
+    // Each `push` is one labelled wire byte. Folding them into a literal would drop those names.
+    #[allow(clippy::vec_init_then_push)]
     pub fn ui_body(
         order_sizes: [f64; 6],
         order_size_keys: [u16; 6],

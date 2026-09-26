@@ -123,6 +123,8 @@ fn sustained_cpu_opens_then_closes_one_episode() {
 
     // Drop CPU; the averaging window needs a few low seconds to fall under the threshold.
     let mut sec = CPU_SUSTAIN_SECS as i64 + 4;
+    // `sec` is the simulated clock, stepped beside each tick. Folding it into the header hides that.
+    #[allow(clippy::explicit_counter_loop)]
     for _ in 0..5 {
         tick_one(&mut engine, sec, 1, IP, Some(5), Some(500));
         sec += 1;
@@ -156,6 +158,8 @@ fn memory_growth_opens_then_closes_per_core_episode() {
 
     // Fall back to baseline: current returns to the window minimum, so growth is zero.
     let mut sec = rise.len() as i64 + 1;
+    // `sec` is the simulated clock, stepped beside each tick. Folding it into the header hides that.
+    #[allow(clippy::explicit_counter_loop)]
     for _ in 0..3 {
         tick_one(&mut engine, sec, 7, IP, Some(10), Some(400));
         sec += 1;

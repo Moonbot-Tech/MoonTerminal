@@ -54,11 +54,11 @@ fn badge_input(
         if matches!(ev, MoonInputEvent::Change) {
             let val = emitter.read(cx).value().to_string();
             this.backend.update(cx, |b, bcx| {
-                if let Some(p) = b.preview.as_mut() {
-                    if let Some(e) = p.badges.entries.get_mut(idx) {
-                        apply(e, val);
-                        bcx.notify();
-                    }
+                if let Some(p) = b.preview.as_mut()
+                    && let Some(e) = p.badges.entries.get_mut(idx)
+                {
+                    apply(e, val);
+                    bcx.notify();
                 }
             });
         }
@@ -94,11 +94,11 @@ fn entry_color(
     };
     super::draft_color(window, cx, init, move |p, cc| {
         let is_light = p.ui_theme_mode.is_light();
-        if let Some(e) = p.badges.entries.get_mut(idx) {
-            if get(e, is_light) != cc {
-                set(e, is_light, cc);
-                return true;
-            }
+        if let Some(e) = p.badges.entries.get_mut(idx)
+            && get(e, is_light) != cc
+        {
+            set(e, is_light, cc);
+            return true;
         }
         false
     })
@@ -233,11 +233,11 @@ impl SettingsView {
     /// Delete draft entry `idx`, then rebuild editor state.
     fn delete_badge(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.backend.update(cx, |b, bcx| {
-            if let Some(p) = b.preview.as_mut() {
-                if idx < p.badges.entries.len() {
-                    p.badges.entries.remove(idx);
-                    bcx.notify();
-                }
+            if let Some(p) = b.preview.as_mut()
+                && idx < p.badges.entries.len()
+            {
+                p.badges.entries.remove(idx);
+                bcx.notify();
             }
         });
         self.badges = build(&self.backend, window, cx);
@@ -280,11 +280,11 @@ impl SettingsView {
                 SharedString::from(format!("badge-active-{idx}")),
                 active,
                 move |p, v| {
-                    if let Some(e) = p.badges.entries.get_mut(idx) {
-                        if e.active != v {
-                            e.active = v;
-                            return true;
-                        }
+                    if let Some(e) = p.badges.entries.get_mut(idx)
+                        && e.active != v
+                    {
+                        e.active = v;
+                        return true;
                     }
                     false
                 },
@@ -297,11 +297,11 @@ impl SettingsView {
                 SharedString::from(format!("badge-dist-{idx}")),
                 distinguish,
                 move |p, v| {
-                    if let Some(e) = p.badges.entries.get_mut(idx) {
-                        if e.distinguish_dir != v {
-                            e.distinguish_dir = v;
-                            return true;
-                        }
+                    if let Some(e) = p.badges.entries.get_mut(idx)
+                        && e.distinguish_dir != v
+                    {
+                        e.distinguish_dir = v;
+                        return true;
                     }
                     false
                 },
@@ -314,11 +314,11 @@ impl SettingsView {
                 SharedString::from(format!("badge-outline-{idx}")),
                 outline,
                 move |p, v| {
-                    if let Some(e) = p.badges.entries.get_mut(idx) {
-                        if e.outline != v {
-                            e.outline = v;
-                            return true;
-                        }
+                    if let Some(e) = p.badges.entries.get_mut(idx)
+                        && e.outline != v
+                    {
+                        e.outline = v;
+                        return true;
                     }
                     false
                 },

@@ -66,7 +66,7 @@ fn okx_uses_the_market_specific_base_volume_cell() {
     let spot = parse_klines(&fixture("spot"), SPOT_VOLUME_CELL).expect("spot fixture parses");
     let swap = parse_klines(&fixture("swap"), SWAP_VOLUME_CELL).expect("swap fixture parses");
 
-    assert!((spot[0].volume - 10.030_456_94).abs() < 0.000_01);
+    assert!((spot[0].volume - 10.030_457).abs() < 0.000_01);
     assert!((swap[0].volume - 144.84).abs() < 0.001);
     assert!(
         swap[0].volume < 1_000.0,

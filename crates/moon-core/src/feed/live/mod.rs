@@ -2701,11 +2701,10 @@ pub(super) fn run(
 
         // Do NOT copy market data here. The feed only signals that the provider has a fresh
         // read-model snapshot; the visible chart pulls the markets it needs itself.
-        if !dirty_markets.is_empty() {
-            if tx.send(FeedMsg::MarketDataChanged(dirty_markets)).is_err() {
-                let _ = client.disconnect();
-                return Ok(());
-            }
+        if !dirty_markets.is_empty() && tx.send(FeedMsg::MarketDataChanged(dirty_markets)).is_err()
+        {
+            let _ = client.disconnect();
+            return Ok(());
         }
         force_market_sample = false;
 

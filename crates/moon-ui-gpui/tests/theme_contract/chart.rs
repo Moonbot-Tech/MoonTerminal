@@ -1266,7 +1266,7 @@ fn empty_chart_stack_keeps_its_localized_size_probed_hint() {
         &main_stack,
         "fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement",
     );
-    let branch = braced_body(&render, "if self.charts.is_empty() {");
+    let branch = braced_body(render, "if self.charts.is_empty() {");
     assert!(
         branch.contains("empty::empty_screen("),
         "the empty Main stack branch must render the empty screen"

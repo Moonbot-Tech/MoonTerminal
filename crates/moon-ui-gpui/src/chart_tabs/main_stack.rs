@@ -912,10 +912,8 @@ impl MainChartStack {
         for e in &self.charts {
             e.panel.update(cx, |p, pcx| {
                 p.set_default_x_ppm(ppm);
-                if apply {
-                    if let Some(v) = ppm {
-                        p.apply_x_ppm(v, pcx);
-                    }
+                if apply && let Some(v) = ppm {
+                    p.apply_x_ppm(v, pcx);
                 }
             });
         }
@@ -1716,11 +1714,11 @@ impl Render for MainChartStack {
         };
         // The body flexes into whatever the row leaves, so the chart loses exactly the row's
         // height and nothing has to subtract it by hand.
-        return v_flex()
+        v_flex()
             .size_full()
             .child(tab_row)
             .child(div().flex_1().w_full().min_h(px(0.0)).child(body))
-            .into_any_element();
+            .into_any_element()
     }
 }
 

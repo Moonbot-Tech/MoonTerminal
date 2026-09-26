@@ -223,13 +223,13 @@ impl AnalyticsView {
                     );
                     let by_field: HashMap<&str, _> =
                         res.fields.into_iter().map(|f| (f.field, f)).collect();
-                    for fi in 0..FIELDS.len() {
+                    for (fi, field) in FIELDS.iter().enumerate() {
                         // Leave fields that were not searched alone (fixed/disabled).
                         if !this.tuner.enabled[fi] {
                             continue;
                         }
                         let (from, to) = by_field
-                            .get(FIELDS[fi].col)
+                            .get(field.col)
                             .map(|f| (fmt_bound(f.from), fmt_bound(f.to)))
                             .unwrap_or_default();
                         this.tuner.bounds[0][fi] = (from, to);

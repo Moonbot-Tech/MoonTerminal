@@ -560,14 +560,12 @@ impl AssetsView {
         {
             return Some(core);
         }
-        if workspace_owned {
-            if let Some(scope) = scope.as_ref() {
-                let ids = scope.ids();
-                return self
-                    .overview_wallet_pick
-                    .filter(|core| ids.contains(core))
-                    .or_else(|| ids.first().copied());
-            }
+        if workspace_owned && let Some(scope) = scope.as_ref() {
+            let ids = scope.ids();
+            return self
+                .overview_wallet_pick
+                .filter(|core| ids.contains(core))
+                .or_else(|| ids.first().copied());
         }
         None
     }

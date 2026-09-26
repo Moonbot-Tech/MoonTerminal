@@ -308,7 +308,7 @@ impl AnalyticsView {
         self.coins.kpi_task = Some(cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             executor.timer(KPI_DEBOUNCE).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     // A later edit landed during the wait — that one owns the recompute.
                     if this.coins.kpi_seq == req {

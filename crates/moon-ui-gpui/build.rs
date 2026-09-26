@@ -69,15 +69,14 @@ fn embed_group_icons() -> std::io::Result<()> {
     let mut ids: Vec<usize> = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("png") {
-            if let Some(id) = path
+        if path.extension().and_then(|s| s.to_str()) == Some("png")
+            && let Some(id) = path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .and_then(|s| s.parse::<usize>().ok())
-            {
-                ids.push(id);
-                max_id = max_id.max(id);
-            }
+        {
+            ids.push(id);
+            max_id = max_id.max(id);
         }
     }
     let mut present = vec![false; max_id + 1];

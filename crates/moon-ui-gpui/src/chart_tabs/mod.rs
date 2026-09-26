@@ -573,10 +573,10 @@ impl ChartTabs {
             // active, so an edit relayed while an AddToChart tab is shown would be written into
             // that tab's spec. It cannot be relayed later either — the edit belongs to the chart it
             // was made on — so it is taken and dropped rather than held.
-            if let Some(cfg) = main.update(cx, |stack, _| stack.take_pending_labels()) {
-                if matches!(this.active, Tab::Main) {
-                    this.apply_labels(cfg, cx);
-                }
+            if let Some(cfg) = main.update(cx, |stack, _| stack.take_pending_labels())
+                && matches!(this.active, Tab::Main)
+            {
+                this.apply_labels(cfg, cx);
             }
             // Main owns focus changes, while ChartTabs owns the visible anchor-aware group target.
             this.sync_main_chart_target(cx);
@@ -1035,10 +1035,10 @@ impl ChartTabs {
     fn main_chart_target(&self, cx: &App) -> Option<(CoreId, String)> {
         // A locked comparison anchor acts like Main fullscreen for trading: its `(core, market)`
         // becomes the group target for F1-F6, S1-S6, and cancel-buy hotkeys.
-        if let Some(stack) = self.active_stack() {
-            if let Some(anchor) = stack.read(cx).compare_anchor() {
-                return Some(anchor);
-            }
+        if let Some(stack) = self.active_stack()
+            && let Some(anchor) = stack.read(cx).compare_anchor()
+        {
+            return Some(anchor);
         }
         self.main.read(cx).active_target(cx)
     }
@@ -1067,10 +1067,9 @@ impl ChartTabs {
             // Only the ACTIVE tab's edit is taken, and only it is persisted here. A DETACHED
             // stack carries this observer too and is never active — its edits belong to the
             // window's own host, which relays them itself, so taking one here would swallow it.
-            if is_active {
-                if let Some(cfg) = stack.update(cx, |stack, _| stack.take_pending_labels()) {
-                    this.apply_labels(cfg, cx);
-                }
+            if is_active && let Some(cfg) = stack.update(cx, |stack, _| stack.take_pending_labels())
+            {
+                this.apply_labels(cfg, cx);
             }
             if is_active {
                 this.sync_main_chart_target(cx);
@@ -1183,12 +1182,11 @@ impl ChartTabs {
     }
 
     fn sync_seen_for_active(&mut self, cx: &App) {
-        if let Tab::Add(n, c) = self.active.clone() {
-            if let Some((_, _, panel)) = self.add.iter().find(|(num, cc, _)| *num == n && *cc == c)
-            {
-                let cnt = panel.read(cx).pane_count(cx);
-                self.seen.insert((n, c), cnt);
-            }
+        if let Tab::Add(n, c) = self.active.clone()
+            && let Some((_, _, panel)) = self.add.iter().find(|(num, cc, _)| *num == n && *cc == c)
+        {
+            let cnt = panel.read(cx).pane_count(cx);
+            self.seen.insert((n, c), cnt);
         }
     }
 
@@ -1397,12 +1395,12 @@ fn chart_pane_label(
     // of the raw 100000-series number; `custom_coins` in the spec identifies it.
     {
         let specs = &backend.read(cx).chart_specs;
-        if let Some(s) = specs.iter().find(|s| s.matches(group, n, bucket)) {
-            if s.custom_coins.is_some() {
-                return s.custom_label.clone().unwrap_or_else(|| {
-                    t!("chart.tab.custom", n = n - CUSTOM_NUM_BASE + 1).to_string()
-                });
-            }
+        if let Some(s) = specs.iter().find(|s| s.matches(group, n, bucket))
+            && s.custom_coins.is_some()
+        {
+            return s.custom_label.clone().unwrap_or_else(|| {
+                t!("chart.tab.custom", n = n - CUSTOM_NUM_BASE + 1).to_string()
+            });
         }
     }
     let mut label = if group.is_empty() {

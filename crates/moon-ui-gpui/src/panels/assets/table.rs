@@ -261,7 +261,7 @@ impl AssetsView {
                     cores,
                     selection,
                     crate::controls::CoreAllRowMode::ImplicitOrComplete,
-                    &t!("assets.all_cores").to_string(),
+                    t!("assets.all_cores").as_ref(),
                     &|n| t!("assets.cores_n", n = n).to_string(),
                 )
                 .label
@@ -282,7 +282,7 @@ impl AssetsView {
             crate::controls::core_combo(
                 "assets-core",
                 cores,
-                &venues,
+                venues,
                 selection,
                 crate::controls::CoreAllRowMode::ImplicitOrComplete,
                 t!("assets.all_cores").to_string(),
@@ -452,32 +452,32 @@ impl AssetsView {
                     .child(super::balances::figure(Some(agg), p, cx)),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
-                if let AssetsScope::Group(_) = &this.scope {
-                    if let Some(scope) = this.effective_scope(this.backend.read(cx)) {
-                        if scope.is_auto_core() {
-                            // A selected Auto core pins the wallet host to the rail.
-                            return;
-                        }
-                        if scope.is_workspace_owned() {
-                            // Auto Overview: pick a transfer host without touching the rail or
-                            // Classic's retained `selected_core`.
-                            if this.overview_wallet_pick != Some(cid) {
-                                this.overview_wallet_pick = Some(cid);
-                                if let Err(error) =
-                                    this.backend.read(cx).session.refresh_transfer_assets(cid)
-                                {
-                                    log::warn!("assets refresh failed for core {cid}: {error}");
-                                    window.push_notification(
-                                        MoonNotification::error(error.to_string()),
-                                        cx,
-                                    );
-                                }
-                                let backend = this.backend.clone();
-                                this.rebuild_cache(backend.read(cx));
-                                cx.notify();
+                if let AssetsScope::Group(_) = &this.scope
+                    && let Some(scope) = this.effective_scope(this.backend.read(cx))
+                {
+                    if scope.is_auto_core() {
+                        // A selected Auto core pins the wallet host to the rail.
+                        return;
+                    }
+                    if scope.is_workspace_owned() {
+                        // Auto Overview: pick a transfer host without touching the rail or
+                        // Classic's retained `selected_core`.
+                        if this.overview_wallet_pick != Some(cid) {
+                            this.overview_wallet_pick = Some(cid);
+                            if let Err(error) =
+                                this.backend.read(cx).session.refresh_transfer_assets(cid)
+                            {
+                                log::warn!("assets refresh failed for core {cid}: {error}");
+                                window.push_notification(
+                                    MoonNotification::error(error.to_string()),
+                                    cx,
+                                );
                             }
-                            return;
+                            let backend = this.backend.clone();
+                            this.rebuild_cache(backend.read(cx));
+                            cx.notify();
                         }
+                        return;
                     }
                 }
                 if this.selected_core != Some(cid) {

@@ -224,6 +224,8 @@ impl CoreOrder {
     /// Order the live sessions kept by `keep` (group / scope filter).
     ///
     /// The predicate controls membership; this method only canonicalizes the retained rows.
+    // The name matches the other ordering entry points. Dropping `self` would lose the rank table.
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn from_sessions<F>(
         &self,
         sessions: &[moon_core::session::CoreSession],
@@ -246,6 +248,8 @@ impl CoreOrder {
     /// Database-only cores whose server is absent from the current config share the `u32::MAX`
     /// rank `rank` hands out for anything unknown, so they land after every configured core and
     /// keep the query order — `sort_by_key` is a STABLE sort.
+    // Same rank table as `from_sessions`. A `from_*` rename would churn every caller.
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn from_db(&self, mut rows: Vec<(CoreId, String)>) -> OrderedCores {
         rows.sort_by_key(|(id, _)| self.rank(*id));
         OrderedCores(rows)

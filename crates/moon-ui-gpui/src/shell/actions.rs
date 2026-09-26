@@ -329,7 +329,8 @@ impl Shell {
     ) -> bool {
         use crate::hotkeys::HotkeyAction;
         let group = self.group.clone();
-        let handled = match action {
+
+        match action {
             HotkeyAction::SuperZoomIn | HotkeyAction::SuperZoomOut => {
                 self.backend.update(cx, |b, bcx| {
                     b.super_zoom_group = Some(group.clone());
@@ -452,8 +453,7 @@ impl Shell {
                     crate::hotkeys::apply(other, b, bcx, &group, target, active_core)
                 })
             }
-        };
-        handled
+        }
     }
 }
 

@@ -1203,7 +1203,7 @@ fn a_core_folder_row_counter_cluster_stays_passive() {
 /// Overview for the whole process lifetime — the reported bug, in full.
 #[test]
 fn strategies_window_seeds_expansion_from_the_auto_workspace() {
-    let ctor = code_only(&braced_body(
+    let ctor = code_only(braced_body(
         &read_src("strategies/state.rs"),
         "pub(super) fn new(",
     ));
@@ -1292,19 +1292,19 @@ fn strategies_reopen_state_is_process_lifetime_only() {
             && read_src("strategies/versions.rs").contains("self.persist_session(cx)"),
         "Strategies mutation writers must share persist_session"
     );
-    let observer = code_only(&braced_body(&state, "cx.observe(&workspace_revision,"));
+    let observer = code_only(braced_body(&state, "cx.observe(&workspace_revision,"));
     assert!(
         observer.contains("this.rail_seen_core = rail")
             && !observer.contains("this.expanded_cores"),
         "the live window's workspace observer must move only the rail overlay, never the persisted set"
     );
-    let capture = code_only(&braced_body(&session, "pub(super) fn capture("));
+    let capture = code_only(braced_body(&session, "pub(super) fn capture("));
     assert!(
         capture.contains("expanded_cores: view.expanded_cores.clone()")
             && !capture.contains("rail"),
         "capture must snapshot the persisted set alone, never the rail overlay"
     );
-    let session_struct = code_only(&braced_body(
+    let session_struct = code_only(braced_body(
         &session,
         "pub(crate) struct StrategiesSessionState",
     ));
@@ -1331,7 +1331,7 @@ fn strategies_reopen_state_is_process_lifetime_only() {
 /// construction. A call only on the create path would not catch this breakage.
 #[test]
 fn strategies_open_re_seeds_the_auto_core_on_an_existing_handle() {
-    let open = code_only(&braced_body(
+    let open = code_only(braced_body(
         &read_src("strategies/window.rs"),
         "pub fn open(",
     ));
@@ -1439,15 +1439,14 @@ fn strategy_field_label_lookup_and_dictionary_remain_bijective() {
             let key = trimmed.trim_end_matches(':').to_string();
             dictionary.entry(key.clone()).or_default();
             current = Some(key);
-        } else if let Some(key) = &current {
-            if let Some((locale, _)) = trimmed.split_once(':') {
-                if matches!(locale, "ru" | "en" | "es") {
-                    dictionary
-                        .get_mut(key)
-                        .expect("current label key was inserted")
-                        .insert(locale.to_string());
-                }
-            }
+        } else if let Some(key) = &current
+            && let Some((locale, _)) = trimmed.split_once(':')
+            && matches!(locale, "ru" | "en" | "es")
+        {
+            dictionary
+                .get_mut(key)
+                .expect("current label key was inserted")
+                .insert(locale.to_string());
         }
     }
     let dictionary_keys: BTreeSet<String> = dictionary.keys().cloned().collect();

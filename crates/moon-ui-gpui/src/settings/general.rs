@@ -157,14 +157,14 @@ impl SettingsView {
     fn adjust_idle(&mut self, delta: i32, cx: &mut Context<Self>) {
         let changed = self.backend.update(cx, |b, bcx| {
             let mut changed = false;
-            if let Some(p) = b.preview.as_mut() {
-                if p.main_idle_close_secs > 0 {
-                    let v = (p.main_idle_close_secs as i32 + delta).clamp(5, 3600) as u32;
-                    if p.main_idle_close_secs != v {
-                        p.main_idle_close_secs = v;
-                        bcx.notify();
-                        changed = true;
-                    }
+            if let Some(p) = b.preview.as_mut()
+                && p.main_idle_close_secs > 0
+            {
+                let v = (p.main_idle_close_secs as i32 + delta).clamp(5, 3600) as u32;
+                if p.main_idle_close_secs != v {
+                    p.main_idle_close_secs = v;
+                    bcx.notify();
+                    changed = true;
                 }
             }
             changed

@@ -86,11 +86,11 @@ pub(crate) fn install(conn: &Connection, axis: &ReportAxis) -> rusqlite::Result<
     // by two conversions cancelling.
     conn.create_scalar_function("mt_core_minute_of_day", 1, flags, move |ctx| {
         let secs = ctx.get::<i64>(0)?;
-        Ok(crate::util::display_time::minute_of_day(secs, chrono_tz::UTC).unwrap_or(0) as i64)
+        Ok(crate::util::display_time::minute_of_day(secs, chrono_tz::UTC).unwrap_or(0))
     })?;
     conn.create_scalar_function("mt_core_minute_of_week", 1, flags, move |ctx| {
         let secs = ctx.get::<i64>(0)?;
-        Ok(crate::util::display_time::minute_of_week(secs, chrono_tz::UTC).unwrap_or(0) as i64)
+        Ok(crate::util::display_time::minute_of_week(secs, chrono_tz::UTC).unwrap_or(0))
     })?;
 
     Ok(())

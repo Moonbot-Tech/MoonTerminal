@@ -307,7 +307,7 @@ fn repeated_activity_in_the_same_workspace_does_not_republish_owner() {
 /// singleton tools fall back to Classic when the first completed window publishes or renders.
 #[test]
 fn rebuild_keeps_an_owner_reopened_second_in_singleton_scope() {
-    let completed = vec!["alpha".to_string()];
+    let completed = ["alpha".to_string()];
     let opening = vec!["beta".to_string()];
     let owner_registered = completed
         .iter()

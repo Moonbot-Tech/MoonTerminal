@@ -45,21 +45,21 @@ impl Render for DetachedChartHost {
             };
             if rev != self.last_x_sync_rev {
                 self.last_x_sync_rev = rev;
-                if let Some((handle, ppm)) = req {
-                    if handle == window.window_handle() {
-                        self.panel
-                            .update(cx, |s, c| s.set_x_ppm(Some(ppm), true, c));
-                        let backend = self.backend.clone();
-                        let (num, bucket) = (self.num, self.bucket.clone());
-                        common::upsert_spec(
-                            &backend,
-                            &self.group.clone(),
-                            num,
-                            &bucket,
-                            cx,
-                            move |s| s.x_ppm = Some(ppm),
-                        );
-                    }
+                if let Some((handle, ppm)) = req
+                    && handle == window.window_handle()
+                {
+                    self.panel
+                        .update(cx, |s, c| s.set_x_ppm(Some(ppm), true, c));
+                    let backend = self.backend.clone();
+                    let (num, bucket) = (self.num, self.bucket.clone());
+                    common::upsert_spec(
+                        &backend,
+                        &self.group.clone(),
+                        num,
+                        &bucket,
+                        cx,
+                        move |s| s.x_ppm = Some(ppm),
+                    );
                 }
             }
         }

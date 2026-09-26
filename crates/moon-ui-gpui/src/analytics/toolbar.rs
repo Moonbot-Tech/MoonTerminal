@@ -739,7 +739,7 @@ impl AnalyticsView {
         crate::controls::core_combo(
             "an-core",
             &cores,
-            &venues,
+            venues,
             &selected,
             crate::controls::CoreAllRowMode::ImplicitOnly,
             all_label,
@@ -915,7 +915,7 @@ impl AnalyticsView {
                 cx.spawn(async move |this, cx| {
                     let executor = cx.update(|cx| cx.background_executor().clone());
                     executor.timer(wait).await;
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let _ = this.update(cx, |this, cx| {
                             this.integrity_poll_armed = false;
                             cx.notify();

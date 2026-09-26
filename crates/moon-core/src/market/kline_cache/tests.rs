@@ -202,7 +202,7 @@ fn retention_removes_expired_rows_from_both_cache_tables() {
 #[test]
 fn pack_unpack_roundtrip() {
     let day_start = 19_000i64 * DAY_MS;
-    let rows = vec![
+    let rows = [
         candle(day_start as f64, 5.0),
         candle((day_start + 60_000) as f64, 6.0),
     ];

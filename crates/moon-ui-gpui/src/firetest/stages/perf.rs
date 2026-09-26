@@ -114,10 +114,10 @@ impl Runtime {
             return 0;
         }
         let mut applied = 0usize;
-        if let Some(chart) = backend.live_chart_consumers().into_iter().next() {
-            if chart.set_firetest_text_labels(count) {
-                applied += 1;
-            }
+        if let Some(chart) = backend.live_chart_consumers().into_iter().next()
+            && chart.set_firetest_text_labels(count)
+        {
+            applied += 1;
         }
         firetest_info(&format!(
             "[firetest] text overlay labels={count} applied_to={applied}"

@@ -133,7 +133,9 @@ const TRADE_PAGE_BUDGET: usize = 240;
 /// An authoritative EMPTY is an answer too, and a valuable one: a delisted or halted market
 /// answers empty every time, so refetching it on each reopen spends the host's budget to learn
 /// something already known.
+// `Ready` owns the series a reopen draws. Boxing it allocates on every remembered answer.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum Remembered {
     /// Rows to draw.
     Ready {

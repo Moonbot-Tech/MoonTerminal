@@ -51,7 +51,7 @@ impl OrdersPanel {
                     cores,
                     selection,
                     crate::controls::CoreAllRowMode::ImplicitOrComplete,
-                    &t!("orders.all_cores").to_string(),
+                    t!("orders.all_cores").as_ref(),
                     &|n| t!("orders.cores_n", n = n).to_string(),
                 )
                 .label
@@ -83,7 +83,7 @@ impl OrdersPanel {
             crate::controls::core_combo(
                 "orders-source",
                 cores,
-                &venues,
+                venues,
                 selection,
                 crate::controls::CoreAllRowMode::ImplicitOrComplete,
                 t!("orders.all_cores").to_string(),

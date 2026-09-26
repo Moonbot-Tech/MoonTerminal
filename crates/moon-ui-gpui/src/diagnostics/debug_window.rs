@@ -434,13 +434,12 @@ pub(crate) fn open_debug_perf_window(
     group: String,
     owner: Option<AnyWindowHandle>,
 ) {
-    if let Some(handle) = backend.read(cx).debug_window {
-        if handle
+    if let Some(handle) = backend.read(cx).debug_window
+        && handle
             .update(cx, |_, window, _| window.activate_window())
             .is_ok()
-        {
-            return;
-        }
+    {
+        return;
     }
 
     let opts = windowing::debug_window_options(
@@ -527,7 +526,7 @@ pub(crate) fn debug_chart_target(b: &Backend) -> Option<(CoreId, String)> {
 pub(crate) fn spawn_debug_chart_windows(cx: &mut App, backend: Entity<Backend>) {
     let Some((core, group, market, epoch, theme, owner)) = ({
         let b = backend.read(cx);
-        debug_chart_target(&b).map(|(core, market)| {
+        debug_chart_target(b).map(|(core, market)| {
             let group = b
                 .session
                 .sessions()

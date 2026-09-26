@@ -342,7 +342,7 @@ fn dump_all(period_name: &str, from: i64, to: i64, pool: &Pool) {
     let monitor = moon_core::db::analytics::profit_monitor(&q(ProfitMetric::Quote));
     println!("{period_name}|profit_monitor|{monitor:?}");
 
-    if let Some(conn) = moon_core::db::open_reader().ok() {
+    if let Ok(conn) = moon_core::db::open_reader() {
         if let Ok(snap) = moon_core::db::read_snapshot(&conn) {
             let filter = ReportFilter::default();
             if let Ok(cores) = moon_core::db::distinct_cores(&snap) {

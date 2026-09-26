@@ -170,6 +170,11 @@ impl OrderBookModel {
         self.raw.len()
     }
 
+    /// Returns whether the book currently holds no levels.
+    pub fn is_empty(&self) -> bool {
+        self.raw.is_empty()
+    }
+
     /// Returns the book's best `(bid, ask)`. If only one side is populated, its best price is
     /// returned in both positions for a zero spread. An empty book or invalid best price returns
     /// `None`. `raw` stores descending bids followed by ascending asks, so the first `!is_ask`

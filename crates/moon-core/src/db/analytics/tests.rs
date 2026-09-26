@@ -312,7 +312,7 @@ fn one_current_stream_preserves_every_summary_field() {
         profit: 6.0,
         raw_profit: 6.0,
         avg_order: 100.0,
-        quote: quote.clone(),
+        quote,
         wins: 1,
         pf: 2.5,
         best: 10.0,
@@ -1096,7 +1096,7 @@ fn corrupt_replica_surfaces_error_not_empty() {
     let res = summary_on(&conn, &wide, false, false);
 
     assert!(
-        !matches!(res, Ok(_)),
+        !res.is_ok(),
         "ошибка чтения не должна превращаться в успешный — в том числе \
          пустой или частичный — период: это и есть чинимый баг"
     );

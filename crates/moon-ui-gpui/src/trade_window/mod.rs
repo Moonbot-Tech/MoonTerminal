@@ -732,7 +732,7 @@ impl TradeWindowView {
             let lookup = executor
                 .spawn(async move { strategy::StrategyLookup::read(core, strategy_id, buy_utc_ms) })
                 .await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.strategy_lookup = Some(lookup);
                     cx.notify();

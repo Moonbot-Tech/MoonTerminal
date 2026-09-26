@@ -1254,7 +1254,9 @@ pub struct CoreTimeOffsetStatus {
 }
 
 /// Account updates and transient notifications delivered from one core's feed.
+// `CoreConfig` is delivered by value on the feed. Boxing it allocates on every such message.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum FeedMsg {
     /// Already deduplicated actual trade edges; independent of order-table publication.
     TradeSounds(Vec<super::trade_sound::TradeSound>),

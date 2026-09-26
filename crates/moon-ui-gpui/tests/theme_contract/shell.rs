@@ -1687,7 +1687,7 @@ fn the_multi_select_hint_clips_instead_of_wrapping() {
     let coin_search = read_src("controls/coin_search.rs");
     let popup = braced_body(&coin_search, "pub(crate) fn render_popup<F, G, H, E>(");
     let hint = chain_between(
-        &popup,
+        popup,
         "if multi_select {",
         "chart.coin.multi_hint",
         "the multi-select hint",

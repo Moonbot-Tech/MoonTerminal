@@ -9,6 +9,7 @@
 //!   row on top (with the delta to the previous month), a plus/minus-day bar
 //!   below. Clicking a day switches to "Day" mode;
 //! - "Day" — hour-by-hour detail of a single day. See `day`.
+//!
 //! Each mode builds its own query (`cal_query` in mod.rs); the window's period
 //! bar is hidden here.
 
@@ -480,14 +481,14 @@ impl AnalyticsView {
                     .into_any_element();
             }
         };
-        if self.cal_mode == CalMode::Month {
-            if let Err(note) = self.cal_prev.view(|_| false) {
-                return v_flex()
-                    .size_full()
-                    .child(self.cal_nav(p, cx))
-                    .child(note_el("analytics-calendar-prev-read", note, 18.0, p, cx))
-                    .into_any_element();
-            }
+        if self.cal_mode == CalMode::Month
+            && let Err(note) = self.cal_prev.view(|_| false)
+        {
+            return v_flex()
+                .size_full()
+                .child(self.cal_nav(p, cx))
+                .child(note_el("analytics-calendar-prev-read", note, 18.0, p, cx))
+                .into_any_element();
         };
         // Frame: the nav bar (like Summary's period bar) + the mode's content.
         let content = match self.cal_mode {

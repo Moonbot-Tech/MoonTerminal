@@ -36,8 +36,10 @@ fn share_roundtrip() {
 /// Old flat theme.toml becomes dark while the caller's light theme remains current.
 #[test]
 fn share_flat_legacy_goes_dark() {
-    let mut flat = ChartTheme::default();
-    flat.bg = [10, 20, 30];
+    let flat = ChartTheme {
+        bg: [10, 20, 30],
+        ..ChartTheme::default()
+    };
     let text = toml::to_string_pretty(&flat).unwrap();
     let mut current = ChartThemeSet::default();
     current.light.bg = [200, 200, 200];
@@ -128,6 +130,8 @@ fn current_revision_keeps_a_deliberately_reselected_retired_value() {
 /// `theme.rs:ChartThemeSet::retire_old_defaults` must stamp a revision-zero custom file once;
 /// otherwise every launch re-examines and rewrites a palette with no old colours left to move.
 #[test]
+// Each palette channel is named on its own line so a round-trip mismatch points at that channel.
+#[allow(clippy::field_reassign_with_default)]
 fn revision_zero_customised_palette_is_stamped_once() {
     let mut set = ChartThemeSet::default();
     set.palette_rev = absent_palette_rev();
@@ -331,8 +335,10 @@ fn sharing_future_dark_table_with_current_light_uses_the_lower_generation() {
 /// taking the higher live generation would prevent a later build from migrating the pasted side.
 #[test]
 fn sharing_older_dark_table_with_newer_light_uses_the_lower_generation() {
-    let mut current = ChartThemeSet::default();
-    current.palette_rev = CURRENT_PALETTE_REV + 2;
+    let current = ChartThemeSet {
+        palette_rev: CURRENT_PALETTE_REV + 2,
+        ..ChartThemeSet::default()
+    };
     let text = format!(
         "palette_rev = {}\n\n[dark]\nbg = [11, 22, 33]\n",
         CURRENT_PALETTE_REV + 1
@@ -372,8 +378,10 @@ fn sharing_retires_both_tables_but_never_the_live_flat_light_set() {
     assert_eq!(parsed, ChartThemeSet::default());
 
     let flat_text = toml::to_string_pretty(&paired.dark).expect("flat themes serialize");
-    let mut current = ChartThemeSet::default();
-    current.light = paired.light.clone();
+    let current = ChartThemeSet {
+        light: paired.light.clone(),
+        ..ChartThemeSet::default()
+    };
     let live_light = current.light.clone();
     let parsed = ChartThemeSet::parse_share(&flat_text, &current).expect("a flat theme parses");
 

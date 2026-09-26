@@ -231,10 +231,10 @@ pub(super) fn draft_color(
         };
         let c = hsla_u8(*h);
         this.backend.update(cx, |b, bcx| {
-            if let Some(p) = b.preview.as_mut() {
-                if apply(p, c) {
-                    bcx.notify();
-                }
+            if let Some(p) = b.preview.as_mut()
+                && apply(p, c)
+            {
+                bcx.notify();
             }
         });
     })
@@ -300,10 +300,10 @@ pub(super) fn draft_slider_on(
         let f = f.end();
         let f = if f == 0.0 { 0.0 } else { f };
         this.backend.update(cx, |b, bcx| {
-            if let Some(p) = b.preview.as_mut() {
-                if apply(p, f, bcx) {
-                    bcx.notify();
-                }
+            if let Some(p) = b.preview.as_mut()
+                && apply(p, f, bcx)
+            {
+                bcx.notify();
             }
         });
     })

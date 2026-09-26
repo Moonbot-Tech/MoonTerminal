@@ -126,6 +126,8 @@ impl FeedTx {
         Self { data, wake }
     }
 
+    // The error returns the unsent message. Boxing it would change this public `Result`.
+    #[allow(clippy::result_large_err)]
     pub fn send(&self, msg: FeedMsg) -> Result<(), SendError<FeedMsg>> {
         self.data.send(msg)?;
         if let Some(wake) = &self.wake {
@@ -301,7 +303,9 @@ impl OrderStopsForm {
 }
 
 /// Commands from the coordinator to a core backend that define the core's market role.
+// `EditCoreConfig` carries the whole config. Boxing it allocates on the command path.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum CoreCmd {
     /// Desired market role of the core as full state, not a delta.
     ///
@@ -811,6 +815,8 @@ impl CoreCmdTx {
     ///
     /// A market-role snapshot is published only after the matching queue send succeeds. Holding the
     /// snapshot lock across both operations gives cloned senders and the consumer one order.
+    // The error returns the unsent command. Boxing it would change this public `Result`.
+    #[allow(clippy::result_large_err)]
     pub fn send(&self, cmd: CoreCmd) -> Result<(), SendError<CoreCmd>> {
         let assignment = match &cmd {
             CoreCmd::SetMarket {

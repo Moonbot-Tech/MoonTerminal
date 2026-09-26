@@ -169,7 +169,7 @@ impl StrategiesView {
                     async move { moon_core::strat_db::stats::versions_with_stats(core, id as i64) },
                 )
                 .await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.versions.inflight = false;
                     if this.versions.key == Some((core, id)) {
@@ -183,12 +183,11 @@ impl StrategiesView {
                         }
                         // A reveal that named a version wins over the deleted default above: it
                         // is the more specific ask, and it arrived from the same click.
-                        if let Some((key, vf)) = this.versions.pending_select.take() {
-                            if key == (core, id)
-                                && this.versions.list.iter().any(|v| v.valid_from == vf)
-                            {
-                                this.select_version(Some(vf), cx);
-                            }
+                        if let Some((key, vf)) = this.versions.pending_select.take()
+                            && key == (core, id)
+                            && this.versions.list.iter().any(|v| v.valid_from == vf)
+                        {
+                            this.select_version(Some(vf), cx);
                         }
                         cx.notify();
                     }
@@ -212,7 +211,7 @@ impl StrategiesView {
             let heads = executor
                 .spawn(async move { moon_core::strat_db::stats::deleted_heads() })
                 .await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.deleted_inflight = false;
                     this.deleted_loaded = true;
@@ -269,7 +268,7 @@ impl StrategiesView {
                     Some((view.fields, ignore))
                 })
                 .await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     let Some((fields, ignore)) = payload else {
                         return;
@@ -476,7 +475,7 @@ impl StrategiesView {
                     Some((head, fields))
                 })
                 .await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let Some((head, fields)) = payload else {
                     log::warn!("восстановление {id}: нет head/версий в strat_db");
                     return;
@@ -580,7 +579,7 @@ impl StrategiesView {
                     )
                 })
                 .await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     let Some(view) = view else { return };
                     if this.versions.sel != Some(vf)
@@ -610,10 +609,9 @@ impl StrategiesView {
                     });
                     if let Some(mut r) = base {
                         if let Some((_, n)) = view.fields.iter().find(|(k, _)| k == "StrategyName")
+                            && !n.is_empty()
                         {
-                            if !n.is_empty() {
-                                r.name = n.clone();
-                            }
+                            r.name = n.clone();
                         }
                         r.fields = view.fields;
                         this.versions.changed = view
@@ -652,7 +650,9 @@ impl StrategiesView {
             if single {
                 self.ensure_versions(cx); // Keep the count on the collapsed strip current.
             }
-            let count = single.then(|| self.versions.list.len()).filter(|n| *n > 0);
+            let count = single
+                .then_some(self.versions.list.len())
+                .filter(|n| *n > 0);
             return v_flex()
                 .id("versions-collapsed")
                 .w(design::ui_px(cx, 22.0))
@@ -871,6 +871,8 @@ impl StrategiesView {
             *stamp_counts.entry(s.as_str()).or_insert(0) += 1;
         }
         let mut previous_taken = false;
+        // `i` indexes the version list and the bare-stamp list together.
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n_versions {
             let v = &self.versions.list[i];
             let slot = if v.valid_to.is_none() {
@@ -998,8 +1000,7 @@ impl StrategiesView {
         // away (defect 5, and it must be unlosable).
         if let (Some(vf), true) = (self.versions.sel, live_exists) {
             let compact =
-                design::ui_body_text_width(cx, &t!("strat.version_restore").to_string(), 400.0)
-                    + 40.0
+                design::ui_body_text_width(cx, t!("strat.version_restore").as_ref(), 400.0) + 40.0
                     > self.panels.versions_w - design::ui_value(cx, VERSIONS_PANE_PADDING * 2.0);
             col = col.child(
                 div()
