@@ -645,7 +645,12 @@ struct PaneRender {
     /// the uploaded candle layer is still resident. Scaling the band from it would blank the
     /// band on exactly the gesture that should rescale it.
     volume_samples: Vec<moon_chart::VolumeSample>,
-    /// Widest `tf_ms` among `volume_samples`, bounding the sorted band lookups' windows.
+    /// Conservative upper bound on `tf_ms` among `volume_samples`, not an exact maximum.
+    ///
+    /// A full replacement scans every sample. A patch keeps this bound when it is wider
+    /// than the new suffix, so a removed maximum may stay high until the next full
+    /// replacement. Sorted band lookups only use it to widen the candidate window; the
+    /// exact candle intersection still decides the result.
     volume_samples_max_tf: f64,
     /// Visible-range volume max and average behind the band, kept as SEMANTIC values.
     ///

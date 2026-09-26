@@ -727,6 +727,17 @@ impl RenderState {
     }
 
     /// Requests presents for changed chart state and bounded decorations; a steady border is idle.
+    ///
+    /// Monotonic decisions — arrival pacing, the present cap, shot-caption expiry, and the
+    /// camera-shift window — read `info.now`. Camera positions stay on the wall clock.
+    /// An arrival-only present does not advance the camera.
+    ///
+    /// Args:
+    ///     info: Frame input from the GPU canvas. `info.now` drives scheduling; wall-clock
+    ///         `now_unix_ms` still places the camera.
+    ///
+    /// Returns:
+    ///     `RequestPresent` when the canvas changed, otherwise `Skip`.
     pub(super) fn frame(&mut self, info: GpuFrameInfo) -> GpuFrameDecision {
         crate::diag::bump(&crate::diag::CHART_FRAME);
         if !info.presentable || info.bounds.is_empty() {
@@ -734,13 +745,14 @@ impl RenderState {
             return GpuFrameDecision::Skip;
         }
 
+        // Wall clock for camera positions. `info.now` is the monotonic clock for pacing.
         let now_ms = now_unix_ms();
-        let now = Instant::now();
+        let now = info.now;
         let mut wants_present = std::mem::take(&mut self.needs_present);
         if self.firetest_force_present {
             wants_present = true;
         }
-        // Shot caption: ENDED here, from wall clock, with
+        // Shot caption: ENDED here, from the frame clock, with
         // no timer, no notify, and nobody to trust with the clear. This is the WATCHDOG, not the
         // normal path: the shot restores the caption itself as soon as it has its picture, and this
         // only fires when that chain never completed. Leaving it armed would keep the EXCHANGE on

@@ -365,3 +365,48 @@ fn live_follow_inside_the_book_margin_keeps_instances_and_bitmap() {
         );
     }
 }
+
+/// `market.rs:volume_sample_timeframe_bound` seeding the patch fold at `0.0` drops a wide row
+/// the patch does not touch.
+///
+/// The user-visible consequence is the volume band clipping a coarse candle that is still
+/// retained. A wider tail is the other direction and must raise the bound.
+#[test]
+fn patch_bound_keeps_wide_row_and_wider_tail() {
+    use super::{CandleApply, volume_sample_timeframe_bound};
+
+    let mut samples = Vec::with_capacity(8);
+    for i in 0..8 {
+        samples.push(moon_chart::VolumeSample {
+            t_open_ms: i as f64,
+            tf_ms: if i == 1 { 3_600_000.0 } else { 60_000.0 },
+            quote_volume: 1.0,
+        });
+    }
+    let previous = 3_600_000.0;
+    let suffix_max = samples[4..]
+        .iter()
+        .map(|sample| sample.tf_ms)
+        .fold(0.0, f64::max);
+    assert!(
+        suffix_max < previous,
+        "fixture suffix is narrower than row 1"
+    );
+    assert_eq!(
+        volume_sample_timeframe_bound(&samples, &CandleApply::Patch(4), previous),
+        previous.max(suffix_max),
+        "a patch must keep the older wide row"
+    );
+
+    samples[7].tf_ms = 7_200_000.0;
+    let raised_suffix = samples[4..]
+        .iter()
+        .map(|sample| sample.tf_ms)
+        .fold(0.0, f64::max);
+    assert!(raised_suffix > previous, "fixture tail is a new maximum");
+    assert_eq!(
+        volume_sample_timeframe_bound(&samples, &CandleApply::Patch(4), previous),
+        previous.max(raised_suffix),
+        "a wider tail must raise the bound"
+    );
+}

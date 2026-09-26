@@ -215,3 +215,36 @@ fn mouse_down_handlers_offer_a_press_to_their_layers_in_a_fixed_order() {
         }
     }
 }
+
+/// `panels/chart/mod.rs:chart_axis_notify_due` dropping `visible &&` wakes a hidden chart.
+///
+/// The user-visible consequence is axis preparation on every covered chart. Hidden, unchanged,
+/// and inside-floor cases are the boundary around that gate.
+#[test]
+fn hidden_axis_notify_stays_off_until_a_visible_change_clears_the_floor() {
+    use std::time::{Duration, Instant};
+
+    let now = Instant::now();
+    let floor = Duration::from_millis(250);
+    let aged = now.checked_sub(floor).expect("floor fits in the clock");
+    assert!(
+        !super::chart_axis_notify_due(false, true, None, now, floor),
+        "a hidden chart must not wake"
+    );
+    assert!(super::chart_axis_notify_due(true, true, None, now, floor));
+    assert!(!super::chart_axis_notify_due(true, false, None, now, floor));
+    assert!(!super::chart_axis_notify_due(
+        true,
+        true,
+        Some(now),
+        now,
+        floor
+    ));
+    assert!(super::chart_axis_notify_due(
+        true,
+        true,
+        Some(aged),
+        now,
+        floor
+    ));
+}

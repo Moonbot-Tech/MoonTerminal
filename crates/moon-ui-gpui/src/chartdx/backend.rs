@@ -194,6 +194,28 @@ impl PlatformLayers {
         }
     }
 
+    /// Whether appending these rows can change a cached combo bitmap.
+    ///
+    /// DX11 asks the combo layer, which knows both bake spans. Every other
+    /// backend reports damage, so it keeps the previous unconditional repaint.
+    ///
+    /// Args:
+    ///     data: Rows about to be appended.
+    ///
+    /// Returns:
+    ///     `false` only when DX11 can prove neither cached span is touched.
+    pub fn combo_append_touches_cached_span(&self, data: &[ChartCross]) -> bool {
+        #[cfg(windows)]
+        {
+            self.combo.append_touches_cached_span(data)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = data;
+            true
+        }
+    }
+
     /// Fully replaces the layer's candle set from the whole composed list.
     pub fn set_candles(&mut self, data: &[CandleGpu]) {
         #[cfg(windows)]

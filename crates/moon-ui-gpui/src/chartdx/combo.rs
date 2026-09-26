@@ -255,11 +255,68 @@ impl ComboLayer {
     }
 
     /// Append live ticks and retain lateness evidence even when this batch replaces the ring.
+    ///
+    /// Once the queue passes twice the ring capacity, its oldest rows are dropped until
+    /// the newest capacity rows remain. The logical ring already publishes only that
+    /// tail, and the lateness evidence is left in place so a later search stays wide.
     pub fn append(&mut self, data: &[ChartCross]) {
-        if !data.is_empty() {
-            self.tick_time_order.extend(data.iter().map(|c| c.time_rel));
-            self.pending_append.extend_from_slice(data);
+        if data.is_empty() {
+            return;
         }
+        self.tick_time_order.extend(data.iter().map(|c| c.time_rel));
+        self.pending_append.extend_from_slice(data);
+        let cap = self.cross_capacity as usize;
+        if self.pending_append.len() > cap.saturating_mul(2) {
+            let excess = self.pending_append.len() - cap;
+            self.pending_append.drain(..excess);
+        }
+    }
+
+    /// Whether appending these rows can change a pixel in either cached bitmap.
+    ///
+    /// An empty batch cannot. A missing or invalid cross or volume cache is damage,
+    /// because there is no span that proves the rows are offscreen. Otherwise both
+    /// bake spans, margins included, are tested against the new times and against
+    /// the oldest rows this append would evict from the pending logical ring.
+    /// The ring is read before any mutation.
+    ///
+    /// Args:
+    ///     data: Rows about to be appended. Not yet in `pending_append`.
+    ///
+    /// Returns:
+    ///     `true` when either cached bitmap may change.
+    pub fn append_touches_cached_span(&self, data: &[ChartCross]) -> bool {
+        if data.is_empty() {
+            return false;
+        }
+        let Some(cross) = self.tex.as_ref().filter(|tex| tex.key.valid) else {
+            return true;
+        };
+        let Some(volume) = self.vol_tex.as_ref().filter(|tex| tex.key.valid) else {
+            return true;
+        };
+        let cross_span = tick_bake_span(
+            cross.key.bake_t0,
+            cross.key.tex_w as f32,
+            cross.key.time_to_px,
+            cross.key.marker_half,
+        );
+        let volume_span = tick_bake_span(
+            volume.key.bake_t0,
+            volume.key.tex_w as f32,
+            volume.key.time_to_px,
+            0.0,
+        );
+        let capacity = self.cross_capacity as usize;
+        let old = moon_chart::tick_volume::pending_ring(
+            &self.resident_crosses,
+            self.resident_head,
+            self.resident_count,
+            capacity,
+            self.pending_reset.as_deref(),
+            &self.pending_append,
+        );
+        append_span_damage(old, data, cross_span, volume_span, capacity)
     }
 
     /// Updates tick colours and invalidates history baked with the previous style.
@@ -1239,6 +1296,39 @@ fn draw_price_ring(
         context.PSSetShader(ps, None);
         context.DrawInstanced(6, segments, 0, 0);
     }
+}
+
+/// Whether new rows, or the old rows they evict, intersect either cached span.
+///
+/// `old` is the logical ring before the append, in chronological order. The
+/// eviction count is how far `old.len() + new_rows.len()` passes `capacity`,
+/// and it never exceeds `old.len()`. A non-finite time touches every span.
+///
+/// Args:
+///     old: Pending logical ring before this append.
+///     new_rows: Rows about to be appended.
+///     cross_span: Cached cross-bitmap time span, margins included.
+///     volume_span: Cached volume-bitmap time span, margins included.
+///     capacity: Ring capacity. Already a positive normalized value.
+///
+/// Returns:
+///     `true` when any tested time lies in either span.
+fn append_span_damage<'a>(
+    old: impl ExactSizeIterator<Item = &'a ChartCross>,
+    new_rows: &[ChartCross],
+    cross_span: (f64, f64),
+    volume_span: (f64, f64),
+    capacity: usize,
+) -> bool {
+    let evicted = old
+        .len()
+        .saturating_add(new_rows.len())
+        .saturating_sub(capacity)
+        .min(old.len());
+    let touches =
+        |time: f32| tick_touches_bake(time, cross_span) || tick_touches_bake(time, volume_span);
+    new_rows.iter().any(|row| touches(row.time_rel))
+        || old.take(evicted).any(|row| touches(row.time_rel))
 }
 
 fn sanitize_capacity(capacity: usize) -> u32 {

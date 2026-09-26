@@ -285,3 +285,206 @@ fn live_follow_inside_the_margin_never_rebakes_and_slides_the_blit() {
         "a price-scale change must bake"
     );
 }
+
+/// Whether `time` lies inside a cached bitmap span. Non-finite times are outside this fixture.
+///
+/// Args:
+///     time: Row time, relative to the chart epoch.
+///     span: Inclusive bake interval.
+///
+/// Returns:
+///     `true` when a finite time is inside the span.
+fn covers(time: f32, span: (f64, f64)) -> bool {
+    time.is_finite() && f64::from(time) >= span.0 && f64::from(time) <= span.1
+}
+
+/// Chronological rows the next upload would publish, copied out of the pending ring.
+///
+/// Args:
+///     layer: Combo layer whose reset and append queues are already filled.
+///
+/// Returns:
+///     The retained logical ring, oldest first.
+fn logical_ring(layer: &ComboLayer) -> Vec<ChartCross> {
+    let capacity = layer.cross_capacity as usize;
+    moon_chart::tick_volume::pending_ring(
+        &layer.resident_crosses,
+        layer.resident_head,
+        layer.resident_count,
+        capacity,
+        layer.pending_reset.as_deref(),
+        &layer.pending_append,
+    )
+    .copied()
+    .collect()
+}
+
+/// Run the damage predicate on `new_rows` without appending them.
+///
+/// Args:
+///     layer: Pending ring the predicate reads.
+///     new_rows: Batch that has not been queued yet.
+///     cross_span: Cached cross-bitmap span.
+///     volume_span: Cached volume-bitmap span.
+///
+/// Returns:
+///     Whatever `append_span_damage` reports for that ring.
+fn damage_of(
+    layer: &ComboLayer,
+    new_rows: &[ChartCross],
+    cross_span: (f64, f64),
+    volume_span: (f64, f64),
+) -> bool {
+    let capacity = layer.cross_capacity as usize;
+    let old = moon_chart::tick_volume::pending_ring(
+        &layer.resident_crosses,
+        layer.resident_head,
+        layer.resident_count,
+        capacity,
+        layer.pending_reset.as_deref(),
+        &layer.pending_append,
+    );
+    super::append_span_damage(old, new_rows, cross_span, volume_span, capacity)
+}
+
+/// `combo.rs:append_span_damage` deleting the evicted-prefix disjunct still accepts offscreen
+/// new rows and leaves a visible cross or volume bar baked after the ring has dropped it.
+#[test]
+fn offscreen_rows_that_evict_a_visible_row_damage_the_cached_span() {
+    let cross_span = (1_000.0, 1_100.0);
+    let volume_span = (90.0, 160.0);
+    let capacity = 4usize;
+    let new_rows = [cross(500.0, 0, 1.0), cross(600.0, 0, 1.0)];
+
+    let mut quiet = ComboLayer::new();
+    quiet.set_capacity(capacity, 1);
+    quiet.reset(vec![
+        cross(10.0, 0, 1.0),
+        cross(20.0, 0, 1.0),
+        cross(300.0, 0, 1.0),
+    ]);
+    quiet.append(&[cross(400.0, 0, 1.0)]);
+    assert!(
+        !damage_of(&quiet, &new_rows, cross_span, volume_span),
+        "offscreen eviction of offscreen rows must not repaint"
+    );
+
+    let mut layer = ComboLayer::new();
+    layer.set_capacity(capacity, 1);
+    // Pending reset replaces resident rows. The queued append is already part of the old ring.
+    // Times 100 and 150 sit in the volume span and miss the cross span.
+    layer.reset(vec![
+        cross(100.0, 0, 1.0),
+        cross(150.0, 0, 1.0),
+        cross(300.0, 0, 1.0),
+    ]);
+    layer.append(&[cross(400.0, 0, 1.0)]);
+
+    let old_rows = logical_ring(&layer);
+    let mut combined = old_rows.clone();
+    combined.extend_from_slice(&new_rows);
+    let retained = &combined[combined.len().saturating_sub(capacity)..];
+    let evicted_n = old_rows
+        .len()
+        .saturating_add(new_rows.len())
+        .saturating_sub(capacity)
+        .min(old_rows.len());
+    let evicted = &old_rows[..evicted_n];
+
+    assert!(
+        evicted
+            .iter()
+            .any(|row| { covers(row.time_rel, volume_span) && !covers(row.time_rel, cross_span) }),
+        "fixture must evict a volume-only row"
+    );
+    assert!(
+        new_rows
+            .iter()
+            .all(|row| { !covers(row.time_rel, volume_span) && !covers(row.time_rel, cross_span) }),
+        "new rows must miss both cached spans"
+    );
+    assert!(
+        evicted
+            .iter()
+            .all(|row| retained.iter().all(|kept| kept.price != row.price)),
+        "evicted prices must leave the retained ring"
+    );
+
+    assert!(
+        damage_of(&layer, &new_rows, cross_span, volume_span),
+        "evicted visible row must mark cached volume damage"
+    );
+}
+
+/// `combo.rs:append_span_damage` dropping `new_rows.iter().any(...)` ignores a tick that lands
+/// in a cached span when the ring does not evict.
+///
+/// The user-visible consequence is a stale cross or volume bitmap until a later eviction.
+/// A miss outside both spans, with no eviction, stays quiet.
+#[test]
+fn new_row_in_span_damages_without_eviction() {
+    let cross_span = (1_000.0, 1_100.0);
+    let volume_span = (90.0, 160.0);
+    let mut layer = ComboLayer::new();
+    layer.set_capacity(8, 1);
+    layer.reset(vec![
+        cross(10.0, 0, 1.0),
+        cross(20.0, 0, 1.0),
+        cross(30.0, 0, 1.0),
+    ]);
+    let old = logical_ring(&layer);
+    assert!(old.len() + 1 <= 8, "fixture must not evict");
+    assert!(
+        damage_of(&layer, &[cross(120.0, 0, 4.0)], cross_span, volume_span),
+        "a new row inside the volume span must damage without eviction"
+    );
+    assert!(
+        damage_of(&layer, &[cross(1_050.0, 0, 5.0)], cross_span, volume_span),
+        "a new row inside the cross span must damage without eviction"
+    );
+    assert!(
+        !damage_of(&layer, &[cross(5_000.0, 0, 6.0)], cross_span, volume_span),
+        "a new row outside both spans must stay quiet when nothing is evicted"
+    );
+}
+
+/// `combo.rs:ComboLayer::append` replacing `drain(..excess)` with `truncate(cap)` keeps the
+/// oldest queued rows and drops the live tail.
+///
+/// The user-visible consequence is the chart drawing stale ticks after the queue overflows.
+/// Lateness is evidence over every appended time, so the trim must not clear it.
+#[test]
+fn pending_append_keeps_newest_capacity() {
+    let cap = 4usize;
+    let mut layer = ComboLayer::new();
+    layer.set_capacity(cap, 1);
+    let mut all = Vec::new();
+    all.push(cross(50.0, 0, 1.0));
+    all.push(cross(10.0, 0, 1.0));
+    for i in 0..(cap * 2) {
+        all.push(cross(100.0 + i as f32, 0, 1.0));
+    }
+    assert!(all.len() > cap * 2, "fixture must cross the overflow line");
+    layer.append(&all);
+    let tail = &all[all.len() - cap..];
+    assert_eq!(
+        layer.pending_append.len(),
+        cap,
+        "overflow keeps one capacity"
+    );
+    for (got, want) in layer.pending_append.iter().zip(tail.iter()) {
+        assert_eq!(got.time_rel, want.time_rel, "oldest rows must not survive");
+        assert_eq!(got.price, want.price);
+    }
+    let mut order = moon_chart::tick_volume::TickTimeOrder::default();
+    order.extend(all.iter().map(|row| row.time_rel));
+    assert_eq!(
+        layer.tick_time_order.max_lateness(),
+        order.max_lateness(),
+        "overflow must keep lateness from the dropped prefix"
+    );
+    assert!(
+        order.max_lateness() >= 40.0,
+        "fixture lateness is 50 minus 10"
+    );
+}

@@ -381,6 +381,31 @@ pub struct ChartPanel {
     focus: FocusHandle,
 }
 
+/// Whether a live-data axis notice may wake this chart's window.
+///
+/// Hidden charts never wake, however long the last wake was. A visible chart
+/// wakes only when the signature changed and the previous wake is missing or
+/// at least `floor` old.
+///
+/// Args:
+///     visible: Whether this panel's scene is on screen.
+///     changed: Whether the data signature differs from the last axis wake.
+///     last: Time of the previous axis wake, if one has happened.
+///     now: Observation time.
+///     floor: Minimum gap between axis wakes.
+///
+/// Returns:
+///     `true` only when the caller should stamp the wake and notify.
+fn chart_axis_notify_due(
+    visible: bool,
+    changed: bool,
+    last: Option<Instant>,
+    now: Instant,
+    floor: Duration,
+) -> bool {
+    visible && changed && last.is_none_or(|t| now.saturating_duration_since(t) >= floor)
+}
+
 impl ChartPanel {
     fn sync_orders_from_backend_notify(&mut self, cx: &mut Context<Self>) -> bool {
         crate::diag::bump(&crate::diag::CHART_ORDER_SYNC);
@@ -615,8 +640,13 @@ impl ChartPanel {
             let now = Instant::now();
             let (sig, settings_sig, panic_rev, fav_rev) = {
                 let b = backend.read(cx);
+                let sig = if this.scene_visible {
+                    this.chart.notify_signature(&b.session)
+                } else {
+                    this.data_sig
+                };
                 (
-                    this.chart.notify_signature(&b.session),
+                    sig,
                     chart_settings_sig(
                         &b,
                         this.chart_graphics,
@@ -660,21 +690,24 @@ impl ChartPanel {
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
-            this.data_sig = sig;
-            // Throttle notification because `gpu_canvas` presents data itself. GPUI notification is
-            // needed only for the top-down axis overlay and also wakes Orders, so cap it at 4 Hz for
-            // fast panels and 1 Hz for numbered AddToChart and Custom panels.
-            // `gpu_canvas.frame()` handles frequent GPU data and state updates without marking GPUI
-            // dirty.
+            if this.scene_visible {
+                this.data_sig = sig;
+            }
+            // Axis overlay only. The own pass presents market data itself. A hidden chart
+            // has no canvas, so a live-data notice must not wake the window. Fast panels
+            // floor at 250 ms and slow panels at 1 s. Settings and orders above stay immediate.
             let floor = if this.fast {
                 Duration::from_millis(250)
             } else {
                 Duration::from_millis(1_000)
             };
-            let notify_due = this
-                .last_adaptive_notify_at
-                .is_none_or(|last| now.duration_since(last) >= floor);
-            if sig != this.last_axis_notify_data_sig && notify_due {
+            if chart_axis_notify_due(
+                this.scene_visible,
+                sig != this.last_axis_notify_data_sig,
+                this.last_adaptive_notify_at,
+                now,
+                floor,
+            ) {
                 this.last_axis_notify_data_sig = sig;
                 this.last_adaptive_notify_at = Some(now);
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
@@ -840,8 +873,13 @@ impl ChartPanel {
             let now = Instant::now();
             let (sig, settings_sig, panic_rev, fav_rev) = {
                 let b = backend.read(cx);
+                let sig = if this.scene_visible {
+                    this.chart.notify_signature(&b.session)
+                } else {
+                    this.data_sig
+                };
                 (
-                    this.chart.notify_signature(&b.session),
+                    sig,
                     chart_settings_sig(
                         &b,
                         this.chart_graphics,
@@ -882,15 +920,19 @@ impl ChartPanel {
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
-            this.data_sig = sig;
-            // Numbered AddToChart and Custom panels are background charts, so cap GPUI notification
-            // and their top-down Orders redraw at 1 Hz. `gpu_canvas.frame()` handles frequent GPU
-            // data and state without notification, while the local TTL timer performs time-based
-            // pruning of unpinned panes.
-            let notify_due = this
-                .last_adaptive_notify_at
-                .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(1_000));
-            if sig != this.last_axis_notify_data_sig && notify_due {
+            if this.scene_visible {
+                this.data_sig = sig;
+            }
+            // Numbered panels cap the axis overlay at 1 Hz. A hidden tile still receives this
+            // observation, and the helper refuses the wake. The TTL timer prunes unpinned panes
+            // on its own clock. Settings and orders above stay immediate.
+            if chart_axis_notify_due(
+                this.scene_visible,
+                sig != this.last_axis_notify_data_sig,
+                this.last_adaptive_notify_at,
+                now,
+                Duration::from_millis(1_000),
+            ) {
                 this.last_axis_notify_data_sig = sig;
                 this.last_adaptive_notify_at = Some(now);
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);

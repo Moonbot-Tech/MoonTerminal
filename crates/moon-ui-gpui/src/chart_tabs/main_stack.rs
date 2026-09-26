@@ -113,6 +113,12 @@ pub(crate) struct MainChartStack {
     layout_min_slot: Option<u16>,
     /// Size the stack was last painted at, written by the render probe. See `AddChartStack`.
     measured: Rc<Cell<Size<Pixels>>>,
+    /// Whether the host presenting this stack is on screen.
+    ///
+    /// The dock writes it through [`Self::set_scene_visible`]. Paint stores `true` because a
+    /// rendered stack is present. Prune and virtual-list callbacks AND this flag, so a hidden
+    /// host cannot be switched back on by a local visibility update.
+    host_visible: bool,
     scroll: MoonVirtualListScrollHandle,
 }
 
@@ -246,6 +252,7 @@ impl MainChartStack {
             layout_columns_exact: None,
             layout_min_slot: None,
             measured: Rc::new(Cell::new(Size::default())),
+            host_visible: true,
             scroll: MoonVirtualListScrollHandle::new(),
         };
         if let Some((core, market)) = focus_open {
@@ -1202,7 +1209,24 @@ impl MainChartStack {
             .update(cx, |panel, pcx| panel.debug_fill_history_to_capacity(pcx))
     }
 
+    /// Record whether the host is showing this stack, and propagate a real change.
+    ///
+    /// An unchanged value returns immediately. Child prune and layout already update local
+    /// visibility, and repeating the hide or reveal on every backend observation would reset
+    /// virtual-list children.
+    ///
+    /// Args:
+    ///     visible: Whether the host currently presents this stack.
+    ///     cx: Stack context used to update child panels.
+    ///
+    /// Returns:
+    ///     Nothing; an unchanged host flag leaves child visibility untouched. A reveal reuses
+    ///     [`Self::sync_visibility`]. A hide forces every child off and clears stack-scroll mode.
     pub(super) fn set_scene_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.host_visible == visible {
+            return;
+        }
+        self.host_visible = visible;
         if visible {
             self.sync_visibility(cx);
         } else {
@@ -1215,12 +1239,20 @@ impl MainChartStack {
         }
     }
 
+    /// Push fullscreen or stack visibility down to every child, gated by the host.
+    ///
+    /// Args:
+    ///     cx: Stack context used to update child panels.
+    ///
+    /// Returns:
+    ///     Nothing. A hidden host forces every child off.
     fn sync_visibility(&mut self, cx: &mut Context<Self>) {
         for (ix, entry) in self.charts.iter().enumerate() {
             // In fullscreen, only the active chart is visible. In stack mode, visible tiles set
             // themselves visible in `ChartPanel::render`; offscreen virtual-list entries remain
-            // hidden and do not run preparation work.
-            let visible = !self.show_stack && Some(ix) == self.active;
+            // hidden and do not run preparation work. `host_visible` keeps a hidden dock or an
+            // inactive Main tab from being turned back on by prune, open, or close.
+            let visible = self.host_visible && !self.show_stack && Some(ix) == self.active;
             let stack_scroll = self.show_stack;
             entry.panel.update(cx, |panel, _| {
                 panel.set_main_stack_scroll(stack_scroll);
@@ -1229,12 +1261,21 @@ impl MainChartStack {
         }
     }
 
+    /// Apply one virtual-list window to stack-mode children, gated by the host.
+    ///
+    /// Args:
+    ///     range: Display indexes the virtual list currently paints.
+    ///     cx: Stack context used to update child panels.
+    ///
+    /// Returns:
+    ///     Nothing. Fullscreen ignores the window. A hidden host forces every child in the
+    ///     window off.
     fn sync_stack_visible_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
         if !self.show_stack {
             return;
         }
         for (ix, entry) in self.charts.iter().enumerate() {
-            let visible = range.contains(&ix);
+            let visible = self.host_visible && range.contains(&ix);
             entry.panel.update(cx, |panel, _| {
                 panel.set_main_stack_scroll(true);
                 panel.set_scene_visible(visible);
@@ -1619,7 +1660,13 @@ mod tests;
 impl Render for MainChartStack {
     /// Renders the per-chart tab row above either the active full-bleed chart or the virtualized
     /// whole-stack layout.
+    ///
+    /// Paint stores `host_visible` because a rendered stack is on screen. Child wake stays on the
+    /// visible-range path; `set_scene_visible` is not called from here.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Paint means this host is on screen. Store the flag only: `set_scene_visible` would mark
+        // every offscreen child visible.
+        self.host_visible = true;
         crate::diag::bump(&crate::diag::MAIN_STACK_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::MAIN_STACK_RENDER_US);
         let palette = moon_ui::MoonPalette::active(cx);

@@ -426,23 +426,39 @@ impl ChartDataState {
         changed
     }
 
+    /// Prepare one canvas frame, or skip it before any chart work.
+    ///
+    /// Hidden, not-presentable, and empty-bounds frames return [`GpuFrameDecision::Skip`]
+    /// before slot geometry, present-rate sampling, market sync, countdown captions, or
+    /// [`RenderState::frame`]. `view_dirty` and `RenderState::needs_present` stay pending.
+    /// `last_frame_tick_at` is cleared so the gap is not a cadence sample. The next eligible
+    /// frame applies the current slot, then one market pull performs the only source sync.
+    /// A present-rate change only marks the view dirty and rides that same pull. With no
+    /// source the dirty flag stays set.
+    ///
+    /// Args:
+    ///     info: Frame input from the GPU canvas. `info.now` is the monotonic clock for
+    ///         present-rate and countdown checks.
+    ///
+    /// Returns:
+    ///     `Skip` when this chart must not prepare, otherwise the render state's decision.
     pub(crate) fn frame(&mut self, info: GpuFrameInfo) -> GpuFrameDecision {
-        // Apply slot geometry synchronously from info.bounds, which the fork provides for this
-        // frame before presentation. Doing this before pull/sync lets the own pass draw in the
-        // current slot without the one- or two-frame probe-to-notify-to-render-to-present delay;
-        // otherwise a vacated or shifted slot flashes the window clear during stack reflow.
-        self.apply_slot_geometry(&info);
-        if !info.presentable || info.bounds.is_empty() {
-            return self.render.borrow_mut().frame(info);
-        }
-        let now = Instant::now();
-        if self.observe_present_rate(now) {
-            if let Some(source) = self.market_source.clone() {
-                crate::diag::bump(&crate::diag::CHART_PREPARE);
-                self.sync_from_market_source(&source, None);
-            } else {
-                self.view_dirty = true;
+        if !self.scene_visible || !info.presentable || info.bounds.is_empty() {
+            self.last_frame_tick_at = None;
+            // Same counter `RenderState::frame` bumps for a direct caller. This path no
+            // longer reaches that guard.
+            if !info.presentable || info.bounds.is_empty() {
+                crate::diag::bump(&crate::diag::CHART_FRAME_SKIP_NOT_PRESENTABLE);
             }
+            return GpuFrameDecision::Skip;
+        }
+        // Geometry before pull/sync: the fork already has this frame's slot, so the own
+        // pass draws it without a one- or two-frame reflow flash. A reveal applies it in
+        // the same call, before anything is drawn.
+        self.apply_slot_geometry(&info);
+        let now = info.now;
+        if self.observe_present_rate(now) {
+            self.mark_view_dirty();
         }
         if self.pull_market_source_if_visible() {
             crate::diag::bump(&crate::diag::CHART_PREPARE);

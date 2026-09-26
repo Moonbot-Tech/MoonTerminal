@@ -268,12 +268,22 @@ impl ChartEngine {
         self.container.borrow().layout(area)
     }
 
+    /// Publish a bootstrap present rate when the requested value changes.
+    ///
+    /// The panel calls this on every render. The rate stored here is that request,
+    /// not the cadence learned from frame callbacks. Writing the learned rate back
+    /// on each render would schedule a full source sync every time.
+    ///
+    /// Args:
+    ///     hz: Requested frames per second. Values below 1 become 1.
     pub fn set_present_rate_hz(&mut self, hz: f32) {
-        self.present_rate_hz = hz.max(1.0);
-        self.data.borrow_mut().present_rate_hz = self.present_rate_hz;
-        self.state
-            .borrow_mut()
-            .set_target_present_rate_hz(self.present_rate_hz);
+        let hz = hz.max(1.0);
+        if hz == self.present_rate_hz {
+            return;
+        }
+        self.present_rate_hz = hz;
+        self.data.borrow_mut().present_rate_hz = hz;
+        self.state.borrow_mut().set_target_present_rate_hz(hz);
     }
 
     /// Uploads the live Moon palette for chart chrome that follows the UI theme.
@@ -427,8 +437,27 @@ impl ChartEngine {
         self.data.borrow().notify_signature(session)
     }
 
+    /// Record whether this chart's scene is on screen.
+    ///
+    /// An unchanged flag does nothing. A real change drops cadence samples so a
+    /// hidden gap cannot train the present rate, including when no frame callback
+    /// runs while the chart is hidden. Revealing marks the view dirty so the next
+    /// frame pulls the latest source. Render dirtiness is left as it was.
+    ///
+    /// Args:
+    ///     visible: Whether the panel is showing this engine.
     pub fn set_scene_visible(&mut self, visible: bool) {
-        self.data.borrow_mut().scene_visible = visible;
+        let mut data = self.data.borrow_mut();
+        if data.scene_visible == visible {
+            return;
+        }
+        data.scene_visible = visible;
+        data.last_frame_tick_at = None;
+        data.present_rate_candidate_hits = 0;
+        data.present_rate_candidate_hz = 0.0;
+        if visible {
+            data.mark_view_dirty();
+        }
     }
 
     /// Adopt a new device pixel scale, invalidating the userdata layer when it actually moved.
