@@ -97,13 +97,16 @@ pub const DEFAULT_TRADES_MAX_MB: u32 = 256;
 /// (`trade_replay::MODEL_PAD_MS`): one setting sizes the chart's window, the close-time capture,
 /// the tuner's fetch and the cleanup alike, and none of them pads it behind the tab's back (the
 /// developer's call, 2026-09-23; the steps started at 5 s before that, and the tuner lifted
-/// them to a minute on its own). The ceiling is two hours: the bar context after an exit is two
-/// hours at least, and prints past the bars would have nowhere to draw.
-pub const TRADE_MARGIN_STEPS_S: &[u32] = &[30, 60, 180, 300, 600, 900, 1800, 3600, 7200];
+/// them to a minute on its own). 65 s is a step so the default survives the snap; it is not
+/// the floor. The ceiling is two hours: the bar context after an exit is two hours at least,
+/// and prints past the bars would have nowhere to draw.
+pub const TRADE_MARGIN_STEPS_S: &[u32] = &[30, 60, 65, 180, 300, 600, 900, 1800, 3600, 7200];
 
-/// Default seconds of prints around a trade, per end — the floor of [`TRADE_MARGIN_STEPS_S`],
-/// 30 s (the developer's call, 2026-09-23; 5 s from 2026-09-21, 15 minutes before that).
-pub const DEFAULT_TRADE_MARGIN_S: u32 = 30;
+/// Default seconds of prints around a trade, per end. 65 s (the user's call, 2026-09-26;
+/// 30 s from 2026-09-23, 5 s from 2026-09-21, 15 minutes before that). Not the floor of
+/// [`TRADE_MARGIN_STEPS_S`]: 30 s stays the tuner's pad and a step, so a file that already
+/// stores 30 keeps 30. A file with no margin key at all takes this default.
+pub const DEFAULT_TRADE_MARGIN_S: u32 = 65;
 
 /// Ceiling on [`TradeReplayStoreCfg::margin_s`] — the last of [`TRADE_MARGIN_STEPS_S`].
 pub const MAX_TRADE_MARGIN_S: u32 = 7200;

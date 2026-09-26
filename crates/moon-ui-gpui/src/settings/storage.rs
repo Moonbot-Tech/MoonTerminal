@@ -210,8 +210,8 @@ impl SettingsView {
     }
 
     /// Moves the prints kept around a trade, per end, `delta` steps along
-    /// `TRADE_MARGIN_STEPS_S` (30 s … 120 min, not a fixed amount), and updates live state and
-    /// storage.toml.
+    /// `TRADE_MARGIN_STEPS_S` (30 s … 120 min, including 65 s, not a fixed amount), and updates
+    /// live state and storage.toml.
     fn adjust_trades_margin_step(&mut self, delta: i32, cx: &mut Context<Self>) {
         let v = storage_cfg::step_trade_margin_s(self.storage.cfg.trade_replay.margin_s, delta);
         if self.storage.cfg.trade_replay.margin_s != v {
@@ -240,13 +240,14 @@ impl SettingsView {
         }
     }
 
-    /// The stepper's label for a margin: whole seconds under a minute, whole minutes from
-    /// there — every step of `TRADE_MARGIN_STEPS_S` is one or the other.
+    /// The stepper's label for a margin: a whole number of minutes when the step divides by
+    /// 60, seconds otherwise. 65 s is a step and must not read as "1 min", which is what 60 s
+    /// already says.
     fn trades_margin_label(secs: u32) -> String {
-        if secs < 60 {
-            t!("storage.trades_sec", s = secs).to_string()
-        } else {
+        if secs % 60 == 0 {
             t!("storage.trades_min", min = secs / 60).to_string()
+        } else {
+            t!("storage.trades_sec", s = secs).to_string()
         }
     }
 
