@@ -876,7 +876,7 @@ pub struct BasePart<'a> {
 
 /// Merges the base sources of one series into its timeframe, later parts winning a bucket.
 ///
-/// Every part is resampled to `tf_ms` and inserted by bucket; a part whose timeframe is coarser
+/// Every part is resampled to `tf_ms` and merged by bucket key; a part whose timeframe is coarser
 /// than or does not divide the target — a 5-minute snapshot under a 1-minute series — contributes
 /// nothing. The caller lists the parts in ASCENDING priority, and that order is the whole
 /// contract: the range-only 5-minute snapshot first, then every cached kind finer than the native
@@ -891,11 +891,10 @@ pub struct BasePart<'a> {
 /// which is more than the snapshot has, and the exchange's own coarse row overrides it the moment
 /// it lands in the cache.
 ///
-/// The result is ascending by `t_open_ms` with one candle per bucket.
+/// The result is ascending by `t_open_ms as i64`, with one candle per key; the last row with
+/// that key is kept.
 pub fn merge_bases(tf_ms: i64, parts: &[BasePart<'_>], out: &mut Vec<ChartCandle>) {
     out.clear();
-    let mut merged: std::collections::BTreeMap<i64, ChartCandle> =
-        std::collections::BTreeMap::new();
     let mut scratch: Vec<ChartCandle> = Vec::new();
     for part in parts {
         if part.rows.is_empty() || part.tf_ms <= 0 || tf_ms < part.tf_ms || tf_ms % part.tf_ms != 0
@@ -903,11 +902,18 @@ pub fn merge_bases(tf_ms: i64, parts: &[BasePart<'_>], out: &mut Vec<ChartCandle
             continue;
         }
         resample(part.rows, tf_ms, &mut scratch);
-        for c in scratch.drain(..) {
-            merged.insert(c.t_open_ms as i64, c);
-        }
+        out.append(&mut scratch);
     }
-    out.extend(merged.into_values());
+    out.sort_by_key(|c| c.t_open_ms as i64);
+    // The later element is passed first, and a true result drops it. Copy it into the retained
+    // slot first so the last row with this key survives.
+    out.dedup_by(|later, earlier| {
+        if (later.t_open_ms as i64) != (earlier.t_open_ms as i64) {
+            return false;
+        }
+        *earlier = *later;
+        true
+    });
 }
 
 /// Whether time-sorted `rows` aggregated at `tf_ms` leave a hole in `from_ms..to_ms`.
@@ -1155,16 +1161,24 @@ pub fn compose_with_coarse(
 
 /// Removes `covered` from `holes`, returning what is left of each hole.
 ///
-/// `covered` must be ascending by start; overlapping members are fine and are coalesced as the
-/// walk proceeds. Both inputs are half-open `[start, end)`.
+/// `holes` are ascending and disjoint. `covered` is ascending by start; overlapping members are
+/// fine and are coalesced as the walk proceeds. Both inputs are half-open `[start, end)`.
+///
+/// One coverage index is shared across every hole. An interval is dropped only after its end is
+/// at or before the hole cursor. An interval that starts at or after the hole end, and an interval
+/// whose end reaches or passes the hole end, stay at that index for the next hole.
 fn subtract_covered(holes: &[(f64, f64)], covered: &[(f64, f64)]) -> Vec<(f64, f64)> {
     let mut out = Vec::with_capacity(holes.len());
+    let mut covered_i = 0usize;
     for &(start, end) in holes {
         let mut cursor = start;
-        for &(cs, ce) in covered {
+        while covered_i < covered.len() {
+            let (cs, ce) = covered[covered_i];
             if ce <= cursor {
+                covered_i += 1;
                 continue;
             }
+            // Starts at or after this hole. Later holes lie further right, so leave the index.
             if cs >= end {
                 break;
             }
@@ -1172,9 +1186,11 @@ fn subtract_covered(holes: &[(f64, f64)], covered: &[(f64, f64)]) -> Vec<(f64, f
                 out.push((cursor, cs.min(end)));
             }
             cursor = cursor.max(ce);
+            // Still reaches this hole's end, so the next hole may need the same interval.
             if cursor >= end {
                 break;
             }
+            covered_i += 1;
         }
         if cursor < end {
             out.push((cursor, end));
@@ -1245,8 +1261,9 @@ impl CandleSeries {
     /// covers it, because the window clips it and the base candle is the complete one.
     ///
     /// `base` MUST be ascending by `t_open_ms` with one candle per bucket — the merge walks it
-    /// once and cannot repair either. The production caller satisfies this by building it from
-    /// a `BTreeMap`; an unsorted slice passes through unsorted and drops local candles.
+    /// once and cannot repair either. The production caller satisfies this through
+    /// [`merge_bases`], which sorts and deduplicates the base; an unsorted slice passes through
+    /// unsorted and drops local candles.
     pub fn rebuild(&mut self, tf_ms: i64, base: &[ChartCandle], base_tf_ms: i64, trades: &[Tick]) {
         let tf_ms = tf_ms.max(1);
         self.tf_ms = tf_ms;

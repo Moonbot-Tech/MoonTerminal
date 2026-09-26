@@ -1,5 +1,7 @@
 use super::*;
 use crate::feed::Side;
+use std::collections::BTreeMap;
+use std::time::Instant;
 
 fn tick(time_ms: f64, price: f32, qty: f32) -> Tick {
     Tick {
@@ -1349,4 +1351,644 @@ fn composed_tail_patch_refuses_a_filler_inside_the_suffix() {
 
     assert_eq!(at, None);
     assert_eq!(patched, fill);
+}
+
+/// A candle whose turnover is `q`, not the zero the shared helper writes.
+fn quoted(t: f64, o: f32, h: f32, l: f32, c: f32, v: f32, q: f32) -> ChartCandle {
+    let mut row = candle(t, o, h, l, c, v);
+    row.quote_volume = q;
+    row
+}
+
+/// `market/candles.rs:merge_bases` dropping `*earlier = *later` keeps the earlier source.
+/// The chart then draws that source's stale OHLC and turnover. Oracle: these input rows.
+#[test]
+fn merge_bases_later_part_replaces_the_whole_shared_bucket() {
+    let low = quoted(0.0, 1.0, 2.0, 0.5, 1.5, 3.0, 10.0);
+    let only_low = quoted(TF5 as f64, 3.0, 4.0, 2.0, 3.5, 1.0, 6.0);
+    let mid = quoted(0.0, 4.0, 5.0, 3.5, 4.5, 2.0, 20.0);
+    let high = quoted(0.0, 8.0, 9.0, 7.0, 8.5, 4.0, 44.0);
+    let mut out = Vec::new();
+    merge_bases(
+        TF5,
+        &[
+            part(&[low, only_low], TF5),
+            part(&[mid], TF5),
+            part(&[high], TF5),
+        ],
+        &mut out,
+    );
+    let mut expect = BTreeMap::new();
+    expect.insert(low.t_open_ms as i64, low);
+    expect.insert(only_low.t_open_ms as i64, only_low);
+    expect.insert(mid.t_open_ms as i64, mid);
+    expect.insert(high.t_open_ms as i64, high);
+    assert_eq!(
+        out,
+        expect.into_values().collect::<Vec<_>>(),
+        "the later part must replace open, high, low, close, volume, and turnover"
+    );
+}
+
+/// `market/candles.rs:subtract_covered` inserting `covered_i += 1` before the
+/// `cursor >= end` break consumes a cover the next hole still needs. A lower-priority
+/// filler is then drawn across minutes the longer cover already spanned.
+#[test]
+fn subtract_covered_retains_a_cover_that_reaches_the_next_hole() {
+    let minute = 60_000.0;
+    let series = [
+        candle(0.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        candle(10.0 * minute, 1.0, 1.0, 1.0, 1.0, 1.0),
+        candle(660_000.0 + 86_400_000.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+    ];
+    let five = candle(9.0 * minute, 2.0, 3.0, 1.0, 2.5, 5.0);
+    let daily = candle(11.0 * minute, 8.0, 9.0, 7.0, 8.5, 6.0);
+    let mut out = Vec::new();
+    compose_with_coarse(
+        &series,
+        minute,
+        &[
+            CoarseLayer {
+                rows: &[five],
+                tf_ms: 5.0 * minute,
+            },
+            CoarseLayer {
+                rows: &[daily],
+                tf_ms: 86_400_000.0,
+            },
+        ],
+        &mut out,
+    );
+    assert!(
+        out.iter()
+            .any(|(c, tf)| *c == five && *tf == 5.0 * minute as f32)
+    );
+    assert!(
+        !out.iter()
+            .any(|(c, tf)| *c == daily && *tf == 86_400_000.0f64 as f32),
+        "a 5-minute cover that reaches the next hole must keep the daily filler out"
+    );
+}
+
+const EPOCH_MS: i64 = 1_699_920_000_000;
+const MIN_MS: i64 = 60_000;
+const M5_MS: i64 = 300_000;
+const DAY_MS: i64 = 86_400_000;
+const TIMING_REPS: usize = 7;
+
+/// One full candle. Turnover is planted from the tag, not taken from production.
+fn priced(open_ms: i64, tag: i32, vol: f32) -> ChartCandle {
+    let price = 100.0 + tag as f32;
+    let mut row = candle(
+        open_ms as f64,
+        price,
+        price + 2.0,
+        price - 1.0,
+        price + 0.5,
+        vol,
+    );
+    row.quote_volume = vol * (price + 0.25);
+    row
+}
+
+/// Range-only snapshot row: open equals high, close equals low.
+fn range_only(open_ms: i64, i: i64) -> ChartCandle {
+    let high = 40.0 + (i % 11) as f32;
+    let low = high - 6.0;
+    let mut row = candle(open_ms as f64, high, high, low, low, 2.0);
+    row.quote_volume = 2.0 * (high + low) * 0.5;
+    row
+}
+
+/// `n` bars of width `tf` starting at `start`.
+fn contiguous(start: i64, tf: i64, n: i64, tag: i32, vol: f32) -> Vec<ChartCandle> {
+    (0..n)
+        .map(|i| priced(start + i * tf, tag.wrapping_add(i as i32), vol))
+        .collect()
+}
+
+/// Same as [`contiguous`], with `gap` bars removed at index `gap_at`.
+fn contiguous_gap(
+    start: i64,
+    tf: i64,
+    n: i64,
+    gap_at: i64,
+    gap: i64,
+    tag: i32,
+    vol: f32,
+) -> Vec<ChartCandle> {
+    (0..n)
+        .filter(|i| !(*i >= gap_at && *i < gap_at + gap))
+        .map(|i| priced(start + i * tf, tag.wrapping_add(i as i32), vol))
+        .collect()
+}
+
+/// Borrows `rows` as one merge source aggregated at `tf_ms`.
+fn part<'a>(rows: &'a [ChartCandle], tf_ms: i64) -> BasePart<'a> {
+    BasePart { rows, tf_ms }
+}
+
+/// Adds a coarse layer when `rows` is non-empty.
+fn push_layer<'a>(layers: &mut Vec<CoarseLayer<'a>>, rows: &'a [ChartCandle], tf_ms: f64) {
+    if !rows.is_empty() {
+        layers.push(CoarseLayer { rows, tf_ms });
+    }
+}
+
+/// `merge_bases` as of `38429ba7`: last `BTreeMap` insert replaces the whole bucket.
+fn baseline_merge_bases(tf_ms: i64, parts: &[BasePart<'_>], out: &mut Vec<ChartCandle>) {
+    out.clear();
+    let mut merged: BTreeMap<i64, ChartCandle> = BTreeMap::new();
+    let mut scratch = Vec::new();
+    for part in parts {
+        if part.rows.is_empty() || part.tf_ms <= 0 || tf_ms < part.tf_ms || tf_ms % part.tf_ms != 0
+        {
+            continue;
+        }
+        resample(part.rows, tf_ms, &mut scratch);
+        for candle in scratch.drain(..) {
+            merged.insert(candle.t_open_ms as i64, candle);
+        }
+    }
+    out.extend(merged.into_values());
+}
+
+/// `subtract_covered` as of `38429ba7`: each hole restarts at the first cover.
+fn baseline_subtract_covered(holes: &[(f64, f64)], covered: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut out = Vec::with_capacity(holes.len());
+    for &(start, end) in holes {
+        let mut cursor = start;
+        for &(cs, ce) in covered {
+            if ce <= cursor {
+                continue;
+            }
+            if cs >= end {
+                break;
+            }
+            if cs > cursor {
+                out.push((cursor, cs.min(end)));
+            }
+            cursor = cursor.max(ce);
+            if cursor >= end {
+                break;
+            }
+        }
+        if cursor < end {
+            out.push((cursor, end));
+        }
+    }
+    out
+}
+
+/// `compose_with_coarse` as of `38429ba7`, calling [`baseline_subtract_covered`].
+fn baseline_compose(
+    series: &[ChartCandle],
+    series_tf_ms: f64,
+    layers: &[CoarseLayer<'_>],
+    out: &mut Vec<(ChartCandle, f32)>,
+) {
+    out.clear();
+    let mut holes = Vec::new();
+    match series.first() {
+        None => holes.push((f64::NEG_INFINITY, f64::INFINITY)),
+        Some(first) => {
+            holes.push((f64::NEG_INFINITY, first.t_open_ms));
+            for pair in series.windows(2) {
+                let start = pair[0].t_open_ms + series_tf_ms;
+                let end = pair[1].t_open_ms;
+                if end > start {
+                    holes.push((start, end));
+                }
+            }
+        }
+    }
+    let mut fillers = Vec::new();
+    let mut covered = Vec::new();
+    let mut wide = Vec::new();
+    for layer in layers {
+        if holes.is_empty() || layer.rows.is_empty() || !(layer.tf_ms > 0.0) {
+            continue;
+        }
+        covered.clear();
+        wide.clear();
+        wide.extend(
+            holes
+                .iter()
+                .copied()
+                .filter(|&(start, end)| end - start >= layer.tf_ms),
+        );
+        for candle in layer.rows {
+            let i = wide.partition_point(|hole| hole.1 <= candle.t_open_ms);
+            let fills =
+                [wide.get(i), wide.get(i + 1)]
+                    .into_iter()
+                    .flatten()
+                    .any(|&(start, end)| {
+                        candle.t_open_ms + layer.tf_ms > start && candle.t_open_ms < end
+                    });
+            if fills {
+                fillers.push((*candle, layer.tf_ms as f32));
+                covered.push((candle.t_open_ms, candle.t_open_ms + layer.tf_ms));
+            }
+        }
+        if covered.is_empty() {
+            continue;
+        }
+        covered.sort_by(|a, b| a.0.total_cmp(&b.0));
+        holes = baseline_subtract_covered(&holes, &covered);
+    }
+    out.reserve(series.len() + fillers.len());
+    fillers.sort_by(|a, b| a.0.t_open_ms.total_cmp(&b.0.t_open_ms));
+    let series_tf = series_tf_ms as f32;
+    let mut si = 0usize;
+    for (filler, tf) in fillers.drain(..) {
+        while si < series.len() && series[si].t_open_ms < filler.t_open_ms {
+            out.push((series[si], series_tf));
+            si += 1;
+        }
+        out.push((filler, tf));
+    }
+    for candle in &series[si..] {
+        out.push((*candle, series_tf));
+    }
+}
+
+/// One labelled cache/compose preparation. Empty vectors mean that source is absent.
+struct PrepCase {
+    label: &'static str,
+    series_tf: i64,
+    native_tf: i64,
+    finer: Vec<Vec<ChartCandle>>,
+    snap: Vec<ChartCandle>,
+    native: Vec<ChartCandle>,
+    deep: Vec<ChartCandle>,
+    cache_5m: Vec<ChartCandle>,
+    ring_5m: Vec<ChartCandle>,
+    daily: Vec<ChartCandle>,
+}
+
+/// Merged base rows, the rebuilt series, and the composed drawable list.
+struct Prepared {
+    merged: Vec<ChartCandle>,
+    series: Vec<ChartCandle>,
+    composed: Vec<(ChartCandle, f32)>,
+}
+
+impl PrepCase {
+    /// No cache and no coarse layers. Callers fill only the sources the case uses.
+    fn bare(label: &'static str, series_tf: i64) -> Self {
+        Self {
+            label,
+            series_tf,
+            native_tf: series_tf,
+            finer: Vec::new(),
+            snap: Vec::new(),
+            native: Vec::new(),
+            deep: Vec::new(),
+            cache_5m: Vec::new(),
+            ring_5m: Vec::new(),
+            daily: Vec::new(),
+        }
+    }
+}
+
+/// Five hundred range-only 5-minute bars ending at the fixture epoch.
+fn snapshot_500() -> Vec<ChartCandle> {
+    let start = EPOCH_MS - 500 * M5_MS;
+    (0..500).map(|i| range_only(start + i * M5_MS, i)).collect()
+}
+
+/// Thirty daily bars ending on the fixture epoch.
+fn daily_30() -> Vec<ChartCandle> {
+    (0..30)
+        .map(|d| priced(EPOCH_MS - (29 - d) * DAY_MS, 5_000 + d as i32, 8.0))
+        .collect()
+}
+
+/// Nine 6-hour sessions, every third day, back to 30 days before the epoch.
+fn older_sessions() -> Vec<ChartCandle> {
+    let mut out = Vec::new();
+    for day in [30_i64, 27, 24, 21, 18, 15, 12, 9, 6] {
+        out.extend(contiguous(
+            EPOCH_MS - day * DAY_MS,
+            M5_MS,
+            72,
+            4_000 + day as i32,
+            5.0,
+        ));
+    }
+    out
+}
+
+/// Seed merge, or the frozen `38429ba7` map merge, chosen by `baseline`.
+fn apply_merge(baseline: bool, tf_ms: i64, parts: &[BasePart<'_>], out: &mut Vec<ChartCandle>) {
+    if baseline {
+        baseline_merge_bases(tf_ms, parts, out);
+    } else {
+        merge_bases(tf_ms, parts, out);
+    }
+}
+
+/// Finer merge, four-part merge, rebuild with no trades, then coarse compose.
+fn prepare(case: &PrepCase, baseline: bool) -> Prepared {
+    let mut finer_rows = Vec::new();
+    if case.finer.iter().any(|rows| !rows.is_empty()) {
+        let parts: Vec<BasePart<'_>> = case.finer.iter().map(|rows| part(rows, MIN_MS)).collect();
+        apply_merge(baseline, case.native_tf, &parts, &mut finer_rows);
+    }
+    let mut merged = Vec::new();
+    apply_merge(
+        baseline,
+        case.series_tf,
+        &[
+            part(&case.snap, M5_MS),
+            part(&finer_rows, case.native_tf),
+            part(&case.native, case.native_tf),
+            part(&case.deep, case.native_tf),
+        ],
+        &mut merged,
+    );
+    let mut series = CandleSeries::default();
+    series.rebuild(case.series_tf, &merged, case.series_tf, &[] as &[Tick]);
+    let mut layers = Vec::new();
+    let series_tf = case.series_tf as f64;
+    if series_tf < M5_MS as f64 {
+        push_layer(&mut layers, &case.cache_5m, M5_MS as f64);
+        push_layer(&mut layers, &case.ring_5m, M5_MS as f64);
+    }
+    if series_tf < DAY_MS as f64 {
+        push_layer(&mut layers, &case.daily, DAY_MS as f64);
+    }
+    let mut composed = Vec::new();
+    if baseline {
+        baseline_compose(series.candles(), series_tf, &layers, &mut composed);
+    } else {
+        compose_with_coarse(series.candles(), series_tf, &layers, &mut composed);
+    }
+    Prepared {
+        merged,
+        series: series.candles().to_vec(),
+        composed,
+    }
+}
+
+/// Median of `samples`, in the caller's unit.
+fn median_ms(samples: &mut [f64]) -> f64 {
+    samples.sort_by(|a, b| a.total_cmp(b));
+    samples[samples.len() / 2]
+}
+
+/// Milliseconds for one call. The caller owns warmup and which arm runs first.
+fn elapsed_ms(body: impl FnOnce()) -> f64 {
+    let started = Instant::now();
+    body();
+    started.elapsed().as_secs_f64() * 1_000.0
+}
+
+/// One warmup of each arm, then [`TIMING_REPS`] paired samples.
+///
+/// Even repetitions measure the seed first and the frozen baseline second.
+/// Odd repetitions reverse that order. Returns one median per arm, in
+/// milliseconds. There is no speed threshold and no winner flag.
+fn paired_arm_medians(case: &PrepCase) -> (f64, f64) {
+    prepare(case, false);
+    prepare(case, true);
+    let mut seed_ms = Vec::with_capacity(TIMING_REPS);
+    let mut base_ms = Vec::with_capacity(TIMING_REPS);
+    for rep in 0..TIMING_REPS {
+        let seed_sample = || {
+            elapsed_ms(|| {
+                std::hint::black_box(prepare(case, false));
+            })
+        };
+        let base_sample = || {
+            elapsed_ms(|| {
+                std::hint::black_box(prepare(case, true));
+            })
+        };
+        if rep % 2 == 0 {
+            seed_ms.push(seed_sample());
+            base_ms.push(base_sample());
+        } else {
+            base_ms.push(base_sample());
+            seed_ms.push(seed_sample());
+        }
+    }
+    (median_ms(&mut seed_ms), median_ms(&mut base_ms))
+}
+
+/// Seed merge, rebuild, and compose against the frozen `38429ba7` algorithms.
+///
+/// Returns the seed prepare. `frozen` is the map merge and the full-scan
+/// subtract, not a value read back from the seed. A nonempty composed list is
+/// the drawable chart.
+fn assert_prepare_matches_frozen(case: &PrepCase) -> Prepared {
+    let seed = prepare(case, false);
+    let frozen = prepare(case, true);
+    assert_eq!(seed.merged, frozen.merged, "{}", case.label);
+    assert_eq!(seed.series, frozen.series, "{}", case.label);
+    assert_eq!(seed.composed, frozen.composed, "{}", case.label);
+    assert!(!seed.composed.is_empty(), "{}", case.label);
+    seed
+}
+
+/// Six [`PrepCase`] values, one per labelled cache/compose fixture.
+///
+/// This does not return a shared snapshot. A backfill miss adds no older
+/// cached prefix; rows the case already holds stay. Timing, when run, is CPU
+/// only and excludes sqlite cache I/O, network, the trade tail, and GPUI.
+fn six_cases() -> Vec<PrepCase> {
+    let snap = snapshot_500();
+    let daily = daily_30();
+    let start = EPOCH_MS - 1_500 * M5_MS;
+    let native = contiguous_gap(start, M5_MS, 1_500, 1_200, 12, 1_000, 3.0);
+    let finer = contiguous(start + 1_199 * M5_MS, MIN_MS, 70, 3_000, 1.25);
+    let deep = contiguous(start + 1_492 * M5_MS, M5_MS, 8, 7_000, 9.0);
+    let mut backfill = older_sessions();
+    backfill.extend(native.iter().copied());
+    let one_start = EPOCH_MS - 1_500 * MIN_MS;
+    let mut open_hit = PrepCase::bare("coin-open-hit", M5_MS);
+    open_hit.finer = vec![finer.clone()];
+    open_hit.snap = snap.clone();
+    open_hit.native = native.clone();
+    open_hit.deep = deep.clone();
+    open_hit.daily = daily.clone();
+    let mut open_miss = PrepCase::bare("coin-open-miss", M5_MS);
+    open_miss.snap = snap.clone();
+    let mut switch_hit = PrepCase::bare("timeframe-switch-hit", MIN_MS);
+    switch_hit.snap = snap.clone();
+    switch_hit.native = contiguous_gap(one_start, MIN_MS, 1_500, 600, 30, 2_000, 1.5);
+    switch_hit.cache_5m = contiguous(one_start, M5_MS, 300, 3_500, 4.0);
+    switch_hit.daily = daily.clone();
+    let mut switch_miss = PrepCase::bare("timeframe-switch-miss", MIN_MS);
+    switch_miss.snap = snap.clone();
+    switch_miss.ring_5m = snap.clone();
+    let mut back_hit = PrepCase::bare("left-backfill-hit", M5_MS);
+    back_hit.finer = vec![finer];
+    back_hit.snap = snap.clone();
+    back_hit.native = backfill;
+    back_hit.deep = deep.clone();
+    back_hit.daily = daily.clone();
+    let mut back_miss = PrepCase::bare("left-backfill-miss", M5_MS);
+    back_miss.snap = snap;
+    back_miss.native = native;
+    back_miss.deep = deep;
+    back_miss.daily = daily;
+    vec![
+        open_hit,
+        open_miss,
+        switch_hit,
+        switch_miss,
+        back_hit,
+        back_miss,
+    ]
+}
+
+/// Default-run equality of merge, rebuild, and compose against `38429ba7`.
+///
+/// `market/candles.rs:merge_bases` dropping `*earlier = *later` keeps the earlier
+/// source's OHLC and turnover. `subtract_covered` inserting `covered_i += 1`
+/// before the `cursor >= end` break lets a coarse filler through a cover that
+/// still reaches the next hole. The chart then draws the wrong candle. Oracle:
+/// the frozen baseline rows. The produced series is also ascending and
+/// non-overlapping at `series_tf`, which is what keeps its holes ordered.
+#[test]
+fn preparation_matches_frozen_baseline_by_default() {
+    for case in six_cases() {
+        let seed = assert_prepare_matches_frozen(&case);
+        let width = case.series_tf as f64;
+        for pair in seed.series.windows(2) {
+            assert!(
+                pair[1].t_open_ms >= pair[0].t_open_ms + width,
+                "{}: series must be ascending and non-overlapping",
+                case.label
+            );
+        }
+    }
+}
+
+/// `market/candles.rs:subtract_covered` inserting `covered_i += 1` before the
+/// `cursor >= end` break consumes a cover the next hole still needs. A later
+/// filler is then drawn in a span that cover already reached.
+///
+/// Oracle: the literal residuals, from half-open arithmetic on these inputs,
+/// and the same literals from the frozen `38429ba7` rescan. Holes are
+/// ascending and disjoint, covers are start-sorted, and residuals stay
+/// ascending and disjoint for the next coarse layer.
+#[test]
+fn subtraction_matches_baseline_for_ordered_interval_shapes() {
+    let check =
+        |name: &str, holes: &[(f64, f64)], covered: &[(f64, f64)], expect: &[(f64, f64)]| {
+            for &(start, end) in holes {
+                assert!(start < end, "{name}");
+            }
+            for pair in holes.windows(2) {
+                assert!(
+                    pair[0].1 <= pair[1].0,
+                    "{name}: holes must be ascending and disjoint"
+                );
+            }
+            for pair in covered.windows(2) {
+                assert!(
+                    pair[0].0 <= pair[1].0,
+                    "{name}: covered must be start-sorted"
+                );
+            }
+            let frozen = baseline_subtract_covered(holes, covered);
+            let seed = subtract_covered(holes, covered);
+            assert_eq!(frozen, expect, "{name}");
+            assert_eq!(
+                seed, expect,
+                "{name}: a cover that still reaches the next hole must not be consumed"
+            );
+            for &(start, end) in &seed {
+                assert!(start < end, "{name}");
+            }
+            for pair in seed.windows(2) {
+                assert!(
+                    pair[0].1 <= pair[1].0,
+                    "{name}: residuals must be ascending and disjoint"
+                );
+            }
+        };
+    // [0, 30) covers the first hole and still clips the second.
+    check(
+        "spanning",
+        &[(0.0, 10.0), (20.0, 40.0)],
+        &[(0.0, 30.0)],
+        &[(30.0, 40.0)],
+    );
+    // [10, 90) contains the shorter [30, 50); the inner cover adds no residual.
+    check(
+        "nested",
+        &[(0.0, 100.0)],
+        &[(10.0, 90.0), (30.0, 50.0)],
+        &[(0.0, 10.0), (90.0, 100.0)],
+    );
+    // [0, 10) ends on the hole cursor. Half-open, so the hole still starts at 10.
+    check(
+        "touching-half-open",
+        &[(10.0, 40.0)],
+        &[(0.0, 10.0), (10.0, 25.0)],
+        &[(25.0, 40.0)],
+    );
+    // The unbounded prefix is covered through 15, which still clips the next hole.
+    check(
+        "leading-infinity",
+        &[(f64::NEG_INFINITY, 0.0), (10.0, 20.0)],
+        &[(f64::NEG_INFINITY, 15.0)],
+        &[(15.0, 20.0)],
+    );
+    // The cover's width equals the first hole and ends where the next hole starts.
+    check(
+        "exact-width",
+        &[(0.0, 20.0), (20.0, 40.0)],
+        &[(0.0, 20.0)],
+        &[(20.0, 40.0)],
+    );
+}
+
+/// Ignored CPU timing of the chart cache/compose path. No wall-time limit.
+///
+/// ```text
+/// CARGO_TARGET_DIR=<worktree>/target cargo test -p moon-core --release --lib market::candles::tests::cache_compose_preparation_timing -- --ignored --exact --nocapture
+/// ```
+///
+/// Each repetition alternates which arm runs first (seed, then baseline, repeating)
+/// after one warmup of each arm. Cases: coin-open hit/miss, timeframe-switch hit/miss,
+/// left-backfill hit/miss. Fixtures: 500 range-only 5-minute snapshot rows, about 1500
+/// native bars, nine 6-hour sessions back to 30 days, 1-minute overlap, and 30 daily rows.
+/// A backfill miss adds no older cached prefix; already-held rows remain. The cargo
+/// finished line is the profile.
+/// Included: finer merge, four-part merge, `CandleSeries::rebuild` with no trades, coarse
+/// compose. Baseline is `38429ba7`. Excluded: sqlite I/O, network, the trade tail, GPUI.
+#[test]
+#[ignore]
+fn cache_compose_preparation_timing() {
+    let cases = six_cases();
+    let mut empty = Vec::new();
+    compose_with_coarse(&[], MIN_MS as f64, &[], &mut empty);
+    assert!(
+        empty.is_empty(),
+        "a completely empty prepare is distinct from a cache miss"
+    );
+    println!(
+        "[OK] cache/compose timing reps={TIMING_REPS} order=alternating epoch_ms={EPOCH_MS} debug_assertions={}",
+        cfg!(debug_assertions)
+    );
+    for case in &cases {
+        let seed = assert_prepare_matches_frozen(case);
+        if case.label == "timeframe-switch-miss" {
+            assert!(seed.series.is_empty() && seed.composed.len() == 500);
+        }
+        let (seed_ms, baseline_ms) = paired_arm_medians(case);
+        println!(
+            "[OK] {} merged={} composed={} seed_ms={:.3} baseline_ms={:.3} equal=yes",
+            case.label,
+            seed.merged.len(),
+            seed.composed.len(),
+            seed_ms,
+            baseline_ms
+        );
+    }
 }
