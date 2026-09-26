@@ -861,6 +861,66 @@ fn the_pre_spike_price_is_the_last_print_at_least_four_seconds_back() {
 }
 
 #[test]
+fn the_pre_spike_price_reads_the_last_taker_buy_else_any_print() {
+    // A taker sell prints at the bid, half a spread under the ask the core read.
+    let ticks = vec![
+        tick(0, 100.25, Side::Buy),
+        tick(500, 100.0, Side::Sell),
+        tick(4_500, 95.0, Side::Sell),
+    ];
+    let at = 500 + PRE_SPIKE_LOOKBACK_MS;
+    assert_eq!(
+        pre_spike_price(&ticks, at, PRE_SPIKE_LOOKBACK_MS),
+        Some(100.25)
+    );
+    // No buy by the cutoff: the last print of either side.
+    let sells = vec![tick(0, 100.0, Side::Sell), tick(500, 99.875, Side::Sell)];
+    assert_eq!(
+        pre_spike_price(&sells, at, PRE_SPIKE_LOOKBACK_MS),
+        Some(99.875)
+    );
+    // A buy from before the window is another market: the last print again.
+    let window = super::exit::sell_order::PRE_SPIKE_BUY_WINDOW_MS;
+    let stale = vec![
+        tick(0, 120.0, Side::Buy),
+        tick(window + 1, 99.875, Side::Sell),
+    ];
+    let at = window + 1 + PRE_SPIKE_LOOKBACK_MS;
+    assert_eq!(
+        pre_spike_price(&stale, at, PRE_SPIKE_LOOKBACK_MS),
+        Some(99.875)
+    );
+}
+
+#[test]
+fn a_short_take_lifted_off_the_tape_reads_the_taker_buy_not_the_sell_under_it() {
+    // A short sells into a spike at 101; SellPrice 1 % puts the take at 101 / 1.01 = 100. The
+    // ask before the spike, 99.5, is farther down: the take sits there — not on the taker sell
+    // at 99, half a spread under the ask.
+    let deal = Deal {
+        is_short: true,
+        ..deal()
+    };
+    let ticks = vec![
+        tick(0, 99.5, Side::Buy),
+        tick(500, 99.0, Side::Sell),
+        tick(5_000, 101.0, Side::Buy),
+    ];
+    let fill = Fill {
+        t_ms: 5_000,
+        price: 101.0,
+    };
+    let exit = ExitParams {
+        sell_price_pct: 1.0,
+        sell_at_last_price: true,
+        sell_price_adjust_pct: 0.0,
+        ..ExitParams::default()
+    };
+    let take = ExitModel::new(&exit).take_level(&deal, &ticks, fill);
+    assert!((take - 99.5).abs() < 1e-9, "{take}");
+}
+
+#[test]
 fn a_take_the_tape_never_reaches_leaves_the_position_open() {
     let fill = Fill {
         t_ms: 10_000,

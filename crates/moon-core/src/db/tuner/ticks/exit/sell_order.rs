@@ -8,9 +8,9 @@
 //!   Delta-Modifier family moves it ([`super::delta_mods`]). It is raised by
 //!   `MShotSellAtLastPrice` to the pre-spike price less `MShotSellPriceAdjust` (the FAQ: "the
 //!   4-second-old ASK, i.e. before the spike"; the model takes the ask the caller recovered from
-//!   the order archive (`Deal::pre_spike_ask`), else reads the last print at least
+//!   the order archive (`Deal::pre_spike_ask`), else reads the last taker buy at least
 //!   `ModelSettings::pre_spike_lookback_ms` ([`crate::db::tuner::ticks::mshot::PRE_SPIKE_LOOKBACK_MS`]
-//!   by default) before the fill, since the tape has no book).
+//!   by default) before the fill, since the tape has no book — [`pre_spike_price`]).
 //! - **SellDelay** — milliseconds after the fill before the take is placed ([`armed_at`]).
 //!
 //! From the Moonbot FAQ (`PriceDown*`, `SellLevel*` answers) and the live strategies
@@ -41,7 +41,7 @@ use crate::feed::types::Tick;
 
 impl ExitModel<'_> {
     /// The take-profit level for a fill: `SellPrice` off the fill, lifted to the pre-spike
-    /// ask (the archive's, else the tape's last print) less the adjustment when
+    /// ask (the archive's, else the tape's last taker buy, [`pre_spike_price`]) less the adjustment when
     /// `MShotSellAtLastPrice` is on. Long above, short below.
     pub fn take_level(&self, deal: &Deal, ticks: &[Tick], fill: Fill) -> f64 {
         // A kind whose take rule the model does not have starts where the core's line did —
@@ -129,7 +129,9 @@ impl ExitModel<'_> {
     /// - a MoonShot lifted to the pre-spike ask (`MShotSellAtLastPrice`) needs that ask off the
     ///   core's record (`Deal::pre_spike_ask`) — the tape's print before the spike sits 0.1–0.5 %
     ///   under the book's ask on a dump, and on 88 stopped MoonShot trades (2026-09-23) a take
-    ///   placed off it was touched before the core's stop on 30, turning a loss into a win;
+    ///   placed off it was touched before the core's stop on 30, turning a loss into a win; the
+    ///   taker buy it reads now lands within 0.05 % of the archived ask on under half the trades
+    ///   ([`pre_spike_price`]), still no ground for a verdict;
     /// - every other kind takes `SellPrice`, known by construction.
     ///
     /// `false` is not "the model was wrong": it is "this trade's take is not modelled here", and
@@ -228,14 +230,38 @@ pub fn archived_pre_spike_ask(
     (take.is_finite() && take > 0.0).then_some(take / factor)
 }
 
-/// The last print at least `lookback_ms` ([`crate::db::tuner::ticks::mshot::PRE_SPIKE_LOOKBACK_MS`]
-/// by default) before `at_ms` — the FAQ's "price before the spike".
+/// How far before the cutoff [`pre_spike_price`] still takes a taker buy for the ask. On a tape of
+/// sells alone the last buy can lie minutes back (the longest over the sample of 2026-09-26: 177 s,
+/// 1 % past 49 s) — another market, not the ask before the spike. A minute costs nothing on that
+/// sample; ten seconds already cost 1–3 points.
+pub const PRE_SPIKE_BUY_WINDOW_MS: i64 = 60_000;
+
+/// The tape's reading of the FAQ's "4-second-old ASK": the last taker BUY at least `lookback_ms`
+/// ([`crate::db::tuner::ticks::mshot::PRE_SPIKE_LOOKBACK_MS`] by default) before `at_ms` and at
+/// most [`PRE_SPIKE_BUY_WINDOW_MS`] before that — a taker buy prints at the ask — else the last
+/// print of either side by then. The ask for a short too: the core lifts a short's take off the
+/// ASK as well.
+///
+/// Measured against the ask the archive gives back (`archived_pre_spike_ask`) on 1 099 MoonShot
+/// trades (2026-09-26), at 4 s: within 0.05 % on 46 % of the longs and 48 % of the shorts, where
+/// the last print of either side — the reading before — landed on 38 % and 36 %, half a spread
+/// under the ask (median −0.04 % long, −0.07 % short). On Binance's cores 56 %; on Gate's no
+/// reading of the prints reaches 20 % — too thin a tape under too wide a spread; the side is not
+/// what fails there (Gate futures infer it from the sign of `size`): the last taker sell lands
+/// farther from the ask than the last buy on Gate too. Hence a take lifted off this reading is
+/// never judged ([`ExitModel::take_known`]).
 pub fn pre_spike_price(ticks: &[Tick], at_ms: i64, lookback_ms: i64) -> Option<f64> {
     let cutoff = at_ms - lookback_ms;
-    ticks
-        .iter()
-        .rev()
-        .find(|t| (t.time_ms as i64) <= cutoff && t.price > 0.0)
+    let before = || {
+        ticks
+            .iter()
+            .rev()
+            .filter(move |t| (t.time_ms as i64) <= cutoff && t.price > 0.0)
+    };
+    before()
+        .take_while(|t| cutoff - (t.time_ms as i64) <= PRE_SPIKE_BUY_WINDOW_MS)
+        .find(|t| t.side == crate::feed::types::Side::Buy)
+        .or_else(|| before().next())
         .map(|t| f64::from(t.price))
 }
 
