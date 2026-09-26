@@ -3,6 +3,7 @@
 //! [`super::stack`]. Used by both the tab strip and detached windows ([`super::windows`]).
 
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::ops::Range;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -137,6 +138,19 @@ pub(crate) struct AddChartStack {
     compact_timer_armed: bool,
     /// Scroll handle for the vertical `MoonVirtualList` used by the stack's Scroll mode.
     scroll: MoonVirtualListScrollHandle,
+    /// Whether the host presenting this stack is on screen.
+    ///
+    /// The strip writes it through [`Self::set_scene_visible`]. A direct render — the detached
+    /// window, which never receives the dock hook, or this stack painted as the active tab —
+    /// stores `true` because paint proves the host is present. Child visibility is this flag
+    /// AND [`Self::viewport_visible`], so a range update cannot show a chart under a hidden host.
+    host_visible: bool,
+    /// Entity ids of children last known to lie in the painted viewport.
+    ///
+    /// Identities, not indexes: pin reorder, a retained vacated slot, and close/add all renumber
+    /// the stack. Geometry writes this set before host visibility is applied, and a hide keeps
+    /// it so a later reveal can restore that subset when a cached ancestor skips the range callback.
+    viewport_visible: HashSet<EntityId>,
 }
 
 impl AddChartStack {
@@ -204,6 +218,8 @@ impl AddChartStack {
             last_count_change: Instant::now(),
             compact_timer_armed: false,
             scroll: MoonVirtualListScrollHandle::new(),
+            host_visible: true,
+            viewport_visible: HashSet::new(),
         }
     }
 
@@ -1101,26 +1117,86 @@ impl AddChartStack {
         }
     }
 
+    /// Record whether the host is showing this stack, and propagate a real change.
+    ///
+    /// An unchanged value returns immediately. A hide forces every child off and keeps
+    /// [`Self::viewport_visible`]. A reveal turns on only the nonvacated children in that set.
+    /// Children the viewport has not seen yet stay off until render or the next prepaint.
+    ///
+    /// Args:
+    ///     visible: Whether the host currently presents this stack.
+    ///     cx: Stack context used to update child panels.
+    ///
+    /// Returns:
+    ///     Nothing; an unchanged host flag leaves child visibility and viewport membership
+    ///     untouched.
     pub(super) fn set_scene_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
-        for entry in &self.charts {
-            entry
-                .panel
-                .update(cx, |panel, _| panel.set_scene_visible(visible));
+        if self.host_visible == visible {
+            return;
         }
+        self.host_visible = visible;
+        self.apply_viewport_visibility(cx);
     }
 
+    /// Replace viewport membership from one reported display range, then push host-gated visibility.
+    ///
+    /// Membership is derived before `host_visible` is consulted and is stored even when the host
+    /// is hidden. An empty range clears the set. A hidden host therefore cannot be switched back
+    /// on by this callback.
+    ///
+    /// Args:
+    ///     range: Display indexes the virtual list currently paints. Empty means the list has no rows.
+    ///     render_order: Real chart indexes in the order the list paints them.
+    ///     cx: Stack context used to update child panels.
+    ///
+    /// Returns:
+    ///     Nothing. A child is on only when the host is showing, the slot is not vacated, and its
+    ///     entity id is in the range.
     fn sync_stack_visible_ordered(
         &mut self,
         range: Range<usize>,
         render_order: &[usize],
         cx: &mut Context<Self>,
     ) {
-        for (ix, entry) in self.charts.iter().enumerate() {
-            let visible = !entry.vacated
-                && render_order
-                    .iter()
-                    .enumerate()
-                    .any(|(display_ix, real_ix)| *real_ix == ix && range.contains(&display_ix));
+        let mut viewport = HashSet::with_capacity(range.len());
+        for (display_ix, &real_ix) in render_order.iter().enumerate() {
+            if !range.contains(&display_ix) {
+                continue;
+            }
+            if let Some(entry) = self.charts.get(real_ix).filter(|entry| !entry.vacated) {
+                viewport.insert(entry.panel.entity_id());
+            }
+        }
+        self.viewport_visible = viewport;
+        self.apply_viewport_visibility(cx);
+    }
+
+    /// Remember every nonvacated child as viewport membership, without pushing visibility.
+    ///
+    /// FIT, COMPRESS, and horizontal scroll mount each of those children and do not report a
+    /// range. Vertical scroll must not call this: its painted subset arrives from
+    /// [`Self::sync_stack_visible_ordered`].
+    fn remember_mounted_children(&mut self) {
+        self.viewport_visible.clear();
+        for entry in &self.charts {
+            if !entry.vacated {
+                self.viewport_visible.insert(entry.panel.entity_id());
+            }
+        }
+    }
+
+    /// Push `host_visible` AND remembered viewport membership to every child.
+    ///
+    /// Args:
+    ///     cx: Stack context used to update child panels.
+    ///
+    /// Returns:
+    ///     Nothing. The remembered set is not changed.
+    fn apply_viewport_visibility(&self, cx: &mut Context<Self>) {
+        for entry in &self.charts {
+            let visible = self.host_visible
+                && !entry.vacated
+                && self.viewport_visible.contains(&entry.panel.entity_id());
             entry
                 .panel
                 .update(cx, |panel, _| panel.set_scene_visible(visible));
@@ -1142,12 +1218,19 @@ impl Render for AddChartStack {
     /// Renders every Add/Custom chart as a labelled, guttered stack tile.
     ///
     /// These stacks have no fullscreen mode, so their shared card helper always retains the
-    /// separator and never needs the Main stack's position note.
+    /// separator and never needs the Main stack's position note. Paint stores `host_visible`
+    /// because a rendered stack is on screen, including a detached window that never receives
+    /// the dock hook. It does not call `set_scene_visible`: vertical scroll keeps the last
+    /// reported range, and every mounted route records that mounted set for a later reveal.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Paint means this host is on screen, detached window included. Store the flag only:
+        // `set_scene_visible` would mark every remembered child visible from inside render.
+        self.host_visible = true;
         crate::diag::bump(&crate::diag::ADD_STACK_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::ADD_STACK_RENDER_US);
         let palette = moon_ui::MoonPalette::active(cx);
         if self.charts.is_empty() {
+            self.viewport_visible.clear();
             // The cover is not optional here: a detached window has `Root=NoFill` and no own
             // pass, so without it the white window backing shows through. Only the mark on it
             // follows the switch, and both come from one builder so that cannot be got wrong.
@@ -1193,6 +1276,12 @@ impl Render for AddChartStack {
             .layout_orientation
             .unwrap_or(StackOrientation::Vertical)
             .is_horizontal();
+        // `render_chart_stack` builds a `MoonVirtualList` only for vertical scroll outside
+        // COMPRESS. Horizontal scroll and FIT/COMPRESS mount every nonvacated child and never
+        // report a range, so those routes are the geometry the next reveal is allowed to restore.
+        if !(scroll && !compress && !horizontal) {
+            self.remember_mounted_children();
+        }
         let entity = cx.entity();
         let p = palette;
         let title_size = crate::design::t_body(cx);

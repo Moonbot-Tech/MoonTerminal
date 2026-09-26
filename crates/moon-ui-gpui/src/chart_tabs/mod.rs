@@ -303,6 +303,12 @@ pub struct ChartTabs {
     detached: Vec<(u32, ChartBucket, Entity<AddChartStack>)>,
     /// Active tab.
     active: Tab,
+    /// Whether this Charts panel is the front dock tab.
+    ///
+    /// Separate from the inner-tab flag above. `Panel::set_active` is the dock host's visibility
+    /// hook; keyboard focus is not occlusion. Starts shown, so the frame before the dock announces
+    /// a change still prepares the active chart. Detached windows are not gated by this flag.
+    host_visible: bool,
     /// Number of markets already seen while each `(number, bucket)` tab was active.
     /// The badge is `pane_count - seen`; active tabs catch up and hide it, while inactive tabs
     /// retain their seen count so new detects increase the badge.
@@ -737,6 +743,7 @@ impl ChartTabs {
             custom_gate_gen: HashMap::new(),
             detached: Vec::new(),
             active: Tab::Main,
+            host_visible: true,
             seen: HashMap::new(),
             add_seq: HashMap::new(),
             last_sig: initial_sig,
@@ -1147,25 +1154,30 @@ impl ChartTabs {
         chart_pane_label(&self.backend, &self.group, n, bucket, cx)
     }
 
-    /// Mark inactive tabs invisible because they are absent from the current GPUI scene and must
-    /// not run CPU preparation from chart-data observation. Active or detached panels mark
-    /// themselves visible in their own render path.
+    /// Mark attached stacks that are absent from the current GPUI scene so they do not run CPU
+    /// preparation from chart-data observation.
+    ///
+    /// A hidden Charts dock passes `false` to every attached Main, Add, and Custom stack. While
+    /// the dock is showing, each attached stack follows the active inner tab, including the active
+    /// Add stack. Detached windows are not in these lists and keep their own visibility.
+    ///
+    /// Args:
+    ///     cx: Tab context used to update attached stacks.
+    ///
+    /// Returns:
+    ///     Nothing; `detached` is not visited.
     fn sync_inactive_chart_visibility(&self, cx: &mut Context<Self>) {
         let active = self.active.clone();
-        if matches!(active, Tab::Main) {
-            self.main
-                .update(cx, |panel, pcx| panel.set_scene_visible(true, pcx));
-        } else {
-            self.main
-                .update(cx, |panel, pcx| panel.set_scene_visible(false, pcx));
-        }
+        let host_visible = self.host_visible;
+        self.main.update(cx, |panel, pcx| {
+            panel.set_scene_visible(host_visible && matches!(active, Tab::Main), pcx);
+        });
         for (n, c, panel) in &self.add {
-            if Tab::Add(*n, c.clone()) != active {
-                panel.update(cx, |panel, pcx| panel.set_scene_visible(false, pcx));
-            }
+            let visible = host_visible && Tab::Add(*n, c.clone()) == active;
+            panel.update(cx, |panel, pcx| panel.set_scene_visible(visible, pcx));
         }
         for (n, c, panel) in &self.custom {
-            let visible = Tab::Custom(*n, c.clone()) == active;
+            let visible = host_visible && Tab::Custom(*n, c.clone()) == active;
             panel.update(cx, |panel, pcx| panel.set_scene_visible(visible, pcx));
         }
     }
@@ -1346,6 +1358,28 @@ impl Panel for ChartTabs {
     }
     fn background_policy(&self, _cx: &App) -> MoonBackgroundPolicy {
         MoonBackgroundPolicy::NoFill
+    }
+
+    /// Propagate dock-tab visibility into the attached chart stacks.
+    ///
+    /// `active` is whether this Charts panel is the front dock tab. An unchanged value returns
+    /// without notifying, persisting, switching the inner tab, or touching detached windows.
+    /// Keyboard focus is not consulted: a window can stay focused while this dock tab sits behind
+    /// another.
+    ///
+    /// Args:
+    ///     active: Whether the dock host is showing this panel.
+    ///     _window: Unused. The dock passes the window that rendered the tab group.
+    ///     cx: Panel context used to update attached stacks on a real change.
+    ///
+    /// Returns:
+    ///     Nothing.
+    fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.host_visible == active {
+            return;
+        }
+        self.host_visible = active;
+        self.sync_inactive_chart_visibility(cx);
     }
 }
 

@@ -509,6 +509,7 @@ impl ChartDataState {
                 pr.last_candle_rev = u64::MAX;
                 pr.candle_rows.clear();
                 pr.volume_samples.clear();
+                pr.volume_samples_max_tf = 0.0;
                 pr.candle_rows_epoch = f64::NAN;
                 pr.candle_resync = false;
             }
@@ -647,6 +648,7 @@ impl ChartDataState {
                 pr.last_candle_rev = u64::MAX;
                 pr.candle_rows.clear();
                 pr.volume_samples.clear();
+                pr.volume_samples_max_tf = 0.0;
                 pr.candle_rows_epoch = f64::NAN;
                 pr.candle_resync = false;
                 pr.gpu_prepare_dirty = true;
@@ -942,6 +944,7 @@ impl ChartDataState {
                         &crate::diag::CHART_COMBO_UPLOAD_LEN,
                         pr.cross_upload.len() as u64,
                     );
+                    let damage = pr.layers.combo_append_touches_cached_span(&pr.cross_upload);
                     pr.layers.append_combo(&pr.cross_upload);
                     // The first crosses this pane ever received may arrive through the live drain
                     // rather than a full read: a chart opened on a market whose ring the core has
@@ -956,7 +959,7 @@ impl ChartDataState {
                         }
                     }
                     pr.gpu_prepare_dirty = true;
-                    pixels_changed = true;
+                    pixels_changed |= damage;
                 }
                 // Append liquidation-trade crosses with side=2 to the same combo ring. Ring order
                 // does not affect placement because the shader uses time_rel. On combo_reset the
@@ -969,9 +972,10 @@ impl ChartDataState {
                         pane.view.epoch_ms,
                         &mut pr.liq_upload,
                     );
+                    let damage = pr.layers.combo_append_touches_cached_span(&pr.liq_upload);
                     pr.layers.append_combo(&pr.liq_upload);
                     pr.gpu_prepare_dirty = true;
-                    pixels_changed = true;
+                    pixels_changed |= damage;
                 }
                 // A live trade batch usually changes only the last candle, so the source ships
                 // just the changed tail and `candle_rows` is patched in place; a rebuild ships the
@@ -1009,12 +1013,13 @@ impl ChartDataState {
                         pr.last_candle_rev = u64::MAX;
                         pr.candle_resync = true;
                     } else {
-                        // Ascending as the composed history is; the widest width bounds each
-                        // lookup. A patch may bring a wider row, so this follows every apply.
-                        pr.volume_samples_max_tf = pr
-                            .volume_samples
-                            .iter()
-                            .fold(0.0, |max: f64, s| max.max(s.tf_ms));
+                        // The bound only widens the sorted lookup. A patch keeps a removed
+                        // maximum until the next full replacement, which cannot drop a pixel.
+                        pr.volume_samples_max_tf = volume_sample_timeframe_bound(
+                            &pr.volume_samples,
+                            &applied,
+                            pr.volume_samples_max_tf,
+                        );
                         crate::diag::record_us(&crate::diag::CHART_CANDLE_UPLOAD_US, upload_timer);
                         pr.last_candle_rev = history.candles_revision;
                         pr.candle_resync = false;
@@ -1131,6 +1136,7 @@ impl ChartDataState {
                     pr.last_candle_rev = u64::MAX;
                     pr.candle_rows.clear();
                     pr.volume_samples.clear();
+                    pr.volume_samples_max_tf = 0.0;
                     pr.candle_rows_epoch = f64::NAN;
                     pr.candle_resync = false;
                     pr.history_cursor.reset();
@@ -2215,6 +2221,35 @@ fn merge_readouts<T>(
 /// chart prints one or two periods, and the comparison runs per pane per market revision.
 fn same_period_set(held: &[(VolumeSpan, VolumeAt)], want: &[(VolumeSpan, VolumeAt)]) -> bool {
     held.len() == want.len() && want.iter().all(|key| held.contains(key))
+}
+
+/// Conservative upper bound on sample timeframes after one candle apply.
+///
+/// A full replacement scans every sample from zero. A patch scans only the new
+/// suffix and starts from the previous bound, so removing the widest row cannot
+/// shrink it. A rejected apply leaves the previous bound unchanged.
+///
+/// Args:
+///     samples: Retained samples after the apply.
+///     applied: How the read landed.
+///     previous: Bound before this apply.
+///
+/// Returns:
+///     A value at least as large as every surviving sample's `tf_ms`.
+fn volume_sample_timeframe_bound(
+    samples: &[moon_chart::VolumeSample],
+    applied: &CandleApply,
+    previous: f64,
+) -> f64 {
+    match applied {
+        CandleApply::Rejected => previous,
+        CandleApply::Full => samples
+            .iter()
+            .fold(0.0, |max, sample| max.max(sample.tf_ms)),
+        CandleApply::Patch(from) => samples[*from..]
+            .iter()
+            .fold(previous, |max, sample| max.max(sample.tf_ms)),
+    }
 }
 
 /// How a candle read landed in a pane's retained rows.
