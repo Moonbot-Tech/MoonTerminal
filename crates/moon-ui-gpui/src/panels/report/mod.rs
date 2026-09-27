@@ -20,6 +20,7 @@ mod columns;
 mod comment;
 mod controls;
 mod export;
+mod overview_narrow;
 mod query;
 mod render;
 mod selection;
@@ -602,6 +603,9 @@ pub struct ReportPanel {
     /// Retained core filter for Classic group views and standalone Reports; empty means all cores.
     /// Group Auto mode pins its effective workspace scope without using or mutating this set.
     pub(super) sel_cores: HashSet<u64>,
+    /// Report-only narrowing of the Auto Overview scope; empty means the whole Overview. Kept
+    /// apart from [`Self::sel_cores`] so switching Auto and Classic never leaks one into the other.
+    pub(super) overview_cores: HashSet<u64>,
     /// Exact selected strategies, or `None` for implicit All as in the shared core selector.
     pub(super) selected_strategies: Option<HashSet<ReportStrategyKey>>,
     /// Searchable, grouped, virtualized MoonUI selector synchronized with Report filters.
@@ -744,10 +748,21 @@ pub struct ReportPanel {
 }
 
 impl crate::controls::CoreComboHost for ReportPanel {
-    /// Group Auto owns the effective scope and leaves the retained selection untouched.
+    /// A selected Auto core pins the picker; Auto Overview edits its Report-only narrowing.
     fn core_selection_pinned(&self, cx: &App) -> bool {
-        self.workspace_scope(self.backend.read(cx))
+        let backend = self.backend.read(cx);
+        self.workspace_scope(backend)
             .is_some_and(|scope| scope.is_workspace_owned())
+            && self.overview_universe(backend).is_none()
+    }
+
+    /// Route saved-group edits to the Overview narrowing while Auto Overview is active.
+    fn core_selection_target(&mut self, cx: &App) -> &mut HashSet<u64> {
+        if self.overview_universe(self.backend.read(cx)).is_some() {
+            &mut self.overview_cores
+        } else {
+            &mut self.sel_cores
+        }
     }
 
     /// Return the retained Classic or standalone core filter for shared picker edits.
@@ -757,7 +772,11 @@ impl crate::controls::CoreComboHost for ReportPanel {
 
     /// Re-scope the strategy filter to the new core set, then requery.
     fn after_core_selection_change(&mut self, cx: &mut Context<Self>) {
-        self.reconcile_strategy_core(cx);
+        if self.overview_universe(self.backend.read(cx)).is_some() {
+            self.persist_filters(None, cx);
+        } else {
+            self.reconcile_strategy_core(cx);
+        }
         self.request_requery(cx);
     }
 }
@@ -941,6 +960,39 @@ impl ReportPanel {
         // honest test, and it is not `hides_anything()`: an explicit selection whose every core is
         // offline resolves to no ids while membership hid nothing, and reading that as unfiltered
         // would broaden a narrow selection to the whole fleet.
-        query_core_ids(scope.ids().to_vec(), scope.membership_total() > 0)
+        // Auto Overview's Report-only narrowing never empties the list (a stale one falls back to
+        // the whole scope), so the sentinel decision below stays the scope's own.
+        match self.overview_narrowed_ids(&scope) {
+            Some(ids) => query_core_ids(ids, scope.membership_total() > 0),
+            None => query_core_ids(scope.ids().to_vec(), scope.membership_total() > 0),
+        }
+    }
+
+    /// Return the Auto Overview scope's ids when this group Report shows the Overview.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority.
+    ///
+    /// Returns:
+    ///     The Report scope's ids under Auto Overview, the universe its core combo offers, or
+    ///     `None` for Classic, a selected Auto core and the standalone window.
+    pub(super) fn overview_universe(&self, b: &Backend) -> Option<Vec<CoreId>> {
+        let scope = self.report_scope(b)?;
+        (scope.label() == crate::workspace::EffectiveScopeLabel::Overview)
+            .then(|| scope.ids().to_vec())
+    }
+
+    /// Apply the Report-only Overview narrowing to a resolved Report scope.
+    ///
+    /// Args:
+    ///     scope: The scope [`Self::report_scope`] resolved.
+    ///
+    /// Returns:
+    ///     The narrowed ids under Auto Overview, or `None` when the whole scope applies.
+    fn overview_narrowed_ids(&self, scope: &EffectiveCoreScope) -> Option<Vec<CoreId>> {
+        if scope.label() != crate::workspace::EffectiveScopeLabel::Overview {
+            return None;
+        }
+        overview_narrow::narrowed_ids(scope.ids(), &self.overview_cores)
     }
 }

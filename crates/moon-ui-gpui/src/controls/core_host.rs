@@ -35,6 +35,20 @@ pub(crate) trait CoreComboHost: Sized + 'static {
     /// empty means all cores.
     fn core_selection_mut(&mut self) -> &mut HashSet<u64>;
 
+    /// The selection a saved-group action edits under the host's CURRENT scope authority.
+    ///
+    /// Defaults to [`Self::core_selection_mut`]; a host whose picker edits a different set in some
+    /// scope (the Report under Auto Overview) routes it here.
+    ///
+    /// Args:
+    ///     cx: Read context for the host's scope authority.
+    ///
+    /// Returns:
+    ///     The selection to rewrite in place; empty means all cores.
+    fn core_selection_target(&mut self, _cx: &App) -> &mut HashSet<u64> {
+        self.core_selection_mut()
+    }
+
     /// Retain or clear presentation provenance after a saved-group action.
     ///
     /// Args:
@@ -99,7 +113,7 @@ fn apply_group_click<T: CoreComboHost>(
             return;
         }
         let (changed, applied_group) = {
-            let selected = this.core_selection_mut();
+            let selected = this.core_selection_target(cx);
             let changed = apply_core_group(selected, &group.cores, selectable, intent);
             let applied = group_is_applied(&group.cores, &selectable_set, selected);
             (changed, applied.then(|| group.name.clone()))

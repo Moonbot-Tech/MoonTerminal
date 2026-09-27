@@ -491,12 +491,13 @@ impl ReportPanel {
                 backend.session.core_venues(),
             )
         };
+        // Auto Overview is no pin: the combo narrows this Report within the Overview's own cores.
+        let overview_universe = self.overview_universe(self.backend.read(cx));
+        let workspace_owned = workspace_owned && overview_universe.is_none();
         let pinned_label = workspace_scope
             .as_ref()
             .and_then(|scope| match scope.label() {
-                crate::workspace::EffectiveScopeLabel::Overview => {
-                    Some(t!("workspace.overview").to_string())
-                }
+                crate::workspace::EffectiveScopeLabel::Overview => None,
                 crate::workspace::EffectiveScopeLabel::Core(core) => {
                     selected_auto_core_name(core, &live_cores, &cores)
                 }
@@ -505,7 +506,34 @@ impl ReportPanel {
             });
         // Resolved once: the trigger, its compact form and the tooltip that recovers the shed words
         // must all describe the SAME set, and a second reading of it is how they drift apart.
-        let selection = if workspace_owned {
+        let overview_selection = overview_universe.as_deref().map(|universe| {
+            super::overview_narrow::shown_selection(universe, &self.overview_cores)
+        });
+        let (cores, overview_label) = match overview_universe.as_deref() {
+            Some(universe) => {
+                let backend = self.backend.read(cx);
+                let named: Vec<(CoreId, String)> = universe
+                    .iter()
+                    .map(|core| {
+                        let name = selected_auto_core_name(*core, &live_cores, &cores)
+                            .unwrap_or_else(|| core.to_string());
+                        (*core, name)
+                    })
+                    .collect();
+                let label = super::overview_narrow::trigger_label(
+                    universe,
+                    &self.overview_cores,
+                    &backend.config.core_groups,
+                    t!("workspace.overview").as_ref(),
+                    &|n| t!("report.cores_n", n = n).to_string(),
+                );
+                (CoreOrder::new(&backend.config).from_db(named), Some(label))
+            }
+            None => (cores, None),
+        };
+        let selection = if let Some(selection) = overview_selection.as_ref() {
+            selection
+        } else if workspace_owned {
             &effective_selection
         } else {
             &self.sel_cores
@@ -514,7 +542,7 @@ impl ReportPanel {
         // is a whole localized phrase ("Полная сводка") that the shared width clips to an ellipsis,
         // and a clipped scope is the one label on this row that must stay readable. The shared
         // fitter is what keeps the number the row budgets with equal to the number it draws.
-        let full_w = match pinned_label.as_deref() {
+        let full_w = match pinned_label.as_deref().or(overview_label.as_deref()) {
             Some(label) => crate::controls::pinned_scope_width(
                 cx,
                 label,
@@ -586,6 +614,12 @@ impl ReportPanel {
                     &|n| n.to_string(),
                 )
             });
+            // The whole Overview reads as the Overview word, a narrowing as its group or count;
+            // the menu's All row keeps "All cores", the gesture that restores the Overview.
+            let combo = match overview_label.clone() {
+                Some(label) => combo.label(label).trigger_width(full_w),
+                None => combo,
+            };
             let combo = if compact {
                 let label = compact_summary
                     .as_ref()
@@ -594,8 +628,12 @@ impl ReportPanel {
             } else {
                 combo
             };
+            // Under Auto Overview the tooltip recovers the full trigger text (Overview word, group
+            // name or count) that the compact label sheds.
             let tooltip = compact_summary.as_ref().map(|summary| {
-                if summary.all_on {
+                if let Some(label) = overview_label.clone() {
+                    label
+                } else if summary.all_on {
                     t!("report.all_cores").to_string()
                 } else {
                     t!("report.cores_n", n = summary.selected).to_string()
