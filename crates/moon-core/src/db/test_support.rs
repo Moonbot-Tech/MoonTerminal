@@ -27,14 +27,13 @@ pub(super) fn remove_db(path: &Path) {
     }
 }
 
-/// Run `rep::init` with throwaway cursor and open-row registries.
+/// Run `rep::init` with a throwaway cursor registry.
 ///
 /// Tests that do not exercise catch-up bookkeeping share this one-liner; those
 /// that do feed the returned state to `rep::apply_*`.
 pub(super) fn rep_init(conn: &Connection) -> super::rep::RepState {
     let cursors = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    let open_rows = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    super::rep::init(conn, cursors, open_rows).unwrap()
+    super::rep::init(conn, cursors).unwrap()
 }
 
 /// Build a replica whose columns predate `rep::init`, allowing index creation

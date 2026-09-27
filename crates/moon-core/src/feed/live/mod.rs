@@ -557,6 +557,13 @@ pub(super) fn run(
     // with the core's database epoch, so a replaced core database is detected even when the new
     // one already grew past the old ids. Catch-up is PAGED: the next page is not requested until
     // the writer commits and acknowledges the current one (backpressure by design).
+    //
+    // Whether an open-row check has STARTED since this feed last asked for one. An
+    // `OpenRowsCheckComplete` names only its ids, not the request it answers, so a completion of a
+    // check that started before a reconnect can be read after the reconnect restarted the walk —
+    // and, when nothing changed, it carries exactly the new walk's first page. Only a check the
+    // library began after the latest request may move the walk on (#742).
+    let mut open_rows_check_started = false;
     if server.feed.reports {
         if let Some(sink) = reports {
             let start = sink.next_start(server.uid);
@@ -590,19 +597,14 @@ pub(super) fn run(
                     server.name
                 ),
             }
-            // Open rows may have closed or been deleted offline BELOW the catch-up start. Register
-            // them for checking; the library retains the set and repeats it on hard reconnect,
-            // and the results arrive as ordinary RowUpsert/RowDelete events.
-            let open = sink.open_rows(server.uid);
-            if !open.is_empty() {
-                if let Err(e) = client.reports().check_open_rows(&open) {
-                    log::warn!(
-                        "отчёты: core={} «{}» check_open_rows не ушёл: {e:?}",
-                        server.uid,
-                        server.name
-                    );
-                }
-            }
+            // Open rows may have closed or been deleted offline BELOW the catch-up start. The
+            // writer reads them and registers them for checking; the results arrive as ordinary
+            // RowUpsert/RowDelete events. Repeated on every reconnect below.
+            sink.send(DbMsg::RecheckOpenRows {
+                core_uid: server.uid,
+                after: None,
+                reports: client.reports(),
+            });
         }
     }
 
@@ -1067,6 +1069,21 @@ pub(super) fn run(
                         "core {} telegram refresh failed: {error}",
                         crate::feed::core_label(server.id)
                     );
+                }
+                // A close that happened while the link was down updated a row BELOW the catch-up
+                // cursor, so catch-up will not bring it. The library does repeat its retained
+                // open-row check after a reconnect, but with the set it was last given, which
+                // cannot hold a trade opened since then. Replace it with the replica's open rows
+                // as they are now (#742).
+                if server.feed.reports {
+                    if let Some(sink) = reports {
+                        open_rows_check_started = false;
+                        sink.send(DbMsg::RecheckOpenRows {
+                            core_uid: server.uid,
+                            after: None,
+                            reports: client.reports(),
+                        });
+                    }
                 }
             }
             if request_license_state {
@@ -2271,18 +2288,37 @@ pub(super) fn run(
                                         }
                                     }
                                 }
-                                ReportEvent::OpenRowsCheckStarted { rec_ids } => log::info!(
-                                    "отчёты: core={} «{}» проверка открытых строк начата ({} шт)",
-                                    server.uid,
-                                    server.name,
-                                    rec_ids.len(),
-                                ),
-                                ReportEvent::OpenRowsCheckComplete { rec_ids } => log::info!(
-                                    "отчёты: core={} «{}» проверка открытых строк завершена ({} шт)",
-                                    server.uid,
-                                    server.name,
-                                    rec_ids.len(),
-                                ),
+                                ReportEvent::OpenRowsCheckStarted { rec_ids } => {
+                                    open_rows_check_started = true;
+                                    log::info!(
+                                        "отчёты: core={} «{}» проверка открытых строк начата                                          ({} шт)",
+                                        server.uid,
+                                        server.name,
+                                        rec_ids.len(),
+                                    );
+                                }
+                                ReportEvent::OpenRowsCheckComplete { rec_ids } => {
+                                    log::info!(
+                                        "отчёты: core={} «{}» проверка открытых строк завершена \
+                                         ({} шт)",
+                                        server.uid,
+                                        server.name,
+                                        rec_ids.len(),
+                                    );
+                                    // A full page may have more open rows below it. Each step
+                                    // goes strictly below the page it follows, so the walk ends;
+                                    // the writer drops the step if a newer walk replaced it.
+                                    if open_rows_check_started
+                                        && rec_ids.len() >= crate::db::OPEN_ROWS_PAGE
+                                    {
+                                        open_rows_check_started = false;
+                                        sink.send(DbMsg::RecheckOpenRows {
+                                            core_uid: server.uid,
+                                            after: Some(rec_ids.clone()),
+                                            reports: client.reports(),
+                                        });
+                                    }
+                                }
                                 // Authoritative visibility for 1..=covered_up_to. Only a map that
                                 // describes the catch-up this feed asked about may be applied;
                                 // anything else would hide live rows and then record that as

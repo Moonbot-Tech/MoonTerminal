@@ -50,8 +50,8 @@ pub use quote::{
 pub use read_cancel::{ReadCancellation, current_is_cancelled, with_read_cancellation};
 pub use read_fail::{FailCode, FailKind, ReadFail, ReadResult};
 pub use reader_budget::ReportReader;
-pub(crate) use rep::ReportStart;
 pub use rep::{DbMsg, ReportSink};
+pub(crate) use rep::{OPEN_ROWS_PAGE, ReportStart};
 pub use report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS, OffsetSegment, ReportAxis, ReportStamp};
 pub(crate) use report_read::max_core_uid_in;
 pub use report_read::{
@@ -402,8 +402,7 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
         return None;
     }
     let starts = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    let open_rows = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    let mut rep_state = match rep::init(&conn, starts.clone(), open_rows.clone()) {
+    let mut rep_state = match rep::init(&conn, starts.clone()) {
         Ok(st) => st,
         Err(e) => {
             log::error!("отчёты: init typed-реплики не удался: {e}");
@@ -416,9 +415,6 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
     let writer_immediate_dirty = immediate_commit_dirty.clone();
     let background_commit_dirty = Arc::new(AtomicBool::new(false));
     let writer_background_dirty = background_commit_dirty.clone();
-    // A committed replica wipe drops the core's open-row set too: checking `newrecid`s from the
-    // superseded database reconciles nothing.
-    let writer_open_rows = open_rows.clone();
     if let Err(e) = std::thread::Builder::new()
         .name("reports-db".into())
         .spawn(move || {
@@ -431,6 +427,10 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
             // Cores whose replica this batch wiped, to be re-declared at full history after the
             // acknowledgements. Reused across batches so the allocation is not per-batch.
             let mut recreated_resyncs: Vec<(u64, MoonReports)> = Vec::new();
+            // Open-row pages this batch admitted, sent once it has committed. Reused like the above.
+            let mut open_row_checks: Vec<(u64, Vec<i64>, MoonReports)> = Vec::new();
+            // The page last registered per core, which tells a continuation from a stale one.
+            let mut open_rows_walk = rep::OpenRowsWalk::default();
             let mut thr_started = std::time::Instant::now();
             // Backdate the value by 30 seconds so the first WAL size check becomes eligible
             // roughly 30 seconds after startup, on the next completed batch, rather than 60.
@@ -536,11 +536,24 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
                             core_uid,
                             redeclare_history,
                         } => {
-                            rep::commit_replica_reset(&rep_state, core_uid, &writer_open_rows);
+                            rep::commit_replica_reset(&rep_state, core_uid);
                             // The core serves a different report database now, so everything
                             // learned from the wiped rows — the span AND the verdict — is stale.
                             quote::coin_m::forget_core(core_uid);
                             recreated_resyncs.push((core_uid, redeclare_history));
+                            // A page read before the wipe names ids of the superseded database.
+                            open_row_checks.retain(|(uid, ..)| *uid != core_uid);
+                            open_rows_walk.forget(core_uid);
+                        }
+                        PostCommit::CheckOpenRows {
+                            core_uid,
+                            after,
+                            rec_ids,
+                            reports,
+                        } => {
+                            if open_rows_walk.admit(core_uid, after.as_deref(), &rec_ids) {
+                                open_row_checks.push((core_uid, rec_ids, reports));
+                            }
                         }
                         PostCommit::AliveMap {
                             core_uid,
@@ -577,6 +590,15 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
                         log::warn!(
                             "отчёты(rep): ядро {core_uid} — полный sync после сброса реплики не \
                              ушёл: {error:?}"
+                        );
+                    }
+                }
+                for (core_uid, rec_ids, reports) in open_row_checks.drain(..) {
+                    if let Err(error) = reports.check_open_rows(&rec_ids) {
+                        log::warn!(
+                            "отчёты(rep): ядро {core_uid} — check_open_rows ({} шт) не ушёл: \
+                             {error:?}",
+                            rec_ids.len()
                         );
                     }
                 }
@@ -646,7 +668,6 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
         tx: ReportSink {
             tx,
             starts,
-            open_rows,
             send_failed: Arc::new(AtomicBool::new(false)),
         },
         generation,
@@ -684,6 +705,16 @@ enum PostCommit {
         core_uid: u64,
         checkpoint: ReportSyncCheckpoint,
         applied: rep::AliveMapApplied,
+    },
+    /// An open-row page was read inside the committed transaction: register it with the core.
+    ///
+    /// Ordered like the others so a wipe later in the same batch can drop a page read before it,
+    /// and so a new walk admitted earlier in the batch outranks a stale continuation after it.
+    CheckOpenRows {
+        core_uid: u64,
+        after: Option<Arc<[i64]>>,
+        rec_ids: Vec<i64>,
+        reports: MoonReports,
     },
 }
 
@@ -912,6 +943,22 @@ fn apply_msg(
         DbMsg::ValuationAck { through_seq } => {
             valuation::ack_outbox(conn, *through_seq)?;
             Ok(ApplyEffect::maintenance())
+        }
+        DbMsg::RecheckOpenRows {
+            core_uid,
+            after,
+            reports,
+        } => {
+            let rec_ids =
+                rep::apply_recheck_open_rows(conn, rep_state, *core_uid, after.as_deref())?;
+            Ok(
+                ApplyEffect::maintenance().publishing(PostCommit::CheckOpenRows {
+                    core_uid: *core_uid,
+                    after: after.clone(),
+                    rec_ids,
+                    reports: reports.clone(),
+                }),
+            )
         }
     }
 }
