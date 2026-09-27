@@ -7,9 +7,10 @@
 //!
 //! Like the Assets panel, it is scoped to a window group and can live in a dock
 //! tab or a detached window. [`crate::persistence::table_persist`] stores separate column
-//! widths and a separate remembered mode choice for `:dock` and `:win`. This module owns data and
-//! lifecycle; [`server_view`], [`table`], [`problems`], [`warnings`] and [`updates_list`] own the
-//! five presentations.
+//! widths, dragged column order, and a separate remembered mode choice for `:dock` and `:win`.
+//! The By IP tree has widths only: its columns are a fixed sequence, not a `MoonDataTable` order.
+//! This module owns data and lifecycle; [`server_view`], [`table`], [`problems`], [`warnings`]
+//! and [`updates_list`] own the five presentations.
 
 mod by_ip_header;
 mod by_ip_widths;
@@ -185,6 +186,47 @@ fn mode_ctx_id(detached: bool) -> String {
     crate::persistence::table_persist::ctx_id("core-status-mode", detached)
 }
 
+/// Build a log table state with its dragged column order restored, and keep later drags.
+///
+/// Widths stay in memory for these logs. Only the order is written, under `base` plus the
+/// panel's `:dock` or `:win` suffix.
+///
+/// Args:
+///     cx: Panel context that owns the new state.
+///     backend: Shared backend whose layout holds the order.
+///     base: Unqualified table id (`core-status-problems`, and the warnings and updates siblings).
+///     detached: Whether this panel is a detached window.
+///     keys: Column ids in source order, used to drop removed ids and append new ones.
+///
+/// Returns:
+///     The table state, already observing itself for order changes.
+fn ordered_log_state(
+    cx: &mut Context<CoreStatusView>,
+    backend: &Entity<Backend>,
+    base: &str,
+    detached: bool,
+    keys: &[&str],
+) -> Entity<MoonDataTableState> {
+    let id = crate::persistence::table_persist::ctx_id(base, detached);
+    let order = crate::persistence::table_persist::restored_order(backend.read(cx), &id, keys);
+    let state = cx.new(|_| {
+        let mut table = MoonDataTableState::new();
+        table.column_order = order;
+        table
+    });
+    cx.observe(&state, move |this, state, cx| {
+        crate::persistence::table_persist::persist_order(
+            &this.backend,
+            &id,
+            &state,
+            this.order_seen.entry(id.clone()).or_default(),
+            cx,
+        );
+    })
+    .detach();
+    state
+}
+
 /// Group-scoped Core Status panel for a dock tab or detached window.
 pub struct CoreStatusView {
     pub(super) backend: Entity<Backend>,
@@ -244,6 +286,12 @@ pub struct CoreStatusView {
     mode: CoreStatusMode,
     tree_state: Entity<MoonTreeState>,
     table_state: Entity<MoonDataTableState>,
+    /// Last order observed for each table on this panel, keyed by its context id.
+    ///
+    /// A resize or a click notifies the same observer as a drag. Docked core-status tables in
+    /// different groups share one `:dock` id, so writing on those other notifications would
+    /// replace a drag another open panel just saved.
+    order_seen: HashMap<String, Vec<SharedString>>,
     /// Column state for the Warnings list table (separate widths from the flat telemetry table).
     warn_table_state: Entity<MoonDataTableState>,
     /// Column state for the Updates list table (separate widths from every other table/tree here,
@@ -429,9 +477,16 @@ impl CoreStatusView {
         )
         .map_or_else(CoreStatusMode::default, CoreStatusMode::from_code);
         let saved_widths = crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
+        let saved_order = crate::persistence::table_persist::restored_order(
+            backend.read(cx),
+            &widths_id,
+            table::order_keys(),
+        );
+        let flat_order_seen = saved_order.clone();
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
             s.column_widths = saved_widths;
+            s.column_order = saved_order;
             if let Some((key, ascending)) = &flat_sort {
                 s.set_sort(key.clone(), *ascending);
             }
@@ -439,6 +494,14 @@ impl CoreStatusView {
         });
         cx.observe(&table_state, |this, state, cx| {
             crate::persistence::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
+            let id = this.widths_id.clone();
+            crate::persistence::table_persist::persist_order(
+                &this.backend,
+                &id,
+                &state,
+                this.order_seen.entry(id.clone()).or_default(),
+                cx,
+            );
         })
         .detach();
         // The By IP width bag. Its own `ctx_id` base, so a docked tab and a detached window keep
@@ -467,9 +530,41 @@ impl CoreStatusView {
             cx.notify();
         })
         .detach();
-        let warn_table_state = cx.new(|_| MoonDataTableState::new());
-        let problems_table_state = cx.new(|_| MoonDataTableState::new());
-        let updates_table_state = cx.new(|_| MoonDataTableState::new());
+        let warn_table_state = ordered_log_state(
+            cx,
+            &backend,
+            "core-status-warnings",
+            detached,
+            warnings::ORDER_KEYS,
+        );
+        let problems_table_state = ordered_log_state(
+            cx,
+            &backend,
+            "core-status-problems",
+            detached,
+            problems::ORDER_KEYS,
+        );
+        let updates_table_state = ordered_log_state(
+            cx,
+            &backend,
+            "core-status-updates",
+            detached,
+            updates_list::ORDER_KEYS,
+        );
+        let mut order_seen = HashMap::new();
+        order_seen.insert(widths_id.clone(), flat_order_seen);
+        order_seen.insert(
+            crate::persistence::table_persist::ctx_id("core-status-warnings", detached),
+            warn_table_state.read(cx).column_order.clone(),
+        );
+        order_seen.insert(
+            crate::persistence::table_persist::ctx_id("core-status-problems", detached),
+            problems_table_state.read(cx).column_order.clone(),
+        );
+        order_seen.insert(
+            crate::persistence::table_persist::ctx_id("core-status-updates", detached),
+            updates_table_state.read(cx).column_order.clone(),
+        );
         let tree_state = cx.new(|cx| MoonTreeState::new(cx));
         let focus = cx.focus_handle();
 
@@ -498,6 +593,7 @@ impl CoreStatusView {
             mode,
             tree_state,
             table_state,
+            order_seen,
             warn_table_state,
             problems_table_state,
             updates_table_state,

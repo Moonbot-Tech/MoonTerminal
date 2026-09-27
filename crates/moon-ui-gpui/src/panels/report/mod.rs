@@ -721,6 +721,9 @@ pub struct ReportPanel {
     /// default, `app_meta`, or per-context set.
     pub(super) visible: HashSet<String>,
     table_state: Entity<MoonDataTableState>,
+    /// Order this table last observed. Group reports share `report-table-v2:dock`, so a resize
+    /// or a click on one must not replace a drag another open report just saved.
+    col_order_cache: Vec<SharedString>,
     /// Versioned context-qualified width-storage ID for docked or detached Report layouts.
     widths_id: String,
     /// Content-derived base widths cached until report data, locale, or resolved typography changes.

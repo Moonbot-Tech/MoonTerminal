@@ -673,6 +673,89 @@ fn table_sort_preferences_survive_toml_round_trip() {
     assert_eq!(decoded.table_sorts, layout.table_sorts);
 }
 
+/// `layout.rs:WindowLayout::table_column_order` must keep each table's dragged sequence.
+///
+/// Mutation: skip the field or sort the ids while saving. A Report the user dragged would reopen
+/// in source order, and a Warnings window would pick up the docked table's sequence.
+#[test]
+fn table_column_order_survives_toml_round_trip() {
+    let mut layout = WindowLayout::default();
+    layout.table_column_order.insert(
+        "report-table-v2:dock".to_string(),
+        vec!["pnl".to_string(), "coin".to_string()],
+    );
+    layout.table_column_order.insert(
+        "core-status-warnings:win".to_string(),
+        vec!["core".to_string(), "time".to_string()],
+    );
+    layout.analytics_period = Some("p-cur-month".to_string());
+
+    let encoded = toml::to_string(&layout).expect("WindowLayout must serialize to TOML");
+    let decoded: WindowLayout =
+        toml::from_str(&encoded).expect("serialized WindowLayout must deserialize");
+
+    assert_eq!(decoded.table_column_order, layout.table_column_order);
+    assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
+}
+
+/// `layout/serde_compat.rs:de_table_order_map` must drop one bad entry and one bad item.
+///
+/// Mutation: decode the map as one all-or-nothing value, or reject a list that contains a number.
+/// The Assets order would then disappear with the Screener typo, or the whole layout would fail
+/// because a hand edit put `7` between two column ids.
+#[test]
+fn one_malformed_column_order_does_not_erase_valid_siblings_or_layout() {
+    let doc = r#"
+analytics_period = "p-cur-month"
+
+[table_column_order]
+"report-table-v2:dock" = ["pnl", 7, "coin", ""]
+"screener-table:win" = "nope"
+"assets-table:win" = ["qty", "coin"]
+"#;
+    let decoded: WindowLayout =
+        toml::from_str(doc).expect("one malformed column order must not reject the layout");
+
+    assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
+    assert_eq!(
+        decoded
+            .table_column_order
+            .get("report-table-v2:dock")
+            .map(Vec::as_slice),
+        Some(["pnl".to_string(), "coin".to_string()].as_slice())
+    );
+    assert!(
+        !decoded
+            .table_column_order
+            .contains_key("screener-table:win")
+    );
+    assert_eq!(
+        decoded
+            .table_column_order
+            .get("assets-table:win")
+            .map(Vec::as_slice),
+        Some(["qty".to_string(), "coin".to_string()].as_slice())
+    );
+}
+
+/// `layout/serde_compat.rs:de_table_order_map` must tolerate a wrong outer value.
+///
+/// Mutation: remove the lenient outer arm. A typo on `table_column_order` would reject every
+/// window position instead of merely forgetting dragged orders. A document written before the
+/// field existed must also load with an empty map.
+#[test]
+fn malformed_or_absent_column_order_cannot_reject_the_layout() {
+    let decoded: WindowLayout =
+        toml::from_str("analytics_period = \"p-cur-month\"\ntable_column_order = 5\n")
+            .expect("a malformed table_column_order value must not fail the complete document");
+    assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
+    assert!(decoded.table_column_order.is_empty());
+
+    let older: WindowLayout = toml::from_str("analytics_period = \"p-cur-month\"\n")
+        .expect("a layout written before column order existed must load");
+    assert!(older.table_column_order.is_empty());
+}
+
 /// `layout/serde_compat.rs:de_table_sort_map` must discard one malformed entry without losing valid siblings.
 ///
 /// Mutation: deserialize the `HashMap<String, TableSortPreference>` as one all-or-nothing value.

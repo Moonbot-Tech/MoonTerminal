@@ -344,6 +344,76 @@ where
     })
 }
 
+/// Read dragged column orders while discarding only the malformed entries.
+///
+/// Args:
+///     d: Serde deserializer positioned at the complete `table_column_order` value.
+///
+/// Returns:
+///     Every well-formed id list. A non-map outer value yields an empty map. A non-list entry is
+///     dropped. A non-string item inside a list is dropped and its sibling ids are kept.
+///
+/// Errors:
+///     Propagates only deserializer failures that cannot be consumed as ignored input.
+pub(super) fn de_table_order_map<'de, D>(d: D) -> Result<HashMap<String, Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// One column id, or an item that is not a string.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Item {
+        /// A column id.
+        Text(String),
+        /// A number, bool, or other hand-edited item.
+        Other(serde::de::IgnoredAny),
+    }
+
+    /// One table's order, or an entry that is not a list.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        /// Column ids in dragged order.
+        List(Vec<Item>),
+        /// Any unsupported entry shape.
+        Other(serde::de::IgnoredAny),
+    }
+
+    /// The expected map or an ignored malformed outer value.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        /// Context ids mapped to independently recoverable lists.
+        Map(HashMap<String, Entry>),
+        /// Any unsupported outer shape.
+        Other(serde::de::IgnoredAny),
+    }
+
+    Ok(match Stored::deserialize(d)? {
+        Stored::Map(entries) => entries
+            .into_iter()
+            .filter_map(|(id, entry)| match entry {
+                Entry::List(items) => {
+                    let keys: Vec<String> = items
+                        .into_iter()
+                        .filter_map(|item| match item {
+                            Item::Text(key) if !key.is_empty() => Some(key),
+                            Item::Text(_) | Item::Other(_) => None,
+                        })
+                        .collect();
+                    if keys.is_empty() {
+                        None
+                    } else {
+                        Some((id, keys))
+                    }
+                }
+                Entry::Other(_) => None,
+            })
+            .collect(),
+        Stored::Other(_) => HashMap::new(),
+    })
+}
+
 /// Decode the hand-editable Auto rail width without rejecting the complete layout document.
 ///
 /// Args:

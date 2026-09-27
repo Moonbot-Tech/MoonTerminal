@@ -490,6 +490,7 @@ impl ReportPanel {
                                         c.notify();
                                     }
                                 });
+                                this.reconcile_column_order(cx);
                             }
                         }
                         // Preserve schema and core choices across a failed read;

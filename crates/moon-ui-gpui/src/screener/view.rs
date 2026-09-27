@@ -68,6 +68,9 @@ pub struct ScreenerView {
     visible_cols: HashSet<String>,
     /// Retained table state for drag order, column widths, and the sort indicator.
     table_state: Entity<MoonDataTableState>,
+    /// Order this table last observed. A resize or a header click notifies the same observer
+    /// as a drag, and must not write an order that did not move.
+    col_order_cache: Vec<SharedString>,
     gate: RenderGate,
     focus: FocusHandle,
 }
@@ -124,16 +127,33 @@ impl ScreenerView {
         let saved_widths = super::table::migrate_legacy_widths(
             crate::persistence::table_persist::saved(backend.read(cx), &widths_id),
         );
+        let screener_keys: Vec<&str> = COLS.iter().map(|column| column.0).collect();
+        let saved_order = crate::persistence::table_persist::restored_order(
+            backend.read(cx),
+            &widths_id,
+            &screener_keys,
+        );
+        let col_order_cache = saved_order.clone();
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
             s.set_sort(restored_sort.0.clone(), !restored_sort.1);
             s.column_widths = saved_widths;
+            s.column_order = saved_order;
             s
         });
-        // Column resizing mutates table state; persist widths through the shared storage.
+        // Column resizing and dragging mutate table state. Order uses its own helper so a panel
+        // that already stores order elsewhere is not given a second copy. The cache skips a
+        // notification that did not move the columns.
         let widths_id_obs = widths_id.clone();
         cx.observe(&table_state, move |this, state, cx| {
             crate::persistence::table_persist::persist(&this.backend, &widths_id_obs, &state, cx);
+            crate::persistence::table_persist::persist_order(
+                &this.backend,
+                &widths_id_obs,
+                &state,
+                &mut this.col_order_cache,
+                cx,
+            );
         })
         .detach();
 
@@ -186,6 +206,7 @@ impl ScreenerView {
             source: ScrSource::All,
             visible_cols,
             table_state,
+            col_order_cache,
             gate: RenderGate::default(),
             focus: cx.focus_handle(),
         };

@@ -453,6 +453,7 @@ impl ReportPanel {
                                 cx.notify();
                             }
                         });
+                        this.reconcile_column_order(cx);
                     }
                     this.comment_metadata_loaded = true;
                     this.natural_widths.clear();
@@ -567,14 +568,29 @@ impl ReportPanel {
         let mut saved_widths =
             crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         complete_widths(&mut saved_widths, &init_cols);
+        // Schema is still empty here. Keep the saved ids verbatim; the metadata load merges them
+        // once the real columns exist.
+        let saved_order =
+            crate::persistence::table_persist::restored_order(backend.read(cx), &widths_id, &[]);
+        let col_order_cache = saved_order.clone();
         let table_state = cx.new(|_| MoonDataTableState::new());
         table_state.update(cx, |state, _| {
             state.set_sort(sort_key.clone(), !sort_desc);
             state.column_widths = saved_widths;
+            state.column_order = saved_order;
         });
-        // A column resize mutates table state; persist the exact user widths through shared storage.
+        // A column resize or drag mutates table state. Widths and order persist separately:
+        // `persist` stays widths-only so Orders and Alerts do not gain a second order store.
+        // The cache skips a resize or a click, so another open report on this id keeps its drag.
         cx.observe(&table_state, |this, state, cx| {
             crate::persistence::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
+            crate::persistence::table_persist::persist_order(
+                &this.backend,
+                &this.widths_id,
+                &state,
+                &mut this.col_order_cache,
+                cx,
+            );
         })
         .detach();
 
@@ -912,6 +928,7 @@ impl ReportPanel {
             last_strategy_scope: None,
             visible,
             table_state,
+            col_order_cache,
             widths_id,
             natural_widths: NaturalWidthsCache::default(),
             detached: false,
@@ -1253,8 +1270,17 @@ impl ReportPanel {
         let mut saved =
             crate::persistence::table_persist::saved(self.backend.read(cx), &self.widths_id);
         complete_widths(&mut saved, &self.cols);
+        let order_id = self.widths_id.clone();
+        let order_backend = self.backend.clone();
+        let live: Vec<String> = self.cols.iter().cloned().collect();
         self.table_state.update(cx, |s, c| {
             s.column_widths = saved;
+            let live_refs: Vec<&str> = live.iter().map(String::as_str).collect();
+            s.column_order = crate::persistence::table_persist::restored_order(
+                order_backend.read(c),
+                &order_id,
+                &live_refs,
+            );
             c.notify();
         });
         self.apply_ctx_columns(cx);
@@ -1335,6 +1361,41 @@ impl ReportPanel {
                 cx,
             );
         }
+    }
+
+    /// Drop removed column ids from the in-memory drag order and append columns the schema gained.
+    ///
+    /// Uses the order already on the table, not a fresh read of the layout: a drag since the last
+    /// flush is the order to keep. An empty order stays empty, so a report the user never dragged
+    /// still follows `DISPLAY_COLUMNS`. Notifies only when the list changes, which is what arms
+    /// [`crate::persistence::table_persist::persist_order`].
+    ///
+    /// Args:
+    ///     cx: Panel context used to update the table state.
+    ///
+    /// Returns:
+    ///     Nothing.
+    pub(super) fn reconcile_column_order(&mut self, cx: &mut Context<Self>) {
+        if self.cols.is_empty() {
+            return;
+        }
+        let live: Vec<&str> = self.cols.iter().map(String::as_str).collect();
+        self.table_state.update(cx, |state, cx| {
+            let stored: Vec<String> = state
+                .column_order
+                .iter()
+                .map(|key| key.to_string())
+                .collect();
+            let next: Vec<SharedString> =
+                crate::persistence::table_persist::merge_column_order(&stored, &live)
+                    .into_iter()
+                    .map(SharedString::from)
+                    .collect();
+            if state.column_order != next {
+                state.column_order = next;
+                cx.notify();
+            }
+        });
     }
 
     /// Return visible columns in runtime-schema order for stable rendering and persistence.

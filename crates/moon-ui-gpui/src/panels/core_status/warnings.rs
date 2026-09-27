@@ -14,6 +14,9 @@ use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
 use super::*;
 use crate::backend::core_warn::{WarnAxis, WarnEpisode};
 
+/// Warnings column ids in source order. A dragged order is stored under these ids.
+pub(super) const ORDER_KEYS: &[&str] = &["time", "dur", "peak", "type", "server", "core"];
+
 /// Build the unsortable Warnings columns with fixed measurement fields and a flexible Core tail.
 ///
 /// Returns:

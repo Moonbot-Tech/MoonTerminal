@@ -23,8 +23,8 @@ use serde_compat::{
     de_connector_thickness, de_hvol_price_frame_pct, de_hvol_side, de_hvol_tf_s, de_hvol_width,
     de_lenient_chart_labels, de_lenient_false, de_lenient_graphics, de_lenient_map,
     de_lenient_seed, de_lenient_true, de_lenient_u32, de_marker_scale,
-    de_strategies_tree_text_step, de_table_sort_map, de_tick_ranges, de_trade_history_style,
-    de_trade_volume_alpha,
+    de_strategies_tree_text_step, de_table_order_map, de_table_sort_map, de_tick_ranges,
+    de_trade_history_style, de_trade_volume_alpha,
 };
 pub use serde_compat::{de_lenient, de_lenient_bool};
 
@@ -1315,6 +1315,17 @@ pub struct WindowLayout {
     /// separate sets. No entry = table default (usually "all visible").
     #[serde(default)]
     pub table_visible_columns: HashMap<String, Vec<String>>,
+    /// Dragged column order per context-qualified table id: the same keys as
+    /// [`Self::table_column_widths`].
+    ///
+    /// No entry, or an empty list, means the table's source order. The list is the user's sequence
+    /// of column ids. A panel drops an id that its current columns do not contain and appends an id
+    /// they gained; this map only stores what was last written. It is read per entry so one
+    /// hand-edited list cannot reject `layout.toml`. The 100 ms coordination drain and
+    /// `on_app_quit` both snapshot this struct whole, which is what registers the map on both save
+    /// paths.
+    #[serde(default, deserialize_with = "de_table_order_map")]
+    pub table_column_order: HashMap<String, Vec<String>>,
     /// Generic table-sort persistence: context-qualified table id to validated column/direction.
     ///
     /// Valid entries are salvaged independently, so a hand-edited value for one panel cannot erase

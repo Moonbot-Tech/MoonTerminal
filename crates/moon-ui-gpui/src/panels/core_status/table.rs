@@ -45,6 +45,17 @@ const COLUMN_KEYS: [&str; 15] = [
     "tz_off",
 ];
 
+/// Every Flat column id, in source order, including columns hidden until a core reports them.
+///
+/// Persistence merges against this full set. Merging against only the columns on screen would drop
+/// `api_key` while no row has one, then append it the next time a key appears.
+///
+/// Returns:
+///     The canonical Flat column ids.
+pub(super) fn order_keys() -> &'static [&'static str] {
+    &COLUMN_KEYS
+}
+
 /// Decide whether one Flat column has information to display in the visible rows.
 ///
 /// Args:
