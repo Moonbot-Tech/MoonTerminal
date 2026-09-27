@@ -962,10 +962,10 @@ impl ReportPanel {
         // would broaden a narrow selection to the whole fleet.
         // Auto Overview's Report-only narrowing never empties the list (a stale one falls back to
         // the whole scope), so the sentinel decision below stays the scope's own.
-        let ids = self
-            .overview_narrowed_ids(&scope)
-            .unwrap_or_else(|| scope.ids().to_vec());
-        query_core_ids(ids, scope.membership_total() > 0)
+        match self.overview_narrowed_ids(&scope) {
+            Some(ids) => query_core_ids(ids, scope.membership_total() > 0),
+            None => query_core_ids(scope.ids().to_vec(), scope.membership_total() > 0),
+        }
     }
 
     /// Return the Auto Overview scope's ids when this group Report shows the Overview.
