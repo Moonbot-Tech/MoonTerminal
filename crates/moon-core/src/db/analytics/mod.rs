@@ -45,7 +45,6 @@ pub(in crate::db) use calendar::FEE_ROW;
 use groups::groups;
 pub(in crate::db) use groups::{coin_groups_from_source, strategies_for_coins_on};
 use query::ProjectionMode;
-use query::WHERE_UNDATED;
 pub(in crate::db) use query::{ProjectionMode as ResolvedProjectionMode, unified_from_mode};
 pub(in crate::db) use query::{
     attach_strategies, effective_sid_expr, quote_breakdown_on, strategies_attached, unified_from,
@@ -136,18 +135,16 @@ pub struct Summary {
     pub to: i64,
 }
 
-/// Closed trades the core never dated, split safely by quote currency.
+/// Closed trades that also have no usable close date, split safely by quote currency.
 ///
-/// Every analytics figure uses a period predicate ending in `closedate > 0`.
-/// So these rows are in NO period — not even "all history" — and their profit is simply
-/// absent from every number this window shows. One measured USDT replica had 370 such trades
-/// carrying -434 USDT: closed for certain (they carry a sell price and a sell reason) and
-/// invisible everywhere.
-///
-/// This is a CORE-side omission, not a replica bug: `db::rep::open_row_ids` already reports
-/// such rows back for re-checking and they stay undated regardless. The terminal cannot
-/// invent the missing timestamp — the only honest thing it can do is say how much is missing,
-/// which is what this returns.
+/// A row is closed only when `closedate` is a positive number — the same partition the
+/// Report uses — and open otherwise. An open position is stored with `closedate` 0 and a
+/// floating profit already filled in. Counting every non-positive `closedate` called that
+/// floating profit a closed trade the core never dated, which is the notice this used to
+/// raise. Open rows are excluded. A closed row already has a positive `closedate`, so it
+/// belongs to a period (including all history) and is not in this set either. While that
+/// partition holds, nothing is both closed and undated, the totals stay empty, and the
+/// window stays silent.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UndatedCloses {
     /// Raw-money totals and complete row count for undated closes.
@@ -199,7 +196,7 @@ impl UndatedCloses {
     }
 }
 
-/// Count them under the CURRENT filters but outside any period — see [`UndatedCloses`].
+/// Count closed rows that have no usable close date, under the current filters.
 ///
 /// Args:
 ///     q: Active Analytics filters; period bounds are intentionally replaced.
@@ -232,9 +229,13 @@ fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> 
     let has_names = masked && strategies_attached(conn);
     let mut groups = Vec::new();
     for src in super::read_sources_res(conn)? {
-        // A source without these columns cannot hold such a row, and asking would fail the
-        // whole statement rather than contribute zero.
-        if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
+        // A source without profit, or without a `closedate` the Report can classify, cannot
+        // hold an undated close. Asking would fail the statement rather than contribute zero.
+        // The predicate is the Report's closed test conjoined with "no usable close date".
+        let Some(undated) = query::where_undated_closed(&src.cols) else {
+            continue;
+        };
+        if !src.cols.contains("profitbtc") {
             continue;
         }
         // Attribution is OFF for an unmasked banner: it counts rows the PERIOD threw away, and
@@ -244,14 +245,7 @@ fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> 
         let attribution = query::liquidation_attribution_available(&src.cols, has_names);
         let (quote, group_by) = super::quote::trusted_quote_group("r", &src.cols);
         let sql = q
-            .where_branches(
-                WHERE_UNDATED,
-                &src.cols,
-                &sid,
-                Some("r"),
-                attribution,
-                &mask,
-            )
+            .where_branches(&undated, &src.cols, &sid, Some("r"), attribution, &mask)
             .iter()
             .map(|where_sql| {
                 format!(

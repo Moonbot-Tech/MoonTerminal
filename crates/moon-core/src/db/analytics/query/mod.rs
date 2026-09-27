@@ -1028,8 +1028,29 @@ pub(in crate::db) fn unified_from_mode(
     }
 }
 
-/// Rows a period can never contain: the close date is absent or non-positive.
-pub(super) const WHERE_UNDATED: &str = "(closedate IS NULL OR closedate <= 0)";
+/// Closed rows that still have no usable close date, on a source aliased `r`.
+///
+/// Closed/open is the Report partition `closed_row_predicate`: a positive numeric
+/// `closedate`, and open otherwise. The other half is a null or non-positive
+/// `closedate`, which is how an open position is stored, already carrying a
+/// floating profit. Counting that half alone is what put open positions into the
+/// "Trades with no close date" notice. The two halves are one predicate so this
+/// file does not grow a second open/closed rule. While the partition requires a
+/// positive `closedate` to call a row closed, the conjunction matches nothing and
+/// the notice stays silent; a later partition that can name a closed row without
+/// that instant starts counting it here.
+///
+/// Args:
+///     cols: Columns available on this source.
+///
+/// Returns:
+///     The conjunction, or `None` when the source cannot express `closedate`.
+pub(super) fn where_undated_closed(cols: &std::collections::HashSet<String>) -> Option<String> {
+    let closed = super::super::report_read::closed_row_predicate(cols)?;
+    Some(format!(
+        "({closed} AND (r.\"closedate\" IS NULL OR r.\"closedate\" <= 0))"
+    ))
+}
 
 /// Is the strategy database available on this connection?
 ///

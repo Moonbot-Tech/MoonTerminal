@@ -696,7 +696,7 @@ fn source_sort_expression(
 ///
 /// Returns:
 ///     The predicate, or `None` when the source cannot express `closedate` at all.
-fn closed_row_predicate(cols: &std::collections::HashSet<String>) -> Option<String> {
+pub(super) fn closed_row_predicate(cols: &std::collections::HashSet<String>) -> Option<String> {
     cols.contains("closedate").then(|| {
         "(typeof(r.\"closedate\") IN ('integer','real') AND r.\"closedate\" > 0)".to_string()
     })
