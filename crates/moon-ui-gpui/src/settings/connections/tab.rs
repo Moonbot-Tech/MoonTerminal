@@ -26,10 +26,10 @@ use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 
 /// Draft server metadata needed to assemble the Connections hierarchy.
-pub(super) type ServerRowMeta = (CoreId, u64, bool, String, Option<CoreVenue>);
+pub(in crate::settings) type ServerRowMeta = (CoreId, u64, bool, String, Option<CoreVenue>);
 
 /// Visible group metadata needed to render one Connections branch.
-pub(super) type GroupRowMeta = (String, bool, u32);
+pub(in crate::settings) type GroupRowMeta = (String, bool, u32);
 
 /// Project retained draft groups onto names referenced by the current server rows.
 ///
@@ -56,6 +56,67 @@ pub(super) fn visible_group_rows(
         .filter(|group| referenced.contains(group.name.as_str()))
         .map(|group| (group.name.clone(), group.active, group.icon))
         .collect()
+}
+
+/// The visible groups in the order every core tree draws them: by name.
+///
+/// ONE place for the order, because two tabs draw this tree — Connections and Settings →
+/// Storage's "Data by core" — and a sort re-typed at each call site would let them drift apart.
+pub(in crate::settings) fn sorted_group_rows(
+    servers: &[ServerRowMeta],
+    groups: &[GroupConfig],
+) -> Vec<GroupRowMeta> {
+    let mut rows = visible_group_rows(servers, groups);
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows
+}
+
+/// The pill a window-group branch sits on, shared by both core trees.
+///
+/// The right inset clears the overlay scrollbar of a virtual list: a row there ending in live
+/// controls would otherwise have their right edge painted over and its clicks swallowed.
+pub(in crate::settings) fn group_pill(p: MoonPalette, cx: &App) -> Div {
+    h_flex()
+        .w_full()
+        .gap_1()
+        .items_center()
+        .px_1()
+        .pr(design::ui_px(cx, design::MOON_SCROLLBAR_OVERLAY_W))
+        .py_0p5()
+        .rounded(design::r_button(cx))
+        .bg(rgb(p.panel_high))
+}
+
+/// A group's icon, or an empty box of the same size while it has none.
+pub(in crate::settings) fn group_icon(tex: Option<Arc<RenderImage>>, cx: &App) -> AnyElement {
+    let side = design::ui_px(cx, 20.0);
+    match tex {
+        Some(arc) => img(arc).w(side).h(side).into_any_element(),
+        None => div().w(side).h(side).into_any_element(),
+    }
+}
+
+/// A group's name on its pill.
+///
+/// It SHRINKS but never GROWS: `flex_1` here handed it every spare pixel of a 1791px row, which
+/// pushed the count away from the name it counts and left the controls scattered across the gap
+/// instead of reading as one cluster. `min_w_0` keeps the truncation, so a long name still
+/// ellipsises rather than pushing the cluster off-row.
+pub(in crate::settings) fn group_name(name: &str) -> Div {
+    div()
+        .min_w_0()
+        .truncate()
+        .font_bold()
+        .child(name.to_string())
+}
+
+/// "N cores" beside a group's name.
+pub(in crate::settings) fn group_count(member_count: usize, p: MoonPalette, cx: &App) -> Div {
+    div()
+        .flex_shrink_0()
+        .text_size(design::t_body(cx))
+        .text_color(rgb(p.text_soft))
+        .child(t!("conn.member_count", n = member_count).to_string())
 }
 
 /// Count how many draft rows name each group, in one pass over the servers.
@@ -101,7 +162,7 @@ pub(super) fn pending_server_indices(servers: &[ServerRowMeta]) -> Vec<usize> {
 ///
 /// Returns:
 ///     A compact heading row with an indicator, caption, and member count.
-fn subsection_header_row(
+pub(in crate::settings) fn subsection_header_row(
     id: SharedString,
     name: String,
     member_count: usize,
@@ -311,19 +372,7 @@ fn group_header_row(
         popover = popover.content(body);
     }
 
-    h_flex()
-        .w_full()
-        .gap_1()
-        .items_center()
-        .px_1()
-        // Overrides the `px_1` right inset only: this row ends in live controls -- the proto
-        // dropdown, the icon popover and the "+ core" button -- and it is a row of the same
-        // virtual list, whose overlay scrollbar would otherwise paint over and swallow clicks on
-        // the right edge of that button.
-        .pr(design::ui_px(cx, design::MOON_SCROLLBAR_OVERLAY_W))
-        .py_0p5()
-        .rounded(design::r_button(cx))
-        .bg(rgb(p.panel_high))
+    group_pill(p, cx)
         .child(
             MoonCheckbox::new(SharedString::from(format!("grp-{name}")))
                 .checked(active)
@@ -347,24 +396,8 @@ fn group_header_row(
                 }),
         )
         .child(ico_el)
-        // The name SHRINKS but never GROWS: `flex_1` here handed it every spare pixel of a
-        // 1791px row, which pushed the count away from the name it counts and left the controls
-        // scattered across the gap instead of reading as one cluster. `min_w_0` keeps the
-        // truncation, so a long name still ellipsises rather than pushing the cluster off-row.
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .font_bold()
-                .child(name.to_string()),
-        )
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_size(design::t_body(cx))
-                .text_color(rgb(p.text_soft))
-                .child(t!("conn.member_count", n = member_count).to_string()),
-        )
+        .child(group_name(name))
+        .child(group_count(member_count, p, cx))
         .child(
             // One right-aligned cluster: `ml_auto` absorbs the free space the name gave up, so
             // the four controls sit together at the row's end instead of spread along it.
@@ -600,7 +633,7 @@ impl SettingsView {
         let status = self.backend.read(cx).session.status_map();
         // Snapshot server row metadata and groups as (name, active, icon).
         // Rank from the draft so a pending sort-mode change is visible before it is applied.
-        let (order, servers, mut groups, endpoints) = {
+        let (order, servers, groups, endpoints) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
             let venues = b.session.core_venues();
@@ -617,7 +650,7 @@ impl SettingsView {
                     )
                 })
                 .collect::<Vec<_>>();
-            let groups = visible_group_rows(&servers, &d.groups);
+            let groups = sorted_group_rows(&servers, &d.groups);
             (
                 crate::core_order::CoreOrder::new(d),
                 servers,
@@ -625,8 +658,6 @@ impl SettingsView {
                 super::endpoints::endpoint_cells(&d.servers),
             )
         };
-        // Keep group branches in stable name order.
-        groups.sort_by(|a, b| a.0.cmp(&b.0));
         // Preload group icons and, while the picker is open, every picker icon. `texture()` needs
         // `&mut self.icons`, so load before building UI and then read from the map -- the row
         // factory below only ever gets `&App` and could not call it itself.
@@ -730,17 +761,8 @@ impl SettingsView {
                             icon,
                             member_count,
                         } => {
-                            let ico_el: AnyElement =
-                                match factory_icon_tex.get(icon).and_then(|t| t.clone()) {
-                                    Some(arc) => img(arc)
-                                        .w(design::ui_px(app, 20.0))
-                                        .h(design::ui_px(app, 20.0))
-                                        .into_any_element(),
-                                    None => div()
-                                        .w(design::ui_px(app, 20.0))
-                                        .h(design::ui_px(app, 20.0))
-                                        .into_any_element(),
-                                };
+                            let ico_el =
+                                group_icon(factory_icon_tex.get(icon).cloned().flatten(), app);
                             let open = factory_picking.as_deref() == Some(name.as_str());
                             group_header_row(
                                 &factory_weak,

@@ -16,6 +16,9 @@ use crate::design;
 
 use super::Shell;
 
+/// How long a report catch-up must run before the status bar mentions it, ms.
+const REPORT_SYNC_SHOW_AFTER_MS: i64 = 2_000;
+
 impl Shell {
     /// Build the lower status bar as three semantic groups plus right-aligned actions.
     ///
@@ -91,6 +94,58 @@ impl Shell {
             })
             .collect::<Vec<_>>()
             .join("\n");
+
+        // Report history still arriving (#665) — without this nothing tells a user that the Report
+        // is short because it is still downloading. A catch-up that ends within a couple of seconds
+        // is the steady state on every connect and would only blink the bar.
+        let now_ms = moon_core::util::time::now_unix_ms_i64();
+        let syncing: Vec<_> = conn
+            .report_sync
+            .iter()
+            .filter(|row| {
+                now_ms.saturating_sub(row.progress.started_ms) >= REPORT_SYNC_SHOW_AFTER_MS
+            })
+            .collect();
+        let percent_text = |done: i64, span: i64| {
+            if span > 0 {
+                format!("{}%", i128::from(done) * 100 / i128::from(span))
+            } else {
+                "…".to_string()
+            }
+        };
+        let sync_value = (!syncing.is_empty()).then(|| {
+            let (done, span) = syncing
+                .iter()
+                .filter_map(|row| row.progress.done_and_span())
+                .fold((0i64, 0i64), |(d, s), (rd, rs)| {
+                    (d.saturating_add(rd), s.saturating_add(rs))
+                });
+            let percent = percent_text(done, span);
+            if syncing.len() > 1 {
+                format!("{} · {percent}", syncing.len())
+            } else {
+                percent
+            }
+        });
+        let sync_text = (!syncing.is_empty()).then(|| {
+            let mut text = t!("status.reports_sync_tip").to_string();
+            for row in &syncing {
+                let (done, span) = row.progress.done_and_span().unwrap_or((0, 0));
+                text.push('\n');
+                text.push_str(&t!(
+                    "status.reports_sync_row",
+                    name = row.name.as_str(),
+                    percent = percent_text(done, span),
+                    rows = row.progress.rows
+                ));
+            }
+            text
+        });
+        let down_text = [Some(down_text).filter(|t| !t.is_empty()), sync_text]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n\n");
 
         // The caption is translated WHOLE, colon included (`%{value}`), rather than glued together
         // as "label + ': ' + tail": punctuation and word order are the translator's business. The
@@ -218,6 +273,83 @@ impl Shell {
                 .on_click(|_, _window, cx| cx.open_url("https://moonbot.pro")),
         );
 
+        let mut items = vec![
+            MoonStatusItem::new(if compact {
+                connection_value
+            } else {
+                status_text
+            })
+            .color(badge_col)
+            .weight(600.0)
+            .gap_after(status_gap),
+        ];
+        if let Some(value) = sync_value {
+            items.push(MoonStatusItem::separator().gap_after(status_gap));
+            items.push(
+                MoonStatusItem::new(if compact {
+                    format!("↓{value}")
+                } else {
+                    t!("status.reports_sync", value = value).to_string()
+                })
+                .color(p.amber)
+                .gap_after(status_gap),
+            );
+        }
+        items.extend([
+            MoonStatusItem::separator().gap_after(status_gap),
+            MoonStatusItem::new(if compact { license_value } else { license_text })
+                .color(license_color)
+                .weight(600.0)
+                .gap_after(group_gap),
+            MoonStatusItem::group_separator().gap_after(group_gap),
+            MoonStatusItem::new("BOOK")
+                .color(p.text_muted)
+                .gap_after(inner_gap),
+            MoonStatusItem::new(format!("{book_levels}"))
+                .color(p.text_soft)
+                .gap_after(value_gap),
+            MoonStatusItem::new("FPS")
+                .color(p.text_muted)
+                .gap_after(inner_gap),
+            MoonStatusItem::new(format!("{fps:.0}"))
+                .color(p.text_soft)
+                .gap_after(group_gap),
+            MoonStatusItem::group_separator().gap_after(group_gap),
+            MoonStatusItem::new(if compact { "CPU" } else { "CPU APP/SYS" })
+                .color(p.text_muted)
+                .gap_after(inner_gap),
+            MoonStatusItem::new(if compact {
+                format!("{:.0}/{:.0}%", snap.cpu_process, snap.cpu_system)
+            } else {
+                format!("{:.0}% / {:.0}%", snap.cpu_process, snap.cpu_system)
+            })
+            .color(p.text_soft)
+            .gap_after(value_gap),
+            MoonStatusItem::new("GPU")
+                .color(p.text_muted)
+                .gap_after(inner_gap),
+            MoonStatusItem::new(format!("{:.0}%", snap.gpu_process))
+                .color(p.text_soft)
+                .gap_after(value_gap),
+            MoonStatusItem::new("RAM")
+                .color(p.text_muted)
+                .gap_after(inner_gap),
+            MoonStatusItem::new(if compact {
+                format!("{:.1}GiB", snap.mem_mb / 1024.0)
+            } else {
+                format!("{:.1} GiB", snap.mem_mb / 1024.0)
+            })
+            .color(p.text_soft)
+            .gap_after(value_gap),
+            MoonStatusItem::new(if compact {
+                format!("Δ5s{:+.1}MiB", snap.mem_delta_mb)
+            } else {
+                format!("Δ5s {:+.1} MiB", snap.mem_delta_mb)
+            })
+            .color(p.text_muted)
+            .gap_after(0.0),
+        ]);
+
         let mut host = div()
             .id("status-bar-host")
             .w_full()
@@ -232,68 +364,7 @@ impl Shell {
                             .size(6.0)
                             .glow(8.0, 0.30),
                     )
-                    .items([
-                        MoonStatusItem::new(if compact {
-                            connection_value
-                        } else {
-                            status_text
-                        })
-                        .color(badge_col)
-                        .weight(600.0)
-                        .gap_after(status_gap),
-                        MoonStatusItem::separator().gap_after(status_gap),
-                        MoonStatusItem::new(if compact { license_value } else { license_text })
-                            .color(license_color)
-                            .weight(600.0)
-                            .gap_after(group_gap),
-                        MoonStatusItem::group_separator().gap_after(group_gap),
-                        MoonStatusItem::new("BOOK")
-                            .color(p.text_muted)
-                            .gap_after(inner_gap),
-                        MoonStatusItem::new(format!("{book_levels}"))
-                            .color(p.text_soft)
-                            .gap_after(value_gap),
-                        MoonStatusItem::new("FPS")
-                            .color(p.text_muted)
-                            .gap_after(inner_gap),
-                        MoonStatusItem::new(format!("{fps:.0}"))
-                            .color(p.text_soft)
-                            .gap_after(group_gap),
-                        MoonStatusItem::group_separator().gap_after(group_gap),
-                        MoonStatusItem::new(if compact { "CPU" } else { "CPU APP/SYS" })
-                            .color(p.text_muted)
-                            .gap_after(inner_gap),
-                        MoonStatusItem::new(if compact {
-                            format!("{:.0}/{:.0}%", snap.cpu_process, snap.cpu_system)
-                        } else {
-                            format!("{:.0}% / {:.0}%", snap.cpu_process, snap.cpu_system)
-                        })
-                        .color(p.text_soft)
-                        .gap_after(value_gap),
-                        MoonStatusItem::new("GPU")
-                            .color(p.text_muted)
-                            .gap_after(inner_gap),
-                        MoonStatusItem::new(format!("{:.0}%", snap.gpu_process))
-                            .color(p.text_soft)
-                            .gap_after(value_gap),
-                        MoonStatusItem::new("RAM")
-                            .color(p.text_muted)
-                            .gap_after(inner_gap),
-                        MoonStatusItem::new(if compact {
-                            format!("{:.1}GiB", snap.mem_mb / 1024.0)
-                        } else {
-                            format!("{:.1} GiB", snap.mem_mb / 1024.0)
-                        })
-                        .color(p.text_soft)
-                        .gap_after(value_gap),
-                        MoonStatusItem::new(if compact {
-                            format!("Δ5s{:+.1}MiB", snap.mem_delta_mb)
-                        } else {
-                            format!("Δ5s {:+.1} MiB", snap.mem_delta_mb)
-                        })
-                        .color(p.text_muted)
-                        .gap_after(0.0),
-                    ])
+                    .items(items)
                     .right_items(right_items)
                     .render(),
             );

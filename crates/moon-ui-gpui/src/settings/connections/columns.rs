@@ -29,10 +29,10 @@
 /// The tree indent in `tab.rs` spends it as `ml(8) + pl(11) + border_l_1`; the header spends it as
 /// plain padding. Both read it from here so a change to the branch guide cannot move the rows out
 /// from under their own headings.
-pub(super) const CONN_TABLE_INSET: f32 = 20.0;
+pub(in crate::settings) const CONN_TABLE_INSET: f32 = 20.0;
 
 /// Left margin of an indented core row, the first part of [`CONN_TABLE_INSET`].
-pub(super) const CONN_INDENT_MARGIN: f32 = 8.0;
+pub(in crate::settings) const CONN_INDENT_MARGIN: f32 = 8.0;
 
 /// Border width of the branch guide drawn down an indented core row.
 pub(super) const CONN_INDENT_BORDER: f32 = 1.0;
@@ -40,7 +40,8 @@ pub(super) const CONN_INDENT_BORDER: f32 = 1.0;
 /// Left padding between the branch guide and an indented core row's first cell.
 ///
 /// The three indent parts sum to [`CONN_TABLE_INSET`]; `tests` proves it.
-pub(super) const CONN_INDENT_PAD: f32 = CONN_TABLE_INSET - CONN_INDENT_MARGIN - CONN_INDENT_BORDER;
+pub(in crate::settings) const CONN_INDENT_PAD: f32 =
+    CONN_TABLE_INSET - CONN_INDENT_MARGIN - CONN_INDENT_BORDER;
 
 /// Width of 21 Geist Mono glyphs (the longest IPv4 endpoint) at the body size, normalized by the
 /// text ratio the column's `TextScaled` policy multiplies back in (`tokens.font(10) / 10` at the

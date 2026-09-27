@@ -331,6 +331,12 @@ pub struct CoreData {
     /// so after a successful startup `elapsed_ms` is how long that core took to come up, not a
     /// running clock.
     pub startup: crate::feed::CoreStartupStatus,
+    /// The running report catch-up, `None` when none is running.
+    ///
+    /// Not cleared by [`Self::begin_connection_attempt`]: the library resumes an interrupted
+    /// catch-up after a reconnect, and a replacement feed starts its own, which overwrites this.
+    /// Readers show it only for a ready core. No revision counter — see [`FeedMsg::ReportSync`].
+    pub report_sync: Option<crate::feed::ReportSyncProgress>,
     /// Why the LAST connection attempt ended, typed, or `None` while nothing has gone wrong.
     ///
     /// It deliberately has NO revision counter of its own. Every consumer is already invalidated
@@ -545,6 +551,7 @@ impl CoreData {
             server_log_raw: VecDeque::new(),
             sys: crate::feed::CoreSysStatus::default(),
             startup: crate::feed::CoreStartupStatus::default(),
+            report_sync: None,
             fault: None,
             endpoint: None,
             news: NewsSnapshot::default(),
@@ -1302,6 +1309,7 @@ impl CoreData {
                     self.startup_rev = self.startup_rev.wrapping_add(1);
                 }
             }
+            FeedMsg::ReportSync(progress) => self.report_sync = progress,
             FeedMsg::HedgeMode(on) => {
                 if self.hedge_mode != Some(on) {
                     self.hedge_mode = Some(on);

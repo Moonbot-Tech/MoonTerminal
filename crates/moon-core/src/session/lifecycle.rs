@@ -689,6 +689,15 @@ impl SessionManager {
             .count()
     }
 
+    /// The report handle of a core's live client, `None` when it has no client right now.
+    ///
+    /// For the Storage tab's re-download: the report writer re-declares the full-history sync on
+    /// this handle after it committed the wipe, so the two cannot interleave.
+    pub fn live_reports(&self, core: CoreId) -> Option<moonproto::MoonReports> {
+        let sess = self.sessions.iter().find(|s| s.id == core)?;
+        sess.handle.client.get().map(|client| client.reports())
+    }
+
     /// Summarize one window group's connection state with the evidence needed for its status bar.
     ///
     /// A non-ready row carries its retained fault and startup snapshot as well as its coarse
@@ -704,6 +713,7 @@ impl SessionManager {
         let mut total = 0;
         let mut ready = 0;
         let mut down = Vec::new();
+        let mut report_sync = Vec::new();
         for s in self.sessions.iter().filter(|s| s.group == group) {
             total += 1;
             let core = self.store.core(s.id);
@@ -712,6 +722,13 @@ impl SessionManager {
                 .unwrap_or(ConnStatus::Connecting);
             if st == ConnStatus::Ready {
                 ready += 1;
+                if let Some(progress) = core.and_then(|d| d.report_sync) {
+                    report_sync.push(crate::session::ReportSyncRow {
+                        id: s.id,
+                        name: s.name.clone(),
+                        progress,
+                    });
+                }
             } else {
                 down.push(crate::session::ConnDown {
                     id: s.id,
@@ -722,7 +739,12 @@ impl SessionManager {
                 });
             }
         }
-        ConnSummary { ready, total, down }
+        ConnSummary {
+            ready,
+            total,
+            down,
+            report_sync,
+        }
     }
 
     /// Summarize license state for the cores in one group.

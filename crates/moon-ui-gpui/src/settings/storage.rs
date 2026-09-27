@@ -7,6 +7,7 @@
 //! statistics and maintenance run only on the background executor because counting a large replica
 //! on the UI thread would freeze the interface.
 
+mod core_data;
 mod trades_cleanup;
 
 use gpui::*;
@@ -53,6 +54,8 @@ pub(super) struct StorageEd {
     pub cleanup_inflight: bool,
     /// The margin moved while a count was running: count again when it lands.
     pub cleanup_dirty: bool,
+    /// The "Data by core" section.
+    pub core_data: core_data::CoreDataEd,
 }
 
 pub(super) fn build() -> StorageEd {
@@ -64,6 +67,7 @@ pub(super) fn build() -> StorageEd {
         cleanup: None,
         cleanup_inflight: false,
         cleanup_dirty: false,
+        core_data: core_data::CoreDataEd::default(),
     }
 }
 
@@ -114,6 +118,9 @@ impl SettingsView {
         }
         self.storage.inflight = true;
         self.storage_cleanup_refresh(cx);
+        if self.storage.core_data.expanded {
+            self.core_data_refresh(cx);
+        }
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let info = executor.spawn(async move { collect_info() }).await;
@@ -334,6 +341,9 @@ impl SettingsView {
                 hint(t!("storage.total_size", size = fmt_size(total)).to_string())
                     .font_family(design::mono()),
             )
+            .child(separator(p, cx))
+            // ── Data by core ────────────────────────────────────────────────
+            .child(self.core_data_section(cx))
             .child(separator(p, cx))
             // ── Reports ─────────────────────────────────────────────────────
             .child(section(&t!("storage.reports_title"), p, cx))

@@ -21,7 +21,7 @@ pub use core_settings::{
 };
 pub use core_status::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreEndpoint, CoreIdentityFacts, CoreInitStep,
-    CoreStartupState, CoreStartupStatus, CoreSysStatus, INIT_STEPS_TOTAL,
+    CoreStartupState, CoreStartupStatus, CoreSysStatus, INIT_STEPS_TOTAL, ReportSyncProgress,
 };
 pub use core_telegram::{
     AuthStep, CoreTelegramActiveProxy, CoreTelegramAuthDetails, CoreTelegramCodeType,
@@ -1500,6 +1500,11 @@ pub enum FeedMsg {
     /// core costs nothing. Moonproto-free — the projection lives in `feed::live::convert`, and the
     /// store gates the Core Status panel with `startup_rev` only when progress changes.
     StartupStatus(CoreStartupStatus),
+    /// Report catch-up progress: `Some` while one runs, `None` once it completes.
+    ///
+    /// Sent per page, which is the rate catch-up itself runs at. Carries no revision: its only
+    /// reader, the status bar, renders on every backend notify anyway.
+    ReportSync(Option<ReportSyncProgress>),
     /// Why the current connection attempt ended, TYPED, so the UI can localize it.
     ///
     /// Emitted exactly once per terminal failure, immediately BEFORE the `Status(Failed)` that

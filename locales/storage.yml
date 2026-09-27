@@ -225,3 +225,134 @@ storage.op_backup:
   ru: "Бэкап"
   en: "Backup"
   es: "Copia"
+# --- Data by core (#553, #665, #724) ---
+# The list comes from the local databases, not from Connections: a deleted connection's data is
+# exactly what a user comes here to remove.
+storage.core_data_title:
+  ru: "Данные по ядрам"
+  en: "Data by core"
+  es: "Datos por núcleo"
+storage.core_data_collapsed_hint:
+  ru: "Чьи отчёты, стратегии, трассы и ворнинги лежат в базах, включая удалённые подключения. Здесь же их можно удалить или перекачать."
+  en: "Whose reports, strategies, traces and warnings the databases hold, deleted connections included. Delete or re-download them here."
+  es: "De quién son los informes, estrategias, trazas y avisos guardados, incluidas conexiones borradas. Aquí se pueden borrar o volver a descargar."
+storage.core_data_loading:
+  ru: "Считаю…"
+  en: "Counting…"
+  es: "Contando…"
+storage.core_data_failed:
+  ru: "Не удалось посчитать: %{err}"
+  en: "Could not count: %{err}"
+  es: "No se pudo contar: %{err}"
+storage.core_data_empty:
+  ru: "В базах нет данных ядер"
+  en: "The databases hold no core data"
+  es: "Las bases no contienen datos de núcleos"
+storage.core_data_group_archive:
+  ru: "Нет в подключениях"
+  en: "Not in Connections"
+  es: "No están en Conexiones"
+storage.core_data_col_core:
+  ru: "Ядро"
+  en: "Core"
+  es: "Núcleo"
+storage.core_data_col_reports:
+  ru: "Отчёты"
+  en: "Reports"
+  es: "Informes"
+storage.core_data_col_strategies:
+  ru: "Стратегии"
+  en: "Strategies"
+  es: "Estrategias"
+storage.core_data_col_traces:
+  ru: "Трассы"
+  en: "Traces"
+  es: "Trazas"
+storage.core_data_col_warnings:
+  ru: "Ворнинги"
+  en: "Warnings"
+  es: "Avisos"
+storage.core_data_col_sync:
+  ru: "Догрузка"
+  en: "Download"
+  es: "Descarga"
+storage.core_data_unnamed:
+  ru: "Ядро %{uid}"
+  en: "Core %{uid}"
+  es: "Núcleo %{uid}"
+storage.core_data_select_all:
+  ru: "Все"
+  en: "All"
+  es: "Todos"
+storage.core_data_what:
+  ru: "Удалять:"
+  en: "Delete:"
+  es: "Borrar:"
+storage.core_data_delete:
+  ru: "Удалить…"
+  en: "Delete…"
+  es: "Borrar…"
+storage.core_data_hint:
+  ru: "Отчёты подключённого ядра после удаления скачаются заново — так чинится дыра в истории. Стратегии, трассы и ворнинги — единственная копия, их не вернуть. Ядро, у которого идёт догрузка, выбрать нельзя до её конца."
+  en: "A connected core's reports download again after a delete — that is how a hole in its history is repaired. Strategies, traces and warnings are the only copy and cannot come back. A core still downloading cannot be selected until it finishes."
+  es: "Los informes de un núcleo conectado se vuelven a descargar tras borrarlos: así se repara un hueco en su historial. Estrategias, trazas y avisos son la única copia y no se recuperan. Un núcleo que aún descarga no se puede elegir hasta que termine."
+storage.core_data_confirm_title:
+  ru: "Удалить данные ядер?"
+  en: "Delete core data?"
+  es: "¿Borrar datos de núcleos?"
+storage.core_data_delete_yes:
+  ru: "Удалить"
+  en: "Delete"
+  es: "Borrar"
+storage.core_data_confirm_cores:
+  ru: "Ядер: %{n} — "
+  en: "Cores: %{n} — "
+  es: "Núcleos: %{n} — "
+storage.core_data_confirm_more:
+  ru: " и ещё %{n}"
+  en: " and %{n} more"
+  es: " y %{n} más"
+storage.core_data_confirm_reports:
+  ru: "Отчёты: %{n} строк."
+  en: "Reports: %{n} rows."
+  es: "Informes: %{n} filas."
+storage.core_data_confirm_redownload:
+  ru: "Ядра из подключений скачают их заново — это трафик, на большом ядре заметный."
+  en: "Cores in Connections download them again — that is traffic, noticeable on a large core."
+  es: "Los núcleos en Conexiones los vuelven a descargar: es tráfico, notable en un núcleo grande."
+storage.core_data_confirm_strategies:
+  ru: "Стратегии: %{heads}, версий в истории: %{versions}."
+  en: "Strategies: %{heads}, versions in history: %{versions}."
+  es: "Estrategias: %{heads}, versiones en el historial: %{versions}."
+storage.core_data_confirm_traces:
+  ru: "Трассы ордеров: %{n} сделок."
+  en: "Order traces: %{n} trades."
+  es: "Trazas de órdenes: %{n} operaciones."
+storage.core_data_confirm_warnings:
+  ru: "Ворнинги: %{n}."
+  en: "Warnings: %{n}."
+  es: "Avisos: %{n}."
+storage.core_data_confirm_irreversible:
+  ru: "Стратегии, трассы и ворнинги не восстанавливаются."
+  en: "Strategies, traces and warnings cannot be restored."
+  es: "Estrategias, trazas y avisos no se pueden restaurar."
+storage.core_data_confirm_untouched:
+  ru: "Логи, бэкапы и сами подключения не затрагиваются."
+  en: "Logs, backups and the connections themselves are not touched."
+  es: "Los registros, las copias de seguridad y las conexiones no se tocan."
+storage.core_data_deleted:
+  ru: "ядер: %{cores}, ворнингов: %{warnings}"
+  en: "cores: %{cores}, warnings: %{warnings}"
+  es: "núcleos: %{cores}, avisos: %{warnings}"
+storage.core_data_partly:
+  ru: "не подтверждено: %{what}"
+  en: "not confirmed: %{what}"
+  es: "sin confirmar: %{what}"
+storage.op_core_delete:
+  ru: "Удаление данных ядер"
+  en: "Deleting core data"
+  es: "Borrado de datos de núcleos"
+storage.core_data_nothing:
+  ru: "Нечего удалять: у выбранных ядер началась догрузка отчётов — дождитесь её конца"
+  en: "Nothing to delete: the selected cores started downloading reports — wait for it to finish"
+  es: "Nada que borrar: los núcleos elegidos empezaron a descargar informes; espere a que termine"

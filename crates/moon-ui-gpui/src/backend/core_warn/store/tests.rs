@@ -355,3 +355,55 @@ fn ping_series_round_trips() {
         None
     );
 }
+
+/// Forgetting a core drops its own episodes and every slice it owns, and nothing else.
+///
+/// Breaks on: `store.rs:forget_core` leaving the core's slices under SERVER-wide episodes (badge =
+/// core id), which is where its per-core graphs live; or deleting the server episode itself, which
+/// describes a machine other cores share.
+#[test]
+fn forgetting_a_core_keeps_other_cores_and_server_episodes() {
+    let store = store();
+    let a = [10, 0, 0, 1];
+    let own = store
+        .insert_episode(&episode(WarnAxis::MemGrowth, a, Some(7), 1_000, 2_000, 5))
+        .unwrap();
+    let other = store
+        .insert_episode(&episode(WarnAxis::MemGrowth, a, Some(8), 1_000, 2_000, 5))
+        .unwrap();
+    let server = store
+        .insert_episode(&episode(WarnAxis::SysCpu, a, None, 1_000, 2_000, 90))
+        .unwrap();
+    for (episode_id, badge) in [(own, 7), (other, 8), (server, 0), (server, 7), (server, 8)] {
+        store
+            .conn
+            .execute(
+                "INSERT INTO core_warning_series (episode_id, badge, subject, blob)                  VALUES (?1, ?2, 'cpu', x'00')",
+                rusqlite::params![episode_id, badge],
+            )
+            .unwrap();
+    }
+
+    assert_eq!(store.forget_core(7).unwrap(), 1);
+
+    let episodes: Vec<i64> = store
+        .conn
+        .prepare("SELECT id FROM core_warnings ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(episodes, vec![other, server]);
+    let slices: Vec<(i64, i64)> = store
+        .conn
+        .prepare("SELECT episode_id, badge FROM core_warning_series ORDER BY episode_id, badge")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let mut want = vec![(other, 8), (server, 0), (server, 8)];
+    want.sort();
+    assert_eq!(slices, want);
+}

@@ -118,6 +118,42 @@ pub(super) fn forget(
     })
 }
 
+/// Purge EVERYTHING this store holds for one core: heads, live or deleted, and all history.
+///
+/// The user's "delete this core's data" (Settings → Storage), for a core that is gone or whose
+/// history they do not want. Unlike [`forget`] it takes live strategies too — asked for by name,
+/// with the dialog saying the history cannot be restored. A core that is still connected simply
+/// starts a new history at its next full set: its heads are evicted with the rows, so that set
+/// takes the `created` branch for every strategy rather than reviving ghosts. Evicted after the
+/// commit, for the reason [`forget`] states.
+///
+/// Args:
+///     conn: The writer's own connection.
+///     st: Writer state whose head cache is evicted once the purge is durable.
+///     core_uid: Core whose rows go.
+///
+/// Returns:
+///     How many head rows and version rows were removed.
+pub(super) fn forget_core(
+    conn: &Connection,
+    st: &mut State,
+    core_uid: u64,
+) -> rusqlite::Result<super::ForgetOutcome> {
+    let uid = core_uid as i64;
+    let tx = conn.unchecked_transaction()?;
+    let heads = tx.execute("DELETE FROM strategies WHERE core_uid=?1", [uid])?;
+    let versions = tx.execute("DELETE FROM strategy_versions WHERE core_uid=?1", [uid])?;
+    // Unconditional, a missing table being nothing to purge — see `forget`.
+    match tx.execute("DELETE FROM version_stats WHERE core_uid=?1", [uid]) {
+        Ok(_) => {}
+        Err(rusqlite::Error::SqliteFailure(_, Some(ref msg))) if msg.contains("no such table") => {}
+        Err(e) => return Err(e),
+    }
+    tx.commit()?;
+    st.heads.retain(|(core, _), _| *core != uid);
+    Ok(super::ForgetOutcome { heads, versions })
+}
+
 pub(super) fn init(conn: &Connection, cfg: &StrategiesStoreCfg) -> rusqlite::Result<State> {
     crate::db::wal::enable(conn)?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;

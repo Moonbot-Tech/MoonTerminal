@@ -729,7 +729,9 @@ fn status_bar_connection_and_license_are_localized() {
 fn status_bar_keeps_three_glanceable_groups() {
     let text = read_src("shell/status_bar.rs");
     let left_items = text
-        .split_once(".items([")
+        // A vec, not an array literal: the report-download item joins the first group only
+        // while a catch-up runs.
+        .split_once("let mut items = vec![")
         .expect("status bar must define its left items")
         .1
         .split_once(".right_items(right_items)")

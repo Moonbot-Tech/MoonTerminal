@@ -526,9 +526,29 @@ of operations rests on one rule: **only the transaction that applied the map wri
   is the core's high-water; it can be in the millions; walking it would block the only writer.
 - **Without a `deleted` column the checkpoint is not saved**: there is nowhere to write visibility, and a
   "map applied" mark would permanently deny the core another attempt.
+- **Without a checkpoint, a start resumes at the catch-up frontier, not at the local maximum** (#665).
+  Live rows are written from the first second of a connection while catch-up walks up from below, so
+  the maximum says nothing about how far catch-up got; resuming there left a permanent hole under the
+  live rows. Every applied page stores `rep_frontier_{core_uid}` = its `last_rec_id` in the SAME
+  transaction as its rows (never lowered; an empty page reports 0 and moves nothing), and
+  `startup_start` resumes at `frontier + 1`. A fresh core's first live rows pin frontier 0; a replica
+  written before the frontier existed gets its old resume point pinned when the writer opens it. A
+  checkpoint retires the frontier. After a committed page the in-memory start moves to
+  `Resume(last + 1)` too (`PostCommit::PageApplied`), so a client recreated in the same session does
+  not download everything again.
 - **Any replica reset clears the checkpoint together with the rows** (`rep::reset_replica`) — both the
   `database_recreated` path of a page and `DatabaseRecreated` of the map. Otherwise the next start would take
-  the old epoch, wipe the partially built replica again and loop a full re-pump.
+  the old epoch, wipe the partially built replica again and loop a full re-pump. The reset writes
+  frontier 0, not "no frontier": a live row landing before the next download's first page must not
+  read as an old replica and resume above itself.
+- **Deleting a core's data** (Settings → Storage → "Data by core", `DbMsg::ForgetCore`) is the same
+  reset, plus the core's legacy rows, and — for a core no longer in Connections — its clock-offset
+  segments, completed-sync marker and frontier. For a connected core the writer re-declares
+  `fresh(All)` on the live handle after commit, and until that download's first page arrives
+  (matched by the `sync_id` its `sync()` returned) it acknowledges without applying every other page
+  of the core and skips every alive map: the catch-up the delete replaced may still have one in
+  flight. The same section deletes the core's strategies (`StratMsg::ForgetCore`, which evicts the
+  writer's head cache), order traces and warning episodes.
 - Failure order: a page is committed before its `page_applied`, `SyncComplete` arrives after
   the last ACK, `DbMsg::SyncComplete` and `DbMsg::AliveMap` go in one FIFO to one writer.
   Rolling back a batch moves neither the checkpoint nor the published start state — the next
