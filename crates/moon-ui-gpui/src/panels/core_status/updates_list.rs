@@ -16,6 +16,11 @@ use super::model::CoreStatusRow;
 use super::presentation::update_tooltip;
 use super::*;
 
+/// Updates column ids in source order. A dragged order is stored under these ids.
+pub(super) const ORDER_KEYS: &[&str] = &[
+    "time", "core", "server", "from_to", "target", "outcome", "duration",
+];
+
 /// The fixed set of Updates columns (no sorting: the merge already orders the rows).
 fn columns() -> Vec<MoonDataTableColumn> {
     vec![

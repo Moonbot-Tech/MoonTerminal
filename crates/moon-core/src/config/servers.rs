@@ -166,10 +166,6 @@ pub struct ServerConfig {
     /// Whether the core is active (Settings checkbox). Inactive cores do not connect.
     #[serde(default = "default_true")]
     pub active: bool,
-    /// Whether to draw the core window/chart. Off + active is headless: reports/detects flow
-    /// into the database/store without a window. A window appears only for active && show_window.
-    #[serde(default = "default_true")]
-    pub show_window: bool,
     /// What to accept from the core (client-side filter).
     #[serde(default)]
     pub feed: FeedFlags,

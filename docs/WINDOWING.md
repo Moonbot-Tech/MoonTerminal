@@ -42,8 +42,8 @@ headings only, never on core rows. Core names do not infer exchange identity. Di
 unavailable rows remain visible with status and reject clicks.
 
 A core is selectable when it and its group are active, a live session exists and the group window is in
-the `Opening` or `Live` state. Per-core `show_window` does not take part here: a headless core is available
-through its group's shared live window. A click inside the current group only changes that group's Auto scope. A click
+the `Opening` or `Live` state. There is no per-core window switch: a core is available through its
+group's shared live window. A click inside the current group only changes that group's Auto scope. A click
 on a core of another group atomically saves `AutoTrading` + core for the destination, hands it
 singleton focus and activates the already existing group window; panels are not reparented between windows and
 no new parallel window is created.

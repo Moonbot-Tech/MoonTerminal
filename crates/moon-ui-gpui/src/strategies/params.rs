@@ -1937,24 +1937,29 @@ impl StrategiesView {
                     let keys = keys.to_vec();
                     let field = field_name.clone();
                     let view = view.clone();
-                    items.push(
+                    // The mark is MoonUI's muted trailing text, not a change to the value the
+                    // click sends. Disabling the row would hide a name the user still has to
+                    // be able to keep.
+                    let mut item =
                         MoonMenuItem::with_key(format!("field-{row_id}-{option}"), label)
-                            .selected(!differ && picklist_row_is(f, &option_value, &value))
-                            .on_click(move |_, _, app| {
-                                view.update(app, |this, cx| {
-                                    this.stage_field_value(&keys, &field, option_value.clone(), cx);
-                                });
-                            }),
-                    );
+                            .selected(!differ && picklist_row_is(f, &option_value, &value));
+                    if let Some(mark) = picklist_missing_mark(f, option) {
+                        item = item.right_label(mark);
+                    }
+                    items.push(item.on_click(move |_, _, app| {
+                        view.update(app, |this, cx| {
+                            this.stage_field_value(&keys, &field, option_value.clone(), cx);
+                        });
+                    }));
                 }
                 let trigger_label = if differ {
                     design::MIXED_MARK.to_string()
+                } else if value.is_empty() {
+                    "—".to_string()
+                } else if let Some(mark) = picklist_missing_mark(f, &value) {
+                    format!("{value} ({mark})")
                 } else {
-                    if value.is_empty() {
-                        "—".to_string()
-                    } else {
-                        value.clone()
-                    }
+                    value.clone()
                 };
                 MoonDropdown::new(SharedString::from(format!("field-combo-{row_id}")))
                     .label(trigger_label)

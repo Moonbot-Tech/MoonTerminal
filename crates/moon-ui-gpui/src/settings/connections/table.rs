@@ -1,4 +1,4 @@
-//! Core table for the Connections tab: server rows with active/window toggles, name, key, endpoint, group,
+//! Core table for the Connections tab: server rows with an active toggle, name, key, endpoint, group,
 //! chart bundle, feed count, color, delete, reconnect, and status controls; shared column layout
 //! and headers; feed-flag dropdown; and server add/delete actions.
 //!
@@ -453,7 +453,6 @@ impl SettingsView {
                     uid: 0,
                     name: format!("server {next}"),
                     active: true,
-                    show_window: true,
                     feed: FeedFlags::default(),
                     key: Secret::new(""),
                     group,
@@ -879,7 +878,7 @@ fn preset_label(m: WorkspaceMembership) -> String {
 /// SettingsView` and leak the window -- the same cycle `strategies/tree/moon.rs::moon_tree_el`
 /// guards for `MoonTree`. Every interactive child below reaches `SettingsView` only through `weak`.
 ///
-/// Columns contain active and window toggles, name, key, draft endpoint, transport mode, group, chart bundle,
+/// Columns contain the active toggle, name, key, draft endpoint, transport mode, group, chart bundle,
 /// feed flags, color, delete, reconnect, and status controls.
 ///
 /// Args:
@@ -960,17 +959,6 @@ pub(super) fn server_row(
             "",
             |s| s.active,
             |s, v| s.active = v,
-        )
-        .into_any_element(),
-        srv_check(
-            view,
-            weak,
-            cx,
-            i,
-            ids.win.clone(),
-            "",
-            |s| s.show_window,
-            |s, v| s.show_window = v,
         )
         .into_any_element(),
         MoonInput::new(ids.name.clone())

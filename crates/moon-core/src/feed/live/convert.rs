@@ -922,7 +922,8 @@ fn order_trace(line: &OrderTraceLine) -> Option<OrderTrace> {
 /// Drawing a percent as a price is what put a stop-loss 10.65 on a 0.00010458 chart: a line at
 /// `+10183491%` that also dragged the auto-Y range with it, flattening the whole pane
 /// (`10kSATS`, BB1, 2026-08-11 17:18). So the value is read against the entry before it is
-/// believed, and a percent is converted the way the core would, `entry * (1 ∓ p/100)`.
+/// believed, and a percent is converted the way the core would: a long is
+/// `entry * (1 - p/100)` and a short is `entry / (1 - p/100)`.
 ///
 /// Args:
 ///     entry: Order entry price; `0` or non-finite when the order has none yet.
@@ -953,7 +954,7 @@ fn stop_loss_line_price(
     // 2026-08-11 diagnostic held its plain percentage there (10.65 against entries from 0.0049 to
     // 0.22), so an unfilled order needs no plausibility test at all.
     if !entry_filled {
-        return pct_level_price(entry, is_short, level);
+        return percentage_stop_price(entry, level, is_short);
     }
     // The side of the entry is what separates the two meanings, not the distance: a percentage stop
     // protects the position, so its price is BELOW a long's entry and ABOVE a short's. A percent
@@ -970,31 +971,68 @@ fn stop_loss_line_price(
     if !price_side {
         // The core quirk from the 2026-07-17 report: a SHORT's percentage stop can arrive already
         // resolved but computed with the long formula, ending up just below the entry, on the
-        // profit side. Close to the entry it is that price, mirrored back; far below it is a
-        // percent.
+        // profit side. Close to the entry it is that price, restated with the core's division;
+        // far below it is a percent.
         if is_short && level >= entry / 2.0 && level < entry {
-            return Some(2.0 * entry - level);
+            // `level = entry * (1 - pct/100)` encodes the percent. The core's short stop for
+            // that percent is `entry / (1 - pct/100)`, which is `entry^2 / level`. The symmetric
+            // mirror `2 * entry - level` is the long product flipped, and it sits inside the
+            // trigger the core actually arms.
+            let pct = (1.0 - level / entry) * 100.0;
+            return percentage_stop_price(entry, pct, true);
         }
-        return pct_level_price(entry, is_short, level);
+        return percentage_stop_price(entry, level, is_short);
     }
     Some(level)
 }
 
-/// Convert a percentage stop level into the price the core would resolve it to.
+/// Absolute price of a percentage stop-loss, the way the core resolves `StopLoss = -pct`.
+///
+/// A long is `entry * (1 - pct/100)`. A short is `entry / (1 - pct/100)`: the long's product
+/// mirrored (`entry * (1 + pct/100)`) sits closer to the entry than the trigger the core arms.
+/// `pct` is a distance; the sign is ignored. Zero is the entry itself. A distance of 100 or
+/// more leaves no positive price, which for a short is a divisor that is not positive.
 ///
 /// Args:
-///     entry: Order entry price, already validated as finite and positive.
-///     is_short: Whether the position is short, which puts the stop above the entry.
-///     level: Percentage distance, always positive on the wire.
+///     entry: Price the stop is measured from.
+///     pct: Stop distance in percent, signed or not.
+///     short: Whether the position is short.
 ///
 /// Returns:
-///     Stop price, or `None` when the percentage leaves nothing above zero.
-fn pct_level_price(entry: f64, is_short: bool, level: f64) -> Option<f64> {
-    let price = if is_short {
-        entry * (1.0 + level / 100.0)
-    } else {
-        entry * (1.0 - level / 100.0)
-    };
+///     The stop price, or `None` when the inputs are not finite and positive or the distance
+///     is 100 percent or more.
+pub fn percentage_stop_price(entry: f64, pct: f64, short: bool) -> Option<f64> {
+    if !(entry.is_finite() && entry > 0.0 && pct.is_finite()) {
+        return None;
+    }
+    let pct = pct.abs();
+    if pct >= 100.0 {
+        return None;
+    }
+    let keep = 1.0 - pct / 100.0;
+    let price = if short { entry / keep } else { entry * keep };
+    (price.is_finite() && price > 0.0).then_some(price)
+}
+
+/// Absolute price of a percentage take-profit, the way the core resolves `SellPrice = pct`.
+///
+/// A long is `entry * (1 + pct/100)`. A short is `entry / (1 + pct/100)`: every per cent of a
+/// short off the buy divides (the core developer, 2026-09-24), so the long's product mirrored
+/// (`entry * (1 - pct/100)`) sits farther from the entry than the target the core places.
+///
+/// Args:
+///     entry: Price the take is measured from.
+///     pct: Take distance in percent; must be positive.
+///     short: Whether the position is short.
+///
+/// Returns:
+///     The take price, or `None` when the inputs are not finite and positive.
+pub fn percentage_take_price(entry: f64, pct: f64, short: bool) -> Option<f64> {
+    if !(entry.is_finite() && entry > 0.0 && pct.is_finite() && pct > 0.0) {
+        return None;
+    }
+    let gain = 1.0 + pct / 100.0;
+    let price = if short { entry / gain } else { entry * gain };
     (price.is_finite() && price > 0.0).then_some(price)
 }
 
@@ -1199,22 +1237,16 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
         size
     };
     let fin = |v: f64| (v.is_finite() && v > 0.0).then_some(v);
-    let pct_stop = |level: f64| {
-        if o.is_short {
-            entry * (1.0 + level / 100.0)
-        } else {
-            entry * (1.0 - level / 100.0)
-        }
-    };
     // Trailing-stop calculation: a fixed value is an absolute level; otherwise, when entry is
-    // valid, derive a percentage level from entry. Disabled or missing-entry cases return `None`.
+    // valid, the percentage is the same stop the core would arm. Disabled or missing-entry
+    // cases return `None`.
     let stop = |enabled: bool, fixed: bool, level: f64| {
         if !enabled {
             None
         } else if fixed {
             fin(level)
         } else if valid_entry {
-            fin(pct_stop(level))
+            percentage_stop_price(entry, level, o.is_short)
         } else {
             None
         }

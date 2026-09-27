@@ -172,7 +172,6 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
                 uid,
                 name: e.name,
                 active: m.map(|m| m.active).unwrap_or(true),
-                show_window: m.map(|m| m.show_window).unwrap_or(true),
                 feed: m.map(|m| m.feed).unwrap_or_default(),
                 key: e.key,
                 group: m
@@ -231,8 +230,8 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
 /// Server connection keys go to `ServersFile`; server metadata, server-group settings, saved core
 /// groups, and presentation preferences go to `SettingsFile`. Saved core groups are copied as
 /// supplied because the caller owns sanitizing the runtime list before persistence.
-/// The retired `ui_density` and `ui_font_delta` keys are never written: a file that still carries
-/// them loses them on its next save.
+/// The retired `ui_density` and `ui_font_delta` keys, and the retired per-core window checkbox,
+/// are never written: a file that still carries them loses them on its next save.
 #[allow(clippy::too_many_arguments)]
 pub fn split(
     servers: &[ServerConfig],
@@ -295,7 +294,6 @@ pub fn split(
                 uid: s.uid,
                 name: s.name.clone(),
                 active: s.active,
-                show_window: s.show_window,
                 feed: s.feed,
                 group: s.group.clone(),
                 market: s.market.clone(),

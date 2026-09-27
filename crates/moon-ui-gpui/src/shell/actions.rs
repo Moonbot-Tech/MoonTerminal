@@ -152,8 +152,9 @@ impl Shell {
     ///
     /// The player records the miss (`media::sound::missing`), once per name per session; this is
     /// the only pump that shows it, guarded like the two drains above so one miss is one toast,
-    /// not one per group window. The toast stays until dismissed: it names a setting to fix, and
-    /// the sound that prompted it is long over by the time the operator looks up.
+    /// not one per group window. The toast uses the standard auto-hide: the same miss is already
+    /// in the log, and the sound lists mark the name, so a card that stays until dismissed only
+    /// stacks over the chart.
     pub(super) fn drain_missing_sound_toasts(&mut self, cx: &mut Context<Self>) {
         if !self.window_active {
             return;
@@ -170,23 +171,7 @@ impl Shell {
                 let fallback = crate::media::sound::DEFAULT_SOUND;
                 for notice in notices {
                     log::warn!("sound not found, default plays: {notice:?}");
-                    let body = match notice {
-                        crate::media::sound::MissingSound::Name(name) => rust_i18n::t!(
-                            "sounds.missing_name",
-                            name = name,
-                            folder = folder,
-                            fallback = fallback
-                        ),
-                        crate::media::sound::MissingSound::Ordinal(n) => rust_i18n::t!(
-                            "sounds.missing_ordinal",
-                            n = n,
-                            folder = folder,
-                            fallback = fallback
-                        ),
-                    };
-                    let note = moon_ui::MoonNotification::warning(body.to_string())
-                        .title(rust_i18n::t!("sounds.missing_title").to_string())
-                        .autohide(false);
+                    let note = missing_sound_notification(notice, &folder, fallback);
                     window.push_notification(note, app);
                 }
             });
@@ -455,6 +440,60 @@ impl Shell {
             }
         }
     }
+}
+
+/// Title and body of the missing-sound toast, in the active locale.
+///
+/// Args:
+///     notice: The name or ordinal the player could not find.
+///     folder: The terminal's sounds directory, shown so the file has somewhere to go.
+///     fallback: The clip that played instead, `ding1` today.
+///
+/// Returns:
+///     `(title, body)`. The title is `sounds.missing_title`; the body is `sounds.missing_name`
+///     or `sounds.missing_ordinal`.
+fn missing_sound_copy(
+    notice: &crate::media::sound::MissingSound,
+    folder: &str,
+    fallback: &str,
+) -> (String, String) {
+    let title = rust_i18n::t!("sounds.missing_title").to_string();
+    let body = match notice {
+        crate::media::sound::MissingSound::Name(name) => rust_i18n::t!(
+            "sounds.missing_name",
+            name = name,
+            folder = folder,
+            fallback = fallback
+        )
+        .to_string(),
+        crate::media::sound::MissingSound::Ordinal(n) => rust_i18n::t!(
+            "sounds.missing_ordinal",
+            n = n,
+            folder = folder,
+            fallback = fallback
+        )
+        .to_string(),
+    };
+    (title, body)
+}
+
+/// The missing-sound toast. Auto-hide stays at MoonNotification's default: a sticky card is
+/// what stacked one warning per custom Moonbot name over the chart.
+///
+/// Args:
+///     notice: The name or ordinal the player could not find.
+///     folder: The terminal's sounds directory.
+///     fallback: The clip that played instead.
+///
+/// Returns:
+///     A warning notification that hides on its own.
+fn missing_sound_notification(
+    notice: crate::media::sound::MissingSound,
+    folder: &str,
+    fallback: &str,
+) -> moon_ui::MoonNotification {
+    let (title, body) = missing_sound_copy(&notice, folder, fallback);
+    moon_ui::MoonNotification::warning(body).title(title)
 }
 
 /// Build the toast for one coin-menu strategy-edit outcome.

@@ -240,6 +240,22 @@ pub fn usd_grouped(v: f64) -> String {
     group_decimal(&usd(v))
 }
 
+/// USDT amount with space-grouped thousands and exactly two decimals.
+///
+/// [`usd_grouped`] keeps one trailing tenth and drops a zero hundredth
+/// (`10 000.0`). Mini App balances share one figure with the hero total, so
+/// every row has to show the cent (`10 000.00`). Non-finite input is `0.00`.
+///
+/// Args:
+///     v: Amount in USDT.
+///
+/// Returns:
+///     Grouped text with two decimals and no currency symbol.
+pub fn usd_grouped_cents(v: f64) -> String {
+    let rounded = round_to(v, 2).unwrap_or(0.0);
+    group_decimal(&format!("{rounded:.2}"))
+}
+
 /// Sign of a formatted delta, classified from the ROUNDED value so the text a caller renders and
 /// the colour it picks cannot disagree.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

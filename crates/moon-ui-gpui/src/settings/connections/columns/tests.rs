@@ -14,7 +14,7 @@ use super::{
 /// server-row control.
 #[test]
 fn column_ids_are_the_complete_spec_indices() {
-    assert_eq!(ConnColId::ALL.len(), 14);
+    assert_eq!(ConnColId::ALL.len(), 13);
 
     for (index, column) in ConnColId::ALL.into_iter().enumerate() {
         assert_eq!(column as usize, index, "{column:?} must index its own spec");

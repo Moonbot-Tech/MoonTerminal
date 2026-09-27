@@ -1248,3 +1248,61 @@ fn min_closedate_skips_non_positive_cores_and_keeps_the_empty_floor() {
     drop(empty);
     remove_db(&empty_path);
 }
+
+/// `analytics/mod.rs:undated_closes_on` — counting `closedate` NULL or `<= 0` by itself
+/// puts an open position into the Analytics notice "Trades with no close date" and blames
+/// the core for a close date that row does not have.
+///
+/// An open position is stored with `closedate` 0 and a profit already filled in. The Report
+/// calls a row closed only when `closedate` is a positive number, so that open row must not
+/// be counted. A closed row already has that positive `closedate`, so it has a date and must
+/// not be counted as undated either: under this partition no row is both closed and dateless,
+/// and the notice stays empty. Dropping either half of the conjunction fails one of the two
+/// counts below (the open row, or the dated close swept in as if it had no date).
+#[test]
+fn undated_closes_exclude_open_rows_and_dated_closes() {
+    let path = temp_db("undated-open");
+    let day = 1_780_000_000i64 / 86_400 * 86_400;
+    // The second row is the open position the notice used to call a closed trade: close
+    // date 0, profit already present. The first row is an ordinary close inside the period.
+    let conn = build_replica(
+        &path,
+        &[(day + 3_600, 10.0, "BTCUSDT"), (0, 1.61, "ETHUSDT")],
+    );
+    let raw_open: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM orders_rep WHERE closedate IS NULL OR closedate <= 0",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count the fixture's dateless rows");
+    assert_eq!(
+        raw_open, 1,
+        "the fixture must contain the open row, or a green count proves nothing"
+    );
+
+    let undated = undated_closes_on(&conn, &q(day, day + 86_400)).expect("undated read");
+    assert_eq!(
+        undated.totals.orders, 0,
+        "an open row with closedate 0 is not counted, and a closed row has a date so it is not undated either"
+    );
+    assert!(
+        undated.is_empty(),
+        "empty undated totals are what keeps the notice silent"
+    );
+
+    let summary = summary_on(&conn, &q(day, day + 86_400), false, false).expect("period read");
+    let summary = summary.data().expect("single-quote summary is comparable");
+    assert_eq!(
+        summary.cur.n, 1,
+        "the dated close still belongs to its period"
+    );
+    assert!(
+        (summary.cur.profit - 10.0).abs() < 1e-9,
+        "period profit must be the closed trade only, not the open row's 1.61; got {}",
+        summary.cur.profit
+    );
+
+    drop(conn);
+    remove_db(&path);
+}

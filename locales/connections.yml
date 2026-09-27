@@ -151,10 +151,6 @@ conn.col.act:
   ru: "Акт"
   en: "Act"
   es: "Act"
-conn.col.win:
-  ru: "Окн"
-  en: "Win"
-  es: "Ven"
 conn.col.name:
   ru: "Имя"
   en: "Name"
@@ -243,10 +239,6 @@ conn.tip.act:
   ru: "Подключаться к ядру"
   en: "Connect to the core"
   es: "Conectarse al núcleo"
-conn.tip.win:
-  ru: "Рисовать окно/чарт. Выкл = headless: данные в БД/память без окна"
-  en: "Draw window/chart. Off = headless: data to DB/memory without a window"
-  es: "Dibujar ventana/gráfico. Desactivado = headless: datos a BD/memoria sin ventana"
 conn.tip.name:
   ru: "Имя ядра (произвольное, для отображения в терминале)"
   en: "Core name (arbitrary, for display in the terminal)"

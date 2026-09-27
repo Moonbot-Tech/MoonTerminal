@@ -261,8 +261,6 @@ pub struct ServerMeta {
     pub name: String,
     #[serde(default = "servers::default_true")]
     pub active: bool,
-    #[serde(default = "servers::default_true")]
-    pub show_window: bool,
     #[serde(default)]
     pub feed: FeedFlags,
     #[serde(default = "servers::default_group")]

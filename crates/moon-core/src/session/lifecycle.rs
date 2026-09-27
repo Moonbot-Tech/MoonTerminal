@@ -662,9 +662,8 @@ impl SessionManager {
 
     /// Summarize connections in one group as ready/total counts and non-ready core details.
     ///
-    /// A group corresponds to an OS window, so each status bar reports only its own group. The
-    /// summary includes headless cores because they still have sessions; `show_window` controls
-    /// only whether the window exists.
+    /// A group corresponds to an OS window, so each status bar reports only its own group.
+    /// Every core that still has a session is counted with that group.
     /// How many cores have not settled yet — still `Connecting`, or partway through an init
     /// `Stage`. A session with no store entry at all counts as pending: it has not reported.
     ///

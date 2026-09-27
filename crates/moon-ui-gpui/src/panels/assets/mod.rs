@@ -25,6 +25,7 @@
 //! the 3 wallet containers and the drag&drop transfer dialog in [`wallets`].
 
 mod balances;
+pub(crate) use balances::{BalanceFigures, aggregate_balance_figures};
 mod cache;
 mod collect;
 mod columns;
@@ -164,6 +165,10 @@ pub struct AssetsView {
     /// Asset-table column widths and sorting state. Both persist through
     /// [`crate::persistence::table_persist`].
     table_state: Entity<MoonDataTableState>,
+    /// Order this table last observed. The state observer also fires for a resize or a click,
+    /// and the global window shares `assets-table:win` with a detached group window. Writing on
+    /// those other notifications would replace the other window's drag.
+    col_order_cache: Vec<SharedString>,
     /// Contextual width-storage ID: `assets-table:dock` for a dock tab and `assets-table:win` for
     /// standalone or detached views with wallets. Each mode retains independent widths.
     widths_id: String,
@@ -261,14 +266,34 @@ impl AssetsView {
         // tabs use `:dock`, retaining separate widths for each mode.
         let widths_id = crate::persistence::table_persist::ctx_id("assets-table", show_wallets);
         let saved_widths = crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
+        let asset_keys: Vec<&str> = columns::AssetCol::ALL
+            .iter()
+            .map(|column| column.key())
+            .collect();
+        let saved_order = crate::persistence::table_persist::restored_order(
+            backend.read(cx),
+            &widths_id,
+            &asset_keys,
+        );
+        let col_order_cache = saved_order.clone();
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
             s.column_widths = saved_widths;
+            s.column_order = saved_order;
             s
         });
-        // Column resizing mutates the state; persist the resulting widths through the shared saver.
+        // Column resizing and dragging mutate the state. Order is stored beside widths, under the
+        // same context id; the roster width bag below is not a column order. The cache skips a
+        // resize or a click so another open table on this id keeps the drag it just saved.
         cx.observe(&table_state, |this, state, cx| {
             crate::persistence::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
+            crate::persistence::table_persist::persist_order(
+                &this.backend,
+                &this.widths_id,
+                &state,
+                &mut this.col_order_cache,
+                cx,
+            );
         })
         .detach();
 
@@ -370,6 +395,7 @@ impl AssetsView {
             hidden_cols: Vec::new(),
             sort: None,
             table_state,
+            col_order_cache,
             widths_id,
             roster_widths,
             roster_widths_id,

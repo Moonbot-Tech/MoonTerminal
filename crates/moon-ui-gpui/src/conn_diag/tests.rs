@@ -11,7 +11,6 @@ fn server(id: CoreId, mode: Option<TransportVersion>) -> ServerConfig {
         uid: id,
         name: format!("core-{id}"),
         active: true,
-        show_window: true,
         feed: FeedFlags::default(),
         key: Secret::new(""),
         group: "fleet".to_string(),

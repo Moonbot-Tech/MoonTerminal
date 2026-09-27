@@ -10,7 +10,10 @@ use moon_core::config::{
     DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, MANUAL_STRAT_SLOTS,
     ManualStratState, StratSlot, TakeProfitMode,
 };
-use moon_core::feed::{ClientSettingsEdit, FieldMask, OrderRow, StrategyRow};
+use moon_core::feed::{
+    ClientSettingsEdit, FieldMask, OrderRow, StrategyRow, percentage_stop_price,
+    percentage_take_price,
+};
 use moon_core::market::MarketQuantityUnit;
 use moon_core::session::CoreId;
 
@@ -176,9 +179,12 @@ fn seed_on_enable(
 
 /// Absolute stop price for one order, from the visible percentage.
 ///
-/// A long stops BELOW its entry and a short ABOVE it; the toolbar's percentage is signed, so only
-/// its magnitude is used. `None` when no usable stop can be computed, which leaves the order on
-/// whatever the core would have applied.
+/// A long stops below its entry and a short above it, at the price
+/// [`percentage_stop_price`] returns: `entry * (1 - pct/100)` and `entry / (1 - pct/100)`.
+/// The toolbar's percentage is signed, so only its magnitude is used. `None` when no usable
+/// stop can be computed. A zero percentage is that case too: the helper would answer with the
+/// entry itself, and this write must not turn "no stop" into a price at the fill. The order
+/// then keeps whatever the core would have applied.
 ///
 /// Args:
 ///     entry: Price the order is placed at.
@@ -189,15 +195,10 @@ fn seed_on_enable(
 ///     The absolute stop price.
 fn stop_price(entry: f64, pct: f64, short: bool) -> Option<f64> {
     let pct = pct.abs();
-    if !(entry.is_finite() && entry > 0.0 && pct.is_finite() && pct > 0.0 && pct < 100.0) {
+    if !(pct.is_finite() && pct > 0.0) {
         return None;
     }
-    let level = if short {
-        entry * (1.0 + pct / 100.0)
-    } else {
-        entry * (1.0 - pct / 100.0)
-    };
-    (level.is_finite() && level > 0.0).then_some(level)
+    percentage_stop_price(entry, pct, short)
 }
 
 /// Who owns the stop the toolbar is showing, and what it is — see [`Backend::manual_stop`].
@@ -323,7 +324,8 @@ pub(crate) fn strat_field_value(
 /// Moonbot's own model, and the reason this is computed per order rather than written anywhere:
 /// the trader's TP or engaged S preset is a property of the ORDER (`planned_sell_price` on the wire
 /// and on the retained row), not of the strategy — clicking a preset changes no strategy file, as
-/// the core's own screen shows. A short sells BELOW its entry, so its target mirrors.
+/// the core's own screen shows. A short sells BELOW its entry, at the core's division
+/// ([`percentage_take_price`]).
 ///
 /// `None` while no percentage is set: zero would ask the core to sell at the entry price.
 ///
@@ -335,15 +337,7 @@ pub(crate) fn strat_field_value(
 /// Returns:
 ///     The absolute price to store with the order.
 fn planned_sell_price(entry: f64, pct: f64, short: bool) -> Option<f64> {
-    if !(entry.is_finite() && entry > 0.0 && pct.is_finite() && pct > 0.0) {
-        return None;
-    }
-    let target = if short {
-        entry * (1.0 - pct / 100.0)
-    } else {
-        entry * (1.0 + pct / 100.0)
-    };
-    (target.is_finite() && target > 0.0).then_some(target)
+    percentage_take_price(entry, pct, short)
 }
 
 /// Resolve the sell-price flag to show: a fresh request the core has not answered yet, or the

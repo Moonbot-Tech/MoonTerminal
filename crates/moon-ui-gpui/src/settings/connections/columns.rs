@@ -138,25 +138,14 @@ pub(super) struct ConnCol {
 /// Every column of the core table, left to right.
 ///
 /// Indexed by [`ConnColId`]; `tests` proves the two stay in step.
-const CONN_COLS: [ConnCol; 14] = [
-    // 34, matching `h-win`: both hold a three-letter label, and at the supported +6 Font
-    // setting the English/Spanish "Act" measures about 30.6px in Geist Mono -- at 28 the
-    // HEADING itself ellipsised, which is the complaint this change exists to answer.
+const CONN_COLS: [ConnCol; 13] = [
+    // 34 holds a three-letter label. At the supported +6 Font setting the English/Spanish
+    // "Act" measures about 30.6px in Geist Mono -- at 28 the HEADING itself ellipsised,
+    // which is the complaint this width exists to answer.
     ConnCol {
         id: "h-act",
         label: Some("conn.col.act"),
         tip: Some("conn.tip.act"),
-        basis: 34.0,
-        grow: false,
-        max: None,
-        width: ConnColWidth::Raw,
-        align: ConnColAlign::Center,
-        head_pad: 0.0,
-    },
-    ConnCol {
-        id: "h-win",
-        label: Some("conn.col.win"),
-        tip: Some("conn.tip.win"),
         basis: 34.0,
         grow: false,
         max: None,
@@ -364,7 +353,6 @@ pub(super) struct MicroTriggerMetrics {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum ConnColId {
     Act,
-    Win,
     Name,
     Key,
     Endpoint,
@@ -381,9 +369,8 @@ pub(super) enum ConnColId {
 
 impl ConnColId {
     /// Every column, left to right, in the order both builders emit them.
-    pub(super) const ALL: [ConnColId; 14] = [
+    pub(super) const ALL: [ConnColId; 13] = [
         ConnColId::Act,
-        ConnColId::Win,
         ConnColId::Name,
         ConnColId::Key,
         ConnColId::Endpoint,

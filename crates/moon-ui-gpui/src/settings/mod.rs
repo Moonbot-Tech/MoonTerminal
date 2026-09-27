@@ -666,7 +666,6 @@ fn settings_sig(b: &Backend) -> u64 {
         s.uid.hash(&mut h);
         s.name.hash(&mut h);
         s.active.hash(&mut h);
-        s.show_window.hash(&mut h);
         s.feed.orders.hash(&mut h);
         s.feed.detects.hash(&mut h);
         s.feed.reports.hash(&mut h);

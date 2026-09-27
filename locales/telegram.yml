@@ -195,11 +195,6 @@ telegram.mini_shell_checking:
   en: "Checking the connection…"
   es: "Comprobando la conexión…"
 
-telegram.mini_shell_connected:
-  ru: "Терминал подключён; здесь пока ничего нет."
-  en: "Terminal connected, nothing here yet."
-  es: "Terminal conectado; aquí no hay nada todavía."
-
 telegram.mini_shell_denied:
   ru: "Этот чат не допущен. Привяжите его заново или включите Mini App в Настройках."
   en: "This chat is not admitted. Re-pair it, or turn Mini App on in Settings."
@@ -209,3 +204,240 @@ telegram.mini_shell_unreachable:
   ru: "Терминал недоступен. Туннель или сам терминал выключен."
   en: "The terminal could not be reached. The tunnel or the terminal is down."
   es: "No se pudo alcanzar el terminal. El túnel o el terminal está apagado."
+
+telegram.mini_title:
+  ru: "MoonTerminal"
+  en: "MoonTerminal"
+  es: "MoonTerminal"
+telegram.mini_tab_report:
+  ru: "Отчёт"
+  en: "Report"
+  es: "Informe"
+telegram.mini_tab_cores:
+  ru: "Ядра"
+  en: "Cores"
+  es: "Núcleos"
+telegram.mini_tab_balances:
+  ru: "Балансы"
+  en: "Balances"
+  es: "Saldos"
+telegram.mini_tab_orders:
+  ru: "Ордера"
+  en: "Orders"
+  es: "Órdenes"
+telegram.mini_period_today:
+  ru: "Сегодня"
+  en: "Today"
+  es: "Hoy"
+telegram.mini_period_yesterday:
+  ru: "Вчера"
+  en: "Yesterday"
+  es: "Ayer"
+telegram.mini_period_month:
+  ru: "Этот месяц"
+  en: "This month"
+  es: "Este mes"
+telegram.mini_period_lastmonth:
+  ru: "Прошлый месяц"
+  en: "Last month"
+  es: "Mes pasado"
+telegram.mini_report_total:
+  ru: "Итого"
+  en: "Total"
+  es: "Total"
+telegram.mini_report_by_exchange:
+  ru: "По биржам"
+  en: "By exchange"
+  es: "Por bolsa"
+telegram.mini_report_by_core:
+  ru: "По ядрам"
+  en: "By core"
+  es: "Por núcleo"
+telegram.mini_report_daily:
+  ru: "По дням"
+  en: "By day"
+  es: "Por día"
+telegram.mini_report_orders:
+  ru: "Сделки"
+  en: "Trades"
+  es: "Operaciones"
+telegram.mini_unvalued:
+  ru: "Нет оценки"
+  en: "No value"
+  es: "Sin valor"
+telegram.mini_core_ready:
+  ru: "Готово"
+  en: "Ready"
+  es: "Listo"
+telegram.mini_core_connecting:
+  ru: "Подключение"
+  en: "Connecting"
+  es: "Conectando"
+telegram.mini_core_stage:
+  ru: "Запуск"
+  en: "Starting"
+  es: "Iniciando"
+telegram.mini_core_failed:
+  ru: "Ошибка"
+  en: "Failed"
+  es: "Error"
+telegram.mini_core_disconnected:
+  ru: "Нет связи"
+  en: "Disconnected"
+  es: "Desconectado"
+telegram.mini_cores_online:
+  ru: "Онлайн: {online} из {total}"
+  en: "Online: {online} of {total}"
+  es: "En línea: {online} de {total}"
+telegram.mini_ping:
+  ru: "Пинг"
+  en: "Ping"
+  es: "Ping"
+telegram.mini_exch_ping:
+  ru: "Пинг биржи"
+  en: "Exchange ping"
+  es: "Ping del exchange"
+telegram.mini_cpu:
+  ru: "ЦП"
+  en: "CPU"
+  es: "CPU"
+telegram.mini_unit_ms:
+  ru: "мс"
+  en: "ms"
+  es: "ms"
+telegram.mini_unit_pct:
+  ru: "%"
+  en: "%"
+  es: "%"
+telegram.mini_fault:
+  ru: "Сбой"
+  en: "Fault"
+  es: "Fallo"
+telegram.mini_balance_stale:
+  ru: "Устарело"
+  en: "Stale"
+  es: "Desactualizado"
+telegram.mini_balance_awaiting:
+  ru: "Ожидание"
+  en: "Waiting"
+  es: "En espera"
+telegram.mini_balance_unpriced:
+  ru: "Нет цены"
+  en: "No price"
+  es: "Sin precio"
+telegram.mini_total:
+  ru: "Всего"
+  en: "Total"
+  es: "Total"
+telegram.mini_free:
+  ru: "Свободно"
+  en: "Free"
+  es: "Libre"
+telegram.mini_partial:
+  ru: "Не учтено ядер: {n}"
+  en: "Cores left out: {n}"
+  es: "Núcleos excluidos: {n}"
+telegram.mini_orders_qty:
+  ru: "Кол-во"
+  en: "Qty"
+  es: "Cantidad"
+telegram.mini_orders_entry:
+  ru: "Вход"
+  en: "Entry"
+  es: "Entrada"
+telegram.mini_orders_mark:
+  ru: "Текущая"
+  en: "Mark"
+  es: "Precio actual"
+telegram.mini_search:
+  ru: "Поиск"
+  en: "Search"
+  es: "Buscar"
+telegram.mini_empty_report:
+  ru: "За этот период сделок нет."
+  en: "No trades in this period."
+  es: "No hay operaciones en este período."
+telegram.mini_empty_cores:
+  ru: "Нет ядер"
+  en: "No cores"
+  es: "No hay núcleos"
+telegram.mini_empty_balances:
+  ru: "Нет балансов"
+  en: "No balances"
+  es: "No hay saldos"
+telegram.mini_empty_orders:
+  ru: "Нет открытых ордеров"
+  en: "No open orders"
+  es: "No hay órdenes abiertas"
+telegram.mini_empty_search:
+  ru: "Ничего не найдено"
+  en: "Nothing found"
+  es: "No hay resultados"
+telegram.mini_error_read:
+  ru: "Не удалось прочитать данные."
+  en: "Could not read the data."
+  es: "No se pudieron leer los datos."
+telegram.mini_error_busy:
+  ru: "Терминал занят. Повторите чуть позже."
+  en: "The terminal is busy. Try again in a moment."
+  es: "El terminal está ocupado. Inténtalo de nuevo en un momento."
+telegram.mini_error_stale_session:
+  ru: "Сессия устарела. Закройте Mini App и откройте снова."
+  en: "Session expired. Close Mini App and open it again."
+  es: "La sesión ha caducado. Cierra Mini App y ábrela de nuevo."
+telegram.mini_error_network:
+  ru: "Нет сети. Проверьте подключение."
+  en: "Network error. Check your connection."
+  es: "Error de red. Comprueba tu conexión."
+telegram.mini_retry:
+  ru: "Повторить"
+  en: "Retry"
+  es: "Reintentar"
+telegram.mini_loading:
+  ru: "Загрузка…"
+  en: "Loading…"
+  es: "Cargando…"
+telegram.mini_updated:
+  ru: "Обновлено"
+  en: "Updated"
+  es: "Actualizado"
+telegram.mini_cancel:
+  ru: "Отменить"
+  en: "Cancel"
+  es: "Cancelar"
+telegram.mini_cancel_confirm:
+  ru: "Отменить ордер {coin}?"
+  en: "Cancel the {coin} order?"
+  es: "¿Cancelar la orden {coin}?"
+telegram.mini_panic_sell:
+  ru: "Panic Sell"
+  en: "Panic Sell"
+  es: "Panic Sell"
+telegram.mini_panic_off:
+  ru: "Выключить Panic Sell"
+  en: "Turn off Panic Sell"
+  es: "Desactivar Panic Sell"
+telegram.mini_panic_confirm:
+  ru: "Включить Panic Sell для {coin}?"
+  en: "Turn on Panic Sell for {coin}?"
+  es: "¿Activar Panic Sell para {coin}?"
+telegram.mini_panic_off_confirm:
+  ru: "Выключить Panic Sell для {coin}?"
+  en: "Turn off Panic Sell for {coin}?"
+  es: "¿Desactivar Panic Sell para {coin}?"
+telegram.mini_cmd_failed:
+  ru: "Команда не выполнена"
+  en: "Command failed"
+  es: "El comando no se ejecutó"
+telegram.mini_cmd_sent:
+  ru: "Команда отправлена"
+  en: "Command sent"
+  es: "Comando enviado"
+telegram.mini_cmd_not_found:
+  ru: "Ордер не найден"
+  en: "Order not found"
+  es: "Orden no encontrada"
+telegram.mini_cmd_unknown:
+  ru: "Результат неизвестен — проверьте ордера"
+  en: "Result unknown — check the orders"
+  es: "Resultado desconocido — revisa las órdenes"

@@ -7,10 +7,14 @@
 //! normally matches the ID passed to `MoonDataTable::new`, while the `:dock`/`:win` suffix keeps
 //! layouts separate.
 //!
-//! Widths live in `layout.table_column_widths`. Mutations set `layout_dirty`, and the shared
-//! debounced/quit save path writes the layout. Visible-column sets use the parallel [`visible`]
-//! and [`set_visible`] helpers; user-selected sorts use [`saved_sort`] and [`set_sort`]. Supporting
-//! another table's columns or sort requires no table-specific storage code here.
+//! Widths live in `layout.table_column_widths`. Dragged column order lives in
+//! `layout.table_column_order` under the same id, through [`saved_order`] and [`persist_order`].
+//! Mutations set `layout_dirty`, and the shared debounced/quit save path writes the whole layout,
+//! so both maps are flushed by the 100 ms coordination drain and by `on_app_quit`. Visible-column
+//! sets use the parallel [`visible`] and [`set_visible`] helpers; user-selected sorts use
+//! [`saved_sort`] and [`set_sort`]. [`persist`] stays widths-only: Orders and Alerts already store
+//! their drag order in `docks.json` and must not gain a second copy here. Supporting another
+//! table's columns, order, or sort requires no table-specific storage code here.
 //!
 //! The module also owns the SIBLING per-context preferences of those tables — [`report_filters`]
 //! and [`set_report_filters`], [`core_status_mode`] and [`set_core_status_mode`] — because they are
@@ -19,7 +23,7 @@
 //! like one. Keeping every writer of that contract in one file is the point; a panel that reaches
 //! into `layout` directly is the drift this prevents.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gpui::{AnyElement, App, Entity, IntoElement, SharedString};
 use moon_core::config::{ReportFilterPrefs, TableSortPreference};
@@ -268,6 +272,163 @@ pub fn persist(
             b.layout_dirty = true;
         }
     });
+}
+
+/// Returns the stored dragged column order for `id`.
+///
+/// An empty vec means the table has no saved order and must keep its source order. Pass the same
+/// context-qualified id used for widths so a docked tab and a detached window stay separate.
+///
+/// Args:
+///     backend: Live backend whose layout holds the order.
+///     id: Context-qualified table id.
+///
+/// Returns:
+///     The stored column ids, or an empty vec when that context has no entry.
+pub fn saved_order(backend: &Backend, id: &str) -> Vec<String> {
+    backend
+        .layout
+        .table_column_order
+        .get(id)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Drop unknown column ids and append ids the table has gained.
+///
+/// Walks `stored` first, skipping blanks, duplicates, and ids absent from `live`, then appends
+/// every remaining `live` id in source order. An empty `stored` stays empty so a table the user
+/// never reordered keeps its source order, including a later change to that source order. An empty
+/// `live` returns `stored` unchanged: the caller does not know the columns yet and must not treat
+/// every saved id as removed.
+///
+/// Args:
+///     stored: Column ids last written for this table, in dragged order.
+///     live: Column ids the table can show now, in source order.
+///
+/// Returns:
+///     The order to seed into `MoonDataTableState::column_order`.
+pub fn merge_column_order(stored: &[String], live: &[&str]) -> Vec<String> {
+    if stored.is_empty() || live.is_empty() {
+        return stored.to_vec();
+    }
+    let live_set: HashSet<&str> = live.iter().copied().collect();
+    let mut seen = HashSet::<String>::new();
+    let mut merged = Vec::new();
+    for key in stored {
+        if key.is_empty() || !live_set.contains(key.as_str()) {
+            continue;
+        }
+        if seen.insert(key.clone()) {
+            merged.push(key.clone());
+        }
+    }
+    for key in live {
+        if seen.insert((*key).to_string()) {
+            merged.push((*key).to_string());
+        }
+    }
+    merged
+}
+
+/// Column ids to seed into a new table state for `id`.
+///
+/// Args:
+///     backend: Live backend whose layout holds the order.
+///     id: Context-qualified table id.
+///     live: Current column ids in source order. Empty means the schema is not loaded yet.
+///
+/// Returns:
+///     Shared ids for `MoonDataTableState::column_order`. Empty leaves the table on source order.
+pub fn restored_order(backend: &Backend, id: &str, live: &[&str]) -> Vec<SharedString> {
+    merge_column_order(&saved_order(backend, id), live)
+        .into_iter()
+        .map(SharedString::from)
+        .collect()
+}
+
+/// Stores `state.column_order` for `id` when this table's own order changed.
+///
+/// `seen` is the order this table instance last observed, seeded with whatever was restored.
+/// The state observer also fires for a resize, a sort, or a selection. Two open tables can
+/// share one context id, and writing on those other notifications would replace the saved
+/// order with the second table's unchanged list. An empty order that did move removes the
+/// entry, so the next open uses source order. Repeating the current list does not arm the
+/// layout saver. Orders and Alerts do not call this; their drag order stays in `docks.json`.
+///
+/// Args:
+///     backend: Shared backend whose layout receives a changed order.
+///     id: Context-qualified table id.
+///     state: Table state whose `column_order` is the user's sequence.
+///     seen: This instance's last local order. Updated when `state` has moved.
+///     cx: GPUI application context for the backend update.
+///
+/// Returns:
+///     Nothing; only a changed list marks the layout dirty.
+pub fn persist_order(
+    backend: &Entity<Backend>,
+    id: &str,
+    state: &Entity<MoonDataTableState>,
+    seen: &mut Vec<SharedString>,
+    cx: &mut App,
+) {
+    let current = state.read(cx).column_order.clone();
+    if !remember_column_order(seen, &current) {
+        return;
+    }
+    let stored: Vec<String> = current.iter().map(|key| key.to_string()).collect();
+    backend.update(cx, |b, _| {
+        if update_column_order(&mut b.layout.table_column_order, id, &stored) {
+            b.layout_dirty = true;
+        }
+    });
+}
+
+/// Reports whether `current` differs from the order this table last observed.
+///
+/// Equal means the notification was not a drag. Callers keep `seen` for the life of one table
+/// instance and seed it with the restored order, so a sibling instance that shares the context
+/// id cannot have its save replaced by a resize or a click here.
+///
+/// Args:
+///     seen: Last order observed for this table instance. Replaced when `current` differs.
+///     current: `MoonDataTableState::column_order` at this notification.
+///
+/// Returns:
+///     `true` when `current` should be written. `seen` then holds `current`.
+fn remember_column_order(seen: &mut Vec<SharedString>, current: &[SharedString]) -> bool {
+    if seen.as_slice() == current {
+        return false;
+    }
+    *seen = current.to_vec();
+    true
+}
+
+/// Apply one column-order list to the shared map and report whether it changed.
+///
+/// Kept pure so insert, no-op, context isolation, and reset have a direct regression test without
+/// constructing a GPUI application context. An empty list removes the entry.
+///
+/// Args:
+///     orders: Shared per-context map to update.
+///     id: Context-qualified table id.
+///     next: Column ids in dragged order. Empty clears the entry.
+///
+/// Returns:
+///     `true` when the map changed, otherwise `false`.
+fn update_column_order(
+    orders: &mut HashMap<String, Vec<String>>,
+    id: &str,
+    next: &[String],
+) -> bool {
+    if next.is_empty() {
+        return orders.remove(id).is_some();
+    }
+    if orders.get(id).map(Vec::as_slice) == Some(next) {
+        return false;
+    }
+    orders.insert(id.to_string(), next.to_vec());
+    true
 }
 
 #[cfg(test)]

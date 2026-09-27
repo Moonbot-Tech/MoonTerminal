@@ -11,7 +11,6 @@ fn server(id: u64, uid: u64, name: &str) -> ServerConfig {
         uid,
         name: name.to_string(),
         active: true,
-        show_window: true,
         feed: FeedFlags::default(),
         key: Secret::default(),
         group: "default".to_string(),

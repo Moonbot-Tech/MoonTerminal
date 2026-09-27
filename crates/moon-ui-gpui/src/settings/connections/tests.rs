@@ -80,7 +80,6 @@ fn server(group: &str) -> ServerConfig {
         uid: 1,
         name: "alpha".to_string(),
         active: true,
-        show_window: true,
         feed: FeedFlags::default(),
         key: Secret::new(""),
         group: group.to_string(),

@@ -7,10 +7,60 @@ use std::time::Duration;
 
 use super::embedded::{DEFAULT_SOUND, MB_SOUNDS, SOUNDS};
 use super::{
-    Catalog, Clip, MissingSound, Playback, RejectReason, Source, install, is_playable,
+    CATALOG, Catalog, Clip, MissingSound, Playback, RejectReason, Source, install, is_playable,
     mb_sound_name, missing, play, play_ordinal, resolve, sources, stems, take_missing_notices,
     wav_duration, with_catalog,
 };
+
+/// Swap the installed catalog for `catalog`, run `body`, and put the previous one back.
+///
+/// The catalog is thread-local and other tests on this thread assume the embedded set they
+/// started with, including one that asserts a fresh thread has not been scanned yet.
+///
+/// Args:
+///     catalog: Catalog installed for the duration of `body`.
+///     body: The test body.
+///
+/// Returns:
+///     Whatever `body` returns.
+fn with_temp_catalog<R>(catalog: Catalog, body: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Catalog>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(previous) = self.0.take() {
+                CATALOG.with(|slot| *slot.borrow_mut() = previous);
+            }
+        }
+    }
+    let previous = CATALOG.with(|slot| std::mem::replace(&mut *slot.borrow_mut(), catalog));
+    let _restore = Restore(Some(previous));
+    body()
+}
+
+/// Run `body` against the embedded set before any folder scan.
+///
+/// Args:
+///     body: The test body.
+///
+/// Returns:
+///     Whatever `body` returns.
+pub(crate) fn with_unscanned_embedded<R>(body: impl FnOnce() -> R) -> R {
+    with_temp_catalog(Catalog::embedded(), body)
+}
+
+/// Run `body` against a finished scan of a folder that is not there: the embedded set, scanned.
+///
+/// Args:
+///     body: The test body.
+///
+/// Returns:
+///     Whatever `body` returns.
+pub(crate) fn with_scanned_embedded<R>(body: impl FnOnce() -> R) -> R {
+    let catalog = sources::scan(std::path::Path::new(
+        r"C:\mt-issue-694-sounds-absent\no-such-folder",
+    ));
+    with_temp_catalog(catalog, body)
+}
 
 /// A clip for a name the catalog is known to hold.
 fn clip(name: &str) -> Clip {

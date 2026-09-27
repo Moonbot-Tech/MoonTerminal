@@ -119,6 +119,9 @@ pub(super) struct ProblemRow {
     pub(super) problem: CoreProblem,
 }
 
+/// Problems column ids in source order. A dragged order is stored under these ids.
+pub(super) const ORDER_KEYS: &[&str] = &["time", "core", "category", "kind", "title"];
+
 /// Build the unsortable Problems columns, with the finding's own heading taking the spare width.
 ///
 /// There is deliberately NO body column. The core's `title` and `message` overlap almost entirely —

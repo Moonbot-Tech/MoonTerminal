@@ -71,7 +71,7 @@ pub(super) struct ConnRow {
     color: Entity<MoonColorPickerState>,
 }
 
-/// The thirteen per-row element-id strings the row factory used to rebuild with `format!` on every
+/// The twelve per-row element-id strings the row factory used to rebuild with `format!` on every
 /// frame. Built once in [`build_conn`] and read from thereafter, so `server_row` allocates none of
 /// them.
 ///
@@ -95,7 +95,6 @@ pub(super) struct ConnRowIds {
     pub(super) proto_tip: SharedString,
     pub(super) preset: SharedString,
     pub(super) act: SharedString,
-    pub(super) win: SharedString,
     pub(super) del: SharedString,
     pub(super) rec: SharedString,
 }
@@ -141,7 +140,6 @@ impl ConnRowIds {
             proto_tip: SharedString::from(format!("proto-tip-{ident}")),
             preset: SharedString::from(format!("preset-{ident}")),
             act: SharedString::from(format!("act-{ident}")),
-            win: SharedString::from(format!("win-{ident}")),
             del: SharedString::from(format!("del-{ident}")),
             rec: SharedString::from(format!("rec-{ident}")),
         }

@@ -130,12 +130,6 @@ steps:
         ru: подключаться вообще.
         en: connect at all.
     - term:
-        ru: Окн
-        en: Win
-      text:
-        ru: рисовать окно ядра. Выключенное «Окн» при включённом «Акт» даёт headless-ядро.
-        en: draw the core's window. Win off with Act on gives you a headless core.
-    - term:
         ru: Данные
         en: Data
       text:

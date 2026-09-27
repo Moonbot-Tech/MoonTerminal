@@ -7,7 +7,8 @@
 //!
 //! Trust itself is not decided here: [`moon_core::session::BalanceState`] is classified by the
 //! core that owns the data, so this panel, the shell header and any future consumer agree. This
-//! module aggregates and renders it.
+//! module aggregates and renders it. The sum itself is [`aggregate_balance_figures`], which takes
+//! plain figures and no GPUI types; the Assets footer and the Mini App both call it.
 
 use super::*;
 use moon_core::session::BalanceState;
@@ -172,41 +173,117 @@ pub(super) fn figure_width(a: Option<&CoreAgg>, cx: &App) -> f32 {
     width
 }
 
+/// One core's free and total USDT plus the store's trust classification.
+///
+/// The caller decides which cores are in scope. An empty slice is an empty account reading,
+/// not "every core".
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BalanceFigures {
+    /// Store-owned trust classification for `free` and `total`.
+    pub state: BalanceState,
+    /// Free balance in USDT.
+    pub free: f64,
+    /// Total balance in USDT, including unrealized PnL.
+    pub total: f64,
+}
+
+/// Sum of usable balances. `free` and `total` are `None` when `counted == 0`.
+///
+/// `stale` counts cores inside `counted`. `excluded` is `awaiting + unpriced`, including a
+/// non-finite figure whatever its state says.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BalanceAggregate {
+    /// Sum of usable free balances, or `None` when nothing was counted.
+    pub free: Option<f64>,
+    /// Sum of usable total balances, or `None` when nothing was counted.
+    pub total: Option<f64>,
+    /// Cores that contributed a finite figure the state allows into the sum.
+    pub counted: u32,
+    /// Cores inside `counted` whose state is [`BalanceState::Stale`].
+    pub stale: u32,
+    /// Cores left out of the sum: awaiting, unpriced, or a non-finite figure.
+    pub excluded: u32,
+    /// Cores with [`BalanceState::Awaiting`], including a non-finite awaiting figure.
+    pub awaiting: u32,
+    /// Cores left out for any reason other than awaiting.
+    pub unpriced: u32,
+}
+
+/// Sum usable balances. Awaiting and unpriced cores are excluded; stale cores are included.
+///
+/// A non-finite free or total is not a contribution. `Awaiting` still counts as awaiting; every
+/// other unusable figure counts as unpriced. `free` and `total` are `None` when `counted == 0`
+/// so an empty sum is not reported as zero.
+///
+/// Args:
+///     rows: Per-core figures already limited to the caller's scope.
+///
+/// Returns:
+///     The scope sum and the trust counts. An empty `rows` has `counted == 0` and `None` totals.
+pub(crate) fn aggregate_balance_figures(rows: &[BalanceFigures]) -> BalanceAggregate {
+    let mut free = 0.0;
+    let mut total = 0.0;
+    let mut counted = 0u32;
+    let mut stale = 0u32;
+    let mut awaiting = 0u32;
+    let mut unpriced = 0u32;
+    for row in rows {
+        // A figure that cannot be added is not a contribution, whatever its state says. The
+        // producer validates these values, but keeping the check structural prevents a malformed
+        // aggregate from being counted while its arithmetic is silently skipped.
+        let usable = row.state.has_value() && row.free.is_finite() && row.total.is_finite();
+        if !usable {
+            if row.state == BalanceState::Awaiting {
+                awaiting = awaiting.saturating_add(1);
+            } else {
+                unpriced = unpriced.saturating_add(1);
+            }
+            continue;
+        }
+        counted = counted.saturating_add(1);
+        if row.state == BalanceState::Stale {
+            stale = stale.saturating_add(1);
+        }
+        free += row.free;
+        total += row.total;
+    }
+    let summed = counted > 0;
+    BalanceAggregate {
+        free: summed.then_some(free),
+        total: summed.then_some(total),
+        counted,
+        stale,
+        excluded: awaiting.saturating_add(unpriced),
+        awaiting,
+        unpriced,
+    }
+}
+
 /// Scope total with trust metadata.
 ///
 /// Cores without a usable figure are NOT summed: their balance is unknown, and a silent zero
 /// would understate the total. They are counted as awaiting or unpriced so the caller can say the
-/// total is partial instead of presenting it as complete.
+/// total is partial instead of presenting it as complete. The arithmetic is
+/// [`aggregate_balance_figures`]; this wrapper keeps the panel's empty-selection-means-all filter.
 fn scope_totals(aggs: &[CoreAgg], sel: &HashSet<CoreId>) -> ScopeTotals {
-    let mut out = ScopeTotals {
-        free: 0.0,
-        total: 0.0,
-        awaiting: 0,
-        unpriced: 0,
-        stale: 0,
-        counted: 0,
-    };
-    for a in aggs.iter().filter(|a| in_scope(sel, a.id)) {
-        // A figure that cannot be added is not a contribution, whatever its state says. The
-        // producer validates these values, but keeping the check structural prevents a malformed
-        // aggregate from being counted while its arithmetic is silently skipped.
-        let usable = a.state.has_value() && a.free.is_finite() && a.total.is_finite();
-        if !usable {
-            if a.state == BalanceState::Awaiting {
-                out.awaiting += 1;
-            } else {
-                out.unpriced += 1;
-            }
-            continue;
-        }
-        out.counted += 1;
-        if a.state == BalanceState::Stale {
-            out.stale += 1;
-        }
-        out.free += a.free;
-        out.total += a.total;
+    let rows: Vec<BalanceFigures> = aggs
+        .iter()
+        .filter(|a| in_scope(sel, a.id))
+        .map(|a| BalanceFigures {
+            state: a.state,
+            free: a.free,
+            total: a.total,
+        })
+        .collect();
+    let summed = aggregate_balance_figures(&rows);
+    ScopeTotals {
+        free: summed.free.unwrap_or(0.0),
+        total: summed.total.unwrap_or(0.0),
+        awaiting: summed.awaiting as usize,
+        unpriced: summed.unpriced as usize,
+        stale: summed.stale as usize,
+        counted: summed.counted as usize,
     }
-    out
 }
 
 /// Whether every in-scope core contributed a figure classified as live.

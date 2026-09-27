@@ -112,7 +112,6 @@ fn three_cores() -> AppConfig {
             uid: id,
             name: format!("s{id}"),
             active: true,
-            show_window: true,
             feed: crate::config::FeedFlags::default(),
             key: crate::config::Secret::new(String::new()),
             group: if id <= 2 { "desk-a" } else { "desk-b" }.into(),

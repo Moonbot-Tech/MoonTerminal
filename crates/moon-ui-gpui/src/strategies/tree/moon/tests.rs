@@ -5,7 +5,8 @@ use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 
 use super::{
-    FolderFill, NodeData, RowCounts, ToggleTarget, drop_dest, heading_chrome, id_exchange,
+    FolderFill, NodeData, RowCounts, ToggleTarget, disclosure_caret_shift, disclosure_caret_x,
+    drop_dest, heading_chrome, id_exchange, tree_row_indent,
 };
 
 /// Minimal row fixture for sibling ordering, with a folder path independent of its id.
@@ -95,6 +96,64 @@ fn populated_folder_icons_follow_their_disclosure_pose() {
 
 /// Compile-time source used to ensure the checkbox producer retains its action guard.
 const SRC: &str = include_str!("../moon.rs");
+
+/// Issue #689: pulling a folder caret left by the disclosure box stacks it on its
+/// core, because that box and the indent step are both 12 design units. A larger
+/// text step used to slide the folder caret even further left. Restoring that
+/// pull makes every expanded folder read as the same column as its core.
+#[test]
+fn folder_caret_sits_one_indent_step_right_of_its_parent() {
+    // Oracle is the row inset the tree already shipped (6 + 12 per level), not
+    // the caret helper's own constants. UI zoom multiplies this design-unit x
+    // once in `render_row` / `core_folder_row`, so a uniform scale cannot close
+    // the gap.
+    const INSET: f32 = 6.0;
+    const STEP: f32 = 12.0;
+    let steps = [0.0_f32, 1.0, 4.0];
+    for depth in 0..6u32 {
+        for step in steps {
+            for icon in [false, true] {
+                let caret = disclosure_caret_x(depth as f32, icon, step);
+                assert_eq!(caret, INSET + STEP * depth as f32);
+                assert_eq!(caret, disclosure_caret_x(depth as f32, !icon, 0.0));
+            }
+            let parent = disclosure_caret_x(depth as f32, false, step);
+            let folder = disclosure_caret_x(depth as f32 + 1.0, true, step);
+            assert_eq!(folder - parent, STEP);
+            // The reported column: indent step minus the disclosure box and the
+            // text step. That difference is zero at the default text size.
+            let stacked = STEP - (crate::design::DISCLOSURE_BOX + step);
+            assert_ne!(folder - parent, stacked);
+        }
+    }
+    assert_eq!(tree_row_indent(0.0), INSET);
+    assert_eq!(tree_row_indent(3.0), INSET + STEP * 3.0);
+    assert_eq!(disclosure_caret_shift(true, 4.0), 0.0);
+    assert_eq!(disclosure_caret_shift(false, 0.0), 0.0);
+}
+
+/// `core_folder_row` must place the glyph with `disclosure_caret_shift`. Putting
+/// the caret back at the left of the previous indent stacks folder carets on
+/// the core again, and the geometry test above would stay green.
+#[test]
+fn core_folder_row_places_the_caret_with_the_geometry_helper() {
+    let start = SRC
+        .find("fn core_folder_row(")
+        .expect("core_folder_row must exist");
+    let body = &SRC[start..];
+    assert!(
+        body.contains("disclosure_caret_shift(folder_icon.is_some(), step)"),
+        "the folder caret must use the geometry helper"
+    );
+    assert!(
+        body.contains(".when_some(folder_icon,"),
+        "the folder mark must sit outside the caret slot"
+    );
+    assert!(
+        !body.contains("-edge"),
+        "subtracting the disclosure box from the caret cancels the indent step"
+    );
+}
 
 /// Removing the visibility guard from `tree/moon.rs` checkbox `on_change` would let a stale
 /// callback stage a hidden core after switching the owning Auto workspace.
