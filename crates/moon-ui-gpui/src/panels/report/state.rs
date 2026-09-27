@@ -874,6 +874,7 @@ impl ReportPanel {
             sort_key,
             sort_desc,
             sel_cores: initial_selected_cores,
+            overview_cores: HashSet::new(),
             selected_strategies,
             strategy_select,
             strategy_catalog,
@@ -1240,9 +1241,19 @@ impl ReportPanel {
             strategy_name_mask: self.strategy_name_mask.clone(),
         };
         let applied = applied_filters(stored, period_bucket, current.clone());
+        // Restored verbatim; a set that no longer intersects the Overview scope falls back to the
+        // whole scope at every read, so it can never empty the Report.
+        let overview_cores: HashSet<u64> = stored
+            .overview_cores
+            .as_deref()
+            .map(|cores| cores.iter().copied().collect())
+            .unwrap_or_else(|| self.overview_cores.clone());
+        let narrowing_changed = overview_cores != self.overview_cores;
+        self.overview_cores = overview_cores;
         // One whole-struct compare rather than six clauses, so another filter added to the set
         // cannot be forgotten here and silently suppress the host-change requery.
         let changed = applied != current;
+        let changed = changed || narrowing_changed;
         self.side = applied.side;
         self.kind = applied.kind;
         self.deleted_only = applied.deleted_only;

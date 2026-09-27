@@ -635,6 +635,7 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         period: Some("rp-cur-week".to_string()),
         period_overview: Some("rp-today".to_string()),
         strategy_name_mask: Some("EMA_".to_string()),
+        overview_cores: None,
     };
     let ReportFilterSet {
         side,
@@ -728,6 +729,7 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         period: Some("rp-nonexistent".to_string()),
         period_overview: Some("rp-overview-nonexistent".to_string()),
         strategy_name_mask: None,
+        overview_cores: None,
     };
     let ReportFilterSet {
         side,
@@ -764,6 +766,7 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         period: None,
         period_overview: None,
         strategy_name_mask: Some(String::new()),
+        overview_cores: None,
     };
     let ReportFilterSet {
         side,

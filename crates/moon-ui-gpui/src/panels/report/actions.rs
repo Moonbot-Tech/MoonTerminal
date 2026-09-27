@@ -41,6 +41,15 @@ impl ReportPanel {
     /// Returns:
     ///     Nothing; Classic or standalone mode schedules a requery, while group Auto is a no-op.
     pub(super) fn toggle_core(&mut self, uid: Option<u64>, cx: &mut Context<Self>) {
+        if let Some(universe) = self.overview_universe(self.backend.read(cx)) {
+            // Start from what the combo shows, so a stale persisted set never survives a click.
+            self.overview_cores =
+                super::overview_narrow::shown_selection(&universe, &self.overview_cores);
+            if crate::controls::toggle_core_selection(&mut self.overview_cores, uid) {
+                self.after_overview_narrowing_change(cx);
+            }
+            return;
+        }
         if self
             .workspace_scope(self.backend.read(cx))
             .is_some_and(|scope| scope.is_workspace_owned())
@@ -58,7 +67,8 @@ impl ReportPanel {
     ///
     /// Empty means All before the click, so the first exchange selection becomes explicit. A
     /// fully selected exchange is removed without changing selections from other exchanges.
-    /// Database cores that disappeared after rendering are ignored. Group Auto mode leaves the
+    /// Database cores that disappeared after rendering are ignored. Auto Overview edits its
+    /// Report-only narrowing instead; a selected Auto core leaves the
     /// retained selection unchanged.
     ///
     /// Args:
@@ -73,17 +83,45 @@ impl ReportPanel {
         exchange_cores: Vec<u64>,
         cx: &mut Context<Self>,
     ) {
-        if self
-            .workspace_scope(self.backend.read(cx))
-            .is_some_and(|scope| scope.is_workspace_owned())
+        let overview = self.overview_universe(self.backend.read(cx));
+        if overview.is_none()
+            && self
+                .workspace_scope(self.backend.read(cx))
+                .is_some_and(|scope| scope.is_workspace_owned())
         {
             return;
         }
-        let available = self.cores.iter().map(|(core, _)| *core).collect();
-        if crate::controls::toggle_exchange_cores(&mut self.sel_cores, &available, exchange_cores) {
-            self.reconcile_strategy_core(cx);
+        let narrowing = overview.is_some();
+        // Auto Overview edits its Report-only narrowing over the Overview's own cores, starting
+        // from what the combo shows so a stale persisted set never survives a click.
+        let (selected, available) = match overview {
+            Some(universe) => {
+                self.overview_cores =
+                    super::overview_narrow::shown_selection(&universe, &self.overview_cores);
+                (&mut self.overview_cores, universe.into_iter().collect())
+            }
+            None => (
+                &mut self.sel_cores,
+                self.cores.iter().map(|(core, _)| *core).collect(),
+            ),
+        };
+        if crate::controls::toggle_exchange_cores(selected, &available, exchange_cores) {
+            if narrowing {
+                self.persist_filters(None, cx);
+            } else {
+                self.reconcile_strategy_core(cx);
+            }
             self.request_requery(cx);
         }
+    }
+
+    /// Persist a changed Auto Overview narrowing and requery the Report under it.
+    ///
+    /// Args:
+    ///     cx: Panel context used to persist and requery.
+    fn after_overview_narrowing_change(&mut self, cx: &mut Context<Self>) {
+        self.persist_filters(None, cx);
+        self.request_requery(cx);
     }
 
     /// Handle a Core-cell click under standalone, Classic, or Auto authority.
@@ -280,6 +318,10 @@ impl ReportPanel {
                 },
             )
         };
+        let mut prefs = prefs;
+        let mut overview_cores: Vec<u64> = self.overview_cores.iter().copied().collect();
+        overview_cores.sort_unstable();
+        prefs.overview_cores = Some(overview_cores);
         crate::persistence::table_persist::set_report_filters(&self.backend, &id, prefs, cx);
     }
 

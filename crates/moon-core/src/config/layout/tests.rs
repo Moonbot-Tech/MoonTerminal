@@ -1625,6 +1625,7 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
         period: Some("rp-cur-week".to_string()),
         period_overview: Some("rp-today".to_string()),
         strategy_name_mask: Some("EMA_%\\".to_string()),
+        overview_cores: None,
     };
     let encoded = toml::to_string(&prefs).expect("serialize Report filters");
     let decoded: super::ReportFilterPrefs =

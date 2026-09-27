@@ -610,6 +610,11 @@ pub struct ReportFilterPrefs {
     /// value standing when it changes host context.
     #[serde(default, deserialize_with = "de_lenient")]
     pub strategy_name_mask: Option<String>,
+    /// Report-only narrowing of the Auto Overview scope, as core uids; empty or absent means the
+    /// whole Overview. A set that no longer intersects the scope is read as the whole Overview.
+    // wire-id-exempt: terminal-issued core uids, never a core id — see `config::wire_id`.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub overview_cores: Option<Vec<u64>>,
 }
 
 /// One user-selected table sort stored under a stable per-context table id.
