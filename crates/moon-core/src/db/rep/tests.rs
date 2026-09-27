@@ -18,8 +18,7 @@ fn replica_with_deleted() -> (Connection, RepState, Arc<Mutex<HashMap<u64, Repor
     )
     .unwrap();
     let starts = Arc::new(Mutex::new(HashMap::new()));
-    let open_rows = Arc::new(Mutex::new(HashMap::new()));
-    let st = init(&conn, starts.clone(), open_rows).unwrap();
+    let st = init(&conn, starts.clone()).unwrap();
     (conn, st, starts)
 }
 
@@ -294,7 +293,7 @@ fn a_replica_without_the_deleted_column_stores_no_checkpoint() {
     )
     .unwrap();
     let starts = Arc::new(Mutex::new(HashMap::new()));
-    let st = init(&conn, starts.clone(), Arc::new(Mutex::new(HashMap::new()))).unwrap();
+    let st = init(&conn, starts.clone()).unwrap();
     seed_rows_without_deleted(&conn, 2, 4);
 
     let done = completion(91, 4);
@@ -401,4 +400,117 @@ fn coalescing_breaks_a_range_at_an_agreeing_row() {
     ranges.push(2, false, None);
     ranges.push(3, false, Some(false));
     assert_eq!(ranges.finish().0, vec![(1, 1), (3, 3)]);
+}
+
+/// Open an in-memory replica with `closedate` and `deleted`, both known to the column cache.
+fn replica_with_close_dates() -> (Connection, RepState) {
+    let conn = Connection::open_in_memory().unwrap();
+    init_db(&conn).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (core_uid INTEGER NOT NULL, core_name TEXT NOT NULL,
+            newrecid INTEGER NOT NULL, closedate INTEGER, deleted INTEGER,
+            PRIMARY KEY (core_uid, newrecid));",
+    )
+    .unwrap();
+    let st = init(&conn, Arc::new(Mutex::new(HashMap::new()))).unwrap();
+    (conn, st)
+}
+
+/// Insert one row of core 3 with the given close date and `deleted` flag.
+fn put_row(conn: &Connection, rec_id: i64, closedate: Option<i64>, deleted: i64) {
+    conn.execute(
+        "INSERT INTO orders_rep VALUES (3, 'Rep', ?1, ?2, ?3)",
+        rusqlite::params![rec_id, closedate, deleted],
+    )
+    .unwrap();
+}
+
+/// The open-row set is read from the replica when it is asked for, never from database open.
+///
+/// Breaks on: `db/rep.rs:open_row_ids` being computed once in `init` again, or losing its
+/// `deleted` filter. The first loses a close that a reconnect dropped for a trade opened during
+/// the session — it stays "open" until a restart (#742). The second spends the core's 100-id
+/// budget re-checking deleted rows on every connect: 54 of 55 ids on one measured core.
+#[test]
+fn the_open_row_set_is_the_replica_now_without_deleted_or_closed_rows() {
+    let (conn, st) = replica_with_close_dates();
+    put_row(&conn, 1, Some(0), 1);
+    put_row(&conn, 2, Some(0), 0);
+    put_row(&conn, 4, Some(1_750_000_000), 0);
+    // Opened after the replica was opened, as a trade during the session is.
+    put_row(&conn, 3, None, 0);
+
+    assert_eq!(
+        apply_recheck_open_rows(&conn, &st, 3, None).unwrap(),
+        vec![3, 2]
+    );
+    // Another core's rows never leak into this core's set.
+    assert!(
+        apply_recheck_open_rows(&conn, &st, 4, None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// More open rows than one check carries are walked page by page, strictly downwards.
+///
+/// Breaks on: the page cap drifting from [`OPEN_ROWS_PAGE`], the step below a page being
+/// inclusive — it would re-send its boundary row and, with one row per page, never finish — or an
+/// empty `after` falling through to the newest page, which restarts the walk forever.
+#[test]
+fn open_rows_beyond_one_check_are_walked_in_pages() {
+    let (conn, st) = replica_with_close_dates();
+    for rec in 1..=250 {
+        put_row(&conn, rec, Some(0), 0);
+    }
+
+    let first = apply_recheck_open_rows(&conn, &st, 3, None).unwrap();
+    assert_eq!(first.len(), OPEN_ROWS_PAGE);
+    assert_eq!((first[0], first[OPEN_ROWS_PAGE - 1]), (250, 151));
+    let second = apply_recheck_open_rows(&conn, &st, 3, Some(&first)).unwrap();
+    assert_eq!((second[0], second.len()), (150, OPEN_ROWS_PAGE));
+    let last = apply_recheck_open_rows(&conn, &st, 3, Some(&second)).unwrap();
+    assert_eq!((last[0], last.len()), (50, 50));
+    assert!(
+        apply_recheck_open_rows(&conn, &st, 3, Some(&last))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        apply_recheck_open_rows(&conn, &st, 3, Some(&[]))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A continuation of a walk that a newer walk replaced is dropped, not sent.
+///
+/// Breaks on: `db/rep.rs:OpenRowsWalk::admit` accepting a continuation without comparing it with
+/// the last registered page. `check_open_rows` replaces the library's set, so a reconnect's
+/// newest page followed by the old walk's next step would leave the newest page — the one that
+/// holds a close lost in that reconnect — unchecked until the next reconnect (#742 again).
+#[test]
+fn a_stale_walk_step_cannot_replace_a_newer_walk() {
+    let mut walk = OpenRowsWalk::default();
+    let page_one = [300, 250, 200];
+    let page_two = [150, 100];
+
+    assert!(walk.admit(3, None, &page_one));
+    // The completion names the page in the library's ascending order, not the writer's.
+    assert!(walk.admit(3, Some(&[200, 250, 300]), &page_two));
+    // A reconnect restarts the walk at the newest page...
+    assert!(walk.admit(3, None, &page_one));
+    // ...so the old walk's completion of page two, arriving after it, is stale.
+    assert!(!walk.admit(3, Some(&page_two), &[50]));
+    // The restarted walk still continues, and ends quietly on an empty page.
+    assert!(walk.admit(3, Some(&page_one), &page_two));
+    assert!(!walk.admit(3, Some(&page_two), &[]));
+    assert!(!walk.admit(3, Some(&page_two), &[50]));
+
+    // A new walk always goes out, even empty: that clears the library's retained set.
+    assert!(walk.admit(3, None, &[]));
+    // Walks are per core, and a wipe forgets the core's walk.
+    assert!(walk.admit(4, None, &page_one));
+    walk.forget(4);
+    assert!(!walk.admit(4, Some(&page_one), &page_two));
 }

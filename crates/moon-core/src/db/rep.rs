@@ -151,6 +151,24 @@ pub enum DbMsg {
         core_uid: u64,
         reports: MoonReports,
     },
+    /// Register this core's open rows with the core for re-checking, read from the replica NOW.
+    ///
+    /// A trade closes by an update to its existing `newrecid`, which catch-up never revisits: it
+    /// resumes above the cursor. A close lost while the link was down is therefore repaired only
+    /// by `check_open_rows`, and only for the ids that set holds — so the set must be the
+    /// replica's current open rows. A snapshot taken when the database opened cannot hold a trade
+    /// opened later in the session, and that is exactly the trade a reconnect loses. Routed
+    /// through the writer so the set reflects every event queued before it; the reports handle
+    /// rides along for the same reason [`DbMsg::ReplicaRecreated`] carries one — the request goes
+    /// out only after this batch commits.
+    RecheckOpenRows {
+        core_uid: u64,
+        /// The completed page this request continues below; `None` starts a new walk at the
+        /// newest open row. A continuation is honoured only while that page is still the one the
+        /// writer last registered for the core — see [`OpenRowsWalk`].
+        after: Option<Arc<[i64]>>,
+        reports: MoonReports,
+    },
     /// Acknowledge valuation outbox rows after their derived values committed.
     ///
     /// This internal message returns through the sole report writer so the valuation worker never
@@ -173,12 +191,6 @@ pub enum DbMsg {
 pub struct ReportSink {
     pub(super) tx: SyncSender<DbMsg>,
     pub(super) starts: Arc<Mutex<HashMap<u64, ReportStart>>>,
-    /// Open rows per core at database open: `newrecid`, newest first, at most 100.
-    ///
-    /// The feed registers them with `check_open_rows` because an open trade may
-    /// have closed or been deleted offline BELOW the checkpoint. Results arrive as
-    /// ordinary `RowUpsert` or `RowDelete` messages.
-    pub(super) open_rows: Arc<Mutex<HashMap<u64, Vec<i64>>>>,
     /// Coalesces the terminal channel-closed diagnostic if the writer thread panics.
     pub(super) send_failed: Arc<AtomicBool>,
 }
@@ -201,15 +213,6 @@ impl ReportSink {
             .ok()
             .and_then(|m| m.get(&core_uid).copied())
             .unwrap_or(ReportStart::Fresh)
-    }
-
-    /// Core's open rows for `check_open_rows`; empty means there is nothing to check.
-    pub fn open_rows(&self, core_uid: u64) -> Vec<i64> {
-        self.open_rows
-            .lock()
-            .ok()
-            .and_then(|m| m.get(&core_uid).cloned())
-            .unwrap_or_default()
     }
 }
 
@@ -318,7 +321,7 @@ fn ensure_indexes(conn: &Connection, cols: &HashSet<String>) -> rusqlite::Result
     Ok(done)
 }
 
-/// Initialize the replica table, per-core start states, and open-row sets.
+/// Initialize the replica table and per-core start states.
 ///
 /// Table-creation, required-schema, and core-scan setup errors return `Err`.
 /// In particular, an unreadable column schema makes the caller disable the
@@ -326,7 +329,6 @@ fn ensure_indexes(conn: &Connection, cols: &HashSet<String>) -> rusqlite::Result
 pub(super) fn init(
     conn: &Connection,
     starts: Arc<Mutex<HashMap<u64, ReportStart>>>,
-    open_rows: Arc<Mutex<HashMap<u64, Vec<i64>>>>,
 ) -> rusqlite::Result<RepState> {
     conn.execute(
         &format!(
@@ -346,14 +348,11 @@ pub(super) fn init(
     let cols = table_cols_for_init(conn)?;
     {
         let mut map = starts.lock().unwrap_or_else(|e| e.into_inner());
-        let mut open_map = open_rows.lock().unwrap_or_else(|e| e.into_inner());
         map.clear();
-        open_map.clear();
         let mut stmt = conn.prepare(&format!("SELECT DISTINCT core_uid FROM {TABLE}"))?;
         let uids: Vec<i64> = stmt.query_map([], |r| r.get(0))?.flatten().collect();
         for uid in uids {
             map.insert(uid as u64, startup_start(conn, uid));
-            open_map.insert(uid as u64, open_row_ids(conn, &cols, uid));
         }
     }
     let legacy_exists = table_exists(conn, "closed_sell_reports");
@@ -628,19 +627,12 @@ fn reset_replica(conn: &Connection, core_uid: u64) -> rusqlite::Result<()> {
 
 /// Publish the in-memory half of a committed [`reset_replica`].
 ///
-/// The open-row set goes with the rows: checking `newrecid`s from the superseded database
-/// reconciles nothing. Both recreation signals — the page and the alive map — publish
-/// through here, so neither can leave the other's in-memory state behind.
-pub(super) fn commit_replica_reset(
-    st: &RepState,
-    core_uid: u64,
-    open_rows: &Mutex<HashMap<u64, Vec<i64>>>,
-) {
+/// Both recreation signals — the page and the alive map — publish through here, so neither can
+/// leave the other's in-memory state behind. The open-row set needs no reset of its own: it is
+/// read from the table on every [`DbMsg::RecheckOpenRows`], and the wipe emptied the table.
+pub(super) fn commit_replica_reset(st: &RepState, core_uid: u64) {
     if let Ok(mut m) = st.starts.lock() {
         m.insert(core_uid, ReportStart::Fresh);
-    }
-    if let Ok(mut m) = open_rows.lock() {
-        m.remove(&core_uid);
     }
 }
 
@@ -948,25 +940,118 @@ fn startup_start(conn: &Connection, uid: i64) -> ReportStart {
     }
 }
 
-/// Load at most 100 open core rows, with NULL or non-positive `closedate`, newest first.
+/// How many ids one `check_open_rows` request carries.
 ///
-/// The set feeds `check_open_rows`. The library also sorts and caps it, but avoiding
-/// excess channel traffic here is cheaper.
-fn open_row_ids(conn: &Connection, cols: &HashSet<String>, uid: i64) -> Vec<i64> {
+/// MoonProto keeps only the newest 100 of a larger set (`MAX_CHECK_ROW_IDS`, crate-private
+/// there), so a core with more open rows is walked in pages of this size: a completed check that
+/// came back full asks for the next page below its lowest id.
+pub(crate) const OPEN_ROWS_PAGE: usize = 100;
+
+/// One page of this core's open rows, newest first: NULL or non-positive `closedate`.
+///
+/// Soft-deleted rows are left out. The core answers each of them as the same deleted open row,
+/// so they never leave the set, and they took the slots of live rows on every connect: on one
+/// measured replica 54 of the 55 ids sent for one core, and all 64 for another, were deleted
+/// rows. A restore reaches the row through its echo or the alive map and puts it back here.
+///
+/// Args:
+///     below: Return only ids below this `newrecid`; `None` starts at the newest.
+fn open_row_ids(
+    conn: &Connection,
+    cols: &HashSet<String>,
+    uid: u64,
+    below: Option<i64>,
+) -> rusqlite::Result<Vec<i64>> {
     if !cols.contains("closedate") {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let mut out = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(&format!(
+    let visible = if cols.contains(DELETED_COL) {
+        " AND COALESCE(deleted,0)=0"
+    } else {
+        ""
+    };
+    let mut stmt = conn.prepare_cached(&format!(
         "SELECT newrecid FROM {TABLE} \
-         WHERE core_uid=?1 AND newrecid>0 AND (closedate IS NULL OR closedate<=0) \
-         ORDER BY newrecid DESC LIMIT 100"
-    )) {
-        if let Ok(rows) = stmt.query_map([uid], |r| r.get::<_, i64>(0)) {
-            out.extend(rows.flatten());
+         WHERE core_uid=?1 AND newrecid>0 AND newrecid<?2 \
+         AND (closedate IS NULL OR closedate<=0){visible} \
+         ORDER BY newrecid DESC LIMIT {OPEN_ROWS_PAGE}"
+    ))?;
+    let rows = stmt.query_map(
+        rusqlite::params![uid as i64, below.unwrap_or(i64::MAX)],
+        |r| r.get::<_, i64>(0),
+    )?;
+    rows.collect()
+}
+
+/// Read the open-row page a [`DbMsg::RecheckOpenRows`] asks for, inside the writer's transaction.
+///
+/// Args:
+///     after: The completed page to continue below; `None` reads the newest page.
+pub(super) fn apply_recheck_open_rows(
+    conn: &Connection,
+    st: &RepState,
+    core_uid: u64,
+    after: Option<&[i64]>,
+) -> rusqlite::Result<Vec<i64>> {
+    let below = match after {
+        None => None,
+        Some(done) => match done.iter().min() {
+            Some(&lowest) => Some(lowest),
+            // Nothing to continue below; reading from the top here would restart the walk.
+            None => return Ok(Vec::new()),
+        },
+    };
+    open_row_ids(conn, &st.cols, core_uid, below)
+}
+
+/// Which open-row page the writer last registered with each core, so a continuation can be told
+/// from a stale one.
+///
+/// `check_open_rows` REPLACES the set the library holds, and its `OpenRowsCheckComplete` names
+/// only the ids it covered, not which request asked for them. A walk that was mid-way when a
+/// reconnect restarted it at the newest page therefore still completes its old page, and the
+/// continuation that completion asks for would replace the fresh newest page — right after a
+/// reconnect the library even holds that page unsent until the schema is confirmed, so it would
+/// never go out at all. Owned by the writer thread, which is the only sender.
+#[derive(Default)]
+pub(super) struct OpenRowsWalk {
+    /// Last registered page per core, ascending — the order the library sorts it into.
+    last: HashMap<u64, Vec<i64>>,
+}
+
+impl OpenRowsWalk {
+    /// Decide whether a page read for [`DbMsg::RecheckOpenRows`] goes out, and record it if so.
+    ///
+    /// A new walk (`after = None`) always goes out, even empty: an empty set clears the one the
+    /// library retained from an earlier call, which it would otherwise re-check after every hard
+    /// reconnect. A continuation goes out only when `after` is the page last registered for the
+    /// core, and not when it came back empty — that is the walk reaching the bottom.
+    ///
+    /// Returns:
+    ///     `true` when `rec_ids` must be passed to `check_open_rows`.
+    pub(super) fn admit(&mut self, core_uid: u64, after: Option<&[i64]>, rec_ids: &[i64]) -> bool {
+        if let Some(done) = after {
+            let mut done = done.to_vec();
+            done.sort_unstable();
+            if self.last.get(&core_uid) != Some(&done) {
+                return false;
+            }
+            if rec_ids.is_empty() {
+                self.forget(core_uid);
+                return false;
+            }
         }
+        let mut ids = rec_ids.to_vec();
+        ids.sort_unstable();
+        self.last.insert(core_uid, ids);
+        true
     }
-    out
+
+    /// Forget the core's walk: it reached the bottom, or its replica was wiped and its pages name
+    /// superseded ids.
+    pub(super) fn forget(&mut self, core_uid: u64) {
+        self.last.remove(&core_uid);
+    }
 }
 
 /// Probe replica columns, surfacing SQLite's own error.
