@@ -49,6 +49,14 @@
     var reportPeriod = null;
     var inFlight = {};
     var reportBody = null;
+    var refreshButton = document.getElementById("app-refresh");
+    var paneStatus = document.getElementById("pane-status");
+    var header = document.querySelector(".app-header");
+    var lastOk = {};
+    var lastRaw = {};
+    var updatedTimer = null;
+    var reportExpanded = false;
+    var MONEY_LIST_LIMIT = 8;
 
     function tr(key) {
         var value = labels[key];
@@ -78,6 +86,7 @@
             webapp.onEvent("themeChanged", function () {
                 applyScheme();
                 applyChromeColors();
+                syncHeaderHeight();
             });
         }
         webapp.ready();
@@ -249,7 +258,7 @@
                         parsed = null;
                     }
                 }
-                return { status: response.status, ok: response.ok, parsed: parsed };
+                return { status: response.status, ok: response.ok, parsed: parsed, text: text };
             });
         }).then(function (pack) {
             if (job.cancelled) {
@@ -291,7 +300,7 @@
                 finish(job, { ok: false, status: pack.status, error: tr("mini_error_read"), retry: true });
                 return;
             }
-            finish(job, { ok: true, status: pack.status, data: pack.parsed });
+            finish(job, { ok: true, status: pack.status, data: pack.parsed, raw: pack.text });
         }).catch(function () {
             if (job.cancelled) {
                 finish(job, { ok: false, status: 0, cancelled: true, retry: false, error: "" });
@@ -340,40 +349,69 @@
         return {};
     }
 
-    function showLoading(host) {
-        clear(host);
-        host.appendChild(el("p", "loading-label", tr("mini_loading")));
+    // One generic skeleton for every tab: a hero bar and five rows.
+    function skeleton(host) {
+        host.appendChild(el("p", "sr-only", tr("mini_loading")));
         var card = el("div", "card");
-        var widths = ["72%", "48%", "64%", "40%"];
+        card.setAttribute("aria-hidden", "true");
+        card.appendChild(el("div", "skel skel-hero"));
+        var widths = ["72%", "48%", "64%", "40%", "56%"];
         var i;
         for (i = 0; i < widths.length; i++) {
-            var row = el("div", "row");
+            var row = el("div", "skel-row");
             var bar = el("div", "skel");
-            bar.style.width = widths[i];
+            bar.style.maxWidth = widths[i];
             row.appendChild(bar);
+            row.appendChild(el("div", "skel"));
             card.appendChild(row);
         }
         host.appendChild(card);
+    }
+
+    function showLoading(host) {
+        clear(host);
+        skeleton(host);
+    }
+
+    function button(className, label, onClick) {
+        var node = document.createElement("button");
+        node.type = "button";
+        node.className = className;
+        node.textContent = label;
+        node.addEventListener("click", onClick);
+        return node;
+    }
+
+    function retryButton(className) {
+        return button(className, tr("mini_retry"), refreshCurrent);
+    }
+
+    function clearStale() {
+        if (paneStatus) clear(paneStatus);
+    }
+
+    function showStale(message, allowRetry) {
+        if (!paneStatus) return;
+        clear(paneStatus);
+        var bar = el("div", "stale-bar");
+        var text = tr("mini_stale_data");
+        var line = el("span", "stale-text", text);
+        if (message) line.appendChild(el("span", "stale-reason", message));
+        bar.appendChild(line);
+        if (allowRetry) bar.appendChild(retryButton(""));
+        paneStatus.appendChild(bar);
     }
 
     function showError(host, message, allowRetry) {
         clear(host);
         var box = el("div", "error");
         box.appendChild(el("p", "", message || tr("mini_error_read")));
-        if (allowRetry) {
-            var button = document.createElement("button");
-            button.type = "button";
-            button.className = "retry";
-            button.textContent = tr("mini_retry");
-            button.addEventListener("click", function () {
-                if (current) reloadPane(current, false);
-            });
-            box.appendChild(button);
-        }
+        if (allowRetry) box.appendChild(retryButton("retry"));
         host.appendChild(box);
     }
 
-    function emptyState(message) {
+    // An optional action ({label, run}) gives the empty pane a way forward.
+    function emptyState(message, action) {
         var box = el("div", "empty");
         var icon = svgEl("svg");
         icon.setAttribute("viewBox", "0 0 48 48");
@@ -396,7 +434,22 @@
         icon.appendChild(path);
         box.appendChild(icon);
         box.appendChild(el("p", "", message));
+        if (action && action.label) box.appendChild(button("retry", action.label, action.run));
         return box;
+    }
+
+    function refreshAction() {
+        return { label: tr("mini_refresh"), run: refreshCurrent };
+    }
+
+    function clearSearchAction(pane, repaint) {
+        return {
+            label: tr("mini_clear_search"),
+            run: function () {
+                queries[pane] = "";
+                repaint();
+            }
+        };
     }
 
     function searchField(id, value, onInput) {
@@ -595,6 +648,7 @@
             }
             (function (key) {
                 head.addEventListener("click", function () {
+                    hapticSelection();
                     collapse[pane][key] = !collapse[pane][key];
                     collapseUser[pane][key] = true;
                     repaint();
@@ -648,7 +702,9 @@
         var row = el("div", "row core-row");
         row.appendChild(el("span", dotClass(core)));
         var body = el("div", "grow");
-        body.appendChild(el("div", "name core-name", core.name || ""));
+        var coreName = el("div", "name core-name", core.name || "");
+        coreName.title = core.name || "";
+        body.appendChild(coreName);
         var secondary = core.fault ? faultLabel(core.fault) : tr("mini_core_" + (core.conn || ""));
         if (secondary) body.appendChild(el("div", "sub", secondary));
         row.appendChild(body);
@@ -673,12 +729,12 @@
         wrap.appendChild(top);
         var bottom = el("div", "spread fine");
         var free = el("span", "");
-        free.appendChild(el("span", "k", tr("mini_free")));
+        free.appendChild(el("span", "k", tr("mini_free") + " "));
         var freeVal = el("span", "num");
-        applyMoney(freeVal, "num balance-figure", row.free_text, row.free);
+        applyMoney(freeVal, "num", row.free_text, row.free);
         free.appendChild(freeVal);
-        var total = el("span", "");
-        total.appendChild(el("span", "k", tr("mini_total")));
+        var total = el("span", "money-col");
+        total.appendChild(el("span", "k", tr("mini_total") + " "));
         var totalVal = el("span", "num");
         applyMoney(totalVal, "num balance-figure", row.total_text, row.total);
         total.appendChild(totalVal);
@@ -686,23 +742,6 @@
         bottom.appendChild(total);
         wrap.appendChild(bottom);
         return wrap;
-    }
-
-    function exchangeBalanceRow(row) {
-        var line = el("div", "row spread");
-        var left = el("div", "grow");
-        left.appendChild(el("div", "name", row.exchange || ""));
-        if (row.excluded > 0) {
-            left.appendChild(el("div", "sub", tr("mini_partial").replace("{n}", String(row.excluded))));
-        }
-        line.appendChild(left);
-        var right = el("div", "balance-side");
-        var val = el("div", "");
-        applyMoney(val, "balance-figure", row.total_text, row.total);
-        right.appendChild(val);
-        if (row.stale > 0) right.appendChild(el("div", "badge badge-bad", tr("mini_balance_stale")));
-        line.appendChild(right);
-        return line;
     }
 
     function sideClass(side) {
@@ -793,8 +832,10 @@
     function orderRow(order, data) {
         var row = el("div", "row order-row");
         var top = el("div", "order-top");
-        top.appendChild(el("span", "name", order.coin || ""));
-        top.appendChild(el("span", "order-side " + sideClass(order.side), order.side || ""));
+        var coin = el("span", "name", order.coin || "");
+        coin.title = order.coin || "";
+        top.appendChild(coin);
+        top.appendChild(el("span", "badge order-side " + sideClass(order.side), order.side || ""));
         top.appendChild(orderChange(order));
         top.appendChild(orderResult(order));
         row.appendChild(top);
@@ -880,7 +921,7 @@
                 svg.appendChild(bar);
             }
         }
-        var caption = el("p", "chart-caption", "");
+        var caption = el("p", "chart-caption", tr("mini_chart_hint"));
         svg.addEventListener("click", function (ev) {
             if (!n) return;
             var rect = svg.getBoundingClientRect();
@@ -912,6 +953,7 @@
                 button.addEventListener("click", function () {
                     if (value === period) return;
                     period = value;
+                    reportExpanded = false;
                     hapticSelection();
                     paintPeriodPressed();
                     reloadPane("report", false);
@@ -939,22 +981,126 @@
         return sections[name];
     }
 
-    function appendMoneyList(host, label, rows, nameClass) {
+    function moneySize(row) {
+        var usdt = row && row.money && row.money.usdt;
+        return typeof usdt === "number" && usdt === usdt ? Math.abs(usdt) : -1;
+    }
+
+    // Largest amount first, unvalued rows last. The source order breaks ties.
+    function sortedByMoney(rows) {
+        var copy = rows.map(function (row, index) { return { row: row, index: index }; });
+        copy.sort(function (a, b) {
+            return moneySize(b.row) - moneySize(a.row) || a.index - b.index;
+        });
+        return copy.map(function (item) { return item.row; });
+    }
+
+    // opts: nameClass, sort (by |usdt|), limit (rows before "show all"), meta (row -> text).
+    function appendMoneyList(host, label, rows, opts) {
         if (!Array.isArray(rows) || !rows.length) return;
+        opts = opts || {};
+        var list = opts.sort ? sortedByMoney(rows) : rows;
+        var cut = opts.limit && !reportExpanded && list.length > opts.limit ? opts.limit : list.length;
         var card = el("div", "card");
         card.appendChild(el("h2", "card-title", label));
         var i;
-        for (i = 0; i < rows.length; i++) {
-            var row = rows[i];
+        for (i = 0; i < cut; i++) {
+            var row = list[i];
             var line = el("div", "row spread");
-            line.appendChild(el("span", nameClass || "name", row.name || row.key || ""));
+            var left = el("div", "grow");
+            var name = el("div", opts.nameClass || "name", row.name || row.key || "");
+            name.title = row.name || row.key || "";
+            left.appendChild(name);
+            var metaText = typeof opts.meta === "function" ? opts.meta(row) : "";
+            if (metaText) left.appendChild(el("div", "row-meta", metaText));
+            line.appendChild(left);
             var money = row.money || {};
             var val = el("span", "");
             applyMoney(val, "num money-col", money.text, money.usdt);
             line.appendChild(val);
             card.appendChild(line);
         }
+        if (cut < list.length) {
+            card.appendChild(button("show-more", tr("mini_show_all").replace("{n}", String(list.length)), function () {
+                reportExpanded = true;
+                hapticSelection();
+                paintReport();
+            }));
+        }
         host.appendChild(card);
+    }
+
+    // "2026-09-27" -> "27.09", plus ".26" when withYear; anything else is shown as sent.
+    function shortDate(text, withYear) {
+        var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(text || "");
+        if (!m) return text || "";
+        return m[3] + "." + m[2] + (withYear ? "." + m[1].slice(2) : "");
+    }
+
+    function yearOf(text) {
+        var m = /^(\d{4})-/.exec(text || "");
+        return m ? m[1] : "";
+    }
+
+    // The year is shown when the range spans two years or is not the current one.
+    function reportRange(data) {
+        var fromYear = yearOf(data.from);
+        var toYear = yearOf(data.to);
+        var thisYear = String(new Date().getFullYear());
+        var withYear = !!((fromYear && toYear && fromYear !== toYear)
+            || (fromYear && fromYear !== thisYear) || (toYear && toYear !== thisYear));
+        var from = shortDate(data.from, withYear);
+        var to = shortDate(data.to, withYear);
+        return !to || from === to ? from : from + "\u2013" + to;
+    }
+
+    function coreOrdersMeta(row) {
+        var n = row.money && row.money.orders;
+        return typeof n === "number" ? tr("mini_report_core_orders").replace("{n}", String(n)) : "";
+    }
+
+    // Order count plus the client sum of every known PnL, same rounding as the group heads.
+    function ordersSummary(orders) {
+        var line = el("p", "summary spread");
+        line.appendChild(el("span", "", tr("mini_orders_summary").replace("{n}", String(orders.length))));
+        var sum = 0;
+        var seen = 0;
+        var i;
+        for (i = 0; i < orders.length; i++) {
+            var pnl = orders[i] && orders[i].pnl;
+            if (typeof pnl !== "number" || pnl !== pnl || pnl === Infinity || pnl === -Infinity) continue;
+            seen += 1;
+            sum += pnl;
+        }
+        var text = seen ? signedFixed(sum) : null;
+        if (text != null) {
+            var fig = el("span", "");
+            applyMoney(fig, "num money-col", text, sum);
+            line.appendChild(fig);
+        }
+        return line;
+    }
+
+    // One text button that opens or closes every group of the pane at once.
+    function appendToggleAll(host, pane, items, keyFn, query, repaint) {
+        if (query) return;
+        var groups = groupBy(items, function (item) { return groupKeyOf(item, keyFn); });
+        if (groups.length < 2) return;
+        var anyOpen = false;
+        var g;
+        for (g = 0; g < groups.length; g++) {
+            if (!collapse[pane]["k:" + groups[g].key]) anyOpen = true;
+        }
+        host.appendChild(button("text-btn", tr(anyOpen ? "mini_collapse_all" : "mini_expand_all"), function () {
+            var i;
+            for (i = 0; i < groups.length; i++) {
+                var slot = "k:" + groups[i].key;
+                collapse[pane][slot] = anyOpen;
+                collapseUser[pane][slot] = true;
+            }
+            hapticSelection();
+            repaint();
+        }));
     }
 
     function paintReport() {
@@ -966,7 +1112,7 @@
         var total = data.total || {};
         var orders = typeof total.orders === "number" ? total.orders : 0;
         if (!orders) {
-            host.appendChild(emptyState(tr("mini_empty_report")));
+            host.appendChild(emptyState(tr("mini_empty_report"), refreshAction()));
             restoreSnap(snap, y);
             return;
         }
@@ -975,10 +1121,14 @@
         var big = el("p", "");
         applyMoney(big, "hero-value num", total.text, total.usdt);
         hero.appendChild(big);
-        var line = el("p", "orders-line");
-        line.appendChild(el("span", "k", tr("mini_report_orders")));
-        line.appendChild(el("span", "num", String(orders)));
-        hero.appendChild(line);
+        var bits = [];
+        var range = reportRange(data);
+        if (range) bits.push(range);
+        bits.push(tr("mini_report_orders") + ": " + orders);
+        if (total.unknown_orders > 0) {
+            bits.push(tr("mini_report_unvalued_n").replace("{n}", String(total.unknown_orders)));
+        }
+        hero.appendChild(el("p", "hero-sub num", bits.join(" \u00B7 ")));
         host.appendChild(hero);
         var days = Array.isArray(data.days) ? data.days : [];
         if (days.length >= 2) {
@@ -987,8 +1137,13 @@
             chartCard.appendChild(renderBars(days));
             host.appendChild(chartCard);
         }
-        appendMoneyList(host, tr("mini_report_by_exchange"), data.by_exchange);
-        appendMoneyList(host, tr("mini_report_by_core"), data.by_core, "name core-name");
+        appendMoneyList(host, tr("mini_report_by_core"), data.by_core, {
+            nameClass: "name core-name",
+            sort: true,
+            limit: MONEY_LIST_LIMIT,
+            meta: coreOrdersMeta
+        });
+        appendMoneyList(host, tr("mini_report_by_exchange"), data.by_exchange, { sort: true });
         restoreSnap(snap, y);
     }
 
@@ -1000,20 +1155,29 @@
         var data = payloads.cores || {};
         var cores = Array.isArray(data.cores) ? data.cores : [];
         var online = 0;
+        var problems = 0;
         var i;
         for (i = 0; i < cores.length; i++) {
             if (cores[i].conn === "ready") online += 1;
+            if (coreProblem(cores[i])) problems += 1;
         }
-        host.appendChild(el(
-            "p",
-            "summary",
-            tr("mini_cores_online").replace("{online}", String(online)).replace("{total}", String(cores.length))
-        ));
         if (!cores.length) {
-            host.appendChild(emptyState(tr("mini_empty_cores")));
+            host.appendChild(emptyState(tr("mini_empty_cores"), refreshAction()));
             restoreSnap(snap, y);
             return;
         }
+        var strip = el("div", "stat-strip");
+        strip.setAttribute("role", "group");
+        strip.setAttribute(
+            "aria-label",
+            tr("mini_cores_online").replace("{online}", String(online)).replace("{total}", String(cores.length))
+        );
+        strip.appendChild(el("span", "stat-value num", online + "/" + cores.length));
+        strip.appendChild(el("span", "stat-label", tr("mini_online")));
+        if (problems > 0) {
+            strip.appendChild(el("span", "neg", tr("mini_cores_problems").replace("{n}", String(problems))));
+        }
+        host.appendChild(strip);
         var coreQuery = cores.length > 10 ? queries.cores : "";
         if (cores.length > 10) {
             host.appendChild(searchField("search-cores", coreQuery, function (value) {
@@ -1025,11 +1189,12 @@
             return [core.name, core.exchange];
         });
         if (coreQuery && !filtered.length) {
-            host.appendChild(emptyState(tr("mini_empty_search")));
+            host.appendChild(emptyState(tr("mini_empty_search"), clearSearchAction("cores", paintCores)));
             restoreSnap(snap, y);
             return;
         }
         ensureCollapse("cores", cores);
+        appendToggleAll(host, "cores", cores, null, coreQuery, paintCores);
         appendGroups(host, "cores", filtered, coreProblem, coreRow, coreQuery, paintCores, null, null, null, coreGroupSummary);
         restoreSnap(snap, y);
     }
@@ -1043,7 +1208,7 @@
         var perCore = Array.isArray(data.per_core) ? data.per_core : [];
         var perExchange = Array.isArray(data.per_exchange) ? data.per_exchange : [];
         if (!perCore.length && !perExchange.length) {
-            host.appendChild(emptyState(tr("mini_empty_balances")));
+            host.appendChild(emptyState(tr("mini_empty_balances"), refreshAction()));
             restoreSnap(snap, y);
             return;
         }
@@ -1053,20 +1218,14 @@
         applyMoney(big, "hero-value num", data.total_text, data.total);
         hero.appendChild(big);
         if (data.stale > 0 || data.excluded > 0) {
-            var meta = el("div", "badges");
+            var meta = el("div", "hero-sub badges");
             if (data.stale > 0) meta.appendChild(el("span", "badge badge-bad", tr("mini_balance_stale")));
             if (data.excluded > 0) {
-                meta.appendChild(el("span", "sub", tr("mini_partial").replace("{n}", String(data.excluded))));
+                meta.appendChild(el("span", "", tr("mini_partial").replace("{n}", String(data.excluded))));
             }
             hero.appendChild(meta);
         }
         host.appendChild(hero);
-        if (perExchange.length) {
-            var card = el("div", "card");
-            var i;
-            for (i = 0; i < perExchange.length; i++) card.appendChild(exchangeBalanceRow(perExchange[i]));
-            host.appendChild(card);
-        }
         var balanceQuery = perCore.length > 10 ? queries.balances : "";
         if (perCore.length > 10) {
             host.appendChild(searchField("search-balances", balanceQuery, function (value) {
@@ -1078,12 +1237,13 @@
             return [row.name, row.exchange];
         });
         if (balanceQuery && perCore.length && !filtered.length) {
-            host.appendChild(emptyState(tr("mini_empty_search")));
+            host.appendChild(emptyState(tr("mini_empty_search"), clearSearchAction("balances", paintBalances)));
             restoreSnap(snap, y);
             return;
         }
         if (filtered.length) {
             ensureCollapse("balances", perCore);
+            appendToggleAll(host, "balances", perCore, null, balanceQuery, paintBalances);
             appendGroups(
                 host,
                 "balances",
@@ -1109,10 +1269,11 @@
         var data = payloads.orders || {};
         var orders = Array.isArray(data.orders) ? data.orders : [];
         if (!orders.length) {
-            host.appendChild(emptyState(tr("mini_empty_orders")));
+            host.appendChild(emptyState(tr("mini_empty_orders"), refreshAction()));
             restoreSnap(snap, y);
             return;
         }
+        host.appendChild(ordersSummary(orders));
         var orderQuery = orders.length > 10 ? queries.orders : "";
         if (orders.length > 10) {
             host.appendChild(searchField("search-orders", orderQuery, function (value) {
@@ -1124,11 +1285,12 @@
             return [order.coin, order.core_name, order.market, order.side];
         });
         if (orderQuery && !filtered.length) {
-            host.appendChild(emptyState(tr("mini_empty_search")));
+            host.appendChild(emptyState(tr("mini_empty_search"), clearSearchAction("orders", paintOrders)));
             restoreSnap(snap, y);
             return;
         }
         ensureCollapse("orders", orders, orderCoreKey);
+        appendToggleAll(host, "orders", orders, orderCoreKey, orderQuery, paintOrders);
         appendGroups(
             host,
             "orders",
@@ -1166,39 +1328,99 @@
     }
 
     function headerIsNarrow() {
-        var header = document.querySelector(".app-header");
         return !!(header && header.clientWidth > 0 && header.clientWidth <= 300);
     }
 
+    function staleAfter(name) {
+        return name === "report" ? REPORT_POLL_MS * 2 : Math.max(POLL_MS * 5, 15000);
+    }
+
+    // Relative age of the current tab's last good read; the fixed clock rides the tooltip.
     function paintUpdated() {
-        if (!lastClock) return;
+        if (!current || !lastOk[current]) {
+            updated.hidden = true;
+            return;
+        }
+        var age = Date.now() - lastOk[current];
+        var secs = Math.max(0, Math.floor(age / 1000));
+        var rel;
+        if (secs < 5) rel = tr("mini_updated_now");
+        else if (secs < 60) rel = tr("mini_updated_secs").replace("{n}", String(secs));
+        else rel = tr("mini_updated_mins").replace("{n}", String(Math.floor(secs / 60)));
         var word = tr("mini_updated");
-        updated.textContent = headerIsNarrow() || !word ? lastClock : word + " " + lastClock;
+        var bare = secs < 5 || headerIsNarrow() || !word;
+        updated.textContent = bare ? rel : word + " " + rel;
+        updated.title = lastClock;
+        updated.className = age > staleAfter(current) ? "updated updated-stale" : "updated";
         updated.hidden = false;
     }
 
-    function markUpdated() {
+    function startUpdatedTimer() {
+        if (updatedTimer || document.visibilityState !== "visible") return;
+        updatedTimer = setInterval(paintUpdated, 1000);
+    }
+
+    function stopUpdatedTimer() {
+        if (!updatedTimer) return;
+        clearInterval(updatedTimer);
+        updatedTimer = null;
+    }
+
+    function markUpdated(name) {
         lastClock = clockNow();
+        lastOk[name] = Date.now();
         paintUpdated();
+    }
+
+    function setSpinning(on) {
+        if (!refreshButton) return;
+        if (on) refreshButton.classList.add("spinning");
+        else refreshButton.classList.remove("spinning");
+        refreshButton.disabled = !!on;
+    }
+
+    function refreshCurrent() {
+        if (!current || inFlight[current]) return;
+        hapticImpact("light");
+        setSpinning(true);
+        reloadPane(current, !!hasData[current]);
     }
 
     function loadTab(name, token, silent) {
         if (name !== current || token !== loadToken) return;
         clearPoll();
         if (!silent) showLoading(paneBody(name));
-        inFlight[name] = true;
+        var ticket = {};
+        inFlight[name] = ticket;
+        if (refreshButton) refreshButton.disabled = true;
         api(pathFor(name), bodyFor(name)).then(function (res) {
-            inFlight[name] = false;
+            if (inFlight[name] === ticket) {
+                inFlight[name] = null;
+                setSpinning(false);
+                // A read still running for the shown tab keeps the button busy.
+                if (refreshButton && current && inFlight[current]) refreshButton.disabled = true;
+            }
             if (res.cancelled || token !== loadToken || name !== current) return;
             if (!res.ok || !res.data) {
+                // A failed background read keeps the last good data on screen.
+                if (silent && hasData[name] && res.status !== 401 && res.status !== 403) {
+                    showStale(res.error, !!res.retry);
+                    schedulePoll(name, token);
+                    return;
+                }
                 hasData[name] = false;
+                lastRaw[name] = null;
+                clearStale();
                 showError(paneBody(name), res.error, !!res.retry);
                 return;
             }
+            clearStale();
+            markUpdated(name);
+            var same = !!(hasData[name] && res.raw && res.raw === lastRaw[name]);
             hasData[name] = true;
             payloads[name] = res.data;
-            markUpdated();
-            paint[name]();
+            lastRaw[name] = res.raw || null;
+            if (!same) paint[name]();
             schedulePoll(name, token);
         });
     }
@@ -1215,6 +1437,8 @@
         if (!sections[name] || name === current) return;
         if (current) hapticSelection();
         showCmdLine("");
+        clearStale();
+        setSpinning(false);
         cancelPending();
         current = name;
         loadToken += 1;
@@ -1227,6 +1451,7 @@
             if (on) buttons[tab].setAttribute("aria-current", "page");
             else buttons[tab].removeAttribute("aria-current");
         }
+        paintUpdated();
         loadTab(name, loadToken, !!hasData[name]);
     }
 
@@ -1234,8 +1459,11 @@
         if (!sessionOk || !current) return;
         if (document.visibilityState !== "visible") {
             clearPoll();
+            stopUpdatedTimer();
             return;
         }
+        paintUpdated();
+        startUpdatedTimer();
         // A read still running reschedules the poll itself; a second one would only queue behind it.
         if (inFlight[current]) return;
         loadTab(current, loadToken, !!hasData[current]);
@@ -1246,18 +1474,16 @@
         startup.hidden = false;
         startup.appendChild(el("p", "", message));
         if (!allowRetry) return;
-        var button = document.createElement("button");
-        button.type = "button";
-        button.className = "retry";
-        button.textContent = tr("mini_retry");
-        button.addEventListener("click", function () {
+        startup.appendChild(button("retry", tr("mini_retry"), function () {
             startSession();
-        });
-        startup.appendChild(button);
+        }));
     }
 
     function startSession() {
         showStartup(tr("mini_shell_checking"), false);
+        var skel = el("div", "startup-skel");
+        skeleton(skel);
+        startup.appendChild(skel);
         main.hidden = true;
         nav.hidden = true;
         api("/api/session", {}).then(function (res) {
@@ -1268,6 +1494,9 @@
                 main.hidden = false;
                 nav.hidden = false;
                 sessionOk = true;
+                if (refreshButton) refreshButton.hidden = false;
+                syncHeaderHeight();
+                startUpdatedTimer();
                 selectTab("report");
                 return;
             }
@@ -1304,7 +1533,37 @@
         reportBody = document.getElementById("report-body");
         if (reportPeriod) reportPeriod.appendChild(periodBar());
         window.addEventListener("resize", paintUpdated);
+        bindRefresh();
+        bindHeaderHeight();
         bindBackButton();
+    }
+
+    function bindRefresh() {
+        if (!refreshButton) return;
+        refreshButton.setAttribute("aria-label", tr("mini_refresh"));
+        refreshButton.title = tr("mini_refresh");
+        refreshButton.addEventListener("click", refreshCurrent);
+    }
+
+    // Sticky group heads sit under the header, so its height is published as --header-h.
+    function syncHeaderHeight() {
+        if (!header || !header.offsetHeight) return;
+        document.documentElement.style.setProperty("--header-h", header.offsetHeight + "px");
+    }
+
+    // Without ResizeObserver, window resize and command-line changes resync the height by hand.
+    var observesHeader = !!(header && typeof ResizeObserver === "function");
+
+    function bindHeaderHeight() {
+        if (observesHeader) new ResizeObserver(syncHeaderHeight).observe(header);
+        else window.addEventListener("resize", syncHeaderHeight);
+        if (webapp && typeof webapp.onEvent === "function") {
+            webapp.onEvent("viewportChanged", syncHeaderHeight);
+            webapp.onEvent("safeAreaChanged", syncHeaderHeight);
+            webapp.onEvent("contentSafeAreaChanged", syncHeaderHeight);
+            webapp.onEvent("fullscreenChanged", syncHeaderHeight);
+        }
+        syncHeaderHeight();
     }
 
     function withCoin(text, coin) {
@@ -1333,11 +1592,12 @@
         }
     }
 
-    function hapticImpact() {
+    // A sent money command is a medium impact; other taps pass their own style.
+    function hapticImpact(style) {
         var feedback = hapticFeedback();
-        if (feedback && typeof feedback.impactOccurred === "function") {
-            feedback.impactOccurred("medium");
-        }
+        if (!feedback || typeof feedback.impactOccurred !== "function") return;
+        if (style) feedback.impactOccurred(style);
+        else feedback.impactOccurred("medium");
     }
 
     function haptic(kind) {
@@ -1414,7 +1674,6 @@
         if (!node) {
             node = el("p", "cmd-status", "");
             node.id = "cmd-status";
-            var header = document.querySelector(".app-header");
             if (header) header.appendChild(node);
             else document.body.appendChild(node);
         }
@@ -1424,11 +1683,13 @@
         }
         node.textContent = text || "";
         node.hidden = !text;
+        if (!observesHeader) syncHeaderHeight();
         if (!text) return;
         cmdTimer = setTimeout(function () {
             cmdTimer = null;
             node.textContent = "";
             node.hidden = true;
+            if (!observesHeader) syncHeaderHeight();
         }, 4000);
     }
 

@@ -12,10 +12,14 @@
         <div class="app-header-row">
             <h1 id="app-title"></h1>
             <p id="app-updated" class="updated" hidden></p>
+            <button type="button" id="app-refresh" class="icon-btn" hidden aria-label="">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M19.8 3.8v4.4h-4.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
         </div>
     </header>
     <div id="startup" class="startup" role="status"></div>
     <main id="app-main" hidden>
+        <div id="pane-status" role="status"></div>
         <section data-tab="report" hidden>
             <div id="report-period"></div>
             <div id="report-body"></div>

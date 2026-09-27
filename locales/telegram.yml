@@ -401,6 +401,66 @@ telegram.mini_updated:
   ru: "Обновлено"
   en: "Updated"
   es: "Actualizado"
+telegram.mini_updated_now:
+  ru: "Только что"
+  en: "Just now"
+  es: "Ahora mismo"
+telegram.mini_updated_secs:
+  ru: "{n} сек назад"
+  en: "{n}s ago"
+  es: "hace {n} s"
+telegram.mini_updated_mins:
+  ru: "{n} мин назад"
+  en: "{n} min ago"
+  es: "hace {n} min"
+telegram.mini_refresh:
+  ru: "Обновить"
+  en: "Refresh"
+  es: "Actualizar"
+telegram.mini_stale_data:
+  ru: "Не удалось обновить — показаны прежние данные"
+  en: "Couldn't refresh. Showing earlier data"
+  es: "No se pudo actualizar — se muestran datos anteriores"
+telegram.mini_report_core_orders:
+  ru: "Сделок: {n}"
+  en: "Trades: {n}"
+  es: "Operaciones: {n}"
+telegram.mini_report_unvalued_n:
+  ru: "Без оценки: {n}"
+  en: "Unvalued: {n}"
+  es: "Sin valorar: {n}"
+telegram.mini_show_all:
+  ru: "Показать все ({n})"
+  en: "Show all ({n})"
+  es: "Mostrar todo ({n})"
+telegram.mini_chart_hint:
+  ru: "Нажмите на столбец, чтобы увидеть день"
+  en: "Tap a bar to see the day"
+  es: "Toca una barra para ver el día"
+telegram.mini_cores_problems:
+  ru: "Проблемы: {n}"
+  en: "Issues: {n}"
+  es: "Problemas: {n}"
+telegram.mini_expand_all:
+  ru: "Развернуть все"
+  en: "Expand all"
+  es: "Expandir todo"
+telegram.mini_collapse_all:
+  ru: "Свернуть все"
+  en: "Collapse all"
+  es: "Contraer todo"
+telegram.mini_online:
+  ru: "онлайн"
+  en: "online"
+  es: "en línea"
+telegram.mini_orders_summary:
+  ru: "Открытых ордеров: {n}"
+  en: "{n} open orders"
+  es: "{n} órdenes abiertas"
+telegram.mini_clear_search:
+  ru: "Сбросить поиск"
+  en: "Clear search"
+  es: "Borrar búsqueda"
 telegram.mini_cancel:
   ru: "Отменить"
   en: "Cancel"

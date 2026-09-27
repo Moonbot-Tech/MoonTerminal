@@ -500,3 +500,63 @@ fn mini_telegram_feedback_is_feature_detected() {
         "a live balance row must not wear the fresh chip"
     );
 }
+
+/// `web/app.js:loadTab` must keep painted data when a background read fails,
+/// except on 401 and 403.
+///
+/// Mutation: drop `res.status !== 401 && res.status !== 403` from the stale
+/// guard. An expired session then keeps showing old rows as if they were fine
+/// instead of asking to relaunch. Mutation: call `showError` in place of
+/// `showStale` in the stale branch, or reset `hasData[name]` there. One 503
+/// during the 2 s poll then blanks the Cores or Orders list.
+#[test]
+fn mini_failed_background_read_keeps_data_but_not_on_auth_failure() {
+    let js = read_core_src("telegram/web/app.js");
+    let load = braced_body(&js, "function loadTab(");
+    let failure = braced_body(load, "if (!res.ok || !res.data)");
+    let stale = braced_body(failure, "if (silent && hasData[name]");
+    let guard = &stale[..stale.find('{').expect("stale branch has a body")];
+    assert!(
+        guard.contains("res.status !== 401") && guard.contains("res.status !== 403"),
+        "401 and 403 must skip the stale branch so the session error is shown: {guard}"
+    );
+    assert!(
+        stale.contains("showStale(") && stale.contains("return;"),
+        "a failed background read must show the stale bar and stop there"
+    );
+    assert!(
+        !stale.contains("showError(") && !stale.contains("hasData[name] = false"),
+        "the stale branch must keep the painted data"
+    );
+    let after = &failure[failure.find(stale).expect("stale branch inside failure") + stale.len()..];
+    assert!(
+        after.contains("hasData[name] = false;") && after.contains("showError(paneBody(name)"),
+        "every other failure, 401 and 403 included, takes the full error path"
+    );
+}
+
+/// `web/app.js:loadTab` clears the busy flag only for the read that owns it.
+///
+/// Mutation: replace `if (inFlight[name] === ticket) {` with an unconditional
+/// block. A cancelled older read then clears a newer read's flag and spinner,
+/// so after a period switch the refresh button re-enables mid-read and a tap
+/// starts a duplicate read.
+#[test]
+fn mini_stale_read_does_not_clear_a_newer_reads_busy_flag() {
+    let js = read_core_src("telegram/web/app.js");
+    let load = braced_body(&js, "function loadTab(");
+    assert!(
+        load.contains("inFlight[name] = ticket;"),
+        "each read must stamp its own ticket"
+    );
+    let owned = braced_body(load, "if (inFlight[name] === ticket)");
+    assert!(
+        owned.contains("inFlight[name] = null;") && owned.contains("setSpinning(false);"),
+        "only the owning read clears the flag and stops the spinner"
+    );
+    assert_eq!(
+        load.matches("inFlight[name] = null").count(),
+        1,
+        "the busy flag must not be cleared outside the ticket check"
+    );
+}
