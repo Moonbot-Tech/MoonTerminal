@@ -8,29 +8,47 @@ Variable interpolation: `%{var}`.
 rust-i18n merges **all** files in this folder into one global
 key space — splitting into files is purely organisational, by UI area:
 
-| File               | Area                                                          |
-|--------------------|--------------------------------------------------------------|
-| `shell.yml`        | top bar, status bar, toolbar, chart tab/window                |
-| `crowd.yml`        | crowd stats on empty Main and its toggle                      |
-| `strategies.yml`   | the Strategies window (tree, filter, parameters, context menu)|
-| `orders.yml`       | the right-hand order panel + the orders table in the bottom dock |
-| `dock.yml`         | bottom-dock tabs, detaching, log, panel stubs                 |
-| `settings.yml`     | Settings window: shared chrome + tab labels                   |
-| `interface.yml`    | the Interface tab (theme, `theme.toml`)                       |
-| `general.yml`      | the General tab                                               |
-| `connections.yml`  | the Connections tab (cores, groups, statuses, columns, tooltips) |
-| `hotkeys.yml`      | the Hotkeys tab                                               |
-| `security.yml`     | the Security block in General + the password login window     |
-| `telegram_core.yml`| the Telegram tab: the selected core's built-in reader         |
-| `report.yml`       | the Report panel (columns, filters, totals)                   |
-| `assets.yml`       | the Assets window/panel (columns, wallets)                    |
-| `dialogs.yml`      | create/rename/delete dialogs + shared buttons                 |
-| `errors.yml`       | error messages (validation, GPU)                              |
-| `common.yml`       | strings shared by several panels (loading, DB-read errors)    |
-| `city.yml`         | city names for the header-clock zone picker                   |
-| `workspace.yml`    | auto-trading mode, core navigation and availability statuses  |
-| `core_expert.yml`  | the Core settings — expert mode window (Moonbot tabs, page states) |
-| `sounds.yml`       | own sounds: the folder block on the Trade sounds tab, the Sound not found toast, the no file mark |
+| File                 | Area                                                          |
+|----------------------|--------------------------------------------------------------|
+| `shell.yml`          | top bar, status bar, toolbar, chart tab/window                |
+| `tick_volume.yml`    | cursor volume readout and the hovered candle's bucket        |
+| `update.yml`         | the terminal's own Windows self-update button and progress   |
+| `crowd.yml`          | crowd stats on empty Main and its toggle                      |
+| `strategies.yml`     | the Strategies window (tree, filter, parameters, context menu)|
+| `screener.yml`       | the Screener window's coin table                              |
+| `orders.yml`         | the right-hand order panel + the orders table in the bottom dock |
+| `dock.yml`           | bottom-dock tabs, detaching, log, panel stubs                 |
+| `news.yml`           | the News panel and the chart's news marks                     |
+| `settings.yml`       | Settings window chrome, tab labels, and the Badges tab        |
+| `interface.yml`      | the Interface tab (theme, `theme.toml`)                       |
+| `lines.yml`          | Lines tab attributes; line names stay English literals        |
+| `general.yml`        | the General tab                                               |
+| `import.yml`         | MoonBot settings import on the General tab                    |
+| `storage.yml`        | the Storage tab: reports, strategies, klines, replay prints   |
+| `connections.yml`    | the Connections tab (cores, groups, statuses, columns, tooltips) |
+| `hotkeys.yml`        | the Hotkeys tab                                               |
+| `horizontal_ray.yml` | the Horizontal Ray figure name and its draw hotkey            |
+| `security.yml`       | the Security block in General + the password login window     |
+| `telegram_core.yml`  | the Telegram tab: the selected core's built-in reader         |
+| `telegram.yml`       | the Telegram Settings tab, the terminal bot, and Mini App     |
+| `telegram_access.yml`| Telegram owner and read-only viewer assignments               |
+| `telegram_report.yml`| Telegram report replies, period buttons, and help text        |
+| `report.yml`         | the Report panel (columns, filters, totals)                   |
+| `trade_window.yml`   | the trade window opened from a closed Report row              |
+| `assets.yml`         | the Assets window/panel (columns, wallets)                    |
+| `analytics.yml`      | the Analytics window and the desktop Profit Monitor           |
+| `dialogs.yml`        | create/rename/delete dialogs + shared buttons                 |
+| `errors.yml`         | error messages (validation, GPU)                              |
+| `common.yml`         | strings shared by several panels (loading, DB-read errors)    |
+| `tables.yml`         | shared table actions, including the column-width reset        |
+| `city.yml`           | city names for the header-clock zone picker                   |
+| `workspace.yml`      | auto-trading mode, core navigation and availability statuses  |
+| `core_run.yml`       | the shared core run control: up, detecting, and trading       |
+| `core_status.yml`    | the Core Status panel: health, warnings, problems, startup    |
+| `core_update.yml`    | the Core Status update queue, separate from `update.yml`      |
+| `core_expert.yml`    | the Core settings — expert mode window (Moonbot tabs, page states) |
+| `sounds.yml`         | own sounds: the folder block on the Trade sounds tab, the Sound not found toast, the no file mark |
+| `trade_sounds.yml`   | the Trade sounds tab: entry and exit sounds per exchange      |
 
 A new UI section → a new file; we name the key `<area>.<...>` (dot as the separator).
 
@@ -52,7 +70,7 @@ Industry standard / tech metrics we leave as they are in every language:
     Add @TMoonBot to your channel · Generate PIN code · Reset channel · Cancel buys · Apply (Special buttons — the same in Moonbot)
     RTT · MTU (network abbreviations in core-start telemetry)
     the status-bar metrics line (ticks / book / fps / present / CPU / RAM)
-    the Settings → Lines tab in full (Buy/Sell/Stop/dashed/knots/…)
+    line names on the Settings → Lines tab (Buy/Sell/Stop/…); dashed, crosses and knots are translated in `lines.yml`
     technical Report columns: ID · TaskID · ExOrderID · Strat · BaseCur · Sell set
     three-letter city codes in the header clock (WAW · NYC · TYO …) — they are like tickers;
     the city NAMES themselves we do translate, they live in `city.yml`
@@ -61,12 +79,13 @@ Industry standard / tech metrics we leave as they are in every language:
 
 Glyphs (`⚙ ▶ ⏸ ↩ + ■ 🔍 ▾`) we **do not store** in dictionary values — the dictionary holds only
 clean translatable text. On a button the glyph is placed as a **separate segment** next to
-the text, as already done with the `🔍` magnifier in `controls.rs`:
+the text, as the scale dropdown does with the `🔍` magnifier in
+`crates/moon-ui-gpui/src/controls/scale.rs`:
 
 ```rust
-MoonButton::new("settings")
-    .segment(MoonButtonSegment::new("⚙"))            // glyph — not translated
-    .segment(MoonButtonSegment::new(t!("shell.settings_btn")))  // text — from the dictionary
+MoonDropdown::new(dropdown_id)
+    .segment(MoonButtonSegment::new("🔍").color(p.text_muted)) // glyph — not translated
+    .segment(MoonButtonSegment::new(trigger_val).color(p.text))
 ```
 
 Why: the icon is the same in every language, a translator cannot lose it, and the strings
