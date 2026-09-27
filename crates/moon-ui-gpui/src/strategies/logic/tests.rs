@@ -667,3 +667,86 @@ fn sound_archive_picklist_preserves_the_core_name_and_selection() {
     );
     assert!(!super::picklist_row_is(&field, "sounds/", "sounds/"));
 }
+
+/// A sound dropdown row this terminal cannot play carries `sounds.missing_mark`; a row it can
+/// play, and Moonbot's `NONE`, do not.
+///
+/// Plausible breakage: baking the mark into [`super::effective_picklist`] would send
+/// `CoreOnly (no file)` to the core, and marking before the folder scan would flash the mark
+/// on every custom name at startup, when the folder may still hold the file. Marking `NONE`
+/// would tell the user that silence is a missing wav.
+#[test]
+fn the_sound_picklist_marks_a_missing_name_and_not_an_existing_one() {
+    let field = moon_core::feed::SchemaField {
+        name: "SoundKind".to_string(),
+        type_name: "String".to_string(),
+        ui: moon_core::feed::SchemaFieldUi::Combo,
+        picklist: vec![
+            "Alarm".to_string(),
+            "babytoy".to_string(),
+            "CoreOnly".to_string(),
+            "NONE".to_string(),
+            "sounds/NotHere.wav".to_string(),
+        ],
+        default: None,
+    };
+    let other = moon_core::feed::SchemaField {
+        name: "SignalType".to_string(),
+        ..field.clone()
+    };
+
+    crate::media::sound::tests::with_unscanned_embedded(|| {
+        assert_eq!(super::picklist_missing_mark(&field, "CoreOnly"), None);
+        assert_eq!(
+            super::picklist_missing_mark(&field, "sounds/NotHere.wav"),
+            None
+        );
+    });
+
+    let _locale = crate::test_locale::force("en");
+    crate::media::sound::tests::with_scanned_embedded(|| {
+        assert_eq!(
+            super::picklist_missing_mark(&field, "CoreOnly").as_deref(),
+            Some("no file")
+        );
+        assert_eq!(
+            super::picklist_missing_mark(&field, "sounds/NotHere.wav").as_deref(),
+            Some("no file"),
+            "a folder prefix and a .wav suffix are the same missing sound"
+        );
+        assert_eq!(super::picklist_missing_mark(&field, "ding1"), None);
+        assert_eq!(super::picklist_missing_mark(&field, "Alarm"), None);
+        assert_eq!(super::picklist_missing_mark(&field, "BABYTOY.wav"), None);
+        assert_eq!(super::picklist_missing_mark(&field, "NONE"), None);
+        assert_eq!(super::picklist_missing_mark(&field, "none.wav"), None);
+        assert_eq!(super::picklist_missing_mark(&other, "CoreOnly"), None);
+
+        let rows = super::effective_picklist(&field, "sounds/NotHere.wav");
+        assert!(
+            rows.iter().any(|row| row == "sounds/NotHere.wav"),
+            "the stored spelling stays in the list"
+        );
+        assert!(
+            rows.iter().all(|row| !row.contains("no file")),
+            "the mark must not become the value a click sends"
+        );
+    });
+
+    let params = include_str!("../params.rs");
+    let arm_at = params
+        .find("FieldControl::Picklist =>")
+        .expect("picklist arm");
+    let arm = &params[arm_at..arm_at + params[arm_at..].find("_ =>").expect("free-text arm")];
+    assert!(
+        arm.contains("picklist_missing_mark"),
+        "the dropdown must ask which rows are missing"
+    );
+    assert!(
+        arm.contains(".right_label(mark)"),
+        "a missing row must carry the mark as MoonUI's muted trailing text"
+    );
+    assert!(
+        arm.contains("format!(\"{value} ({mark})\")"),
+        "the closed trigger shows the same mark on the stored value"
+    );
+}

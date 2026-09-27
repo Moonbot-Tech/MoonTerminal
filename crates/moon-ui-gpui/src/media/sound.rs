@@ -123,6 +123,20 @@ pub(crate) fn is_playable(name: &str) -> bool {
     with_catalog(|c| c.find(name).is_some())
 }
 
+/// Whether the folder scan has landed and still has no file for `name`.
+///
+/// Before the scan this is false: the embedded table alone cannot say a name the user's folder
+/// may hold is missing, which is the same hold-back the missing-sound notices use.
+///
+/// Args:
+///     name: A sound name in any spelling [`Catalog::find`] matches.
+///
+/// Returns:
+///     `true` only after a scan, when no catalog entry answers to `name`.
+pub(crate) fn absent_after_scan(name: &str) -> bool {
+    with_catalog(|catalog| catalog.scanned() && catalog.find(name).is_none())
+}
+
 /// A name or ordinal to a clip. A request the catalog cannot answer yields the default clip and
 /// is recorded as missing — held back until the first folder scan has landed, since the embedded
 /// set alone cannot say a name is absent. `None` only for an explicit "no sound" — an empty name.
@@ -397,4 +411,4 @@ fn play_bytes(wav: Arc<[u8]>) {
 fn play_bytes(_wav: Arc<[u8]>) {}
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

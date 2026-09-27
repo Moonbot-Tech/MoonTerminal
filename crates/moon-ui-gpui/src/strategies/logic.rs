@@ -518,7 +518,8 @@ fn has_picklist(f: &SchemaField) -> bool {
 /// terminal's that list lacks, then the stored value when nothing answers to it — so the dropdown
 /// shows what the strategy holds instead of blanking it, and the next click cannot silently
 /// replace a name the user gave in Moonbot. Rows are matched by stem (see [`picklist_row_is`]),
-/// so the core's `BABYTOY` and the terminal's embedded `babytoy` are one row.
+/// so the core's `BABYTOY` and the terminal's embedded `babytoy` are one row. These strings are
+/// what a click sends; the missing-file mark is not part of them (see [`picklist_missing_mark`]).
 pub(super) fn effective_picklist(f: &SchemaField, value: &str) -> Vec<String> {
     if f.name != SOUND_KIND_FIELD {
         return f.picklist.clone();
@@ -546,6 +547,34 @@ pub(super) fn effective_picklist(f: &SchemaField, value: &str) -> Vec<String> {
         rows.push(value.to_string());
     }
     rows
+}
+
+/// The missing-file mark for one sound-dropdown row, or `None` when the row should look ordinary.
+///
+/// A mark is the shared `sounds.missing_mark` text. It is display-only: the row value stays the
+/// core's spelling, so choosing it still writes that spelling. `NONE` is silence, not a missing
+/// file. Until the folder scan lands, nothing is marked — the embedded table cannot say a name
+/// is absent. Any other field is untouched.
+///
+/// Args:
+///     field: Schema field that owns the dropdown.
+///     option: One row from [`effective_picklist`], or the value the closed trigger shows.
+///
+/// Returns:
+///     The localized mark when this terminal has no file for a sound row, otherwise `None`.
+pub(super) fn picklist_missing_mark(field: &SchemaField, option: &str) -> Option<String> {
+    if field.name != SOUND_KIND_FIELD {
+        return None;
+    }
+    let stem = moon_core::util::sound::sound_stem(option);
+    if stem.is_empty() || stem.eq_ignore_ascii_case(SOUND_NONE) {
+        return None;
+    }
+    if crate::media::sound::absent_after_scan(option) {
+        Some(rust_i18n::t!("sounds.missing_mark").to_string())
+    } else {
+        None
+    }
 }
 
 /// Whether a picklist row IS the stored value. Exact for a core-supplied list; for the sound
