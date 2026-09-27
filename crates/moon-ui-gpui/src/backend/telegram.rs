@@ -2,6 +2,8 @@
 use crate::Backend;
 use gpui::Context;
 use moon_core::config::TelegramConfig;
+use moon_core::config::telegram_access::TelegramReportAccess;
+use moon_core::telegram::web::dto::{ReportDto, ReportPeriodDto};
 use moon_core::telegram::{
     TelegramService, TelegramStatus,
     api::{
@@ -18,6 +20,7 @@ use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+mod mini_app;
 mod reports;
 #[cfg(test)]
 mod tests;
@@ -26,6 +29,20 @@ mod tests;
 pub(crate) struct TelegramState {
     /// At most one database report is computed at a time, including timed-out requests.
     report_pending: bool,
+    /// At most one Mini App report is computed at a time, including timed-out requests.
+    mini_report_pending: bool,
+    /// Last finished Mini App report for one chat, period, and admission grant.
+    ///
+    /// A read that outlives the 5 s HTTP wait stays here for 60 s so the page retry can still
+    /// receive it. A hit is served only when the stored grant still equals the chat's current
+    /// admission. Service restart, a failed admission recheck, and a grant mismatch all clear it.
+    mini_report_last: Option<(
+        i64,
+        ReportPeriodDto,
+        TelegramReportAccess,
+        Instant,
+        ReportDto,
+    )>,
     pub(crate) service: Option<TelegramService>,
     pub(crate) status: TelegramStatus,
     pub(crate) mini_status: MiniAppStatus,
@@ -60,6 +77,8 @@ impl TelegramState {
         };
         Self {
             report_pending: false,
+            mini_report_pending: false,
+            mini_report_last: None,
             service,
             status,
             mini_status: MiniAppStatus::Stopped,
@@ -75,8 +94,11 @@ impl TelegramState {
     fn start_saved(&mut self, config: &TelegramConfig) {
         let retired = std::mem::take(&mut self.retired_menu_chats);
         let report_pending = self.report_pending;
+        let mini_report_pending = self.mini_report_pending;
         *self = Self::new_with_menu_cleanup(config, retired);
         self.report_pending = report_pending;
+        self.mini_report_pending = mini_report_pending;
+        // `mini_report_last` stays clear: a restarted service must not replay the previous grant.
     }
 
     /// Retain only removed identities, and never transfer them to a different bot token.
@@ -117,6 +139,7 @@ impl TelegramState {
 
     /// Retire the current transport without blocking the coordination loop.
     fn restart(&mut self) {
+        self.mini_report_last = None;
         self.pairing = None;
         self.status = TelegramStatus::Stopping;
         self.mini_status = MiniAppStatus::Stopped;
@@ -323,7 +346,7 @@ impl Backend {
                         }
                     }
                 }
-                Work::MiniApp(request) => self.telegram_mini_request(request),
+                Work::MiniApp(request) => self.telegram_mini_request(request, cx),
             }
         }
         if self
@@ -348,7 +371,7 @@ impl Backend {
     }
 
     /// Recheck pairing and Mini App enablement on every authenticated HTTP request.
-    fn telegram_mini_request(&mut self, request: MiniAppApiRequest) {
+    fn telegram_mini_request(&mut self, request: MiniAppApiRequest, cx: &mut Context<Self>) {
         match request {
             MiniAppApiRequest::Session { chat_id, reply, .. } => {
                 if !self.config.telegram.mini_app_enabled
@@ -359,6 +382,7 @@ impl Backend {
                 }
                 let _ = reply.try_send(Ok(()));
             }
+            other => mini_app::dispatch(self, other, cx),
         }
     }
 }
@@ -413,17 +437,13 @@ fn navigation_buttons() -> [(&'static str, &'static str); 5] {
     ]
 }
 
-/// Compose Mini App shell labels and all reply-button aliases in the UI locale domain.
+/// Compose Mini App page and shell labels, plus reply-button aliases in the UI locale domain.
 fn telegram_labels() -> std::collections::BTreeMap<String, String> {
     let mut labels: std::collections::BTreeMap<String, String> = [
         ("menu_miniapp".to_string(), t!("telegram.open").to_string()),
         (
             "mini_shell_checking".to_string(),
             t!("telegram.mini_shell_checking").to_string(),
-        ),
-        (
-            "mini_shell_connected".to_string(),
-            t!("telegram.mini_shell_connected").to_string(),
         ),
         (
             "mini_shell_denied".to_string(),
@@ -474,5 +494,76 @@ fn telegram_labels() -> std::collections::BTreeMap<String, String> {
             t!("telegram.button_help", locale = locale).to_string(),
         );
     }
+    for key in MINI_LABEL_KEYS {
+        let path = format!("telegram.{key}");
+        labels.insert((*key).to_string(), t!(&path).to_string());
+    }
+    for (kind, panel_key) in mini_app::FAULT_LABELS {
+        let path = (*panel_key).to_string();
+        labels.insert(format!("mini_fault_{kind}"), t!(&path).to_string());
+    }
     labels
 }
+
+/// Mini App page keys. Values live in the locale files; this list only wires the lookup.
+const MINI_LABEL_KEYS: &[&str] = &[
+    "mini_title",
+    "mini_tab_report",
+    "mini_tab_cores",
+    "mini_tab_balances",
+    "mini_tab_orders",
+    "mini_period_today",
+    "mini_period_yesterday",
+    "mini_period_month",
+    "mini_period_lastmonth",
+    "mini_report_total",
+    "mini_report_by_exchange",
+    "mini_report_by_core",
+    "mini_report_daily",
+    "mini_report_orders",
+    "mini_unvalued",
+    "mini_core_ready",
+    "mini_core_connecting",
+    "mini_core_stage",
+    "mini_core_failed",
+    "mini_core_disconnected",
+    "mini_cores_online",
+    "mini_ping",
+    "mini_exch_ping",
+    "mini_cpu",
+    "mini_unit_ms",
+    "mini_unit_pct",
+    "mini_fault",
+    "mini_balance_stale",
+    "mini_balance_awaiting",
+    "mini_balance_unpriced",
+    "mini_total",
+    "mini_free",
+    "mini_partial",
+    "mini_orders_qty",
+    "mini_orders_entry",
+    "mini_orders_mark",
+    "mini_search",
+    "mini_empty_report",
+    "mini_empty_cores",
+    "mini_empty_balances",
+    "mini_empty_orders",
+    "mini_empty_search",
+    "mini_error_read",
+    "mini_error_busy",
+    "mini_error_stale_session",
+    "mini_error_network",
+    "mini_retry",
+    "mini_loading",
+    "mini_updated",
+    "mini_cancel",
+    "mini_cancel_confirm",
+    "mini_panic_sell",
+    "mini_panic_off",
+    "mini_panic_confirm",
+    "mini_panic_off_confirm",
+    "mini_cmd_failed",
+    "mini_cmd_sent",
+    "mini_cmd_not_found",
+    "mini_cmd_unknown",
+];

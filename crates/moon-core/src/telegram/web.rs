@@ -3,6 +3,11 @@
 //! All `touche` types stay inside this module. The listener binds only `127.0.0.1` with an
 //! OS-selected port. Static assets are embedded; the authenticated `POST /api/session` route
 //! verifies Telegram `initData` and then authorizes the signed identity against paired chat ids.
+//!
+//! Every `/api/*` route, read or write, re-verifies initData HMAC, the paired chat, and
+//! `auth_date` within `INIT_DATA_MAX_AGE_SECS` (3600 s) before anything reaches the consumer.
+//! Routes: `POST /api/session`, `POST /api/report`, `POST /api/cores`, `POST /api/balances`,
+//! `POST /api/orders`, `POST /api/order/cancel`, and `POST /api/panic`.
 
 use std::io::{self, Read};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -23,6 +28,10 @@ use super::init_data::{
 use crate::config::Secret;
 use crate::util::time::now_unix_secs;
 
+pub mod dto;
+
+use dto::{BalancesDto, CommandResultDto, CoresDto, OrdersDto, ReportDto, ReportPeriodDto};
+
 const INDEX_HTML: &str = include_str!("web/index.html");
 const APP_CSS: &str = include_str!("web/app.css");
 const APP_JS: &str = include_str!("web/app.js");
@@ -35,7 +44,7 @@ const MAX_HEADER_COUNT: usize = 32;
 const MAX_HEADER_BYTES: usize = 8 * 1024;
 /// How long an idle connection may wait for request bytes.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long the handler waits for a session-check reply.
+/// How long an API handler waits for its consumer reply.
 const API_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Header carrying raw Telegram `initData`.
 const INIT_DATA_HEADER: &str = "x-telegram-init-data";
@@ -56,7 +65,7 @@ pub struct MiniAppServer {
 pub struct MiniAppServerConfig {
     /// Bot token used only for HMAC verification; never logged or returned.
     pub token: Secret,
-    /// Chat ids allowed to pass the Mini App session check.
+    /// Chat ids allowed to authenticate Mini App API requests.
     pub authorized_chat_ids: Vec<i64>,
 }
 
@@ -71,6 +80,72 @@ pub enum MiniAppApiRequest {
         /// One-shot reply for the HTTP handler.
         reply: SyncSender<Result<(), MiniAppApiError>>,
     },
+    /// Report for one named period.
+    Report {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// Window requested in the JSON body.
+        period: ReportPeriodDto,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<ReportDto, MiniAppApiError>>,
+    },
+    /// Live status of every visible core.
+    Cores {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<CoresDto, MiniAppApiError>>,
+    },
+    /// Balances for every visible core.
+    Balances {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<BalancesDto, MiniAppApiError>>,
+    },
+    /// Open orders for every visible core.
+    Orders {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<OrdersDto, MiniAppApiError>>,
+    },
+    /// Cancel one open order. Nothing is sent when that uid is not on the core.
+    CancelOrder {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// Core that owns the order.
+        core: u64,
+        /// Order uid from the same list the orders route returns.
+        uid: u64,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<CommandResultDto, MiniAppApiError>>,
+    },
+    /// Arm or disarm Panic Sell for one market.
+    PanicSell {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// Core that owns the market.
+        core: u64,
+        /// Market key. Longer than 64 bytes is rejected before this event is built.
+        market: String,
+        /// Armed state the page asked for.
+        on: bool,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<CommandResultDto, MiniAppApiError>>,
+    },
 }
 
 /// Handler-level API failure that does not carry secrets.
@@ -78,6 +153,14 @@ pub enum MiniAppApiRequest {
 pub enum MiniAppApiError {
     /// Consumer refused the request.
     Rejected,
+    /// The consumer could not finish the read.
+    ReadFailed,
+    /// The consumer is already busy with another read.
+    Busy,
+    /// The signed chat is not allowed to see this data.
+    Forbidden,
+    /// The named target does not exist.
+    NotFound,
 }
 
 impl MiniAppServer {
@@ -210,6 +293,33 @@ impl Iterator for StoppableAccept {
     }
 }
 
+/// Body of `POST /api/report`. Unknown fields are rejected.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReportPeriodBody {
+    period: ReportPeriodDto,
+}
+
+/// Body of `POST /api/order/cancel`. Unknown fields are rejected.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CancelOrderBody {
+    core: u64,
+    uid: u64,
+}
+
+/// Longest `market` accepted by `POST /api/panic`, in bytes.
+const MAX_MARKET_BYTES: usize = 64;
+
+/// Body of `POST /api/panic`. Unknown fields are rejected.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanicSellBody {
+    core: u64,
+    market: String,
+    on: bool,
+}
+
 /// Per-connection `touche` service. Clone is cheap: only Arcs and a channel sender.
 #[derive(Clone)]
 struct App {
@@ -222,6 +332,9 @@ struct App {
 
 impl App {
     /// Dispatch one HTTP request onto the fixed Mini App route table.
+    // Route closures return `Result<_, Response<Body>>`. Boxing that error would
+    // change the shared helper the same way `authenticate` refuses to.
+    #[allow(clippy::result_large_err)]
     fn handle(&self, request: Request<Body>) -> Response<Body> {
         if self.stop.load(Ordering::SeqCst) {
             return status_response(StatusCode::SERVICE_UNAVAILABLE, "stopped");
@@ -244,9 +357,83 @@ impl App {
                 static_response("application/javascript; charset=utf-8", APP_JS)
             }
             (&Method::POST, "/api/session") => self.handle_session(request),
-            (&Method::GET, "/api/session") | (&Method::HEAD, "/") | (&Method::OPTIONS, _) => {
-                status_response(StatusCode::METHOD_NOT_ALLOWED, "method")
+            (&Method::POST, "/api/report") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<ReportPeriodBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    Ok(MiniAppApiRequest::Report {
+                        identity,
+                        chat_id,
+                        period: parsed.period,
+                        reply,
+                    })
+                })
             }
+            (&Method::POST, "/api/cores") => {
+                self.handle_api(request, |identity, chat_id, _body, reply| {
+                    Ok(MiniAppApiRequest::Cores {
+                        identity,
+                        chat_id,
+                        reply,
+                    })
+                })
+            }
+            (&Method::POST, "/api/balances") => {
+                self.handle_api(request, |identity, chat_id, _body, reply| {
+                    Ok(MiniAppApiRequest::Balances {
+                        identity,
+                        chat_id,
+                        reply,
+                    })
+                })
+            }
+            (&Method::POST, "/api/orders") => {
+                self.handle_api(request, |identity, chat_id, _body, reply| {
+                    Ok(MiniAppApiRequest::Orders {
+                        identity,
+                        chat_id,
+                        reply,
+                    })
+                })
+            }
+            (&Method::POST, "/api/order/cancel") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<CancelOrderBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    Ok(MiniAppApiRequest::CancelOrder {
+                        identity,
+                        chat_id,
+                        core: parsed.core,
+                        uid: parsed.uid,
+                        reply,
+                    })
+                })
+            }
+            (&Method::POST, "/api/panic") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<PanicSellBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    if parsed.market.len() > MAX_MARKET_BYTES {
+                        return Err(status_response(StatusCode::BAD_REQUEST, "json"));
+                    }
+                    Ok(MiniAppApiRequest::PanicSell {
+                        identity,
+                        chat_id,
+                        core: parsed.core,
+                        market: parsed.market,
+                        on: parsed.on,
+                        reply,
+                    })
+                })
+            }
+            (&Method::GET, "/api/session")
+            | (
+                &Method::GET,
+                "/api/report" | "/api/cores" | "/api/balances" | "/api/orders"
+                | "/api/order/cancel" | "/api/panic",
+            )
+            | (&Method::HEAD, "/")
+            | (&Method::OPTIONS, _) => status_response(StatusCode::METHOD_NOT_ALLOWED, "method"),
             _ => {
                 if matches!(
                     request.method(),
@@ -296,6 +483,73 @@ impl App {
         }
     }
 
+    /// Authenticate one JSON API route and wait for a typed consumer reply.
+    ///
+    /// Args:
+    ///     request: POST whose body is a JSON object and whose header carries initData.
+    ///     build: Turns the signed identity and that object into one [`MiniAppApiRequest`].
+    ///         An `Err` skips the consumer and becomes the HTTP response.
+    ///
+    /// Returns:
+    ///     `200` and the typed JSON on success. `Rejected` and `Forbidden` are both
+    ///     `403 rejected`. `ReadFailed` is `500 read_failed`, `Busy` is `503 busy`,
+    ///     `NotFound` is `404 not_found`, a late reply is `504 timeout`, and a dropped
+    ///     or full channel is `503 unavailable`.
+    ///
+    /// [`handle_session`] stays on its own path so its `403` source line is unchanged.
+    fn handle_api<T: Serialize>(
+        &self,
+        request: Request<Body>,
+        build: impl FnOnce(
+            SignedInitData,
+            i64,
+            Value,
+            SyncSender<Result<T, MiniAppApiError>>,
+        ) -> Result<MiniAppApiRequest, Response<Body>>,
+    ) -> Response<Body> {
+        let (identity, chat_id) = match self.authenticate(&request) {
+            Ok(parts) => parts,
+            Err(response) => return response,
+        };
+        if let Err(response) = require_json_content_type(request.headers()) {
+            return response;
+        }
+        let body = match read_limited_json_object(request) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        let event = match build(identity, chat_id, body, reply_tx) {
+            Ok(event) => event,
+            Err(response) => return response,
+        };
+        match self.events_tx.try_send(event) {
+            Ok(()) => {}
+            Err(_) => return status_response(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+        }
+        match reply_rx.recv_timeout(API_REPLY_TIMEOUT) {
+            Ok(Ok(value)) => json_response(StatusCode::OK, value),
+            Ok(Err(MiniAppApiError::Rejected | MiniAppApiError::Forbidden)) => {
+                status_response(StatusCode::FORBIDDEN, "rejected")
+            }
+            Ok(Err(MiniAppApiError::ReadFailed)) => {
+                status_response(StatusCode::INTERNAL_SERVER_ERROR, "read_failed")
+            }
+            Ok(Err(MiniAppApiError::Busy)) => {
+                status_response(StatusCode::SERVICE_UNAVAILABLE, "busy")
+            }
+            Ok(Err(MiniAppApiError::NotFound)) => {
+                status_response(StatusCode::NOT_FOUND, "not_found")
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                status_response(StatusCode::GATEWAY_TIMEOUT, "timeout")
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                status_response(StatusCode::SERVICE_UNAVAILABLE, "unavailable")
+            }
+        }
+    }
+
     /// Validate initData HMAC and paired identity. Body is not consumed.
     // Failures are HTTP responses. Boxing `Response<Body>` would change every `?` on this path.
     #[allow(clippy::result_large_err)]
@@ -308,9 +562,6 @@ impl App {
             .get(INIT_DATA_HEADER)
             .and_then(|value| value.to_str().ok())
             .ok_or_else(|| status_response(StatusCode::UNAUTHORIZED, "missing_init_data"))?;
-        if init_data.len() > MAX_HEADER_BYTES {
-            return Err(status_response(StatusCode::PAYLOAD_TOO_LARGE, "init_data"));
-        }
         let signed = verify_init_data(init_data, self.token.expose(), now_unix_secs())
             .map_err(|error| status_response(auth_status(error), auth_reason(error)))?;
         let chat_id = authorize_paired_identity(&signed, &self.authorized_chat_ids)
@@ -354,7 +605,7 @@ fn check_peer_and_headers(headers: &HeaderMap, host: Option<&str>) -> Result<(),
         .or(host)
     {
         let host_only = host_header.split(':').next().unwrap_or(host_header);
-        if host_only != "127.0.0.1" && host_only != "localhost" && host_only != "[::1]" {
+        if host_only != "127.0.0.1" && host_only != "localhost" {
             return Err(StatusCode::FORBIDDEN);
         }
     }
@@ -469,3 +720,6 @@ fn static_response(content_type: &'static str, body: &str) -> Response<Body> {
         .body(Body::from(body.as_bytes().to_vec()))
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
+
+#[cfg(test)]
+mod tests;

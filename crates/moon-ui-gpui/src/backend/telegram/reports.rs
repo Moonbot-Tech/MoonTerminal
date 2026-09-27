@@ -281,6 +281,151 @@ fn read_page_on(
     })
 }
 
+/// One Mini App report: the period total plus every exchange, core, and day on that snapshot.
+pub(super) struct MiniReport {
+    /// Inclusive window start, unix seconds.
+    pub from: i64,
+    /// Inclusive window end, unix seconds.
+    pub to: i64,
+    /// Display zone the day buckets were cut in.
+    pub zone: Tz,
+    /// Period total over the accessible cores.
+    pub total: QuoteBreakdown,
+    /// Active exchanges: stable key, caption, money.
+    pub by_exchange: Vec<(String, String, QuoteBreakdown)>,
+    /// Active cores: id key, caption, money.
+    pub by_core: Vec<(String, String, QuoteBreakdown)>,
+    /// Every calendar day in the window, including days with no trades.
+    pub days: Vec<(String, QuoteBreakdown)>,
+}
+
+/// Read a Mini App report on one snapshot, the same connection `read_page` uses.
+///
+/// Owner sees every core (an empty id list). A viewer whose cores do not intersect the
+/// snapshot is queried with [`moon_core::config::NO_MATCH_CORE_UID`], so empty does not mean all.
+/// Exchange and core rows keep the chat report's activity filter. Days keep every date in the window.
+///
+/// Args:
+///     from: Inclusive window start, unix seconds.
+///     to: Inclusive window end, unix seconds.
+///     zone: Display zone for the day buckets and the report axis.
+///     order: Canonical core order.
+///     venues: Live venue of each core id.
+///     access: Chat grant captured at admission.
+///
+/// Returns:
+///     The four breakdowns, or the database error. A successful empty period is not an error.
+pub(super) fn read_mini_report(
+    from: i64,
+    to: i64,
+    zone: Tz,
+    order: CoreOrder,
+    venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+    access: TelegramReportAccess,
+) -> db::ReadResult<MiniReport> {
+    let conn = db::open_reader()?;
+    let snap = db::read_snapshot(&conn)?;
+    let mut cores = db::distinct_cores(&snap)?;
+    order.sort_by(&mut cores, |(id, _)| *id);
+    if let TelegramReportAccess::Viewer(allowed) = &access {
+        cores.retain(|(id, _)| allowed.contains(id));
+    }
+    let scoped_ids = if access == TelegramReportAccess::Owner {
+        Vec::new()
+    } else if cores.is_empty() {
+        vec![moon_core::config::NO_MATCH_CORE_UID]
+    } else {
+        cores.iter().map(|(id, _)| *id).collect()
+    };
+    let filter = ReportFilter {
+        core_uids: scoped_ids,
+        date_from: Some(from),
+        date_to: Some(to),
+        emulator: Some(false),
+        rows: RowScope::Closed,
+        axis: db::ReportAxis::load(&snap, zone)?,
+        ..Default::default()
+    };
+    let total = db::query_totals(&snap, &filter)?.quotes;
+    let mut by_exchange = Vec::new();
+    for (venue, members) in crate::core_order::exchange_sections(
+        cores
+            .iter()
+            .enumerate()
+            .map(|(index, (id, _))| (index, venues.get(id))),
+    ) {
+        let mut group = filter.clone();
+        group.core_uids = members.iter().map(|&index| cores[index].0).collect();
+        let quotes = db::query_totals(&snap, &group)?.quotes;
+        if quotes.orders > 0 {
+            by_exchange.push((
+                exchange_key(venue),
+                crate::controls::venue_section_label(venue),
+                quotes,
+            ));
+        }
+    }
+    let mut by_core = Vec::new();
+    for (id, name) in &cores {
+        let mut core = filter.clone();
+        core.core_uids = vec![*id];
+        let quotes = db::query_totals(&snap, &core)?.quotes;
+        if quotes.orders > 0 {
+            by_core.push((id.to_string(), name.clone(), quotes));
+        }
+    }
+    let mut days = Vec::new();
+    if let (Some(mut date), Some(end)) =
+        (display_time::date(from, zone), display_time::date(to, zone))
+    {
+        let span = (end - date).num_days();
+        if !(0..370).contains(&span) {
+            return Err(db::ReadFail::failed(
+                db::FailKind::Other,
+                "telegram report calendar range is invalid",
+                moon_core::config::paths::reports_db_path(),
+                "telegram: calendar range",
+                db::FailCode::None,
+            ));
+        }
+        for _ in 0..=span {
+            let Some(next) = date.checked_add_days(Days::new(1)) else {
+                break;
+            };
+            if let (Some(start), Some(stop)) = (
+                display_time::day_start(date, zone),
+                display_time::day_start(next, zone),
+            ) {
+                let mut day = filter.clone();
+                day.date_from = Some(start.max(from));
+                day.date_to = Some((stop - 1).min(to));
+                days.push((date.to_string(), db::query_totals(&snap, &day)?.quotes));
+            }
+            date = next;
+        }
+    }
+    Ok(MiniReport {
+        from,
+        to,
+        zone,
+        total,
+        by_exchange,
+        by_core,
+        days,
+    })
+}
+
+/// Stable exchange key shared by the Mini App row and independent of the localized caption.
+fn exchange_key(venue: Option<&moon_core::venue::CoreVenue>) -> String {
+    match scope_of(venue) {
+        moon_core::telegram::report::ReportScope::Venue(id) => {
+            format!("{:x}.{:x}", id.code, id.dex)
+        }
+        moon_core::telegram::report::ReportScope::Unidentified
+        | moon_core::telegram::report::ReportScope::All => "unidentified".to_string(),
+    }
+}
+
 /// Exchange buttons always list every active venue the chat can see, including from a scoped view.
 fn exchange_drilldowns(
     snap: &rusqlite::Transaction<'_>,

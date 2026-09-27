@@ -2,8 +2,8 @@
 //!
 //! Pure, GPUI-free and theme-free: every function here is a function of the row alone, so the
 //! surfaces that state money about an open order all quote the SAME arithmetic. Today those are
-//! the Orders table's PNL / PNL % / PNL TP cells, the Orders sort comparator, and the chart's
-//! open-order overlay.
+//! the Orders table's PNL / PNL % / PNL TP cells, the Orders sort comparator, the chart's
+//! open-order overlay, and the Mini App order row.
 //!
 //! The estimates live in the UI crate rather than beside [`OrderRow`] in `moon-core` on purpose:
 //! the wire carries no server PnL, so this is what the TERMINAL computes to match what the Assets

@@ -174,6 +174,21 @@ fn usd_grouped_is_one_precision_for_every_amount_surface() {
     assert_eq!(usd_grouped(-1234.0), "-1 234.0");
 }
 
+/// `fmt.rs:usd_grouped_cents` must keep the hundredths the Mini App balance rows
+/// line up on. The hero total and the per-exchange figures share this text.
+///
+/// Breakage: routing the call through `usd_grouped` (or `usd`). `10 000.00`
+/// becomes `10 000.0` and `1 613 658.50` becomes `1 613 658.5`, which is the
+/// mixed-decimal Balances tab.
+#[test]
+fn usd_grouped_cents_keeps_two_decimals_on_every_amount() {
+    assert_eq!(usd_grouped_cents(1_613_658.5), "1 613 658.50");
+    assert_eq!(usd_grouped_cents(10_000.0), "10 000.00");
+    assert_eq!(usd_grouped_cents(170_293.47), "170 293.47");
+    assert_eq!(usd_grouped_cents(-1_234.0), "-1 234.00");
+    assert_eq!(usd_grouped_cents(f64::NAN), "0.00");
+}
+
 #[test]
 fn pct_shares_the_signed_rounding_without_the_sign() {
     assert_eq!(pct(2.04, 1).unwrap().0, "2.0%");

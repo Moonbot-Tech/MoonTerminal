@@ -22,6 +22,7 @@ mod detects;
 mod dock_chrome;
 mod fonts;
 mod log;
+mod mini_app;
 mod naming;
 mod report;
 mod shared_config;
