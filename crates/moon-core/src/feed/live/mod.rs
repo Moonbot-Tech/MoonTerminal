@@ -345,6 +345,7 @@ use convert::{
     profit_state_from_proto, runtime_state_from_proto, settings_event_snapshot,
     sys_status_from_proto, telegram_from_proto,
 };
+pub use convert::{percentage_stop_price, percentage_take_price};
 use deadline::CoalescedDeadline;
 use dirty::market_dirty_from_events;
 pub(in crate::feed) use market_role::MarketRoleState;

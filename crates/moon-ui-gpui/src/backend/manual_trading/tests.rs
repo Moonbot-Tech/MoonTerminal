@@ -422,14 +422,22 @@ fn a_planned_sell_target_mirrors_for_a_short() {
     let long = planned_sell_price(100.0, 2.0, false).expect("a long target");
     let short = planned_sell_price(100.0, 2.0, true).expect("a short target");
     assert!((long - 102.0).abs() < 1e-9, "long target {long}");
-    assert!((short - 98.0).abs() < 1e-9, "short target {short}");
+    assert!((short - 100.0 / 1.02).abs() < 1e-9, "short target {short}");
+    // The core divides a short's per cent off the buy; the long keeps its product.
+    for pct in [1.0_f64, 2.5, 10.0] {
+        let gain = 1.0 + pct / 100.0;
+        let short = planned_sell_price(100.0, pct, true).expect("short");
+        let long = planned_sell_price(100.0, pct, false).expect("long");
+        assert!((short - 100.0 / gain).abs() < 1e-9, "short +{pct}% {short}");
+        assert!((long - 100.0 * gain).abs() < 1e-9, "long +{pct}% {long}");
+    }
 
     // No percentage set, or nonsense input: no target, which the wire spells as zero.
     assert_eq!(planned_sell_price(100.0, 0.0, false), None);
     assert_eq!(planned_sell_price(0.0, 2.0, false), None);
     assert_eq!(planned_sell_price(100.0, f64::NAN, false), None);
-    // A short cannot be asked for 100% down: that is a target of zero.
-    assert_eq!(planned_sell_price(100.0, 100.0, true), None);
+    // A short of 100% divides by two rather than reaching zero.
+    assert_eq!(planned_sell_price(100.0, 100.0, true), Some(50.0));
 }
 
 /// Regression target: a manual order with a strategy takes its stop FROM THE STRATEGY, so the stop
@@ -440,12 +448,42 @@ fn a_visible_stop_becomes_an_absolute_price_on_the_correct_side() {
     let long = stop_price(100.0, -3.0, false).expect("a long stop");
     let short = stop_price(100.0, -3.0, true).expect("a short stop");
     assert!((long - 97.0).abs() < 1e-9, "long stop {long}");
-    assert!((short - 103.0).abs() < 1e-9, "short stop {short}");
+    assert!((short - 100.0 / 0.97).abs() < 1e-9, "short stop {short}");
 
     // Nothing usable: the order keeps whatever the core would have applied.
     assert_eq!(stop_price(100.0, 0.0, false), None);
     assert_eq!(stop_price(0.0, -3.0, false), None);
     assert_eq!(stop_price(100.0, -100.0, false), None);
+    // A short of 100% used to become entry * 2. The divisor is not positive, so there is no price.
+    assert_eq!(stop_price(100.0, -100.0, true), None);
+}
+
+/// A short's manual stop is the price the core would arm, sent as a fixed level.
+///
+/// The per-order write does not send a percentage: the core would resolve that from the
+/// strategy this write exists to override. `StopLoss = -pct` on a short is
+/// `entry / (1 - pct/100)`. At -2.5%, -5% and -10% of 100 that is 102.564, 105.263 and
+/// 111.111. The mirrored product sits closer to the entry. A long stays
+/// `entry * (1 - pct/100)`.
+///
+/// Mutation: multiply the short by `(1 + pct/100)`. The order's fixed stop is inside the
+/// core's trigger and these three distances go red.
+///
+/// Returns:
+///     Nothing; each short matches the division and each long is unchanged.
+#[test]
+fn a_short_manual_stop_matches_the_core_division() {
+    let entry = 100.0;
+    for (pct, keep) in [(2.5_f64, 0.975), (5.0, 0.95), (10.0, 0.9)] {
+        let short = stop_price(entry, -pct, true).expect("short");
+        let long = stop_price(entry, -pct, false).expect("long");
+        assert!((short - entry / keep).abs() < 1e-9, "short -{pct}% {short}");
+        assert!((long - entry * keep).abs() < 1e-9, "long -{pct}% {long}");
+    }
+    // buyPrice 0.22650 stop -2.50% => 0.23231, which is the division rounded to five decimals.
+    let logged = stop_price(0.22650, -2.5, true).expect("logged short");
+    assert!((logged - 0.22650 / 0.975).abs() < 1e-12, "{logged}");
+    assert!((logged - 0.23231).abs() < 5e-6, "{logged}");
 }
 
 /// Regression target: treating an EMPTY list as a confirmed answer. The feed publishes an empty

@@ -106,12 +106,20 @@ fn a_percentage_stop_level_is_not_drawn_as_a_price() {
     // above a long's entry it cannot be that long's stop price.
     let mid = stop_loss_line_price(2.0, false, false, 10.65, true).expect("percent resolves");
     assert!((mid - 2.0 * (1.0 - 0.1065)).abs() < 1e-9, "got {mid}");
-    // A short takes the percent to the other side of the entry, on both price scales.
+    // A short takes the percent to the other side of the entry by the core's division,
+    // `entry / (1 - p/100)`, on both price scales. The mirrored product `entry * 1.1065`
+    // is the price this must not draw.
     let short = stop_loss_line_price(entry, true, false, 10.65, true).expect("percent resolves");
-    assert!((short - entry * 1.1065).abs() < 1e-12);
+    assert!(
+        (short - entry / (1.0 - 0.1065)).abs() < 1e-12,
+        "got {short}"
+    );
     let short_mid =
         stop_loss_line_price(100.0, true, false, 10.65, true).expect("percent resolves");
-    assert!((short_mid - 110.65).abs() < 1e-9, "got {short_mid}");
+    assert!(
+        (short_mid - 100.0 / (1.0 - 0.1065)).abs() < 1e-9,
+        "got {short_mid}"
+    );
 }
 
 /// Before the fill the level is a percent whatever it looks like, with no plausibility test.
@@ -208,27 +216,73 @@ fn the_price_diagnostic_measures_like_the_chart_label() {
     assert_eq!(stop_distance_pct(None, 100.0, false), None);
 }
 
-/// A short's percentage stop reported with the long formula is mirrored back above the entry.
+/// A short's percentage stop reported with the long formula is restated with the core's division.
 ///
 /// The 2026-07-17 report: a market short drew its stop on the take-profit side while Moonbot showed
 /// it above the entry, and the core's own `StopLoss applied` line confirmed the higher trigger.
+/// 97 under an entry of 100 is the long formula at -3%. The core's short for that percent is
+/// `100 / 0.97`, not the symmetric mirror 103.
 ///
-/// Mutation: drop the mirror. A short's stop returns to the profit side, where it reads as a
-/// protective level that would never trigger.
+/// Mutation: restore `2 * entry - level`, or drop the restatement. The line lands on 103, or back
+/// on the profit side, where it reads as a protective level that would never trigger.
 ///
 /// Returns:
-///     Nothing; a short's stop price stays above its entry.
+///     Nothing; a short's stop price stays above its entry, on the division.
 #[test]
-fn a_short_stop_reported_below_entry_is_mirrored() {
-    assert_eq!(
-        stop_loss_line_price(100.0, true, false, 97.0, true),
-        Some(103.0)
-    );
+fn a_short_stop_reported_below_entry_is_restated_with_the_division() {
+    let price = stop_loss_line_price(100.0, true, false, 97.0, true).expect("restated");
+    assert!((price - 100.0 / 0.97).abs() < 1e-9, "got {price}");
     // Fixed levels are left alone: a dragged stop may sit anywhere on purpose.
     assert_eq!(
         stop_loss_line_price(100.0, true, true, 97.0, true),
         Some(97.0)
     );
+}
+
+/// A short's percentage stop is the core's division at the distances the logs disagree on.
+///
+/// `StopLoss applied (buyPrice 0.22650 stop -2.50% => 0.23231)` is `0.22650 / 0.975`. The
+/// mirrored product is `0.22650 * 1.025`, and the same gap at -5% and -10% is what a manual
+/// order and the chart line were both sending. A long stays `entry * (1 - pct/100)`. A price
+/// the core has already resolved with the division sits above the entry and is drawn as reported.
+///
+/// Mutation: multiply a short by `(1 + pct/100)`. The three distances go red and the chart line
+/// sits inside the trigger the core arms.
+///
+/// Returns:
+///     Nothing; each distance matches the division, and a long is unchanged.
+#[test]
+fn a_short_percentage_stop_uses_the_cores_division() {
+    let entry = 100.0;
+    for (pct, keep) in [(2.5_f64, 0.975), (5.0, 0.95), (10.0, 0.9)] {
+        let short = stop_loss_line_price(entry, true, false, pct, false).expect("unfilled short");
+        let long = stop_loss_line_price(entry, false, false, pct, false).expect("unfilled long");
+        assert!((short - entry / keep).abs() < 1e-9, "short -{pct}% {short}");
+        assert!((long - entry * keep).abs() < 1e-9, "long -{pct}% {long}");
+        // Filled, but the percent is not a plausible price beside this entry, so the same
+        // conversion runs.
+        let filled = stop_loss_line_price(entry, true, false, pct, true).expect("filled short");
+        assert!(
+            (filled - short).abs() < 1e-12,
+            "filled short -{pct}% {filled}"
+        );
+        let helper = percentage_stop_price(entry, -pct, true).expect("helper");
+        assert!(
+            (helper - entry / keep).abs() < 1e-9,
+            "helper -{pct}% {helper}"
+        );
+    }
+    // The logged core line, rounded to five decimals, is the division and not the mirror.
+    let logged = percentage_stop_price(0.22650, 2.5, true).expect("logged short");
+    assert!((logged - 0.22650 / 0.975).abs() < 1e-12, "{logged}");
+    assert!((logged - 0.23231).abs() < 5e-6, "{logged}");
+    let resolved = 0.22650 / 0.975;
+    assert_eq!(
+        stop_loss_line_price(0.22650, true, false, resolved, true),
+        Some(resolved)
+    );
+    // A short of 100% has no positive divisor.
+    assert_eq!(stop_loss_line_price(entry, true, false, 100.0, false), None);
 }
 
 /// A key the exchange reports NO expiration for answers successfully with `is_known() == false`,
@@ -662,4 +716,22 @@ fn conn_fault_bind_failure_counts_sweeps_and_keeps_its_startup() {
     assert_eq!(fault.startup.current_local_udp_port, Some(31_111));
     assert_eq!(fault.startup.current_port_sent_packets, 4);
     assert_eq!(fault.startup.current_port_received_packets, 7);
+}
+
+#[test]
+fn a_short_percentage_take_uses_the_cores_division() {
+    let entry = 100.0;
+    for pct in [1.0_f64, 2.5, 10.0] {
+        let gain = 1.0 + pct / 100.0;
+        let short = percentage_take_price(entry, pct, true).expect("short");
+        let long = percentage_take_price(entry, pct, false).expect("long");
+        assert!((short - entry / gain).abs() < 1e-9, "short +{pct}% {short}");
+        assert!((long - entry * gain).abs() < 1e-9, "long +{pct}% {long}");
+    }
+    // The site's example: a short's take of +50 % at 100 stands at 66.6.
+    let site = percentage_take_price(100.0, 50.0, true).expect("site");
+    assert!((site - 200.0 / 3.0).abs() < 1e-9, "{site}");
+    assert_eq!(percentage_take_price(entry, 0.0, true), None);
+    assert_eq!(percentage_take_price(0.0, 2.0, false), None);
+    assert_eq!(percentage_take_price(entry, f64::NAN, true), None);
 }
