@@ -165,6 +165,60 @@ fn disclosure_run(app: &App, step: f32) -> Pixels {
     design::ui_px(app, design::DISCLOSURE_BOX + step) + design::ui_px(app, HEADING_GAP)
 }
 
+/// Pane inset before depth zero, in design units. Shared with [`tree_row_indent`].
+const TREE_INDENT_INSET: f32 = 6.0;
+/// One tree level, in design units. Kept equal to the historical `12.0 * depth` step.
+const TREE_INDENT_STEP: f32 = 12.0;
+
+/// Leading inset of a tree row at `depth`, in design units.
+///
+/// Args:
+///     depth: Nesting level from the tree entry. Zero is the first row in the pane.
+///
+/// Returns:
+///     Unscaled x of the row content. [`design::ui_px`] applies UI zoom later, once.
+fn tree_row_indent(depth: f32) -> f32 {
+    TREE_INDENT_INSET + TREE_INDENT_STEP * depth
+}
+
+/// Unscaled x of a heading caret, in design units from the pane's left edge.
+///
+/// A folder used to subtract `DISCLOSURE_BOX + step` from this whenever it also
+/// drew an icon. That box is the same 12 units as [`TREE_INDENT_STEP`], so the
+/// folder caret landed on its core's caret, and a larger text step moved it
+/// further left. The icon no longer shares the caret slot, so neither input
+/// moves the box: a child one level deeper stays exactly one step to the right
+/// at every text size. UI zoom is a later [`design::ui_px`] of this value.
+///
+/// Args:
+///     depth: Nesting level of the heading row.
+///     has_icon: Whether the row draws a folder mark. Must not move the caret.
+///     step: Local unscaled text-size step. Must not move the caret.
+///
+/// Returns:
+///     Left edge of the caret box.
+fn disclosure_caret_x(depth: f32, has_icon: bool, step: f32) -> f32 {
+    // Both inputs stay in the signature so the row cannot stop passing them.
+    // Neither is allowed to become a shift again.
+    let _ = (has_icon, step);
+    tree_row_indent(depth)
+}
+
+/// Design-unit shift of the caret glyph from the left of its own depth slot.
+///
+/// The slot is already padded by [`tree_row_indent`], so this is the glyph's
+/// `left`. It is whatever [`disclosure_caret_x`] adds on top of that indent.
+///
+/// Args:
+///     has_icon: Whether the row draws a folder mark.
+///     step: Local unscaled text-size step.
+///
+/// Returns:
+///     `0.0` while the caret stays on its own level.
+fn disclosure_caret_shift(has_icon: bool, step: f32) -> f32 {
+    disclosure_caret_x(0.0, has_icon, step) - tree_row_indent(0.0)
+}
+
 /// Data for one tree row, looked up by node ID from `render_row` and decorators.
 pub(crate) enum NodeData {
     /// Always-expanded, non-interactive heading for one canonical exchange section.
@@ -1214,7 +1268,7 @@ fn render_row(
     // preference change is never served stale.
     let step = view.read(app).prefs.tree_text_step;
     let depth = entry.depth();
-    let indent = design::ui_px(app, 6.0 + 12.0 * depth as f32);
+    let indent = design::ui_px(app, tree_row_indent(depth as f32));
     let node_id = entry.item().id().clone();
     let Some(node) = data.get(entry.item().id()) else {
         return div().into_any_element();
@@ -1672,6 +1726,12 @@ fn core_folder_row(
     let counts_row_id = SharedString::from(format!("cnt:{row_id}"));
     let view_click = view.clone();
     let view_menu = view.clone();
+    // Resolved before the row so the caret slot and the mark after the checkbox
+    // share one answer. The mark used to fill the caret slot and shove the glyph
+    // into the previous indent, which stacked a folder caret on its core.
+    let (folder_icon, caret) = heading_chrome(&target, fill, expanded);
+    let edge = design::ui_px(app, design::DISCLOSURE_BOX + step);
+    let caret_left = design::ui_px(app, disclosure_caret_shift(folder_icon.is_some(), step));
     h_flex()
         // The node's own id, NEVER the rendered text. GPUI keeps `pending_mouse_down` in element
         // state looked up by `ElementId`, so an id derived from the caption ("core  3/10  (2)")
@@ -1691,32 +1751,21 @@ fn core_folder_row(
         .when(!selected, |s| {
             s.hover(move |s| s.bg(moon_alpha(p.panel, 0.74)))
         })
-        .child({
-            let (icon, caret) = heading_chrome(&target, fill, expanded);
-            let edge = design::ui_px(app, design::DISCLOSURE_BOX + step);
-            // Reuse the disclosure slot for the bundled MoonUI folder icon. Its passive caret
-            // occupies preceding tree indentation, so checkbox and caption widths do not move.
+        .child(
             div()
                 .relative()
                 .flex_none()
                 .size(edge)
-                .when_some(icon, |slot, path| {
-                    slot.child(svg().path(path).size(edge).text_color(rgb(color)))
-                })
                 .when_some(caret, |slot, expanded| {
                     slot.child(
-                        div()
-                            .absolute()
-                            .left(if icon.is_some() { -edge } else { px(0.0) })
-                            .top_0()
-                            .child(
-                                MoonDisclosure::glyph(expanded)
-                                    .size(design::DISCLOSURE_GLYPH_MARKER + step)
-                                    .box_size(design::DISCLOSURE_BOX + step),
-                            ),
+                        div().absolute().left(caret_left).top_0().child(
+                            MoonDisclosure::glyph(expanded)
+                                .size(design::DISCLOSURE_GLYPH_MARKER + step)
+                                .box_size(design::DISCLOSURE_BOX + step),
+                        ),
                     )
-                })
-        })
+                }),
+        )
         .child(match check_target.filter(|_| fill.has_contents()) {
             Some((core, path, checked)) => {
                 checks::bulk_check(view, &check_row_id, core, path, checked)
@@ -1724,6 +1773,16 @@ fn core_folder_row(
             // Reserved rather than omitted, so this row's caption stays on the same control column
             // as every sibling at its depth.
             None => checks::bulk_check_slot(&check_row_id),
+        })
+        // Folder mark after the checkbox, in the same place a strategy row draws its
+        // status dot. The caret slot above stays one disclosure box wide, so the
+        // checkbox column does not move and strategy rows keep their indent.
+        .when_some(folder_icon, |row, path| {
+            row.child(
+                div()
+                    .flex_none()
+                    .child(svg().path(path).size(edge).text_color(rgb(color))),
+            )
         })
         .child(
             div().flex_1().min_w_0().truncate().child(
