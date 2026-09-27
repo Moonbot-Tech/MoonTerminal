@@ -56,6 +56,7 @@ fn stopped() -> Deal {
         hook_depth_pct: None,
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,
+        round_trip_ms: None,
         stop_anchor: None,
         delta_track: None,
         bars: None,
@@ -294,4 +295,155 @@ fn only_a_reproduced_trade_is_searched() {
     assert!(!fit_for_search(&verdict(Some(true), Some(false))));
     // An exit the model has no rule for is not a pass.
     assert!(!fit_for_search(&verdict(Some(true), None)));
+}
+
+// ---- the trailing's own anchor ---------------------------------------------------------------
+
+/// A spread quoted at each moment: the bid by a taker sell, the ask by a taker buy.
+fn quotes(points: &[(i64, f64, f64)]) -> Vec<Tick> {
+    points
+        .iter()
+        .flat_map(|&(t, bid, ask)| [sold(t, bid), tick(t, ask)])
+        .collect()
+}
+
+/// A 1 % trailing, the take far away, no stop, no latency.
+fn trailing() -> ExitParams {
+    ExitParams {
+        sell_price_pct: 50.0,
+        trailing_pct: -1.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    }
+}
+
+/// Up to a middle of 102.1, then down to 101.0: a 1 % trailing fires at the 6 450 arrival, a 2 %
+/// one never does.
+fn peak_and_fall() -> Vec<Tick> {
+    quotes(&[
+        (100, 100.0, 100.2),
+        (3_000, 102.0, 102.2),
+        (5_000, 100.9, 101.1),
+        (9_000, 100.9, 101.1),
+    ])
+}
+
+/// A trade the trailing closed hands its firing only to a variant running the same trailing: a
+/// 2 % trailing, or none at all, sells where its own walk says — not at the fact's moment and price.
+#[test]
+fn a_different_trailing_does_not_inherit_the_facts_exit() {
+    let mut d = stopped();
+    d.sell_reason = "TrailingStop AutoActivated on price drop: ASK = 101.10 LastPrice = 101.00; \
+                     PeakPrice = 102.10"
+        .into();
+    d.close_ms = 3_900;
+    d.sell_price = 100.5;
+    d.stop_anchor = Some(StopAnchor::of(&d, &trailing(), None));
+    let fired = d.stop_anchor.and_then(|a| a.fired).expect("a stopped fact");
+    let ticks = peak_and_fall();
+    let own = walk(&d, &ticks, fact_fill(), 150.0, &trailing());
+    assert_eq!((own.exit.t_ms, own.exit.price), fired, "{own:?}");
+    for other in [
+        ExitParams {
+            trailing_pct: -2.0,
+            ..trailing()
+        },
+        ExitParams {
+            trailing_pct: 0.0,
+            ..trailing()
+        },
+    ] {
+        let w = walk(&d, &ticks, fact_fill(), 150.0, &other);
+        assert_ne!((w.exit.t_ms, w.exit.price), fired, "{other:?}: {w:?}");
+        assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd, "{other:?}: {w:?}");
+    }
+}
+
+/// A trade no stop closed proves quiet only the stops it ran: a variant with the same stop and a
+/// different trailing keeps its trailing live — it fires at 6 450 into the bid — while the
+/// fact's own trailing stays quiet to the close.
+#[test]
+fn the_stop_and_the_trailing_are_quiet_each_under_its_own_settings() {
+    let mut d = stopped();
+    d.sell_reason = "Auto Price Down".into();
+    d.close_ms = 60_000;
+    let fact = ExitParams {
+        trailing_pct: -3.0,
+        ..trailing()
+    };
+    d.stop_anchor = Some(StopAnchor::of(&d, &fact, None));
+    let ticks = peak_and_fall();
+    let w = walk(&d, &ticks, fact_fill(), 150.0, &trailing());
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 6_450), "{w:?}");
+    assert!((w.exit.price - 100.9).abs() < 1e-4, "{w:?}");
+    // The fact's own trailing is the one the close proves quiet.
+    d.stop_anchor = Some(StopAnchor::of(&d, &trailing(), None));
+    let w = walk(&d, &ticks, fact_fill(), 150.0, &trailing());
+    assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd, "{w:?}");
+}
+
+/// `StopLoss Market Sell` is the core's name for both groups' sale: the fact's firing goes to a
+/// variant only when its stop AND its trailing are the fact's.
+#[test]
+fn a_market_sell_hands_its_firing_only_when_both_groups_hold() {
+    let fact = ExitParams {
+        stop_loss_pct: -1.0,
+        fast_stop_loss: false,
+        ..trailing()
+    };
+    let mut d = stopped();
+    d.sell_reason = "StopLoss Market Sell".into();
+    d.stop_anchor = Some(StopAnchor::of(&d, &fact, None));
+    let ticks = quotes(&[(100, 99.9, 100.1), (9_000, 99.9, 100.1)]);
+    let own = walk(&d, &ticks, fact_fill(), 150.0, &fact);
+    assert_eq!(
+        (own.exit.kind, own.exit.t_ms, own.exit.price),
+        (ExitKind::Stop, 4_050, 97.0),
+        "{own:?}"
+    );
+    for other in [
+        ExitParams {
+            trailing_pct: -2.0,
+            ..fact
+        },
+        ExitParams {
+            stop_loss_pct: -2.0,
+            ..fact
+        },
+    ] {
+        let w = walk(&d, &ticks, fact_fill(), 150.0, &other);
+        assert_ne!(w.exit.kind, ExitKind::Stop, "{other:?}: {w:?}");
+    }
+}
+
+/// A fact whose take the core booked 3 s after the buy: its sell timers run from the booked take,
+/// so the first Price Down step lands at 4 000, not at 1 000 — the print at 2 500 is not a sale,
+/// the one at 4 500 is.
+#[test]
+fn a_late_booked_facts_sell_timers_run_from_the_booked_take() {
+    let p = ExitParams {
+        sell_price_pct: 1.0,
+        price_down_timer_s: 1.0,
+        price_down_pct: 50.0,
+        price_down_delay_s: 1.0,
+        price_down_allowed_drop_pct: 0.1,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    };
+    let mut d = stopped();
+    d.sell_reason = "Auto Price Down".into();
+    d.close_ms = 60_000;
+    let line = [(3_000, 101.0)];
+    d.stop_anchor = Some(StopAnchor::of(&d, &p, Some(&line)));
+    assert_eq!(d.stop_anchor.map(|a| a.entry_ms), Some(3_000));
+    let ticks = vec![tick(2_500, 100.6), tick(4_500, 100.6), tick(70_000, 100.0)];
+    let outcome = simulate(&d, &ticks, &EntryParams::Fact, &p, None);
+    let exit = outcome.exit.expect("an exit");
+    assert_eq!((exit.kind, exit.t_ms), (ExitKind::Line, 4_500), "{exit:?}");
 }

@@ -52,10 +52,11 @@ pub use params::{ParamGroup, ParamKind, TICK_PARAMS, TickParam};
 pub use record::{OwnLines, StopAnchor, entry_placement, fit_for_search, prepare_deal};
 pub use scope::{is_service_row, is_tunable};
 pub use search::{
-    PreparedDeal, SearchMiss, SearchParams, SearchResult, SearchStats, suggest, variant_tally,
+    PreparedDeal, SearchMiss, SearchParams, SearchResult, SearchStats, VariantScore, comparable,
+    fact_tally, suggest, variant_tally,
 };
 pub use settings::ModelSettings;
-pub use stats::{fact_stats, stats_of};
+pub use stats::{fact_stats, fact_tally_of, stats_of};
 pub use verify::{Verdict, verify};
 
 /// Relative tolerance under which a modelled price counts as reproducing the fact: 0.05 %.
@@ -282,6 +283,12 @@ pub struct Deal {
     /// one that moved the order, milliseconds — its replace round trip, calibrated by the caller
     /// off the core's own archived lines ([`calibrate`]); 0 runs the steps on the plain schedule.
     pub step_lag_ms: f64,
+    /// The deal's CORE's replace round trip, milliseconds — how long a re-placed entry order
+    /// takes to reach the exchange, calibrated by the caller off the core's own archived Entry
+    /// lines ([`calibrate::replace_round_trip_samples`]). The entry model replays the core's
+    /// re-places on it ([`mshot::entry_latency_ms`]); `None` — too few re-places archived, or no
+    /// caller calibrated it — runs them on the model settings' one latency.
+    pub round_trip_ms: Option<f64>,
     /// What the fact proves about the stop, for a variant that runs the same one
     /// ([`record::StopAnchor`]); filled with the rest of the model inputs, `None` before.
     pub stop_anchor: Option<StopAnchor>,
@@ -661,13 +668,27 @@ pub fn simulate(
     // An entry the tape shows filling only after a long position's hole began — on the first
     // print past it, most often — filled somewhere in the hole, or never: nobody holds the prints
     // that would say. The fact's own entry is at the buy, before any hole.
+    // The test reads the entry fill, not the booked take: whether the position was held into the
+    // hole is decided at entry — which is also why `Outcome::fill` stays unshifted on purpose.
     let exit_result = match &deal.gap {
         Some(gap) if fill.t_ms > gap.from_ms => Exit {
             t_ms: fill.t_ms,
             price: f64::NAN,
             kind: ExitKind::InGap,
         },
-        _ => ExitModel::new(exit).exit(deal, ticks, fill),
+        _ => {
+            // The fact's own entry times its sell from the booked take, as the core does
+            // (`record::StopAnchor::entry_ms`); a modelled entry keeps its own fill.
+            let sell_fill = if fill == fact_fill {
+                Fill {
+                    t_ms: deal.stop_anchor.map_or(fill.t_ms, |a| a.entry_ms),
+                    price: fill.price,
+                }
+            } else {
+                fill
+            };
+            ExitModel::new(exit).exit(deal, ticks, sell_fill)
+        }
     };
     let profit_pct = match exit_result.kind {
         ExitKind::OpenAtWindowEnd | ExitKind::InGap => None,

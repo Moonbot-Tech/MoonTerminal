@@ -211,8 +211,9 @@ impl AnalyticsView {
                     // The list differs from what the strategies hold — the same condition
                     // the coin table's "changed" badge and its Revert button read.
                     TunerKind::Coins => self.coins.has_changes(),
-                    // The first variant column holds something to write.
-                    TunerKind::Ticks => self.ticks.has_changes(),
+                    // The first variant column holds something to write, scored on enough
+                    // deals to recommend it; a thin one stays writable, unlit.
+                    TunerKind::Ticks => self.ticks.save_recommended(),
                 };
                 MoonButton::new(SharedString::from(format!("tun-save-{k}")))
                     .variant(if dirty {

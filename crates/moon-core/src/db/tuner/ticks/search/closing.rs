@@ -128,23 +128,5 @@ pub(super) fn closable_at_base(
     (kept, of_kept, left_open)
 }
 
-/// The tally of a point over `deals` — the deals it closed — and how many it bought and left
-/// open inside the tape, which the tally cannot hold.
-pub(super) fn tally_counting_open(
-    deals: &[PreparedDeal],
-    of_deal: &[usize],
-    params: &[(EntryParams, ExitParams)],
-) -> (Tally, usize) {
-    let mut tally = Tally::default();
-    let mut open = 0;
-    for (result, left_open) in results(deals, of_deal, params) {
-        open += usize::from(left_open);
-        if let Some((money, _)) = result {
-            tally.push(money);
-        }
-    }
-    (tally, open)
-}
-
 #[cfg(test)]
 mod tests;

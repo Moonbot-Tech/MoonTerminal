@@ -31,6 +31,7 @@ fn deal(uid: i64, buy_ms: i64, buy: f64, sell: f64, short: bool) -> Deal {
         hook_depth_pct: None,
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,
+        round_trip_ms: None,
         stop_anchor: None,
         delta_track: None,
         bars: None,
@@ -311,6 +312,9 @@ fn invalidate_stops_the_search_and_drops_the_variant_scores_but_keeps_the_edits(
         train: Default::default(),
         holdout: Some(Default::default()),
         holdout_open: 0,
+        fact_train: Default::default(),
+        fact_holdout: None,
+        holdout_loses: false,
         seed: 1,
         stats: Default::default(),
     });
@@ -531,4 +535,63 @@ fn a_percent_that_rounds_to_zero_is_unsigned() {
     let (text, sign) = paint_fixed(1.2, 2);
     assert_eq!(text, "+1.20");
     assert_eq!(sign, DeltaSign::Positive);
+}
+
+/// `n` fit rows whose tape is in memory — the set the search and the variant column replay.
+fn replayable_state(n: usize) -> TicksState {
+    let rows = (0..n)
+        .map(|i| DealRow {
+            deal: deal(i as i64 + 1, 1_000 * (i as i64 + 1), 100.0, 101.0, false),
+            tape: TapeStatus::Covered,
+            verdict: Some(verdict(Some(true), Some(true))),
+            address: None,
+            ticks: Some(tape_of(3)),
+            entry_line: None,
+            held: Some((60_000, 600_000)),
+        })
+        .collect();
+    let mut state = TicksState::default();
+    state.data.apply(Ok(TicksData {
+        rows,
+        ..TicksData::default()
+    }));
+    state
+}
+
+/// Under the floor the search buttons are off, with the count the line and tooltips name; at
+/// the floor they are on.
+#[test]
+fn the_search_is_off_under_the_deal_floor() {
+    use moon_core::db::tuner::ticks::search::MIN_SEARCH_DEALS;
+    assert_eq!(
+        replayable_state(MIN_SEARCH_DEALS - 1).search_too_few(),
+        Some(MIN_SEARCH_DEALS - 1)
+    );
+    assert_eq!(replayable_state(MIN_SEARCH_DEALS).search_too_few(), None);
+    assert_eq!(
+        TicksState::default().search_too_few(),
+        None,
+        "nothing loaded is not a refusal"
+    );
+}
+
+/// A hand-typed variant scored on too few deals keeps its changes, but "Save" does not light
+/// up as a recommendation; scored on enough, it does.
+#[test]
+fn a_variant_scored_on_too_few_deals_does_not_light_save() {
+    use moon_core::db::tuner::ticks::search::MIN_SEARCH_DEALS;
+    let mut state = TicksState::default();
+    state.set_variant("StopLoss", "-0.5".into());
+    assert!(
+        state.save_recommended(),
+        "not scored yet: nothing says thin"
+    );
+    state.var_stats = Some(moon_core::db::tuner::VarStats::default());
+    state.var_n = 4;
+    assert_eq!(state.variant_too_few(), Some(4));
+    assert!(state.has_changes());
+    assert!(!state.save_recommended());
+    state.var_n = MIN_SEARCH_DEALS;
+    assert_eq!(state.variant_too_few(), None);
+    assert!(state.save_recommended());
 }

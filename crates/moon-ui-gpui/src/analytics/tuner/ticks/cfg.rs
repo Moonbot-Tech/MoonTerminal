@@ -66,6 +66,7 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let running = matches!(self.ticks.sugg, SuggState::Running { .. });
+        let too_few = self.ticks.search_too_few();
         let (status, status_color) = match &self.ticks.sugg {
             // Counted against the restarts the run was launched with, not the box's current
             // text.
@@ -89,13 +90,21 @@ impl AnalyticsView {
             }
             // A note first; else how the last search went, so a restart or pass count that
             // changed nothing can be seen to have changed nothing.
-            SuggState::Idle => match (&self.ticks.sugg_note, &self.ticks.last_result) {
-                (Some(note), _) => (note.clone(), p.amber),
-                (None, Some(result)) => (
+            SuggState::Idle => match (&self.ticks.sugg_note, too_few, &self.ticks.last_result) {
+                (Some(note), _, _) => (note.clone(), p.amber),
+                // Too few deals to search: the buttons are off, and this line says why.
+                (None, Some(n), _) => (
+                    super::variants::miss_note(
+                        moon_core::db::tuner::ticks::search::SearchMiss::TooFew { n },
+                        0,
+                    ),
+                    p.amber,
+                ),
+                (None, None, Some(result)) => (
                     super::variants::search_stats_line(&result.stats),
                     p.text_muted,
                 ),
-                (None, None) => (String::new(), p.text_muted),
+                (None, None, None) => (String::new(), p.text_muted),
             },
         };
         super::variants::probe_painted(&status);
@@ -157,7 +166,9 @@ impl AnalyticsView {
                         MoonButton::new("tun-suggest-one-x")
                             .variant(MoonButtonVariant::Soft)
                             .label(t!("analytics.tuner.suggest_one").to_string())
-                            .disabled(running || self.ticks.sel_field.is_none())
+                            .disabled(
+                                running || too_few.is_some() || self.ticks.sel_field.is_none(),
+                            )
                             .on_click(
                                 cx.listener(|this, _, window, cx| {
                                     this.ticks_suggest_one(window, cx)
@@ -175,7 +186,7 @@ impl AnalyticsView {
                         MoonButton::new("tun-suggest-run-x")
                             .variant(MoonButtonVariant::Blue)
                             .label(t!("analytics.tuner.suggest_run").to_string())
-                            .disabled(running)
+                            .disabled(running || too_few.is_some())
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.ticks_suggest(window, cx)),
                             )

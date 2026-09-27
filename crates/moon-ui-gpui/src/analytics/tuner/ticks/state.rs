@@ -18,7 +18,7 @@ use moon_core::db::tuner::VarStats;
 use moon_core::db::tuner::threshold_search::SearchHandle;
 use moon_core::db::tuner::ticks::params::range::{FieldSpan, TickRange};
 use moon_core::db::tuner::ticks::params::{ParamGroup, ParamSection};
-use moon_core::db::tuner::ticks::search::SearchResult;
+use moon_core::db::tuner::ticks::search::{self, SearchResult};
 use moon_core::db::tuner::ticks::{Deal, Verdict, fit_for_search};
 use moon_core::market::trade_replay::TickStatus;
 
@@ -28,6 +28,10 @@ use moon_core::market::trade_replay::TickStatus;
 /// is — a group under the share may still be searched, its heading says the answer speaks for
 /// fewer trades (`TicksState::gate_pct`).
 pub(in crate::analytics::tuner) const DEFAULT_GATE_PCT: u32 = 80;
+
+/// The Entry/Exit axis holds 30 % back by default: a point fitted on the whole period has no
+/// out-of-sample check. The By-filter axis keeps its own default (`filter::state::DEFAULT_TRAIN`).
+pub(in crate::analytics::tuner) const TICKS_DEFAULT_TRAIN: usize = 70;
 
 /// Bytes of tape kept in memory across every fit row, for the variants and the search — what
 /// four million prints took before they were packed ([`PackedTape`]), which now holds three times
@@ -114,6 +118,7 @@ impl DealRow {
         self.deal.fact_modifier = answer.deal.fact_modifier;
         self.deal.entry_placed = answer.deal.entry_placed;
         self.deal.step_lag_ms = answer.deal.step_lag_ms;
+        self.deal.round_trip_ms = answer.deal.round_trip_ms;
         self.deal.stop_anchor = answer.deal.stop_anchor;
         self.deal.own_entry = answer.deal.own_entry;
         self.deal.gap = answer.deal.gap;
@@ -161,13 +166,13 @@ pub(in crate::analytics::tuner) struct TicksData {
     /// Trades the tuner cannot be run on — container or unresolved kinds, manual exits — in
     /// the Fact column, not in the table.
     pub(in crate::analytics::tuner) untunable: usize,
-    /// One column: the rows fit for the search ([`DealRow::fit`]) — the sample the variants
-    /// replay, and the baseline they are compared with. The whole scope is not shown: the axis
+    /// One column: the rows fit for the search ([`DealRow::fit`]) whose tape is in memory — the
+    /// sample the variants replay, and the baseline they are compared with. The whole scope is not shown: the axis
     /// works on the fit rows only (the developer's call, 2026-09-23).
     pub(in crate::analytics::tuner) kpi: Vec<VarStats>,
-    /// `(hits, answered)` of the entry group over the covered rows.
+    /// `(hits, total)` of the entry group over the covered rows, not-judged included.
     pub(in crate::analytics::tuner) entry_share: (usize, usize),
-    /// `(hits, answered)` of the exit group over the covered rows.
+    /// `(hits, total)` of the exit group over the covered rows, not-judged included.
     pub(in crate::analytics::tuner) exit_share: (usize, usize),
     /// The model's accuracy over every covered row — unjudged ones counted against it — for
     /// the line under the grid after a search (`accuracy.rs`).
@@ -290,7 +295,7 @@ impl TicksData {
             .then(|| self.share_of(group))
     }
 
-    /// `(hits, answered)` of one group over the covered rows.
+    /// `(hits, total)` of one group over the covered rows, not-judged included.
     pub(in crate::analytics::tuner) fn share_of(&self, group: ParamGroup) -> (usize, usize) {
         match group {
             ParamGroup::Entry => self.entry_share,
@@ -368,6 +373,20 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) var_stats: Option<VarStats>,
     /// How many replayable rows the variant KPI was computed over, for its caption.
     pub(in crate::analytics::tuner) var_n: usize,
+    /// Deals the variant bought and left open inside the tape: above zero its column is not
+    /// scored ([`super::variants`]).
+    pub(in crate::analytics::tuner) var_open: usize,
+    /// Deals the variant never bought — its entry did not fill.
+    pub(in crate::analytics::tuner) var_untraded: usize,
+    /// The fact over the very deals the variant was scored over — the replayable rows less
+    /// those the strategies as they stand leave open (`search::comparable`); `None` until a
+    /// variant is scored, when the "Fact" column shows the summary's value.
+    pub(in crate::analytics::tuner) set_fact: Option<VarStats>,
+    /// Replayable rows the strategies as they stand leave open, out of every column.
+    pub(in crate::analytics::tuner) base_open: usize,
+    /// The last cut of the sample (`search::comparable`), reused while its key holds: it
+    /// depends on the deals, the defaults, the kind and the model, never on the variant.
+    pub(in crate::analytics::tuner) cut_cache: Option<CutCache>,
     /// Generation of the variant KPI recompute; a stale completion is dropped.
     pub(in crate::analytics::tuner) var_seq: u64,
     /// The pending debounced recompute; dropping it cancels it.
@@ -411,6 +430,9 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) sugg_seq: u64,
     /// What the last completed search found, for the holdout caption.
     pub(in crate::analytics::tuner) last_result: Option<SearchResult>,
+    /// The variant's changes as the last search landed them: its verdict speaks for that
+    /// point alone ([`TicksState::current_result`]).
+    pub(in crate::analytics::tuner) result_variant: Vec<(String, String)>,
     /// The last search's failure to say anything, for the status line.
     pub(in crate::analytics::tuner) sugg_note: Option<String>,
     /// `TicksData::kpi` under the shape the shared matrix reads; applied together with `data`.
@@ -488,6 +510,11 @@ impl Default for TicksState {
             variant: HashMap::new(),
             var_stats: None,
             var_n: 0,
+            var_open: 0,
+            var_untraded: 0,
+            set_fact: None,
+            base_open: 0,
+            cut_cache: None,
             var_seq: 0,
             var_task: None,
             inputs: HashMap::new(),
@@ -498,7 +525,7 @@ impl Default for TicksState {
             sel_field: None,
             iters: String::new(),
             min_trades: String::new(),
-            train_pct: super::super::filter::state::DEFAULT_TRAIN,
+            train_pct: TICKS_DEFAULT_TRAIN,
             seed: String::new(),
             last_seed: None,
             passes: String::new(),
@@ -509,6 +536,7 @@ impl Default for TicksState {
             sugg: SuggState::Idle,
             sugg_seq: 0,
             last_result: None,
+            result_variant: Vec::new(),
             sugg_note: None,
             kpi: LoadState::default(),
             seq: 0,
@@ -534,6 +562,28 @@ impl Default for TicksState {
     }
 }
 
+/// What the comparable cut is keyed on: the rows' revision, each deal with its held trail, the
+/// kind, the model and the defaults — every input of `search::comparable` but the tapes, which
+/// the revision covers.
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::analytics::tuner) struct CutKey {
+    pub(in crate::analytics::tuner) rows_rev: u64,
+    pub(in crate::analytics::tuner) deals: Vec<(i64, i64)>,
+    pub(in crate::analytics::tuner) kind: String,
+    pub(in crate::analytics::tuner) model: moon_core::db::tuner::ticks::ModelSettings,
+    pub(in crate::analytics::tuner) defaults: Vec<(String, f64)>,
+}
+
+/// One cut of the sample: the deals kept, how many the base leaves open, and the fact over the
+/// kept ones.
+#[derive(Clone, Debug)]
+pub(in crate::analytics::tuner) struct CutCache {
+    pub(in crate::analytics::tuner) key: CutKey,
+    pub(in crate::analytics::tuner) kept: Arc<HashSet<i64>>,
+    pub(in crate::analytics::tuner) base_open: usize,
+    pub(in crate::analytics::tuner) fact: VarStats,
+}
+
 impl TicksState {
     /// The group gate as a fraction: the typed per cent, else [`DEFAULT_GATE_PCT`], within 0–100.
     pub(in crate::analytics::tuner) fn gate(&self) -> f64 {
@@ -549,11 +599,14 @@ impl TicksState {
     /// Take the persisted settings of the axis (`WindowLayout::analytics_ticks`).
     pub(in crate::analytics) fn restore(&mut self, saved: &moon_core::config::TicksAxisLayout) {
         self.iters = saved.iters.map(|n| n.to_string()).unwrap_or_default();
+        // A layout written before the 70 % default holds the old 100 % for everyone: it is
+        // not the user's choice, and the out-of-sample check reaches them once.
         self.train_pct = saved
             .train
+            .filter(|_| saved.train_v2)
             .map(|n| n as usize)
             .filter(|n| super::super::filter::state::TRAIN_OPTIONS.contains(n))
-            .unwrap_or(super::super::filter::state::DEFAULT_TRAIN);
+            .unwrap_or(TICKS_DEFAULT_TRAIN);
         self.seed = saved.seed.clone().unwrap_or_default();
         self.passes = saved.passes.map(|n| n.to_string()).unwrap_or_default();
         self.gate_pct = saved.gate_pct.map(|n| n.to_string()).unwrap_or_default();
@@ -581,6 +634,7 @@ impl TicksState {
         moon_core::config::TicksAxisLayout {
             iters: number(&self.iters),
             train: Some(self.train_pct as u32),
+            train_v2: true,
             seed: Some(self.seed.trim().to_string()).filter(|s| s.parse::<u64>().is_ok()),
             passes: number(&self.passes),
             gate_pct: number(&self.gate_pct),
@@ -631,7 +685,8 @@ impl TicksState {
         self.order = None;
         self.var_seq = self.var_seq.wrapping_add(1);
         self.var_task = None;
-        self.var_stats = None;
+        self.cut_cache = None;
+        self.clear_var_score();
         self.plan.clear();
         if let Some(data) = self.data.data_mut() {
             for row in &mut data.rows {
@@ -675,9 +730,41 @@ impl TicksState {
         out
     }
 
+    /// The last search's answer while the variant column still is its point — a hand edit since
+    /// makes its holdout verdict about some other point.
+    pub(in crate::analytics::tuner) fn current_result(&self) -> Option<&SearchResult> {
+        self.last_result
+            .as_ref()
+            .filter(|_| self.variant_changes() == self.result_variant)
+    }
+
     /// Whether the variant holds anything to write.
     pub(in crate::analytics::tuner) fn has_changes(&self) -> bool {
         !self.variant_changes().is_empty()
+    }
+
+    /// The replayable rows while they are too few to search ([`search::sample_floor`]): the
+    /// search buttons are off and the search row says why. `None` at or above the floor, and
+    /// while nothing is loaded.
+    pub(in crate::analytics::tuner) fn search_too_few(&self) -> Option<usize> {
+        let n = self.data.data()?.replayable().count();
+        search::sample_floor(n).is_err().then_some(n)
+    }
+
+    /// The deals the variant column was scored on while they are too few to recommend it
+    /// ([`search::sample_floor`]): its figures are not coloured as a gain and "Save" does not
+    /// light up. A hand-typed variant stays scored and writable.
+    pub(in crate::analytics::tuner) fn variant_too_few(&self) -> Option<usize> {
+        self.var_stats.as_ref()?;
+        search::sample_floor(self.var_n)
+            .is_err()
+            .then_some(self.var_n)
+    }
+
+    /// "Save" lights up: the variant holds something to write and was scored on enough deals
+    /// to be a recommendation.
+    pub(in crate::analytics::tuner) fn save_recommended(&self) -> bool {
+        self.has_changes() && self.variant_too_few().is_none()
     }
 
     /// Set one cell of the variant; an empty value clears it.
@@ -794,6 +881,16 @@ impl TicksState {
         self.order = None;
     }
 
+    /// Forget the variant's score and the deal set it was scored over.
+    pub(in crate::analytics::tuner) fn clear_var_score(&mut self) {
+        self.var_stats = None;
+        self.var_n = 0;
+        self.var_open = 0;
+        self.var_untraded = 0;
+        self.set_fact = None;
+        self.base_open = 0;
+    }
+
     /// Publish one loaded picture (or its failure) to both load states at once.
     pub(in crate::analytics::tuner) fn publish(
         &mut self,
@@ -872,9 +969,9 @@ impl TicksData {
     /// changed them. The shares stay over every covered row: they are how much of the tape the
     /// model reproduces, which is what the fit subset is cut from.
     pub(in crate::analytics::tuner) fn refresh_summary(&mut self) {
-        let subset = moon_core::db::tuner::ticks::fact_stats(
-            self.rows.iter().filter(|r| r.fit()).map(|r| &r.deal),
-        );
+        // Over the rows the variants replay, not every fit row: a fit row whose tape the cap
+        // let go is in no variant column, so it is in no "Fact" either.
+        let subset = moon_core::db::tuner::ticks::fact_stats(self.replayable().map(|r| &r.deal));
         self.kpi = vec![subset];
         let verdicts = || self.rows.iter().filter_map(|r| r.verdict.as_ref());
         self.entry_share = moon_core::db::tuner::ticks::verify::share(verdicts().map(|v| v.entry));

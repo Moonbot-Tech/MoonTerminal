@@ -60,6 +60,18 @@ struct Figure {
     signed: f64,
 }
 
+/// The cell of a column that is not scored, or of a figure that does not exist: "—".
+fn blank_figure() -> Figure {
+    Figure {
+        text: KpiCellText {
+            display: "—".to_string(),
+            tooltip: None,
+        },
+        tone: FigureTone::Muted,
+        signed: 0.0,
+    }
+}
+
 /// Paint one KPI from a column's stats.
 ///
 /// Avg loss and max drawdown are stored as positive magnitudes. They are shown as a negative
@@ -77,14 +89,7 @@ struct Figure {
 /// Returns:
 ///     Display text, optional exact tooltip, and the colour tone.
 fn figure_of(kind: MetricKind, stats: &VarStats) -> Figure {
-    let dash = || Figure {
-        text: KpiCellText {
-            display: "—".to_string(),
-            tooltip: None,
-        },
-        tone: FigureTone::Muted,
-        signed: 0.0,
-    };
+    let dash = blank_figure;
     let signed = |value: f64| Figure {
         text: format_kpi_cell(CellFormat::Profit, value),
         tone: FigureTone::Signed,
@@ -250,6 +255,13 @@ pub(super) struct VarLabel {
     pub(super) sub: Option<String>,
     /// Full heading, shown on hover when the visible label is shortened to one line.
     pub(super) tip: Option<String>,
+    /// The second line is a warning, drawn in the warn colour.
+    pub(super) sub_warn: bool,
+    /// The column cannot be scored: every cell reads "—" whatever its stats say.
+    pub(super) blank: bool,
+    /// The column is scored on too few deals to recommend: its signed figures are drawn
+    /// muted, never green as a gain.
+    pub(super) muted: bool,
 }
 
 impl VarLabel {
@@ -258,6 +270,9 @@ impl VarLabel {
             title,
             sub: None,
             tip: None,
+            sub_warn: false,
+            blank: false,
+            muted: false,
         }
     }
 
@@ -266,7 +281,42 @@ impl VarLabel {
             title,
             sub: Some(sub),
             tip: None,
+            sub_warn: false,
+            blank: false,
+            muted: false,
         }
+    }
+
+    /// Attach a visible second line.
+    ///
+    /// Args:
+    ///     sub: The line.
+    ///     warn: Whether it is a warning, drawn in the warn colour.
+    ///
+    /// Returns:
+    ///     The same label with the line.
+    pub(super) fn sub_line(mut self, sub: String, warn: bool) -> Self {
+        self.sub = Some(sub);
+        self.sub_warn = warn;
+        self
+    }
+
+    /// Mark the column as not scored: its cells read "—".
+    ///
+    /// Returns:
+    ///     The same label, blanked.
+    pub(super) fn blanked(mut self) -> Self {
+        self.blank = true;
+        self
+    }
+
+    /// Mark the column as scored on too few deals: its signed figures read muted.
+    ///
+    /// Returns:
+    ///     The same label, muted.
+    pub(super) fn muted(mut self) -> Self {
+        self.muted = true;
+        self
     }
 
     /// Attach the unabridged heading. The visible title stays short.
@@ -406,6 +456,8 @@ pub(super) fn kpi_matrix_card_over(
         .collect();
     // A second line only when some heading still carries one. A short title plus a tooltip
     // stays on one line, so a narrow pane does not wrap "2 of 2 with tape…" onto an ellipsis.
+    let blank: Vec<bool> = headings.iter().map(|label| label.blank).collect();
+    let muted: Vec<bool> = headings.iter().map(|label| label.muted).collect();
     let head_h = if headings.iter().any(|label| label.sub.is_some()) {
         34.0
     } else {
@@ -436,7 +488,11 @@ pub(super) fn kpi_matrix_card_over(
             .children(label.sub.map(|s| {
                 div()
                     .text_size(design::t_caption(cx))
-                    .text_color(moon(p.text_muted))
+                    .text_color(moon(if label.sub_warn {
+                        p.amber
+                    } else {
+                        p.text_muted
+                    }))
                     .truncate()
                     .child(s)
             }));
@@ -475,8 +531,13 @@ pub(super) fn kpi_matrix_card_over(
                     .child(label),
             );
         for (i, s) in stats.iter().enumerate() {
-            let figure = figure_of(kind, s);
+            let figure = if blank.get(i).copied().unwrap_or(false) {
+                blank_figure()
+            } else {
+                figure_of(kind, s)
+            };
             let color = match figure.tone {
+                FigureTone::Signed if muted.get(i).copied().unwrap_or(false) => p.text_muted,
                 FigureTone::Signed => sign_color(p, figure.signed),
                 FigureTone::Muted => p.text_muted,
                 FigureTone::Neutral => p.text,

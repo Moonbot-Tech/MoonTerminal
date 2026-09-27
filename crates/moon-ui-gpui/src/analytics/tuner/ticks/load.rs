@@ -951,6 +951,8 @@ pub(super) fn replay_row_with(
     );
     // The core's own clock for its PriceDown steps, as the last load calibrated it.
     row.deal.step_lag_ms = super::lags::step_lag_of(row.deal.core_uid);
+    // And its own replace round trip for the entry's re-places.
+    row.deal.round_trip_ms = super::lags::round_trip_of(row.deal.core_uid);
     row.verdict = Some(verify(
         &row.deal,
         &ticks,

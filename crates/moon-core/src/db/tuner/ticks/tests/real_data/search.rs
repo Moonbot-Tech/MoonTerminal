@@ -139,7 +139,7 @@ fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, 
     eprintln!("  own Delta Modifiers: {section:?}");
     // The whole sample, the strategies as they stand against the answer.
     let whole = |values: &[(String, String)]| {
-        let (tally, _) = variant_tally(&deals, defaults, kind, values, params.model);
+        let tally = variant_tally(&deals, defaults, kind, values, params.model).tally;
         (tally.n, (tally.profit * 1000.0).round() / 1000.0)
     };
     eprintln!(
@@ -148,7 +148,7 @@ fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, 
     );
     match answer {
         Ok(found) => eprintln!(
-            "  found {:?}\n  whole sample {:?} · train n {} profit {:.3} · holdout {:?} · {:?}",
+            "  found {:?}\n  whole sample {:?} · train n {} profit {:.3} · holdout {:?} · fact train n {} profit {:.3} · fact holdout {:?} · holdout loses {} · {:?}",
             found.values,
             whole(&found.values),
             found.train.n,
@@ -156,6 +156,12 @@ fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, 
             found
                 .holdout
                 .map(|t| (t.n, (t.profit * 1000.0).round() / 1000.0)),
+            found.fact_train.n,
+            found.fact_train.profit,
+            found
+                .fact_holdout
+                .map(|t| (t.n, (t.profit * 1000.0).round() / 1000.0)),
+            found.holdout_loses,
             found.stats
         ),
         Err(miss) => eprintln!("  no answer: {miss:?}"),
@@ -191,7 +197,7 @@ fn run_groups(
     );
     let model = ModelSettings::default();
     let whole = |values: &[(String, String)]| {
-        let (tally, _) = variant_tally(deals, defaults, kind, values, model);
+        let tally = variant_tally(deals, defaults, kind, values, model).tally;
         (tally.n, (tally.profit * 1000.0).round() / 1000.0)
     };
     // One training slice and one holdout for every point of the run: a search held over another's
@@ -203,7 +209,7 @@ fn run_groups(
     // search refuses such a point outright: the figure carries both counts, so a point the search
     // would refuse reads as one (`open`, `nearer`, `inverted` not all zero).
     let on = |slice: &[PreparedDeal], values: &[(String, String)]| {
-        let (tally, _) = variant_tally(slice, defaults, kind, values, model);
+        let tally = variant_tally(slice, defaults, kind, values, model).tally;
         let open = slice
             .iter()
             .filter(|d| {

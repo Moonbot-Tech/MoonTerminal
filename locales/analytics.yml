@@ -2012,10 +2012,6 @@ analytics.ticks.var_sub:
   ru: "по %{n} из %{m} годных"
   en: "%{n} of %{m} reproduced"
   es: "%{n} de %{m} reproducidas"
-analytics.ticks.holdout:
-  ru: "holdout: %{n} сделок, %{profit}"
-  en: "holdout: %{n} trades, %{profit}"
-  es: "holdout: %{n} operaciones, %{profit}"
 analytics.ticks.vary_gated:
   ru: "Модель воспроизводит факт лишь в %{hits} из %{n} сделок — меньше %{gate} %: подбор идёт, но его ответ говорит только за воспроизведённые сделки"
   en: "The model reproduces the fact on only %{hits} of %{n} trades — under %{gate} %: the search runs, but its answer speaks for the reproduced trades alone"
@@ -2101,9 +2097,9 @@ analytics.ticks.acc_tip_no_tape:
   en: "Without tape: %{n}, left out of the estimate."
   es: "Sin cinta: %{n}, fuera de la estimación."
 analytics.ticks.acc_tip_assumptions:
-  ru: "Допущения модели: стакана нет — очередь перед нашим ордером не моделируется, филл = касание принтом; стоп по стакану видит цену тикера раз в %{ticker} с, вместо неё — последний принт; задержка ядра и биржи — одна на все ядра, %{latency} мс; совпадением считается цена в пределах %{price} % и момент в пределах %{time} с; поля выхода вне модели (SellShot, SellSpread и другие) — такие сделки не судятся; середина долгой позиции не хранится — вариант, чья линия или стоп стояли там ближе к цене, чем у факта, на такой сделке не судится."
-  en: "The model assumes: no order book — the queue ahead of our order is not modelled, a fill is a touching print; a book-watching stop sees the ticker price every %{ticker} s, the last print standing in for it; one core and venue latency for every core, %{latency} ms; a match is a price within %{price} % and a moment within %{time} s; exit fields outside the model (SellShot, SellSpread and others) leave such trades unjudged; the middle of a long position is not kept — a variant whose line or stop stood nearer the price there than the fact's is not judged on that trade."
-  es: "El modelo supone: sin libro de órdenes — la cola delante de nuestra orden no se modela, un llenado es un print que toca; un stop por libro ve el precio del ticker cada %{ticker} s, con el último print en su lugar; una latencia de núcleo y bolsa para todos los núcleos, %{latency} ms; coincide un precio dentro de %{price} % y un momento dentro de %{time} s; los campos de salida fuera del modelo (SellShot, SellSpread y otros) dejan esas operaciones sin juzgar; el medio de una posición larga no se guarda — una variante cuya línea o stop estuvo allí más cerca del precio que el del hecho no se juzga en esa operación."
+  ru: "Допущения модели: стакана нет — очередь перед нашим ордером не моделируется, филл = касание принтом; стоп по стакану видит цену тикера раз в %{ticker} с, вместо неё — последний принт; перестановка входа идёт до биржи столько, сколько у своего ядра по архиву, у ядра без замеров и у продажи — %{latency} мс; совпадением считается цена в пределах %{price} % и момент в пределах %{time} с; поля выхода вне модели (SellShot, SellSpread и другие) — такие сделки не судятся; середина долгой позиции не хранится — вариант, чья линия или стоп стояли там ближе к цене, чем у факта, на такой сделке не судится."
+  en: "The model assumes: no order book — the queue ahead of our order is not modelled, a fill is a touching print; a book-watching stop sees the ticker price every %{ticker} s, the last print standing in for it; an entry re-place takes its own core's archived round trip to reach the venue, %{latency} ms for a core without one and for the sell; a match is a price within %{price} % and a moment within %{time} s; exit fields outside the model (SellShot, SellSpread and others) leave such trades unjudged; the middle of a long position is not kept — a variant whose line or stop stood nearer the price there than the fact's is not judged on that trade."
+  es: "El modelo supone: sin libro de órdenes — la cola delante de nuestra orden no se modela, un llenado es un print que toca; un stop por libro ve el precio del ticker cada %{ticker} s, con el último print en su lugar; un reemplazo de la entrada tarda en llegar a la bolsa el viaje de ida y vuelta archivado de su propio núcleo, %{latency} ms para un núcleo sin él y para la venta; coincide un precio dentro de %{price} % y un momento dentro de %{time} s; los campos de salida fuera del modelo (SellShot, SellSpread y otros) dejan esas operaciones sin juzgar; el medio de una posición larga no se guarda — una variante cuya línea o stop estuvo allí más cerca del precio que el del hecho no se juzga en esa operación."
 analytics.ticks.long_title:
   ru: "Долгий подбор"
   en: "A long search"
@@ -2152,6 +2148,86 @@ analytics.ticks.holdout_open:
   ru: "открытыми остались %{n}"
   en: "%{n} left open"
   es: "%{n} quedaron abiertas"
+analytics.ticks.holdout_vs_fact:
+  ru: "отложено %{n}: %{profit} против факта %{fact}"
+  en: "holdout %{n}: %{profit} vs fact %{fact}"
+  es: "reservado %{n}: %{profit} frente al hecho %{fact}"
+analytics.ticks.holdout_loses:
+  ru: "вне выборки хуже факта"
+  en: "loses to fact out of sample"
+  es: "pierde frente al hecho fuera de muestra"
+analytics.ticks.train_below_fact:
+  ru: "хуже факта даже на обучении"
+  en: "below fact even on train"
+  es: "por debajo del hecho incluso en entrenamiento"
+analytics.ticks.whole_period:
+  ru: "весь период, без проверки вне выборки"
+  en: "whole period, no out-of-sample check"
+  es: "todo el período, sin comprobación fuera de muestra"
+analytics.ticks.answers_for:
+  ru: "модель воспроизводит %{hits} из %{n} сделок (неоценённые — против)"
+  en: "the model reproduces %{hits} of %{n} deals (not judged count against)"
+  es: "el modelo reproduce %{hits} de %{n} operaciones (las no evaluadas cuentan en contra)"
+analytics.ticks.warn_holdout_loses:
+  ru: "Найденная точка хуже факта на отложенных сделках."
+  en: "The found point loses to the fact on the held-back deals."
+  es: "El punto encontrado pierde frente al hecho en las operaciones reservadas."
+analytics.ticks.var_open:
+  ru: "открытыми осталось: %{n} — колонка не оценена"
+  en: "left open: %{n} — column not scored"
+  es: "quedaron abiertas: %{n} — columna sin evaluar"
+analytics.ticks.var_untraded:
+  ru: "без результата: %{n}"
+  en: "not scored: %{n}"
+  es: "sin resultado: %{n}"
+analytics.ticks.set_counts:
+  ru: "сделок: %{n} · не закрыты базой: %{base_open} · без ленты: %{no_tape} (не входят ни в одну колонку)"
+  en: "deals: %{n} · not closed by the base: %{base_open} · without tape: %{no_tape} (in no column)"
+  es: "operaciones: %{n} · sin cerrar por la base: %{base_open} · sin cinta: %{no_tape} (en ninguna columna)"
+analytics.ticks.set_counts_pending:
+  ru: "%{n} сделок · %{no_tape} без ленты"
+  en: "%{n} deals · %{no_tape} without tape"
+  es: "%{n} operaciones · %{no_tape} sin cinta"
+analytics.ticks.set_counts_short:
+  ru: "сделок: %{n}"
+  en: "deals: %{n}"
+  es: "operac.: %{n}"
+analytics.ticks.var_open_short:
+  ru: "открыто: %{n}, без оценки"
+  en: "open: %{n}, not scored"
+  es: "abiertas: %{n}, sin evaluar"
+analytics.ticks.holdout_short:
+  ru: "вне %{profit} / факт %{fact}"
+  en: "oos %{profit} / fact %{fact}"
+  es: "fuera %{profit} / hecho %{fact}"
+analytics.ticks.holdout_loses_short:
+  ru: "вне < факта"
+  en: "oos < fact"
+  es: "fuera < hecho"
+analytics.ticks.train_below_short:
+  ru: "обуч. < факта"
+  en: "train < fact"
+  es: "entren. < hecho"
+analytics.ticks.untraded_short:
+  ru: "без результата: %{n}"
+  en: "no result: %{n}"
+  es: "sin resultado: %{n}"
+analytics.ticks.whole_period_short:
+  ru: "без проверки вне"
+  en: "no oos check"
+  es: "sin prueba fuera"
+analytics.ticks.search_base_open:
+  ru: "%{n} открыты у её базы, не в счёте"
+  en: "%{n} open at its base, left out"
+  es: "%{n} abiertas en su base, fuera del cómputo"
+analytics.ticks.warn_whole_period:
+  ru: "Найденная точка подобрана и оценена на одних и тех же сделках: проверки вне выборки нет."
+  en: "The found point was fitted and judged on the same deals: no out-of-sample check."
+  es: "El punto encontrado se ajustó y evaluó con las mismas operaciones: no hay comprobación fuera de muestra."
+analytics.ticks.holdout_small:
+  ru: "отложено сделок: %{n} — это не проверка вне выборки"
+  en: "held back: %{n} deals — no out-of-sample check"
+  es: "reservadas: %{n} operaciones — no es una comprobación fuera de muestra"
 analytics.ticks.unguarded_warn:
   ru: "Без защиты: %{n} из %{m} стратегий — ни стопа, ни трейлинга без ТП; сделка может не закрыться"
   en: "Unguarded: %{n} of %{m} strategies — no stop and no trailing without a take profit; a trade may never close"
@@ -2176,6 +2252,18 @@ analytics.ticks.sugg_floor:
   ru: "Ни один вариант не держит ≥ %{n} сделок"
   en: "No variant keeps ≥ %{n} trades"
   es: "Ninguna variante mantiene ≥ %{n} operaciones"
+analytics.ticks.sugg_too_few:
+  ru: "Мало годных сделок: %{n} из %{min} — подбор не запускается"
+  en: "Too few fit deals: %{n} of %{min} — the search does not run"
+  es: "Pocas operaciones aptas: %{n} de %{min} — la búsqueda no se ejecuta"
+analytics.ticks.too_few_short:
+  ru: "мало сделок"
+  en: "too few"
+  es: "pocas"
+analytics.ticks.var_too_few:
+  ru: "Посчитано на %{n} сделках из нужных %{min}: это шум, а не рекомендация"
+  en: "Scored on %{n} deals of the %{min} needed: noise, not a recommendation"
+  es: "Calculado sobre %{n} operaciones de las %{min} necesarias: ruido, no una recomendación"
 analytics.ticks.sugg_floor_sample:
   ru: "Порог %{n} сделок больше выборки: в обучении %{m} сделок с лентой в памяти"
   en: "A floor of %{n} trades exceeds the sample: %{m} trades with tape in memory to train on"
@@ -2365,9 +2453,9 @@ analytics.ticks.model_latency:
   en: "Replace latency, ms"
   es: "Latencia de reemplazo, ms"
 analytics.ticks.model_latency_tip:
-  ru: "Сколько перестановка ордера (входа и продажи) идёт до биржи; принт в это время бьёт по старому уровню"
-  en: "How long a re-place (of the entry or of the sell) takes to reach the exchange; a print in between meets the old level"
-  es: "Cuánto tarda un reemplazo (de la entrada o de la venta) en llegar al exchange; un print entretanto encuentra el nivel viejo"
+  ru: "Сколько перестановка продажи — и входа у ядра без замеров в архиве — идёт до биржи; принт в это время бьёт по старому уровню"
+  en: "How long a re-place of the sell — and of the entry on a core with no archived round trip — takes to reach the exchange; a print in between meets the old level"
+  es: "Cuánto tarda un reemplazo de la venta — y de la entrada en un núcleo sin viaje de ida y vuelta archivado — en llegar al exchange; un print entretanto encuentra el nivel viejo"
 analytics.ticks.model_replace_window:
   ru: "Окно цены перестановки, мс"
   en: "Re-place price window, ms"

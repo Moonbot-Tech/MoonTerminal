@@ -55,6 +55,7 @@ pub(super) fn deal() -> Deal {
         hook_depth_pct: None,
         hook_stated_take_pct: None,
         step_lag_ms: 0.0,
+        round_trip_ms: None,
         stop_anchor: None,
         delta_track: None,
         bars: None,
@@ -235,6 +236,31 @@ fn approaching_inside_price_min_moves_the_order_after_the_latency() {
         None,
         "the order had moved"
     );
+}
+
+/// A core's re-places reach the book on ITS measured round trip, not on the settings' one
+/// latency: the same tape the 100 ms setting misses at t=2200 fills on a core that takes 300 ms,
+/// and a core with no measurement stays on the setting.
+#[test]
+fn a_core_replays_its_re_places_on_its_own_round_trip() {
+    let missed = tape(&[(0, 100.0), (1_000, 99.6), (2_000, 99.3), (2_200, 99.0)]);
+    let unmeasured = deal();
+    assert_eq!(
+        crate::db::tuner::ticks::mshot::entry_latency_ms(ModelSettings::default(), &unmeasured),
+        ModelSettings::default().latency_ms
+    );
+    assert_eq!(fill_of(&unmeasured, &missed, &mshot()), None);
+    let slow = Deal {
+        round_trip_ms: Some(300.0),
+        ..deal()
+    };
+    assert_eq!(
+        crate::db::tuner::ticks::mshot::entry_latency_ms(ModelSettings::default(), &slow),
+        300.0
+    );
+    let fill = fill_of(&slow, &missed, &mshot()).expect("the old level still stood");
+    assert_eq!(fill.t_ms, 2_200);
+    assert!((fill.price - 99.0).abs() < 1e-9);
 }
 
 #[test]
@@ -1414,9 +1440,11 @@ fn verify_takes_a_level_placed_through_the_market() {
 }
 
 #[test]
-fn share_counts_only_answered_verdicts() {
-    assert_eq!(share([Some(true), None, Some(false), Some(true)]), (2, 3));
-    assert_eq!(share([None, None]), (0, 0));
+fn share_counts_a_verdict_not_judged_against_the_share() {
+    // verify.rs `share`: a deal not judged (None) is in the total and never a hit — dropping it
+    // from the denominator would print 2/3 for a sample where only half the deals reproduced.
+    assert_eq!(share([Some(true), None, Some(false), Some(true)]), (2, 4));
+    assert_eq!(share([None, None]), (0, 2));
 }
 
 // ---- parameters out of a strategy ----------------------------------------------------------
@@ -1630,6 +1658,7 @@ fn hook_deal() -> Deal {
         hook_depth_pct: Some(4.0),
         hook_stated_take_pct: Some(2.0),
         step_lag_ms: 0.0,
+        round_trip_ms: None,
         stop_anchor: None,
         delta_track: None,
         bars: None,

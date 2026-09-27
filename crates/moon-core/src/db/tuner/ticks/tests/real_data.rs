@@ -361,6 +361,234 @@ impl PathTally {
     }
 }
 
+/// Median and 90th percentile of a sample, sorted in place, to three decimals.
+fn quantiles(v: &mut [f64]) -> (Option<f64>, Option<f64>) {
+    v.sort_by(f64::total_cmp);
+    let at = |q: f64| {
+        v.get(((v.len() as f64 * q) as usize).min(v.len().saturating_sub(1)))
+            .copied()
+    };
+    (round3(at(0.5)), round3(at(0.9)))
+}
+
+/// The candidate fill rules of a take placed below the market against the fact's fill: per kind
+/// and whether the archive holds the Exit line's fill, per rule, the signed errors (positive =
+/// the model better than the fact for the trade) and how many takes were marketable at placement.
+#[derive(Default)]
+struct TakeFillDiag {
+    /// (kind, archived fill?) -> per rule F1..F5 the signed errors, and the marketable count.
+    rows: HashMap<(String, bool), ([Vec<f64>; 5], usize)>,
+    tolerance_pct: f64,
+}
+
+impl TakeFillDiag {
+    fn add(
+        &mut self,
+        deal: &Deal,
+        ticks: &[Tick],
+        exit: &ExitParams,
+        exit_points: Option<&[(i64, f64)]>,
+    ) {
+        use crate::feed::types::Side as TapeSide;
+        if !deal
+            .sell_reason
+            .trim()
+            .eq_ignore_ascii_case(verify::REASON_TAKE)
+            || ticks.is_empty()
+        {
+            return;
+        }
+        self.tolerance_pct = exit.model.price_pct;
+        let fill = Fill {
+            t_ms: verify::fact_sell_start(deal, exit, exit_points).t_ms,
+            price: deal.buy_price,
+        };
+        let raw = ExitModel::new(exit).take_level(deal, ticks, fill);
+        let level = match deal.tick {
+            Some(step) if step > 0.0 => round_to_step(raw, step),
+            _ => raw,
+        };
+        let at = fill.t_ms + exit.sell_delay_ms as i64 + exit.model.latency_whole_ms();
+        let long = deal.is_long();
+        let better = |a: f64, b: f64| if long { a.max(b) } else { a.min(b) };
+        let t = |k: &Tick| k.time_ms as i64;
+        let first_after = ticks.iter().find(|k| t(k) >= at).map(|k| k.price as f64);
+        let last_of = |side: TapeSide| {
+            ticks
+                .iter()
+                .rfind(|k| t(k) <= at && k.side == side)
+                .map(|k| k.price as f64)
+        };
+        let bid = last_of(if long { TapeSide::Sell } else { TapeSide::Buy });
+        let mid = match (last_of(TapeSide::Sell), last_of(TapeSide::Buy)) {
+            (Some(a), Some(b)) => Some((a + b) / 2.0),
+            _ => None,
+        };
+        let extreme = ticks
+            .iter()
+            .filter(|k| t(k) >= at && t(k) <= at + 1_000)
+            .map(|k| k.price as f64)
+            .reduce(better);
+        let archived_fill = exit_points
+            .and_then(|pts| verify::ArchivedExit::of(deal, exit, pts).fill)
+            .map(|(_, p)| p);
+        let reference = archived_fill.unwrap_or(deal.sell_price);
+        if !(reference.is_finite() && reference > 0.0) {
+            return;
+        }
+        let candidates = [
+            first_after.map(|p| better(level, p)),
+            bid.map(|p| better(level, p)),
+            mid.map(|p| better(level, p)),
+            extreme.map(|p| better(level, p)),
+            Some(level),
+        ];
+        let row = self
+            .rows
+            .entry((deal.kind.clone(), archived_fill.is_some()))
+            .or_default();
+        for (errors, candidate) in row.0.iter_mut().zip(candidates) {
+            if let Some(c) = candidate {
+                let err = (c - reference) / reference * 100.0;
+                errors.push(if long { err } else { -err });
+            }
+        }
+        row.1 +=
+            usize::from(first_after.is_some_and(|p| if long { p >= level } else { p <= level }));
+    }
+
+    fn print(&self) {
+        eprintln!(
+            "take fill diag: (err % against the fact's fill, + = the model better for the trade)"
+        );
+        let mut keys: Vec<_> = self.rows.keys().cloned().collect();
+        keys.sort();
+        for key in keys {
+            let (errors, marketable) = &self.rows[&key];
+            let names = [
+                "F1 first>=T",
+                "F2 bid<=T",
+                "F3 mid<=T",
+                "F4 best[T,T+1s]",
+                "F5 level",
+            ];
+            for (name, signed) in names.iter().zip(errors) {
+                let mut abs: Vec<f64> = signed.iter().map(|e| e.abs()).collect();
+                let within = abs.iter().filter(|e| **e <= self.tolerance_pct).count();
+                let (abs_median, _) = quantiles(&mut abs);
+                let (signed_median, _) = quantiles(&mut signed.clone());
+                eprintln!(
+                    "  {:<10} archive {:<5} {name:<16} n {:>4} |err| median {abs_median:?} signed median {signed_median:?} within {} % {within} marketable at T {marketable}",
+                    key.0,
+                    key.1,
+                    signed.len(),
+                    self.tolerance_pct,
+                );
+            }
+        }
+    }
+}
+
+/// How far a stop's sale slipped past its trigger, per kind and reason family.
+#[derive(Default)]
+struct StopSlipDiag {
+    /// (kind, family) -> slips %, proxy errors %, the cores.
+    rows: HashMap<(String, &'static str), (Vec<f64>, Vec<f64>, std::collections::HashSet<u64>)>,
+}
+
+impl StopSlipDiag {
+    fn add(&mut self, deal: &Deal, ticks: &[Tick], exit: &ExitParams) {
+        if !verify::is_stop_reason(&deal.sell_reason) {
+            return;
+        }
+        let Some((at, _)) = deal.stop_anchor.as_ref().and_then(|a| a.fired) else {
+            return;
+        };
+        let Some(trigger) = verify::stated_stop_level(&deal.sell_reason)
+            .or_else(|| verify::stop_jump_level(deal, exit))
+            .filter(|l| l.is_finite() && *l > 0.0)
+        else {
+            return;
+        };
+        let long = deal.is_long();
+        let sold = deal.sell_price;
+        let slip = if long {
+            (trigger - sold) / trigger * 100.0
+        } else {
+            (sold - trigger) / trigger * 100.0
+        };
+        let family = if verify::reason_starts_with(deal.sell_reason.trim(), verify::REASON_TRAILING)
+        {
+            "TrailingStop"
+        } else {
+            "StopLoss"
+        };
+        let row = self.rows.entry((deal.kind.clone(), family)).or_default();
+        row.0.push(slip);
+        if let Some(proxy) = ticks
+            .iter()
+            .rfind(|k| k.time_ms as i64 <= at)
+            .map(|k| k.price as f64)
+        {
+            let err = (proxy - sold) / sold * 100.0;
+            row.1.push(if long { err } else { -err });
+        }
+        row.2.insert(deal.core_uid);
+    }
+
+    fn print(&self) {
+        eprintln!(
+            "stop slip diag: (slip % past the trigger, adverse +; proxy err %, + = the model better)"
+        );
+        let mut keys: Vec<_> = self.rows.keys().cloned().collect();
+        keys.sort();
+        for key in keys {
+            let (slips, proxies, cores) = &self.rows[&key];
+            let (median, p90) = quantiles(&mut slips.clone());
+            let (proxy_median, _) = quantiles(&mut proxies.clone());
+            eprintln!(
+                "  {:<10} {:<12} n {:>4} slip median {median:?} p90 {p90:?} proxy err median {proxy_median:?} cores {}",
+                key.0,
+                key.1,
+                slips.len(),
+                cores.len(),
+            );
+        }
+    }
+}
+
+/// Deals whose sell started more than half a second after the buy, per kind: all, late, late fit.
+#[derive(Default)]
+struct LateBookedDiag {
+    rows: HashMap<String, (usize, usize, usize)>,
+}
+
+impl LateBookedDiag {
+    fn add(
+        &mut self,
+        deal: &Deal,
+        exit: &ExitParams,
+        exit_points: Option<&[(i64, f64)]>,
+        fit: bool,
+    ) {
+        let late = verify::fact_sell_start(deal, exit, exit_points).t_ms - deal.buy_ms > 500;
+        let row = self.rows.entry(deal.kind.clone()).or_default();
+        row.0 += 1;
+        row.1 += usize::from(late);
+        row.2 += usize::from(late && fit);
+    }
+
+    fn print(&self) {
+        eprintln!("late booked diag: (sell start > 500 ms after the buy)");
+        let mut keys: Vec<_> = self.rows.keys().cloned().collect();
+        keys.sort();
+        for key in keys {
+            let (n, late, fit) = self.rows[&key];
+            eprintln!("  {key:<10} deals {n:>5} late {late:>5} of them fit {fit:>5}");
+        }
+    }
+}
+
 /// The shifts of `MShotPrice` the two entry methods are compared on, per cent points.
 const PRICE_SHIFTS: [f64; 5] = [-0.3, -0.15, 0.0, 0.15, 0.3];
 
@@ -688,6 +916,9 @@ fn real_data_reproduction() {
     let mut cross: Vec<CrossRow> = Vec::new();
     let partners = partners_of(&read.deals, &venue_of_core, &keys, &defaults);
     let mut partner_tally = PartnerTally::default();
+    let mut take_diag = TakeFillDiag::default();
+    let mut stop_diag = StopSlipDiag::default();
+    let mut late_diag = LateBookedDiag::default();
     let (mut own_sum, mut fact_sum) = (0.0f64, 0.0f64);
     let search_kind = std::env::var("MOON_TICKS_SEARCH").ok();
     let mut searched: Vec<search::PreparedDeal> = Vec::new();
@@ -1178,6 +1409,9 @@ fn real_data_reproduction() {
             };
             *unfit.entry(why).or_default() += 1;
         }
+        take_diag.add(&deal, &ticks, &exit, exit_points.as_deref());
+        stop_diag.add(&deal, &ticks, &exit);
+        late_diag.add(&deal, &exit, exit_points.as_deref(), fit);
         // Counted as the axis counts it (`load.rs::replay_row_with` passes both archived lines
         // whenever it has them): the entry off its archived line when there is one — without it
         // the two verdicts are the same call — and the exit ALWAYS against the archived Exit
@@ -1349,4 +1583,7 @@ fn real_data_reproduction() {
         own_sum / own_n.max(1) as f64,
         fact_sum / own_n.max(1) as f64,
     );
+    take_diag.print();
+    stop_diag.print();
+    late_diag.print();
 }

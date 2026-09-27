@@ -41,6 +41,26 @@ pub struct LineWalk {
     /// Where the stop stood when the walk ended — the ladder's last step, else the first stop's
     /// level; `None` without a stop. What the verdict holds against the level the core printed.
     pub stop_level: Option<f64>,
+    /// The first print once the take was live, when it was already through the untouched take:
+    /// the take fills at the market there, not at its level. What the verdict prices the take at,
+    /// while no move had landed by the moment it judges ([`Self::moved_at`]).
+    pub marketable_take: Option<f64>,
+    /// When the first move of the line reached the exchange; `None` when none did.
+    pub moved_at: Option<i64>,
+}
+
+/// Whether no move of the line had landed at or before `horizon`: the take still untouched.
+fn untouched_until(moved_at: Option<i64>, horizon: i64) -> bool {
+    moved_at.is_none_or(|t| t > horizon)
+}
+
+impl LineWalk {
+    /// The market fill of a take placed through the market, while the take stood untouched at
+    /// `horizon` — no move landed at or before it.
+    pub fn marketable_until(&self, horizon: i64) -> Option<f64> {
+        self.marketable_take
+            .filter(|_| untouched_until(self.moved_at, horizon))
+    }
 }
 
 /// One step of the core's sell price: `level` is what a rule computed, `order` that level on
@@ -91,11 +111,15 @@ pub(super) struct Line {
     /// When the take is on the book: placed at `armed_at`, there after the same latency as any
     /// move of the line.
     live_at: i64,
+    /// The take as placed, before any move landed: what "through the take" is judged against.
+    take: f64,
     /// The exchange's level (what fills, on the grid).
     exch: f64,
     /// Whether a move has reached the exchange: what tells a fill at the take from a fill at
     /// a level a rule moved the line to — not the price, which a moved line can round back onto.
     exch_moved: bool,
+    /// When the first move reached the exchange.
+    moved_at: Option<i64>,
     /// The core's sell price: the ORDER's price once a move reached the book, the computed value
     /// while rounding kept the order where it was — see [`advance`]. The take is an order too.
     core: f64,
@@ -104,6 +128,16 @@ pub(super) struct Line {
     last_sent: f64,
     /// A move the exchange has not seen yet: when it lands, and at what level.
     pending: Option<(i64, f64)>,
+    /// The first print once the take was live: `None` until one came, `Some(None)` when it did
+    /// not reach the untouched take, `Some(Some((t_ms, price)))` when it was through it — a take
+    /// placed through the market fills at that print, as the core's does. Only a take the
+    /// market was ALREADY through when it went live (`prevailing`) counts: one resting short of
+    /// the market and crossed later by a jump is a resting limit and fills at its level.
+    first_live: Option<Option<(i64, f64)>>,
+    /// The last print at or before `live_at`, the buy's own print included: the price the take
+    /// met when it reached the book. On a sparse tape that may be the buy's own print or an
+    /// earlier one — still the market the take meets.
+    prevailing: Option<f64>,
     points: Vec<LinePoint>,
 }
 
@@ -116,11 +150,15 @@ impl Line {
             latency_ms,
             armed_at,
             live_at: armed_at + latency_ms,
+            take: take_placed,
             exch: take_placed,
             exch_moved: false,
+            moved_at: None,
             core: take_placed,
             last_sent: take_placed,
             pending: None,
+            first_live: None,
+            prevailing: None,
             points: vec![LinePoint {
                 t_ms: armed_at,
                 price: take_placed,
@@ -153,11 +191,43 @@ impl Line {
 
     /// The move on its way lands on the exchange, when it is due by `t_ms`.
     fn land(&mut self, t_ms: i64) {
-        if let Some((_, level)) = self.pending.filter(|(apply_at, _)| t_ms >= *apply_at) {
+        if let Some((apply_at, level)) = self.pending.filter(|(apply_at, _)| t_ms >= *apply_at) {
             self.exch = level;
             self.exch_moved = true;
+            self.moved_at.get_or_insert(apply_at);
             self.pending = None;
         }
+    }
+
+    /// Remember any print up to the moment the take goes live: the last one is the market the
+    /// take meets on the book.
+    fn see_before_live(&mut self, t_ms: i64, price: f64) {
+        if t_ms <= self.live_at {
+            self.prevailing = Some(price);
+        }
+    }
+
+    /// Remember the first print once the take is live, and whether the take was marketable:
+    /// the market ALREADY through the untouched take when it went live (`prevailing`), and
+    /// that print through it too. A take crossed only later rests and fills at its level.
+    /// Invariant: "through" is judged against the untouched take (`take`), never `exch` — a move
+    /// landed by then already rules the marketable fill out (see [`Self::marketable_until`]).
+    fn see_live(&mut self, t_ms: i64, price: f64, side: Side) {
+        // A print at exactly `armed_at` is prevailing, never the first live one (as `fill_on`).
+        if self.first_live.is_none() && t_ms > self.armed_at && t_ms >= self.live_at {
+            let through = |p: f64| reaches(p, self.take, !side.long);
+            self.first_live = Some(
+                (self.prevailing.is_some_and(through) && through(price)).then_some((t_ms, price)),
+            );
+        }
+    }
+
+    /// The market fill of a take placed through the market, while no move landed at or before
+    /// `horizon` — the same test as [`LineWalk::marketable_until`].
+    fn marketable_until(&self, horizon: i64) -> Option<(i64, f64)> {
+        self.first_live
+            .flatten()
+            .filter(|_| untouched_until(self.moved_at, horizon))
     }
 
     /// The print at `t_ms`, `price` filling the order the exchange holds: once the take is on
@@ -166,7 +236,11 @@ impl Line {
         (t_ms > self.armed_at && t_ms >= self.live_at && reaches(price, self.exch, !side.long))
             .then_some(Exit {
                 t_ms,
-                price: self.exch,
+                // A take already through the market at its first live print fills at that print.
+                price: self
+                    .marketable_until(t_ms)
+                    .filter(|(at, _)| *at == t_ms)
+                    .map_or(self.exch, |(_, p)| p),
                 // What the print met: the take as placed, or a level a rule moved it to.
                 kind: if !self.exch_moved {
                     ExitKind::Take
@@ -188,6 +262,9 @@ impl Line {
 
     fn close(self, exit: Exit) -> LineWalk {
         LineWalk {
+            // The first live print alone; the verdict weighs it against `moved_at`.
+            marketable_take: self.first_live.flatten().map(|(_, p)| p),
+            moved_at: self.moved_at,
             exit,
             points: self.points,
             stop_level: None,
@@ -238,7 +315,11 @@ pub fn walk_held(
     for (index, tick) in ticks.iter().enumerate() {
         let t_ms = tick.time_ms as i64;
         let price = f64::from(tick.price);
-        if t_ms <= fill.t_ms || !price.is_finite() || price <= 0.0 {
+        if !price.is_finite() || price <= 0.0 {
+            continue;
+        }
+        line.see_before_live(t_ms, price);
+        if t_ms <= fill.t_ms {
             continue;
         }
         last_t = t_ms;
@@ -305,6 +386,7 @@ pub fn walk_held(
         // not a print the take was there for. Filling on it turned 30 of 88 stopped MoonShot
         // trades into wins on the live sample (2026-09-23), the take "touched" 9 ms after the
         // buy by the pump it was bought on.
+        line.see_live(t_ms, price, side);
         let held = hold_until_ms.is_some_and(|until| t_ms <= until);
         if !held {
             if let Some(exit) = line.fill_on(t_ms, price, side) {

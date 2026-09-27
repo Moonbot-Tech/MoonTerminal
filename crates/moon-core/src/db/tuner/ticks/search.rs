@@ -136,7 +136,7 @@ pub struct SearchParams<'a> {
     pub grids: &'a Grids,
     /// Restart count, at least 1.
     pub restarts: usize,
-    /// Minimum trades a point must keep, or one tenth of the fitted sample.
+    /// Minimum trades a point must keep, or half the train deals.
     pub min_n: Option<i64>,
     /// Base seed of the restarts; `None` draws one from the clock.
     pub seed: Option<u64>,
@@ -169,6 +169,12 @@ pub enum SearchMiss {
     /// No point the search visited closed every deal it bought inside the tape with something
     /// standing to close each trade — a stop, or a trailing without a take profit ([`closing`]).
     Unclosed,
+    /// The scored set holds fewer than [`MIN_SEARCH_DEALS`] deals: whatever a search fits on it
+    /// is noise, so none is run ([`sample_floor`]).
+    TooFew {
+        /// Deals the set holds.
+        n: usize,
+    },
 }
 
 /// How a search went — what shows whether its restarts and passes changed anything.
@@ -215,6 +221,13 @@ pub struct SearchResult {
     /// How many of the deals held back the answer bought and left open inside the tape — none
     /// may be among the deals it was fitted on; the holdout is only scored, so it says them.
     pub holdout_open: usize,
+    /// The fact over the deals the search was fitted on ([`fact_tally`]).
+    pub fact_train: Tally,
+    /// The fact over the deals held back, when any were — the slice `holdout` is scored on.
+    pub fact_holdout: Option<Tally>,
+    /// Whether the answer loses to the fact on the holdout: it leaves a held-back deal open, or
+    /// its holdout profit is below the fact's there.
+    pub holdout_loses: bool,
     /// The seed the restarts were derived from.
     pub seed: u64,
     /// How the run went.
@@ -570,22 +583,50 @@ fn results(
         .collect()
 }
 
-/// The tally of a point over `deals`, in order, and the spend of the deals it traded; arguments
-/// as for [`results`].
-fn tally_and_spent(
+/// One variant's score over a set of deals: the tally of the deals it traded, their spend, and
+/// the deals that fell out of the tally — so a variant never reads better than the fact because
+/// deals silently dropped out.
+#[derive(Clone, Debug, Default)]
+pub struct VariantScore {
+    /// The results of the deals the variant traded and closed, in order.
+    pub tally: Tally,
+    /// Sum of the entry sizes of the deals in `tally`.
+    pub spent: f64,
+    /// Deals the variant bought and left open inside the tape — no result on record.
+    pub open: usize,
+    /// Deals the variant has no result for: not bought (its entry did not fill on the tape), or
+    /// bought and closed with no result in the scope's metric (nothing spent under the percent
+    /// metric).
+    pub untraded: usize,
+}
+
+impl VariantScore {
+    /// Count one deal's replay: its `(metric, spent)` when it made a trade, whether the
+    /// position was left open.
+    fn push(&mut self, result: Option<(f64, f64)>, left_open: bool) {
+        match result {
+            Some((value, size)) => {
+                self.tally.push(value);
+                self.spent += size;
+            }
+            None if left_open => self.open += 1,
+            None => self.untraded += 1,
+        }
+    }
+}
+
+/// The score of a point over `deals`, in order; arguments as for [`results`].
+fn score(
     deals: &[PreparedDeal],
     of_deal: &[usize],
     params: &[(EntryParams, ExitParams)],
-) -> (Tally, f64) {
-    // The replay of every deal is independent; the tally is folded in order afterwards.
-    let results = results(deals, of_deal, params);
-    let mut tally = Tally::default();
-    let mut spent = 0.0;
-    for (money, size) in results.into_iter().filter_map(|(result, _)| result) {
-        tally.push(money);
-        spent += size;
+) -> VariantScore {
+    // The replay of every deal is independent; the score is folded in order afterwards.
+    let mut score = VariantScore::default();
+    for (result, left_open) in results(deals, of_deal, params) {
+        score.push(result, left_open);
     }
-    (tally, spent)
+    score
 }
 
 /// Each MoonShot deal's own corridor and the deltas its entry order lived through — what a
@@ -778,10 +819,14 @@ pub fn suggest(
     // leaves the sample below among them: where each number field starts, what completes a point
     // (`deps`) and the parameters built per base are then the same for the filter and for every
     // point scored after it, restart 0's included.
-    let whole = Bases::of(deals);
-    let (start, deps) = deps::dependents_of(params, &whole.owns);
-    // A deal the strategies as they stand leave open is out of the sample (`closing`).
-    let (kept, of_kept, left_open) = closing::closable_at_base(deals, &whole, params, &deps);
+    let Cut {
+        whole,
+        start,
+        deps,
+        kept,
+        of_kept,
+        left_open,
+    } = cut(deals, params);
     let deals = kept.as_slice();
     if deals.is_empty() || fields.is_empty() {
         return Err(SearchMiss::Nothing);
@@ -791,7 +836,7 @@ pub fn suggest(
     let train = &deals[..train_n];
     let min_n = params
         .min_n
-        .unwrap_or_else(|| (train_n as i64 / 10).max(1))
+        .unwrap_or_else(|| default_min_n(train_n))
         .max(1);
     let seed = params.seed.unwrap_or_else(|| {
         std::time::SystemTime::now()
@@ -1066,11 +1111,16 @@ pub fn suggest(
     values.sort();
     let (holdout, holdout_open) = if train_n < deals.len() {
         let per_base = bases.params(params.held, params.defaults, &point, params.kind, model);
-        let (tally, open) =
-            closing::tally_counting_open(&deals[train_n..], &bases.of_deal[train_n..], &per_base);
-        (Some(tally), open)
+        let held_back = self::score(&deals[train_n..], &bases.of_deal[train_n..], &per_base);
+        (Some(held_back.tally), held_back.open)
     } else {
         (None, 0)
+    };
+    let fact_train = fact_tally(&deals[..train_n]);
+    let fact_holdout = holdout.is_some().then(|| fact_tally(&deals[train_n..]));
+    let holdout_loses = match (&holdout, &fact_holdout) {
+        (Some(ours), Some(fact)) => holdout_open > 0 || ours.profit < fact.profit,
+        _ => false,
     };
     let mut searched: Vec<String> = fields.iter().map(|f| f.key.to_string()).collect();
     searched.sort();
@@ -1080,13 +1130,100 @@ pub fn suggest(
         train: train_tally,
         holdout,
         holdout_open,
+        fact_train,
+        fact_holdout,
+        holdout_loses,
         seed,
         stats,
     })
 }
 
-/// The KPI of one explicit set of values over `deals` — a variant column — and the spend of
-/// the deals it traded.
+/// The fact of `deals`, in order: each deal's reported result — the same per-deal value
+/// [`super::fact_stats`] folds into the "Fact" column, so the two cannot drift. Every deal
+/// counts, as there.
+pub fn fact_tally(deals: &[PreparedDeal]) -> Tally {
+    super::stats::fact_tally_of(deals.iter().map(|d| &d.deal)).0
+}
+
+/// The deals a variant and the fact are compared over: `deals` less those the strategies as
+/// they stand leave open inside the tape — the cut the search makes before it fits
+/// ([`closing::closable_at_base`]), so the search's fact and the "Fact" column over the variant
+/// columns are one set. A variant that leaves one of the kept deals open cannot be scored.
+///
+/// Args:
+///     deals: The covered deals, chronological.
+///     params: What the base is completed with — `held`, `defaults`, `kind`, `model`, and the
+///         grids and groups the dependents are read from.
+///
+/// Returns:
+///     The kept deals, in order, and how many the base leaves open.
+pub fn comparable(deals: &[PreparedDeal], params: &SearchParams<'_>) -> (Vec<PreparedDeal>, usize) {
+    let cut = install(|| cut(deals, params));
+    (cut.kept, cut.left_open.len())
+}
+
+/// The sample's bases, their completion, and the sample less the deals the strategies as they
+/// stand leave open inside the tape — the one cut both the search and the variant columns
+/// ([`comparable`]) make.
+struct Cut<'a> {
+    /// The strategies of the whole sample, the dropped deals' among them.
+    whole: Bases<'a>,
+    /// Where each number field starts on its grid ([`deps::dependents_of`]).
+    start: HashMap<&'static str, usize>,
+    /// What completes a point over `whole`.
+    deps: deps::Dependents,
+    /// The kept deals, in order.
+    kept: Vec<PreparedDeal>,
+    /// Each kept deal's index into `whole.owns`.
+    of_kept: Vec<usize>,
+    /// The dropped deals' ids.
+    left_open: Vec<i64>,
+}
+
+/// Make the [`Cut`] of `deals` under `params` (`closing::closable_at_base`).
+fn cut<'a>(deals: &'a [PreparedDeal], params: &SearchParams<'_>) -> Cut<'a> {
+    let whole = Bases::of(deals);
+    let (start, deps) = deps::dependents_of(params, &whole.owns);
+    let (kept, of_kept, left_open) = closing::closable_at_base(deals, &whole, params, &deps);
+    Cut {
+        whole,
+        start,
+        deps,
+        kept,
+        of_kept,
+        left_open,
+    }
+}
+
+/// The trade floor a search holds when the caller sets none: half the deals it fits on.
+pub fn default_min_n(train_n: usize) -> i64 {
+    (train_n as i64 / 2).max(1)
+}
+
+/// The fewest held-back deals that make an out-of-sample check: a holdout under this is no
+/// check at all, and the answer reads as fitted and judged on the same deals.
+pub const MIN_HOLDOUT: i64 = 5;
+
+/// The fewest deals a search of the Entry/Exit axis is fitted on: under it a point is fitted
+/// on noise. 20 keeps, at the 70 % training share, at least 6 held-back deals — above
+/// [`MIN_HOLDOUT`], so every answer the search gives can be checked out of sample.
+pub const MIN_SEARCH_DEALS: usize = 20;
+
+/// Whether a scored set of `n` deals is large enough to search ([`MIN_SEARCH_DEALS`]) — the
+/// one rule both the search buttons and a hand-typed variant's column read.
+///
+/// Returns:
+///     `Err(SearchMiss::TooFew)` under the floor.
+pub fn sample_floor(n: usize) -> Result<(), SearchMiss> {
+    if n < MIN_SEARCH_DEALS {
+        Err(SearchMiss::TooFew { n })
+    } else {
+        Ok(())
+    }
+}
+
+/// The score of one explicit set of values over `deals` — a variant column: its tally, the
+/// spend of the deals it traded, and the deals it left open or never traded.
 ///
 /// Args:
 ///     deals: The covered deals, chronological; each is run over its own strategy's values
@@ -1101,7 +1238,7 @@ pub fn variant_tally(
     kind: &str,
     values: &[(String, String)],
     model: ModelSettings,
-) -> (Tally, f64) {
+) -> VariantScore {
     let bases = Bases::of(deals);
     let per_base = bases.params(
         &HashMap::new(),
@@ -1110,7 +1247,7 @@ pub fn variant_tally(
         kind,
         model.sanitized(),
     );
-    install(|| tally_and_spent(deals, &bases.of_deal, &per_base))
+    install(|| score(deals, &bases.of_deal, &per_base))
 }
 
 /// One variant on one deal, as the tuner's trade pane draws it.
@@ -1203,14 +1340,14 @@ pub type DealResults = Vec<(i64, Option<(f64, f64)>)>;
 ///     deals, defaults, kind, values, model: As for [`variant_tally`].
 ///
 /// Returns:
-///     The tally, the spent sum, and each deal's result ([`DealResults`]).
+///     The score ([`VariantScore`]) and each deal's result ([`DealResults`]).
 pub fn variant_tally_by_deal(
     deals: &[PreparedDeal],
     defaults: &HashMap<String, f64>,
     kind: &str,
     values: &[(String, String)],
     model: ModelSettings,
-) -> (Tally, f64, DealResults) {
+) -> (VariantScore, DealResults) {
     let bases = Bases::of(deals);
     let per_base = bases.params(
         &HashMap::new(),
@@ -1232,22 +1369,21 @@ pub fn variant_tally_by_deal(
                     let on_spent = outcome.profit_on_spent(&d.deal).unwrap_or(0.0);
                     (money, on_spent)
                 });
-                (d.deal.report_uid, result, outcome.profit_metric(&d.deal))
+                let metric = outcome
+                    .profit_metric(&d.deal)
+                    .map(|value| (value, d.deal.spent));
+                (d.deal.report_uid, result, metric, outcome.left_open())
             })
             .collect();
-        let mut tally = Tally::default();
-        let mut spent = 0.0;
-        for (deal, (_, _, value)) in deals.iter().zip(&scored) {
-            if let Some(value) = value {
-                tally.push(*value);
-                spent += deal.deal.spent;
-            }
+        let mut score = VariantScore::default();
+        for (_, _, metric, left_open) in &scored {
+            score.push(*metric, *left_open);
         }
         let money = scored
             .into_iter()
-            .map(|(uid, result, _)| (uid, result))
+            .map(|(uid, result, _, _)| (uid, result))
             .collect();
-        (tally, spent, money)
+        (score, money)
     })
 }
 

@@ -212,18 +212,28 @@ pub fn verify(
                 .and_then(|a| level_on_archive_clock(&modelled, a, horizon, model))
                 .or_else(|| modelled.iter().rev().find(|p| p.t_ms <= horizon).copied());
             match level {
-                Some(level) => Exit {
-                    t_ms: deal.close_ms,
-                    price: level.price,
-                    kind: if modelled
+                Some(level) => {
+                    let kind = if modelled
                         .first()
                         .is_some_and(|first| first.t_ms < level.t_ms)
                     {
                         ExitKind::Line
                     } else {
                         ExitKind::Take
-                    },
-                },
+                    };
+                    // A take through the market when it went live filled at the market, as
+                    // the variants price it — unless a move landed by the horizon judged here:
+                    // the walk ran past the close, and a later move says nothing about it.
+                    let price = match (kind, walked.marketable_until(horizon)) {
+                        (ExitKind::Take, Some(p)) => p,
+                        _ => level.price,
+                    };
+                    Exit {
+                        t_ms: deal.close_ms,
+                        price,
+                        kind,
+                    }
+                }
                 // No level placed by the close — the sell delay outlived the trade: the
                 // walk's own end, `OpenAtWindowEnd` or a stop fired later against a fact
                 // that was not a stop, which `exit_rule_matches` leaves unanswered.
@@ -246,7 +256,7 @@ pub fn verify(
         || reason.eq_ignore_ascii_case(REASON_MARKET_STOP);
     let missed_stop = fact_stopped
         && closed.kind != ExitKind::Stop
-        && (stop_pct(&fact_exit, deal, deal.buy_ms) != 0.0
+        && (stop_pct(&fact_exit, deal, fact_fill.t_ms) != 0.0
             || (fact_exit.trailing_pct != 0.0 && trailing_can_be_it));
     let (exit_ok, exit_dev, line_points) = if exit.unmodelled.is_some() {
         // A rule the model does not have was on: whatever the walk made of the trade is not
@@ -724,6 +734,34 @@ pub(super) fn is_stop_reason(sell_reason: &str) -> bool {
     reason_starts_with(reason, REASON_STOP) || reason_starts_with(reason, REASON_TRAILING)
 }
 
+/// Which group of the sell's stops closed the position, by the core's `sellreason`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StopGroup {
+    /// The stop (and its ladder).
+    Stop,
+    /// The trailing stop.
+    Trailing,
+    /// Either: a market sale, which the core writes for both.
+    Either,
+}
+
+/// The stop group a `sellreason` names; `None` when no stop closed the position. `StopLoss
+/// Market Sell` is the core's rewrite of both a stop and a trailing stop under `UseMarketOrder`
+/// ([`REASON_TRAILING`]), so it names either group.
+pub(super) fn stop_group(sell_reason: &str) -> Option<StopGroup> {
+    let reason = sell_reason.trim();
+    // The market sale first: it also starts with the stop's prefix.
+    if reason_starts_with(reason, REASON_MARKET_STOP) {
+        Some(StopGroup::Either)
+    } else if reason_starts_with(reason, REASON_TRAILING) {
+        Some(StopGroup::Trailing)
+    } else if reason_starts_with(reason, REASON_STOP) {
+        Some(StopGroup::Stop)
+    } else {
+        None
+    }
+}
+
 /// Whether the model's exit rule is the one the core's `sellreason` names, so the two prices
 /// are comparable: the take against "Sell Price", the moving line against the PriceDown /
 /// SellLevel reasons, the stop against "StopLoss …". A SellShot close has no counterpart: the
@@ -748,11 +786,11 @@ pub(super) fn reason_starts_with(reason: &str, prefix: &str) -> bool {
         .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }
 
-/// Share of ✓ over verdicts that answered, as `(hits, answered)`; the caption prints it and
-/// the gate compares it with the threshold. Unanswered verdicts are out of both counts.
+/// Share of ✓ over every verdict, as `(hits, total)`; the caption prints it and the gate
+/// compares it with the threshold. A verdict not judged counts against the share: it is in the
+/// total and never a hit.
 pub fn share(verdicts: impl IntoIterator<Item = Option<bool>>) -> (usize, usize) {
-    verdicts
-        .into_iter()
-        .flatten()
-        .fold((0, 0), |(hits, n), ok| (hits + usize::from(ok), n + 1))
+    verdicts.into_iter().fold((0, 0), |(hits, n), ok| {
+        (hits + usize::from(ok == Some(true)), n + 1)
+    })
 }
