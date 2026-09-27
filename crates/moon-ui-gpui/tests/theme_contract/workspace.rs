@@ -255,8 +255,9 @@ fn auto_dock_is_modular_attached_and_charts_first() {
     );
 }
 
-/// Catches gating a core on its per-core `show_window` flag or duplicating group enumeration;
-/// a headless core with a live session in an existing group window must remain selectable.
+/// Catches Auto availability growing a per-core window gate, and catches duplicating
+/// group enumeration. A core with a live session stays selectable from its active flag
+/// and its group's window lifecycle.
 #[test]
 fn headless_core_uses_its_live_group_window_owner() {
     let backend = code_only(&read_src("backend/mod.rs"));
@@ -265,8 +266,11 @@ fn headless_core_uses_its_live_group_window_owner() {
         "pub(crate) fn workspace_core_availability(",
     ));
     assert!(
-        !availability.contains("show_window"),
-        "per-core window visibility must not gate Auto scope or roster selection"
+        availability.contains("server.active")
+            && availability.contains("WorkspaceWindowState::Live")
+            && availability.contains("WorkspaceWindowState::Opening")
+            && availability.contains("WorkspaceWindowState::Missing"),
+        "Auto scope follows the core's active flag and its group's window lifecycle"
     );
 
     let configured = code_only(braced_body(&backend, "fn group_is_configured("));

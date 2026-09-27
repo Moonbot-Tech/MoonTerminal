@@ -24,6 +24,42 @@ fn retired_density_and_font_keys_are_ignored_on_load() {
     }
 }
 
+/// Catches `ServerMeta` growing `deny_unknown_fields`, or the retired per-core window
+/// checkbox coming back as a serialized field. A `settings.toml` written while that
+/// checkbox existed must still load: a parse failure quarantines the file to `.bak` and
+/// the next launch opens on defaults. The next save must drop the key.
+///
+/// The fixture assembles the retired key. The removal contract is that the name is gone
+/// from the tree, so this source does not spell it.
+#[test]
+fn retired_per_core_window_checkbox_is_ignored_on_load_and_dropped_on_save() {
+    let key = ["show", "window"].join("_");
+    let legacy = format!(
+        "[[servers]]\n\
+         uid = 7\n\
+         name = \"alpha\"\n\
+         active = false\n\
+         {key} = false\n\
+         group = \"desk\"\n"
+    );
+    let parsed: SettingsFile = toml::from_str(&legacy).unwrap_or_else(|err| {
+        panic!("a file carrying the retired per-core window checkbox must still load: {err}")
+    });
+    assert_eq!(parsed.servers.len(), 1);
+    assert!(!parsed.servers[0].active);
+    assert_eq!(parsed.servers[0].name, "alpha");
+    assert_eq!(parsed.servers[0].group, "desk");
+    let saved = toml::to_string(&parsed).expect("settings must serialize");
+    assert!(
+        !saved.contains(&key),
+        "the next save must drop the retired per-core window checkbox"
+    );
+    let reread: SettingsFile = toml::from_str(&saved).expect("our own output must load");
+    assert!(!reread.servers[0].active);
+    assert_eq!(reread.servers[0].name, "alpha");
+    assert_eq!(reread.servers[0].group, "desk");
+}
+
 /// Catches serializing either retired key again: a file that carried them loses them on its
 /// next save, so the interface never reads a density it no longer has.
 #[test]

@@ -410,14 +410,12 @@ fn group_header_row(
                     MoonButton::new(SharedString::from(format!("eye-{name}")))
                         .ghost()
                         .width(34.0)
-                        // The label read "win" -- an untranslated abbreviation of an action this
-                        // button does NOT perform: it opens the group's window
-                        // (`show_group_request`), while `win` is the per-core headless toggle in
-                        // `table.rs`. The glyph names the action and the tooltip carries the
-                        // sentence. Same icon, size and variant as the chart strip's
-                        // gather-windows button (`chart_tabs/strip.rs`), tooltip included --
-                        // `MoonButton` takes one natively, so an icon-only button needs no
-                        // wrapping `div` to host it.
+                        // An untranslated text label named an action this button does not
+                        // perform: it opens the group's window (`show_group_request`). The
+                        // glyph names the action and the tooltip carries the sentence. Same
+                        // icon, size and variant as the chart strip's gather-windows button
+                        // (`chart_tabs/strip.rs`), tooltip included -- `MoonButton` takes one
+                        // natively, so an icon-only button needs no wrapping `div` to host it.
                         .leading_icon(MoonButtonIconSlot::new("icons/window-restore.svg"))
                         .tooltip(t!("conn.show_group").to_string())
                         .on_click({

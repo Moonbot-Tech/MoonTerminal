@@ -3,7 +3,7 @@
 //!   Telegram token, pairing, and preferences; host and port are encoded in the Moonbot key
 //!   itself, and so is the transport mode the key seeds;
 //! - `cfg/settings.toml` (plaintext): schema version, groups, and per-server metadata such as
-//!   active/show_window/feed flags, group, market, and color, joined to servers by uid.
+//!   active/feed flags, group, market, and color, joined to servers by uid.
 //!
 //! An older `settings.toml` without newer fields remains readable through serde defaults. A
 //! `version` below `SCHEMA_VERSION` triggers one write that adds defaulted fields while retaining
@@ -750,7 +750,6 @@ impl AppConfig {
                 uid,
                 name,
                 active: true,
-                show_window: true,
                 feed: FeedFlags::default(),
                 key: Secret::new(key.clone()),
                 group: group.clone(),
