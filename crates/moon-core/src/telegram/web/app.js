@@ -1091,7 +1091,7 @@
         for (g = 0; g < groups.length; g++) {
             if (!collapse[pane]["k:" + groups[g].key]) anyOpen = true;
         }
-        host.appendChild(button("text-btn", tr(anyOpen ? "mini_collapse_all" : "mini_expand_all"), function () {
+        var toggle = button("text-btn", tr(anyOpen ? "mini_collapse_all" : "mini_expand_all"), function () {
             var i;
             for (i = 0; i < groups.length; i++) {
                 var slot = "k:" + groups[i].key;
@@ -1100,7 +1100,22 @@
             }
             hapticSelection();
             repaint();
-        }));
+        });
+        // The toggle rides the line above it instead of taking a row of its own: beside the
+        // search field when there is one, else at the end of the pane's summary line.
+        var prev = host.lastElementChild;
+        if (prev && prev.classList.contains("search")) {
+            var row = el("div", "tool-row");
+            host.replaceChild(row, prev);
+            row.appendChild(prev);
+            row.appendChild(toggle);
+        } else if (prev && (prev.classList.contains("stat-strip") || prev.classList.contains("summary"))) {
+            toggle.className = "text-btn inline";
+            prev.appendChild(toggle);
+        } else {
+            toggle.className = "text-btn standalone";
+            host.appendChild(toggle);
+        }
     }
 
     function paintReport() {

@@ -784,12 +784,38 @@ main {
 }
 
 .text-btn {
-    display: block;
-    margin: var(--sp-2) 0 var(--sp-2) auto;
+    flex: none;
     min-height: 44px;
-    padding: 0 var(--sp-4);
+    padding: 0 var(--sp-2);
     color: var(--link);
     font-size: var(--fs-meta);
+    white-space: nowrap;
+}
+
+.tool-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin: 0 var(--sp-4) 12px;
+}
+
+.tool-row .search {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
+    margin: 0;
+}
+
+.text-btn.inline {
+    align-self: center;
+    margin-left: auto;
+    padding-right: 0;
+}
+
+.text-btn.standalone {
+    display: block;
+    margin: calc(-1 * var(--sp-2)) var(--sp-4) 0 auto;
+    padding-right: 0;
 }
 
 #app-nav {
