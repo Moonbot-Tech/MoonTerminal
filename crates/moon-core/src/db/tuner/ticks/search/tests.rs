@@ -906,3 +906,20 @@ fn a_value_moves_as_a_value_not_as_text() {
     };
     assert!(bases.moves(&held, "UseTrailing", "0"));
 }
+
+/// A set under the floor is refused with its size; the floor itself is searched, and it leaves
+/// a holdout at the 70 % share large enough to be a check.
+#[test]
+fn a_sample_under_the_floor_is_refused_with_its_size() {
+    assert_eq!(
+        sample_floor(MIN_SEARCH_DEALS - 1),
+        Err(SearchMiss::TooFew {
+            n: MIN_SEARCH_DEALS - 1
+        })
+    );
+    assert_eq!(sample_floor(4), Err(SearchMiss::TooFew { n: 4 }));
+    assert_eq!(sample_floor(MIN_SEARCH_DEALS), Ok(()));
+    let closes: Vec<i64> = (1..=MIN_SEARCH_DEALS as i64).collect();
+    let holdout = MIN_SEARCH_DEALS - train_len(&closes, 0.7);
+    assert!(holdout as i64 >= MIN_HOLDOUT, "holdout {holdout}");
+}

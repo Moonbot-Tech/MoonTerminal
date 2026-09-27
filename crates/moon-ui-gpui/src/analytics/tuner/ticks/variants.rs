@@ -30,8 +30,8 @@ use moon_core::db::tuner::threshold_search::SearchHandle;
 use moon_core::db::tuner::ticks::params::range::Grids;
 use moon_core::db::tuner::ticks::params::{self, ParamGroup};
 use moon_core::db::tuner::ticks::search::{
-    DEFAULT_MAX_PASSES, MIN_HOLDOUT, SearchMiss, SearchParams, check_corridors, comparable,
-    default_min_n, suggest, train_len, variant_tally_by_deal,
+    DEFAULT_MAX_PASSES, MIN_HOLDOUT, MIN_SEARCH_DEALS, SearchMiss, SearchParams, check_corridors,
+    comparable, default_min_n, sample_floor, suggest, train_len, variant_tally_by_deal,
 };
 use moon_core::db::tuner::ticks::{fact_stats, stats_of};
 
@@ -306,6 +306,10 @@ impl AnalyticsView {
             let refused = t!("analytics.ticks.sugg_one_kind").to_string();
             return (refused.clone(), refused);
         }
+        if let Some(n) = self.ticks.search_too_few() {
+            let refused = miss_note(SearchMiss::TooFew { n }, 0);
+            return (refused.clone(), refused);
+        }
         let one = match self.ticks.sel_field {
             Some(key) => t!("analytics.ticks.suggest_one_tip", field = key).to_string(),
             None => t!("analytics.ticks.suggest_one_none").to_string(),
@@ -511,6 +515,11 @@ impl AnalyticsView {
         if pending.is_empty() {
             return self.ticks_search_refused("analytics.ticks.sugg_no_tape", cx);
         }
+        if let Err(miss) = sample_floor(pending.len()) {
+            self.ticks.sugg_note = Some(miss_note(miss, 0));
+            cx.notify();
+            return;
+        }
         let defaults = self.filter_defaults(cx);
         let restarts = probe::restarts().unwrap_or_else(|| restarts_of(&self.ticks.iters));
         let max_passes = passes_of(&self.ticks.passes);
@@ -590,7 +599,12 @@ impl AnalyticsView {
                 // The search alone is timed for the point cost: the queue and the unpacking of
                 // the tapes above are no point's.
                 let searching = std::time::Instant::now();
-                let result = suggest(&deals, &params, &handle);
+                // The floor holds over the set the search scored: the deals the strategies as
+                // they stand leave open are cut from it first.
+                let result = suggest(&deals, &params, &handle).and_then(|found| {
+                    sample_floor(deals.len().saturating_sub(found.stats.left_open))
+                        .map(|()| found)
+                });
                 (result, searching.elapsed())
             },
             move |this, (result, searched_for), cx| {
@@ -636,16 +650,8 @@ impl AnalyticsView {
                     // answer's verdict no longer speaks for the column either.
                     Err(miss) => {
                         this.ticks.last_result = None;
-                        this.ticks.sugg_note = Some(match miss {
-                            SearchMiss::Floor => t!(
-                                "analytics.ticks.sugg_floor",
-                                n = min_n.unwrap_or_else(|| default_min_n(train_n))
-                            )
-                            .to_string(),
-                            SearchMiss::Corridor => t!("analytics.ticks.sugg_corridor").to_string(),
-                            SearchMiss::Unclosed => t!("analytics.ticks.sugg_unclosed").to_string(),
-                            SearchMiss::Nothing => t!("analytics.ticks.sugg_none").to_string(),
-                        });
+                        let floor = min_n.unwrap_or_else(|| default_min_n(train_n));
+                        this.ticks.sugg_note = Some(miss_note(miss, floor));
                     }
                 }
                 cx.notify();
@@ -847,6 +853,23 @@ fn land_answer(v1: &mut HashMap<String, String>, searched: &[String], values: &[
         v1.remove(key);
     }
     v1.extend(values.iter().cloned());
+}
+
+/// Why a search came back with nothing, as the status band says it; `floor` is the trade floor
+/// the run held ([`SearchMiss::Floor`]).
+pub(super) fn miss_note(miss: SearchMiss, floor: i64) -> String {
+    match miss {
+        SearchMiss::Floor => t!("analytics.ticks.sugg_floor", n = floor).to_string(),
+        SearchMiss::TooFew { n } => t!(
+            "analytics.ticks.sugg_too_few",
+            n = n,
+            min = MIN_SEARCH_DEALS
+        )
+        .to_string(),
+        SearchMiss::Corridor => t!("analytics.ticks.sugg_corridor").to_string(),
+        SearchMiss::Unclosed => t!("analytics.ticks.sugg_unclosed").to_string(),
+        SearchMiss::Nothing => t!("analytics.ticks.sugg_none").to_string(),
+    }
 }
 
 /// The status band's account of the last search: restarts, the winning one, its passes and

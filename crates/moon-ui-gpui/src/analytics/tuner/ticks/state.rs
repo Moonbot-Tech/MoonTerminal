@@ -18,7 +18,7 @@ use moon_core::db::tuner::VarStats;
 use moon_core::db::tuner::threshold_search::SearchHandle;
 use moon_core::db::tuner::ticks::params::range::{FieldSpan, TickRange};
 use moon_core::db::tuner::ticks::params::{ParamGroup, ParamSection};
-use moon_core::db::tuner::ticks::search::SearchResult;
+use moon_core::db::tuner::ticks::search::{self, SearchResult};
 use moon_core::db::tuner::ticks::{Deal, Verdict, fit_for_search};
 use moon_core::market::trade_replay::TickStatus;
 
@@ -741,6 +741,30 @@ impl TicksState {
     /// Whether the variant holds anything to write.
     pub(in crate::analytics::tuner) fn has_changes(&self) -> bool {
         !self.variant_changes().is_empty()
+    }
+
+    /// The replayable rows while they are too few to search ([`search::sample_floor`]): the
+    /// search buttons are off and the search row says why. `None` at or above the floor, and
+    /// while nothing is loaded.
+    pub(in crate::analytics::tuner) fn search_too_few(&self) -> Option<usize> {
+        let n = self.data.data()?.replayable().count();
+        search::sample_floor(n).is_err().then_some(n)
+    }
+
+    /// The deals the variant column was scored on while they are too few to recommend it
+    /// ([`search::sample_floor`]): its figures are not coloured as a gain and "Save" does not
+    /// light up. A hand-typed variant stays scored and writable.
+    pub(in crate::analytics::tuner) fn variant_too_few(&self) -> Option<usize> {
+        self.var_stats.as_ref()?;
+        search::sample_floor(self.var_n)
+            .is_err()
+            .then_some(self.var_n)
+    }
+
+    /// "Save" lights up: the variant holds something to write and was scored on enough deals
+    /// to be a recommendation.
+    pub(in crate::analytics::tuner) fn save_recommended(&self) -> bool {
+        self.has_changes() && self.variant_too_few().is_none()
     }
 
     /// Set one cell of the variant; an empty value clears it.

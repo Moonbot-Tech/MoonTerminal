@@ -259,6 +259,9 @@ pub(super) struct VarLabel {
     pub(super) sub_warn: bool,
     /// The column cannot be scored: every cell reads "—" whatever its stats say.
     pub(super) blank: bool,
+    /// The column is scored on too few deals to recommend: its signed figures are drawn
+    /// muted, never green as a gain.
+    pub(super) muted: bool,
 }
 
 impl VarLabel {
@@ -269,6 +272,7 @@ impl VarLabel {
             tip: None,
             sub_warn: false,
             blank: false,
+            muted: false,
         }
     }
 
@@ -279,6 +283,7 @@ impl VarLabel {
             tip: None,
             sub_warn: false,
             blank: false,
+            muted: false,
         }
     }
 
@@ -302,6 +307,15 @@ impl VarLabel {
     ///     The same label, blanked.
     pub(super) fn blanked(mut self) -> Self {
         self.blank = true;
+        self
+    }
+
+    /// Mark the column as scored on too few deals: its signed figures read muted.
+    ///
+    /// Returns:
+    ///     The same label, muted.
+    pub(super) fn muted(mut self) -> Self {
+        self.muted = true;
         self
     }
 
@@ -443,6 +457,7 @@ pub(super) fn kpi_matrix_card_over(
     // A second line only when some heading still carries one. A short title plus a tooltip
     // stays on one line, so a narrow pane does not wrap "2 of 2 with tape…" onto an ellipsis.
     let blank: Vec<bool> = headings.iter().map(|label| label.blank).collect();
+    let muted: Vec<bool> = headings.iter().map(|label| label.muted).collect();
     let head_h = if headings.iter().any(|label| label.sub.is_some()) {
         34.0
     } else {
@@ -522,6 +537,7 @@ pub(super) fn kpi_matrix_card_over(
                 figure_of(kind, s)
             };
             let color = match figure.tone {
+                FigureTone::Signed if muted.get(i).copied().unwrap_or(false) => p.text_muted,
                 FigureTone::Signed => sign_color(p, figure.signed),
                 FigureTone::Muted => p.text_muted,
                 FigureTone::Neutral => p.text,

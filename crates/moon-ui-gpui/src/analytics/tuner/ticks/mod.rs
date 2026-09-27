@@ -55,6 +55,9 @@ mod trade_pane;
 mod unmodelled;
 mod variants;
 
+#[cfg(test)]
+mod tests;
+
 impl AnalyticsView {
     /// The deal table card — sits UNDER the strategy list, where the coin table sits in "By
     /// coin".
@@ -615,8 +618,11 @@ impl AnalyticsView {
                     )
                 };
                 // A variant that leaves a deal open cannot be scored honestly: no number shows.
+                // One scored on too few deals is shown, never coloured as a gain.
                 if self.ticks.var_open > 0 {
                     label.blanked()
+                } else if self.ticks.variant_too_few().is_some() {
+                    label.muted()
                 } else {
                     label
                 }
@@ -666,16 +672,25 @@ struct VarPart {
 }
 
 impl AnalyticsView {
-    /// The variant column's parts, in the order the line shows them: a column not scored, a
-    /// search answer that loses to the fact out of sample or on train, the holdout against the
-    /// fact, the deals without a result, no out-of-sample check, the search base's own cut.
+    /// The variant column's parts, in the order the line shows them. A search answer's
+    /// out-of-sample status comes first — the holdout against the fact, a holdout the answer
+    /// left open, or no check at all — so it is always one of the two tokens on screen; then a
+    /// column scored on too few deals to recommend, a column not scored, an answer that loses to
+    /// the fact out of sample or on train, the deals without a result, the search base's own cut.
     /// The search's verdict speaks only while the column still is its point
     /// ([`state::TicksState::current_result`]).
     fn ticks_variant_parts(&self) -> Vec<VarPart> {
-        use moon_core::db::tuner::ticks::search::MIN_HOLDOUT;
-        let fmt = super::super::summary::fmt_signed;
+        use moon_core::db::tuner::ticks::search::MIN_SEARCH_DEALS;
         let part = |short: String, long: String, warn: bool| VarPart { short, long, warn };
-        let mut parts = Vec::new();
+        let result = self.ticks.current_result();
+        let mut parts: Vec<VarPart> = result.map(holdout_part).into_iter().collect();
+        if let Some(n) = self.ticks.variant_too_few() {
+            parts.push(part(
+                t!("analytics.ticks.too_few_short").to_string(),
+                t!("analytics.ticks.var_too_few", n = n, min = MIN_SEARCH_DEALS).to_string(),
+                true,
+            ));
+        }
         let open = self.ticks.var_open;
         if open > 0 {
             parts.push(part(
@@ -684,7 +699,6 @@ impl AnalyticsView {
                 true,
             ));
         }
-        let result = self.ticks.current_result();
         if let Some(r) = result
             && r.holdout_loses
         {
@@ -703,37 +717,6 @@ impl AnalyticsView {
                 true,
             ));
         }
-        match result.and_then(|r| r.holdout.as_ref().map(|h| (r, h))) {
-            // Deals the answer left open are not in its holdout, all are in the fact's: the
-            // two profits are over different sets and are not printed side by side.
-            Some((r, _)) if r.holdout_open > 0 => {
-                let text = t!("analytics.ticks.holdout_open", n = r.holdout_open).to_string();
-                parts.push(part(text.clone(), text, true));
-            }
-            Some((r, holdout)) if holdout.n >= MIN_HOLDOUT => {
-                let fact = r
-                    .fact_holdout
-                    .as_ref()
-                    .map_or_else(|| "—".to_string(), |f| fmt(f.profit));
-                parts.push(part(
-                    t!(
-                        "analytics.ticks.holdout_short",
-                        profit = fmt(holdout.profit),
-                        fact = fact.clone()
-                    )
-                    .to_string(),
-                    t!(
-                        "analytics.ticks.holdout_vs_fact",
-                        n = holdout.n,
-                        profit = fmt(holdout.profit),
-                        fact = fact
-                    )
-                    .to_string(),
-                    false,
-                ));
-            }
-            _ => {}
-        }
         let untraded = self.ticks.var_untraded;
         if untraded > 0 {
             parts.push(part(
@@ -742,29 +725,66 @@ impl AnalyticsView {
                 false,
             ));
         }
-        if let Some(r) = result {
-            // No holdout, or one too small to be a check: fitted and judged on the same deals.
-            match &r.holdout {
-                None => parts.push(part(
-                    t!("analytics.ticks.whole_period_short").to_string(),
-                    t!("analytics.ticks.whole_period").to_string(),
-                    true,
-                )),
-                Some(h) if h.n < MIN_HOLDOUT => parts.push(part(
-                    t!("analytics.ticks.whole_period_short").to_string(),
-                    t!("analytics.ticks.holdout_small", n = h.n).to_string(),
-                    true,
-                )),
-                Some(_) => {}
-            }
-            // The search's base can hold edits the "Fact" column's does not: its own cut.
-            if r.stats.left_open > 0 {
-                let text =
-                    t!("analytics.ticks.search_base_open", n = r.stats.left_open).to_string();
-                parts.push(part(text.clone(), text, false));
-            }
+        // The search's base can hold edits the "Fact" column's does not: its own cut.
+        if let Some(r) = result
+            && r.stats.left_open > 0
+        {
+            let text = t!("analytics.ticks.search_base_open", n = r.stats.left_open).to_string();
+            parts.push(part(text.clone(), text, false));
         }
         parts
+    }
+}
+
+/// A search answer's out-of-sample status — every answer has one: the holdout against the
+/// fact, a holdout the answer left open, or no check (no holdout, or one under
+/// [`MIN_HOLDOUT`](moon_core::db::tuner::ticks::search::MIN_HOLDOUT)): fitted and judged on the
+/// same deals.
+fn holdout_part(r: &moon_core::db::tuner::ticks::search::SearchResult) -> VarPart {
+    use moon_core::db::tuner::ticks::search::MIN_HOLDOUT;
+    let fmt = super::super::summary::fmt_signed;
+    let whole = |long: String| VarPart {
+        short: t!("analytics.ticks.whole_period_short").to_string(),
+        long,
+        warn: true,
+    };
+    match &r.holdout {
+        None => whole(t!("analytics.ticks.whole_period").to_string()),
+        Some(h) if h.n < MIN_HOLDOUT => {
+            whole(t!("analytics.ticks.holdout_small", n = h.n).to_string())
+        }
+        // Deals the answer left open are not in its holdout, all are in the fact's: the two
+        // profits are over different sets and are not printed side by side.
+        Some(_) if r.holdout_open > 0 => {
+            let text = t!("analytics.ticks.holdout_open", n = r.holdout_open).to_string();
+            VarPart {
+                short: text.clone(),
+                long: text,
+                warn: true,
+            }
+        }
+        Some(holdout) => {
+            let fact = r
+                .fact_holdout
+                .as_ref()
+                .map_or_else(|| "—".to_string(), |f| fmt(f.profit));
+            VarPart {
+                short: t!(
+                    "analytics.ticks.holdout_short",
+                    profit = fmt(holdout.profit),
+                    fact = fact.clone()
+                )
+                .to_string(),
+                long: t!(
+                    "analytics.ticks.holdout_vs_fact",
+                    n = holdout.n,
+                    profit = fmt(holdout.profit),
+                    fact = fact
+                )
+                .to_string(),
+                warn: false,
+            }
+        }
     }
 }
 

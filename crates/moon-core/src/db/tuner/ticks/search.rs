@@ -169,6 +169,12 @@ pub enum SearchMiss {
     /// No point the search visited closed every deal it bought inside the tape with something
     /// standing to close each trade — a stop, or a trailing without a take profit ([`closing`]).
     Unclosed,
+    /// The scored set holds fewer than [`MIN_SEARCH_DEALS`] deals: whatever a search fits on it
+    /// is noise, so none is run ([`sample_floor`]).
+    TooFew {
+        /// Deals the set holds.
+        n: usize,
+    },
 }
 
 /// How a search went — what shows whether its restarts and passes changed anything.
@@ -1197,6 +1203,24 @@ pub fn default_min_n(train_n: usize) -> i64 {
 /// The fewest held-back deals that make an out-of-sample check: a holdout under this is no
 /// check at all, and the answer reads as fitted and judged on the same deals.
 pub const MIN_HOLDOUT: i64 = 5;
+
+/// The fewest deals a search of the Entry/Exit axis is fitted on: under it a point is fitted
+/// on noise. 20 keeps, at the 70 % training share, at least 6 held-back deals — above
+/// [`MIN_HOLDOUT`], so every answer the search gives can be checked out of sample.
+pub const MIN_SEARCH_DEALS: usize = 20;
+
+/// Whether a scored set of `n` deals is large enough to search ([`MIN_SEARCH_DEALS`]) — the
+/// one rule both the search buttons and a hand-typed variant's column read.
+///
+/// Returns:
+///     `Err(SearchMiss::TooFew)` under the floor.
+pub fn sample_floor(n: usize) -> Result<(), SearchMiss> {
+    if n < MIN_SEARCH_DEALS {
+        Err(SearchMiss::TooFew { n })
+    } else {
+        Ok(())
+    }
+}
 
 /// The score of one explicit set of values over `deals` — a variant column: its tally, the
 /// spend of the deals it traded, and the deals it left open or never traded.
