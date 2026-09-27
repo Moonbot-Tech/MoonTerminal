@@ -31,6 +31,20 @@ status.connection:
   ru: "Соединение: %{value}"
   en: "Connection: %{value}"
   es: "Conexión: %{value}"
+# Report history still downloading on one or more ready cores. %{value} is a percent ("43%"),
+# prefixed with the core count when there are several ("2 · 43%"), or "…" before the first page.
+status.reports_sync:
+  ru: "Отчёты ↓ %{value}"
+  en: "Reports ↓ %{value}"
+  es: "Informes ↓ %{value}"
+status.reports_sync_tip:
+  ru: "Догружается история отчётов:"
+  en: "Report history is downloading:"
+  es: "Descargando el historial de informes:"
+status.reports_sync_row:
+  ru: "%{name}: %{percent} · строк %{rows}"
+  en: "%{name}: %{percent} · %{rows} rows"
+  es: "%{name}: %{percent} · %{rows} filas"
 status.license:
   ru: "Лицензия: %{value}"
   en: "License: %{value}"

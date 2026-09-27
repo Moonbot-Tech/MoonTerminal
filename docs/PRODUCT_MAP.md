@@ -99,7 +99,8 @@ exchange limits (money minimum, order and leverage ceiling); the manual
 strategy is owned by the core (MS/Hook popups, Moonbot's stop rule).
 
 **Report**: a full local replica of every core's report DB (checkpoint +
-live-row map, survives drops), USDT valuation at trade time
+live-row map + catch-up frontier, survives drops and restarts mid-download; the
+status bar shows a running download), USDT valuation at trade time
 (two modes, COIN-M in BTC), filters on everything, multi-select of rows, marking
 deleted, comments, the core log for a trade.
 
@@ -139,7 +140,10 @@ everywhere — cores, strategies, lines, figures, badges, news tags; a custom HE
 is remembered app-wide, last 20, the grid scrolls),
 locales ru/en/es, self-update
 (a check every 15 min, no restart), Settings and strategy backups
-(`backups/`, daily), one instance per install folder, FireTest
+(`backups/`, daily), "Data by core" in Settings → Storage (whose reports,
+strategies, traces and warnings the databases hold — deleted connections
+included — on the Connections tree; delete them per core, a connected core's
+reports download again), one instance per install folder, FireTest
 (`chart-smoke`) — the built-in chart bench.
 
 **Your own sounds**: the `sounds/` folder next to the exe (on macOS — in the data directory),

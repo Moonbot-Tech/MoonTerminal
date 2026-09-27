@@ -7,7 +7,7 @@
 //! Kept separate from `reports.sqlite` on purpose: warning history is the only copy and must survive
 //! a report-replica reset (see `paths::core_warnings_db_path`).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::path::Path;
 
@@ -367,6 +367,58 @@ impl WarnStore {
             params![cutoff_ms],
         )
     }
+
+    /// Delete one core's warning history (Settings → Storage).
+    ///
+    /// Its own episodes go with their slices, and so do the slices it contributed to server-wide
+    /// episodes (`badge` = the core id). The server-wide episodes themselves stay: they describe
+    /// the machine, which other cores may share, and carry no core of their own to delete by.
+    ///
+    /// Args:
+    ///     core: The core's uid.
+    ///
+    /// Returns:
+    ///     How many of the core's own episodes were deleted.
+    pub(crate) fn forget_core(&self, core: CoreId) -> rusqlite::Result<usize> {
+        let core = core as i64;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM core_warning_series WHERE badge = ?1 OR episode_id IN              (SELECT id FROM core_warnings WHERE core_id = ?1)",
+            params![core],
+        )?;
+        let episodes = tx.execute(
+            "DELETE FROM core_warnings WHERE core_id = ?1",
+            params![core],
+        )?;
+        tx.commit()?;
+        Ok(episodes)
+    }
+}
+
+/// Episodes per core in the warnings database at `path`, read on a read-only connection so the
+/// Storage tab can count off the UI thread. A missing file is an empty map; server-wide episodes
+/// belong to no core and are not counted.
+pub(crate) fn episodes_by_core(path: &Path) -> rusqlite::Result<HashMap<CoreId, u64>> {
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
+    let mut stmt = conn.prepare(
+        "SELECT core_id, COUNT(*) FROM core_warnings WHERE core_id IS NOT NULL GROUP BY core_id",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (core, n) = row?;
+        if let (Ok(core), Ok(n)) = (u64::try_from(core), u64::try_from(n)) {
+            out.insert(core, n);
+        }
+    }
+    Ok(out)
 }
 
 /// Encode a scalar `u16` history slice as `[base_ms: i64 LE][n: u16 LE][n×(value u16 LE)]`.

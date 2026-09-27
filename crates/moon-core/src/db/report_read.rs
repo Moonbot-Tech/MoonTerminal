@@ -1,5 +1,7 @@
 //! Read layer for the Reports window: filters, source projection, sort/merge, and aggregates.
 
+use std::collections::HashMap;
+
 use rusqlite::Connection;
 use rusqlite::types::Value;
 
@@ -2569,6 +2571,62 @@ pub(crate) fn max_core_uid_in(
         .map_err(|e| read_fail(ctx, e))?;
     // A negative value cannot be a uid; dropping it beats wrapping into a huge `u64`.
     Ok(found.and_then(|v| u64::try_from(v).ok()))
+}
+
+/// Row count per `core_uid` in one table, or an empty map when the table does not exist.
+///
+/// One grouped pass over the `core_uid`-leading key: 16 ms on a 608k-row replica (29 cores),
+/// 1-2 ms on the strategy and trace stores. Shared by every store the Storage tab counts.
+pub(crate) fn count_by_core(
+    conn: &Connection,
+    table: &str,
+    ctx: &'static str,
+) -> ReadResult<HashMap<u64, u64>> {
+    let present: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+            [table],
+            |r| r.get(0),
+        )
+        .map_err(|e| read_fail(ctx, e))?;
+    if present == 0 {
+        return Ok(HashMap::new());
+    }
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT core_uid, COUNT(*) FROM {table} GROUP BY core_uid"
+        ))
+        .map_err(|e| read_fail(ctx, e))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(|e| read_fail(ctx, e))?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (uid, n) = row.map_err(|e| read_fail(ctx, e))?;
+        if let (Ok(uid), Ok(n)) = (u64::try_from(uid), u64::try_from(n)) {
+            out.insert(uid, n);
+        }
+    }
+    Ok(out)
+}
+
+/// Every core with report rows, newest first, with its newest name and its row count across both
+/// schemas — the Storage tab's list of whose data the replica holds.
+pub fn rows_by_core(conn: &Connection) -> ReadResult<Vec<(u64, String, u64)>> {
+    const CTX: &str = "отчёты: rows_by_core";
+    let mut counts: HashMap<u64, u64> = HashMap::new();
+    for src in read_sources_res(conn)? {
+        if !src.cols.contains("core_uid") {
+            continue;
+        }
+        for (uid, n) in count_by_core(conn, src.table, CTX)? {
+            *counts.entry(uid).or_default() += n;
+        }
+    }
+    Ok(distinct_cores(conn)?
+        .into_iter()
+        .map(|(uid, name)| (uid, name, counts.get(&uid).copied().unwrap_or(0)))
+        .collect())
 }
 
 /// Highest `core_uid` any report row has ever carried, across both schemas.

@@ -174,6 +174,12 @@ pub enum TraceDbMsg {
     },
     /// This core's replica catch-up completed; list what closed recently and is still unknown.
     Backfill { core_uid: u64, ask: AskSink },
+    /// The user deleted this core's data (Settings → Storage): drop every answer filed for it.
+    ForgetCore {
+        core_uid: u64,
+        /// Answered `true` once the delete committed, `false` when it failed.
+        done: SyncSender<bool>,
+    },
 }
 
 /// Channel to the writer plus its commit generation.
@@ -336,6 +342,22 @@ fn spawn_writer() -> Option<TraceSink> {
                                 "[x] order traces: core {core_uid} backfill listing failed: {e}"
                             ),
                         }
+                    }
+                    TraceDbMsg::ForgetCore { core_uid, done } => {
+                        let ok = match forget_core(&conn, core_uid) {
+                            Ok(answers) => {
+                                gen_writer.fetch_add(1, Ordering::Relaxed);
+                                log::info!(
+                                    "order traces: core {core_uid} data deleted — {answers} answer(s)"
+                                );
+                                true
+                            }
+                            Err(e) => {
+                                log::error!("[x] order traces: core {core_uid} not deleted: {e}");
+                                false
+                            }
+                        };
+                        let _ = done.try_send(ok);
                     }
                 }
             }
@@ -663,6 +685,32 @@ fn replica_columns(conn: &Connection) -> ReadResult<Vec<String>> {
         out.push(name.map_err(|e| read_fail(CTX, e))?.to_lowercase());
     }
     Ok(out)
+}
+
+/// Delete every answer and line filed for one core, in one transaction.
+fn forget_core(conn: &Connection, core_uid: u64) -> rusqlite::Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "DELETE FROM trace_lines WHERE core_uid=?1",
+        [core_uid as i64],
+    )?;
+    let answers = tx.execute(
+        "DELETE FROM trace_answers WHERE core_uid=?1",
+        [core_uid as i64],
+    )?;
+    tx.commit()?;
+    Ok(answers)
+}
+
+/// How many closed rows each core has an answer filed for, for the Storage tab.
+///
+/// A missing file is an empty map.
+pub fn answers_by_core() -> ReadResult<HashMap<u64, u64>> {
+    const CTX: &str = "order traces: answers_by_core";
+    let Some(conn) = open_ro(&paths::order_traces_db_path())? else {
+        return Ok(HashMap::new());
+    };
+    super::count_by_core(&conn, "trace_answers", CTX)
 }
 
 /// Highest `core_uid` this store has ever recorded, for the startup uid floor.

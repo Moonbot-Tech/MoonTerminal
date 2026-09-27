@@ -27,7 +27,7 @@ mod rec_ranges;
 /// session facade keeps `session::CoreSysStatus` valid for the "Core status" panel.
 pub use crate::feed::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreIdentityFacts, CoreInitStep, CoreStartupState,
-    CoreStartupStatus, CoreSysStatus, INIT_STEPS_TOTAL,
+    CoreStartupStatus, CoreSysStatus, INIT_STEPS_TOTAL, ReportSyncProgress,
 };
 pub use run_state::{AutoAction, CoreRunState, RunSummary, TradingAction};
 pub use store::{BalanceState, CoreId, CoreStore};
@@ -99,6 +99,15 @@ pub struct ConnDown {
     pub startup: CoreStartupStatus,
 }
 
+/// One ready core whose report history is still being downloaded.
+pub struct ReportSyncRow {
+    /// Stable core identity, used to rank the list canonically.
+    pub id: CoreId,
+    /// Configured core display name.
+    pub name: String,
+    pub progress: ReportSyncProgress,
+}
+
 /// Connection summary for a status bar: ready and total counts plus non-ready core details for the
 /// tooltip.
 pub struct ConnSummary {
@@ -106,6 +115,9 @@ pub struct ConnSummary {
     pub total: usize,
     /// Non-ready cores, for canonically ordered status tooltips.
     pub down: Vec<ConnDown>,
+    /// Ready cores with a report catch-up running (#665: the only sign that history is still
+    /// arriving).
+    pub report_sync: Vec<ReportSyncRow>,
 }
 
 /// License summary for the cores in one window group.

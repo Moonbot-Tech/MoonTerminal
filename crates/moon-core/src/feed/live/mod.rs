@@ -16,6 +16,7 @@ mod convert;
 mod deadline;
 mod dirty;
 mod market_role;
+mod report_sync;
 mod shared_config;
 mod startup_watchdog;
 mod telegram;
@@ -564,6 +565,8 @@ pub(super) fn run(
     // and, when nothing changed, it carries exactly the new walk's first page. Only a check the
     // library began after the latest request may move the walk on (#742).
     let mut open_rows_check_started = false;
+    // Catch-up progress for the status bar, published only while the replica is written.
+    let mut report_sync = report_sync::ReportSyncTracker::default();
     if server.feed.reports {
         if let Some(sink) = reports {
             let start = sink.next_start(server.uid);
@@ -2222,6 +2225,13 @@ pub(super) fn run(
                                 }
                             }
                             _ => {}
+                        }
+                        if reports.is_some() {
+                            if let Some(progress) =
+                                report_sync.observe(rev, crate::util::time::now_unix_ms_i64())
+                            {
+                                let _ = tx.send(FeedMsg::ReportSync(progress));
+                            }
                         }
                         if let Some(sink) = reports {
                             match rev {

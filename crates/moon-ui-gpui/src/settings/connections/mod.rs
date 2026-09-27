@@ -20,6 +20,15 @@ mod table;
 #[cfg(test)]
 mod tests;
 
+// The same group → exchange → core tree, reused by Settings → Storage's "Data by core" list.
+pub(in crate::settings) use columns::{CONN_INDENT_MARGIN, CONN_INDENT_PAD, CONN_TABLE_INSET};
+pub(in crate::settings) use entries::{EntryLabels, flatten_entries};
+pub(in crate::settings) use tab::{
+    ServerRowMeta, group_count, group_icon, group_name, group_pill, sorted_group_rows,
+    subsection_header_row,
+};
+pub(in crate::settings) use table::conn_row_h_value;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::*;

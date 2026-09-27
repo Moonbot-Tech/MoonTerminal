@@ -92,6 +92,14 @@ pub enum StratMsg {
         /// is sent: the queue is serial, so a caller that stopped waiting does NOT cancel the work.
         done: SyncSender<Option<ForgetOutcome>>,
     },
+    /// Purge every strategy row and all history of one core, live strategies included.
+    ///
+    /// The Storage tab's "delete this core's data"; see [`write::forget_core`].
+    ForgetCore {
+        core_uid: u64,
+        /// One-shot result, `None` when the purge failed; see [`StratMsg::Forget`].
+        done: SyncSender<Option<ForgetOutcome>>,
+    },
 }
 
 /// Channel capacity: sets arrive from the core at no more than 1 Hz and are small. If the
@@ -117,7 +125,7 @@ impl StratSink {
                     StratMsg::FullSet { .. } => log::warn!(
                         "стратегии(db): очередь writer'а полна — набор пропущен (догонит следующий)"
                     ),
-                    StratMsg::Forget { .. } => log::warn!(
+                    StratMsg::Forget { .. } | StratMsg::ForgetCore { .. } => log::warn!(
                         "стратегии(db): очередь writer'а полна — забывание НЕ выполнено и не будет повторено"
                     ),
                 }
@@ -150,6 +158,17 @@ impl StratSink {
             done,
         })
         .then_some(rx)
+    }
+
+    /// Queue an irreversible purge of every strategy row of one core.
+    ///
+    /// Returns:
+    ///     A receiver for the one-shot result, or `None` when the queue refused the message. A
+    ///     timeout means "not known yet", exactly as for [`Self::forget`].
+    pub fn forget_core(&self, core_uid: u64) -> Option<Receiver<Option<ForgetOutcome>>> {
+        let (done, rx) = std::sync::mpsc::sync_channel(1);
+        self.send(StratMsg::ForgetCore { core_uid, done })
+            .then_some(rx)
     }
 
     /// Increases after each write that changes rows, allowing version-history readers to
@@ -309,6 +328,27 @@ fn spawn_writer() -> Option<StratSink> {
                             };
                         let _ = done.try_send(outcome);
                     }
+                    StratMsg::ForgetCore { core_uid, done } => {
+                        let outcome = match write::forget_core(&conn, &mut state, core_uid) {
+                            Ok(outcome) => {
+                                gen_writer.fetch_add(1, Ordering::Relaxed);
+                                log::info!(
+                                    "стратегии(db): данные ядра {core_uid} удалены — голов {}, \
+                                     версий {}",
+                                    outcome.heads,
+                                    outcome.versions
+                                );
+                                Some(outcome)
+                            }
+                            Err(e) => {
+                                log::error!(
+                                    "стратегии(db): удаление данных ядра {core_uid} не удалось: {e:#}"
+                                );
+                                None
+                            }
+                        };
+                        let _ = done.try_send(outcome);
+                    }
                 }
             }
             log::info!("стратегии(db): writer завершён");
@@ -347,6 +387,52 @@ pub fn max_core_uid() -> crate::db::ReadResult<Option<u64>> {
         max = max.max(crate::db::max_core_uid_in(&conn, table, CTX)?);
     }
     Ok(max)
+}
+
+/// What this store holds for one core, for the Storage tab.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CoreStratCounts {
+    /// The name the core last wrote its strategies under, empty when unknown.
+    pub name: String,
+    /// Head rows, live and deleted.
+    pub heads: u64,
+    /// Version rows.
+    pub versions: u64,
+}
+
+/// Heads and versions per core; a store that does not exist yet is an empty map.
+pub fn counts_by_core() -> crate::db::ReadResult<std::collections::HashMap<u64, CoreStratCounts>> {
+    const CTX: &str = "стратегии: counts_by_core";
+    let path = paths::strategies_db_path();
+    if !path.exists() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let conn = open_ro(&path).map_err(|e| crate::db::read_fail::read_fail_at(CTX, &path, e))?;
+    let heads = crate::db::count_by_core(&conn, "strategies", CTX)?;
+    let versions = crate::db::count_by_core(&conn, "strategy_versions", CTX)?;
+    let mut out: std::collections::HashMap<u64, CoreStratCounts> = std::collections::HashMap::new();
+    for (uid, n) in heads {
+        out.entry(uid).or_default().heads = n;
+    }
+    for (uid, n) in versions {
+        out.entry(uid).or_default().versions = n;
+    }
+    // `MAX(rowid)` picks the name of the head written last, which is the core's latest name.
+    let mut stmt = conn
+        .prepare(
+            "SELECT core_uid, core_name FROM strategies s WHERE rowid = \
+             (SELECT MAX(rowid) FROM strategies WHERE core_uid = s.core_uid)",
+        )
+        .map_err(|e| crate::db::read_fail::read_fail_at(CTX, &path, e))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| crate::db::read_fail::read_fail_at(CTX, &path, e))?;
+    for (uid, name) in rows.flatten() {
+        if let (Ok(uid), false) = (u64::try_from(uid), name.is_empty()) {
+            out.entry(uid).or_default().name = name;
+        }
+    }
+    Ok(out)
 }
 
 /// Read-only connection to the strategies file, with the store's shared busy timeout.

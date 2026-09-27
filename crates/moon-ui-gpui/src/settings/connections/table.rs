@@ -65,7 +65,7 @@ const FEED_FLAGS: [(&str, fn(&FeedFlags) -> bool, fn(&mut FeedFlags, bool)); 8] 
 ///
 /// Returns:
 ///     The uniform virtual-list row height in unscaled design units.
-pub(super) fn conn_row_h_value(cx: &App) -> f32 {
+pub(in crate::settings) fn conn_row_h_value(cx: &App) -> f32 {
     design::fit_h_value(cx, 30.0, 13.0, 8.5)
 }
 

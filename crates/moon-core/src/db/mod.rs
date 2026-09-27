@@ -53,7 +53,6 @@ pub use reader_budget::ReportReader;
 pub use rep::{DbMsg, ReportSink};
 pub(crate) use rep::{OPEN_ROWS_PAGE, ReportStart};
 pub use report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS, OffsetSegment, ReportAxis, ReportStamp};
-pub(crate) use report_read::max_core_uid_in;
 pub use report_read::{
     CHART_TRADE_HISTORY_ATTACH, COLUMNS_ADDED_SINCE_V2, ChartTradeHistory, ChartTradeRecord,
     DISPLAY_COLUMNS, PROFIT_PERCENT_COLUMN, ProfitMetric, ReportFilter, ReportStrategy,
@@ -61,8 +60,9 @@ pub use report_read::{
     VALUATION_PROFIT_COLUMN, VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN, display_columns,
     distinct_cores, distinct_strategies, max_core_uid, open_rows_for_bound,
     query_chart_trade_history, query_chart_trade_history_for_cores, query_reports, query_totals,
-    strategy_purge_rows,
+    rows_by_core, strategy_purge_rows,
 };
+pub(crate) use report_read::{count_by_core, max_core_uid_in};
 pub use trade_meta::{TradeMeta, query_trade_meta};
 
 use read_fail::read_fail;
@@ -208,6 +208,12 @@ pub fn report_row_count() -> ReadResult<i64> {
         r.get(0)
     })
     .map_err(|e| read_fail(CTX, e))
+}
+
+/// Report rows per core with each core's newest name, for the Storage tab.
+pub fn report_rows_by_core() -> ReadResult<Vec<(u64, String, u64)>> {
+    let conn = open_reader()?;
+    rows_by_core(&conn)
 }
 
 /// Writer-channel capacity: backpressure instead of OOM.
@@ -555,6 +561,24 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
                                 open_row_checks.push((core_uid, rec_ids, reports));
                             }
                         }
+                        PostCommit::CoreForgotten {
+                            core_uid,
+                            resync,
+                            done,
+                        } => {
+                            rep::commit_replica_reset(&rep_state, core_uid);
+                            quote::coin_m::forget_core(core_uid);
+                            if let Some(reports) = resync {
+                                recreated_resyncs.push((core_uid, reports));
+                            }
+                            open_row_checks.retain(|(uid, ..)| *uid != core_uid);
+                            open_rows_walk.forget(core_uid);
+                            let _ = done.try_send(true);
+                        }
+                        PostCommit::PageApplied {
+                            core_uid,
+                            last_rec_id,
+                        } => rep::commit_page(&rep_state, core_uid, last_rec_id),
                         PostCommit::AliveMap {
                             core_uid,
                             checkpoint,
@@ -584,13 +608,19 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
                 // library restart catch-up on `page_applied`, and this request must land behind
                 // that restart to replace its history depth rather than be replaced by it.
                 for (core_uid, reports) in recreated_resyncs.drain(..) {
-                    if let Err(error) = reports.sync(moonproto::ReportSyncRequest::fresh(
+                    match reports.sync(moonproto::ReportSyncRequest::fresh(
                         moonproto::ReportHistoryDepth::All,
                     )) {
-                        log::warn!(
-                            "отчёты(rep): ядро {core_uid} — полный sync после сброса реплики не \
-                             ушёл: {error:?}"
-                        );
+                        Ok(ticket) => {
+                            rep::resync_declared(&mut rep_state, core_uid, Some(ticket.sync_id))
+                        }
+                        Err(error) => {
+                            rep::resync_declared(&mut rep_state, core_uid, None);
+                            log::warn!(
+                                "отчёты(rep): ядро {core_uid} — полный sync после сброса реплики \
+                                 не ушёл: {error:?}"
+                            );
+                        }
                     }
                 }
                 for (core_uid, rec_ids, reports) in open_row_checks.drain(..) {
@@ -700,6 +730,19 @@ enum PostCommit {
         core_uid: u64,
         redeclare_history: MoonReports,
     },
+    /// The user deleted a core's report data: reset what the writer remembers about it, as a
+    /// replica reset does, then answer the caller.
+    ///
+    /// `resync` re-declares the full-history download on a connected core, queued behind the
+    /// acknowledgements exactly like a reset's; without it the next connection starts fresh.
+    CoreForgotten {
+        core_uid: u64,
+        resync: Option<MoonReports>,
+        done: std::sync::mpsc::SyncSender<bool>,
+    },
+    /// A catch-up page reached SQLite with its frontier: a reconnect later in this session resumes
+    /// after it. Ordered with the replica reset, so a wipe later in the same batch wins.
+    PageApplied { core_uid: u64, last_rec_id: i64 },
     /// An alive map reached SQLite: publish the checkpoint it committed with.
     AliveMap {
         core_uid: u64,
@@ -815,6 +858,7 @@ fn apply_msg(
                 row,
                 rep::RowSource::Live,
             )?;
+            rep::note_live_row(conn, rep_state, *core_uid)?;
             valuation::stage_row(conn, valuation::TradeSource::Typed, *core_uid, row.rec_id)?;
             Ok(ApplyEffect::immediate(false))
         }
@@ -872,7 +916,14 @@ fn apply_msg(
             page,
             ack,
         } => {
-            rep::apply_page(conn, rep_state, *core_uid, core_name, page)?;
+            // A page of a download the user's delete superseded is acknowledged, never applied.
+            if !rep::apply_page(conn, rep_state, *core_uid, core_name, page)? {
+                return Ok(ApplyEffect {
+                    page_ack: true,
+                    publication: None,
+                    post_commit: None,
+                });
+            }
             if page.database_recreated {
                 valuation::stage_rescan_core(conn, *core_uid)?;
             }
@@ -886,7 +937,10 @@ fn apply_msg(
                     redeclare_history: ack.clone(),
                 })
             } else {
-                effect
+                effect.publishing(PostCommit::PageApplied {
+                    core_uid: *core_uid,
+                    last_rec_id: page.last_rec_id,
+                })
             })
         }
         DbMsg::SyncComplete { core_uid, done } => {
@@ -904,6 +958,12 @@ fn apply_msg(
             map,
             checkpoint,
         } => {
+            if rep::alive_map_blocked(rep_state, *core_uid) {
+                log::info!(
+                    "отчёты(rep): ядро {core_uid} — карта живых строк отменённой догрузки пропущена"
+                );
+                return Ok(ApplyEffect::maintenance());
+            }
             let applied = rep::apply_alive_map(
                 conn,
                 rep_state,
@@ -940,6 +1000,27 @@ fn apply_msg(
                 }),
             )
         }
+        DbMsg::ForgetCore {
+            core_uid,
+            resync,
+            forget,
+            done,
+        } => {
+            rep::apply_forget_core(conn, rep_state, *core_uid, resync.is_some(), *forget)?;
+            // The clock-offset segments went with a forgotten core: the axis moved, exactly as
+            // when a segment is stored, and every cache keyed on it must see that.
+            if *forget {
+                bump_axis_generation(conn)?;
+            }
+            valuation::stage_rescan_core(conn, *core_uid)?;
+            Ok(
+                ApplyEffect::immediate(false).publishing(PostCommit::CoreForgotten {
+                    core_uid: *core_uid,
+                    resync: resync.clone(),
+                    done: done.clone(),
+                }),
+            )
+        }
         DbMsg::ValuationAck { through_seq } => {
             valuation::ack_outbox(conn, *through_seq)?;
             Ok(ApplyEffect::maintenance())
@@ -949,6 +1030,11 @@ fn apply_msg(
             after,
             reports,
         } => {
+            // A new walk is how a feed announces a new client or a reconnect: see
+            // `rep::feed_restarted`.
+            if after.is_none() {
+                rep::feed_restarted(rep_state, *core_uid);
+            }
             let rec_ids =
                 rep::apply_recheck_open_rows(conn, rep_state, *core_uid, after.as_deref())?;
             Ok(

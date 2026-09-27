@@ -60,8 +60,8 @@ pub(super) enum RowSource {
 pub(crate) enum ReportStart {
     /// No local rows: request the core's full retained history.
     Fresh,
-    /// Local rows but no stored epoch: resume at the next local id until an alive map commits the
-    /// first epoch-bearing checkpoint.
+    /// Local rows but no stored epoch: resume after the catch-up frontier until an alive map
+    /// commits the first epoch-bearing checkpoint.
     Resume(i64),
     /// A checkpoint committed together with an applied alive map.
     Checkpoint(ReportSyncCheckpoint),
@@ -169,6 +169,21 @@ pub enum DbMsg {
         after: Option<Arc<[i64]>>,
         reports: MoonReports,
     },
+    /// The user deleted this core's report data (Settings → Storage).
+    ///
+    /// Wipes the core's replica rows, legacy rows and start state in one transaction. `resync`
+    /// carries the live reports handle when the core is connected: the writer then re-declares the
+    /// full-history download itself after commit, like [`DbMsg::ReplicaRecreated`], so the wipe
+    /// and the new download cannot interleave. `None` leaves the core fresh for its next
+    /// connection. `forget` also drops what describes the core rather than its report — the clock
+    /// offset segments and the completed-sync marker — for a core that is gone for good.
+    ForgetCore {
+        core_uid: u64,
+        resync: Option<MoonReports>,
+        forget: bool,
+        /// Answered `true` once the wipe committed; dropped unanswered when the batch failed.
+        done: SyncSender<bool>,
+    },
     /// Acknowledge valuation outbox rows after their derived values committed.
     ///
     /// This internal message returns through the sole report writer so the valuation worker never
@@ -238,6 +253,15 @@ pub(super) struct RepState {
     /// Whether every replica index is guaranteed to exist, avoiding CREATE calls
     /// for every core schema.
     indexes_done: bool,
+    /// Cores whose data the user deleted while connected, waiting for the re-download this writer
+    /// declared: `None` until the declaration returned its `sync_id`.
+    ///
+    /// Until that download's first page arrives, every other page of the core is acknowledged but
+    /// not applied, and every alive map is skipped. The catch-up the delete replaced may still
+    /// have a page — or, right after its completion, an alive map — in flight, and applying either
+    /// after the wipe would put back rows the user removed, a frontier from the dead download, or
+    /// its high checkpoint (see [`apply_forget_core`]).
+    awaiting_resync: HashMap<u64, Option<u64>>,
 }
 
 /// Every index the replica's read paths need, as `(name, columns)`.
@@ -352,7 +376,21 @@ pub(super) fn init(
         let mut stmt = conn.prepare(&format!("SELECT DISTINCT core_uid FROM {TABLE}"))?;
         let uids: Vec<i64> = stmt.query_map([], |r| r.get(0))?.flatten().collect();
         for uid in uids {
-            map.insert(uid as u64, startup_start(conn, uid));
+            let start = startup_start(conn, uid);
+            // A replica written before the frontier existed resumes at its local maximum, as it
+            // always did. Pin that as its frontier NOW: live rows from this session would
+            // otherwise raise the maximum, and an interruption before the first page would resume
+            // above them. Best effort: failing it costs only that protection, never the writer.
+            if let ReportStart::Resume(from) = start {
+                if load_frontier(conn, uid as u64).is_none() {
+                    if let Err(error) = record_frontier(conn, uid as u64, from - 1) {
+                        log::warn!(
+                            "отчёты(rep): ядро {uid} — рубеж догрузки не закреплён: {error}"
+                        );
+                    }
+                }
+            }
+            map.insert(uid as u64, start);
         }
     }
     let legacy_exists = table_exists(conn, "closed_sell_reports");
@@ -377,6 +415,7 @@ pub(super) fn init(
         synced,
         vacuum_pending: false,
         indexes_done,
+        awaiting_resync: HashMap::new(),
     };
     // Purge rows left after SyncComplete by older terminal versions that still
     // consumed the legacy close-SQL stream; otherwise the merged reader sees duplicates.
@@ -609,7 +648,11 @@ pub(super) fn apply_set_deleted(
     Ok(())
 }
 
-/// Drop one core's replica rows and its durable checkpoint.
+/// Drop one core's replica rows and its durable checkpoint, and record frontier 0.
+///
+/// Frontier 0, not no frontier: rows can land again before the next catch-up's first page — a
+/// live row in the same writer batch, before the in-memory start turned fresh — and without a
+/// frontier the next start would read them as an old replica and resume above them.
 ///
 /// The ONE reset used by both recreation signals — the `database_recreated` page and the alive
 /// map's [`moonproto::ReportAliveMapOutcome::DatabaseRecreated`]. Splitting them would leave the
@@ -622,7 +665,8 @@ fn reset_replica(conn: &Connection, core_uid: u64) -> rusqlite::Result<()> {
         &format!("DELETE FROM {TABLE} WHERE core_uid=?1"),
         [core_uid as i64],
     )?;
-    clear_checkpoint(conn, core_uid)
+    clear_checkpoint(conn, core_uid)?;
+    meta_set_i64(conn, &frontier_key(core_uid), 0)
 }
 
 /// Publish the in-memory half of a committed [`reset_replica`].
@@ -647,7 +691,20 @@ pub(super) fn apply_page(
     core_uid: u64,
     core_name: &str,
     page: &ReportSyncPage,
-) -> rusqlite::Result<()> {
+) -> rusqlite::Result<bool> {
+    let sync_id = page.ticket.sync_id;
+    match st.awaiting_resync.get(&core_uid).copied() {
+        Some(Some(expected)) if expected == sync_id => {
+            st.awaiting_resync.remove(&core_uid);
+        }
+        Some(_) => {
+            log::info!(
+                "отчёты(rep): ядро {core_uid} — страница отменённой догрузки пропущена (sync {sync_id})"
+            );
+            return Ok(false);
+        }
+        None => {}
+    }
     if page.database_recreated {
         reset_replica(conn, core_uid)?;
         log::warn!(
@@ -657,7 +714,79 @@ pub(super) fn apply_page(
     for row in page.rows.iter() {
         apply_upsert(conn, st, core_uid, core_name, row, RowSource::CatchUpPage)?;
     }
+    // A recreated page's rows belong to the restart from zero, not to a contiguous walk.
+    if !page.database_recreated {
+        record_frontier(conn, core_uid, page.last_rec_id)?;
+    }
+    Ok(true)
+}
+
+/// Delete a core's report data at the user's request.
+///
+/// The replica rows and start state go through [`reset_replica`], the same reset the recreation
+/// signals use, so the next download starts from zero. Legacy rows go too: the Report and
+/// Analytics readers merge both tables, and a core left with legacy rows would stay listed.
+/// `forget` additionally removes the clock-offset segments and the completed-sync marker, which
+/// a core that keeps connecting still needs.
+pub(super) fn apply_forget_core(
+    conn: &Connection,
+    st: &mut RepState,
+    core_uid: u64,
+    resync: bool,
+    forget: bool,
+) -> rusqlite::Result<()> {
+    // The download the writer re-declares after commit is the only one whose pages may land now;
+    // see `RepState::awaiting_resync`.
+    if resync {
+        st.awaiting_resync.insert(core_uid, None);
+    }
+    reset_replica(conn, core_uid)?;
+    if st.legacy_exists {
+        conn.execute(
+            "DELETE FROM closed_sell_reports WHERE core_uid=?1",
+            [core_uid as i64],
+        )?;
+    }
+    if forget {
+        if table_exists(conn, core_offset::TABLE) {
+            conn.execute(
+                &format!("DELETE FROM {} WHERE core_uid=?1", core_offset::TABLE),
+                [core_uid as i64],
+            )?;
+        }
+        super::meta_delete(conn, &format!("rep_synced_{core_uid}"))?;
+        // The reset's frontier 0 guards rows that land before the next download; a forgotten core
+        // has no next download.
+        super::meta_delete(conn, &frontier_key(core_uid))?;
+        st.synced.remove(&core_uid);
+    }
+    log::info!("отчёты(rep): данные ядра {core_uid} удалены по запросу (forget={forget})");
     Ok(())
+}
+
+/// Record the `sync_id` of the re-download the writer declared after a delete, or give up
+/// waiting when the declaration failed, so the core's pages are not skipped for good.
+pub(super) fn resync_declared(st: &mut RepState, core_uid: u64, sync_id: Option<u64>) {
+    if let Some(slot) = st.awaiting_resync.get_mut(&core_uid) {
+        match sync_id {
+            Some(id) => *slot = Some(id),
+            None => {
+                st.awaiting_resync.remove(&core_uid);
+            }
+        }
+    }
+}
+
+/// Whether a core's alive maps are skipped: it waits for the download that replaced a deleted
+/// replica, and any map arriving now answers the catch-up the delete superseded.
+pub(super) fn alive_map_blocked(st: &RepState, core_uid: u64) -> bool {
+    st.awaiting_resync.contains_key(&core_uid)
+}
+
+/// A new feed client for this core declares its own download with a ticket this writer never
+/// saw: stop waiting for the one the writer declared on the old client.
+pub(super) fn feed_restarted(st: &mut RepState, core_uid: u64) {
+    st.awaiting_resync.remove(&core_uid);
 }
 
 /// Wipe a core's replica because the core serves another report database.
@@ -882,19 +1011,97 @@ fn load_checkpoint(conn: &Connection, core_uid: u64) -> Option<ReportSyncCheckpo
 }
 
 /// Write a core's durable checkpoint. Only [`apply_alive_map`] calls this.
+///
+/// The catch-up frontier goes with it: a checkpoint is the better start state (it carries the
+/// epoch), and [`startup_start`] never reads a frontier beside one.
 fn store_checkpoint(
     conn: &Connection,
     core_uid: u64,
     checkpoint: ReportSyncCheckpoint,
 ) -> rusqlite::Result<()> {
     meta_set_i64(conn, &epoch_key(core_uid), i64::from(checkpoint.epoch))?;
-    meta_set_i64(conn, &next_key(core_uid), checkpoint.next_from_rec_id)
+    meta_set_i64(conn, &next_key(core_uid), checkpoint.next_from_rec_id)?;
+    super::meta_delete(conn, &frontier_key(core_uid))
 }
 
-/// Drop a core's durable checkpoint, so its next sync starts from zero.
+/// Drop a core's durable checkpoint and catch-up frontier, so its next sync starts from zero.
 fn clear_checkpoint(conn: &Connection, core_uid: u64) -> rusqlite::Result<()> {
     super::meta_delete(conn, &epoch_key(core_uid))?;
-    super::meta_delete(conn, &next_key(core_uid))
+    super::meta_delete(conn, &next_key(core_uid))?;
+    super::meta_delete(conn, &frontier_key(core_uid))
+}
+
+/// `app_meta` key holding the highest `newRecID` a catch-up page has delivered for a core that has
+/// no checkpoint yet.
+///
+/// Live rows are written from the first second of a connection while catch-up walks up from below,
+/// so the local maximum says nothing about how far catch-up got. Without this key a start
+/// interrupted before the alive map resumed ABOVE the live rows and never asked for the span under
+/// them again (#665).
+fn frontier_key(core_uid: u64) -> String {
+    format!("rep_frontier_{core_uid}")
+}
+
+/// Read a core's catch-up frontier.
+fn load_frontier(conn: &Connection, core_uid: u64) -> Option<i64> {
+    super::meta_get_i64(conn, &frontier_key(core_uid)).filter(|&v| v >= 0)
+}
+
+/// Raise a core's catch-up frontier to `last_rec_id`, never lower it.
+///
+/// Called in the transaction that applies the page, so the frontier and the rows it vouches for
+/// commit together. An empty page reports `last_rec_id = 0` and moves nothing.
+fn record_frontier(conn: &Connection, core_uid: u64, last_rec_id: i64) -> rusqlite::Result<()> {
+    if last_rec_id <= 0 || load_frontier(conn, core_uid).is_some_and(|f| f >= last_rec_id) {
+        return Ok(());
+    }
+    meta_set_i64(conn, &frontier_key(core_uid), last_rec_id)
+}
+
+/// Record "no page delivered yet" for a core replicating from zero, once it gets its first rows.
+///
+/// A fresh core's first rows are usually LIVE rows, landing before the first catch-up page
+/// commits. Without a frontier the next start would read the local maximum and resume above them;
+/// frontier 0 makes it resume from the beginning. Only while the core's start state is fresh —
+/// after the first committed page it is [`ReportStart::Resume`] and the page owns the frontier.
+pub(super) fn note_live_row(
+    conn: &Connection,
+    st: &RepState,
+    core_uid: u64,
+) -> rusqlite::Result<()> {
+    let fresh = st
+        .starts
+        .lock()
+        .map(|m| matches!(m.get(&core_uid), None | Some(ReportStart::Fresh)))
+        .unwrap_or(false);
+    if !fresh {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO app_meta (key, value) VALUES (?1, '0')",
+        [frontier_key(core_uid)],
+    )?;
+    Ok(())
+}
+
+/// Publish the in-memory half of a committed catch-up page: the core's next connection in this
+/// session resumes after it, as the next process would from the stored frontier.
+///
+/// A checkpoint is left alone — it carries the epoch, and the frontier never replaces it.
+pub(super) fn commit_page(st: &RepState, core_uid: u64, last_rec_id: i64) {
+    if last_rec_id <= 0 {
+        return;
+    }
+    if let Ok(mut m) = st.starts.lock() {
+        let next = last_rec_id + 1;
+        match m.get(&core_uid).copied() {
+            Some(ReportStart::Checkpoint(_)) => {}
+            Some(ReportStart::Resume(from)) if from >= next => {}
+            _ => {
+                m.insert(core_uid, ReportStart::Resume(next));
+            }
+        }
+    }
 }
 
 /// Decide where a core's replication starts, from the durable checkpoint and the local rows.
@@ -936,7 +1143,12 @@ fn startup_start(conn: &Connection, uid: i64) -> ReportStart {
     match (max_local, load_checkpoint(conn, uid as u64)) {
         (None, _) => ReportStart::Fresh,
         (Some(_), Some(checkpoint)) => ReportStart::Checkpoint(checkpoint),
-        (Some(max), None) => ReportStart::Resume(max + 1),
+        // Not the local maximum when catch-up recorded how far it got: live rows above the
+        // frontier do not mean the span below them arrived (#665).
+        (Some(max), None) => match load_frontier(conn, uid as u64) {
+            Some(frontier) => ReportStart::Resume(frontier + 1),
+            None => ReportStart::Resume(max + 1),
+        },
     }
 }
 

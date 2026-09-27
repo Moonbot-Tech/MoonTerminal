@@ -208,6 +208,159 @@ fn an_existing_replica_without_an_epoch_resumes_instead_of_resyncing() {
     assert_eq!(startup_start(&conn, 5), ReportStart::Fresh);
 }
 
+/// An interrupted catch-up must resume at its frontier, not above the live rows (#665).
+///
+/// Breaks on: `db/rep.rs:startup_start` going back to `Resume(max + 1)` when a frontier is
+/// stored. Live rows land above catch-up from the first second of a connection, so the local
+/// maximum overstates what arrived and the span between the frontier and the first live row is
+/// never requested again, in any later session.
+#[test]
+fn an_interrupted_catch_up_resumes_at_its_frontier() {
+    let (conn, _st, _starts) = replica_with_deleted();
+    // Catch-up delivered 1..=40, then live rows 900 and 901 arrived, then the terminal closed.
+    seed_rows(&conn, 2, 40);
+    for rec in [900, 901] {
+        conn.execute(
+            "INSERT INTO orders_rep (core_uid, core_name, newrecid, deleted) VALUES (2, 'Rep', ?1, 0)",
+            [rec],
+        )
+        .unwrap();
+    }
+    record_frontier(&conn, 2, 40).unwrap();
+
+    assert_eq!(startup_start(&conn, 2), ReportStart::Resume(41));
+}
+
+/// The frontier only rises, and an empty page moves nothing.
+///
+/// Breaks on: `db/rep.rs:record_frontier` writing `last_rec_id` unconditionally — an empty page
+/// reports `last_rec_id = 0` and would send the next start back to the beginning of history, and a
+/// page replayed after a retry would lower it.
+#[test]
+fn the_frontier_never_moves_down() {
+    let (conn, _st, _starts) = replica_with_deleted();
+    record_frontier(&conn, 2, 500).unwrap();
+    record_frontier(&conn, 2, 0).unwrap();
+    record_frontier(&conn, 2, 120).unwrap();
+    assert_eq!(load_frontier(&conn, 2), Some(500));
+    record_frontier(&conn, 2, 700).unwrap();
+    assert_eq!(load_frontier(&conn, 2), Some(700));
+}
+
+/// Live rows of a core replicating from zero pin frontier 0, so an interruption before the first
+/// page resumes from the beginning.
+///
+/// Breaks on: `db/rep.rs:note_live_row` being dropped or writing for every core. Without it a
+/// fresh core whose first rows were live ones restarts at `max + 1` — the whole history under them
+/// is lost. Writing it for a core already past its first page would reset a real frontier.
+#[test]
+fn live_rows_before_the_first_page_resume_from_the_beginning() {
+    let (conn, st, starts) = replica_with_deleted();
+    // Core 2 is fresh (absent from the start map), core 3 already resumes.
+    starts.lock().unwrap().insert(3, ReportStart::Resume(51));
+    record_frontier(&conn, 3, 50).unwrap();
+
+    seed_rows(&conn, 2, 1);
+    note_live_row(&conn, &st, 2).unwrap();
+    note_live_row(&conn, &st, 3).unwrap();
+
+    assert_eq!(load_frontier(&conn, 2), Some(0));
+    assert_eq!(startup_start(&conn, 2), ReportStart::Resume(1));
+    assert_eq!(
+        load_frontier(&conn, 3),
+        Some(50),
+        "a resuming core keeps its frontier"
+    );
+}
+
+/// A checkpoint retires the frontier, and a replica reset puts it back to zero.
+///
+/// Breaks on: `db/rep.rs:store_checkpoint` leaving the frontier behind, or `reset_replica` keeping
+/// the old one or dropping it. A stale frontier would make the rebuilt replica resume mid-history
+/// on its first interruption; no frontier would make a live row that lands before the first page
+/// read as an old replica and resume above it.
+#[test]
+fn checkpoint_and_reset_retire_the_frontier() {
+    let (conn, _st, _starts) = replica_with_deleted();
+    seed_rows(&conn, 2, 10);
+    record_frontier(&conn, 2, 10).unwrap();
+    store_checkpoint(
+        &conn,
+        2,
+        ReportSyncCheckpoint {
+            epoch: 7,
+            next_from_rec_id: 11,
+        },
+    )
+    .unwrap();
+    assert_eq!(load_frontier(&conn, 2), None);
+
+    record_frontier(&conn, 2, 10).unwrap();
+    reset_replica(&conn, 2).unwrap();
+    assert_eq!(
+        load_frontier(&conn, 2),
+        Some(0),
+        "a wiped replica restarts from the beginning, whatever lands before the first page"
+    );
+}
+
+/// Opening a replica written before the frontier existed pins its old resume point, so live rows
+/// of this session cannot raise it.
+///
+/// Breaks on: `db/rep.rs:init` no longer pinning the frontier for a `Resume` core. The next start
+/// would read the maximum raised by this session's live rows.
+#[test]
+fn opening_an_old_replica_pins_its_resume_point() {
+    let conn = Connection::open_in_memory().unwrap();
+    init_db(&conn).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (core_uid INTEGER NOT NULL, core_name TEXT NOT NULL,
+            newrecid INTEGER NOT NULL, deleted INTEGER, PRIMARY KEY (core_uid, newrecid));",
+    )
+    .unwrap();
+    seed_rows(&conn, 2, 40);
+    let starts = Arc::new(Mutex::new(HashMap::new()));
+    init(&conn, starts.clone()).unwrap();
+    assert_eq!(
+        starts.lock().unwrap().get(&2),
+        Some(&ReportStart::Resume(41))
+    );
+
+    // A live row far above arrives; the next start still resumes at 41.
+    conn.execute(
+        "INSERT INTO orders_rep (core_uid, core_name, newrecid, deleted) VALUES (2, 'Rep', 900, 0)",
+        [],
+    )
+    .unwrap();
+    assert_eq!(startup_start(&conn, 2), ReportStart::Resume(41));
+}
+
+/// A committed page moves the in-memory start of a fresh or resuming core, never a checkpoint.
+///
+/// Breaks on: `db/rep.rs:commit_page` overwriting a checkpoint (the epoch is lost, so a recreated
+/// core database goes undetected) or leaving a fresh core fresh (a reconnect in the same session
+/// downloads the whole history again).
+#[test]
+fn a_committed_page_moves_the_session_start() {
+    let (_conn, st, starts) = replica_with_deleted();
+    let checkpoint = ReportSyncCheckpoint {
+        epoch: 7,
+        next_from_rec_id: 11,
+    };
+    starts
+        .lock()
+        .unwrap()
+        .insert(4, ReportStart::Checkpoint(checkpoint));
+
+    commit_page(&st, 2, 300);
+    commit_page(&st, 2, 0);
+    commit_page(&st, 4, 300);
+
+    let m = starts.lock().unwrap();
+    assert_eq!(m.get(&2), Some(&ReportStart::Resume(301)));
+    assert_eq!(m.get(&4), Some(&ReportStart::Checkpoint(checkpoint)));
+}
+
 /// The visibility scan covers the local rows the map speaks for, and only those.
 ///
 /// Two ends, because the bound is wrong in two opposite ways:

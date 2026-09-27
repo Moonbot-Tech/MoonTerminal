@@ -87,11 +87,11 @@ pub(crate) enum ConnEntry {
 }
 
 /// Localized captions the pure pass cannot produce on its own.
-pub(super) struct EntryLabels<'a> {
+pub(in crate::settings) struct EntryLabels<'a> {
     /// Caption for the pending-cores heading.
-    pub(super) pending: &'a str,
+    pub(in crate::settings) pending: &'a str,
     /// Builds one exchange section's caption from its venue, or `None` for the unidentified bucket.
-    pub(super) exchange: &'a dyn Fn(Option<&CoreVenue>) -> String,
+    pub(in crate::settings) exchange: &'a dyn Fn(Option<&CoreVenue>) -> String,
 }
 
 /// Flatten pending rows, then every group's exchange sections, into one drawable sequence.
@@ -104,7 +104,7 @@ pub(super) struct EntryLabels<'a> {
 ///
 /// Returns:
 ///     The flat entry sequence, empty only when there are no servers at all.
-pub(super) fn flatten_entries(
+pub(in crate::settings) fn flatten_entries(
     servers: &[ServerRowMeta],
     groups: &[GroupRowMeta],
     order: &CoreOrder,

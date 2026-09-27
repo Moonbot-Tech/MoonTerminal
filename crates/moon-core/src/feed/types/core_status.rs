@@ -233,6 +233,62 @@ const INIT_STEPS: [CoreInitStep; 8] = [
 /// completed count instead of trusting this number alone.
 pub const INIT_STEPS_TOTAL: u8 = INIT_STEPS.len() as u8;
 
+/// How far one core's report catch-up has got, as the feed saw its pages arrive.
+///
+/// Measured in `newRecID`, the only axis a page carries: the span runs from the first id the
+/// catch-up delivered to the core's high-water, so a fresh download of a core whose oldest
+/// retained row is id 500 000 starts at 0 %, not at the half the empty ids below it would suggest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReportSyncProgress {
+    /// Lowest id this catch-up delivered, `None` until a page with rows arrives.
+    pub first_rec_id: Option<i64>,
+    /// Highest id delivered so far.
+    pub last_rec_id: i64,
+    /// The core's report high-water, as the latest page stated it.
+    pub max_rec_id: i64,
+    /// Rows delivered by this catch-up.
+    pub rows: u64,
+    /// When this catch-up started, Unix ms.
+    pub started_ms: i64,
+}
+
+impl ReportSyncProgress {
+    /// A catch-up that has just been requested and delivered nothing yet.
+    pub fn started(now_ms: i64) -> Self {
+        Self {
+            first_rec_id: None,
+            last_rec_id: 0,
+            max_rec_id: 0,
+            rows: 0,
+            started_ms: now_ms,
+        }
+    }
+
+    /// Ids delivered and ids in the whole span, or `None` before the span is known.
+    ///
+    /// Summed across cores by the status bar, so one large core weighs more than a small one.
+    pub fn done_and_span(&self) -> Option<(i64, i64)> {
+        let first = self.first_rec_id?;
+        let span = self.max_rec_id.saturating_sub(first).saturating_add(1);
+        if span <= 0 {
+            return None;
+        }
+        let done = self
+            .last_rec_id
+            .saturating_sub(first)
+            .saturating_add(1)
+            .clamp(0, span);
+        Some((done, span))
+    }
+
+    /// Whole percent delivered, `None` before the span is known.
+    pub fn percent(&self) -> Option<u8> {
+        self.done_and_span().map(|(done, span)| {
+            u8::try_from(i128::from(done) * 100 / i128::from(span)).unwrap_or(100)
+        })
+    }
+}
+
 /// Startup progress and channel measurements for one core, from moonproto's `StartupStatus`.
 ///
 /// Polled from the feed thread rather than pushed, because MoonProto publishes it as a passive
