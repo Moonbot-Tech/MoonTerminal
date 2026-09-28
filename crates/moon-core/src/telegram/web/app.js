@@ -577,7 +577,7 @@
         return item && item.exchange ? String(item.exchange) : "";
     }
 
-    // Orders and Strategies groups start collapsed, including on a later refresh. A group the
+    // Every pane's groups start collapsed, including on a later refresh. A group the
     // user has toggled keeps that choice while the popup stays open. Search
     // still draws matching groups open and clearing it restores this choice.
     function ensureCollapse(pane, items, keyFn) {
@@ -1326,8 +1326,9 @@
             strip.appendChild(el("span", "neg", tr("mini_cores_problems").replace("{n}", String(problems))));
         }
         host.appendChild(strip);
-        // Exchange groups start open; a header tap still folds one.
         if (data.can_control) host.appendChild(massActions(cores));
+        // Exchange groups start folded; the header summary says how many cores are online.
+        ensureCollapse("cores", cores, null);
         appendGroups(
             host, "cores", cores, coreProblem,
             function (core) { return coreRow(core, data); },
@@ -1388,8 +1389,9 @@
             hero.appendChild(meta);
         }
         host.appendChild(hero);
-        // Exchange groups start open; a header tap still folds one.
+        // Exchange groups start folded; the header carries the exchange total.
         if (perCore.length) {
+            ensureCollapse("balances", perCore, null);
             appendGroups(
                 host,
                 "balances",

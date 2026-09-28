@@ -381,13 +381,13 @@ fn mini_app_css_keeps_the_narrow_popup_layout() {
     );
 }
 
-/// `web/app.js:ensureCollapse` starts Orders and Strategies groups collapsed; Cores and
-/// Balances, which have no expand-all button, start open.
+/// `web/app.js:ensureCollapse` starts the groups of every pane collapsed: Orders,
+/// Strategies, Cores and Balances.
 ///
 /// Mutation: restore `collapse[pane][slot] = count > 20 && !problem`, or drop
 /// the `collapseUser` skip. Small order groups then open on first paint and on
-/// every poll the user has not toggled. Seeding cores or balances hides them
-/// behind header taps with no expand-all left. Dropping `!query &&` in `appendGroups` would also keep
+/// every poll the user has not toggled. Dropping the cores or balances call
+/// brings back the wall of open exchange groups the owner asked to fold. Dropping `!query &&` in `appendGroups` would also keep
 /// a search from opening the groups that match it.
 #[test]
 fn mini_list_groups_start_collapsed_until_the_user_toggles() {
@@ -407,12 +407,10 @@ fn mini_list_groups_start_collapsed_until_the_user_toggles() {
     );
     assert!(
         js.contains("ensureCollapse(\"orders\", orders, orderCoreKey);")
-            && js.contains("ensureCollapse(\"strategies\", withRows, strategyCoreKey);"),
-        "orders and strategies must seed the collapsed default"
-    );
-    assert!(
-        !js.contains("ensureCollapse(\"cores\"") && !js.contains("ensureCollapse(\"balances\""),
-        "cores and balances have no expand-all button, so their groups must start open"
+            && js.contains("ensureCollapse(\"strategies\", withRows, strategyCoreKey);")
+            && js.contains("ensureCollapse(\"cores\", cores, null);")
+            && js.contains("ensureCollapse(\"balances\", perCore, null);"),
+        "orders, strategies, cores and balances must seed the collapsed default"
     );
     let append = braced_body(&js, "function appendGroups(");
     assert!(
