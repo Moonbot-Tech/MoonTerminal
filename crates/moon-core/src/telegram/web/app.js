@@ -11,13 +11,13 @@
     // The server answers within 5 s; a request still open well past that is dead, and the queue is serial.
     var FETCH_TIMEOUT_MS = 12000;
     var TAB_NAMES = ["report", "cores", "balances", "orders", "trades", "strategies"];
+    // Nav buttons by data-tab; "deals" shows the orders or trades pane.
     var TAB_KEYS = {
         report: "mini_tab_report",
         cores: "mini_tab_cores",
         balances: "mini_tab_balances",
-        orders: "mini_tab_orders",
-        trades: "mini_tab_trades",
-        strategies: "mini_tab_strategies"
+        strategies: "mini_tab_strategies",
+        deals: "mini_tab_trades"
     };
     var PERIODS = [
         ["today", "mini_period_today"],
@@ -34,6 +34,9 @@
     var main = document.getElementById("app-main");
     var nav = document.getElementById("app-nav");
     var sections = {};
+    // One nav tab holds open orders and closed trades; this is the segment it shows.
+    var dealsSegment = "orders";
+    var dealsSwitch = null;
     var buttons = {};
     var payloads = {};
     var queries = { orders: "" };
@@ -1078,6 +1081,36 @@
         }
     }
 
+    // Open | Closed switch of the merged trades tab; it sits outside both panes like the period bar.
+    function dealsBar() {
+        var bar = el("div", "segments");
+        var segs = [["orders", "mini_deals_open"], ["trades", "mini_deals_closed"]];
+        var i;
+        for (i = 0; i < segs.length; i++) {
+            (function (value, key) {
+                var button = document.createElement("button");
+                button.type = "button";
+                button.textContent = tr(key);
+                button.setAttribute("data-seg", value);
+                button.addEventListener("click", function () {
+                    selectTab(value);
+                });
+                bar.appendChild(button);
+            })(segs[i][0], segs[i][1]);
+        }
+        return bar;
+    }
+
+    function paintDealsPressed() {
+        var nodes = dealsSwitch.querySelectorAll("button");
+        var i;
+        for (i = 0; i < nodes.length; i++) {
+            var on = nodes[i].getAttribute("data-seg") === dealsSegment;
+            nodes[i].className = on ? "active" : "";
+            nodes[i].setAttribute("aria-pressed", on ? "true" : "false");
+        }
+    }
+
     // The report period bar sits outside this node, so loading and errors do not remove it.
     function paneBody(name) {
         if (name === "report" && reportBody) return reportBody;
@@ -2003,11 +2036,17 @@
         var i;
         for (i = 0; i < TAB_NAMES.length; i++) {
             var tab = TAB_NAMES[i];
-            var on = tab === name;
-            sections[tab].hidden = !on;
-            buttons[tab].className = on ? "active" : "";
-            if (on) buttons[tab].setAttribute("aria-current", "page");
-            else buttons[tab].removeAttribute("aria-current");
+            sections[tab].hidden = tab !== name;
+            buttons[tab].className = "";
+            buttons[tab].removeAttribute("aria-current");
+        }
+        buttons[name].className = "active";
+        buttons[name].setAttribute("aria-current", "page");
+        var deals = name === "orders" || name === "trades";
+        if (deals) dealsSegment = name;
+        if (dealsSwitch) {
+            dealsSwitch.hidden = !deals;
+            paintDealsPressed();
         }
         paintUpdated();
         loadTab(name, loadToken, !!hasData[name]);
@@ -2074,13 +2113,19 @@
         for (i = 0; i < nodes.length; i++) {
             var button = nodes[i];
             var name = button.getAttribute("data-tab");
-            buttons[name] = button;
+            if (name === "deals") {
+                buttons.orders = button;
+                buttons.trades = button;
+            } else {
+                buttons[name] = button;
+            }
             var label = tr(TAB_KEYS[name]);
             var span = button.querySelector(".nav-label");
             if (span) span.textContent = label;
             button.setAttribute("aria-label", label);
             button.addEventListener("click", function (ev) {
-                selectTab(ev.currentTarget.getAttribute("data-tab"));
+                var tab = ev.currentTarget.getAttribute("data-tab");
+                selectTab(tab === "deals" ? dealsSegment : tab);
             });
         }
         var found = document.querySelectorAll("#app-main section[data-tab]");
@@ -2090,6 +2135,8 @@
         reportPeriod = document.getElementById("report-period");
         reportBody = document.getElementById("report-body");
         if (reportPeriod) reportPeriod.appendChild(periodBar());
+        dealsSwitch = document.getElementById("deals-switch");
+        if (dealsSwitch) dealsSwitch.appendChild(dealsBar());
         window.addEventListener("resize", paintUpdated);
         bindRefresh();
         bindHeaderHeight();

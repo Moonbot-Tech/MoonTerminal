@@ -221,10 +221,6 @@ telegram.mini_tab_balances:
   ru: "Балансы"
   en: "Balances"
   es: "Saldos"
-telegram.mini_tab_orders:
-  ru: "Ордера"
-  en: "Orders"
-  es: "Órdenes"
 telegram.mini_period_today:
   ru: "Сегодня"
   en: "Today"
@@ -557,6 +553,14 @@ telegram.mini_tab_trades:
   ru: "Сделки"
   en: "Trades"
   es: "Cierres"
+telegram.mini_deals_open:
+  ru: "Открытые"
+  en: "Open"
+  es: "Abiertas"
+telegram.mini_deals_closed:
+  ru: "Закрытые"
+  en: "Closed"
+  es: "Cerradas"
 telegram.mini_tab_strategies:
   ru: "Стратегии"
   en: "Strategies"
