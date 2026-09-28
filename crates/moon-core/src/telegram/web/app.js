@@ -842,6 +842,13 @@
         return wrap;
     }
 
+    // The wire keeps buy/sell; the page names the position side. LONG / SHORT stay untranslated.
+    function sideLabel(side) {
+        if (side === "buy") return "LONG";
+        if (side === "sell") return "SHORT";
+        return side || "";
+    }
+
     function sideClass(side) {
         if (side === "buy") return "pos";
         if (side === "sell") return "neg";
@@ -940,7 +947,7 @@
         var coin = el("span", "name order-coin", order.coin || "");
         coin.title = order.coin || "";
         top.appendChild(coin);
-        top.appendChild(el("span", "badge order-side " + sideClass(order.side), order.side || ""));
+        top.appendChild(el("span", "badge order-side " + sideClass(order.side), sideLabel(order.side)));
         top.appendChild(orderChange(order));
         top.appendChild(orderResult(order));
         main.appendChild(top);
@@ -1483,7 +1490,7 @@
             }));
         }
         var filtered = filterItems(orders, orderQuery, function (order) {
-            return [order.coin, order.core_name, order.market, order.side];
+            return [order.coin, order.core_name, order.market, sideLabel(order.side)];
         });
         if (orderQuery && !filtered.length) {
             host.appendChild(emptyState(tr("mini_empty_search"), clearSearchAction("orders", paintOrders)));
@@ -1631,7 +1638,7 @@
         var coin = el("span", "name order-coin", trade.coin || "");
         coin.title = trade.coin || "";
         top.appendChild(coin);
-        top.appendChild(el("span", "badge order-side " + sideClass(trade.side), trade.side || ""));
+        top.appendChild(el("span", "badge order-side " + sideClass(trade.side), sideLabel(trade.side)));
         left.appendChild(top);
         var meta = el("div", "sub trade-row-meta");
         var when = trade.closed_short_text || trade.closed_text;
@@ -1693,7 +1700,7 @@
         var title = el("span", "name order-coin", trade.coin || "");
         title.id = "sheet-title";
         top.appendChild(title);
-        top.appendChild(el("span", "badge order-side " + sideClass(trade.side), trade.side || ""));
+        top.appendChild(el("span", "badge order-side " + sideClass(trade.side), sideLabel(trade.side)));
         titleBox.appendChild(top);
         var where = [];
         if (trade.core_name) where.push(trade.core_name);

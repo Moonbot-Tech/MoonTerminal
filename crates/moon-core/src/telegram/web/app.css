@@ -1198,7 +1198,8 @@ input:focus-visible {
     font-size: 14px;
 }
 
-.order-row .order-side {
+/* Position side badge (LONG / SHORT) on order rows, trade rows and the trade sheet. */
+.order-side {
     padding: 1px 4px;
     border-radius: var(--r-ctl);
     background: var(--tint);
@@ -1207,11 +1208,11 @@ input:focus-visible {
     text-transform: uppercase;
 }
 
-.order-row .order-side.pos {
+.order-side.pos {
     color: var(--pos);
 }
 
-.order-row .order-side.neg {
+.order-side.neg {
     color: var(--neg);
 }
 
