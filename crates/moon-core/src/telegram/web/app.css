@@ -1026,13 +1026,14 @@ input:focus-visible {
     padding-left: 16px;
 }
 
-/* All-cores bar: one tight row of two segmented START/STOP pairs; wraps to two rows on
-   the narrowest popups. */
+/* All-cores bar: one tight row of two segmented START/STOP pairs; never wraps — on a narrow
+   phone the gaps and buttons tighten and a label ellipsizes before the row would break. */
 .mass-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
-    gap: 6px 12px;
+    justify-content: space-between;
+    gap: 12px;
     padding: 6px 12px;
 }
 
@@ -1053,19 +1054,32 @@ input:focus-visible {
 }
 
 .mass-label {
+    min-width: 0;
+    overflow: hidden;
     color: var(--sub);
     font-size: var(--fs-meta);
+    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .mass-pair {
     display: inline-flex;
+    flex: none;
 }
 
 /* The caption only fits beside both pairs on a wide popup; aria-label names the bar below. */
 @media (max-width: 439px) {
     .mass-title {
         display: none;
+    }
+
+    .mass-actions {
+        gap: 8px;
+        padding: 6px 10px;
+    }
+
+    .mass-group {
+        gap: 4px;
     }
 }
 
@@ -1083,6 +1097,12 @@ input:focus-visible {
 .mass-pair .mass-btn + .mass-btn {
     margin-left: -1px;
     border-radius: 0 var(--r-ctl) var(--r-ctl) 0;
+}
+
+@media (max-width: 439px) {
+    .mass-pair .mass-btn {
+        padding: 0 6px;
+    }
 }
 
 /* Exchange section caption inside a per-core list (report, orders). */
