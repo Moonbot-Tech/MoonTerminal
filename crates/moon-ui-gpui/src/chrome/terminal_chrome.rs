@@ -303,6 +303,8 @@ pub fn header(
                 t!("update.installing").to_string()
             } else if matches!(update_state, crate::update::UpdateState::Failed { .. }) {
                 t!("update.retry").to_string()
+            } else if matches!(update_state, crate::update::UpdateState::Opened(_)) {
+                t!("update.opened").to_string()
             } else {
                 t!("update.available", version = version).to_string()
             };
@@ -310,6 +312,8 @@ pub fn header(
                 crate::update::UpdateState::Failed { message, .. } => {
                     t!("update.failed", error = message).to_string()
                 }
+                crate::update::UpdateState::Opened(_) => t!("update.opened_tooltip").to_string(),
+                _ if cfg!(target_os = "macos") => t!("update.tooltip_image").to_string(),
                 _ => t!("update.tooltip").to_string(),
             };
             // An offered update is the only call to action this header ever grows, and it appears

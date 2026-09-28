@@ -3,12 +3,12 @@
 use std::{fs, time::Duration};
 
 use moon_core::config::paths;
-use moon_core::update::DiscoveryRetry;
+use moon_core::update::{DiscoveryRetry, ReleaseVersion};
 
 use super::{
     POLL_WINDOW_SECONDS, PollSchedule, STARTUP_POLL_GAP_SECONDS, UpdateState, claim_polling,
     failure_backoff, next_regular_poll, polling_continues_after, read_helper_failure,
-    record_helper_failure, same_installed_target,
+    record_helper_failure, reusable_installer_image, same_installed_target,
 };
 
 /// Removing the five-minute startup gap would issue a duplicate request when an immediate scan
@@ -163,4 +163,38 @@ fn same_installed_target_rejects_a_target_outside_the_derived_install_root() {
     let outside = std::path::Path::new(r"C:\other\MoonTerminal.exe");
 
     assert!(!same_installed_target(outside, canonical));
+}
+
+/// The macOS `Opened` state must stay a clickable, idle button (a click reopens the saved image)
+/// that keeps discovery running, or a user who closed the image could never get it back and a
+/// later release would never be offered.
+#[test]
+fn opened_installer_state_is_clickable_idle_and_keeps_polling() {
+    let version = ReleaseVersion {
+        major: 0,
+        minor: 24,
+        patch: 1,
+    };
+    let opened = UpdateState::Opened(version);
+    assert!(opened.visible() && opened.clickable() && !opened.busy());
+    assert_eq!(opened.version(), Some(version));
+    assert!(polling_continues_after(&opened));
+}
+
+/// Reusing a vanished image would make the reopen click fail forever instead of downloading
+/// again; a live image must be reused rather than downloaded twice.
+#[test]
+fn installer_image_is_reused_only_while_it_exists() {
+    let root = std::env::temp_dir().join(format!("mt-image-reuse-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let image = root.join("MoonTerminal-0.24.1.dmg");
+    fs::write(&image, b"dmg").unwrap();
+    assert_eq!(
+        reusable_installer_image(Some(image.clone())),
+        Some(image.clone())
+    );
+    fs::remove_file(&image).unwrap();
+    assert_eq!(reusable_installer_image(Some(image)), None);
+    assert_eq!(reusable_installer_image(None), None);
+    let _ = fs::remove_dir(&root);
 }

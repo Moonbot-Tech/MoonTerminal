@@ -1,4 +1,4 @@
-# Windows self-update button and progress states.
+# Header update button: Windows self-update, macOS installer image download.
 _version: 2
 
 update.available:
@@ -9,6 +9,18 @@ update.tooltip:
   ru: "Скачать, установить и перезапустить MoonTerminal"
   en: "Download, install, and restart MoonTerminal"
   es: "Descargar, instalar y reiniciar MoonTerminal"
+update.tooltip_image:
+  ru: "Скачать установщик MoonTerminal в Загрузки и открыть его"
+  en: "Download the MoonTerminal installer to Downloads and open it"
+  es: "Descargar el instalador de MoonTerminal en Descargas y abrirlo"
+update.opened:
+  ru: "Установщик открыт"
+  en: "Installer opened"
+  es: "Instalador abierto"
+update.opened_tooltip:
+  ru: "Установщик открыт — перетащите MoonTerminal в «Программы». Нажмите, чтобы открыть его снова"
+  en: "Installer opened — drag MoonTerminal into Applications. Click to open it again"
+  es: "Instalador abierto: arrastre MoonTerminal a Aplicaciones. Haga clic para abrirlo de nuevo"
 update.installing:
   ru: "Установка обновления..."
   en: "Installing update..."

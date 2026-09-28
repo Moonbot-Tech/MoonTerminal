@@ -118,7 +118,7 @@ fn update_process_modes_dispatch_before_gpui_and_quit_through_app() {
         .find("prepare_install(candidate)")
         .expect("installation must wait for helper readiness");
     let successful = install
-        .find("Ok(_) => {")
+        .find("Ok(InstallOutcome::Restart) => {")
         .expect("installation must branch on helper readiness");
     let failed = install
         .find("Err(error) => {")
@@ -213,7 +213,7 @@ fn every_shell_observes_the_one_backend_updater() {
     );
 }
 
-/// Removing the Windows/FireTest gates would spend GitHub quota in unsupported or diagnostic
+/// Removing the Windows/macOS/FireTest gates would spend GitHub quota in unsupported or diagnostic
 /// processes; arming the timer before awaiting the scan would permit overlapping requests.
 #[test]
 fn recurring_update_scans_are_gated_idempotent_and_sequential() {
@@ -229,7 +229,7 @@ fn recurring_update_scans_are_gated_idempotent_and_sequential() {
     let timer = start.find("executor.timer(wait).await").unwrap();
     assert!(
         boot.contains(
-            "if firetest_config.is_none() {\n        #[cfg(windows)]\n        crate::update::UpdateController::start_polling(&updater, cx);"
+            "#[cfg(any(windows, target_os = \"macos\"))]\n        crate::update::UpdateController::start_polling(&updater, cx);"
         ) && start.contains("claim_polling(&mut this.polling_started)")
             && start.contains("polling_continues_after(&this.state)")
             && start.matches("ReleaseDiscovery::new(identity)").count() == 1
@@ -237,7 +237,7 @@ fn recurring_update_scans_are_gated_idempotent_and_sequential() {
             && scan_loop < scan
             && scan < timer
             && !start.contains("install_generation"),
-        "one Windows-only non-FireTest loop must await every scan before arming its next timer"
+        "one Windows/macOS-only non-FireTest loop must await every scan before arming its next timer"
     );
 }
 

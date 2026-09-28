@@ -1,7 +1,8 @@
 //! Stable GitHub release discovery and verified update downloads.
 //!
-//! This module deliberately stops at a verified staged executable. Process coordination,
-//! replacement, restart, and rollback belong to the Windows GPUI shell.
+//! This module deliberately stops at a verified download: the staged Windows executable or the
+//! macOS disk image. Process coordination, replacement, restart, and rollback belong to the
+//! Windows GPUI shell; on macOS the shell only opens the image.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -84,6 +85,49 @@ impl GitHubReleaseClient {
     ) -> anyhow::Result<PathBuf> {
         download::download_verified(self, release, nonce)
     }
+
+    /// Download an eligible asset to an exact destination, such as the macOS disk image.
+    ///
+    /// Args:
+    ///     release: Immutable release metadata selected by [`ReleaseDiscovery::scan`].
+    ///     dest: Final file path; its parent directory is created when missing.
+    ///
+    /// Returns:
+    ///     `dest` after the same size and SHA-256 verification as [`Self::download_verified`].
+    pub fn download_verified_to(
+        &self,
+        release: &AvailableRelease,
+        dest: &std::path::Path,
+    ) -> anyhow::Result<PathBuf> {
+        download::download_verified_to(self, release, dest)
+    }
+}
+
+/// File name the macOS disk image of one release is saved under.
+///
+/// Args:
+///     version: Release version the image installs.
+///
+/// Returns:
+///     `MoonTerminal-<major>.<minor>.<patch>.dmg`, distinct per release so an older image in the
+///     same folder is never mistaken for the new one.
+pub fn installer_image_file_name(version: ReleaseVersion) -> String {
+    format!(
+        "MoonTerminal-{}.{}.{}.dmg",
+        version.major, version.minor, version.patch
+    )
+}
+
+/// Path in the user's Downloads folder where one release's disk image is saved.
+///
+/// Args:
+///     version: Release version the image installs.
+///
+/// Returns:
+///     [`crate::config::paths::user_download_path`] for [`installer_image_file_name`], or
+///     `None` when no Downloads folder can be resolved.
+pub fn installer_image_download_path(version: ReleaseVersion) -> Option<PathBuf> {
+    crate::config::paths::user_download_path(&installer_image_file_name(version))
 }
 
 impl Default for GitHubReleaseClient {

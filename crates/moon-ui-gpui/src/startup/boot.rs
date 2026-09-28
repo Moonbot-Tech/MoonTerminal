@@ -1023,7 +1023,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         );
     }
     if firetest_config.is_none() {
-        #[cfg(windows)]
+        // Windows replaces the executable in place; macOS opens the release .dmg. Linux has no
+        // update path, so it never spends GitHub quota on discovery.
+        #[cfg(any(windows, target_os = "macos"))]
         crate::update::UpdateController::start_polling(&updater, cx);
     }
     if update_recovered {

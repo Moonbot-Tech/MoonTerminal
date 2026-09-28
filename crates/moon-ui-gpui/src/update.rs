@@ -1,4 +1,7 @@
 //! Process-wide update state and the acknowledged Windows replacement helper.
+//!
+//! On macOS the same button downloads the verified `.dmg` into Downloads and opens it; the user
+//! drags the app into Applications, so no helper, quit or replacement runs there.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -69,6 +72,8 @@ pub(crate) enum UpdateState {
     Installing(ReleaseVersion),
     /// The helper acknowledged the parent and normal quit is beginning.
     Restarting(ReleaseVersion),
+    /// macOS only: the verified disk image was saved and opened; a click reopens it.
+    Opened(ReleaseVersion),
     /// A clicked installation failed while the current app remains viable.
     Failed {
         version: ReleaseVersion,
@@ -84,7 +89,10 @@ impl UpdateState {
 
     /// Return whether a click may begin or retry installation.
     pub(crate) fn clickable(&self) -> bool {
-        matches!(self, Self::Available(_) | Self::Failed { .. })
+        matches!(
+            self,
+            Self::Available(_) | Self::Failed { .. } | Self::Opened(_)
+        )
     }
 
     /// Return whether the button should show a busy treatment.
@@ -96,9 +104,10 @@ impl UpdateState {
     pub(crate) fn version(&self) -> Option<ReleaseVersion> {
         match self {
             Self::Hidden => None,
-            Self::Available(version) | Self::Installing(version) | Self::Restarting(version) => {
-                Some(*version)
-            }
+            Self::Available(version)
+            | Self::Installing(version)
+            | Self::Restarting(version)
+            | Self::Opened(version) => Some(*version),
             Self::Failed { version, .. } => Some(*version),
         }
     }
@@ -307,6 +316,8 @@ fn later_unix(local: u64, server: Option<u64>) -> u64 {
 pub(crate) struct UpdateController {
     state: UpdateState,
     candidate: Option<AvailableRelease>,
+    /// Disk image saved and opened for `candidate` (macOS), reopened on the next click.
+    installer_image: Option<PathBuf>,
     polling_started: bool,
     install_generation: u64,
 }
@@ -317,6 +328,7 @@ impl UpdateController {
         Self {
             state: UpdateState::Hidden,
             candidate: None,
+            installer_image: None,
             polling_started: false,
             install_generation: 0,
         }
@@ -404,12 +416,13 @@ impl UpdateController {
         }
         self.state = UpdateState::Available(release.version());
         self.candidate = Some(release);
+        self.installer_image = None;
         cx.notify();
     }
 
     /// Start or retry the single installation attempt from an explicit user click.
     pub(crate) fn start_install(entity: &Entity<Self>, cx: &mut App) {
-        let Some((candidate, version, generation)) = entity.update(cx, |this, cx| {
+        let Some((candidate, saved_image, version, generation)) = entity.update(cx, |this, cx| {
             if !this.state.clickable() {
                 return None;
             }
@@ -418,7 +431,12 @@ impl UpdateController {
             this.install_generation = this.install_generation.wrapping_add(1);
             this.state = UpdateState::Installing(version);
             cx.notify();
-            Some((candidate, version, this.install_generation))
+            Some((
+                candidate,
+                this.installer_image.clone(),
+                version,
+                this.install_generation,
+            ))
         }) else {
             return;
         };
@@ -426,7 +444,13 @@ impl UpdateController {
         let executor = cx.background_executor().clone();
         cx.spawn(async move |cx| {
             let result = executor
-                .spawn(async move { prepare_install(candidate) })
+                .spawn(async move {
+                    if cfg!(target_os = "macos") {
+                        open_installer_image(candidate, saved_image).map(InstallOutcome::Opened)
+                    } else {
+                        prepare_install(candidate).map(|()| InstallOutcome::Restart)
+                    }
+                })
                 .await;
             if let Err(error) = &result {
                 log::error!("update install failed: {error:#}");
@@ -437,10 +461,15 @@ impl UpdateController {
                         return;
                     }
                     match result {
-                        Ok(_) => {
+                        Ok(InstallOutcome::Restart) => {
                             this.state = UpdateState::Restarting(version);
                             cx.notify();
                             cx.quit();
+                        }
+                        Ok(InstallOutcome::Opened(image)) => {
+                            this.installer_image = Some(image);
+                            this.state = UpdateState::Opened(version);
+                            cx.notify();
                         }
                         Err(error) => {
                             this.state = UpdateState::Failed {
@@ -455,6 +484,73 @@ impl UpdateController {
         })
         .detach();
     }
+}
+
+/// What a successful click left behind, which decides the next header state.
+enum InstallOutcome {
+    /// Windows: the helper owns the replacement and this process quits.
+    Restart,
+    /// macOS: the verified disk image at this path was opened for the user.
+    Opened(PathBuf),
+}
+
+/// Save the verified macOS disk image into Downloads (unless already saved) and open it.
+///
+/// Args:
+///     candidate: Exact immutable release selected by the background check.
+///     saved_image: Image saved by an earlier click for this same candidate, if any.
+///
+/// Returns:
+///     Path of the opened image.
+///
+/// Errors:
+///     Returns path-resolution, download/verification, or `open` failures; the app stays as is.
+fn open_installer_image(
+    candidate: AvailableRelease,
+    saved_image: Option<PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    let image = match reusable_installer_image(saved_image) {
+        Some(image) => image,
+        None => {
+            let dest = moon_core::update::installer_image_download_path(candidate.version())
+                .ok_or_else(|| anyhow!("cannot locate the Downloads folder"))?;
+            GitHubReleaseClient::new().download_verified_to(&candidate, &dest)?
+        }
+    };
+    launch_installer_image(&image)?;
+    Ok(image)
+}
+
+/// Keep an earlier saved image only while it still exists as a plain file.
+///
+/// Args:
+///     saved_image: Image path recorded after the last successful open.
+///
+/// Returns:
+///     The same path when it can be reopened, or `None` to download again.
+fn reusable_installer_image(saved_image: Option<PathBuf>) -> Option<PathBuf> {
+    saved_image.filter(|path| {
+        fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+    })
+}
+
+/// Hand the disk image to Finder, which mounts it and shows the drag-to-Applications window.
+#[cfg(target_os = "macos")]
+fn launch_installer_image(image: &Path) -> anyhow::Result<()> {
+    let status = Command::new("/usr/bin/open")
+        .arg(image)
+        .status()
+        .context("run /usr/bin/open")?;
+    if !status.success() {
+        bail!("/usr/bin/open exited with {status}");
+    }
+    Ok(())
+}
+
+/// Opening a disk image exists only on macOS.
+#[cfg(not(target_os = "macos"))]
+fn launch_installer_image(_image: &Path) -> anyhow::Result<()> {
+    bail!("installer images open only on macOS")
 }
 
 /// Persisted transaction authority shared by the old app, helper, and new app.
