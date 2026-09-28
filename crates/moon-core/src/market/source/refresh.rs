@@ -425,6 +425,19 @@ impl MarketDataSource {
         }
     }
 
+    /// `core`'s feed saw the core answer its chart-archive request for `market` — see
+    /// [`super::archive::ArchiveGate::answered`]. Any core, not only an elected provider: the tape
+    /// stage asks every connected core of the venue.
+    pub fn archive_answered(&self, core: CoreId, market: &str, epoch: u64) {
+        let archive = self
+            .inner
+            .read()
+            .expect("market source poisoned")
+            .archive
+            .clone();
+        archive.answered(core, market, epoch);
+    }
+
     pub fn refresh_market(&self, core: CoreId, market: &str) -> bool {
         let (provider, client, store, elapsed_ms, orderbook_kind) = {
             let inner = self.inner.read().expect("market source poisoned");

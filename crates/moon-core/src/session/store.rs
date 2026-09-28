@@ -1439,6 +1439,7 @@ impl CoreData {
             FeedMsg::Identity { .. }
             | FeedMsg::CoreBase { .. }
             | FeedMsg::MarketDataChanged(_)
+            | FeedMsg::ChartArchiveAnswered { .. }
             | FeedMsg::TradeSounds(_)
             | FeedMsg::TradeClosed { .. } => {}
         }

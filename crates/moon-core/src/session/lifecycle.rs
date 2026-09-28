@@ -378,6 +378,9 @@ impl SessionManager {
                         self.core_base.insert(sess.id, base);
                         stats.ui_state = true;
                     }
+                    FeedMsg::ChartArchiveAnswered { market, epoch } => {
+                        self.market_source.archive_answered(sess.id, &market, epoch);
+                    }
                     FeedMsg::MarketDataChanged(markets) => {
                         if !markets.is_empty() {
                             self.market_source.mark_dirty(sess.id, &markets);

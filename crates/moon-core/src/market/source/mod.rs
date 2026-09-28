@@ -1,5 +1,6 @@
 mod arb;
 mod archive;
+pub(crate) use archive::ARCHIVE_WAIT;
 mod history;
 #[cfg(test)]
 mod label_tests;

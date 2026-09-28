@@ -275,6 +275,7 @@ impl SettingsView {
         let trades_max_mb = self.storage.cfg.trade_replay.max_mb;
         let trades_margin_s = self.storage.cfg.trade_replay.margin_s;
         let autoload_missing = self.storage.cfg.trade_replay.autoload_missing;
+        let autoload_cores = self.storage.cfg.trade_replay.autoload_cores;
         let long_position_min = self.storage.cfg.trade_replay.long_position_min;
         let cleanup_at_startup = self.storage.cfg.trade_replay.cleanup_at_startup;
 
@@ -552,8 +553,30 @@ impl SettingsView {
                     )),
             )
             .child(hint(t!("storage.trades_long_position_hint").to_string()))
-            // The Entry/Exit axis' tape autoload: a live cell in moon-core, read by the
-            // coordination tick, so a flip needs no restart.
+            // The Entry/Exit axis' tape autoload, from the cores' archives and from the venues:
+            // live cells in moon-core, read by the coordination tick, so a flip needs no restart.
+            .child(
+                moon_ui::MoonCheckbox::new("trades-autoload-cores")
+                    .checked(autoload_cores)
+                    .label(t!("storage.trades_autoload_cores").to_string())
+                    .description(t!("storage.trades_autoload_cores_hint").to_string())
+                    .on_change(cx.listener(|this, v: &bool, _, cx| {
+                        let v = *v;
+                        if this.storage.cfg.trade_replay.autoload_cores != v {
+                            this.storage.cfg.trade_replay.autoload_cores = v;
+                            moon_core::market::trade_replay::set_tape_autoload_cores(v);
+                            // Off stops the core filing between markets and leaves the venue
+                            // path alone; on re-arms the pass so it files what the cores hold.
+                            if v {
+                                crate::analytics::tape_autoload::switched_on();
+                            } else {
+                                crate::analytics::tape_autoload::cores_switched_off();
+                            }
+                            storage_cfg::save(&this.storage.cfg);
+                            cx.notify();
+                        }
+                    })),
+            )
             .child(
                 moon_ui::MoonCheckbox::new("trades-autoload-missing")
                     .checked(autoload_missing)
@@ -565,8 +588,12 @@ impl SettingsView {
                             this.storage.cfg.trade_replay.autoload_missing = v;
                             moon_core::market::trade_replay::set_tape_autoload(v);
                             // Immediately, not on the next coordination tick: the pass may
-                            // already have handed its rows to the fetch job.
-                            if !v {
+                            // already have handed its rows to the fetch job. Off drops the venue
+                            // rows only — the core filing is the other switch's; on re-arms the
+                            // pass, which a finished one would otherwise never do again.
+                            if v {
+                                crate::analytics::tape_autoload::switched_on();
+                            } else {
                                 crate::analytics::tape_autoload::switched_off();
                             }
                             storage_cfg::save(&this.storage.cfg);

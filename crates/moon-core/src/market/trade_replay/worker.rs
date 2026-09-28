@@ -1745,12 +1745,18 @@ fn serve_ticks(
         if held_whole {
             return;
         }
+        // One deadline for the whole focus: a long position's two ends share it.
+        let archive_deadline = Instant::now() + crate::market::source::ARCHIVE_WAIT;
         file_core_into_tiles(&request.address, &request.market, &focus, tiles, |span| {
+            // Wait for the core's archive of this market first: the copy is final for the
+            // stage, and a ring copied before the answer sends the venue — or, with no route,
+            // nobody — the stretch the archive holds.
             request.address.history.capture_core_span(
                 &request.address,
                 &request.market,
                 span.0,
                 span.1,
+                Some(archive_deadline),
             )
         });
     };
@@ -2390,6 +2396,7 @@ fn capture_from_core(request: &CaptureRequest, span: (i64, i64), tiles: &Mutex<T
                 &request.market,
                 span.0,
                 span.1,
+                None,
             )
         },
     );

@@ -1329,6 +1329,18 @@ pub enum FeedMsg {
     /// `SessionManager` mark particular markets dirty while visible charts pull the snapshots they
     /// need. The ticks and order book themselves do not travel through the UI channel.
     MarketDataChanged(Vec<MarketDirty>),
+    /// The core answered this client's chart-archive request for the market — merged it into the
+    /// retained rings (`Ready`) or failed it. Sent by EVERY core, provider or not, chart open or
+    /// not: the tuner's tape stage asks any connected core of the venue and waits for exactly this
+    /// (`market::source::archive`), while [`Self::MarketDataChanged`] only ever comes from an
+    /// elected provider with a wanted market. `epoch` is the client slot's epoch the answering
+    /// client was installed under: a network reconnect keeps the slot and bumps the epoch, and an
+    /// answer still in this channel from the previous connection must not settle the new one's
+    /// request for the same market.
+    ChartArchiveAnswered {
+        market: String,
+        epoch: u64,
+    },
     /// Open core orders across all markets.
     Orders(Vec<OrderRow>),
     /// Fast order snapshot only for the chart/order-line store. The Orders table remains gated by
