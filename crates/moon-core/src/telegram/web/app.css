@@ -24,6 +24,8 @@
     --card-high: #f8fafc;
     --row-line: var(--line);
     --pos: #0e6e45;
+    --pill-on: var(--pos);
+    --pill-on-fill: rgba(14, 110, 69, 0.14);
     --neg: var(--danger);
     --warn: #b97824;
     --tint: rgba(0, 157, 255, 0.08);
@@ -70,6 +72,8 @@
     --button: #ffb347;
     --button-ink: #131416;
     --pos: #1e8c5b;
+    --pill-on: #3ddc84;
+    --pill-on-fill: rgba(61, 220, 132, 0.16);
     --neg: #e5484d;
     --danger: #e5484d;
     --warn: #ffb347;
@@ -91,6 +95,8 @@
         --button: #ffb347;
         --button-ink: #131416;
         --pos: #1e8c5b;
+        --pill-on: #3ddc84;
+        --pill-on-fill: rgba(61, 220, 132, 0.16);
         --neg: #e5484d;
         --danger: #e5484d;
         --warn: #ffb347;
@@ -1267,10 +1273,11 @@ button.pill {
     cursor: pointer;
 }
 
+/* ON reads from its own tokens: the dark palette's --pos is too faint for a label on a card. */
 .pill.on {
-    border-color: var(--pos);
-    color: var(--pos);
-    background-color: rgba(14, 110, 69, 0.14);
+    border-color: var(--pill-on);
+    color: var(--pill-on);
+    background-color: var(--pill-on-fill);
 }
 
 .pill.off {
