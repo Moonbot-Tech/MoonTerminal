@@ -1111,7 +1111,8 @@
         hero.appendChild(el("p", "hero-sub num", bits.join(" \u00B7 ")));
         host.appendChild(hero);
         var days = Array.isArray(data.days) ? data.days : [];
-        if (days.length) host.appendChild(dayTable(data, days));
+        // A one-day window (today, yesterday) has one row that only repeats the total above.
+        if (days.length > 1) host.appendChild(dayTable(data, days));
         appendMoneyList(host, tr("mini_report_by_exchange"), data.by_exchange, { sort: true });
         appendMoneyList(host, tr("mini_report_by_core"), data.by_core, {
             nameClass: "name core-name",
