@@ -653,16 +653,18 @@ main {
     border-radius: var(--r-card);
 }
 
+/* Each option sizes from its own label, so "Last month" gets the room it needs and every
+   label stays on one line. */
 .segments button {
-    flex: 1 1 0;
+    flex: 1 1 auto;
     min-width: 44px;
     min-height: 44px;
     border-radius: var(--r-ctl);
-    padding: 4px 2px;
+    padding: 4px 6px;
     color: var(--hint);
     font-size: 13px;
     line-height: 1.1;
-    white-space: normal;
+    white-space: nowrap;
     hyphens: none;
     text-align: center;
     box-shadow: inset 0 0 0 1px transparent;
