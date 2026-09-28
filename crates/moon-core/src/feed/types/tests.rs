@@ -375,3 +375,92 @@ fn a_temp_blacklist_remainder_is_never_trusted() {
         );
     }
 }
+
+/// A tester pastes either `Moon Bot` or the whole `InstallTestVersion Moon Bot` line.
+///
+/// The command word is a case-insensitive token, and the build name keeps every word it had,
+/// with whitespace runs collapsed. Breaks when the compare becomes case-sensitive: the lowercase
+/// paste is then sent as the version name, command word included.
+#[test]
+fn a_pasted_install_command_keeps_only_the_build_name() {
+    assert_eq!(
+        super::normalize_named_build("  installtestversion   Moon   Bot  "),
+        Some("Moon Bot".to_string())
+    );
+    assert_eq!(
+        super::normalize_named_build("INSTALLTESTVERSION MoonBot-F8"),
+        Some("MoonBot-F8".to_string())
+    );
+}
+
+/// A build name that merely contains spaces is still the whole name.
+///
+/// Breaks when the command-word filter is dropped and the first word is always discarded:
+/// `Moon Bot` would be sent as `Bot`.
+#[test]
+fn a_multi_word_build_name_is_not_decapitated() {
+    assert_eq!(
+        super::normalize_named_build("Moon   Bot"),
+        Some("Moon Bot".to_string())
+    );
+}
+
+/// `InstallTestVersion-foo` is one token. The command word is stripped only when whitespace
+/// separates it, so a name that starts with those letters stays whole.
+///
+/// Breaks when the bare-name branch strips a case-insensitive prefix instead of requiring a
+/// token break: the updater would be asked for `-foo` or `MoonBot`.
+#[test]
+fn a_command_prefix_without_a_token_break_stays() {
+    assert_eq!(
+        super::normalize_named_build("InstallTestVersion-foo"),
+        Some("InstallTestVersion-foo".to_string())
+    );
+    assert_eq!(
+        super::normalize_named_build("installtestversionMoonBot"),
+        Some("installtestversionMoonBot".to_string())
+    );
+}
+
+/// An empty field, and a field that is only the command word, are "do nothing" — not a version
+/// named `InstallTestVersion`.
+///
+/// Breaks when the command-word-only branch is dropped: that paste is sent as the build name.
+#[test]
+fn a_blank_or_bare_command_is_not_a_build_name() {
+    assert_eq!(super::normalize_named_build(""), None);
+    assert_eq!(super::normalize_named_build("   \n\t  "), None);
+    assert_eq!(super::normalize_named_build("InstallTestVersion"), None);
+    assert_eq!(super::normalize_named_build("  installtestversion  "), None);
+}
+
+/// `BGF-SUB4` counts only when the next character ends the token.
+///
+/// A longer sibling (`BGF-SUB40`), an underscore join, and a hyphen join are different tokens.
+/// The match is case-sensitive. Breaks when the trailing-boundary check is dropped: `BGF-SUB40`
+/// then frees the update lane while a different code was logged.
+#[test]
+fn a_longer_reject_token_is_not_the_code() {
+    assert!(super::is_core_update_rejection("BGF-SUB4"));
+    assert!(super::is_core_update_rejection(
+        "refused BGF-SUB4: try another"
+    ));
+    assert!(!super::is_core_update_rejection("BGF-SUB40"));
+    assert!(!super::is_core_update_rejection("BGF-SUB4_foo"));
+    assert!(!super::is_core_update_rejection("BGF-SUB4-extra"));
+    assert!(!super::is_core_update_rejection("bgf-sub4"));
+    assert!(!super::is_core_update_rejection(""));
+}
+
+/// The character before the code has to end a token too. `XBGF-SUB4` is not `BGF-SUB4`.
+///
+/// Breaks when the leading-boundary check is dropped: a longer token that happens to end in
+/// the code is read as a refusal.
+#[test]
+fn a_reject_code_must_start_on_a_token_boundary() {
+    assert!(!super::is_core_update_rejection("XBGF-SUB4"));
+    assert!(!super::is_core_update_rejection("XBGF-SUB4:"));
+    assert!(!super::is_core_update_rejection("foo-BGF-SUB4"));
+    assert!(super::is_core_update_rejection("(BGF-SUB4)"));
+    assert!(super::is_core_update_rejection("XBGF-SUB4 then BGF-SUB4"));
+}
