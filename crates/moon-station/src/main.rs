@@ -6,18 +6,33 @@
 //!
 //! - replicates every core's reports into `reports.sqlite` — the same writer, the same checkpoints;
 //! - backfills and keeps each closed trade's order traces (`order_traces.sqlite`);
-//! - records the tape around every trade by archive requests alone
-//!   (`market::tape_recorder`, always on here) into `tape_recorder.sqlite`.
+//! - records the tape around every trade (`market::tape_recorder`, always on here) into
+//!   `tape_recorder.sqlite`: the pair subscribed for the trade's lifetime, seeded once with the
+//!   core's chart archive.
 //!
 //! It never elects a market provider — the terminal does that from its open charts — so no core
-//! is asked for its exchange's live trade stream.
+//! is asked to keep every market's trades; only the pairs of trades in progress are selected.
 //!
-//! Usage: `moon-station --data <dir>`. The directory is the station's whole state: `station.toml`
-//! (the cores), the databases under `data/`, the logs under `logs/`, `cfg/diagnostics.toml`.
+//! Usage: `moon-station --data <dir> [--config <station.toml>]`. The directory is the station's
+//! whole state: the databases under `data/`, the logs under `logs/`, `cfg/diagnostics.toml`, and
+//! `station.toml` (the cores) unless `--config` names it elsewhere — the service keeps it in
+//! `/etc/moon-station`, read-only to the station. Core keys come as systemd credentials
+//! (`cores.rs`).
+//!
+//! Signals: SIGTERM (and SIGINT) stop it cleanly — the tape recorder files what it drained before
+//! the process exits; the report replica and the order traces need no such step, the replica
+//! resuming from its last committed checkpoint and the traces backfilled at the next start.
+//! SIGHUP re-reads `station.toml`: cores removed or switched off disconnect, the tape window moves.
+//! A core ADDED needs its credential, which systemd hands over only at a start, so that one takes
+//! a restart.
+//!
+//! The allocator is musl's own. `mimalloc` was measured in its place (2026-09-28): the same CPU at
+//! idle, and resident memory at twice the size and growing — not worth it on a 1 GB server.
 
 mod cores;
+mod signals;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// How often the feeds' channels are drained — the terminal's own coordination cadence.
@@ -26,15 +41,24 @@ const DRAIN_EVERY: Duration = Duration::from_millis(100);
 const DIAG_POLL_EVERY: Duration = Duration::from_secs(1);
 /// How often the connection summary is logged.
 const STATUS_EVERY: Duration = Duration::from_secs(60);
+/// How long a stopping station waits for the tape recorder's last writes. systemd waits 90 s
+/// before it kills.
+const STOP_WAIT: Duration = Duration::from_secs(15);
 
 fn main() -> anyhow::Result<()> {
-    let data_root = data_root()?;
+    let (data_root, config) = args()?;
     anyhow::ensure!(
         moon_core::config::paths::set_data_dir_override(data_root.clone()),
         "data root already set"
     );
     let (diag_cfg, diag_err) = moon_core::diagnostics::init();
-    if let Err(e) = moon_core::applog::install(&moon_core::diagnostics::filter_string(&diag_cfg)) {
+    // The terminal's base filter raises only its own crates to `info`; the station's startup,
+    // tape-window and minute status lines come from this one.
+    let filter = format!(
+        "{},moon_station=info",
+        moon_core::diagnostics::filter_string(&diag_cfg)
+    );
+    if let Err(e) = moon_core::applog::install(&filter) {
         eprintln!("logger not installed: {e}");
     }
     moon_core::applog::set_file_logging(true, 14);
@@ -48,13 +72,16 @@ fn main() -> anyhow::Result<()> {
         data_root.display()
     );
 
-    let cfg = cores::load(&data_root)?;
-    log::info!(
-        "cores: {} configured, {} active",
-        cfg.servers.len(),
-        cfg.servers.iter().filter(|s| s.active).count()
-    );
+    let signals = signals::Signals::install()?;
+    let config_path = config.unwrap_or_else(|| data_root.join("station.toml"));
+    let station = cores::load(&config_path)?;
+    // The terminal's window around a trade, before the recorder builds its first one.
+    apply_tape(&station.tape);
+    let cfg = station.config;
+    log_cores(&cfg);
 
+    // Before any core is spawned: every feed reads it when its client is built.
+    moon_core::feed::station::enable();
     moon_core::market::tape_recorder::set_always_on();
     // The interprocess lease on the replica: a second station, or a terminal, on the same data
     // root is refused here rather than corrupting the file.
@@ -72,15 +99,29 @@ fn main() -> anyhow::Result<()> {
     // feeds deliver anything, and again whenever a core names its exchange.
     session.map_cores_to_themselves();
 
-    let groups: Vec<String> = {
-        let mut groups: Vec<String> = cfg.servers.iter().map(|s| s.group.clone()).collect();
-        groups.sort();
-        groups.dedup();
-        groups
-    };
+    let mut groups = groups_of(&cfg);
     let mut last_diag = Instant::now();
     let mut last_status = Instant::now();
     loop {
+        if signals.stop_requested() {
+            log::info!("stopping");
+            if !moon_core::market::tape_recorder::shutdown(STOP_WAIT) {
+                log::warn!("the tape recorder did not finish its last writes in time");
+            }
+            log::info!("stopped");
+            return Ok(());
+        }
+        if signals.take_reload() {
+            match reload(&config_path) {
+                Ok(cfg) => {
+                    session.reconcile(&cfg, Some(&reports.tx));
+                    session.map_cores_to_themselves();
+                    groups = groups_of(&cfg);
+                }
+                // The running set stays as it was: a half-written file must not drop every core.
+                Err(e) => log::error!("reload of {} failed: {e:#}", config_path.display()),
+            }
+        }
         if session.drain().identity {
             session.map_cores_to_themselves();
         }
@@ -114,18 +155,64 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-/// `--data <dir>`, required: the station never guesses where its state lives.
-fn data_root() -> anyhow::Result<PathBuf> {
+/// Re-read `station.toml` and apply its tape window; the cores are for the caller to reconcile.
+fn reload(path: &Path) -> anyhow::Result<moon_core::config::AppConfig> {
+    let station = cores::load(path)?;
+    log::info!("reloaded {}", path.display());
+    apply_tape(&station.tape);
+    log_cores(&station.config);
+    Ok(station.config)
+}
+
+/// The terminal's window around a trade; absent fields keep what is in force.
+fn apply_tape(tape: &cores::Tape) {
+    if let Some(secs) = tape.margin_s {
+        moon_core::market::trade_replay::set_margin_s(secs);
+    }
+    if let Some(minutes) = tape.long_position_min {
+        moon_core::market::trade_replay::set_long_position_min(minutes);
+    }
+    log::info!(
+        "tape window: margin {} s, long position from {} min",
+        moon_core::market::trade_replay::margin_ms() / 1_000,
+        moon_core::market::trade_replay::long_position_ms() / 60_000
+    );
+}
+
+fn log_cores(cfg: &moon_core::config::AppConfig) {
+    log::info!(
+        "cores: {} configured, {} active",
+        cfg.servers.len(),
+        cfg.servers.iter().filter(|s| s.active).count()
+    );
+}
+
+/// The core groups the status line sums over.
+fn groups_of(cfg: &moon_core::config::AppConfig) -> Vec<String> {
+    let mut groups: Vec<String> = cfg.servers.iter().map(|s| s.group.clone()).collect();
+    groups.sort();
+    groups.dedup();
+    groups
+}
+
+/// `--data <dir>`, required: the station never guesses where its state lives. `--config <file>`,
+/// optional: `station.toml` somewhere else.
+fn args() -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
+    const USAGE: &str = "usage: moon-station --data <dir> [--config <station.toml>]";
+    let (mut data, mut config) = (None, None);
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
-        if arg == "--data" {
-            let dir = args
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("--data needs a directory"))?;
-            let dir = PathBuf::from(dir);
-            std::fs::create_dir_all(&dir)?;
-            return Ok(dir);
-        }
+        let slot = match arg.as_str() {
+            "--data" => &mut data,
+            "--config" => &mut config,
+            other => anyhow::bail!("unknown argument {other:?}; {USAGE}"),
+        };
+        let value = args
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("{arg} needs a path; {USAGE}"))?;
+        *slot = Some(PathBuf::from(value));
     }
-    anyhow::bail!("usage: moon-station --data <dir>")
+    let data = data.ok_or_else(|| anyhow::anyhow!(USAGE))?;
+    std::fs::create_dir_all(&data)?;
+    Ok((data, config))
 }

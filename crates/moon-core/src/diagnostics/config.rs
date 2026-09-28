@@ -67,7 +67,7 @@ pub struct Channels {
     /// (`"BONK,1000SATS"`) whose catalog spellings are dumped once per core. See
     /// `crate::coin_naming`.
     pub coin_naming: String,
-    /// The station's request-only tape, recorded beside the terminal's own captures — the one key
+    /// The station's tape, recorded beside the terminal's own captures — the one key
     /// here that CONNECTS: one extra client per exchange. See `crate::market::tape_recorder`.
     pub tape_recorder: bool,
 }

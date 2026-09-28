@@ -11,6 +11,7 @@ pub mod news;
 pub mod news_marks;
 mod order_edit;
 pub mod report_traces;
+pub mod station;
 mod strategies;
 pub mod strategy_deps;
 pub mod strategy_order;

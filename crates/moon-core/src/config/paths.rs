@@ -750,7 +750,7 @@ pub fn trades_db_path() -> PathBuf {
 }
 
 /// SQLite database the tape recorder files into (see `market::tape_recorder`): the layout of
-/// [`trades_db_path`], kept apart so the request-only tape can be compared with the ring captures
+/// [`trades_db_path`], kept apart so the station's tape can be compared with the ring captures
 /// the terminal files there, and deleted after a run without touching them.
 pub fn tape_recorder_db_path() -> PathBuf {
     db_dir().join("tape_recorder.sqlite")
@@ -838,6 +838,20 @@ pub fn core_warnings_db_path() -> PathBuf {
 /// values, while system values such as the version ignore list are edited manually.
 pub fn storage_path() -> PathBuf {
     cfg_dir().join("storage.toml")
+}
+
+/// The servers the terminal prepared for its station (`moon-remote`): each host's pinned key and
+/// administrator in `hosts.toml`, the app's own SSH key sealed in `app_key.enc`. Created on first
+/// access.
+pub fn remote_dir() -> PathBuf {
+    let dir = data_dir().join("remote");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log::warn!(
+            "could not create the remote directory {}: {e}",
+            dir.display()
+        );
+    }
+    dir
 }
 
 /// Log directory for diagnostic core commands/reports.

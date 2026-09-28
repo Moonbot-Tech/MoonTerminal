@@ -193,6 +193,8 @@ enum Op {
         apply: bool,
         reply: mpsc::Sender<rusqlite::Result<TrimReport>>,
     },
+    /// Nothing: answered once every op queued before it has been served.
+    Sync { reply: mpsc::Sender<()> },
 }
 
 /// Cheaply cloneable handle to the one worker.
@@ -348,6 +350,16 @@ impl TradeCache {
         let (reply, rx) = mpsc::channel();
         self.tx.send(Op::Trim { keep, apply, reply }).ok()?;
         rx.recv_timeout(MAINTENANCE_TIMEOUT).ok()
+    }
+
+    /// Wait until every write queued before this call is on disk, at most `timeout` — for a
+    /// process about to exit.
+    ///
+    /// Returns:
+    ///     Whether the worker got there in time.
+    pub fn sync(&self, timeout: Duration) -> bool {
+        let (reply, rx) = mpsc::channel();
+        self.tx.send(Op::Sync { reply }).is_ok() && rx.recv_timeout(timeout).is_ok()
     }
 }
 
@@ -713,6 +725,9 @@ fn serve(conn: &rusqlite::Connection, op: Op, held: &mut i64, ceiling: fn() -> O
         }
         Op::Inventory { reply } => {
             let _ = reply.send(trim::inventory(conn));
+        }
+        Op::Sync { reply } => {
+            let _ = reply.send(());
         }
         Op::Trim { keep, apply, reply } => {
             let result = trim::trim(conn, &keep, apply);

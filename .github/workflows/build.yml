@@ -3,10 +3,12 @@ name: build
 permissions:
   contents: read
 
-# Seven jobs, six of which gate a merge:
+# Eight jobs, seven of which gate a merge:
 #   Windows .exe — the real release binary, uploaded as an artifact.
 #   Tests        — `cargo test --workspace`. Blocking: a red suite is a red PR.
 #   Clippy       — `cargo clippy --workspace --all-targets --locked -- -D warnings`. Blocking.
+#   Station      — the headless station for Linux (static musl): build, test and clippy of
+#                  `moon-station` on the target it ships for. Blocking.
 #   Audit        — cargo-deny over the committed lockfile. Blocking.
 #   Tour         — deterministic interactive and AI documentation. Blocking.
 #   Fmt          — `cargo fmt --all -- --check`. Blocking.
@@ -16,7 +18,7 @@ permissions:
 #                  .dmg ships, unevenly: arm64 is compiled, the Intel slice only
 #                  type-checked. Read its log; it never blocks.
 #
-# THE LOCKFILE CONTRACT, which the four compiling jobs implement in the same three steps.
+# THE LOCKFILE CONTRACT, which the five compiling jobs implement in the same three steps.
 # `Cargo.lock` is committed, so third-party versions move only in a deliberate commit. Each job
 # then, in this order and no other:
 #   1. verifies the committed lock still agrees with the manifests (`cargo fetch --locked`),
@@ -46,8 +48,8 @@ permissions:
 # deliberate commit that can be reverted on its own when a new compiler breaks a dep. Dependabot
 # does not propose that raise: it is told to ignore this action in .github/dependabot.yml, because
 # the action is versioned by branches its author creates ahead of the Rust releases they name, so
-# its "latest" resolves to a toolchain rustup cannot download. Move all six sites together —
-# three here, two in release.yml, and rust-toolchain.toml, which never re-runs these gates.
+# its "latest" resolves to a toolchain rustup cannot download. Move all eight sites together —
+# five here, two in release.yml, and rust-toolchain.toml, which never re-runs these gates.
 on:
   push:
     branches: [main]
@@ -169,6 +171,42 @@ jobs:
         run: bash .github/scripts/assert-only-moonui-moved.sh
       - name: Lint the workspace
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  station-linux:
+    name: Station (x86_64-linux-musl)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    # A gate, not a probe. The station is the one binary this workspace ships for Linux — a
+    # static musl build the terminal installs on the user's server — and no other job compiles
+    # for Linux at all, so a `cfg(unix)` path or a C dependency that breaks there would first
+    # show on a user's VPS. Only `moon-station` and what it pulls in: the terminal's GUI crates
+    # are Windows/macOS and never built here.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: x86_64-unknown-linux-musl
+          components: clippy
+      # `musl-gcc` for the C inside the station's dependencies (ring, SQLite).
+      - name: Install the musl C toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The lockfile contract — see the header.
+      - name: Verify the committed lockfile agrees with the manifests
+        run: cargo fetch --locked
+      - name: Refresh MoonUI only
+        run: cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui
+      - name: Assert the refresh moved MoonUI and nothing else
+        shell: bash
+        run: bash .github/scripts/assert-only-moonui-moved.sh
+      - name: Build the station
+        run: cargo build -p moon-station --locked --target x86_64-unknown-linux-musl
+      - name: Test the station
+        run: cargo test -p moon-station --locked --target x86_64-unknown-linux-musl
+      - name: Lint the station
+        run: cargo clippy -p moon-station --all-targets --locked --target x86_64-unknown-linux-musl -- -D warnings
 
   macos-probe:
     name: macOS probe (arm64 build, x86_64 check) — diagnostic

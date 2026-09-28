@@ -2,7 +2,7 @@
 name = "moon-station"
 version = "0.1.0"
 edition = "2021"
-description = "Headless MoonTerminal station: report replica, order traces and the request-only trade tape, without a window."
+description = "Headless MoonTerminal station: report replica, order traces and the trade tape around every trade, without a window."
 publish = false
 
 [[bin]]
@@ -11,13 +11,17 @@ path = "src/main.rs"
 
 [dependencies]
 # Without `desktop`: no OS keyring, so no D-Bus on Linux — the station's core keys come from
-# its own `station.toml`, not from the terminal's `servers.enc`. A desktop host that wants to
+# its systemd credentials, not from the terminal's `servers.enc`. A desktop host that wants to
 # run the probe against a copy of the terminal's `cfg/` turns `terminal-config` on.
 moon-core = { path = "../moon-core", default-features = false }
 anyhow = "1"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+zeroize = "1"
+
+[target.'cfg(unix)'.dependencies]
+signal-hook = { version = "0.4", default-features = false }
 
 [features]
 # Read the cores from a copy of the terminal's `cfg/servers.enc` when no `station.toml` is
