@@ -13,7 +13,7 @@ renders every Mini App screen from the synthetic payloads in `miniapp_preview/fi
 like `crates/moon-core/src/telegram/web/dto.rs`) at 421x900 and 390x844, light and dark, into
 `<dir>` (default `tools/miniapp_preview/out/`, ignored), then checks the owner commands the page
 sends and exits non-zero on a failure or a page error. No core or bot is needed. Install its two
-packages once with `npm install --prefix tools/miniapp_preview` (`playwright-core`, `js-yaml`;
+packages once with `npm install` run inside `tools/miniapp_preview` (`playwright-core`, `js-yaml`;
 nothing is committed); it drives the system Chrome from the standard install path on Windows,
 macOS or Linux, or `CHROME_PATH` when set.
 

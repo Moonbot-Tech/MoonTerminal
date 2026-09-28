@@ -41,7 +41,7 @@ function loadDeps() {
     try {
         return { chromium: require("playwright-core").chromium, yaml: require("js-yaml") };
     } catch {
-        console.error("[FAIL] dependencies missing: run `npm install --prefix tools/miniapp_preview` once");
+        console.error("[FAIL] dependencies missing: run `npm install` once inside tools/miniapp_preview");
         process.exit(2);
     }
 }
