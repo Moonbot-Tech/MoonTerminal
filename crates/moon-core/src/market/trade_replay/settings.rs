@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 static MARGIN_S: AtomicU32 = AtomicU32::new(crate::config::storage::DEFAULT_TRADE_MARGIN_S);
 /// Live value of `[trade_replay] autoload_missing`.
 static TAPE_AUTOLOAD: AtomicBool = AtomicBool::new(false);
+/// Live value of `[trade_replay] autoload_cores`.
+static TAPE_AUTOLOAD_CORES: AtomicBool = AtomicBool::new(true);
 /// Live value of `[trade_replay] long_position_min`.
 static LONG_POSITION_MIN: AtomicU32 =
     AtomicU32::new(crate::config::storage::DEFAULT_LONG_POSITION_MIN);
@@ -27,14 +29,16 @@ fn init() {
         let cfg = crate::config::storage::load();
         MARGIN_S.store(cfg.trade_replay.margin_s, Ordering::Relaxed);
         TAPE_AUTOLOAD.store(cfg.trade_replay.autoload_missing, Ordering::Relaxed);
+        TAPE_AUTOLOAD_CORES.store(cfg.trade_replay.autoload_cores, Ordering::Relaxed);
         LONG_POSITION_MIN.store(cfg.trade_replay.long_position_min, Ordering::Relaxed);
         CLEANUP_AT_STARTUP.store(cfg.trade_replay.cleanup_at_startup, Ordering::Relaxed);
         // Once per launch, so a file migrated from `margin_min` shows what it was read as.
         log::info!(
-            "[x] trade-replay settings: margin {} s, long position from {} min, tape autoload {}, cleanup at startup {}",
+            "[x] trade-replay settings: margin {} s, long position from {} min, tape autoload from venues {}, from cores {}, cleanup at startup {}",
             cfg.trade_replay.margin_s,
             cfg.trade_replay.long_position_min,
             cfg.trade_replay.autoload_missing,
+            cfg.trade_replay.autoload_cores,
             cfg.trade_replay.cleanup_at_startup
         );
     });
@@ -62,8 +66,8 @@ pub fn set_margin_s(secs: u32) {
     );
 }
 
-/// Whether the terminal fetches the tape of recent closed trades on its own once the cores are
-/// up — `[trade_replay] autoload_missing`.
+/// Whether the terminal fetches the tape of recent closed trades from the VENUES on its own once
+/// the cores are up — `[trade_replay] autoload_missing`.
 pub fn tape_autoload() -> bool {
     init();
     TAPE_AUTOLOAD.load(Ordering::Relaxed)
@@ -73,6 +77,19 @@ pub fn tape_autoload() -> bool {
 pub fn set_tape_autoload(on: bool) {
     init();
     TAPE_AUTOLOAD.store(on, Ordering::Relaxed);
+}
+
+/// Whether the terminal files what the cores' archives hold of recent closed trades on its own
+/// once the cores are up — `[trade_replay] autoload_cores`.
+pub fn tape_autoload_cores() -> bool {
+    init();
+    TAPE_AUTOLOAD_CORES.load(Ordering::Relaxed)
+}
+
+/// Move the live core-archive autoload switch; the Storage tab writes the file beside this.
+pub fn set_tape_autoload_cores(on: bool) {
+    init();
+    TAPE_AUTOLOAD_CORES.store(on, Ordering::Relaxed);
 }
 
 /// How long a position must be held to be walked as its two ends — `[trade_replay]

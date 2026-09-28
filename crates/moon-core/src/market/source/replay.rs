@@ -3,6 +3,7 @@
 use super::{MarketDataSource, ReplayAddress};
 use crate::feed::{Side, Tick};
 use crate::market::trade_replay::ReplayWindow;
+use crate::session::CoreId;
 
 /// Bound the requested interval copy; unrelated retained history must not reject a donor.
 const MAX_CORE_ROWS: usize = 250_000;
@@ -74,6 +75,68 @@ impl MarketDataSource {
         )
     }
 
+    /// Ask every matching core for `market`'s chart archive and wait, up to
+    /// [`super::ARCHIVE_WAIT`] in all, for the first answer — without copying anything.
+    ///
+    /// For a caller that files the ring through the close-time capture afterwards
+    /// (`trade_replay::worker::capture`): the capture runs on the worker's coordinator, which
+    /// answers the tuner's held-data queries and may not block, so the wait happens here, on the
+    /// caller's thread, and the capture then copies a ring that already holds the archive. Once
+    /// per market and client the wait is real; later calls return at once.
+    pub(crate) fn await_core_archive(&self, address: &ReplayAddress, market: &str) {
+        let deadline = std::time::Instant::now() + super::ARCHIVE_WAIT;
+        let (donors, archive) = self.venue_donors(address);
+        // The first core that answers is enough: its ring is the one the capture copies, and
+        // every further ask is another multi-megabyte archive for the same prints.
+        for (provider, slot) in donors {
+            let Some((client, epoch)) = slot.get_with_epoch() else {
+                continue;
+            };
+            let Some(snapshot) = client.snapshot_versioned() else {
+                continue;
+            };
+            if !serves_exchange(&snapshot, &address.exchange_key)
+                || snapshot.market_history_readers(market).is_none()
+            {
+                continue;
+            }
+            let waited =
+                archive.request_and_wait(provider, market, &client, epoch, deadline, || {
+                    slot.get_with_epoch().map(|(_, e)| e) == Some(epoch)
+                });
+            super::market_diag(format!(
+                "autoload archive wait {market} provider={provider}: {waited:?}"
+            ));
+            if waited == super::archive::ArchiveWait::Answered
+                || std::time::Instant::now() >= deadline
+            {
+                return;
+            }
+        }
+    }
+
+    /// Every connected core on `address`'s exchange, with the archive gate — read under one lock.
+    fn venue_donors(
+        &self,
+        address: &ReplayAddress,
+    ) -> (
+        Vec<(CoreId, crate::feed::SharedMoonClient)>,
+        std::sync::Arc<super::archive::ArchiveGate>,
+    ) {
+        let inner = self.inner.read().expect("market source poisoned");
+        let donors: Vec<_> = inner
+            .core_venue
+            .iter()
+            .filter_map(|(id, venue)| {
+                let exchange = venue.id;
+                (format!("{}:{:08x}", exchange.code, exchange.dex) == address.exchange_key)
+                    .then(|| inner.clients.get(id).map(|slot| (*id, slot.clone())))
+                    .flatten()
+            })
+            .collect();
+        (donors, inner.archive.clone())
+    }
+
     fn core_ticks(
         &self,
         address: &ReplayAddress,
@@ -84,20 +147,7 @@ impl MarketDataSource {
         // cores, or a long position's two ends, must not wait a dozen times.
         deadline: Option<std::time::Instant>,
     ) -> Option<CoreReplayTicks> {
-        let (donors, archive) = {
-            let inner = self.inner.read().expect("market source poisoned");
-            let donors: Vec<_> = inner
-                .core_venue
-                .iter()
-                .filter_map(|(id, venue)| {
-                    let exchange = venue.id;
-                    (format!("{}:{:08x}", exchange.code, exchange.dex) == address.exchange_key)
-                        .then(|| inner.clients.get(id).map(|slot| (*id, slot.clone())))
-                        .flatten()
-                })
-                .collect();
-            (donors, inner.archive.clone())
-        };
+        let (donors, archive) = self.venue_donors(address);
         let mut best: Option<CoreReplayTicks> = None;
         for (provider, slot) in donors {
             let Some((client, epoch)) = slot.get_with_epoch() else {
@@ -108,15 +158,7 @@ impl MarketDataSource {
             };
             // A queued job can outlive a provider election or slot replacement. Recheck the
             // actual client's identity before accepting its catalog or issuing an archive ask.
-            let info = snapshot.server_info();
-            let Some(code) = info.exchange_code else {
-                continue;
-            };
-            let exchange = crate::feed::ExchangeId::with_dex(
-                code.stable_id(),
-                info.dex_name.as_deref().unwrap_or_default(),
-            );
-            if format!("{}:{:08x}", exchange.code, exchange.dex) != address.exchange_key {
+            if !serves_exchange(&snapshot, &address.exchange_key) {
                 continue;
             }
             let Some(mut readers) = snapshot.market_history_readers(market) else {
@@ -194,6 +236,20 @@ impl MarketDataSource {
         }
         best
     }
+}
+
+/// Whether the client behind `snapshot` is connected to the exchange `exchange_key` names —
+/// `"{code}:{dex:08x}"`, the replay address's key.
+fn serves_exchange(snapshot: &moonproto::MoonClientSnapshot, exchange_key: &str) -> bool {
+    let info = snapshot.server_info();
+    let Some(code) = info.exchange_code else {
+        return false;
+    };
+    let exchange = crate::feed::ExchangeId::with_dex(
+        code.stable_id(),
+        info.dex_name.as_deref().unwrap_or_default(),
+    );
+    format!("{}:{:08x}", exchange.code, exchange.dex) == exchange_key
 }
 
 /// What a ring must hold before its copy of a window counts.

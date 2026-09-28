@@ -140,14 +140,22 @@ storage.trades_long_position_hint:
   ru: "Дольше — трейды только вокруг входа и выхода. Середину тюнер не видит: вариант, который мог выйти в ней, на такой сделке не судится."
   en: "Held longer — prints around the entry and the exit only. The tuner does not see the middle: a variant that may have closed there is not judged on such a trade."
   es: "Más larga — operaciones solo alrededor de la entrada y la salida. El afinador no ve el medio: una variante que pudo cerrar allí no se juzga en esa operación."
+storage.trades_autoload_cores:
+  ru: "Подгружать недостающую ленту из ядер при старте"
+  en: "Fetch the missing tape from the cores at startup"
+  es: "Descargar la cinta que falta desde los núcleos al arrancar"
+storage.trades_autoload_cores_hint:
+  ru: "Трейды сделок стратегий, закрытых пока терминал не работал, — из архива ядра: у каждого рынка он держит последние несколько тысяч трейдов (минуты у горячей монеты, до суток у тихой), любые биржи, включая Bybit и Hyperliquid. Лимит запросов биржи не тратит; сделки старше 48 ч не берёт."
+  en: "Prints of strategy trades that closed while the terminal was not running — from the core's archive, which holds the last few thousand prints of each market (minutes on a hot coin, up to a day on a quiet one), on any venue, Bybit and Hyperliquid included. Spends no venue request budget; trades older than 48 h are skipped."
+  es: "Operaciones de posiciones de estrategias cerradas mientras el terminal no estaba en marcha — desde el archivo del núcleo, que guarda las últimas miles de operaciones de cada mercado (minutos en una moneda activa, hasta un día en una tranquila), en cualquier bolsa, Bybit e Hyperliquid incluidas. No gasta el límite de peticiones de la bolsa; las posiciones de más de 48 h se omiten."
 storage.trades_autoload:
-  ru: "Подгружать недостающую ленту при старте"
-  en: "Fetch the missing tape at startup"
-  es: "Descargar la cinta que falta al arrancar"
+  ru: "Подгружать недостающую ленту с биржи при старте"
+  en: "Fetch the missing tape from the venue at startup"
+  es: "Descargar la cinta que falta desde la bolsa al arrancar"
 storage.trades_autoload_hint:
-  ru: "Трейды сделок стратегий, закрытых пока терминал не работал, — насколько биржа ещё отдаёт (Binance фьючерсы 48 ч, остальные до 30 дней; Bybit и Hyperliquid истории не дают). Тратит лимит запросов; останавливается кнопкой тюнера."
-  en: "Prints of strategy trades that closed while the terminal was not running — as far back as the venue still serves (Binance futures 48 h, others up to 30 days; Bybit and Hyperliquid serve no history). Spends the request budget; stops with the tuner's button."
-  es: "Operaciones de posiciones de estrategias cerradas mientras el terminal no estaba en marcha — hasta donde la bolsa aún sirve (futuros Binance 48 h, el resto hasta 30 días; Bybit e Hyperliquid no dan historial). Gasta el límite de peticiones; se para con el botón del afinador."
+  ru: "Что не нашлось в архиве ядра — с биржи, насколько она ещё отдаёт (Binance фьючерсы 48 ч, остальные до 30 дней; Bybit и Hyperliquid истории не дают). Тратит лимит запросов; останавливается кнопкой тюнера."
+  en: "What the core's archive does not hold — from the venue, as far back as it still serves (Binance futures 48 h, others up to 30 days; Bybit and Hyperliquid serve no history). Spends the request budget; stops with the tuner's button."
+  es: "Lo que el archivo del núcleo no tiene — desde la bolsa, hasta donde aún sirve (futuros Binance 48 h, el resto hasta 30 días; Bybit e Hyperliquid no dan historial). Gasta el límite de peticiones; se para con el botón del afinador."
 storage.trades_cleanup_at_startup:
   ru: "Чистка при старте"
   en: "Clean up at startup"

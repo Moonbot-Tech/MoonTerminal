@@ -46,6 +46,15 @@ pub struct ReplayAddress {
     pub cache: Option<crate::market::kline_cache::KlineCache>,
 }
 
+impl ReplayAddress {
+    /// Wait for `market`'s chart archive from this venue's cores — see
+    /// [`MarketDataSource::await_core_archive`]. Blocks up to a few seconds: never on the UI
+    /// thread.
+    pub fn await_core_archive(&self, market: &str) {
+        self.history.await_core_archive(self, market);
+    }
+}
+
 /// What a market's position actually is: size signed by DIRECTION, with the entry and liquidation
 /// prices of the leg that size came from.
 ///

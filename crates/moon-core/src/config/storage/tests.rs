@@ -19,6 +19,8 @@ max_mb = 512
     // The autoload switch came after the margin and reads as OFF from a file without it: it
     // spends the venues' budget, and may not switch itself on.
     assert!(!cfg.trade_replay.autoload_missing);
+    // The core-archive autoload came last and reads as ON: it costs the cores' traffic only.
+    assert!(cfg.trade_replay.autoload_cores);
     // The long-position threshold came later still and reads as the five minutes it was as a
     // constant; the startup cleanup, like the autoload, may not switch itself on.
     assert_eq!(
@@ -185,4 +187,25 @@ fn snap_and_step_walk_the_step_list() {
         "from the snapped step, 1800"
     );
     assert_eq!(step_trade_margin_s(2700, 0), 1800);
+}
+
+/// The core-archive autoload round-trips, and a file that carries only the venue switch — the
+/// shape every terminal wrote before 2026-09-28 — keeps that switch and reads the new one as on.
+#[test]
+fn autoload_cores_defaults_on_and_round_trips() {
+    let old: StorageCfg = toml::from_str(
+        "[trade_replay]
+autoload_missing = true
+",
+    )
+    .expect("old file parses");
+    assert!(old.trade_replay.autoload_missing);
+    assert!(old.trade_replay.autoload_cores);
+
+    let mut cfg = StorageCfg::default();
+    cfg.trade_replay.autoload_cores = false;
+    let text = toml::to_string(&cfg).expect("serialises");
+    assert!(text.contains("autoload_cores = false"), "{text}");
+    let back: StorageCfg = toml::from_str(&text).expect("parses");
+    assert!(!back.trade_replay.autoload_cores);
 }
