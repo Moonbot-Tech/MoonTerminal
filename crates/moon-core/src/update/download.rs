@@ -29,11 +29,33 @@ pub(super) fn download_verified(
 ) -> anyhow::Result<PathBuf> {
     let staged_path = crate::config::paths::update_staged_executable_path(nonce)
         .context("resolve canonical update staging path")?;
-    validate_download_url(release.download_url(), release.release_tag())?;
+    download_verified_to(client, release, &staged_path)
+}
+
+/// Download one eligible asset to an exact caller-chosen path through the same verified flow.
+///
+/// Args:
+///     client: Shared bounded GitHub transport facade.
+///     release: Immutable release metadata selected by discovery.
+///     dest: Final file path; a unique `.part` beside it is renamed onto it only after both
+///         digest passes succeed, so a failed download never leaves bytes under `dest`.
+///
+/// Returns:
+///     `dest` after streamed and post-sync verification on one open handle.
+pub(super) fn download_verified_to(
+    client: &GitHubReleaseClient,
+    release: &AvailableRelease,
+    dest: &Path,
+) -> anyhow::Result<PathBuf> {
+    validate_download_url(
+        release.download_url(),
+        release.release_tag(),
+        release.asset_name(),
+    )?;
     stage_verified_asset(
         client,
         release.download_url(),
-        &staged_path,
+        dest,
         release.asset_size(),
         &release.asset_sha256(),
         "MoonTerminal-updater",

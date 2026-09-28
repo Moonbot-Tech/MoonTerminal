@@ -7,10 +7,31 @@ use serde::Deserialize;
 
 const DOWNLOAD_PREFIX: &str = "https://github.com/Moonbot-Tech/MoonTerminal/releases/download/";
 const WINDOWS_ASSET_NAME: &str = "MoonTerminal.exe";
+const MACOS_ASSET_NAME: &str = "MoonTerminal.dmg";
 pub(super) const MAX_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[cfg(test)]
 mod tests;
+
+/// Exact release asset name the update path installs on one target OS.
+///
+/// Args:
+///     target_os: Value of `std::env::consts::OS` for the build being served.
+///
+/// Returns:
+///     `MoonTerminal.dmg` on macOS and `MoonTerminal.exe` everywhere else.
+pub(super) fn asset_name_for_os(target_os: &str) -> &'static str {
+    if target_os == "macos" {
+        MACOS_ASSET_NAME
+    } else {
+        WINDOWS_ASSET_NAME
+    }
+}
+
+/// Exact release asset name for the platform this binary was compiled for.
+pub(super) fn platform_asset_name() -> &'static str {
+    asset_name_for_os(std::env::consts::OS)
+}
 
 /// Stable release version encoded by legacy `v0.21` or canonical `v0.24.1` tags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -91,6 +112,8 @@ impl BuildIdentity {
 /// Exact release asset metadata needed for a verified download.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReleaseAsset {
+    /// Exact asset file name the URL ends with.
+    name: &'static str,
     /// HTTPS GitHub release download URL.
     download_url: String,
     /// Byte length reported by the immutable release metadata.
@@ -106,7 +129,7 @@ pub struct AvailableRelease {
     version: ReleaseVersion,
     /// Exact Git tag returned by the immutable release metadata.
     release_tag: String,
-    /// Exact Windows executable asset.
+    /// Exact platform asset (`MoonTerminal.exe` or `MoonTerminal.dmg`).
     asset: ReleaseAsset,
 }
 
@@ -132,6 +155,11 @@ impl AvailableRelease {
     /// Return the immutable asset SHA-256 digest.
     pub fn asset_sha256(&self) -> [u8; 32] {
         self.asset.sha256
+    }
+
+    /// Return the exact asset file name selected for this platform.
+    pub fn asset_name(&self) -> &'static str {
+        self.asset.name
     }
 
     /// Return the canonical GitHub download URL retained from immutable metadata.
@@ -162,7 +190,7 @@ pub(super) struct GitHubRelease {
     assets: Vec<GitHubAsset>,
 }
 
-/// Minimal GitHub asset response needed for exact Windows selection.
+/// Minimal GitHub asset response needed for exact platform asset selection.
 #[derive(Clone, Debug, Deserialize)]
 struct GitHubAsset {
     name: String,
@@ -171,7 +199,7 @@ struct GitHubAsset {
     browser_download_url: String,
 }
 
-/// Convert one API release into an eligible Windows candidate.
+/// Convert one API release into an eligible candidate for this platform.
 ///
 /// Args:
 ///     release: One bounded release-list record borrowed from the page cache.
@@ -180,9 +208,27 @@ struct GitHubAsset {
 ///     A cloned install candidate when every stable immutable metadata check passes.
 ///
 /// Errors:
-///     Returns an error for duplicate Windows assets or a malformed canonical download URL.
+///     Returns an error for duplicate platform assets or a malformed canonical download URL.
 pub(super) fn eligible_release(
     release: &GitHubRelease,
+) -> anyhow::Result<Option<AvailableRelease>> {
+    eligible_release_for(release, platform_asset_name())
+}
+
+/// Convert one API release into an eligible candidate carrying one exact asset name.
+///
+/// Args:
+///     release: One bounded release-list record borrowed from the page cache.
+///     asset_name: Exact platform asset name from [`asset_name_for_os`].
+///
+/// Returns:
+///     A cloned install candidate when every stable immutable metadata check passes.
+///
+/// Errors:
+///     Returns an error for duplicate assets of that name or a malformed canonical download URL.
+pub(super) fn eligible_release_for(
+    release: &GitHubRelease,
+    asset_name: &'static str,
 ) -> anyhow::Result<Option<AvailableRelease>> {
     if release.draft || release.prerelease || !release.immutable {
         return Ok(None);
@@ -193,17 +239,20 @@ pub(super) fn eligible_release(
     let mut matching = release
         .assets
         .iter()
-        .filter(|asset| asset.name == WINDOWS_ASSET_NAME);
+        .filter(|asset| asset.name == asset_name);
     let Some(asset) = matching.next() else {
         return Ok(None);
     };
     if matching.next().is_some() {
-        bail!("release {} has duplicate Windows assets", release.tag_name);
+        bail!(
+            "release {} has duplicate {asset_name} assets",
+            release.tag_name
+        );
     }
     if asset.size == 0 || asset.size > MAX_EXECUTABLE_BYTES {
         return Ok(None);
     }
-    validate_download_url(&asset.browser_download_url, &release.tag_name)?;
+    validate_download_url(&asset.browser_download_url, &release.tag_name, asset_name)?;
     let Some(digest) = asset.digest.as_deref().and_then(parse_sha256) else {
         return Ok(None);
     };
@@ -211,6 +260,7 @@ pub(super) fn eligible_release(
         version,
         release_tag: release.tag_name.clone(),
         asset: ReleaseAsset {
+            name: asset_name,
             download_url: asset.browser_download_url.clone(),
             size: asset.size,
             sha256: digest,
@@ -223,16 +273,21 @@ pub(super) fn eligible_release(
 /// Args:
 ///     url: Candidate browser-download URL returned by GitHub.
 ///     release_tag: Exact stable tag from the same immutable release object.
+///     asset_name: Exact asset file name the URL must end with.
 ///
 /// Errors:
 ///     Returns an error when the tag is malformed or the URL names another repository, tag, or
 ///     asset.
-pub(super) fn validate_download_url(url: &str, release_tag: &str) -> anyhow::Result<()> {
+pub(super) fn validate_download_url(
+    url: &str,
+    release_tag: &str,
+    asset_name: &str,
+) -> anyhow::Result<()> {
     if ReleaseVersion::parse(release_tag).is_none() {
         bail!("release asset URL carries a non-canonical Git tag");
     }
     let expected = format!("{DOWNLOAD_PREFIX}{release_tag}/");
-    if url.strip_prefix(&expected) != Some(WINDOWS_ASSET_NAME) {
+    if url.strip_prefix(&expected) != Some(asset_name) {
         bail!("release asset URL is outside the canonical GitHub namespace");
     }
     Ok(())

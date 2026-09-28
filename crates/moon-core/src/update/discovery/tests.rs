@@ -397,9 +397,12 @@ fn repeated_release_page(tag: &str, count: usize) -> String {
 }
 
 /// Serialize the minimal immutable GitHub release fixture used by the loopback server.
+///
+/// The asset is the one this platform installs, so the suite holds on Windows and macOS alike.
 fn release_json(tag: &str) -> String {
+    let asset = crate::update::release::platform_asset_name();
     format!(
-        r#"{{"tag_name":"{tag}","draft":false,"prerelease":false,"immutable":true,"assets":[{{"name":"MoonTerminal.exe","size":3,"digest":"sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","browser_download_url":"https://github.com/Moonbot-Tech/MoonTerminal/releases/download/{tag}/MoonTerminal.exe"}}]}}"#
+        r#"{{"tag_name":"{tag}","draft":false,"prerelease":false,"immutable":true,"assets":[{{"name":"{asset}","size":3,"digest":"sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","browser_download_url":"https://github.com/Moonbot-Tech/MoonTerminal/releases/download/{tag}/{asset}"}}]}}"#
     )
 }
 

@@ -111,6 +111,20 @@ pub fn update_transaction_dir(nonce: &str) -> std::io::Result<PathBuf> {
     Ok(update_root()?.join(nonce))
 }
 
+/// Path in the user's Downloads folder for one downloaded installer file.
+///
+/// Args:
+///     file_name: Installer file name, such as `MoonTerminal-0.24.1.dmg`.
+///
+/// Returns:
+///     The platform Downloads folder (falling back to `$HOME/Downloads`) joined with
+///     `file_name`, or `None` when neither folder can be resolved.
+pub fn user_download_path(file_name: &str) -> Option<PathBuf> {
+    let folder =
+        dirs::download_dir().or_else(|| dirs::home_dir().map(|home| home.join("Downloads")))?;
+    Some(folder.join(file_name))
+}
+
 /// Staged executable path for one update transaction.
 ///
 /// Args:

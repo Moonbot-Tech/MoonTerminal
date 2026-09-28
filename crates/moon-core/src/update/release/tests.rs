@@ -48,7 +48,7 @@ fn stable_versions_preserve_legacy_tags_and_accept_canonical_patch_tags() {
 #[test]
 fn eligibility_requires_an_immutable_stable_release_and_exact_asset() {
     let release = fixture_release("v0.22.1");
-    let candidate = eligible_release(&release).unwrap().unwrap();
+    let candidate = eligible_exe(&release).unwrap().unwrap();
     assert_eq!(
         candidate.version,
         ReleaseVersion {
@@ -59,7 +59,7 @@ fn eligibility_requires_an_immutable_stable_release_and_exact_asset() {
     );
     assert_eq!(candidate.release_tag(), "v0.22.1");
     let legacy_release = fixture_release("v0.21");
-    let legacy = eligible_release(&legacy_release).unwrap().unwrap();
+    let legacy = eligible_exe(&legacy_release).unwrap().unwrap();
     assert_eq!(legacy.release_tag(), "v0.21");
     assert_eq!(legacy.version.patch, 0);
     assert_eq!(
@@ -73,13 +73,13 @@ fn eligibility_requires_an_immutable_stable_release_and_exact_asset() {
 
     let mut mutable = fixture_release("v0.22.1");
     mutable.immutable = false;
-    assert_eq!(eligible_release(&mutable).unwrap(), None);
+    assert_eq!(eligible_exe(&mutable).unwrap(), None);
     let mut draft = fixture_release("v0.22.1");
     draft.draft = true;
-    assert_eq!(eligible_release(&draft).unwrap(), None);
+    assert_eq!(eligible_exe(&draft).unwrap(), None);
     let mut prerelease = fixture_release("v0.22.1");
     prerelease.prerelease = true;
-    assert_eq!(eligible_release(&prerelease).unwrap(), None);
+    assert_eq!(eligible_exe(&prerelease).unwrap(), None);
 }
 
 /// Removing either side of the absolute executable-size range would admit an empty or oversized
@@ -95,7 +95,7 @@ fn eligibility_enforces_every_executable_size_boundary() {
         let mut release = fixture_release("v0.22.1");
         release.assets[0].size = size;
         assert_eq!(
-            eligible_release(&release).unwrap().is_some(),
+            eligible_exe(&release).unwrap().is_some(),
             expected_eligible,
             "unexpected eligibility for executable size {size}"
         );
@@ -108,8 +108,12 @@ fn eligibility_enforces_every_executable_size_boundary() {
 fn eligibility_rejects_duplicate_windows_assets() {
     let mut release = fixture_release("v0.22.1");
     release.assets.push(release.assets[0].clone());
-    let error = eligible_release(&release).unwrap_err();
-    assert!(error.to_string().contains("duplicate Windows assets"));
+    let error = eligible_exe(&release).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate MoonTerminal.exe assets")
+    );
 }
 
 /// Trusting a URL from another repository or tag would disconnect the selected version from the
@@ -119,13 +123,15 @@ fn asset_url_is_bound_to_the_repository_tag_and_exact_name() {
     assert!(
         validate_download_url(
             "https://github.com/Moonbot-Tech/MoonTerminal/releases/download/v0.21/MoonTerminal.exe",
-            "v0.21"
+            "v0.21",
+            WINDOWS_ASSET_NAME
         )
         .is_ok()
     );
     assert!(validate_download_url(
         "https://github.com/Moonbot-Tech/MoonTerminal/releases/download/v0.24.1/MoonTerminal.exe",
-        "v0.24.1"
+        "v0.24.1",
+        WINDOWS_ASSET_NAME
     )
     .is_ok());
     for rejected in [
@@ -135,28 +141,105 @@ fn asset_url_is_bound_to_the_repository_tag_and_exact_name() {
         "https://github.com/Moonbot-Tech/MoonTerminal/releases/download/v0.24.1/EvilMoonTerminal.exe",
     ] {
         assert!(
-            validate_download_url(rejected, "v0.24.1").is_err(),
+            validate_download_url(rejected, "v0.24.1", WINDOWS_ASSET_NAME).is_err(),
             "accepted {rejected}"
         );
     }
 }
 
+/// The asset choice is a plain function of the target OS, so this Windows-run suite also pins
+/// what a macOS build selects; swapping or collapsing the two names would offer macOS users an
+/// executable they cannot run, or Windows users a disk image.
+#[test]
+fn asset_name_is_chosen_per_target_os() {
+    assert_eq!(asset_name_for_os("macos"), "MoonTerminal.dmg");
+    assert_eq!(asset_name_for_os("windows"), "MoonTerminal.exe");
+    assert_eq!(
+        platform_asset_name(),
+        asset_name_for_os(std::env::consts::OS)
+    );
+}
+
+/// A macOS build must be offered only the `.dmg`, validated as strictly as the executable: a
+/// release carrying just the Windows asset is not an update for it, and vice versa.
+#[test]
+fn eligibility_offers_only_the_platform_asset() {
+    let exe_only = fixture_release("v0.22.1");
+    assert_eq!(
+        eligible_release_for(&exe_only, MACOS_ASSET_NAME).unwrap(),
+        None
+    );
+
+    let dmg_only = fixture_release_with("v0.22.1", MACOS_ASSET_NAME);
+    assert_eq!(eligible_exe(&dmg_only).unwrap(), None);
+    let dmg = eligible_release_for(&dmg_only, MACOS_ASSET_NAME)
+        .unwrap()
+        .unwrap();
+    assert_eq!(dmg.asset_name(), "MoonTerminal.dmg");
+    assert!(dmg.download_url().ends_with("/v0.22.1/MoonTerminal.dmg"));
+
+    let mut both = fixture_release("v0.22.1");
+    both.assets
+        .extend(fixture_release_with("v0.22.1", MACOS_ASSET_NAME).assets);
+    assert_eq!(
+        eligible_release_for(&both, MACOS_ASSET_NAME)
+            .unwrap()
+            .unwrap()
+            .asset_name(),
+        "MoonTerminal.dmg"
+    );
+    assert_eq!(
+        eligible_exe(&both).unwrap().unwrap().asset_name(),
+        "MoonTerminal.exe"
+    );
+
+    let mut undigested = fixture_release_with("v0.22.1", MACOS_ASSET_NAME);
+    undigested.assets[0].digest = None;
+    assert_eq!(
+        eligible_release_for(&undigested, MACOS_ASSET_NAME).unwrap(),
+        None
+    );
+    let mut foreign = fixture_release_with("v0.22.1", MACOS_ASSET_NAME);
+    foreign.assets[0].browser_download_url =
+        "https://github.com/other/MoonTerminal/releases/download/v0.22.1/MoonTerminal.dmg"
+            .to_owned();
+    assert!(eligible_release_for(&foreign, MACOS_ASSET_NAME).is_err());
+    assert!(
+        validate_download_url(
+            "https://github.com/Moonbot-Tech/MoonTerminal/releases/download/v0.22.1/MoonTerminal.exe",
+            "v0.22.1",
+            MACOS_ASSET_NAME
+        )
+        .is_err()
+    );
+}
+
+/// Select the Windows executable regardless of the host the suite runs on.
+fn eligible_exe(release: &GitHubRelease) -> anyhow::Result<Option<AvailableRelease>> {
+    eligible_release_for(release, WINDOWS_ASSET_NAME)
+}
+
 /// Build an independent immutable-release response fixture for eligibility tests.
 fn fixture_release(tag: &str) -> GitHubRelease {
+    fixture_release_with(tag, WINDOWS_ASSET_NAME)
+}
+
+/// Build an immutable-release fixture carrying one asset with the given exact name.
+fn fixture_release_with(tag: &str, asset_name: &str) -> GitHubRelease {
     GitHubRelease {
         tag_name: tag.to_owned(),
         draft: false,
         prerelease: false,
         immutable: true,
         assets: vec![GitHubAsset {
-            name: "MoonTerminal.exe".to_owned(),
+            name: asset_name.to_owned(),
             size: 3,
             digest: Some(
                 "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
                     .to_owned(),
             ),
             browser_download_url: format!(
-                "https://github.com/Moonbot-Tech/MoonTerminal/releases/download/{tag}/MoonTerminal.exe"
+                "https://github.com/Moonbot-Tech/MoonTerminal/releases/download/{tag}/{asset_name}"
             ),
         }],
     }
