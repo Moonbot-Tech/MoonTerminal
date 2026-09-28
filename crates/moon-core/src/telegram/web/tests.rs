@@ -405,7 +405,10 @@ fn telegram_core_control_routes_require_fresh_paired_init_data() {
         ("user", "{\"id\":42,\"first_name\":\"Eve\"}"),
     ]);
     let routes = [
-        ("/api/core/switch", r#"{"core":1,"switch":"trading","on":false}"#),
+        (
+            "/api/core/switch",
+            r#"{"core":1,"switch":"trading","on":false}"#,
+        ),
         (
             "/api/cores/switch",
             r#"{"cores":[1,2],"switch":"auto_detect","on":false}"#,
@@ -416,7 +419,11 @@ fn telegram_core_control_routes_require_fresh_paired_init_data() {
     for (path, body) in routes {
         let (status, text) = post(&app, path, None, body);
         assert_eq!(status, 401, "{path} without initData body {text}");
-        assert_eq!(error_code(&text), Some("missing_init_data"), "{path} body {text}");
+        assert_eq!(
+            error_code(&text),
+            Some("missing_init_data"),
+            "{path} body {text}"
+        );
 
         let (status, text) = post(&app, path, Some(&forged), body);
         assert_eq!(status, 401, "{path} forged hash body {text}");
