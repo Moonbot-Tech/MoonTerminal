@@ -1636,7 +1636,7 @@
         return false;
     }
 
-    // Core header: strategies switched on out of all of them.
+    // Core header: "on N of M" strategies, muted at the right.
     function strategyGroupSummary(items) {
         var on = 0;
         var total = 0;
@@ -1649,7 +1649,7 @@
                 if (list[j].checked) on += 1;
             }
         }
-        return el("span", "count num", on + "/" + total);
+        return el("span", "count num hint", trf("mini_on_of", { on: on, total: total }));
     }
 
     // The app's one on/off look: an ON / OFF pill (labels stay untranslated). `state` null is
