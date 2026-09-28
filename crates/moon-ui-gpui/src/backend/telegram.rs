@@ -642,4 +642,7 @@ const MINI_LABEL_KEYS: &[&str] = &[
     "mini_start_all",
     "mini_stop_all",
     "mini_on_of",
+    "mini_orders_n_one",
+    "mini_orders_n_few",
+    "mini_orders_n_many",
 ];

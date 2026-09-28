@@ -596,34 +596,43 @@
         return wrap;
     }
 
-    // Core header: order count, plus the sum of finite order.pnl figures.
-    // An order that has no position yet has no pnl, because order_pnl returns
-    // nothing, and that row adds nothing. The chart position caption skips
-    // the same rows. The header shows a dash only when no order in the group
-    // has a finite figure.
-    function orderGroupSummary(items) {
-        var wrap = el("span", "group-meta");
-        wrap.appendChild(el("span", "num", String(items.length)));
+    // Signed dollars for a client PnL sum, the balance figures' "$" suffix; null when not finite.
+    function signedDollars(value) {
+        var text = signedFixed(value);
+        return text == null ? null : text + "$";
+    }
+
+    // Finite order.pnl figures of a set of orders: their sum and how many there were. An order
+    // with no position yet has no pnl (order_pnl returns nothing) and adds nothing; the chart
+    // position caption skips the same rows.
+    function knownPnl(orders) {
         var sum = 0;
         var known = 0;
         var i;
-        for (i = 0; i < items.length; i++) {
-            var pnl = items[i] && items[i].pnl;
+        for (i = 0; i < orders.length; i++) {
+            var pnl = orders[i] && orders[i].pnl;
             if (typeof pnl !== "number" || pnl !== pnl || pnl === Infinity || pnl === -Infinity) {
                 continue;
             }
             known += 1;
             sum += pnl;
         }
-        var text = known ? signedFixed(sum) : null;
-        var fig = el("span", "num");
-        if (!known || text == null) {
-            fig.className = "num hint";
-            fig.textContent = "\u2014";
-        } else {
-            applyMoney(fig, "num", text, sum);
+        return { sum: sum, known: known };
+    }
+
+    // Core header: "<N> orders", plus the core's open PnL in signed dollars. A core with no
+    // valued order shows the count alone.
+    function orderGroupSummary(items) {
+        var wrap = el("span", "group-meta");
+        var n = items.length;
+        wrap.appendChild(el("span", "num hint", trf("mini_orders_n_" + pluralForm(n), { n: n })));
+        var pnl = knownPnl(items);
+        var text = pnl.known ? signedDollars(pnl.sum) : null;
+        if (text != null) {
+            var fig = el("span", "num");
+            applyMoney(fig, "num", text, pnl.sum);
+            wrap.appendChild(fig);
         }
-        wrap.appendChild(fig);
         return wrap;
     }
 
@@ -1093,19 +1102,11 @@
     function ordersSummary(orders) {
         var line = el("p", "summary spread");
         line.appendChild(el("span", "", tr("mini_orders_summary").replace("{n}", String(orders.length))));
-        var sum = 0;
-        var seen = 0;
-        var i;
-        for (i = 0; i < orders.length; i++) {
-            var pnl = orders[i] && orders[i].pnl;
-            if (typeof pnl !== "number" || pnl !== pnl || pnl === Infinity || pnl === -Infinity) continue;
-            seen += 1;
-            sum += pnl;
-        }
-        var text = seen ? signedFixed(sum) : null;
+        var pnl = knownPnl(orders);
+        var text = pnl.known ? signedDollars(pnl.sum) : null;
         if (text != null) {
             var fig = el("span", "");
-            applyMoney(fig, "num money-col", text, sum);
+            applyMoney(fig, "num money-col", text, pnl.sum);
             line.appendChild(fig);
         }
         return line;

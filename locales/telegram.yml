@@ -645,3 +645,15 @@ telegram.mini_on_of:
   ru: "вкл {on} из {total}"
   en: "on {on} of {total}"
   es: "activos {on} de {total}"
+telegram.mini_orders_n_one:
+  ru: "{n} орд."
+  en: "{n} order"
+  es: "{n} orden"
+telegram.mini_orders_n_few:
+  ru: "{n} орд."
+  en: "{n} orders"
+  es: "{n} órdenes"
+telegram.mini_orders_n_many:
+  ru: "{n} орд."
+  en: "{n} orders"
+  es: "{n} órdenes"

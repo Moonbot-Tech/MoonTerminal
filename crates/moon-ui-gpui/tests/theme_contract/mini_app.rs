@@ -424,10 +424,11 @@ fn mini_list_groups_start_collapsed_until_the_user_toggles() {
 /// `appendGroups` call. A collapsed exchange then shows only its name, which
 /// is the popup the user could not read without opening every group.
 ///
-/// An order group's PnL sums the finite figures and dashes only when none
+/// An order group's PnL sums the finite figures and shows nothing when none
 /// exist. Mutation: set `known = false` and `break` on the first order
 /// without a figure. A core with open positions plus one unfilled order
-/// then shows a dash instead of those positions' PnL.
+/// then loses those positions' PnL. Mutation: draw a dash for an unvalued
+/// core. The header then shows "—" where a PnL is expected.
 #[test]
 fn mini_collapsed_groups_carry_their_summary() {
     let js = read_core_src("telegram/web/app.js");
@@ -441,13 +442,18 @@ fn mini_collapsed_groups_carry_their_summary() {
         balances.contains("total_text"),
         "a balance group must show the exchange total the page already received"
     );
+    let known = braced_body(&js, "function knownPnl(");
+    assert!(
+        known.contains("known += 1") && !known.contains("known = false"),
+        "an order group must sum every finite PnL, not stop at the first unvalued order"
+    );
     let orders = braced_body(&js, "function orderGroupSummary(");
     assert!(
-        orders.contains("known += 1")
-            && orders.contains("\\u2014")
-            && orders.contains("applyMoney(fig, \"num\", text, sum)")
-            && !orders.contains("known = false"),
-        "an order group sums finite PnL and shows a dash only when none is finite"
+        orders.contains("knownPnl(items)")
+            && orders.contains("mini_orders_n_")
+            && orders.contains("applyMoney(fig, \"num\", text, pnl.sum)")
+            && !orders.contains("\\u2014"),
+        "an order group labels its count and shows PnL only when some order is valued"
     );
 }
 
