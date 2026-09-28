@@ -728,7 +728,17 @@
         coreName.title = core.name || "";
         body.appendChild(coreName);
         var secondary = core.fault ? faultLabel(core.fault) : tr("mini_core_" + (core.conn || ""));
-        if (secondary) body.appendChild(el("div", "sub", secondary));
+        var sub = el("div", "sub core-sub");
+        if (secondary) {
+            sub.appendChild(el("span", "", secondary));
+            sub.appendChild(el("span", "sep", "·"));
+        }
+        // What a trader checks first: whether this core trades. Read-only; switched on the detail screen.
+        var trade = el("span", "trade-state");
+        trade.appendChild(el("span", "", tr("mini_trading")));
+        trade.appendChild(stateTag(core.trading));
+        sub.appendChild(trade);
+        body.appendChild(sub);
         row.appendChild(body);
         var metrics = metricsBlock(core);
         if (metrics) row.appendChild(metrics);
@@ -1650,6 +1660,12 @@
         pill.setAttribute("aria-pressed", known ? String(state) : "mixed");
         pill.disabled = commandBusy || !known || !!pending;
         return pill;
+    }
+
+    // Small read-only ON / OFF tag in the pill's look; an unknown state is a muted dash.
+    function stateTag(state) {
+        var known = state === true || state === false;
+        return el("span", "tag " + (known ? (state ? "on" : "off") : "unknown"), known ? (state ? "ON" : "OFF") : "—");
     }
 
     // The pill is the core's confirmed state; the sub line says when a change is unconfirmed.
