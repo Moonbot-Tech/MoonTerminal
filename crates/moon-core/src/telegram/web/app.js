@@ -8,6 +8,8 @@
     var RETRY_MS = [1000, 2000, 4000];
     var REPORT_RETRY_LIMIT = 6;
     var REPORT_RETRY_MS = 2000;
+    // The server answers within 5 s; a request still open well past that is dead, and the queue is serial.
+    var FETCH_TIMEOUT_MS = 12000;
     var TAB_NAMES = ["report", "cores", "balances", "orders", "trades", "strategies"];
     var TAB_KEYS = {
         report: "mini_tab_report",
@@ -276,7 +278,9 @@
             body: JSON.stringify(job.body)
         };
         if (controller) opts.signal = controller.signal;
+        var deadline = controller ? setTimeout(function () { controller.abort(); }, FETCH_TIMEOUT_MS) : null;
         fetch(job.path, opts).then(function (response) {
+            if (deadline) clearTimeout(deadline);
             return response.text().then(function (text) {
                 var parsed = null;
                 if (text) {
@@ -330,6 +334,7 @@
             }
             finish(job, { ok: true, status: pack.status, data: pack.parsed, raw: pack.text });
         }).catch(function () {
+            if (deadline) clearTimeout(deadline);
             if (job.cancelled) {
                 finish(job, { ok: false, status: 0, cancelled: true, retry: false, error: "" });
                 return;
@@ -2303,6 +2308,7 @@
         }
         if (!res.ok) {
             showCmdLine(res.error || tr("mini_error_read"));
+            reloadAfterCommand(true);
             return;
         }
         var data = res.data || {};
@@ -2331,6 +2337,7 @@
             failed = path.indexOf("/api/core") === 0 ? tr("mini_cmd_core_not_found") : tr("mini_cmd_not_found");
         }
         showCmdLine(failed);
+        reloadAfterCommand(true);
     }
 
     // confirmText null fires at once; otherwise exactly one confirm.
@@ -2339,6 +2346,8 @@
         commandBusy = true;
         setCommandsDisabled(true);
         function send() {
+            // A command must not wait behind a background read; the pane reloads after it anyway.
+            cancelPending();
             hapticImpact();
             api(path, body, true).then(function (res) { finishCommand(path, res); });
         }

@@ -643,6 +643,27 @@ impl Backend {
         id: u64,
         on: bool,
     ) -> Result<CommandResultDto, MiniAppApiError> {
+        let result = self.mini_strategy_toggle_inner(chat_id, core, id, on);
+        let outcome = match &result {
+            Ok(dto) if dto.ok => "sent",
+            Ok(dto) => match dto.error {
+                Some(CommandErrorDto::NotFound) => "not found",
+                _ => "unavailable",
+            },
+            Err(_) => "rejected",
+        };
+        log::info!("mini app strategy toggle: core={core} strategy={id} on={on} -> {outcome}");
+        result
+    }
+
+    /// Body of [`Self::mini_strategy_toggle`], which logs the outcome.
+    fn mini_strategy_toggle_inner(
+        &mut self,
+        chat_id: i64,
+        core: u64,
+        id: u64,
+        on: bool,
+    ) -> Result<CommandResultDto, MiniAppApiError> {
         self.mini_owner(chat_id)?;
         if !self.mini_core_known(core) {
             return Ok(command_miss(CommandErrorDto::NotFound));
