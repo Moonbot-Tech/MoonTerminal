@@ -150,6 +150,8 @@ impl SessionManager {
     /// Start a core feed thread with `feed::spawn` and register its market client.
     fn spawn_feed(&self, server: ServerConfig, mem: u16, reports: Option<&ReportTx>) -> FeedHandle {
         let id = server.id;
+        // Registered whether or not the recorder is on: switching it on must find every core.
+        crate::market::tape_recorder::core_up(&server);
         let handle = feed::spawn(
             server,
             mem,
@@ -321,6 +323,7 @@ impl SessionManager {
         self.pending_drop.retain(|(core, _), _| *core != id);
         self.wanted_orderbook.remove(&id);
         self.pending_ob_drop.retain(|(core, _), _| *core != id);
+        crate::market::tape_recorder::core_down(id);
         log::info!("session down: core={}", crate::feed::core_label(id));
         // Release the name AFTER the line above, so the last line still names the core; a later id
         // reuse must not inherit it.
@@ -368,8 +371,14 @@ impl SessionManager {
                         self.trade_sounds.retain(|(core, _, _)| *core != sess.id);
                         // One insert replaces the whole entry, so a reconnect onto a different
                         // venue cannot leave the previous caption or DEX name behind.
-                        self.core_venue
-                            .insert(sess.id, CoreVenue::identify(id.code, &dex, Some(&reported)));
+                        let venue = CoreVenue::identify(id.code, &dex, Some(&reported));
+                        // The replay address's spelling (`MarketDataSource::replay_address`),
+                        // which the recorder's keys and donors are matched by.
+                        crate::market::tape_recorder::core_exchange(
+                            sess.id,
+                            format!("{}:{:08x}", venue.id.code, venue.id.dex),
+                        );
+                        self.core_venue.insert(sess.id, venue);
                         self.market_source
                             .set_orderbook_kind(sess.id, orderbook_kind_for_exchange(id));
                         stats.ui_state = true;
@@ -426,7 +435,17 @@ impl SessionManager {
                             stats.ui_state |= core.folders_rev != before;
                         }
                     }
+                    FeedMsg::TradeOpened {
+                        rec_id,
+                        coin,
+                        quote,
+                        buy,
+                    } => {
+                        // Not `ui_state` either: only the tape recorder listens.
+                        self.record_opened_trade(sess.id, rec_id, &coin, &quote, buy);
+                    }
                     FeedMsg::TradeClosed {
+                        rec_id,
                         coin,
                         quote,
                         buy,
@@ -435,7 +454,7 @@ impl SessionManager {
                         // Not `ui_state`: nothing on screen changes; the prints go to the replay
                         // worker's own store. Every step that cannot resolve simply files
                         // nothing — the next window pages the venue as it always did.
-                        self.capture_closed_trade(sess.id, &coin, &quote, buy, close);
+                        self.capture_closed_trade(sess.id, rec_id, &coin, &quote, buy, close);
                     }
                     traces @ FeedMsg::ReportTraces { .. } => {
                         // Not `ui_state`: the answer is for the trace resolver, which wakes its
@@ -468,6 +487,7 @@ impl SessionManager {
     ///
     /// Args:
     ///     core: The core that closed the trade.
+    ///     rec_id: The trade's report row.
     ///     coin: The row's coin token.
     ///     quote: The core's quote setting.
     ///     buy: Entry stamp, core-local.
@@ -475,6 +495,7 @@ impl SessionManager {
     fn capture_closed_trade(
         &self,
         core: CoreId,
+        rec_id: i64,
         coin: &str,
         quote: &str,
         buy: crate::db::ReportStamp,
@@ -487,6 +508,77 @@ impl SessionManager {
         let Ok(address) = self.market_source.replay_address(core) else {
             return;
         };
+        let (open_ms, close_ms) = self
+            .true_utc_axis(core)
+            .stamp_pair_to_utc_ms(buy, close, core);
+        if open_ms <= 0 || close_ms < open_ms {
+            return;
+        }
+        crate::market::tape_recorder::trade_closed(
+            &address.exchange_key,
+            &market,
+            crate::market::tape_recorder::TradeId { core, rec_id },
+            open_ms,
+            close_ms,
+        );
+        crate::market::trade_replay::worker::capture(
+            crate::market::trade_replay::worker::CaptureRequest {
+                address,
+                market,
+                open_ms,
+                close_ms,
+                // The setting's margin, whose floor is the tuner's run-up and tail
+                // (`MODEL_PAD_MS`): the capture is what the tuner reads a closed trade's tape
+                // from, and they must be in the tile or every closed trade re-walks the venue
+                // for the seconds the ring held for free.
+                margin_ms: crate::market::trade_replay::margin_ms(),
+                long_position_ms: crate::market::trade_replay::long_position_ms(),
+            },
+        );
+    }
+
+    /// Hand a just-opened trade to the tape recorder, resolved the way
+    /// [`Self::capture_closed_trade`] resolves a close. Nothing is resolved while the recorder
+    /// is off.
+    ///
+    /// Args:
+    ///     core: The core that opened the trade.
+    ///     rec_id: The trade's report row.
+    ///     coin: The row's coin token.
+    ///     quote: The core's quote setting.
+    ///     buy: Entry stamp, core-local.
+    fn record_opened_trade(
+        &self,
+        core: CoreId,
+        rec_id: i64,
+        coin: &str,
+        quote: &str,
+        buy: crate::db::ReportStamp,
+    ) {
+        if !crate::market::tape_recorder::enabled() {
+            return;
+        }
+        let Some(market) = self.market_source.resolve_market(core, quote, coin) else {
+            return;
+        };
+        let Ok(address) = self.market_source.replay_address(core) else {
+            return;
+        };
+        let open_ms = self.true_utc_axis(core).stamp_to_utc_ms(buy, core);
+        if open_ms > 0 {
+            crate::market::tape_recorder::trade_opened(
+                &address.exchange_key,
+                &market,
+                crate::market::tape_recorder::TradeId { core, rec_id },
+                open_ms,
+            );
+        }
+    }
+
+    /// The time axis that lifts `core`'s report stamps onto true UTC through its measured clock
+    /// offset — the stamps as they are when the offset was never measured, which is what the
+    /// report itself shows.
+    fn true_utc_axis(&self, core: CoreId) -> crate::db::ReportAxis {
         let measured = self
             .store
             .core(core)
@@ -502,25 +594,7 @@ impl SessionManager {
             })
             .into_iter()
             .collect();
-        let axis = crate::db::ReportAxis::from_measured(measured, chrono_tz::UTC);
-        let (open_ms, close_ms) = axis.stamp_pair_to_utc_ms(buy, close, core);
-        if open_ms <= 0 || close_ms < open_ms {
-            return;
-        }
-        crate::market::trade_replay::worker::capture(
-            crate::market::trade_replay::worker::CaptureRequest {
-                address,
-                market,
-                open_ms,
-                close_ms,
-                // The setting's margin, whose floor is the tuner's run-up and tail
-                // (`MODEL_PAD_MS`): the capture is what the tuner reads a closed trade's tape
-                // from, and they must be in the tile or every closed trade re-walks the venue
-                // for the seconds the ring held for free.
-                margin_ms: crate::market::trade_replay::margin_ms(),
-                long_position_ms: crate::market::trade_replay::long_position_ms(),
-            },
-        );
+        crate::db::ReportAxis::from_measured(measured, chrono_tz::UTC)
     }
 
     /// Current connection token for delayed trade playback; removal makes it unavailable.

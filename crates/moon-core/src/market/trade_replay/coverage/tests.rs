@@ -83,3 +83,26 @@ fn display_names_every_span() {
         "1..2+5..9"
     );
 }
+
+#[test]
+fn minus_cuts_every_overlap_and_keeps_inclusive_edges() {
+    let whole = Coverage::from_spans([(0, 9), (20, 29)]);
+    assert_eq!(
+        whole.minus(&Coverage::one((3, 5))).spans(),
+        &[(0, 2), (6, 9), (20, 29)]
+    );
+    // A cut spanning the gap between two spans trims both.
+    assert_eq!(
+        whole.minus(&Coverage::one((8, 21))).spans(),
+        &[(0, 7), (22, 29)]
+    );
+    // Nothing left, nothing to cut, and a cut past either edge.
+    assert!(whole.minus(&Coverage::one((0, 29))).is_empty());
+    assert_eq!(whole.minus(&Coverage::none()), whole);
+    assert_eq!(
+        whole
+            .minus(&Coverage::from_spans([(-5, 0), (29, 40)]))
+            .spans(),
+        &[(1, 9), (20, 28)]
+    );
+}

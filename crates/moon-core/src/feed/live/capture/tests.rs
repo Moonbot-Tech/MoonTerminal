@@ -17,17 +17,18 @@ fn fields() -> CaptureFields {
     }
 }
 
+/// A row as moonproto delivers it: fields ascending by index, which `ReportRow::value` relies on
+/// (a binary search) — an unsorted list would hide fields from the tracker.
 fn row(rec_id: i64, values: &[(u16, ReportValue)]) -> ReportRow {
-    ReportRow {
-        rec_id,
-        fields: values
-            .iter()
-            .map(|(field_index, value)| ReportFieldValue {
-                field_index: *field_index,
-                value: value.clone(),
-            })
-            .collect(),
-    }
+    let mut fields: Vec<ReportFieldValue> = values
+        .iter()
+        .map(|(field_index, value)| ReportFieldValue {
+            field_index: *field_index,
+            value: value.clone(),
+        })
+        .collect();
+    fields.sort_by_key(|field| field.field_index);
+    ReportRow { rec_id, fields }
 }
 
 fn text(s: &str) -> ReportValue {
@@ -42,16 +43,18 @@ fn int(v: i64) -> ReportValue {
 #[test]
 fn a_complete_closing_row_is_announced() {
     let mut tracker = CaptureTracker::new(fields());
-    let closed = tracker.on_row(&row(
-        7,
-        &[
-            (COIN, text("SUE")),
-            (BUY, int(1_000)),
-            (BUY_MS, int(1_000_250)),
-            (CLOSE, int(1_060)),
-            (CLOSE_MS, int(1_060_900)),
-        ],
-    ));
+    let closed = tracker
+        .on_row(&row(
+            7,
+            &[
+                (COIN, text("SUE")),
+                (BUY, int(1_000)),
+                (BUY_MS, int(1_000_250)),
+                (CLOSE, int(1_060)),
+                (CLOSE_MS, int(1_060_900)),
+            ],
+        ))
+        .and_then(RowEdge::closed);
     assert_eq!(
         closed,
         Some(ClosedTrade {
@@ -67,16 +70,26 @@ fn a_complete_closing_row_is_announced() {
 #[test]
 fn a_partial_close_is_completed_from_the_open_row_and_announced_once() {
     let mut tracker = CaptureTracker::new(fields());
-    assert!(
-        tracker
-            .on_row(&row(
-                7,
-                &[(COIN, text("SUE")), (BUY, int(1_000)), (CLOSE, int(0))]
-            ))
-            .is_none(),
-        "an open row announces nothing"
+    let open = row(
+        7,
+        &[(COIN, text("SUE")), (BUY, int(1_000)), (CLOSE, int(0))],
     );
-    let closed = tracker.on_row(&row(7, &[(CLOSE, int(1_060)), (CLOSE_MS, int(1_060_900))]));
+    assert_eq!(
+        tracker.on_row(&open),
+        Some(RowEdge::Opened {
+            rec_id: 7,
+            coin: "SUE".into(),
+            buy: ReportStamp::Seconds(1_000),
+        }),
+        "an open row announces its entry"
+    );
+    assert!(
+        tracker.on_row(&open).is_none(),
+        "the same open row upserted again is not a second entry"
+    );
+    let closed = tracker
+        .on_row(&row(7, &[(CLOSE, int(1_060)), (CLOSE_MS, int(1_060_900))]))
+        .and_then(RowEdge::closed);
     assert_eq!(
         closed,
         Some(ClosedTrade {
@@ -85,14 +98,18 @@ fn a_partial_close_is_completed_from_the_open_row_and_announced_once() {
             close: ReportStamp::Millis(1_060_900),
         })
     );
-    assert!(
-        tracker
-            .on_row(&row(
-                7,
-                &[(CLOSE, int(1_060)), (COIN, text("SUE")), (BUY, int(1_000))]
-            ))
-            .is_none(),
+    assert_eq!(
+        tracker.on_row(&row(
+            7,
+            &[(CLOSE, int(1_060)), (COIN, text("SUE")), (BUY, int(1_000))]
+        )),
+        None,
         "the PnL edit that follows a close carries CloseDate too, and is not a second close"
+    );
+    assert_eq!(
+        tracker.on_row(&row(7, &[(COIN, text("SUE")), (BUY, int(1_000))])),
+        None,
+        "an upsert of a just-closed row that omits CloseDate is not a new entry"
     );
 }
 
@@ -119,8 +136,15 @@ fn page_rows_remember_open_rows_and_announce_nothing() {
         tracker.on_row(&row(3, &[(CLOSE, int(20))])).is_none(),
         "a historical close on a page was not remembered as open"
     );
+    assert!(
+        tracker
+            .on_row(&row(4, &[(COIN, text("OPEN")), (BUY, int(30))]))
+            .is_none(),
+        "a trade already open on a page is not an entry happening now"
+    );
     let closed = tracker
         .on_row(&row(4, &[(CLOSE, int(40))]))
+        .and_then(RowEdge::closed)
         .expect("the open page row closes");
     assert_eq!(closed.coin, "OPEN");
     assert_eq!(closed.buy, ReportStamp::Seconds(30));
@@ -134,11 +158,13 @@ fn rows_are_kept_apart() {
     tracker.on_row(&row(2, &[(COIN, text("B")), (BUY, int(20))]));
     let closed = tracker
         .on_row(&row(2, &[(CLOSE, int(30))]))
+        .and_then(RowEdge::closed)
         .expect("B closes");
     assert_eq!(closed.coin, "B");
     assert_eq!(closed.buy, ReportStamp::Seconds(20));
     let closed = tracker
         .on_row(&row(1, &[(CLOSE, int(40))]))
+        .and_then(RowEdge::closed)
         .expect("A closes");
     assert_eq!(closed.coin, "A");
 }

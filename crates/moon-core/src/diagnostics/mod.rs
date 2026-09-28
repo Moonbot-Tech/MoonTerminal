@@ -6,7 +6,9 @@
 //! learn what could be traced was to grep the sources. The file is that list for every OBSERVATION
 //! channel; switches that change what the program DOES (`MOON_ARCHIVE_PROBE`, the
 //! `MOON_RENDER_DIAG_OPEN_*` startup automation, `MOON_ANALYTICS_PROBE`, which opens a window) stay
-//! on the environment deliberately, and `tests/diagnostics_contract.rs` holds that line.
+//! on the environment deliberately, and `tests/diagnostics_contract.rs` holds that line. The one
+//! exception is `channels.tape_recorder`: a measuring instrument that has to be switched while the
+//! terminal runs, and connects to the cores to do so — its template entry says so in capitals.
 //!
 //! Three properties the rest of the code depends on:
 //!
@@ -44,6 +46,7 @@ static ASSETS: AtomicBool = AtomicBool::new(false);
 static MARKETS: AtomicBool = AtomicBool::new(false);
 static HL_LIMIT: AtomicBool = AtomicBool::new(false);
 static SETTINGS: AtomicBool = AtomicBool::new(false);
+static TAPE_RECORDER: AtomicBool = AtomicBool::new(false);
 /// Fast path for the order channel: the selector itself sits behind a lock, and reading that lock
 /// on every order of every core would be the one diagnostic that costs something while OFF.
 static ORDERS_ON: AtomicBool = AtomicBool::new(false);
@@ -113,6 +116,13 @@ pub fn stamped_line(file: &str, msg: &str) {
 #[inline]
 pub fn settings() -> bool {
     SETTINGS.load(Ordering::Relaxed)
+}
+
+/// Tape recorder (`logs/tape_recorder.log`, `tape_recorder.sqlite`) — see
+/// `crate::market::tape_recorder`.
+#[inline]
+pub fn tape_recorder() -> bool {
+    TAPE_RECORDER.load(Ordering::Relaxed)
 }
 
 /// Whether the order channel is following anything at all.
@@ -308,6 +318,7 @@ fn apply(cfg: &DiagCfg) {
     MARKETS.store(cfg.channels.markets, Ordering::Relaxed);
     HL_LIMIT.store(cfg.channels.hl_limit, Ordering::Relaxed);
     SETTINGS.store(cfg.channels.settings, Ordering::Relaxed);
+    TAPE_RECORDER.store(cfg.channels.tape_recorder, Ordering::Relaxed);
     RING_LINES.store(cfg.limits.log_ring_lines, Ordering::Relaxed);
     BALANCE_WINDOW_SEC.store(cfg.limits.balance_repeat_window_sec, Ordering::Relaxed);
     MARKET_FLOOR_MS.store(cfg.limits.market_trace_min_interval_ms, Ordering::Relaxed);

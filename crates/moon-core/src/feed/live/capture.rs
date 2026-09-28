@@ -9,6 +9,13 @@
 //! row, which carries the core's whole column set. The upsert that closes the row completes
 //! itself from that memory, and the row is forgotten.
 //!
+//! The tracker also announces the OPEN, once, when a live upsert first carries a row's coin and
+//! entry — for the tape recorder (`market::tape_recorder`), which asks the core's archive for the
+//! run-up while it is still there. A page row is remembered but never announced: a page is history,
+//! and a trade open before this connection is not an entry happening now. (The open-row check
+//! after a reconnect resends such rows as upserts, which this cannot tell from an entry — the
+//! listener filters them by their stamp.)
+//!
 //! One announcement per row: a closed row upserted again (a later PnL or comment edit carries
 //! `CloseDate` too) is recognised by its `rec_id` and not announced twice, so the worker never
 //! copies the same span a second time on the core's account.
@@ -68,6 +75,34 @@ pub(super) struct ClosedTrade {
     pub close: ReportStamp,
 }
 
+/// What one live upsert meant for its trade.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum RowEdge {
+    /// A row this feed had not seen open carried its coin and entry for the first time.
+    ///
+    /// "First time" is per tracker, and a tracker lives one connection: after a reconnect the
+    /// core's open-row check resends every open row as an upsert, and each is announced again.
+    /// The listener tells a real entry by its stamp (`market::tape_recorder`).
+    Opened {
+        rec_id: i64,
+        coin: String,
+        buy: ReportStamp,
+    },
+    /// The row `rec_id` closed.
+    Closed(i64, ClosedTrade),
+}
+
+#[cfg(test)]
+impl RowEdge {
+    /// The close, when this edge is one.
+    pub(super) fn closed(self) -> Option<ClosedTrade> {
+        match self {
+            Self::Closed(_, trade) => Some(trade),
+            Self::Opened { .. } => None,
+        }
+    }
+}
+
 /// Per-feed memory of open rows, keyed by `rec_id`.
 #[derive(Debug)]
 pub(super) struct CaptureTracker {
@@ -93,28 +128,42 @@ impl CaptureTracker {
     ///     row: The row as the page carried it.
     pub(super) fn on_page_row(&mut self, row: &moonproto::ReportRow) {
         let (coin, buy, close) = self.read(row);
-        if close.is_none() {
+        if let (Some(coin), Some(buy), None) = (coin, buy, close) {
             self.remember_open(row.rec_id, coin, buy);
         }
     }
 
-    /// Feed one live upsert and get the trade back when this upsert CLOSES one.
+    /// Feed one live upsert and get the trade back when this upsert OPENS or CLOSES one.
     ///
-    /// An open row (no usable `CloseDate`) that carries its coin and entry is remembered. A
-    /// closed row completes itself from the row first, then from memory, and is announced once;
-    /// a closed row this feed cannot complete — closed before the terminal ever saw it open, and
-    /// not on any page it received — is not a trade this can locate, and is skipped.
+    /// An open row (no usable `CloseDate`) that carries its coin and entry is remembered, and
+    /// announced the first time. A closed row completes itself from the row first, then from
+    /// memory, and is announced once; a closed row this feed cannot complete — closed before the
+    /// terminal ever saw it open, and not on any page it received — is not a trade this can
+    /// locate, and is skipped.
     ///
     /// Args:
     ///     row: The row as the core sent it.
     ///
     /// Returns:
-    ///     The trade, on the one upsert that closes it and can be completed.
-    pub(super) fn on_row(&mut self, row: &moonproto::ReportRow) -> Option<ClosedTrade> {
+    ///     The open, on the first upsert that carries it; the close, on the one upsert that closes
+    ///     the trade and can be completed.
+    pub(super) fn on_row(&mut self, row: &moonproto::ReportRow) -> Option<RowEdge> {
         let (coin, buy, close) = self.read(row);
         let Some(close) = close else {
-            self.remember_open(row.rec_id, coin, buy);
-            return None;
+            // A just-closed row upserted again without its CloseDate is no entry: announced, it
+            // would leave an open trade behind that no close will ever come for.
+            let (Some(coin), Some(buy), false) =
+                (coin, buy, self.recent_closed.contains(&row.rec_id))
+            else {
+                return None;
+            };
+            return self
+                .remember_open(row.rec_id, coin.clone(), buy)
+                .then_some(RowEdge::Opened {
+                    rec_id: row.rec_id,
+                    coin,
+                    buy,
+                });
         };
         let remembered = self.open.remove(&row.rec_id);
         if self.recent_closed.contains(&row.rec_id) {
@@ -131,7 +180,10 @@ impl CaptureTracker {
         while self.recent_closed.len() > MAX_RECENT_CLOSED {
             self.recent_closed.pop_front();
         }
-        Some(ClosedTrade { coin, buy, close })
+        Some(RowEdge::Closed(
+            row.rec_id,
+            ClosedTrade { coin, buy, close },
+        ))
     }
 
     /// The coin and both stamps a row carries, each `None` when absent or zero.
@@ -160,14 +212,12 @@ impl CaptureTracker {
         (coin, buy, close)
     }
 
-    /// Remember what a close will not repeat, when the row carried it.
-    fn remember_open(&mut self, rec_id: i64, coin: Option<String>, buy: Option<ReportStamp>) {
-        if let (Some(coin), Some(buy)) = (coin, buy) {
-            if self.open.len() >= MAX_OPEN_ROWS {
-                self.open.clear();
-            }
-            self.open.insert(rec_id, (coin, buy));
+    /// Remember what a close will not repeat. Whether the row was not remembered before.
+    fn remember_open(&mut self, rec_id: i64, coin: String, buy: ReportStamp) -> bool {
+        if self.open.len() >= MAX_OPEN_ROWS {
+            self.open.clear();
         }
+        self.open.insert(rec_id, (coin, buy)).is_none()
     }
 }
 

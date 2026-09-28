@@ -117,6 +117,28 @@ impl Coverage {
         out
     }
 
+    /// The part of this coverage that `other` does not cover: each span with every span of
+    /// `other` cut out of it, inclusive edges kept exact (`(0, 9)` minus `(3, 5)` is `(0, 2)` and
+    /// `(6, 9)`).
+    pub fn minus(&self, other: &Coverage) -> Coverage {
+        let mut out = Self::none();
+        for &(from, to) in &self.spans {
+            let mut cursor = from;
+            for &(o_from, o_to) in &other.spans {
+                if o_to < cursor || o_from > to {
+                    continue;
+                }
+                out.add((cursor, o_from.saturating_sub(1)));
+                cursor = o_to.saturating_add(1);
+                if cursor > to {
+                    break;
+                }
+            }
+            out.add((cursor, to));
+        }
+        out
+    }
+
     /// Total covered milliseconds, spans summed.
     pub fn width_ms(&self) -> i64 {
         self.spans
